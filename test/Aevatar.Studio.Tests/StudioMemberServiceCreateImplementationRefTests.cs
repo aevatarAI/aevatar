@@ -76,7 +76,8 @@ public sealed class StudioMemberServiceCreateImplementationRefTests
                 DisplayName: " Alpha ",
                 ImplementationKind: " WORKFLOW ",
                 Description: " first member ",
-                MemberId: " m-alpha "));
+                MemberId: " m-alpha ",
+                TeamId: " t-alpha "));
 
         commandPort.CreateRequests.Should().ContainSingle();
         commandPort.CreateRequests[0].ScopeId.Should().Be(ScopeId);
@@ -86,6 +87,7 @@ public sealed class StudioMemberServiceCreateImplementationRefTests
                 ImplementationKind: MemberImplementationKindNames.Workflow,
                 Description: "first member",
                 MemberId: "m-alpha",
+                TeamId: "t-alpha",
                 ImplementationRef: null));
         summary.LifecycleStage.Should().Be(MemberLifecycleStageNames.Created);
         summary.ImplementationRef.Should().BeNull();
@@ -99,7 +101,8 @@ public sealed class StudioMemberServiceCreateImplementationRefTests
             new InertTeamQueryPort(),
             new ThrowingServiceLifecycleQueryPort(),
             new ThrowingScopeBindingReadinessQueryPort(),
-            new ThrowingServiceCommandPort());
+            new ThrowingServiceCommandPort(),
+            new StudioWorkflowCapabilityAdmissionTestService());
 
     private sealed class RecordingMemberCommandPort : IStudioMemberCommandPort
     {

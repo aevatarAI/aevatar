@@ -12,8 +12,23 @@ public interface IChatHistoryCommandPort
         IReadOnlyList<StoredChatMessage> messages,
         CancellationToken ct = default);
 
-    Task DeleteConversationAsync(
+    Task<ChatHistoryDeleteResult> DeleteConversationAsync(
         string scopeId,
         string conversationId,
         CancellationToken ct = default);
+}
+
+public enum ChatHistoryDeleteResultStatus
+{
+    Accepted = 0,
+    NotFound = 1,
+}
+
+public sealed record ChatHistoryDeleteResult(ChatHistoryDeleteResultStatus Status)
+{
+    public static ChatHistoryDeleteResult Accepted() =>
+        new(ChatHistoryDeleteResultStatus.Accepted);
+
+    public static ChatHistoryDeleteResult NotFound() =>
+        new(ChatHistoryDeleteResultStatus.NotFound);
 }

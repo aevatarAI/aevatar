@@ -4,7 +4,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 
 namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 
-public sealed class NyxIdChannelEventsTool : IAgentTool
+public sealed class NyxIdChannelEventsTool : INyxIdBuiltInTool
 {
     private readonly NyxIdApiClient _client;
 

@@ -5,6 +5,7 @@ option csharp_namespace = "Aevatar.Workflow.Core";
 import "google/protobuf/any.proto";
 import "google/protobuf/timestamp.proto";
 import "workflow_execution_messages.proto";
+import "workflow_capability_admission.proto";
 import "workflow_external_action.proto";
 import "Credentials/credential_secret_references.proto";
 
@@ -79,6 +80,7 @@ message WorkflowState
   int32 max_sub_workflow_depth = 16;
   int32 max_active_sub_workflows = 17;
   WorkflowAuthorizationDependencies authorization_dependencies = 18;
+  WorkflowCapabilityAdmissionPlan capability_admission_plan = 19;
 }
 
 message WorkflowRunState

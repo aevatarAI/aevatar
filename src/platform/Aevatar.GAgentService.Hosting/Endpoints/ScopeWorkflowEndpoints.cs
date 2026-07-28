@@ -123,7 +123,10 @@ public static class ScopeWorkflowEndpoints
                 request.WorkflowName,
                 request.DisplayName,
                 request.InlineWorkflowYamls,
-                request.RevisionId), ct);
+                request.RevisionId)
+            {
+                CapabilityAdmission = WorkflowCapabilityAdmissionHttpContext.Create(http),
+            }, ct);
             return Results.Accepted(result.ReadModelUrl, result);
         }
         catch (InvalidOperationException ex)
@@ -158,7 +161,10 @@ public static class ScopeWorkflowEndpoints
                     request.InlineWorkflowYamls,
                     request.AppId,
                     request.ServiceId,
-                    request.ExposureDesired),
+                    request.ExposureDesired)
+                {
+                    CapabilityAdmission = WorkflowCapabilityAdmissionHttpContext.Create(http),
+                },
                 ct);
             return Results.Accepted(result.Workflow.ReadModelUrl, result);
         }
@@ -705,12 +711,7 @@ public static class ScopeWorkflowEndpoints
                 var model = string.IsNullOrWhiteSpace(userConfig.DefaultModel)
                     ? control.ModelOverride
                     : userConfig.DefaultModel.Trim();
-                var route = string.IsNullOrWhiteSpace(userConfig.PreferredLlmRoute)
-                    ? control.NyxIdRoutePreference
-                    : userConfig.PreferredLlmRoute.Trim();
-                (model, route) = await UserLlmRouteModelResolver
-                    .ResolveAsync(http, model, route, cancellationToken)
-                    .ConfigureAwait(false);
+                var route = UserLlmSelectionRoute.Resolve(userConfig.LlmSelection);
 
                 control = control with
                 {

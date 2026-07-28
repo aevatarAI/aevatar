@@ -94,7 +94,7 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
             var commitResult = await _eventStore.AppendAsync(
                 _agentId, stateEvents, _currentVersion, ct);
             _currentVersion = commitResult.LatestVersion;
-            RemoveCommittedPendingPrefix(pendingEvents.Length);
+            RemovePendingPrefix(pendingEvents.Length);
             _logger.LogInformation(
                 "Event sourcing commit completed. agentId={AgentId} eventType={EventType} version={Version} elapsedMs={ElapsedMs} result={Result}",
                 _agentId,
@@ -163,11 +163,12 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
                     Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds);
             }
             _currentVersion = refreshed;
-            RemoveCommittedPendingPrefix(pendingEvents.Length);
+            RemovePendingPrefix(pendingEvents.Length);
             throw;
         }
         catch (Exception ex)
         {
+            RemovePendingPrefix(pendingEvents.Length);
             _logger.LogError(
                 ex,
                 "Event sourcing commit failed. agentId={AgentId} eventType={EventType} version={Version} elapsedMs={ElapsedMs} result={Result} errorType={ErrorType}",
@@ -304,18 +305,18 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
         }
     }
 
-    private void RemoveCommittedPendingPrefix(int committedCount)
+    private void RemovePendingPrefix(int count)
     {
-        if (committedCount <= 0)
+        if (count <= 0)
             return;
 
-        if (_pending.Count <= committedCount)
+        if (_pending.Count <= count)
         {
             _pending.Clear();
             return;
         }
 
-        _pending.RemoveRange(0, committedCount);
+        _pending.RemoveRange(0, count);
     }
 
     private async Task<EventSourcingSnapshot<TState>?> TryLoadSnapshotAsync(

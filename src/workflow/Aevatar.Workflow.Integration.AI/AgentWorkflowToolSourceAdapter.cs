@@ -129,10 +129,9 @@ public sealed class AgentWorkflowToolSourceAdapter(
             var resultJson = toolCallContext.Result
                              ?? throw new InvalidOperationException(
                                  $"Tool '{_tool.Name}' returned no result.");
-            var receipt = ToolCallReceiptFinalizer.Finalize(toolCallContext).Receipt;
-            return new WorkflowToolExecutionResult(
-                resultJson,
-                ToWorkflowManagedHandoffOutcome(receipt?.ManagedWorkflowHandoff));
+            return AgentWorkflowToolReceiptOutcomeMapper.Map(
+                ToolCallReceiptFinalizer.Finalize(toolCallContext).Receipt,
+                resultJson);
         }
 
         private static WorkflowToolApprovalPendingOutcome ToWorkflowToolApprovalPendingOutcome(
@@ -160,21 +159,63 @@ public sealed class AgentWorkflowToolSourceAdapter(
             return $"Tool '{context.ToolName}' execution terminated by middleware ({context.TerminationKind}){suffix}";
         }
 
-        private static WorkflowManagedHandoffOutcome? ToWorkflowManagedHandoffOutcome(
-            ManagedWorkflowHandoffReceipt? receipt)
-        {
-            if (receipt == null || string.IsNullOrWhiteSpace(receipt.InvocationId))
-                return null;
+    }
+}
 
-            return new WorkflowManagedHandoffOutcome
-            {
-                ParentActorId = receipt.ParentActorId ?? string.Empty,
-                ParentRunId = receipt.ParentRunId ?? string.Empty,
-                ParentStepId = receipt.ParentStepId ?? string.Empty,
-                InvocationId = receipt.InvocationId ?? string.Empty,
-                ChildRunId = receipt.ChildRunId ?? string.Empty,
-                StreamTopic = receipt.StreamTopic ?? string.Empty,
-            };
+file static class AgentWorkflowToolReceiptOutcomeMapper
+{
+    public static WorkflowToolExecutionResult Map(AgentToolReceipt receipt, string resultJson)
+    {
+        if (IsFailure(receipt.Status))
+        {
+            return WorkflowToolExecutionResult.Failed(
+                receipt.ResultJson ?? string.Empty,
+                ResolveFailureCode(receipt),
+                ResolveFailureMessage(receipt));
         }
+
+        return WorkflowToolExecutionResult.Success(
+            resultJson,
+            ToWorkflowManagedHandoffOutcome(receipt.ManagedWorkflowHandoff));
+    }
+
+    private static bool IsFailure(AgentToolReceiptStatus status) =>
+        status is AgentToolReceiptStatus.Error or
+            AgentToolReceiptStatus.Denied or
+            AgentToolReceiptStatus.AuthorizationRequired;
+
+    private static string ResolveFailureCode(AgentToolReceipt receipt)
+    {
+        if (!string.IsNullOrWhiteSpace(receipt.ErrorCode))
+            return receipt.ErrorCode.Trim();
+
+        return receipt.Status switch
+        {
+            AgentToolReceiptStatus.Denied => "tool_denied",
+            AgentToolReceiptStatus.AuthorizationRequired => "authorization_required",
+            _ => "tool_error",
+        };
+    }
+
+    private static string ResolveFailureMessage(AgentToolReceipt receipt) =>
+        string.IsNullOrWhiteSpace(receipt.ErrorMessage)
+            ? ResolveFailureCode(receipt)
+            : receipt.ErrorMessage.Trim();
+
+    private static WorkflowManagedHandoffOutcome? ToWorkflowManagedHandoffOutcome(
+        ManagedWorkflowHandoffReceipt? receipt)
+    {
+        if (receipt == null || string.IsNullOrWhiteSpace(receipt.InvocationId))
+            return null;
+
+        return new WorkflowManagedHandoffOutcome
+        {
+            ParentActorId = receipt.ParentActorId ?? string.Empty,
+            ParentRunId = receipt.ParentRunId ?? string.Empty,
+            ParentStepId = receipt.ParentStepId ?? string.Empty,
+            InvocationId = receipt.InvocationId ?? string.Empty,
+            ChildRunId = receipt.ChildRunId ?? string.Empty,
+            StreamTopic = receipt.StreamTopic ?? string.Empty,
+        };
     }
 }

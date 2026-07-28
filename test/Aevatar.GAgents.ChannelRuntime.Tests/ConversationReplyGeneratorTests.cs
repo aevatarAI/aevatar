@@ -2,6 +2,7 @@ using Aevatar.GAgents.Scheduled;
 using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.Prompting;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.AI.ToolProviders.NyxId;
@@ -17,6 +18,7 @@ using NSubstitute;
 using Xunit;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.NyxidChat;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -30,6 +32,9 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
 public sealed class ConversationReplyGeneratorTests
 {
+    private static readonly IBuiltInPromptFloorProvider BuiltInPromptFloorProvider =
+        new StubBuiltInPromptFloorProvider("built-in prompt floor");
+
     private static readonly LLMProviderCapabilities MultimodalCapabilities = new()
     {
         SupportedInputModalities = new HashSet<ContentPartKind>
@@ -121,7 +126,7 @@ public sealed class ConversationReplyGeneratorTests
     public async Task GenerateReplyAsync_WithPriorConversationHistory_BuildsSecondTurnRequestWithPreviousUserAndAssistant()
     {
         var providerFactory = new SequentialResponseProviderFactory("first assistant", "second assistant", "isolated assistant");
-        var generator = new NyxIdConversationReplyGenerator(providerFactory);
+        var generator = new NyxIdConversationReplyGenerator(providerFactory, BuiltInPromptFloorProvider);
 
         var first = await generator.GenerateReplyAsync(
             new ChatActivity
@@ -200,7 +205,7 @@ public sealed class ConversationReplyGeneratorTests
     public async Task GenerateReplyAsync_WithEmptyAssistantHistoryEntries_SkipsThemOnReplay()
     {
         var providerFactory = new SequentialResponseProviderFactory("recovered assistant");
-        var generator = new NyxIdConversationReplyGenerator(providerFactory);
+        var generator = new NyxIdConversationReplyGenerator(providerFactory, BuiltInPromptFloorProvider);
 
         var poisonedHistory = new[]
         {
@@ -247,7 +252,7 @@ public sealed class ConversationReplyGeneratorTests
         // turn in the conversation completes empty). The rehydration boundary must strip
         // reasoning while preserving the visible content.
         var providerFactory = new SequentialResponseProviderFactory("next assistant");
-        var generator = new NyxIdConversationReplyGenerator(providerFactory);
+        var generator = new NyxIdConversationReplyGenerator(providerFactory, BuiltInPromptFloorProvider);
 
         var priorHistory = new List<ConversationHistoryEntry>
         {
@@ -300,6 +305,7 @@ public sealed class ConversationReplyGeneratorTests
         };
         IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
             providerFactory,
+            BuiltInPromptFloorProvider,
             larkClient: lark,
             fileIngressPort: fileArtifacts,
             fileArtifactReadPort: fileArtifacts);
@@ -338,6 +344,71 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
+    public async Task GenerateReplyAsync_WithLarkFileCardImageAttachment_BuildsImageContentPart()
+    {
+        var imageBytes = new byte[] { 9, 10, 11, 12 };
+        var lark = new RecordingLarkNyxClient(
+            new LarkMessageResourceDownloadResult(true, imageBytes, "image/jpeg", "IMG_20260708_091630.jpg"));
+        var fileArtifacts = new RecordingWorkflowFileArtifactPort();
+        var providerFactory = new RecordingProviderFactory
+        {
+            Capabilities = MultimodalCapabilities,
+        };
+        IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            BuiltInPromptFloorProvider,
+            larkClient: lark,
+            fileIngressPort: fileArtifacts,
+            fileArtifactReadPort: fileArtifacts);
+        var activity = CreateLarkActivity(
+            "msg-file-card-image",
+            "describe it",
+            "om_file_card_image",
+            token: "user-token");
+        activity.Content.Attachments.Add(new AttachmentRef
+        {
+            AttachmentId = "file_img_key",
+            Kind = AttachmentKind.File,
+            ContentType = "image/jpeg",
+            Name = "IMG_20260708_091630.jpg",
+            SizeBytes = 512,
+        });
+
+        await generator.GenerateReplyAsync(
+            activity,
+            new Dictionary<string, string>(),
+            streamingSink: null,
+            CancellationToken.None);
+
+        var userMessage = providerFactory.Requests.Should().ContainSingle().Subject
+            .Messages.Last(message => message.Role == "user");
+        userMessage.ContentParts.Should().NotBeNull();
+        userMessage.ContentParts!.Should().Contain(part =>
+            part.Kind == ContentPartKind.Text &&
+            part.Text == "describe it");
+        var imagePart = userMessage.ContentParts!.Single(part => part.Kind == ContentPartKind.Image);
+        imagePart.DataBase64.Should().Be(Convert.ToBase64String(imageBytes));
+        imagePart.MediaType.Should().Be("image/jpeg");
+        imagePart.Name.Should().Be("IMG_20260708_091630.jpg");
+        imagePart.FileRef.Should().BeNull();
+        userMessage.ContentParts!.Should().NotContain(part =>
+            part.Text != null &&
+            part.Text.Contains("Attachment visibility warning", StringComparison.Ordinal));
+        lark.Downloads.Should().ContainSingle().Which.Should().Be((
+            "user-token",
+            "om_file_card_image",
+            "file_img_key",
+            LarkMessageResourceKind.File));
+        fileArtifacts.IngressRequests.Should().ContainSingle().Which.Should().Match<FileArtifactIngressRequest>(request =>
+            request.Content.ToArray().SequenceEqual(imageBytes) &&
+            request.SourceKind == FileArtifactSourceKind.ChatInput &&
+            request.SourceMessageId == "om_file_card_image" &&
+            request.SourceResourceKey == "file_img_key" &&
+            request.FileName == "IMG_20260708_091630.jpg" &&
+            request.MediaType == "image/jpeg");
+    }
+
+    [Fact]
     public async Task GenerateReplyAsync_WithCurrentLarkImageAttachment_ShouldUseInboundProviderSlugClient()
     {
         var imageBytes = new byte[] { 5, 6, 7, 8 };
@@ -354,6 +425,7 @@ public sealed class ConversationReplyGeneratorTests
         };
         IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
             providerFactory,
+            BuiltInPromptFloorProvider,
             larkClient: defaultLark,
             fileIngressPort: fileArtifacts,
             fileArtifactReadPort: fileArtifacts,
@@ -399,6 +471,7 @@ public sealed class ConversationReplyGeneratorTests
         };
         var generator = new NyxIdConversationReplyGenerator(
             providerFactory,
+            BuiltInPromptFloorProvider,
             larkClient: lark,
             fileIngressPort: new RecordingWorkflowFileArtifactPort(),
             fileArtifactReadPort: new RecordingWorkflowFileArtifactPort());
@@ -437,6 +510,7 @@ public sealed class ConversationReplyGeneratorTests
         };
         var generator = new NyxIdConversationReplyGenerator(
             providerFactory,
+            BuiltInPromptFloorProvider,
             larkClient: lark,
             fileIngressPort: new RecordingWorkflowFileArtifactPort(),
             fileArtifactReadPort: new RecordingWorkflowFileArtifactPort());
@@ -471,6 +545,7 @@ public sealed class ConversationReplyGeneratorTests
         };
         var generator = new NyxIdConversationReplyGenerator(
             providerFactory,
+            BuiltInPromptFloorProvider,
             larkClient: lark,
             fileIngressPort: new RejectingWorkflowFileIngressPort(
                 new InvalidOperationException("ingress policy rejected attachment")),
@@ -508,6 +583,7 @@ public sealed class ConversationReplyGeneratorTests
         };
         IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
             providerFactory,
+            BuiltInPromptFloorProvider,
             larkClient: lark,
             fileIngressPort: fileArtifacts,
             fileArtifactReadPort: fileArtifacts);
@@ -590,6 +666,7 @@ public sealed class ConversationReplyGeneratorTests
         };
         IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
             providerFactory,
+            BuiltInPromptFloorProvider,
             larkClient: defaultLark,
             fileIngressPort: fileArtifacts,
             fileArtifactReadPort: fileArtifacts,
@@ -662,6 +739,7 @@ public sealed class ConversationReplyGeneratorTests
             new StubTool("delegated_tool"));
         IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
             providerFactory,
+            BuiltInPromptFloorProvider,
             toolSources: [toolSource]);
         var activity = CreateLarkActivity("msg-gate", "hi", "om_gate", token: "runtime-token");
         var channelMetadata = new Dictionary<string, string>
@@ -705,6 +783,7 @@ public sealed class ConversationReplyGeneratorTests
             new StubTool("delegated_tool"));
         IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
             providerFactory,
+            BuiltInPromptFloorProvider,
             toolSources: [toolSource]);
         var activity = CreateLarkActivity("msg-round2", "next round", "om_round2", token: "runtime-token");
 
@@ -717,6 +796,41 @@ public sealed class ConversationReplyGeneratorTests
         toolNames.Should().Contain("delegated_tool");
         toolNames.Should().NotContain("human_only_tool",
             "the durable typed channel context must keep the human-only gate on after the channel metadata is stripped");
+    }
+
+    [Fact]
+    public async Task BuildStepPlanAsync_ForBoundLarkRelayTurn_DiscoversRequestToolsWithSenderCredentialContext()
+    {
+        var requestScopedSource = new RequestScopedToolSource(
+            new FixedResultTool("nyxid_service_inventory", """{"instances":[]}"""));
+        IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
+            new RecordingProviderFactory(),
+            BuiltInPromptFloorProvider,
+            toolSources: [requestScopedSource]);
+
+        var plan = await generator.BuildStepPlanAsync(
+            CreateLarkActivity(
+                "msg-bound-step-inventory",
+                "我在 NyxID 上连接了哪些服务",
+                "om_bound_step_inventory",
+                token: "sender-token"),
+            new Dictionary<string, string>
+            {
+                [ChannelMetadataKeys.Platform] = "lark",
+                [ChannelMetadataKeys.SenderId] = "ou_user_1",
+                [ChannelMetadataKeys.MessageId] = "msg-bound-step-inventory",
+            },
+            Control("sender-model", "sender-route", 4, token: "owner-token", senderToken: "sender-token"),
+            RelayToolContext("bnd-user-1", "msg-bound-step-inventory"),
+            priorHistory: null,
+            attachmentContext: null,
+            forceDisableTools: false,
+            CancellationToken.None);
+
+        requestScopedSource.CapturedAccessTokens.Should().ContainSingle()
+            .Which.Should().Be("sender-token");
+        plan.ToolContext.Credentials.NyxIdAccessToken.Should().Be("sender-token");
+        OfferedToolNames(plan).Should().ContainSingle(name => name == "nyxid_service_inventory");
     }
 
     private static IReadOnlyList<string> OfferedToolNames(AgentRunReplyStepPlan plan)
@@ -761,7 +875,7 @@ public sealed class ConversationReplyGeneratorTests
         {
             Capabilities = LLMProviderCapabilities.TextOnly,
         };
-        var generator = new NyxIdConversationReplyGenerator(providerFactory, larkClient: lark);
+        var generator = new NyxIdConversationReplyGenerator(providerFactory, BuiltInPromptFloorProvider, larkClient: lark);
 
         await generator.GenerateReplyAsync(
             CreateLarkImageActivity(
@@ -789,6 +903,61 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
+    public async Task GenerateReplyAsync_WithoutChannelResourceDownloader_AddsProviderNeutralVisibilityWarning()
+    {
+        var providerFactory = new RecordingProviderFactory
+        {
+            Capabilities = MultimodalCapabilities,
+        };
+        var generator = new NyxIdConversationReplyGenerator(providerFactory, BuiltInPromptFloorProvider);
+
+        await generator.GenerateReplyAsync(
+            CreateLarkImageActivity(
+                "msg-image-no-downloader",
+                "describe it",
+                "om_no_downloader",
+                "img_no_downloader",
+                token: "user-token"),
+            new Dictionary<string, string>(),
+            streamingSink: null,
+            CancellationToken.None);
+
+        var systemMessage = providerFactory.Requests.Should().ContainSingle().Subject
+            .Messages.First(message => message.Role == "system");
+        systemMessage.Content.Should().Contain("channel resource download is not available in this runtime");
+        systemMessage.Content.Should().NotContain("Lark");
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_WithoutChannelUserCredential_AddsProviderNeutralVisibilityWarning()
+    {
+        var lark = new RecordingLarkNyxClient(
+            new LarkMessageResourceDownloadResult(true, [1], "image/png", "photo.png"));
+        var providerFactory = new RecordingProviderFactory
+        {
+            Capabilities = MultimodalCapabilities,
+        };
+        var generator = new NyxIdConversationReplyGenerator(providerFactory, BuiltInPromptFloorProvider, larkClient: lark);
+
+        await generator.GenerateReplyAsync(
+            CreateLarkImageActivity(
+                "msg-image-no-token",
+                "describe it",
+                "om_no_token",
+                "img_no_token",
+                token: null),
+            new Dictionary<string, string>(),
+            streamingSink: null,
+            CancellationToken.None);
+
+        var systemMessage = providerFactory.Requests.Should().ContainSingle().Subject
+            .Messages.First(message => message.Role == "system");
+        systemMessage.Content.Should().Contain("channel user credential needed to download the attachment is unavailable");
+        systemMessage.Content.Should().NotContain("Lark");
+        lark.Downloads.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task GenerateReplyAsync_WithNonImageAttachment_AddsHonestVisibilityWarning()
     {
         var lark = new RecordingLarkNyxClient(
@@ -797,7 +966,7 @@ public sealed class ConversationReplyGeneratorTests
         {
             Capabilities = MultimodalCapabilities,
         };
-        var generator = new NyxIdConversationReplyGenerator(providerFactory, larkClient: lark);
+        var generator = new NyxIdConversationReplyGenerator(providerFactory, BuiltInPromptFloorProvider, larkClient: lark);
         var activity = CreateLarkActivity(
             "msg-file",
             "read this",
@@ -840,7 +1009,7 @@ public sealed class ConversationReplyGeneratorTests
         {
             Capabilities = MultimodalCapabilities,
         };
-        var generator = new NyxIdConversationReplyGenerator(providerFactory, larkClient: lark);
+        var generator = new NyxIdConversationReplyGenerator(providerFactory, BuiltInPromptFloorProvider, larkClient: lark);
 
         await generator.GenerateReplyAsync(
             CreateLarkImageActivity(
@@ -875,7 +1044,7 @@ public sealed class ConversationReplyGeneratorTests
         {
             Capabilities = LLMProviderCapabilities.TextOnly,
         };
-        var generator = new NyxIdConversationReplyGenerator(providerFactory, larkClient: lark);
+        var generator = new NyxIdConversationReplyGenerator(providerFactory, BuiltInPromptFloorProvider, larkClient: lark);
 
         await generator.GenerateReplyAsync(
             CreateLarkActivity(
@@ -901,7 +1070,7 @@ public sealed class ConversationReplyGeneratorTests
     public async Task GenerateReplyAsync_CapsPriorHistoryToTenMostRecent_AndStillExportsCurrentTurnHistory()
     {
         var providerFactory = new SequentialResponseProviderFactory("window assistant");
-        var generator = new NyxIdConversationReplyGenerator(providerFactory);
+        var generator = new NyxIdConversationReplyGenerator(providerFactory, BuiltInPromptFloorProvider);
         var priorHistory = Enumerable.Range(0, 100)
             .Select(index => new ConversationHistoryEntry
             {
@@ -950,6 +1119,7 @@ public sealed class ConversationReplyGeneratorTests
         var providerFactory = new RecordingProviderFactory();
         var generator = new NyxIdConversationReplyGenerator(
             providerFactory,
+            BuiltInPromptFloorProvider,
             relayOptions: new global::Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
             {
                 WebhookBaseUrl = "https://dev.aevatar.local/",
@@ -984,11 +1154,12 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
-    public async Task GenerateReplyAsync_WithChannelContextMiddleware_IncludesLarkApprovalOperatorUserIdInSystemPrompt()
+    public async Task GenerateReplyAsync_WithChannelContextMiddleware_RendersOperatorIdsWithProviderNeutralLabels()
     {
         var providerFactory = new RecordingProviderFactory();
         var generator = new NyxIdConversationReplyGenerator(
             providerFactory,
+            BuiltInPromptFloorProvider,
             llmMiddlewares: [new ChannelContextMiddleware(NullLogger<ChannelContextMiddleware>.Instance)]);
 
         var reply = await generator.GenerateReplyAsync(
@@ -1005,8 +1176,20 @@ public sealed class ConversationReplyGeneratorTests
                 [ChannelMetadataKeys.ChatType] = "group",
                 [ChannelMetadataKeys.SenderId] = "ou_sender_1",
                 [ChannelMetadataKeys.ConversationId] = "oc_1",
-                [ChannelMetadataKeys.LarkOperatorUserId] = "lark-user-1",
-                [ChannelMetadataKeys.LarkOperatorOpenId] = "ou_operator_1",
+            },
+            llmControl: null,
+            toolContext: AgentToolExecutionContext.Empty with
+            {
+                Channel = AgentToolChannelContext.Empty with
+                {
+                    IdentityHints =
+                    [
+                        new AgentToolChannelIdentityHint("sender", "global", "on_sender_1"),
+                        new AgentToolChannelIdentityHint("conversation", "platform", "oc_provider_1"),
+                        new AgentToolChannelIdentityHint("operator", "account", "provider-user-1"),
+                        new AgentToolChannelIdentityHint("operator", "platform", "provider-operator-1"),
+                    ],
+                },
             },
             streamingSink: null,
             CancellationToken.None);
@@ -1014,8 +1197,16 @@ public sealed class ConversationReplyGeneratorTests
         reply.Text.Should().Be("ok");
         var systemPrompt = providerFactory.Requests.Should().ContainSingle().Subject
             .Messages.First(message => message.Role == "system").Content;
-        systemPrompt.Should().Contain("operator_user_id: \"lark-user-1\"");
-        systemPrompt.Should().Contain("operator_open_id: \"ou_operator_1\"");
+        systemPrompt.Should().Contain("identity_hints:");
+        systemPrompt.Should().Contain("- subject: \"sender\", kind: \"global\", value: \"on_sender_1\"");
+        systemPrompt.Should().Contain("- subject: \"conversation\", kind: \"platform\", value: \"oc_provider_1\"");
+        systemPrompt.Should().Contain("- subject: \"operator\", kind: \"account\", value: \"provider-user-1\"");
+        systemPrompt.Should().Contain("- subject: \"operator\", kind: \"platform\", value: \"provider-operator-1\"");
+        systemPrompt.Should().NotContain("operator_user_id:");
+        systemPrompt.Should().NotContain("operator_open_id:");
+        systemPrompt.Should().NotContain("operator_union_id:");
+        systemPrompt.Should().NotContain("lark_union_id:");
+        systemPrompt.Should().NotContain("lark_chat_id:");
     }
 
     [Fact]
@@ -1025,6 +1216,7 @@ public sealed class ConversationReplyGeneratorTests
         var providerFactory = new RecordingProviderFactory();
         var generator = new NyxIdConversationReplyGenerator(
             providerFactory,
+            new StubBuiltInPromptFloorProvider("MANDATORY FLOOR"),
             overlayProvider: new StubSystemSkillOverlayProvider(overlayMarkdown));
 
         await generator.GenerateReplyAsync(
@@ -1049,12 +1241,16 @@ public sealed class ConversationReplyGeneratorTests
         var systemPrompt = providerFactory.Requests.Should().ContainSingle().Subject
             .Messages.First(message => message.Role == "system").Content;
         systemPrompt.Should().Contain(overlayMarkdown);
+        systemPrompt.Should().Contain("MANDATORY FLOOR");
         systemPrompt.Should().Contain("<channel-context>");
         // Kernel anchor: a stable invariant heading the slimmed kernel still carries, asserting the
         // overlay is appended AFTER the kernel. (Capability how-to like skill-discovery moved out of
         // the kernel into the overlay in #2468, so it is no longer a valid kernel anchor.)
         systemPrompt.Should().Contain("Action-First Behavior");
         systemPrompt!.IndexOf("Action-First Behavior", StringComparison.Ordinal)
+            .Should()
+            .BeLessThan(systemPrompt.IndexOf("MANDATORY FLOOR", StringComparison.Ordinal));
+        systemPrompt.IndexOf("MANDATORY FLOOR", StringComparison.Ordinal)
             .Should()
             .BeLessThan(systemPrompt.IndexOf(overlayMarkdown, StringComparison.Ordinal));
         // Anchor on the INJECTED channel-context runtime block (its rendered sender id), not the
@@ -1073,6 +1269,7 @@ public sealed class ConversationReplyGeneratorTests
         var overlayProvider = new StubSystemSkillOverlayProvider("## overlay\n- context-aware");
         var generator = new NyxIdConversationReplyGenerator(
             new RecordingProviderFactory(),
+            BuiltInPromptFloorProvider,
             overlayProvider: overlayProvider);
 
         await generator.GenerateReplyAsync(
@@ -1106,6 +1303,7 @@ public sealed class ConversationReplyGeneratorTests
         var overlayProvider = new StubSystemSkillOverlayProvider("## overlay\n- per-step context-aware");
         IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
             new RecordingProviderFactory(),
+            BuiltInPromptFloorProvider,
             overlayProvider: overlayProvider);
         var toolContext = AgentToolExecutionContext.Empty with
         {
@@ -1146,6 +1344,7 @@ public sealed class ConversationReplyGeneratorTests
         var providerFactory = new RecordingProviderFactory();
         var generator = new NyxIdConversationReplyGenerator(
             providerFactory,
+            new StubBuiltInPromptFloorProvider("MANDATORY FLOOR"),
             overlayProvider: overlayMarkdown is null ? null : new StubSystemSkillOverlayProvider(overlayMarkdown));
 
         await generator.GenerateReplyAsync(
@@ -1162,16 +1361,18 @@ public sealed class ConversationReplyGeneratorTests
 
         var systemPrompt = providerFactory.Requests.Should().ContainSingle().Subject
             .Messages.First(message => message.Role == "system").Content;
+        systemPrompt.Should().Contain("MANDATORY FLOOR");
         systemPrompt.Should().NotContain("Runtime system skills");
         systemPrompt.Should().NotContain("prefer the committed overlay");
     }
 
     [Fact]
-    public async Task GenerateReplyAsync_WithChannelContextMiddleware_IncludesLarkSubjectIdsSeparatelyFromOperatorIds()
+    public async Task GenerateReplyAsync_WithChannelContextMiddleware_RendersSubjectIdsSeparatelyFromOperatorIds()
     {
         var providerFactory = new RecordingProviderFactory();
         var generator = new NyxIdConversationReplyGenerator(
             providerFactory,
+            BuiltInPromptFloorProvider,
             llmMiddlewares: [new ChannelContextMiddleware(NullLogger<ChannelContextMiddleware>.Instance)]);
 
         var reply = await generator.GenerateReplyAsync(
@@ -1188,8 +1389,18 @@ public sealed class ConversationReplyGeneratorTests
                 [ChannelMetadataKeys.ChatType] = "group",
                 [ChannelMetadataKeys.SenderId] = "ou_sender_1",
                 [ChannelMetadataKeys.ConversationId] = "oc_1",
-                [ChannelMetadataKeys.LarkSubjectUserId] = "lark-subject-user-1",
-                [ChannelMetadataKeys.LarkSubjectEmployeeId] = "employee-1",
+            },
+            llmControl: null,
+            toolContext: AgentToolExecutionContext.Empty with
+            {
+                Channel = AgentToolChannelContext.Empty with
+                {
+                    IdentityHints =
+                    [
+                        new AgentToolChannelIdentityHint("subject", "account", "provider-subject-user-1"),
+                        new AgentToolChannelIdentityHint("subject", "directory", "directory-1"),
+                    ],
+                },
             },
             streamingSink: null,
             CancellationToken.None);
@@ -1197,10 +1408,13 @@ public sealed class ConversationReplyGeneratorTests
         reply.Text.Should().Be("ok");
         var systemPrompt = providerFactory.Requests.Should().ContainSingle().Subject
             .Messages.First(message => message.Role == "system").Content;
-        systemPrompt.Should().Contain("subject_user_id: \"lark-subject-user-1\"");
-        systemPrompt.Should().Contain("subject_employee_id: \"employee-1\"");
-        systemPrompt.Should().Contain("operator_user_id: \"\"");
-        systemPrompt.Should().Contain("operator_open_id: \"\"");
+        systemPrompt.Should().Contain("identity_hints:");
+        systemPrompt.Should().Contain("- subject: \"subject\", kind: \"account\", value: \"provider-subject-user-1\"");
+        systemPrompt.Should().Contain("- subject: \"subject\", kind: \"directory\", value: \"directory-1\"");
+        systemPrompt.Should().NotContain("operator_account_id:");
+        systemPrompt.Should().NotContain("operator_platform_id:");
+        systemPrompt.Should().NotContain("subject_user_id:");
+        systemPrompt.Should().NotContain("subject_employee_id:");
         systemPrompt.Should().NotContain("operator_user_id: \"lark-subject-user-1\"");
     }
 
@@ -1210,6 +1424,7 @@ public sealed class ConversationReplyGeneratorTests
         var providerFactory = new RecordingProviderFactory();
         var generator = new NyxIdConversationReplyGenerator(
             providerFactory,
+            BuiltInPromptFloorProvider,
             llmMiddlewares: [new ChannelContextMiddleware(NullLogger<ChannelContextMiddleware>.Instance)]);
 
         var reply = await generator.GenerateReplyAsync(
@@ -1244,6 +1459,7 @@ public sealed class ConversationReplyGeneratorTests
         var providerFactory = new RecordingProviderFactory();
         var generator = new NyxIdConversationReplyGenerator(
             providerFactory,
+            BuiltInPromptFloorProvider,
             llmMiddlewares: [new ChannelContextMiddleware(NullLogger<ChannelContextMiddleware>.Instance)]);
 
         var reply = await generator.GenerateReplyAsync(
@@ -1281,6 +1497,7 @@ public sealed class ConversationReplyGeneratorTests
         var providerFactory = new UsageReportingProviderFactory();
         var generator = new NyxIdConversationReplyGenerator(
             providerFactory,
+            BuiltInPromptFloorProvider,
             relayOptions: new global::Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
             {
                 WebhookBaseUrl = "https://dev.aevatar.local/",
@@ -1314,6 +1531,7 @@ public sealed class ConversationReplyGeneratorTests
         var providerFactory = new RecordingProviderFactory();
         var generator = new NyxIdConversationReplyGenerator(
             providerFactory,
+            BuiltInPromptFloorProvider,
             relayOptions: new global::Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
             {
                 StreamingPlaceholderText = "…",
@@ -1344,6 +1562,7 @@ public sealed class ConversationReplyGeneratorTests
         var providerFactory = new RecordingProviderFactory();
         var generator = new NyxIdConversationReplyGenerator(
             providerFactory,
+            BuiltInPromptFloorProvider,
             relayOptions: new global::Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
             {
                 StreamingPlaceholderText = string.Empty,
@@ -1370,6 +1589,7 @@ public sealed class ConversationReplyGeneratorTests
         var providerFactory = new RecordingProviderFactory();
         var generator = new NyxIdConversationReplyGenerator(
             providerFactory,
+            BuiltInPromptFloorProvider,
             relayOptions: new global::Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
             {
                 StreamingPlaceholderText = "…",
@@ -1395,6 +1615,7 @@ public sealed class ConversationReplyGeneratorTests
         var approvalHandler = new CountingApprovalHandler();
         var generator = new NyxIdConversationReplyGenerator(
             new ToolCallingProviderFactory(),
+            BuiltInPromptFloorProvider,
             toolSources: [new SingleToolSource(new ApprovalRequiredTool())],
             approvalHandler: approvalHandler);
 
@@ -1423,6 +1644,7 @@ public sealed class ConversationReplyGeneratorTests
         var tool = new ApprovalRequiredTool();
         var generator = new NyxIdConversationReplyGenerator(
             new ToolResultEchoingProviderFactory(),
+            BuiltInPromptFloorProvider,
             toolSources: [new SingleToolSource(tool)]);
 
         var reply = await generator.GenerateReplyAsync(
@@ -1450,6 +1672,7 @@ public sealed class ConversationReplyGeneratorTests
         var providerFactory = new ToolResultEchoingProviderFactory();
         var generator = new NyxIdConversationReplyGenerator(
             providerFactory,
+            BuiltInPromptFloorProvider,
             toolSources: [new SingleToolSource(tool)],
             approvalHandler: approvalHandler);
 
@@ -1497,6 +1720,7 @@ public sealed class ConversationReplyGeneratorTests
         var providerFactory = new RecordingProviderFactory();
         var generator = new NyxIdConversationReplyGenerator(
             providerFactory,
+            BuiltInPromptFloorProvider,
             localSkillCatalog: localSkillCatalog,
             remoteSkillFetcher: null,
             logger: logger);
@@ -1525,6 +1749,7 @@ public sealed class ConversationReplyGeneratorTests
         var providerFactory = new RecordingProviderFactory();
         var generator = new NyxIdConversationReplyGenerator(
             providerFactory,
+            BuiltInPromptFloorProvider,
             toolSources:
             [
                 new SingleToolSource(new FixedResultTool("aevatar_invoke_gagent", """{"ok":true}""")),
@@ -1578,6 +1803,7 @@ public sealed class ConversationReplyGeneratorTests
         var providerFactory = new RecordingProviderFactory();
         var generator = new NyxIdConversationReplyGenerator(
             providerFactory,
+            BuiltInPromptFloorProvider,
             toolSources:
             [
                 new SingleToolSource(new CapabilityFixedResultTool(
@@ -1626,6 +1852,7 @@ public sealed class ConversationReplyGeneratorTests
         var providerFactory = new RecordingProviderFactory();
         var generator = new NyxIdConversationReplyGenerator(
             providerFactory,
+            BuiltInPromptFloorProvider,
             toolSources:
             [
                 // Same name as the Observatory tool, but no exclusion capability → stays visible.
@@ -1689,6 +1916,7 @@ public sealed class ConversationReplyGeneratorTests
         var providerFactory = new UseSkillMountWorkflowProviderFactory();
         var generator = new NyxIdConversationReplyGenerator(
             providerFactory,
+            BuiltInPromptFloorProvider,
             toolSources:
             [
                 new SingleToolSource(new UseSkillTool(catalog, scopeWorkflowCommandPort: commandPort)),
@@ -1727,6 +1955,7 @@ public sealed class ConversationReplyGeneratorTests
         var providerFactory = new ToolCallingProviderFactory();
         var generator = new NyxIdConversationReplyGenerator(
             providerFactory,
+            BuiltInPromptFloorProvider,
             toolSources: [new SingleToolSource(new ApprovalRequiredTool())],
             relayOptions: new global::Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
             {
@@ -1752,11 +1981,152 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
+    public async Task GenerateReplyAsync_ForNyxIdInventory_UsesSkillThenTypedToolAndStreamsFinalAnswer()
+    {
+        var executionEvents = new List<string>();
+        var providerFactory = new NyxIdInventorySkillStreamingProviderFactory();
+        var remoteSkillFetcher = new RecordingNyxIdRemoteSkillFetcher(executionEvents);
+        var skillCapabilityIssuer = new RecordingNyxIdSkillCapabilityIssuer("sender-skill-token");
+        var inventoryCapabilityIssuer = new RecordingNyxIdInventoryCapabilityIssuer(
+            "sender-inventory-token",
+            executionEvents);
+        var inventoryHandler = new RecordingNyxIdInventoryHandler(executionEvents);
+        var nyxIdOptions = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
+        var inventorySource = new ChannelNyxIdConnectedServiceInventoryToolSource(
+            nyxIdOptions,
+            new FixedNyxIdApiClientFactory(new NyxIdApiClient(
+                nyxIdOptions,
+                new HttpClient(inventoryHandler))),
+            inventoryCapabilityIssuer,
+            NullLogger<ChannelNyxIdConnectedServiceInventoryToolSource>.Instance);
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            BuiltInPromptFloorProvider,
+            toolSources: [inventorySource],
+            localSkillCatalog: new LocalSkillCatalog(),
+            remoteSkillFetcher: remoteSkillFetcher,
+            relayOptions: new global::Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                StreamingPlaceholderText = "…",
+            },
+            remoteSkillAccessTokenResolver: new ChannelRemoteSkillAccessTokenResolver(
+                skillCapabilityIssuer,
+                NullLogger<ChannelRemoteSkillAccessTokenResolver>.Instance));
+        var sink = new RecordingStreamingSink();
+        var toolContext = AgentToolExecutionContext.Empty with
+        {
+            Channel = new AgentToolChannelContext(
+                "lark",
+                "ou-channel-alpha",
+                "scope-channel-alpha",
+                "message-inventory-alpha",
+                null),
+            SenderBinding = new AgentToolSenderBindingContext(
+                "bnd-skill-inventory-alpha",
+                NyxUserId: "nyx-user-channel-alpha",
+                SenderTenant: "tenant-channel-alpha"),
+            NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                "lark",
+                "tenant-authority-alpha",
+                "ou-authority-alpha"),
+        };
+
+        var reply = await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "message-inventory-alpha",
+                ChannelId = ChannelId.From("lark"),
+                Conversation = new ConversationReference
+                {
+                    CanonicalKey = "lark:dm:ou-channel-alpha",
+                },
+                Content = new MessageContent
+                {
+                    Text = "我在 NyxID 上连接了哪些服务",
+                },
+            },
+            new Dictionary<string, string>
+            {
+                [ChannelMetadataKeys.Platform] = "lark",
+                [ChannelMetadataKeys.SenderId] = "ou-channel-alpha",
+                [ChannelMetadataKeys.MessageId] = "message-inventory-alpha",
+            },
+            Control(
+                model: "sender-model",
+                route: "sender-route",
+                rounds: 4,
+                token: "ambient-owner-token",
+                senderToken: null),
+            toolContext,
+            sink,
+            CancellationToken.None);
+
+        providerFactory.ChatStreamCallCount.Should().Be(3);
+        providerFactory.Requests.Should().HaveCount(3);
+        providerFactory.ObservedToolCalls.Should().Equal(
+            "use_skill",
+            "nyxid_service_inventory");
+        executionEvents.Should().Equal(
+            "use_skill",
+            "nyxid_service_inventory",
+            "/api/v1/keys");
+
+        remoteSkillFetcher.Requests.Should().ContainSingle().Which.Should().Be((
+            "sender-skill-token",
+            "nyxid"));
+        remoteSkillFetcher.Requests.Should().NotContain(request =>
+            request.AccessToken == "ambient-owner-token");
+        skillCapabilityIssuer.BindingIds.Should().ContainSingle()
+            .Which.Should().Be("bnd-skill-inventory-alpha");
+        inventoryCapabilityIssuer.BindingIds.Should().ContainSingle()
+            .Which.Should().Be("bnd-skill-inventory-alpha");
+        skillCapabilityIssuer.Subjects.Should().ContainSingle().Which.Should().Be((
+            "lark",
+            "tenant-authority-alpha",
+            "ou-authority-alpha"));
+        inventoryCapabilityIssuer.Subjects.Should().ContainSingle().Which.Should().Be((
+            "lark",
+            "tenant-authority-alpha",
+            "ou-authority-alpha"));
+        inventoryHandler.Authorization.Should().Be("Bearer sender-inventory-token");
+        inventoryHandler.RequestPath.Should().Be("/api/v1/keys");
+
+        var useSkillResult = providerFactory.Requests[1].Messages
+            .Should().ContainSingle(message =>
+                message.Role == "tool" &&
+                message.ToolCallId == "call-use-nyxid")
+            .Which.Content;
+        var inventoryResult = providerFactory.Requests[2].Messages
+            .Should().ContainSingle(message =>
+                message.Role == "tool" &&
+                message.ToolCallId == "call-nyxid-inventory")
+            .Which.Content;
+        useSkillResult.Should().Contain("nyxid_service_inventory");
+        inventoryResult.Should().Contain("GitHub");
+
+        providerFactory.Requests
+            .SelectMany(request => request.Tools ?? [])
+            .Should().NotContain(tool => tool.Name == "code_execute");
+        reply.Text.Should().Be("你已连接 GitHub。");
+        sink.Emissions.Should().NotBeEmpty();
+        sink.Emissions.Last().Should().Be("你已连接 GitHub。");
+
+        var visibleAndToolOutput = string.Join(
+            "\n",
+            new[] { reply.Text, useSkillResult, inventoryResult }
+                .Where(static value => !string.IsNullOrWhiteSpace(value)));
+        visibleAndToolOutput.Should().NotContain("UNAUTHENTICATED");
+        visibleAndToolOutput.Should().NotContain("nyxid service list");
+        visibleAndToolOutput.Should().NotContain("/init");
+    }
+
+    [Fact]
     public async Task GenerateReplyAsync_WithToolCallPreamble_DoesNotStreamProcessNarration()
     {
         var providerFactory = new ToolCallingPreambleProviderFactory();
         var generator = new NyxIdConversationReplyGenerator(
             providerFactory,
+            BuiltInPromptFloorProvider,
             toolSources: [new SingleToolSource(new ApprovalRequiredTool())],
             relayOptions: new global::Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
             {
@@ -1792,6 +2162,7 @@ public sealed class ConversationReplyGeneratorTests
         var providerFactory = new PrimarySkillRecoveryProviderFactory();
         var generator = new NyxIdConversationReplyGenerator(
             providerFactory,
+            BuiltInPromptFloorProvider,
             toolSources:
             [
                 new SingleToolSource(new FixedResultTool("ornn_search_skills", "Found 1 skills:\n- **project-summary**")),
@@ -1847,6 +2218,7 @@ public sealed class ConversationReplyGeneratorTests
         var providerFactory = new PrimarySkillRecoveryProviderFactory();
         var generator = new NyxIdConversationReplyGenerator(
             providerFactory,
+            BuiltInPromptFloorProvider,
             toolSources:
             [
                 new SingleToolSource(new FixedResultTool("ornn_search_skills", "Found 1 skills:\n- **project-summary**")),
@@ -1887,6 +2259,7 @@ public sealed class ConversationReplyGeneratorTests
         var providerFactory = new BlockerRecoveryProviderFactory();
         var generator = new NyxIdConversationReplyGenerator(
             providerFactory,
+            BuiltInPromptFloorProvider,
             toolSources:
             [
                 new SingleToolSource(new FixedResultTool("ornn_search_skills", "Found 1 skills:\n- **project-summary**")),
@@ -1938,6 +2311,7 @@ public sealed class ConversationReplyGeneratorTests
         var providerFactory = new SlashInitialSearchRecoveryProviderFactory();
         var generator = new NyxIdConversationReplyGenerator(
             providerFactory,
+            BuiltInPromptFloorProvider,
             toolSources:
             [
                 new SingleToolSource(new FixedResultTool("ornn_search_skills", "Found 1 skills:\n- **goal**")),
@@ -1986,6 +2360,7 @@ public sealed class ConversationReplyGeneratorTests
         var providerFactory = new UnparseableSearchMatchRecoveryProviderFactory();
         var generator = new NyxIdConversationReplyGenerator(
             providerFactory,
+            BuiltInPromptFloorProvider,
             toolSources:
             [
                 new SingleToolSource(new FixedResultTool("ornn_search_skills", "Found 1 skills:\n* project-summary")),
@@ -2038,7 +2413,7 @@ public sealed class ConversationReplyGeneratorTests
                 ["bnd_sender"] = new NyxIdUserLlmPreferences("sender-model", string.Empty, MaxToolRounds: 0),
             },
         };
-        var generator = new NyxIdConversationReplyGenerator(providerFactory, preferencesStore: prefsStore);
+        var generator = new NyxIdConversationReplyGenerator(providerFactory, BuiltInPromptFloorProvider, preferencesStore: prefsStore);
 
         await generator.GenerateReplyAsync(
             new ChatActivity
@@ -2073,7 +2448,7 @@ public sealed class ConversationReplyGeneratorTests
         // unbound deployments behave identically to before issue #513.
         var providerFactory = new RecordingProviderFactory();
         var prefsStore = new ScopedStubPreferencesStore();
-        var generator = new NyxIdConversationReplyGenerator(providerFactory, preferencesStore: prefsStore);
+        var generator = new NyxIdConversationReplyGenerator(providerFactory, BuiltInPromptFloorProvider, preferencesStore: prefsStore);
 
         await generator.GenerateReplyAsync(
             new ChatActivity
@@ -2103,7 +2478,7 @@ public sealed class ConversationReplyGeneratorTests
     public async Task GenerateReplyAsync_ShouldNotPromoteMetadataOwnedKeysIntoToolContext()
     {
         var providerFactory = new RecordingProviderFactory();
-        var generator = new NyxIdConversationReplyGenerator(providerFactory);
+        var generator = new NyxIdConversationReplyGenerator(providerFactory, BuiltInPromptFloorProvider);
 
         await generator.GenerateReplyAsync(
             new ChatActivity
@@ -2159,6 +2534,7 @@ public sealed class ConversationReplyGeneratorTests
         var toolSource = new CountingToolSource(new ApprovalRequiredTool());
         var generator = new NyxIdConversationReplyGenerator(
             providerFactory,
+            BuiltInPromptFloorProvider,
             toolSources: [toolSource],
             localSkillCatalog: new LocalSkillCatalog());
 
@@ -2196,6 +2572,7 @@ public sealed class ConversationReplyGeneratorTests
         var providerFactory = new RecordingProviderFactory();
         var generator = new NyxIdConversationReplyGenerator(
             providerFactory,
+            BuiltInPromptFloorProvider,
             toolSources: [new SingleToolSource(new FixedResultTool("any_tool", """{"ok":true}"""))]);
 
         await generator.GenerateReplyAsync(
@@ -2248,6 +2625,7 @@ public sealed class ConversationReplyGeneratorTests
             Substitute.For<IScheduledInvocationAuthorizationRevalidator>());
         var generator = new NyxIdConversationReplyGenerator(
             providerFactory,
+            BuiltInPromptFloorProvider,
             toolSources: [agentBuilderSource]);
 
         await generator.GenerateReplyAsync(
@@ -2280,6 +2658,42 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
+    public async Task GenerateReplyAsync_ForBoundLarkRelayTurn_DiscoversRequestToolsWithSenderCredentialContext()
+    {
+        var providerFactory = new RecordingProviderFactory();
+        var requestScopedSource = new RequestScopedToolSource(
+            new FixedResultTool("nyxid_service_inventory", """{"instances":[]}"""));
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            BuiltInPromptFloorProvider,
+            toolSources: [requestScopedSource]);
+
+        await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-bound-channel-inventory",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-1" },
+                Content = new MessageContent { Text = "我在 NyxID 上连接了哪些服务" },
+            },
+            new Dictionary<string, string>
+            {
+                [ChannelMetadataKeys.Platform] = "lark",
+                [ChannelMetadataKeys.SenderId] = "ou_user_1",
+                [ChannelMetadataKeys.MessageId] = "msg-bound-channel-inventory",
+            },
+            Control("sender-model", "sender-route", 4, token: "owner-token", senderToken: "sender-token"),
+            RelayToolContext("bnd-user-1", "msg-bound-channel-inventory"),
+            streamingSink: null,
+            CancellationToken.None);
+
+        requestScopedSource.CapturedAccessTokens.Should().ContainSingle()
+            .Which.Should().Be("sender-token");
+        var request = providerFactory.Requests.Should().ContainSingle().Subject;
+        request.Tools.Should().ContainSingle(tool => tool.Name == "nyxid_service_inventory");
+        request.ToolContext!.Credentials.NyxIdAccessToken.Should().Be("sender-token");
+    }
+
+    [Fact]
     public async Task GenerateReplyAsync_FallsBackToOwnerPrefsWhenSenderStoreThrows()
     {
         // Pin graceful-degradation: a transient sender-config projection
@@ -2287,7 +2701,7 @@ public sealed class ConversationReplyGeneratorTests
         // owner prefs survive (PR #521 review glm-5.1).
         var providerFactory = new RecordingProviderFactory();
         var prefsStore = new ScopedStubPreferencesStore { ThrowOnLookup = true };
-        var generator = new NyxIdConversationReplyGenerator(providerFactory, preferencesStore: prefsStore);
+        var generator = new NyxIdConversationReplyGenerator(providerFactory, BuiltInPromptFloorProvider, preferencesStore: prefsStore);
 
         await generator.GenerateReplyAsync(
             new ChatActivity
@@ -2328,7 +2742,7 @@ public sealed class ConversationReplyGeneratorTests
                     MaxToolRounds: 7),
             },
         };
-        var generator = new NyxIdConversationReplyGenerator(providerFactory, preferencesStore: prefsStore);
+        var generator = new NyxIdConversationReplyGenerator(providerFactory, BuiltInPromptFloorProvider, preferencesStore: prefsStore);
 
         var reply = await generator.GenerateReplyAsync(
             new ChatActivity
@@ -2387,6 +2801,7 @@ public sealed class ConversationReplyGeneratorTests
         };
         var generator = new NyxIdConversationReplyGenerator(
             providerFactory,
+            BuiltInPromptFloorProvider,
             toolSources: [new SingleToolSource(new FixedResultTool("aevatar_observe_run", """{"status":"running"}"""))],
             preferencesStore: prefsStore);
 
@@ -2428,6 +2843,7 @@ public sealed class ConversationReplyGeneratorTests
         };
         var generator = new NyxIdConversationReplyGenerator(
             providerFactory,
+            BuiltInPromptFloorProvider,
             toolSources: [new SingleToolSource(new FixedResultTool("aevatar_observe_run", """{"status":"running"}"""))]);
 
         var reply = await generator.GenerateReplyAsync(
@@ -2471,7 +2887,7 @@ public sealed class ConversationReplyGeneratorTests
                     MaxToolRounds: 7),
             },
         };
-        var generator = new NyxIdConversationReplyGenerator(providerFactory, preferencesStore: prefsStore);
+        var generator = new NyxIdConversationReplyGenerator(providerFactory, BuiltInPromptFloorProvider, preferencesStore: prefsStore);
 
         await generator.GenerateReplyAsync(
             new ChatActivity
@@ -2509,7 +2925,7 @@ public sealed class ConversationReplyGeneratorTests
                 ["bnd_sender"] = new NyxIdUserLlmPreferences("sender-model", string.Empty, MaxToolRounds: 0),
             },
         };
-        var generator = new NyxIdConversationReplyGenerator(providerFactory, preferencesStore: prefsStore);
+        var generator = new NyxIdConversationReplyGenerator(providerFactory, BuiltInPromptFloorProvider, preferencesStore: prefsStore);
 
         await generator.GenerateReplyAsync(
             new ChatActivity
@@ -2599,7 +3015,7 @@ public sealed class ConversationReplyGeneratorTests
                 break;
         }
 
-        var generator = new NyxIdConversationReplyGenerator(providerFactory, preferencesStore: prefsStore);
+        var generator = new NyxIdConversationReplyGenerator(providerFactory, BuiltInPromptFloorProvider, preferencesStore: prefsStore);
         await generator.GenerateReplyAsync(
             new ChatActivity
             {
@@ -2657,13 +3073,22 @@ public sealed class ConversationReplyGeneratorTests
     {
         public SystemSkillOverlayRequest LastRequest { get; private set; }
 
-        public SystemSkillOverlay? GetCurrent(SystemSkillOverlayRequest request)
+        public GlobalSystemSkillPromptLayer? GetCurrent(SystemSkillOverlayRequest request)
         {
             LastRequest = request;
             return overlayMarkdown is null
                 ? null
-                : new SystemSkillOverlay { OverlayMarkdown = overlayMarkdown };
+                : new GlobalSystemSkillPromptLayer(
+                    overlayMarkdown,
+                    new GlobalSystemSkillPromptProvenance("test-global"),
+                    new PromptLayerBounds(32 * 1024, 8192));
         }
+    }
+
+    internal sealed class StubBuiltInPromptFloorProvider(string content) : IBuiltInPromptFloorProvider
+    {
+        public BuiltInPromptFloorLayer GetFloor() =>
+            new(content, new BuiltInPromptFloorProvenance("test-floor"));
     }
 
     private sealed class RecordingStreamingSink : IStreamingReplySink
@@ -2944,6 +3369,175 @@ public sealed class ConversationReplyGeneratorTests
         }
     }
 
+    private sealed class NyxIdInventorySkillStreamingProviderFactory : ILLMProviderFactory, ILLMProvider
+    {
+        public string Name => "nyxid-inventory-skill-streaming";
+
+        public int ChatStreamCallCount { get; private set; }
+
+        public List<LLMRequest> Requests { get; } = [];
+
+        public List<string> ObservedToolCalls { get; } = [];
+
+        public ILLMProvider GetProvider(string name) => this;
+
+        public ILLMProvider GetDefault() => this;
+
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            ChatStreamCallCount++;
+            Requests.Add(request);
+
+            if (!HasToolCall(request, "use_skill"))
+            {
+                ObservedToolCalls.Add("use_skill");
+                yield return ToolChunk(
+                    "call-use-nyxid",
+                    "use_skill",
+                    """{"skill":"nyxid"}""");
+                yield return new LLMStreamChunk { IsLast = true };
+                await Task.CompletedTask;
+                yield break;
+            }
+
+            if (!HasToolCall(request, "nyxid_service_inventory"))
+            {
+                ObservedToolCalls.Add("nyxid_service_inventory");
+                yield return ToolChunk(
+                    "call-nyxid-inventory",
+                    "nyxid_service_inventory",
+                    "{}");
+                yield return new LLMStreamChunk { IsLast = true };
+                await Task.CompletedTask;
+                yield break;
+            }
+
+            yield return new LLMStreamChunk { DeltaContent = "你已连接 " };
+            yield return new LLMStreamChunk { DeltaContent = "GitHub。" };
+            yield return new LLMStreamChunk { IsLast = true };
+            await Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingNyxIdRemoteSkillFetcher(List<string> executionEvents)
+        : IRemoteSkillFetcher
+    {
+        public List<(string AccessToken, string NameOrId)> Requests { get; } = [];
+
+        public Task<SkillDefinition?> FetchSkillAsync(
+            string accessToken,
+            string nameOrId,
+            CancellationToken ct = default)
+        {
+            Requests.Add((accessToken, nameOrId));
+            executionEvents.Add("use_skill");
+            return Task.FromResult<SkillDefinition?>(new SkillDefinition
+            {
+                Name = "nyxid",
+                Description = "Use the caller-scoped NyxID tools.",
+                Instructions =
+                    "Use `nyxid_service_inventory` for the sender-scoped connected-service inventory.",
+                Source = SkillSource.Remote,
+                RemoteId = "skill-nyxid-alpha",
+            });
+        }
+    }
+
+    private sealed class RecordingNyxIdSkillCapabilityIssuer(string accessToken)
+        : INyxIdSkillCapabilityIssuer
+    {
+        public List<string> BindingIds { get; } = [];
+
+        public List<(string Platform, string Tenant, string ExternalUserId)> Subjects { get; } = [];
+
+        public Task<CapabilityHandle> IssueByBindingIdAsync(
+            ExternalSubjectRef externalSubject,
+            string bindingId,
+            CancellationToken ct = default)
+        {
+            BindingIds.Add(bindingId);
+            Subjects.Add((
+                externalSubject.Platform,
+                externalSubject.Tenant,
+                externalSubject.ExternalUserId));
+            return Task.FromResult(new CapabilityHandle
+            {
+                AccessToken = accessToken,
+                Scope = "proxy",
+            });
+        }
+    }
+
+    private sealed class RecordingNyxIdInventoryCapabilityIssuer(
+        string accessToken,
+        List<string> executionEvents)
+        : INyxIdConnectedServiceInventoryCapabilityIssuer
+    {
+        public List<string> BindingIds { get; } = [];
+
+        public List<(string Platform, string Tenant, string ExternalUserId)> Subjects { get; } = [];
+
+        public Task<CapabilityHandle> IssueByBindingIdAsync(
+            ExternalSubjectRef externalSubject,
+            string bindingId,
+            CancellationToken ct = default)
+        {
+            executionEvents.Add("nyxid_service_inventory");
+            BindingIds.Add(bindingId);
+            Subjects.Add((
+                externalSubject.Platform,
+                externalSubject.Tenant,
+                externalSubject.ExternalUserId));
+            return Task.FromResult(new CapabilityHandle
+            {
+                AccessToken = accessToken,
+                Scope = "proxy",
+            });
+        }
+    }
+
+    private sealed class RecordingNyxIdInventoryHandler(List<string> executionEvents) : HttpMessageHandler
+    {
+        public string? Authorization { get; private set; }
+
+        public string? RequestPath { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            Authorization = request.Headers.Authorization?.ToString();
+            RequestPath = request.RequestUri?.AbsolutePath;
+            executionEvents.Add(RequestPath ?? "unknown-http-path");
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent("""
+                    {
+                      "keys": [
+                        {
+                          "id": "user-service-github-alpha",
+                          "slug": "github",
+                          "service_id": "catalog-github-alpha",
+                          "label": "GitHub",
+                          "is_active": true,
+                          "credential_source": { "type": "personal" }
+                        }
+                      ]
+                    }
+                    """),
+            });
+        }
+    }
+
+    private sealed class FixedNyxIdApiClientFactory(NyxIdApiClient client) : INyxIdApiClientFactory
+    {
+        public NyxIdApiClient CreateClient() => client;
+    }
+
     private sealed class ToolResultEchoingProviderFactory : ILLMProviderFactory, ILLMProvider
     {
         public string Name => "tool-result-echoing";
@@ -3204,6 +3798,19 @@ public sealed class ConversationReplyGeneratorTests
     {
         public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<IAgentTool>>([tool]);
+    }
+
+    private sealed class RequestScopedToolSource(IAgentTool tool) : IAgentToolSource
+    {
+        public List<string?> CapturedAccessTokens { get; } = [];
+
+        public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
+        {
+            var accessToken = AgentToolRequestContext.NyxIdAccessToken;
+            CapturedAccessTokens.Add(accessToken);
+            return Task.FromResult<IReadOnlyList<IAgentTool>>(
+                string.IsNullOrWhiteSpace(accessToken) ? [] : [tool]);
+        }
     }
 
     private sealed class FixedResultTool(string name, string result) : IAgentTool

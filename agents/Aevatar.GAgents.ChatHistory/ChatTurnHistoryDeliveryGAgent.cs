@@ -12,6 +12,8 @@ namespace Aevatar.GAgents.ChatHistory;
 [GAgent("chat.history.turn-delivery")]
 public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDeliveryState>
 {
+    public static string ProjectionKind => "chat-history-turn-delivery";
+
     private const string ConversationAppendPublisherId = "chat-history-turn-delivery";
     private readonly IActorRuntime _actorRuntime;
     private readonly IActorDispatchPort _dispatchPort;
@@ -51,6 +53,8 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
     {
         ArgumentNullException.ThrowIfNull(command);
         if (State.Status is ChatTurnHistoryDeliveryStatus.AppendDispatched
+            or ChatTurnHistoryDeliveryStatus.AppendCommitted
+            or ChatTurnHistoryDeliveryStatus.AppendRejected
             or ChatTurnHistoryDeliveryStatus.Abandoned
             or ChatTurnHistoryDeliveryStatus.Failed)
         {
@@ -85,6 +89,7 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
             WorkflowCorrelationId = command.WorkflowCorrelationId?.Trim() ?? string.Empty,
             ReservedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
             CreateConversationIfMissing = command.CreateConversationIfMissing,
+            RequestFingerprint = command.RequestFingerprint?.Trim() ?? string.Empty,
         });
     }
 
@@ -431,6 +436,7 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
         next.WorkflowActorId = evt.WorkflowActorId;
         next.WorkflowCommandId = evt.WorkflowCommandId;
         next.WorkflowCorrelationId = evt.WorkflowCorrelationId;
+        next.RequestFingerprint = evt.RequestFingerprint;
         next.Status = ChatTurnHistoryDeliveryStatus.Reserved;
         next.ReservedAtUnixMs = evt.ReservedAtUnixMs;
         next.CreateConversationIfMissing = evt.CreateConversationIfMissing;

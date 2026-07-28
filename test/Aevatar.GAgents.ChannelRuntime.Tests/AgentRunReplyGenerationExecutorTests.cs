@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Tools;
@@ -27,7 +28,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
         var executor = CreateExecutor(provider);
         var workItem = BuildFinalNoToolsWorkItem();
 
-        await executor.BuildLlmStepContinuationAsync(workItem, CancellationToken.None);
+        await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
 
         var request = provider.Requests.Should().ContainSingle().Subject;
         request.Tools.Should().BeNull();
@@ -49,7 +50,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
                 SideEffectKind = "definition.update",
             });
 
-        await executor.BuildLlmStepContinuationAsync(workItem, CancellationToken.None);
+        await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
 
         var request = provider.Requests.Should().ContainSingle().Subject;
         request.Tools.Should().BeNull();
@@ -101,7 +102,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
             imagePart,
         ])));
 
-        await executor.BuildLlmStepContinuationAsync(workItem, CancellationToken.None);
+        await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
 
         var providerImagePart = provider.Requests.Should().ContainSingle().Subject
             .Messages.Last(message => message.Role == "user")
@@ -147,11 +148,143 @@ public sealed class AgentRunReplyGenerationExecutorTests
                 }),
         ])));
 
-        var act = async () => await executor.BuildLlmStepContinuationAsync(workItem, CancellationToken.None);
+        var act = async () => await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
 
         var failure = await act.Should().ThrowAsync<InvalidOperationException>();
         failure.Which.Message.Should().Contain("Referenced chat media exceeds the materialization size limit");
         provider.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task BuildLlmStepContinuation_WhenProviderCallsTool_ShouldReturnFactsBeforeExecutingTool()
+    {
+        var tool = new CountingTool("use_skill");
+        var provider = new ToolCallProvider(tool.Name);
+        var executor = CreateToolEnabledExecutor(tool, provider);
+        var workItem = BuildToolEnabledWorkItem();
+
+        var execution = await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
+
+        execution.Continuation.LlmStepResult.ToolCalls.Should().ContainSingle()
+            .Which.Name.Should().Be(tool.Name);
+        execution.AuthorizedToolStep.Should().NotBeNull();
+        tool.ExecuteCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task BuildLlmStepContinuation_ShouldSnapshotExactProviderOwnedCallSafety()
+    {
+        var tool = new EffectClassifiedTool("repository_update");
+        var provider = new ToolCallProvider(tool.Name);
+        var executor = CreateToolEnabledExecutor(tool, provider);
+        var workItem = BuildToolEnabledWorkItem();
+
+        var execution = await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
+
+        tool.ClassifiedArguments.Should().Be("{}");
+        var snapshot = execution.AuthorizedToolCallSafeties.Should().ContainSingle().Which;
+        snapshot.CallId.Should().Be("call-1");
+        snapshot.ToolName.Should().Be(tool.Name);
+        snapshot.ArgumentsJson.Should().Be("{}");
+        snapshot.CallSafety.RequiresApproval.Should().BeFalse();
+        snapshot.CallSafety.IsReadOnly.Should().BeFalse();
+        snapshot.CallSafety.IsDestructive.Should().BeTrue();
+        snapshot.SideEffectKind.Should().Be("repository.update");
+    }
+
+    [Fact]
+    public async Task BuildLlmStepContinuation_WhenMiddlewareRemovesTools_ShouldRejectFabricatedToolCall()
+    {
+        var tool = new CountingTool("use_skill");
+        var provider = new ToolCallProvider(tool.Name);
+        var executor = CreateToolEnabledExecutor(tool, provider, [new RemoveToolsMiddleware()]);
+
+        var llmWorkItem = BuildToolEnabledWorkItem();
+        var execution = await executor.BuildLlmStepExecutionAsync(
+            llmWorkItem,
+            CancellationToken.None);
+        var toolWorkItem = BuildToolStepWorkItem(llmWorkItem, execution.Continuation);
+        var continuation = await executor.BuildToolStepContinuationAsync(
+            toolWorkItem,
+            execution.AuthorizedToolStep,
+            CancellationToken.None);
+
+        provider.Requests.Should().ContainSingle().Which.Tools.Should().BeNull();
+        continuation.ToolStepResult.Should().NotBeNull();
+        var rejected = continuation.ToolStepResult.ResultMessages.Should().ContainSingle().Which;
+        rejected.Content.Should().Be("{\"error\":\"The tool request failed.\"}");
+        var receipt = continuation.ToolStepResult.ToolReceipts.Should().ContainSingle().Which;
+        receipt.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ErrorCode.Should().Be("tool_execution_exception");
+        tool.ExecuteCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task BuildToolStepContinuation_WithoutMatchingAuthorization_ShouldRejectAllPendingCalls()
+    {
+        var registeredTool = new CountingTool("use_skill");
+        var executor = CreateToolEnabledExecutor(registeredTool, new RecordingProvider());
+        var workItem = BuildToolEnabledWorkItem();
+        workItem.StepState.NextStepIndex = 2;
+        workItem.StepState.PendingToolCalls.AddRange(
+        [
+            new AgentRunToolCall { Id = "call-1", Name = registeredTool.Name, ArgumentsJson = "{}" },
+            new AgentRunToolCall { Id = "call-2", Name = registeredTool.Name, ArgumentsJson = "{}" },
+        ]);
+        workItem = workItem with { StepIndex = 2 };
+
+        var continuation = await executor.BuildToolStepContinuationAsync(
+            workItem,
+            authorizedToolStep: null,
+            CancellationToken.None);
+
+        continuation.StepIndex.Should().Be(3);
+        var result = continuation.ToolStepResult;
+        result.Should().NotBeNull();
+        result.AdvanceRound.Should().BeTrue();
+        result.ResultMessages.Select(static message => message.ToolCallId)
+            .Should().Equal("call-1", "call-2");
+        result.ResultMessages.Should().OnlyContain(static message =>
+            message.Content.Contains("not found", StringComparison.Ordinal));
+        registeredTool.ExecuteCount.Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData(AuthorizedToolStepMutation.RunId)]
+    [InlineData(AuthorizedToolStepMutation.CorrelationId)]
+    [InlineData(AuthorizedToolStepMutation.Attempt)]
+    [InlineData(AuthorizedToolStepMutation.StepIndex)]
+    [InlineData(AuthorizedToolStepMutation.ToolCallCount)]
+    [InlineData(AuthorizedToolStepMutation.ToolCallId)]
+    [InlineData(AuthorizedToolStepMutation.ToolName)]
+    [InlineData(AuthorizedToolStepMutation.Arguments)]
+    public async Task BuildToolStepContinuation_WhenAuthorizationIsTampered_ShouldRejectBeforeToolExecution(
+        AuthorizedToolStepMutation mutation)
+    {
+        var registeredTool = new CountingTool("use_skill");
+        var executor = CreateToolEnabledExecutor(
+            registeredTool,
+            new ToolCallProvider(registeredTool.Name));
+        var llmWorkItem = BuildToolEnabledWorkItem();
+        var execution = await executor.BuildLlmStepExecutionAsync(
+            llmWorkItem,
+            CancellationToken.None);
+        var toolWorkItem = MutateToolStepWorkItem(
+            BuildToolStepWorkItem(llmWorkItem, execution.Continuation),
+            mutation);
+
+        var continuation = await executor.BuildToolStepContinuationAsync(
+            toolWorkItem,
+            execution.AuthorizedToolStep,
+            CancellationToken.None);
+
+        execution.AuthorizedToolStep.Should().NotBeNull();
+        var result = continuation.ToolStepResult;
+        result.Should().NotBeNull();
+        result!.ResultMessages.Should().HaveCount(toolWorkItem.StepState.PendingToolCalls.Count);
+        result.ResultMessages.Should().OnlyContain(static message =>
+            message.Content.Contains("not found", StringComparison.Ordinal));
+        registeredTool.ExecuteCount.Should().Be(0);
     }
 
     private static AgentRunReplyGenerationExecutor CreateExecutor(
@@ -163,9 +296,9 @@ public sealed class AgentRunReplyGenerationExecutorTests
             history: new ChatHistory(),
             toolLoop: new ToolCallLoop(new ToolManager()),
             hooks: null,
-            requestBuilder: static () => new LLMRequest { Messages = [] });
+            requestBuilder: static _ => new LLMRequest { Messages = [] });
         var plan = new AgentRunReplyStepPlan(
-            runtime.CreateStepExecutor(),
+            runtime.CreateStepExecutor(turnCatalog: null),
             new Dictionary<string, string>(),
             LLMControlContext.Empty,
             AgentToolExecutionContext.Empty,
@@ -180,6 +313,35 @@ public sealed class AgentRunReplyGenerationExecutorTests
             relayOptions: null,
             NullLogger<AgentRunReplyGenerationExecutor>.Instance,
             fileArtifactReadPort: fileArtifactReadPort);
+    }
+
+    private static AgentRunReplyGenerationExecutor CreateToolEnabledExecutor(
+        IAgentTool tool,
+        ILLMProvider provider,
+        IReadOnlyList<ILLMCallMiddleware>? llmMiddlewares = null)
+    {
+        var tools = new ToolManager();
+        tools.Register(tool);
+        var runtime = new ChatRuntime(
+            () => provider,
+            new ChatHistory(),
+            new ToolCallLoop(tools),
+            hooks: null,
+            requestBuilder: _ => new LLMRequest { Messages = [], Tools = tools.GetAll() },
+            llmMiddlewares: llmMiddlewares);
+        var plan = new AgentRunReplyStepPlan(
+            runtime.CreateStepExecutor(turnCatalog: null),
+            new Dictionary<string, string>(),
+            LLMControlContext.Empty,
+            AgentToolExecutionContext.Empty,
+            InitialMessages: [],
+            MaxToolRounds: 1);
+        return new AgentRunReplyGenerationExecutor(
+            Substitute.For<IActorDispatchPort>(),
+            new StaticStepPlanReplyGenerator(plan),
+            interactiveReplyCollector: null,
+            relayOptions: null,
+            NullLogger<AgentRunReplyGenerationExecutor>.Instance);
     }
 
     private static AgentRunReplyStepExecutionRequest BuildFinalNoToolsWorkItem(params AgentToolReceipt[] receipts)
@@ -219,6 +381,102 @@ public sealed class AgentRunReplyGenerationExecutorTests
             stepState);
     }
 
+    private static AgentRunReplyStepExecutionRequest BuildToolEnabledWorkItem()
+    {
+        var request = new NeedsLlmReplyEvent
+        {
+            RunId = "run-1",
+            CorrelationId = "corr-1",
+            TargetActorId = "conversation-actor",
+            Activity = new ChatActivity
+            {
+                Id = "activity-1",
+                Content = new MessageContent { Text = "run" },
+            },
+        };
+        var stepState = new AgentRunReplyStepState
+        {
+            RunId = "run-1",
+            CorrelationId = "corr-1",
+            TargetActorId = "conversation-actor",
+            Attempt = 1,
+            NextStepIndex = 1,
+            MaxToolRounds = 1,
+        };
+        stepState.Messages.Add(AgentRunReplyStepMappers.ToProto(ChatMessage.User("run")));
+        return new AgentRunReplyStepExecutionRequest(
+            "run-1",
+            "channel-agent-run:run-1",
+            Attempt: 1,
+            StepIndex: 1,
+            request,
+            stepState);
+    }
+
+    private static AgentRunReplyStepExecutionRequest BuildToolStepWorkItem(
+        AgentRunReplyStepExecutionRequest llmWorkItem,
+        AgentRunNextLlmStepRequestedEvent continuation)
+    {
+        var stepState = llmWorkItem.StepState.Clone();
+        stepState.NextStepIndex = continuation.StepIndex;
+        stepState.PendingToolCalls.Clear();
+        stepState.PendingToolCalls.AddRange(continuation.LlmStepResult.ToolCalls.Select(static call => call.Clone()));
+        return llmWorkItem with
+        {
+            StepIndex = continuation.StepIndex,
+            StepState = stepState,
+        };
+    }
+
+    private static AgentRunReplyStepExecutionRequest MutateToolStepWorkItem(
+        AgentRunReplyStepExecutionRequest workItem,
+        AuthorizedToolStepMutation mutation)
+    {
+        if (mutation == AuthorizedToolStepMutation.RunId)
+            return workItem with { RunId = "run-tampered" };
+        if (mutation == AuthorizedToolStepMutation.CorrelationId)
+        {
+            var request = workItem.Request.Clone();
+            request.CorrelationId = "corr-tampered";
+            return workItem with { Request = request };
+        }
+        if (mutation == AuthorizedToolStepMutation.Attempt)
+            return workItem with { Attempt = workItem.Attempt + 1 };
+        if (mutation == AuthorizedToolStepMutation.StepIndex)
+            return workItem with { StepIndex = workItem.StepIndex + 1 };
+
+        var stepState = workItem.StepState.Clone();
+        if (mutation == AuthorizedToolStepMutation.ToolCallCount)
+        {
+            stepState.PendingToolCalls.Add(new AgentRunToolCall
+            {
+                Id = "call-2",
+                Name = "use_skill",
+                ArgumentsJson = "{}",
+            });
+        }
+        else
+        {
+            var toolCall = stepState.PendingToolCalls.Should().ContainSingle().Subject;
+            switch (mutation)
+            {
+                case AuthorizedToolStepMutation.ToolCallId:
+                    toolCall.Id = "call-tampered";
+                    break;
+                case AuthorizedToolStepMutation.ToolName:
+                    toolCall.Name = "tampered_tool";
+                    break;
+                case AuthorizedToolStepMutation.Arguments:
+                    toolCall.ArgumentsJson = "{\"tampered\":true}";
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(mutation), mutation, null);
+            }
+        }
+
+        return workItem with { StepState = stepState };
+    }
+
     private sealed class RecordingProvider : ILLMProvider
     {
         public string Name => "recording-provider";
@@ -232,6 +490,101 @@ public sealed class AgentRunReplyGenerationExecutorTests
             yield return new LLMStreamChunk { DeltaContent = "final" };
             await Task.Yield();
         }
+    }
+
+    private sealed class ToolCallProvider(string toolName) : ILLMProvider
+    {
+        public string Name => "tool-call-provider";
+        public List<LLMRequest> Requests { get; } = [];
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            Requests.Add(request);
+            yield return new LLMStreamChunk
+            {
+                DeltaToolCall = new ToolCall
+                {
+                    Id = "call-1",
+                    Name = toolName,
+                    ArgumentsJson = "{}",
+                },
+            };
+            await Task.Yield();
+        }
+    }
+
+    private sealed class RemoveToolsMiddleware : ILLMCallMiddleware
+    {
+        public Task InvokeAsync(LLMCallContext context, Func<Task> next)
+        {
+            var request = context.Request;
+            context.Request = new LLMRequest
+            {
+                Messages = request.Messages,
+                RequestId = request.RequestId,
+                Metadata = request.Metadata,
+                CallerContext = request.CallerContext,
+                ToolContext = request.ToolContext,
+                RoutingContext = request.RoutingContext,
+                LlmControl = request.LlmControl,
+                Tools = null,
+                Model = request.Model,
+                Temperature = request.Temperature,
+                MaxTokens = request.MaxTokens,
+                ResponseFormat = request.ResponseFormat,
+            };
+            return next();
+        }
+    }
+
+    private sealed class CountingTool(string name) : IAgentTool
+    {
+        public int ExecuteCount { get; private set; }
+        public string Name => name;
+        public string Description => name;
+        public string ParametersSchema => "{}";
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        {
+            ExecuteCount++;
+            return Task.FromResult("{}");
+        }
+    }
+
+    private sealed class EffectClassifiedTool(string name) : IAgentTool
+    {
+        public string Name => name;
+        public string Description => name;
+        public string ParametersSchema => "{}";
+        public bool IsDestructive => true;
+        public string SideEffectKind => "repository.update";
+        public string? ClassifiedArguments { get; private set; }
+
+        public AgentToolCallSafety GetCallSafety(string argumentsJson)
+        {
+            ClassifiedArguments = argumentsJson;
+            return new AgentToolCallSafety(
+                RequiresApproval: false,
+                IsReadOnly: false,
+                IsDestructive: true);
+        }
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult("{}");
+    }
+
+    public enum AuthorizedToolStepMutation
+    {
+        RunId,
+        CorrelationId,
+        Attempt,
+        StepIndex,
+        ToolCallCount,
+        ToolCallId,
+        ToolName,
+        Arguments,
     }
 
     private sealed class StaticStepPlanReplyGenerator(AgentRunReplyStepPlan plan) : IAgentRunStepConversationReplyGenerator
@@ -254,14 +607,14 @@ public sealed class AgentRunReplyGenerationExecutorTests
             AgentToolExecutionContext? toolContext,
             IStreamingReplySink? streamingSink,
             CancellationToken ct) =>
-            throw new NotSupportedException("Per-step tests drive BuildLlmStepContinuationAsync only.");
+            throw new NotSupportedException("Per-step tests drive BuildLlmStepExecutionAsync only.");
 
         public Task<ConversationReplyResult> GenerateReplyAsync(
             ChatActivity activity,
             IReadOnlyDictionary<string, string> metadata,
             IStreamingReplySink? streamingSink,
             CancellationToken ct) =>
-            throw new NotSupportedException("Per-step tests drive BuildLlmStepContinuationAsync only.");
+            throw new NotSupportedException("Per-step tests drive BuildLlmStepExecutionAsync only.");
     }
 
     private sealed class RecordingFileArtifactReadPort(ApplicationFileArtifactRef fileRef, byte[] content)

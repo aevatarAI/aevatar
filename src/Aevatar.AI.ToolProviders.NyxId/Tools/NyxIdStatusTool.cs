@@ -5,7 +5,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 
 /// <summary>Tool to show NyxID account overview (user, services, API keys, nodes).</summary>
-public sealed class NyxIdStatusTool : IAgentTool, IAgentToolCapabilityDescriptor
+public sealed class NyxIdStatusTool : INyxIdBuiltInTool, IAgentToolCapabilityDescriptor
 {
     public IReadOnlyCollection<string> Capabilities => NyxIdToolSurfaces.HumanSessionOnly;
 

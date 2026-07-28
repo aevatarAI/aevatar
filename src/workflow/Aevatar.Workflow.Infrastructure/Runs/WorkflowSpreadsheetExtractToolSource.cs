@@ -364,10 +364,13 @@ public sealed class WorkflowSpreadsheetExtractToolSource(
                 descriptor.OwnerRunId,
                 descriptor.OwnerScopeId);
 
-        private static WorkflowToolExecutionResult Error(string error, string detail) =>
-            WorkflowToolExecutionResult.Success(JsonSerializer.Serialize(
+        private static WorkflowToolExecutionResult Error(string error, string detail)
+        {
+            var resultJson = JsonSerializer.Serialize(
                 new SpreadsheetExtractError(error, detail),
-                JsonOptions));
+                JsonOptions);
+            return WorkflowToolExecutionResult.Failed(resultJson, error, detail);
+        }
 
         private static string ToErrorName(SpreadsheetPreviewErrorCode errorCode) =>
             errorCode switch

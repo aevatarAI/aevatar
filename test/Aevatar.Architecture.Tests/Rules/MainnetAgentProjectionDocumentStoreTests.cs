@@ -46,6 +46,7 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
         AssertProviderStore<ProjectionScopeStatusDocument, InMemoryProjectionDocumentStore<ProjectionScopeStatusDocument, string>>(provider);
         AssertProviderStore<ExternalIdentityBindingDocument, InMemoryProjectionDocumentStore<ExternalIdentityBindingDocument, string>>(provider);
         AssertProviderStore<AevatarOAuthClientDocument, InMemoryProjectionDocumentStore<AevatarOAuthClientDocument, string>>(provider);
+        AssertProviderStore<ManagedCodexCredentialDocument, InMemoryProjectionDocumentStore<ManagedCodexCredentialDocument, string>>(provider);
         AssertProviderStore<ChatRoutePolicyCurrentStateDocument, InMemoryProjectionDocumentStore<ChatRoutePolicyCurrentStateDocument, string>>(provider);
         AssertProviderStore<DeviceRegistrationDocument, InMemoryProjectionDocumentStore<DeviceRegistrationDocument, string>>(provider);
         AssertProviderStore<UserAgentCatalogDocument, InMemoryProjectionDocumentStore<UserAgentCatalogDocument, string>>(provider);
@@ -76,6 +77,7 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
         AssertProviderStore<ProjectionScopeStatusDocument, ElasticsearchProjectionDocumentStore<ProjectionScopeStatusDocument, string>>(provider);
         AssertProviderStore<ExternalIdentityBindingDocument, ElasticsearchProjectionDocumentStore<ExternalIdentityBindingDocument, string>>(provider);
         AssertProviderStore<AevatarOAuthClientDocument, ElasticsearchProjectionDocumentStore<AevatarOAuthClientDocument, string>>(provider);
+        AssertProviderStore<ManagedCodexCredentialDocument, ElasticsearchProjectionDocumentStore<ManagedCodexCredentialDocument, string>>(provider);
         AssertProviderStore<ChatRoutePolicyCurrentStateDocument, ElasticsearchProjectionDocumentStore<ChatRoutePolicyCurrentStateDocument, string>>(provider);
         AssertProviderStore<DeviceRegistrationDocument, ElasticsearchProjectionDocumentStore<DeviceRegistrationDocument, string>>(provider);
         AssertProviderStore<UserAgentCatalogDocument, ElasticsearchProjectionDocumentStore<UserAgentCatalogDocument, string>>(provider);

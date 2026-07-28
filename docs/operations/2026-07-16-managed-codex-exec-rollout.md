@@ -1,102 +1,181 @@
 # Managed codex_exec rollout runbook
 
-This runbook enables the direct Aevatar-to-OpenSandbox path after the immutable runner and offline tests have passed. The feature is disabled by default and must remain allowlisted during P0.
+This runbook enables Aevatar's NyxID-to-chrono-sandbox managed Codex path. The feature is disabled by default and must remain restricted to trusted internal users during P0.
 
 ## Ownership
 
-Aevatar owns the typed tool contract, fixed command, short-lived NyxID credential exchange, runtime config, JSONL validation, failure mapping, and unconditional cleanup.
+Aevatar owns the typed tool contract, Application readiness coordinator,
+per-user credential actor/projection, `ISecretVault` storage, diagnostic
+lifecycle API, fixed NyxID proxy request, and sanitized failure mapping.
 
-Operations owns the deployed OpenSandbox endpoint and API key, private control-plane connectivity, image pull access, Credential Proxy/egress components, kernel/runtime support, resource quotas, observability, and the live tenant proof.
+NyxID owns agent-key scope enforcement and the temporary five-minute `proxy:*` delegation token injected into internal-canary calls to `chrono-sandbox`.
 
-No chrono-sandbox API or code change is required.
+Chrono-sandbox owns the deployed OpenSandbox control plane, immutable runner image, fixed Codex command, request-local delegation-token environment mapping, resource limits, output bounds, cancellation, cleanup, and live execution proof. Operations owns the gVisor tenant and its IP-level egress NetworkPolicy (ADR-0044), deploys and configures NyxID and chrono-sandbox, and does not receive or store users' agent keys.
 
-## OpenSandbox prerequisites
+## Operations prerequisites
 
-Confirm all of the following before enabling Aevatar:
+Before enabling Aevatar, operations must confirm:
 
-- OpenSandbox server `>= 0.2.0`
-- egress component `>= 1.1.1`
-- Credential Proxy in `dns+nft` mode
-- no service-mesh sidecar injected into runner pods
-- private domain reachable from the trusted Aevatar workload with `UseServerProxy=true`
-- runner registry digest pullable on the selected architecture
-- non-root Landlock and `PR_SET_NO_NEW_PRIVS` available for UID/GID `10001`
-- proxy CA mounted at `/opt/opensandbox/mitmproxy-ca-cert.pem`
-- PID, CPU, memory, ephemeral-storage, and tenant concurrency limits configured
+- the NyxID UserService that fronts Aevatar temporarily uses
+  `forward_access_token=true` for the internal P0; it may also inject a
+  delegation token, and Aevatar selects the forwarded bearer for transparent
+  current-user readiness
+- the `chrono-sandbox` service is deployed and exposes `POST /codex/execute`
+- its NyxID service definition is active with `forward_access_token=false`
+- `inject_delegation_token=true` and `delegation_token_scope=proxy:*`
+- each canary user directly owns an active `chrono-sandbox` UserService
+- each canary user has a usable `chrono-llm-public` route
+- chrono-sandbox sets `NYXID_LLM_PROXY_URL=https://nyx-api.chrono-ai.fun/api/v1/proxy/s/chrono-llm-public`; it does not use `/api/v1/llm/gateway/v1` or `/api/v1/llm/chrono-llm-public/v1`
+- chrono-sandbox can pull the approved `containers/codex-runner` image digest
+- runner pods are scheduled under the `gvisor` RuntimeClass with Codex's inner sandbox disabled per ADR-0044; there is no Landlock preflight, and the sandbox create call requests no `networkPolicy` and no `credentialProxy`
+- chrono-sandbox validates the injected token before sandbox creation and passes it only as request-local `NYXID_LLM_TOKEN` through execd's native environment map
+- its OpenSandbox runtime has the required quota, PID, timeout, and cleanup controls, and operations has applied the IP-level egress NetworkPolicy for the codex tenant (coarser than an FQDN allow-list; the NyxID gateway sits behind a shared CDN range)
+- a chrono-owned end-to-end smoke returns exact `CODEX_EXEC_READY` and proves sandbox cleanup
 
-Use this immutable image:
+The runner image itself must contain no provider, NyxID, OpenSandbox control-plane, or user credential. The P0 delegation token must not be written to a shell wrapper, profile, workspace, persisted session, logs, or result. Aevatar no longer needs an OpenSandbox endpoint or API key.
 
-```text
-ghcr.io/aevatarai/codex-runner@sha256:bad7537bc07e8e151bcbaf7fea5e334db8569d71adb563998be6f5f762e42417
-```
+The internal P0 uses two distinct NyxID UserService policies. The UserService
+fronting Aevatar temporarily forwards the interactive access token so the same
+workflow call can confirm `/users/me` and create or repair the user's Agent
+Key. The user's `chrono-sandbox` UserService must instead keep
+`forward_access_token=false`, `inject_delegation_token=true`, and exact
+`proxy:*` delegation; Aevatar validates that chrono policy during first-use
+readiness, explicit provisioning, and rotation, but cannot prevent the service
+owner from changing it later.
 
-Initial request/limit values are `250m` CPU request, `512Mi` memory request, `1` CPU limit, `2Gi` memory limit, and `2Gi` ephemeral storage.
-
-## Run the tenant smoke first
-
-Follow `tools/opensandbox-codex-smoke/README.md`. Supply secrets only through the trusted workload's environment or Secret store. Use a short-lived token carrying only `llm:proxy`; never paste it into GitHub, logs, or checked-in configuration.
-
-The smoke is successful only when it:
-
-1. creates and awaits one sandbox
-2. installs a sanitized Credential Vault binding
-3. initializes the empty Git workspace
-4. passes the native Landlock boundary probe
-5. receives exact `CODEX_EXEC_READY` through the NyxID Responses gateway
-6. consumes bounded JSONL
-7. kills the sandbox and observes it absent
-
-Record only redacted sandbox/execution IDs, image digest, architecture, elapsed time, exact output, and cleanup status.
+The five-minute runner token can access other NyxID REST proxy services
+available to the same user, and Aevatar ingress temporarily handles the
+forwarded interactive bearer, so keep the rollout restricted to trusted
+internal users and operators. Do not use `All` beyond that internal population
+until #2899 adds immutable/version-bound caller-credential non-forwarding,
+NyxID replaces `proxy:*` with authorization limited to `chrono-llm-public`,
+and transparent readiness no longer depends on forwarding the interactive
+bearer.
 
 ## Configure Aevatar
 
-Store `ApiKey` in Kubernetes Secret-backed configuration. Do not add it to `appsettings.json` or a ConfigMap. The .NET environment names are:
+Start with an explicit NyxID user allowlist:
 
 ```text
 Aevatar__CodexExecution__ManagedSandbox__Enabled=true
-Aevatar__CodexExecution__ManagedSandbox__Domain=<private-host[:port]>
-Aevatar__CodexExecution__ManagedSandbox__ApiKey=<secret-ref>
-Aevatar__CodexExecution__ManagedSandbox__Protocol=https
-Aevatar__CodexExecution__ManagedSandbox__UseServerProxy=true
-Aevatar__CodexExecution__ManagedSandbox__RunnerImage=ghcr.io/aevatarai/codex-runner@sha256:bad7537bc07e8e151bcbaf7fea5e334db8569d71adb563998be6f5f762e42417
-Aevatar__CodexExecution__ManagedSandbox__RunnerArchitecture=amd64
-Aevatar__CodexExecution__ManagedSandbox__NyxIdGatewayUrl=https://nyx-api.chrono-ai.fun/api/v1/llm/gateway/v1
-Aevatar__CodexExecution__ManagedSandbox__Model=gpt-5.4
-Aevatar__CodexExecution__ManagedSandbox__AllowedNyxIdUserIds__0=2db990b5-29ea-4a32-acf5-0008420afa1f
-Aevatar__CodexExecution__ManagedSandbox__ReadyTimeoutSeconds=60
-Aevatar__CodexExecution__ManagedSandbox__CleanupTimeoutSeconds=30
-Aevatar__CodexExecution__ManagedSandbox__MaxOutputBytes=1048576
-Aevatar__CodexExecution__ManagedSandbox__MaxConcurrentExecutions=1
+Aevatar__CodexExecution__ManagedSandbox__RolloutBoundary=InternalOnly
+Aevatar__CodexExecution__ManagedSandbox__Eligibility__Mode=Allowlist
+Aevatar__CodexExecution__ManagedSandbox__Eligibility__AllowedNyxIdUserIds__0=<canary-nyxid-user-id>
+Aevatar__CodexExecution__ManagedSandbox__CredentialLifetimeDays=30
+Aevatar__CodexExecution__ManagedSandbox__MaxResponseBytes=1048576
+Aevatar__CodexExecution__ManagedSandbox__MutationLeaseSeconds=300
+Aevatar__CodexExecution__ManagedSandbox__MutationCompletionSeconds=240
 ```
 
-Keep the architecture consistent with the node pool. Startup option validation rejects mutable images, missing allowlist/API key, non-HTTPS gateway URLs, disabled server proxy, unsupported architecture, and out-of-range limits.
-
-## NyxID account readiness
-
-The cluster-owned Aevatar OAuth client must use the canonical interactive authorization scope (`openid profile email offline_access urn:nyxid:scope:broker_binding proxy`). Separately, NyxID's broker/delegation policy must permit a short-lived `llm:proxy` capability. Do not add `llm:proxy` to `/oauth/authorize`, forward the inbound bearer, or broaden the delegated scope to work around `invalid_scope`.
-
-For P0, allow only the intended NyxID subject. The initial subject is:
+After the internal cohort is ready, `All` mode removes the Aevatar allowlist:
 
 ```text
-2db990b5-29ea-4a32-acf5-0008420afa1f
+Aevatar__CodexExecution__ManagedSandbox__Eligibility__Mode=All
 ```
 
-After deployment, run the public Ornn skill `aevatar-codex-exec-workflow-sample` and its `codex-exec-check` workflow as that account. Health checks, option validation, and a successful standalone smoke do not prove workflow identity propagation. The workflow result must have `status=succeeded`, `target=managed_sandbox`, and `output=CODEX_EXEC_READY` exactly after trimming.
+Do not set any `AllowedNyxIdUserIds` entry in `All` mode. `All` does not create
+NyxID UserServices: each user must already have a personal active
+`chrono-sandbox` UserService and a usable `chrono-llm-public` route.
+Keep `RolloutBoundary=InternalOnly`; startup rejects any enabled configuration
+without that explicit boundary, and no public boundary is supported while
+delegation scope remains `proxy:*`.
+
+Do not configure an OpenSandbox URL/API key, runner image, model, provider URL,
+or delegation token in Aevatar. Those belong to chrono-sandbox and NyxID.
+
+## Canary normal path
+
+Do not pre-provision or poll before the normal canary. Invoke the public Ornn
+skill `aevatar-codex-exec-workflow-sample` and its `codex-exec-check` workflow
+directly as an eligible user. The first call must:
+
+1. derive the native NyxID subject independently of `scopeId`;
+2. use the current user bearer only if key creation or repair is required;
+3. commit and observe the per-user descriptor;
+4. continue the same workflow call through chrono-sandbox; and
+5. return exact `CODEX_EXEC_READY`.
+
+The workflow must finish with:
+
+- `status=succeeded`
+- `target=managed_sandbox`
+- output equal to `CODEX_EXEC_READY` after trimming
+- a sanitized diagnostic ID
+
+Run it for a second eligible user and use redacted projection or diagnostic
+evidence to verify a distinct key ID and credential actor identity. Verify that
+Aevatar, NyxID, chrono-sandbox, and runner logs contain neither user's agent
+key nor either interactive bearer.
+
+## Diagnostic lifecycle API
+
+The manual API is retained for diagnostics, explicit rotation, revocation, and
+emergency recovery. It is not part of the normal workflow sequence. The user
+calls it with that user's normal authenticated NyxID bearer; there is no
+request body and no target user parameter:
+
+```bash
+curl -i -X POST \
+  -H "Authorization: Bearer ${NYXID_ACCESS_TOKEN}" \
+  https://<aevatar-host>/api/managed-codex/credential
+```
+
+A `202 Accepted` response means the command was admitted, not that the
+projection is already visible. A diagnostic client may read the status
+endpoint:
+
+```bash
+curl -sS \
+  -H "Authorization: Bearer ${NYXID_ACCESS_TOKEN}" \
+  https://<aevatar-host>/api/managed-codex/credential
+```
+
+The response includes `enabled` and `eligible` but never includes a Vault
+reference or raw key. `status=expired` is repaired transparently by an
+authenticated interactive execution or explicitly through rotation.
+
+Rotation and revocation use the same caller identity:
+
+```bash
+curl -i -X POST \
+  -H "Authorization: Bearer ${NYXID_ACCESS_TOKEN}" \
+  https://<aevatar-host>/api/managed-codex/credential/rotate
+
+curl -i -X DELETE \
+  -H "Authorization: Bearer ${NYXID_ACCESS_TOKEN}" \
+  https://<aevatar-host>/api/managed-codex/credential
+```
+
+The public skill invoke endpoint uses the same trusted caller-credential extraction path as workflow chat. It resolves the authenticated NyxID subject and binding into typed `WorkflowCallerNyxIdAuthority` independently of the observatory `scopeId`; a bearer-only workflow credential is a deployment regression.
 
 ## Failure handling
 
-- `managed_sandbox_disabled` / `target_not_configured`: host feature wiring is disabled.
-- `managed_feature_not_enabled`: caller subject is absent from the allowlist.
-- `nyxid_binding_required` / `nyxid_binding_revoked`: repeat the normal login/consent binding flow.
-- `llm_proxy_scope_missing`: NyxID broker/delegation policy did not issue the `llm:proxy` capability; do not repair this by adding it to `/oauth/authorize`.
-- `llm_service_access_missing`: binding does not grant the configured LLM resource.
-- `managed_capacity_unavailable`: P0 process-local slot is busy; retry later.
-- `sandbox_provisioning_failed`: inspect control-plane connectivity, API key, quota, architecture, and image pull.
-- `credential_vault_binding_failed`: inspect Credential Proxy version/config without logging the token.
-- `landlock_preflight_failed`: stop rollout; do not enable a weaker sandbox fallback.
-- `codex_jsonl_*` / `codex_terminal_*`: correlate with the sanitized diagnostic ID.
-- `sandbox_cleanup_failed`: treat as an incident and verify the pod/process tree manually.
+- `managed_target_disabled`: enable the Aevatar kill switch only after all prerequisites pass.
+- `managed_feature_not_enabled`: add the exact NyxID subject to the P0 allowlist and redeploy.
+- `managed_user_authorization_unavailable`: the first call needs the current user's bearer to create or repair a credential; do not substitute an operator credential.
+- `managed_credential_commit_timeout`: Actor commit or Projection Session observation did not finish inside the bounded mutation window; inspect dispatch/projection health rather than polling in the workflow.
+- `managed_user_services_unavailable`: the user's required `chrono-sandbox` or `chrono-llm-public` UserService is absent, ambiguous, inactive, or has invalid delegation configuration.
+- `nyxid_identity_mismatch`: the authenticated claim and `/users/me` owner differ; do not override it.
+- `chrono_sandbox_service_*`: repair the user's exact NyxID UserService or delegation settings.
+- `chrono_llm_route_unavailable`: repair the user's `chrono-llm-public` readiness.
+- `managed_credential_untracked_key_exists`: reconcile and revoke the old named key before retrying.
+- `managed_credential_mutation_in_progress`: another mutation holds the user's distributed lease; retry after it completes.
+- `managed_credential_cleanup_pending`: an external NyxID/Vault cleanup track is still incomplete; retry with the same user bearer after the dependency recovers.
+- `managed_credential_persistence_pending`: Actor dispatch may already have been admitted; do not delete or rotate the new key manually. Re-read status, then retry the same lifecycle action so deterministic reconciliation can complete.
+- `managed_credential_vault_unavailable`: Vault reconciliation could not determine whether the deterministic reference exists. Restore Vault health and retry; do not revoke the active NyxID key manually.
+- `managed_credential_unavailable` / `managed_credential_invalid`: inspect projection and Vault health without exposing the secret.
+- `managed_proxy_authorization_denied`: inspect the exact agent-key service grant and NyxID proxy policy.
+- `managed_proxy_target_unavailable`: verify the user's `chrono-sandbox` UserService and deployed route.
+- `managed_proxy_timeout` / `managed_proxy_unavailable`: inspect NyxID and chrono-sandbox capacity.
+- `managed_response_invalid` / `managed_response_too_large`: correlate with the sanitized chrono diagnostic ID and treat the contract drift as a rollout blocker.
 
 ## Rollback
 
-Set `Aevatar__CodexExecution__ManagedSandbox__Enabled=false` and roll the Aevatar deployment. This removes the managed target from tool discovery; private SSH `codex_exec` remains independently controlled by `EnableSshExecTool`. Then verify no managed sandbox remains and revoke the OpenSandbox API key if compromise is suspected.
+Set `Aevatar__CodexExecution__ManagedSandbox__Enabled=false` and roll the
+Aevatar deployment. This removes managed execution from tool discovery and
+blocks automatic readiness, explicit provisioning, and rotation. Status and
+revocation remain available so each provisioned canary can revoke its key.
+
+If chrono-sandbox itself is unhealthy, operations rolls back or disables that service independently. Private SSH `codex_exec` remains controlled by its existing NyxID settings.
+
+If the NyxID UserService forwarding policy drifts, disable managed execution immediately, restore the required policy, inspect downstream logs for exposure, rotate affected invocation keys, and keep the feature disabled until the incident is resolved.

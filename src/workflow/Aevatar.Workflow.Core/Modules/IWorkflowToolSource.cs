@@ -12,11 +12,28 @@ public interface IWorkflowTool
 public sealed record WorkflowToolExecutionResult(
     string ResultJson,
     WorkflowManagedHandoffOutcome? ManagedHandoff = null,
-    WorkflowToolApprovalPendingOutcome? PendingApproval = null)
+    WorkflowToolApprovalPendingOutcome? PendingApproval = null,
+    WorkflowToolExecutionFailure? Failure = null)
 {
-    public static WorkflowToolExecutionResult Success(string resultJson) =>
-        new(resultJson ?? string.Empty);
+    public static WorkflowToolExecutionResult Success(
+        string resultJson,
+        WorkflowManagedHandoffOutcome? managedHandoff = null) =>
+        new(resultJson ?? string.Empty, managedHandoff);
+
+    public static WorkflowToolExecutionResult Failed(
+        string resultJson,
+        string errorCode,
+        string errorMessage) =>
+        new(
+            resultJson ?? string.Empty,
+            Failure: new WorkflowToolExecutionFailure(
+                errorCode ?? string.Empty,
+                errorMessage ?? string.Empty));
 }
+
+public sealed record WorkflowToolExecutionFailure(
+    string ErrorCode,
+    string ErrorMessage);
 
 public sealed record WorkflowToolApprovalPendingOutcome(
     string ApprovalRequestId,

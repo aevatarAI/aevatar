@@ -143,6 +143,27 @@ public class EventSourcingBehaviorTests
     }
 
     [Fact]
+    public async Task ConfirmEventsAsync_WhenAppendFails_ShouldDropRejectedPrefixAndKeepUncommittedSuffix()
+    {
+        var store = new FailOnceReentrantAppendEventStore();
+        var behavior = new CounterEventSourcingBehavior(store, "agent-failed-prefix");
+        store.OnFirstAppend = () => behavior.RaiseEvent(new IncrementEvent { Amount = 2 });
+
+        behavior.RaiseEvent(new IncrementEvent { Amount = 1 });
+
+        await Should.ThrowAsync<InvalidOperationException>(() => behavior.ConfirmEventsAsync());
+        await behavior.ConfirmEventsAsync();
+
+        behavior.CurrentVersion.ShouldBe(1);
+        var events = await store.GetEventsAsync("agent-failed-prefix");
+        events.Count.ShouldBe(1);
+        events[0].EventData.Unpack<IncrementEvent>().Amount.ShouldBe(2);
+        var replayed = await behavior.ReplayAsync("agent-failed-prefix");
+        replayed.ShouldNotBeNull();
+        replayed!.Count.ShouldBe(2);
+    }
+
+    [Fact]
     public async Task PersistSnapshotAsync_WhenSnapshotStrategyMatches_ShouldPersistSnapshot()
     {
         var store = new InMemoryEventStore();
@@ -714,6 +735,47 @@ public class EventSourcingBehaviorTests
             OnFirstAppend = null;
             callback?.Invoke();
             return result;
+        }
+
+        public Task<IReadOnlyList<StateEvent>> GetEventsAsync(
+            string agentId,
+            long? fromVersion = null,
+            CancellationToken ct = default) =>
+            _inner.GetEventsAsync(agentId, fromVersion, ct);
+
+        public Task<long> GetVersionAsync(string agentId, CancellationToken ct = default) =>
+            _inner.GetVersionAsync(agentId, ct);
+
+        public Task<long> DeleteEventsUpToAsync(
+            string agentId,
+            long toVersion,
+            CancellationToken ct = default) =>
+            _inner.DeleteEventsUpToAsync(agentId, toVersion, ct);
+    }
+
+    private sealed class FailOnceReentrantAppendEventStore : IEventStore
+    {
+        private readonly InMemoryEventStore _inner = new();
+        private bool _shouldFail = true;
+
+        public Action? OnFirstAppend { get; set; }
+
+        public Task<EventStoreCommitResult> AppendAsync(
+            string agentId,
+            IEnumerable<StateEvent> events,
+            long expectedVersion,
+            CancellationToken ct = default)
+        {
+            if (_shouldFail)
+            {
+                _shouldFail = false;
+                var callback = OnFirstAppend;
+                OnFirstAppend = null;
+                callback?.Invoke();
+                throw new InvalidOperationException("append-failed");
+            }
+
+            return _inner.AppendAsync(agentId, events, expectedVersion, ct);
         }
 
         public Task<IReadOnlyList<StateEvent>> GetEventsAsync(

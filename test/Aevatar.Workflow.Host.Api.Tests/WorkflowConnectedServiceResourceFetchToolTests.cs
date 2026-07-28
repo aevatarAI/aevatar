@@ -291,6 +291,9 @@ public sealed class WorkflowConnectedServiceResourceFetchToolTests
 
     private static void AssertError(WorkflowToolExecutionResult output, string expectedError)
     {
+        output.Failure.Should().NotBeNull();
+        output.Failure!.ErrorCode.Should().Be(expectedError);
+        output.Failure.ErrorMessage.Should().NotBeNullOrWhiteSpace();
         using var document = JsonDocument.Parse(output.ResultJson);
         var root = document.RootElement;
         root.GetProperty("success").GetBoolean().Should().BeFalse();
