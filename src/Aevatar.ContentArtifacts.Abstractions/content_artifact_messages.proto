@@ -160,7 +160,7 @@ message CreateContentArtifact {
 
 message AppendContentArtifactRevision {
   string artifact_id = 1;
-  int64 expected_concurrency_version = 2;
+  reserved 2;
   ContentArtifactPrincipal requested_by = 3;
   ContentArtifactRevision revision = 4;
   google.protobuf.Timestamp requested_at_utc = 5;

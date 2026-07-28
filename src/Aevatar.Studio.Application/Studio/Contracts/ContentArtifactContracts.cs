@@ -94,7 +94,6 @@ public sealed record CreateContentArtifactRequest(
     string? WorkOrderId = null);
 
 public sealed record AppendContentArtifactRevisionRequest(
-    long ExpectedConcurrencyVersion,
     ContentArtifactRevisionWriteRequest Revision);
 
 public sealed record AdvanceContentArtifactCurrentRevisionRequest(

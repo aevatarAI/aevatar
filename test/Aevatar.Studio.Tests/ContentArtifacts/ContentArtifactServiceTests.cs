@@ -89,14 +89,13 @@ public sealed class ContentArtifactServiceTests
     }
 
     [Fact]
-    public async Task AppendRevisionAsync_ShouldAuthorizeWriterAndRequireCurrentCasVersion()
+    public async Task AppendRevisionAsync_ShouldAuthorizeWriterWithoutDerivingWriteFacts()
     {
         var queryPort = new RecordingQueryPort(BuildCurrentState());
         var commandPort = new RecordingCommandPort();
         var service = CreateService(commandPort: commandPort, queryPort: queryPort);
         var request = new AppendContentArtifactRevisionRequest(
-            ExpectedConcurrencyVersion: 1,
-            Revision: RevisionWrite("revision two", "revision-2-dedup", parentRevisionId: "revision-1"));
+            RevisionWrite("revision two", "revision-2-dedup", parentRevisionId: "revision-1"));
 
         await service.AppendRevisionAsync(
             "scope-1",
@@ -105,36 +104,28 @@ public sealed class ContentArtifactServiceTests
             Principal("writer-1"));
 
         commandPort.AppendRequest.Should().NotBeNull();
-        commandPort.AppendRevisionNumber.Should().Be(2);
         commandPort.AppendRequest!.Revision.ParentRevisionId.Should().Be("revision-1");
-
-        var stale = () => service.AppendRevisionAsync(
-            "scope-1",
-            "artifact-1",
-            request with { ExpectedConcurrencyVersion = 0 },
-            Principal("owner-1"));
-        await stale.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*concurrency version is 1, not 0*");
     }
 
     [Fact]
-    public async Task AppendRevisionAsync_ShouldDeriveRevisionNumberFromHistoryNotCasVersion()
+    public async Task AppendRevisionAsync_ShouldDispatchWhenAdvisoryReadModelIsMissing()
     {
-        var current = BuildCurrentState() with { ConcurrencyVersion = 7 };
         var commandPort = new RecordingCommandPort();
         var service = CreateService(
             commandPort: commandPort,
-            queryPort: new RecordingQueryPort(current));
+            queryPort: new RecordingQueryPort(current: null));
 
         await service.AppendRevisionAsync(
-            "scope-1",
-            "artifact-1",
+            " scope-1 ",
+            " artifact-1 ",
             new AppendContentArtifactRevisionRequest(
-                ExpectedConcurrencyVersion: 7,
-                Revision: RevisionWrite("revision two", "revision-2-dedup", "revision-1")),
-            Principal("owner-1"));
+                RevisionWrite("revision two", "revision-2-dedup", "revision-1")),
+            Principal("writer-1"));
 
-        commandPort.AppendRevisionNumber.Should().Be(2);
+        commandPort.ScopeId.Should().Be("scope-1");
+        commandPort.AppendArtifactId.Should().Be("artifact-1");
+        commandPort.AppendRequest!.Revision.Provenance.ScopeId.Should().Be("scope-1");
+        commandPort.AppendRequest.Revision.Provenance.TeamId.Should().Be("caller-supplied-team");
     }
 
     [Fact]
@@ -336,7 +327,7 @@ public sealed class ContentArtifactServiceTests
         public string? ScopeId { get; private set; }
         public CreateContentArtifactRequest? CreateRequest { get; private set; }
         public AppendContentArtifactRevisionRequest? AppendRequest { get; private set; }
-        public long AppendRevisionNumber { get; private set; }
+        public string? AppendArtifactId { get; private set; }
 
         public Task<ContentArtifactAcceptedReceipt> CreateAsync(string scopeId, CreateContentArtifactRequest request, ContentArtifactPrincipalContract requester, CancellationToken ct = default)
         {
@@ -345,9 +336,10 @@ public sealed class ContentArtifactServiceTests
             return Receipt();
         }
 
-        public Task<ContentArtifactAcceptedReceipt> AppendRevisionAsync(string scopeId, string artifactId, long revisionNumber, AppendContentArtifactRevisionRequest request, ContentArtifactPrincipalContract requester, CancellationToken ct = default)
+        public Task<ContentArtifactAcceptedReceipt> AppendRevisionAsync(string scopeId, string artifactId, AppendContentArtifactRevisionRequest request, ContentArtifactPrincipalContract requester, CancellationToken ct = default)
         {
-            AppendRevisionNumber = revisionNumber;
+            ScopeId = scopeId;
+            AppendArtifactId = artifactId;
             AppendRequest = request;
             return Receipt();
         }
@@ -361,12 +353,14 @@ public sealed class ContentArtifactServiceTests
             Task.FromResult(new ContentArtifactAcceptedReceipt("artifact-1", "command-1", "correlation-1", ContentArtifactCommandStageNames.DispatchAccepted));
     }
 
-    private sealed class RecordingQueryPort(ContentArtifactCurrentStateResponse current) : IContentArtifactQueryPort
+    private sealed class RecordingQueryPort(ContentArtifactCurrentStateResponse? current) : IContentArtifactQueryPort
     {
         public int ContentReadCount { get; private set; }
 
         public Task<ContentArtifactListResponse> ListAsync(string scopeId, string ownerPrincipalId, ContentArtifactQueryRequest query, CancellationToken ct = default) =>
-            Task.FromResult(new ContentArtifactListResponse(scopeId, [current]));
+            Task.FromResult(new ContentArtifactListResponse(
+                scopeId,
+                current == null ? [] : [current]));
 
         public Task<ContentArtifactCurrentStateResponse?> GetAsync(string scopeId, string artifactId, CancellationToken ct = default) =>
             Task.FromResult<ContentArtifactCurrentStateResponse?>(current);
@@ -374,7 +368,7 @@ public sealed class ContentArtifactServiceTests
         public Task<ContentArtifactRevisionContentResponse> GetRevisionContentAsync(string scopeId, string artifactId, string revisionId, ContentArtifactPrincipalContract requester, CancellationToken ct = default)
         {
             ContentReadCount++;
-            var revision = current.Revisions.Single(item => item.RevisionId == revisionId);
+            var revision = current!.Revisions.Single(item => item.RevisionId == revisionId);
             return Task.FromResult(new ContentArtifactRevisionContentResponse(
                 new ContentArtifactReferenceContract(artifactId, revisionId, revision.ContentHash, revision.MediaType),
                 System.Text.Encoding.UTF8.GetBytes("report")));

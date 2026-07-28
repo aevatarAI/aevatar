@@ -13,7 +13,6 @@ public interface IContentArtifactCommandPort
     Task<ContentArtifactAcceptedReceipt> AppendRevisionAsync(
         string scopeId,
         string artifactId,
-        long revisionNumber,
         AppendContentArtifactRevisionRequest request,
         ContentArtifactPrincipalContract requester,
         CancellationToken ct = default);

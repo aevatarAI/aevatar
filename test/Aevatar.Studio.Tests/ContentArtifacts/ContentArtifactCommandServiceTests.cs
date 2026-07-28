@@ -43,7 +43,7 @@ public sealed class ContentArtifactCommandServiceTests
     }
 
     [Fact]
-    public async Task AppendRevisionAsync_ShouldUseServerDerivedRevisionNumberIndependentlyFromExpectedVersion()
+    public async Task AppendRevisionAsync_ShouldLeaveRevisionIdentityForActor()
     {
         var dispatchPort = new RecordingDispatchPort();
         var service = new ActorDispatchContentArtifactCommandService(
@@ -51,21 +51,19 @@ public sealed class ContentArtifactCommandServiceTests
             CreateCommandDispatch(dispatchPort));
         var artifactId = ContentArtifactConventions.BuildArtifactId(ScopeId, "report-dedup");
         var request = new AppendContentArtifactRevisionRequest(
-            ExpectedConcurrencyVersion: 7,
-            Revision: RevisionWrite("revision four", "revision-4-dedup", "revision-3"));
+            RevisionWrite("revision four", "revision-4-dedup", "revision-3"));
 
         var receipt = await service.AppendRevisionAsync(
             ScopeId,
             artifactId,
-            revisionNumber: 4,
             request,
             new ContentArtifactPrincipalContract("owner-1", "user"));
 
-        receipt.CommandId.Should().StartWith($"content-artifact-append-{artifactId}-v7-");
+        receipt.CommandId.Should().StartWith($"content-artifact-append-{artifactId}-v0-");
         var command = dispatchPort.Envelopes.Should().ContainSingle().Subject.Payload!
             .Unpack<Aevatar.ContentArtifacts.Abstractions.AppendContentArtifactRevision>();
-        command.Revision.RevisionNumber.Should().Be(4);
-        command.Revision.RevisionId.Should().Be(ContentArtifactConventions.BuildRevisionId(artifactId, 4));
+        command.Revision.RevisionNumber.Should().Be(0);
+        command.Revision.RevisionId.Should().BeEmpty();
         command.Revision.ParentRevisionId.Should().Be("revision-3");
     }
 

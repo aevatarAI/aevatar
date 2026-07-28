@@ -92,7 +92,105 @@ public sealed class ContentArtifactGAgentTests
     }
 
     [Fact]
-    public async Task AppendAndAdvance_ShouldKeepPriorRevisionImmutableAndUseCas()
+    public async Task DuplicateCreate_ShouldUseCommittedHashWithoutReopeningBackingContent()
+    {
+        var content = "backed report";
+        var command = BuildCreate(content);
+        command.FirstRevision.Content = new ContentArtifactRevisionContent
+        {
+            BackingObject = new ContentArtifactBackingObjectReference
+            {
+                Provider = "object-store",
+                ObjectKey = "scope-1/reports/1",
+            },
+        };
+        var port = new RecordingBackingContentPort(content);
+        var agent = await CreateAgentAsync(backingContentPort: port);
+        await agent.HandleCreateAsync(command);
+        port.Available = false;
+        var retry = command.Clone();
+        retry.RequestedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-21T00:00:00Z"));
+        retry.FirstRevision.CreatedAtUtc = retry.RequestedAtUtc.Clone();
+        retry.FirstRevision.Availability = ContentArtifactRevisionAvailability.Unspecified;
+
+        await agent.HandleCreateAsync(retry);
+
+        port.OpenReadCount.Should().Be(1);
+        agent.State.ConcurrencyVersion.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Append_ShouldBeWriterBlindRetrySafeAndAssignRevisionIdentity()
+    {
+        var agent = await CreateAgentAsync();
+        await agent.HandleCreateAsync(BuildCreate("revision one"));
+        var revision = BuildRevision(2, "revision two", "revision-2-dedup", agent.State.CurrentRevisionId);
+        revision.RevisionId = string.Empty;
+        revision.RevisionNumber = 0;
+        var append = new AppendContentArtifactRevision
+        {
+            ArtifactId = ArtifactId,
+            RequestedBy = Principal("writer-1"),
+            Revision = revision,
+        };
+
+        await agent.HandleAppendRevisionAsync(append);
+        await agent.HandleAppendRevisionAsync(append.Clone());
+
+        agent.State.ConcurrencyVersion.Should().Be(2);
+        var appended = agent.State.Revisions.Values.Should()
+            .ContainSingle(item => item.DedupKey == "revision-2-dedup").Subject;
+        appended.RevisionNumber.Should().Be(2);
+        appended.RevisionId.Should().Be(ContentArtifactConventions.BuildRevisionId(ArtifactId, 2));
+    }
+
+    [Fact]
+    public async Task AppendDuplicate_ShouldAuthorizeBeforeReturningSuccess()
+    {
+        var agent = await CreateAgentAsync();
+        await agent.HandleCreateAsync(BuildCreate("revision one"));
+        var append = new AppendContentArtifactRevision
+        {
+            ArtifactId = ArtifactId,
+            RequestedBy = Principal("writer-1"),
+            Revision = BuildRevision(2, "revision two", "revision-2-dedup", agent.State.CurrentRevisionId),
+        };
+        await agent.HandleAppendRevisionAsync(append);
+        append.RequestedBy = Principal("unrelated-1");
+
+        var act = () => agent.HandleAppendRevisionAsync(append);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*not authorized*");
+        agent.State.ConcurrencyVersion.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task AppendDuplicate_ShouldRejectDifferentFactsForSameDedupKey()
+    {
+        var agent = await CreateAgentAsync();
+        await agent.HandleCreateAsync(BuildCreate("revision one"));
+        var first = new AppendContentArtifactRevision
+        {
+            ArtifactId = ArtifactId,
+            RequestedBy = Principal("writer-1"),
+            Revision = BuildRevision(2, "revision two", "revision-2-dedup", agent.State.CurrentRevisionId),
+        };
+        await agent.HandleAppendRevisionAsync(first);
+        var conflicting = first.Clone();
+        conflicting.Revision.Content.InlineContent = ByteString.CopyFromUtf8("different revision");
+        conflicting.Revision.ByteLength = conflicting.Revision.Content.InlineContent.Length;
+        conflicting.Revision.ContentHash = ContentHash("different revision");
+
+        var act = () => agent.HandleAppendRevisionAsync(conflicting);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*dedup_key already exists with different facts*");
+        agent.State.ConcurrencyVersion.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task AppendAndAdvance_ShouldKeepPriorRevisionImmutableAndUseAdvanceCas()
     {
         var agent = await CreateAgentAsync();
         await agent.HandleCreateAsync(BuildCreate("revision one"));
@@ -102,7 +200,6 @@ public sealed class ContentArtifactGAgentTests
         await agent.HandleAppendRevisionAsync(new AppendContentArtifactRevision
         {
             ArtifactId = ArtifactId,
-            ExpectedConcurrencyVersion = 1,
             RequestedBy = Principal("owner-1"),
             Revision = second,
         });
@@ -123,19 +220,19 @@ public sealed class ContentArtifactGAgentTests
         agent.State.CurrentRevisionId.Should().Be(second.RevisionId);
         agent.State.ConcurrencyVersion.Should().Be(3);
 
-        var stale = () => agent.HandleAppendRevisionAsync(new AppendContentArtifactRevision
+        var stale = () => agent.HandleAdvanceCurrentRevisionAsync(new AdvanceContentArtifactCurrentRevision
         {
             ArtifactId = ArtifactId,
             ExpectedConcurrencyVersion = 2,
             RequestedBy = Principal("owner-1"),
-            Revision = BuildRevision(3, "stale", "revision-3-dedup", second.RevisionId),
+            RevisionId = first.RevisionId,
         });
         await stale.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*concurrency version is 3, not 2*");
     }
 
     [Fact]
-    public async Task DuplicateAppendAndAdvance_ShouldBeIdempotentAfterVersionMoves()
+    public async Task DuplicateAppend_ShouldBeIdempotentAfterVersionMoves()
     {
         var agent = await CreateAgentAsync();
         await agent.HandleCreateAsync(BuildCreate("revision one"));
@@ -143,7 +240,6 @@ public sealed class ContentArtifactGAgentTests
         var append = new AppendContentArtifactRevision
         {
             ArtifactId = ArtifactId,
-            ExpectedConcurrencyVersion = 1,
             RequestedBy = Principal("owner-1"),
             Revision = second,
         };
@@ -157,13 +253,6 @@ public sealed class ContentArtifactGAgentTests
         });
 
         await agent.HandleAppendRevisionAsync(append.Clone());
-        await agent.HandleAdvanceCurrentRevisionAsync(new AdvanceContentArtifactCurrentRevision
-        {
-            ArtifactId = ArtifactId,
-            ExpectedConcurrencyVersion = 2,
-            RequestedBy = Principal("owner-1"),
-            RevisionId = second.RevisionId,
-        });
 
         agent.State.ConcurrencyVersion.Should().Be(3);
         agent.State.Revisions.Should().HaveCount(2);
@@ -179,7 +268,6 @@ public sealed class ContentArtifactGAgentTests
         await original.HandleAppendRevisionAsync(new AppendContentArtifactRevision
         {
             ArtifactId = ArtifactId,
-            ExpectedConcurrencyVersion = 1,
             RequestedBy = Principal("owner-1"),
             Revision = second,
         });
@@ -238,7 +326,6 @@ public sealed class ContentArtifactGAgentTests
         var act = () => agent.HandleAppendRevisionAsync(new AppendContentArtifactRevision
         {
             ArtifactId = ArtifactId,
-            ExpectedConcurrencyVersion = 1,
             RequestedBy = Principal("owner-1"),
             Revision = invalid,
         });
@@ -272,7 +359,6 @@ public sealed class ContentArtifactGAgentTests
         await agent.HandleAppendRevisionAsync(new AppendContentArtifactRevision
         {
             ArtifactId = ArtifactId,
-            ExpectedConcurrencyVersion = 2,
             RequestedBy = Principal("owner-1"),
             Revision = second,
         });
@@ -423,11 +509,15 @@ public sealed class ContentArtifactGAgentTests
     private sealed class RecordingBackingContentPort(string content) : IContentArtifactBackingContentPort
     {
         public List<ContentArtifactBackingContentRequest> Described { get; } = [];
+        public bool Available { get; set; } = true;
+        public int OpenReadCount { get; private set; }
 
         public Task<ContentArtifactBackingContentDescriptor> DescribeAsync(
             ContentArtifactBackingContentRequest request,
             CancellationToken ct = default)
         {
+            if (!Available)
+                throw new FileNotFoundException("backing content is unavailable");
             Described.Add(request with { Reference = request.Reference.Clone() });
             return Task.FromResult(new ContentArtifactBackingContentDescriptor(
                 ByteString.CopyFromUtf8(content).Length,
@@ -436,7 +526,12 @@ public sealed class ContentArtifactGAgentTests
 
         public Task<Stream> OpenReadAsync(
             ContentArtifactBackingContentRequest request,
-            CancellationToken ct = default) =>
-            Task.FromResult<Stream>(new MemoryStream(ByteString.CopyFromUtf8(content).ToByteArray()));
+            CancellationToken ct = default)
+        {
+            if (!Available)
+                throw new FileNotFoundException("backing content is unavailable");
+            OpenReadCount++;
+            return Task.FromResult<Stream>(new MemoryStream(ByteString.CopyFromUtf8(content).ToByteArray()));
+        }
     }
 }

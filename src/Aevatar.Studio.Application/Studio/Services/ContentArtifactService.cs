@@ -133,26 +133,27 @@ public sealed class ContentArtifactService : IContentArtifactService
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        var current = await GetCurrentForMutationAsync(
-            scopeId,
-            artifactId,
-            request.ExpectedConcurrencyVersion,
-            requester,
-            ownerOnly: false,
-            ct);
+        var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
+        var normalizedArtifactId = NormalizeRequired(artifactId, nameof(artifactId));
+        var principal = NormalizePrincipal(requester);
+        var current = await _queryPort.GetAsync(normalizedScopeId, normalizedArtifactId, ct);
+        if (current != null)
+        {
+            var canWrite = PrincipalEquals(current.Owner, principal) ||
+                           current.WriterPrincipalIds.Contains(principal.PrincipalId, StringComparer.Ordinal);
+            if (!string.Equals(current.ScopeId, normalizedScopeId, StringComparison.Ordinal) || !canWrite)
+                throw new ContentArtifactNotFoundException(normalizedScopeId, normalizedArtifactId);
+        }
         var normalizedRevision = NormalizeRevisionWrite(
             request.Revision,
-            current.ScopeId,
-            current.TeamId);
-        var revisionNumber = checked(
-            current.Revisions.Select(static revision => revision.RevisionNumber).DefaultIfEmpty().Max() + 1);
+            normalizedScopeId,
+            current?.TeamId ?? NormalizeOptional(request.Revision.Provenance?.TeamId));
         await ValidateExecutionProvenanceAsync(normalizedRevision.Provenance, ct);
         return await _commandPort.AppendRevisionAsync(
-            current.ScopeId,
-            current.ArtifactId,
-            revisionNumber,
+            normalizedScopeId,
+            normalizedArtifactId,
             request with { Revision = normalizedRevision },
-            NormalizePrincipal(requester),
+            principal,
             ct);
     }
 

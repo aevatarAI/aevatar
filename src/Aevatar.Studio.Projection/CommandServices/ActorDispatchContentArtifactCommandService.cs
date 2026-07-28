@@ -58,7 +58,6 @@ internal sealed class ActorDispatchContentArtifactCommandService : IContentArtif
     public Task<ContentArtifactAcceptedReceipt> AppendRevisionAsync(
         string scopeId,
         string artifactId,
-        long revisionNumber,
         AppendContentArtifactRevisionRequest request,
         ContentArtifactPrincipalContract requester,
         CancellationToken ct = default)
@@ -70,13 +69,12 @@ internal sealed class ActorDispatchContentArtifactCommandService : IContentArtif
             new AppendContentArtifactRevision
             {
                 ArtifactId = artifactId,
-                ExpectedConcurrencyVersion = request.ExpectedConcurrencyVersion,
                 RequestedBy = ToPrincipal(requester),
-                Revision = ToRevision(artifactId, revisionNumber, request.Revision, now),
+                Revision = ToRevision(artifactId, revisionNumber: 0, request.Revision, now),
                 RequestedAtUtc = now,
             },
             "append",
-            request.ExpectedConcurrencyVersion,
+            0,
             ct);
     }
 
@@ -204,7 +202,9 @@ internal sealed class ActorDispatchContentArtifactCommandService : IContentArtif
     {
         var revision = new ContentArtifactRevision
         {
-            RevisionId = ContentArtifactConventions.BuildRevisionId(artifactId, revisionNumber),
+            RevisionId = revisionNumber > 0
+                ? ContentArtifactConventions.BuildRevisionId(artifactId, revisionNumber)
+                : string.Empty,
             RevisionNumber = revisionNumber,
             DedupKey = request.DedupKey,
             ParentRevisionId = request.ParentRevisionId ?? string.Empty,

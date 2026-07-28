@@ -30,8 +30,6 @@ public sealed class ContentArtifactGAgent : GAgentBase<ContentArtifactState>, IP
     public async Task HandleCreateAsync(CreateContentArtifact command)
     {
         ArgumentNullException.ThrowIfNull(command);
-        await ValidateCreateAsync(command);
-
         if (!string.IsNullOrWhiteSpace(State.ArtifactId))
         {
             if (!string.Equals(State.CreationRequestHash, HashCreateRequest(command), StringComparison.Ordinal))
@@ -41,6 +39,8 @@ public sealed class ContentArtifactGAgent : GAgentBase<ContentArtifactState>, IP
             }
             return;
         }
+
+        await ValidateCreateAsync(command);
 
         var createdAt = command.RequestedAtUtc?.Clone()
                         ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
@@ -59,24 +59,31 @@ public sealed class ContentArtifactGAgent : GAgentBase<ContentArtifactState>, IP
     public async Task HandleAppendRevisionAsync(AppendContentArtifactRevision command)
     {
         ArgumentNullException.ThrowIfNull(command);
-        EnsureActiveArtifact(command.ArtifactId);
         ArgumentNullException.ThrowIfNull(command.Revision);
+        EnsureWriter(command.RequestedBy);
+        EnsureActiveArtifact(command.ArtifactId);
+        var dedupKey = ContentArtifactConventions.NormalizeRequired(
+            command.Revision.DedupKey,
+            "revision.dedupKey");
 
-        if (State.Revisions.TryGetValue(command.Revision.RevisionId, out var existingRevision))
+        var existingRevision = State.Revisions.Values.FirstOrDefault(revision =>
+            string.Equals(revision.DedupKey, dedupKey, StringComparison.Ordinal));
+        if (existingRevision != null)
         {
             if (!RevisionsEqualForAppend(existingRevision, command.Revision))
-                throw new InvalidOperationException("ContentArtifact revision identity already exists with different facts.");
+                throw new InvalidOperationException("ContentArtifact revision dedup_key already exists with different facts.");
             return;
         }
 
-        EnsureWriter(command.RequestedBy);
-        EnsureConcurrencyVersion(command.ExpectedConcurrencyVersion);
-        await ValidateRevisionAsync(command.Revision, firstRevision: false);
         var appendedAt = command.RequestedAtUtc?.Clone()
                          ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
         var revision = command.Revision.Clone();
+        revision.RevisionNumber = checked(
+            State.Revisions.Values.Select(static item => item.RevisionNumber).DefaultIfEmpty().Max() + 1);
+        revision.RevisionId = ContentArtifactConventions.BuildRevisionId(State.ArtifactId, revision.RevisionNumber);
         revision.CreatedAtUtc ??= appendedAt.Clone();
         revision.Availability = ContentArtifactRevisionAvailability.Available;
+        await ValidateRevisionAsync(revision, firstRevision: false);
         await PersistDomainEventAsync(new ContentArtifactRevisionAppendedEvent
         {
             Revision = revision,
@@ -416,8 +423,9 @@ public sealed class ContentArtifactGAgent : GAgentBase<ContentArtifactState>, IP
     private void EnsureWriter(ContentArtifactPrincipal? principal)
     {
         ValidatePrincipal(principal, "requested_by");
-        if (PrincipalEquals(State.AccessPolicy.Owner, principal!) ||
-            State.AccessPolicy.WriterPrincipalIds.Contains(principal!.PrincipalId))
+        if (State.AccessPolicy != null &&
+            (PrincipalEquals(State.AccessPolicy.Owner, principal!) ||
+             State.AccessPolicy.WriterPrincipalIds.Contains(principal!.PrincipalId)))
         {
             return;
         }
@@ -549,7 +557,10 @@ public sealed class ContentArtifactGAgent : GAgentBase<ContentArtifactState>, IP
         var semantic = command.Clone();
         semantic.RequestedAtUtc = null;
         if (semantic.FirstRevision != null)
+        {
             semantic.FirstRevision.CreatedAtUtc = null;
+            semantic.FirstRevision.Availability = ContentArtifactRevisionAvailability.Available;
+        }
         return Convert.ToHexStringLower(SHA256.HashData(semantic.ToByteArray()));
     }
 
@@ -559,6 +570,10 @@ public sealed class ContentArtifactGAgent : GAgentBase<ContentArtifactState>, IP
         var normalizedRight = right.Clone();
         normalizedLeft.CreatedAtUtc = null;
         normalizedRight.CreatedAtUtc = null;
+        normalizedLeft.RevisionId = string.Empty;
+        normalizedRight.RevisionId = string.Empty;
+        normalizedLeft.RevisionNumber = 0;
+        normalizedRight.RevisionNumber = 0;
         normalizedLeft.Availability = ContentArtifactRevisionAvailability.Available;
         normalizedRight.Availability = ContentArtifactRevisionAvailability.Available;
         return normalizedLeft.Equals(normalizedRight);
