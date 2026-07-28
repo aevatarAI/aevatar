@@ -103,6 +103,48 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
     }
 
     [Fact]
+    public async Task DispatchesProjectionRebuild_AfterProvisionReconciliation()
+    {
+        var projectionDispatch = new RecordingCommandDispatch<RebuildAevatarOAuthClientProjectionCommand>(
+            static _ => new ChannelIdentityOAuthAcceptedReceipt(
+                ActorId: AevatarOAuthClientGAgent.WellKnownId,
+                CommandId: "cmd-2",
+                CorrelationId: "cmd-2"));
+        var result = await InvokeRebuildAsync(
+            authorizer: new FakePlatformAdminAuthorizer(true),
+            bearer: AdminBearer,
+            dispatch: new RecordingCommandDispatch<ProvisionAevatarOAuthClientCommand>(
+                static _ => OAuthClientReceipt()),
+            projectionRebuildDispatch: projectionDispatch);
+
+        projectionDispatch.Commands.Should().ContainSingle(
+            "a same-snapshot reconciliation appends no event, so a wiped readmodel is only rebuilt by the explicit projection command");
+
+        var ctx = NewHttpContext();
+        await result.ExecuteAsync(ctx);
+        ctx.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        ctx.Response.Body.Position = 0;
+        var text = await new StreamReader(ctx.Response.Body, Encoding.UTF8).ReadToEndAsync();
+        var doc = JsonDocument.Parse(text);
+        doc.RootElement.GetProperty("projection_rebuild_command_id").GetString().Should().Be("cmd-2");
+    }
+
+    [Fact]
+    public async Task Returns503_WhenProjectionRebuildDispatchRejects()
+    {
+        var result = await InvokeRebuildAsync(
+            authorizer: new FakePlatformAdminAuthorizer(true),
+            bearer: AdminBearer,
+            dispatch: new RecordingCommandDispatch<ProvisionAevatarOAuthClientCommand>(
+                static _ => OAuthClientReceipt()),
+            projectionRebuildDispatch: new RejectingCommandDispatch<RebuildAevatarOAuthClientProjectionCommand>());
+
+        var (doc, statusCode) = await ReadJsonWithStatusAsync(result);
+        statusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        doc.RootElement.GetProperty("error").GetString().Should().Be("actor_dispatch_rejected");
+    }
+
+    [Fact]
     public async Task Returns503_WhenDispatchThrows()
     {
         var result = await InvokeRebuildAsync(
@@ -136,6 +178,7 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
         IPlatformAdminAuthorizer? authorizer,
         string? bearer,
         ICommandDispatchService<ProvisionAevatarOAuthClientCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> dispatch,
+        ICommandDispatchService<RebuildAevatarOAuthClientProjectionCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>? projectionRebuildDispatch = null,
         string? legacyStaticTokenHeader = null,
         string configuredClientId = ConfiguredClientId,
         CancellationToken ct = default)
@@ -151,6 +194,9 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
             clientOptions: new AevatarOAuthClientOptions { ClientId = configuredClientId },
             adminAuthorizer: authorizer,
             rebuildDispatch: dispatch,
+            projectionRebuildDispatch: projectionRebuildDispatch
+                ?? new RecordingCommandDispatch<RebuildAevatarOAuthClientProjectionCommand>(
+                    static _ => OAuthClientReceipt()),
             loggerFactory: NullLoggerFactory.Instance,
             ct: ct);
     }

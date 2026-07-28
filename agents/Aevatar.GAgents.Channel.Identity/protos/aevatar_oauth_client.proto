@@ -167,6 +167,11 @@ message ProvisionAevatarOAuthClientCommand {
 // out via grace window.
 message RotateAevatarOAuthClientHmacKeyCommand {}
 
+// Issued by the operator rebuild endpoint: re-materialize the wiped/reset
+// current-state readmodel from the surviving actor state. Appends no event
+// and changes no OAuth client fact — disaster recovery only.
+message RebuildAevatarOAuthClientProjectionCommand {}
+
 // Issued by the OAuth callback handler when it observes binding_id in the
 // token response — confirmation that NyxID admin has enabled
 // broker_capability_enabled on this client.
