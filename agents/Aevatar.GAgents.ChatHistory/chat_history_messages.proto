@@ -62,6 +62,16 @@ message ChatTurnAppendRejection {
   google.protobuf.Timestamp rejected_at = 3;
 }
 
+message ChatConversationInitialization {
+  string operation_id = 1;
+  string scope_id = 2;
+  string conversation_id = 3;
+  string service_id = 4;
+  string service_kind = 5;
+  google.protobuf.Timestamp created_at = 6;
+  string initial_title = 7;
+}
+
 // ─── ChatConversationGAgent State ───
 
 message ChatConversationState {
@@ -77,9 +87,30 @@ message ChatConversationState {
   repeated ChatTurn turns = 10;
   bool deleted = 11;
   ChatTurnAppendRejection last_rejected_append = 12;
+  ChatConversationInitialization initialization = 13;
 }
 
 // ─── ChatConversationGAgent Events ───
+
+message InitializeChatConversationCommand {
+  string operation_id = 1;
+  string scope_id = 2;
+  string conversation_id = 3;
+  string service_id = 4;
+  string service_kind = 5;
+  google.protobuf.Timestamp created_at = 6;
+  string initial_title = 7;
+}
+
+message ChatConversationInitializedEvent {
+  string operation_id = 1;
+  string scope_id = 2;
+  string conversation_id = 3;
+  string service_id = 4;
+  string service_kind = 5;
+  google.protobuf.Timestamp created_at = 6;
+  string initial_title = 7;
+}
 
 message AppendChatTurnCommand {
   string scope_id = 1;

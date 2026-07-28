@@ -151,6 +151,14 @@ public sealed class ChatHistoryEndpointsTests
     {
         public List<string> Calls { get; } = [];
 
+        public Task InitializeConversationAsync(
+            ChatHistoryConversationInitialization request,
+            CancellationToken ct = default)
+        {
+            Calls.Add($"HandleInitializeConversation:{request.ScopeId}:{request.ConversationId}");
+            return Task.CompletedTask;
+        }
+
         public Task<ChatHistoryIndexPage> GetIndexAsync(
             ChatHistoryIndexPageRequest request,
             CancellationToken ct = default)

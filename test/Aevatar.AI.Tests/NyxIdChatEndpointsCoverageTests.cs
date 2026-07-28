@@ -3847,6 +3847,10 @@ public partial class NyxIdChatEndpointsCoverageTests
         public List<(string ScopeId, string ConversationId)> DeletedConversations { get; } = [];
         public Exception? DeleteConversationException { get; init; }
 
+        public Task InitializeConversationAsync(
+            ChatHistoryConversationInitialization request,
+            CancellationToken ct = default) => Task.CompletedTask;
+
         public Task SaveMessagesAsync(
             string scopeId,
             string conversationId,

@@ -128,6 +128,30 @@ internal sealed class ActorBackedChatHistoryStore :
             await _commandDispatch.DispatchAsync(conversationActor, turn, PublisherId, ct);
     }
 
+    public async Task InitializeConversationAsync(
+        ChatHistoryConversationInitialization request,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var operationId = NormalizeRequired(request.OperationId, nameof(request.OperationId));
+        var scopeId = NormalizeRequired(request.ScopeId, nameof(request.ScopeId));
+        var conversationId = NormalizeRequired(request.ConversationId, nameof(request.ConversationId));
+        var serviceId = NormalizeRequired(request.ServiceId, nameof(request.ServiceId));
+        var serviceKind = NormalizeRequired(request.ServiceKind, nameof(request.ServiceKind));
+        var conversationActor = await EnsureConversationActorAsync(scopeId, conversationId, ct);
+        var command = new InitializeChatConversationCommand
+        {
+            OperationId = operationId,
+            ScopeId = scopeId,
+            ConversationId = conversationId,
+            ServiceId = serviceId,
+            ServiceKind = serviceKind,
+            CreatedAt = Timestamp.FromDateTimeOffset(request.CreatedAt),
+            InitialTitle = NormalizeOptional(request.InitialTitle) ?? string.Empty,
+        };
+        await _commandDispatch.DispatchAsync(conversationActor, command, PublisherId, ct);
+    }
+
     public async Task<ChatHistoryDeleteResult> DeleteConversationAsync(
         string scopeId, string conversationId, CancellationToken ct = default)
     {
@@ -347,6 +371,9 @@ internal sealed class ActorBackedChatHistoryStore :
 
     private static string? NormalizeOptional(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static string NormalizeRequired(string? value, string parameterName) =>
+        NormalizeOptional(value) ?? throw new ArgumentException("Value is required.", parameterName);
 
     private static string? EmptyToNull(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

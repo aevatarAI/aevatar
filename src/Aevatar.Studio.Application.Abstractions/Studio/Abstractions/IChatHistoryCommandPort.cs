@@ -5,6 +5,10 @@ namespace Aevatar.Studio.Application.Studio.Abstractions;
 //   new=split query/command port + CQRS Core dispatch
 public interface IChatHistoryCommandPort
 {
+    Task InitializeConversationAsync(
+        ChatHistoryConversationInitialization request,
+        CancellationToken ct = default);
+
     Task SaveMessagesAsync(
         string scopeId,
         string conversationId,
@@ -17,6 +21,15 @@ public interface IChatHistoryCommandPort
         string conversationId,
         CancellationToken ct = default);
 }
+
+public sealed record ChatHistoryConversationInitialization(
+    string OperationId,
+    string ScopeId,
+    string ConversationId,
+    string ServiceId,
+    string ServiceKind,
+    DateTimeOffset CreatedAt,
+    string? InitialTitle = null);
 
 public enum ChatHistoryDeleteResultStatus
 {

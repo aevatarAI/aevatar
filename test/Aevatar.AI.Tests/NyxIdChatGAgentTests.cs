@@ -2047,6 +2047,10 @@ public class NyxIdChatGAgentTests
         public List<SavedChatHistory> Saved { get; } = [];
         public List<(string ScopeId, string ConversationId)> Deleted { get; } = [];
 
+        public Task InitializeConversationAsync(
+            ChatHistoryConversationInitialization request,
+            CancellationToken ct = default) => Task.CompletedTask;
+
         public Task SaveMessagesAsync(
             string scopeId,
             string conversationId,
