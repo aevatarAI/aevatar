@@ -369,7 +369,7 @@ public static class ScopeServiceEndpoints
         {
             WorkflowExternalCapabilityRef.CapabilityOneofCase.NyxIdUserService => new
             {
-                userServiceId = readiness.SelectedCapability.NyxIdUserService.UserServiceId,
+                userServiceId = (string?)readiness.SelectedCapability.NyxIdUserService.UserServiceId,
                 operationId = readiness.SelectedCapability.NyxIdUserService.OperationId,
                 connectorCapabilityRef = (string?)null,
             },
@@ -377,7 +377,7 @@ public static class ScopeServiceEndpoints
             {
                 userServiceId = (string?)null,
                 operationId = readiness.SelectedCapability.HostConnector.OperationId,
-                connectorCapabilityRef = readiness.SelectedCapability.HostConnector.ConnectorCapabilityRef,
+                connectorCapabilityRef = (string?)readiness.SelectedCapability.HostConnector.ConnectorCapabilityRef,
             },
             _ => null,
         };
