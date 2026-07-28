@@ -45,7 +45,7 @@
 - Consumes: Git `origin/feature/integrate`, default NyxID profile, skillset GUID `248b99d6-36ff-4d41-bb45-baa25c6a9cad`.
 - Produces: exact source revision, latest 15-member closure, and owner matrix.
 
-- [ ] **Step 1: Create the external workspace and confirm the repository is clean**
+- [x] **Step 1: Create the external workspace and confirm the repository is clean**
 
 ```bash
 export WORK_ROOT="${TMPDIR:-/tmp}/aevatar-platform-tool-contract-skills-2026-07-28"
@@ -57,7 +57,7 @@ git status --short --branch
 
 Expected: the documentation worktree is clean and `WORK_ROOT` is outside it.
 
-- [ ] **Step 2: Refresh and record source authority**
+- [x] **Step 2: Refresh and record source authority**
 
 ```bash
 git -c http.version=HTTP/1.1 fetch origin feature/integrate --prune
@@ -72,7 +72,7 @@ git diff --name-status \
 
 Expected: fetch exits 0, baseline is an ancestor, and the exact revision is recorded. Fetch failure stops the release.
 
-- [ ] **Step 3: Assert the platform owner and permissions without printing credentials**
+- [x] **Step 3: Assert the platform owner and permissions without printing credentials**
 
 ```bash
 identity="$(nyxid whoami --output json)"
@@ -85,7 +85,7 @@ jq -e '.error == null
 
 Expected: both assertions exit 0.
 
-- [ ] **Step 4: Read and validate the latest skillset surfaces**
+- [x] **Step 4: Read and validate the latest skillset surfaces**
 
 ```bash
 nyxid proxy request ornn-api '/api/v1/skillsets/aevatar-platform' \
@@ -108,7 +108,7 @@ jq -e '.error == null and (.data.items | length) == 15
 
 Expected: latest all-public 15-member closure with unique names and hashes.
 
-- [ ] **Step 5: Read every skill GUID and owner sequentially**
+- [x] **Step 5: Read every skill GUID and owner sequentially**
 
 ```bash
 : > "$WORK_ROOT/owners.tsv"
@@ -142,20 +142,18 @@ Expected: 15 exact `name/version/GUID/owner` rows.
 - Consumes: Task 1 closure and owners.
 - Produces: byte-verified baselines and one impact decision per member.
 
-- [ ] **Step 1: Ensure every owner profile is exact**
+- [x] **Step 1: Ensure effective write authority for every resource**
 
-The default profile owns platform skills. Owner `2db990b5-29ea-4a32-acf5-0008420afa1f` uses `--profile codex-skill-owner`. If that profile is absent, run `nyxid login --profile codex-skill-owner --base-url https://nyx-api.chrono-ai.fun`, then require exact owner ID with `nyxid whoami --profile codex-skill-owner --output json`. Never reuse the default token for another owner.
+Use the default local NyxID credential only after readback proves effective Ornn `write` authority over each exact GUID. Exact creator identity is not required when a ChronoAI organization grant supplies that authority. The two Codex skills retained creator `2db990b5-29ea-4a32-acf5-0008420afa1f` and were updated through the organization grant; no credential was copied or transferred between profiles.
 
-- [ ] **Step 2: Download each exact ZIP and verify the closure hash**
+- [x] **Step 2: Download each exact ZIP and verify the closure hash**
 
 ```bash
 while IFS=$'\t' read -r name version guid owner; do
-  profile_args=()
-  [[ "$owner" == "2db990b5-29ea-4a32-acf5-0008420afa1f" ]] && profile_args=(--profile codex-skill-owner)
   mkdir -p "$WORK_ROOT/baselines/$name/$version"
   zip_path="$WORK_ROOT/baselines/$name/$version.zip"
   nyxid proxy request ornn-api "/api/v1/skills/$name/versions/$version/download" \
-    "${profile_args[@]}" --method GET --stream > "$zip_path"
+    --method GET --stream > "$zip_path"
   unzip -t "$zip_path" >/dev/null
   actual="$(shasum -a 256 "$zip_path" | awk '{print $1}')"
   expected="$(jq -er --arg name "$name" '.data.items[] | select(.name == $name) | .skillHash' \
@@ -168,13 +166,13 @@ done < "$WORK_ROOT/owners.tsv"
 
 Expected: 15 valid hash-matching packages.
 
-- [ ] **Step 3: Read exact JSON packages and compare every file**
+- [x] **Step 3: Read exact JSON packages and compare every file**
 
-For every owner row, call `/api/v1/skills/<name>/json?version=<version>` with the same profile, require exact name/version, compare file counts, and compare every local extracted file with `.data.files[path]` using `cmp`. Store JSON beside each ZIP.
+For every owner row, call `/api/v1/skills/<name>/json?version=<version>` with the default local profile, require exact name/version, compare file counts, and compare every local extracted file with `.data.files[path]` using `cmp`. Store JSON beside each ZIP.
 
 Expected: all JSON file maps match extracted packages exactly.
 
-- [ ] **Step 4: Build the tool-mention inventory**
+- [x] **Step 4: Build the tool-mention inventory**
 
 ```bash
 : > "$WORK_ROOT/inventory/tool-mentions.tsv"
@@ -190,7 +188,7 @@ done < "$WORK_ROOT/owners.tsv"
 
 Expected: an exact package/file/line mapping for all relevant calls.
 
-- [ ] **Step 5: Run old-version RED and no-skill controls**
+- [x] **Step 5: Run old-version RED and no-skill controls**
 
 Run a fresh isolated Codex CLI process for each member. Save response and trace. Use these exact scenario groups:
 
@@ -204,7 +202,7 @@ Run a fresh isolated Codex CLI process for each member. Save response and trace.
 
 Mark a skill affected only when its exact old package emits a stale call, omits a required distinction, or teaches a false lifecycle promise. A correct old skill remains unchanged.
 
-- [ ] **Step 6: Freeze the complete impact ledger**
+- [x] **Step 6: Freeze the complete impact ledger**
 
 Write `impact.tsv` with exact columns:
 
@@ -230,11 +228,11 @@ Use `affected` or `unchanged`. Determine planned versions only after reading com
 - Consumes: one affected ledger row and its exact RED evidence.
 - Produces: one immutable validated, hash-verified skill version per iteration.
 
-- [ ] **Step 1: Recheck the live target before editing**
+- [x] **Step 1: Recheck the live target before editing**
 
-Read live detail and versions with the owner profile. Assert GUID/owner from `owners.tsv`. If latest differs from the ledger baseline, download/hash it, rerun RED, and update the ledger before continuing.
+Read live detail and versions with the default local profile. Assert GUID/creator from `owners.tsv` and effective write authority from the resource grants. If latest differs from the ledger baseline, download/hash it, rerun RED, and update the ledger before continuing.
 
-- [ ] **Step 2: Copy the exact baseline and make only RED-driven edits**
+- [x] **Step 2: Copy the exact baseline and make only RED-driven edits**
 
 Copy its extracted root to `candidates/<skill>/<skill>`. Use `apply_patch` for `SKILL.md` and only required references/assets. Preserve unrelated content and dependencies. Apply only relevant recipes:
 
@@ -248,11 +246,11 @@ Copy its extracted root to `candidates/<skill>/<skill>`. Use `apply_patch` for `
 - member invocation: `member_id + payload` with optional known non-chat endpoint;
 - managed Codex: explicit preparation, authoritative readiness, then workflow timeout at least 360 seconds.
 
-- [ ] **Step 3: Run static and candidate GREEN checks**
+- [x] **Step 3: Run static and candidate GREEN checks**
 
 Inspect `git diff --no-index` from baseline to candidate. Scan for raw route fields in admitted calls, removed readiness `capability` bags, hand-written channel inventory IDs, identity equality, automatic managed credential repair, active-without-ready decisions, under-budget canaries, and secrets. Manually inspect every match. Repeat the exact RED prompt against the candidate and require the corrected exact tool/schema/lifecycle behavior.
 
-- [ ] **Step 4: Package deterministically and validate with Ornn**
+- [x] **Step 4: Package deterministically and validate with Ornn**
 
 ```bash
 find "$candidate_root" -type f -exec touch -t 202607280000 {} +
@@ -261,7 +259,7 @@ find "$candidate_root" -type f -exec touch -t 202607280000 {} +
   zip -X -q "$package" -@)
 unzip -t "$package" >/dev/null
 validation="$(nyxid proxy request ornn-api '/api/v1/skill-format/validate' \
-  "${profile_args[@]}" --method POST --data "@$package" \
+  --method POST --data "@$package" \
   --header 'Content-Type:application/zip' --output json)"
 jq -e '.error == null and .data.valid == true
   and (.data.violations | length) == 0' <<<"$validation" >/dev/null
@@ -269,7 +267,7 @@ jq -e '.error == null and .data.valid == true
 
 Expected: valid deterministic ZIP with zero violations.
 
-- [ ] **Step 5: Publish exactly once by stable GUID**
+- [x] **Step 5: Publish exactly once by stable GUID**
 
 Read history first. If the planned version exists, continue only when its
 server hash equals the candidate hash. Otherwise publish the already validated
@@ -277,7 +275,7 @@ ZIP through the same immutable update contract verified by the prior release:
 
 ```bash
 publish="$(nyxid proxy request ornn-api "/api/v1/skills/$guid" \
-  "${profile_args[@]}" --method PUT --data "@$package" \
+  --method PUT --data "@$package" \
   --header 'Content-Type:application/zip' --output json)"
 jq -e --arg name "$name" --arg version "$planned_version" \
   '.error == null and .data.name == $name and .data.version == $version' \
@@ -289,11 +287,11 @@ The exact version is declared inside the candidate package. Do not add
 An ambiguous mutation is never retried until a versions readback proves whether
 it committed.
 
-- [ ] **Step 6: Verify JSON, ZIP, hash, and published behavior**
+- [x] **Step 6: Verify JSON, ZIP, hash, and published behavior**
 
 Download exact JSON and ZIP. Require `cmp` between uploaded and downloaded ZIP, equality of local/download/server SHA-256, and equality of every candidate file with `.data.files`. Append name/version/GUID/hash to `published.tsv` only after all pass. Repeat GREEN using only published readback files. A failure requires a corrected later immutable version.
 
-- [ ] **Step 7: Repeat sequentially for all affected rows**
+- [x] **Step 7: Repeat sequentially for all affected rows**
 
 Do not begin another candidate before the current skill passes readback. At the end, require exactly one final successful `published.tsv` row per affected name and none for unchanged names.
 
@@ -313,27 +311,27 @@ Do not begin another candidate before the current skill passes readback. At the 
 - Consumes: latest live skillset, unchanged refs, and final published changed refs.
 - Produces: one system-assigned immutable skillset revision.
 
-- [ ] **Step 1: Refresh source and registry immediately before mutation**
+- [x] **Step 1: Refresh source and registry immediately before mutation**
 
 Repeat Task 1 fetch and registry reads. If source changed, redo contract delta and affected evaluations. If skillset advanced, rebase its description, tags, members, and instructions.
 
-- [ ] **Step 2: Build exact members and complete rebased instructions**
+- [x] **Step 2: Build exact members and complete rebased instructions**
 
 Start from latest live members. Replace only names in `published.tsv`, preserving all other refs and order. Require 15 unique refs/names. Write `skillset-publish.json` with no version. Preserve current router rules and add only verified deltas: actual schema selection, the three NyxID modes, exact readiness selector, direct member invocation, empty-object channel inventory, and explicit managed Codex readiness. Require instructions length 1-8000 bytes.
 
-- [ ] **Step 3: Resolve every proposed dependency closure**
+- [x] **Step 3: Resolve every proposed dependency closure**
 
 Call `/api/v1/skills/<name>/closure?version=<version>` for each root. Combine nodes and require one version per name, valid hashes, readable public members, and no conflicts.
 
-- [ ] **Step 4: Run integrated prepublish evaluation**
+- [x] **Step 4: Run integrated prepublish evaluation**
 
 Using only proposed exact readbacks, require one answer that lists channel services, calls a dynamic operation, authors the admitted workflow call, checks exact readiness, invokes `m-alpha` without confusing `wf-alpha`/`svc-alpha`, prepares/runs managed Codex, and diagnoses route-field rejection plus timeout. Inspect full text and trace.
 
-- [ ] **Step 5: Publish once and verify all registry surfaces**
+- [x] **Step 5: Publish once and verify all registry surfaces**
 
 Capture current version and expected next minor. Issue one `PUT /api/v1/skillsets/248b99d6-36ff-4d41-bb45-baa25c6a9cad` through `nyxid proxy request` with the complete JSON. Assert exact GUID/name/owner/system-assigned version. Read exact detail/history/closure and require all-public visibility, byte-equal instructions, exact members, unique conflict-free closure, changed hashes from `published.tsv`, unchanged refs from prepublish, and preservation of the prior revision.
 
-- [ ] **Step 6: Forward-test only published skillset readbacks**
+- [x] **Step 6: Forward-test only published skillset readbacks**
 
 Independently download the final closure and repeat the integrated evaluation without candidate or product-source inputs.
 
@@ -349,11 +347,11 @@ Independently download the final closure and repeat the integrated evaluation wi
 - Consumes: exact final readbacks and evaluations.
 - Produces: non-secret publication evidence and final handoff.
 
-- [ ] **Step 1: Update design and plan from actual evidence**
+- [x] **Step 1: Update design and plan from actual evidence**
 
 Record source revision, affected/unchanged matrix, every published skill version/GUID/hash, final skillset version/visibility/closure, evaluation paths, and limitations. Mark only actually completed checkboxes. Include no secrets or raw identity envelopes.
 
-- [ ] **Step 2: Run fresh verification**
+- [x] **Step 2: Run fresh verification**
 
 ```bash
 bash tools/docs/lint.sh
@@ -366,7 +364,7 @@ git diff -- \
 
 Expected: lint and diff checks pass; only the two evidence documents differ.
 
-- [ ] **Step 3: Commit only final evidence**
+- [x] **Step 3: Commit only final evidence**
 
 ```bash
 git add \
@@ -379,6 +377,48 @@ git commit -m "Document Ornn tool contract skill publication"
 
 Expected: exactly the spec and plan are committed.
 
-- [ ] **Step 4: Report the real published state**
+- [x] **Step 4: Report the real published state**
 
 Report final skillset revision, changed and unchanged versions, new invocation contracts, source refresh, validation/readback evidence, and any limitation. Do not imply a skill changed merely because it was audited.
+
+## Implementation Result
+
+Final source authority: `de38876690952257cc3c992615de1f643d8b285c`.
+The late source delta changed no audited tool argument schema; its new draft-run
+`externalCapabilityReadiness` response was correctly handled by the already
+published workflow-authoring 2.1, so no extra release was created.
+
+Nine affected skills were published and exact JSON/ZIP/SHA-256 read back:
+workflow-authoring 2.1, platform-map 1.10, feasibility-advisor 1.4, triage
+1.6, channels-delivery 1.3, Firecrawl 1.2, GitHub 1.1, Codex workflow
+sample 3.1, and Codex node setup 4.1. Six skills retained their existing
+versions. Workflow-authoring 1.6 was rejected before write because the change
+required a major bump; 2.0 was published but superseded after its
+published-only evaluation exposed a flattened readiness selector.
+
+The default local NyxID credential updated the two Codex skills through the
+ChronoAI organization `write` grant while their original creators remained
+unchanged. No owner token or credential was copied between profiles.
+
+The stable skillset GUID
+`248b99d6-36ff-4d41-bb45-baa25c6a9cad` was published once. Ornn assigned
+`aevatar-platform@1.14`; detail, history, closure, all-public visibility, 15
+exact refs, nine changed hashes, six unchanged refs, and the preserved 1.13
+revision passed machine assertions. Ornn trimmed the master prompt's final
+newline, as defined by its input schema; the normalized 7994-character body
+matched detail and closure exactly.
+
+The 15 final public ZIPs were downloaded again through NyxID and matched the
+1.14 closure hashes. Prepublish and published-only fresh-context evaluations
+both returned the correct channel inventory, dynamic operation, admitted
+workflow and readiness calls, member identity, managed Codex lifecycle and
+deadlines, and failure attribution. The first source-refresh evaluation was
+interrupted before producing a verdict; one reasoned retry completed and
+provided the recorded result. Evaluation artifacts remain outside the
+repository in the release workspace.
+
+An independent reviewer was not started: the orchestration call failed schema
+validation twice before agent creation, so the project circuit breaker stopped
+further retries. The primary agent instead performed a read-only diff, stale
+term, source-ledger, impact-ledger, and publication-ledger review before the
+final documentation gates.

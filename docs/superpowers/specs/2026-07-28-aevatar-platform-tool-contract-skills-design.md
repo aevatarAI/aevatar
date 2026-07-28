@@ -1,6 +1,6 @@
 ---
 title: "Ornn Aevatar Platform Tool Contract Skill Upgrade"
-status: "Scope approved on 2026-07-28; written specification awaiting review"
+status: "Published and verified on 2026-07-28"
 owner: eanzhao
 ---
 
@@ -79,11 +79,20 @@ after the recorded baseline include:
   `807882018b9875489e34401bee67de061f22037e`: managed Codex readiness,
   read-only execution, timeout budgets, and recovery operations.
 
-GitHub remote refresh failed twice during design discovery with independent TLS
-handshake errors. Therefore the local ref is sufficient only for this design.
-A successful `git fetch`, an exact source revision record, and a repeated
-tool-contract diff are hard preconditions before authoring or publishing any
-immutable candidate. If the refresh still fails, publication stops.
+GitHub remote refresh initially failed twice during design discovery with
+independent TLS handshake errors. The release later refreshed successfully over
+GitHub SSH port 443 immediately before the skillset mutation. The final merged
+source authority was
+`de38876690952257cc3c992615de1f643d8b285c`.
+
+The late delta from `14aca8177d5b332436b0dc7451c70df0fe67c5e4`
+to that revision added draft workflow validation detail, observatory UI
+stability, OAuth client projection recovery, and committed-fact maintenance.
+It did not change any audited tool name or argument schema. It did add
+`externalCapabilityReadiness` to applicable `INVALID_WORKFLOW_YAML` responses.
+A fresh-context test using only `aevatar-workflow-authoring@2.1` correctly
+treated its typed blocker/remediation as authoritative and selected rebind
+instead of a blind YAML retry, so no additional 2.2 release was justified.
 
 Unmerged worktrees and staged local experiments are explicitly excluded. A
 contract enters a public skill only after it is present in the refreshed merged
@@ -333,11 +342,13 @@ Ornn skills and skillsets are immutable. The safe order is:
 8. Repeat the integrated fresh-context scenario using only those independent
    readbacks.
 
-Before any mutation, assert the authenticated NyxID user equals the registered
-owner of that exact skill GUID and has the required Ornn permissions. Never
-print, copy, or transfer one owner's token to another profile. If a required
-owner is unavailable, stop before publishing dependent versions or the
-skillset.
+Before any mutation, require an authenticated NyxID user with effective Ornn
+write authority over the exact resource. Exact creator identity is not required
+when the skill or skillset grants the caller's organization `write` access.
+Never print, copy, or transfer credentials between profiles. The two Codex
+skills were published with the default local NyxID credential through the
+ChronoAI organization write grant; their original `createdBy` values remained
+unchanged.
 
 Concurrent publication is handled by rebase. If any target skill or the
 skillset advances after the baseline read, download the new immutable version,
@@ -380,3 +391,63 @@ The upgrade is complete only when:
 - no product source repository is changed by the skill publication workflow;
 - repository documentation lint and diff checks pass for the final evidence
   update.
+
+## Publication Evidence
+
+The complete 15-member `aevatar-platform@1.13` closure produced this final
+impact matrix:
+
+| Skill | Baseline | Decision | Final |
+| --- | ---: | --- | ---: |
+| `fallback-to-calling-agent` | 1.0 | unchanged | 1.0 |
+| `aevatar-workflow-authoring` | 1.5 | affected | 2.1 |
+| `aevatar-team-builder` | 1.3 | unchanged | 1.3 |
+| `aevatar-scheduler` | 1.8 | unchanged | 1.8 |
+| `aevatar-service-publisher` | 1.5 | unchanged | 1.5 |
+| `aevatar-platform-map` | 1.9 | affected | 1.10 |
+| `aevatar-agent-profile-management` | 1.0 | unchanged | 1.0 |
+| `aevatar-feasibility-advisor` | 1.3 | affected | 1.4 |
+| `aevatar-triage` | 1.5 | affected | 1.6 |
+| `firecrawl-via-nyxid` | 1.1 | affected | 1.2 |
+| `github-via-nyxid` | 1.0 | affected | 1.1 |
+| `aevatar-automation` | 1.2 | unchanged | 1.2 |
+| `aevatar-channels-delivery` | 1.2 | affected | 1.3 |
+| `aevatar-codex-exec-workflow-sample` | 3.0 | affected | 3.1 |
+| `aevatar-codex-exec-node-setup` | 4.0 | affected | 4.1 |
+
+The nine final immutable publications are:
+
+| Skill | Version | GUID | SHA-256 |
+| --- | ---: | --- | --- |
+| `aevatar-workflow-authoring` | 2.1 | `bdfb0ec1-41cc-4909-815a-eb1a12b7aa2e` | `1ce600cacca5b949d3746d41f5d693987184aa8aad1cdc7aa7a366311ef0e6f4` |
+| `aevatar-platform-map` | 1.10 | `b8bf9e98-2658-4e09-9c51-2e4958137091` | `74ec410a0150fe55bd3360628f95f012a832c4b2eebf3b93c50b53ba19fbf4e8` |
+| `aevatar-feasibility-advisor` | 1.4 | `d0619556-402e-4baf-aa26-fbfe78ac937c` | `d6252a65f1928c942004c2eb69f302154d7e2b53f0ea521787c210876e96f0e7` |
+| `aevatar-triage` | 1.6 | `fbd40315-317f-4f80-9885-b44b83e1a204` | `da2dbdb97350328fac2f248f17f0719a1166955088c14f31b21e61f4711fe5df` |
+| `aevatar-channels-delivery` | 1.3 | `d2b575d3-0d80-4167-99e4-6161be47db7f` | `4770b46984239d882caa00d7e38e1ec05fed4af70fa6d13b087637a99d73fdc8` |
+| `firecrawl-via-nyxid` | 1.2 | `47c28da0-430c-4cd8-adf2-4c5fbdf4e6c2` | `f5a0f83d119a5722ef17d39b8ae437bc4c9e2dcdef0899994353032dc6c1f45b` |
+| `github-via-nyxid` | 1.1 | `abd23ac2-ed1c-4f8c-a6bc-6270390cbe32` | `089479f0bce9de830c3ecbedc688e4f85fcadc9d937d743aa41014472227bd09` |
+| `aevatar-codex-exec-workflow-sample` | 3.1 | `f69ba2d0-4ae9-4ae5-8fd6-92b287695427` | `01cc4ac1ebdf62a0474d433b8bc6b8b96b73bada5c76c053e5c2a33c5bc4967e` |
+| `aevatar-codex-exec-node-setup` | 4.1 | `9d4361eb-602e-4186-a12a-6b95801906c4` | `5afbd50a77b8e92e5ebbeb34a338c51774a352d40d97e26f77c020afecdecbba` |
+
+`aevatar-workflow-authoring@1.6` was rejected before write with Ornn
+`BREAKING_CHANGE_WITHOUT_MAJOR_BUMP`. Version 2.0 was then published with hash
+`188b5b1ea5c92103dc8dba009e57077b6da0b755fa3decad106f93727c19b7a5`,
+but its published-only evaluation exposed a flattened readiness selector. It
+is preserved as superseded evidence; 2.1 is the corrected final reference.
+
+The skillset was published once by stable GUID
+`248b99d6-36ff-4d41-bb45-baa25c6a9cad`. Ornn assigned
+`aevatar-platform@1.14`; it is `all-public` with 15 readable closure nodes and
+the exact planned member order. Detail, history, and closure matched the
+request after Ornn's documented trailing-whitespace trim, and 1.13 remained
+readable with its original members and master prompt.
+
+All 15 final ZIP packages were independently downloaded from the 1.14 closure,
+validated as ZIPs, and matched their closure SHA-256 values. Both the proposed
+exact-package evaluation and the final published-only evaluation correctly
+produced the empty channel inventory call, dynamic operation call, admitted
+workflow call and readiness selector, `m-alpha` invocation, managed credential
+and readiness sequence, five deadlines, and typed failure attribution.
+Evaluation traces and registry artifacts remain in the external release
+workspace; the repository records no tokens, raw identity envelopes, or
+package binaries.
