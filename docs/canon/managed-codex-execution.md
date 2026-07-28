@@ -41,6 +41,17 @@ codex_exec
 
 The workflow run actor remains the authority for step lifecycle and terminal state. A per-user `ManagedCodexCredentialGAgent` separately owns durable, non-secret invocation-credential facts. Its current-state projection is the only query source. No process-local identity or execution registry is introduced.
 
+Managed execution failures retain their typed `CodexExecutionFailureKind` at
+the shared tool-receipt boundary. Synthetic receipts and audit artifacts derive
+a closed `codex_execution_*` classification from that enum; they never copy the
+provider-owned `Code`, `Message`, or `DiagnosticId` into the audit record. The
+safe exception class remains `CodexExecutionException`, and `TimedOut` and
+`Cancelled` retain their corresponding terminal audit outcomes. Generic thrown
+tool exceptions continue to use `tool_execution_exception`. This keeps detector
+fingerprints aligned with the established failure domain instead of merging
+admission, readiness, transport, response, and execution failures into one
+incident class.
+
 ## Typed request contract
 
 `CodexExecutionTarget` is a Protobuf `oneof` containing `private_ssh` or `managed_sandbox`. `CodexExecutionWorkspace` is a separate `oneof`; managed execution accepts only `empty_git`, while private SSH accepts no caller-selected workspace.

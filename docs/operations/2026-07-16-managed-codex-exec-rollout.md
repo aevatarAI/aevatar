@@ -169,6 +169,47 @@ The public skill invoke endpoint uses the same trusted caller-credential extract
 - `managed_proxy_timeout` / `managed_proxy_unavailable`: inspect NyxID and chrono-sandbox capacity.
 - `managed_response_invalid` / `managed_response_too_large`: correlate with the sanitized chrono diagnostic ID and treat the contract drift as a rollout blocker.
 
+### Incident 3d836d6c causal record
+
+The 2026-07-25 detector window contained eight `codex_exec` calls in scope
+`5d0d7b72-acff-49af-bb1b-9f30bbb7c102`. All eight used audit actor
+`audit_actor:hmac-sha256:96e469afb1c956f4efa8cdd6dffc8465ced357d647b50dae94a01bb638f59ac1`,
+but each had a distinct `call_id` and `workflow_run_id`; `request_id` and
+`session_id` were empty. Correlating each audit record with its workflow
+current state, and with the durable event stream for the retried run, produced
+this partition:
+
+| UTC | `call_id` | `workflow_run_id` | Owner outcome |
+| --- | --- | --- | --- |
+| 2026-07-25 15:18:11 | `workflow:workflow.definition:909d262643d249acb3606205dfc52201:run:b37402c9dee54ea8bf0ab9cdcb4256f4:verify_managed_codex:1904476f959f4c4daf5072e81dc10dca` | `workflow.definition:909d262643d249acb3606205dfc52201:run:b37402c9dee54ea8bf0ab9cdcb4256f4` | Invalid managed response; `MalformedOutput` |
+| 2026-07-25 16:52:14 | `workflow:workflow.definition:b51ba99af7514ad3a2e5b7a9458373e4:run:5b84a55ed3be42e2ad34d8e2ffa38304:verify_managed_codex:90d002e0b0b94ddaa190c2444722f573` | `workflow.definition:b51ba99af7514ad3a2e5b7a9458373e4:run:5b84a55ed3be42e2ad34d8e2ffa38304` | Invalid managed response; `MalformedOutput` |
+| 2026-07-25 16:58:39 | `workflow:workflow.definition:89662c56052b424cac3d2ad72cb98303:run:3242523a7d18484fb40b2634ace121fc:verify_managed_codex:2e2e818474f84d2b8f100724321d7c66` | `workflow.definition:89662c56052b424cac3d2ad72cb98303:run:3242523a7d18484fb40b2634ace121fc` | Credential readiness commit timeout; `ProvisioningFailed` |
+| 2026-07-25 17:36:33 | `workflow:workflow.definition:5675fd044d544f52bc71caffa3e54da1:run:38bac78c18924cfd9f32ad0ab2da2f21:verify_managed_codex:00d903f5cc8e49c6b10b8a87c407f209` | `workflow.definition:5675fd044d544f52bc71caffa3e54da1:run:38bac78c18924cfd9f32ad0ab2da2f21` | Success; exact output `CODEX_EXEC_READY` |
+| 2026-07-25 17:39:45 | `workflow:workflow.definition:aff9edb9886845a68c0d3c8d9c012eb1:run:68c0111f0c12428d818796fb8acdbb97:verify_managed_codex:e3f0e7b5c934493bbf3550cbc3de913d` | `workflow.definition:aff9edb9886845a68c0d3c8d9c012eb1:run:68c0111f0c12428d818796fb8acdbb97` | Success; exact output `CODEX_EXEC_READY` |
+| 2026-07-25 18:16:04 | `workflow:workflow.definition:4677ad65086f446ebfc26b74b5b0c5a7:run:0fd65c71da7442d6a064c7262930eef4:complex_codex_engineering:1b4d19c84937417bb7e4bacdf7a15385` | `workflow.definition:4677ad65086f446ebfc26b74b5b0c5a7:run:0fd65c71da7442d6a064c7262930eef4` | Proxy request timeout; `TimedOut` |
+| 2026-07-25 18:21:10 | `workflow:workflow.definition:3dca3050a9704ee1b0f75988ce71f505:run:4821d12a95604ff9bc4720bc27d2c473:implement_and_verify_json_patch:df700c67a96f4e7ab43b6b54aad83e71` | `workflow.definition:3dca3050a9704ee1b0f75988ce71f505:run:4821d12a95604ff9bc4720bc27d2c473` | Proxy temporarily unavailable; `CapacityUnavailable` |
+| 2026-07-25 18:24:37 | `workflow:workflow.definition:00b67792deaa48db81dd566504747810:run:fadc4c70bb97444bab91607daf7d4145:implement_and_verify_sudoku:a753ac4cebef49239dc26cbe30e0c5e5` | `workflow.definition:00b67792deaa48db81dd566504747810:run:fadc4c70bb97444bab91607daf7d4145` | Proxy temporarily unavailable; `CapacityUnavailable` |
+
+The six failures therefore partition as two `MalformedOutput`, one
+`ProvisioningFailed`, one `TimedOut`, and two `CapacityUnavailable`; they
+do not prove one upstream NyxID or chrono-sandbox defect. The apparent shared
+cause was the detector input
+`action=codex_exec + error_code=tool_execution_exception + stage=running`.
+`running` was the failing audit stage, and `CodexExecutionException` was the
+safe exception class for each producer-owned failure.
+`ToolManager.ExecuteToolCallRawAsync` returned the typed exception as data,
+then `StreamingToolExecutor` installed the generic receipt before audit
+finalization. `StreamingToolExecutor` owns the invariant that a
+`CodexExecutionException` reaches the shared receipt finalizer before any
+generic `tool_execution_error` receipt is created. The streaming-path
+regression reproduces the former collapse for all four observed owner outcomes.
+
+Positive traffic occurred twice inside the detector window, with exact
+`CODEX_EXEC_READY` output at 17:36:33 and 17:39:45 UTC. A later non-synthetic
+successful `codex_exec` receipt at 2026-07-27 03:49:38 UTC, also with exact
+`CODEX_EXEC_READY` output, is the positive-traffic recovery check. These facts
+do not claim or require an unobserved NyxID or chrono-sandbox change.
+
 ## Rollback
 
 Set `Aevatar__CodexExecution__ManagedSandbox__Enabled=false` and roll the
