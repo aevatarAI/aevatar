@@ -51,9 +51,16 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
 
         if (hasInlineWorkflowYamls)
         {
-            var inlineBundle = await BuildInlineWorkflowBundleAsync(inlineWorkflowDocuments, ct);
+            var inlineBundle = await _definitionParser.ParseInlineWorkflowBundleAsync(inlineWorkflowDocuments, ct);
             if (!inlineBundle.Succeeded)
-                return new WorkflowActorResolutionResult(null, workflowNameForRun, WorkflowChatRunStartError.InvalidWorkflowYaml);
+                return new WorkflowActorResolutionResult(
+                    null,
+                    workflowNameForRun,
+                    WorkflowChatRunStartError.InvalidWorkflowYaml,
+                    WorkflowChatRunStartFailureDetail.Create(
+                        WorkflowChatRunStartError.InvalidWorkflowYaml,
+                        inlineBundle.Error,
+                        inlineBundle.ExternalCapabilityReadiness));
 
             workflowNameForRun = inlineBundle.EntryWorkflowName;
             workflowYamlForRun = inlineBundle.EntryWorkflowYaml;
@@ -238,58 +245,6 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
         };
     }
 
-    private async Task<InlineWorkflowBundle> BuildInlineWorkflowBundleAsync(
-        IReadOnlyList<WorkflowChatInlineYamlDocument> inlineWorkflowDocuments,
-        CancellationToken ct)
-    {
-        if (inlineWorkflowDocuments.Count == 0)
-            return InlineWorkflowBundle.Invalid;
-
-        var workflowByName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        string entryWorkflowName = string.Empty;
-        string entryWorkflowYaml = string.Empty;
-
-        for (var i = 0; i < inlineWorkflowDocuments.Count; i++)
-        {
-            var document = inlineWorkflowDocuments[i];
-            var yaml = document.Yaml;
-            if (string.IsNullOrWhiteSpace(yaml))
-                return InlineWorkflowBundle.Invalid;
-
-            var parseResult = await _definitionParser.ParseWorkflowYamlAsync(yaml, ct);
-            if (!parseResult.Succeeded)
-                return InlineWorkflowBundle.Invalid;
-
-            var workflowName = WorkflowRunNameNormalizer.NormalizeWorkflowName(parseResult.WorkflowName);
-            if (string.IsNullOrWhiteSpace(workflowName))
-                return InlineWorkflowBundle.Invalid;
-            var documentName = WorkflowRunNameNormalizer.NormalizeWorkflowName(document.Name);
-            if (!string.IsNullOrWhiteSpace(documentName) &&
-                !string.Equals(documentName, workflowName, StringComparison.OrdinalIgnoreCase))
-            {
-                return InlineWorkflowBundle.Invalid;
-            }
-
-            if (!workflowByName.TryAdd(workflowName, yaml))
-                return InlineWorkflowBundle.Invalid;
-
-            if (i == 0)
-            {
-                entryWorkflowName = workflowName;
-                entryWorkflowYaml = yaml;
-            }
-        }
-
-        if (string.IsNullOrWhiteSpace(entryWorkflowName) || string.IsNullOrWhiteSpace(entryWorkflowYaml))
-            return InlineWorkflowBundle.Invalid;
-
-        return new InlineWorkflowBundle(
-            true,
-            entryWorkflowName,
-            entryWorkflowYaml,
-            workflowByName);
-    }
-
     private async Task<WorkflowRunCreationReceipt> CreateRunActorAsync(
         WorkflowDefinitionBinding definitionBinding,
         bool wrapAsFallbackTrigger,
@@ -338,16 +293,4 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
             ? sourceScopeId.Trim()
             : scopeIdHint?.Trim() ?? string.Empty;
 
-    private readonly record struct InlineWorkflowBundle(
-        bool Succeeded,
-        string EntryWorkflowName,
-        string EntryWorkflowYaml,
-        IReadOnlyDictionary<string, string> WorkflowYamlsByName)
-    {
-        public static InlineWorkflowBundle Invalid { get; } = new(
-            false,
-            string.Empty,
-            string.Empty,
-            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
-    }
 }

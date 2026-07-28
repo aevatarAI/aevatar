@@ -1486,6 +1486,17 @@ public sealed class DefaultServiceInvocationDispatcherTests
 
         public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(string workflowYaml, CancellationToken ct = default) =>
             Task.FromResult(WorkflowYamlParseResult.Success("wf"));
+
+        public Task<WorkflowInlineYamlBundleParseResult> ParseInlineWorkflowBundleAsync(
+            IReadOnlyList<WorkflowChatInlineYamlDocument> inlineWorkflowDocuments,
+            CancellationToken ct = default) =>
+            Task.FromResult(WorkflowInlineYamlBundleParseResult.Success(
+                "wf",
+                inlineWorkflowDocuments.FirstOrDefault()?.Yaml ?? string.Empty,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["wf"] = inlineWorkflowDocuments.FirstOrDefault()?.Yaml ?? string.Empty,
+                }));
     }
 
     private sealed class RecordingActor : IActor

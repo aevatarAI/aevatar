@@ -1778,8 +1778,8 @@ function loadObsDetail(runId,rerender,refresh){
     if(d&&d.forbidden) err='无权查看该 run（403）';
     else if(!d) err='该 run 不存在或不在当前账号的可见范围';
     if(err){
-      if(previousDetail){ OBS_DETAIL[runId]={loading:false,err:null,refreshErr:err,detail:previousDetail}; return false; }
-      OBS_DETAIL[runId]={loading:false,err:err,detail:null}; return true;
+      if(previousDetail){ OBS_DETAIL[runId]={loading:false,err:null,refreshErr:err,detail:previousDetail,notFound:!d}; return false; }
+      OBS_DETAIL[runId]={loading:false,err:err,detail:null,notFound:!d}; return true;
     }
     var detail=mapObsDetail(d,g), changed=!obsDetailsEqual(previousDetail,detail);
     OBS_DETAIL[runId]={loading:false,err:null,detail:detail}; obsUpsertRunFromDetail(runId,detail);
@@ -3380,6 +3380,8 @@ function bindObservatory(root){
       if(listBefore!==JSON.stringify({runs:OBS_RUNS,err:OBS_RUNS_ERR})){ reList(); reDetail(); }
       var selected=obsSelected();
       if(!selected){ reDetail(); return; }
+      var detailState=OBS_DETAIL[selected.id];
+      if(detailState&&detailState.notFound) return;
       loadObsDetail(selected.id,function(){ reList(); if(OBS_STATE.selectedId===selected.id) reDetail(); },true);
     });
   },3000);

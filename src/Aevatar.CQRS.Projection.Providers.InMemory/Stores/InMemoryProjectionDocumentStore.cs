@@ -358,6 +358,12 @@ public sealed class InMemoryProjectionDocumentStore<TReadModel, TKey>
                 continue;
             }
 
+            if (current is IMessage message && message.Descriptor.FindFieldByName(segment) is { } field)
+            {
+                current = field.Accessor.GetValue(message);
+                continue;
+            }
+
             var property = current.GetType().GetProperty(
                 segment,
                 BindingFlags.Instance | BindingFlags.Public);
@@ -415,9 +421,9 @@ public sealed class InMemoryProjectionDocumentStore<TReadModel, TKey>
         return filter.Operator switch
         {
             ProjectionDocumentFilterOperator.Exists => actualValue != null,
-            ProjectionDocumentFilterOperator.Eq => CompareNormalizedValues(actualValue, GetScalarValue(filter.Value)) == 0,
+            ProjectionDocumentFilterOperator.Eq => EqualsFilterValue(actualValue, GetScalarValue(filter.Value)),
             ProjectionDocumentFilterOperator.EqOrMissing =>
-                actualValue == null || CompareNormalizedValues(actualValue, GetScalarValue(filter.Value)) == 0,
+                actualValue == null || EqualsFilterValue(actualValue, GetScalarValue(filter.Value)),
             ProjectionDocumentFilterOperator.In => GetCollectionValues(filter.Value)
                 .Any(expected => CompareNormalizedValues(actualValue, expected) == 0),
             ProjectionDocumentFilterOperator.Gt => CompareNormalizedValues(actualValue, GetScalarValue(filter.Value)) > 0,
@@ -427,6 +433,12 @@ public sealed class InMemoryProjectionDocumentStore<TReadModel, TKey>
             _ => false,
         };
     }
+
+    private static bool EqualsFilterValue(object? actualValue, object? expectedValue) =>
+        actualValue is IEnumerable values and not string
+            ? values.Cast<object?>().Any(value =>
+                CompareNormalizedValues(NormalizeComparableValue(value), expectedValue) == 0)
+            : CompareNormalizedValues(actualValue, expectedValue) == 0;
 
     private static object? GetScalarValue(ProjectionDocumentValue value)
     {
