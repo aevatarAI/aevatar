@@ -45,7 +45,7 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
                         Delta = "hello",
                     },
                 }, ct);
-                return CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                return WorkflowChatRunInteractionResult
                     .Success(
                         receipt,
                         new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(
@@ -78,7 +78,7 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
         var service = new FakeCommandInteractionService
         {
             Handler = (_, _, _, _) => Task.FromResult(
-                CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                WorkflowChatRunInteractionResult
                     .Failure(WorkflowChatRunStartError.WorkflowNotFound)),
         };
 
@@ -104,7 +104,7 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
         var service = new FakeCommandInteractionService
         {
             Handler = (_, _, _, _) => Task.FromResult(
-                CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                WorkflowChatRunInteractionResult
                     .Failure(WorkflowChatRunStartError.AgentNotFound)),
         };
 
@@ -218,7 +218,7 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
                 var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
                 if (onAcceptedAsync != null)
                     await onAcceptedAsync(receipt, ct);
-                return CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                return WorkflowChatRunInteractionResult
                     .Success(
                         receipt,
                         new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(
@@ -352,14 +352,14 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
 
     private sealed class FakeCommandInteractionService : IWorkflowChatRunInteractionPort
     {
-        public Func<WorkflowChatRunRequest, Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask>, Func<WorkflowChatInteractionAcceptedReceipt, CancellationToken, ValueTask>?, CancellationToken, Task<CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>>> Handler { get; set; } =
+        public Func<WorkflowChatRunRequest, Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask>, Func<WorkflowChatInteractionAcceptedReceipt, CancellationToken, ValueTask>?, CancellationToken, Task<WorkflowChatRunInteractionResult>> Handler { get; set; } =
             (_, _, _, _) => Task.FromResult(
-                CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                WorkflowChatRunInteractionResult
                     .Failure(WorkflowChatRunStartError.AgentNotFound));
 
         public WorkflowChatRunRequest? LastRequest { get; private set; }
 
-        public Task<CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>> ExecuteAsync(
+        public Task<WorkflowChatRunInteractionResult> ExecuteAsync(
             WorkflowChatRunRequest request,
             Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask> emitAsync,
             Func<WorkflowChatInteractionAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,

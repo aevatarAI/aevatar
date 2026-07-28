@@ -239,10 +239,9 @@ public static class WorkflowCapabilityEndpoints
 
             if (!result.Succeeded && !writer.Started)
             {
-                var (code, message) = ChatRunStartErrorMapper.ToCommandError(result.Error);
                 var statusCode = ChatRunStartErrorMapper.ToHttpStatusCode(result.Error);
                 scope.MarkResult(statusCode);
-                await WriteJsonErrorResponseAsync(http, statusCode, code, message, ct);
+                await WriteRunStartFailureResponseAsync(http, statusCode, result, ct);
             }
         }
         catch (OperationCanceledException)
@@ -346,10 +345,9 @@ public static class WorkflowCapabilityEndpoints
 
             if (!result.Succeeded && !writer.Started)
             {
-                var (code, message) = ChatRunStartErrorMapper.ToCommandError(result.Error);
                 var statusCode = ChatRunStartErrorMapper.ToHttpStatusCode(result.Error);
                 scope.MarkResult(statusCode);
-                await WriteJsonErrorResponseAsync(http, statusCode, code, message, ct);
+                await WriteRunStartFailureResponseAsync(http, statusCode, result, ct);
             }
         }
         catch (OperationCanceledException)
@@ -958,6 +956,21 @@ public static class WorkflowCapabilityEndpoints
                 code,
                 message,
             },
+            cancellationToken: ct);
+    }
+
+    private static async Task WriteRunStartFailureResponseAsync(
+        HttpContext http,
+        int statusCode,
+        WorkflowChatRunInteractionResult result,
+        CancellationToken ct)
+    {
+        http.Response.StatusCode = statusCode;
+        http.Response.ContentType = "application/json; charset=utf-8";
+        await http.Response.WriteAsJsonAsync(
+            result.FailureDetail == null
+                ? ChatRunStartErrorMapper.ToErrorBody(result.Error)
+                : ChatRunStartErrorMapper.ToErrorBody(result.FailureDetail),
             cancellationToken: ct);
     }
 

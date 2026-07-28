@@ -252,6 +252,10 @@ public static class ScopeServiceEndpoints
         }
     }
 
+
+    private static string? NullIfEmpty(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value;
+
     private static async ValueTask<ScopeDraftRunRequestInput> ParseScopeDraftRunRequestAsync(
         HttpContext http,
         WorkflowMultipartFileInputParser multipartFileInputParser,

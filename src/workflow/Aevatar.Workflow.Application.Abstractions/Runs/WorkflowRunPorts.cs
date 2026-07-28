@@ -25,6 +25,36 @@ public sealed record WorkflowYamlParseResult(
             externalCapabilityReadiness?.Clone());
 }
 
+public sealed record WorkflowInlineYamlBundleParseResult(
+    string EntryWorkflowName,
+    string EntryWorkflowYaml,
+    IReadOnlyDictionary<string, string> WorkflowYamlsByName,
+    string Error,
+    ExternalCapabilityReadiness? ExternalCapabilityReadiness = null)
+{
+    public bool Succeeded => string.IsNullOrWhiteSpace(Error);
+
+    public static WorkflowInlineYamlBundleParseResult Success(
+        string entryWorkflowName,
+        string entryWorkflowYaml,
+        IReadOnlyDictionary<string, string> workflowYamlsByName) =>
+        new(
+            entryWorkflowName ?? string.Empty,
+            entryWorkflowYaml ?? string.Empty,
+            workflowYamlsByName ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+            string.Empty);
+
+    public static WorkflowInlineYamlBundleParseResult Invalid(
+        string error,
+        ExternalCapabilityReadiness? externalCapabilityReadiness = null) =>
+        new(
+            string.Empty,
+            string.Empty,
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+            string.IsNullOrWhiteSpace(error) ? "Workflow YAML is invalid." : error,
+            externalCapabilityReadiness?.Clone());
+}
+
 public enum WorkflowActorKind
 {
     Unsupported = 0,
@@ -268,5 +298,9 @@ public interface IWorkflowDefinitionParser
     /// </summary>
     Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(
         string workflowYaml,
+        CancellationToken ct = default);
+
+    Task<WorkflowInlineYamlBundleParseResult> ParseInlineWorkflowBundleAsync(
+        IReadOnlyList<WorkflowChatInlineYamlDocument> inlineWorkflowDocuments,
         CancellationToken ct = default);
 }

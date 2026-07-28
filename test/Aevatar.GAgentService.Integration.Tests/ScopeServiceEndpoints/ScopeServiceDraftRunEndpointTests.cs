@@ -28,6 +28,7 @@ using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.AGUI.Contracts;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
@@ -67,7 +68,7 @@ public sealed class ScopeServiceDraftRunEndpointTests : ScopeServiceEndpointTest
                     Delta = "hello",
                 },
             }, ct);
-            return CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+            return WorkflowChatRunInteractionResult
                 .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
         };
 
@@ -117,7 +118,7 @@ public sealed class ScopeServiceDraftRunEndpointTests : ScopeServiceEndpointTest
                 },
             }, ct);
 
-            return CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+            return WorkflowChatRunInteractionResult
                 .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
         };
 
@@ -169,7 +170,7 @@ public sealed class ScopeServiceDraftRunEndpointTests : ScopeServiceEndpointTest
             if (onAcceptedAsync != null)
                 await onAcceptedAsync(receipt, ct);
 
-            return CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+            return WorkflowChatRunInteractionResult
                 .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
         };
 
@@ -226,6 +227,127 @@ public sealed class ScopeServiceDraftRunEndpointTests : ScopeServiceEndpointTest
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
         body.Should().NotBeNull();
         body!["code"].Should().Be("INVALID_SCOPE_DRAFT_RUN_REQUEST");
+    }
+
+    [Fact]
+    public async Task ScopeDraftRunEndpoint_ShouldReturnWorkflowYamlValidationMessage_WhenInlineYamlIsInvalid()
+    {
+        const string invalidWorkflowYaml = "name: main\nsteps:\n- id: call\n  type: tool_call";
+        const string validationMessage = "Workflow step 'call' external capability is invalid: nyxid_proxy derived field 'service_id' cannot be authored; select a connected-service operation and rebind.";
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.WorkflowDefinitionParser.ParseResults[invalidWorkflowYaml] = WorkflowYamlParseResult.Invalid(validationMessage);
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/workflow/draft-run", new
+        {
+            prompt = "run the draft",
+            workflowYamls = new[]
+            {
+                invalidWorkflowYaml,
+            },
+        });
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        body.Should().NotBeNull();
+        body!["code"].Should().Be("INVALID_WORKFLOW_YAML");
+        body["message"].Should().Be(validationMessage);
+        host.InteractionService.LastRequest.Should().NotBeNull();
+        host.InteractionService.LastRequest!.Source.WorkflowYamls.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ScopeDraftRunEndpoint_ShouldDelegateInlineWorkflowBundleValidationToWorkflowPipeline()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/workflow/draft-run", new
+        {
+            prompt = "run the draft",
+            workflowYamls = new[]
+            {
+                "name: main\nsteps:\n  - run: echo hello",
+                "name: main\nsteps:\n  - run: echo child",
+            },
+        });
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        body.Should().NotBeNull();
+        body!["code"].Should().Be("INVALID_WORKFLOW_YAML");
+        body["message"].Should().Be("Duplicate workflow name 'main' in workflowYamls.");
+        host.InteractionService.LastRequest.Should().NotBeNull();
+        host.InteractionService.LastRequest!.Source.WorkflowYamls.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task ScopeDraftRunEndpoint_ShouldReturnExternalCapabilityReadiness_WhenInlineYamlCapabilityIsInvalid()
+    {
+        const string invalidWorkflowYaml = "name: main\nsteps:\n- id: call\n  type: tool_call";
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.WorkflowDefinitionParser.ParseResults[invalidWorkflowYaml] = WorkflowYamlParseResult.Invalid(
+            "Workflow step 'call' external capability is invalid: select a connected-service operation and rebind.",
+            new ExternalCapabilityReadiness
+            {
+                Status = ExternalCapabilityReadinessStatus.AdmissionRebindRequired,
+                Blockers =
+                {
+                    new ExternalCapabilityBlocker
+                    {
+                        Status = ExternalCapabilityReadinessStatus.AdmissionRebindRequired,
+                        Code = "admission_rebind_required",
+                        SafeMessage = "Select a connected-service operation and rebind.",
+                    },
+                },
+                Remediations =
+                {
+                    new ExternalCapabilityRemediation
+                    {
+                        ActionKind = ExternalCapabilityRemediationActionKind.RebindWorkflow,
+                        Label = "Rebind workflow",
+                        TrustedLocator = "nyxid:services",
+                    },
+                },
+                Sources =
+                {
+                    new ExternalCapabilitySourceStamp
+                    {
+                        SourceKind = ExternalCapabilitySourceKind.NyxIdOpenApi,
+                        SourceId = "user-service-1",
+                        SourceVersion = 7,
+                    },
+                },
+                SelectedSelector = new ExternalWorkflowCapabilitySelector
+                {
+                    NyxIdOperation = new NyxIdOperationSelector
+                    {
+                        UserServiceId = "user-service-1",
+                        OperationId = "operation-1",
+                    },
+                },
+            });
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/workflow/draft-run", new
+        {
+            prompt = "run the draft",
+            workflowYamls = new[]
+            {
+                invalidWorkflowYaml,
+            },
+        });
+        using var body = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        body.RootElement.GetProperty("code").GetString().Should().Be("INVALID_WORKFLOW_YAML");
+        var readiness = body.RootElement.GetProperty("externalCapabilityReadiness");
+        readiness.GetProperty("status").GetString().Should().Be("admission_rebind_required");
+        readiness.GetProperty("blockers")[0].GetProperty("code").GetString().Should().Be("admission_rebind_required");
+        readiness.GetProperty("selectedCapability").GetProperty("userServiceId").GetString().Should().Be("user-service-1");
+        readiness.GetProperty("remediations")[0].GetProperty("actionKind").GetString().Should().Be("rebind_workflow");
+        readiness.GetProperty("remediations")[0].GetProperty("trustedLocator").GetString().Should().Be("nyxid:services");
+        readiness.GetProperty("sources")[0].GetProperty("sourceKind").GetString().Should().Be("nyx_id_open_api");
+        readiness.GetProperty("sources")[0].GetProperty("sourceVersion").GetInt64().Should().Be(7);
+        host.InteractionService.LastRequest.Should().NotBeNull();
+        host.InteractionService.LastRequest!.Source.WorkflowYamls.Should().ContainSingle();
     }
 
     [Fact]
