@@ -747,7 +747,16 @@ const TeamAutomationsTab: React.FC<Props> = ({
       <div>
         <Typography.Text>{view.cronExpression}</Typography.Text>
         <Typography.Paragraph type="secondary" style={{ margin: "4px 0 0" }}>
-          {view.timezone} · Next {formatCompactDateTime(view.nextFireAt, "not scheduled")}
+          {view.timezone} · {copy(
+            "teams.automations.schedule.next",
+            "Next {time}",
+            {
+              time: formatCompactDateTime(
+                view.nextFireAt,
+                copy("teams.automations.schedule.notScheduled", "not scheduled"),
+              ),
+            },
+          )}
         </Typography.Paragraph>
         {view.revocationPending ? (
           <Space size={[6, 6]} wrap>
@@ -857,10 +866,16 @@ const TeamAutomationsTab: React.FC<Props> = ({
       </div>
 
       <div style={{ marginTop: 16 }}>
-        {automationsQuery.isLoading ? <Spin aria-label="Loading automations" /> : null}
+        {automationsQuery.isLoading ? (
+          <Spin aria-label={copy("teams.automations.loading", "Loading automations")} />
+        ) : null}
         {automationsQuery.isError ? (
           <Alert
-            action={<Button onClick={() => void automationsQuery.refetch()}>Try again</Button>}
+            action={(
+              <Button onClick={() => void automationsQuery.refetch()}>
+                {copy("teams.automations.actions.tryAgain", "Try again")}
+              </Button>
+            )}
             description={automationsQuery.error instanceof Error ? automationsQuery.error.message : String(automationsQuery.error)}
             message={copy(
               "teams.automations.error.stateLoad",
@@ -976,7 +991,14 @@ const TeamAutomationsTab: React.FC<Props> = ({
               </Button>
               {previewText ? <Typography.Paragraph type="secondary">{previewText}</Typography.Paragraph> : null}
             </div>
-            {authorizationFlow.state === "preflighting" ? <Spin aria-label="Preparing authorization review" /> : null}
+            {authorizationFlow.state === "preflighting" ? (
+              <Spin
+                aria-label={copy(
+                  "teams.automations.authorization.preparing",
+                  "Preparing authorization review",
+                )}
+              />
+            ) : null}
             {authorizationFlow.state === "plan_changed" ? (
               <Alert
                 action={(

@@ -787,6 +787,7 @@ const enUSMessages = {
   'teams.automations.actions.resume': 'Resume',
   'teams.automations.actions.runNow': 'Run now',
   'teams.automations.actions.runHistory': 'View member run history',
+  'teams.automations.actions.tryAgain': 'Try again',
   'teams.automations.authorization.back': 'Back',
   'teams.automations.authorization.confirm': 'Authorize and continue',
   'teams.automations.authorization.description':
@@ -807,6 +808,7 @@ const enUSMessages = {
   'teams.automations.authorization.error': 'Authorization could not continue',
   'teams.automations.authorization.exactAccess': 'Exact access',
   'teams.automations.authorization.expiry': 'Credential expiry',
+  'teams.automations.authorization.preparing': 'Preparing authorization review',
   'teams.automations.authorization.review': 'Review authorization',
   'teams.automations.authorization.reviewAgain': 'Review again',
   'teams.automations.authorization.serviceModel': 'Service and model',
@@ -907,6 +909,7 @@ const enUSMessages = {
   'teams.automations.form.timezone': 'Timezone',
   'teams.automations.form.timezoneAria': 'Timezone',
   'teams.automations.form.title': 'New member automation',
+  'teams.automations.loading': 'Loading automations',
   'teams.automations.member.publishFirst':
     'Publish this member before adding recurring work.',
   'teams.automations.member.publishedServiceReady':
@@ -923,6 +926,8 @@ const enUSMessages = {
   'teams.automations.memberUnavailable.title': 'Member unavailable for automation',
   'teams.automations.member.workflowOnly':
     'Only workflow members can have recurring work.',
+  'teams.automations.schedule.next': 'Next {time}',
+  'teams.automations.schedule.notScheduled': 'not scheduled',
   'teams.automations.messages.createFailed':
     'Automation was not created: {message}',
   'teams.automations.messages.createSuccess': 'Automation created.',

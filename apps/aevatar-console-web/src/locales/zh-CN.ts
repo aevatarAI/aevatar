@@ -746,6 +746,7 @@ const zhCNMessages = {
   'teams.automations.actions.resume': '恢复',
   'teams.automations.actions.runNow': '立即运行',
   'teams.automations.actions.runHistory': '查看成员运行记录',
+  'teams.automations.actions.tryAgain': '重试',
   'teams.automations.authorization.back': '返回',
   'teams.automations.authorization.confirm': '授权并继续',
   'teams.automations.authorization.description':
@@ -766,6 +767,7 @@ const zhCNMessages = {
   'teams.automations.authorization.error': '无法继续授权',
   'teams.automations.authorization.exactAccess': '精确权限',
   'teams.automations.authorization.expiry': '凭证有效期',
+  'teams.automations.authorization.preparing': '正在准备授权检查',
   'teams.automations.authorization.review': '检查授权',
   'teams.automations.authorization.reviewAgain': '重新检查',
   'teams.automations.authorization.serviceModel': '服务与模型',
@@ -860,6 +862,7 @@ const zhCNMessages = {
   'teams.automations.form.timezone': '时区',
   'teams.automations.form.timezoneAria': '时区',
   'teams.automations.form.title': '新建成员自动化',
+  'teams.automations.loading': '正在加载自动化',
   'teams.automations.member.publishFirst': '先发布这个成员，再添加周期任务。',
   'teams.automations.member.publishedServiceReady': '已发布服务可用',
   'teams.automations.member.unknown': '未知成员',
@@ -874,6 +877,8 @@ const zhCNMessages = {
   'teams.automations.memberUnavailable.title': '该成员无法配置自动化',
   'teams.automations.member.workflowOnly':
     '只有 Workflow 成员可以添加周期任务。',
+  'teams.automations.schedule.next': '下次 {time}',
+  'teams.automations.schedule.notScheduled': '尚未安排',
   'teams.automations.messages.createFailed': '自动化未创建：{message}',
   'teams.automations.messages.createSuccess': '自动化已创建。',
   'teams.automations.messages.authorizationAccepted': '授权请求已受理',
