@@ -17,6 +17,9 @@ When `CLAUDE.md` changes, review whether this FKST projection or its conformance
 - If assignment fails, stop before making a branch or code changes.
 - If an issue is already assigned, treat it as owned by someone else and skip it unless the assignee explicitly delegates the issue.
 - If the issue appears to be user error, duplicate, obsolete, or missing reproduction, report that conclusion instead of forcing a code change.
+- Treat `blocked-github-content` fork shells as not developable until the fork owns its requirements. A provenance-only body such as `Self-owned fork for isolated implementation.` plus `Original: ...`, or a blocked title token, is not a problem statement.
+- Before selecting or marking a blocked fork shell ready for implementation, require a sanitized self-owned problem statement, intended behavior, code-verifiable acceptance checks, and either class remediation or explicit waiver for the blocked-content recurrence.
+- Do not infer hidden original issue content from blocked titles, source-reference markers, sibling issue patterns, or route names. If the sanitized statement and waiver/remediation evidence are missing, stop at intake and report the requirement gap instead of starting code changes.
 
 ## Issue analysis
 
