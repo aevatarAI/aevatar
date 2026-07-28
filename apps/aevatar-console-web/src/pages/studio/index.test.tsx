@@ -5241,6 +5241,7 @@ describe("StudioPage", () => {
         memberReadsBeforeDelete + 2,
       );
     });
+    expect(screen.getByLabelText("Delete workspace-demo")).toBeTruthy();
     expect(message.info).toHaveBeenCalled();
     expect(message.success).not.toHaveBeenCalled();
 

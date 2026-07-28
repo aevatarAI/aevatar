@@ -899,7 +899,7 @@ const zhCNMessages = {
   'teams.members.delete.failed': '删除成员失败。',
   'teams.members.delete.keep': '保留成员',
   'teams.members.delete.notConfirmed':
-    '删除尚未确认。成员已恢复到列表，请刷新后重试。',
+    '删除尚未确认。成员仍保留在列表中，请刷新后重试。',
   'teams.members.delete.submitted': '删除请求已提交，正在等待确认。',
   'teams.members.delete.success': '已删除成员 {member}。',
   'teams.members.delete.title': '删除成员',

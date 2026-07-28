@@ -1901,7 +1901,7 @@ describe("TeamDetailPage", () => {
     });
   });
 
-  it("keeps an accepted member deletion pending across a stale roster refetch until removal is observable", async () => {
+  it("keeps an accepted member visible until removal is observable", async () => {
     window.history.replaceState(
       {},
       "",
@@ -1965,10 +1965,9 @@ describe("TeamDetailPage", () => {
         scopeId: "scope-1",
         memberId: "member-team-alpha",
       });
-      expect(studioApi.listTeamMembers).toHaveBeenCalledTimes(2);
       expect(studioApi.getMember).toHaveBeenCalledTimes(2);
     });
-    expect(screen.queryByText("Team Alpha Operator")).toBeNull();
+    expect(screen.getByText("Team Alpha Operator")).toBeTruthy();
     expect(message.info).toHaveBeenCalled();
     expect(message.success).not.toHaveBeenCalled();
 
@@ -1981,6 +1980,8 @@ describe("TeamDetailPage", () => {
       "已删除成员 Team Alpha Operator。",
     );
     await waitFor(() => {
+      expect(studioApi.listTeamMembers).toHaveBeenCalledTimes(2);
+      expect(screen.queryByText("Team Alpha Operator")).toBeNull();
       expect(new URLSearchParams(window.location.search).get("memberId")).toBeNull();
       expect(new URLSearchParams(window.location.search).get("tab")).toBe("members");
     });
@@ -2015,7 +2016,7 @@ describe("TeamDetailPage", () => {
     expect(screen.getByText("Team Alpha Operator")).toBeTruthy();
   });
 
-  it("restores a member for retry when accepted deletion is not confirmed", async () => {
+  it("keeps a member visible when accepted deletion is not confirmed", async () => {
     window.history.replaceState(
       {},
       "",
@@ -2042,7 +2043,7 @@ describe("TeamDetailPage", () => {
 
     expect(message.success).not.toHaveBeenCalled();
     expect(message.error).toHaveBeenCalledWith(
-      "删除尚未确认。成员已恢复到列表，请刷新后重试。",
+      "删除尚未确认。成员仍保留在列表中，请刷新后重试。",
     );
     await waitFor(() => {
       expect(screen.getByText("Team Alpha Operator")).toBeTruthy();

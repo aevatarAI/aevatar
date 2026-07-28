@@ -499,7 +499,7 @@ const TeamDetailPage: React.FC = () => {
   const [teamTestModalOpen, setTeamTestModalOpen] = React.useState(false);
   const [entryActionBusyMemberId, setEntryActionBusyMemberId] = React.useState("");
   const [deletingMemberId, setDeletingMemberId] = React.useState("");
-  const [pendingDeletedMemberIds, setPendingDeletedMemberIds] = React.useState(
+  const [confirmedDeletedMemberIds, setConfirmedDeletedMemberIds] = React.useState(
     () => new Set<string>(),
   );
   const teamTestAbortRef = React.useRef<AbortController | null>(null);
@@ -543,7 +543,7 @@ const TeamDetailPage: React.FC = () => {
     setTeamTestModalOpen(routeState.testTeam);
     setEntryActionBusyMemberId("");
     setDeletingMemberId("");
-    setPendingDeletedMemberIds(new Set());
+    setConfirmedDeletedMemberIds(new Set());
   }, [routeState.testTeam, scopeId, selectedTeamId]);
 
   React.useEffect(
@@ -911,7 +911,7 @@ const TeamDetailPage: React.FC = () => {
       (teamMembersQuery.data?.members ?? [])
         .filter(
           (member) =>
-            !pendingDeletedMemberIds.has(trimText(member.memberId)),
+            !confirmedDeletedMemberIds.has(trimText(member.memberId)),
         )
         .map((member) => {
         const isWorkflowMember =
@@ -1007,8 +1007,8 @@ const TeamDetailPage: React.FC = () => {
         };
         }),
     [
+      confirmedDeletedMemberIds,
       entryMemberId,
-      pendingDeletedMemberIds,
       selectedRosterMemberId,
       scopeId,
       selectedTeamId,
@@ -1818,7 +1818,6 @@ const TeamDetailPage: React.FC = () => {
         title: t("teams.members.delete.title", "Delete member"),
         onOk: async () => {
           setDeletingMemberId(normalizedMemberId);
-          let tombstoneApplied = false;
           try {
             let alreadyDeleted = false;
             try {
@@ -1833,12 +1832,26 @@ const TeamDetailPage: React.FC = () => {
               alreadyDeleted = true;
             }
 
-            setPendingDeletedMemberIds((current) => {
+            if (!alreadyDeleted) {
+              void message.info(
+                t(
+                  "teams.members.delete.submitted",
+                  "Deletion submitted. Waiting for confirmation.",
+                ),
+              );
+            }
+            if (!alreadyDeleted) {
+              await waitForStudioMemberDeletion({
+                scopeId,
+                memberId: normalizedMemberId,
+              });
+            }
+            setConfirmedDeletedMemberIds((current) => {
               const next = new Set(current);
               next.add(normalizedMemberId);
               return next;
             });
-            tombstoneApplied = true;
+            await refreshTeamAuthority();
             queryClient.setQueryData<StudioMemberRoster | undefined>(
               teamMembersQueryKey,
               (current) =>
@@ -1852,21 +1865,6 @@ const TeamDetailPage: React.FC = () => {
                     }
                   : current,
             );
-            if (!alreadyDeleted) {
-              void message.info(
-                t(
-                  "teams.members.delete.submitted",
-                  "Deletion submitted. Waiting for confirmation.",
-                ),
-              );
-            }
-            await refreshTeamAuthority();
-            if (!alreadyDeleted) {
-              await waitForStudioMemberDeletion({
-                scopeId,
-                memberId: normalizedMemberId,
-              });
-            }
             if (
               trimText(routeState.memberId) === normalizedMemberId ||
               trimText(preferredMemberId) === normalizedMemberId
@@ -1888,19 +1886,11 @@ const TeamDetailPage: React.FC = () => {
               }),
             );
           } catch (error) {
-            if (tombstoneApplied) {
-              setPendingDeletedMemberIds((current) => {
-                const next = new Set(current);
-                next.delete(normalizedMemberId);
-                return next;
-              });
-              void refreshTeamAuthority().catch(() => undefined);
-            }
             void message.error(
               error instanceof StudioMemberDeletionNotConfirmedError
                 ? t(
                     "teams.members.delete.notConfirmed",
-                    "Deletion was not confirmed. The member was restored; refresh and retry.",
+                    "Deletion was not confirmed. The member remains in the list; refresh and retry.",
                   )
                 : describeError(
                     error,

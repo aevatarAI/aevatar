@@ -3032,7 +3032,7 @@ const StudioPage: React.FC = () => {
   const [optimisticStudioMembers, setOptimisticStudioMembers] = useState<
     StudioMemberSummary[]
   >([]);
-  const [pendingDeletedStudioMemberIds, setPendingDeletedStudioMemberIds] =
+  const [confirmedDeletedStudioMemberIds, setConfirmedDeletedStudioMemberIds] =
     useState(() => new Set<string>());
   const [createMemberModalOpen, setCreateMemberModalOpen] = useState(false);
   const [createMemberKind, setCreateMemberKind] = useState<BuildMode>('workflow');
@@ -3419,18 +3419,18 @@ const StudioPage: React.FC = () => {
         resolvedStudioTeamId,
       ).filter(
         (member) =>
-          !pendingDeletedStudioMemberIds.has(trimOptional(member.memberId)),
+          !confirmedDeletedStudioMemberIds.has(trimOptional(member.memberId)),
       ),
     [
+      confirmedDeletedStudioMemberIds,
       optimisticStudioMembers,
-      pendingDeletedStudioMemberIds,
       resolvedStudioScopeId,
       resolvedStudioTeamId,
       studioMembersQuery.data?.members,
     ],
   );
   useEffect(() => {
-    setPendingDeletedStudioMemberIds(new Set());
+    setConfirmedDeletedStudioMemberIds(new Set());
   }, [resolvedStudioScopeId, resolvedStudioTeamId]);
   const studioMemberByPublishedServiceId = useMemo(() => {
     const members = new Map<string, (typeof studioScopeMembers)[number]>();
@@ -9403,7 +9403,6 @@ const StudioPage: React.FC = () => {
         onOk: async () => {
           setInventoryBusyKey(memberKey);
           setInventoryBusyAction('delete');
-          let tombstoneApplied = false;
 
           try {
             let alreadyDeleted = false;
@@ -9419,22 +9418,6 @@ const StudioPage: React.FC = () => {
               alreadyDeleted = true;
             }
 
-            setPendingDeletedStudioMemberIds((current) => {
-              const next = new Set(current);
-              next.add(memberId);
-              return next;
-            });
-            tombstoneApplied = true;
-            setOptimisticStudioMembers((current) =>
-              current.filter(
-                (member) => trimOptional(member.memberId) !== memberId,
-              ),
-            );
-            queryClient.setQueryData<StudioMemberRoster>(
-              studioMembersQueryKey,
-              (current) =>
-                removeStudioMemberRosterMember(current, scopeId, memberId),
-            );
             if (!alreadyDeleted) {
               void message.info(
                 t(
@@ -9443,6 +9426,20 @@ const StudioPage: React.FC = () => {
                 ),
               );
             }
+            if (!alreadyDeleted) {
+              await waitForStudioMemberDeletion({ scopeId, memberId });
+            }
+
+            setConfirmedDeletedStudioMemberIds((current) => {
+              const next = new Set(current);
+              next.add(memberId);
+              return next;
+            });
+            setOptimisticStudioMembers((current) =>
+              current.filter(
+                (member) => trimOptional(member.memberId) !== memberId,
+              ),
+            );
 
             const invalidations = [
               queryClient.invalidateQueries({
@@ -9466,9 +9463,11 @@ const StudioPage: React.FC = () => {
               );
             }
             await Promise.all(invalidations);
-            if (!alreadyDeleted) {
-              await waitForStudioMemberDeletion({ scopeId, memberId });
-            }
+            queryClient.setQueryData<StudioMemberRoster>(
+              studioMembersQueryKey,
+              (current) =>
+                removeStudioMemberRosterMember(current, scopeId, memberId),
+            );
 
             const deletedMemberKey = buildBackendMemberKey(memberId);
             if (
@@ -9502,21 +9501,11 @@ const StudioPage: React.FC = () => {
               }),
             );
           } catch (error) {
-            if (tombstoneApplied) {
-              setPendingDeletedStudioMemberIds((current) => {
-                const next = new Set(current);
-                next.delete(memberId);
-                return next;
-              });
-              void queryClient.invalidateQueries({
-                queryKey: studioMembersQueryKey,
-              });
-            }
             void message.error(
               error instanceof StudioMemberDeletionNotConfirmedError
                 ? t(
                     "pages.studio.index.delete.member.not.confirmed",
-                    "Deletion was not confirmed. The member was restored; refresh and retry.",
+                    "Deletion was not confirmed. The member remains in the list; refresh and retry.",
                   )
                 : error instanceof Error
                   ? error.message
