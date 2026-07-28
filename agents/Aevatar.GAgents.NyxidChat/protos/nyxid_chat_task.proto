@@ -554,6 +554,107 @@ message NyxIdChatConversationGAgentState {
   // in pending_actions; completed/declined/failed/cancelled/expired actions
   // move here without losing typed correlation and proof evidence.
   repeated NyxIdChatActionRequestState recent_actions = 18;
+  // Post-registration delivery state for creating the authoritative empty
+  // ChatConversationGAgent transcript. This outbox is transport state only
+  // and is deliberately excluded from public current-state projections.
+  NyxIdChatHistoryInitializationOutbox pending_history_initialization = 19;
+  // Stable identity retained after dispatch so exact registration retries do
+  // not prepare a second initialization operation.
+  string history_initialization_operation_id = 20;
+  // One stable reservation shared by controller recovery and terminal
+  // delivery. The prompt is transcript input, not execution capability;
+  // credentials and raw content parts are deliberately absent.
+  NyxIdChatHistoryDeliveryReservationState history_delivery_reservation = 21;
+  // Bounded at-least-once delivery transport state. Public projections must
+  // not expose this field; ChatConversationGAgent remains transcript owner.
+  NyxIdChatHistoryTerminalOutbox pending_history_terminal = 22;
+}
+
+message NyxIdChatHistoryInitializationOutbox {
+  string operation_id = 1;
+  string scope_id = 2;
+  string conversation_id = 3;
+  string service_id = 4;
+  string service_kind = 5;
+  google.protobuf.Timestamp created_at = 6;
+  string initial_title = 7;
+  int32 attempt = 8;
+}
+
+// Typed self-continuation and durable callback payload. It intentionally
+// carries only the stable operation identity and attempt; the actor rehydrates
+// all delivery data from its committed outbox.
+message NyxIdChatHistoryInitializationDispatchRequested {
+  string operation_id = 1;
+  int32 attempt = 2;
+}
+
+message NyxIdChatHistoryInitializationDispatchedEvent {
+  string operation_id = 1;
+  int32 attempt = 2;
+  google.protobuf.Timestamp dispatched_at = 3;
+}
+
+message NyxIdChatHistoryInitializationRetryScheduledEvent {
+  string operation_id = 1;
+  int32 attempt = 2;
+  string failure_code = 3;
+  google.protobuf.Timestamp scheduled_at = 4;
+}
+
+message NyxIdChatHistoryDeliveryReservationState {
+  string delivery_id = 1;
+  string scope_id = 2;
+  string conversation_id = 3;
+  string turn_id = 4;
+  string user_text = 5;
+  string source_actor_id = 6;
+  string source_command_id = 7;
+  string source_correlation_id = 8;
+  string request_fingerprint = 9;
+  bool create_conversation_if_missing = 10;
+  bool expose_create_recovery = 11;
+  bool dispatched = 12;
+  google.protobuf.Timestamp dispatched_at = 13;
+}
+
+message NyxIdChatHistoryDeliveryReservationDispatchedEvent {
+  string delivery_id = 1;
+  string source_command_id = 2;
+  google.protobuf.Timestamp dispatched_at = 3;
+}
+
+message NyxIdChatHistoryTerminalOutbox {
+  string delivery_id = 1;
+  string turn_id = 2;
+  string source_actor_id = 3;
+  string source_command_id = 4;
+  NyxIdChatTurnStatus status = 5;
+  string text = 6;
+  string error_code = 7;
+  google.protobuf.Timestamp observed_at = 8;
+  int32 attempt = 9;
+}
+
+// Typed self-continuation and durable retry payload. Full terminal content is
+// rehydrated from actor-owned state and never copied into callback messages.
+message NyxIdChatHistoryTerminalDispatchRequested {
+  string delivery_id = 1;
+  int32 attempt = 2;
+}
+
+message NyxIdChatHistoryTerminalDispatchedEvent {
+  string delivery_id = 1;
+  string source_command_id = 2;
+  int32 attempt = 3;
+  google.protobuf.Timestamp dispatched_at = 4;
+}
+
+message NyxIdChatHistoryTerminalRetryScheduledEvent {
+  string delivery_id = 1;
+  int32 attempt = 2;
+  string failure_code = 3;
+  google.protobuf.Timestamp scheduled_at = 4;
 }
 
 // One atomic controller commit for a newly admitted turn. The snapshot already

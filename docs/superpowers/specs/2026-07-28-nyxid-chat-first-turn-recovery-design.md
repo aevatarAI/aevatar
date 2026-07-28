@@ -188,6 +188,15 @@ Terminal mapping is closed:
 | `stopped` | `stopped` | empty text plus stable stop code |
 | `blocked` | `blocked` | safe blocker summary |
 
+An `action.continue` input creates its own continuation turn and therefore its
+own history reservation before any postcondition dispatch. It is a structured
+NyxID action report, not an LLM prompt. Because the authoritative `ChatTurn`
+contract pairs each turn with `user_text`, the controller renders only the
+closed report dispositions into a fixed safe transcript input such as
+`NyxID action update: completed.` Resource identities, caller safe messages,
+raw report payloads, credentials, and the origin prompt are never copied into
+that text. The action command ID remains the source command identity.
+
 The controller outbox is transport state, not a second transcript. It is
 bounded to the single pending terminal and is excluded from current-state
 read models and AG-UI frames. This mirrors the repository's existing workflow
@@ -270,6 +279,9 @@ streaming.
   round trips.
 - NyxID completed, failed, stopped, and blocked terminals append one exact
   turn; exact retries do not duplicate it.
+- Action continuations reserve their server-owned continuation turn before
+  postcondition dispatch and persist only a fixed disposition summary as the
+  transcript input.
 - A crash after terminal commit but before notification dispatch recovers the
   pending outbox without storing transcript data in the query read model.
 

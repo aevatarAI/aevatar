@@ -203,7 +203,7 @@ Task NotifyTurnTerminalAsync(
 - Produces unchanged `IActorRuntime.LinkAsync(string parentId, string childId,
   CancellationToken ct)` semantics with a current-parent fast path.
 
-- [ ] **Step 1: Write the bound-parent RED tests**
+- [x] **Step 1: Write the bound-parent RED tests**
 
 Add tests that bind a persistent state whose `AgentId == parentId`, invoke
 `LinkAsync`, and assert:
@@ -229,7 +229,7 @@ dotnet test test/Aevatar.Foundation.Runtime.Hosting.Tests/Aevatar.Foundation.Run
 Expected: FAIL because `OrleansActorRuntime` does not receive the binding
 accessor and still calls the parent grain proxy.
 
-- [ ] **Step 2: Implement the minimum current-parent branch**
+- [x] **Step 2: Implement the minimum current-parent branch**
 
 Inject the existing `IRuntimeActorStateBindingAccessor`. After child
 initialization and inside the existing call-chain-reentrancy scope, compare
@@ -239,7 +239,7 @@ state. Otherwise call the existing `parent.AddChildAsync`. Leave child parent
 assignment, hierarchy relay, committed-observation relay, logging, and public
 signatures unchanged.
 
-- [ ] **Step 3: Verify GREEN, guards, and commit**
+- [x] **Step 3: Verify GREEN, guards, and commit**
 
 Run:
 
@@ -281,7 +281,7 @@ git commit -m "Fix Orleans self-parent actor linking"
 - Consumes the existing deterministic `ChatHistoryActorIds.Conversation`
   address and `StudioActorCommandDispatch` accepted-only pipeline.
 
-- [ ] **Step 1: Write initialization actor RED tests**
+- [x] **Step 1: Write initialization actor RED tests**
 
 Add tests for an empty actor, exact retry, conflicting identity/payload, and an
 initialize command arriving after a same-identity append. Key assertions:
@@ -309,7 +309,7 @@ dotnet test test/Aevatar.Studio.Tests/Aevatar.Studio.Tests.csproj --nologo --no-
 Expected: FAIL because the initialization Protobuf messages and handler do not
 exist.
 
-- [ ] **Step 2: Implement idempotent initialization**
+- [x] **Step 2: Implement idempotent initialization**
 
 Add the Protobuf command/event without changing existing field numbers. The
 handler validates required identity, valid timestamp, non-deleted state, and
@@ -319,7 +319,7 @@ exact replay and throws `InvalidOperationException` for conflict. The state
 transition sets identity/service/title/created/updated timestamps and never
 adds or removes a turn.
 
-- [ ] **Step 3: Write adapter and projection RED tests**
+- [x] **Step 3: Write adapter and projection RED tests**
 
 Assert `InitializeConversationAsync` ensures the deterministic conversation
 actor and dispatches the exact typed command. Project an initialized state and
@@ -340,7 +340,7 @@ dotnet test test/Aevatar.Studio.Tests/Aevatar.Studio.Tests.csproj --nologo --no-
 Expected: FAIL because the application port and actor-backed initialization
 mapping do not exist.
 
-- [ ] **Step 4: Implement the typed adapter mapping**
+- [x] **Step 4: Implement the typed adapter mapping**
 
 Add the application record/method exactly as declared above. Normalize required
 values once in Infrastructure, ensure the deterministic conversation actor,
@@ -348,7 +348,7 @@ map to `InitializeChatConversationCommand`, and dispatch through the existing
 command pipeline. Keep the read path unchanged; normal committed-state
 projection makes the empty document visible.
 
-- [ ] **Step 5: Verify GREEN, guards, and commit**
+- [x] **Step 5: Verify GREEN, guards, and commit**
 
 Run:
 
@@ -398,7 +398,7 @@ git commit -m "Initialize accepted chat transcripts"
 - Existing `IWorkflowChatHistoryTerminalDeliveryPort` remains unchanged and
   maps workflow receipts/notifications at the boundary.
 
-- [ ] **Step 1: Write source-neutral wire and actor RED tests**
+- [x] **Step 1: Write source-neutral wire and actor RED tests**
 
 Write handcrafted Protobuf bytes for fields 6, 7, and 8 and parse them with the
 new generated classes. Assert descriptor field numbers remain 6/7/8 and the
@@ -416,7 +416,7 @@ dotnet test test/Aevatar.Studio.Tests/Aevatar.Studio.Tests.csproj --nologo --no-
 Expected: FAIL because the generated contract still exposes workflow-named
 fields and has no neutral terminal message.
 
-- [ ] **Step 2: Rename fields and centralize terminal handling**
+- [x] **Step 2: Rename fields and centralize terminal handling**
 
 Retain all wire numbers and message names. Update state transitions and
 validation to source terminology. Add one source-neutral terminal handler/core;
@@ -429,7 +429,7 @@ Make the existing deterministic delivery actor ID helper public. Mark
 `ChatTurnHistoryDeliveryGAgent` as `IProjectedActor` because it already
 feeds the stable create-recovery current-state consumer.
 
-- [ ] **Step 3: Write application adapter RED tests**
+- [x] **Step 3: Write application adapter RED tests**
 
 Assert the ActorBacked adapter:
 
@@ -450,7 +450,7 @@ dotnet test test/Aevatar.Studio.Tests/Aevatar.Studio.Tests.csproj --nologo --no-
 Expected: FAIL because the application contracts/mappings and workflow-only
 projection flag do not exist.
 
-- [ ] **Step 4: Implement adapter and workflow-only recovery projection**
+- [x] **Step 4: Implement adapter and workflow-only recovery projection**
 
 Add `ExposeCreateRecovery` to the delivery reserve/event/state contract on
 new field numbers. Existing workflow create reservation sets it true; NyxID
@@ -459,7 +459,7 @@ create-recovery projector on this field, then map source fields back into its
 workflow-specific read document. Do not rename the public workflow recovery
 DTO in this issue.
 
-- [ ] **Step 5: Verify GREEN, guards, and commit**
+- [x] **Step 5: Verify GREEN, guards, and commit**
 
 Run:
 
@@ -503,11 +503,15 @@ git commit -m "Generalize chat history terminal delivery"
   `NyxIdChatHistoryTerminalOutbox`.
 - Produces typed self signals and committed dispatched/retry events keyed by
   stable operation/delivery ID and attempt.
+- Action continuations reserve the server-owned continuation turn before a
+  postcondition dispatch. Their history input is a fixed rendering of closed
+  report dispositions, never an origin prompt, resource identity, caller safe
+  message, or raw action payload.
 - Extends `NyxIdChatConversationRegistrationAcceptedEvent` with a state
   snapshot on a new field number so registration acceptance and initialization
   outbox preparation are one commit.
 
-- [ ] **Step 1: Write registration/initialization outbox RED tests**
+- [x] **Step 1: Write registration/initialization outbox RED tests**
 
 After admission-visible registry registration, inspect the single registration
 accepted event and its resulting state. Assert it contains one initialization
@@ -536,7 +540,7 @@ dotnet test test/Aevatar.AI.Tests/Aevatar.AI.Tests.csproj --nologo --no-restore 
 Expected: FAIL because registration accepted does not transition controller
 state and no initialization outbox/signals exist.
 
-- [ ] **Step 2: Implement atomic initialization outbox and retry**
+- [x] **Step 2: Implement atomic initialization outbox and retry**
 
 Clone the controller state after registry admission, prepare the deterministic
 initialization operation exactly once, and persist it inside the existing
@@ -546,7 +550,7 @@ dispatch, commit/clear; on failure, commit the next attempt and schedule
 `ScheduleSelfDurableTimeoutAsync`. Activation republishes pending work;
 callbacks and handlers compare operation ID plus attempt before acting.
 
-- [ ] **Step 3: Write reservation-before-provider and dispatch-failure RED tests**
+- [x] **Step 3: Write reservation-before-provider and dispatch-failure RED tests**
 
 Update the start-turn harness to record `history.reserve` separately from
 runtime and provider dispatch. Assert this order:
@@ -573,7 +577,7 @@ dotnet test test/Aevatar.AI.Tests/Aevatar.AI.Tests.csproj --nologo --no-restore 
 Expected: FAIL because start-turn has no history reservation and exceptions
 escape before a terminal controller fact is committed.
 
-- [ ] **Step 4: Implement reservation and typed first-dispatch failure**
+- [x] **Step 4: Implement reservation and typed first-dispatch failure**
 
 Include a pending reservation descriptor in the same state snapshot as
 `NyxIdChatTurnStartedEvent`. Admit the deterministic source-neutral
@@ -585,7 +589,7 @@ stages in one narrowly scoped failure conversion that uses
 failure. Activation must finish a pending reservation before publishing the
 existing interrupted-operation recovery signal.
 
-- [ ] **Step 5: Write terminal-outbox RED tests for all closed statuses**
+- [x] **Step 5: Write terminal-outbox RED tests for all closed statuses**
 
 Drive completed, failed, stopped, and blocked transitions. Inspect the exact
 committed event state and assert terminal status plus one matching pending
@@ -605,7 +609,7 @@ dotnet test test/Aevatar.AI.Tests/Aevatar.AI.Tests.csproj --nologo --no-restore 
 Expected: FAIL because terminal controller commits do not prepare or deliver a
 history outbox.
 
-- [ ] **Step 6: Implement terminal preparation/delivery without a second transcript**
+- [x] **Step 6: Implement terminal preparation/delivery without a second transcript**
 
 Before persisting each terminal controller event, clone its authoritative next
 state and attach one matching terminal outbox from its reservation. Apply this
@@ -618,7 +622,7 @@ failure schedules durable retry, and activation republishes it. The outbox is
 delivery transport state only; transcript append stays in
 `ChatTurnHistoryDeliveryGAgent -> ChatConversationGAgent`.
 
-- [ ] **Step 7: Prove outboxes do not leak into current-state/AGUI**
+- [x] **Step 7: Prove outboxes do not leak into current-state/AGUI**
 
 Populate every outbox with unique sentinel safe text and a credential-like
 sentinel in an actor-state fixture. Project it and serialize the resulting
@@ -635,7 +639,7 @@ dotnet test test/Aevatar.Studio.Tests/Aevatar.Studio.Tests.csproj --nologo --no-
 Expected: FAIL only if the implementation exposed new outbox fields; after the
 explicit query-shape mapping is kept narrow, PASS with no sentinel leakage.
 
-- [ ] **Step 8: Verify GREEN, guards, and commit**
+- [x] **Step 8: Verify GREEN, guards, and commit**
 
 Run:
 
