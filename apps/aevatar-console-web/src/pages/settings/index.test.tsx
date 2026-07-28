@@ -669,6 +669,15 @@ describe("SettingsPage", () => {
         "Shared OpenAI alpha",
       ),
     );
+    await waitFor(() => {
+      expect(view.queryClient.isFetching({
+        queryKey: ["settings", "user-llm-settings"],
+      })).toBe(0);
+      expect(view.queryClient.getQueryData([
+        "settings",
+        "user-llm-settings",
+      ])).toEqual(expect.objectContaining({ savedUserServiceId: "us-alpha" }));
+    }, { timeout: 5_000 });
 
     await act(async () => {
       await view.queryClient.invalidateQueries({
@@ -676,11 +685,16 @@ describe("SettingsPage", () => {
       });
     });
 
-    await waitFor(() =>
+    await waitFor(() => {
+      expect(mockStudioApi.getUserLlmSettings).toHaveBeenCalledTimes(2);
+      expect(view.queryClient.getQueryData([
+        "settings",
+        "user-llm-settings",
+      ])).toEqual(expect.objectContaining({ savedUserServiceId: "us-beta" }));
       expect(selectedLlmServiceElement()).toHaveTextContent(
         "Shared OpenAI beta",
-      ),
-    );
+      );
+    }, { timeout: 5_000 });
     expect(screen.getByRole("button", { name: "Save config" })).toBeDisabled();
   });
 
