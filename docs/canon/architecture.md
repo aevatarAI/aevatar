@@ -150,6 +150,12 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 2. Orleans runtime：`RuntimeActorGrainState` 持久态持有 `ParentId/Children`
 3. `LinkAsync/UnlinkAsync` 同时更新拓扑状态和 stream relay binding
 
+Orleans 的 `LinkAsync(parentId, childId)` 必须区分当前 grain 与其他 parent：
+
+1. 当调用发生在 `parentId` 自己的 grain turn 内，`IRuntimeActorStateBindingAccessor` 已绑定该 parent 的 `RuntimeActorGrainState`。Runtime 直接在当前串行 turn 内幂等追加 `Children` 并持久化；不得再通过 hosted client 调用同一个 parent 的 `AddChildAsync`，否则非重入 grain 会等待自己的下一次 turn 而自锁。
+2. 当当前绑定状态不属于 `parentId` 时，仍通过 parent grain proxy 的 `AddChildAsync` 更新权威拓扑，不能用本地对象结构猜测 parent 状态。
+3. 两条路径都继续执行 child 的 `SetParentAsync`，并同时保留 parent-to-child hierarchy relay 与 child-to-parent committed-observation relay。当前 parent 快路径只消除 self-call，不改变拓扑、传播或投影语义。
+
 实际消息行为已经收敛为：
 
 1. `DirectRoute` 由 runtime 直接投递到目标 actor inbox

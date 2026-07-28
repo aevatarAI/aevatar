@@ -18,6 +18,7 @@ namespace Aevatar.GAgents.NyxidChat;
 public sealed class NyxIdChatConversationGAgent
     : GAgentBase<NyxIdChatConversationGAgentState>
 {
+    private const string SharedInputHistoryText = "Shared input content.";
     private static readonly TimeSpan HistoryInitializationRetryDelay = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan HistoryTerminalRetryDelay = TimeSpan.FromSeconds(5);
 
@@ -177,24 +178,18 @@ public sealed class NyxIdChatConversationGAgent
                     CorrelationId = correlationId,
                     State = next,
                 }, CancellationToken.None).ConfigureAwait(false);
-
-                if (State.PendingHistoryInitialization is { } pendingInitialization)
-                {
-                    await DispatchHistoryInitializationContinuationAsync(
-                            pendingInitialization,
-                            CancellationToken.None)
-                        .ConfigureAwait(false);
-                }
+            }
+            else
+            {
+                await PersistRegistrationUnavailableAndCompensateAsync(
+                        scopeId,
+                        command.CreatedLocally,
+                        "registration_not_admission_visible",
+                        commandId,
+                        correlationId)
+                    .ConfigureAwait(false);
                 return;
             }
-
-            await PersistRegistrationUnavailableAndCompensateAsync(
-                    scopeId,
-                    command.CreatedLocally,
-                    "registration_not_admission_visible",
-                    commandId,
-                    correlationId)
-                .ConfigureAwait(false);
         }
         catch (Exception exception)
         {
@@ -210,6 +205,26 @@ public sealed class NyxIdChatConversationGAgent
                     commandId,
                     correlationId)
                 .ConfigureAwait(false);
+            return;
+        }
+
+        if (State.PendingHistoryInitialization is not { } pendingInitialization)
+            return;
+
+        try
+        {
+            await DispatchHistoryInitializationContinuationAsync(
+                    pendingInitialization,
+                    CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            Logger.LogWarning(
+                "NyxIdChat history initialization continuation dispatch failed after registration acceptance: actor={ActorId} operation={OperationId} exceptionType={ExceptionType}",
+                Id,
+                pendingInitialization.OperationId,
+                exception.GetType().Name);
         }
     }
 
@@ -1688,6 +1703,7 @@ public sealed class NyxIdChatConversationGAgent
         NyxIdChatStartTurnCommand command)
     {
         var sourceCommandId = command.CommandId.Trim();
+        var prompt = command.Prompt.Trim();
         return new NyxIdChatHistoryDeliveryReservationState
         {
             DeliveryId = BuildStableIdentity(
@@ -1697,18 +1713,13 @@ public sealed class NyxIdChatConversationGAgent
             ScopeId = command.ScopeId.Trim(),
             ConversationId = Id,
             TurnId = command.TurnId.Trim(),
-            UserText = command.Prompt.Trim(),
+            UserText = string.IsNullOrWhiteSpace(prompt) && command.InputParts.Count > 0
+                ? SharedInputHistoryText
+                : prompt,
             SourceActorId = Id,
             SourceCommandId = sourceCommandId,
             SourceCorrelationId = command.CorrelationId.Trim(),
-            RequestFingerprint = BuildStableIdentity(
-                "chat-history-request",
-                Id,
-                command.TurnId.Trim(),
-                command.TaskId.Trim(),
-                command.ClientRequestId.Trim(),
-                sourceCommandId,
-                command.Prompt),
+            RequestFingerprint = BuildHistoryRequestFingerprint(command, sourceCommandId),
             CreateConversationIfMissing = true,
             ExposeCreateRecovery = false,
         };
@@ -2195,7 +2206,7 @@ public sealed class NyxIdChatConversationGAgent
         }
     }
 
-    private static bool SameTurnAdmission(
+    private bool SameTurnAdmission(
         NyxIdChatConversationGAgentState state,
         NyxIdChatStartTurnCommand command) =>
         string.Equals(state.ConversationActorId, command.ConversationActorId.Trim(), StringComparison.Ordinal) &&
@@ -2203,7 +2214,35 @@ public sealed class NyxIdChatConversationGAgent
         string.Equals(state.ActiveTurn?.TurnId, command.TurnId.Trim(), StringComparison.Ordinal) &&
         string.Equals(state.ActiveTurn?.TaskId, command.TaskId.Trim(), StringComparison.Ordinal) &&
         string.Equals(state.ActiveTurn?.ClientRequestId, command.ClientRequestId.Trim(), StringComparison.Ordinal) &&
-        string.Equals(state.ActiveTurn?.Prompt, command.Prompt, StringComparison.Ordinal);
+        string.Equals(state.ActiveTurn?.Prompt, command.Prompt, StringComparison.Ordinal) &&
+        string.Equals(
+            state.HistoryDeliveryReservation?.RequestFingerprint,
+            BuildHistoryRequestFingerprint(
+                command,
+                state.HistoryDeliveryReservation?.SourceCommandId ?? command.CommandId.Trim()),
+            StringComparison.Ordinal);
+
+    private string BuildHistoryRequestFingerprint(
+        NyxIdChatStartTurnCommand command,
+        string sourceCommandId) =>
+        BuildStableIdentity(
+            "chat-history-request",
+            Id,
+            command.TurnId.Trim(),
+            command.TaskId.Trim(),
+            command.ClientRequestId.Trim(),
+            sourceCommandId,
+            command.Prompt,
+            BuildInputPartsFingerprint(command.InputParts));
+
+    private static string BuildInputPartsFingerprint(
+        IEnumerable<Aevatar.AI.Abstractions.ChatContentPart> inputParts) =>
+        BuildStableIdentity(
+            "input-parts",
+            inputParts
+                .Select(static part => Convert.ToHexStringLower(
+                    System.Security.Cryptography.SHA256.HashData(part.ToByteArray())))
+                .ToArray());
 
     private static bool KeysEqual(NyxIdChatOperationKey? left, NyxIdChatOperationKey? right) =>
         left is not null &&

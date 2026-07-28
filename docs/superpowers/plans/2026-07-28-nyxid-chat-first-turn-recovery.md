@@ -102,7 +102,7 @@ Grpc.Tools 2.76.0, xUnit, FluentAssertions, ASP.NET Core SSE.
 | `test/Aevatar.Studio.Tests/ChatConversationGAgentAppendTests.cs` | R5 | Prove zero-turn initialization, exact replay, conflict, and initialize-after-append behavior. | Not applicable. |
 | `test/Aevatar.Studio.Tests/ChatConversationCurrentStateProjectorTests.cs` | R4 | Prove initialized state materializes a zero-turn current-state document. | Not applicable. |
 | `test/Aevatar.Studio.Tests/ActorBackedChatHistoryStoreTests.cs` | R4 | Prove typed adapter dispatch and empty-message read result. | Not applicable. |
-| `test/Aevatar.Studio.Tests/ChatTurnHistoryDeliveryGAgentTests.cs` | R5 | Prove source-neutral wire compatibility, workflow adaptation, status mapping, and deduplication. | Not applicable. |
+| `test/Aevatar.Studio.Tests/ChatTurnHistoryDeliveryGAgentTests.cs` | R5 | Prove source-neutral wire compatibility, workflow adaptation, status mapping, deduplication, and immutable committed reservations. | Not applicable. |
 | `test/Aevatar.Studio.Tests/ChatTurnHistoryTerminalDeliveryPortTests.cs` | R4 | Preserve workflow behavior while asserting source-neutral mapping. | Not applicable. |
 | `test/Aevatar.Studio.Tests/ChatHistoryCreateRecoveryCurrentStateProjectorTests.cs` | R4 | Prove only workflow create reservations produce create-recovery documents. | Not applicable. |
 | `agents/Aevatar.GAgents.NyxidChat/protos/nyxid_chat_task.proto` | R4 | Persist bounded reservation/initialization/terminal outboxes and typed retry signals/events. | Not applicable. |
@@ -480,6 +480,35 @@ git add agents/Aevatar.GAgents.ChatHistory/chat_history_messages.proto agents/Ae
 git commit -m "Generalize chat history terminal delivery"
 ```
 
+- [x] **Step 6: Add a review-gap RED for malformed reservation replay**
+
+Commit one valid reservation, then replay the same delivery actor with an
+empty required `UserText`. Assert the handler throws a reservation-conflict
+exception and the original `Reserved` status, request fingerprint, and empty
+error fields remain unchanged.
+
+Run:
+
+```bash
+dotnet test test/Aevatar.Studio.Tests/Aevatar.Studio.Tests.csproj --nologo --no-restore --filter "FullyQualifiedName~WhenCommittedReservationIsReusedWithMalformedPayload"
+```
+
+Expected: FAIL because reserve validation currently persists a failed event
+before checking whether the actor already owns a committed reservation.
+
+- [x] **Step 7: Make committed reservation identity immutable**
+
+Check existing state before validating a new reserve command. Return only for
+an exact reservation replay; otherwise throw the existing conflict exception
+without committing another event. Keep the existing validation-and-failure
+behavior unchanged for a fresh delivery actor.
+
+- [x] **Step 8: Verify the immutable-reservation review gap**
+
+Run the new RED/GREEN test, the complete
+`ChatTurnHistoryDeliveryGAgentTests` class, the Studio project, stability
+guard, and `git diff --check`.
+
 ---
 
 ### Task 4: Add NyxID history reservation and durable outboxes
@@ -662,6 +691,64 @@ git add agents/Aevatar.GAgents.NyxidChat/protos/nyxid_chat_task.proto agents/Aev
 git commit -m "Deliver NyxID turns to chat history"
 ```
 
+- [x] **Step 9: Add a review-gap RED for post-accept continuation failure**
+
+Make the actor dispatch port throw while creating an admission-visible local
+conversation. Assert that the already committed registration-accepted state
+retains its initialization outbox, the registry is not unregistered, the actor
+is not destroyed, and no registration-unavailable event is committed.
+
+Run:
+
+```bash
+dotnet test test/Aevatar.AI.Tests/Aevatar.AI.Tests.csproj --nologo --no-restore --filter "FullyQualifiedName~WhenInitializationContinuationDispatchFails"
+```
+
+Expected: FAIL because the broad registration `catch` currently treats the
+post-commit self-message failure as registration failure and compensates the
+already accepted conversation.
+
+- [x] **Step 10: Keep creation compensation before the accepted boundary**
+
+Limit creation compensation to registration/admission and accepted-event
+persistence failures. After the accepted event commits, catch a failed
+initialization self-message publication separately, log only safe identity and
+exception type, and leave the durable outbox pending for activation recovery.
+
+- [x] **Step 11: Verify the post-accept recovery gap**
+
+Run the new RED/GREEN test, all creation/initialization tests in
+`NyxIdChatGAgentTests`, the AI project, stability guard, and `git diff --check`.
+
+- [x] **Step 12: Add review-gap RED tests for input-parts-only turns**
+
+Start one turn with an empty prompt and a typed input part containing unique
+raw sentinels. Assert history reservation uses exactly `Shared input content.`,
+contains none of the raw values, and provider dispatch still runs. Replay the
+same turn identity and prompt with different input parts and assert it is not
+treated as an exact no-op.
+
+Run:
+
+```bash
+dotnet test test/Aevatar.AI.Tests/Aevatar.AI.Tests.csproj --nologo --no-restore --filter "FullyQualifiedName~InputPartsOnly|FullyQualifiedName~DifferentInputParts"
+```
+
+Expected: FAIL because reservation currently forwards the empty prompt as an
+invalid empty `UserText`, while exact-turn admission compares only the prompt.
+
+- [x] **Step 13: Reuse the request fingerprint for full input identity**
+
+Keep normal prompt text unchanged. For input-parts-only turns use the fixed safe
+transcript text and include a length-safe irreversible digest of each full
+input part in the existing request fingerprint. Exact-turn admission compares
+that committed fingerprint; no raw part content is added to history state.
+
+- [x] **Step 14: Verify the input-parts compatibility gap**
+
+Run the two new tests, all `NyxIdChatConversationGAgentTests`, the AI project,
+stability guard, security scans, and `git diff --check`.
+
 ---
 
 ### Task 5: Enforce a strict SSE wall-clock terminal
@@ -733,6 +820,35 @@ git add agents/Aevatar.GAgents.NyxidChat/NyxIdChatEndpoints.Streaming.cs test/Ae
 git commit -m "Enforce NyxID stream wall-clock timeout"
 ```
 
+- [x] **Step 5: Add review-gap RED tests for inner timeouts**
+
+For both text and approval interactions, return a faulted task whose exception
+is `TimeoutException`. Assert that the endpoint emits exactly one terminal with
+code `STREAM_FAILURE`, not `STREAM_TIMEOUT`, and does not expose the inner
+exception text.
+
+Run:
+
+```bash
+dotnet test test/Aevatar.AI.Tests/Aevatar.AI.Tests.csproj --nologo --no-restore --filter "FullyQualifiedName~WhenInteractionThrowsTimeout_ShouldWriteStreamFailure"
+```
+
+Expected: FAIL because the broad endpoint `catch (TimeoutException)` currently
+cannot distinguish the inner failure from its own `WaitAsync` deadline.
+
+- [x] **Step 6: Give the wall-clock deadline a private typed exception**
+
+Wait for the interaction with an independent linked deadline cancellation
+token. Translate only cancellation of that deadline into one private
+endpoint-owned timeout exception; allow an inner `TimeoutException` to reach
+the existing safe `STREAM_FAILURE` path. Keep public routes and DTOs unchanged.
+
+- [x] **Step 7: Verify the review gap and commit it with Task 6 docs**
+
+Run the two new tests, the Task 5 endpoint regression suite, stability guard,
+and `git diff --check`. Include this narrow correction in the final Task 6
+documentation commit.
+
 ---
 
 ### Task 6: Update canon and close verification
@@ -747,7 +863,7 @@ git commit -m "Enforce NyxID stream wall-clock timeout"
 - Documents the implemented HTTP/actor/runtime contracts; introduces no new
   code interface.
 
-- [ ] **Step 1: Update canonical behavior**
+- [x] **Step 1: Update canonical behavior**
 
 In `nyxid-chat-api.md` state all of the following explicitly:
 
@@ -767,7 +883,7 @@ In `architecture.md` document that Orleans `LinkAsync` updates the
 currently bound parent persistent state inside its existing grain turn, while
 non-current parents use `AddChildAsync`, and both relay bindings remain.
 
-- [ ] **Step 2: Run focused cross-layer verification**
+- [x] **Step 2: Run focused cross-layer verification**
 
 Run:
 
@@ -780,7 +896,7 @@ dotnet test test/Aevatar.AI.Tests/Aevatar.AI.Tests.csproj --nologo --no-restore 
 Expected: all focused runtime, transcript, controller, security, and endpoint
 tests pass.
 
-- [ ] **Step 3: Run mandatory guards and docs lint**
+- [x] **Step 3: Run mandatory guards and docs lint**
 
 Run:
 
@@ -796,7 +912,7 @@ bash tools/docs/lint.sh
 Expected: every guard/lint exits 0 with no new architecture, polling,
 projection, or documentation violations.
 
-- [ ] **Step 4: Build and run relevant/full tests**
+- [x] **Step 4: Build and run relevant/full tests**
 
 Run:
 
@@ -812,7 +928,7 @@ Expected: build and relevant projects pass; full solution tests pass unless an
 environment-owned integration dependency is unavailable, in which case record
 the exact failing test/output without weakening it.
 
-- [ ] **Step 5: Review the final diff and architecture evidence**
+- [x] **Step 5: Review the final diff and architecture evidence**
 
 Run:
 
@@ -829,38 +945,66 @@ present. Confirm each requirement row above has code, tests, and (where
 applicable) canon evidence. Apply the repository review checklist and record
 any blocking gap before completion.
 
-- [ ] **Step 6: Commit documentation**
+- [x] **Step 6: Commit final review corrections and documentation**
 
 ```bash
-git add docs/canon/nyxid-chat-api.md docs/canon/architecture.md
+git add \
+  agents/Aevatar.GAgents.ChatHistory/ChatTurnHistoryDeliveryGAgent.cs \
+  agents/Aevatar.GAgents.NyxidChat/NyxIdChatConversationGAgent.cs \
+  agents/Aevatar.GAgents.NyxidChat/NyxIdChatEndpoints.Streaming.cs \
+  docs/canon/architecture.md \
+  docs/canon/nyxid-chat-api.md \
+  docs/superpowers/plans/2026-07-28-nyxid-chat-first-turn-recovery.md \
+  docs/superpowers/specs/2026-07-28-nyxid-chat-first-turn-recovery-design.md \
+  src/Aevatar.Studio.Infrastructure/ActorBacked/ActorBackedChatHistoryStore.cs \
+  test/Aevatar.AI.Tests/NyxIdChatConversationGAgentTests.cs \
+  test/Aevatar.AI.Tests/NyxIdChatGAgentTests.cs \
+  test/Aevatar.AI.Tests/NyxIdChatStreamIdentityAndTerminalTests.cs \
+  test/Aevatar.Studio.Tests/ChatTurnHistoryDeliveryGAgentTests.cs
 git commit -m "Document NyxID first-turn recovery"
 ```
 
+## Verification Evidence
+
+- `dotnet build aevatar.slnx --nologo --no-restore`: exit 0, 0 errors.
+- Runtime Hosting: 294 passed, 17 environment-gated skips, 0 failed.
+- Studio: 1443 passed, 0 failed.
+- AI: 1885 passed, 0 failed.
+- `dotnet test aevatar.slnx --nologo --no-build --no-restore`: exit 0;
+  every executed project reported 0 failures.
+- Stability, query/projection, architecture, docs, solution-split, test
+  ownership, and slow-test guards: exit 0.
+- Production image `de388766` is an `origin/feature/integrate` revision and
+  does not contain this branch; the seven-step production smoke in the design
+  remains a post-deployment rollout check, not local completion evidence.
+
 ## Final Review Checklist
 
-- [ ] R1: bound-parent Orleans link avoids the parent proxy, writes once, and
+- [x] R1: bound-parent Orleans link avoids the parent proxy, writes once, and
   preserves child parent plus both relays.
-- [ ] R2: history reservation is admitted before provider dispatch and each
+- [x] R2: history reservation is admitted before provider dispatch and each
   reserve/create/link/dispatch failure becomes a typed terminal.
-- [ ] R3: accepted registration atomically prepares initialization; projected
+- [x] R3: accepted registration atomically prepares initialization; projected
   empty history returns `200` with zero messages.
-- [ ] R4: completed/failed/stopped/blocked terminals use the existing delivery
+- [x] R4: completed/failed/stopped/blocked terminals use the existing delivery
   and conversation actors; exact retries do not duplicate turns.
-- [ ] R5: initialization and terminal pending state survives activation and is
+- [x] R4: malformed or conflicting reservation replay cannot overwrite an
+  already committed delivery state.
+- [x] R5: initialization and terminal pending state survives activation and is
   retried only through typed self events/durable callbacks.
-- [ ] R6: cancellation-ignoring interactions still return one timeout terminal
+- [x] R6: cancellation-ignoring interactions still return one timeout terminal
   by the configured wall clock and deterministic late frames cannot write.
-- [ ] R7: docs distinguish NyxID status polling, workflow create recovery, and
+- [x] R7: docs distinguish NyxID status polling, workflow create recovery, and
   legacy read-only history.
-- [ ] Protobuf old field numbers/type names are unchanged where renamed.
-- [ ] NyxID current-state and AGUI outputs contain no history outbox content,
+- [x] Protobuf old field numbers/type names are unchanged where renamed.
+- [x] NyxID current-state and AGUI outputs contain no history outbox content,
   credential, reasoning, tool argument, or raw tool result.
-- [ ] No query path activates actors, primes projection, reads the event store,
+- [x] No query path activates actors, primes projection, reads the event store,
   or reconstructs transcript state.
-- [ ] No test adds arbitrary delay/polling and all mandatory guards pass.
-- [ ] `git status --short` contains no generated output, databases,
+- [x] No test adds arbitrary delay/polling and all mandatory guards pass.
+- [x] `git status --short` contains no generated output, databases,
   WAL/SHM, secrets, or files from the user's main worktree.
-- [ ] Over-engineering review result is exactly `符合约定，可交付` or every
+- [x] Over-engineering review result is exactly `符合约定，可交付` or every
   finding is resolved/registered before handoff.
 
 ## Plan Self-Review

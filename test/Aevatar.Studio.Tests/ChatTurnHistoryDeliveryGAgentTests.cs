@@ -95,6 +95,25 @@ public sealed class ChatTurnHistoryDeliveryGAgentTests
     }
 
     [Fact]
+    public async Task Reserve_WhenCommittedReservationIsReusedWithMalformedPayload_ShouldPreserveCommittedState()
+    {
+        var agent = await CreateAgentAsync(new RecordingActorRuntime(), new RecordingActorDispatchPort());
+        var reserve = SourceReserve();
+        await agent.HandleEventAsync(Envelope(reserve, "chat-history-command-port"));
+
+        var malformed = reserve.Clone();
+        malformed.UserText = string.Empty;
+        var act = () => agent.HandleEventAsync(Envelope(malformed, "chat-history-command-port"));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*reservation conflicts*");
+        agent.State.Status.Should().Be(ChatTurnHistoryDeliveryStatus.Reserved);
+        agent.State.RequestFingerprint.Should().Be("fingerprint-original");
+        agent.State.ErrorCode.Should().BeEmpty();
+        agent.State.ErrorSummary.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task SourceTerminal_WhenExactlyRetried_ShouldNoOp_ButConflictShouldFailClosed()
     {
         var dispatch = new RecordingActorDispatchPort();

@@ -202,7 +202,7 @@ public static partial class NyxIdChatEndpoints
                     interactionCancellation.Token);
             }
 
-            result = await interactionTask.WaitAsync(ResolveStreamTerminalTimeout(), ct);
+            result = await WaitForStreamTerminalAsync(interactionTask, ct);
 
             if (!result.Succeeded)
                 heartbeat.Stop();
@@ -215,7 +215,7 @@ public static partial class NyxIdChatEndpoints
                     ? "The action continuation failed. Please try again."
                     : "The chat request failed. Please try again.");
         }
-        catch (TimeoutException)
+        catch (NyxIdChatStreamDeadlineExceededException)
         {
             logger.LogWarning("NyxID chat stream timed out for actor {ActorId} turn {TurnId}", actorId, turnId);
             try
@@ -407,7 +407,7 @@ public static partial class NyxIdChatEndpoints
                 },
                 null,
                 interactionCancellation.Token);
-            var result = await interactionTask.WaitAsync(ResolveStreamTerminalTimeout(), ct);
+            var result = await WaitForStreamTerminalAsync(interactionTask, ct);
 
             if (!result.Succeeded)
                 heartbeat.Stop();
@@ -418,7 +418,7 @@ public static partial class NyxIdChatEndpoints
                 turnId,
                 "The approval continuation failed. Please try again.");
         }
-        catch (TimeoutException)
+        catch (NyxIdChatStreamDeadlineExceededException)
         {
             logger.LogWarning("NyxID approval stream timed out for actor {ActorId} turn {TurnId}", actorId, turnId);
             try
@@ -695,6 +695,24 @@ public static partial class NyxIdChatEndpoints
             ? TimeSpan.FromMinutes(5)
             : StreamTerminalTimeout;
 
+    private static async Task<T> WaitForStreamTerminalAsync<T>(
+        Task<T> interactionTask,
+        CancellationToken requestCancellationToken)
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(
+            requestCancellationToken);
+        deadline.CancelAfter(ResolveStreamTerminalTimeout());
+        try
+        {
+            return await interactionTask.WaitAsync(deadline.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException exception)
+            when (!requestCancellationToken.IsCancellationRequested && deadline.IsCancellationRequested)
+        {
+            throw new NyxIdChatStreamDeadlineExceededException(exception);
+        }
+    }
+
     private static void CancelObserveAndDisposeInteraction(
         CancellationTokenSource cancellation,
         Task interactionTask,
@@ -798,6 +816,9 @@ public static partial class NyxIdChatEndpoints
             }
         }
     }
+
+    private sealed class NyxIdChatStreamDeadlineExceededException(Exception innerException)
+        : Exception("The NyxID stream wall-clock deadline elapsed.", innerException);
 
     private sealed class NyxIdChatStreamKeepAlive : IAsyncDisposable
     {

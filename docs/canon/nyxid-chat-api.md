@@ -41,6 +41,16 @@ The conversation controller owns active/latest turns, task and step status, oper
 
 The Host authenticates, validates identities, dispatches commands, and maps typed results. It does not decide task transitions. Projection consumes committed controller facts only. Query reads `NyxIdChatConversationCurrentStateDocument` only; it does not activate an actor, read the event store, attach or prime a projection, replay events, or create a turn.
 
+Conversation creation has three deliberately separate authorities:
+
+| Concern | Authority | Query surface |
+|---|---|---|
+| Admission and create status | Scope actor registry | `GET /api/scopes/{scopeId}/nyxid-chat/conversations` |
+| Task, turn, and control state | `NyxIdChatConversationGAgent` | `GET /api/scopes/{scopeId}/nyxid-chat/conversations/{actorId}/state` |
+| Durable transcript | `ChatConversationGAgent` | `/api/scopes/{scopeId}/chat-history` |
+
+The HTTP endpoint owns only authentication/protocol adaptation, serialized SSE writes, and the wall-clock connection deadline. No one surface implies synchronous visibility in the other two.
+
 ## Identity model
 
 | Identity | Owner and lifetime | Meaning |
@@ -70,6 +80,37 @@ actorId + turnId + taskId + stepId + operationId + operationGeneration
 ```
 
 A mismatch in any component is stale or foreign evidence and cannot advance state.
+
+## Create and confirm a conversation
+
+```http
+POST /api/scopes/{scopeId}/nyxid-chat/conversations
+Authorization: Bearer <access-token>
+```
+
+Creation remains asynchronous and returns `202 Accepted` with a stable actor identity and an honest accepted-stage receipt:
+
+```json
+{
+  "status": "accepted",
+  "actorId": "conversation-alpha",
+  "acceptedCommandId": "command-alpha",
+  "correlationId": "correlation-alpha",
+  "statusUrl": "/api/scopes/scope-alpha/nyxid-chat/conversations"
+}
+```
+
+`acceptedCommandId` traces inbox admission; it is not a promise that actor handling, transcript projection, or a first turn has completed. The response `Location` and `statusUrl` both identify the NyxID conversation list. That list is the create-status resource for this transport: poll it until the returned `actorId` is present before treating admission as observable.
+
+Registry visibility and transcript visibility are eventually consistent. Once registration is accepted, the controller durably schedules idempotent transcript initialization. The normal chat-history projection therefore eventually makes this request return `200` even when no first turn has completed:
+
+```http
+GET /api/scopes/{scopeId}/chat-history/conversations/{actorId}
+```
+
+The response contains the conversation document with an empty `messages` list. A transient `404` before projection catches up is lag, not permission to reconstruct history from controller events or to create a second transcript store.
+
+`GET /api/scopes/{scopeId}/chat-history/create-recovery/{commandId}` belongs only to workflow conversation creation through `/api/chat`. It is not valid recovery for `nyxid-chat`; NyxID clients use the returned conversation-list `statusUrl`.
 
 ## Start and observe a turn
 
@@ -122,7 +163,7 @@ Text, reasoning, tool-start, task, control, and terminal frames share the actor-
 - task and turn `failed`: `RUN_ERROR` with a stable code and safe message;
 - inconsistent committed task/turn terminal states: fail closed with `NYXID_CHAT_TERMINAL_STATE_CONFLICT`.
 
-Heartbeat stops before terminal output. A bounded terminal deadline emits a safe `RUN_ERROR` instead of leaving a keepalive-only connection open indefinitely.
+Heartbeat and text/action/approval frames share one serialized writer gate. A real terminal atomically closes that gate. If the configured wall-clock deadline wins, the endpoint closes the same gate, emits exactly one safe `RUN_ERROR` with code `STREAM_TIMEOUT`, and only then cancels the inner interaction. It returns without waiting for an interaction that ignores cancellation; any later content or terminal callback is discarded. A provider or interaction that completes by throwing its own `TimeoutException` is instead an inner execution failure and maps to the safe `STREAM_FAILURE` terminal. Request cancellation closes the gate without attempting a synthetic terminal on a disconnected client.
 
 ## Actor-owned state machine
 
@@ -285,6 +326,8 @@ Safe resource variants are `userService`, `key`, `node`, `serviceAccount`, `deve
 
 `action.continue` is a wake-up signal, not mutation proof and not an old-run resume. The server creates a new `continuationTurnId` from the conversation and authenticated client request identity. A `completed` report starts the action-specific typed read-model postcondition. Only an exact, current match can change the step to `done / confirmed`. Missing, stale, unavailable, or mismatched evidence remains blocked/unverified; it never guesses success. Non-completed dispositions become typed terminal action outcomes without a postcondition success.
 
+The continuation is archived as a separate transcript turn, but its user-side transcript input is a fixed disposition-only summary such as `NyxID action update: completed.` It never copies action resource IDs, request payloads, credentials, tool arguments, or raw results into chat history.
+
 Multiple reports are reconciled independently; a batch is not a transaction. Duplicate exact reports are idempotent, while conflicting or cross-scope/conversation/origin reports fail closed.
 
 ## Conditional current-state query
@@ -361,7 +404,18 @@ Action names such as `service_account.rotate_secret` describe a NyxID-owned jour
 
 ## Conversation transcript
 
-All turns under one `actorId` share a conversation transcript, including after passivation/reactivation. Transcript/history remains a separate `ChatConversationGAgent` concern and is not the task current-state read model. A blocked or stopped turn is archived with its typed terminal and safe summary. A new `clientRequestId` starts a new turn over the same conversation; reconnect uses the current-state endpoint instead of replaying actor events inside the query path.
+All turns under one `actorId` share a conversation transcript, including after passivation/reactivation. Transcript/history remains a separate `ChatConversationGAgent` concern and is not the task current-state read model. Accepted registration initializes this authority even with zero turns. Completed, failed, stopped, and blocked terminal turns are delivered through the existing chat-history delivery actor at least once; stable delivery identities make initialization, reservation, and terminal replay idempotent and prevent duplicate transcript turns. Once a reservation is committed, any malformed or conflicting reuse fails without replacing that authoritative delivery state.
+
+For a text turn whose `prompt` is empty and whose content is supplied only by
+typed `inputParts`, transcript `userText` is the fixed safe placeholder
+`Shared input content.` Raw part text, bytes, URI, and name are not copied into
+history. The idempotency fingerprint still includes an irreversible digest of
+the complete typed parts, so the same request identity cannot replay different
+input as if it were an exact retry.
+
+A blocked or stopped turn is archived with its typed terminal and safe summary. A new `clientRequestId` starts a new turn over the same conversation; reconnect uses the current-state endpoint instead of replaying actor events inside the query path.
+
+Historical `nyxid.chat.legacy` actors are not controller actors. Their existing chat-history documents remain readable through chat-history endpoints, but the new `nyxid-chat` admission and streaming routes do not reinterpret `serviceKind`, actor-ID text, or history rows as a migration. Presenting a legacy actor ID to the new stream may therefore return `ACTOR_NOT_FOUND`. Legacy conversations remain read-only until an explicit migration contract creates a controller identity and records a real mapping.
 
 ## Caller checklist
 
@@ -376,6 +430,8 @@ Callers must:
 7. send schema v4 action reports with `actionRequestId`, `originTurnId`, `disposition`, and typed resource refs;
 8. treat browser `completed` as a signal pending typed postcondition proof;
 9. poll with `stateVersion` and obey `reload_required`;
-10. never send a secret, OAuth/device/user code, raw credential, or secret-bearing URL in action params or reports.
+10. use the NyxID conversation list, not workflow `create-recovery`, to confirm creation;
+11. tolerate eventual empty-transcript materialization before the first turn;
+12. never send a secret, OAuth/device/user code, raw credential, or secret-bearing URL in action params or reports.
 
 Earlier schema v3 drafts that use action `id`, inner `payload`, only `completed/declined`, or a device user-code action are obsolete and must not be used to implement or test this contract.

@@ -53,6 +53,14 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
     public async Task HandleReserveAsync(ChatTurnHistoryDeliveryReserveRequested command)
     {
         ArgumentNullException.ThrowIfNull(command);
+        if (State.Status != ChatTurnHistoryDeliveryStatus.Unspecified)
+        {
+            if (HasSameReservation(State, command))
+                return;
+
+            throw new InvalidOperationException("Chat history delivery reservation conflicts with the committed reservation.");
+        }
+
         var validation = ValidateReserve(command);
         if (validation is not null)
         {
@@ -64,14 +72,6 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
                     validation.Value.Summary)
                 .ConfigureAwait(false);
             return;
-        }
-
-        if (State.Status != ChatTurnHistoryDeliveryStatus.Unspecified)
-        {
-            if (HasSameReservation(State, command))
-                return;
-
-            throw new InvalidOperationException("Chat history delivery reservation conflicts with the committed reservation.");
         }
 
         await PersistDomainEventAsync(new ChatTurnHistoryDeliveryReservedEvent

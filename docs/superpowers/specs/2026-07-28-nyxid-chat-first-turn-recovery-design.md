@@ -132,6 +132,10 @@ initialize command. Inbox admission commits an initialization-dispatched event;
 dispatch failure schedules an actor-owned durable retry, and activation
 re-publishes a typed recovery signal while the outbox remains pending. The
 NyxID current-state projector deliberately excludes this delivery outbox.
+Once the registration-accepted event has committed, failure to publish that
+self continuation is a post-commit delivery failure: it leaves the registry
+admission and initialization outbox intact for activation recovery and must not
+enter conversation-creation compensation.
 
 The outbox makes registration the prerequisite fact and avoids both bad
 creation orders: history is not created speculatively before registration, and
@@ -164,6 +168,11 @@ conversation and turn identities. NyxID uses them as follows:
    correlation identities. Exact retries reuse the reservation; conflicting
    content fails closed. Activation recovery ensures the same reservation
    before reconciling a requested-but-interrupted turn.
+   A text turn may contain only typed `inputParts`; in that case transcript
+   input is the fixed safe text `Shared input content.` rather than raw part
+   text, bytes, URI, or name. The request fingerprint still incorporates an
+   irreversible digest of the full input parts so different inputs cannot be
+   mistaken for an exact replay.
 2. Continue with turn actor creation, linking, and operation dispatch only
    after reservation admission. A create/link/dispatch exception is converted
    into a typed failed terminal instead of leaving `requested` forever.
@@ -210,6 +219,13 @@ append all use stable deduplication identities. This does not claim a
 cross-actor atomic transaction: it provides at-least-once delivery with an
 idempotent receiver.
 
+Reservation identity becomes immutable after the first valid reservation is
+committed. An exact replay remains a no-op; every other reuse, including a
+malformed command missing a required field, fails as a reservation conflict
+without committing a failure event or replacing the existing delivery state.
+Validation failure is persisted as `Failed` only while the delivery actor is
+fresh and has no committed reservation.
+
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart LR
@@ -252,11 +268,21 @@ streaming.
   becomes a typed failed controller terminal and a safe terminal transport
   frame.
 - History reservation conflict rejects the turn before provider execution.
+- A malformed or conflicting replay cannot overwrite an already committed
+  history reservation with `Failed`; the original state remains authoritative.
+- An input-parts-only turn reserves a non-empty safe transcript input without
+  copying raw content parts, and a same-identity replay with different parts is
+  rejected.
 - History initialization and terminal-notification failures retain their
   bounded actor-owned outboxes and retry through eventized continuations.
+- Failure to publish the initialization self continuation after registration
+  acceptance cannot unregister or destroy the already accepted conversation.
 - History projection lag is not actor absence; the empty transcript becomes
   visible through normal eventual materialization.
 - Endpoint timeout emits `RUN_ERROR` code `STREAM_TIMEOUT` exactly once.
+- A provider or interaction that completes by throwing `TimeoutException` is
+  an inner execution failure and emits `STREAM_FAILURE`; it cannot impersonate
+  the endpoint-owned wall-clock deadline.
 - `ACTOR_NOT_FOUND` remains correct for a legacy actor presented to the new
   transport; no kind fallback is attempted.
 
@@ -278,6 +304,8 @@ streaming.
   document is materialized.
 - Generic source identities preserve workflow delivery behavior and protobuf
   round trips.
+- A malformed replay against a committed reservation throws a conflict and
+  leaves its status, fingerprint, and error fields unchanged.
 - NyxID completed, failed, stopped, and blocked terminals append one exact
   turn; exact retries do not duplicate it.
 - Action continuations reserve their server-owned continuation turn before

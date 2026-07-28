@@ -169,6 +169,66 @@ public partial class NyxIdChatEndpointsCoverageTests
     }
 
     [Fact]
+    public async Task HandleStreamMessageAsync_WhenInteractionThrowsTimeout_ShouldWriteStreamFailure()
+    {
+        var context = CreateAuthorizedStreamContext();
+        var interactionService = new StubNyxIdChatInteractionService<NyxIdChatCommand>
+        {
+            Exception = new TimeoutException("provider timeout secret"),
+        };
+
+        await InvokeTaskAsync(
+            "HandleStreamMessageAsync",
+            context,
+            "scope-a",
+            "actor-1",
+            new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello", Type: "text"),
+            new StubGAgentActorStore(),
+            interactionService,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        var body = await ReadResponseBodyAsync(context);
+        var terminal = ParseSseFrames(body)
+            .Where(static frame =>
+                frame.GetProperty("type").GetString() is "RUN_FINISHED" or "RUN_ERROR")
+            .Should().ContainSingle().Which;
+        terminal.GetProperty("runError").GetProperty("code").GetString()
+            .Should().Be("STREAM_FAILURE");
+        body.Should().NotContain("provider timeout secret");
+    }
+
+    [Fact]
+    public async Task HandleApproveAsync_WhenInteractionThrowsTimeout_ShouldWriteStreamFailure()
+    {
+        var context = CreateAuthorizedStreamContext();
+        var interactionService = new StubNyxIdChatInteractionService<NyxIdApprovalCommand>
+        {
+            Exception = new TimeoutException("approval timeout secret"),
+        };
+
+        await InvokeTaskAsync(
+            "HandleApproveAsync",
+            context,
+            "scope-a",
+            "actor-1",
+            new NyxIdChatEndpoints.NyxIdApprovalRequest("request-alpha"),
+            new StubGAgentActorStore(),
+            interactionService,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        var body = await ReadResponseBodyAsync(context);
+        var terminal = ParseSseFrames(body)
+            .Where(static frame =>
+                frame.GetProperty("type").GetString() is "RUN_FINISHED" or "RUN_ERROR")
+            .Should().ContainSingle().Which;
+        terminal.GetProperty("runError").GetProperty("code").GetString()
+            .Should().Be("STREAM_FAILURE");
+        body.Should().NotContain("approval timeout secret");
+    }
+
+    [Fact]
     public async Task HandleStreamMessageAsync_ShouldNotWriteSecondTerminal_WhenCleanupFailsAfterCompletion()
     {
         var context = CreateAuthorizedStreamContext();

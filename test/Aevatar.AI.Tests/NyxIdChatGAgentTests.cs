@@ -207,6 +207,37 @@ public class NyxIdChatGAgentTests
     }
 
     [Fact]
+    public async Task HandleCreateConversationAsync_WhenInitializationContinuationDispatchFails_ShouldKeepAcceptedConversationPendingRecovery()
+    {
+        var registry = new RecordingGAgentActorRegistryCommandPort();
+        var runtime = new RecordingActorRuntime();
+        var dispatch = new RecordingSelfDispatchPort
+        {
+            DispatchException = new InvalidOperationException("self dispatch unavailable"),
+        };
+        using var provider = BuildServiceProvider(registry, runtime);
+        const string actorId = "nyxid-chat-history-post-accept-dispatch-failure";
+        var agent = CreateConversationAgent(provider, actorId, dispatch);
+
+        await agent.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatConversationCreateCommand
+        {
+            ScopeId = "scope-a",
+            CreatedLocally = true,
+        }));
+
+        agent.State.PendingHistoryInitialization.Should().NotBeNull();
+        registry.RegisteredActors.Should().ContainSingle();
+        registry.UnregisteredActors.Should().BeEmpty(
+            "post-accept continuation delivery must recover from the durable outbox");
+        runtime.DestroyedActors.Should().BeEmpty();
+        var events = await provider.GetRequiredService<IEventStore>().GetEventsAsync(actorId);
+        events.Should().ContainSingle(stateEvent =>
+            stateEvent.EventData.Is(NyxIdChatConversationRegistrationAcceptedEvent.Descriptor));
+        events.Should().NotContain(stateEvent =>
+            stateEvent.EventData.Is(NyxIdChatConversationRegistrationUnavailableEvent.Descriptor));
+    }
+
+    [Fact]
     public async Task HandleCreateConversationAsync_WhenRegistrationIsNotVisible_ShouldNotPrepareHistoryInitialization()
     {
         var registry = new RecordingGAgentActorRegistryCommandPort
@@ -2382,6 +2413,7 @@ public class NyxIdChatGAgentTests
 
     private sealed class RecordingSelfDispatchPort : IActorDispatchPort
     {
+        public Exception? DispatchException { get; init; }
         public List<(string ActorId, EventEnvelope Envelope)> Calls { get; } = [];
 
         public Task<DispatchAdmission> DispatchAsync(
@@ -2391,6 +2423,8 @@ public class NyxIdChatGAgentTests
         {
             ct.ThrowIfCancellationRequested();
             Calls.Add((actorId, envelope.Clone()));
+            if (DispatchException is not null)
+                throw DispatchException;
             return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
     }

@@ -204,6 +204,97 @@ public sealed class NyxIdChatConversationGAgentTests
             .Be(NyxIdChatOperationPhase.Dispatched);
     }
 
+    [Fact]
+    public async Task StartTurn_InputPartsOnly_ShouldReserveSafeTranscriptTextAndDispatchOperation()
+    {
+        const string conversationActorId = "conversation-alpha";
+        var operations = new List<string>();
+        var history = new RecordingChatHistoryCommandPort(operations);
+        var eventStore = new InMemoryEventStoreForTests();
+        using var services = BuildEventSourcingServices(eventStore, history);
+        var agent = new NyxIdChatConversationGAgent(
+            new RecordingActorRuntime(operations),
+            new RecordingActorDispatchPort(operations, static (_, _) => Task.CompletedTask),
+            new FixedTimeProvider(new DateTimeOffset(2026, 7, 24, 8, 0, 0, TimeSpan.Zero)))
+        {
+            Services = services,
+            EventSourcingBehaviorFactory = services.GetRequiredService<
+                IEventSourcingBehaviorFactory<NyxIdChatConversationGAgentState>>(),
+        };
+        AssignActorId(agent, conversationActorId);
+        await agent.ActivateAsync();
+        var command = CreateStartTurnCommand();
+        command.Prompt = string.Empty;
+        command.InputParts.Add(new ChatContentPart
+        {
+            Kind = ChatContentPartKind.Image,
+            Text = "raw-part-text-sentinel",
+            DataBase64 = "raw-part-base64-sentinel",
+            MediaType = "image/private-sentinel",
+            Uri = "https://private.invalid/raw-part-uri-sentinel",
+            Name = "raw-part-name-sentinel",
+        });
+
+        await agent.HandleEventAsync(CreateEnvelope(conversationActorId, command));
+
+        operations.Should().Equal("history.reserve", "create", "link", "dispatch");
+        var reservation = history.Reservations.Should().ContainSingle().Which;
+        reservation.UserText.Should().Be("Shared input content.");
+        reservation.ToString().Should()
+            .NotContain("raw-part-text-sentinel")
+            .And.NotContain("raw-part-base64-sentinel")
+            .And.NotContain("raw-part-uri-sentinel")
+            .And.NotContain("raw-part-name-sentinel");
+        agent.State.ActiveTask.Steps.Single().Operation.Phase.Should().Be(
+            NyxIdChatOperationPhase.Dispatched);
+    }
+
+    [Fact]
+    public async Task StartTurn_ReusedIdentityWithDifferentInputParts_ShouldRejectInsteadOfExactReplay()
+    {
+        const string conversationActorId = "conversation-alpha";
+        var operations = new List<string>();
+        var history = new RecordingChatHistoryCommandPort(operations);
+        var eventStore = new InMemoryEventStoreForTests();
+        using var services = BuildEventSourcingServices(eventStore, history);
+        var agent = new NyxIdChatConversationGAgent(
+            new RecordingActorRuntime(operations),
+            new RecordingActorDispatchPort(operations, static (_, _) => Task.CompletedTask),
+            new FixedTimeProvider(new DateTimeOffset(2026, 7, 24, 8, 0, 0, TimeSpan.Zero)))
+        {
+            Services = services,
+            EventSourcingBehaviorFactory = services.GetRequiredService<
+                IEventSourcingBehaviorFactory<NyxIdChatConversationGAgentState>>(),
+        };
+        AssignActorId(agent, conversationActorId);
+        await agent.ActivateAsync();
+        var command = CreateStartTurnCommand();
+        command.Prompt = string.Empty;
+        command.InputParts.Add(new ChatContentPart
+        {
+            Kind = ChatContentPartKind.Text,
+            Text = "first input",
+        });
+        await agent.HandleEventAsync(CreateEnvelope(conversationActorId, command));
+        var beforeReplay = await eventStore.GetEventsAsync(conversationActorId);
+
+        var conflicting = command.Clone();
+        conflicting.InputParts.Clear();
+        conflicting.InputParts.Add(new ChatContentPart
+        {
+            Kind = ChatContentPartKind.Text,
+            Text = "different input",
+        });
+        await agent.HandleEventAsync(CreateEnvelope(conversationActorId, conflicting));
+
+        var afterReplay = await eventStore.GetEventsAsync(conversationActorId);
+        afterReplay.Should().HaveCount(beforeReplay.Count + 1);
+        afterReplay[^1].EventData.Is(NyxIdChatTurnAdmissionRejectedEvent.Descriptor)
+            .Should().BeTrue();
+        history.Reservations.Should().ContainSingle();
+        operations.Should().Equal("history.reserve", "create", "link", "dispatch");
+    }
+
     [Theory]
     [InlineData(
         "reserve",

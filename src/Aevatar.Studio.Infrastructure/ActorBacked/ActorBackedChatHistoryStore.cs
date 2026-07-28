@@ -11,8 +11,8 @@ namespace Aevatar.Studio.Infrastructure.ActorBacked;
 /// <summary>
 /// Actor-backed implementation of chat history query and command ports.
 /// Reads from the projection document store (CQRS read model).
-/// Writes send commands only to <see cref="ChatConversationGAgent"/>
-/// through CQRS Core dispatch.
+/// Writes send commands to the authoritative conversation and turn-delivery
+/// actors through CQRS Core dispatch.
 /// </summary>
 internal sealed class ActorBackedChatHistoryStore :
     IChatHistoryQueryPort,
