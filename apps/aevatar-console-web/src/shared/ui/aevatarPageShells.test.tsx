@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import { Grid } from 'antd';
 import React from 'react';
-import { AevatarContextDrawer } from './aevatarPageShells';
+import { AevatarContextDrawer, AevatarPageShell } from './aevatarPageShells';
 
 describe('AevatarContextDrawer', () => {
   afterEach(() => {
@@ -34,5 +34,32 @@ describe('AevatarContextDrawer', () => {
     expect(
       document.querySelector('.aevatar-context-drawer-right'),
     ).toBeNull();
+  });
+});
+
+describe('AevatarPageShell', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('removes nested inline page padding in viewport mode on compact screens', () => {
+    jest.spyOn(Grid, 'useBreakpoint').mockReturnValue({
+      lg: false,
+      md: false,
+      sm: false,
+      xl: false,
+      xs: true,
+      xxl: false,
+    });
+
+    render(
+      <AevatarPageShell title="Compact Team detail">
+        <div>Team content</div>
+      </AevatarPageShell>,
+    );
+
+    expect(
+      screen.getByText('Team content').parentElement?.parentElement,
+    ).toHaveStyle({ paddingInline: 0 });
   });
 });

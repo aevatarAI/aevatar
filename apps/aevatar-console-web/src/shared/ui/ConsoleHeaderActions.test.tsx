@@ -30,6 +30,13 @@ describe("ConsoleHeaderActions", () => {
   it("renders a login entry when there is no restorable auth session", () => {
     render(React.createElement(ConsoleHeaderActions));
 
+    expect(document.querySelector(".console-header-actions")).toHaveAttribute(
+      "data-responsive-layout",
+      "compact-header-actions",
+    );
+    expect(document.querySelector(".console-header-actions__language-label")).toHaveTextContent(
+      "English",
+    );
     expect(
       screen.getByRole("button", { name: "Switch language" }),
     ).toBeInTheDocument();
@@ -63,6 +70,10 @@ describe("ConsoleHeaderActions", () => {
 
     expect(getLocale()).toBe("zh-CN");
     expect(screen.getByText("Abigail Deng")).toBeInTheDocument();
+    expect(document.querySelector(".console-header-actions__user-name")).toHaveAttribute(
+      "data-compact-label",
+      "hidden",
+    );
   });
 
   it("applies an optional dropdown root class to action menus", async () => {

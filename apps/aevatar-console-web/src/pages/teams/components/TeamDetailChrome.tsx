@@ -10,6 +10,7 @@ import {
   AevatarPanel,
 } from "@/shared/ui/aevatarPageShells";
 import { AEVATAR_INTERACTIVE_CHIP_CLASS } from "@/shared/ui/interactionStandards";
+import "./TeamDetailChrome.css";
 
 export type TeamTabOption = {
   readonly label: string;
@@ -164,18 +165,23 @@ export const TeamTabBar: React.FC<TeamTabBarProps> = ({
 
   return (
     <div
+      className="team-detail-tabs"
+      data-responsive-layout="horizontal-scroll"
       role="tablist"
       aria-label={intl.formatMessage({ id: "teams.detail.tabList.label" })}
       style={{
         alignItems: "center",
         background: token.colorBgContainer,
         border: `1px solid ${token.colorBorderSecondary}`,
-        borderRadius: 20,
+        borderRadius: "var(--team-detail-tabs-radius, 20px)",
         boxShadow: token.boxShadowSecondary,
         display: "flex",
-        flexWrap: "wrap",
-        gap: 10,
-        padding: 8,
+        flexWrap: "nowrap",
+        gap: "var(--team-detail-tabs-gap, 10px)",
+        maxWidth: "100%",
+        overflowX: "auto",
+        padding: "var(--team-detail-tabs-padding, 8px)",
+        width: "100%",
       }}
     >
       {tabOptions.map((option) => {
@@ -193,10 +199,13 @@ export const TeamTabBar: React.FC<TeamTabBarProps> = ({
               borderRadius: 999,
               color: active ? token.colorWhite : token.colorTextSecondary,
               cursor: "pointer",
+              flex: "0 0 auto",
               fontSize: 14,
               fontWeight: active ? 700 : 500,
-              padding: "10px 16px",
+              minHeight: 44,
+              padding: "10px var(--team-detail-tab-padding-inline, 16px)",
               transition: "all 160ms ease",
+              whiteSpace: "nowrap",
             }}
             type="button"
           >

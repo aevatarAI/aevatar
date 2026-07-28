@@ -24,22 +24,30 @@
 
   .team-members-table-primary-actions {
     justify-content: flex-start !important;
-    width: 100% !important;
+    max-width: 100% !important;
   }
+}
 
-  .team-members-table-invoke-action,
-  .team-members-table-published-runs-action,
-  .team-members-table-automate-action,
-  .team-members-table-studio-action,
-  .team-members-table-entry-action,
-  .team-members-table-delete-action {
-    min-width: 0 !important;
+@container team-members-table (max-width: 420px) {
+  .team-members-table-primary-actions {
+    --team-member-action-size: var(--team-member-action-touch-target);
+    --team-member-actions-display: grid;
+    --team-member-actions-gap: 8px;
+    --team-member-actions-justify: flex-start;
+    --team-member-actions-padding: 6px;
+    --team-member-actions-width: max-content;
+    grid-template-columns: repeat(3, var(--team-member-action-touch-target));
   }
 }
 
 @media (max-width: 420px) {
-  .team-members-table-primary-actions {
-    justify-content: flex-start !important;
+  .team-members-panel-header {
+    --team-members-create-height: auto;
+    --team-members-create-min-height: 44px;
+    --team-members-create-white-space: normal;
+    --team-members-create-width: 100%;
+    --team-members-panel-align: stretch;
+    --team-members-panel-direction: column;
   }
 }
 

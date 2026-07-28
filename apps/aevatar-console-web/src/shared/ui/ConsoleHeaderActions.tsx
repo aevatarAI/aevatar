@@ -46,6 +46,47 @@ type ConsoleHeaderActionThemeProps = {
   readonly dropdownRootClassName?: string;
 };
 
+const consoleHeaderActionsCss = `
+.console-header-actions {
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  gap: 8px;
+  max-width: 100%;
+  min-width: 0;
+}
+
+@media (max-width: 480px) {
+  .console-header-actions {
+    --console-header-action-flex: 0 0 44px;
+    --console-header-action-height: 44px;
+    --console-header-action-min-width: 44px;
+    --console-header-action-padding-inline: 0;
+    --console-header-action-width: 44px;
+    --console-header-user-padding: 0;
+    gap: 4px;
+  }
+
+  .console-header-actions__language-label,
+  .console-header-actions__login-label,
+  .console-header-actions__user-name,
+  .console-header-actions__user-caret {
+    display: none;
+  }
+}
+`;
+
+const compactActionStyle: React.CSSProperties = {
+  boxSizing: "border-box",
+  flex: "var(--console-header-action-flex, 0 1 auto)",
+  height: "var(--console-header-action-height, 36px)",
+  justifyContent: "center",
+  minWidth: "var(--console-header-action-min-width, auto)",
+  paddingInline: "var(--console-header-action-padding-inline)",
+  width: "var(--console-header-action-width, auto)",
+};
+
 export const ConsoleLanguageSwitch: React.FC<ConsoleHeaderActionThemeProps> = ({
   dropdownRootClassName,
 }) => {
@@ -87,13 +128,18 @@ export const ConsoleLanguageSwitch: React.FC<ConsoleHeaderActionThemeProps> = ({
         className="console-header-actions__language"
         icon={<GlobalOutlined />}
         style={{
+          ...compactActionStyle,
           alignItems: "center",
           display: "inline-flex",
-          height: 36,
         }}
         type="text"
       >
-        {intl.formatMessage({ id: selectedOption.messageId })}
+        <span
+          className="console-header-actions__language-label"
+          data-compact-label="hidden"
+        >
+          {intl.formatMessage({ id: selectedOption.messageId })}
+        </span>
       </Button>
     </Dropdown>
   );
@@ -112,12 +158,15 @@ export const ConsoleAuthActions: React.FC<ConsoleHeaderActionThemeProps> = ({
         onClick={() => {
           history.push(buildLoginRoute(getCurrentReturnTo()));
         }}
+        style={compactActionStyle}
         type="link"
       >
-        {intl.formatMessage({
-          defaultMessage: "Sign in",
-          id: "common.user.signIn",
-        })}
+        <span className="console-header-actions__login-label" data-compact-label="hidden">
+          {intl.formatMessage({
+            defaultMessage: "Sign in",
+            id: "common.user.signIn",
+          })}
+        </span>
       </Button>
     );
   }
@@ -165,6 +214,7 @@ export const ConsoleAuthActions: React.FC<ConsoleHeaderActionThemeProps> = ({
       <span
         className="console-header-actions__user"
         style={{
+          ...compactActionStyle,
           alignItems: "center",
           background: "var(--ant-color-fill-tertiary)",
           border: "1px solid var(--ant-color-border-secondary)",
@@ -172,9 +222,8 @@ export const ConsoleAuthActions: React.FC<ConsoleHeaderActionThemeProps> = ({
           cursor: "pointer",
           display: "inline-flex",
           gap: 8,
-          height: 36,
           maxWidth: 220,
-          padding: "0 10px 0 6px",
+          padding: "var(--console-header-user-padding, 0 10px 0 6px)",
         }}
         title={displayName}
       >
@@ -185,6 +234,7 @@ export const ConsoleAuthActions: React.FC<ConsoleHeaderActionThemeProps> = ({
         />
         <Typography.Text
           className="console-header-actions__user-name"
+          data-compact-label="hidden"
           style={{
             flex: 1,
             color: "var(--ant-color-text)",
@@ -219,12 +269,16 @@ export const ConsoleHeaderActions: React.FC<{
     .join(" ");
 
   return (
-    <div
-      className={rootClassName}
-      data-dropdown-root-class-name={dropdownRootClassName}
-    >
-      <ConsoleLanguageSwitch dropdownRootClassName={dropdownRootClassName} />
-      <ConsoleAuthActions dropdownRootClassName={dropdownRootClassName} />
-    </div>
+    <>
+      <style>{consoleHeaderActionsCss}</style>
+      <div
+        className={rootClassName}
+        data-dropdown-root-class-name={dropdownRootClassName}
+        data-responsive-layout="compact-header-actions"
+      >
+        <ConsoleLanguageSwitch dropdownRootClassName={dropdownRootClassName} />
+        <ConsoleAuthActions dropdownRootClassName={dropdownRootClassName} />
+      </div>
+    </>
   );
 };

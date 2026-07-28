@@ -2449,6 +2449,8 @@ describe("TeamDetailPage", () => {
       ".team-members-table-primary-actions",
     ) as HTMLElement | null;
     expect(memberActions).toBeTruthy();
+    expect(memberActions).toHaveAttribute("data-compact-touch-target", "44");
+    expect(memberActions).toHaveStyle("--team-member-action-touch-target: 44px");
     expect(within(memberActions as HTMLElement).getByLabelText("调用")).toBeTruthy();
     expect(
       within(memberActions as HTMLElement).getByLabelText("发布运行记录"),
@@ -2465,6 +2467,19 @@ describe("TeamDetailPage", () => {
     expect(
       within(memberActions as HTMLElement).getByLabelText("删除成员"),
     ).toBeTruthy();
+
+    const createMemberAction = screen.getByRole("link", {
+      name: "创建工作流成员",
+    });
+    expect(createMemberAction).toHaveClass("team-members-create-action");
+    expect(createMemberAction).toHaveAttribute("data-compact-width", "contained");
+
+    const tabList = screen.getByRole("tablist", { name: "团队详情标签" });
+    expect(tabList).toHaveClass("team-detail-tabs");
+    expect(tabList).toHaveAttribute(
+      "data-responsive-layout",
+      "horizontal-scroll",
+    );
 
   });
 

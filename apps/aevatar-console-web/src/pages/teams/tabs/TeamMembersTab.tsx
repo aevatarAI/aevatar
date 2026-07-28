@@ -133,7 +133,7 @@ const rosterRowBaseStyle: React.CSSProperties = {
 
 const memberNameRowStyle: React.CSSProperties = {
   alignItems: "center",
-  display: "flex",
+  display: "var(--team-member-actions-display, flex)",
   gap: 8,
   minWidth: 0,
 };
@@ -170,27 +170,28 @@ const actionCellStyle: React.CSSProperties = {
   width: "100%",
 };
 
-const primaryActionsStyle: React.CSSProperties = {
+const primaryActionsStyle = {
   alignItems: "center",
   borderRadius: 12,
   display: "flex",
   flex: "0 0 auto",
-  gap: 4,
-  justifyContent: "flex-end",
+  gap: "var(--team-member-actions-gap, 4px)",
+  justifyContent: "var(--team-member-actions-justify, flex-end)",
   minWidth: 0,
-  padding: 4,
-  width: "max-content",
-};
+  padding: "var(--team-member-actions-padding, 4px)",
+  width: "var(--team-member-actions-width, max-content)",
+  "--team-member-action-touch-target": "44px",
+} as React.CSSProperties;
 
 const memberActionButtonBaseStyle: React.CSSProperties = {
   border: "none",
   borderRadius: 8,
   boxShadow: "none",
-  height: 32,
+  height: "var(--team-member-action-size, 32px)",
   lineHeight: 1,
-  minWidth: 32,
+  minWidth: "var(--team-member-action-size, 32px)",
   paddingInline: 0,
-  width: 32,
+  width: "var(--team-member-action-size, 32px)",
 };
 
 const memberRosterSkeletonRowKeys = ["primary", "secondary", "tertiary"] as const;
@@ -212,8 +213,10 @@ const SkeletonLine: React.FC<{
 );
 
 const panelHeaderStyle: React.CSSProperties = {
-  alignItems: "center",
+  alignItems: "var(--team-members-panel-align, center)",
   display: "flex",
+  flexDirection:
+    "var(--team-members-panel-direction, row)" as React.CSSProperties["flexDirection"],
   flexWrap: "wrap",
   gap: 12,
   justifyContent: "space-between",
@@ -238,7 +241,11 @@ const panelTitleStyle: React.CSSProperties = {
 
 const panelCreateActionStyle: React.CSSProperties = {
   flex: "0 0 auto",
+  height: "var(--team-members-create-height)",
+  minHeight: "var(--team-members-create-min-height)",
   minWidth: 0,
+  whiteSpace: "var(--team-members-create-white-space, nowrap)",
+  width: "var(--team-members-create-width, auto)",
 };
 
 const EllipsisText: React.FC<{
@@ -366,6 +373,7 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                   <div className="team-members-table-actions" style={actionCellStyle}>
                     <div
                       className="team-members-table-primary-actions"
+                      data-compact-touch-target="44"
                       style={primaryActionsStyle}
                     >
                       <Skeleton.Button
@@ -428,7 +436,7 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <AevatarPanel>
-        <div style={panelHeaderStyle}>
+        <div className="team-members-panel-header" style={panelHeaderStyle}>
           <div style={panelTitleGroupStyle}>
             <Typography.Title level={3} style={panelTitleStyle}>
               {intl.formatMessage({ id: "teams.members.title" })}
@@ -444,6 +452,8 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
           </div>
           {createMemberHref ? (
             <Button
+              className="team-members-create-action"
+              data-compact-width="contained"
               href={createMemberHref}
               icon={<PlusOutlined />}
               onClick={handleNavigate(createMemberHref)}
@@ -647,6 +657,7 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                       <div className="team-members-table-actions" style={actionCellStyle}>
                         <div
                           className="team-members-table-primary-actions"
+                          data-compact-touch-target="44"
                           style={{
                             ...primaryActionsStyle,
                             background: token.colorFillQuaternary,

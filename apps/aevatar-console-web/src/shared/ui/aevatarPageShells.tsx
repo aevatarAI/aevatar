@@ -164,6 +164,11 @@ const pageContainerChildrenViewportStyle: React.CSSProperties = {
   minHeight: 0,
 };
 
+const compactPageContainerChildrenViewportStyle: React.CSSProperties = {
+  ...pageContainerChildrenViewportStyle,
+  paddingInline: 0,
+};
+
 const pageContainerChildrenDocumentStyle: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
@@ -250,7 +255,10 @@ const titleNavigationRowStyle: React.CSSProperties = {
   alignItems: 'center',
   display: 'flex',
   gap: 8,
+  maxWidth: '100%',
   minWidth: 0,
+  overflow: 'hidden',
+  width: '100%',
 };
 
 const backButtonStyle: React.CSSProperties = {
@@ -263,7 +271,10 @@ const backButtonStyle: React.CSSProperties = {
 };
 
 const breadcrumbStyle: React.CSSProperties = {
+  flex: '1 1 auto',
+  maxWidth: '100%',
   minWidth: 0,
+  overflow: 'hidden',
 };
 
 const breadcrumbLabelStyle: React.CSSProperties = {
@@ -296,7 +307,11 @@ const breadcrumbCss = `
 }
 
 .aevatar-breadcrumb__item {
+  display: flex;
+  flex: 0 1 auto;
+  max-width: var(--aevatar-breadcrumb-item-max-width, 180px);
   min-width: 0;
+  overflow: hidden;
 }
 
 .aevatar-breadcrumb__item--separator {
@@ -306,6 +321,8 @@ const breadcrumbCss = `
 
 .aevatar-breadcrumb__link {
   color: var(--aevatar-breadcrumb-link-color);
+  display: flex;
+  min-width: 0;
   text-decoration: none;
 }
 
@@ -315,6 +332,23 @@ const breadcrumbCss = `
 
 .aevatar-breadcrumb__current {
   color: var(--aevatar-breadcrumb-current-color);
+  display: flex;
+  min-width: 0;
+}
+
+@media (max-width: 480px) {
+  .aevatar-breadcrumb__list {
+    gap: 4px;
+  }
+
+  .aevatar-breadcrumb__item:not(.aevatar-breadcrumb__item--separator) {
+    max-width: 32vw;
+  }
+
+  .aevatar-breadcrumb__item:not(.aevatar-breadcrumb__item--separator):first-child {
+    flex: 0 0 auto;
+    max-width: 24vw;
+  }
 }
 `;
 
@@ -514,7 +548,7 @@ export const AevatarPageShell: React.FC<AevatarPageShellProps> = ({
   titleHelp,
 }) => {
   const screens = Grid.useBreakpoint();
-  const useCompactDocumentPadding = layoutMode === 'document' && !screens.md;
+  const useCompactPagePadding = !screens.md;
 
   return (
     <AevatarLayoutModeContext.Provider value={layoutMode}>
@@ -527,10 +561,12 @@ export const AevatarPageShell: React.FC<AevatarPageShellProps> = ({
         }
         childrenContentStyle={
           layoutMode === 'document'
-            ? useCompactDocumentPadding
+            ? useCompactPagePadding
               ? compactPageContainerChildrenDocumentStyle
               : pageContainerChildrenDocumentStyle
-            : pageContainerChildrenViewportStyle
+            : useCompactPagePadding
+              ? compactPageContainerChildrenViewportStyle
+              : pageContainerChildrenViewportStyle
         }
         content={content}
         extra={extra}

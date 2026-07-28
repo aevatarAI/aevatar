@@ -1,0 +1,21 @@
+.team-detail-tabs {
+  overscroll-behavior-inline: contain;
+  scrollbar-width: thin;
+}
+
+.team-detail-tabs > button {
+  flex-shrink: 0;
+}
+
+@media (max-width: 420px) {
+  .team-detail-tabs {
+    --team-detail-tab-padding-inline: 12px;
+    --team-detail-tabs-gap: 4px;
+    --team-detail-tabs-padding: 4px;
+    --team-detail-tabs-radius: 12px;
+  }
+
+  .team-detail-tabs > button {
+    min-height: 44px;
+  }
+}
