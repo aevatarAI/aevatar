@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using System.Text.RegularExpressions;
 using Aevatar.BackendConsole.Hosting;
@@ -93,6 +94,124 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         html.Should().Contain("if(cache&&cache.loading&&!d)");
         html.Should().Contain("loadObsDetail(selected.id,function(){ reList();");
         html.Should().NotContain("delete OBS_DETAIL[selected.id]");
+    }
+
+    [Fact]
+    public async Task AdminShell_ObservatoryPolling_ShouldStopAfterHandled404UntilExplicitReloadRecovers()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            (async function() {
+            function functionSource(name, nextName) {
+              const start = html.indexOf('function ' + name + '(');
+              const end = html.indexOf('\nfunction ' + nextName + '(', start);
+              assert.notEqual(start, -1, name + ' must exist in the served admin asset');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return html.slice(start, end);
+            }
+
+            const context = { assert, setImmediate };
+            vm.createContext(context);
+            vm.runInContext(`
+              var runId = 'run-a';
+              var OBS_DETAIL = {}, OBS_DETAIL_REQUESTS = {}, OBS_DETAIL_SCOPE_VERSION = 0;
+              var OBS_RUNS = [], OBS_RUNS_ERR = null, OBS_POLL_TIMER = null;
+              var OBS_STATE = { selectedId: runId, immersive: false };
+              var detailRequests = 0, intervalCallback = null, clickHandler = null;
+              var detailResponses = [
+                function() { return Promise.reject({ status: 404 }); },
+                function() { return Promise.resolve({ runId: runId, visible: true }); }
+              ];
+
+              function adminJson(path) {
+                if (path === '/graph') return Promise.resolve(null);
+                assert.equal(path, '/detail');
+                detailRequests++;
+                return detailResponses.shift()();
+              }
+              function obsDetailRequestBase() { return '/detail'; }
+              function obsGraphRequestUrl() { return '/graph'; }
+              function mapObsDetail(detail) { return detail; }
+              function obsUpsertRunFromDetail() {}
+              function obsDetailsEqual(left, right) { return JSON.stringify(left) === JSON.stringify(right); }
+              function loadObsRuns(rerender) { if (rerender) rerender(); return Promise.resolve(); }
+              function obsSelected() { return { id: OBS_STATE.selectedId }; }
+              function obsRunsFiltered() { return OBS_RUNS; }
+              function obsSetImmersive() {}
+              function curParts() { return ['observatory']; }
+              function defaultModule() { return 'observatory'; }
+              function setInterval(callback) { intervalCallback = callback; return 1; }
+              function clearInterval() {}
+              var document = { hidden: false };
+
+              ${functionSource('obsNextDetailRequest', 'obsInvalidateDetail')}
+              ${functionSource('obsDetailRequestCurrent', 'obsDetailRequestBase')}
+              ${functionSource('loadObsDetail', 'loadObsGraph')}
+              ${functionSource('loadObsGraph', 'loadObsResolveScope')}
+              ${functionSource('bindObservatory', 'cqrsPipeline')}
+            `, context);
+
+            await vm.runInContext(`(async function() {
+              var root = {
+                querySelector: function() { return null; },
+                addEventListener: function(type, handler) {
+                  if (type === 'click') clickHandler = handler;
+                }
+              };
+              bindObservatory(root);
+              await new Promise(setImmediate);
+
+              assert.equal(detailRequests, 1);
+              assert.equal(OBS_DETAIL[runId].notFound, true);
+
+              intervalCallback();
+              await new Promise(setImmediate);
+              assert.equal(detailRequests, 1, 'automatic polling must stop after the handled 404');
+
+              var reload = { getAttribute: function() { return 'obsReload'; } };
+              clickHandler({ target: {
+                closest: function(selector) { return selector === '[data-act]' ? reload : null; }
+              }});
+              await new Promise(setImmediate);
+
+              assert.equal(detailRequests, 2, 'explicit reload must retry the detail request');
+              assert.equal(OBS_DETAIL[runId].notFound, undefined);
+              assert.equal(OBS_DETAIL[runId].detail.runId, runId);
+              assert.equal(OBS_DETAIL[runId].detail.visible, true);
+            })()`, context);
+            })().catch(function(error) {
+              console.error(error);
+              process.exitCode = 1;
+            });
+            """;
+
+        var startInfo = new ProcessStartInfo("node")
+        {
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        startInfo.ArgumentList.Add("--eval");
+        startInfo.ArgumentList.Add(script);
+
+        using var process = Process.Start(startInfo);
+        process.Should().NotBeNull("Node.js is required to execute the shipped admin polling behavior");
+        var outputTask = process!.StandardOutput.ReadToEndAsync();
+        var errorTask = process.StandardError.ReadToEndAsync();
+        await process.StandardInput.WriteAsync(html);
+        process.StandardInput.Close();
+        await process.WaitForExitAsync();
+        var output = await outputTask;
+        var error = await errorTask;
+
+        process.ExitCode.Should().Be(0, $"the causal polling regression should pass. stdout: {output} stderr: {error}");
     }
 
     [Fact]
