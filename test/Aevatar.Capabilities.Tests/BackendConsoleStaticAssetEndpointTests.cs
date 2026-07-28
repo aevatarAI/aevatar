@@ -96,6 +96,18 @@ public sealed class BackendConsoleStaticAssetEndpointTests
     }
 
     [Fact]
+    public async Task AdminShell_ObservatoryPolling_ShouldNotRetryNotFoundDetail()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        html.Should().Contain("notFound:!d");
+        html.Should().Contain("var detailState=OBS_DETAIL[selected.id];");
+        html.Should().Contain("if(detailState&&detailState.notFound) return;");
+        html.Should().Contain("loadObsDetail(current.id,function(){ reList(); reDetail(); },true)");
+    }
+
+    [Fact]
     public async Task AdminShell_ObservatoryRouteState_ShouldDefaultToMineAndBuildSupportedFilters()
     {
         await using var app = await CreateAppAsync();
