@@ -220,6 +220,13 @@ No process-local dictionary, query-time event replay, query-time projection
 priming, compatibility endpoint, deprecated message, or parallel old/new
 contract participates in the WorkOrder path.
 
+ContentArtifact interoperability preserves the existing WorkOrder reference
+shape. `artifact_kind="content-artifact"` identifies the resource family,
+`artifact_id` and `revision_id` retain the exact ContentArtifact identities, and
+the optional `uri` may use the same-Scope revision metadata path. WorkOrder does
+not copy the ContentArtifact hash, content, provenance, citations, or lifecycle
+into its own authority. See [Content Artifacts](content-artifacts.md).
+
 ## Non-Goals
 
 A WorkOrder is not a project-management ticket, recurring schedule, approval

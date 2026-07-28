@@ -203,6 +203,15 @@ Runtime boundary:
 - Host composition must fail closed for production/external backends. `WorkflowFileArtifacts:Backend=External` requires explicit registrations for ingress/read/ownership/cleanup ports; production policy rejects the implicit filesystem backend.
 - The filesystem backend is the local/test concrete backend. Its cleanup removes expired descriptor-committed artifacts and stale staged directories without introducing a process-local artifact registry.
 
+Workflow files can back a revisioned ContentArtifact without becoming the
+ContentArtifact authority. The Host adapter accepts only
+`backingObject.provider=workflow-file`, maps `objectKey` to the stable workflow
+`FileArtifactRef.ArtifactId`, and requires descriptor Scope/Run ownership to
+match the ContentArtifact revision provenance. Workflow file expiry and cleanup
+remain unchanged; a missing file makes content unavailable while immutable
+ContentArtifact metadata and provenance survive. See
+[Content Artifacts](content-artifacts.md).
+
 ### Webhook Ingress API
 
 `POST /api/workflow-webhooks/{routeKey}` 是 workflow 的第四个 start-run 入口。它和 `/api/chat` 复用同一条 `WorkflowChatRunRequest` accepted-only command dispatch 主干；它不是 workflow YAML 顶级 trigger，也不复用 channel inbound 或 `WorkflowSignalCommand`。

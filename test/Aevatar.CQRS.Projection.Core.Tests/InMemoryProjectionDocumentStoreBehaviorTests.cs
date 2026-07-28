@@ -7,6 +7,67 @@ namespace Aevatar.CQRS.Projection.Core.Tests;
 public sealed class InMemoryProjectionDocumentStoreBehaviorTests
 {
     [Fact]
+    public async Task QueryAsync_ShouldResolveProtoFieldNames()
+    {
+        var store = new InMemoryProjectionDocumentStore<TestStoreReadModel, string>(
+            keySelector: model => model.Id);
+        await store.UpsertAsync(new TestStoreReadModel
+        {
+            Id = "item-1",
+            ActorId = "actor-1",
+            StateVersion = 1,
+            LastEventId = "event-1",
+            UpdatedAt = DateTimeOffset.UnixEpoch,
+        });
+
+        var result = await store.QueryAsync(new ProjectionDocumentQuery
+        {
+            Filters =
+            [
+                new ProjectionDocumentFilter
+                {
+                    FieldPath = "actor_id",
+                    Operator = ProjectionDocumentFilterOperator.Eq,
+                    Value = ProjectionDocumentValue.FromString("actor-1"),
+                },
+            ],
+        });
+
+        result.Items.Should().ContainSingle().Which.Id.Should().Be("item-1");
+    }
+
+    [Fact]
+    public async Task QueryAsync_ShouldMatchScalarEqualityAgainstRepeatedFieldElement()
+    {
+        var store = new InMemoryProjectionDocumentStore<TestRecursiveWellKnownReadModel, string>(
+            keySelector: model => model.Id);
+        await store.UpsertAsync(new TestRecursiveWellKnownReadModel
+        {
+            Id = "item-1",
+            ActorId = "actor-1",
+            StateVersion = 1,
+            LastEventId = "event-1",
+            UpdatedAt = DateTimeOffset.UnixEpoch,
+            Tags = { "reader-1", "reader-2" },
+        });
+
+        var result = await store.QueryAsync(new ProjectionDocumentQuery
+        {
+            Filters =
+            [
+                new ProjectionDocumentFilter
+                {
+                    FieldPath = "tags",
+                    Operator = ProjectionDocumentFilterOperator.Eq,
+                    Value = ProjectionDocumentValue.FromString("reader-1"),
+                },
+            ],
+        });
+
+        result.Items.Should().ContainSingle().Which.Id.Should().Be("item-1");
+    }
+
+    [Fact]
     public async Task QueryAsync_ShouldApplyAnyOfFiltersBeforeCountAndPaging()
     {
         var store = new InMemoryProjectionDocumentStore<TestStoreReadModel, string>(

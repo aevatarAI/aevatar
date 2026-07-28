@@ -120,7 +120,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<NyxIdToolOptions>();
         services.TryAddSingleton<INyxIdServiceRegistrationPort, NyxIdServiceRegistrationAdapter>();
         services.TryAddSingleton<INyxIdRegistrationTokenAccessor, ConfiguredNyxIdRegistrationTokenAccessor>();
-        services.TryAddSingleton<IServiceRunRegistrationPort, ServiceRunRegistrationAdapter>();
+        AddServiceRunWritePorts(services);
         services.TryAddSingleton<ILlmSessionRegistrationPort, LlmSessionRegistrationAdapter>();
         services.TryAddSingleton<IResponsesAgentToolStateCommandPort, ResponsesAgentToolStateCommandAdapter>();
         services.TryAddSingleton<ILlmSessionRunObservationService, LlmSessionRunObservationService>();
@@ -232,7 +232,7 @@ public static class ServiceCollectionExtensions
         services.AddNyxIdAuthorizationCatalogHosting(configuration);
         services.TryAddSingleton<PreparedServiceRevisionArtifactAssembler>();
         services.TryAddSingleton<IServiceServingTargetResolver, DefaultServiceServingTargetResolver>();
-        services.TryAddSingleton<IServiceRunRegistrationPort, ServiceRunRegistrationAdapter>();
+        AddServiceRunWritePorts(services);
         services.TryAddSingleton<ServiceInvocationResolutionService>();
         services.TryAddSingleton<IServiceInvocationResolutionPort>(sp =>
             sp.GetRequiredService<ServiceInvocationResolutionService>());
@@ -422,6 +422,15 @@ public static class ServiceCollectionExtensions
             keySelector: keySelector,
             keyFormatter: static key => key,
             defaultSortSelector: static readModel => readModel.UpdatedAt);
+    }
+
+    private static void AddServiceRunWritePorts(IServiceCollection services)
+    {
+        services.TryAddSingleton<ServiceRunRegistrationAdapter>();
+        services.TryAddSingleton<IServiceRunRegistrationPort>(sp =>
+            sp.GetRequiredService<ServiceRunRegistrationAdapter>());
+        services.TryAddSingleton<IServiceRunResultArtifactAttachmentPort>(sp =>
+            sp.GetRequiredService<ServiceRunRegistrationAdapter>());
     }
 
 }

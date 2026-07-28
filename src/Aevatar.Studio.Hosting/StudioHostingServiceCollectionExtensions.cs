@@ -1,3 +1,5 @@
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.ContentArtifacts.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Hosting.DependencyInjection;
@@ -7,6 +9,7 @@ using Aevatar.Studio.Application.Studio.DependencyInjection;
 using Aevatar.Studio.Application.Studio.Services;
 using Aevatar.Studio.Application.Studio.WorkflowBoards;
 using Aevatar.Studio.Hosting.Controllers;
+using Aevatar.Studio.Hosting.ContentArtifacts;
 using Aevatar.Studio.Hosting.Endpoints;
 using Aevatar.Studio.Hosting.WorkflowBoards;
 using Aevatar.Studio.Hosting.WorkOrders;
@@ -44,6 +47,9 @@ internal static class StudioHostingServiceCollectionExtensions
         services.AddHttpContextAccessor();
         services.AddHttpClient();
         services.TryAddSingleton(TimeProvider.System);
+        services.TryAddSingleton<
+            IContentArtifactBackingContentPort,
+            WorkflowFileContentArtifactBackingContentPort>();
         services.AddSingleton<IAppScopeResolver, DefaultAppScopeResolver>();
         services.AddStudioApplication();
         AddWorkOrderExecutionWorker(services, configuration);
