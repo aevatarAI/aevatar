@@ -41,6 +41,35 @@ public sealed class InMemoryActorRuntimeCallbackSchedulerTests
     }
 
     [Fact]
+    public async Task ScheduleTimeoutAsync_AfterOneShotCleanup_ShouldNotReuseFiredGeneration()
+    {
+        var scheduler = new InMemoryActorRuntimeCallbackScheduler(new RecordingStreamProvider());
+
+        var firstLease = await scheduler.ScheduleTimeoutAsync(new RuntimeCallbackTimeoutRequest
+        {
+            ActorId = "actor-1",
+            CallbackId = "cb-1",
+            DueTime = TimeSpan.FromMinutes(1),
+            TriggerEnvelope = CreateEnvelope(),
+        });
+        await scheduler.CancelAsync(firstLease);
+
+        var secondLease = await scheduler.ScheduleTimeoutAsync(new RuntimeCallbackTimeoutRequest
+        {
+            ActorId = "actor-1",
+            CallbackId = "cb-1",
+            DueTime = TimeSpan.FromMinutes(1),
+            TriggerEnvelope = CreateEnvelope(),
+        });
+        await scheduler.CancelAsync(firstLease);
+
+        secondLease.Generation.Should().Be(2);
+        var current = GetScheduledCallback(scheduler, "actor-1", "cb-1");
+        current.Should().NotBeNull();
+        GetGeneration(current!).Should().Be(secondLease.Generation);
+    }
+
+    [Fact]
     public async Task ScheduleTimeoutAsync_ShouldReturnInMemoryBackendLease()
     {
         var scheduler = new InMemoryActorRuntimeCallbackScheduler(new RecordingStreamProvider());

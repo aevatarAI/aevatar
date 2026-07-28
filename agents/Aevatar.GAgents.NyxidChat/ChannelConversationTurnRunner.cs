@@ -70,6 +70,10 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
     private sealed record LarkSubjectContactIds(string? UserId, string? EmployeeId);
 
+    private sealed record ReplyChannelContext(
+        IReadOnlyDictionary<string, string> Metadata,
+        IReadOnlyList<AgentToolChannelIdentityHint> IdentityHints);
+
     private readonly IServiceProvider _toolServiceProvider;
     private readonly IChannelBotRegistrationQueryPort _registrationQueryPort;
     private readonly IChannelBotRegistrationQueryByNyxIdentityPort? _registrationQueryByNyxIdentityPort;
@@ -178,6 +182,17 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         var typingReactionTask = TrySendImmediateLarkReactionAsync(activity, registration, ct);
 
         var inbound = ToInboundMessage(activity);
+        var hasSlashCommand = TryParseSlashCommand(inbound.Text, out var observedCommandName, out _);
+        _logger.LogInformation(
+            "Channel inbound routing started: activity={ActivityId}, type={ActivityType}, platform={Platform}, chatType={ChatType}, conversation={CanonicalKey}, hasText={HasText}, slashCommand={SlashCommand}, hasRelayDelivery={HasRelayDelivery}",
+            activity.Id,
+            activity.Type,
+            inbound.Platform,
+            inbound.ChatType,
+            activity.Conversation?.CanonicalKey,
+            !string.IsNullOrWhiteSpace(inbound.Text),
+            hasSlashCommand ? observedCommandName : string.Empty,
+            HasRelayDelivery(inbound));
         // Workflow resume is the structured-payload path (card_action etc) and
         // takes priority over slash-command parsing — a card-action with text
         // that looks like /init is still a card-action. (deepseek-v4-pro L65)
@@ -339,19 +354,43 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         var handler = ResolveSlashCommandHandler(commandName);
         var bindingLookup = await ResolveSlashBindingAsync(commandName, inbound, registration, queryPort, ct)
             .ConfigureAwait(false);
+        _logger.LogInformation(
+            "Slash command routing checked: activity={ActivityId}, command={Command}, handlerFound={HandlerFound}, requiresBinding={RequiresBinding}, identityEnabled={IdentityEnabled}, subjectResolved={SubjectResolved}, bindingFound={BindingFound}",
+            activity.Id,
+            commandName,
+            handler is not null,
+            handler?.RequiresBinding ?? false,
+            bindingLookup.IdentityEnabled,
+            bindingLookup.SubjectResolved,
+            bindingLookup.BindingId is not null);
 
         if (handler is null)
         {
             if (bindingLookup.IdentityEnabled && bindingLookup.SubjectResolved && bindingLookup.BindingId is null)
+            {
+                _logger.LogInformation(
+                    "Unknown slash command routed to binding prompt: activity={ActivityId}, command={Command}",
+                    activity.Id,
+                    commandName);
                 return await SendBindingPromptAsync(activity, inbound, registration, runtimeContext, ct).ConfigureAwait(false);
+            }
 
             // Unknown slash command for bound senders falls through to the Ornn
             // skill-discovery rewrite in BuildLlmReplyRequestAsync.
+            _logger.LogInformation(
+                "Unknown slash command falling through to LLM skill recovery: activity={ActivityId}, command={Command}, bindingFound={BindingFound}",
+                activity.Id,
+                commandName,
+                bindingLookup.BindingId is not null);
             return null;
         }
 
         if (handler.RequiresBinding && bindingLookup.BindingId is null)
         {
+            _logger.LogInformation(
+                "Registered slash command routed to binding prompt: activity={ActivityId}, command={Command}",
+                activity.Id,
+                commandName);
             return await SendBindingPromptAsync(activity, inbound, registration, runtimeContext, ct).ConfigureAwait(false);
         }
 
@@ -512,7 +551,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                     var challenge = await broker.StartExternalBindingAsync(subject, ct).ConfigureAwait(false);
                     reply = InitChannelSlashCommandHandler.BuildBindingCard(
                         challenge.AuthorizeUrl,
-                        challenge.ReviewsExistingBinding);
+                        challenge.RenewsExistingBinding);
                 }
                 catch (AevatarOAuthClientNotProvisionedException ex)
                 {
@@ -815,7 +854,11 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                     .ConfigureAwait(false);
                 var updated = await optionsService.GetOptionsAsync(query, ct).ConfigureAwait(false);
                 var picked = updated.Current ?? updated.Available.FirstOrDefault(option =>
-                    string.Equals(option.ServiceId, action.Value.Trim(), StringComparison.OrdinalIgnoreCase));
+                    option.Identity is
+                    {
+                        Authority: UserLlmIdentityAuthority.NyxIdUserServicesInventory,
+                    } identity &&
+                    string.Equals(identity.NyxIdUserServiceId, action.Value.Trim(), StringComparison.Ordinal));
                 return picked is null
                     ? new MessageContent { Text = "已切换 LLM service。下一条消息会用新的设置回复。" }
                     : renderer.RenderSelectionConfirm(picked, picked.DefaultModel);
@@ -1445,7 +1488,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         var replyContent = decision.ReplyContent ?? new MessageContent { Text = decision.ReplyPayload };
         if (decision.RequiresToolExecution)
         {
-            var metadata = await BuildAgentBuilderMetadataAsync(
+            var channelContext = await BuildAgentBuilderChannelContextAsync(
                     activity,
                     inboundEvent,
                     runtimeContext,
@@ -1456,7 +1499,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                        registration,
                        ResolveUserAccessToken(activity, runtimeContext),
                        senderBinding,
-                       metadata)))
+                       channelContext.Metadata,
+                       channelContext.IdentityHints)))
             {
                 var tool = ActivatorUtilities.CreateInstance<AgentBuilderTool>(_toolServiceProvider);
                 var toolResult = await tool.ExecuteAsync(decision.ToolArgumentsJson!, ct);
@@ -1906,7 +1950,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             .ConfigureAwait(false);
     }
 
-    private async Task<IReadOnlyDictionary<string, string>> BuildReplyMetadataAsync(
+    private async Task<ReplyChannelContext> BuildReplyChannelContextAsync(
         ChannelInboundEvent inboundEvent,
         ChatActivity? activity,
         ConversationTurnRuntimeContext runtimeContext,
@@ -1921,6 +1965,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             [ChannelMetadataKeys.MessageId] = inboundEvent.MessageId,
             [ChannelMetadataKeys.ChatType] = inboundEvent.ChatType,
         };
+        var identityHints = new List<AgentToolChannelIdentityHint>();
 
         // Inbound channel-bot's NyxID provider slug. Scheduled workflow creation captures this
         // as the failure-notification provider so a failed outbound delivery
@@ -1947,11 +1992,17 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         // not surface as `code:99992361 open_id cross app` rejections at send time.
         var larkUnionId = NormalizeOptional(activity?.TransportExtras?.NyxLarkUnionId);
         if (!string.IsNullOrWhiteSpace(larkUnionId))
+        {
             metadata[ChannelMetadataKeys.LarkUnionId] = larkUnionId;
+            AddIdentityHint(identityHints, "sender", "global", larkUnionId);
+        }
 
         var larkChatId = NormalizeOptional(activity?.TransportExtras?.NyxLarkChatId);
         if (!string.IsNullOrWhiteSpace(larkChatId))
+        {
             metadata[ChannelMetadataKeys.LarkChatId] = larkChatId;
+            AddIdentityHint(identityHints, "conversation", "platform", larkChatId);
+        }
 
         var deliveryAddressId = NormalizeOptional(activity?.TransportExtras?.DeliveryAddressId);
         if (!string.IsNullOrWhiteSpace(deliveryAddressId))
@@ -1971,23 +2022,39 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
         var larkOperatorUserId = NormalizeOptional(activity?.TransportExtras?.NyxLarkOperatorUserId);
         if (!string.IsNullOrWhiteSpace(larkOperatorUserId))
+        {
             metadata[ChannelMetadataKeys.LarkOperatorUserId] = larkOperatorUserId;
+            AddIdentityHint(identityHints, "operator", "account", larkOperatorUserId);
+        }
 
         var larkOperatorOpenId = NormalizeOptional(activity?.TransportExtras?.NyxLarkOperatorOpenId);
         if (!string.IsNullOrWhiteSpace(larkOperatorOpenId))
+        {
             metadata[ChannelMetadataKeys.LarkOperatorOpenId] = larkOperatorOpenId;
+            AddIdentityHint(identityHints, "operator", "platform", larkOperatorOpenId);
+        }
 
         var larkOperatorUnionId = NormalizeOptional(activity?.TransportExtras?.NyxLarkOperatorUnionId);
         if (!string.IsNullOrWhiteSpace(larkOperatorUnionId))
+        {
             metadata[ChannelMetadataKeys.LarkOperatorUnionId] = larkOperatorUnionId;
+            AddIdentityHint(identityHints, "operator", "global", larkOperatorUnionId);
+        }
 
         if (await TryResolveLarkSubjectContactIdsAsync(inboundEvent, activity, runtimeContext, larkUnionId, ct)
                 .ConfigureAwait(false) is { } subjectContactIds)
         {
             if (!string.IsNullOrWhiteSpace(subjectContactIds.UserId))
+            {
                 metadata[ChannelMetadataKeys.LarkSubjectUserId] = subjectContactIds.UserId;
+                AddIdentityHint(identityHints, "subject", "account", subjectContactIds.UserId);
+            }
+
             if (!string.IsNullOrWhiteSpace(subjectContactIds.EmployeeId))
+            {
                 metadata[ChannelMetadataKeys.LarkSubjectEmployeeId] = subjectContactIds.EmployeeId;
+                AddIdentityHint(identityHints, "subject", "directory", subjectContactIds.EmployeeId);
+            }
         }
 
         // Surface resolved @-mentions (canonical id + name) so the agent can target a third party by a
@@ -2006,8 +2073,15 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 metadata[ChannelMetadataKeys.Mentions] = formattedMentions;
         }
 
-        return metadata;
+        return new ReplyChannelContext(metadata, identityHints);
     }
+
+    private static void AddIdentityHint(
+        ICollection<AgentToolChannelIdentityHint> identityHints,
+        string subject,
+        string kind,
+        string value) =>
+        identityHints.Add(new AgentToolChannelIdentityHint(subject, kind, value));
 
     private async Task<LarkSubjectContactIds?> TryResolveLarkSubjectContactIdsAsync(
         ChannelInboundEvent inboundEvent,
@@ -2131,7 +2205,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ChannelBotRegistrationEntry registration,
         string? userAccessToken,
         ResolvedSenderBinding? senderBinding,
-        IReadOnlyDictionary<string, string> metadata)
+        IReadOnlyDictionary<string, string> metadata,
+        IReadOnlyList<AgentToolChannelIdentityHint> identityHints)
     {
         var token = NormalizeOptional(userAccessToken);
         return AgentToolExecutionContext.Empty with
@@ -2151,7 +2226,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 NormalizeOptional(activity.TransportExtras?.NyxPlatformMessageId),
                 null,
                 BuildWorkflowResultDeliveryCredential(registration),
-                NormalizeOptional(registration.Id)),
+                NormalizeOptional(registration.Id),
+                identityHints),
             ExternalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(metadata),
         };
     }
@@ -2177,19 +2253,18 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         };
     }
 
-    private async Task<IReadOnlyDictionary<string, string>> BuildAgentBuilderMetadataAsync(
+    private async Task<ReplyChannelContext> BuildAgentBuilderChannelContextAsync(
         ChatActivity activity,
         ChannelInboundEvent inboundEvent,
         ConversationTurnRuntimeContext runtimeContext,
         CancellationToken ct)
     {
-        var metadata = new Dictionary<string, string>(
-            await BuildReplyMetadataAsync(inboundEvent, activity, runtimeContext, ct),
-            StringComparer.Ordinal)
+        var replyChannelContext = await BuildReplyChannelContextAsync(inboundEvent, activity, runtimeContext, ct);
+        var metadata = new Dictionary<string, string>(replyChannelContext.Metadata, StringComparer.Ordinal)
         {
             [ChannelMetadataKeys.ChatType] = ResolveConversationChatType(activity.Conversation),
         };
-        return metadata;
+        return new ReplyChannelContext(metadata, replyChannelContext.IdentityHints);
     }
 
     internal static InboundMessage ToInboundMessage(ChatActivity activity)
@@ -2387,7 +2462,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             request.ReplyTokenExpiresAtUnixMs = token.ExpiresAtUtc.ToUnixTimeMilliseconds();
         }
 
-        var replyMetadata = await BuildReplyMetadataAsync(inboundEvent, activity, runtimeContext, ct);
+        var replyChannelContext = await BuildReplyChannelContextAsync(inboundEvent, activity, runtimeContext, ct);
+        var replyMetadata = replyChannelContext.Metadata;
         foreach (var pair in replyMetadata)
             request.Metadata[pair.Key] = pair.Value;
 
@@ -2411,7 +2487,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 NormalizeOptional(activity.TransportExtras?.NyxPlatformMessageId),
                 null,
                 BuildWorkflowResultDeliveryCredential(registration),
-                NormalizeOptional(registration.Id)),
+                NormalizeOptional(registration.Id),
+                replyChannelContext.IdentityHints),
             ExternalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(replyMetadata),
         }).ToPayload();
 
@@ -2421,6 +2498,23 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             {
                 SkillRecovery = skillRecovery,
             }).ToPayload();
+            _logger.LogInformation(
+                "LLM reply request includes skill recovery: activity={ActivityId}, command={Command}, primarySkill={PrimarySkill}, requireInitialSearch={RequireInitialSearch}, defaultSkillName={DefaultSkillName}, senderBindingFound={SenderBindingFound}",
+                activity.Id,
+                skillRecovery.CommandName,
+                skillRecovery.PrimarySkillName,
+                skillRecovery.RequireInitialOrnnSearch,
+                defaultSkillName ?? string.Empty,
+                senderBinding is not null);
+        }
+        else
+        {
+            _logger.LogInformation(
+                "LLM reply request has no skill recovery: activity={ActivityId}, allowSkillInvocationPrompt={AllowSkillInvocationPrompt}, defaultSkillName={DefaultSkillName}, senderBindingFound={SenderBindingFound}",
+                activity.Id,
+                allowSkillInvocationPrompt,
+                defaultSkillName ?? string.Empty,
+                senderBinding is not null);
         }
 
         request.LlmControl = (await BuildOwnerLlmControlAsync(
@@ -2448,6 +2542,10 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                     senderBinding.BindingId,
                     NyxUserId: null,
                     SenderTenant: senderTenant),
+                NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                    senderBinding.Subject.Platform,
+                    senderBinding.Subject.Tenant,
+                    senderBinding.Subject.ExternalUserId),
                 Caller = AgentToolExecutionContextMapper.FromPayload(request.ToolContext).Caller with
                 {
                     OwnerScopeId = senderBinding.OwnerScopeId,
@@ -2683,7 +2781,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         {
             _logger.LogWarning(
                 ex,
-                "Sender NyxID binding lacks a required service; preserving the binding for in-place /init grant review. subject={Platform}:{Tenant}:{User}",
+                "Sender NyxID binding lacks a required service; preserving it until /init service authorization renewal succeeds. subject={Platform}:{Tenant}:{User}",
                 subject.Platform,
                 subject.Tenant,
                 subject.ExternalUserId);
@@ -2751,7 +2849,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         {
             _logger.LogWarning(
                 ex,
-                "Failed to resolve sender NyxID user id from short-lived token; team invocation will fall back to registration scope. subject={Platform}:{Tenant}:{User}",
+                "Failed to resolve sender NyxID user id from short-lived token; preserving typed owner scope and continuing without sender NyxID user id enrichment. subject={Platform}:{Tenant}:{User}",
                 subject.Platform,
                 subject.Tenant,
                 subject.ExternalUserId);

@@ -4,7 +4,9 @@ using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Schedules;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.Workflow.Abstractions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -15,8 +17,6 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
 {
     private static readonly TimeSpan DurableCredentialProjectionTtl = TimeSpan.FromHours(24);
     private static readonly TimeSpan ProjectedCredentialCleanupTimeout = TimeSpan.FromSeconds(5);
-    private const string LegacyConnectorHttpAuthorizationBlockedKey =
-        ScheduledServiceInvocationPayloadPolicy.ConnectorHttpAuthorizationKey;
 
     private readonly IServiceInvocationPort _serviceInvocationPort;
     private readonly IScheduledServiceInvocationCredentialExchangePort _credentialExchangePort;
@@ -54,6 +54,7 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         ArgumentNullException.ThrowIfNull(dispatch);
         ArgumentNullException.ThrowIfNull(dispatch.Request);
         ValidateAuthorizationFact(dispatch);
+        ValidateWorkflowAgentKeyIntegrity(dispatch);
 
         var prepared = await BuildInvocationRequestAsync(dispatch, ct);
         try
@@ -86,33 +87,15 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
     private void ValidateAuthorizationFact(ScheduledServiceInvocationDispatchRequest dispatch)
     {
         var fact = dispatch.AuthorizationFact;
-        if (fact == null)
+        if (fact == null &&
+            dispatch.Auth?.Source is not ScheduledInvocationAgentKeyCredentialReference)
             return;
 
-        if (string.IsNullOrWhiteSpace(fact.PermissionDigest) ||
-            string.IsNullOrWhiteSpace(fact.PolicyVersion) ||
-            string.IsNullOrWhiteSpace(fact.Owner.Authority) ||
-            string.IsNullOrWhiteSpace(fact.Owner.OwnerSubject) ||
-            string.IsNullOrWhiteSpace(fact.Scopes) ||
-            fact.ExpiresAt <= _timeProvider.GetUtcNow() ||
-            fact.Authority.CatalogStateVersion <= 0 ||
-            fact.ServiceGrants.Any(static grant =>
-                string.IsNullOrWhiteSpace(grant.ServiceId)) ||
-            fact.ServiceGrants.Count == 0 && !fact.ServiceGrantsNotRequired ||
-            fact.NodeGrants.Any(static grant =>
-                string.IsNullOrWhiteSpace(grant.UserServiceId) ||
-                string.IsNullOrWhiteSpace(grant.NodeId) ||
-                string.IsNullOrWhiteSpace(grant.Role) ||
-                string.IsNullOrWhiteSpace(grant.EdgeKind)) ||
-            fact.ServiceGrants.Any(grant =>
-                !grant.NodeGrantsNotRequired &&
-                !fact.NodeGrants.Any(node => string.Equals(
-                    node.UserServiceId,
-                    grant.ServiceId,
-                    StringComparison.Ordinal))) ||
-            !fact.Disclosure.DedicatedToSchedule ||
-            !fact.Disclosure.SecretManagedByAevatar ||
-            fact.Disclosure.BrowserReceivesRawKey)
+        if (fact == null ||
+            IsCoreAuthorizationFactInvalid(fact, _timeProvider.GetUtcNow()) ||
+            IsCatalogAuthorityInvalid(fact.Authority) ||
+            AreServiceGrantsInvalid(fact) ||
+            IsDisclosureInvalid(fact.Disclosure))
         {
             throw new ScheduledServiceInvocationAuthorizationException(
                 ScheduledServiceInvocationAuthorizationFailureCode.AuthorizationFactInvalid,
@@ -129,6 +112,124 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         }
     }
 
+    private static bool IsCoreAuthorizationFactInvalid(
+        ScheduledInvocationAuthorizationFact fact,
+        DateTimeOffset now) =>
+        string.IsNullOrWhiteSpace(fact.PermissionDigest) ||
+        string.IsNullOrWhiteSpace(fact.PolicyVersion) ||
+        string.IsNullOrWhiteSpace(fact.Owner.Authority) ||
+        string.IsNullOrWhiteSpace(fact.Owner.OwnerSubject) ||
+        string.IsNullOrWhiteSpace(fact.Scopes) ||
+        fact.ExpiresAt <= now;
+
+    private static bool IsCatalogAuthorityInvalid(ScheduledInvocationAuthorizationAuthority authority) =>
+        authority.CatalogStateVersion <= 0 ||
+        string.IsNullOrWhiteSpace(authority.CatalogContentDigest) ||
+        string.IsNullOrWhiteSpace(authority.CatalogContractVersion) ||
+        string.IsNullOrWhiteSpace(authority.CatalogPolicyVersion) ||
+        authority.CatalogEvaluatedAt == default;
+
+    private static bool AreServiceGrantsInvalid(ScheduledInvocationAuthorizationFact fact) =>
+        fact.ServiceGrants.Count == 0 && !fact.ServiceGrantsNotRequired ||
+        fact.ServiceGrants.Any(IsServiceGrantInvalid);
+
+    private static bool IsServiceGrantInvalid(ScheduledInvocationAuthorizationServiceGrant grant) =>
+        string.IsNullOrWhiteSpace(grant.ServiceId) ||
+        grant.NodeIds == null ||
+        grant.NodeIds.Any(string.IsNullOrWhiteSpace) ||
+        grant.NodeGrantsNotRequired && grant.NodeIds.Count != 0 ||
+        !grant.NodeGrantsNotRequired && grant.NodeIds.Count == 0;
+
+    private static bool IsDisclosureInvalid(ScheduledInvocationAuthorizationDisclosure disclosure) =>
+        !disclosure.DedicatedToSchedule ||
+        !disclosure.SecretManagedByAevatar ||
+        disclosure.BrowserReceivesRawKey;
+
+    private static void ValidateWorkflowAgentKeyIntegrity(
+        ScheduledServiceInvocationDispatchRequest dispatch)
+    {
+        if (!dispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredential ||
+            dispatch.Auth?.Source is not ScheduledInvocationAgentKeyCredentialReference)
+        {
+            return;
+        }
+
+        var authority = dispatch.Auth.CallerAuthority;
+        if (authority == null ||
+            !IsCanonicalAuthorityValue(authority.Platform) ||
+            !IsCanonicalAuthorityValue(authority.ExternalUserId) ||
+            !IsCanonicalAuthorityValue(authority.Scope) ||
+            !IsCanonicalAuthorityValue(authority.BindingId))
+        {
+            throw new ScheduledServiceInvocationAuthorizationException(
+                ScheduledServiceInvocationAuthorizationFailureCode.CallerAuthorityInvalid,
+                "Scheduled workflow Agent Key caller authority is missing or malformed.");
+        }
+
+        ValidateOwnerLLMSelectionAndPayload(dispatch.Request, dispatch.AuthorizationFact!);
+    }
+
+    private static bool IsCanonicalAuthorityValue(string? value) =>
+        !string.IsNullOrEmpty(value) && string.Equals(value, value.Trim(), StringComparison.Ordinal);
+
+    private static void ValidateOwnerLLMSelectionAndPayload(
+        ServiceInvocationRequest request,
+        ScheduledInvocationAuthorizationFact fact)
+    {
+        var chatRequest = new ChatRequestEvent();
+        bool hasChatPayload;
+        try
+        {
+            hasChatPayload = request.Payload?.TryUnpack(out chatRequest) == true;
+        }
+        catch (InvalidProtocolBufferException)
+        {
+            ThrowOwnerLLMPayloadMismatch();
+            return;
+        }
+
+        if (!hasChatPayload)
+        {
+            ThrowOwnerLLMPayloadMismatch();
+            return;
+        }
+
+        var control = chatRequest?.LlmControl;
+        var route = control?.NyxIdRoutePreference ?? string.Empty;
+        var model = control?.ModelOverride ?? string.Empty;
+
+        if (fact.Authority.OwnerLlmStateVersion <= 0)
+        {
+            if (route.Length > 0 || model.Length > 0)
+                ThrowOwnerLLMPayloadMismatch();
+            return;
+        }
+
+        var selection = fact.OwnerLLMSelection;
+        if (!ScheduledInvocationOwnerLLMSelectionPolicy.IsDurableSelectionValid(selection) ||
+            (selection!.RouteKind == ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService &&
+             !fact.ServiceGrants.Any(grant => string.Equals(
+                 grant.ServiceId,
+                 selection.NyxIdUserServiceId,
+                 StringComparison.Ordinal))))
+        {
+            throw new ScheduledServiceInvocationAuthorizationException(
+                ScheduledServiceInvocationAuthorizationFailureCode.OwnerLLMSelectionInvalid,
+                "Scheduled workflow owner LLM selection is missing or malformed.");
+        }
+
+        if (!string.Equals(route, selection.RouteValue, StringComparison.Ordinal) ||
+            !string.Equals(model, selection.Model, StringComparison.Ordinal))
+        {
+            ThrowOwnerLLMPayloadMismatch();
+        }
+    }
+
+    private static void ThrowOwnerLLMPayloadMismatch() =>
+        throw new ScheduledServiceInvocationAuthorizationException(
+            ScheduledServiceInvocationAuthorizationFailureCode.OwnerLLMPayloadMismatch,
+            "Scheduled workflow owner LLM payload does not match the authorization fact.");
+
     private async Task<PreparedInvocationRequest> BuildInvocationRequestAsync(
         ScheduledServiceInvocationDispatchRequest dispatch,
         CancellationToken ct)
@@ -143,7 +244,7 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
                     new ExchangedCredential(
                         CredentialRole.ScheduledInvocationAgentKey,
                         string.Empty,
-                        CreateBorrowedDurableCallerCredential(agentKey)),
+                        CreateBorrowedDurableCallerCredential(agentKey, dispatch.Auth.CallerAuthority)),
                     projectNyxIdAccessTokenToWorkflowCallerCredential: true),
                 DurableCallerCredential: null);
         }
@@ -238,17 +339,21 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
     }
 
     private static DurableCallerCredentialRef CreateBorrowedDurableCallerCredential(
-        ScheduledInvocationAgentKeyCredentialReference source)
+        ScheduledInvocationAgentKeyCredentialReference source,
+        ScheduledCallerNyxIdAuthority? callerAuthority)
     {
         var reference = source.SecretReference;
         if (string.IsNullOrWhiteSpace(reference.Ref))
             throw new ScheduledServiceInvocationAuthorizationException(
                 ScheduledServiceInvocationAuthorizationFailureCode.CredentialReferenceMissing,
                 "Scheduled invocation agent key secret reference is missing.");
-        if (string.IsNullOrWhiteSpace(reference.Purpose))
+        if (!string.Equals(
+                reference.Purpose,
+                CredentialSecretPurposes.ScheduledInvocationAgentKey,
+                StringComparison.Ordinal))
             throw new ScheduledServiceInvocationAuthorizationException(
                 ScheduledServiceInvocationAuthorizationFailureCode.CredentialReferenceInvalid,
-                "Scheduled invocation agent key secret reference purpose is missing.");
+                "Scheduled invocation agent key secret reference purpose is invalid.");
         if (string.IsNullOrWhiteSpace(reference.OwnerScopeKey))
             throw new ScheduledServiceInvocationAuthorizationException(
                 ScheduledServiceInvocationAuthorizationFailureCode.CredentialReferenceInvalid,
@@ -265,6 +370,7 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
             OwnerScopeKey = reference.OwnerScopeKey,
             SubjectId = source.ApiKeyId,
             SourceKind = DurableCallerCredentialSourceKind.ScheduledDispatch,
+            ScheduledCallerNyxIdAuthority = NormalizeScheduledCallerNyxIdAuthority(callerAuthority),
         };
     }
 
@@ -282,7 +388,7 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
 
         var ownerScopeKey = ResolveOwnerScopeKey(dispatch);
         var subjectId = ResolveSubjectId(dispatch.Auth, role);
-        var callerAuthority = ResolveScheduledCallerNyxIdAuthority(dispatch.Auth, role);
+        var callerAuthority = NormalizeScheduledCallerNyxIdAuthority(dispatch.Auth?.CallerAuthority);
         var stored = await _secretVault.PutAsync(new StoreSecretRequest(
             CredentialSecretPurposes.WorkflowCallerDurableBearerToken,
             ownerScopeKey,
@@ -639,7 +745,7 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         {
             foreach (var (key, value) in headers)
             {
-                if (string.Equals(key, LegacyConnectorHttpAuthorizationBlockedKey, StringComparison.Ordinal))
+                if (ScheduledServiceInvocationPayloadPolicy.IsConnectorHttpAuthorizationKey(key))
                     continue;
 
                 chatRequest.Metadata[key] = value;
@@ -798,21 +904,20 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
             (subject.ExternalUserId ?? string.Empty).Trim());
     }
 
-    private static ScheduledCallerNyxIdAuthority? ResolveScheduledCallerNyxIdAuthority(
-        ScheduledServiceInvocationAuth? auth,
-        CredentialRole role)
+    private static ScheduledCallerNyxIdAuthority? NormalizeScheduledCallerNyxIdAuthority(
+        ScheduledCallerNyxIdAuthority? source)
     {
-        if (role is not (CredentialRole.Sender or CredentialRole.ScopeOwner))
+        if (source == null)
             return null;
 
-        var source = auth?.NyxId;
-        var subject = source?.Subject;
-        var platform = subject?.Platform?.Trim() ?? string.Empty;
-        var externalUserId = subject?.ExternalUserId?.Trim() ?? string.Empty;
-        var scope = source?.Scope?.Trim() ?? string.Empty;
+        var platform = source.Platform?.Trim() ?? string.Empty;
+        var externalUserId = source.ExternalUserId?.Trim() ?? string.Empty;
+        var scope = source.Scope?.Trim() ?? string.Empty;
+        var bindingId = source.BindingId?.Trim() ?? string.Empty;
         if (string.IsNullOrWhiteSpace(platform) ||
             string.IsNullOrWhiteSpace(externalUserId) ||
-            string.IsNullOrWhiteSpace(scope))
+            string.IsNullOrWhiteSpace(scope) ||
+            string.IsNullOrWhiteSpace(bindingId))
         {
             throw new InvalidOperationException(
                 "Scheduled workflow NyxID caller authority is incomplete.");
@@ -821,9 +926,10 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         return new ScheduledCallerNyxIdAuthority
         {
             Platform = platform,
-            Tenant = subject?.Tenant?.Trim() ?? string.Empty,
+            Tenant = source.Tenant?.Trim() ?? string.Empty,
             ExternalUserId = externalUserId,
             Scope = scope,
+            BindingId = bindingId,
         };
     }
 
@@ -831,9 +937,15 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         ScheduledServiceInvocationAuth? auth,
         out ScheduledCallerNyxIdAuthority authority)
     {
-        var role = ResolveCredentialRole(auth);
-        authority = ResolveScheduledCallerNyxIdAuthority(auth, role) ?? new ScheduledCallerNyxIdAuthority();
-        return role is CredentialRole.Sender or CredentialRole.ScopeOwner;
+        if (auth?.Source is not ScheduledServiceInvocationNyxIdCredentialSource)
+        {
+            authority = new ScheduledCallerNyxIdAuthority();
+            return false;
+        }
+
+        authority = NormalizeScheduledCallerNyxIdAuthority(auth?.CallerAuthority) ??
+                    new ScheduledCallerNyxIdAuthority();
+        return auth?.CallerAuthority != null;
     }
 
     private static CredentialRole ResolveCredentialRole(ScheduledServiceInvocationAuth? auth) =>

@@ -67,6 +67,35 @@ public sealed class StudioWorkspaceGAgent : GAgentBase<StudioWorkspaceState>, IP
         return PersistDomainEventAsync(evt);
     }
 
+    [EventHandler(EndpointName = "repairWorkspaceProjection")]
+    public async Task HandleProjectionRepairAsync(RepairStudioWorkspaceProjectionCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        ValidateWorkspace(command.WorkspaceId, command.ScopeId);
+        var currentVersion = EventSourcing?.CurrentVersion
+            ?? throw new InvalidOperationException("Workspace event sourcing is unavailable.");
+        if (command.MinimumStateVersion <= 0 ||
+            currentVersion < command.MinimumStateVersion)
+        {
+            throw new InvalidOperationException("Workspace projection repair source version changed.");
+        }
+        if (string.IsNullOrWhiteSpace(State.WorkspaceId) ||
+            !string.Equals(State.WorkspaceId, command.WorkspaceId, StringComparison.Ordinal) ||
+            !string.Equals(State.ScopeId, command.ScopeId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Workspace projection repair identity does not match current state.");
+        }
+
+        await RepublishCommittedStateAsync(new StudioWorkspaceSettingsUpdated
+        {
+            WorkspaceId = State.WorkspaceId,
+            ScopeId = State.ScopeId,
+            Settings = State.Settings?.Clone() ?? new StudioWorkspaceSettings(),
+            UpdatedAtUtc = State.UpdatedAtUtc?.Clone() ?? new Timestamp(),
+            ExpectedVersion = State.LastAppliedEventVersion,
+        });
+    }
+
     protected override StudioWorkspaceState TransitionState(
         StudioWorkspaceState current,
         IMessage evt)

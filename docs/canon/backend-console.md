@@ -66,6 +66,21 @@ Aevatar admins resolved by `IPlatformAdminAuthorizer` may use
 drilldown endpoints still read only workflow current-state/readmodel artifacts; they do not replay events, prime
 projections, or dispatch actor commands.
 
+The embedded `/admin#/observatory` UI defaults every caller, including an administrator, to the caller's own
+scope. `scope=all` is an explicit administrator viewing mode that maps to the backend-only `__all__` sentinel;
+exact scope IDs remain exact and are never inferred from role. Its shareable hash state uses only `scope`,
+`status`, `origin`, `definition`, `schedule`, `from`, `to`, `run`, and `tab`. Local text search, the collapsed run
+rail, expanded filter controls, and immersive mode are viewing preferences rather than shareable query state.
+
+Fleet links carry exact `scope + run`, and schedule links carry `schedule` while clearing an unrelated selected
+run. A selected run outside the current server filters or local search stays pinned instead of changing the
+filters or silently selecting the first result. Local text search is limited to the loaded maximum of 100 run
+summaries and presents visible and loaded counts explicitly.
+
+Own-scope detail and graph reads use normal endpoints without `scope`; exact-scope reads use normal endpoints
+with that scope; all-scope selections and unknown-owner manual run lookup use the administrator endpoints.
+Administrator identity by itself does not select the administrator endpoint.
+
 Run detail responses expose `diagnostics` assembled from the committed workflow current-state snapshot and the
 materialized run-report artifact. Diagnostics are query-time explanations for operators; they are not durable log
 entries or deletion tombstones and must not be presented as either. Admin controls accept a run id through an

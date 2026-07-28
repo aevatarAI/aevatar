@@ -1,10 +1,12 @@
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgents.WorkOrder;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Authoring;
 using Aevatar.Studio.Application.Studio.Services;
 using Aevatar.Studio.Application.Studio.WorkflowBoards;
 using Aevatar.Studio.Application.Studio.WorkflowBoards.Services;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -20,6 +22,9 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<WorkspaceService>();
         services.AddSingleton<ExecutionService>();
         services.AddSingleton<ConnectorService>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IExternalWorkflowCapabilitySource,
+            ConnectorExternalWorkflowCapabilitySource>());
         services.AddSingleton<RoleCatalogService>();
         services.AddSingleton<SettingsService>();
         // Refactor (iter21/cluster-001):
@@ -39,11 +44,24 @@ public static class ServiceCollectionExtensions
         // aevatar_provision_workflow_schedule agent tool can depend only on Aevatar.Studio.Application.Abstractions.
         services.TryAddSingleton<IWorkflowScheduleProvisioningPort, WorkflowScheduleProvisioningPort>();
         services.TryAddSingleton<IStudioTeamService, StudioTeamService>();
+        services.TryAddSingleton<WorkOrderAssignmentValidator>();
+        services.TryAddSingleton<IWorkOrderExecutionPort, ValidatedWorkOrderExecutionPort>();
+        services.AddOptions<WorkOrderExecutionWorkerOptions>();
+        services.TryAddSingleton<IWorkOrderExecutionQueue, WorkOrderExecutionQueue>();
+        services.TryAddSingleton<WorkOrderExecutionScheduler>();
+        services.TryAddSingleton<IWorkOrderExecutionScheduler>(provider =>
+            provider.GetRequiredService<WorkOrderExecutionScheduler>());
+        services.TryAddSingleton<WorkOrderExecutionService>();
+        services.TryAddSingleton<IWorkOrderService, WorkOrderService>();
         services.TryAddSingleton<IStudioTeamProvisioningPort, StudioTeamProvisioningPort>();
         services.TryAddSingleton<IStudioMemberProvisioningPort, StudioMemberProvisioningPort>();
         services.TryAddSingleton<IStudioMemberWorkflowBindingPort, StudioMemberWorkflowBindingPort>();
         services.TryAddSingleton(new StudioMemberWorkflowSchedulePolicy());
-        services.TryAddSingleton<IStudioMemberWorkflowSchedulePort, StudioMemberWorkflowSchedulePort>();
+        services.TryAddSingleton<StudioMemberWorkflowSchedulePort>();
+        services.TryAddSingleton<IStudioMemberWorkflowSchedulePort>(provider =>
+            provider.GetRequiredService<StudioMemberWorkflowSchedulePort>());
+        services.TryAddSingleton<IStudioMemberAutomationQueryPort>(provider =>
+            provider.GetRequiredService<IStudioMemberWorkflowSchedulePort>());
         services.TryAddSingleton<IStudioTeamGAgentStreamInvocationService, StudioTeamGAgentStreamInvocationService>();
         services.TryAddSingleton<IWorkflowBoardClock, SystemWorkflowBoardClock>();
         services.TryAddSingleton<IWorkflowBoardRosterQueryPort, StudioWorkflowBoardRosterQueryPort>();

@@ -24,6 +24,7 @@
     <ProjectReference Include="..\..\Aevatar.Audit.Abstractions\Aevatar.Audit.Abstractions.csproj" />
     <ProjectReference Include="..\..\Aevatar.Audit.Hosting\Aevatar.Audit.Hosting.csproj" />
     <ProjectReference Include="..\..\Aevatar.BackendConsole.Hosting\Aevatar.BackendConsole.Hosting.csproj" />
+    <ProjectReference Include="..\..\..\agents\Aevatar.GAgents.Channel.Identity.Abstractions\Aevatar.GAgents.Channel.Identity.Abstractions.csproj" />
   </ItemGroup>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />

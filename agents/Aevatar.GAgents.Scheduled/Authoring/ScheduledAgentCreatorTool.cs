@@ -4,6 +4,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgents.Scheduled;
+using Aevatar.Workflow.Abstractions;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.Scheduled;
@@ -120,12 +121,22 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
               "type": "boolean",
               "description": "When true, the run must observe a successful NyxID proxy call."
             },
-            "required_service_slugs": {
+            "required_nyx_services": {
               "type": "array",
-              "description": "Optional extra NyxID service slugs the scheduled skill body will call through nyxid_proxy, such as tavily-search or api-github. This does not select the one-shot reminder delivery provider; use nyx_provider_slug for that. The creator resolves these to service IDs for the scoped key; callers must not provide service IDs.",
+              "description": "Exact NyxID UserService identities and route snapshots required by Ornn, failure delivery, or the scheduled skill body.",
               "items": {
-                "type": "string"
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "user_service_id": { "type": "string" },
+                  "service_slug_snapshot": { "type": "string" }
+                },
+                "required": ["user_service_id", "service_slug_snapshot"]
               }
+            },
+            "nyx_user_service_id": {
+              "type": "string",
+              "description": "Exact NyxID UserService identity for the effective outbound delivery provider."
             },
             "nyx_provider_slug": {
               "type": "string",
@@ -265,7 +276,7 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
         string agentId)
     {
         var request = plan.Request!;
-        var serviceSlugs = plan.ServiceSlugs!;
+        var serviceRequirements = plan.ServiceRequirements!;
         var bindingId = Normalize(AgentToolRequestContext.SenderBindingId);
         var ownerSubject = Normalize(AgentToolRequestContext.SenderNyxUserId) ?? Normalize(caller.NyxUserId);
         var subjectPlatform = Normalize(AgentToolRequestContext.NyxIdAuthority.Platform) ?? Normalize(caller.Platform);
@@ -279,17 +290,7 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
             return null;
         }
 
-        var requiredSlugs = new List<string>();
-        if (serviceSlugs.RequiresOrnnService)
-            requiredSlugs.Add(Normalize(_options.OrnnServiceSlug) ?? ScheduledAgentCreatorOptions.DefaultOrnnServiceSlug);
-        requiredSlugs.Add(serviceSlugs.PrimaryOutboundSlug);
-        if (!string.IsNullOrWhiteSpace(serviceSlugs.FailureNotificationSlug))
-            requiredSlugs.Add(serviceSlugs.FailureNotificationSlug);
-        requiredSlugs.AddRange(serviceSlugs.RequiredServiceSlugs);
-        var distinctRequiredSlugs = requiredSlugs
-            .Where(static slug => !string.IsNullOrWhiteSpace(slug))
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
+        var requiredServices = BuildRequiredServices(serviceRequirements);
 
         var authority = Normalize(_options.NyxIdAuthority);
         if (authority is null)
@@ -316,9 +317,8 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
                 Normalize(caller.RegistrationScopeId) ?? string.Empty,
                 subjectExternalUserId,
                 bindingId),
-            [],
-            distinctRequiredSlugs,
-            distinctRequiredSlugs.Length == 0
+            requiredServices,
+            requiredServices.Count == 0
                 ? AuthorizationGrantRequirement.NotRequired
                 : AuthorizationGrantRequirement.Required,
             now.AddDays(_options.ApiKeyLifetimeDays),
@@ -328,6 +328,70 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
                 SourceKind = AuthorizationSourceKind.ScheduledAgentRegistration,
                 SourceId = agentId,
             }]);
+    }
+
+    private IReadOnlyList<NyxIdUserServiceCapabilityRef> BuildRequiredServices(
+        ScheduledAgentServiceRequirements requirements)
+    {
+        var services = new List<NyxIdUserServiceCapabilityRef>();
+        var identities = new HashSet<(string Id, string Slug)>();
+
+        if (requirements.RequiresOrnnService)
+        {
+            AddExactRoute(
+                services,
+                identities,
+                requirements.RequiredNyxServices,
+                Normalize(_options.OrnnServiceSlug) ?? ScheduledAgentCreatorOptions.DefaultOrnnServiceSlug);
+        }
+
+        AddService(services, identities, new NyxIdUserServiceCapabilityRef
+        {
+            UserServiceId = requirements.PrimaryOutboundUserServiceId,
+            ServiceSlugSnapshot = requirements.PrimaryOutboundSlug,
+        });
+
+        if (!string.IsNullOrWhiteSpace(requirements.FailureNotificationSlug))
+        {
+            AddExactRoute(
+                services,
+                identities,
+                requirements.RequiredNyxServices,
+                requirements.FailureNotificationSlug);
+        }
+
+        foreach (var service in requirements.RequiredNyxServices)
+            AddService(services, identities, service);
+        return services;
+    }
+
+    private static void AddExactRoute(
+        ICollection<NyxIdUserServiceCapabilityRef> destination,
+        ISet<(string Id, string Slug)> identities,
+        IReadOnlyList<NyxIdUserServiceCapabilityRef> candidates,
+        string slugSnapshot)
+    {
+        var matches = candidates
+            .Where(candidate => string.Equals(
+                candidate.ServiceSlugSnapshot.Trim(),
+                slugSnapshot.Trim(),
+                StringComparison.Ordinal))
+            .ToArray();
+        AddService(destination, identities, matches.Length == 1
+            ? matches[0]
+            : new NyxIdUserServiceCapabilityRef { ServiceSlugSnapshot = slugSnapshot.Trim() });
+    }
+
+    private static void AddService(
+        ICollection<NyxIdUserServiceCapabilityRef> destination,
+        ISet<(string Id, string Slug)> identities,
+        NyxIdUserServiceCapabilityRef service)
+    {
+        var clone = service.Clone();
+        clone.UserServiceId = clone.UserServiceId.Trim();
+        clone.ServiceSlugSnapshot = clone.ServiceSlugSnapshot.Trim();
+        if (identities.Add((clone.UserServiceId, clone.ServiceSlugSnapshot)))
+            destination.Add(clone);
     }
 
     private static string? Normalize(string? value) =>

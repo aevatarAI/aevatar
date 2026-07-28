@@ -121,6 +121,34 @@ public sealed class ActorBackedGAgentRegistryPortsTests
         result.Status.Should().Be(ScopeResourceAdmissionStatus.NotFound);
     }
 
+    [Fact]
+    public async Task AuthorizeTargetAsync_ShouldMapControlAsTypedRegistryOperation()
+    {
+        var actor = new StubActor("gagent-registry-scope-a");
+        var dispatch = new RecordingCommandDispatchService();
+        var ports = NewPorts(
+            dispatch,
+            new RecordingActorRuntime { ExistingActor = actor },
+            new RecordingBootstrap(actor),
+            new RecordingDocumentReader());
+        var control = System.Enum.Parse<ScopeResourceOperation>("Control");
+
+        var admission = await ports.AuthorizeTargetAsync(new ScopeResourceTarget(
+            "scope-a",
+            ScopeResourceKind.GAgentActor,
+            CanonicalKind,
+            "actor-1",
+            control));
+
+        admission.Status.Should().Be(ScopeResourceAdmissionStatus.Allowed);
+        var requested = dispatch.Payloads.Should()
+            .ContainSingle()
+            .Which.Should()
+            .BeOfType<ScopeResourceAdmissionRequested>()
+            .Which;
+        requested.Operation.ToString().Should().Be("Control");
+    }
+
     private static ActorBackedGAgentRegistryPorts NewPorts(
         RecordingCommandDispatchService dispatch,
         RecordingActorRuntime runtime,
@@ -209,6 +237,8 @@ public sealed class ActorBackedGAgentRegistryPortsTests
         public AppScopeContext? Resolve(HttpContext? httpContext = null) => new("scope-a", "test");
 
         public bool HasAuthenticatedRequestWithoutScope(HttpContext? httpContext = null) => false;
+
+        public bool HasHttpRequestContext(HttpContext? httpContext = null) => false;
     }
 
     private sealed class StubActor(string id) : IActor

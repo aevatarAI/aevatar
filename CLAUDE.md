@@ -19,7 +19,7 @@ New principle: CLAUDE.md keeps the cross-process architecture and engineering bo
 - 删除优先：空转发、重复抽象、无业务价值代码直接删除，不保留兼容空壳。
 - 变更必须可验证：架构调整需同步文档，且 `build/test` 通过。
 - 外部仓库无改动权：本仓库需求禁止依赖 NyxID / chrono-storage / chrono-ornn 等外部仓库新增或修改；现有 surface 不足时，在本仓库内绕开或不做。只有发现外部仓库行为违反其已发布契约时，才可提 issue。
-- 不得对特定 skill / 命令 / 模板名硬编码：skill 接口本身就是泛化协议；生产代码、prompt、路由表、类型名和字段名不得感知具体 skill 名（如 `/daily`、`chrono-ai-daily` 等）。需要个性化行为时，通过 skill metadata / 通用 discovery 接口表达，不允许在分支判断、路由表、类型名里出现具体 skill 名；例外：测试代码可在 testfile 内引用具体 skill 名作 fixture。
+- 不得在运行时代码、prompt、类型名、字段名或 compiled branch 中硬编码具体 skill / command / template 名称；只有经过部署发布流程核验、由 Host 持有并在启动时结构校验的 server-owned profile 数据，才可列举 opaque intent 标识、不可变 Ornn `{guid, literal_version}` 引用、显式 trigger alias 以及单义 `tool_names` / `tool_set_refs`。客户端不得提交、覆盖或逐消息切换这些 profile/tool policy 数据；运行时 router 与 classifier template 只能解释 typed profile contract，不得按具体 skill 名写分支。普通 on-demand discovery 继续走通用 search / `use_skill` 协议；测试 fixture 可引用具体名称。
 
 ## 架构哲学
 - 单一主干，插件扩展：只保留一条权威业务主链路；新能力以插件/模块挂载，禁止平行"第二系统"。

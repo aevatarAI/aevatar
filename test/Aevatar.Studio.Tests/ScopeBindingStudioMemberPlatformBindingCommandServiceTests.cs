@@ -1,8 +1,10 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgents.StudioMember;
 using Aevatar.Studio.Projection.CommandServices;
+using Aevatar.Workflow.Abstractions;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -113,8 +115,47 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
         request.ImplementationKind.Should().Be(ScopeBindingImplementationKind.Workflow);
         request.Workflow!.WorkflowId.Should().Be("workflow-stable-id");
         request.Workflow!.WorkflowYamls.Should().ContainSingle().Which.Should().Contain("name: workflow-main");
+        request.CapabilityAdmission.Should().NotBeNull();
+        request.CapabilityAdmission!.ExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Interactive);
+        request.CapabilityAdmission.ExistingPlan.Should().NotBeNull();
+        request.CapabilityAdmission.ExistingPlan!.AdmissionDigest.Should().Be(
+            NewWorkflowStartRequest().Request.Workflow.CapabilityAdmissionPlan.AdmissionDigest);
         request.AllowExistingRevisionReplay.Should().BeTrue();
         request.ReplayRevisionId.Should().Be("rev-platform-bind-1");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldPreserveDurableOwnerWithoutReconstructingCallerCredentials()
+    {
+        var scopeBindingPort = new RecordingScopeBindingCommandPort();
+        var dispatchPort = new RecordingDispatchPort();
+        var service = CreateService(scopeBindingPort, dispatchPort);
+        var startRequest = NewDurableWorkflowStartRequest();
+        var submittedPlan = startRequest.Request.Workflow.CapabilityAdmissionPlan.Clone();
+
+        await service.ExecuteAsync(
+            "studio-member-binding-run:bind-1",
+            "platform-bind-1",
+            startRequest);
+
+        await dispatchPort.NextDispatch.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var upsert = scopeBindingPort.Requests.Should().ContainSingle().Subject;
+        upsert.ServiceId.Should().Be("svc-gamma");
+        upsert.CapabilityAdmission.Should().NotBeNull();
+        var admission = upsert.CapabilityAdmission!;
+        admission.CallerId.Should().BeEmpty();
+        admission.NyxIdCallerBearerToken.Should().BeNull();
+        admission.NyxIdOrganizationBearerToken.Should().BeNull();
+        admission.ExistingPlan.Should().NotBeNull();
+        admission.ExistingPlan.Should().NotBeSameAs(submittedPlan);
+        admission.ExistingPlan.Should().BeEquivalentTo(submittedPlan);
+        admission.ExistingPlan!.DurableAuthorizationOwner.Should().BeEquivalentTo(
+            new ExternalCapabilityAuthorizationOwner
+            {
+                Authority = WorkflowCapabilityAdmissionPlanIntegrity.NyxIdAuthority,
+                OwnerKind = ExternalCapabilityAuthorizationOwnerKind.Personal,
+                OwnerSubject = "caller-alpha",
+            });
     }
 
     [Fact]
@@ -591,9 +632,90 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
         {
             WorkflowId = "workflow-stable-id",
             WorkflowYamls = { "name: workflow-main\nsteps: []\n" },
+            CapabilityAdmissionPlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+                "name: workflow-main\nsteps: []",
+                new Dictionary<string, string>(),
+                ExternalCapabilityExecutionMode.Interactive,
+                [],
+                []),
         };
         return request;
     }
+
+    private static StudioMemberPlatformBindingStartRequested NewDurableWorkflowStartRequest()
+    {
+        const string workflowYaml = "name: workflow-main\nsteps: []\n";
+        var request = NewWorkflowStartRequest();
+        request.Request.MemberId = "m-beta";
+        request.Admitted.MemberId = "m-beta";
+        request.Admitted.PublishedServiceId = "svc-gamma";
+        var capability = new ExternalWorkflowCapabilityRef
+        {
+            NyxIdUserService = new NyxIdUserServiceCapabilityRef
+            {
+                UserServiceId = "us-gamma",
+                ServiceSlugSnapshot = "service-gamma",
+                OperationId = "invoke-gamma",
+                HttpMethod = "POST",
+                PathTemplate = "/invoke",
+                ContractDigest = "operation-gamma-digest",
+            },
+        };
+        var owner = new ExternalCapabilityAuthorizationOwner
+        {
+            Authority = WorkflowCapabilityAdmissionPlanIntegrity.NyxIdAuthority,
+            OwnerKind = ExternalCapabilityAuthorizationOwnerKind.Personal,
+            OwnerSubject = "caller-alpha",
+        };
+        var observedAt = new DateTimeOffset(2026, 7, 22, 10, 0, 0, TimeSpan.Zero);
+        request.Request.Workflow.CapabilityAdmissionPlan =
+            WorkflowCapabilityAdmissionPlanIntegrity.Create(
+                workflowYaml,
+                new Dictionary<string, string>(),
+                ExternalCapabilityExecutionMode.Durable,
+                [capability],
+                [
+                    Source(
+                        ExternalCapabilitySourceKind.NyxIdUserServices,
+                        "nyxid-user-services:caller-alpha",
+                        observedAt,
+                        "user-services-gamma-digest"),
+                    Source(
+                        ExternalCapabilitySourceKind.NyxIdOpenApi,
+                        "us-gamma",
+                        observedAt,
+                        "openapi-gamma-digest"),
+                    Source(
+                        ExternalCapabilitySourceKind.DurableAuthorizationCatalog,
+                        NyxIdAuthorizationCatalogActorIds.Build(new AuthorizationOwnerIdentity
+                        {
+                            Authority = NyxIdAuthorizationAuthorities.NyxId,
+                            OwnerKind = AuthorizationOwnerKind.Personal,
+                            OwnerSubject = "caller-alpha",
+                        }),
+                        observedAt,
+                        "catalog-gamma-digest",
+                        sourceVersion: 17),
+                ],
+                owner);
+        return request;
+    }
+
+    private static ExternalCapabilitySourceStamp Source(
+        ExternalCapabilitySourceKind sourceKind,
+        string sourceId,
+        DateTimeOffset observedAt,
+        string contentDigest,
+        long sourceVersion = 0) =>
+        new()
+        {
+            SourceKind = sourceKind,
+            SourceId = sourceId,
+            SourceVersion = sourceVersion,
+            ObservedAt = Timestamp.FromDateTimeOffset(observedAt),
+            FreshUntil = Timestamp.FromDateTimeOffset(observedAt.AddMinutes(5)),
+            ContentDigest = contentDigest,
+        };
 
     private static StudioMemberPlatformBindingStartRequested NewGAgentStartRequest()
     {

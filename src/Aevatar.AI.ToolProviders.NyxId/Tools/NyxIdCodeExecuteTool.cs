@@ -11,7 +11,7 @@ namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 /// with a clean interface so the agent can run code without needing to
 /// discover services or guess API paths.
 /// </summary>
-public sealed class NyxIdCodeExecuteTool : IAgentTool
+public sealed class NyxIdCodeExecuteTool : INyxIdBuiltInTool
 {
     private readonly NyxIdApiClient _client;
     private readonly ILogger _logger;

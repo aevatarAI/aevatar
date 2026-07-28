@@ -57,6 +57,37 @@ public sealed class ToolCallModuleContextTests
     }
 
     [Fact]
+    public async Task ToolCallModule_WhenToolReturnsTypedFailure_ShouldPublishFailedToolAndStepOutcomes()
+    {
+        const string resultJson = """{"error":true,"status":503}""";
+        var tool = new ScriptedResultWorkflowTool(
+            "nyxid_proxy",
+            WorkflowToolExecutionResult.Failed(
+                resultJson,
+                "NYXID_PROXY_HTTP_503",
+                "The service request failed."));
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext();
+
+        await ExecuteToolCallAsync(module, ctx, tool.Name, executionId: "exec-1");
+
+        var toolCompleted = ctx.Published.Select(x => x.Event)
+            .OfType<WorkflowToolCallCompletedEvent>()
+            .Single();
+        toolCompleted.Success.Should().BeFalse();
+        toolCompleted.ResultJson.Should().Be(resultJson);
+        toolCompleted.Error.Should().Contain("tool 'nyxid_proxy' execution failed");
+        toolCompleted.Error.Should().Contain("NYXID_PROXY_HTTP_503");
+        toolCompleted.Error.Should().Contain("The service request failed.");
+
+        var stepCompleted = LastCompleted(ctx);
+        stepCompleted.Success.Should().BeFalse();
+        stepCompleted.Output.Should().Be(resultJson);
+        stepCompleted.Error.Should().Be(toolCompleted.Error);
+        stepCompleted.ExecutionId.Should().Be("exec-1");
+    }
+
+    [Fact]
     public async Task ToolCallModule_ShouldSetExecutionIdWhenToolParameterIsMissing()
     {
         var tool = new FakeAgentTool("unused", _ => "{}");
@@ -375,6 +406,21 @@ public sealed class ToolCallModuleContextTests
             ct.ThrowIfCancellationRequested();
             ExecuteCalls++;
             return Task.FromResult(WorkflowToolExecutionResult.Success(execute(request.ArgumentsJson)));
+        }
+    }
+
+    private sealed class ScriptedResultWorkflowTool(
+        string name,
+        WorkflowToolExecutionResult result) : IWorkflowTool
+    {
+        public string Name { get; } = name;
+
+        public Task<WorkflowToolExecutionResult> ExecuteAsync(
+            WorkflowToolExecutionRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(result);
         }
     }
 

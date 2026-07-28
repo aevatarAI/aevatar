@@ -10,8 +10,10 @@
     <ProjectReference Include="..\Aevatar.AI.Abstractions\Aevatar.AI.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.AI.ToolProviders.Workflow\Aevatar.AI.ToolProviders.Workflow.csproj" />
     <ProjectReference Include="..\platform\Aevatar.GAgentService.Abstractions\Aevatar.GAgentService.Abstractions.csproj" />
+    <ProjectReference Include="..\workflow\Aevatar.Workflow.Application.Abstractions\Aevatar.Workflow.Application.Abstractions.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <PackageReference Include="Google.Protobuf" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
   </ItemGroup>

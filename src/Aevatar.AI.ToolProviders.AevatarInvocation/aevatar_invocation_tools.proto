@@ -53,6 +53,13 @@ message InvokeTeamToolRequest {
   InvocationWaitMode wait = 4;
 }
 
+message InvokeMemberToolRequest {
+  string member_id = 1;
+  string endpoint_id = 2;
+  InvocationPayload payload = 3;
+  InvocationWaitMode wait = 4;
+}
+
 message StartWorkflowToolRequest {
   string workflow_id = 1;
   InvocationPayload inputs = 2;

@@ -274,11 +274,12 @@ print(json.dumps({
 PY
 )"
 
-provision_body="$(python3 - "${workflow_yaml}" <<'PY'
+provision_body="$(python3 - "${team_id}" "${workflow_yaml}" <<'PY'
 import json
 import sys
-workflow_yaml = sys.argv[1]
+team_id, workflow_yaml = sys.argv[1:]
 print(json.dumps({
+    "teamId": team_id,
     "displayName": "Main Flow Smoke Provisioned Workflow",
     "workflowYaml": workflow_yaml,
     "prompt": "main-flow smoke manual trigger",
@@ -354,6 +355,7 @@ request_json GET "/api/scopes/${scope_id}/workflows?includeSource=true" "" "200"
 
 request_json POST "/api/schedules/preview" "${preview_body}" "200" "${preview_response}"
 request_json POST "/api/scopes/${scope_id}/provision-workflow" "${provision_body}" "202" "${provision_response}"
+assert_json_field "${provision_response}" "teamId" "${team_id}"
 
 schedule_id="$(python3 - "${provision_response}" <<'PY'
 import json

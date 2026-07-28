@@ -7,6 +7,9 @@ import "google/protobuf/timestamp.proto";
 import "scheduled_invocation_authorization_evidence.proto";
 
 message NyxIdAuthorizationCatalogDocument {
+  reserved 10;
+  reserved "external_revision";
+
   string id = 1;
   string actor_id = 2;
   int64 state_version = 3;
@@ -16,7 +19,6 @@ message NyxIdAuthorizationCatalogDocument {
   repeated aevatar.gagentservice.schedules.authorization.NyxIdAuthorizationServiceEvidence services = 7;
   google.protobuf.Timestamp observed_at_utc_value = 8;
   google.protobuf.Timestamp fresh_until_utc_value = 9;
-  string external_revision = 10;
   string content_digest = 11;
   bool invalidated = 12;
   string invalidation_reason = 13;
@@ -29,4 +31,7 @@ message NyxIdAuthorizationCatalogDocument {
   bool cleaned = 20;
   google.protobuf.Timestamp cleaned_at_utc_value = 21;
   string cleanup_reason = 22;
+  string contract_version = 23;
+  string policy_version = 24;
+  google.protobuf.Timestamp evaluated_at_utc_value = 25;
 }

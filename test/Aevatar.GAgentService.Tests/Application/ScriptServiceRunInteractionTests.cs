@@ -516,16 +516,6 @@ public sealed class ScriptServiceRunInteractionTests
         public Task RunRuntimeAsync(
             string runtimeActorId,
             string runId,
-            Any? inputPayload,
-            string scriptRevision,
-            string definitionActorId,
-            string requestedEventType,
-            CancellationToken ct) =>
-            throw new NotSupportedException();
-
-        public Task RunRuntimeAsync(
-            string runtimeActorId,
-            string runId,
             string commandId,
             string correlationId,
             Any? inputPayload,
@@ -533,6 +523,9 @@ public sealed class ScriptServiceRunInteractionTests
             string definitionActorId,
             string requestedEventType,
             string? scopeId,
+            string? completionNotificationActorId,
+            string? completionNotificationDeliveryId,
+            long completionNotificationExpiresAtUnixMs,
             CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
@@ -545,7 +538,9 @@ public sealed class ScriptServiceRunInteractionTests
                 scriptRevision,
                 definitionActorId,
                 requestedEventType,
-                scopeId));
+                scopeId,
+                completionNotificationDeliveryId,
+                completionNotificationExpiresAtUnixMs));
             if (DispatchException != null)
                 throw DispatchException;
 
@@ -562,7 +557,9 @@ public sealed class ScriptServiceRunInteractionTests
         string ScriptRevision,
         string DefinitionActorId,
         string RequestedEventType,
-        string? ScopeId);
+        string? ScopeId,
+        string? CompletionNotificationDeliveryId,
+        long CompletionNotificationExpiresAtUnixMs);
 
     private sealed class RecordingScriptServiceRunInteraction
         : ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus>

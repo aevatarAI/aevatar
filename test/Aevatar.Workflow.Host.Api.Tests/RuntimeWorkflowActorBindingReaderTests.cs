@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Projection.Orchestration;
 using Aevatar.Workflow.Projection.ReadModels;
@@ -31,6 +32,12 @@ public sealed class ProjectionWorkflowActorBindingReaderTests
     [Fact]
     public async Task GetAsync_ShouldMapRunBinding_FromProjectedDocument()
     {
+        var capabilityAdmissionPlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            "yaml",
+            new Dictionary<string, string> { ["child"] = "yaml-child" },
+            ExternalCapabilityExecutionMode.Interactive,
+            [],
+            []);
         var reader = CreateReader(
             getDocumentAsync: (_, _) => Task.FromResult<WorkflowActorBindingDocument?>(new WorkflowActorBindingDocument
             {
@@ -40,6 +47,8 @@ public sealed class ProjectionWorkflowActorBindingReaderTests
                 RunId = "run-1",
                 WorkflowName = "direct",
                 WorkflowYaml = "yaml",
+                SourceKind = "service_revision",
+                CapabilityAdmissionPlan = capabilityAdmissionPlan,
                 InlineWorkflowYamls = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
                 {
                     ["child"] = "yaml-child",
@@ -56,6 +65,8 @@ public sealed class ProjectionWorkflowActorBindingReaderTests
         result.WorkflowName.Should().Be("direct");
         result.WorkflowYaml.Should().Be("yaml");
         result.InlineWorkflowYamls.Should().ContainKey("child").WhoseValue.Should().Be("yaml-child");
+        result.SourceKind.Should().Be("service_revision");
+        result.CapabilityAdmissionPlan!.AdmissionDigest.Should().Be(capabilityAdmissionPlan.AdmissionDigest);
     }
 
     [Fact]
