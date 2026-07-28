@@ -8,7 +8,7 @@ owner: eanzhao
 
 NyxID connected-service 工具以 `user_service_id` 为实例身份。NyxID 是 catalog service、exact UserService 及其 effective OpenAPI 的唯一权威 owner；Aevatar 在请求期从 NyxID `/keys` live surface 读取调用者可见的实例，并只通过 `GET /api/v1/proxy/services/{user_service_id}/openapi.json` 读取该 exact UserService 的有效契约。Aevatar 不托管 OpenAPI、不保存 service/endpoint 影子目录、不从 slug 猜实例，也不在 prompt 里另建权限目录。
 
-模型看到的最终 tool schema 与实际执行对象来自同一份 `LLMRequest.Tools`。工具调用仍经 NyxID proxy 下发，凭证注入、proxy/broker 审计、approval、node routing 和 delegation 由 NyxID 负责；Aevatar 只记录自己的平台 tool invocation 与 typed receipt 审计。
+模型看到的最终 tool schema 与实际执行对象来自同一份 `LLMRequest.Tools`。工具调用仍经 NyxID proxy 下发；凭证注入、proxy/broker 审计、node routing 和 delegation 由 NyxID 负责。Aevatar 负责本地动态工具审批以及 workflow proof 中明确归 Aevatar 的审批，记录平台 tool invocation 与 typed receipt 审计。
 
 ## 1. 实例发现与身份
 
@@ -55,6 +55,12 @@ flowchart LR
 
 Workflow admission 只读 exact UserService effective contract。无 contract、读取失败、无权访问、文档无效或 contract drift 都 fail closed，并返回 typed blocker/remediation；不存在 Aevatar contract pack、catalog contract fallback、本地 OpenAPI cache 或 runtime/query-time side read。
 
+同一个 `x-aevatar-tool` marker 被三个彼此独立的策略消费，不能把其中一个策略的通过当成另两个策略的授权：
+
+1. **Dynamic exposure**：marker 只决定 operation 是否能进入 request-local LLM tool catalog。缺 marker 默认不暴露，operation-level `false` 覆盖 service-level `true`。
+2. **Workflow definition admission**：作者只提交 `user_service_id + operation_id` selector；live admission 重新读取 exact contract，并由 definition actor 提交 call-site scoped v3 proof。marker 通过只是 admission 条件之一，不是 runtime authorization。
+3. **Runtime authorization**：managed workflow 的 raw `nyxid_proxy` 只接受当前 call site 的 actor-owned proof。普通 non-workflow human session 的 raw proxy surface 不因 workflow policy 获得或失去权限。
+
 注册是 allow-list：没有标记的 operation 不会成为工具。标记可写在文档根、`info` 或单个 operation 上：
 
 ```yaml
@@ -95,11 +101,17 @@ sequenceDiagram
 
 每次 update、route、delete、request 或 operation 执行，都先用发现时绑定的 token 调用 exact `/keys/{user_service_id}`。当前记录必须与冻结记录在 identity、credential/token source、credential-allowed、catalog/slug、endpoint、`node_id`、route constraint 和 proxy spec 上一致，而且仍为 active；否则在副作用前 fail closed。
 
+Managed workflow proof 还携带 typed `risk / approval / enforcement_owner / allowed_execution_modes`。GET/HEAD/OPTIONS 默认是 read-only；POST/PUT/PATCH 是 write；DELETE 或 destructive marker 是 destructive。仓库内从 OpenAPI 派生的 write/destructive operation 必须由 Aevatar 审批，且首版只允许 interactive execution；read-only operation 可允许 interactive 与 durable。任意第三方 OpenAPI marker 不能把 enforcement owner 改为 NyxID。typed policy 进入现有 contract/admission digest，policy drift 必须重新 admission/rebind，不新增第二个 digest。
+
+`NyxIdProxyTool` 是共享 runtime enforcement boundary。`Aevatar:NyxId:ManagedWorkflowAdmissionMode=Enforce` 时，managed workflow 缺 proof 或携带无效 policy 会在 token 解析、exact-service read、file ingress 和 proxy HTTP 前返回 `NYXID_OPERATION_ADMISSION_REQUIRED`；`Shadow` 只记录同一 decision 并继续 legacy path。proof 存在时，method/path/schema 仍完全由 `NyxIdOperationRequestBuilder` 从 proof 构造，调用参数不能覆盖 route facts。
+
 proxy 请求只接受相对路径，拒绝绝对 URL、fragment、query-in-path 和 dot segment。路由只来自冻结并重验后的 catalog ID 或 custom slug；Aevatar 追加 URL 编码后的 `_nyxid_via={user_service_id}`，调用参数不得提供任何 `_nyxid_*` query。header allow-list 仅含 JSON `Accept`/`Content-Type` 与条件头 `If-Match`/`If-None-Match`，禁止调用者注入 authorization、routing 或 hop-by-hop header。非 safe method 由客户端生成 typed idempotency key。
 
 ## 5. 请求期能力边界
 
 完整动态工具集位于独立 tool set `nyxid.connected_services`（`ToolSetNames.NyxIdConnectedServices`）。其中 update、route、delete、request 与 OpenAPI operation 工具默认不并入通用 chat surface，chat route policy 必须显式引用该 tool set 或包含它的组合 tool set。
+
+内建 Studio role 显式声明 `tool_sets: [nyxid.connected_services]`，但不再把 raw `nyxid_proxy` 放进 `allowed_tools`。每个 Studio LLM turn 都在当前 caller token 与 typed tool context 下重新 resolve/discover，并把结果放入该请求自己的 `AgentProfileTurnCatalog`；动态名称只并入本次 turn 的 visibility ceiling。unknown set、discovery failure 或重复名称 collision 对该请求 fail closed，只记录有界 count，不写 actor/global catalog，也不跨 caller 缓存。Workflow authoring 仍使用 structured selector/readiness；内部 `tool_call -> nyxid_proxy` 只是 proof-bound runtime adapter。
 
 只读 `nyxid_service_inventory` 由 `ChannelNyxIdConnectedServiceInventoryToolSource` 显式挂入 channel reply generator。tool discovery 只暴露无参数、list-only 的 request-local 工具，不签发 capability，也不访问 NyxID；因为此时还没有 `/keys` 结果，schema 不得接受未枚举的 `user_service_id`。只有模型实际执行工具时，source 才组合底层 `NyxIdConnectedServiceInventoryToolSource`：存在已验证的 sender runtime token 时复用；否则根据 typed `ExternalSubjectRef + bindingId` 通过 `INyxIdConnectedServiceInventoryCapabilityIssuer` 当场签发 inventory capability，再以 current sender 身份读取 `GET /api/v1/keys`。inventory capability 只证明绑定账号可以读取自己的 connected-service inventory，不证明该 binding 已覆盖 Aevatar LLM route、Ornn、Sandbox 等全部 runtime resources；后者仍由严格 `INyxIdCapabilityBroker` 独立校验。不得用 bot owner token 代替 sender inventory authority，也不得缓存 bearer 或用户事实。
 
@@ -119,6 +131,7 @@ Voice realtime attach 也遵循同一边界。带 `voice-tool:` credential ref �
 - Aevatar 不新增 NyxID endpoint，不绕过 proxy 直连下游，不引入第二条投影或 read model。
 - 外部 JSON 只在 NyxID adapter 边界解析；内部实例、请求与结果语义使用 Protobuf。
 - 平台审计只由 canonical `ToolExecutionAuditMiddleware` 消费 typed execution context、credential source 和 receipt；默认不记录完整 arguments、result 或 `receipt.result_json`。
+- admission decision counter 是 `aevatar.nyxid.proxy.admission.decisions`（Meter `Aevatar.AI.ToolProviders.NyxId`）。唯一 tags 为 `aevatar.nyxid.admission.mode`、`managed`、`proof_present`、`invocation_surface`、`risk`、`would_approve`、`would_block`；值域分别是有界 enum/bool，不得追加 token、body、header、path、user/service ID 或用户内容。
 - prompt-prefetch、API hint、slug-bound proxy 和独立 connected-service spec cache 已从主链删除；prompt 不能替代最终 tool schema 做能力判断。
 
 ## 7. `QuotaLedger` profile
