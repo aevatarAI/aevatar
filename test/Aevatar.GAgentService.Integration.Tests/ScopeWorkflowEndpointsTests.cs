@@ -336,7 +336,7 @@ public sealed class ScopeWorkflowEndpointsTests
                         Delta = "hello",
                     },
                 }, ct);
-                return CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                return WorkflowChatRunInteractionResult
                     .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
             },
         };
@@ -429,7 +429,7 @@ public sealed class ScopeWorkflowEndpointsTests
                         }),
                     },
                 }, ct);
-                return CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                return WorkflowChatRunInteractionResult
                     .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
             },
         };
@@ -609,7 +609,7 @@ public sealed class ScopeWorkflowEndpointsTests
                 if (onAcceptedAsync != null)
                     await onAcceptedAsync(receipt, ct);
 
-                return CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                return WorkflowChatRunInteractionResult
                     .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
             },
         };
@@ -718,7 +718,7 @@ public sealed class ScopeWorkflowEndpointsTests
                 if (onAcceptedAsync != null)
                     await onAcceptedAsync(receipt, ct);
                 await emitAsync(BuildRawObservedWorkflowExecutionStartedFrame(), ct);
-                return CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                return WorkflowChatRunInteractionResult
                     .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
             },
         };
@@ -751,6 +751,55 @@ public sealed class ScopeWorkflowEndpointsTests
     }
 
     [Fact]
+    public async Task HandleRunWorkflowByIdStreamAsync_ShouldPreserveMappedMessage_WhenAguiFailsBeforeStart()
+    {
+        var snapshot = new ServiceCatalogSnapshot(
+            "tenant-a:workflow-app:user:token:approval",
+            "tenant-a",
+            "workflow-app",
+            "user:user-1-token",
+            "approval",
+            "Approval",
+            "rev-1",
+            "rev-1",
+            "dep-1",
+            "definition-actor-1",
+            "active",
+            [],
+            [],
+            DateTimeOffset.UtcNow);
+        var queryPort = new FakeServiceLifecycleQueryPort
+        {
+            ListServicesResult = [snapshot],
+        };
+        queryPort.GetServiceResults.Enqueue(snapshot);
+        var interactionService = new FakeCommandInteractionService
+        {
+            ResultFactory = (_, _, _, _) => Task.FromResult(
+                WorkflowChatRunInteractionResult
+                    .Failure(WorkflowChatRunStartError.WorkflowNotFound)),
+        };
+        var http = CreateHttpContext();
+
+        await ScopeWorkflowEndpoints.HandleRunWorkflowByIdStreamAsync(
+            http,
+            "user-1",
+            "approval",
+            new ScopeWorkflowEndpoints.RunScopeWorkflowByIdStreamHttpRequest(
+                "hello",
+                EventFormat: "agui"),
+            BuildQueryPort(queryPort: queryPort),
+            interactionService,
+            CancellationToken.None);
+
+        var body = await ReadBodyAsync(http.Response);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
+        body.Should().Contain("WORKFLOW_NOT_FOUND");
+        body.Should().Contain("Workflow not found.");
+        body.Should().NotContain("current scope catalog");
+    }
+
+    [Fact]
     public async Task HandleRunWorkflowByIdStreamAsync_ShouldReturnServiceUnavailable_WhenProjectionUnavailableBeforeAguiStarts()
     {
         var snapshot = new ServiceCatalogSnapshot(
@@ -776,7 +825,7 @@ public sealed class ScopeWorkflowEndpointsTests
         var interactionService = new FakeCommandInteractionService
         {
             ResultFactory = (_, _, _, _) => Task.FromResult(
-                CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                WorkflowChatRunInteractionResult
                     .Failure(WorkflowChatRunStartError.ProjectionUnavailable)),
         };
         var http = CreateHttpContext();
@@ -836,7 +885,7 @@ public sealed class ScopeWorkflowEndpointsTests
                         Delta = "hi",
                     },
                 }, ct);
-                return CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                return WorkflowChatRunInteractionResult
                     .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
             },
         };
@@ -1075,12 +1124,12 @@ public sealed class ScopeWorkflowEndpointsTests
     {
         public WorkflowChatRunRequest? LastRequest { get; private set; }
 
-        public Func<WorkflowChatRunRequest, Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask>, Func<WorkflowChatInteractionAcceptedReceipt, CancellationToken, ValueTask>?, CancellationToken, Task<CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>>> ResultFactory { get; set; } =
+        public Func<WorkflowChatRunRequest, Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask>, Func<WorkflowChatInteractionAcceptedReceipt, CancellationToken, ValueTask>?, CancellationToken, Task<WorkflowChatRunInteractionResult>> ResultFactory { get; set; } =
             (_, _, _, _) => Task.FromResult(
-                CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                WorkflowChatRunInteractionResult
                     .Failure(WorkflowChatRunStartError.AgentNotFound));
 
-        public Task<CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>> ExecuteAsync(
+        public Task<WorkflowChatRunInteractionResult> ExecuteAsync(
             WorkflowChatRunRequest request,
             Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask> emitAsync,
             Func<WorkflowChatInteractionAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,

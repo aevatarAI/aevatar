@@ -65,6 +65,40 @@ public sealed class WorkflowChatRunInteractionServiceTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_ShouldPreserveActorResolutionFailureDetail()
+    {
+        var failureDetail = WorkflowChatRunStartFailureDetail.Create(
+            WorkflowChatRunStartError.InvalidWorkflowYaml,
+            "Workflow step 'call' external capability is invalid.");
+        var actorResolver = new RecordingActorResolver
+        {
+            Results =
+            {
+                new WorkflowActorResolutionResult(
+                    null,
+                    string.Empty,
+                    WorkflowChatRunStartError.InvalidWorkflowYaml,
+                    failureDetail),
+            },
+        };
+        var inner = new RecordingInteractionService();
+        var service = CreateService(
+            actorResolver,
+            new RecordingProjectionPort(),
+            new RecordingRunProvisioningPort(),
+            inner);
+
+        var result = await service.ExecuteAsync(
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.InlineYamlBundle(["bad"])),
+            static (_, _) => ValueTask.CompletedTask);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(WorkflowChatRunStartError.InvalidWorkflowYaml);
+        result.FailureDetail.Should().BeSameAs(failureDetail);
+        inner.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ExecuteAsync_ShouldResolveActivateAndInvokeInnerWithSeedsAndTargetSeed()
     {
         var actorResolver = new RecordingActorResolver

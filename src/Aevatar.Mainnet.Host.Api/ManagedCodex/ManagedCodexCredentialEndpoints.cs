@@ -37,15 +37,25 @@ internal static class ManagedCodexCredentialEndpoints
         if (!TryResolveSubject(http, out var userId))
             return Results.Unauthorized();
 
-        var eligible = options.Value.IsEligible(userId);
-        var snapshot = await queryPort.ResolveAsync(Owner(userId), ct).ConfigureAwait(false);
+        var managedOptions = options.Value;
+        var eligible = managedOptions.IsEligible(userId);
+        var owner = Owner(userId);
+        var now = timeProvider.GetUtcNow();
+        var snapshot = await queryPort.ResolveAsync(owner, ct).ConfigureAwait(false);
+        var readiness = ManagedCodexCredentialReadiness.Assess(
+            managedOptions,
+            owner,
+            snapshot,
+            now);
         if (snapshot?.Credential is null)
         {
             return Results.Ok(new
             {
-                enabled = options.Value.Enabled,
+                enabled = managedOptions.Enabled,
                 eligible,
                 status = "not_provisioned",
+                execution_ready = readiness.ExecutionReady,
+                execution_readiness_reason = readiness.Reason,
                 state_version = 0L,
                 cleanup_pending = 0,
             });
@@ -54,9 +64,11 @@ internal static class ManagedCodexCredentialEndpoints
         var credential = snapshot.Credential;
         return Results.Ok(new
         {
-            enabled = options.Value.Enabled,
+            enabled = managedOptions.Enabled,
             eligible,
-            status = EffectiveStatus(credential, timeProvider.GetUtcNow()),
+            status = EffectiveStatus(credential, now),
+            execution_ready = readiness.ExecutionReady,
+            execution_readiness_reason = readiness.Reason,
             expires_at_unix_ms = credential.ExpiresAt?.ToDateTimeOffset().ToUnixTimeMilliseconds(),
             state_version = snapshot.StateVersion,
             cleanup_pending = snapshot.PendingRevocations.Count,

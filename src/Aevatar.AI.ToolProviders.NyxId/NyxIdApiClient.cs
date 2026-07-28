@@ -154,6 +154,10 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
         // New: DI registers this as an AddHttpClient<T> typed client; only manual construction owns this fallback.
         _http = httpClient ?? new HttpClient();
         _ownsHttpClient = httpClient is null;
+        // Only a self-created client may be configured here: mutating Timeout on a caller-supplied
+        // HttpClient throws once it has started a request, and its owner sets its own policy.
+        if (_ownsHttpClient)
+            _http.Timeout = _options.EffectiveMaxRequestDuration;
         _logger = logger ?? NullLogger<NyxIdApiClient>.Instance;
     }
 

@@ -774,7 +774,7 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
         }
     }
 
-    private sealed class FakeWorkflowRunActorPort : IWorkflowRunProvisioningPort, IWorkflowDefinitionParser
+    private sealed class FakeWorkflowRunActorPort : IWorkflowRunProvisioningPort
     {
         public Exception? DestroyException { get; set; }
         public List<string> DestroyCalls { get; } = [];
@@ -805,8 +805,6 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
             CancellationToken ct = default) =>
             Task.CompletedTask;
 
-        public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(string workflowYaml, CancellationToken ct = default) =>
-            throw new NotSupportedException();
     }
 
     private sealed class FakeProjectionLease(string actorId, string commandId) : IWorkflowExecutionProjectionLease

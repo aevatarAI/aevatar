@@ -1118,6 +1118,26 @@ public sealed class ServiceImplementationAdaptersTests
             ParseCalls.Add(workflowYaml);
             return Task.FromResult(ParseResult);
         }
+
+        public async Task<WorkflowInlineYamlBundleParseResult> ParseInlineWorkflowBundleAsync(
+            IReadOnlyList<WorkflowChatInlineYamlDocument> inlineWorkflowDocuments,
+            CancellationToken ct = default)
+        {
+            if (inlineWorkflowDocuments.Count == 0)
+                return WorkflowInlineYamlBundleParseResult.Invalid("workflowYamls is required.");
+
+            var entryYaml = inlineWorkflowDocuments[0].Yaml;
+            var parseResult = await ParseWorkflowYamlAsync(entryYaml, ct);
+            return parseResult.Succeeded
+                ? WorkflowInlineYamlBundleParseResult.Success(
+                    parseResult.WorkflowName,
+                    entryYaml,
+                    new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        [parseResult.WorkflowName] = entryYaml,
+                    })
+                : WorkflowInlineYamlBundleParseResult.Invalid(parseResult.Error, parseResult.ExternalCapabilityReadiness);
+        }
     }
 
     private sealed class RecordingActor : IActor

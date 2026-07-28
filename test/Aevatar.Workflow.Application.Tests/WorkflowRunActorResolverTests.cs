@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Aevatar.Workflow.Application.Runs;
@@ -336,7 +337,11 @@ public sealed class WorkflowRunActorResolverTests
     public async Task ResolveOrCreateAsync_ShouldReturnInvalidWorkflowYaml_WhenInlineYamlBundleIsInvalid()
     {
         var actorPort = new RecordingWorkflowRunActorPort();
-        actorPort.ParseResults["bad"] = WorkflowYamlParseResult.Invalid("bad yaml");
+        var readiness = new ExternalCapabilityReadiness
+        {
+            Status = ExternalCapabilityReadinessStatus.AdmissionRebindRequired,
+        };
+        actorPort.ParseResults["bad"] = WorkflowYamlParseResult.Invalid("bad yaml", readiness);
         var resolver = new WorkflowRunActorResolver(new StaticWorkflowActorBindingReader(null), actorPort, actorPort, new InMemoryWorkflowDefinitionCatalog());
 
         var result = await resolver.ResolveOrCreateAsync(
@@ -344,6 +349,10 @@ public sealed class WorkflowRunActorResolverTests
             CancellationToken.None);
 
         result.Error.Should().Be(WorkflowChatRunStartError.InvalidWorkflowYaml);
+        result.FailureDetail.Should().NotBeNull();
+        result.FailureDetail!.Message.Should().Be("bad yaml");
+        result.FailureDetail.ExternalCapabilityReadiness.Should().NotBeSameAs(readiness);
+        result.FailureDetail.ExternalCapabilityReadiness!.Status.Should().Be(ExternalCapabilityReadinessStatus.AdmissionRebindRequired);
         actorPort.CreateRunBindings.Should().BeEmpty();
     }
 
@@ -787,6 +796,44 @@ public sealed class WorkflowRunActorResolverTests
                 ParseResults.TryGetValue(workflowYaml, out var result)
                     ? result
                     : WorkflowYamlParseResult.Invalid($"Unexpected workflow YAML: {workflowYaml}"));
+        }
+
+        public async Task<WorkflowInlineYamlBundleParseResult> ParseInlineWorkflowBundleAsync(
+            IReadOnlyList<WorkflowChatInlineYamlDocument> inlineWorkflowDocuments,
+            CancellationToken ct = default)
+        {
+            if (inlineWorkflowDocuments.Count == 0)
+                return WorkflowInlineYamlBundleParseResult.Invalid("workflowYamls is required.");
+
+            var workflowYamlsByName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            string entryWorkflowName = string.Empty;
+            string entryWorkflowYaml = string.Empty;
+            for (var i = 0; i < inlineWorkflowDocuments.Count; i++)
+            {
+                var document = inlineWorkflowDocuments[i];
+                var parseResult = await ParseWorkflowYamlAsync(document.Yaml, ct);
+                if (!parseResult.Succeeded)
+                    return WorkflowInlineYamlBundleParseResult.Invalid(parseResult.Error, parseResult.ExternalCapabilityReadiness);
+
+                var documentName = document.Name.Trim();
+                if (!string.IsNullOrWhiteSpace(documentName) &&
+                    !string.Equals(documentName, parseResult.WorkflowName, StringComparison.OrdinalIgnoreCase))
+                {
+                    return WorkflowInlineYamlBundleParseResult.Invalid(
+                        $"workflowYamls[{i}] document name '{documentName}' does not match workflow name '{parseResult.WorkflowName}'.");
+                }
+
+                if (!workflowYamlsByName.TryAdd(parseResult.WorkflowName, document.Yaml))
+                    return WorkflowInlineYamlBundleParseResult.Invalid($"Duplicate workflow name '{parseResult.WorkflowName}' in workflowYamls.");
+
+                if (i == 0)
+                {
+                    entryWorkflowName = parseResult.WorkflowName;
+                    entryWorkflowYaml = document.Yaml;
+                }
+            }
+
+            return WorkflowInlineYamlBundleParseResult.Success(entryWorkflowName, entryWorkflowYaml, workflowYamlsByName);
         }
     }
 

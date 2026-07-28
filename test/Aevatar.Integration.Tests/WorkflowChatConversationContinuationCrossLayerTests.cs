@@ -301,7 +301,7 @@ public sealed class WorkflowChatConversationContinuationCrossLayerTests : Workfl
         };
 
     private sealed record ContinuationExecution(
-        CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus> Result,
+        WorkflowChatRunInteractionResult Result,
         WorkflowChatRunRequest? DispatchedRequest);
 
     private sealed class DocumentStoreWriteDispatcher(

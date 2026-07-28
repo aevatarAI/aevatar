@@ -259,6 +259,7 @@ public abstract class ScopeServiceEndpointTestKit
             FakeMemberPublishedServiceResolver memberPublishedServiceResolver,
             FakeTeamEntryMemberResolver teamEntryMemberResolver,
             FakeCommandInteractionService interactionService,
+            FakeWorkflowDefinitionParser workflowDefinitionParser,
             FakeStaticGAgentStreamInvocationPort staticGAgentStreamInvocationPort,
             FakeWorkflowExecutionQueryApplicationService workflowQueryService,
             FakeWorkflowRunBindingReader runBindingReader,
@@ -287,6 +288,7 @@ public abstract class ScopeServiceEndpointTestKit
             MemberPublishedServiceResolver = memberPublishedServiceResolver;
             TeamEntryMemberResolver = teamEntryMemberResolver;
             InteractionService = interactionService;
+            WorkflowDefinitionParser = workflowDefinitionParser;
             StaticGAgentStreamInvocationPort = staticGAgentStreamInvocationPort;
             WorkflowQueryService = workflowQueryService;
             RunBindingReader = runBindingReader;
@@ -338,6 +340,8 @@ public abstract class ScopeServiceEndpointTestKit
 
         public FakeCommandInteractionService InteractionService { get; }
 
+        public FakeWorkflowDefinitionParser WorkflowDefinitionParser { get; }
+
         public FakeStaticGAgentStreamInvocationPort StaticGAgentStreamInvocationPort { get; }
 
         public FakeWorkflowExecutionQueryApplicationService WorkflowQueryService { get; }
@@ -384,7 +388,8 @@ public abstract class ScopeServiceEndpointTestKit
             var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
             var memberPublishedServiceResolver = new FakeMemberPublishedServiceResolver();
             var teamEntryMemberResolver = new FakeTeamEntryMemberResolver();
-            var interactionService = new FakeCommandInteractionService();
+            var workflowDefinitionParser = new FakeWorkflowDefinitionParser();
+            var interactionService = new FakeCommandInteractionService(workflowDefinitionParser);
             var gagentDraftRunInteractionService = new FakeGAgentDraftRunInteractionService();
             var scriptServiceRunInteractionService = new FakeScriptServiceRunInteractionService();
             var staticGAgentStreamInvocationPort = new FakeStaticGAgentStreamInvocationPort(
@@ -429,6 +434,7 @@ public abstract class ScopeServiceEndpointTestKit
             builder.Services.AddSingleton<ServiceInvocationResolutionService>();
             builder.Services.AddSingleton<ServiceInvokeReadinessErrorMapper>();
             builder.Services.AddSingleton<IInvokeAdmissionAuthorizer, AllowAllInvokeAdmissionAuthorizer>();
+            builder.Services.AddSingleton<IWorkflowDefinitionParser>(workflowDefinitionParser);
             builder.Services.AddSingleton<IWorkflowChatRunInteractionPort>(interactionService);
             builder.Services.AddSingleton<IGAgentDraftRunInteractionPort>(gagentDraftRunInteractionService);
             builder.Services.AddSingleton<ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus>>(scriptServiceRunInteractionService);
@@ -559,6 +565,7 @@ public abstract class ScopeServiceEndpointTestKit
                 memberPublishedServiceResolver,
                 teamEntryMemberResolver,
                 interactionService,
+                workflowDefinitionParser,
                 staticGAgentStreamInvocationPort,
                 workflowQueryService,
                 runBindingReader,
@@ -1359,16 +1366,80 @@ public abstract class ScopeServiceEndpointTestKit
             Task.FromResult(new WorkflowRunGraphExportSubgraph());
     }
 
+    protected sealed class FakeWorkflowDefinitionParser : IWorkflowDefinitionParser
+    {
+        public Dictionary<string, WorkflowYamlParseResult> ParseResults { get; } = new(StringComparer.Ordinal);
+
+        public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(
+            string workflowYaml,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (ParseResults.TryGetValue(workflowYaml, out var result))
+                return Task.FromResult(result);
+
+            var workflowName = ResolveWorkflowName(workflowYaml);
+            return Task.FromResult(WorkflowYamlParseResult.Success(
+                string.IsNullOrWhiteSpace(workflowName) ? "main" : workflowName));
+        }
+
+        public async Task<WorkflowInlineYamlBundleParseResult> ParseInlineWorkflowBundleAsync(
+            IReadOnlyList<WorkflowChatInlineYamlDocument> inlineWorkflowDocuments,
+            CancellationToken ct = default)
+        {
+            if (inlineWorkflowDocuments.Count == 0)
+                return WorkflowInlineYamlBundleParseResult.Invalid("workflowYamls is required.");
+
+            var workflowByName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            string entryWorkflowName = string.Empty;
+            string entryWorkflowYaml = string.Empty;
+            for (var i = 0; i < inlineWorkflowDocuments.Count; i++)
+            {
+                var document = inlineWorkflowDocuments[i];
+                if (string.IsNullOrWhiteSpace(document.Yaml))
+                    return WorkflowInlineYamlBundleParseResult.Invalid($"workflowYamls[{i}] is required.");
+
+                var parseResult = await ParseWorkflowYamlAsync(document.Yaml, ct);
+                if (!parseResult.Succeeded)
+                    return WorkflowInlineYamlBundleParseResult.Invalid(parseResult.Error, parseResult.ExternalCapabilityReadiness);
+
+                var workflowName = parseResult.WorkflowName.Trim();
+                if (!workflowByName.TryAdd(workflowName, document.Yaml))
+                    return WorkflowInlineYamlBundleParseResult.Invalid($"Duplicate workflow name '{workflowName}' in workflowYamls.");
+
+                if (i == 0)
+                {
+                    entryWorkflowName = workflowName;
+                    entryWorkflowYaml = document.Yaml;
+                }
+            }
+
+            return WorkflowInlineYamlBundleParseResult.Success(entryWorkflowName, entryWorkflowYaml, workflowByName);
+        }
+
+        private static string ResolveWorkflowName(string workflowYaml) =>
+            workflowYaml
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .FirstOrDefault(static line => line.StartsWith("name:", StringComparison.OrdinalIgnoreCase))
+                ?.Split(':', 2)[1]
+                .Trim() ?? string.Empty;
+    }
+
     protected sealed class FakeCommandInteractionService : IWorkflowChatRunInteractionPort
     {
+        private readonly FakeWorkflowDefinitionParser _workflowDefinitionParser;
+
+        public FakeCommandInteractionService(FakeWorkflowDefinitionParser workflowDefinitionParser)
+        {
+            _workflowDefinitionParser = workflowDefinitionParser;
+            ResultFactory = DefaultResultFactoryAsync;
+        }
+
         public WorkflowChatRunRequest? LastRequest { get; private set; }
 
-        public Func<WorkflowChatRunRequest, Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask>, Func<WorkflowChatInteractionAcceptedReceipt, CancellationToken, ValueTask>?, CancellationToken, Task<CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>>> ResultFactory { get; set; } =
-            (_, _, _, _) => Task.FromResult(
-                CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
-                    .Failure(WorkflowChatRunStartError.AgentNotFound));
+        public Func<WorkflowChatRunRequest, Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask>, Func<WorkflowChatInteractionAcceptedReceipt, CancellationToken, ValueTask>?, CancellationToken, Task<WorkflowChatRunInteractionResult>> ResultFactory { get; set; }
 
-        public Task<CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>> ExecuteAsync(
+        public Task<WorkflowChatRunInteractionResult> ExecuteAsync(
             WorkflowChatRunRequest request,
             Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask> emitAsync,
             Func<WorkflowChatInteractionAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,
@@ -1376,6 +1447,32 @@ public abstract class ScopeServiceEndpointTestKit
         {
             LastRequest = request;
             return ResultFactory(request, emitAsync, onAcceptedAsync, ct);
+        }
+
+        private async Task<WorkflowChatRunInteractionResult> DefaultResultFactoryAsync(
+            WorkflowChatRunRequest request,
+            Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask> emitAsync,
+            Func<WorkflowChatInteractionAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync,
+            CancellationToken ct)
+        {
+            _ = emitAsync;
+            _ = onAcceptedAsync;
+            var documents = request.Source.InlineBundle?.YamlDocuments;
+            if (documents is { Count: > 0 })
+            {
+                var parse = await _workflowDefinitionParser.ParseInlineWorkflowBundleAsync(documents, ct);
+                if (!parse.Succeeded)
+                {
+                    return WorkflowChatRunInteractionResult.Failure(
+                        WorkflowChatRunStartError.InvalidWorkflowYaml,
+                        WorkflowChatRunStartFailureDetail.Create(
+                            WorkflowChatRunStartError.InvalidWorkflowYaml,
+                            parse.Error,
+                            parse.ExternalCapabilityReadiness));
+                }
+            }
+
+            return WorkflowChatRunInteractionResult.Failure(WorkflowChatRunStartError.AgentNotFound);
         }
     }
 

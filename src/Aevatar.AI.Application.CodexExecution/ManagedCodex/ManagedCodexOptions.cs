@@ -44,6 +44,13 @@ public sealed class ManagedCodexOptions
     public int MutationLeaseSeconds { get; set; } = 300;
     public int MutationCompletionSeconds { get; set; } = 240;
 
+    /// <summary>
+    /// Complete-lifecycle grace added to chrono-sandbox's execution timeout. It covers sandbox
+    /// teardown and the return path so Aevatar can receive chrono's terminal response instead of
+    /// racing it to a less informative local timeout.
+    /// </summary>
+    public int ExecutionLifecycleGraceSeconds { get; set; } = 120;
+
     public bool IsEligible(string userId)
     {
         var normalized = userId?.Trim();
@@ -88,6 +95,8 @@ public sealed class ManagedCodexOptionsValidator : IValidateOptions<ManagedCodex
             failures.Add("CredentialLifetimeDays must be between 1 and 90.");
         if (options.MaxResponseBytes is < 16_384 or > 1_048_576)
             failures.Add("MaxResponseBytes must be between 16384 and 1048576.");
+        if (options.ExecutionLifecycleGraceSeconds is < 120 or > 180)
+            failures.Add("ExecutionLifecycleGraceSeconds must be between 120 and 180.");
         if (options.MutationCompletionSeconds is < 30 or > 600)
             failures.Add("MutationCompletionSeconds must be between 30 and 600.");
         if (options.MutationLeaseSeconds <

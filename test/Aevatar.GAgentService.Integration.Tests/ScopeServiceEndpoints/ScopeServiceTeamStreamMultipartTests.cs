@@ -85,7 +85,7 @@ public sealed class ScopeServiceTeamStreamMultipartTests : ScopeServiceEndpointT
             var receipt = new WorkflowChatRunAcceptedReceipt("run-actor-team-a", "member-a", "cmd-team-a", "corr-team-a");
             if (onAcceptedAsync != null)
                 await onAcceptedAsync(receipt, ct);
-            return CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+            return WorkflowChatRunInteractionResult
                 .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
         };
         using var request = new HttpRequestMessage(HttpMethod.Post, "/api/scopes/scope-a/teams/team-a/invoke/chat:stream")

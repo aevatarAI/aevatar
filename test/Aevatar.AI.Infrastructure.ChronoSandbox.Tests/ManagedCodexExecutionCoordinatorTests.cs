@@ -6,6 +6,8 @@ using Aevatar.GAgents.Channel.Identity.Abstractions;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Time.Testing;
 using NSubstitute;
 
 namespace Aevatar.AI.Infrastructure.ChronoSandbox.Tests;
@@ -15,8 +17,8 @@ public sealed class ManagedCodexExecutionCoordinatorTests
     private static readonly DateTimeOffset Now =
         DateTimeOffset.Parse("2026-07-25T00:00:00Z");
 
-    private readonly IManagedCodexCredentialLifecycle _lifecycle =
-        Substitute.For<IManagedCodexCredentialLifecycle>();
+    private readonly IManagedCodexCredentialQueryPort _query =
+        Substitute.For<IManagedCodexCredentialQueryPort>();
     private readonly IManagedCodexChronoTransport _transport =
         Substitute.For<IManagedCodexChronoTransport>();
     private readonly ManagedCodexExecutionCoordinator _coordinator;
@@ -24,15 +26,15 @@ public sealed class ManagedCodexExecutionCoordinatorTests
     public ManagedCodexExecutionCoordinatorTests()
     {
         _coordinator = new ManagedCodexExecutionCoordinator(
-            _lifecycle,
+            Options.Create(ManagedOptions()),
+            _query,
             _transport,
+            new FakeTimeProvider(Now),
             NullLogger<ManagedCodexExecutionCoordinator>.Instance);
-        _lifecycle.EnsureReadyAsync(
+        _query.ResolveAsync(
                 Arg.Any<ExternalSubjectRef>(),
-                Arg.Any<string?>(),
-                Arg.Any<ManagedCodexCredentialReadinessMode>(),
                 Arg.Any<CancellationToken>())
-            .Returns(ReadyDescriptor());
+            .Returns(ReadySnapshot());
         _transport.ExecuteAsync(
                 Arg.Any<CodexExecutionRequest>(),
                 Arg.Any<ManagedCodexCredentialDescriptor>(),
@@ -41,7 +43,7 @@ public sealed class ManagedCodexExecutionCoordinatorTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenCredentialIsMissing_EnsuresThenExecutesInSameCall()
+    public async Task ExecuteAsync_WhenCredentialIsReady_QueriesOnceAndExecutesOnce()
     {
         var events = await CollectAsync(_coordinator.ExecuteAsync(Request()));
 
@@ -49,10 +51,8 @@ public sealed class ManagedCodexExecutionCoordinatorTests
             .Should()
             .Equal(CodexExecutionEventKind.Started, CodexExecutionEventKind.Completed);
         events[^1].Result!.Output.Should().Be("CODEX_EXEC_READY");
-        await _lifecycle.Received(1).EnsureReadyAsync(
+        await _query.Received(1).ResolveAsync(
             Owner("user-a"),
-            "caller-token",
-            ManagedCodexCredentialReadinessMode.Normal,
             Arg.Any<CancellationToken>());
         await _transport.Received(1).ExecuteAsync(
             Arg.Is<CodexExecutionRequest>(request => request.Prompt == Request().Prompt),
@@ -61,32 +61,53 @@ public sealed class ManagedCodexExecutionCoordinatorTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenAuthorizationIsDenied_RepairsAndRetriesOnce()
+    public async Task ExecuteAsync_WhenCredentialIsMissing_FailsWithoutChrono()
     {
-        _transport.ExecuteAsync(
-                Arg.Any<CodexExecutionRequest>(),
-                Arg.Any<ManagedCodexCredentialDescriptor>(),
+        _query.ResolveAsync(
+                Arg.Any<ExternalSubjectRef>(),
                 Arg.Any<CancellationToken>())
-            .Returns(
-                _ => throw TransportFailure("managed_proxy_authorization_denied"),
-                _ => new CodexExecutionResult("CODEX_EXEC_READY", 0));
+            .Returns((ManagedCodexCredentialSnapshot?)null);
 
         var events = await CollectAsync(_coordinator.ExecuteAsync(Request()));
 
-        events[^1].Kind.Should().Be(CodexExecutionEventKind.Completed);
-        await _lifecycle.Received(1).EnsureReadyAsync(
+        events[^1].Kind.Should().Be(CodexExecutionEventKind.Failed);
+        events[^1].Failure!.Kind.Should().Be(CodexExecutionFailureKind.ProvisioningFailed);
+        events[^1].Failure!.Code.Should().Be("managed_credential_not_provisioned");
+        await _query.Received(1).ResolveAsync(
             Owner("user-a"),
-            "caller-token",
-            ManagedCodexCredentialReadinessMode.ForceRemoteValidation,
             Arg.Any<CancellationToken>());
-        await _transport.Received(2).ExecuteAsync(
-            Arg.Any<CodexExecutionRequest>(),
-            Arg.Any<ManagedCodexCredentialDescriptor>(),
-            Arg.Any<CancellationToken>());
+        await _transport.DidNotReceiveWithAnyArgs().ExecuteAsync(
+            default!,
+            default!,
+            default);
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenAuthorizationIsDeniedTwice_FailsAfterOneRepair()
+    public async Task ExecuteAsync_WhenCredentialReferenceIsInvalid_FailsWithoutChrono()
+    {
+        var snapshot = ReadySnapshot();
+        snapshot.Credential.SecretReference.OwnerScopeKey =
+            "managed-codex-credential:nyxid::user-b";
+        _query.ResolveAsync(
+                Arg.Any<ExternalSubjectRef>(),
+                Arg.Any<CancellationToken>())
+            .Returns(snapshot);
+
+        var events = await CollectAsync(_coordinator.ExecuteAsync(Request()));
+
+        events[^1].Failure!.Kind.Should().Be(CodexExecutionFailureKind.ProvisioningFailed);
+        events[^1].Failure!.Code.Should().Be("managed_credential_reference_invalid");
+        await _query.Received(1).ResolveAsync(
+            Owner("user-a"),
+            Arg.Any<CancellationToken>());
+        await _transport.DidNotReceiveWithAnyArgs().ExecuteAsync(
+            default!,
+            default!,
+            default);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenAuthorizationIsDenied_DoesNotRepairOrRetryInActorTurn()
     {
         _transport.ExecuteAsync(
                 Arg.Any<CodexExecutionRequest>(),
@@ -99,12 +120,29 @@ public sealed class ManagedCodexExecutionCoordinatorTests
 
         events[^1].Kind.Should().Be(CodexExecutionEventKind.Failed);
         events[^1].Failure!.Code.Should().Be("managed_proxy_authorization_denied");
-        await _lifecycle.Received(1).EnsureReadyAsync(
+        await _query.Received(1).ResolveAsync(
             Owner("user-a"),
-            "caller-token",
-            ManagedCodexCredentialReadinessMode.ForceRemoteValidation,
             Arg.Any<CancellationToken>());
-        await _transport.Received(2).ExecuteAsync(
+        await _transport.Received(1).ExecuteAsync(
+            Arg.Any<CodexExecutionRequest>(),
+            Arg.Any<ManagedCodexCredentialDescriptor>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenCredentialIsUnavailable_DoesNotRepairOrRetryInActorTurn()
+    {
+        _transport.ExecuteAsync(
+                Arg.Any<CodexExecutionRequest>(),
+                Arg.Any<ManagedCodexCredentialDescriptor>(),
+                Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromException<CodexExecutionResult>(
+                TransportFailure("managed_credential_unavailable")));
+
+        var events = await CollectAsync(_coordinator.ExecuteAsync(Request()));
+
+        events[^1].Failure!.Code.Should().Be("managed_credential_unavailable");
+        await _transport.Received(1).ExecuteAsync(
             Arg.Any<CodexExecutionRequest>(),
             Arg.Any<ManagedCodexCredentialDescriptor>(),
             Arg.Any<CancellationToken>());
@@ -114,7 +152,7 @@ public sealed class ManagedCodexExecutionCoordinatorTests
     [InlineData("managed_proxy_timeout", CodexExecutionFailureKind.TimedOut)]
     [InlineData("managed_proxy_unavailable", CodexExecutionFailureKind.CapacityUnavailable)]
     [InlineData("managed_response_invalid", CodexExecutionFailureKind.MalformedOutput)]
-    public async Task ExecuteAsync_WhenFailureIsNotRepairable_DoesNotForceRepair(
+    public async Task ExecuteAsync_WhenTransportFails_EmitsTheOriginalFailure(
         string code,
         CodexExecutionFailureKind kind)
     {
@@ -128,33 +166,46 @@ public sealed class ManagedCodexExecutionCoordinatorTests
         var events = await CollectAsync(_coordinator.ExecuteAsync(Request()));
 
         events[^1].Failure!.Code.Should().Be(code);
-        await _lifecycle.DidNotReceive().EnsureReadyAsync(
-            Arg.Any<ExternalSubjectRef>(),
-            Arg.Any<string?>(),
-            ManagedCodexCredentialReadinessMode.ForceRemoteValidation,
+        events[^1].Failure!.Kind.Should().Be(kind);
+        await _transport.Received(1).ExecuteAsync(
+            Arg.Any<CodexExecutionRequest>(),
+            Arg.Any<ManagedCodexCredentialDescriptor>(),
             Arg.Any<CancellationToken>());
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenFirstUseAuthorizationIsUnavailable_MapsProvisioningFailure()
+    public async Task ExecuteAsync_WhenTargetIsDisabled_FailsBeforeCredentialQuery()
     {
-        _lifecycle.EnsureReadyAsync(
-                Arg.Any<ExternalSubjectRef>(),
-                Arg.Any<string?>(),
-                ManagedCodexCredentialReadinessMode.Normal,
-                Arg.Any<CancellationToken>())
-            .Returns<Task<ManagedCodexCredentialDescriptor>>(_ =>
-                throw new ManagedCodexCredentialLifecycleException(
-                    "managed_user_authorization_unavailable",
-                    "authorization required"));
+        var coordinator = new ManagedCodexExecutionCoordinator(
+            Options.Create(ManagedOptions(enabled: false)),
+            _query,
+            _transport,
+            new FakeTimeProvider(Now),
+            NullLogger<ManagedCodexExecutionCoordinator>.Instance);
 
-        var events = await CollectAsync(
-            _coordinator.ExecuteAsync(Request(bearer: null)));
+        var events = await CollectAsync(coordinator.ExecuteAsync(Request()));
 
-        var failure = events[^1].Failure;
-        failure.Should().NotBeNull();
-        failure!.Kind.Should().Be(CodexExecutionFailureKind.ProvisioningFailed);
-        failure.Code.Should().Be("managed_user_authorization_unavailable");
+        events[^1].Failure!.Kind.Should().Be(CodexExecutionFailureKind.TargetNotConfigured);
+        events[^1].Failure!.Code.Should().Be("managed_target_disabled");
+        await _query.DidNotReceiveWithAnyArgs().ResolveAsync(default!, default);
+        await _transport.DidNotReceiveWithAnyArgs().ExecuteAsync(
+            default!,
+            default!,
+            default);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenOwnerIsIneligible_FailsBeforeCredentialQuery()
+    {
+        var events = await CollectAsync(_coordinator.ExecuteAsync(
+            Request(authority: new CodexExecutionNyxIdAuthority(
+                OwnerScope.NyxIdPlatform,
+                string.Empty,
+                "user-b"))));
+
+        events[^1].Failure!.Kind.Should().Be(CodexExecutionFailureKind.AdmissionDenied);
+        events[^1].Failure!.Code.Should().Be("managed_feature_not_enabled");
+        await _query.DidNotReceiveWithAnyArgs().ResolveAsync(default!, default);
         await _transport.DidNotReceiveWithAnyArgs().ExecuteAsync(
             default!,
             default!,
@@ -185,11 +236,7 @@ public sealed class ManagedCodexExecutionCoordinatorTests
             _coordinator.ExecuteAsync(Request(authority: null)));
 
         events[^1].Failure!.Code.Should().Be("managed_identity_unavailable");
-        await _lifecycle.DidNotReceiveWithAnyArgs().EnsureReadyAsync(
-            default!,
-            default,
-            default,
-            default);
+        await _query.DidNotReceiveWithAnyArgs().ResolveAsync(default!, default);
         await _transport.DidNotReceiveWithAnyArgs().ExecuteAsync(
             default!,
             default!,
@@ -207,11 +254,7 @@ public sealed class ManagedCodexExecutionCoordinatorTests
                     "user-a"))));
 
         events[^1].Failure!.Code.Should().Be("managed_identity_unavailable");
-        await _lifecycle.DidNotReceiveWithAnyArgs().EnsureReadyAsync(
-            default!,
-            default,
-            default,
-            default);
+        await _query.DidNotReceiveWithAnyArgs().ResolveAsync(default!, default);
         await _transport.DidNotReceiveWithAnyArgs().ExecuteAsync(
             default!,
             default!,
@@ -242,6 +285,17 @@ public sealed class ManagedCodexExecutionCoordinatorTests
                 "step-a",
                 "call-a"));
 
+    private static ManagedCodexOptions ManagedOptions(bool enabled = true) => new()
+    {
+        Enabled = enabled,
+        RolloutBoundary = ManagedCodexRolloutBoundary.InternalOnly,
+        Eligibility = new ManagedCodexEligibilityOptions
+        {
+            Mode = ManagedCodexEligibilityMode.Allowlist,
+            AllowedNyxIdUserIds = ["user-a"],
+        },
+    };
+
     private static ExternalSubjectRef Owner(string userId) => new()
     {
         Platform = OwnerScope.NyxIdPlatform,
@@ -249,25 +303,36 @@ public sealed class ManagedCodexExecutionCoordinatorTests
         ExternalUserId = userId,
     };
 
-    private static ManagedCodexCredentialDescriptor ReadyDescriptor() => new()
+    private static ManagedCodexCredentialSnapshot ReadySnapshot() => new()
     {
-        Owner = Owner("user-a"),
-        ApiKeyId = "key-a",
-        SecretReference = new SecretReference
-        {
-            Ref = "sec-a",
-            Purpose = CredentialSecretPurposes.ManagedCodexInvocationAgentKey,
-            OwnerScopeKey = "managed-codex-credential:nyxid::user-a",
-            Fingerprint = "fingerprint-a",
-            Version = 1,
-            ExpiresAtUnixMs = Now.AddDays(30).ToUnixTimeMilliseconds(),
-        },
-        ChronoSandboxUserServiceId = "us-sandbox",
-        ChronoLlmUserServiceId = "us-llm",
-        ChronoSandboxServiceSlug = ManagedCodexOptions.ChronoSandboxServiceSlug,
-        ExpiresAt = Timestamp.FromDateTimeOffset(Now.AddDays(30)),
-        Status = ManagedCodexCredentialStatus.Active,
+        Credential = ReadyDescriptor(),
+        StateVersion = 7,
+        LastEventId = "event-7",
     };
+
+    private static ManagedCodexCredentialDescriptor ReadyDescriptor()
+    {
+        var expiresAt = Now.AddDays(30);
+        return new ManagedCodexCredentialDescriptor
+        {
+            Owner = Owner("user-a"),
+            ApiKeyId = "key-a",
+            SecretReference = new SecretReference
+            {
+                Ref = "sec-a",
+                Purpose = CredentialSecretPurposes.ManagedCodexInvocationAgentKey,
+                OwnerScopeKey = "managed-codex-credential:nyxid::user-a",
+                Fingerprint = "fingerprint-a",
+                Version = 1,
+                ExpiresAtUnixMs = expiresAt.ToUnixTimeMilliseconds(),
+            },
+            ChronoSandboxUserServiceId = "us-sandbox",
+            ChronoLlmUserServiceId = "us-llm",
+            ChronoSandboxServiceSlug = ManagedCodexOptions.ChronoSandboxServiceSlug,
+            ExpiresAt = Timestamp.FromDateTimeOffset(expiresAt),
+            Status = ManagedCodexCredentialStatus.Active,
+        };
+    }
 
     private static ManagedCodexTransportException TransportFailure(
         string code,
