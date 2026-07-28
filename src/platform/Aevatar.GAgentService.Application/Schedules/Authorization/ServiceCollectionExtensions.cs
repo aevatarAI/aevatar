@@ -12,6 +12,9 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton<IScheduledInvocationAuthorizationPlanner, ScheduledInvocationAuthorizationPlanner>();
         services.TryAddSingleton<IScheduledInvocationAuthorizationRevalidator, ScheduledInvocationAuthorizationRevalidator>();
+        services.TryAddSingleton<
+            INyxIdAuthorizationCatalogVisibilityPort,
+            NyxIdAuthorizationCatalogVisibilityService>();
         return services;
     }
 }

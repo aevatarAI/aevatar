@@ -312,7 +312,19 @@ public sealed class AgentToolExecutionContextMapperTests
             new AgentToolRequestIdentity(" request-1 ", " call-1 "),
             new AgentToolCredentials(" access-1 ", " org-1 ", " sender-access-1 "),
             new AgentToolCallerContext(" scope-1 ", " owner-1 ", " response-1 "),
-            new AgentToolChannelContext(" telegram ", " sender-1 ", " registration-1 ", " message-1 ", " platform-message-1 ", " delivery-target-1 ", ChannelWorkflowResultDeliveryCredentialTestData.Create("roundtrip"), " bot-reg-1 "),
+            new AgentToolChannelContext(
+                " telegram ",
+                " sender-1 ",
+                " registration-1 ",
+                " message-1 ",
+                " platform-message-1 ",
+                " delivery-target-1 ",
+                ChannelWorkflowResultDeliveryCredentialTestData.Create("roundtrip"),
+                " bot-reg-1 ",
+                [
+                    new AgentToolChannelIdentityHint(" sender ", " global ", " on_sender_1 "),
+                    new AgentToolChannelIdentityHint(" conversation ", " platform ", " oc_provider_1 "),
+                ]),
             new AgentToolSenderBindingContext(" binding-1 ", " nyx-user-1 ", " ou_tenant_1 "),
             new LLMRequestRoutingContext(" model-1 ", " route-1 ", 7, " memory-1 "),
             new AgentToolConnectedServicesContext("""{"service":"telegram"}"""),
@@ -355,6 +367,13 @@ public sealed class AgentToolExecutionContextMapperTests
         copy.Channel.DeliveryTargetId.Should().Be("delivery-target-1");
         copy.Channel.WorkflowResultDeliveryCredential.Should().Be(ChannelWorkflowResultDeliveryCredentialTestData.Create("roundtrip"));
         copy.Channel.BotRegistrationId.Should().Be("bot-reg-1");
+        copy.Channel.IdentityHints.Should().BeEquivalentTo(
+            new[]
+            {
+                new AgentToolChannelIdentityHint("sender", "global", "on_sender_1"),
+                new AgentToolChannelIdentityHint("conversation", "platform", "oc_provider_1"),
+            },
+            options => options.WithStrictOrdering());
         copy.SenderBinding.BindingId.Should().Be("binding-1");
         copy.SenderBinding.NyxUserId.Should().Be("nyx-user-1");
         copy.SenderBinding.SenderTenant.Should().Be("ou_tenant_1");

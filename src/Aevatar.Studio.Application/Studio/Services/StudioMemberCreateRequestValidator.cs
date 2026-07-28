@@ -30,6 +30,10 @@ internal static class StudioMemberCreateRequestValidator
         ValidateTeamId(request.TeamId);
 
         var implementationKind = ValidateImplementationKind(request.ImplementationKind);
+        if (implementationKind == MemberImplementationKindNames.Workflow && request.TeamId is null)
+        {
+            throw new InvalidOperationException("teamId is required for workflow members.");
+        }
 
         return request with
         {

@@ -99,14 +99,25 @@ public sealed class ChatConversationGAgentAppendTests
     [Fact]
     public async Task AppendChatTurnCommand_ShouldDeduplicateSameTurnPayload()
     {
-        var agent = await CreateAgentAsync();
+        var eventStore = new RecordingEventStore();
+        var agent = await CreateAgentAsync(eventStore: eventStore);
         var command = CreateAppend("turn-1", "hello", "hi", ChatTurnTerminalStatus.Completed);
 
         await agent.HandleEventAsync(Envelope(command));
         await agent.HandleEventAsync(Envelope(command.Clone()));
+        await agent.HandleEventAsync(Envelope(CreateAppend(
+            "turn-2",
+            "continue",
+            "continued",
+            ChatTurnTerminalStatus.Completed)));
 
-        agent.State.Turns.Should().ContainSingle();
+        agent.State.Turns.Should().HaveCount(2);
         agent.State.Turns[0].Sequence.Should().Be(1);
+        agent.State.Turns[1].Sequence.Should().Be(2);
+        agent.State.LastRejectedAppend.Should().BeNull();
+        var persisted = await eventStore.GetEventsAsync(ActorId);
+        persisted.Count(evt => evt.EventData.Is(ChatTurnAppendedEvent.Descriptor)).Should().Be(2);
+        persisted.Should().NotContain(evt => evt.EventData.Is(ChatTurnAppendRejectedEvent.Descriptor));
     }
 
     [Fact]
@@ -198,10 +209,12 @@ public sealed class ChatConversationGAgentAppendTests
         };
 
     private static async Task<ChatConversationGAgent> CreateAgentAsync(
-        IActorDispatchPort? dispatchPort = null)
+        IActorDispatchPort? dispatchPort = null,
+        RecordingEventStore? eventStore = null)
     {
+        eventStore ??= new RecordingEventStore();
         var services = new ServiceCollection()
-            .AddSingleton<IEventStore, RecordingEventStore>()
+            .AddSingleton<IEventStore>(eventStore)
             .AddSingleton(dispatchPort ?? new RecordingActorDispatchPort())
             .AddSingleton<EventSourcingRuntimeOptions>()
             .AddSingleton<IActorRuntimeCallbackScheduler, NoopCallbackScheduler>()

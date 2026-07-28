@@ -5,6 +5,7 @@
 // ─────────────────────────────────────────────────────────────
 
 using System.Diagnostics;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 
@@ -16,6 +17,8 @@ namespace Aevatar.AI.Core.Observability;
 /// </summary>
 public sealed class GenAIObservabilityMiddleware : IAgentRunMiddleware, IToolCallMiddleware, ILLMCallMiddleware
 {
+    private const string SafeToolFailureMessage = "The tool request failed.";
+
     // ─── Agent Run ───
 
     public async Task InvokeAsync(AgentRunContext context, Func<Task> next)
@@ -133,24 +136,28 @@ public sealed class GenAIObservabilityMiddleware : IAgentRunMiddleware, IToolCal
     {
         using var activity = GenAIActivitySource.StartExecuteTool(context.ToolName, context.ToolCallId);
 
-        if (GenAIActivitySource.EnableSensitiveData)
-            activity?.SetTag("gen_ai.tool.arguments", context.ArgumentsJson);
-
         var sw = Stopwatch.StartNew();
         try
         {
             await next();
-            activity?.SetTag("gen_ai.tool.status", context.Terminate ? "terminated" : "ok");
+            var failed = IsFailedToolCall(context);
+            activity?.SetTag("gen_ai.tool.status", context.Terminate ? "terminated" : failed ? "error" : "ok");
+            if (failed)
+                activity?.SetStatus(ActivityStatusCode.Error);
 
-            if (GenAIActivitySource.EnableSensitiveData && context.Result != null)
-                activity?.SetTag("gen_ai.tool.result", context.Result);
+            if (GenAIActivitySource.EnableSensitiveData && !failed)
+            {
+                activity?.SetTag("gen_ai.tool.arguments", context.ArgumentsJson);
+                if (context.Result != null)
+                    activity?.SetTag("gen_ai.tool.result", context.Result);
+            }
         }
         catch (Exception ex)
         {
             activity?.SetTag("gen_ai.tool.status", "error");
-            activity?.SetTag("error.message", ex.Message);
+            activity?.SetTag("error.message", SafeToolFailureMessage);
             activity?.SetTag("error.type", ex.GetType().FullName);
-            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            activity?.SetStatus(ActivityStatusCode.Error, SafeToolFailureMessage);
             throw;
         }
         finally
@@ -160,4 +167,10 @@ public sealed class GenAIObservabilityMiddleware : IAgentRunMiddleware, IToolCal
                 new TagList { { "gen_ai.tool.name", context.ToolName } });
         }
     }
+
+    private static bool IsFailedToolCall(ToolCallContext context) =>
+        context.Receipt?.Status is AgentToolReceiptStatus.Error or
+            AgentToolReceiptStatus.Denied or
+            AgentToolReceiptStatus.AuthorizationRequired ||
+        context.Terminate && context.TerminationKind != ToolCallTerminationKind.ApprovalPending;
 }

@@ -123,6 +123,70 @@ public sealed class ToolCallModuleApprovalTests
     }
 
     [Fact]
+    public async Task ApprovedResume_WhenToolReturnsTypedFailure_ShouldPublishFailedToolAndStepOutcomes()
+    {
+        const string resultJson = """{"error":true,"status":503}""";
+        var pending = new WorkflowToolApprovalPendingOutcome(
+            ApprovalRequestId: "approval-1",
+            ToolName: "danger",
+            ToolCallId: "workflow:run-1:danger_step:exec-1",
+            ArgumentsJson: """{"danger":true}""",
+            ApprovalMode: "AlwaysRequire",
+            IsReadOnly: false,
+            IsDestructive: true);
+        var tool = new ScriptedWorkflowTool(
+            "danger",
+            request => request.ApprovalGrant is null
+                ? new WorkflowToolExecutionResult(string.Empty, PendingApproval: pending)
+                : WorkflowToolExecutionResult.Failed(
+                    resultJson,
+                    "NYXID_PROXY_HTTP_503",
+                    "The service request failed."));
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext();
+
+        await ExecuteToolCallAsync(
+            module,
+            ctx,
+            tool.Name,
+            "danger_step",
+            """{"danger":true}""",
+            "exec-1");
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new WorkflowResumedEvent
+            {
+                RunId = "run-1",
+                StepId = "danger_step",
+                Approved = true,
+                ToolApproval = new WorkflowToolApprovalResume
+                {
+                    ExecutionId = "exec-1",
+                    ToolCallId = "workflow:run-1:danger_step:exec-1",
+                    ApprovalRequestId = "approval-1",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var toolCompleted = ctx.Published.Select(x => x.Event)
+            .OfType<WorkflowToolCallCompletedEvent>()
+            .Single();
+        toolCompleted.Success.Should().BeFalse();
+        toolCompleted.ResultJson.Should().Be(resultJson);
+        toolCompleted.Error.Should().Contain("NYXID_PROXY_HTTP_503");
+
+        var stepCompleted = ctx.Published.Select(x => x.Event)
+            .OfType<StepCompletedEvent>()
+            .Single();
+        stepCompleted.Success.Should().BeFalse();
+        stepCompleted.Output.Should().Be(resultJson);
+        stepCompleted.Error.Should().Contain("The service request failed.");
+        ctx.LoadState<ToolCallModuleState>("tool_call").PendingApprovals.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task RejectedResume_ShouldFailClosedAndClearPendingState()
     {
         var pending = new WorkflowToolApprovalPendingOutcome(

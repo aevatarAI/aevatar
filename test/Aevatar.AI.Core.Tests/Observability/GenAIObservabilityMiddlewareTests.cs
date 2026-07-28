@@ -1,8 +1,10 @@
 using System.Diagnostics;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Observability;
+using Aevatar.AI.Core.Tools;
 using FluentAssertions;
 
 namespace Aevatar.AI.Core.Tests.Observability;
@@ -281,7 +283,7 @@ public class GenAIObservabilityMiddlewareTests : IDisposable
     }
 
     [Fact]
-    public async Task ToolCall_OnError_SetsErrorTag()
+    public async Task ToolCall_OnError_SetsSafeErrorTag()
     {
         _activities.Clear();
 
@@ -301,7 +303,8 @@ public class GenAIObservabilityMiddlewareTests : IDisposable
         var activity = _activities.Where(a =>
             a.GetTagItem("gen_ai.operation.name")?.ToString() == "execute_tool").Last();
         activity.GetTagItem("gen_ai.tool.status").Should().Be("error");
-        activity.GetTagItem("error.message").Should().Be("tool boom");
+        activity.GetTagItem("error.message").Should().Be("The tool request failed.");
+        activity.ToString().Should().NotContain("tool boom");
     }
 
     [Fact]
@@ -328,6 +331,131 @@ public class GenAIObservabilityMiddlewareTests : IDisposable
             a.GetTagItem("gen_ai.operation.name")?.ToString() == "execute_tool").Last();
         activity.GetTagItem("gen_ai.tool.arguments").Should().Be("{\"q\":\"test\"}");
         activity.GetTagItem("gen_ai.tool.result").Should().Be("ok");
+    }
+
+    [Theory]
+    [InlineData(AgentToolReceiptStatus.Error)]
+    [InlineData(AgentToolReceiptStatus.Denied)]
+    [InlineData(AgentToolReceiptStatus.AuthorizationRequired)]
+    public async Task ToolCall_WithSensitiveDataEnabled_ExcludesArgumentsAndResultForFailedReceipt(
+        AgentToolReceiptStatus status)
+    {
+        _activities.Clear();
+        GenAIActivitySource.EnableSensitiveData = true;
+
+        var ctx = new ToolCallContext
+        {
+            Tool = new FakeTool("search"),
+            ToolName = "search",
+            ToolCallId = "call-sensitive-failure",
+            ArgumentsJson = "{\"token\":\"telemetry-secret\"}",
+        };
+
+        await _middleware.InvokeAsync(ctx, () =>
+        {
+            ctx.Result = "raw result with telemetry-secret";
+            ctx.Receipt = new AgentToolReceipt
+            {
+                CallId = ctx.ToolCallId,
+                ToolName = ctx.ToolName,
+                Status = status,
+                ResultJson = "{\"error\":\"safe failure\"}",
+            };
+            return Task.CompletedTask;
+        });
+
+        var activity = _activities.Where(a =>
+            a.GetTagItem("gen_ai.operation.name")?.ToString() == "execute_tool").Last();
+        activity.GetTagItem("gen_ai.tool.status").Should().Be("error");
+        activity.GetTagItem("gen_ai.tool.arguments").Should().BeNull();
+        activity.GetTagItem("gen_ai.tool.result").Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ToolCall_WithSensitiveDataEnabled_ExcludesArgumentsAndExceptionMessageOnError()
+    {
+        _activities.Clear();
+        GenAIActivitySource.EnableSensitiveData = true;
+
+        var ctx = new ToolCallContext
+        {
+            Tool = new FakeTool("search"),
+            ToolName = "search",
+            ToolCallId = "call-sensitive-exception",
+            ArgumentsJson = "{\"token\":\"telemetry-secret\"}",
+        };
+
+        var act = async () => await _middleware.InvokeAsync(ctx, () =>
+            throw new InvalidOperationException("failed with telemetry-secret"));
+
+        await act.Should().ThrowAsync<InvalidOperationException>();
+
+        var activity = _activities.Where(a =>
+            a.GetTagItem("gen_ai.operation.name")?.ToString() == "execute_tool").Last();
+        activity.GetTagItem("gen_ai.tool.status").Should().Be("error");
+        activity.GetTagItem("gen_ai.tool.arguments").Should().BeNull();
+        activity.GetTagItem("error.message").Should().Be("The tool request failed.");
+        activity.ToString().Should().NotContain("telemetry-secret");
+    }
+
+    [Fact]
+    public async Task ToolCall_StreamingExecutorProviderFailure_ExcludesArgumentsAndRawResult()
+    {
+        _activities.Clear();
+        GenAIActivitySource.EnableSensitiveData = true;
+        var tools = new ToolManager();
+        tools.Register(new FailedReceiptTool());
+        var executor = new StreamingToolExecutor(tools, toolMiddlewares: [_middleware]);
+        using var state = executor.CreateExecutionState();
+        executor.AddTool(state, new ToolCall
+        {
+            Id = "call-provider-failure",
+            Name = "failed_receipt",
+            ArgumentsJson = "{\"token\":\"telemetry-secret\"}",
+        });
+
+        var results = new List<ToolExecutionResult>();
+        await foreach (var result in executor.GetRemainingResultsAsync(state, CancellationToken.None))
+            results.Add(result);
+
+        results.Should().ContainSingle(result =>
+            result.IsError && result.Receipt!.Status == AgentToolReceiptStatus.Error);
+        var activity = _activities.Where(a =>
+            a.GetTagItem("gen_ai.operation.name")?.ToString() == "execute_tool").Last();
+        activity.GetTagItem("gen_ai.tool.status").Should().Be("error");
+        activity.GetTagItem("gen_ai.tool.arguments").Should().BeNull();
+        activity.GetTagItem("gen_ai.tool.result").Should().BeNull();
+        activity.ToString().Should().NotContain("telemetry-secret");
+    }
+
+    [Fact]
+    public async Task ToolCall_StreamingExecutorException_ExcludesArguments()
+    {
+        _activities.Clear();
+        GenAIActivitySource.EnableSensitiveData = true;
+        var tools = new ToolManager();
+        tools.Register(new ThrowingTool());
+        var executor = new StreamingToolExecutor(tools, toolMiddlewares: [_middleware]);
+        using var state = executor.CreateExecutionState();
+        executor.AddTool(state, new ToolCall
+        {
+            Id = "call-execution-failure",
+            Name = "throwing",
+            ArgumentsJson = "{\"token\":\"telemetry-secret\"}",
+        });
+
+        var results = new List<ToolExecutionResult>();
+        await foreach (var result in executor.GetRemainingResultsAsync(state, CancellationToken.None))
+            results.Add(result);
+
+        results.Should().ContainSingle(result =>
+            result.IsError && result.Receipt!.Status == AgentToolReceiptStatus.Error);
+        var activity = _activities.Where(a =>
+            a.GetTagItem("gen_ai.operation.name")?.ToString() == "execute_tool").Last();
+        activity.GetTagItem("gen_ai.tool.status").Should().Be("error");
+        activity.GetTagItem("gen_ai.tool.arguments").Should().BeNull();
+        activity.GetTagItem("gen_ai.tool.result").Should().BeNull();
+        activity.ToString().Should().NotContain("telemetry-secret");
     }
 
     [Fact]
@@ -373,6 +501,39 @@ public class GenAIObservabilityMiddlewareTests : IDisposable
         public string ParametersSchema => "{}";
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct) =>
             Task.FromResult("fake");
+    }
+
+    private sealed class FailedReceiptTool : IAgentTool
+    {
+        public string Name => "failed_receipt";
+        public string Description => "returns a failed provider receipt";
+        public string ParametersSchema => "{}";
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct) =>
+            Task.FromResult("raw result with telemetry-secret");
+
+        public AgentToolReceipt? CreateResultReceipt(
+            string callId,
+            string toolName,
+            string argumentsJson,
+            string resultJson) =>
+            new()
+            {
+                CallId = callId,
+                ToolName = toolName,
+                Status = AgentToolReceiptStatus.Error,
+                ResultJson = "{\"error\":\"safe failure\"}",
+            };
+    }
+
+    private sealed class ThrowingTool : IAgentTool
+    {
+        public string Name => "throwing";
+        public string Description => "throws with sensitive input";
+        public string ParametersSchema => "{}";
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct) =>
+            throw new InvalidOperationException($"failed with {argumentsJson}");
     }
 
     private sealed class FakeLLMProvider(string name = "fake") : ILLMProvider

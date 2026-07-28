@@ -81,7 +81,6 @@ public static class UserLlmCatalogNormalization
 public static class NyxIdLlmServiceMapping
 {
     public static UserLlmOption ToOption(NyxIdLlmService service) => new(
-        ServiceId: NormalizeRequired(service.UserServiceId, nameof(service.UserServiceId)),
         ServiceSlug: NormalizeRequired(service.ServiceSlug, nameof(service.ServiceSlug)),
         DisplayName: NormalizeRequired(service.DisplayName, nameof(service.DisplayName)),
         RouteValue: NormalizeRequired(service.RouteValue, nameof(service.RouteValue)),
@@ -94,7 +93,8 @@ public static class NyxIdLlmServiceMapping
         Status: UserLlmCatalogNormalization.NormalizeStatus(service.Status).ToWireValue(),
         Source: UserLlmCatalogNormalization.NormalizeSource(service.Source).ToWireValue(),
         Allowed: service.Allowed,
-        Description: NormalizeOptional(service.Description));
+        Description: NormalizeOptional(service.Description),
+        Identity: service.Identity);
 
     private static string NormalizeRequired(string value, string name)
     {

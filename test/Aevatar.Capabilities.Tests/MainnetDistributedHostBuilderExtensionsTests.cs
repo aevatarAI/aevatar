@@ -41,7 +41,7 @@ public sealed class MainnetDistributedHostBuilderExtensionsTests
             ["ActorRuntime:Provider"] = "Orleans",
         });
 
-        builder.AddAevatarDefaultHost();
+        builder.AddAevatarDefaultHost(options => options.AllowLocalFileSecretsStore = false);
         builder.AddMainnetDistributedOrleansHost();
 
         using var app = builder.Build();
@@ -83,7 +83,7 @@ public sealed class MainnetDistributedHostBuilderExtensionsTests
         using var bare = new EnvironmentVariableScope(
             "Projection__Policies__Environment", "Development");
 
-        builder.AddAevatarDefaultHost();
+        builder.AddAevatarDefaultHost(options => options.AllowLocalFileSecretsStore = false);
         builder.AddMainnetDistributedOrleansHost();
 
         // AEVATAR_ prefixed env vars should win.
@@ -113,7 +113,7 @@ public sealed class MainnetDistributedHostBuilderExtensionsTests
             ["ActorRuntime:Provider"] = "Orleans",
         });
 
-        builder.AddAevatarDefaultHost();
+        builder.AddAevatarDefaultHost(options => options.AllowLocalFileSecretsStore = false);
         builder.AddMainnetDistributedOrleansHost();
 
         using var app = builder.Build();
@@ -145,7 +145,7 @@ public sealed class MainnetDistributedHostBuilderExtensionsTests
             ["ActorRuntime:Provider"] = "Orleans",
         });
 
-        builder.AddAevatarDefaultHost();
+        builder.AddAevatarDefaultHost(options => options.AllowLocalFileSecretsStore = false);
         builder.AddMainnetDistributedOrleansHost();
 
         using var app = builder.Build();

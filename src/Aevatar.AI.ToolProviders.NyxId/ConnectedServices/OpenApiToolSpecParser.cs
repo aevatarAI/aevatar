@@ -20,8 +20,12 @@ public sealed record ConnectedServiceSpecParseResult(
         foreach (var operation in Operations)
         {
             var admitted = operation.Marker is { } marker ? marker.Enabled : serviceEnabled;
-            if (admitted)
+            if (admitted && !operation.Parameters.Any(static parameter =>
+                    parameter.In == ParameterLocation.Header &&
+                    NyxIdProxyHeaderPolicy.IsSensitive(parameter.Name)))
+            {
                 yield return operation;
+            }
         }
     }
 }
@@ -35,7 +39,11 @@ public static class OpenApiToolSpecParser
 {
     private static readonly HashSet<string> HttpMethods = new(StringComparer.OrdinalIgnoreCase)
     {
-        "get", "put", "post", "delete", "patch", "head", "options", "trace",
+        "get", "put", "post", "delete", "patch", "head", "options",
+    };
+    private static readonly HashSet<string> AllowedHeaders = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Accept", "Content-Type", "If-Match", "If-None-Match",
     };
 
     public static ConnectedServiceSpecParseResult Parse(string? specJson)
@@ -83,13 +91,15 @@ public static class OpenApiToolSpecParser
                         continue;
                     }
 
-                    operations.Add(BuildOperation(
+                    var parsed = BuildOperation(
                         pathEntry.Name,
                         methodEntry.Name.ToUpperInvariant(),
                         methodEntry.Value,
                         sharedParameters,
                         inliner,
-                        components));
+                        components);
+                    if (parsed is not null)
+                        operations.Add(parsed);
                 }
             }
 
@@ -101,7 +111,7 @@ public static class OpenApiToolSpecParser
         }
     }
 
-    private static ConnectedServiceToolOperation BuildOperation(
+    private static ConnectedServiceToolOperation? BuildOperation(
         string path,
         string method,
         JsonElement operation,
@@ -122,7 +132,20 @@ public static class OpenApiToolSpecParser
                 : null;
 
         var parameters = MergeParameters(sharedParameters, ParseParameters(operation, inliner, components));
-        var (bodySchema, bodyRequired) = ParseRequestBody(operation, inliner, components);
+        if (parameters.Any(parameter =>
+                parameter.In == ParameterLocation.Header &&
+                parameter.Required &&
+                !AllowedHeaders.Contains(parameter.Name)))
+        {
+            return null;
+        }
+        parameters = parameters
+            .Where(parameter => parameter.In != ParameterLocation.Header || AllowedHeaders.Contains(parameter.Name))
+            .ToArray();
+        var (bodySchema, bodyRequired, bodyMediaType, unsupportedRequiredBody) =
+            ParseRequestBody(operation, inliner, components);
+        if (unsupportedRequiredBody)
+            return null;
 
         return new ConnectedServiceToolOperation(
             operationId,
@@ -132,7 +155,8 @@ public static class OpenApiToolSpecParser
             AevatarToolMarker.FromOwner(operation),
             parameters,
             bodySchema,
-            bodyRequired);
+            bodyRequired,
+            bodyMediaType);
     }
 
     private static IReadOnlyList<ConnectedServiceToolParameter> MergeParameters(
@@ -199,54 +223,48 @@ public static class OpenApiToolSpecParser
         return results;
     }
 
-    private static (System.Text.Json.Nodes.JsonNode? Schema, bool Required) ParseRequestBody(
+    private static (System.Text.Json.Nodes.JsonNode? Schema, bool Required, string? MediaType, bool UnsupportedRequired)
+        ParseRequestBody(
         JsonElement operation,
         OpenApiSchemaInliner inliner,
         JsonElement components)
     {
         if (!operation.TryGetProperty("requestBody", out var requestBody))
-            return (null, false);
+            return (null, false, null, false);
 
         var resolved = ResolveComponentRef(requestBody, components, "requestBodies");
         if (resolved.ValueKind != JsonValueKind.Object)
-            return (null, false);
+            return (null, false, null, true);
 
         var required = resolved.TryGetProperty("required", out var req) && req.ValueKind == JsonValueKind.True;
 
         if (!resolved.TryGetProperty("content", out var content) || content.ValueKind != JsonValueKind.Object)
-            return (null, false);
+            return (null, false, null, required);
 
         if (!TryGetJsonContentSchema(content, out var schemaEl))
-            return (null, required);
+            return (null, required, null, required);
 
-        return (inliner.Inline(schemaEl), required);
+        return (inliner.Inline(schemaEl), required, "application/json", false);
     }
 
     private static bool TryGetJsonContentSchema(JsonElement content, out JsonElement schema)
     {
         schema = default;
-        JsonElement? chosen = null;
         foreach (var media in content.EnumerateObject())
         {
             if (string.Equals(media.Name, "application/json", StringComparison.OrdinalIgnoreCase))
             {
-                chosen = media.Value;
-                break;
+                if (media.Value.ValueKind != JsonValueKind.Object ||
+                    !media.Value.TryGetProperty("schema", out var schemaEl))
+                {
+                    return false;
+                }
+
+                schema = schemaEl;
+                return true;
             }
-
-            if (chosen is null && media.Name.Contains("json", StringComparison.OrdinalIgnoreCase))
-                chosen = media.Value;
         }
-
-        if (chosen is not { } mediaType ||
-            mediaType.ValueKind != JsonValueKind.Object ||
-            !mediaType.TryGetProperty("schema", out var schemaEl))
-        {
-            return false;
-        }
-
-        schema = schemaEl;
-        return true;
+        return false;
     }
 
     private static JsonElement ResolveComponentRef(JsonElement node, JsonElement components, string section)

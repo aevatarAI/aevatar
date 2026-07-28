@@ -43,8 +43,10 @@ if grep -Eiq '(^|_)(OPENAI|NYXID|OPENSANDBOX|OPEN_SANDBOX)(_.*)?=' <<< "${config
     echo "Runner image must not contain provider or control-plane credentials." >&2
     exit 1
 fi
-if ! grep -Fxq 'SSL_CERT_FILE=/opt/opensandbox/mitmproxy-ca-cert.pem' <<< "${configured_environment}"; then
-    echo "Runner image must trust the OpenSandbox Credential Proxy CA path." >&2
+# gVisor variant: no Credential-Proxy MITM, so SSL_CERT_FILE must NOT be set —
+# the runner reaches the gateway directly with the system CA bundle.
+if grep -Eiq '(^|_)SSL_CERT_FILE=' <<< "${configured_environment}"; then
+    echo "gVisor variant must not pin SSL_CERT_FILE (no Credential-Proxy MITM)." >&2
     exit 1
 fi
 
@@ -74,7 +76,7 @@ docker exec "${CONTAINER_ID}" bash -euo pipefail -c '
     test "$(id -g)" = "10001"
     test "${HOME}" = "/home/codex"
     test "${CODEX_HOME}" = "/home/codex/.codex"
-    test "${SSL_CERT_FILE}" = "/opt/opensandbox/mitmproxy-ca-cert.pem"
+    test -z "${SSL_CERT_FILE:-}"
     test "$(stat --format "%u:%g" /home/codex)" = "10001:10001"
     test ! -e "${HOME}/.npm"
     test ! -e "${CODEX_HOME}/auth.json"
@@ -82,8 +84,6 @@ docker exec "${CONTAINER_ID}" bash -euo pipefail -c '
     test "${PWD}" = "/workspace"
     test -w /workspace
     test -w "${CODEX_HOME}"
-    test -w /opt/aevatar-sandbox-probe
-    bwrap --version >/dev/null
     git init --quiet
     git config user.name "Aevatar Codex Runner"
     git config user.email "codex-runner@invalid"
@@ -95,33 +95,17 @@ docker exec "${CONTAINER_ID}" bash -euo pipefail -c '
     codex exec --help >/dev/null
 '
 
-if [[ "${SKIP_CODEX_RUNNER_LANDLOCK_PROBE:-0}" == "1" ]]; then
-    echo "Skipping Landlock probe by explicit request; this image is not isolation-verified." >&2
-else
-    docker exec "${CONTAINER_ID}" rm -f \
-        /opt/aevatar-sandbox-probe/escape \
-        /workspace/.aevatar/inner-sandbox-ready \
-        /workspace/.git/aevatar-landlock-probe
-    docker exec "${CONTAINER_ID}" codex sandbox \
-        --permission-profile aevatar-landlock \
-        -c 'permissions.aevatar-landlock.filesystem={":root"="read",":workspace_roots"={"."="write",".git"="write",".agents"="write",".codex"="write"}}' \
-        -c 'permissions.aevatar-landlock.network.enabled=true' \
-        -c 'use_legacy_landlock=true' \
-        -C /workspace \
-        -- /bin/sh -c '
-            printf ready > /workspace/.aevatar/inner-sandbox-ready
-            printf metadata-write > /workspace/.git/aevatar-landlock-probe
-            if printf escaped > /opt/aevatar-sandbox-probe/escape 2>/dev/null; then
-                exit 91
-            fi
-        '
-    docker exec "${CONTAINER_ID}" bash -euo pipefail -c '
-        test "$(cat /workspace/.aevatar/inner-sandbox-ready)" = ready
-        test "$(cat /workspace/.git/aevatar-landlock-probe)" = metadata-write
-        test ! -e /opt/aevatar-sandbox-probe/escape
-        rm -f /workspace/.aevatar/inner-sandbox-ready /workspace/.git/aevatar-landlock-probe
-    '
-fi
+# gVisor variant: Codex runs no inner sandbox (the gVisor Sentry is the
+# isolation boundary), so there is no local Landlock/Bubblewrap probe to run —
+# isolation is a property of the deployed gVisor runtime, not the image. The
+# in-image check confirms Codex can start with the inner sandbox disabled
+# without falling back to a runc-only backend; end-to-end isolation is verified
+# against the deployed gVisor tenant, not here.
+docker exec "${CONTAINER_ID}" bash -euo pipefail -c '
+    out="$(codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check "noop" 2>&1 || true)"
+    printf "%s\n" "${out}" | grep -Fq "danger-full-access"
+    ! printf "%s\n" "${out}" | grep -Eiq "LandlockRestrict|bwrap|bubblewrap"
+'
 
 docker stop --time 5 "${CONTAINER_ID}" >/dev/null
 docker wait "${CONTAINER_ID}" >/dev/null

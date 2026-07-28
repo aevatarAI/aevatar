@@ -14,6 +14,7 @@ using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http;
@@ -50,6 +51,7 @@ public sealed class ScopeWorkflowEndpointsTests
     public async Task HandleSaveAndBindWorkflowAsync_ShouldReturnAccepted_WithoutRequestRevisionId()
     {
         var http = CreateHttpContext();
+        http.Request.Headers.Authorization = "Bearer transient-caller-token";
         var port = new RecordingScopeWorkflowSaveAndBindPort();
 
         var result = await ScopeWorkflowEndpoints.HandleSaveAndBindWorkflowAsync(
@@ -81,6 +83,9 @@ public sealed class ScopeWorkflowEndpointsTests
         port.Request.AppId.Should().Be("studio");
         port.Request.ServiceId.Should().Be("svc-alpha");
         port.Request.ExposureDesired.Should().BeTrue();
+        port.Request.CapabilityAdmission.Should().NotBeNull();
+        port.Request.CapabilityAdmission!.CallerId.Should().Be("caller-alpha");
+        port.Request.CapabilityAdmission.NyxIdCallerBearerToken.Should().Be("transient-caller-token");
         body.Should().Contain("\"revisionId\":\"rev-generated\"");
         body.Should().Contain("\"acceptanceStage\":\"accepted\"");
         body.Should().Contain("\"propagationStage\":\"readmodel_propagating\"");
@@ -478,6 +483,56 @@ public sealed class ScopeWorkflowEndpointsTests
         scopedControlInput.Should().BeNull();
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task BuildScopedLlmControlInputAsync_WithoutTypedSelection_ShouldIgnoreCompatibilityRoute(
+        bool useUnspecifiedSelection)
+    {
+        const string prefixedModel = "chrono-llm/gpt-5.5";
+        var selection = useUnspecifiedSelection
+            ? new UserLlmSelectionValue(
+                UserLlmSelectionKind.Unspecified,
+                "/api/v1/proxy/s/typed-but-ignored",
+                "us-ignored",
+                "ignored")
+            : null;
+        var http = CreateHttpContext(
+            userConfigQueryPort: new StubUserConfigStore(new UserConfig(
+                DefaultModel: prefixedModel,
+                PreferredLlmRoute: "/api/v1/proxy/s/legacy",
+                LlmSelection: selection)));
+
+        var control = await ScopeWorkflowEndpoints.BuildScopedLlmControlInputAsync(
+            http,
+            CancellationToken.None);
+
+        control.Should().NotBeNull();
+        control!.ModelOverride.Should().Be(prefixedModel);
+        control.NyxIdRoutePreference.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task BuildScopedLlmControlInputAsync_WithTypedGateway_ShouldUseCanonicalGateway()
+    {
+        var http = CreateHttpContext(
+            userConfigQueryPort: new StubUserConfigStore(new UserConfig(
+                DefaultModel: "gpt-5.5",
+                PreferredLlmRoute: "/api/v1/proxy/s/legacy",
+                LlmSelection: new UserLlmSelectionValue(
+                    UserLlmSelectionKind.Gateway,
+                    "/api/v1/proxy/s/typed-but-ignored",
+                    "us-ignored",
+                    "ignored"))));
+
+        var control = await ScopeWorkflowEndpoints.BuildScopedLlmControlInputAsync(
+            http,
+            CancellationToken.None);
+
+        control.Should().NotBeNull();
+        control!.NyxIdRoutePreference.Should().Be(UserConfigLlmRouteDefaults.Gateway);
+    }
+
     [Fact]
     public async Task HandleRunWorkflowByIdStreamAsync_ShouldReturnNotReady_WhenRunnableReadmodelIsMissing()
     {
@@ -560,7 +615,14 @@ public sealed class ScopeWorkflowEndpointsTests
         };
         var http = CreateHttpContext(
             userConfigQueryPort: new StubUserConfigStore(
-                new UserConfig(DefaultModel: string.Empty, PreferredLlmRoute: "/preferred-route")));
+                new UserConfig(
+                    DefaultModel: string.Empty,
+                    PreferredLlmRoute: "/api/v1/proxy/s/legacy",
+                    LlmSelection: new UserLlmSelectionValue(
+                        UserLlmSelectionKind.NyxIdUserService,
+                        " /preferred-route ",
+                        "us-preferred",
+                        "preferred"))));
 
         await ScopeWorkflowEndpoints.HandleRunWorkflowByIdStreamAsync(
             http,
@@ -898,7 +960,8 @@ public sealed class ScopeWorkflowEndpointsTests
                 ServiceAppId = "default",
                 ServiceNamespace = "default",
                 DefinitionActorIdPrefix = "scope-workflow",
-            }));
+            }),
+            new PassthroughWorkflowCapabilityAdmissionService());
     }
 
     private static IScopeWorkflowQueryPort BuildQueryPort(
@@ -932,7 +995,10 @@ public sealed class ScopeWorkflowEndpointsTests
         http.Response.Body = new MemoryStream();
         http.User = new ClaimsPrincipal(
             new ClaimsIdentity(
-                [new Claim("scope_id", scopeId)],
+                [
+                    new Claim("scope_id", scopeId),
+                    new Claim("sub", "caller-alpha"),
+                ],
                 authenticationType: "test"));
         return http;
     }
@@ -1029,14 +1095,14 @@ public sealed class ScopeWorkflowEndpointsTests
     {
         public Task<UserConfig> GetAsync(CancellationToken ct = default) => Task.FromResult(config);
 
-        public Task<UserConfig> GetAsync(string scopeId, CancellationToken ct = default) => GetAsync(ct);
+        public Task<UserConfig> GetAsync(UserConfigResourceKey resource, CancellationToken ct = default) => GetAsync(ct);
     }
 
     private sealed class ThrowingUserConfigStore : IUserConfigQueryPort
     {
         public Task<UserConfig> GetAsync(CancellationToken ct = default) => throw new HttpRequestException("config backend unavailable");
 
-        public Task<UserConfig> GetAsync(string scopeId, CancellationToken ct = default) => GetAsync(ct);
+        public Task<UserConfig> GetAsync(UserConfigResourceKey resource, CancellationToken ct = default) => GetAsync(ct);
     }
 
     private sealed class FakeServiceCommandPort : IServiceCommandPort
@@ -1228,6 +1294,24 @@ public sealed class ScopeWorkflowEndpointsTests
             Commands.Add(command);
             return Task.FromResult(Result);
         }
+    }
+
+    private sealed class PassthroughWorkflowCapabilityAdmissionService : IWorkflowExternalCapabilityAdmissionService
+    {
+        public Task<WorkflowCapabilityAdmissionPlan> AdmitAsync(
+            WorkflowExternalCapabilityAdmissionRequest request,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(WorkflowCapabilityAdmissionPlanIntegrity.Create(
+                request.WorkflowYaml,
+                request.InlineWorkflowYamls,
+                request.ExecutionMode,
+                [],
+                []));
+
+        public Task<WorkflowCapabilityAdmissionPlan> RevalidatePersistedAsync(
+            PersistedWorkflowCapabilityAdmissionRequest request,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(request.Plan.Clone());
     }
 
     private sealed class NoOpServiceGovernanceCommandPort : IServiceGovernanceCommandPort

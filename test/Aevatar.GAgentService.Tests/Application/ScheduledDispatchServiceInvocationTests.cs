@@ -5,6 +5,7 @@ using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Schedules;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Application.Schedules;
 using Aevatar.GAgentService.Hosting.Endpoints.Schedules;
 using Aevatar.GAgentService.Infrastructure.Schedules;
@@ -18,6 +19,10 @@ namespace Aevatar.GAgentService.Tests.Application;
 
 public sealed class ScheduledDispatchServiceInvocationTests
 {
+    private const string OwnerLLMRoute = "/api/v1/proxy/s/chrono-llm-public";
+    private const string OwnerLLMModel = "gpt-5.5";
+    private const string OwnerLLMServiceId = "nyx-llm-service-alpha";
+
     [Fact]
     public async Task PrepareAsync_ShouldBuildServiceInvocationAdapterEnvelope()
     {
@@ -163,6 +168,42 @@ public sealed class ScheduledDispatchServiceInvocationTests
         descriptorChat.ToolContext.Routing.ModelOverride.Should().Be("tool-model");
     }
 
+    [Theory]
+    [InlineData("Connector.Http.Authorization")]
+    [InlineData("CONNECTOR.HTTP.AUTHORIZATION")]
+    public async Task PrepareAsync_ShouldStripCaseVariantConnectorAuthorizationKeys(string authorizationKey)
+    {
+        var service = new ScheduledDispatchTargetPreparationService();
+        var payload = new ChatRequestEvent { Prompt = "hello" };
+        payload.Headers[authorizationKey] = "redacted";
+        payload.Headers["trace"] = "kept";
+        payload.Metadata[authorizationKey] = "redacted";
+        payload.Metadata["annotation"] = "kept";
+        var configuration = new ScheduledDispatchConfiguration(
+            "schedule-case-variant",
+            "Case variant",
+            new ScheduledDispatchTargetDescriptor(
+                ScheduledDispatchTargetKind.ServiceInvocation,
+                ServiceInvocation: new ScheduledServiceInvocationTargetDescriptor(
+                    new ServiceIdentity { ServiceId = "svc" },
+                    "chat",
+                    Any.Pack(payload))),
+            "0 9 * * *",
+            "UTC",
+            true,
+            new Dictionary<string, string>());
+
+        var prepared = await service.PrepareAsync(configuration, "cmd-case-variant", "corr-case-variant");
+
+        var preparedChat = prepared.Descriptor.ServiceInvocation!.Payload.Unpack<ChatRequestEvent>();
+        preparedChat.Headers.Keys.Should().NotContain(key =>
+            string.Equals(key, authorizationKey, StringComparison.OrdinalIgnoreCase));
+        preparedChat.Metadata.Keys.Should().NotContain(key =>
+            string.Equals(key, authorizationKey, StringComparison.OrdinalIgnoreCase));
+        preparedChat.Headers.Should().Contain("trace", "kept");
+        preparedChat.Metadata.Should().Contain("annotation", "kept");
+    }
+
     [Fact]
     public async Task PrepareAsync_ShouldStripToolContextCredentialsWhenLlmControlIsMissing()
     {
@@ -284,20 +325,28 @@ public sealed class ScheduledDispatchServiceInvocationTests
     }
 
     [Fact]
-    public async Task ScheduledServiceInvocationDispatchPort_WithValidAuthorizationFact_ShouldInvokeService()
+    public async Task ScheduledServiceInvocationDispatchPort_WithValidExactOwnerLLMSelection_ShouldInvokeServiceUnchanged()
     {
         var now = new DateTimeOffset(2026, 7, 15, 8, 0, 0, TimeSpan.Zero);
         var invocationPort = new RecordingServiceInvocationPort();
+        var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort();
+        var vault = new RecordingSecretVault("must-not-resolve");
         var port = new ScheduledServiceInvocationDispatchPort(
             invocationPort,
-            new RecordingScheduledServiceInvocationCredentialExchangePort(),
-            secretVault: null,
+            credentialExchange,
+            vault,
             timeProvider: new FixedTimeProvider(now));
 
         await port.DispatchAsync(CreateAuthorizationFactDispatch(now));
 
-        invocationPort.Requests.Should().ContainSingle()
-            .Which.ScheduleId.Should().Be("schedule-authorized");
+        var invoked = invocationPort.Requests.Should().ContainSingle().Which;
+        invoked.ScheduleId.Should().Be("schedule-authorized");
+        var chat = invoked.Payload.Unpack<ChatRequestEvent>();
+        chat.LlmControl.NyxIdRoutePreference.Should().Be(OwnerLLMRoute);
+        chat.LlmControl.ModelOverride.Should().Be(OwnerLLMModel);
+        credentialExchange.Sources.Should().BeEmpty();
+        vault.ResolveRequests.Should().BeEmpty();
+        vault.StoreRequests.Should().BeEmpty();
     }
 
     [Fact]
@@ -327,6 +376,64 @@ public sealed class ScheduledDispatchServiceInvocationTests
         invocationPort.Requests.Should().ContainSingle();
     }
 
+    [Fact]
+    public async Task ScheduledServiceInvocationDispatchPort_WithAgentKeyWithoutAuthorizationFact_ShouldRejectBeforeCredentialAccess()
+    {
+        var invocationPort = new RecordingServiceInvocationPort();
+        var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort("unused");
+        var vault = new RecordingSecretVault("agent-key-token");
+        var expiresAtUnixMs = DateTimeOffset.UtcNow.AddDays(7).ToUnixTimeMilliseconds();
+        var port = new ScheduledServiceInvocationDispatchPort(invocationPort, credentialExchange, vault);
+        var dispatch = new ScheduledServiceInvocationDispatchRequest(
+            new ServiceInvocationRequest
+            {
+                CommandId = "cmd-missing-authorization-fact",
+                CorrelationId = "corr-missing-authorization-fact",
+                Payload = Any.Pack(new ChatRequestEvent { Prompt = "hello" }),
+            },
+            new ScheduledServiceInvocationAuth(new ScheduledInvocationAgentKeyCredentialReference(
+                new SecretReference
+                {
+                    Ref = "sec-agent-key",
+                    Purpose = CredentialSecretPurposes.ScheduledInvocationAgentKey,
+                    OwnerScopeKey = "scope-key",
+                    ExpiresAtUnixMs = expiresAtUnixMs,
+                },
+                "key-schedule",
+                expiresAtUnixMs)));
+
+        var act = () => port.DispatchAsync(dispatch);
+
+        var failure = await act.Should().ThrowAsync<ScheduledServiceInvocationAuthorizationException>();
+        failure.Which.Code.Should()
+            .Be(ScheduledServiceInvocationAuthorizationFailureCode.AuthorizationFactInvalid);
+        invocationPort.Requests.Should().BeEmpty();
+        credentialExchange.Sources.Should().BeEmpty();
+        vault.ResolveRequests.Should().BeEmpty();
+        vault.StoreRequests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ScheduledInvocationAuthorizationFact_ShouldExposeOnlyPerServiceNodeGrants()
+    {
+        typeof(ScheduledInvocationAuthorizationFact).GetProperties()
+            .Should().NotContain(property => property.Name == "NodeGrants");
+        typeof(ScheduledInvocationAuthorizationFact).Assembly
+            .GetType("Aevatar.GAgentService.Abstractions.Schedules.ScheduledInvocationAuthorizationNodeGrant")
+            .Should().BeNull();
+
+        var authorityProperties = typeof(ScheduledInvocationAuthorizationAuthority)
+            .GetProperties()
+            .Select(property => property.Name);
+        authorityProperties.Should().NotContain("CatalogExternalRevision");
+        authorityProperties.Should().Contain([
+            "CatalogContentDigest",
+            "CatalogContractVersion",
+            "CatalogPolicyVersion",
+            "CatalogEvaluatedAt",
+        ]);
+    }
+
     [Theory]
     [MemberData(nameof(InvalidAuthorizationFactCases))]
     public async Task ScheduledServiceInvocationDispatchPort_WithInvalidAuthorizationFact_ShouldRejectBeforeInvocation(
@@ -346,6 +453,62 @@ public sealed class ScheduledDispatchServiceInvocationTests
 
         await act.Should().ThrowAsync<InvalidOperationException>();
         invocationPort.Requests.Should().BeEmpty();
+    }
+
+    [Theory]
+    [MemberData(nameof(InvalidOwnerLLMSelectionCases))]
+    public async Task ScheduledServiceInvocationDispatchPort_WithInvalidRequiredOwnerLLMSelection_ShouldRejectBeforeCredentialAccess(
+        string _,
+        Func<ScheduledServiceInvocationDispatchRequest, ScheduledServiceInvocationDispatchRequest> invalidate)
+    {
+        var now = new DateTimeOffset(2026, 7, 15, 8, 0, 0, TimeSpan.Zero);
+        var invocationPort = new RecordingServiceInvocationPort();
+        var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort();
+        var vault = new RecordingSecretVault("must-not-resolve");
+        var port = new ScheduledServiceInvocationDispatchPort(
+            invocationPort,
+            credentialExchange,
+            vault,
+            timeProvider: new FixedTimeProvider(now));
+        var dispatch = invalidate(CreateAuthorizationFactDispatch(now));
+
+        var act = () => port.DispatchAsync(dispatch);
+
+        var failure = await act.Should().ThrowAsync<ScheduledServiceInvocationAuthorizationException>();
+        failure.Which.Code.Should().Be(ScheduledServiceInvocationAuthorizationFailureCode.OwnerLLMSelectionInvalid);
+        failure.Which.StableCode.Should().Be("owner_llm_selection_invalid");
+        invocationPort.Requests.Should().BeEmpty();
+        credentialExchange.Sources.Should().BeEmpty();
+        vault.ResolveRequests.Should().BeEmpty();
+        vault.StoreRequests.Should().BeEmpty();
+    }
+
+    [Theory]
+    [MemberData(nameof(OwnerLLMPayloadMismatchCases))]
+    public async Task ScheduledServiceInvocationDispatchPort_WithOwnerLLMPayloadFactDrift_ShouldRejectBeforeCredentialAccess(
+        string _,
+        Func<ScheduledServiceInvocationDispatchRequest, ScheduledServiceInvocationDispatchRequest> mutate)
+    {
+        var now = new DateTimeOffset(2026, 7, 15, 8, 0, 0, TimeSpan.Zero);
+        var invocationPort = new RecordingServiceInvocationPort();
+        var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort();
+        var vault = new RecordingSecretVault("must-not-resolve");
+        var port = new ScheduledServiceInvocationDispatchPort(
+            invocationPort,
+            credentialExchange,
+            vault,
+            timeProvider: new FixedTimeProvider(now));
+        var dispatch = mutate(CreateAuthorizationFactDispatch(now));
+
+        var act = () => port.DispatchAsync(dispatch);
+
+        var failure = await act.Should().ThrowAsync<ScheduledServiceInvocationAuthorizationException>();
+        failure.Which.Code.Should().Be(ScheduledServiceInvocationAuthorizationFailureCode.OwnerLLMPayloadMismatch);
+        failure.Which.StableCode.Should().Be("owner_llm_payload_mismatch");
+        invocationPort.Requests.Should().BeEmpty();
+        credentialExchange.Sources.Should().BeEmpty();
+        vault.ResolveRequests.Should().BeEmpty();
+        vault.StoreRequests.Should().BeEmpty();
     }
 
     [Fact]
@@ -421,7 +584,17 @@ public sealed class ScheduledDispatchServiceInvocationTests
         var auth = new ScheduledServiceInvocationAuth(
             ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
                 "proxy",
-                new ScheduledServiceInvocationNyxIdSubjectRef("nyxid", "tenant-1", "owner-1")));
+                new ScheduledServiceInvocationNyxIdSubjectRef("nyxid", "tenant-1", "owner-1")))
+        {
+            CallerAuthority = new ScheduledCallerNyxIdAuthority
+            {
+                Platform = "nyxid",
+                Tenant = "tenant-1",
+                ExternalUserId = "owner-1",
+                Scope = "proxy",
+                BindingId = "bnd-owner-alpha",
+            },
+        };
         var original = new ServiceInvocationRequest
         {
             CommandId = "cmd-invoke",
@@ -441,6 +614,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
         chat.CallerDurableCredential.Ref.Should().BeEmpty();
         chat.CallerDurableCredential.ScheduledCallerNyxIdAuthority.ExternalUserId.Should().Be("owner-1");
         chat.CallerDurableCredential.ScheduledCallerNyxIdAuthority.Scope.Should().Be("proxy");
+        chat.CallerDurableCredential.ScheduledCallerNyxIdAuthority.BindingId.Should().Be("bnd-owner-alpha");
     }
 
     [Fact]
@@ -470,7 +644,17 @@ public sealed class ScheduledDispatchServiceInvocationTests
         };
         var auth = new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationNyxIdCredentialSource(
             new ScheduledServiceInvocationNyxIdSubjectRef("lark", "tenant-1", "ou-user-1"),
-            "proxy"));
+            "proxy"))
+        {
+            CallerAuthority = new ScheduledCallerNyxIdAuthority
+            {
+                Platform = "lark",
+                Tenant = "tenant-1",
+                ExternalUserId = "ou-user-1",
+                Scope = "proxy",
+                BindingId = "bnd-owner-alpha",
+            },
+        };
 
         await port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
             original,
@@ -499,6 +683,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
                 Tenant = "tenant-1",
                 ExternalUserId = "ou-user-1",
                 Scope = "proxy",
+                BindingId = "bnd-owner-alpha",
             });
         invokedChat.Metadata.Should().Contain("trace", "kept");
         invokedChat.Metadata.Should().NotContainKey("connector.http.authorization");
@@ -592,17 +777,28 @@ public sealed class ScheduledDispatchServiceInvocationTests
             ScheduledInvocationAgentKey: new ScheduledInvocationAgentKeyCredentialReference(
                 reference,
                 "key-schedule",
-                expiresAt.ToUnixTimeMilliseconds()));
+                expiresAt.ToUnixTimeMilliseconds()))
+        {
+            CallerAuthority = new ScheduledCallerNyxIdAuthority
+            {
+                Platform = "lark",
+                Tenant = "tenant-alpha",
+                ExternalUserId = "sender-alpha",
+                Scope = "proxy",
+                BindingId = "bnd-owner-alpha",
+            },
+        };
 
         await port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
             new ServiceInvocationRequest
             {
                 CommandId = "cmd-invoke",
                 CorrelationId = "corr-invoke",
-                Payload = Any.Pack(new ChatRequestEvent { Prompt = "hello" }),
+                Payload = Any.Pack(CreateOwnerLLMChatRequest("hello")),
             },
             auth,
-            ProjectNyxIdAccessTokenToWorkflowCallerCredential: true));
+            ProjectNyxIdAccessTokenToWorkflowCallerCredential: true,
+            AuthorizationFact: CreateAuthorizationFactDispatch(expiresAt.AddHours(-1)).AuthorizationFact));
 
         credentialExchange.Sources.Should().BeEmpty();
         vault.ResolveRequests.Should().BeEmpty();
@@ -613,10 +809,85 @@ public sealed class ScheduledDispatchServiceInvocationTests
         invokedChat.CallerDurableCredential.OwnerScopeKey.Should().Be(reference.OwnerScopeKey);
         invokedChat.CallerDurableCredential.SubjectId.Should().Be("key-schedule");
         invokedChat.CallerDurableCredential.SourceKind.Should().Be(DurableCallerCredentialSourceKind.ScheduledDispatch);
+        invokedChat.CallerDurableCredential.ScheduledCallerNyxIdAuthority.Should().BeEquivalentTo(
+            new ScheduledCallerNyxIdAuthority
+            {
+                Platform = "lark",
+                Tenant = "tenant-alpha",
+                ExternalUserId = "sender-alpha",
+                Scope = "proxy",
+                BindingId = "bnd-owner-alpha",
+            });
         invokedChat.LlmControl.NyxIdAccessToken.Should().BeEmpty();
         invokedChat.LlmControl.NyxIdOrgToken.Should().BeEmpty();
         invokedChat.LlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
         invokedChat.ConnectorHttpAuthorization.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ScheduledServiceInvocationDispatchPort_WithWrongPurposeWorkflowAgentKey_ShouldRejectBeforeDispatch()
+    {
+        var now = new DateTimeOffset(2026, 7, 15, 8, 0, 0, TimeSpan.Zero);
+        var invocationPort = new RecordingServiceInvocationPort();
+        var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort("unused");
+        var vault = new RecordingSecretVault("must-not-resolve");
+        var port = new ScheduledServiceInvocationDispatchPort(
+            invocationPort,
+            credentialExchange,
+            vault,
+            timeProvider: new FixedTimeProvider(now));
+        var dispatch = CreateAuthorizationFactDispatch(now);
+        dispatch.Auth!.ScheduledInvocationAgentKey!.SecretReference.Purpose =
+            CredentialSecretPurposes.ScheduledNyxApiKey;
+
+        var act = () => port.DispatchAsync(dispatch);
+
+        var failure = await act.Should().ThrowAsync<ScheduledServiceInvocationAuthorizationException>();
+        failure.WithMessage("Scheduled invocation agent key secret reference purpose is invalid.");
+        failure.Which.Code.Should()
+            .Be(ScheduledServiceInvocationAuthorizationFailureCode.CredentialReferenceInvalid);
+        invocationPort.Requests.Should().BeEmpty();
+        credentialExchange.Sources.Should().BeEmpty();
+        vault.ResolveRequests.Should().BeEmpty();
+        vault.StoreRequests.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("platform")]
+    [InlineData("externalUserId")]
+    [InlineData("scope")]
+    [InlineData("bindingId")]
+    public async Task ScheduledServiceInvocationDispatchPort_WithIncompleteWorkflowAgentKeyCallerAuthority_ShouldRejectBeforeCredentialAccess(
+        string? missingField)
+    {
+        var now = new DateTimeOffset(2026, 7, 15, 8, 0, 0, TimeSpan.Zero);
+        var invocationPort = new RecordingServiceInvocationPort();
+        var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort("unused");
+        var vault = new RecordingSecretVault("must-not-resolve");
+        var port = new ScheduledServiceInvocationDispatchPort(
+            invocationPort,
+            credentialExchange,
+            vault,
+            timeProvider: new FixedTimeProvider(now));
+        var dispatch = CreateAuthorizationFactDispatch(now);
+        dispatch = dispatch with
+        {
+            Auth = dispatch.Auth! with
+            {
+                CallerAuthority = CreateIncompleteCallerAuthority(missingField),
+            },
+        };
+
+        var act = () => port.DispatchAsync(dispatch);
+
+        var failure = await act.Should().ThrowAsync<ScheduledServiceInvocationAuthorizationException>();
+        failure.Which.Code.Should().Be(ScheduledServiceInvocationAuthorizationFailureCode.CallerAuthorityInvalid);
+        failure.Which.StableCode.Should().Be("caller_authority_invalid");
+        invocationPort.Requests.Should().BeEmpty();
+        credentialExchange.Sources.Should().BeEmpty();
+        vault.ResolveRequests.Should().BeEmpty();
+        vault.StoreRequests.Should().BeEmpty();
     }
 
     [Fact]
@@ -627,6 +898,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
         var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort("unused");
         var vault = new RecordingSecretVault("must-not-resolve");
         var port = new ScheduledServiceInvocationDispatchPort(invocationPort, credentialExchange, vault);
+        var expiresAt = DateTimeOffset.UtcNow.AddDays(7);
         var reference = new SecretReference
         {
             Ref = "sec-borrowed-agent-key",
@@ -638,13 +910,17 @@ public sealed class ScheduledDispatchServiceInvocationTests
             new ServiceInvocationRequest
             {
                 CommandId = "cmd-failing-invoke",
-                Payload = Any.Pack(new ChatRequestEvent { Prompt = "hello" }),
+                Payload = Any.Pack(CreateOwnerLLMChatRequest("hello")),
             },
             new ScheduledServiceInvocationAuth(new ScheduledInvocationAgentKeyCredentialReference(
                 reference,
                 "key-borrowed",
-                DateTimeOffset.UtcNow.AddDays(7).ToUnixTimeMilliseconds())),
-            ProjectNyxIdAccessTokenToWorkflowCallerCredential: true));
+                expiresAt.ToUnixTimeMilliseconds()))
+            {
+                CallerAuthority = CreateCallerAuthority(),
+            },
+            ProjectNyxIdAccessTokenToWorkflowCallerCredential: true,
+            AuthorizationFact: CreateAuthorizationFactDispatch(expiresAt.AddHours(-1)).AuthorizationFact));
 
         var thrown = await act.Should().ThrowAsync<InvalidOperationException>();
         thrown.Which.Should().BeSameAs(invocationFailure);
@@ -664,7 +940,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
     [Theory]
     [InlineData("ref", "Scheduled invocation agent key secret reference is missing.",
         ScheduledServiceInvocationAuthorizationFailureCode.CredentialReferenceMissing)]
-    [InlineData("purpose", "Scheduled invocation agent key secret reference purpose is missing.",
+    [InlineData("purpose", "Scheduled invocation agent key secret reference purpose is invalid.",
         ScheduledServiceInvocationAuthorizationFailureCode.CredentialReferenceInvalid)]
     [InlineData("ownerScopeKey", "Scheduled invocation agent key owner scope is missing.",
         ScheduledServiceInvocationAuthorizationFailureCode.CredentialReferenceInvalid)]
@@ -686,17 +962,22 @@ public sealed class ScheduledDispatchServiceInvocationTests
             OwnerScopeKey = missingField == "ownerScopeKey" ? " " : "scope-key",
         };
         var apiKeyId = missingField == "apiKeyId" ? " " : "key-schedule";
+        var expiresAt = DateTimeOffset.UtcNow.AddDays(7);
 
         var act = () => port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
             new ServiceInvocationRequest
             {
-                Payload = Any.Pack(new ChatRequestEvent { Prompt = "hello" }),
+                Payload = Any.Pack(CreateOwnerLLMChatRequest("hello")),
             },
             new ScheduledServiceInvocationAuth(new ScheduledInvocationAgentKeyCredentialReference(
                 reference,
                 apiKeyId,
-                DateTimeOffset.UtcNow.AddDays(7).ToUnixTimeMilliseconds())),
-            ProjectNyxIdAccessTokenToWorkflowCallerCredential: true));
+                expiresAt.ToUnixTimeMilliseconds()))
+            {
+                CallerAuthority = CreateCallerAuthority(),
+            },
+            ProjectNyxIdAccessTokenToWorkflowCallerCredential: true,
+            AuthorizationFact: CreateAuthorizationFactDispatch(expiresAt.AddHours(-1)).AuthorizationFact));
 
         var failure = await act.Should().ThrowAsync<ScheduledServiceInvocationAuthorizationException>();
         failure.WithMessage(expectedMessage);
@@ -731,7 +1012,8 @@ public sealed class ScheduledDispatchServiceInvocationTests
             new ScheduledServiceInvocationAuth(new ScheduledInvocationAgentKeyCredentialReference(
                 stored.Reference,
                 "key-schedule",
-                expiresAt.ToUnixTimeMilliseconds()))));
+                expiresAt.ToUnixTimeMilliseconds())),
+            AuthorizationFact: CreateAuthorizationFactDispatch(expiresAt.AddHours(-1)).AuthorizationFact));
 
         var invokedChat = invocationPort.Requests.Should().ContainSingle().Which.Payload.Unpack<ChatRequestEvent>();
         invokedChat.CallerDurableCredential.Should().BeNull();
@@ -753,11 +1035,12 @@ public sealed class ScheduledDispatchServiceInvocationTests
             "test scheduled invocation",
             DateTimeOffset.UtcNow.AddDays(7)));
         var port = new ScheduledServiceInvocationDispatchPort(invocationPort, credentialExchange, vault);
+        var expiredAt = DateTimeOffset.UtcNow.AddMinutes(-1);
         var auth = new ScheduledServiceInvocationAuth(
             ScheduledInvocationAgentKey: new ScheduledInvocationAgentKeyCredentialReference(
                 stored.Reference,
                 "key-schedule",
-                DateTimeOffset.UtcNow.AddMinutes(-1).ToUnixTimeMilliseconds()));
+                expiredAt.ToUnixTimeMilliseconds()));
 
         var act = () => port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
             new ServiceInvocationRequest
@@ -766,7 +1049,8 @@ public sealed class ScheduledDispatchServiceInvocationTests
                 CorrelationId = "corr-invoke",
                 Payload = Any.Pack(new ChatRequestEvent { Prompt = "hello" }),
             },
-            auth));
+            auth,
+            AuthorizationFact: CreateAuthorizationFactDispatch(DateTimeOffset.UtcNow).AuthorizationFact));
 
         var failure = await act.Should().ThrowAsync<ScheduledServiceInvocationAuthorizationException>();
         failure.WithMessage("Scheduled invocation agent key is expired.");
@@ -781,7 +1065,8 @@ public sealed class ScheduledDispatchServiceInvocationTests
     {
         var invocationPort = new RecordingServiceInvocationPort();
         var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort("unused");
-        var expiresAtUnixMs = DateTimeOffset.UtcNow.AddDays(7).ToUnixTimeMilliseconds();
+        var expiresAt = DateTimeOffset.UtcNow.AddDays(7);
+        var expiresAtUnixMs = expiresAt.ToUnixTimeMilliseconds();
         var port = new ScheduledServiceInvocationDispatchPort(invocationPort, credentialExchange);
         var auth = new ScheduledServiceInvocationAuth(
             ScheduledInvocationAgentKey: new ScheduledInvocationAgentKeyCredentialReference(
@@ -802,7 +1087,8 @@ public sealed class ScheduledDispatchServiceInvocationTests
                 CorrelationId = "corr-invoke",
                 Payload = Any.Pack(new ChatRequestEvent { Prompt = "hello" }),
             },
-            auth));
+            auth,
+            AuthorizationFact: CreateAuthorizationFactDispatch(expiresAt.AddHours(-1)).AuthorizationFact));
 
         var failure = await act.Should().ThrowAsync<ScheduledServiceInvocationAuthorizationException>();
         failure.WithMessage("Scheduled invocation agent key resolver is not configured.");
@@ -818,7 +1104,8 @@ public sealed class ScheduledDispatchServiceInvocationTests
         var invocationPort = new RecordingServiceInvocationPort();
         var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort("unused");
         var vault = new InMemorySecretVault();
-        var expiresAtUnixMs = DateTimeOffset.UtcNow.AddDays(7).ToUnixTimeMilliseconds();
+        var expiresAt = DateTimeOffset.UtcNow.AddDays(7);
+        var expiresAtUnixMs = expiresAt.ToUnixTimeMilliseconds();
         var port = new ScheduledServiceInvocationDispatchPort(invocationPort, credentialExchange, vault);
         var auth = new ScheduledServiceInvocationAuth(
             ScheduledInvocationAgentKey: new ScheduledInvocationAgentKeyCredentialReference(
@@ -839,7 +1126,8 @@ public sealed class ScheduledDispatchServiceInvocationTests
                 CorrelationId = "corr-invoke",
                 Payload = Any.Pack(new ChatRequestEvent { Prompt = "hello" }),
             },
-            auth));
+            auth,
+            AuthorizationFact: CreateAuthorizationFactDispatch(expiresAt.AddHours(-1)).AuthorizationFact));
 
         var failure = await act.Should().ThrowAsync<ScheduledServiceInvocationAuthorizationException>();
         failure.WithMessage("Scheduled invocation agent key could not be resolved.");
@@ -916,7 +1204,17 @@ public sealed class ScheduledDispatchServiceInvocationTests
                 LlmControl = new LLMControlContextPayload { ModelOverride = "opus" },
             }),
         };
-        var auth = new ScheduledServiceInvocationAuth(CreateDurableCredentialReference());
+        var auth = new ScheduledServiceInvocationAuth(CreateDurableCredentialReference())
+        {
+            CallerAuthority = new ScheduledCallerNyxIdAuthority
+            {
+                Platform = "lark",
+                Tenant = "tenant-alpha",
+                ExternalUserId = "sender-alpha",
+                Scope = "proxy",
+                BindingId = "bnd-owner-alpha",
+            },
+        };
 
         await port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
             original,
@@ -945,6 +1243,15 @@ public sealed class ScheduledDispatchServiceInvocationTests
         invokedChat.CallerDurableCredential.OwnerScopeKey.Should().Be("schedule:schedule-durable");
         invokedChat.CallerDurableCredential.SubjectId.Should().Be("credential-1");
         invokedChat.CallerDurableCredential.SourceKind.Should().Be(DurableCallerCredentialSourceKind.ScheduledDispatch);
+        invokedChat.CallerDurableCredential.ScheduledCallerNyxIdAuthority.Should().BeEquivalentTo(
+            new ScheduledCallerNyxIdAuthority
+            {
+                Platform = "lark",
+                Tenant = "tenant-alpha",
+                ExternalUserId = "sender-alpha",
+                Scope = "proxy",
+                BindingId = "bnd-owner-alpha",
+            });
         invokedChat.LlmControl.ModelOverride.Should().Be("opus");
     }
 
@@ -1332,6 +1639,32 @@ public sealed class ScheduledDispatchServiceInvocationTests
                 }
             },
             {
+                "blank-service-node-id",
+                dispatch => dispatch with
+                {
+                    AuthorizationFact = dispatch.AuthorizationFact! with
+                    {
+                        ServiceGrants =
+                        [
+                            new ScheduledInvocationAuthorizationServiceGrant("svc-alpha", [" "], false),
+                        ],
+                    },
+                }
+            },
+            {
+                "unexpected-node-id-when-node-grants-not-required",
+                dispatch => dispatch with
+                {
+                    AuthorizationFact = dispatch.AuthorizationFact! with
+                    {
+                        ServiceGrants =
+                        [
+                            new ScheduledInvocationAuthorizationServiceGrant("svc-alpha", ["node-alpha"], true),
+                        ],
+                    },
+                }
+            },
+            {
                 "missing-service-id",
                 dispatch => dispatch with
                 {
@@ -1358,6 +1691,46 @@ public sealed class ScheduledDispatchServiceInvocationTests
                     AuthorizationFact = dispatch.AuthorizationFact! with
                     {
                         Authority = dispatch.AuthorizationFact.Authority with { CatalogStateVersion = 0 },
+                    },
+                }
+            },
+            {
+                "missing-catalog-content-digest",
+                dispatch => dispatch with
+                {
+                    AuthorizationFact = dispatch.AuthorizationFact! with
+                    {
+                        Authority = dispatch.AuthorizationFact.Authority with { CatalogContentDigest = " " },
+                    },
+                }
+            },
+            {
+                "missing-catalog-contract-version",
+                dispatch => dispatch with
+                {
+                    AuthorizationFact = dispatch.AuthorizationFact! with
+                    {
+                        Authority = dispatch.AuthorizationFact.Authority with { CatalogContractVersion = " " },
+                    },
+                }
+            },
+            {
+                "missing-catalog-policy-version",
+                dispatch => dispatch with
+                {
+                    AuthorizationFact = dispatch.AuthorizationFact! with
+                    {
+                        Authority = dispatch.AuthorizationFact.Authority with { CatalogPolicyVersion = " " },
+                    },
+                }
+            },
+            {
+                "missing-catalog-evaluated-at",
+                dispatch => dispatch with
+                {
+                    AuthorizationFact = dispatch.AuthorizationFact! with
+                    {
+                        Authority = dispatch.AuthorizationFact.Authority with { CatalogEvaluatedAt = default },
                     },
                 }
             },
@@ -1404,6 +1777,190 @@ public sealed class ScheduledDispatchServiceInvocationTests
             },
         };
 
+    public static TheoryData<
+        string,
+        Func<ScheduledServiceInvocationDispatchRequest, ScheduledServiceInvocationDispatchRequest>>
+        InvalidOwnerLLMSelectionCases() => new()
+        {
+            {
+                "missing-selection",
+                dispatch => dispatch with
+                {
+                    AuthorizationFact = dispatch.AuthorizationFact! with { OwnerLLMSelection = null },
+                }
+            },
+            {
+                "malformed-selection",
+                dispatch => ReplaceOwnerLLMSelection(dispatch, new ScheduledInvocationOwnerLLMSelection
+                {
+                    RouteKind = ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService,
+                    RouteValue = $" {OwnerLLMRoute}",
+                    NyxIdUserServiceId = OwnerLLMServiceId,
+                    ServiceSlugSnapshot = "chrono-llm-public",
+                    Model = OwnerLLMModel,
+                })
+            },
+            {
+                "exact-service-not-granted",
+                dispatch => dispatch with
+                {
+                    AuthorizationFact = dispatch.AuthorizationFact! with
+                    {
+                        ServiceGrants = dispatch.AuthorizationFact.ServiceGrants
+                            .Where(grant => !string.Equals(
+                                grant.ServiceId,
+                                OwnerLLMServiceId,
+                                StringComparison.Ordinal))
+                            .ToArray(),
+                    },
+                }
+            },
+        };
+
+    public static TheoryData<
+        string,
+        Func<ScheduledServiceInvocationDispatchRequest, ScheduledServiceInvocationDispatchRequest>>
+        OwnerLLMPayloadMismatchCases() => new()
+        {
+            {
+                "non-chat-payload",
+                dispatch => ReplacePayload(dispatch, Any.Pack(new StringValue { Value = "not-chat" }))
+            },
+            {
+                "non-chat-payload-without-owner-llm-source-stamp",
+                dispatch => ReplacePayload(
+                    RemoveOwnerLLMSourceStamp(dispatch),
+                    Any.Pack(new StringValue { Value = "not-chat" }))
+            },
+            {
+                "malformed-chat-payload",
+                dispatch =>
+                {
+                    var payload = Any.Pack(new ChatRequestEvent());
+                    payload.Value = Google.Protobuf.ByteString.CopyFrom(0x0A, 0x05, 0x01);
+                    return ReplacePayload(dispatch, payload);
+                }
+            },
+            {
+                "route-mismatch",
+                dispatch => ReplaceOwnerLLMPayload(dispatch, "/api/v1/proxy/s/other-llm", OwnerLLMModel)
+            },
+            {
+                "model-mismatch",
+                dispatch => ReplaceOwnerLLMPayload(dispatch, OwnerLLMRoute, "gpt-other")
+            },
+            {
+                "route-present-without-owner-llm-source-stamp",
+                dispatch => ReplaceOwnerLLMPayload(
+                    RemoveOwnerLLMSourceStamp(dispatch),
+                    OwnerLLMRoute,
+                    string.Empty)
+            },
+            {
+                "model-present-without-owner-llm-source-stamp",
+                dispatch => ReplaceOwnerLLMPayload(
+                    RemoveOwnerLLMSourceStamp(dispatch),
+                    string.Empty,
+                    OwnerLLMModel)
+            },
+        };
+
+    private static ScheduledServiceInvocationDispatchRequest ReplaceOwnerLLMSelection(
+        ScheduledServiceInvocationDispatchRequest dispatch,
+        ScheduledInvocationOwnerLLMSelection selection) =>
+        dispatch with
+        {
+            AuthorizationFact = dispatch.AuthorizationFact! with { OwnerLLMSelection = selection },
+        };
+
+    private static ScheduledServiceInvocationDispatchRequest ReplacePayload(
+        ScheduledServiceInvocationDispatchRequest dispatch,
+        Any payload)
+    {
+        var request = dispatch.Request.Clone();
+        request.Payload = payload;
+        return dispatch with { Request = request };
+    }
+
+    private static ScheduledServiceInvocationDispatchRequest ReplaceOwnerLLMPayload(
+        ScheduledServiceInvocationDispatchRequest dispatch,
+        string route,
+        string model)
+    {
+        var request = dispatch.Request.Clone();
+        var chat = request.Payload.Unpack<ChatRequestEvent>();
+        chat.LlmControl ??= new LLMControlContextPayload();
+        chat.LlmControl.NyxIdRoutePreference = route;
+        chat.LlmControl.ModelOverride = model;
+        request.Payload = Any.Pack(chat);
+        return dispatch with { Request = request };
+    }
+
+    private static ScheduledServiceInvocationDispatchRequest RemoveOwnerLLMSourceStamp(
+        ScheduledServiceInvocationDispatchRequest dispatch) =>
+        dispatch with
+        {
+            AuthorizationFact = dispatch.AuthorizationFact! with
+            {
+                Authority = dispatch.AuthorizationFact.Authority with { OwnerLlmStateVersion = 0 },
+                OwnerLLMSelection = null,
+            },
+        };
+
+    private static ScheduledCallerNyxIdAuthority CreateCallerAuthority() => new()
+    {
+        Platform = "lark",
+        ExternalUserId = "sender-alpha",
+        Scope = "proxy",
+        BindingId = "bnd-owner-alpha",
+    };
+
+    private static ScheduledCallerNyxIdAuthority? CreateIncompleteCallerAuthority(string? missingField)
+    {
+        if (missingField == null)
+            return null;
+
+        var authority = CreateCallerAuthority();
+        switch (missingField)
+        {
+            case "platform":
+                authority.Platform = " ";
+                break;
+            case "externalUserId":
+                authority.ExternalUserId = " ";
+                break;
+            case "scope":
+                authority.Scope = " ";
+                break;
+            case "bindingId":
+                authority.BindingId = " ";
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(missingField), missingField, null);
+        }
+
+        return authority;
+    }
+
+    private static ScheduledInvocationOwnerLLMSelection CreateOwnerLLMSelection() => new()
+    {
+        RouteKind = ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService,
+        RouteValue = OwnerLLMRoute,
+        NyxIdUserServiceId = OwnerLLMServiceId,
+        ServiceSlugSnapshot = "chrono-llm-public",
+        Model = OwnerLLMModel,
+    };
+
+    private static ChatRequestEvent CreateOwnerLLMChatRequest(string prompt) => new()
+    {
+        Prompt = prompt,
+        LlmControl = new LLMControlContextPayload
+        {
+            NyxIdRoutePreference = OwnerLLMRoute,
+            ModelOverride = OwnerLLMModel,
+        },
+    };
+
     private static ScheduledServiceInvocationDispatchRequest CreateAuthorizationFactDispatch(DateTimeOffset now)
     {
         var factExpiresAt = now.AddHours(1);
@@ -1414,7 +1971,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
                 CorrelationId = "corr-authorized",
                 Identity = new ServiceIdentity { ServiceId = "svc-alpha" },
                 EndpointId = "chat",
-                Payload = Any.Pack(new ChatRequestEvent { Prompt = "run" }),
+                Payload = Any.Pack(CreateOwnerLLMChatRequest("run")),
             },
             CreateScheduledAgentKeyAuth(factExpiresAt),
             ProjectNyxIdAccessTokenToWorkflowCallerCredential: true,
@@ -1423,7 +1980,13 @@ public sealed class ScheduledDispatchServiceInvocationTests
                 "digest-alpha",
                 "policy-v1",
                 new ScheduledInvocationAuthorizationOwner("nyxid", "personal", "owner-alpha"),
-                [new ScheduledInvocationAuthorizationServiceGrant("svc-alpha", ["node-alpha"], false)],
+                [
+                    new ScheduledInvocationAuthorizationServiceGrant("svc-alpha", ["node-alpha"], false),
+                    new ScheduledInvocationAuthorizationServiceGrant(
+                        OwnerLLMServiceId,
+                        ["node-owner-llm"],
+                        false),
+                ],
                 "proxy",
                 factExpiresAt,
                 ServiceGrantsNotRequired: false,
@@ -1436,21 +1999,11 @@ public sealed class ScheduledDispatchServiceInvocationTests
                     15,
                     now.AddMinutes(-1),
                     now.AddMinutes(30),
-                    "catalog-rev-alpha",
-                    "catalog-digest-alpha"))
-            {
-                NodeGrants =
-                [
-                    new ScheduledInvocationAuthorizationNodeGrant(
-                        "svc-alpha",
-                        "node-alpha",
-                        "Primary node",
-                        "Primary",
-                        "UserServicePrimary",
-                        "binding-alpha",
-                        0),
-                ],
-            });
+                    "catalog-digest-alpha",
+                    "scope-plan-contract/v1",
+                    "scope-plan-policy/v1",
+                    now.AddMinutes(-2)),
+                CreateOwnerLLMSelection()));
     }
 
     private static ScheduledServiceInvocationAuth CreateScheduledAgentKeyAuth(DateTimeOffset expiresAt) =>
@@ -1458,12 +2011,15 @@ public sealed class ScheduledDispatchServiceInvocationTests
             new SecretReference
             {
                 Ref = "secret-alpha",
-                Purpose = CredentialSecretPurposes.ScheduledNyxApiKey,
+                Purpose = CredentialSecretPurposes.ScheduledInvocationAgentKey,
                 OwnerScopeKey = "owner-alpha",
                 ExpiresAtUnixMs = expiresAt.ToUnixTimeMilliseconds(),
             },
             "key-alpha",
-            expiresAt.ToUnixTimeMilliseconds()));
+            expiresAt.ToUnixTimeMilliseconds()))
+        {
+            CallerAuthority = CreateCallerAuthority(),
+        };
 
     private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
     {

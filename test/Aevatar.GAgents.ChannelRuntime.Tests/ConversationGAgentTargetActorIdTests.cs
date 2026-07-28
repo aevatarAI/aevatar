@@ -1,4 +1,5 @@
 using System.Reflection;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
@@ -29,6 +30,35 @@ public sealed class ConversationGAgentTargetActorIdTests
         dispatcher.Requests[0].TargetActorId.Should().Be(actorId);
         agent.State.PendingLlmReplyRequests.Should().ContainSingle();
         agent.State.PendingLlmReplyRequests[0].TargetActorId.Should().Be(actorId);
+    }
+
+    [Fact]
+    public async Task HandleInboundActivityAsync_WhenNyxIdAuthorityIsOnlyDurableToolFact_PersistsItWithoutCredentials()
+    {
+        var actorId = ConversationGAgent.BuildActorId("lark:dm:ou-channel-alpha");
+        var runner = new DeferredReplyTurnRunner();
+        runner.Request.ToolContext = (AgentToolExecutionContext.Empty with
+        {
+            Credentials = new AgentToolCredentials(
+                "owner-runtime-token",
+                "owner-runtime-token",
+                "sender-runtime-token"),
+            NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                "lark",
+                "tenant-authority-alpha",
+                "ou-authority-alpha"),
+        }).ToPayload();
+        var agent = await CreateAgentAsync(actorId, runner, new RecordingLlmReplyRunDispatcher());
+
+        await agent.HandleInboundActivityAsync(BuildInboundActivity("msg-authority-only-1"));
+
+        var persisted = agent.State.PendingLlmReplyRequests.Should().ContainSingle().Subject;
+        var context = AgentToolExecutionContextMapper.FromPayload(persisted.ToolContext);
+        context.NyxIdAuthority.Should().Be(new AgentToolNyxIdAuthorityContext(
+            "lark",
+            "tenant-authority-alpha",
+            "ou-authority-alpha"));
+        context.Credentials.Should().Be(AgentToolCredentials.Empty);
     }
 
     [Fact]

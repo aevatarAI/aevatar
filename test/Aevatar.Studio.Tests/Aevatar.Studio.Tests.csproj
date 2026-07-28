@@ -29,8 +29,13 @@
     <ProjectReference Include="../../src/Aevatar.Authentication.Providers.NyxId/Aevatar.Authentication.Providers.NyxId.csproj" />
     <ProjectReference Include="../../src/Aevatar.Studio.Projection/Aevatar.Studio.Projection.csproj" />
     <ProjectReference Include="../../src/Aevatar.Studio.Hosting/Aevatar.Studio.Hosting.csproj" />
+    <ProjectReference Include="../../src/Aevatar.Foundation.Runtime/Aevatar.Foundation.Runtime.csproj" />
+    <ProjectReference Include="../../src/Aevatar.Foundation.Runtime.Implementations.Local/Aevatar.Foundation.Runtime.Implementations.Local.csproj" />
+    <ProjectReference Include="../../agents/Aevatar.GAgents.UserConfig/Aevatar.GAgents.UserConfig.csproj" />
     <ProjectReference Include="../../agents/Aevatar.GAgents.StudioMember/Aevatar.GAgents.StudioMember.csproj" />
     <ProjectReference Include="../../agents/Aevatar.GAgents.StudioTeam/Aevatar.GAgents.StudioTeam.csproj" />
+    <ProjectReference Include="../../agents/Aevatar.GAgents.WorkOrder/Aevatar.GAgents.WorkOrder.csproj" />
+    <ProjectReference Include="../../agents/Aevatar.GAgents.NyxidChat/Aevatar.GAgents.NyxidChat.csproj" />
     <ProjectReference Include="../../src/workflow/Aevatar.Workflow.Studio/Aevatar.Workflow.Studio.csproj" />
   </ItemGroup>
 

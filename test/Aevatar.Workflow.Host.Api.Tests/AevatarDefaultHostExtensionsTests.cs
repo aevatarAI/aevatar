@@ -14,7 +14,8 @@ public class AevatarDefaultHostExtensionsTests
     {
         var builder = CreateBuilder();
 
-        builder.AddAevatarDefaultHost();
+        builder.AddAevatarDefaultHost(
+            configureHost: static options => options.AllowLocalFileSecretsStore = false);
 
         builder.Services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IHostedService) &&
@@ -27,7 +28,11 @@ public class AevatarDefaultHostExtensionsTests
         var builder = CreateBuilder();
 
         builder.AddAevatarDefaultHost(
-            configureHost: static options => options.EnableConnectorBootstrap = false);
+            configureHost: static options =>
+            {
+                options.AllowLocalFileSecretsStore = false;
+                options.EnableConnectorBootstrap = false;
+            });
 
         builder.Services.Should().NotContain(descriptor =>
             descriptor.ServiceType == typeof(IHostedService) &&
