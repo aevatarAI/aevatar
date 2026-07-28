@@ -905,6 +905,11 @@ public sealed class WorkflowExecutionProjectionProjectorTests
                     DeadLetterFailedCompensationStepId = "refund_payment",
                     DeadLetterRemainingUncompensated = 2,
                     DeadLetterError = "refund failed",
+                    CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+                    {
+                        SchemaVersion = WorkflowCapabilityAdmissionPlanIntegrity.SchemaVersion,
+                        AdmissionDigest = "admission-v3",
+                    },
                     ExecutionStates =
                     {
                         ["workflow_execution_kernel"] = Any.Pack(new WorkflowExecutionKernelState
@@ -929,6 +934,9 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         document.DeadLetterFailedCompensationStepId.Should().Be("refund_payment");
         document.DeadLetterRemainingUncompensated.Should().Be(2);
         document.DeadLetterError.Should().Be("refund failed");
+        document.CapabilityAdmissionPlan.Should().NotBeNull();
+        document.CapabilityAdmissionPlan.SchemaVersion.Should().Be(WorkflowCapabilityAdmissionPlanIntegrity.SchemaVersion);
+        document.CapabilityAdmissionPlan.AdmissionDigest.Should().Be("admission-v3");
         document.StateVersion.Should().Be(1);
         document.Compiled.Should().BeTrue();
         document.ExecutionStateCount.Should().Be(1);
