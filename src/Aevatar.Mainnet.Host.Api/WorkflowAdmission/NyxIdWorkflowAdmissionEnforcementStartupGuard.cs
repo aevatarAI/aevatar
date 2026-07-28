@@ -1,5 +1,7 @@
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Projection.ReadModels;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Projection.ReadModels;
@@ -11,7 +13,8 @@ namespace Aevatar.Mainnet.Host.Api.WorkflowAdmission;
 internal sealed class NyxIdWorkflowAdmissionEnforcementStartupGuard(
     IOptions<NyxIdToolOptions> options,
     IProjectionDocumentReader<WorkflowActorBindingDocument, string> definitionReader,
-    IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string> runReader) : IHostedService
+    IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string> runReader,
+    IProjectionDocumentReader<ServiceDeploymentCatalogReadModel, string> deploymentReader) : IHostedService
 {
     private const int PageSize = 200;
     private const int SampleLimit = 8;
@@ -21,7 +24,8 @@ internal sealed class NyxIdWorkflowAdmissionEnforcementStartupGuard(
         if (options.Value.ManagedWorkflowAdmissionMode != NyxIdManagedWorkflowAdmissionMode.Enforce)
             return;
 
-        var invalidDefinitions = await ScanDefinitionsAsync(cancellationToken);
+        var deactivatedServiceDefinitions = await ScanDeactivatedServiceDefinitionsAsync(cancellationToken);
+        var invalidDefinitions = await ScanDefinitionsAsync(deactivatedServiceDefinitions, cancellationToken);
         var invalidActiveRuns = await ScanActiveRunsAsync(cancellationToken);
         if (invalidDefinitions.Count == 0 && invalidActiveRuns.Count == 0)
             return;
@@ -35,7 +39,9 @@ internal sealed class NyxIdWorkflowAdmissionEnforcementStartupGuard(
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
-    private async Task<InventoryFailures> ScanDefinitionsAsync(CancellationToken ct)
+    private async Task<InventoryFailures> ScanDefinitionsAsync(
+        IReadOnlySet<string> deactivatedServiceDefinitions,
+        CancellationToken ct)
     {
         var failures = new InventoryFailures();
         string? cursor = null;
@@ -67,6 +73,9 @@ internal sealed class NyxIdWorkflowAdmissionEnforcementStartupGuard(
             }, ct);
             foreach (var document in page.Items)
             {
+                if (deactivatedServiceDefinitions.Contains(document.ActorId))
+                    continue;
+
                 if (!HasValidV3Plan(
                         document.CapabilityAdmissionPlan,
                         document.WorkflowYaml,
@@ -80,6 +89,52 @@ internal sealed class NyxIdWorkflowAdmissionEnforcementStartupGuard(
         } while (!string.IsNullOrWhiteSpace(cursor));
 
         return failures;
+    }
+
+    private async Task<IReadOnlySet<string>> ScanDeactivatedServiceDefinitionsAsync(CancellationToken ct)
+    {
+        var deactivated = new HashSet<string>(StringComparer.Ordinal);
+        var nonDeactivated = new HashSet<string>(StringComparer.Ordinal);
+        string? cursor = null;
+        do
+        {
+            var page = await deploymentReader.QueryAsync(new ProjectionDocumentQuery
+            {
+                Cursor = cursor,
+                Take = PageSize,
+                Sorts =
+                [
+                    new ProjectionDocumentSort
+                    {
+                        FieldPath = nameof(ServiceDeploymentCatalogReadModel.Id),
+                        Direction = ProjectionDocumentSortDirection.Asc,
+                    },
+                ],
+            }, ct);
+            foreach (var deployment in page.Items.SelectMany(static document => document.Deployments))
+            {
+                var actorId = deployment.PrimaryActorId?.Trim();
+                if (string.IsNullOrWhiteSpace(actorId))
+                    continue;
+
+                if (string.Equals(
+                        deployment.Status,
+                        ServiceDeploymentStatus.Deactivated.ToString(),
+                        StringComparison.Ordinal))
+                {
+                    deactivated.Add(actorId);
+                }
+                else
+                {
+                    nonDeactivated.Add(actorId);
+                }
+            }
+
+            cursor = page.NextCursor;
+        } while (!string.IsNullOrWhiteSpace(cursor));
+
+        deactivated.ExceptWith(nonDeactivated);
+        return deactivated;
     }
 
     private async Task<InventoryFailures> ScanActiveRunsAsync(CancellationToken ct)

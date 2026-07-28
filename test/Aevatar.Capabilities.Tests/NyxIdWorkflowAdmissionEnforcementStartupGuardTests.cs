@@ -1,5 +1,7 @@
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Projection.ReadModels;
 using Aevatar.Mainnet.Host.Api.WorkflowAdmission;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -16,12 +18,14 @@ public sealed class NyxIdWorkflowAdmissionEnforcementStartupGuardTests
     {
         var definitions = new PagedReader<WorkflowActorBindingDocument>([]);
         var runs = new PagedReader<WorkflowExecutionCurrentStateDocument>([]);
-        var guard = CreateGuard(NyxIdManagedWorkflowAdmissionMode.Shadow, definitions, runs);
+        var deployments = new PagedReader<ServiceDeploymentCatalogReadModel>([]);
+        var guard = CreateGuard(NyxIdManagedWorkflowAdmissionMode.Shadow, definitions, runs, deployments);
 
         await guard.StartAsync(CancellationToken.None);
 
         definitions.Queries.Should().BeEmpty();
         runs.Queries.Should().BeEmpty();
+        deployments.Queries.Should().BeEmpty();
     }
 
     [Fact]
@@ -47,7 +51,11 @@ public sealed class NyxIdWorkflowAdmissionEnforcementStartupGuardTests
                 SchemaVersion = WorkflowCapabilityAdmissionPlanIntegrity.LegacySchemaVersion,
             })],
         ]);
-        var guard = CreateGuard(NyxIdManagedWorkflowAdmissionMode.Enforce, definitions, runs);
+        var guard = CreateGuard(
+            NyxIdManagedWorkflowAdmissionMode.Enforce,
+            definitions,
+            runs,
+            new PagedReader<ServiceDeploymentCatalogReadModel>([]));
 
         var act = () => guard.StartAsync(CancellationToken.None);
 
@@ -81,16 +89,64 @@ public sealed class NyxIdWorkflowAdmissionEnforcementStartupGuardTests
                 SchemaVersion = WorkflowCapabilityAdmissionPlanIntegrity.LegacySchemaVersion,
             }),
         ]]);
-        var guard = CreateGuard(NyxIdManagedWorkflowAdmissionMode.Enforce, definitions, runs);
+        var guard = CreateGuard(
+            NyxIdManagedWorkflowAdmissionMode.Enforce,
+            definitions,
+            runs,
+            new PagedReader<ServiceDeploymentCatalogReadModel>([]));
 
         await guard.StartAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task StartAsync_WhenEnforce_ShouldIgnoreOnlyExplicitlyDeactivatedServiceDefinitions()
+    {
+        var definitions = new PagedReader<WorkflowActorBindingDocument>(
+        [[
+            Definition("service-definition-retired", LegacyPlan()),
+            Definition("service-definition-active", LegacyPlan()),
+        ]]);
+        var runs = new PagedReader<WorkflowExecutionCurrentStateDocument>([]);
+        var deployments = new PagedReader<ServiceDeploymentCatalogReadModel>(
+        [[new ServiceDeploymentCatalogReadModel
+        {
+            Id = "service-alpha",
+            Deployments =
+            {
+                Deployment(
+                    "deployment-retired",
+                    "service-definition-retired",
+                    ServiceDeploymentStatus.Deactivated),
+                Deployment(
+                    "deployment-active",
+                    "service-definition-active",
+                    ServiceDeploymentStatus.Active),
+            },
+        }]]);
+        var guard = CreateGuard(
+            NyxIdManagedWorkflowAdmissionMode.Enforce,
+            definitions,
+            runs,
+            deployments);
+
+        var act = () => guard.StartAsync(CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*definitions=1*service-definition-active*")
+            .Where(exception => !exception.Message.Contains("service-definition-retired", StringComparison.Ordinal));
+        deployments.Queries.Should().ContainSingle();
     }
 
     private static NyxIdWorkflowAdmissionEnforcementStartupGuard CreateGuard(
         NyxIdManagedWorkflowAdmissionMode mode,
         IProjectionDocumentReader<WorkflowActorBindingDocument, string> definitions,
-        IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string> runs) =>
-        new(Options.Create(new NyxIdToolOptions { ManagedWorkflowAdmissionMode = mode }), definitions, runs);
+        IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string> runs,
+        IProjectionDocumentReader<ServiceDeploymentCatalogReadModel, string> deployments) =>
+        new(
+            Options.Create(new NyxIdToolOptions { ManagedWorkflowAdmissionMode = mode }),
+            definitions,
+            runs,
+            deployments);
 
     private static WorkflowActorBindingDocument Definition(string id, WorkflowCapabilityAdmissionPlan plan) =>
         new()
@@ -123,6 +179,23 @@ public sealed class NyxIdWorkflowAdmissionEnforcementStartupGuardTests
             ExternalCapabilityExecutionMode.Interactive,
             invocationAdmissions: [],
             sourceStamps: []);
+
+    private static WorkflowCapabilityAdmissionPlan LegacyPlan() =>
+        new()
+        {
+            SchemaVersion = WorkflowCapabilityAdmissionPlanIntegrity.LegacySchemaVersion,
+        };
+
+    private static ServiceDeploymentReadModel Deployment(
+        string deploymentId,
+        string actorId,
+        ServiceDeploymentStatus status) =>
+        new()
+        {
+            DeploymentId = deploymentId,
+            PrimaryActorId = actorId,
+            Status = status.ToString(),
+        };
 
     private static WorkflowCapabilityAdmissionPlan InvalidPolicyV3Plan()
     {
