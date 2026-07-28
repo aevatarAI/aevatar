@@ -818,12 +818,81 @@ button{font-family:inherit;cursor:pointer;}
 .artifact-item{display:flex;align-items:center;gap:12px;padding:10px 12px;border:1px solid var(--border);border-radius:6px;}
 .art-name{font-size:13px;color:var(--heading);flex:1 1 auto;}
 .art-size{font-size:11.5px;color:var(--faint);}
-.dag{display:flex;flex-direction:column;}
-.dag-node{display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--border);border-radius:7px;background:var(--surface);}
-.dag-dot{width:8px;height:8px;border-radius:50%;}
-.dag-name{font-size:13px;color:var(--heading);font-weight:550;flex:1 1 auto;}
-.dag-io{font-size:11px;color:var(--faint);}
-.dag-link{width:2px;height:14px;background:var(--border);margin-left:18px;}
+/* narrative IO + rich timeline / tool call */
+.obs-narrative{display:flex;flex-direction:column;gap:10px;margin:14px 0 4px;}
+.obs-io-block{border:1px solid var(--border);border-radius:8px;background:var(--surface);overflow:hidden;}
+.obs-io-block.err{border-color:var(--failed-bd);background:var(--failed-bg);}
+.obs-io-block>summary,.obs-io-head{display:flex;align-items:center;gap:8px;padding:9px 12px;font-size:12px;font-weight:600;color:var(--heading);cursor:pointer;list-style:none;}
+.obs-io-block>summary::-webkit-details-marker{display:none;}
+.obs-io-block pre,.obs-io-body{margin:0;padding:0 12px 12px;font-family:var(--mono);font-size:12px;line-height:1.55;color:var(--fg);white-space:pre-wrap;overflow:auto;max-height:240px;}
+.obs-io-empty{padding:0 12px 12px;font-size:12px;color:var(--faint);}
+.tl-note{font-size:11.5px;color:var(--faint);margin:0 0 10px;}
+.tl-body{align-items:flex-start;}
+.tl-kind{font-size:11px;color:var(--muted);background:var(--surface-3);border:1px solid var(--border);border-radius:999px;padding:1px 7px;}
+.tl-reply{width:100%;margin-top:6px;border:1px solid var(--border);border-radius:8px;background:var(--surface-2);padding:10px 12px;}
+.tl-reply-role{font-size:11.5px;color:var(--faint);margin-bottom:6px;font-family:var(--mono);}
+.tl-reply-body{font-size:13px;color:var(--fg);line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere;}
+.tl-reply-body.clamp{max-height:7.5em;overflow:hidden;position:relative;}
+.tl-reply-body.clamp:after{content:"";position:absolute;left:0;right:0;bottom:0;height:28px;background:linear-gradient(transparent,var(--surface-2));}
+.tl-more{margin-top:6px;border:0;background:none;color:var(--primary-strong);font-size:12px;cursor:pointer;padding:0;}
+.toolcall{width:100%;margin-top:6px;border:1px solid var(--border);border-radius:8px;background:var(--surface);overflow:hidden;}
+.toolcall[data-open="false"] .tc-body{display:none;}
+.tc-head{width:100%;display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 10px;border:0;background:var(--surface-2);cursor:pointer;text-align:left;font:inherit;color:inherit;}
+.tc-name{font-weight:600;color:var(--heading);font-size:12.5px;}
+.tc-callid{font-family:var(--mono);font-size:11px;color:var(--faint);}
+.tc-status{margin-left:auto;font-size:11.5px;font-weight:550;}
+.tc-status.ok{color:var(--success);} .tc-status.bad{color:var(--failed);}
+.tc-body{padding:8px 10px 10px;display:flex;flex-direction:column;gap:8px;}
+.tc-field-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px;}
+.tc-field-label{font-size:11px;color:var(--faint);text-transform:uppercase;letter-spacing:.04em;}
+.tc-json{margin:0;padding:8px 10px;font-family:var(--mono);font-size:11.5px;line-height:1.45;background:var(--surface-3);border:1px solid var(--border);border-radius:6px;white-space:pre-wrap;overflow:auto;max-height:220px;color:var(--fg);}
+.tc-error{color:var(--failed);font-weight:550;}
+.datachips{display:flex;flex-wrap:wrap;gap:6px;width:100%;margin-top:6px;}
+.dchip{display:inline-flex;gap:5px;align-items:center;font-size:11px;border:1px solid var(--border);border-radius:999px;padding:2px 8px;background:var(--surface-2);color:var(--muted);}
+.dchip .dv{font-family:var(--mono);color:var(--heading);}
+.datamore{width:100%;margin-top:6px;font-size:12px;color:var(--muted);}
+.datatable{display:grid;grid-template-columns:minmax(90px,auto) 1fr;gap:4px 10px;margin-top:6px;font-family:var(--mono);font-size:11.5px;}
+.dt-k{color:var(--faint);} .dt-v{color:var(--fg);white-space:pre-wrap;word-break:break-word;}
+.diag-strip{margin:10px 0 4px;padding:10px 12px;border:1px solid var(--failed-bd);background:var(--failed-bg);border-radius:8px;}
+.diag-strip .ds-title{font-size:12px;font-weight:600;color:var(--failed);margin-bottom:6px;}
+.diag-strip .ds-item{font-size:12.5px;color:var(--fg);line-height:1.45;margin-top:4px;}
+.art-preview{margin-top:8px;font-family:var(--mono);font-size:12px;line-height:1.5;white-space:pre-wrap;max-height:200px;overflow:auto;color:var(--fg);background:var(--surface-3);border:1px solid var(--border);border-radius:6px;padding:10px;}
+.logs-note{font-size:11.5px;color:var(--faint);margin:0 0 8px;}
+.step-preview-note{font-size:11px;color:var(--faint);margin-top:6px;}
+/* interactive DAG */
+.obs-graph-wrap{position:relative;height:min(62vh,560px);border:1px solid var(--border);border-radius:10px;background:var(--surface-2);overflow:hidden;touch-action:none;cursor:grab;}
+.obs-graph-wrap.is-panning{cursor:grabbing;}
+.obs-graph-viewport{position:absolute;top:0;left:0;transform-origin:0 0;will-change:transform;}
+.obs-graph-canvas{position:relative;}
+.obs-graph-canvas svg{position:absolute;inset:0;overflow:visible;pointer-events:none;}
+.obs-gnode{position:absolute;width:220px;min-height:78px;padding:10px 12px;border:1.5px solid var(--border);border-radius:10px;background:var(--surface);box-shadow:0 1px 2px rgba(15,23,42,.04);cursor:pointer;text-align:left;font:inherit;color:inherit;display:flex;flex-direction:column;gap:6px;}
+.obs-gnode:hover,.obs-gnode:focus-visible{border-color:var(--primary);outline:none;box-shadow:0 0 0 2px var(--primary-weak);}
+.obs-gnode.selected{border-color:var(--primary);box-shadow:0 0 0 2px var(--primary-weak);}
+.obs-gnode.st-success{border-color:color-mix(in oklab,var(--success) 55%,var(--border));}
+.obs-gnode.st-running{border-color:color-mix(in oklab,var(--running) 55%,var(--border));}
+.obs-gnode.st-failed{border-color:color-mix(in oklab,var(--failed) 55%,var(--border));}
+.obs-gnode.st-stopped{border-color:color-mix(in oklab,var(--waiting) 55%,var(--border));}
+.obs-gnode.st-waiting{border-style:dashed;}
+.gn-id{font-size:12.5px;font-weight:600;color:var(--heading);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.gn-type{font-size:11px;color:var(--faint);font-family:var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.gn-foot{display:flex;justify-content:space-between;gap:8px;font-size:11px;color:var(--muted);margin-top:auto;}
+.obs-graph-controls{position:absolute;right:10px;top:10px;display:flex;flex-direction:column;gap:4px;z-index:2;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:6px;}
+.obs-graph-controls button{width:34px;height:28px;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);color:var(--heading);font-size:12px;cursor:pointer;}
+.obs-graph-controls button:hover{border-color:var(--primary);color:var(--primary-strong);}
+.obs-graph-zoom{text-align:center;font-family:var(--mono);font-size:10px;color:var(--faint);padding:2px 0;}
+.obs-graph-legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:12px;font-size:12px;color:var(--muted);}
+.obs-graph-legend .lg{display:inline-flex;align-items:center;gap:6px;}
+.obs-graph-legend .sw{width:11px;height:11px;border-radius:3px;border:1.5px solid var(--border);}
+.obs-graph-legend .sw.done{border-color:var(--success);background:color-mix(in oklab,var(--success) 18%,transparent);}
+.obs-graph-legend .sw.current{border-color:var(--running);background:color-mix(in oklab,var(--running) 18%,transparent);}
+.obs-graph-legend .sw.failed{border-color:var(--failed);background:color-mix(in oklab,var(--failed) 18%,transparent);}
+.obs-graph-legend .sw.stopped{border-color:var(--waiting);background:color-mix(in oklab,var(--waiting) 18%,transparent);}
+.obs-graph-legend .sw.pending{border-style:dashed;}
+.edge-label{position:absolute;transform:translate(-50%,-50%);font-size:10px;color:var(--faint);background:var(--surface);padding:0 4px;pointer-events:none;}
+.edge-label.flow{color:var(--primary-strong);font-weight:550;}
+@media (prefers-reduced-motion:reduce){
+  .obs-graph-viewport{transition:none!important;}
+}
 .obs-immersive-bar{display:none;}
 body.obs-immersive .rail{display:none!important;}
 body.obs-immersive .app-header{display:none!important;}
@@ -1598,12 +1667,16 @@ function mapObsDetail(d,graph){
       nextStepId:s.nextStepId||'', branchKey:s.branchKey||'', usage:s.usage||{} }; });
   var events=rawTimeline.map(function(e){
     e=e||{}; var tc=e.toolCall||null;
-    var msg=e.content||e.message||(tc&&(tc.error||tc.toolName))||'';
-    var st=(e.kind==='RunError'||(tc&&tc.success===false))?'failed':(e.kind==='RunStopped'?'stuck':(e.kind==='RunFinished'?'success':'running'));
+    var mappedTc=tc?{ toolName:tc.toolName||'', callId:tc.callId||'', argumentsJson:tc.argumentsJson||'',
+      resultJson:tc.resultJson||'', success:tc.success!==false, error:tc.error||'' }:null;
+    var msg=e.content||e.message||(mappedTc&&(mappedTc.error||mappedTc.toolName))||'';
+    var st=(e.kind==='RunError'||(mappedTc&&mappedTc.success===false))?'failed':(e.kind==='RunStopped'?'stuck':(e.kind==='RunFinished'?'success':'running'));
     return { t:obsTime(e.timestampUtc), timestampUtc:e.timestampUtc||'', kind:e.kind||'Event', stage:e.stage||'',
       stepId:e.stepId||'', stepType:e.stepType||'', agentId:e.agentId||'', text:msg, message:e.message||'',
-      content:e.content||'', toolCall:tc, data:e.data||{}, st:st }; });
+      content:e.content||'', toolCall:mappedTc, data:e.data||{}, st:st }; });
   var usage={
+    promptTokens:obsNum(ut.promptTokens),
+    completionTokens:obsNum(ut.completionTokens),
     tokens:obsNum(ut.totalTokens!=null?ut.totalTokens:(ut.promptTokens||0)+(ut.completionTokens||0)),
     steps:(stats.completedSteps!=null?stats.completedSteps:steps.filter(function(s){return s.completedAtUtc;}).length)
       +'/'+(stats.totalSteps!=null?stats.totalSteps:steps.length),
@@ -1612,7 +1685,8 @@ function mapObsDetail(d,graph){
   if(events.length){
     timeline=events.map(function(e){
       return { t:e.t, step:obsEventTitle(e), st:e.st, dur:'', err:e.st==='failed'?e.text:null,
-        msg:e.text, kind:e.kind, stage:e.stage, stepId:e.stepId, agentId:e.agentId };
+        msg:e.text, kind:e.kind, stage:e.stage, stepId:e.stepId, agentId:e.agentId, content:e.content,
+        toolCall:e.toolCall, data:e.data, message:e.message, timestampUtc:e.timestampUtc };
     });
   } else {
     timeline=steps.map(function(s){
@@ -1634,16 +1708,7 @@ function mapObsDetail(d,graph){
   events.forEach(function(e){ if(e.text){ logs.push((e.timestampUtc?obsTime(e.timestampUtc)+' ':'')+(e.stage?'['+e.stage+'] ':'')+e.text); } });
   if(!logs.length){ steps.forEach(function(s){ if(s.error){ logs.push(obsTime(s.requestedAtUtc)+' ERROR '+s.error); } else if(s.outputPreview){ logs.push(obsTime(s.completedAtUtc||s.requestedAtUtc)+' '+(s.stepType||'')+' '+s.outputPreview); } }); }
   if(d.finalError) logs.push('FINAL ERROR '+d.finalError);
-  /* graph：优先真实 DAG nodes/edges；回退到步骤序列 */
-  var gnodes;
-  if(graph && graph.nodes && graph.nodes.length){
-    var byStep={}; steps.forEach(function(s){ byStep[s.stepId]=s; });
-    gnodes=graph.nodes.map(function(n){ var s=byStep[n.stepId]||{};
-      return { name:(n.nodeType||s.stepType||n.nodeId), st:(s.stepId?s.status:'waiting'),
-        io:obsNodeIo(n,graph), stepId:n.stepId||'', nodeId:n.nodeId||'' }; });
-  } else {
-    gnodes=steps.map(function(s){ return { name:(s.stepType||s.targetRole||s.stepId), st:s.status, io:'—', stepId:s.stepId, nodeId:s.stepId }; });
-  }
+  var mappedGraph=obsMapGraph(graph,steps,obsMapStatus(sum.status));
   /* artifacts：summary 无文件列表；finalOutput 视为单一产出 */
   var artifacts=[]; if(d.finalOutput){ artifacts.push({ name:'finalOutput', size:obsBytes(d.finalOutput), content:d.finalOutput }); }
   var mapped={ id:sum.runId, name:sum.workflowName||sum.runId, status:obsMapStatus(sum.status),
@@ -1651,9 +1716,48 @@ function mapObsDetail(d,graph){
     scope:sum.scopeId||'—', definition:sum.definitionId||sum.workflowName||'—',
     schedule:sum.scheduleId||'', startedAtUtc:sum.startedAtUtc||'', updatedAtUtc:sum.updatedAtUtc||'',
     input:d.input||'', finalOutput:d.finalOutput||'', finalError:d.finalError||'',
-    usage:usage, steps:steps, timeline:timeline, events:events, diagnostics:diagnostics, logs:logs, graph:gnodes, artifacts:artifacts };
+    usage:usage, steps:steps, timeline:timeline, events:events, diagnostics:diagnostics, logs:logs, graph:mappedGraph, artifacts:artifacts,
+    statistics:stats };
   mapped.issue=obsIssuePayload(mapped);
   return mapped;
+}
+function obsMapGraph(graph,steps,runStatus){
+  var byStep={}; (steps||[]).forEach(function(s){ if(s&&s.stepId) byStep[s.stepId]=s; });
+  var topologyStatus=runStatus==='running'?'running':runStatus==='success'?'success':runStatus==='failed'?'failed':runStatus==='stopped'?'stopped':'waiting';
+  if(graph&&graph.nodes&&graph.nodes.length){
+    var nodeIds={}; (graph.nodes||[]).forEach(function(n){ if(n&&n.nodeId) nodeIds[n.nodeId]=true; });
+    var validEdges=[];
+    (graph.edges||[]).forEach(function(e){
+      if(!e||!e.fromNodeId||!e.toNodeId) return;
+      if(!nodeIds[e.fromNodeId]||!nodeIds[e.toNodeId]||e.fromNodeId===e.toNodeId) return;
+      validEdges.push({ edgeId:e.edgeId||(e.fromNodeId+'>'+e.toNodeId), fromNodeId:e.fromNodeId, toNodeId:e.toNodeId,
+        edgeType:e.edgeType||'', branchKey:e.branchKey||'' });
+    });
+    var inc={},outc={};
+    validEdges.forEach(function(e){ inc[e.toNodeId]=(inc[e.toNodeId]||0)+1; outc[e.fromNodeId]=(outc[e.fromNodeId]||0)+1; });
+    var mappedNodes=(graph.nodes||[]).map(function(n){
+      var step=n.stepId?byStep[n.stepId]:null;
+      return { nodeId:n.nodeId||'', nodeType:n.nodeType||'', stepId:n.stepId||'',
+        name:(n.nodeType||(step&&(step.stepType||step.targetRole))||n.nodeId||'node'),
+        st:step?step.status:topologyStatus,
+        incoming:inc[n.nodeId]||0, outgoing:outc[n.nodeId]||0 };
+    });
+    return {rootNodeId:graph.rootNodeId||'',nodes:mappedNodes,edges:validEdges};
+  }
+  var nodes=(steps||[]).map(function(s,i){
+    return { nodeId:s.stepId||('step-'+(i+1)), nodeType:s.stepType||'', stepId:s.stepId||'',
+      name:(s.stepType||s.targetRole||s.stepId||('step '+(i+1))), st:s.status, incoming:0, outgoing:0 };
+  });
+  var edges=[];
+  (steps||[]).forEach(function(s,i){
+    if(!s.nextStepId) return;
+    var from=s.stepId||('step-'+(i+1));
+    edges.push({ edgeId:from+'>'+s.nextStepId, fromNodeId:from, toNodeId:s.nextStepId, edgeType:'NEXT', branchKey:s.branchKey||'' });
+  });
+  var inc2={},out2={};
+  edges.forEach(function(e){ inc2[e.toNodeId]=(inc2[e.toNodeId]||0)+1; out2[e.fromNodeId]=(out2[e.fromNodeId]||0)+1; });
+  nodes.forEach(function(n){ n.incoming=inc2[n.nodeId]||0; n.outgoing=out2[n.nodeId]||0; });
+  return {rootNodeId:nodes[0]?nodes[0].nodeId:'',nodes:nodes,edges:edges};
 }
 function obsEventTitle(e){
   var label={RunStarted:'Run started',RunFinished:'Run finished',RunError:'Run error',RunStopped:'Run stopped',
@@ -3093,7 +3197,8 @@ function viewStatus(){
 
 /* ================= ③ 运行观测台 Run Observatory ================= */
 var OBS_STATE={selectedId:null,tab:'timeline',filterOpen:false,localSearch:'',railCollapsed:false,immersive:false,
-  scope:'mine',status:'',origin:'',definition:'',schedule:'',from:'',to:''};
+  scope:'mine',status:'',origin:'',definition:'',schedule:'',from:'',to:'',
+  graphView:{zoom:1,panX:0,panY:0,fitted:false},graphNodeId:null,expandedTool:{},expandedReply:{}};
 var OBS_SESSION_IMMERSIVE='aevatar:admin:observatory:immersive';
 var OBS_SESSION_RAIL='aevatar:admin:observatory:rail-collapsed';
 var OBS_SESSION_READY=false;
@@ -3121,10 +3226,15 @@ function obsSyncStateFromUrl(){
   var scope=q.scope||'mine';
   if(scope==='__all__') scope='all';
   if((scope==='all'||scope!=='mine')&&!(ACCOUNT&&ACCOUNT.admin)) scope='mine';
+  var previousRun=OBS_STATE.selectedId;
   Object.assign(OBS_STATE,{scope:scope,status:OBS_STATUS_VALUES.indexOf(q.status)>=0?q.status:'',
     origin:q.origin||'',definition:q.definition||'',schedule:q.schedule||'',from:q.from||'',to:q.to||'',
     selectedId:q.run||null,tab:OBS_TAB_VALUES.indexOf(q.tab)>=0?q.tab:'timeline'});
   if(previousScope!==scope){ OBS_DETAIL_SCOPE_VERSION++; OBS_DETAIL={}; }
+  if(previousRun!==OBS_STATE.selectedId){
+    OBS_STATE.graphView={zoom:1,panX:0,panY:0,fitted:false}; OBS_STATE.graphNodeId=null;
+    OBS_STATE.expandedTool={}; OBS_STATE.expandedReply={};
+  }
 }
 function obsCanonicalQuery(overrides){
   var values={scope:OBS_STATE.scope,status:OBS_STATE.status,origin:OBS_STATE.origin,definition:OBS_STATE.definition,
@@ -3211,19 +3321,147 @@ function obsTabs(d){
     return '<button class="obs-tab'+(t===OBS_STATE.tab?' on':'')+'" data-obstab="'+t+'">'+lbl+(n?'<span class="filter-badge num" style="margin-left:6px">'+n+'</span>':'')+'</button>';
   }).join('');
 }
+function obsPrettyJson(raw){
+  if(raw==null||String(raw).trim()==='') return '—';
+  var s=String(raw);
+  try{ return JSON.stringify(JSON.parse(s),null,2); }catch(e){ return s; }
+}
+function obsDataLookup(data,keys){
+  if(!data) return '';
+  for(var i=0;i<keys.length;i++){ var v=data[keys[i]]; if(v!=null&&String(v).trim()!=='') return String(v); }
+  var lower={}; Object.keys(data).forEach(function(k){ lower[k.toLowerCase()]=data[k]; });
+  for(var j=0;j<keys.length;j++){ var v2=lower[String(keys[j]).toLowerCase()]; if(v2!=null&&String(v2).trim()!=='') return String(v2); }
+  return '';
+}
+function obsRenderDataChips(data){
+  if(!data||typeof data!=='object') return '';
+  var modelKeys=['model','model_id','modelId','model_name','modelName','deployment','provider'];
+  var tokenDefs=[['prompt',['prompt_tokens','promptTokens','input_tokens','inputTokens','prompt']],
+    ['completion',['completion_tokens','completionTokens','output_tokens','outputTokens','completion']],
+    ['total',['total_tokens','totalTokens','total']]];
+  var chipKeySet={}; modelKeys.concat(tokenDefs.reduce(function(a,x){return a.concat(x[1]);},[])).forEach(function(k){chipKeySet[k.toLowerCase()]=true;});
+  ['call_id','arguments_json','result_json','success','error'].forEach(function(k){chipKeySet[k]=true;});
+  var model=obsDataLookup(data,modelKeys);
+  var tokens=tokenDefs.map(function(d){return [d[0],obsDataLookup(data,d[1])];}).filter(function(x){return x[1];});
+  var extra=Object.keys(data).filter(function(k){return !chipKeySet[k.toLowerCase()]&&String(data[k]).trim()!=='';});
+  if(!model&&!tokens.length&&!extra.length) return '';
+  var html='';
+  if(model||tokens.length){
+    html+='<div class="datachips">';
+    if(model) html+='<span class="dchip"><span class="dk">模型</span><span class="dv">'+esc(model)+'</span></span>';
+    var labels={prompt:'输入',completion:'输出',total:'合计'};
+    tokens.forEach(function(t){ html+='<span class="dchip"><span class="dk">'+labels[t[0]]+'</span><span class="dv">'+esc(t[1])+'</span></span>'; });
+    html+='</div>';
+  }
+  if(extra.length){
+    html+='<details class="datamore"><summary>详情 · '+extra.length+'</summary><div class="datatable">';
+    extra.sort().forEach(function(k){ html+='<span class="dt-k">'+esc(k)+'</span><span class="dt-v">'+esc(String(data[k]))+'</span>'; });
+    html+='</div></details>';
+  }
+  return html;
+}
+function obsRenderToolCall(tc,forceOpen){
+  if(!tc) return '';
+  var open=!!forceOpen||!!(OBS_STATE.expandedTool&&OBS_STATE.expandedTool[tc.callId||tc.toolName]);
+  var ok=tc.success!==false;
+  var body='<div class="tc-field"><div class="tc-field-head"><span class="tc-field-label">参数 · arguments</span>'+
+    '<button class="ibtn" style="height:24px" data-act="obsCopyJson" data-copy="'+esc(tc.argumentsJson||'')+'">复制</button></div>'+
+    '<pre class="tc-json">'+esc(obsPrettyJson(tc.argumentsJson))+'</pre></div>';
+  if(ok){
+    body+='<div class="tc-field"><div class="tc-field-head"><span class="tc-field-label">结果 · result</span>'+
+      '<button class="ibtn" style="height:24px" data-act="obsCopyJson" data-copy="'+esc(tc.resultJson||'')+'">复制</button></div>'+
+      '<pre class="tc-json">'+esc(obsPrettyJson(tc.resultJson))+'</pre></div>';
+  } else {
+    body+='<div class="tc-field"><div class="tc-field-head"><span class="tc-field-label">错误 · error</span></div>'+
+      '<pre class="tc-json"><span class="tc-error">'+esc(tc.error||'unknown error')+'</span></pre></div>';
+  }
+  return '<div class="toolcall" data-open="'+(open?'true':'false')+'" data-callid="'+esc(tc.callId||tc.toolName||'')+'">'+
+    '<button type="button" class="tc-head" data-act="obsToggleTc" data-callid="'+esc(tc.callId||tc.toolName||'')+'" aria-expanded="'+(open?'true':'false')+'">'+
+      '<span class="tc-name">'+esc(tc.toolName||'tool')+'</span>'+
+      (tc.callId?'<span class="tc-callid">'+esc(tc.callId)+'</span>':'')+
+      '<span class="tc-status '+(ok?'ok':'bad')+'">'+(ok?'成功':'失败')+'</span></button>'+
+    '<div class="tc-body">'+body+'</div></div>';
+}
+function obsRenderReply(content,role){
+  var text=content==null?'':String(content);
+  if(!text.trim()) return '<div class="tl-reply"><div class="tl-reply-role">'+esc(role||'assistant')+' · 回复</div><div class="tl-msg">（无文本内容 —— 该回合可能仅触发工具调用）</div></div>';
+  var long=text.length>360||(text.match(/\n/g)||[]).length>8;
+  var id='reply-'+Math.abs(obsHash(text+String(role||'')));
+  var clamped=long&&!(OBS_STATE.expandedReply&&OBS_STATE.expandedReply[id]);
+  return '<div class="tl-reply" data-reply-id="'+id+'"><div class="tl-reply-role">'+esc(role||'assistant')+' · 回复</div>'+
+    '<div class="tl-reply-body'+(clamped?' clamp':'')+'" data-reply-body="'+id+'">'+esc(text)+'</div>'+
+    (long?'<button type="button" class="tl-more" data-act="obsToggleClamp" data-reply-id="'+id+'" aria-expanded="'+(clamped?'false':'true')+'">'+(clamped?'展开':'收起')+'</button>':'')+
+  '</div>';
+}
+function obsHash(s){ var h=0; s=String(s||''); for(var i=0;i<s.length;i++){ h=((h<<5)-h)+s.charCodeAt(i); h|=0; } return h; }
+function obsKindLabel(kind){
+  return {RunStarted:'运行开始',RunFinished:'运行完成',RunError:'运行错误',RunStopped:'运行停止',
+    StepStarted:'步骤开始',StepFinished:'步骤完成',ToolCall:'工具调用',Message:'模型回复',TextMessage:'模型回复',
+    HumanInputRequest:'待人工确认',SignalWaiting:'等待信号',SignalBuffered:'信号已缓冲',Step:'步骤'}[kind]||kind||'Event';
+}
+function obsNarrativeView(r){
+  var running=r.status==='running'||r.rawStatus==='running';
+  var inputBody=r.input&&String(r.input).trim()?('<pre>'+esc(r.input)+'</pre>'):'<div class="obs-io-empty">无输入</div>';
+  var outBody;
+  if(running&&!(r.finalOutput&&String(r.finalOutput).trim())) outBody='<div class="obs-io-empty">运行尚未完成，最终输出尚未物化</div>';
+  else if(r.finalOutput&&String(r.finalOutput).trim()) outBody='<pre>'+esc(r.finalOutput)+'</pre>';
+  else outBody='<div class="obs-io-empty">无最终输出</div>';
+  var err='';
+  if(r.finalError&&String(r.finalError).trim()){
+    err='<div class="obs-io-block err"><div class="obs-io-head">最终错误</div><pre>'+esc(r.finalError)+'</pre></div>';
+  }
+  return '<div class="obs-narrative">'+
+    '<details class="obs-io-block" open><summary>输入 · input</summary>'+inputBody+'</details>'+
+    '<details class="obs-io-block" open><summary>最终输出 · finalOutput</summary>'+outBody+'</details>'+
+    err+'</div>';
+}
+function obsDiagnosticStrip(r){
+  var bad=r.status==='failed'||r.status==='stopped'||r.rawStatus==='timed_out'||r.rawStatus==='failed'||r.rawStatus==='stopped';
+  if(!bad&&!(r.diagnostics&&r.diagnostics.length)) return '';
+  var items=(r.diagnostics||[]).slice(0,3);
+  if(!items.length&&!bad) return '';
+  var body=items.length?items.map(function(t){
+    return '<div class="ds-item"><b>'+esc((t.severity||'info').toUpperCase())+' · '+esc(t.code)+'</b> — '+esc(t.message||'')+
+      (t.stepId?' <span class="tnum">('+esc(t.stepId)+')</span>':'')+'</div>';
+  }).join(''):'<div class="ds-item">运行已进入终止态，但诊断尚未物化。请复制 run id 与 state version 排查。</div>';
+  return '<div class="diag-strip"><div class="ds-title">失败诊断 · '+(items.length||0)+' 条</div>'+body+'</div>';
+}
 function obsTimelineView(r){
-  return r.timeline.length?'<div class="timeline">'+r.timeline.map(function(s){
-    var errTxt=s.err||(s.st==='failed'&&r.diagnostics.length?r.diagnostics[0].message:'');
-    return '<div class="tl-item tl-'+s.st+'"><span class="tl-time tnum">'+esc(s.t)+'</span><span class="tl-dot"></span>'+
-      '<span class="tl-body"><span class="tl-step">'+esc(s.step)+'</span>'+statusTag(s.st)+(s.dur?'<span class="tl-dur tnum">'+esc(s.dur)+'</span>':'')+
-      (s.msg&&!errTxt?'<span class="tl-msg">'+esc(s.msg)+'</span>':'')+
-      (errTxt?'<span class="tl-err">'+esc(errTxt)+'</span>':'')+'</span></div>';
-  }).join('')+'</div>':emptyBlock('run').replace('暂无 Run','暂无事件').replace('该员工还没有执行记录。','本次 Run 尚无 timeline 事件。');
+  var rows=r.events&&r.events.length?r.events:r.timeline;
+  if(!rows||!rows.length) return emptyBlock('run').replace('暂无 Run','暂无事件').replace('该员工还没有执行记录。','本次 Run 尚无 timeline 事件。');
+  var html='<p class="tl-note">按时间自上而下 · 展示 committed timeline（含 tool 参数/结果与模型回复全文）</p><div class="timeline">';
+  rows.forEach(function(e){
+    var kind=e.kind||'Event';
+    var st=e.st||'running';
+    var title=obsKindLabel(kind)+(e.stepId?' · '+e.stepId:'')+(e.agentId?' · @'+e.agentId:'');
+    var body='';
+    if(kind==='ToolCall'&&e.toolCall){ body=obsRenderToolCall(e.toolCall); }
+    else if(kind==='Message'||kind==='TextMessage'||(e.content&&String(e.content).trim())){
+      body=obsRenderReply(e.content||e.text||e.message||'', e.agentId||e.stepId||'assistant');
+    } else if(e.err||st==='failed'){
+      body='<span class="tl-err">'+esc(e.err||e.text||e.message||'')+'</span>';
+    } else if(e.message||e.text||e.msg){
+      body='<span class="tl-msg">'+esc(e.message||e.text||e.msg||'')+'</span>';
+    }
+    var chips=kind==='ToolCall'?'':obsRenderDataChips(e.data);
+    html+='<div class="tl-item tl-'+st+'"><span class="tl-time tnum">'+esc(e.t||obsTime(e.timestampUtc))+'</span><span class="tl-dot"></span>'+
+      '<span class="tl-body"><span class="tl-step">'+esc(title)+'</span><span class="tl-kind">'+esc(kind)+'</span>'+statusTag(st)+
+      (e.dur?'<span class="tl-dur tnum">'+esc(e.dur)+'</span>':'')+body+chips+'</span></div>';
+  });
+  return html+'</div>';
 }
 function obsStepsView(r){
   if(!r.steps.length) return emptyBlock('run').replace('暂无 Run','暂无步骤').replace('该员工还没有执行记录。','本次 Run 尚无步骤 trace。');
+  var evByStep={};
+  (r.events||[]).forEach(function(e){ if(!e.stepId) return; (evByStep[e.stepId]=evByStep[e.stepId]||[]).push(e); });
   return '<div class="step-list">'+r.steps.map(function(s){
-    var params=Object.keys(s.params||{}).sort().map(function(k){return '<span class="param-pill">'+esc(k)+'='+esc(s.params[k])+'</span>';}).join('');
+    var params=Object.keys(s.params||{}).sort();
+    var paramHtml=params.length?'<div class="param-pills">'+params.map(function(k){
+      return '<span class="param-pill">'+esc(k)+'='+esc(s.params[k])+'</span>'; }).join('')+'</div>':'';
+    var related=evByStep[s.stepId]||[];
+    var tools=related.filter(function(e){return e.kind==='ToolCall';}).length;
+    var lastErr=(related.filter(function(e){return e.st==='failed'||(e.toolCall&&e.toolCall.success===false);}).pop()||{}).text||s.error||'';
+    var summary=related.length?'<div class="step-preview-note">关联 timeline 事件 '+related.length+(tools?' · tool 调用 '+tools:'')+(lastErr?' · 最近错误见下':'')+' · 完整内容见 Timeline</div>':'';
     return '<div class="step-card '+(s.status==='failed'?'failed':'')+'">'+
       '<div class="step-head"><span class="step-title">'+esc(s.stepId||('step '+s.idx))+'</span>'+statusTag(s.status)+
       '<span class="step-meta">'+esc(s.stepType||'unknown')+(s.targetRole?' · @'+esc(s.targetRole):'')+'</span></div>'+
@@ -3232,10 +3470,10 @@ function obsStepsView(r){
         '<div class="step-kv"><b>completed</b><span>'+esc(s.completedAtUtc||'—')+'</span></div>'+
         '<div class="step-kv"><b>duration</b><span>'+esc(s.duration)+'</span></div>'+
         '<div class="step-kv"><b>route</b><span>'+esc((s.branchKey||'default')+(s.nextStepId?' -> '+s.nextStepId:''))+'</span></div>'+
-      '</div>'+
-      (params?'<div class="param-pills">'+params+'</div>':'')+
+      '</div>'+paramHtml+
       (s.error?'<div class="tl-err" style="margin-top:8px">'+esc(s.error)+'</div>':'')+
-      (s.outputPreview?'<div class="tl-msg" style="margin-top:8px">'+esc(s.outputPreview)+'</div>':'')+
+      (s.outputPreview?'<div class="tl-msg" style="margin-top:8px">'+esc(s.outputPreview)+'</div><div class="step-preview-note">outputPreview 为 240 字预览；完整 role/tool 输出见 Timeline</div>':'')+
+      summary+
     '</div>';
   }).join('')+'</div>';
 }
@@ -3274,6 +3512,7 @@ function obsDetail(r){
   head='<div class="obs-detail-head"><div class="odh-top"><span class="sub-title" style="font-size:16px">'+esc(r.name)+'</span>'+statusTag(r.status)+'</div><div class="run-chips">'+chips+'</div></div>'+
     (cache.refreshErr?'<div class="obs-stale">'+ICON.warn+'<span>刷新失败，当前展示缓存数据：'+esc(cache.refreshErr)+'</span></div>':'');
   var usage='<div class="usage-strip">'+
+    usageCell('prompt',r.usage.promptTokens)+usageCell('completion',r.usage.completionTokens)+
     usageCell('tokens',r.usage.tokens)+usageCell('steps',r.usage.steps)+usageCell('time',r.usage.time)+usageCell('cost',r.usage.cost)+'</div>';
   var tabs=obsTabs(r);
   var content;
@@ -3284,22 +3523,213 @@ function obsDetail(r){
   } else if(OBS_STATE.tab==='diagnostics'){
     content=obsDiagnosticsView(r)+obsIssueView(r);
   } else if(OBS_STATE.tab==='logs'){
-    content=r.logs.length?'<pre class="logs">'+r.logs.map(esc).join('\n')+'</pre>':emptyBlock('run').replace('暂无 Run','暂无日志').replace('该员工还没有执行记录。','本次 Run 尚无日志输出。');
+    content=(r.logs.length
+      ?'<p class="logs-note">派生视图：由 diagnostics + committed timeline 组装，不是独立日志流。</p><pre class="logs">'+r.logs.map(esc).join('\n')+'</pre>'
+      :emptyBlock('run').replace('暂无 Run','暂无日志').replace('该员工还没有执行记录。','本次 Run 尚无日志输出。'));
   } else if(OBS_STATE.tab==='artifacts'){
     content=r.artifacts.length?'<div class="artifacts">'+r.artifacts.map(function(a){
-      return '<div class="artifact-item"><span class="art-name tnum">'+esc(a.name)+'</span><span class="art-size tnum">'+esc(a.size)+'</span><button class="ibtn" style="height:26px" data-act="artDl" data-name="'+esc(a.name)+'">下载</button></div>';
+      return '<div class="artifact-item" style="flex-wrap:wrap"><span class="art-name tnum">'+esc(a.name)+'</span><span class="art-size tnum">'+esc(a.size)+'</span>'+
+        '<button class="ibtn" style="height:26px" data-act="artDl" data-name="'+esc(a.name)+'">下载</button>'+
+        (a.content!=null?'<pre class="art-preview" style="width:100%">'+esc(a.content)+'</pre>':'')+'</div>';
     }).join('')+'</div>':emptyBlock('run').replace('暂无 Run','暂无产出').replace('该员工还没有执行记录。','本次 Run 尚未生成最终产出。');
   } else {
-    content='<div class="dag">'+r.graph.map(function(n){
-      var sd={running:'var(--running)',success:'var(--success)',failed:'var(--failed)',waiting:'var(--idle)'}[n.st]||'var(--idle)';
-      return '<div class="dag-node"><span class="dag-dot" style="background:'+sd+'"></span><span class="dag-name">'+esc(n.name)+'</span>'+statusTag(n.st)+'<span class="dag-io tnum">'+esc(n.io)+'</span></div>';
-    }).join('<div class="dag-link"></div>')+'</div>';
+    content=obsGraphView(r);
   }
-  return head+usage+
+  return head+usage+obsDiagnosticStrip(r)+obsNarrativeView(r)+
     '<div class="obs-tabs">'+tabs+'</div><div class="obs-tab-body">'+content+'</div>';
 }
+function obsGraphView(r){
+  var g=r.graph;
+  if(!g||!g.nodes||!g.nodes.length){
+    return emptyBlock('run').replace('暂无 Run','暂无拓扑').replace('该员工还没有执行记录。','本次 Run 尚无 graph 节点。');
+  }
+  var horizontal=(typeof window!=='undefined'&&window.innerWidth>720);
+  var NW=220,NH=86,GX=120,GY=72,PAD=28;
+  var ids=g.nodes.map(function(n){return n.nodeId;});
+  var idSet={}; ids.forEach(function(id){idSet[id]=true;});
+  var outAdj={},indeg={}; ids.forEach(function(id){outAdj[id]=[];indeg[id]=0;});
+  (g.edges||[]).forEach(function(e){
+    if(idSet[e.fromNodeId]&&idSet[e.toNodeId]&&e.fromNodeId!==e.toNodeId){
+      outAdj[e.fromNodeId].push(e.toNodeId); indeg[e.toNodeId]=(indeg[e.toNodeId]||0)+1;
+    }
+  });
+  var roots=ids.filter(function(id){return !indeg[id];});
+  if(!roots.length) roots=[(g.rootNodeId&&idSet[g.rootNodeId])?g.rootNodeId:ids[0]];
+  var depth={}; ids.forEach(function(id){depth[id]=0;});
+  var queue=roots.slice(),guard=0,cap=ids.length*ids.length+16;
+  while(queue.length&&guard++<cap){
+    var id=queue.shift();
+    (outAdj[id]||[]).forEach(function(c){
+      if(depth[c]<depth[id]+1){ depth[c]=depth[id]+1; queue.push(c); }
+    });
+  }
+  var rowByDepth={},pos={};
+  g.nodes.forEach(function(nd){
+    var d=depth[nd.nodeId]||0;
+    var row=rowByDepth[d]===undefined?0:rowByDepth[d]+1;
+    rowByDepth[d]=row;
+    pos[nd.nodeId]=horizontal?{x:PAD+d*(NW+GX),y:PAD+row*(NH+GY)}:{x:PAD+row*(NW+GX),y:PAD+d*(NH+GY)};
+  });
+  var maxDepth=ids.reduce(function(m,id){return Math.max(m,depth[id]||0);},0);
+  var maxRow=Object.keys(rowByDepth).reduce(function(m,k){return Math.max(m,rowByDepth[k]);},0);
+  var cols=horizontal?maxDepth:maxRow;
+  var rows=horizontal?maxRow:maxDepth;
+  var W=PAD*2+(cols+1)*NW+cols*GX;
+  var H=PAD*2+(rows+1)*NH+rows*GY;
+  var nextTargets={};
+  (g.edges||[]).forEach(function(e){ if(e.edgeType==='NEXT') nextTargets[e.toNodeId]=true; });
+  var paths='',labels='';
+  (g.edges||[]).forEach(function(e){
+    if(e.edgeType==='CONTAINS_STEP'&&nextTargets[e.toNodeId]) return;
+    var a=pos[e.fromNodeId],b=pos[e.toNodeId]; if(!a||!b) return;
+    var x1,y1,x2,y2,mx,my,d;
+    if(horizontal){ x1=a.x+NW; y1=a.y+NH/2; x2=b.x; y2=b.y+NH/2; var cx=(x1+x2)/2; d='M'+x1+','+y1+' C'+cx+','+y1+' '+cx+','+y2+' '+x2+','+y2; mx=(x1+x2)/2; my=(y1+y2)/2; }
+    else { x1=a.x+NW/2; y1=a.y+NH; x2=b.x+NW/2; y2=b.y; var cy=(y1+y2)/2; d='M'+x1+','+y1+' C'+x1+','+cy+' '+x2+','+cy+' '+x2+','+y2; mx=(x1+x2)/2; my=(y1+y2)/2; }
+    var isFlow=e.edgeType==='NEXT';
+    var isContains=e.edgeType==='CONTAINS_STEP';
+    var stroke=isFlow?'var(--primary)':'var(--faint)';
+    var sw=isFlow?'2':'1.5';
+    var dash=isContains?' stroke-dasharray="3 4" opacity=".35"':(b&&false?'':'');
+    var marker=isFlow?'url(#obsArrowFlow)':'url(#obsArrow)';
+    paths+='<path d="'+d+'" fill="none" stroke="'+stroke+'" stroke-width="'+sw+'" marker-end="'+marker+'"'+dash+'></path>';
+    var lab=isFlow?(e.branchKey||''):(isContains?'':(e.edgeType||''));
+    if(lab) labels+='<span class="edge-label'+(isFlow?' flow':'')+'" style="left:'+mx+'px;top:'+my+'px">'+esc(lab)+'</span>';
+  });
+  var nodesHtml=g.nodes.map(function(nd){
+    var p=pos[nd.nodeId]||{x:0,y:0};
+    var sel=OBS_STATE.graphNodeId===nd.nodeId?' selected':'';
+    return '<button type="button" class="obs-gnode st-'+esc(nd.st||'waiting')+sel+'" data-obs-node="'+esc(nd.nodeId)+'" style="left:'+p.x+'px;top:'+p.y+'px" aria-label="节点 '+esc(nd.stepId||nd.nodeId)+'">'+
+      '<div class="gn-id" title="'+esc(nd.nodeId)+'">'+esc(nd.stepId||nd.name||nd.nodeId)+'</div>'+
+      '<div class="gn-type">'+esc(nd.nodeType||'—')+'</div>'+
+      '<div class="gn-foot"><span>'+statusTag(nd.st||'waiting')+'</span><span class="tnum">in '+(nd.incoming||0)+' / out '+(nd.outgoing||0)+'</span></div>'+
+    '</button>';
+  }).join('');
+  var gv=OBS_STATE.graphView||{zoom:1,panX:0,panY:0,fitted:false};
+  var transform='translate('+gv.panX+'px,'+gv.panY+'px) scale('+gv.zoom+')';
+  return '<div class="obs-graph-host" data-obs-graph-w="'+W+'" data-obs-graph-h="'+H+'">'+
+    '<div class="obs-graph-wrap" role="application" aria-label="工作流拓扑图：滚轮缩放、拖拽平移、点击节点查看详情">'+
+      '<div class="obs-graph-viewport" style="transform:'+transform+'">'+
+        '<div class="obs-graph-canvas" style="width:'+W+'px;height:'+H+'px">'+
+          '<svg width="'+W+'" height="'+H+'" aria-hidden="true"><defs>'+
+            '<marker id="obsArrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--faint)"/></marker>'+
+            '<marker id="obsArrowFlow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--primary)"/></marker>'+
+          '</defs>'+paths+'</svg>'+nodesHtml+labels+
+        '</div></div>'+
+      '<div class="obs-graph-controls" role="group" aria-label="缩放控制">'+
+        '<button type="button" data-obs-graph-act="zoom-in" title="放大" aria-label="放大">+</button>'+
+        '<div class="obs-graph-zoom" data-obs-graph-zoom>'+Math.round((gv.zoom||1)*100)+'%</div>'+
+        '<button type="button" data-obs-graph-act="zoom-out" title="缩小" aria-label="缩小">−</button>'+
+        '<button type="button" data-obs-graph-act="fit" title="适应窗口" aria-label="适应窗口">fit</button>'+
+        '<button type="button" data-obs-graph-act="one" title="实际大小" aria-label="实际大小">1:1</button>'+
+      '</div></div>'+
+    '<div class="obs-graph-legend">'+
+      '<span class="lg"><span class="sw done"></span>已完成</span>'+
+      '<span class="lg"><span class="sw current"></span>进行中</span>'+
+      '<span class="lg"><span class="sw failed"></span>失败</span>'+
+      '<span class="lg"><span class="sw stopped"></span>已停止</span>'+
+      '<span class="lg"><span class="sw pending"></span>待执行</span>'+
+    '</div></div>';
+}
+function obsApplyGraphTransform(root){
+  var wrap=root.querySelector('.obs-graph-wrap'); if(!wrap) return;
+  var vp=wrap.querySelector('.obs-graph-viewport'); if(!vp) return;
+  var v=OBS_STATE.graphView||{zoom:1,panX:0,panY:0};
+  vp.style.transform='translate('+v.panX+'px,'+v.panY+'px) scale('+v.zoom+')';
+  var lab=wrap.querySelector('[data-obs-graph-zoom]'); if(lab) lab.textContent=Math.round((v.zoom||1)*100)+'%';
+}
+function obsFitGraph(root,readableFloor){
+  var host=root.querySelector('.obs-graph-host'); var wrap=root.querySelector('.obs-graph-wrap');
+  if(!host||!wrap) return;
+  var W=parseFloat(host.getAttribute('data-obs-graph-w')||'0'), H=parseFloat(host.getAttribute('data-obs-graph-h')||'0');
+  var vw=wrap.clientWidth, vh=wrap.clientHeight; if(!vw||!vh||!W||!H) return;
+  var pad=28, z=Math.max(0.3,Math.min((vw-pad*2)/W,(vh-pad*2)/H,1,2));
+  if(readableFloor&&z<readableFloor){ OBS_STATE.graphView={zoom:readableFloor,panX:pad,panY:Math.max(pad,(vh-H*readableFloor)/2),fitted:true}; }
+  else { OBS_STATE.graphView={zoom:z,panX:(vw-W*z)/2,panY:(vh-H*z)/2,fitted:true}; }
+  obsApplyGraphTransform(root);
+}
+function obsZoomGraphAt(root,factor,cx,cy){
+  var v=OBS_STATE.graphView||{zoom:1,panX:0,panY:0,fitted:false};
+  var nz=Math.max(0.3,Math.min(2,v.zoom*factor));
+  var k=nz/v.zoom;
+  OBS_STATE.graphView={zoom:nz,panX:cx-(cx-v.panX)*k,panY:cy-(cy-v.panY)*k,fitted:true};
+  obsApplyGraphTransform(root);
+}
+function obsBindGraph(root){
+  var wrap=root.querySelector('.obs-graph-wrap'); if(!wrap||wrap.getAttribute('data-obs-bound')==='1') return;
+  wrap.setAttribute('data-obs-bound','1');
+  if(!(OBS_STATE.graphView&&OBS_STATE.graphView.fitted)){
+    setTimeout(function(){ obsFitGraph(root,0.55); },0);
+  } else {
+    obsApplyGraphTransform(root);
+  }
+  wrap.addEventListener('wheel',function(e){
+    e.preventDefault();
+    var rect=wrap.getBoundingClientRect();
+    obsZoomGraphAt(root,e.deltaY<0?1.1:1/1.1,e.clientX-rect.left,e.clientY-rect.top);
+  },{passive:false});
+  var dragging=false,pid=null,sx=0,sy=0,ox=0,oy=0;
+  wrap.addEventListener('pointerdown',function(e){
+    if(e.button!==0||e.target.closest('[data-obs-node], .obs-graph-controls')) return;
+    dragging=true; pid=e.pointerId; sx=e.clientX; sy=e.clientY;
+    var v=OBS_STATE.graphView||{panX:0,panY:0,zoom:1}; ox=v.panX; oy=v.panY;
+    wrap.classList.add('is-panning');
+    try{ wrap.setPointerCapture(e.pointerId); }catch(_){}
+  });
+  wrap.addEventListener('pointermove',function(e){
+    if(!dragging||e.pointerId!==pid) return;
+    var v=OBS_STATE.graphView||{zoom:1,panX:0,panY:0};
+    OBS_STATE.graphView={zoom:v.zoom,panX:ox+(e.clientX-sx),panY:oy+(e.clientY-sy),fitted:true};
+    obsApplyGraphTransform(root);
+  });
+  function end(){ if(!dragging) return; dragging=false; wrap.classList.remove('is-panning'); try{ wrap.releasePointerCapture(pid); }catch(_){} }
+  wrap.addEventListener('pointerup',end);
+  wrap.addEventListener('pointercancel',end);
+  wrap.addEventListener('click',function(e){
+    var act=e.target.closest('[data-obs-graph-act]');
+    if(act){
+      var a=act.getAttribute('data-obs-graph-act');
+      if(a==='zoom-in') obsZoomGraphAt(root,1.2,wrap.clientWidth/2,wrap.clientHeight/2);
+      else if(a==='zoom-out') obsZoomGraphAt(root,1/1.2,wrap.clientWidth/2,wrap.clientHeight/2);
+      else if(a==='fit') obsFitGraph(root);
+      else if(a==='one'){ var v=OBS_STATE.graphView||{}; OBS_STATE.graphView={zoom:1,panX:v.panX||0,panY:v.panY||0,fitted:true}; obsApplyGraphTransform(root); }
+      return;
+    }
+    var node=e.target.closest('[data-obs-node]');
+    if(node){ obsOpenGraphNode(node.getAttribute('data-obs-node')); }
+  });
+}
+function obsOpenGraphNode(nodeId){
+  var sel=obsSelected(), cache=sel&&OBS_DETAIL[sel.id], detail=cache&&cache.detail;
+  if(!detail||!detail.graph) return;
+  var node=(detail.graph.nodes||[]).filter(function(n){return n.nodeId===nodeId;})[0];
+  if(!node){ OBS_STATE.graphNodeId=null; return; }
+  OBS_STATE.graphNodeId=nodeId;
+  var events=(detail.events||detail.timeline||[]).filter(function(e){return node.stepId&&e.stepId===node.stepId;});
+  var body='<div class="drawer-section"><h4>节点</h4>'+
+    '<div class="step-grid">'+
+      '<div class="step-kv"><b>status</b><span>'+statusTag(node.st||'waiting')+'</span></div>'+
+      '<div class="step-kv"><b>type</b><span>'+esc(node.nodeType||'—')+'</span></div>'+
+      '<div class="step-kv"><b>nodeId</b><span>'+esc(node.nodeId)+'</span></div>'+
+      '<div class="step-kv"><b>stepId</b><span>'+esc(node.stepId||'—')+'</span></div>'+
+      '<div class="step-kv"><b>incoming</b><span>'+esc(String(node.incoming||0))+'</span></div>'+
+      '<div class="step-kv"><b>outgoing</b><span>'+esc(String(node.outgoing||0))+'</span></div>'+
+    '</div></div>'+
+    '<div class="drawer-section"><h4>关联 timeline · '+events.length+'</h4>'+
+    (events.length?events.map(function(e){
+      var block='<div class="step-card" style="margin-bottom:8px"><div class="step-head"><span class="step-title">'+esc(obsKindLabel(e.kind))+'</span><span class="step-meta">'+esc(e.t||obsTime(e.timestampUtc))+'</span></div>';
+      if(e.kind==='ToolCall'&&e.toolCall) block+=obsRenderToolCall(e.toolCall,true);
+      else if(e.content) block+=obsRenderReply(e.content,e.agentId||e.stepId);
+      else if(e.message||e.text) block+='<div class="tl-msg">'+esc(e.message||e.text)+'</div>';
+      block+=obsRenderDataChips(e.data);
+      return block+'</div>';
+    }).join(''):'<div class="es">'+(node.stepId?'该步骤尚无执行事件。':'拓扑节点 · 无独立步骤事件，状态反映整体运行。')+'</div>')+
+    '</div>';
+  openInspector(body,{title:node.stepId||node.name||node.nodeId, sub:node.nodeType||'graph node'});
+  var host=document.getElementById('obs-detail');
+  if(host){ host.querySelectorAll('[data-obs-node]').forEach(function(btn){ btn.classList.toggle('selected',btn.getAttribute('data-obs-node')===nodeId); }); }
+}
 function usageCell(k,v){
-  var lbl={tokens:'Tokens',steps:'Steps',time:'耗时',cost:'成本'}[k];
+  var lbl={prompt:'输入 Tokens',completion:'输出 Tokens',tokens:'合计 Tokens',steps:'Steps',time:'耗时',cost:'成本'}[k];
   return '<div class="usage-cell"><span class="uc-l">'+lbl+'</span><span class="uc-v num">'+esc(v)+'</span></div>';
 }
 function obsFilterChips(){
@@ -3366,7 +3796,7 @@ function bindObservatory(root){
   }
   function reList(){ var l=root.querySelector('#obs-list'); if(l) l.innerHTML=obsList(); reCounts(); }
   function reDetail(resetScroll){ var d=root.querySelector('#obs-detail'),inner=d&&d.querySelector('.obs-detail-inner'); if(d&&inner){ var scrollTop=resetScroll?0:d.scrollTop;
-    inner.innerHTML=obsDetail(obsSelected()); d.scrollTop=scrollTop; } }
+    inner.innerHTML=obsDetail(obsSelected()); d.scrollTop=scrollTop; if(d) obsBindGraph(d); } }
   function reBar(){ var b=root.querySelector('.obs-filterbar'); if(b) b.outerHTML=obsFilterBar(); }
   function selectRun(id){ obsNavigate({run:id}); }
   /* 首屏拉取真实运行列表，到达后选中首行并预取其详情 */
@@ -3406,6 +3836,21 @@ function bindObservatory(root){
       copyWithToast(cv, '已复制 run id：'+cv, '复制失败，请手动选择：'+cv); }
     else if(a==='obsCopyIssue'){ var si=obsSelected(), cd=si&&OBS_DETAIL[si.id], iv=(cd&&cd.detail&&cd.detail.issue)||'{}';
       copyWithToast(iv, '已复制 issue payload', '复制失败，请手动选择 issue payload'); }
+    else if(a==='obsToggleTc'){
+      var callId=act.getAttribute('data-callid')||'';
+      OBS_STATE.expandedTool=OBS_STATE.expandedTool||{};
+      OBS_STATE.expandedTool[callId]=!OBS_STATE.expandedTool[callId];
+      var box=act.closest('.toolcall'); if(box){ var open=!!OBS_STATE.expandedTool[callId]; box.setAttribute('data-open',open?'true':'false'); act.setAttribute('aria-expanded',open?'true':'false'); }
+    } else if(a==='obsToggleClamp'){
+      var rid=act.getAttribute('data-reply-id')||'';
+      OBS_STATE.expandedReply=OBS_STATE.expandedReply||{};
+      OBS_STATE.expandedReply[rid]=!OBS_STATE.expandedReply[rid];
+      var body=root.querySelector('[data-reply-body="'+rid+'"]');
+      if(body){ var open=!!OBS_STATE.expandedReply[rid]; body.classList.toggle('clamp',!open); act.setAttribute('aria-expanded',open?'true':'false'); act.textContent=open?'收起':'展开'; }
+    } else if(a==='obsCopyJson'){
+      var jv=act.getAttribute('data-copy')||'';
+      copyWithToast(jv, '已复制 JSON', '复制失败，请手动选择');
+    }
     else if(a==='artDl'){ var sel=obsSelected(), cache=sel&&OBS_DETAIL[sel.id], d=cache&&cache.detail;
       var art=d&&(d.artifacts||[]).filter(function(x){return x.name===act.getAttribute('data-name');})[0];
       if(art&&art.content!=null){ try{ var blob=new Blob([art.content],{type:'text/plain'}); var u=URL.createObjectURL(blob);
@@ -4753,6 +5198,27 @@ function openInspector(bodyHTML, opts){
     root.querySelector('.drawer').classList.add('open');
     var cb=root.querySelector('.drawer-close'); if(cb) cb.focus();
   });
+  if(!root._obsDrawerBound){
+    root._obsDrawerBound=true;
+    root.addEventListener('click',function(ev){
+      var act=ev.target.closest&&ev.target.closest('[data-act]'); if(!act) return;
+      var a=act.getAttribute('data-act');
+      if(a==='obsToggleTc'){
+        var callId=act.getAttribute('data-callid')||'';
+        OBS_STATE.expandedTool=OBS_STATE.expandedTool||{};
+        OBS_STATE.expandedTool[callId]=!OBS_STATE.expandedTool[callId];
+        var box=act.closest('.toolcall'); if(box){ var open=!!OBS_STATE.expandedTool[callId]; box.setAttribute('data-open',open?'true':'false'); act.setAttribute('aria-expanded',open?'true':'false'); }
+      } else if(a==='obsToggleClamp'){
+        var rid=act.getAttribute('data-reply-id')||'';
+        OBS_STATE.expandedReply=OBS_STATE.expandedReply||{};
+        OBS_STATE.expandedReply[rid]=!OBS_STATE.expandedReply[rid];
+        var body=root.querySelector('[data-reply-body="'+rid+'"]');
+        if(body){ var open2=!!OBS_STATE.expandedReply[rid]; body.classList.toggle('clamp',!open2); act.setAttribute('aria-expanded',open2?'true':'false'); act.textContent=open2?'收起':'展开'; }
+      } else if(a==='obsCopyJson'){
+        copyWithToast(act.getAttribute('data-copy')||'', '已复制 JSON', '复制失败，请手动选择');
+      }
+    });
+  }
 }
 function closeDrawer(){
   var root=document.getElementById('drawer-root');
