@@ -228,6 +228,7 @@ public static class ChannelCallbackEndpoints
                 nyx_provider_slug = e.NyxProviderSlug,
                 scope_id = e.ScopeId,
                 callback_url = string.Empty,
+                webhook_url = e.WebhookUrl,
                 nyx_channel_bot_id = e.NyxChannelBotId,
                 nyx_agent_api_key_id = e.NyxAgentApiKeyId,
                 nyx_conversation_route_id = e.NyxConversationRouteId,

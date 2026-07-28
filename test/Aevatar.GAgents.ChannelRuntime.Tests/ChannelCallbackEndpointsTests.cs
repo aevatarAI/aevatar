@@ -623,6 +623,7 @@ public sealed class ChannelCallbackEndpointsTests
             NyxProviderSlug = "api-lark-bot",
             ScopeId = "scope-1",
             NyxChannelBotId = "bot-1",
+            WebhookUrl = "https://nyx.example/api/v1/webhooks/channel/lark/bot-alpha",
         });
         var http = CreateHttpContext("scope-1");
 
@@ -632,6 +633,7 @@ public sealed class ChannelCallbackEndpointsTests
         response.StatusCode.Should().Be(StatusCodes.Status200OK);
         response.Body.Should().Contain("\"registration_mode\":\"nyx_relay_webhook\"");
         response.Body.Should().Contain("\"callback_url\":\"\"");
+        response.Body.Should().Contain("\"webhook_url\":\"https://nyx.example/api/v1/webhooks/channel/lark/bot-alpha\"");
         response.Body.Should().Contain("\"owned\":true");
         response.Body.Should().Contain("\"workflow_result_delivery_status\":\"repair_required\"");
     }
