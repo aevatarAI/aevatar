@@ -851,6 +851,7 @@ message WorkflowToolRuntimeContextPayload
 message WorkflowAgentToolScope
 {
   repeated string allowed_tool_names = 1;
+  repeated string tool_set_refs = 2;
 }
 
 message WorkflowLlmInvocationStartedEvent

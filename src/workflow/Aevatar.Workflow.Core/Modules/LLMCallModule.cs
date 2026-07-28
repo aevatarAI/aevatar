@@ -531,6 +531,12 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             if (normalized is not null)
                 intent.AgentToolScope.AllowedToolNames.Add(normalized);
         }
+        foreach (var toolSetRef in source.ToolSetRefs)
+        {
+            var normalized = Normalize(toolSetRef);
+            if (normalized is not null)
+                intent.AgentToolScope.ToolSetRefs.Add(normalized);
+        }
     }
 
     private static bool TryResolvePending(

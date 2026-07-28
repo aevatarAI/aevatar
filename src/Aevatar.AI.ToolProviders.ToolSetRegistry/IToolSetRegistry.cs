@@ -7,6 +7,9 @@ public interface IToolSetRegistry
 {
     IReadOnlyList<string> GetRegisteredNames();
 
+    ToolSetResolveResult Resolve(string? name) =>
+        Resolve(new ChatRouteToolSetRef { Name = name ?? string.Empty });
+
     ToolSetResolveResult Resolve(ChatRouteToolSetRef? toolSetRef);
 }
 

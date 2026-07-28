@@ -933,6 +933,7 @@ public sealed class IdempotentStepExecutionTests
                     AgentToolScope = new WorkflowAgentToolScopeDefinition
                     {
                         AllowedToolNames = ["search", "calendar"],
+                        ToolSetRefs = ["nyxid.connected_services", "shared"],
                     },
                 },
             ],
@@ -946,6 +947,7 @@ public sealed class IdempotentStepExecutionTests
                     AgentToolScope = new WorkflowAgentToolScopeDefinition
                     {
                         AllowedToolNames = ["calendar", "forbidden"],
+                        ToolSetRefs = ["nyxid.connected_services", "other"],
                     },
                 },
             ],
@@ -957,6 +959,7 @@ public sealed class IdempotentStepExecutionTests
         var request = StepRequests(ctx).Single();
         request.StepParameters.AgentToolScope.Should().NotBeNull();
         request.StepParameters.AgentToolScope.AllowedToolNames.Should().Equal("calendar");
+        request.StepParameters.AgentToolScope.ToolSetRefs.Should().Equal("nyxid.connected_services");
     }
 
     [Fact]

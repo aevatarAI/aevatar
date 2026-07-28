@@ -2066,6 +2066,8 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         var payload = (request.StepParameters ??= new WorkflowStepParameters()).AgentToolScope = new WorkflowAgentToolScope();
         foreach (var toolName in effectiveScope.AllowedToolNames)
             payload.AllowedToolNames.Add(toolName);
+        foreach (var toolSetRef in effectiveScope.ToolSetRefs)
+            payload.ToolSetRefs.Add(toolSetRef);
     }
 
     private static WorkflowAgentToolScopeDefinition? IntersectAgentToolScope(
@@ -2079,10 +2081,15 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             return CloneAgentToolScope(roleScope);
 
         var stepAllowed = new HashSet<string>(stepScope.AllowedToolNames, StringComparer.OrdinalIgnoreCase);
+        var stepToolSets = new HashSet<string>(stepScope.ToolSetRefs, StringComparer.OrdinalIgnoreCase);
         return new WorkflowAgentToolScopeDefinition
         {
             AllowedToolNames = roleScope.AllowedToolNames
                 .Where(stepAllowed.Contains)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList(),
+            ToolSetRefs = roleScope.ToolSetRefs
+                .Where(stepToolSets.Contains)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList(),
         };
@@ -2092,6 +2099,9 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         new()
         {
             AllowedToolNames = scope.AllowedToolNames
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList(),
+            ToolSetRefs = scope.ToolSetRefs
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList(),
         };
