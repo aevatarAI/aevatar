@@ -735,6 +735,8 @@ public sealed class WorkflowRuntimeModuleBranchTests
                 {
                     AgentToolScope = new WorkflowAgentToolScope
                     {
+                        RestrictAllowedToolNames = true,
+                        RestrictToolSets = true,
                         AllowedToolNames = { "search" },
                         ToolSetRefs = { "nyxid.connected_services" },
                     },
@@ -747,6 +749,8 @@ public sealed class WorkflowRuntimeModuleBranchTests
         intent.AgentToolScope.Should().NotBeNull();
         intent.AgentToolScope.AllowedToolNames.Should().Equal("search");
         intent.AgentToolScope.ToolSetRefs.Should().Equal("nyxid.connected_services");
+        intent.AgentToolScope.RestrictAllowedToolNames.Should().BeTrue();
+        intent.AgentToolScope.RestrictToolSets.Should().BeTrue();
         intent.Annotations.Should().NotContainKey("allowed_tools");
     }
 

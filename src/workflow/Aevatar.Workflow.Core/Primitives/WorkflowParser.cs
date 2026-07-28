@@ -313,6 +313,8 @@ public sealed class WorkflowParser
 
         return new WorkflowAgentToolScopeDefinition
         {
+            RestrictAllowedToolNames = allowedToolsSource is not null,
+            RestrictToolSets = toolSetsSource is not null,
             AllowedToolNames = NormalizeToolNames(allowedToolsSource).ToList(),
             ToolSetRefs = NormalizeToolNames(toolSetsSource).ToList(),
         };

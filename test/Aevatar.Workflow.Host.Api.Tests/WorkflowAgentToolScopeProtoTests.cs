@@ -11,6 +11,8 @@ public sealed class WorkflowAgentToolScopeProtoTests
     {
         var scope = new WorkflowAgentToolScope
         {
+            RestrictAllowedToolNames = true,
+            RestrictToolSets = true,
             AllowedToolNames = { "search" },
             ToolSetRefs = { "nyxid.connected_services" },
         };
@@ -19,5 +21,7 @@ public sealed class WorkflowAgentToolScopeProtoTests
 
         parsed.AllowedToolNames.Should().Equal("search");
         parsed.ToolSetRefs.Should().Equal("nyxid.connected_services");
+        parsed.RestrictAllowedToolNames.Should().BeTrue();
+        parsed.RestrictToolSets.Should().BeTrue();
     }
 }

@@ -852,6 +852,8 @@ message WorkflowAgentToolScope
 {
   repeated string allowed_tool_names = 1;
   repeated string tool_set_refs = 2;
+  bool restrict_allowed_tool_names = 3;
+  bool restrict_tool_sets = 4;
 }
 
 message WorkflowLlmInvocationStartedEvent

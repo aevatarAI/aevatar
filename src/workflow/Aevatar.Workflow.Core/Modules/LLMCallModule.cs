@@ -524,7 +524,11 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         if (source == null)
             return;
 
-        intent.AgentToolScope = new WorkflowAgentToolScope();
+        intent.AgentToolScope = new WorkflowAgentToolScope
+        {
+            RestrictAllowedToolNames = source.RestrictAllowedToolNames || source.AllowedToolNames.Count > 0,
+            RestrictToolSets = source.RestrictToolSets || source.ToolSetRefs.Count > 0,
+        };
         foreach (var toolName in source.AllowedToolNames)
         {
             var normalized = Normalize(toolName);

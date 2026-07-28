@@ -2063,7 +2063,11 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         if (effectiveScope == null)
             return;
 
-        var payload = (request.StepParameters ??= new WorkflowStepParameters()).AgentToolScope = new WorkflowAgentToolScope();
+        var payload = (request.StepParameters ??= new WorkflowStepParameters()).AgentToolScope = new WorkflowAgentToolScope
+        {
+            RestrictAllowedToolNames = effectiveScope.RestrictAllowedToolNames,
+            RestrictToolSets = effectiveScope.RestrictToolSets,
+        };
         foreach (var toolName in effectiveScope.AllowedToolNames)
             payload.AllowedToolNames.Add(toolName);
         foreach (var toolSetRef in effectiveScope.ToolSetRefs)
@@ -2080,24 +2084,53 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         if (stepScope == null)
             return CloneAgentToolScope(roleScope);
 
-        var stepAllowed = new HashSet<string>(stepScope.AllowedToolNames, StringComparer.OrdinalIgnoreCase);
-        var stepToolSets = new HashSet<string>(stepScope.ToolSetRefs, StringComparer.OrdinalIgnoreCase);
+        var roleRestrictsAllowed = RestrictsAllowedToolNames(roleScope);
+        var stepRestrictsAllowed = RestrictsAllowedToolNames(stepScope);
+        var roleRestrictsToolSets = RestrictsToolSets(roleScope);
+        var stepRestrictsToolSets = RestrictsToolSets(stepScope);
         return new WorkflowAgentToolScopeDefinition
         {
-            AllowedToolNames = roleScope.AllowedToolNames
-                .Where(stepAllowed.Contains)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList(),
-            ToolSetRefs = roleScope.ToolSetRefs
-                .Where(stepToolSets.Contains)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList(),
+            RestrictAllowedToolNames = roleRestrictsAllowed || stepRestrictsAllowed,
+            RestrictToolSets = roleRestrictsToolSets || stepRestrictsToolSets,
+            AllowedToolNames = IntersectScopeDimension(
+                roleScope.AllowedToolNames,
+                roleRestrictsAllowed,
+                stepScope.AllowedToolNames,
+                stepRestrictsAllowed),
+            ToolSetRefs = IntersectScopeDimension(
+                roleScope.ToolSetRefs,
+                roleRestrictsToolSets,
+                stepScope.ToolSetRefs,
+                stepRestrictsToolSets),
         };
     }
+
+    private static List<string> IntersectScopeDimension(
+        IEnumerable<string> roleValues,
+        bool roleRestricts,
+        IEnumerable<string> stepValues,
+        bool stepRestricts)
+    {
+        if (!roleRestricts)
+            return stepValues.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (!stepRestricts)
+            return roleValues.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+
+        var stepSet = new HashSet<string>(stepValues, StringComparer.OrdinalIgnoreCase);
+        return roleValues.Where(stepSet.Contains).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private static bool RestrictsAllowedToolNames(WorkflowAgentToolScopeDefinition scope) =>
+        scope.RestrictAllowedToolNames || scope.AllowedToolNames.Count > 0;
+
+    private static bool RestrictsToolSets(WorkflowAgentToolScopeDefinition scope) =>
+        scope.RestrictToolSets || scope.ToolSetRefs.Count > 0;
 
     private static WorkflowAgentToolScopeDefinition CloneAgentToolScope(WorkflowAgentToolScopeDefinition scope) =>
         new()
         {
+            RestrictAllowedToolNames = RestrictsAllowedToolNames(scope),
+            RestrictToolSets = RestrictsToolSets(scope),
             AllowedToolNames = scope.AllowedToolNames
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList(),

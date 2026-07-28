@@ -120,14 +120,20 @@ public class WorkflowParserConfigurationTests
         workflow.Roles.Should().ContainSingle().Subject.AgentToolScope.Should().NotBeNull();
         workflow.Roles[0].AgentToolScope!.AllowedToolNames.Should().Equal("search", "calendar");
         workflow.Roles[0].AgentToolScope!.ToolSetRefs.Should().Equal("nyxid.connected_services");
+        workflow.Roles[0].AgentToolScope!.RestrictAllowedToolNames.Should().BeTrue();
+        workflow.Roles[0].AgentToolScope!.RestrictToolSets.Should().BeTrue();
         workflow.Roles[0].AgentToolScope!.AllowedToolNames.Should().NotContain("nyxid.connected_services");
         workflow.Steps[0].AgentToolScope.Should().NotBeNull();
         workflow.Steps[0].AgentToolScope!.AllowedToolNames.Should().Equal("calendar");
         workflow.Steps[0].AgentToolScope!.ToolSetRefs.Should().Equal("nyxid.connected_services");
+        workflow.Steps[0].AgentToolScope!.RestrictAllowedToolNames.Should().BeTrue();
+        workflow.Steps[0].AgentToolScope!.RestrictToolSets.Should().BeTrue();
         workflow.Steps[0].Parameters.Should().NotContainKey("allowed_tools");
         workflow.Steps[0].Parameters.Should().NotContainKey("tool_sets");
         workflow.Steps[1].AgentToolScope.Should().NotBeNull();
         workflow.Steps[1].AgentToolScope!.AllowedToolNames.Should().BeEmpty();
+        workflow.Steps[1].AgentToolScope!.RestrictAllowedToolNames.Should().BeTrue();
+        workflow.Steps[1].AgentToolScope!.RestrictToolSets.Should().BeFalse();
     }
 
     [Fact]

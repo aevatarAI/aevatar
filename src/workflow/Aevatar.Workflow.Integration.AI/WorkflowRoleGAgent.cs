@@ -231,7 +231,7 @@ public class WorkflowRoleGAgent(
         WorkflowAgentToolScope? scope,
         AgentToolExecutionContext toolContext)
     {
-        if (scope == null)
+        if (scope == null || (!scope.RestrictAllowedToolNames && scope.AllowedToolNames.Count == 0))
             return toolContext;
 
         return toolContext with
@@ -451,7 +451,9 @@ public class WorkflowRoleGAgent(
                 collisions);
         }
 
-        var allowedNames = scope.AllowedToolNames
+        var allowedNames = (scope.RestrictAllowedToolNames || scope.AllowedToolNames.Count > 0
+                ? scope.AllowedToolNames
+                : Tools.GetAll().Select(static tool => tool.Name))
             .Concat(exactTools.Select(static tool => tool.Name));
         return new AgentProfileTurnCatalog(
             allowedNames,

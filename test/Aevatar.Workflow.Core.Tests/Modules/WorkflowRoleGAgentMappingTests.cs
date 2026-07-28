@@ -203,6 +203,58 @@ public sealed class WorkflowRoleGAgentMappingTests
         registry.ResolvedNames.Should().Equal("nyxid.connected_services", "nyxid.connected_services");
     }
 
+    [Fact]
+    public async Task WorkflowRoleGAgent_WithOnlyToolSetRestriction_ShouldKeepRegisteredStaticTools()
+    {
+        var provider = new RecordingLlmProvider();
+        var source = new RecordingToolSource(new StaticAgentTool("nyxid_calendar_create_event"));
+        var agent = new TestWorkflowRoleGAgent(provider, new RecordingToolSetRegistry(source));
+        agent.AddTool(new StaticAgentTool("search"));
+
+        await agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
+        {
+            RunId = "run-tool-set-only",
+            StepId = "reply",
+            SessionId = "session-tool-set-only",
+            Prompt = "find and schedule",
+            AgentToolScope = new WorkflowAgentToolScope
+            {
+                ToolSetRefs = { "nyxid.connected_services" },
+            },
+        });
+
+        provider.LastRequest.Should().NotBeNull();
+        provider.LastRequest!.Tools.Should().Contain(tool => tool.Name == "search");
+        provider.LastRequest.Tools.Should().Contain(tool => tool.Name == "nyxid_calendar_create_event");
+    }
+
+    [Fact]
+    public async Task WorkflowRoleGAgent_WithExplicitEmptyStaticRestriction_ShouldExposeOnlyRequestTools()
+    {
+        var provider = new RecordingLlmProvider();
+        var source = new RecordingToolSource(new StaticAgentTool("nyxid_calendar_create_event"));
+        var agent = new TestWorkflowRoleGAgent(provider, new RecordingToolSetRegistry(source));
+        agent.AddTool(new StaticAgentTool("search"));
+
+        await agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
+        {
+            RunId = "run-empty-static",
+            StepId = "reply",
+            SessionId = "session-empty-static",
+            Prompt = "schedule only",
+            AgentToolScope = new WorkflowAgentToolScope
+            {
+                RestrictAllowedToolNames = true,
+                RestrictToolSets = true,
+                ToolSetRefs = { "nyxid.connected_services" },
+            },
+        });
+
+        provider.LastRequest.Should().NotBeNull();
+        provider.LastRequest!.Tools.Should().NotContain(tool => tool.Name == "search");
+        provider.LastRequest.Tools.Should().ContainSingle(tool => tool.Name == "nyxid_calendar_create_event");
+    }
+
     private static WorkflowLlmExecutionIntent BuildConnectedServiceIntent(string token, string sessionId) =>
         new()
         {
