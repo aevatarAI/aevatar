@@ -664,6 +664,79 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
+    public async Task BuildStepPlanAsync_WithRecentLarkPdfAttachment_PersistsFileRefWithoutExtractedText()
+    {
+        var pdfBytes = BuildSimplePdf("confidential extracted document text");
+        var lark = new RecordingLarkNyxClient(
+            new LarkMessageResourceDownloadResult(true, pdfBytes, "application/pdf", "recent.pdf"));
+        var fileArtifacts = new RecordingWorkflowFileArtifactPort();
+        var providerFactory = new RecordingProviderFactory
+        {
+            Capabilities = LLMProviderCapabilities.TextOnly,
+        };
+        IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            BuiltInPromptFloorProvider,
+            larkClient: lark,
+            fileIngressPort: fileArtifacts,
+            fileArtifactReadPort: fileArtifacts);
+        var recentActivity = CreateLarkActivity(
+            "msg-pdf-recent",
+            "earlier pdf",
+            "om_recent_pdf",
+            token: null);
+        recentActivity.Content.Attachments.Add(new AttachmentRef
+        {
+            AttachmentId = "pdf_recent",
+            Kind = AttachmentKind.File,
+            ContentType = "application/pdf",
+            Name = "recent.pdf",
+            SizeBytes = pdfBytes.Length,
+        });
+        var currentActivity = new ChatActivity
+        {
+            Id = "msg-follow-up-pdf",
+            ChannelId = ChannelId.From("lark"),
+            Conversation = new ConversationReference { CanonicalKey = "lark:scope-a:chat-1" },
+            Content = new MessageContent { Text = "what was in the pdf?" },
+        };
+        var attachmentContext = new ChatAttachmentInputContext(
+            [
+                new RecentConversationAttachmentActivity
+                {
+                    ActivityId = recentActivity.Id,
+                    AcceptedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    Activity = recentActivity.Clone(),
+                },
+            ],
+            "recent-token");
+
+        var plan = await generator.BuildStepPlanAsync(
+            currentActivity,
+            new Dictionary<string, string>(),
+            llmControl: null,
+            toolContext: null,
+            priorHistory: null,
+            attachmentContext,
+            forceDisableTools: false,
+            CancellationToken.None);
+
+        var userMessage = plan.InitialMessages.Last(message => message.Role == "user");
+        var documentPart = userMessage.ContentParts.Should().NotBeNull().And.Subject
+            .Single(part => part.Kind == ContentPartKind.Text && part.FileRef is not null);
+        documentPart.Text.Should().BeNull();
+        documentPart.FileRef!.ArtifactId.Should().Be("workflow-file://wf-file-1");
+        documentPart.FileRef.SourceKind.Should().Be(LlmChatFileSourceKind.ChatInput);
+        documentPart.FileRef.SourceMessageId.Should().Be("om_recent_pdf");
+        documentPart.FileRef.SourceResourceKey.Should().Be("pdf_recent");
+        documentPart.MediaType.Should().Be("application/pdf");
+        documentPart.Name.Should().Be("recent.pdf");
+        userMessage.ContentParts!.Should().NotContain(part =>
+            part.Text != null &&
+            part.Text.Contains("confidential extracted document text", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task BuildStepPlanAsync_WithRecentLarkImageAttachment_ShouldUseAttachmentActivityProviderSlugClient()
     {
         var imageBytes = new byte[] { 3, 4, 5 };
@@ -1002,7 +1075,7 @@ public sealed class ConversationReplyGeneratorTests
             SizeBytes = pdfBytes.Length,
         });
 
-        await generator.GenerateReplyAsync(
+        var result = await generator.GenerateReplyAsync(
             activity,
             new Dictionary<string, string>(),
             streamingSink: null,
@@ -1034,6 +1107,15 @@ public sealed class ConversationReplyGeneratorTests
         ingress.SourceResourceKey.Should().Be("file_key");
         ingress.FileName.Should().Be("report.pdf");
         ingress.MediaType.Should().Be("application/pdf");
+        result.AppendedHistory.Should().NotContain(entry =>
+            entry.ContentParts.Any(part =>
+                part.Text.Contains("Invoice total 42.00 USD", StringComparison.Ordinal)));
+        result.AppendedHistory.SelectMany(entry => entry.ContentParts)
+            .Should().Contain(part =>
+                part.Kind == Aevatar.AI.Abstractions.ChatContentPartKind.Text &&
+                part.Text.Length == 0 &&
+                part.FileRef != null &&
+                part.FileRef.ArtifactId == "workflow-file://wf-file-1");
     }
 
     [Fact]
@@ -1122,7 +1204,7 @@ public sealed class ConversationReplyGeneratorTests
             SizeBytes = fileBytes.Length,
         });
 
-        await generator.GenerateReplyAsync(
+        var result = await generator.GenerateReplyAsync(
             activity,
             new Dictionary<string, string>(),
             streamingSink: null,
@@ -1155,6 +1237,15 @@ public sealed class ConversationReplyGeneratorTests
         ingress.MediaType.Should().Be(fileName.EndsWith(".yaml", StringComparison.Ordinal)
             ? "application/yaml"
             : contentType);
+        result.AppendedHistory.Should().NotContain(entry =>
+            entry.ContentParts.Any(part =>
+                part.Text.Contains(fileContent, StringComparison.Ordinal)));
+        result.AppendedHistory.SelectMany(entry => entry.ContentParts)
+            .Should().Contain(part =>
+                part.Kind == Aevatar.AI.Abstractions.ChatContentPartKind.Text &&
+                part.Text.Length == 0 &&
+                part.FileRef != null &&
+                part.FileRef.ArtifactId == "workflow-file://wf-file-1");
     }
 
     [Fact]

@@ -56,6 +56,15 @@ public sealed class AgentRunGAgentTests
                 },
                 new Aevatar.AI.Abstractions.ChatContentPart
                 {
+                    Kind = Aevatar.AI.Abstractions.ChatContentPartKind.Text,
+                    Text = "large extracted document text",
+                    FileRef = new Aevatar.AI.Abstractions.ChatFileRef
+                    {
+                        ArtifactId = "workflow-file://wf-file-document",
+                    },
+                },
+                new Aevatar.AI.Abstractions.ChatContentPart
+                {
                     Kind = Aevatar.AI.Abstractions.ChatContentPartKind.Image,
                     DataBase64 = "large-image-base64",
                     FileRef = new Aevatar.AI.Abstractions.ChatFileRef
@@ -86,10 +95,13 @@ public sealed class AgentRunGAgentTests
         var sanitized = AgentRunGAgent.StripInlineMediaPayloads(stepState);
 
         sanitized.Messages.Single().ContentParts[0].Text.Should().Be("describe");
-        sanitized.Messages.Single().ContentParts[1].DataBase64.Should().BeEmpty();
-        sanitized.Messages.Single().ContentParts[1].FileRef.ArtifactId.Should().Be("workflow-file://wf-file-1");
+        sanitized.Messages.Single().ContentParts[1].Text.Should().BeEmpty();
+        sanitized.Messages.Single().ContentParts[1].FileRef.ArtifactId.Should().Be("workflow-file://wf-file-document");
+        sanitized.Messages.Single().ContentParts[2].DataBase64.Should().BeEmpty();
+        sanitized.Messages.Single().ContentParts[2].FileRef.ArtifactId.Should().Be("workflow-file://wf-file-1");
         sanitized.AppendedHistory.Single().ContentParts.Should().OnlyContain(part => part.DataBase64.Length == 0);
-        stepState.Messages.Single().ContentParts[1].DataBase64.Should().Be("large-image-base64");
+        stepState.Messages.Single().ContentParts[1].Text.Should().Be("large extracted document text");
+        stepState.Messages.Single().ContentParts[2].DataBase64.Should().Be("large-image-base64");
     }
 
     [Fact]
