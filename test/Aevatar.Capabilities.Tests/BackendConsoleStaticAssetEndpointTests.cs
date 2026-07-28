@@ -84,6 +84,19 @@ public sealed class BackendConsoleStaticAssetEndpointTests
     }
 
     [Fact]
+    public async Task AdminShell_Channels_ShouldEmbedCanonicalSurfaceWithoutDuplicateMutations()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        html.Should().Contain("suiteFrame('/channels','通道接入')");
+        html.Should().NotContain("function doRegister()");
+        html.Should().NotContain("a==='wzPermImport'");
+        html.Should().NotContain("a==='wzPublish'");
+        html.Should().NotContain("CHANNELS_DATA.splice");
+    }
+
+    [Fact]
     public async Task AdminShell_ObservatoryPolling_ShouldKeepCachedDetailVisible()
     {
         await using var app = await CreateAppAsync();
