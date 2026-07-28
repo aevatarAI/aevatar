@@ -35,6 +35,7 @@ The identities remain separate:
 Scope ownership is required. Team ownership is optional. When `teamId` is
 present, creation validates that the Team exists and is active in the same
 Scope. A scope-owned artifact without a Team stores no invented Team identity.
+Team ownership records resource context; it grants no implicit artifact access.
 
 ## Immutable Revisions And CAS
 
@@ -43,11 +44,17 @@ revision number from the authoritative revision history. Append never changes a
 prior revision's content, hash, provenance, citations, creation time, or
 supersession reason. Advancing the current pointer is a separate command.
 
-Append, pointer advance, redaction, expiry, and tombstone carry the expected
-artifact concurrency version. The Actor checks that version immediately before
-committing. Pointer changes and lifecycle operations may advance the concurrency
-version without creating a revision, so revision numbering must never be derived
-from the CAS version.
+Append carries no expected concurrency version. Its client-supplied revision
+`dedupKey` is the idempotency key: an authorized retry with identical facts is a
+no-op, while the same key with different facts fails closed. The Actor assigns
+the revision number and id from authoritative state.
+
+Pointer advance, redaction, expiry, and tombstone carry an expected artifact
+concurrency version. The Actor authorizes first, then checks CAS before duplicate
+or no-op classification. Application read-model version checks are advisory only.
+Pointer changes and lifecycle operations may advance the concurrency version
+without creating a revision, so neither revision identity nor any other write
+fact may be derived from the read model or CAS version.
 
 Each revision contains media type, byte length, SHA-256 content hash, exact
 execution provenance, typed citations, and exactly one content location. A
@@ -80,25 +87,36 @@ or unavailable provider fails closed.
 
 This mapping does not change workflow-file lifecycle semantics. Local/testing
 files and production `External` providers retain their configured expiry and
-cleanup behavior. If backing content later expires or disappears, the exact
-ContentArtifact revision metadata and provenance remain, while the content API
-returns an explicit unavailable result. Applications needing retention beyond a
-workflow file's lifetime must copy bytes into a backing provider whose retention
-contract covers that period and register that provider at the Host boundary.
+cleanup behavior. If backing content later disappears, the exact revision
+metadata and provenance remain, while the content read fails closed as a backing
+storage failure. HTTP 410 is reserved for committed redaction, retention expiry,
+or tombstone facts. Applications needing retention beyond a workflow file's
+lifetime must copy bytes into a backing provider whose retention contract covers
+that period and register that provider at the Host boundary.
 
 ## Authorization And Lifecycle
 
 The access policy has one typed owner plus explicit reader and writer principal
-ids. Scope authorization is checked at the HTTP boundary. The application
-service checks artifact access against the current read model, and the content
-query checks the same principal again against the exact snapshot used for the
-physical read. Backing access additionally checks Scope and Run ownership.
+ids. `principalId` is the ACL identity; `principalKind` is descriptive and never
+changes a match. Scope authorization is checked at the HTTP boundary. The
+application checks artifact access against the current read model, and the
+content query checks the same principal again against the exact snapshot used
+for the physical read. Backing access additionally checks Scope and Run
+ownership.
 
-Writers may append, advance, redact, or expire revisions. Only the owner may
-tombstone the artifact. Redaction and retention expiry clear the content
-location while preserving identity, hash, provenance, citations, and the typed
+The owner can read, append, advance, redact, expire, and tombstone. Explicit
+readers can read and discover. A writer-only principal has one append-only
+capability: it can append and blindly retry without CAS, but cannot read, list,
+advance, redact, expire, attach to a Run, or tombstone. Advance, redaction, and
+expiry require owner authority or membership in both reader and writer lists.
+Only the owner may tombstone. Redaction and retention expiry clear the content
+location while preserving identity, hash, provenance, citations, and typed
 reason/time facts. Tombstone clears the current pointer and all surviving
-content locations without rewriting the historical provenance.
+content locations without rewriting historical provenance.
+
+List membership is `owner == caller OR readerPrincipalIds contains caller`. The
+projection store applies that ACL together with all user filters before cursor
+paging; Host, Application, and query ports do not post-filter materialized pages.
 
 ## Run And WorkOrder Interoperability
 
@@ -133,3 +151,12 @@ redact, expire, or tombstone; and attach exact references to a Service Run.
 Mutation responses are `202 Accepted` dispatch receipts. Clients observe
 committed state through the current-state query surface and its authoritative
 `stateVersion`; no endpoint implies query freshness from command acceptance.
+
+Artifact absence and artifact-level ACL denial both return HTTP 404 on reads,
+mutations, and Run attachment. A missing revision is also 404. The shared
+`scopeId + dedupKey` namespace is intentionally observable only as occupancy:
+cross-principal create collision returns HTTP 409 without exposing the occupying
+artifact's facts. HTTP 410 is reachable only after read authorization and only
+for committed redacted, retention-expired, or tombstoned content. Malformed
+requests and readable lifecycle/CAS conflicts remain HTTP 400; missing
+authentication and Scope denial remain HTTP 401 and 403.
