@@ -203,6 +203,17 @@ public sealed class ContentArtifactNotFoundException : InvalidOperationException
     public string ArtifactId { get; }
 }
 
+public sealed class ContentArtifactIdentityConflictException : InvalidOperationException
+{
+    public ContentArtifactIdentityConflictException(string dedupKey)
+        : base($"ContentArtifact dedup key '{dedupKey}' is already occupied in this scope.")
+    {
+        DedupKey = dedupKey;
+    }
+
+    public string DedupKey { get; }
+}
+
 public sealed class ContentArtifactContentUnavailableException : InvalidOperationException
 {
     public ContentArtifactContentUnavailableException(string artifactId, string revisionId, string reason)

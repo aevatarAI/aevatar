@@ -73,6 +73,30 @@ public sealed class ContentArtifactServiceTests
     }
 
     [Fact]
+    public async Task CreateAsync_ShouldExposeOnlyDedupKeyOccupancyForAnotherOwner()
+    {
+        var commandPort = new RecordingCommandPort();
+        var service = CreateService(
+            commandPort: commandPort,
+            queryPort: new RecordingQueryPort(BuildCurrentState()));
+
+        var occupied = () => service.CreateAsync(
+            "scope-1",
+            CreateRequest(),
+            Principal("other-owner"));
+
+        var conflict = (await occupied.Should().ThrowAsync<ContentArtifactIdentityConflictException>())
+            .Which;
+        conflict.Message.Should().Contain("report-dedup")
+            .And.NotContain("artifact-1")
+            .And.NotContain("owner-1");
+        commandPort.CreateRequest.Should().BeNull();
+
+        await service.CreateAsync("scope-1", CreateRequest(), Principal("owner-1", "service"));
+        commandPort.CreateRequest.Should().NotBeNull();
+    }
+
+    [Fact]
     public async Task GetAsync_ShouldAuthorizeOwnerAndExplicitReaderOnly()
     {
         var queryPort = new RecordingQueryPort(BuildCurrentState());
@@ -84,8 +108,7 @@ public sealed class ContentArtifactServiceTests
 
         owner.ArtifactId.Should().Be("artifact-1");
         reader.ArtifactId.Should().Be("artifact-1");
-        await denied.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*not authorized to read*");
+        await denied.Should().ThrowAsync<ContentArtifactNotFoundException>();
     }
 
     [Fact]
@@ -157,8 +180,7 @@ public sealed class ContentArtifactServiceTests
 
         var writerOnly = () => InvokeMutationAsync(service, operation, Principal("writer-1"));
 
-        await writerOnly.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*not authorized to read*");
+        await writerOnly.Should().ThrowAsync<ContentArtifactNotFoundException>();
         await InvokeMutationAsync(service, operation, Principal("editor-1"));
         await InvokeMutationAsync(service, operation, Principal("owner-1"));
         commandPort.MutationCallCount.Should().Be(2);
@@ -181,14 +203,65 @@ public sealed class ContentArtifactServiceTests
             new TombstoneContentArtifactRequest(1, "retention complete"),
             Principal("editor-1"));
 
-        await editor.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*owner*");
+        await editor.Should().ThrowAsync<ContentArtifactNotFoundException>();
         await service.TombstoneAsync(
             "scope-1",
             "artifact-1",
             new TombstoneContentArtifactRequest(1, "retention complete"),
             Principal("owner-1"));
         commandPort.MutationCallCount.Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData("get")]
+    [InlineData("get-revision")]
+    [InlineData("get-current-revision")]
+    [InlineData("get-content")]
+    [InlineData("append")]
+    [InlineData("advance")]
+    [InlineData("redact")]
+    [InlineData("expire")]
+    [InlineData("tombstone")]
+    [InlineData("attach")]
+    public async Task ArtifactAclDenial_ShouldBeIndistinguishableFromAbsence(string operation)
+    {
+        var service = CreateService(queryPort: new RecordingQueryPort(BuildCurrentState()));
+        var principal = Principal(operation == "append" ? "unrelated-1" : "writer-1");
+
+        var denied = () => InvokeOperationAsync(service, operation, principal);
+
+        var notFound = (await denied.Should().ThrowAsync<ContentArtifactNotFoundException>()).Which;
+        notFound.Message.Should().NotContain("authorized")
+            .And.NotContain("tombstoned")
+            .And.NotContain("concurrency");
+    }
+
+    [Fact]
+    public async Task GetRevisionAsync_ShouldReturnNotFoundForMissingRevision()
+    {
+        var service = CreateService(queryPort: new RecordingQueryPort(BuildCurrentState()));
+
+        var missing = () => service.GetRevisionAsync(
+            "scope-1",
+            "artifact-1",
+            "revision-missing",
+            Principal("owner-1"));
+
+        await missing.Should().ThrowAsync<ContentArtifactNotFoundException>();
+    }
+
+    [Fact]
+    public async Task GetCurrentRevisionAsync_ShouldReturnNotFoundWhenActiveArtifactHasNoRevision()
+    {
+        var current = BuildCurrentState() with { CurrentRevisionId = null, Revisions = [] };
+        var service = CreateService(queryPort: new RecordingQueryPort(current));
+
+        var missing = () => service.GetCurrentRevisionAsync(
+            "scope-1",
+            "artifact-1",
+            Principal("owner-1"));
+
+        await missing.Should().ThrowAsync<ContentArtifactNotFoundException>();
     }
 
     [Fact]
@@ -384,6 +457,65 @@ public sealed class ContentArtifactServiceTests
             _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, null),
         };
 
+    private static async Task InvokeOperationAsync(
+        ContentArtifactService service,
+        string operation,
+        ContentArtifactPrincipalContract principal)
+    {
+        switch (operation)
+        {
+            case "get":
+                await service.GetAsync("scope-1", "artifact-1", principal);
+                break;
+            case "get-revision":
+                await service.GetRevisionAsync("scope-1", "artifact-1", "revision-1", principal);
+                break;
+            case "get-current-revision":
+                await service.GetCurrentRevisionAsync("scope-1", "artifact-1", principal);
+                break;
+            case "get-content":
+                await service.GetRevisionContentAsync("scope-1", "artifact-1", "revision-1", principal);
+                break;
+            case "append":
+                await service.AppendRevisionAsync(
+                    "scope-1",
+                    "artifact-1",
+                    new AppendContentArtifactRevisionRequest(
+                        RevisionWrite("revision two", "revision-2-dedup", "revision-1")),
+                    principal);
+                break;
+            case "advance":
+            case "redact":
+            case "expire":
+                await InvokeMutationAsync(service, operation, principal);
+                break;
+            case "tombstone":
+                await service.TombstoneAsync(
+                    "scope-1",
+                    "artifact-1",
+                    new TombstoneContentArtifactRequest(1, "retention complete"),
+                    principal);
+                break;
+            case "attach":
+                var revision = BuildCurrentState().Revisions[0];
+                await service.AttachToRunAsync(
+                    "scope-1",
+                    new AttachContentArtifactsToRunRequest(
+                        "service-1",
+                        "run-1",
+                        4,
+                        [new ContentArtifactReferenceContract(
+                            "artifact-1",
+                            revision.RevisionId,
+                            revision.ContentHash,
+                            revision.MediaType)]),
+                    principal);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(operation), operation, null);
+        }
+    }
+
     private static string ContentHash(string content) =>
         Convert.ToHexStringLower(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(content)));
 
@@ -459,6 +591,9 @@ public sealed class ContentArtifactServiceTests
                 current == null ? [] : [current]));
 
         public Task<ContentArtifactCurrentStateResponse?> GetAsync(string scopeId, string artifactId, CancellationToken ct = default) =>
+            Task.FromResult<ContentArtifactCurrentStateResponse?>(current);
+
+        public Task<ContentArtifactCurrentStateResponse?> GetByDedupKeyAsync(string scopeId, string dedupKey, CancellationToken ct = default) =>
             Task.FromResult<ContentArtifactCurrentStateResponse?>(current);
 
         public Task<ContentArtifactRevisionContentResponse> GetRevisionContentAsync(string scopeId, string artifactId, string revisionId, ContentArtifactPrincipalContract requester, CancellationToken ct = default)

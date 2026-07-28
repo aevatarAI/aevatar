@@ -113,6 +113,23 @@ public sealed class ContentArtifactProjectionTests
     }
 
     [Fact]
+    public async Task GetByDedupKeyAsync_ShouldUseCanonicalArtifactAddress()
+    {
+        var document = ContentArtifactCurrentStateProjector.ToDocument(
+            ActorId,
+            new StateEvent { Version = 7, EventId = "event-7" },
+            BuildState(DateTimeOffset.Parse("2026-07-20T09:00:00Z")),
+            DateTimeOffset.Parse("2026-07-20T10:00:00Z"));
+        var reader = new RecordingDocumentReader(document);
+        var queryPort = new ProjectionContentArtifactQueryPort(reader);
+
+        await queryPort.GetByDedupKeyAsync(ScopeId, "report-dedup");
+
+        var artifactId = ContentArtifactConventions.BuildArtifactId(ScopeId, "report-dedup");
+        reader.LastKey.Should().Be(ContentArtifactConventions.BuildActorId(ScopeId, artifactId));
+    }
+
+    [Fact]
     public async Task ListAsync_ShouldApplyReadableAclBeforeCursorPaging()
     {
         var store = new InMemoryProjectionDocumentStore<ContentArtifactCurrentStateDocument, string>(
@@ -180,7 +197,7 @@ public sealed class ContentArtifactProjectionTests
     }
 
     [Fact]
-    public async Task GetRevisionContentAsync_ShouldFailClosedForMissingBackingContent()
+    public async Task GetRevisionContentAsync_ShouldTreatMissingBackingContentAsAReadFailureNotGone()
     {
         var document = ContentArtifactCurrentStateProjector.ToDocument(
             ActorId,
@@ -202,8 +219,8 @@ public sealed class ContentArtifactProjectionTests
             "revision-2",
             Principal("owner-1"));
 
-        await act.Should().ThrowAsync<ContentArtifactContentUnavailableException>()
-            .WithMessage("*missing backing content*");
+        var exception = (await act.Should().ThrowAsync<IOException>()).Which;
+        exception.Message.Should().Contain("backing content is missing");
     }
 
     [Fact]
@@ -224,8 +241,7 @@ public sealed class ContentArtifactProjectionTests
             "revision-1",
             Principal("revoked-reader"));
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*not authorized to read*");
+        await act.Should().ThrowAsync<ContentArtifactNotFoundException>();
     }
 
     [Fact]
@@ -313,8 +329,13 @@ public sealed class ContentArtifactProjectionTests
 
         var missingRevisionRead = () => new ProjectionContentArtifactQueryPort(new RecordingDocumentReader(document))
             .GetRevisionContentAsync(ScopeId, ArtifactId, "revision-missing", Principal("owner-1"));
-        await missingRevisionRead.Should().ThrowAsync<ContentArtifactContentUnavailableException>()
-            .WithMessage("*revision was not found*");
+        await missingRevisionRead.Should().ThrowAsync<ContentArtifactNotFoundException>();
+
+        var tombstonedMissingRevision = tombstoned.Clone();
+        var tombstonedMissingRevisionRead = () => new ProjectionContentArtifactQueryPort(
+                new RecordingDocumentReader(tombstonedMissingRevision))
+            .GetRevisionContentAsync(ScopeId, ArtifactId, "revision-missing", Principal("owner-1"));
+        await tombstonedMissingRevisionRead.Should().ThrowAsync<ContentArtifactNotFoundException>();
 
         var redacted = document.Clone();
         redacted.Revisions[0].Availability = ContentArtifactRevisionAvailabilityNames.Redacted;
@@ -323,21 +344,30 @@ public sealed class ContentArtifactProjectionTests
         await redactedRead.Should().ThrowAsync<ContentArtifactContentUnavailableException>()
             .WithMessage("*redacted*");
 
+        var expired = document.Clone();
+        expired.Revisions[0].Availability = ContentArtifactRevisionAvailabilityNames.RetentionExpired;
+        var expiredRead = () => new ProjectionContentArtifactQueryPort(new RecordingDocumentReader(expired))
+            .GetRevisionContentAsync(ScopeId, ArtifactId, "revision-1", Principal("owner-1"));
+        await expiredRead.Should().ThrowAsync<ContentArtifactContentUnavailableException>()
+            .WithMessage("*retention_expired*");
+
         var missingLocation = document.Clone();
         missingLocation.Revisions[0].ContentLocationKind = string.Empty;
         var missingLocationRead = () => new ProjectionContentArtifactQueryPort(
                 new RecordingDocumentReader(missingLocation))
             .GetRevisionContentAsync(ScopeId, ArtifactId, "revision-1", Principal("owner-1"));
-        await missingLocationRead.Should().ThrowAsync<ContentArtifactContentUnavailableException>()
-            .WithMessage("*content location is unavailable*");
+        var missingLocationException = (await missingLocationRead.Should()
+            .ThrowAsync<InvalidDataException>()).Which;
+        missingLocationException.Message.Should().Contain("content location is unavailable");
 
         var missingProvider = document.Clone();
         missingProvider.Revisions[0].ContentLocationKind = "backing_object";
         var missingProviderRead = () => new ProjectionContentArtifactQueryPort(
                 new RecordingDocumentReader(missingProvider))
             .GetRevisionContentAsync(ScopeId, ArtifactId, "revision-1", Principal("owner-1"));
-        await missingProviderRead.Should().ThrowAsync<ContentArtifactContentUnavailableException>()
-            .WithMessage("*backing content provider is unavailable*");
+        var missingProviderException = (await missingProviderRead.Should()
+            .ThrowAsync<IOException>()).Which;
+        missingProviderException.Message.Should().Contain("backing content provider is unavailable");
     }
 
     [Fact]
@@ -595,10 +625,14 @@ public sealed class ContentArtifactProjectionTests
     private sealed class RecordingDocumentReader(ContentArtifactCurrentStateDocument document)
         : IProjectionDocumentReader<ContentArtifactCurrentStateDocument, string>
     {
+        public string? LastKey { get; private set; }
         public ProjectionDocumentQuery? LastQuery { get; private set; }
 
-        public Task<ContentArtifactCurrentStateDocument?> GetAsync(string key, CancellationToken ct = default) =>
-            Task.FromResult<ContentArtifactCurrentStateDocument?>(key == document.Id ? document : null);
+        public Task<ContentArtifactCurrentStateDocument?> GetAsync(string key, CancellationToken ct = default)
+        {
+            LastKey = key;
+            return Task.FromResult<ContentArtifactCurrentStateDocument?>(key == document.Id ? document : null);
+        }
 
         public Task<ProjectionDocumentQueryResult<ContentArtifactCurrentStateDocument>> QueryAsync(
             ProjectionDocumentQuery query,

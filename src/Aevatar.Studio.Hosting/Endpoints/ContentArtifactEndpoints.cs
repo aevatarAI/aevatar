@@ -42,6 +42,14 @@ internal static class ContentArtifactEndpoints
             var receipt = await service.CreateAsync(scopeId, request, principal, ct);
             return Results.Accepted(BuildLocation(scopeId, receipt.ArtifactId), receipt);
         }
+        catch (ContentArtifactIdentityConflictException ex)
+        {
+            return Results.Conflict(new
+            {
+                code = "CONTENT_ARTIFACT_DEDUP_KEY_OCCUPIED",
+                message = ex.Message,
+            });
+        }
         catch (InvalidOperationException ex)
         {
             return BadRequest("INVALID_CONTENT_ARTIFACT_REQUEST", ex.Message);
@@ -237,6 +245,10 @@ internal static class ContentArtifactEndpoints
         {
             return NotFound(ex.Message);
         }
+        catch (ContentArtifactContentUnavailableException ex)
+        {
+            return Results.Problem(ex.Message, statusCode: StatusCodes.Status410Gone);
+        }
         catch (InvalidOperationException ex)
         {
             return BadRequest("INVALID_CONTENT_ARTIFACT_COMMAND", ex.Message);
@@ -284,6 +296,10 @@ internal static class ContentArtifactEndpoints
         catch (ContentArtifactNotFoundException ex)
         {
             return NotFound(ex.Message);
+        }
+        catch (ContentArtifactContentUnavailableException ex)
+        {
+            return Results.Problem(ex.Message, statusCode: StatusCodes.Status410Gone);
         }
         catch (InvalidOperationException ex)
         {

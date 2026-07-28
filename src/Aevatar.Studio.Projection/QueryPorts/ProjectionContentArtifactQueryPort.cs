@@ -85,6 +85,15 @@ public sealed class ProjectionContentArtifactQueryPort : IContentArtifactQueryPo
         return ToResponse(document);
     }
 
+    public Task<ContentArtifactCurrentStateResponse?> GetByDedupKeyAsync(
+        string scopeId,
+        string dedupKey,
+        CancellationToken ct = default) =>
+        GetAsync(
+            scopeId,
+            ContentArtifactConventions.BuildArtifactId(scopeId, dedupKey),
+            ct);
+
     public async Task<ContentArtifactRevisionContentResponse> GetRevisionContentAsync(
         string scopeId,
         string artifactId,
@@ -104,30 +113,27 @@ public sealed class ProjectionContentArtifactQueryPort : IContentArtifactQueryPo
             throw new ContentArtifactNotFoundException(normalizedScopeId, normalizedArtifactId);
         }
         EnsureReadAuthorized(document, requester);
-        if (!string.Equals(document.LifecycleStatus, ContentArtifactLifecycleStatusNames.Active, StringComparison.Ordinal))
+        var revision = document.Revisions.FirstOrDefault(item =>
+            string.Equals(item.RevisionId, normalizedRevisionId, StringComparison.Ordinal));
+        if (revision == null)
+            throw new ContentArtifactNotFoundException(normalizedScopeId, normalizedArtifactId);
+        if (string.Equals(document.LifecycleStatus, ContentArtifactLifecycleStatusNames.Tombstoned, StringComparison.Ordinal))
         {
             throw new ContentArtifactContentUnavailableException(
                 normalizedArtifactId,
                 normalizedRevisionId,
                 "artifact is tombstoned");
         }
-
-        var revision = document.Revisions.FirstOrDefault(item =>
-            string.Equals(item.RevisionId, normalizedRevisionId, StringComparison.Ordinal));
-        if (revision == null)
-        {
-            throw new ContentArtifactContentUnavailableException(
-                normalizedArtifactId,
-                normalizedRevisionId,
-                "revision was not found");
-        }
-        if (!string.Equals(revision.Availability, ContentArtifactRevisionAvailabilityNames.Available, StringComparison.Ordinal))
+        if (revision.Availability is ContentArtifactRevisionAvailabilityNames.Redacted or
+            ContentArtifactRevisionAvailabilityNames.RetentionExpired)
         {
             throw new ContentArtifactContentUnavailableException(
                 normalizedArtifactId,
                 normalizedRevisionId,
                 revision.Availability);
         }
+        if (!string.Equals(revision.Availability, ContentArtifactRevisionAvailabilityNames.Available, StringComparison.Ordinal))
+            throw new InvalidDataException("ContentArtifact revision availability is invalid.");
 
         var content = await ReadContentAsync(normalizedArtifactId, revision, ct);
         VerifyContent(normalizedArtifactId, revision, content);
@@ -148,19 +154,9 @@ public sealed class ProjectionContentArtifactQueryPort : IContentArtifactQueryPo
         if (string.Equals(revision.ContentLocationKind, "inline", StringComparison.Ordinal))
             return revision.InlineContent.ToByteArray();
         if (!string.Equals(revision.ContentLocationKind, "backing_object", StringComparison.Ordinal))
-        {
-            throw new ContentArtifactContentUnavailableException(
-                artifactId,
-                revision.RevisionId,
-                "content location is unavailable");
-        }
+            throw new InvalidDataException("ContentArtifact content location is unavailable.");
         if (_backingContentPort == null)
-        {
-            throw new ContentArtifactContentUnavailableException(
-                artifactId,
-                revision.RevisionId,
-                "backing content provider is unavailable");
-        }
+            throw new IOException("ContentArtifact backing content provider is unavailable.");
 
         try
         {
@@ -180,17 +176,11 @@ public sealed class ProjectionContentArtifactQueryPort : IContentArtifactQueryPo
         }
         catch (FileNotFoundException ex)
         {
-            throw new ContentArtifactContentUnavailableException(
-                artifactId,
-                revision.RevisionId,
-                $"missing backing content ({ex.Message})");
+            throw new IOException("ContentArtifact backing content is missing.", ex);
         }
         catch (DirectoryNotFoundException ex)
         {
-            throw new ContentArtifactContentUnavailableException(
-                artifactId,
-                revision.RevisionId,
-                $"missing backing content ({ex.Message})");
+            throw new IOException("ContentArtifact backing content is missing.", ex);
         }
     }
 
@@ -251,7 +241,7 @@ public sealed class ProjectionContentArtifactQueryPort : IContentArtifactQueryPo
             "requester.principalKind");
         var isOwner = string.Equals(document.OwnerPrincipalId, principalId, StringComparison.Ordinal);
         if (!isOwner && !document.ReaderPrincipalIds.Contains(principalId))
-            throw new InvalidOperationException("ContentArtifact principal is not authorized to read.");
+            throw new ContentArtifactNotFoundException(document.ScopeId, document.ArtifactId);
     }
 
     private static ContentArtifactRevisionResponse ToRevisionResponse(ContentArtifactRevisionDocument revision) =>

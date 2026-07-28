@@ -38,6 +38,12 @@ public sealed class ContentArtifactService : IContentArtifactService
         var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
         var normalizedRequester = NormalizePrincipal(requester);
         var normalizedRequest = NormalizeCreateRequest(normalizedScopeId, request);
+        var occupied = await _queryPort.GetByDedupKeyAsync(
+            normalizedScopeId,
+            normalizedRequest.DedupKey,
+            ct);
+        if (occupied != null && !PrincipalEquals(occupied.Owner, normalizedRequester))
+            throw new ContentArtifactIdentityConflictException(normalizedRequest.DedupKey);
         if (normalizedRequest.TeamId != null)
             await EnsureActiveTeamAsync(normalizedScopeId, normalizedRequest.TeamId, ct);
         await ValidateExecutionProvenanceAsync(normalizedRequest.FirstRevision.Provenance, ct);
@@ -64,7 +70,7 @@ public sealed class ContentArtifactService : IContentArtifactService
         string artifactId,
         ContentArtifactPrincipalContract requester,
         CancellationToken ct = default) =>
-        await GetAuthorizedCurrentAsync(scopeId, artifactId, requester, requireWrite: false, ct);
+        await GetAuthorizedCurrentAsync(scopeId, artifactId, requester, ct);
 
     public async Task<ContentArtifactRevisionResponse> GetRevisionAsync(
         string scopeId,
@@ -73,7 +79,7 @@ public sealed class ContentArtifactService : IContentArtifactService
         ContentArtifactPrincipalContract requester,
         CancellationToken ct = default)
     {
-        var current = await GetAuthorizedCurrentAsync(scopeId, artifactId, requester, requireWrite: false, ct);
+        var current = await GetAuthorizedCurrentAsync(scopeId, artifactId, requester, ct);
         return FindRevision(current, revisionId);
     }
 
@@ -83,14 +89,16 @@ public sealed class ContentArtifactService : IContentArtifactService
         ContentArtifactPrincipalContract requester,
         CancellationToken ct = default)
     {
-        var current = await GetAuthorizedCurrentAsync(scopeId, artifactId, requester, requireWrite: false, ct);
-        if (string.IsNullOrWhiteSpace(current.CurrentRevisionId))
+        var current = await GetAuthorizedCurrentAsync(scopeId, artifactId, requester, ct);
+        if (string.Equals(current.LifecycleStatus, ContentArtifactLifecycleStatusNames.Tombstoned, StringComparison.Ordinal))
         {
             throw new ContentArtifactContentUnavailableException(
                 current.ArtifactId,
                 string.Empty,
-                "artifact has no current revision");
+                "artifact is tombstoned");
         }
+        if (string.IsNullOrWhiteSpace(current.CurrentRevisionId))
+            throw new ContentArtifactNotFoundException(current.ScopeId, current.ArtifactId);
         return FindRevision(current, current.CurrentRevisionId);
     }
 
@@ -101,22 +109,25 @@ public sealed class ContentArtifactService : IContentArtifactService
         ContentArtifactPrincipalContract requester,
         CancellationToken ct = default)
     {
-        var current = await GetAuthorizedCurrentAsync(scopeId, artifactId, requester, requireWrite: false, ct);
+        var current = await GetAuthorizedCurrentAsync(scopeId, artifactId, requester, ct);
         var revision = FindRevision(current, revisionId);
-        if (!string.Equals(current.LifecycleStatus, ContentArtifactLifecycleStatusNames.Active, StringComparison.Ordinal))
+        if (string.Equals(current.LifecycleStatus, ContentArtifactLifecycleStatusNames.Tombstoned, StringComparison.Ordinal))
         {
             throw new ContentArtifactContentUnavailableException(
                 current.ArtifactId,
                 revision.RevisionId,
                 "artifact is tombstoned");
         }
-        if (!string.Equals(revision.Availability, ContentArtifactRevisionAvailabilityNames.Available, StringComparison.Ordinal))
+        if (revision.Availability is ContentArtifactRevisionAvailabilityNames.Redacted or
+            ContentArtifactRevisionAvailabilityNames.RetentionExpired)
         {
             throw new ContentArtifactContentUnavailableException(
                 current.ArtifactId,
                 revision.RevisionId,
                 revision.Availability);
         }
+        if (!string.Equals(revision.Availability, ContentArtifactRevisionAvailabilityNames.Available, StringComparison.Ordinal))
+            throw new InvalidOperationException("ContentArtifact revision availability is invalid.");
         return await _queryPort.GetRevisionContentAsync(
             current.ScopeId,
             current.ArtifactId,
@@ -292,7 +303,6 @@ public sealed class ContentArtifactService : IContentArtifactService
                 normalizedScopeId,
                 requestedReference.ArtifactId,
                 principal,
-                requireWrite: false,
                 ct);
             var revision = FindRevision(current, requestedReference.RevisionId);
             if (!string.Equals(revision.ContentHash, requestedReference.ContentHash, StringComparison.OrdinalIgnoreCase) ||
@@ -341,18 +351,17 @@ public sealed class ContentArtifactService : IContentArtifactService
             scopeId,
             artifactId,
             requester,
-            requireWrite: false,
             ct);
         var principal = NormalizePrincipal(requester);
         var isOwner = PrincipalEquals(current.Owner, principal);
         if (ownerOnly)
         {
             if (!isOwner)
-                throw new InvalidOperationException("Only the ContentArtifact owner can perform this command.");
+                throw new ContentArtifactNotFoundException(current.ScopeId, current.ArtifactId);
         }
         else if (!isOwner && !current.WriterPrincipalIds.Contains(principal.PrincipalId, StringComparer.Ordinal))
         {
-            throw new InvalidOperationException("ContentArtifact principal is not authorized to write.");
+            throw new ContentArtifactNotFoundException(current.ScopeId, current.ArtifactId);
         }
         if (!string.Equals(current.LifecycleStatus, ContentArtifactLifecycleStatusNames.Active, StringComparison.Ordinal))
             throw new InvalidOperationException("ContentArtifact is tombstoned.");
@@ -368,7 +377,6 @@ public sealed class ContentArtifactService : IContentArtifactService
         string scopeId,
         string artifactId,
         ContentArtifactPrincipalContract requester,
-        bool requireWrite,
         CancellationToken ct)
     {
         var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
@@ -379,14 +387,9 @@ public sealed class ContentArtifactService : IContentArtifactService
         if (!string.Equals(current.ScopeId, normalizedScopeId, StringComparison.Ordinal))
             throw new ContentArtifactNotFoundException(normalizedScopeId, normalizedArtifactId);
         var authorized = PrincipalEquals(current.Owner, principal) ||
-                         (requireWrite
-                             ? current.WriterPrincipalIds.Contains(principal.PrincipalId, StringComparer.Ordinal)
-                             : current.ReaderPrincipalIds.Contains(principal.PrincipalId, StringComparer.Ordinal));
+                         current.ReaderPrincipalIds.Contains(principal.PrincipalId, StringComparer.Ordinal);
         if (!authorized)
-        {
-            throw new InvalidOperationException(
-                $"ContentArtifact principal is not authorized to {(requireWrite ? "write" : "read")}.");
-        }
+            throw new ContentArtifactNotFoundException(normalizedScopeId, normalizedArtifactId);
         return current;
     }
 
@@ -537,10 +540,9 @@ public sealed class ContentArtifactService : IContentArtifactService
         var normalizedRevisionId = NormalizeRequired(revisionId, nameof(revisionId));
         return current.Revisions.FirstOrDefault(revision =>
                    string.Equals(revision.RevisionId, normalizedRevisionId, StringComparison.Ordinal))
-               ?? throw new ContentArtifactContentUnavailableException(
-                   current.ArtifactId,
-                   normalizedRevisionId,
-                   "revision was not found");
+               ?? throw new ContentArtifactNotFoundException(
+                   current.ScopeId,
+                   current.ArtifactId);
     }
 
     private static ContentArtifactPrincipalContract NormalizePrincipal(ContentArtifactPrincipalContract principal)

@@ -15,6 +15,11 @@ public interface IContentArtifactQueryPort
         string artifactId,
         CancellationToken ct = default);
 
+    Task<ContentArtifactCurrentStateResponse?> GetByDedupKeyAsync(
+        string scopeId,
+        string dedupKey,
+        CancellationToken ct = default);
+
     Task<ContentArtifactRevisionContentResponse> GetRevisionContentAsync(
         string scopeId,
         string artifactId,
