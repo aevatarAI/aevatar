@@ -147,7 +147,7 @@ public static class IdentityOAuthEndpoints
             // protection added in this PR). This is the same "still
             // initializing / drift not yet healed" condition the state-token
             // decoder surfaces above, so route it to the same retry-friendly
-            // 400 path instead of letting the generic catch return 502
+            // 400 path instead of letting the generic catch return 503
             // token_exchange_failed — that misclassifies a self-recoverable
             // condition as a NyxID outage.
             logger.LogWarning(
@@ -172,14 +172,28 @@ public static class IdentityOAuthEndpoints
                 detail = "NyxID 授权未包含 Aevatar、默认 LLM、Ornn service 或 Sandbox service。请回到 Lark 重新发送 /init,并在授权页保留这些必需 services。",
             }, statusCode: StatusCodes.Status409Conflict);
         }
+        // RFC 6749 §5.2: the token endpoint answers 400 for a bad grant
+        // (expired/replayed code) — a user-recoverable condition, not an
+        // upstream outage.
+        catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.BadRequest)
+        {
+            logger.LogWarning(ex, "NyxID rejected the OAuth callback authorization code for correlation {CorrelationId}", decode.CorrelationId);
+            return OAuthCallbackProblem(
+                StatusCodes.Status400BadRequest,
+                "authorization_code_rejected",
+                "NyxID 拒绝了本次授权码,绑定链接可能已过期。请回到 Lark 重新发送 /init。");
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             logger.LogError(ex, "OAuth callback authorization-code exchange failed for correlation {CorrelationId}", decode.CorrelationId);
-            return Results.Json(new
-            {
-                error = "token_exchange_failed",
-                detail = "NyxID 绑定失败,稍后重试 /init",
-            }, statusCode: StatusCodes.Status502BadGateway);
+            return OAuthCallbackProblem(
+                StatusCodes.Status503ServiceUnavailable,
+                "token_exchange_failed",
+                "NyxID 绑定失败,稍后重试 /init");
         }
 
         var existingBinding = await queryPort.ResolveAsync(subject, ct).ConfigureAwait(false);
@@ -247,11 +261,10 @@ public static class IdentityOAuthEndpoints
                 "OAuth callback succeeded but id_token did not carry a stable NyxID uid/sub claim. correlation={CorrelationId}",
                 decode.CorrelationId);
             await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
-            return Results.Json(new
-            {
-                error = "owner_scope_missing",
-                detail = "NyxID binding succeeded but Aevatar could not resolve the canonical owner scope. Re-run /init later.",
-            }, statusCode: StatusCodes.Status502BadGateway);
+            return OAuthCallbackProblem(
+                StatusCodes.Status503ServiceUnavailable,
+                "owner_scope_missing",
+                "NyxID binding succeeded but Aevatar could not resolve the canonical owner scope. Re-run /init later.");
         }
 
         var stateExpectedBindingHash = decode.ExpectedBindingHash?.Trim() ?? string.Empty;
@@ -498,22 +511,30 @@ public static class IdentityOAuthEndpoints
     private static IResult BuildIssuedBindingProbeError(IssuedBindingProbeResult probeResult) =>
         probeResult switch
         {
-            IssuedBindingProbeResult.MissingRequiredAccess => Results.Json(new
-            {
-                error = "required_service_access_missing",
-                detail = "NyxID 授权没有覆盖 Aevatar 所需的 scope 或 services。请回到 Lark 重新发送 /init，并在授权页保留所有必需 services。",
-            }, statusCode: StatusCodes.Status409Conflict),
-            IssuedBindingProbeResult.Invalid => Results.Json(new
-            {
-                error = "issued_binding_invalid",
-                detail = "NyxID 新授权在 Aevatar 接管前已失效。请回到 Lark 重新发送 /init。",
-            }, statusCode: StatusCodes.Status502BadGateway),
-            _ => Results.Json(new
-            {
-                error = "issued_binding_probe_failed",
-                detail = "Aevatar 暂时无法验证新的 NyxID 服务授权。请稍后回到 Lark 重新发送 /init。",
-            }, statusCode: StatusCodes.Status503ServiceUnavailable),
+            IssuedBindingProbeResult.MissingRequiredAccess => OAuthCallbackProblem(
+                StatusCodes.Status409Conflict,
+                "required_service_access_missing",
+                "NyxID 授权没有覆盖 Aevatar 所需的 scope 或 services。请回到 Lark 重新发送 /init，并在授权页保留所有必需 services。"),
+            IssuedBindingProbeResult.Invalid => OAuthCallbackProblem(
+                StatusCodes.Status503ServiceUnavailable,
+                "issued_binding_invalid",
+                "NyxID 新授权在 Aevatar 接管前已失效。请回到 Lark 重新发送 /init。"),
+            _ => OAuthCallbackProblem(
+                StatusCodes.Status503ServiceUnavailable,
+                "issued_binding_probe_failed",
+                "Aevatar 暂时无法验证新的 NyxID 服务授权。请稍后回到 Lark 重新发送 /init。"),
         };
+
+    // Callback failure branches must never answer with 502/504: Cloudflare
+    // replaces origin-generated 502/504 responses with its own opaque branded
+    // error page, which strips this structured body before it reaches the
+    // client (2026-07-28 login incident). Upstream faults are reported as 503
+    // with a stable error code.
+    private static IResult OAuthCallbackProblem(int statusCode, string errorCode, string detail) =>
+        Results.Problem(
+            detail: detail,
+            statusCode: statusCode,
+            extensions: new Dictionary<string, object?> { ["error"] = errorCode });
 
     // ─── Status endpoint ───
 
