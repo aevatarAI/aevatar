@@ -45,7 +45,6 @@ const studioProxyEntries = [
   '/api/editor',
   '/api/executions',
   '/api/roles',
-  '/api/settings',
   '/api/studio',
   '/api/workspace',
 ].reduce<Record<string, ReturnType<typeof buildProxyTarget>>>((entries, path) => {

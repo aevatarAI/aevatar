@@ -43,13 +43,10 @@ import type {
   StudioScopeGAgentBindingResult,
   StudioScopeScriptBindingResult,
   StudioScopeScriptBindingStatus,
-  StudioRuntimeTestResult,
   StudioSaveAndBindWorkflowAcceptedResult,
   StudioSaveAndBindWorkflowInput,
-  StudioSaveSettingsInput,
   StudioSaveWorkflowInput,
   StudioSerializeYamlResult,
-  StudioSettings,
   StudioStartExecutionInput,
   StudioTeamCreateInput,
   StudioTeamCommandResponse,
@@ -3258,45 +3255,6 @@ export const studioApi = {
     return request("/api/roles/import", {
       method: "POST",
       body: form,
-    });
-  },
-
-  getSettings(): Promise<StudioSettings> {
-    return requestJson("/api/settings/");
-  },
-
-  saveSettings(input: StudioSaveSettingsInput): Promise<StudioSettings> {
-    return requestJson("/api/settings/", {
-      method: "PUT",
-      headers: JSON_HEADERS,
-      body: JSON.stringify(
-        compactObject({
-          runtimeBaseUrl: trimOptional(input.runtimeBaseUrl),
-          defaultProviderName: trimOptional(input.defaultProviderName),
-          providers: input.providers?.map((provider) =>
-            compactObject({
-              providerName: provider.providerName.trim(),
-              providerType: provider.providerType.trim(),
-              model: provider.model.trim(),
-              endpoint: trimOptional(provider.endpoint),
-              apiKey: trimOptional(provider.apiKey),
-              clearApiKey: provider.clearApiKey ? true : undefined,
-            })
-          ),
-        })
-      ),
-    });
-  },
-
-  testRuntimeConnection(input: {
-    runtimeBaseUrl?: string | null;
-  }): Promise<StudioRuntimeTestResult> {
-    return requestJson("/api/settings/runtime/test", {
-      method: "POST",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({
-        runtimeBaseUrl: trimOptional(input.runtimeBaseUrl),
-      }),
     });
   },
 

@@ -1477,17 +1477,10 @@ export function ServiceSelector({
       minWidth={168}
       onChange={onSelect}
       options={services.map((service) => ({
-        badge:
-          service.kind === "nyxid-chat"
-            ? "Built-in"
-            : service.kind === "onboarding"
-              ? "Setup"
-              : "Service",
+        badge: service.kind === "nyxid-chat" ? "Built-in" : "Service",
         description:
           service.kind === "nyxid-chat"
             ? "Built-in console assistant"
-            : service.kind === "onboarding"
-              ? "Connect an AI provider and save it to Studio Settings"
             : `${service.id}${service.deploymentStatus ? ` · ${service.deploymentStatus}` : ""}`,
         label: service.label,
         value: service.id,

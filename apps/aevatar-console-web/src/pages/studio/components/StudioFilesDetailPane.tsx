@@ -20,10 +20,7 @@ import type {
   StudioConnectorDefinition,
   StudioRoleCatalog,
   StudioRoleDefinition,
-  StudioSettings,
-  StudioWorkflowDirectory,
   StudioWorkflowSummary,
-  StudioWorkspaceSettings,
 } from '@/shared/studio/models';
 import type { ScopedScriptDetail } from '@/shared/studio/scriptsModels';
 import { describeError } from '@/shared/ui/errorText';
@@ -42,7 +39,6 @@ type QueryState<T> = {
 };
 
 type StudioFileKey =
-  | 'settings.json'
   | 'role-catalog'
   | 'connector-catalog'
   | `chat-history:${string}`
@@ -121,14 +117,11 @@ function formatScriptDetailLabel(
 type Props = {
   readonly selectedFile: StudioFileKey;
   readonly workflows: QueryState<StudioWorkflowSummary[]>;
-  readonly workspaceSettings: QueryState<StudioWorkspaceSettings>;
   readonly roles: QueryState<StudioRoleCatalog>;
   readonly connectors: QueryState<StudioConnectorCatalog>;
-  readonly settings: QueryState<StudioSettings>;
   readonly scripts: QueryState<ScopedScriptDetail[]>;
   readonly chatConversations: QueryState<ConversationMeta[]>;
   readonly scopeId: string;
-  readonly workflowStorageMode: string;
   readonly scriptsEnabled: boolean;
   readonly onOpenWorkflowInStudio: (workflowId: string) => void;
   readonly onOpenScriptInStudio: (scriptId: string) => void;
@@ -180,27 +173,6 @@ const editorHeaderDescriptionStyle: React.CSSProperties = {
   marginTop: 4,
 };
 
-const editorSurfaceStyle: React.CSSProperties = {
-  background: 'var(--ant-color-bg-container)',
-  border: '1px solid #EEEAE4',
-  borderRadius: 16,
-  padding: 4,
-};
-
-const editorTextAreaStyle: React.CSSProperties = {
-  background: 'transparent',
-  border: 'none',
-  color: '#374151',
-  fontFamily:
-    'ui-monospace, SFMono-Regular, SF Mono, Menlo, Monaco, Consolas, Liberation Mono, monospace',
-  fontSize: 13,
-  lineHeight: 1.7,
-  minHeight: 400,
-  outline: 'none',
-  padding: 16,
-  resize: 'vertical',
-  width: '100%',
-};
 
 const codePreviewStyle: React.CSSProperties = {
   background: '#FAFAF9',
@@ -429,10 +401,6 @@ function trimText(value: unknown): string {
   return String(value ?? '').trim();
 }
 
-function formatJson(value: unknown): string {
-  return JSON.stringify(value, null, 2);
-}
-
 function splitCatalogLines(value: string): string[] {
   return String(value || '')
     .split(/\r?\n|,/)
@@ -475,24 +443,6 @@ function parseMapText(value: string): Record<string, string> {
   }
 
   return result;
-}
-
-function buildSettingsDocument(
-  workflowStorageMode: string,
-  workspaceSettings: StudioWorkspaceSettings | undefined,
-  settings: StudioSettings | undefined,
-  scopeId: string,
-): Record<string, unknown> {
-  return {
-    scopeId: scopeId || null,
-    workflowStorageMode,
-    runtimeBaseUrl:
-      settings?.runtimeBaseUrl || workspaceSettings?.runtimeBaseUrl || '',
-    defaultProviderName: settings?.defaultProviderName || '',
-    directories: workspaceSettings?.directories ?? [],
-    providerTypes: settings?.providerTypes ?? [],
-    providers: settings?.providers ?? [],
-  };
 }
 
 function createRoleCatalogItem(role: StudioRoleDefinition): StudioRoleCatalogItem {
@@ -700,189 +650,6 @@ function createUniqueConnectorName(
   return candidate;
 }
 
-function normalizeSettingsProviderInput(value: unknown): {
-  readonly providerName: string;
-  readonly providerType: string;
-  readonly model: string;
-  readonly endpoint?: string | null;
-  readonly apiKey?: string | null;
-  readonly clearApiKey?: boolean | null;
-} {
-  const record =
-    value && typeof value === 'object'
-      ? (value as Record<string, unknown>)
-      : {};
-
-  return {
-    providerName: trimText(record.providerName),
-    providerType: trimText(record.providerType),
-    model: trimText(record.model),
-    endpoint: trimText(record.endpoint) || null,
-    apiKey: trimText(record.apiKey) || null,
-    clearApiKey:
-      record.clearApiKey === true || record.clearApiKeyRequested === true
-        ? true
-        : null,
-  };
-}
-
-function normalizeDirectoryInput(value: unknown): Array<{
-  readonly directoryId: string;
-  readonly label: string;
-  readonly path: string;
-  readonly isBuiltIn: boolean;
-}> {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  return value.map((item) => {
-    const record =
-      item && typeof item === 'object'
-        ? (item as Record<string, unknown>)
-        : {};
-    return {
-      directoryId: trimText(record.directoryId),
-      label: trimText(record.label),
-      path: trimText(record.path),
-      isBuiltIn: record.isBuiltIn === true,
-    };
-  });
-}
-
-function normalizeDirectorySnapshot(
-  directories: readonly StudioWorkflowDirectory[],
-): string {
-  return JSON.stringify(
-    directories.map((directory) => ({
-      directoryId: directory.directoryId,
-      isBuiltIn: directory.isBuiltIn,
-      label: directory.label,
-      path: directory.path,
-    })),
-  );
-}
-
-async function syncWorkspaceDirectories(
-  currentDirectories: readonly StudioWorkflowDirectory[],
-  nextDirectories: Array<{
-    readonly directoryId: string;
-    readonly label: string;
-    readonly path: string;
-    readonly isBuiltIn: boolean;
-  }>,
-  workflowStorageMode: string,
-): Promise<boolean> {
-  if (workflowStorageMode === 'scope') {
-    if (
-      normalizeDirectorySnapshot(currentDirectories) !==
-      JSON.stringify(
-        nextDirectories.map((directory) => ({
-          directoryId: directory.directoryId,
-          isBuiltIn: directory.isBuiltIn,
-          label: directory.label,
-          path: directory.path,
-        })),
-      )
-    ) {
-      throw new Error(
-        'Workflow directories are managed by the current workspace and cannot be edited here.',
-      );
-    }
-
-    return false;
-  }
-
-  let changed = false;
-  const currentById = new Map(
-    currentDirectories.map((directory) => [directory.directoryId, directory]),
-  );
-
-  for (const currentDirectory of currentDirectories) {
-    const matchingNext =
-      nextDirectories.find(
-        (directory) =>
-          directory.directoryId &&
-          directory.directoryId === currentDirectory.directoryId,
-      ) ||
-      nextDirectories.find(
-        (directory) =>
-          !directory.directoryId && directory.path === currentDirectory.path,
-      ) ||
-      null;
-
-    if (currentDirectory.isBuiltIn) {
-      if (
-        !matchingNext ||
-        matchingNext.path !== currentDirectory.path ||
-        matchingNext.label !== currentDirectory.label
-      ) {
-        throw new Error(
-          'Built-in workflow directories cannot be removed or edited here.',
-        );
-      }
-
-      continue;
-    }
-
-    if (!matchingNext) {
-      await studioApi.removeWorkflowDirectory(currentDirectory.directoryId);
-      changed = true;
-      continue;
-    }
-
-    if (
-      matchingNext.path !== currentDirectory.path ||
-      matchingNext.label !== currentDirectory.label
-    ) {
-      await studioApi.removeWorkflowDirectory(currentDirectory.directoryId);
-      await studioApi.addWorkflowDirectory({
-        path: matchingNext.path,
-        label: matchingNext.label || null,
-      });
-      changed = true;
-    }
-  }
-
-  for (const nextDirectory of nextDirectories) {
-    if (nextDirectory.isBuiltIn) {
-      if (
-        !nextDirectory.directoryId ||
-        !currentById.get(nextDirectory.directoryId)?.isBuiltIn
-      ) {
-        throw new Error(
-          'Built-in workflow directories are managed by Studio and cannot be created here.',
-        );
-      }
-
-      continue;
-    }
-
-    const existingCurrent =
-      (nextDirectory.directoryId
-        ? currentById.get(nextDirectory.directoryId)
-        : currentDirectories.find(
-            (directory) => directory.path === nextDirectory.path,
-          )) || null;
-
-    if (existingCurrent) {
-      continue;
-    }
-
-    if (!nextDirectory.path) {
-      continue;
-    }
-
-    await studioApi.addWorkflowDirectory({
-      path: nextDirectory.path,
-      label: nextDirectory.label || null,
-    });
-    changed = true;
-  }
-
-  return changed;
-}
-
 function FilesDrawer(props: {
   readonly open: boolean;
   readonly title: string;
@@ -970,41 +737,16 @@ function FieldTextArea(props: {
 const StudioFilesDetailPane: React.FC<Props> = ({
   selectedFile,
   workflows,
-  workspaceSettings,
   roles,
   connectors,
-  settings,
   scripts,
   chatConversations,
   scopeId,
-  workflowStorageMode,
   scriptsEnabled,
   onOpenWorkflowInStudio,
   onOpenScriptInStudio,
 }) => {
   const queryClient = useQueryClient();
-
-  const settingsDocument = React.useMemo(
-    () =>
-      buildSettingsDocument(
-        workflowStorageMode,
-        workspaceSettings.data,
-        settings.data,
-        scopeId,
-      ),
-    [scopeId, settings.data, workflowStorageMode, workspaceSettings.data],
-  );
-  const settingsSnapshot = React.useMemo(
-    () => formatJson(settingsDocument),
-    [settingsDocument],
-  );
-  const [settingsEditorValue, setSettingsEditorValue] = React.useState(
-    settingsSnapshot,
-  );
-  const [settingsPending, setSettingsPending] = React.useState(false);
-  const [settingsNotice, setSettingsNotice] = React.useState<NoticeState | null>(
-    null,
-  );
 
   const [roleCatalogDraft, setRoleCatalogDraft] = React.useState<
     StudioRoleCatalogItem[]
@@ -1025,10 +767,6 @@ const StudioFilesDetailPane: React.FC<Props> = ({
   const [connectorAddMenuOpen, setConnectorAddMenuOpen] =
     React.useState(false);
   const [chatNotice, setChatNotice] = React.useState<NoticeState | null>(null);
-
-  React.useEffect(() => {
-    setSettingsEditorValue(settingsSnapshot);
-  }, [settingsSnapshot]);
 
   React.useEffect(() => {
     setRoleCatalogDraft((roles.data?.roles ?? []).map(createRoleCatalogItem));
@@ -1053,8 +791,6 @@ const StudioFilesDetailPane: React.FC<Props> = ({
       JSON.stringify(connectors.data?.connectors ?? []),
     [connectorCatalogDraft, connectors.data?.connectors],
   );
-
-  const settingsDirty = settingsEditorValue !== settingsSnapshot;
 
   const editingRole =
     roleCatalogDraft.find((role) => role.key === editingRoleKey) ?? null;
@@ -1101,99 +837,6 @@ const StudioFilesDetailPane: React.FC<Props> = ({
     enabled: Boolean(scopeId && selectedConversationId),
     queryFn: () => chatHistoryApi.loadConversation(scopeId, selectedConversationId),
   });
-
-  const handleSaveSettings = async () => {
-    setSettingsPending(true);
-    setSettingsNotice(null);
-
-    try {
-      const parsed = JSON.parse(settingsEditorValue) as Record<string, unknown>;
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        throw new Error('settings.json must remain a JSON object.');
-      }
-
-      const nextScopeId =
-        parsed.scopeId === null || parsed.scopeId === undefined
-          ? ''
-          : trimText(parsed.scopeId);
-      if (nextScopeId !== trimText(scopeId)) {
-        throw new Error('scopeId is resolved by the current session and cannot be changed here.');
-      }
-
-      const nextWorkflowStorageMode = trimText(
-        parsed.workflowStorageMode || workflowStorageMode,
-      );
-      if (nextWorkflowStorageMode !== workflowStorageMode) {
-        throw new Error(
-          'workflowStorageMode is managed by the Studio host and cannot be changed here.',
-        );
-      }
-
-      if (
-        JSON.stringify(parsed.providerTypes ?? settings.data?.providerTypes ?? []) !==
-        JSON.stringify(settings.data?.providerTypes ?? [])
-      ) {
-        throw new Error(
-          'providerTypes are provided by the Studio host and cannot be edited here.',
-        );
-      }
-
-      const saveSettingsResult = await studioApi.saveSettings({
-        runtimeBaseUrl: trimText(
-          parsed.runtimeBaseUrl ?? settings.data?.runtimeBaseUrl ?? '',
-        ),
-        defaultProviderName: trimText(
-          parsed.defaultProviderName ?? settings.data?.defaultProviderName ?? '',
-        ),
-        providers: Array.isArray(parsed.providers)
-          ? parsed.providers.map(normalizeSettingsProviderInput)
-          : (settings.data?.providers ?? []).map(normalizeSettingsProviderInput),
-      });
-
-      queryClient.setQueryData(['studio-settings'], saveSettingsResult);
-      queryClient.setQueryData(
-        ['studio-workspace-settings', scopeId || 'workspace'],
-        (current: StudioWorkspaceSettings | undefined) =>
-          current
-            ? {
-                ...current,
-                runtimeBaseUrl: saveSettingsResult.runtimeBaseUrl,
-              }
-            : current,
-      );
-
-      const nextDirectories = normalizeDirectoryInput(parsed.directories);
-      const directoriesChanged = await syncWorkspaceDirectories(
-        workspaceSettings.data?.directories ?? [],
-        nextDirectories,
-        workflowStorageMode,
-      );
-
-      if (directoriesChanged) {
-        await queryClient.invalidateQueries({
-          queryKey: ['studio-workspace-settings'],
-        });
-        await queryClient.invalidateQueries({
-          queryKey: ['studio-workspace-workflows'],
-        });
-      }
-
-      setSettingsNotice({
-        type: 'success',
-        message: t("pages.studio.studiofilesdetailpane.settings.json.saved", "settings.json saved."),
-      });
-    } catch (error) {
-      setSettingsNotice({
-        type: 'error',
-        message:
-          error instanceof Error
-            ? error.message
-            : 'Failed to save settings.json.',
-      });
-    } finally {
-      setSettingsPending(false);
-    }
-  };
 
   const handleAddRole = () => {
     const nextRole: StudioRoleCatalogItem = {
@@ -1302,70 +945,6 @@ const StudioFilesDetailPane: React.FC<Props> = ({
       });
     }
   };
-
-  const renderSettingsPanel = () => (
-    <div style={detailScrollStyle}>
-      <div style={cliEditorShellStyle}>
-        <div style={editorHeaderRowStyle}>
-          <div>
-            <div style={editorHeaderLabelStyle}>settings.json</div>
-            <div style={editorHeaderTitleStyle}>{t("pages.studio.studiofilesdetailpane.configuration", "Configuration")}</div>
-          </div>
-          <button
-            aria-disabled={!settingsDirty || settingsPending}
-            className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
-            type="button"
-            disabled={!settingsDirty || settingsPending}
-            onClick={() => void handleSaveSettings()}
-            style={{
-              ...primaryActionStyle,
-              opacity: !settingsDirty || settingsPending ? 0.3 : 1,
-            }}
-          >
-            {settingsPending
-              ? t("pages.studio.studiofilesdetailpane.saving", "Saving...")
-              : t("pages.studio.studiofilesdetailpane.save", "Save")}
-          </button>
-        </div>
-
-        {workspaceSettings.isError ? (
-          <Alert
-            type="error"
-            showIcon
-            message={t("pages.studio.studiofilesdetailpane.failed.to.load.workspace.settings", "Failed to load workspace settings")}
-            description={describeError(workspaceSettings.error)}
-          />
-        ) : null}
-
-        {settings.isError ? (
-          <Alert
-            type="error"
-            showIcon
-            message={t("pages.studio.studiofilesdetailpane.failed.to.load.provider.settings", "Failed to load provider settings")}
-            description={describeError(settings.error)}
-          />
-        ) : null}
-
-        {settingsNotice ? (
-          <Alert
-            type={settingsNotice.type}
-            showIcon
-            message={settingsNotice.message}
-          />
-        ) : null}
-
-        <div style={editorSurfaceStyle}>
-          <textarea
-            aria-label={t("pages.studio.studiofilesdetailpane.settings.json.editor", "settings.json editor")}
-            spellCheck={false}
-            value={settingsEditorValue}
-            onChange={(event) => setSettingsEditorValue(event.target.value)}
-            style={editorTextAreaStyle}
-          />
-        </div>
-      </div>
-    </div>
-  );
 
   const renderRolesPanel = () => (
     <div style={detailScrollStyle}>
@@ -2710,10 +2289,6 @@ const StudioFilesDetailPane: React.FC<Props> = ({
       </div>
     );
   };
-
-  if (selectedFile === 'settings.json') {
-    return renderSettingsPanel();
-  }
 
   if (selectedFile === 'role-catalog') {
     return renderRolesPanel();
