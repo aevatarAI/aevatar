@@ -1325,6 +1325,38 @@ public sealed class ProvisionWorkflowScheduleToolTests
     }
 
     [Fact]
+    public async Task ScheduleMemberWorkflow_WhenAuthorizationPlanMismatchDuringCreate_ShouldReturnSanitizedReason()
+    {
+        var schedulePort = new RecordingMemberWorkflowSchedulePort
+        {
+            CreateException = new StudioMemberAutomationPlanConflictException(
+                "authorization_plan_changed",
+                "private authorization planner detail owner-alpha node-a",
+                ScheduledAuthorizationPlanMismatchReason.AllowedNodeIdsMismatch),
+        };
+        var tool = await DiscoverScheduleMemberWorkflowToolAsync(schedulePort);
+
+        using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
+        var output = await tool.ExecuteAsync("""
+            {
+              "member_id": "member-alpha",
+              "schedule_cron": "0 9 * * *",
+              "schedule_timezone": "Asia/Shanghai"
+            }
+            """);
+
+        ErrorCode(output).Should().Be("authorization_plan_changed");
+        ErrorMessage(output).Should().Be("The authorization plan changed. Run schedule preflight again before retrying.");
+        ErrorAuthorizationPlanMismatchReason(output).Should().Be("allowed_node_ids_mismatch");
+        output.Should()
+            .NotContain("private authorization planner detail")
+            .And.NotContain("owner-alpha")
+            .And.NotContain("node-a");
+        schedulePort.WritePreflightRequests.Should().ContainSingle();
+        schedulePort.CreateCallCount.Should().Be(1);
+    }
+
+    [Fact]
     public async Task ScheduleMemberWorkflow_WhenScopeMissing_ShouldReturnStructuredErrorAndNotCallPort()
     {
         var schedulePort = new RecordingMemberWorkflowSchedulePort();
@@ -1826,6 +1858,15 @@ public sealed class ProvisionWorkflowScheduleToolTests
         return document.RootElement.TryGetProperty("error", out var error)
             && error.TryGetProperty("message", out var message)
             ? message.GetString()
+            : null;
+    }
+
+    private static string? ErrorAuthorizationPlanMismatchReason(string output)
+    {
+        using var document = JsonDocument.Parse(output);
+        return document.RootElement.TryGetProperty("error", out var error)
+            && error.TryGetProperty("authorization_plan_mismatch_reason", out var reason)
+            ? reason.GetString()
             : null;
     }
 

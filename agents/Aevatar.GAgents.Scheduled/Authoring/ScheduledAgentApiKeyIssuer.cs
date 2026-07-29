@@ -240,13 +240,13 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
                 _logger.Log(
                     LogLevel.Warning,
                     new EventId(),
-                    $"NyxID scheduled API key scope-plan no longer matches the validated authorization plan. reason={mismatchReason} planned_service_count={plan.NyxIdServiceGrants.Count()} current_service_count={scopePlan.Services.Count()} planned_node_count={nodeIds.Count()} current_node_count={scopePlan.AllowedNodeIds.Count()}",
+                    $"NyxID scheduled API key scope-plan no longer matches the validated authorization plan. reason={ScheduledAuthorizationPlanMismatchReasons.ToWireValue(mismatchReason)} planned_service_count={plan.NyxIdServiceGrants.Count()} current_service_count={scopePlan.Services.Count()} planned_node_count={nodeIds.Count()} current_node_count={scopePlan.AllowedNodeIds.Count()}",
                     null,
                     static (state, _) => state);
             }
             return ScheduledAgentApiKeyIssueResult.Failed(
                 "authorization_plan_changed",
-                $"authorization_plan_changed:{mismatchReason}");
+                authorizationPlanMismatchReason: mismatchReason);
         }
 
         var response = await client.CreateApiKeyAsync(
@@ -461,29 +461,29 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
         string ownerSubject,
         IReadOnlyList<string> serviceIds,
         IReadOnlyList<string> nodeIds,
-        out string mismatchReason)
+        out ScheduledAuthorizationPlanMismatchReason mismatchReason)
     {
         if (!string.Equals(scopePlan.Authority, NyxIdAuthorizationAuthorities.NyxId, StringComparison.Ordinal))
         {
-            mismatchReason = "scope_plan_authority_mismatch";
+            mismatchReason = ScheduledAuthorizationPlanMismatchReason.ScopePlanAuthorityMismatch;
             return false;
         }
 
         if (!MatchesScopePlanVersions(scopePlan, plan.CatalogAuthority))
         {
-            mismatchReason = "scope_plan_versions_mismatch";
+            mismatchReason = ScheduledAuthorizationPlanMismatchReason.ScopePlanVersionsMismatch;
             return false;
         }
 
         if (!MatchesPrincipal(scopePlan.IntendedKeyOwner, ownerKind, ownerSubject))
         {
-            mismatchReason = "intended_key_owner_mismatch";
+            mismatchReason = ScheduledAuthorizationPlanMismatchReason.IntendedKeyOwnerMismatch;
             return false;
         }
 
         if (!MatchesPrincipal(scopePlan.AuthenticatedActor, plan.AuthenticatedActor))
         {
-            mismatchReason = "authenticated_actor_mismatch";
+            mismatchReason = ScheduledAuthorizationPlanMismatchReason.AuthenticatedActorMismatch;
             return false;
         }
 
@@ -491,7 +491,7 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
             !string.Equals(scopePlan.Freshness.PreconditionField, "scope_plan_digest", StringComparison.Ordinal) ||
             scopePlan.Freshness.PostCreationDrift != NyxIdScopePlanPostCreationDrift.FailClosed)
         {
-            mismatchReason = "scope_plan_freshness_mismatch";
+            mismatchReason = ScheduledAuthorizationPlanMismatchReason.ScopePlanFreshnessMismatch;
             return false;
         }
 
@@ -500,25 +500,25 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
             scopePlan.Completeness.RouteCandidateBasis != NyxIdScopePlanRouteCandidateBasis.ActiveConfiguredRoutes ||
             !scopePlan.Completeness.TransientNodeStateExcluded)
         {
-            mismatchReason = "scope_plan_completeness_mismatch";
+            mismatchReason = ScheduledAuthorizationPlanMismatchReason.ScopePlanCompletenessMismatch;
             return false;
         }
 
         if (!scopePlan.AllowedServiceIds.SequenceEqual(serviceIds, StringComparer.Ordinal))
         {
-            mismatchReason = "allowed_service_ids_mismatch";
+            mismatchReason = ScheduledAuthorizationPlanMismatchReason.AllowedServiceIdsMismatch;
             return false;
         }
 
         if (!scopePlan.AllowedNodeIds.SequenceEqual(nodeIds, StringComparer.Ordinal))
         {
-            mismatchReason = "allowed_node_ids_mismatch";
+            mismatchReason = ScheduledAuthorizationPlanMismatchReason.AllowedNodeIdsMismatch;
             return false;
         }
 
         if (scopePlan.Services.Count != plan.NyxIdServiceGrants.Count)
         {
-            mismatchReason = "service_grant_count_mismatch";
+            mismatchReason = ScheduledAuthorizationPlanMismatchReason.ServiceGrantCountMismatch;
             return false;
         }
 
@@ -528,24 +528,24 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
             var currentGrant = scopePlan.Services[index];
             if (!string.Equals(currentGrant.UserServiceId, plannedGrant.UserServiceId, StringComparison.Ordinal))
             {
-                mismatchReason = "service_grant_identity_mismatch";
+                mismatchReason = ScheduledAuthorizationPlanMismatchReason.ServiceGrantIdentityMismatch;
                 return false;
             }
 
             if (!MatchesPrincipal(currentGrant.ResourceOwner, plannedGrant.ResourceOwner))
             {
-                mismatchReason = "service_grant_resource_owner_mismatch";
+                mismatchReason = ScheduledAuthorizationPlanMismatchReason.ServiceGrantResourceOwnerMismatch;
                 return false;
             }
 
             if (!MatchesNodeGrant(currentGrant.NodeGrant, plannedGrant))
             {
-                mismatchReason = "service_grant_node_mismatch";
+                mismatchReason = ScheduledAuthorizationPlanMismatchReason.ServiceGrantNodeMismatch;
                 return false;
             }
         }
 
-        mismatchReason = string.Empty;
+        mismatchReason = ScheduledAuthorizationPlanMismatchReason.Unspecified;
         return true;
     }
 

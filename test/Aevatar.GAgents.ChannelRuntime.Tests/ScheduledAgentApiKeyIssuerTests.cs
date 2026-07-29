@@ -161,8 +161,13 @@ public sealed class ScheduledAgentApiKeyIssuerTests
 
         result.Success.Should().BeFalse();
         result.Error.Should().Be("authorization_plan_changed");
-        result.Detail.Should().Be("authorization_plan_changed:authenticated_actor_mismatch");
-        result.ToErrorJson().Should().NotContain("admin-alpha").And.NotContain("admin-other");
+        result.Detail.Should().BeNull();
+        result.AuthorizationPlanMismatchReason.Should()
+            .Be(ScheduledAuthorizationPlanMismatchReason.AuthenticatedActorMismatch);
+        result.ToErrorJson().Should()
+            .Contain("authenticated_actor_mismatch")
+            .And.NotContain("admin-alpha")
+            .And.NotContain("admin-other");
         handler.Requests.Should().ContainSingle().Which.Should().Be("/api/v1/api-keys/scope-plan");
     }
 
@@ -187,21 +192,25 @@ public sealed class ScheduledAgentApiKeyIssuerTests
 
         result.Success.Should().BeFalse();
         result.Error.Should().Be("authorization_plan_changed");
-        result.Detail.Should().Be("authorization_plan_changed:allowed_node_ids_mismatch");
-        result.ToErrorJson().Should().NotContain("node-other");
+        result.Detail.Should().BeNull();
+        result.AuthorizationPlanMismatchReason.Should()
+            .Be(ScheduledAuthorizationPlanMismatchReason.AllowedNodeIdsMismatch);
+        result.ToErrorJson().Should()
+            .Contain("allowed_node_ids_mismatch")
+            .And.NotContain("node-other");
         handler.Requests.Should().ContainSingle().Which.Should().Be("/api/v1/api-keys/scope-plan");
     }
 
     [Theory]
-    [InlineData("contract_version", "scope_plan_versions_mismatch")]
-    [InlineData("policy_version", "scope_plan_versions_mismatch")]
-    [InlineData("principal", "intended_key_owner_mismatch")]
-    [InlineData("service_identity", "allowed_service_ids_mismatch")]
-    [InlineData("resource_owner", "service_grant_resource_owner_mismatch")]
-    [InlineData("node_requirement", "allowed_node_ids_mismatch")]
+    [InlineData("contract_version", ScheduledAuthorizationPlanMismatchReason.ScopePlanVersionsMismatch)]
+    [InlineData("policy_version", ScheduledAuthorizationPlanMismatchReason.ScopePlanVersionsMismatch)]
+    [InlineData("principal", ScheduledAuthorizationPlanMismatchReason.IntendedKeyOwnerMismatch)]
+    [InlineData("service_identity", ScheduledAuthorizationPlanMismatchReason.AllowedServiceIdsMismatch)]
+    [InlineData("resource_owner", ScheduledAuthorizationPlanMismatchReason.ServiceGrantResourceOwnerMismatch)]
+    [InlineData("node_requirement", ScheduledAuthorizationPlanMismatchReason.AllowedNodeIdsMismatch)]
     public async Task IssueAsync_WhenCurrentScopeFactDiffersFromValidatedPlan_FailsBeforeCreate(
         string mismatch,
-        string expectedReason)
+        ScheduledAuthorizationPlanMismatchReason expectedReason)
     {
         var plan = ValidPlan();
         var scopePlanJson = PersonalScopePlanJson();
@@ -256,9 +265,11 @@ public sealed class ScheduledAgentApiKeyIssuerTests
 
         result.Success.Should().BeFalse();
         result.Error.Should().Be("authorization_plan_changed");
-        result.Detail.Should().Be($"authorization_plan_changed:{expectedReason}");
+        result.Detail.Should().BeNull();
+        result.AuthorizationPlanMismatchReason.Should().Be(expectedReason);
         result.ToErrorJson().Should()
-            .NotContain("owner-alpha")
+            .Contain(ScheduledAuthorizationPlanMismatchReasons.ToWireValue(expectedReason))
+            .And.NotContain("owner-alpha")
             .And.NotContain("owner-other")
             .And.NotContain("us-other")
             .And.NotContain("resource-other")
