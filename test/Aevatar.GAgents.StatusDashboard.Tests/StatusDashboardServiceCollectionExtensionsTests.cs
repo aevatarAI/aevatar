@@ -17,19 +17,15 @@ namespace Aevatar.GAgents.StatusDashboard.Tests;
 public sealed class StatusDashboardServiceCollectionExtensionsTests
 {
     [Fact]
-    public void AddStatusDashboard_RegistersCommittedStateProjectionActivationHook()
+    public void AddStatusDashboard_DoesNotRegisterHealthProjectionPipeline()
     {
         using var provider = new ServiceCollection()
             .AddStatusDashboard(new ConfigurationBuilder().Build())
             .BuildServiceProvider();
 
-        provider.GetService<ProjectionActivationPlanDispatcher>()
-            .Should().NotBeNull("the committed-state hook dispatches activation plans through the shared dispatcher");
-        provider.GetServices<ICommittedStatePublicationHook>()
-            .Should().ContainSingle(hook => hook is CommittedStateProjectionActivationHook);
-        provider.GetServices<IProjectionActivationPlanProvider>()
-            .Should().ContainSingle(planProvider =>
-                planProvider is HealthProbeCommittedStateProjectionActivationPlanProvider);
+        provider.GetService<ProjectionActivationPlanDispatcher>().Should().BeNull();
+        provider.GetServices<ICommittedStatePublicationHook>().Should().BeEmpty();
+        provider.GetServices<IProjectionActivationPlanProvider>().Should().BeEmpty();
     }
 
     [Fact]
@@ -39,8 +35,6 @@ public sealed class StatusDashboardServiceCollectionExtensionsTests
             .AddStatusDashboard(new ConfigurationBuilder().Build());
 
         services.Should().ContainSingle(descriptor =>
-            descriptor.ServiceType == typeof(IProjectionDocumentMetadataProvider<HealthProbeTargetDocument>));
-        services.Should().ContainSingle(descriptor =>
             descriptor.ServiceType == typeof(IHealthStatusQueryPort) &&
             descriptor.ImplementationType == typeof(HealthStatusQueryPort));
         services.Should().ContainSingle(descriptor =>
@@ -49,41 +43,18 @@ public sealed class StatusDashboardServiceCollectionExtensionsTests
     }
 
     [Fact]
-    public async Task AddStatusDashboard_HealthProbeActivation_ShouldNotActivateProjectionScopeStatus()
-    {
-        var runtime = new RecordingActorRuntime();
-        var dispatchPort = new RecordingActorDispatchPort();
-        var statusActivation = new RecordingStatusActivationService();
-        var services = new ServiceCollection();
-        services.AddSingleton<IActorRuntime>(runtime);
-        services.AddSingleton<IActorDispatchPort>(dispatchPort);
-        services.AddSingleton<IProjectionScopeActivationService<ProjectionScopeStatusRuntimeLease>>(statusActivation);
-        services.AddStatusDashboard(new ConfigurationBuilder().Build());
-
-        await using var provider = services.BuildServiceProvider();
-        var activation = provider.GetRequiredService<
-            IProjectionScopeActivationService<HealthProbeMaterializationRuntimeLease>>();
-
-        _ = await activation.EnsureAsync(new ProjectionScopeStartRequest
-        {
-            RootActorId = "health-probe::self-liveness",
-            ProjectionKind = HealthProbeTargetGAgent.ProjectionKind,
-            Mode = ProjectionRuntimeMode.DurableMaterialization,
-        });
-
-        statusActivation.Requests.Should().BeEmpty(
-            "the health document is already the operational status surface, so projecting its scope status recursively only amplifies durable writes");
-    }
-
-    [Fact]
-    public async Task AddStatusDashboard_Startup_ShouldReleaseLegacyStatusScopesForCurrentAndRetiredProbes()
+    public async Task AddStatusDashboard_Startup_ShouldReleaseLegacyHealthAndStatusScopesForCurrentAndRetiredProbes()
     {
         var runtime = new RecordingActorRuntime();
         var dispatchPort = new RecordingActorDispatchPort();
         var currentSlug = "current-probe";
         var retiredSlug = RetiredStatusProbeTargets.Slugs[0];
+        var currentLegacyHealthScopeId = BuildLegacyHealthScopeActorId(currentSlug);
+        var retiredLegacyHealthScopeId = BuildLegacyHealthScopeActorId(retiredSlug);
         var currentLegacyStatusScopeId = BuildLegacyStatusScopeActorId(currentSlug);
         var retiredLegacyStatusScopeId = BuildLegacyStatusScopeActorId(retiredSlug);
+        runtime.SeedActor(currentLegacyHealthScopeId);
+        runtime.SeedActor(retiredLegacyHealthScopeId);
         runtime.SeedActor(currentLegacyStatusScopeId);
         runtime.SeedActor(retiredLegacyStatusScopeId);
         var configuration = new ConfigurationBuilder()
@@ -115,39 +86,24 @@ public sealed class StatusDashboardServiceCollectionExtensionsTests
         var releasedActorIds = dispatchPort.Dispatches
             .Where(dispatch => dispatch.Envelope.Payload.Is(ReleaseProjectionScopeCommand.Descriptor))
             .Select(dispatch => dispatch.ActorId);
-        releasedActorIds.Should().BeEquivalentTo(currentLegacyStatusScopeId, retiredLegacyStatusScopeId);
+        releasedActorIds.Should().BeEquivalentTo(
+            currentLegacyHealthScopeId,
+            retiredLegacyHealthScopeId,
+            currentLegacyStatusScopeId,
+            retiredLegacyStatusScopeId);
     }
 
-    private static string BuildLegacyStatusScopeActorId(string slug)
-    {
-        var healthScopeActorId = ProjectionScopeActorId.Build(new ProjectionRuntimeScopeKey(
+    private static string BuildLegacyHealthScopeActorId(string slug) =>
+        ProjectionScopeActorId.Build(new ProjectionRuntimeScopeKey(
             HealthProbeStoreCommands.BuildActorId(slug),
-            HealthProbeTargetGAgent.ProjectionKind,
+            HealthProbeTargetGAgent.LegacyProjectionKind,
             ProjectionRuntimeMode.DurableMaterialization));
-        return ProjectionScopeActorId.Build(new ProjectionRuntimeScopeKey(
-            healthScopeActorId,
+
+    private static string BuildLegacyStatusScopeActorId(string slug) =>
+        ProjectionScopeActorId.Build(new ProjectionRuntimeScopeKey(
+            BuildLegacyHealthScopeActorId(slug),
             ProjectionScopeStatusMaterializationContext.ProjectionKindValue,
             ProjectionRuntimeMode.DurableMaterialization));
-    }
-
-    private sealed class RecordingStatusActivationService
-        : IProjectionScopeActivationService<ProjectionScopeStatusRuntimeLease>
-    {
-        public List<ProjectionScopeStartRequest> Requests { get; } = [];
-
-        public Task<ProjectionScopeStatusRuntimeLease> EnsureAsync(
-            ProjectionScopeStartRequest request,
-            CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            Requests.Add(request);
-            return Task.FromResult(new ProjectionScopeStatusRuntimeLease(
-                new ProjectionScopeStatusMaterializationContext
-                {
-                    RootActorId = request.RootActorId,
-                }));
-        }
-    }
 
     private sealed class RecordingActorRuntime : IActorRuntime
     {

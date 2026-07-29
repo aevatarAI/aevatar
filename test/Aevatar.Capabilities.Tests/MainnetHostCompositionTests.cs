@@ -46,6 +46,7 @@ using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Device;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgents.NyxidChat.AgentProfiles;
+using Aevatar.GAgents.StatusDashboard;
 using Aevatar.GAgents.StatusDashboard.Executors;
 using Aevatar.Mainnet.Host.Api.AgentProfiles;
 using Aevatar.Mainnet.Host.Api.Hosting;
@@ -282,7 +283,7 @@ public sealed class MainnetHostCompositionTests
         readModelDescriptors.Select(static descriptor => descriptor.Name)
             .Should()
             .OnlyHaveUniqueItems();
-        readModelDescriptors.Should().HaveCount(19);
+        readModelDescriptors.Should().HaveCount(18);
         readModelDescriptors.Should()
             .ContainSingle(static descriptor => descriptor.Name == "workflow-external-approval-continuation");
         readModelDescriptors.Should()
@@ -1104,6 +1105,13 @@ public sealed class MainnetHostCompositionTests
         app.Services.GetServices<IProjectionIndexReconcileTarget>()
             .Should()
             .ContainSingle(static target => target.IndexAlias.EndsWith("-audit-trail-current", StringComparison.Ordinal));
+        app.Services.GetServices<IProjectionIndexReconcileTarget>()
+            .Should()
+            .ContainSingle(static target => target.IndexAlias.EndsWith(
+                "-health-probe-operational-snapshots",
+                StringComparison.Ordinal));
+        app.Services.GetRequiredService<IHealthProbeOperationalSnapshotStore>()
+            .GetType().Name.Should().Be("ElasticsearchHealthProbeOperationalSnapshotStore");
         app.Services.GetServices<IProjectionReadModelDescriptor>()
             .Should()
             .NotContain(static descriptor => descriptor.Name.Contains("audit", StringComparison.OrdinalIgnoreCase));

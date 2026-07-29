@@ -25,6 +25,7 @@ using Aevatar.GAgents.Device;
 using Aevatar.GAgents.Scheduled;
 using Aevatar.GAgents.StatusDashboard;
 using Aevatar.GAgents.StreamingProxy;
+using Aevatar.Mainnet.Host.Api.Status;
 using Aevatar.Workflow.Projection.ReadModels;
 using Google.Protobuf;
 using Microsoft.Extensions.Configuration;
@@ -119,6 +120,7 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
     private static void AddElasticsearchStores(IServiceCollection services, IConfiguration configuration)
     {
         RegisterElasticsearchAuditTrailArtifactStore(services, configuration);
+        RegisterElasticsearchHealthProbeOperationalSnapshotStore(services, configuration);
         TryAddElasticsearchStore<ChannelBotRegistrationDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<ConversationDeliveryCurrentStateDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<ProjectionScopeStatusDocument>(services, configuration, static document => document.Id);
@@ -130,7 +132,6 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         TryAddElasticsearchStore<UserAgentCatalogDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<UserAgentCatalogNyxCredentialDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<UserAgentApiKeyRevocationDocument>(services, configuration, static document => document.Id);
-        TryAddElasticsearchStore<HealthProbeTargetDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<WorkflowExternalApprovalContinuationDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<StreamingProxyChatSessionTerminalSnapshot>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<StreamingProxyRoomParticipantsSnapshot>(services, configuration, static document => document.Id);
@@ -139,6 +140,9 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
     private static void AddInMemoryStores(IServiceCollection services)
     {
         RegisterInMemoryAuditTrailArtifactStore(services);
+        services.Replace(ServiceDescriptor.Singleton<
+            IHealthProbeOperationalSnapshotStore,
+            InMemoryHealthProbeOperationalSnapshotStore>());
         TryAddInMemoryStore<ChannelBotRegistrationDocument>(services, static document => document.Id);
         TryAddInMemoryStore<ConversationDeliveryCurrentStateDocument>(services, static document => document.Id);
         TryAddInMemoryStore<ProjectionScopeStatusDocument>(services, static document => document.Id);
@@ -150,7 +154,6 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         TryAddInMemoryStore<UserAgentCatalogDocument>(services, static document => document.Id);
         TryAddInMemoryStore<UserAgentCatalogNyxCredentialDocument>(services, static document => document.Id);
         TryAddInMemoryStore<UserAgentApiKeyRevocationDocument>(services, static document => document.Id);
-        TryAddInMemoryStore<HealthProbeTargetDocument>(services, static document => document.Id);
         TryAddInMemoryStore<WorkflowExternalApprovalContinuationDocument>(services, static document => document.Id);
         TryAddInMemoryStore(
             services,
@@ -183,7 +186,6 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         TryAddReadModelDescriptor<UserAgentCatalogDocument>(services, "user-agent-catalog", "UserAgentCatalogGAgent", engineLabel, shape);
         TryAddReadModelDescriptor<UserAgentCatalogNyxCredentialDocument>(services, "user-agent-catalog-nyx-credential", "UserAgentCatalogGAgent", engineLabel, shape);
         TryAddReadModelDescriptor<UserAgentApiKeyRevocationDocument>(services, "user-agent-api-key-revocation", "UserAgentCatalogGAgent", engineLabel, shape);
-        TryAddReadModelDescriptor<HealthProbeTargetDocument>(services, "health-probe-target", "HealthProbeGAgent", engineLabel, shape);
         // WorkflowExternalApprovalContinuationDocument is inventoried at the workflow store-registration
         // site (it owns that read-model); registering it here too would double-count it in the inventory.
         TryAddReadModelDescriptor<StreamingProxyChatSessionTerminalSnapshot>(services, "streaming-proxy-chat-session", "StreamingProxyChatSessionGAgent", engineLabel, shape);
@@ -213,6 +215,20 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         services.TryAddSingleton<InMemoryAuditTrailStore>();
         services.TryAddSingleton<IAuditTrailArtifactStore>(static sp => sp.GetRequiredService<InMemoryAuditTrailStore>());
         services.TryAddSingleton<IAuditTrailQueryPort>(static sp => sp.GetRequiredService<InMemoryAuditTrailStore>());
+    }
+
+    private static void RegisterElasticsearchHealthProbeOperationalSnapshotStore(
+        IServiceCollection services,
+        IConfiguration configuration)
+    {
+        services.TryAddSingleton<ElasticsearchHealthProbeOperationalSnapshotStore>(sp =>
+            new ElasticsearchHealthProbeOperationalSnapshotStore(
+                ProjectionDocumentProviderConfiguration.BindRequiredElasticsearchOptions(configuration),
+                logger: sp.GetRequiredService<ILogger<ElasticsearchHealthProbeOperationalSnapshotStore>>()));
+        services.Replace(ServiceDescriptor.Singleton<IHealthProbeOperationalSnapshotStore>(static sp =>
+            sp.GetRequiredService<ElasticsearchHealthProbeOperationalSnapshotStore>()));
+        services.AddSingleton<IProjectionIndexReconcileTarget>(static sp =>
+            sp.GetRequiredService<ElasticsearchHealthProbeOperationalSnapshotStore>());
     }
 
     // Registers a single inventory descriptor that delegates to the read-model's already-registered

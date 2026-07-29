@@ -17,9 +17,9 @@ namespace Aevatar.GAgents.StatusDashboard;
 /// configured snapshot store.
 /// </summary>
 [GAgent("status.dashboard.health-probe-target")]
-public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>, IProjectedActor
+public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
 {
-    public static string ProjectionKind => "health-probe-target";
+    internal const string LegacyProjectionKind = "health-probe-target";
 
     internal const int RetainedOutcomeCount = 120;
     private static readonly TimeSpan RetainedOutcomeWindow = TimeSpan.FromHours(2);
@@ -167,22 +167,28 @@ public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
             executor,
             descriptor.Clone(),
             execution.Clone(),
-            timeProvider.GetTimestamp());
+            timeProvider.GetTimestamp(),
+            _lifetimeCts?.Token ?? CancellationToken.None);
     }
 
     private async Task ExecuteProbeAndSignalAsync(
         IHealthProbeExecutor executor,
         HealthProbeTargetDescriptor descriptor,
         HealthProbeExecutionState execution,
-        long startedAt)
+        long startedAt,
+        CancellationToken ct)
     {
         var timeProvider = ResolveTimeProvider();
         HealthProbeOutcome outcome;
         try
         {
-            outcome = await executor.ProbeAsync(descriptor, CancellationToken.None);
+            outcome = await executor.ProbeAsync(descriptor, ct);
             outcome.LatencyMs = ToLatencyMs(timeProvider.GetElapsedTime(startedAt));
             outcome.ObservedAt = Timestamp.FromDateTimeOffset(timeProvider.GetUtcNow());
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            return;
         }
         catch (Exception ex)
         {
@@ -197,16 +203,26 @@ public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
             };
         }
 
-        await EventPublisher.PublishAsync(
-            new HealthProbeCompletedEvent
-            {
-                Slug = descriptor.Slug,
-                OperationId = execution.OperationId,
-                Outcome = outcome,
-            },
-            TopologyAudience.Self,
-            CancellationToken.None,
-            sourceEnvelope: null);
+        try
+        {
+            await EventPublisher.PublishAsync(
+                new HealthProbeCompletedEvent
+                {
+                    Slug = descriptor.Slug,
+                    OperationId = execution.OperationId,
+                    Outcome = outcome,
+                },
+                TopologyAudience.Self,
+                ct,
+                sourceEnvelope: null);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to publish health-probe completion for actor {ActorId}", Id);
+        }
     }
 
     private async Task ObserveImmediateOutcomeAsync(HealthProbeOutcome outcome)

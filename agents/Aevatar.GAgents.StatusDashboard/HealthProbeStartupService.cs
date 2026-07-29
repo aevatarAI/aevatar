@@ -3,6 +3,7 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.StatusDashboard.Configuration;
 using Aevatar.GAgents.StatusDashboard.Executors;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -62,7 +63,7 @@ public sealed class HealthProbeStartupService : IHostedService
                      .Where(static slug => !string.IsNullOrWhiteSpace(slug))
                      .Distinct(StringComparer.Ordinal))
         {
-            await ReleaseLegacyStatusScopeIfExistsAsync(slug, ct);
+            await ReleaseLegacyProjectionScopesIfExistsAsync(slug, ct);
         }
 
         if (_manifest.Descriptors.Count == 0)
@@ -109,15 +110,19 @@ public sealed class HealthProbeStartupService : IHostedService
             Enabled = false,
         };
 
-    private async Task ReleaseLegacyStatusScopeIfExistsAsync(string slug, CancellationToken ct)
+    private async Task ReleaseLegacyProjectionScopesIfExistsAsync(string slug, CancellationToken ct)
     {
+        var healthScopeKey = new ProjectionRuntimeScopeKey(
+            HealthProbeStoreCommands.BuildActorId(slug),
+            HealthProbeTargetGAgent.LegacyProjectionKind,
+            ProjectionRuntimeMode.DurableMaterialization);
+        var healthScopeActorId = ProjectionScopeActorId.Build(healthScopeKey);
+
+        await ReleaseLegacyHealthScopeIfExistsAsync(healthScopeKey, healthScopeActorId, slug, ct);
+
         if (_statusScopeLookup == null || _statusScopeReleaseService == null)
             return;
 
-        var healthScopeActorId = ProjectionScopeActorId.Build(new ProjectionRuntimeScopeKey(
-            HealthProbeStoreCommands.BuildActorId(slug),
-            HealthProbeTargetGAgent.ProjectionKind,
-            ProjectionRuntimeMode.DurableMaterialization));
         var request = new ProjectionScopeStartRequest
         {
             RootActorId = healthScopeActorId,
@@ -144,6 +149,46 @@ public sealed class HealthProbeStartupService : IHostedService
             _logger.LogWarning(
                 ex,
                 "Failed to release legacy health projection status scope for {Slug}; startup will continue.",
+                slug);
+        }
+    }
+
+    private async Task ReleaseLegacyHealthScopeIfExistsAsync(
+        ProjectionRuntimeScopeKey scopeKey,
+        string scopeActorId,
+        string slug,
+        CancellationToken ct)
+    {
+        try
+        {
+            if (!await _actorRuntime.ExistsAsync(scopeActorId))
+                return;
+
+            var command = new ReleaseProjectionScopeCommand
+            {
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+                SessionId = scopeKey.SessionId,
+                Mode = ProjectionScopeMode.DurableMaterialization,
+            };
+            var envelope = new EventEnvelope
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                Payload = Any.Pack(command),
+                Route = EnvelopeRouteSemantics.CreateDirect("status.health-probe-cleanup", scopeActorId),
+            };
+            _ = await _dispatchPort.DispatchAsync(scopeActorId, envelope, ct);
+            _logger.LogInformation("Dispatched release for legacy health projection scope {Slug}.", slug);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to release legacy health projection scope for {Slug}; startup will continue.",
                 slug);
         }
     }

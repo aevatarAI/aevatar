@@ -18,7 +18,8 @@ enum HealthOutcomeStatus {
   HEALTH_OUTCOME_STATUS_DOWN = 4;
 }
 
-// One probe execution result. Held on actor state and projected to readmodel.
+// One probe execution result. New samples live only in actor runtime state and
+// the overwritten operational snapshot.
 message HealthProbeOutcome {
   HealthOutcomeStatus status = 1;
   int32 latency_ms = 2;
@@ -44,9 +45,9 @@ message HealthProbeTargetDescriptor {
 
 // ─── Persisted actor state ───
 
-// One actor per probe target — current state replica is the source of truth for
-// the read model. Configuration lives alongside the latest outcome so the actor
-// is self-sufficient across restarts.
+// One actor per probe target. The spec is authoritative event-sourced state.
+// Deprecated sample fields remain only so historical streams can replay; actor
+// activation clears them before normal operation or snapshot persistence.
 message HealthProbeTargetState {
   HealthProbeTargetDescriptor spec = 1;
   HealthProbeOutcome last_outcome = 2;
@@ -73,8 +74,8 @@ message HealthProbeConfigureCommand {
   HealthProbeTargetDescriptor spec = 1;
 }
 
-// Self-message produced by the durable timer scheduler — handled by the same
-// actor to invoke the registered probe executor and persist the outcome.
+// Ephemeral self-message handled by the same actor to invoke the registered
+// probe executor and overwrite its operational snapshot.
 message HealthProbeTickRequested {
   string slug = 1;               // for diagnostic correlation only
   google.protobuf.Timestamp scheduled_for = 2;
@@ -123,29 +124,4 @@ message HealthProbeOperationalSnapshot {
   google.protobuf.Timestamp last_check_at = 5;
   repeated HealthProbeOutcome recent_outcomes = 6;
   google.protobuf.Timestamp updated_at = 7;
-}
-
-// ─── Projection read model ───
-
-message HealthProbeTargetDocument {
-  string id = 1;                                 // = slug (also document key)
-  string slug = 2;
-  string display_name = 3;
-  string category = 4;
-  string probe_kind = 5;
-  int32 interval_seconds = 6;
-  bool enabled = 7;
-  HealthOutcomeStatus status = 8;
-  int32 latency_ms = 9;
-  string detail = 10;
-  string error_message = 11;
-  int32 consecutive_failures = 12;
-  google.protobuf.Timestamp last_check_at = 13;
-  google.protobuf.Timestamp last_success_at = 14;
-  int64 state_version = 15;
-  string last_event_id = 16;
-  string actor_id = 17;
-  google.protobuf.Timestamp updated_at_utc = 18;
-  repeated HealthProbeOutcome recent_outcomes = 19;
-  string severity = 20;                          // "critical" | "standard" | "canary"
 }

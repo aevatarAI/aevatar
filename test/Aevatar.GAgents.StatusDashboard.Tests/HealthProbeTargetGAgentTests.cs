@@ -415,6 +415,25 @@ public sealed class HealthProbeTargetGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Deactivation_CancelsActiveProbeWithoutPublishingCompletion()
+    {
+        await ConfigureAsync(NewDescriptor("nyxid-auth"));
+        _executor.WaitForCompletion = true;
+        await _agent.HandleTickAsync(new HealthProbeTickRequested { Slug = "nyxid-auth" });
+        await _executor.ProbeStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        await _agent.DeactivateAsync();
+        _deactivated = true;
+        var executionWasCanceled = _executor.LastCancellationToken.IsCancellationRequested;
+        _executor.ProbeCompletion.TrySetResult();
+        await _executor.ProbeFinished.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        executionWasCanceled.Should().BeTrue();
+        _publisher.LastCompletion.Should().BeNull();
+        (await SnapshotAsync("nyxid-auth")).LastOutcome.Should().BeNull();
+    }
+
+    [Fact]
     public async Task SnapshotWriteFailure_DoesNotFailProbeOrCommitSamplingEvents()
     {
         var timeProvider = new FakeTimeProvider(DateTimeOffset.Parse("2026-05-21T11:00:00Z"));
@@ -541,26 +560,35 @@ public sealed class HealthProbeTargetGAgentTests : IAsyncLifetime
         public Exception? ThrowOnNextProbe { get; set; }
         public TimeSpan Delay { get; set; }
         public bool WaitForCompletion { get; set; }
+        public CancellationToken LastCancellationToken { get; private set; }
         public TaskCompletionSource ProbeStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource ProbeCompletion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ProbeFinished { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public async Task<HealthProbeOutcome> ProbeAsync(HealthProbeTargetDescriptor descriptor, CancellationToken ct)
         {
             _ = descriptor;
-            _ = ct;
+            LastCancellationToken = ct;
             Invocations++;
             ProbeStarted.TrySetResult();
-            if (ThrowOnNextProbe is { } ex)
+            try
             {
-                ThrowOnNextProbe = null;
-                throw ex;
-            }
+                if (ThrowOnNextProbe is { } ex)
+                {
+                    ThrowOnNextProbe = null;
+                    throw ex;
+                }
 
-            if (WaitForCompletion)
-                await ProbeCompletion.Task;
-            if (Delay > TimeSpan.Zero)
-                timeProvider.Advance(Delay);
-            return NextOutcome.Clone();
+                if (WaitForCompletion)
+                    await ProbeCompletion.Task.WaitAsync(ct);
+                if (Delay > TimeSpan.Zero)
+                    timeProvider.Advance(Delay);
+                return NextOutcome.Clone();
+            }
+            finally
+            {
+                ProbeFinished.TrySetResult();
+            }
         }
     }
 
