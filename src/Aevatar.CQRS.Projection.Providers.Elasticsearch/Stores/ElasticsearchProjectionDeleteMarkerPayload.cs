@@ -8,6 +8,7 @@ namespace Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 internal static class ElasticsearchProjectionDeleteMarkerPayload
 {
     internal const string TombstoneField = "__projection_tombstone";
+    internal const string DeletedAtUtcField = "__projection_deleted_at_utc";
     private static readonly JsonFormatter Formatter = new(
         JsonFormatter.Settings.Default
             .WithFormatDefaultValues(true));

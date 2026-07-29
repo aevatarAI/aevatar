@@ -179,8 +179,15 @@ internal sealed class ElasticsearchOptimisticWriter<TReadModel>
         {
             return _parser.Parse<TReadModel>(json);
         }
-        catch
+        catch (Exception ex)
         {
+            _logger.LogWarning(
+                ex,
+                "Projection read-model deserialization failed during optimistic write. provider={Provider} readModelType={ReadModelType} result={Result} errorType={ErrorType}",
+                ProviderName,
+                typeof(TReadModel).FullName,
+                "ignored",
+                ex.GetType().Name);
             return null;
         }
     }

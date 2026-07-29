@@ -1215,12 +1215,14 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
         handler.CapturedRequests.Should().HaveCount(3);
         handler.CapturedRequests[1].Method.Should().Be("PUT");
         handler.CapturedRequests[1].PathAndQuery.Should().Contain("if_seq_no=7");
-        handler.CapturedRequests[1].Body.Should().Contain("\"__projection_tombstone\":true");
-        handler.CapturedRequests[1].Body.Should().Contain("\"state_version\":\"8\"");
-        handler.CapturedRequests[1].Body.Should().Contain("\"last_event_id\":\"evt-8-delete\"");
-        handler.CapturedRequests.Should().ContainSingle(r =>
-            r.Method == "PUT" &&
-            r.Body.Contains("\"__projection_tombstone\":true", StringComparison.Ordinal));
+        var tombstonePayload = ParseJson(handler.CapturedRequests[1].Body);
+        tombstonePayload.GetProperty("__projection_tombstone").GetBoolean().Should().BeTrue();
+        tombstonePayload.GetProperty("state_version").GetString().Should().Be("8");
+        tombstonePayload.GetProperty("last_event_id").GetString().Should().Be("evt-8-delete");
+        var tombstoneRequests = handler.CapturedRequests
+            .Where(r => r.Method == "PUT" && HasTombstonePayload(r.Body))
+            .ToList();
+        tombstoneRequests.Should().ContainSingle();
     }
 
     [Fact]
@@ -2127,6 +2129,13 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
     {
         using var document = System.Text.Json.JsonDocument.Parse(json);
         return document.RootElement.Clone();
+    }
+
+    private static bool HasTombstonePayload(string json)
+    {
+        var payload = ParseJson(json);
+        return payload.TryGetProperty("__projection_tombstone", out var tombstone) &&
+               tombstone.ValueKind == JsonValueKind.True;
     }
 
     private static IReadOnlyDictionary<string, JsonElement> GetProperties(JsonElement indexPayload)
