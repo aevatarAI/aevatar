@@ -9,7 +9,6 @@ import {
   MessageOutlined,
   RightOutlined,
   SearchOutlined,
-  SettingOutlined,
   TeamOutlined,
 } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
@@ -23,9 +22,7 @@ import { useExplorerStore } from '@/pages/studio/explorer/useExplorerStore';
 import type {
   StudioConnectorCatalog,
   StudioRoleCatalog,
-  StudioSettings,
   StudioWorkflowSummary,
-  StudioWorkspaceSettings,
 } from '@/shared/studio/models';
 import { scriptsApi } from '@/shared/studio/scriptsApi';
 import type { ScopedScriptDetail } from '@/shared/studio/scriptsModels';
@@ -50,7 +47,6 @@ type QueryState<T> = {
 };
 
 type StudioFileKey =
-  | 'settings.json'
   | 'role-catalog'
   | 'connector-catalog'
   | `chat-history:${string}`
@@ -58,7 +54,7 @@ type StudioFileKey =
   | `script:${string}`;
 
 type StaticFileDescriptor = {
-  readonly file: 'settings.json' | 'role-catalog' | 'connector-catalog';
+  readonly file: 'role-catalog' | 'connector-catalog';
   readonly icon: React.ReactNode;
   readonly label: ConsoleMessageDescriptor;
 };
@@ -70,12 +66,9 @@ type PendingExplorerAction =
 
 type StudioFilesPageProps = {
   readonly workflows: QueryState<StudioWorkflowSummary[]>;
-  readonly workspaceSettings: QueryState<StudioWorkspaceSettings>;
   readonly roles: QueryState<StudioRoleCatalog>;
   readonly connectors: QueryState<StudioConnectorCatalog>;
-  readonly settings: QueryState<StudioSettings>;
   readonly scopeId: string;
-  readonly workflowStorageMode: string;
   readonly scriptsEnabled: boolean;
   readonly onOpenWorkflowInStudio: (workflowId: string) => void;
   readonly onOpenScriptInStudio: (scriptId: string) => void;
@@ -83,14 +76,6 @@ type StudioFilesPageProps = {
 };
 
 const staticFiles: readonly StaticFileDescriptor[] = [
-  {
-    file: 'settings.json',
-    icon: <SettingOutlined />,
-    label: {
-      id: 'pages.studio.studiofilespage.settings.json',
-      defaultMessage: 'settings.json',
-    },
-  },
   {
     file: 'role-catalog',
     icon: <TeamOutlined />,
@@ -286,18 +271,15 @@ const FolderToggle: React.FC<{
 
 const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
   workflows,
-  workspaceSettings,
   roles,
   connectors,
-  settings,
   scopeId,
-  workflowStorageMode,
   scriptsEnabled,
   onOpenWorkflowInStudio,
   onOpenScriptInStudio,
   showHeader = true,
 }) => {
-  const [selectedFile, setSelectedFile] = React.useState<StudioFileKey>('settings.json');
+  const [selectedFile, setSelectedFile] = React.useState<StudioFileKey>('role-catalog');
   const [viewMode, setViewMode] = React.useState<FilesViewMode>('curated');
   const [explorerDirty, setExplorerDirty] = React.useState(false);
   const [pendingExplorerAction, setPendingExplorerAction] =
@@ -409,8 +391,8 @@ const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
       return;
     }
 
-    if (visibleStaticFiles.includes('settings.json')) {
-      setSelectedFile('settings.json');
+    if (visibleStaticFiles[0]) {
+      setSelectedFile(visibleStaticFiles[0]);
       return;
     }
 
@@ -770,14 +752,11 @@ const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
             <StudioFilesDetailPane
               selectedFile={selectedFile}
               workflows={workflows}
-              workspaceSettings={workspaceSettings}
               roles={roles}
               connectors={connectors}
-              settings={settings}
               scripts={scripts}
               chatConversations={chatConversations}
               scopeId={scopeId}
-              workflowStorageMode={workflowStorageMode}
               scriptsEnabled={scriptsEnabled}
               onOpenWorkflowInStudio={onOpenWorkflowInStudio}
               onOpenScriptInStudio={onOpenScriptInStudio}
