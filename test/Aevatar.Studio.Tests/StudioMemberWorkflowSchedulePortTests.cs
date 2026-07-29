@@ -410,6 +410,37 @@ public sealed class StudioMemberWorkflowSchedulePortTests
     }
 
     [Fact]
+    public async Task PreflightForWriteAsync_WhenCatalogSnapshotUnavailableWithoutRequiredServices_ShouldNotRefresh()
+    {
+        var planner = new RecordingAuthorizationPlanner();
+        planner.Results.Enqueue(ScheduledInvocationAuthorizationPlanResult.Failed(
+            ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+            "nyxid_catalog_snapshot_not_found",
+            requiredNyxIdServices: []));
+        planner.Results.Enqueue(RecordingAuthorizationPlanner.SuccessResult());
+        var refresh = new RecordingCatalogRefreshPort();
+        var tokenProvider = new RecordingWorkflowCallerAccessTokenProvider();
+        var request = Request("scope-1", "member-1") with
+        {
+            ProvisioningBearerToken = null,
+        };
+        var port = NewPort(
+            new RecordingScheduleService(),
+            planner: planner,
+            catalogRefresh: refresh,
+            callerAccessTokenProvider: tokenProvider);
+
+        var result = await port.PreflightForWriteAsync(request);
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound);
+        result.Detail.Should().Be("nyxid_catalog_refresh_required_services_unavailable:nyxid_catalog_snapshot_not_found");
+        planner.Requests.Should().ContainSingle();
+        refresh.RefreshCallCount.Should().Be(0);
+        tokenProvider.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task PreflightForWriteAsync_WhenRetryReturnsNonCatalogFailureWithoutCatalogObservation_ShouldReturnPlannerFailure()
     {
         var planner = new RecordingAuthorizationPlanner();
