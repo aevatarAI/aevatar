@@ -219,8 +219,9 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
             capability = NyxIdOperationAdmissionProofBuilder.Build(
                 service.UserServiceId,
                 service.ServiceSlug,
+                BuildServiceAuthority(service),
                 admitted,
-                BuildOperationContractDigest(admitted));
+                NyxIdOperationAdmissionProofBuilder.ComputeContractDigest(admitted));
         }
         catch (NyxIdOperationSchemaUnsupportedException)
         {
@@ -586,6 +587,22 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
                 [service.Source]);
         }
 
+        if (!WorkflowCapabilityAdmissionPlanIntegrity.IsCanonicalNyxIdServiceAuthority(
+                service.UserServiceId,
+                service.ServiceSlug,
+                BuildServiceAuthority(service)))
+        {
+            return Failure(
+                selector,
+                executionMode,
+                ExternalCapabilityReadinessStatus.SourceStale,
+                "NYXID_SERVICE_FACTS_INCOMPLETE",
+                "NyxID did not publish all facts required to admit the selected UserService.",
+                ExternalCapabilityRemediationActionKind.RefreshSource,
+                "Refresh NyxID capabilities",
+                [service.Source]);
+        }
+
         return null;
     }
 
@@ -776,6 +793,12 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
             HasNodeBinding = ReadBool(element, "has_node_binding", "hasNodeBinding"),
             NodeId = ReadString(element, "node_id", "nodeId") ?? ReadString(node, "id", "node_id", "nodeId") ?? string.Empty,
             NodeStatus = ReadString(element, "node_status", "nodeStatus") ?? ReadString(node, "status") ?? string.Empty,
+            EndpointUrl = ReadString(element, "endpoint_url", "endpointUrl") ?? string.Empty,
+            EndpointId = ReadString(element, "endpoint_id", "endpointId") ?? string.Empty,
+            CatalogServiceId = ReadString(element, "catalog_service_id", "catalogServiceId") ?? string.Empty,
+            ProxySpecServiceId = ResolveProxySpecServiceId(
+                ReadString(element, "openapi_url", "openapiUrl"),
+                serviceId),
             BearerToken = bearerToken,
             Source = source.Clone(),
         };
@@ -869,9 +892,47 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
     private bool IsStale(ExternalCapabilitySourceStamp source) =>
         source.FreshUntil is null || source.FreshUntil.ToDateTimeOffset() < _timeProvider.GetUtcNow();
 
-    private static string BuildOperationContractDigest(ConnectedServiceToolOperation operation)
-        => ExternalWorkflowCapabilityContractDigest.Compute(
-            ["nyxid-openapi-operation.v1", operation.OperationId, operation.CanonicalContract()]);
+    private static NyxIdUserServiceAuthoritySnapshot BuildServiceAuthority(
+        NyxIdUserServiceSnapshot service)
+    {
+        var authority = new NyxIdUserServiceAuthoritySnapshot
+        {
+            EndpointUrl = service.EndpointUrl,
+            EndpointId = service.EndpointId,
+            ProxySpecServiceId = service.ProxySpecServiceId,
+            CredentialSource = service.CredentialSourceType.Equals("personal", StringComparison.OrdinalIgnoreCase)
+                ? Aevatar.Workflow.Abstractions.NyxIdUserServiceCredentialSource.Personal
+                : Aevatar.Workflow.Abstractions.NyxIdUserServiceCredentialSource.Organization,
+        };
+        if (!string.IsNullOrWhiteSpace(service.CatalogServiceId))
+            authority.CatalogServiceId = service.CatalogServiceId;
+        else
+            authority.ServiceSlug = service.ServiceSlug;
+        if (!string.IsNullOrWhiteSpace(service.NodeId))
+            authority.NodeId = service.NodeId;
+        return authority;
+    }
+
+    private static string ResolveProxySpecServiceId(string? openApiUrl, string userServiceId)
+    {
+        if (!Uri.TryCreate(openApiUrl, UriKind.Absolute, out var uri) ||
+            (!string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) &&
+             !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)))
+            return string.Empty;
+        var segments = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length < 4 ||
+            !string.Equals(segments[^1], "openapi.json", StringComparison.Ordinal) ||
+            !string.Equals(segments[^3], "services", StringComparison.Ordinal) ||
+            !string.Equals(segments[^4], "proxy", StringComparison.Ordinal))
+        {
+            return string.Empty;
+        }
+
+        var serviceId = Uri.UnescapeDataString(segments[^2]);
+        return string.Equals(serviceId, userServiceId, StringComparison.Ordinal)
+            ? serviceId
+            : string.Empty;
+    }
 
     private static bool IsSafeMethod(string method) =>
         method.Equals("GET", StringComparison.OrdinalIgnoreCase) ||
@@ -982,6 +1043,10 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
         public bool? HasNodeBinding { get; init; }
         public required string NodeId { get; init; }
         public required string NodeStatus { get; init; }
+        public required string EndpointUrl { get; init; }
+        public required string EndpointId { get; init; }
+        public required string CatalogServiceId { get; init; }
+        public required string ProxySpecServiceId { get; init; }
         public required string BearerToken { get; init; }
         public required ExternalCapabilitySourceStamp Source { get; init; }
     }

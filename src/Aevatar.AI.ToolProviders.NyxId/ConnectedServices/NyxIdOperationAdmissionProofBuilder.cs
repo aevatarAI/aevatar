@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json.Nodes;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 
 namespace Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 
@@ -11,6 +12,7 @@ internal static class NyxIdOperationAdmissionProofBuilder
     public static ExternalWorkflowCapabilityRef Build(
         string userServiceId,
         string serviceSlug,
+        NyxIdUserServiceAuthoritySnapshot serviceAuthority,
         ConnectedServiceToolOperation operation,
         string contractDigest)
     {
@@ -28,6 +30,7 @@ internal static class NyxIdOperationAdmissionProofBuilder
                 TextAllowed = true,
                 FileArtifactAllowed = operation.ResponseMediaTypes.Any(IsBinaryMediaType),
             },
+            ServiceAuthority = serviceAuthority.Clone(),
         };
         proof.ResponsePolicy.MediaTypes.Add(operation.ResponseMediaTypes);
 
@@ -56,6 +59,10 @@ internal static class NyxIdOperationAdmissionProofBuilder
 
         return new ExternalWorkflowCapabilityRef { NyxIdUserService = proof };
     }
+
+    internal static string ComputeContractDigest(ConnectedServiceToolOperation operation) =>
+        ExternalWorkflowCapabilityContractDigest.Compute(
+            ["nyxid-openapi-operation.v1", operation.OperationId, operation.CanonicalContract()]);
 
     private static NyxIdOperationSchema ConvertSchema(JsonNode? node, int depth)
     {

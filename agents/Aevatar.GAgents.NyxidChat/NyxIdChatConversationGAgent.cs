@@ -20,6 +20,7 @@ public sealed class NyxIdChatConversationGAgent
 {
     private const string SharedInputHistoryText = "Shared input content.";
     private static readonly TimeSpan HistoryInitializationRetryDelay = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan HistoryReservationRetryDelay = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan HistoryTerminalRetryDelay = TimeSpan.FromSeconds(5);
 
     public static string ProjectionKind => "nyxid-chat-conversation";
@@ -51,6 +52,8 @@ public sealed class NyxIdChatConversationGAgent
             .On<NyxIdChatTurnStartedEvent>(ApplyTurnStarted)
             .On<NyxIdChatHistoryDeliveryReservationDispatchedEvent>(
                 ApplyHistoryDeliveryReservationDispatched)
+            .On<NyxIdChatHistoryDeliveryReservationRetryScheduledEvent>(
+                ApplyHistoryDeliveryReservationRetryScheduled)
             .On<NyxIdChatHistoryTerminalDispatchedEvent>(ApplyHistoryTerminalDispatched)
             .On<NyxIdChatHistoryTerminalRetryScheduledEvent>(ApplyHistoryTerminalRetryScheduled)
             .On<NyxIdChatOperationDispatchedEvent>(ApplyOperationDispatched)
@@ -98,13 +101,13 @@ public sealed class NyxIdChatConversationGAgent
                     Id,
                     pendingReservation.DeliveryId,
                     exception.GetType().Name);
-                return;
+                await ScheduleHistoryReservationRetryAsync(pendingReservation);
             }
         }
 
         if (State.PendingHistoryTerminal is { } pendingTerminal)
         {
-            await DispatchHistoryTerminalContinuationAsync(pendingTerminal, ct);
+            await DispatchPendingHistoryTerminalAsync();
         }
 
         var operation = ResolveOutstandingRecoveryOperation(State);
@@ -299,6 +302,46 @@ public sealed class NyxIdChatConversationGAgent
                     pending.OperationId,
                     nextAttempt);
             }
+        }
+    }
+
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    public async Task HandleHistoryDeliveryReservationDispatchRequestedAsync(
+        NyxIdChatHistoryDeliveryReservationDispatchRequested signal)
+    {
+        ArgumentNullException.ThrowIfNull(signal);
+        var pending = State.HistoryDeliveryReservation;
+        if (pending is null || pending.Dispatched ||
+            !string.Equals(pending.DeliveryId, signal.DeliveryId, StringComparison.Ordinal) ||
+            pending.Attempt != signal.Attempt)
+        {
+            return;
+        }
+
+        try
+        {
+            await ReserveHistoryDeliveryAsync(pending, CancellationToken.None);
+            await PersistDomainEventAsync(new NyxIdChatHistoryDeliveryReservationDispatchedEvent
+            {
+                DeliveryId = pending.DeliveryId,
+                SourceCommandId = pending.SourceCommandId,
+                DispatchedAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
+            }, CancellationToken.None);
+            await DispatchPendingHistoryTerminalAsync();
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            Logger.LogWarning(
+                "NyxIdChat history reservation retry failed: actor={ActorId} delivery={DeliveryId} attempt={Attempt} exceptionType={ExceptionType}",
+                Id,
+                pending.DeliveryId,
+                pending.Attempt,
+                exception.GetType().Name);
+            await ScheduleHistoryReservationRetryAsync(pending);
         }
     }
 
@@ -1344,6 +1387,23 @@ public sealed class NyxIdChatConversationGAgent
         return next;
     }
 
+    private static NyxIdChatConversationGAgentState ApplyHistoryDeliveryReservationRetryScheduled(
+        NyxIdChatConversationGAgentState current,
+        NyxIdChatHistoryDeliveryReservationRetryScheduledEvent evt)
+    {
+        var reservation = current.HistoryDeliveryReservation;
+        if (reservation is null || reservation.Dispatched ||
+            !string.Equals(reservation.DeliveryId, evt.DeliveryId, StringComparison.Ordinal) ||
+            evt.Attempt <= reservation.Attempt)
+        {
+            return current;
+        }
+
+        var next = current.Clone();
+        next.HistoryDeliveryReservation.Attempt = evt.Attempt;
+        return next;
+    }
+
     private static NyxIdChatConversationGAgentState ApplyHistoryTerminalDispatched(
         NyxIdChatConversationGAgentState current,
         NyxIdChatHistoryTerminalDispatchedEvent evt)
@@ -1694,6 +1754,7 @@ public sealed class NyxIdChatConversationGAgent
             RequestFingerprint = BuildHistoryRequestFingerprint(command, sourceCommandId),
             CreateConversationIfMissing = true,
             ExposeCreateRecovery = false,
+            Attempt = 1,
         };
     }
 
@@ -1731,7 +1792,48 @@ public sealed class NyxIdChatConversationGAgent
                 reportFingerprint),
             CreateConversationIfMissing = true,
             ExposeCreateRecovery = false,
+            Attempt = 1,
         };
+    }
+
+    private async Task ScheduleHistoryReservationRetryAsync(
+        NyxIdChatHistoryDeliveryReservationState pending)
+    {
+        var nextAttempt = pending.Attempt == int.MaxValue
+            ? int.MaxValue
+            : Math.Max(1, pending.Attempt + 1);
+        await PersistDomainEventAsync(new NyxIdChatHistoryDeliveryReservationRetryScheduledEvent
+        {
+            DeliveryId = pending.DeliveryId,
+            Attempt = nextAttempt,
+            FailureCode = "history_reservation_dispatch_failed",
+            ScheduledAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
+        }, CancellationToken.None);
+
+        try
+        {
+            await ScheduleSelfDurableTimeoutAsync(
+                BuildStableIdentity(
+                    "history-reservation-retry",
+                    pending.DeliveryId,
+                    nextAttempt.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                HistoryReservationRetryDelay,
+                new NyxIdChatHistoryDeliveryReservationDispatchRequested
+                {
+                    DeliveryId = pending.DeliveryId,
+                    Attempt = nextAttempt,
+                },
+                ct: CancellationToken.None);
+        }
+        catch (Exception schedulingException)
+        {
+            Logger.LogWarning(
+                "NyxIdChat history reservation retry scheduling failed: actor={ActorId} delivery={DeliveryId} attempt={Attempt} exceptionType={ExceptionType}",
+                Id,
+                pending.DeliveryId,
+                nextAttempt,
+                schedulingException.GetType().Name);
+        }
     }
 
     private static string BuildActionContinuationHistoryText(

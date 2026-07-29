@@ -235,7 +235,17 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
                 capability.NyxIdUserService.OperationId,
                 capability.NyxIdUserService.HttpMethod,
                 capability.NyxIdUserService.PathTemplate,
-                capability.NyxIdUserService.ContractDigest),
+                capability.NyxIdUserService.ContractDigest,
+                capability.NyxIdUserService.ServiceAuthority?.EndpointUrl,
+                capability.NyxIdUserService.ServiceAuthority?.EndpointId,
+                capability.NyxIdUserService.ServiceAuthority?.ProxySpecServiceId,
+                capability.NyxIdUserService.ServiceAuthority?.ProxyRouteCase.ToString(),
+                capability.NyxIdUserService.ServiceAuthority?.CatalogServiceId,
+                capability.NyxIdUserService.ServiceAuthority?.ServiceSlug,
+                capability.NyxIdUserService.ServiceAuthority?.HasNodeId == true
+                    ? capability.NyxIdUserService.ServiceAuthority.NodeId
+                    : string.Empty,
+                capability.NyxIdUserService.ServiceAuthority?.CredentialSource.ToString()),
             _ => "none",
         };
     }
@@ -273,7 +283,17 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
             if (admission.Capability.CapabilityCase ==
                 ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService)
             {
-                var policy = admission.Capability.NyxIdUserService.ExecutionPolicy;
+                var nyxId = admission.Capability.NyxIdUserService;
+                if (!IsCanonicalNyxIdServiceAuthority(
+                        nyxId.UserServiceId,
+                        nyxId.ServiceSlugSnapshot,
+                        nyxId.ServiceAuthority))
+                {
+                    throw new InvalidOperationException(
+                        "Workflow NyxID service authority is invalid.");
+                }
+
+                var policy = nyxId.ExecutionPolicy;
                 ValidateNyxIdExecutionPolicy(policy);
                 if (!policy.AllowedExecutionModes.Contains(executionMode))
                 {
@@ -284,6 +304,40 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
         }
         EnsureUniqueCallSites(admissions.Select(static admission => admission.CallSiteId));
     }
+
+    public static bool IsCanonicalNyxIdServiceAuthority(
+        string? userServiceId,
+        string? serviceSlug,
+        NyxIdUserServiceAuthoritySnapshot? authority)
+    {
+        if (!IsCanonicalValue(userServiceId) ||
+            !IsCanonicalValue(serviceSlug) ||
+            authority is null ||
+            !IsCanonicalValue(authority.EndpointUrl) ||
+            !Uri.TryCreate(authority.EndpointUrl, UriKind.Absolute, out _) ||
+            !IsCanonicalValue(authority.EndpointId) ||
+            !string.Equals(authority.ProxySpecServiceId, userServiceId, StringComparison.Ordinal) ||
+            authority.CredentialSource is not (
+                NyxIdUserServiceCredentialSource.Personal or
+                NyxIdUserServiceCredentialSource.Organization) ||
+            authority.HasNodeId && !IsCanonicalValue(authority.NodeId))
+        {
+            return false;
+        }
+
+        return authority.ProxyRouteCase switch
+        {
+            NyxIdUserServiceAuthoritySnapshot.ProxyRouteOneofCase.CatalogServiceId =>
+                IsCanonicalValue(authority.CatalogServiceId),
+            NyxIdUserServiceAuthoritySnapshot.ProxyRouteOneofCase.ServiceSlug =>
+                string.Equals(authority.ServiceSlug, serviceSlug, StringComparison.Ordinal),
+            _ => false,
+        };
+    }
+
+    private static bool IsCanonicalValue(string? value) =>
+        !string.IsNullOrWhiteSpace(value) &&
+        string.Equals(value, value.Trim(), StringComparison.Ordinal);
 
     public static bool IsValidNyxIdExecutionPolicy(NyxIdOperationExecutionPolicy? policy)
     {

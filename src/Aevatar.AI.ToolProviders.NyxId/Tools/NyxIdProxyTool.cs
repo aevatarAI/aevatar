@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 using Aevatar.AI.ToolProviders.NyxId.Observability;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.Extensions.Logging;
@@ -366,6 +367,16 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool
         }
 
         var effectiveToken = await ResolveTokenForServiceAsync(token, orgToken, request.ServiceId, ct);
+        var revalidationFailure = await RevalidateAdmittedOperationAsync(
+            admission,
+            effectiveToken,
+            ReferenceEquals(effectiveToken, token) || TokensEqual(effectiveToken, token)
+                ? NyxIdServiceAccessTokenSource.User
+                : NyxIdServiceAccessTokenSource.Organization,
+            ct);
+        if (revalidationFailure is not null)
+            return revalidationFailure;
+
         _logger.LogInformation(
             "[nyxid_proxy] admitted {Method} slug={Slug} operationId={OperationId} tokenSource={Source}",
             request.Method,
@@ -391,6 +402,83 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool
             request.Headers,
             ct);
     }
+
+    private async Task<string?> RevalidateAdmittedOperationAsync(
+        AgentToolOperationAdmission admission,
+        string accessToken,
+        NyxIdServiceAccessTokenSource accessTokenSource,
+        CancellationToken ct)
+    {
+        if (admission.ServiceAuthority is not { } authority ||
+            authority.Route.Kind == AgentToolServiceRouteKind.Unspecified ||
+            string.IsNullOrWhiteSpace(authority.Route.Value))
+        {
+            return AdmissionDriftError(
+                "NYXID_OPERATION_AUTHORITY_DRIFT",
+                "The admitted NyxID service authority is incomplete.");
+        }
+
+        var route = new NyxIdProxyRouteConstraint();
+        if (authority.Route.Kind == AgentToolServiceRouteKind.CatalogService)
+            route.CatalogServiceId = authority.Route.Value;
+        else if (authority.Route.Kind == AgentToolServiceRouteKind.ServiceSlug)
+            route.ServiceSlug = authority.Route.Value;
+        else
+            return AdmissionDriftError("NYXID_OPERATION_AUTHORITY_DRIFT", "The admitted NyxID route is invalid.");
+
+        var instance = new NyxIdServiceInstance
+        {
+            UserServiceId = admission.ServiceInstanceId,
+            DisplaySlug = admission.ServiceSlug,
+            EndpointUrl = authority.EndpointUrl,
+            EndpointId = authority.EndpointId,
+            IsActive = true,
+            CredentialSource = authority.CredentialSource switch
+            {
+                AgentToolServiceCredentialSource.Personal => NyxIdServiceCredentialSource.Personal,
+                AgentToolServiceCredentialSource.Organization => NyxIdServiceCredentialSource.Organization,
+                _ => NyxIdServiceCredentialSource.Unspecified,
+            },
+            AccessTokenSource = accessTokenSource,
+            ProxySpecServiceId = authority.ProxySpecServiceId,
+            RouteConstraint = route,
+            CredentialAllowed = true,
+        };
+        if (authority.Route.Kind == AgentToolServiceRouteKind.CatalogService)
+            instance.CatalogServiceId = authority.Route.Value;
+        if (!string.IsNullOrWhiteSpace(authority.NodeId))
+            instance.NodeId = authority.NodeId;
+
+        var client = new NyxIdServiceInstanceClient(_client);
+        var live = await client.RevalidateAsync(
+            new NyxIdServiceInstanceBinding(instance, accessToken),
+            ct);
+        if (live is null)
+        {
+            return AdmissionDriftError(
+                "NYXID_OPERATION_AUTHORITY_DRIFT",
+                "The live NyxID service authority no longer matches the admitted operation.");
+        }
+
+        var spec = OpenApiToolSpecParser.Parse(await client.GetSpecAsync(live, ct));
+        var operation = spec.AdmittedOperations().SingleOrDefault(candidate =>
+            string.Equals(candidate.OperationId, admission.OperationId, StringComparison.Ordinal));
+        if (operation is null ||
+            !string.Equals(
+                NyxIdOperationAdmissionProofBuilder.ComputeContractDigest(operation),
+                admission.ContractDigest,
+                StringComparison.Ordinal))
+        {
+            return AdmissionDriftError(
+                "NYXID_OPERATION_CONTRACT_DRIFT",
+                "The live NyxID OpenAPI operation no longer matches the admitted contract.");
+        }
+
+        return null;
+    }
+
+    private static string AdmissionDriftError(string code, string message) =>
+        JsonSerializer.Serialize(new { error = true, error_code = code, message });
 
     private async Task<string> ExecuteAdmittedFileArtifactAsync(
         string effectiveToken,

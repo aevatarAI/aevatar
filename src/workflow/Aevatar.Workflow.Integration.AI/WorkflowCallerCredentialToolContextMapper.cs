@@ -26,7 +26,8 @@ internal static class WorkflowCallerCredentialToolContextMapper
                 : new AgentToolNyxIdAuthorityContext(
                     Normalize(credential.NyxIdAuthority.Platform),
                     Normalize(credential.NyxIdAuthority.Tenant),
-                    Normalize(credential.NyxIdAuthority.ExternalUserId)),
+                    Normalize(credential.NyxIdAuthority.ExternalUserId),
+                    Normalize(credential.NyxIdAuthority.Scope)),
             SenderBinding = credential?.NyxIdAuthority == null
                 ? AgentToolSenderBindingContext.Empty
                 : new AgentToolSenderBindingContext(

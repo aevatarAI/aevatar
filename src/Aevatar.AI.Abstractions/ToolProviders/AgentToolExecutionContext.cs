@@ -183,7 +183,8 @@ public sealed record AgentToolCallerContext(string? ScopeId, string? OwnerSubjec
 public sealed record AgentToolNyxIdAuthorityContext(
     string? Platform,
     string? Tenant,
-    string? ExternalUserId)
+    string? ExternalUserId,
+    string? Scope = null)
 {
     public static AgentToolNyxIdAuthorityContext Empty { get; } = new(null, null, null);
 

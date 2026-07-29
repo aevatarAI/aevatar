@@ -101,6 +101,25 @@ message NyxIdUserServiceCapabilityRef {
   NyxIdOperationRequestBodyContract request_body = 8;
   NyxIdOperationResponsePolicy response_policy = 9;
   NyxIdOperationExecutionPolicy execution_policy = 10;
+  NyxIdUserServiceAuthoritySnapshot service_authority = 11;
+}
+
+enum NyxIdUserServiceCredentialSource {
+  NYX_ID_USER_SERVICE_CREDENTIAL_SOURCE_UNSPECIFIED = 0;
+  NYX_ID_USER_SERVICE_CREDENTIAL_SOURCE_PERSONAL = 1;
+  NYX_ID_USER_SERVICE_CREDENTIAL_SOURCE_ORGANIZATION = 2;
+}
+
+message NyxIdUserServiceAuthoritySnapshot {
+  string endpoint_url = 1;
+  string endpoint_id = 2;
+  string proxy_spec_service_id = 3;
+  oneof proxy_route {
+    string catalog_service_id = 4;
+    string service_slug = 5;
+  }
+  optional string node_id = 6;
+  NyxIdUserServiceCredentialSource credential_source = 7;
 }
 
 enum NyxIdOperationRisk {

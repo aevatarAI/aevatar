@@ -394,6 +394,9 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
                 { "keys": [{
                   "id": "us-home-alpha",
                   "slug": "home-assistant",
+                  "endpoint_url": "https://home.example.test",
+                  "endpoint_id": "ep-home-alpha",
+                  "openapi_url": "https://nyxid.invalid/api/v1/proxy/services/us-home-alpha/openapi.json",
                   "status": "active",
                   "is_active": true,
                   "connected": true,
@@ -459,6 +462,49 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
             descriptor.Selector,
             ExternalCapabilityExecutionMode.Interactive,
             CancellationToken.None);
+
+        result.Status.Should().Be(ExternalCapabilityReadinessStatus.SourceStale);
+        result.Blockers.Should().ContainSingle().Which.Code.Should().Be("NYXID_SERVICE_FACTS_INCOMPLETE");
+    }
+
+    [Fact]
+    public async Task InspectAsync_ShouldFailClosed_WhenPublishedServiceAuthorityIsIncomplete()
+    {
+        var result = await InspectPublishedServiceAsync("""
+            { "keys": [{
+              "id": "us-home-alpha",
+              "slug": "home-assistant",
+              "status": "active",
+              "is_active": true,
+              "connected": true,
+              "requires_connection": false,
+              "has_node_binding": false,
+              "credential_source": { "type": "personal" }
+            }] }
+            """);
+
+        result.Status.Should().Be(ExternalCapabilityReadinessStatus.SourceStale);
+        result.Blockers.Should().ContainSingle().Which.Code.Should().Be("NYXID_SERVICE_FACTS_INCOMPLETE");
+    }
+
+    [Fact]
+    public async Task InspectAsync_ShouldFailClosed_WhenPublishedOpenApiUrlUsesNonHttpScheme()
+    {
+        var result = await InspectPublishedServiceAsync("""
+            { "keys": [{
+              "id": "us-home-alpha",
+              "slug": "home-assistant",
+              "endpoint_url": "https://home.example.test",
+              "endpoint_id": "ep-home-alpha",
+              "openapi_url": "ftp://nyxid.invalid/api/v1/proxy/services/us-home-alpha/openapi.json",
+              "status": "active",
+              "is_active": true,
+              "connected": true,
+              "requires_connection": false,
+              "has_node_binding": false,
+              "credential_source": { "type": "personal" }
+            }] }
+            """);
 
         result.Status.Should().Be(ExternalCapabilityReadinessStatus.SourceStale);
         result.Blockers.Should().ContainSingle().Which.Code.Should().Be("NYXID_SERVICE_FACTS_INCOMPLETE");
@@ -828,6 +874,9 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
         { "keys": [{
           "id": "us-home-alpha",
           "slug": "home-assistant",
+          "endpoint_url": "https://home.example.test",
+          "endpoint_id": "ep-home-alpha",
+          "openapi_url": "https://nyxid.invalid/api/v1/proxy/services/us-home-alpha/openapi.json",
           "status": "active",
           "is_active": true,
           "connected": true,
@@ -842,6 +891,9 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
         { "keys": [{
           "id": "us-home-alpha",
           "slug": "home-assistant",
+          "endpoint_url": "https://home.example.test",
+          "endpoint_id": "ep-home-alpha",
+          "openapi_url": "https://nyxid.invalid/api/v1/proxy/services/us-home-alpha/openapi.json",
           "status": "active",
           "is_active": true,
           "connected": true,
@@ -855,6 +907,9 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
         { "keys": [{
           "id": "us-calendar-beta",
           "slug": "calendar",
+          "endpoint_url": "https://calendar.example.test",
+          "endpoint_id": "ep-calendar-beta",
+          "openapi_url": "https://nyxid.invalid/api/v1/proxy/services/us-calendar-beta/openapi.json",
           "status": "active",
           "is_active": true,
           "connected": true,

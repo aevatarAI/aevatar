@@ -16,7 +16,8 @@ public sealed record AgentToolOperationAdmission(
     IReadOnlyList<AgentToolOperationParameter> Parameters,
     AgentToolOperationRequestBody? RequestBody,
     AgentToolOperationResponsePolicy ResponsePolicy,
-    AgentToolOperationExecutionPolicy ExecutionPolicy)
+    AgentToolOperationExecutionPolicy ExecutionPolicy,
+    AgentToolServiceAuthoritySnapshot? ServiceAuthority = null)
 {
     public IEnumerable<AgentToolOperationParameter> PathParameters =>
         Parameters.Where(static parameter => parameter.Location == AgentToolOperationParameterLocation.Path);
@@ -26,6 +27,32 @@ public sealed record AgentToolOperationAdmission(
 
     public IEnumerable<AgentToolOperationParameter> HeaderParameters =>
         Parameters.Where(static parameter => parameter.Location == AgentToolOperationParameterLocation.Header);
+}
+
+public sealed record AgentToolServiceAuthoritySnapshot(
+    string EndpointUrl,
+    string EndpointId,
+    string ProxySpecServiceId,
+    AgentToolServiceRouteAuthority Route,
+    string? NodeId,
+    AgentToolServiceCredentialSource CredentialSource);
+
+public sealed record AgentToolServiceRouteAuthority(
+    AgentToolServiceRouteKind Kind,
+    string Value);
+
+public enum AgentToolServiceRouteKind
+{
+    Unspecified = 0,
+    CatalogService = 1,
+    ServiceSlug = 2,
+}
+
+public enum AgentToolServiceCredentialSource
+{
+    Unspecified = 0,
+    Personal = 1,
+    Organization = 2,
 }
 
 public enum AgentToolOperationRisk

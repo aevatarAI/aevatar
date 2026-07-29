@@ -28,7 +28,40 @@ public static class WorkflowOperationAdmissionToolContextMapper
             proof.Parameters.Select(MapParameter).ToArray(),
             MapRequestBody(proof.RequestBody),
             MapResponsePolicy(proof.ResponsePolicy),
-            MapExecutionPolicy(proof.ExecutionPolicy));
+            MapExecutionPolicy(proof.ExecutionPolicy),
+            MapServiceAuthority(proof.ServiceAuthority));
+    }
+
+    private static AgentToolServiceAuthoritySnapshot? MapServiceAuthority(
+        NyxIdUserServiceAuthoritySnapshot? authority)
+    {
+        if (authority is null)
+            return null;
+
+        var route = authority.ProxyRouteCase switch
+        {
+            NyxIdUserServiceAuthoritySnapshot.ProxyRouteOneofCase.CatalogServiceId =>
+                new AgentToolServiceRouteAuthority(
+                    AgentToolServiceRouteKind.CatalogService,
+                    authority.CatalogServiceId),
+            NyxIdUserServiceAuthoritySnapshot.ProxyRouteOneofCase.ServiceSlug =>
+                new AgentToolServiceRouteAuthority(
+                    AgentToolServiceRouteKind.ServiceSlug,
+                    authority.ServiceSlug),
+            _ => new AgentToolServiceRouteAuthority(AgentToolServiceRouteKind.Unspecified, string.Empty),
+        };
+        return new AgentToolServiceAuthoritySnapshot(
+            authority.EndpointUrl,
+            authority.EndpointId,
+            authority.ProxySpecServiceId,
+            route,
+            authority.HasNodeId ? authority.NodeId : null,
+            authority.CredentialSource switch
+            {
+                NyxIdUserServiceCredentialSource.Personal => AgentToolServiceCredentialSource.Personal,
+                NyxIdUserServiceCredentialSource.Organization => AgentToolServiceCredentialSource.Organization,
+                _ => AgentToolServiceCredentialSource.Unspecified,
+            });
     }
 
     private static AgentToolOperationParameter MapParameter(NyxIdOperationParameterContract parameter) =>

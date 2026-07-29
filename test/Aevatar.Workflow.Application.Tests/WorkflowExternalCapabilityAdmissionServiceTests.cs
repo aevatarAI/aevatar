@@ -161,6 +161,23 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
     }
 
     [Fact]
+    public void Create_ShouldRejectIncompleteNyxIdServiceAuthority()
+    {
+        var capability = NyxIdCapability();
+        capability.NyxIdUserService.ServiceAuthority.EndpointId = string.Empty;
+
+        Action act = () => WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            "name: wf-alpha\nsteps: []\n",
+            new Dictionary<string, string>(),
+            ExternalCapabilityExecutionMode.Interactive,
+            Admissions(capability),
+            Ready(capability).Sources);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*service authority*");
+    }
+
+    [Fact]
     public void AdmissionPlanContract_ShouldPreserveTheLegacyV2WireFixtureWhenV3FieldsAreEmpty()
     {
         const string legacyWireBase64 =
@@ -1004,6 +1021,14 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
                 HttpMethod = "GET",
                 PathTemplate = "/states/{entity_id}",
                 ContractDigest = "operation-digest",
+                ServiceAuthority = new NyxIdUserServiceAuthoritySnapshot
+                {
+                    EndpointUrl = "https://home.example.test",
+                    EndpointId = "ep-home-alpha",
+                    ProxySpecServiceId = "us-home-alpha",
+                    ServiceSlug = "home-assistant",
+                    CredentialSource = NyxIdUserServiceCredentialSource.Personal,
+                },
                 ExecutionPolicy = new NyxIdOperationExecutionPolicy
                 {
                     Risk = NyxIdOperationRisk.ReadOnly,

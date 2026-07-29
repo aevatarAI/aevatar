@@ -9,9 +9,12 @@ using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 using Aevatar.AI.ToolProviders.NyxId.Tools;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using FluentAssertions;
+using System.Text.Json.Nodes;
 
 namespace Aevatar.AI.Tests;
 
@@ -187,6 +190,25 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
         request.Method.Should().Be("GET");
     }
 
+    [Theory]
+    [InlineData("../../../api-keys")]
+    [InlineData("/%2e%2e/%2e%2e/api-keys")]
+    public async Task ExecuteAsync_ShouldRejectUnsafeStaticProofPathBeforeAnyHttpRequest(string pathTemplate)
+    {
+        var handler = new RecordingHandler();
+        var tool = CreateTool(handler);
+        using var scope = PushContext(ListMessagesAdmission() with
+        {
+            PathTemplate = pathTemplate,
+            Parameters = [],
+        });
+
+        var result = await tool.ExecuteAsync("{}");
+
+        result.Should().Contain("NYXID_OPERATION_PATH_TEMPLATE_INVALID");
+        handler.RequestCount.Should().Be(0);
+    }
+
     [Fact]
     public async Task ExecuteAsync_ShouldAcceptDynamicMessageResourceAsAFileArtifact()
     {
@@ -238,6 +260,83 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
         handler.RequestBodies.Should().OnlyContain(body => !body.Contains("lark_list_messages"));
         handler.RequestUris.Should().OnlyContain(uri =>
             !uri.Contains("operation_id") && !uri.Contains("contract_digest"));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldRejectLiveRouteDriftBeforeProxyDispatch()
+    {
+        var handler = new RecordingHandler
+        {
+            AuthorityJson = LiveAuthorityJson(
+                "us-lark-alpha",
+                "api-lark-bot-2",
+                nodeId: "node-beta"),
+        };
+        var tool = CreateTool(handler);
+        using var scope = PushContext(ListMessagesAdmission() with
+        {
+            ServiceAuthority = LiveAuthority("us-lark-alpha", nodeId: "node-alpha"),
+        });
+
+        var result = await tool.ExecuteAsync(
+            """{"query":{"container_id":"oc_1"}}""");
+
+        result.Should().Contain("NYXID_OPERATION_AUTHORITY_DRIFT");
+        handler.AuthorityRequests.Should().ContainSingle();
+        handler.ProxyRequests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldRejectLiveContractDigestDriftBeforeProxyDispatch()
+    {
+        var handler = new RecordingHandler
+        {
+            AuthorityJson = LiveAuthorityJson("us-lark-alpha", "api-lark-bot-2"),
+            OpenApiJson = """
+                {
+                  "openapi": "3.1.0",
+                  "paths": {
+                    "/open-apis/im/v1/messages": {
+                      "post": {
+                        "operationId": "lark_list_messages",
+                        "x-aevatar-tool": { "enabled": true }
+                      }
+                    }
+                  }
+                }
+                """,
+        };
+        var tool = CreateTool(handler);
+        using var scope = PushContext(ListMessagesAdmission() with
+        {
+            ServiceAuthority = LiveAuthority("us-lark-alpha"),
+        });
+
+        var result = await tool.ExecuteAsync(
+            """{"query":{"container_id":"oc_1"}}""");
+
+        result.Should().Contain("NYXID_OPERATION_CONTRACT_DRIFT");
+        handler.AuthorityRequests.Should().ContainSingle();
+        handler.OpenApiRequests.Should().ContainSingle();
+        handler.ProxyRequests.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("_nyxid_via")]
+    [InlineData("_NYXID_ROUTE")]
+    public async Task ExecuteAsync_ShouldRejectReservedProofQueryNamesBeforeAnyHttpRequest(string name)
+    {
+        var handler = new RecordingHandler();
+        var tool = CreateTool(handler);
+        var admission = ListMessagesAdmission() with
+        {
+            Parameters = [QueryParameter(name, required: false)],
+        };
+        using var scope = PushContext(admission);
+        var result = await tool.ExecuteAsync("{}");
+
+        result.Should().Contain("NYXID_OPERATION_QUERY_PARAMETER_FORBIDDEN");
+        handler.RequestCount.Should().Be(0);
     }
 
     [Theory]
@@ -345,10 +444,10 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
     }
 
     [Theory]
-    [InlineData("""{"path_params":{"item_id":"7"},"query":{"ratio":1.5},"headers":{"X-Enabled":true}}""", "NYXID_OPERATION_PATH_PARAMETER_INVALID")]
-    [InlineData("""{"path_params":{"item_id":7},"query":{"ratio":2.5},"headers":{"X-Enabled":true}}""", "NYXID_OPERATION_QUERY_PARAMETER_INVALID")]
-    [InlineData("""{"path_params":{"item_id":7},"query":{"ratio":1.5,"mode":"brief"},"headers":{"X-Enabled":true}}""", "NYXID_OPERATION_QUERY_PARAMETER_INVALID")]
-    [InlineData("""{"path_params":{"item_id":7},"query":{"ratio":1.5},"headers":{"X-Enabled":"true"}}""", "NYXID_OPERATION_HEADER_INVALID")]
+    [InlineData("""{"path_params":{"item_id":"7"},"query":{"ratio":1.5},"headers":{"If-Match":true}}""", "NYXID_OPERATION_PATH_PARAMETER_INVALID")]
+    [InlineData("""{"path_params":{"item_id":7},"query":{"ratio":2.5},"headers":{"If-Match":true}}""", "NYXID_OPERATION_QUERY_PARAMETER_INVALID")]
+    [InlineData("""{"path_params":{"item_id":7},"query":{"ratio":1.5,"mode":"brief"},"headers":{"If-Match":true}}""", "NYXID_OPERATION_QUERY_PARAMETER_INVALID")]
+    [InlineData("""{"path_params":{"item_id":7},"query":{"ratio":1.5},"headers":{"If-Match":"true"}}""", "NYXID_OPERATION_HEADER_INVALID")]
     public async Task ExecuteAsync_ShouldValidateNonBodyValuesAgainstAdmittedSchemas(
         string argumentsJson,
         string expectedCode)
@@ -371,7 +470,7 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
         using var scope = PushContext(TypedParametersAdmission());
 
         var result = await tool.ExecuteAsync(
-            """{"path_params":{"item_id":7},"query":{"ratio":1.5,"mode":"full"},"headers":{"X-Enabled":true}}""");
+            """{"path_params":{"item_id":7},"query":{"ratio":1.5,"mode":"full"},"headers":{"If-Match":true}}""");
 
         result.Should().NotContain("error_code");
         var request = handler.ProxyRequests.Should().ContainSingle().Subject;
@@ -552,7 +651,7 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
                     false,
                     ValueSchema(AgentToolOperationValueKind.String, "full")),
                 new AgentToolOperationParameter(
-                    "X-Enabled",
+                    "If-Match",
                     AgentToolOperationParameterLocation.Header,
                     true,
                     ValueSchema(AgentToolOperationValueKind.Boolean)),
@@ -592,6 +691,36 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
     private static AgentToolOperationParameter QueryParameter(string name, bool required) =>
         new(name, AgentToolOperationParameterLocation.Query, required, AgentToolOperationValueSchema.Text);
 
+    private static AgentToolServiceAuthoritySnapshot LiveAuthority(
+        string serviceId,
+        string nodeId = "node-alpha") =>
+        new(
+            "https://service.internal",
+            "endpoint-alpha",
+            serviceId,
+            new AgentToolServiceRouteAuthority(
+                AgentToolServiceRouteKind.CatalogService,
+                "catalog-alpha"),
+            nodeId,
+            AgentToolServiceCredentialSource.Personal);
+
+    private static string LiveAuthorityJson(
+        string serviceId,
+        string slug,
+        string nodeId = "node-alpha") =>
+        JsonSerializer.Serialize(new
+        {
+            id = serviceId,
+            slug,
+            endpoint_url = "https://service.internal",
+            endpoint_id = "endpoint-alpha",
+            catalog_service_id = "catalog-alpha",
+            node_id = nodeId,
+            openapi_url = $"https://nyx.test/api/v1/proxy/services/{serviceId}/openapi.json",
+            is_active = true,
+            credential_source = new { type = "personal" },
+        });
+
     private static NyxIdProxyTool CreateTool(
         RecordingHandler handler,
         INyxIdProxyFileArtifactIngress? ingress = null,
@@ -615,7 +744,7 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
             AgentSkillRecoveryContext.Empty,
             new Dictionary<string, string>(StringComparer.Ordinal))
         {
-            OperationAdmission = admission,
+            OperationAdmission = WithLiveProof(admission),
             WorkflowRuntime = new AgentWorkflowRuntimeContext(
                 "workflow-run-actor-alpha",
                 "run-alpha",
@@ -624,6 +753,100 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
                 1),
             InvocationSurface = AgentToolInvocationSurface.WorkflowToolCall,
         });
+
+    private static AgentToolOperationAdmission WithLiveProof(AgentToolOperationAdmission admission)
+    {
+        var spec = BuildLiveOpenApi(admission);
+        var operation = OpenApiToolSpecParser.Parse(spec).AdmittedOperations().Single();
+        return admission with
+        {
+            ContractDigest = ExternalWorkflowCapabilityContractDigest.Compute(
+                ["nyxid-openapi-operation.v1", operation.OperationId, operation.CanonicalContract()]),
+            ServiceAuthority = admission.ServiceAuthority ?? LiveAuthority(admission.ServiceInstanceId),
+        };
+    }
+
+    private static string BuildLiveOpenApi(AgentToolOperationAdmission admission)
+    {
+        var operation = new JsonObject
+        {
+            ["operationId"] = admission.OperationId,
+            ["x-aevatar-tool"] = new JsonObject
+            {
+                ["enabled"] = true,
+                ["readOnly"] = admission.ExecutionPolicy.Risk == AgentToolOperationRisk.ReadOnly,
+                ["destructive"] = admission.ExecutionPolicy.Risk == AgentToolOperationRisk.Destructive,
+            },
+        };
+        if (admission.Parameters.Count > 0)
+        {
+            operation["parameters"] = new JsonArray(admission.Parameters.Select(parameter =>
+                (JsonNode)new JsonObject
+                {
+                    ["name"] = parameter.Name,
+                    ["in"] = parameter.Location.ToString().ToLowerInvariant(),
+                    ["required"] = parameter.Required,
+                    ["schema"] = ToOpenApiSchema(parameter.Schema),
+                }).ToArray());
+        }
+        if (admission.RequestBody is { } body)
+        {
+            operation["requestBody"] = new JsonObject
+            {
+                ["required"] = body.Required,
+                ["content"] = new JsonObject
+                {
+                    [body.MediaType] = new JsonObject { ["schema"] = ToOpenApiSchema(body.Schema) },
+                },
+            };
+        }
+
+        return new JsonObject
+        {
+            ["openapi"] = "3.1.0",
+            ["paths"] = new JsonObject
+            {
+                [admission.PathTemplate] = new JsonObject
+                {
+                    [admission.HttpMethod.ToLowerInvariant()] = operation,
+                },
+            },
+        }.ToJsonString();
+    }
+
+    private static JsonObject ToOpenApiSchema(AgentToolOperationValueSchema schema)
+    {
+        var result = new JsonObject
+        {
+            ["type"] = schema.Kind.ToString().ToLowerInvariant(),
+        };
+        if (schema.AllowedValues.Count > 0)
+        {
+            result["enum"] = new JsonArray(schema.AllowedValues.Select(value =>
+                schema.Kind switch
+                {
+                    AgentToolOperationValueKind.Integer => JsonValue.Create(long.Parse(value)),
+                    AgentToolOperationValueKind.Number => JsonValue.Create(double.Parse(value, System.Globalization.CultureInfo.InvariantCulture)),
+                    AgentToolOperationValueKind.Boolean => JsonValue.Create(bool.Parse(value)),
+                    _ => JsonValue.Create(value),
+                }).ToArray<JsonNode?>());
+        }
+        if (schema.Kind == AgentToolOperationValueKind.Object)
+        {
+            result["additionalProperties"] = schema.AdditionalPropertiesAllowed;
+            result["properties"] = new JsonObject(schema.Properties.Select(property =>
+                new KeyValuePair<string, JsonNode?>(property.Name, ToOpenApiSchema(property.Schema))));
+            if (schema.RequiredProperties.Count > 0)
+                result["required"] = new JsonArray(schema.RequiredProperties
+                    .Select(static value => (JsonNode?)JsonValue.Create(value))
+                    .ToArray());
+        }
+        else if (schema.Kind == AgentToolOperationValueKind.Array && schema.Items is not null)
+        {
+            result["items"] = ToOpenApiSchema(schema.Items);
+        }
+        return result;
+    }
 
     private static AgentToolContextScope PushProoflessManagedContext() =>
         AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
@@ -661,6 +884,14 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
 
         public List<string> RequestUris { get; } = [];
 
+        public List<string> AuthorityRequests { get; } = [];
+
+        public List<string> OpenApiRequests { get; } = [];
+
+        public string? AuthorityJson { get; init; }
+
+        public string? OpenApiJson { get; init; }
+
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken)
@@ -671,7 +902,12 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
                 : await request.Content.ReadAsStringAsync(cancellationToken);
             RequestBodies.Add(body);
             RequestUris.Add(request.RequestUri!.ToString());
-            if (request.RequestUri!.AbsolutePath.StartsWith("/api/v1/proxy/", StringComparison.Ordinal))
+            var path = request.RequestUri!.AbsolutePath;
+            if (path.StartsWith("/api/v1/keys/", StringComparison.Ordinal))
+                AuthorityRequests.Add(path);
+            else if (path.StartsWith("/api/v1/proxy/services/", StringComparison.Ordinal))
+                OpenApiRequests.Add(path);
+            else if (path.StartsWith("/api/v1/proxy/s/", StringComparison.Ordinal))
             {
                 ProxyRequests.Add(new RecordedProxyRequest(
                     request.Method.Method,
@@ -682,7 +918,19 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
 
             var response = new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = binaryResponse
+                Content = AuthorityRequests.Count > 0 && AuthorityRequests[^1] == path
+                    ? new StringContent(
+                        AuthorityJson ?? LiveAuthorityJson(
+                            AgentToolRequestContext.Current!.OperationAdmission!.ServiceInstanceId,
+                            AgentToolRequestContext.Current.OperationAdmission.ServiceSlug),
+                        Encoding.UTF8,
+                        "application/json")
+                    : OpenApiRequests.Count > 0 && OpenApiRequests[^1] == path
+                        ? new StringContent(
+                            OpenApiJson ?? BuildLiveOpenApi(AgentToolRequestContext.Current!.OperationAdmission!),
+                            Encoding.UTF8,
+                            "application/json")
+                        : binaryResponse
                     ? new ByteArrayContent(Encoding.UTF8.GetBytes("fixture-resource"))
                     : new StringContent("{}", Encoding.UTF8, "application/json"),
             };
