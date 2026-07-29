@@ -110,6 +110,8 @@ sequenceDiagram
 
 Managed workflow proof 还携带 typed `risk / approval / enforcement_owner / allowed_execution_modes`。GET/HEAD/OPTIONS 默认是 read-only；POST/PUT/PATCH 是 write；DELETE 是 destructive。MCP config 当前不发布可作为授权依据的 execution policy，因此 Aevatar 保守推导：write/destructive operation 必须由 Aevatar 审批且只允许 interactive；read-only operation 可允许 interactive 与 durable。typed policy 进入现有 contract/admission digest，policy drift 必须重新 admission/rebind，不新增第二个 digest。
 
+每次 proof-bound dispatch 在发送 proxy 请求前，必须用本次 caller token 重新读取同一权威 MCP config，按 exact `service_id + endpoint_id` 定位 live endpoint，并逐项比对 `service_slug` 与既有 `contract_digest`。service/slug drift 返回 `NYXID_OPERATION_AUTHORITY_DRIFT`，endpoint 缺失或 digest drift 返回 `NYXID_OPERATION_CONTRACT_DRIFT`；两者都必须发生在任何 downstream proxy dispatch 或 file ingress 之前。
+
 `NyxIdProxyTool` 是共享 runtime enforcement boundary。`Aevatar:NyxId:ManagedWorkflowAdmissionMode=Enforce` 时，managed workflow 缺 proof 或携带无效 policy 会在 token 解析、exact-service read、file ingress 和 proxy HTTP 前返回 `NYXID_OPERATION_ADMISSION_REQUIRED`；`Shadow` 只记录同一 decision 并继续 legacy path。proof 存在时，method/path/schema 仍完全由 `NyxIdOperationRequestBuilder` 从 proof 构造，调用参数不能覆盖 route facts。
 
 proxy 请求只接受相对路径，拒绝绝对 URL、fragment、query-in-path 和 dot segment。路由只来自冻结并重验后的 catalog ID 或 custom slug；Aevatar 追加 URL 编码后的 `_nyxid_via={user_service_id}`，调用参数不得提供任何 `_nyxid_*` query。普通 connected-service header allow-list 仅含 JSON `Accept`/`Content-Type` 与条件头 `If-Match`/`If-None-Match`；workflow proof-bound 调用的 `Content-Type` 由 typed body contract 独占，caller header 只允许 JSON `Accept` 与条件头。所有路径都禁止调用者注入 authorization、routing 或 hop-by-hop header。非 safe method 由客户端生成 typed idempotency key。

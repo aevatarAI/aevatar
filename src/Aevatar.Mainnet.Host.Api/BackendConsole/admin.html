@@ -1772,6 +1772,7 @@ function loadObsDetail(runId,rerender,refresh){
       OBS_DETAIL[runId]={loading:false,err:err,detail:null,notFound:!d}; return true;
     }
     var detail=mapObsDetail(d,g), changed=!obsDetailsEqual(previousDetail,detail);
+    obsReconcileApprovalState(detail);
     OBS_DETAIL[runId]={loading:false,err:null,detail:detail}; obsUpsertRunFromDetail(runId,detail);
     return changed;
   }).catch(function(e){
@@ -3187,13 +3188,23 @@ function obsNarrativeView(r){
     '<details class="obs-io-block" open><summary>最终输出 · finalOutput</summary>'+outBody+'</details>'+
     err+'</div>';
 }
-function obsApprovalState(runId){
-  return OBS_APPROVAL[runId]||(OBS_APPROVAL[runId]={rejecting:false,feedback:'',submitting:false,accepted:false,error:''});
+function obsApprovalKey(run,approval){
+  return String(run&&run.id||'')+'\n'+String(approval&&approval.stepId||'')+'\n'+String(approval&&approval.requestedAtUtc||'');
+}
+function obsApprovalState(run,approval){
+  var runId=run&&run.id,key=obsApprovalKey(run,approval),state=OBS_APPROVAL[runId];
+  if(!state||state.approvalKey!==key) state=OBS_APPROVAL[runId]={approvalKey:key,rejecting:false,feedback:'',submitting:false,accepted:false,error:''};
+  return state;
 }
 function obsActiveApproval(run){
   return ((run&&run.steps)||[]).filter(function(step){
     return !step.completedAtUtc&&String(step.suspensionType||'').toLowerCase()==='human_approval';
   }).slice(-1)[0]||null;
+}
+function obsReconcileApprovalState(run){
+  var approval=obsActiveApproval(run),state=run&&run.id&&OBS_APPROVAL[run.id];
+  if(!state) return;
+  if(!approval||state.approvalKey!==obsApprovalKey(run,approval)||state.accepted) delete OBS_APPROVAL[run.id];
 }
 function obsCanApprove(run){
   return !!(ACCOUNT&&ACCOUNT.scope&&run&&run.scope===ACCOUNT.scope);
@@ -3201,7 +3212,7 @@ function obsCanApprove(run){
 function obsApprovalPanel(run){
   var approval=obsActiveApproval(run);
   if(!approval){ if(run&&run.id) delete OBS_APPROVAL[run.id]; return ''; }
-  var state=obsApprovalState(run.id),owner=obsCanApprove(run),disabled=state.submitting||state.accepted?' disabled':'',timeout='';
+  var state=obsApprovalState(run,approval),owner=obsCanApprove(run),disabled=state.submitting||state.accepted?' disabled':'',timeout='';
   if(approval.suspensionTimeoutSeconds!=null) timeout='<span>审批时限 '+esc(approval.suspensionTimeoutSeconds)+' 秒</span>';
   var prompt=approval.suspensionPrompt?'<div style="margin-top:7px;font-size:12.5px;color:var(--muted)">'+esc(approval.suspensionPrompt)+'</div>':'';
   var content='<pre class="approval-content" tabindex="0" aria-label="待审批内容">'+esc(approval.suspensionContent||'（无待审内容）')+'</pre>';
@@ -3226,7 +3237,7 @@ function obsApprovalPanel(run){
   return '<section class="approval-panel" aria-labelledby="obs-approval-title"><div class="approval-head"><div id="obs-approval-title">需要审批</div>'+timeout+'</div>'+prompt+content+actions+'</section>';
 }
 async function obsSubmitApproval(run,approved,rerender){
-  var approval=obsActiveApproval(run),state=obsApprovalState(run.id);
+  var approval=obsActiveApproval(run),state=obsApprovalState(run,approval);
   if(!approval||!obsCanApprove(run)||state.submitting||state.accepted) return false;
   var feedback=(state.feedback||'').trim();
   if(!approved&&!feedback){ state.error='请填写驳回反馈'; if(rerender) rerender(); return false; }

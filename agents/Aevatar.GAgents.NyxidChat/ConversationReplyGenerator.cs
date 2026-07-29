@@ -1209,9 +1209,29 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 materialized.Add(part);
                 continue;
             }
+            if (part.FileRef.ExpiresAtUnixMs > 0 &&
+                part.FileRef.ExpiresAtUnixMs <= DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
+            {
+                materialized.Add(BuildUnavailableAttachmentPart(part));
+                continue;
+            }
 
-            var artifact = await fileArtifactReadPort.OpenReadAsync(ToFileArtifactRef(part.FileRef), ct)
-                .ConfigureAwait(false);
+            FileArtifactContent artifact;
+            try
+            {
+                artifact = await fileArtifactReadPort.OpenReadAsync(ToFileArtifactRef(part.FileRef), ct)
+                    .ConfigureAwait(false);
+            }
+            catch (FileNotFoundException)
+            {
+                materialized.Add(BuildUnavailableAttachmentPart(part));
+                continue;
+            }
+            catch (DirectoryNotFoundException)
+            {
+                materialized.Add(BuildUnavailableAttachmentPart(part));
+                continue;
+            }
             await using var content = artifact.Content;
             var descriptor = artifact.FileRef;
             ValidateMaterializedPartDescriptor(part, descriptor);
@@ -1241,6 +1261,15 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         }
 
         return materialized;
+    }
+
+    private static ContentPart BuildUnavailableAttachmentPart(ContentPart part)
+    {
+        var name = NormalizeOptional(part.FileRef?.FileName) ?? NormalizeOptional(part.Name) ?? "attachment";
+        if (name.Length > 128)
+            name = name[..128];
+
+        return ContentPart.TextPart($"Attachment unavailable: '{name}' has expired or was removed.");
     }
 
     private static ContentPart MaterializeDocumentTextPart(

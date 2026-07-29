@@ -1430,20 +1430,26 @@ public sealed class ScheduledAgentCreatorToolTests
             Activated: true);
     }
 
-    private static NyxIdAuthorizationServiceEvidence ServiceEvidence(string id, string slug) => new()
+    private static NyxIdAuthorizationServiceEvidence ServiceEvidence(string id, string slug)
     {
-        UserServiceId = id,
-        ServiceSlug = slug,
-        DisplayName = slug,
-        Access = NyxIdAuthorizationAccess.Permitted,
-        NodeGrantRequirement = AuthorizationGrantRequirement.NotRequired,
-        ResourceOwner = new AuthorizationOwnerIdentity
+        var now = DateTimeOffset.UtcNow;
+        return new NyxIdAuthorizationServiceEvidence
         {
-            Authority = NyxIdAuthorizationAuthorities.NyxId,
-            OwnerKind = AuthorizationOwnerKind.Personal,
-            OwnerSubject = "nyx-user-1",
-        },
-    };
+            UserServiceId = id,
+            ServiceSlug = slug,
+            DisplayName = slug,
+            Access = NyxIdAuthorizationAccess.Permitted,
+            NodeGrantRequirement = AuthorizationGrantRequirement.NotRequired,
+            ResourceOwner = new AuthorizationOwnerIdentity
+            {
+                Authority = NyxIdAuthorizationAuthorities.NyxId,
+                OwnerKind = AuthorizationOwnerKind.Personal,
+                OwnerSubject = "nyx-user-1",
+            },
+            ObservedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(now.AddMinutes(-1)),
+            FreshUntil = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(now.AddMinutes(10)),
+        };
+    }
 
     private sealed record CreatorHarness(
         ScheduledAgentCreatorTool Tool,

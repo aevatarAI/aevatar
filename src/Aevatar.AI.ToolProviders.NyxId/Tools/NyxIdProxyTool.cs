@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 using Aevatar.AI.ToolProviders.NyxId.Observability;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.Extensions.Logging;
@@ -364,6 +365,10 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool
                 : """{"error":"No NyxID access token available. User must be authenticated."}""";
         }
 
+        var revalidationFailure = await RevalidateAdmittedOperationAsync(admission, token, ct);
+        if (revalidationFailure is not null)
+            return revalidationFailure;
+
         _logger.LogInformation(
             "[nyxid_proxy] admitted {Method} slug={Slug} operationId={OperationId}",
             request.Method,
@@ -388,6 +393,42 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool
             request.Headers,
             ct);
     }
+
+    private async Task<string?> RevalidateAdmittedOperationAsync(
+        AgentToolOperationAdmission admission,
+        string token,
+        CancellationToken ct)
+    {
+        var catalog = NyxIdMcpOperationCatalog.Parse(
+            await _client.GetMcpConfigAsync(token, ct),
+            "runtime",
+            TimeProvider.System.GetUtcNow(),
+            TimeSpan.FromMinutes(5));
+        var service = catalog.Services.SingleOrDefault(candidate =>
+            string.Equals(candidate.UserServiceId, admission.ServiceInstanceId, StringComparison.Ordinal));
+        if (service is null ||
+            !string.Equals(service.ServiceSlug, admission.ServiceSlug, StringComparison.Ordinal))
+        {
+            return AdmissionDriftError(
+                "NYXID_OPERATION_AUTHORITY_DRIFT",
+                "The live NyxID service authority no longer matches the admitted operation.");
+        }
+
+        var endpoint = service.Endpoints.SingleOrDefault(candidate =>
+            string.Equals(candidate.EndpointId, admission.OperationId, StringComparison.Ordinal));
+        if (endpoint is null ||
+            !string.Equals(endpoint.ContractDigest, admission.ContractDigest, StringComparison.Ordinal))
+        {
+            return AdmissionDriftError(
+                "NYXID_OPERATION_CONTRACT_DRIFT",
+                "The live NyxID endpoint no longer matches the admitted contract.");
+        }
+
+        return null;
+    }
+
+    private static string AdmissionDriftError(string code, string message) =>
+        JsonSerializer.Serialize(new { error = true, error_code = code, message });
 
     private async Task<string> ExecuteAdmittedFileArtifactAsync(
         string effectiveToken,
