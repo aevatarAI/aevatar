@@ -43,7 +43,7 @@ public static class BackendConsoleHostingServiceCollectionExtensions
         };
         ApplyFallbacks(configuration, options);
         ApplyHostEnvironmentOverrides(options);
-        NormalizeOidcResources(options);
+        NormalizeOidcResources(configuration, options);
         return options;
     }
 
@@ -74,7 +74,9 @@ public static class BackendConsoleHostingServiceCollectionExtensions
         options.DefaultReturnPath = EnvironmentOverride("HOST_BACKEND_CONSOLE_DEFAULT_RETURN_PATH", options.DefaultReturnPath);
     }
 
-    private static void NormalizeOidcResources(BackendConsoleOptions options)
+    private static void NormalizeOidcResources(
+        IConfiguration configuration,
+        BackendConsoleOptions options)
     {
         options.NyxApiBaseUrl = options.NyxApiBaseUrl.Trim().TrimEnd('/');
         var resources = options.OidcResources
@@ -90,7 +92,12 @@ public static class BackendConsoleHostingServiceCollectionExtensions
         }
 
         var requiredResource =
-            $"{options.NyxApiBaseUrl.Trim().TrimEnd('/')}/api/v1/proxy/s/aevatar";
+            $"{options.NyxApiBaseUrl}/api/v1/proxy/s/aevatar";
+        var ornnServiceSlug = configuration["Aevatar:Ornn:NyxIdSlug"]?.Trim();
+        if (string.IsNullOrEmpty(ornnServiceSlug))
+            ornnServiceSlug = "ornn-api";
+        var ornnResource =
+            $"{options.NyxApiBaseUrl}/api/v1/proxy/s/{Uri.EscapeDataString(ornnServiceSlug)}";
         var legacyAuthorityResource = string.IsNullOrWhiteSpace(options.OidcAuthority)
             ? null
             : $"{options.OidcAuthority.Trim().TrimEnd('/')}/api/v1/proxy/s/aevatar";
@@ -101,9 +108,10 @@ public static class BackendConsoleHostingServiceCollectionExtensions
                 .ToArray();
         }
 
-        options.OidcResources = resources.Contains(requiredResource, StringComparer.Ordinal)
-            ? resources
-            : [requiredResource, .. resources];
+        options.OidcResources = new[] { requiredResource, ornnResource }
+            .Concat(resources)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
     }
 
     private static string EnvironmentOverride(string key, string configuredValue)

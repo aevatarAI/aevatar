@@ -49,6 +49,55 @@ public sealed class BackendConsoleAssetServiceTests
     }
 
     [Fact]
+    public void Render_ShouldRequestTheConfiguredOrnnProxyResource()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Aevatar:BackendConsole:NyxApiBaseUrl"] = "https://api.example.test",
+                ["Aevatar:Ornn:NyxIdSlug"] = "ornn-tenant-a",
+            })
+            .Build();
+        services.AddBackendConsoleStaticAssets(configuration);
+
+        var assets = services.BuildServiceProvider().GetRequiredService<IBackendConsoleAssetService>();
+        var html = assets.Render(new BackendConsoleAsset(
+            "fixture",
+            typeof(BackendConsoleAssetServiceTests).Assembly,
+            "BackendConsoleAssetServiceTests.fixture.html",
+            "text/html",
+            InjectHostConfiguration: true));
+
+        html.Should().Contain(
+            "\"resources\":[\"https://api.example.test/api/v1/proxy/s/aevatar\",\"https://api.example.test/api/v1/proxy/s/ornn-tenant-a\"]");
+    }
+
+    [Fact]
+    public void Render_ShouldRequestTheDefaultOrnnProxyResource()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Aevatar:BackendConsole:NyxApiBaseUrl"] = "https://api.example.test",
+            })
+            .Build();
+        services.AddBackendConsoleStaticAssets(configuration);
+
+        var assets = services.BuildServiceProvider().GetRequiredService<IBackendConsoleAssetService>();
+        var html = assets.Render(new BackendConsoleAsset(
+            "fixture",
+            typeof(BackendConsoleAssetServiceTests).Assembly,
+            "BackendConsoleAssetServiceTests.fixture.html",
+            "text/html",
+            InjectHostConfiguration: true));
+
+        html.Should().Contain(
+            "\"resources\":[\"https://api.example.test/api/v1/proxy/s/aevatar\",\"https://api.example.test/api/v1/proxy/s/ornn-api\"]");
+    }
+
+    [Fact]
     public void Render_ShouldLetHostEnvironmentOverrideOptionalConfig()
     {
         using var authority = new EnvironmentVariableScope("HOST_BACKEND_CONSOLE_OIDC_AUTHORITY", "https://env-id.example.test");
