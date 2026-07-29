@@ -211,28 +211,46 @@ describe("TeamAutomationsTab canonical member authority", () => {
     ).toBe(true);
   });
 
-  it("makes zero automation requests without a path member", async () => {
+  it("keeps the full Automations shell without querying before a member is selected", async () => {
     renderTab();
 
-    expect(await screen.findByText("Choose a team member")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Automations" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Give a member recurring work" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Upcoming" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "New automation" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add recurring work" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Refresh" })).not.toBeInTheDocument();
+    expect(screen.queryByText("View member run history")).not.toBeInTheDocument();
+    expect(screen.getByText("Planner")).toBeInTheDocument();
+    expect(screen.getByText("No automations for this member")).toBeInTheDocument();
+    expect(screen.getByText("No upcoming runs are visible yet.")).toBeInTheDocument();
     expect(teamAutomationApi.listAll).not.toHaveBeenCalled();
     expect(scheduledDispatchApi.listAll).not.toHaveBeenCalled();
   });
 
-  it("navigates the Team shell to the canonical member resource", async () => {
+  it("opens the complete dev form directly from the Team shell", async () => {
     renderTab();
 
-    fireEvent.click(await screen.findByRole("button", { name: "Planner" }));
+    fireEvent.click(await screen.findByRole("button", { name: "New automation" }));
 
-    expect(history.push).toHaveBeenCalledWith(
-      "/scopes/scope-alpha/teams/team-alpha/members/m-alpha/automations",
-    );
+    expect(await screen.findByText("1. Target member")).toBeInTheDocument();
+    expect(screen.getByText("2. Work to run")).toBeInTheDocument();
+    expect(screen.getByText("3. Schedule")).toBeInTheDocument();
+    expect(screen.getByLabelText("Automation member")).toBeEnabled();
+    expect(screen.getByLabelText("Automation cadence")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Preview next runs" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create automation" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Review authorization" })).not.toBeInTheDocument();
+    expect(history.push).not.toHaveBeenCalled();
     expect(teamAutomationApi.listAll).not.toHaveBeenCalled();
   });
 
   it("loads only the exact canonical member collection", async () => {
     renderTab("m-alpha");
 
+    expect(await screen.findByRole("heading", { name: "Automations" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Give a member recurring work" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Upcoming" })).toBeInTheDocument();
     await waitFor(() =>
       expect(teamAutomationApi.listAll).toHaveBeenCalledWith(
         { scopeId: "scope-alpha", teamId: "team-alpha", memberId: "m-alpha" },
@@ -240,6 +258,22 @@ describe("TeamAutomationsTab canonical member authority", () => {
       ),
     );
     expect(scheduledDispatchApi.listAll).not.toHaveBeenCalled();
+  });
+
+  it("derives Upcoming from the exact member read model", async () => {
+    (teamAutomationApi.listAll as jest.Mock).mockResolvedValue({
+      items: [automationView()],
+      nextCursor: null,
+      totalCount: 1,
+    });
+
+    renderTab("m-alpha");
+
+    expect(await screen.findByText("Planner recurring work")).toBeInTheDocument();
+    expect(teamAutomationApi.listAll).toHaveBeenCalledWith(
+      { scopeId: "scope-alpha", teamId: "team-alpha", memberId: "m-alpha" },
+      { take: 200 },
+    );
   });
 
   it("does not query when the path member is outside the current Team", async () => {
@@ -270,7 +304,7 @@ describe("TeamAutomationsTab canonical member authority", () => {
     fireEvent.change(screen.getByLabelText("Recurring prompt"), {
       target: { value: "Summarize open work." },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Review authorization" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create automation" }));
 
     await waitFor(() => expect(teamAutomationApi.preflightCreate).toHaveBeenCalledTimes(1));
     expect(teamAutomationApi.create).not.toHaveBeenCalled();
@@ -284,8 +318,6 @@ describe("TeamAutomationsTab canonical member authority", () => {
   });
 
   it("clears accepted create observation after the authoritative row becomes terminal", async () => {
-    const now = Date.parse("2026-07-29T00:00:00Z");
-    const nowSpy = jest.spyOn(Date, "now").mockReturnValue(now);
     (teamAutomationApi.listAll as jest.Mock)
       .mockResolvedValueOnce({ items: [], nextCursor: null, totalCount: 0 })
       .mockResolvedValueOnce({
@@ -319,23 +351,15 @@ describe("TeamAutomationsTab canonical member authority", () => {
     fireEvent.change(screen.getByLabelText("Recurring prompt"), {
       target: { value: "Summarize open work." },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Review authorization" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create automation" }));
     fireEvent.click(await screen.findByRole("button", { name: "Authorize and continue" }));
 
     expect(await screen.findByText("Preparing authorization")).toBeInTheDocument();
     expect(
-      await screen.findByText("Credential active", {}, { timeout: 3_500 }),
+      await screen.findByRole("status", { name: "Active" }, { timeout: 3_500 }),
     ).toBeInTheDocument();
     expect(teamAutomationApi.listAll).toHaveBeenCalledTimes(3);
-    nowSpy.mockReturnValue(now + 61_000);
-    const callsBeforeRefresh = (teamAutomationApi.listAll as jest.Mock).mock.calls.length;
-    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
-    await waitFor(() =>
-      expect(teamAutomationApi.listAll).toHaveBeenCalledTimes(callsBeforeRefresh + 1),
-    );
-    await waitFor(() =>
-      expect(screen.queryByText("Still pending")).not.toBeInTheDocument(),
-    );
+    expect(screen.queryByText("Still pending")).not.toBeInTheDocument();
   });
 
   it("recovers a confirmed create when the fresh binding is missing", async () => {
@@ -358,7 +382,7 @@ describe("TeamAutomationsTab canonical member authority", () => {
     fireEvent.change(screen.getByLabelText("Recurring prompt"), {
       target: { value: "Summarize open work." },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Review authorization" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create automation" }));
     fireEvent.click(await screen.findByRole("button", { name: "Authorize and continue" }));
 
     await waitFor(() => expect(NyxIDAuthClient).toHaveBeenCalledTimes(1));
@@ -546,9 +570,7 @@ describe("TeamAutomationsTab canonical member authority", () => {
     expect(await screen.findByText("Dedicated Agent Key")).toBeInTheDocument();
   });
 
-  it("retries actor-owned revocation after refresh without a browser operation ledger", async () => {
-    const now = Date.parse("2026-07-29T00:00:00Z");
-    const nowSpy = jest.spyOn(Date, "now").mockReturnValue(now);
+  it("retries actor-owned revocation without a browser operation ledger", async () => {
     const revoking = automationView({
       authorizationStatus: "revocation_pending",
       revocationPending: true,
@@ -590,15 +612,7 @@ describe("TeamAutomationsTab canonical member authority", () => {
       await screen.findByText("No automations for this member", {}, { timeout: 3_500 }),
     ).toBeInTheDocument();
     expect(teamAutomationApi.listAll).toHaveBeenCalledTimes(3);
-    nowSpy.mockReturnValue(now + 61_000);
-    const callsBeforeRefresh = (teamAutomationApi.listAll as jest.Mock).mock.calls.length;
-    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
-    await waitFor(() =>
-      expect(teamAutomationApi.listAll).toHaveBeenCalledTimes(callsBeforeRefresh + 1),
-    );
-    await waitFor(() =>
-      expect(screen.queryByText("Still pending")).not.toBeInTheDocument(),
-    );
+    expect(screen.queryByText("Still pending")).not.toBeInTheDocument();
   });
 
   it("reconnects NyxID for revocation retry without persisting an action ledger", async () => {
