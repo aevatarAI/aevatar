@@ -171,6 +171,19 @@ internal static class ElasticsearchProjectionDocumentStoreMetadataSupport
                 CreateStableSortFieldMapping();
         }
 
+        normalizedProperties.TryAdd(
+            ElasticsearchProjectionDeleteMarkerPayload.TombstoneField,
+            new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["type"] = "boolean",
+            });
+        normalizedProperties.TryAdd(
+            ElasticsearchProjectionDeleteMarkerPayload.DeletedAtUtcField,
+            new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["type"] = "date",
+            });
+
         mappings["properties"] = normalizedProperties;
     }
 
