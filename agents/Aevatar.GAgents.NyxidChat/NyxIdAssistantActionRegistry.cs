@@ -134,7 +134,7 @@ public sealed class NyxIdAssistantActionRegistry
                 var descriptor = RequireObject(item);
                 var wireAction = ReadRequiredString(descriptor, "action", 128);
                 if (!SupportedActions.TryGetValue(wireAction, out var contract))
-                    throw Error(ActionUnsupported, "The NyxID action is not supported by this Aevatar version.");
+                    continue;
 
                 var tier = ParseTier(ReadRequiredString(descriptor, "tier", 32));
                 if (tier != NyxIdAssistantActionTier.V1)
