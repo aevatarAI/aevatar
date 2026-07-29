@@ -42,7 +42,9 @@ projection scope, reducer, committed-state activation plan, or watermark.
 - Production uses an Elasticsearch adapter in the Mainnet Host. It performs an
   unconditional exact-key overwrite in a dedicated
   `health-probe-operational-snapshots` index. JSON exists only at this external
-  adapter boundary; the internal contract remains generated Protobuf.
+  adapter boundary; the internal contract remains generated Protobuf. The
+  existing index-reconcile hosted service provisions/reconciles the alias at
+  startup; actor turns never perform index lifecycle operations.
 - Development and tests use an explicit
   `InMemoryHealthProbeOperationalSnapshotStore`. This is infrastructure-only
   ephemeral state and is not a production fact source.
@@ -60,8 +62,11 @@ active execution, and stale signals are ignored.
 The delayed callback uses the platform `TimeProvider` overload of
 `Task.Delay` and an actor-lifetime cancellation token. It introduces no timer
 registry and writes no reminder state. Activation recreates the tick chain;
-deactivation cancels outstanding tick and timeout delays. Callback continuations
+deactivation cancels outstanding tick/timeout delays and the active executor.
+Callback continuations
 only call the standard event publisher and never read or mutate actor state.
+Activation also best-effort purges durable callbacks left by the old
+implementation. This is bounded migration cleanup, not the new scheduling path.
 
 ## Data Flow
 
@@ -73,6 +78,7 @@ The canonical path is:
 3. Actor activation initializes an empty operational snapshot from the
    committed descriptor and rearms an ephemeral delayed self-tick.
 4. A tick starts one runtime execution and invokes the registered executor.
+   A duplicate tick while an execution is active is ignored.
 5. Completion or timeout re-enters the actor inbox as a typed self-message.
 6. The actor reconciles the operation id, updates its bounded runtime history,
    and overwrites the operational snapshot.
@@ -110,7 +116,9 @@ index is an operational cleanup outside this code change.
 - A late completion after timeout, or a late timeout after completion, is
   ignored by operation-id reconciliation.
 - Deactivation cancels delayed signals. Reactivation starts a fresh loop and
-  does not recover an interrupted execution.
+  does not recover an interrupted execution or publish its late completion.
+- Failure to purge a legacy durable callback is logged; operation-id and
+  active-execution guards prevent it from creating parallel probe executions.
 - Configuration persistence failure still fails the command because the actor
   cannot safely run without an authoritative descriptor.
 
@@ -145,13 +153,14 @@ Tests must prove:
    operation ids.
 4. Tick and timeout scheduling write no durable callback and delayed callbacks
    only publish typed self-messages.
-5. Runtime history is bounded to 120 samples and resets on activation.
-6. Old event streams still replay without activation failure.
-7. Status queries include only current manifest slugs and read no projection
+5. Deactivation cancels an active executor and prevents a late completion self-message.
+6. Runtime history is bounded to 120 samples and resets on activation.
+7. Old event streams still replay without activation failure.
+8. Status queries include only current manifest slugs and read no projection
    lifecycle service.
-8. Mainnet composition selects Elasticsearch while development selects the
+9. Mainnet composition selects Elasticsearch while development selects the
    in-memory adapter.
-9. Static guards find no health committed-state activation provider or health
+10. Static guards find no health committed-state activation provider or health
    projection materializer.
 
 Before pushing, run the StatusDashboard and Mainnet capability tests, test

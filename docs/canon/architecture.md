@@ -212,6 +212,7 @@ Orleans 的 `LinkAsync(parentId, childId)` 必须区分当前 grain 与其他 pa
 - `WorkflowExecutionRunEventProjector` 优先使用 projection session command id，并在缺失时回退到 `EventEnvelope.Propagation.CorrelationId`，按 `workflow-run:{actorId}:{commandId}` 事件流路由。
 - 各 workflow readmodel projector 都只记录 committed `StateVersion` 与 `LastEventId`，用于读侧一致性观察。
 - Projection 消费的是 Actor 运行时 envelope 流；EventStore 仍只用于写侧事实持久化与重放。
+- StatusDashboard health sampling 是明确的 operational telemetry 例外：只有 `HealthProbeConfigured` 进入 EventStore；周期结果保留在 actor-owned runtime state，并覆盖写入独立 `HealthProbeOperationalSnapshot`。该 snapshot 不是 readmodel/业务事实，没有 projection scope、watermark 或 `StateVersion`，actor/backend 重启后历史可清空；旧 health projection scopes 与 durable callbacks 只在启动迁移路径中被幂等释放。
 - 编排层守卫：
   - `tools/ci/architecture_guards.sh` 强制关键编排类保持轻量（行数与依赖数上限），防止职责反弹。
 
