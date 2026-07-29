@@ -1216,8 +1216,9 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         ArgumentNullException.ThrowIfNull(plan);
         var policy = plan.CredentialPolicy
             ?? throw new InvalidOperationException("scheduled_authorization_policy_missing");
-        var catalog = plan.CatalogAuthority
-            ?? throw new InvalidOperationException("scheduled_authorization_catalog_authority_missing");
+        var catalog = plan.CatalogAuthority;
+        if (catalog is null && policy.ServiceGrantRequirement != AuthorizationGrantRequirement.NotRequired)
+            throw new InvalidOperationException("scheduled_authorization_catalog_authority_missing");
         var disclosure = plan.Disclosures.ToHashSet();
         var grants = plan.NyxIdServiceGrants.Select(static grant =>
             new ScheduledInvocationAuthorizationServiceGrant(
@@ -1247,13 +1248,13 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                 SourceVersion(plan, AuthorizationSourceKind.WorkflowRevision),
                 SourceVersion(plan, AuthorizationSourceKind.ConnectorCatalog),
                 SourceVersion(plan, AuthorizationSourceKind.OwnerLlmRoute),
-                catalog.ActorStateVersion,
-                catalog.ObservedAt.ToDateTimeOffset(),
-                catalog.FreshUntil.ToDateTimeOffset(),
-                catalog.ContentDigest,
-                catalog.ContractVersion,
-                catalog.PolicyVersion,
-                catalog.EvaluatedAt.ToDateTimeOffset()),
+                catalog?.ActorStateVersion ?? 0,
+                catalog?.ObservedAt?.ToDateTimeOffset() ?? default,
+                catalog?.FreshUntil?.ToDateTimeOffset() ?? default,
+                catalog?.ContentDigest ?? string.Empty,
+                catalog?.ContractVersion ?? string.Empty,
+                catalog?.PolicyVersion ?? string.Empty,
+                catalog?.EvaluatedAt?.ToDateTimeOffset() ?? default),
             plan.OwnerLlmSelection?.Clone());
     }
 

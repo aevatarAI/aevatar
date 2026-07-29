@@ -93,7 +93,7 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
 
         if (fact == null ||
             IsCoreAuthorizationFactInvalid(fact, _timeProvider.GetUtcNow()) ||
-            IsCatalogAuthorityInvalid(fact.Authority) ||
+            RequiresCatalogAuthority(fact) && IsCatalogAuthorityInvalid(fact.Authority) ||
             AreServiceGrantsInvalid(fact) ||
             IsDisclosureInvalid(fact.Disclosure))
         {
@@ -128,6 +128,9 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         string.IsNullOrWhiteSpace(authority.CatalogContractVersion) ||
         string.IsNullOrWhiteSpace(authority.CatalogPolicyVersion) ||
         authority.CatalogEvaluatedAt == default;
+
+    private static bool RequiresCatalogAuthority(ScheduledInvocationAuthorizationFact fact) =>
+        !fact.ServiceGrantsNotRequired || fact.ServiceGrants.Count > 0;
 
     private static bool AreServiceGrantsInvalid(ScheduledInvocationAuthorizationFact fact) =>
         fact.ServiceGrants.Count == 0 && !fact.ServiceGrantsNotRequired ||
