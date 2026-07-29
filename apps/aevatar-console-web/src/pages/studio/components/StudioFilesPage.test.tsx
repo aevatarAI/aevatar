@@ -292,6 +292,19 @@ describe('StudioFilesPage', () => {
     expect(screen.queryByText('Configuration')).not.toBeInTheDocument();
   });
 
+  it('falls back to the first visible catalog when search hides the selected panel', async () => {
+    const props = createProps();
+
+    renderWithQueryClient(React.createElement(StudioFilesPage, props));
+    fireEvent.click(screen.getByRole('button', { name: 'Connector Catalog' }));
+    fireEvent.change(screen.getByLabelText('Search files'), {
+      target: { value: 'Role Catalog' },
+    });
+
+    expect(await screen.findByRole('button', { name: 'Add Role' })).toBeInTheDocument();
+    expect(screen.getAllByText('Role Catalog').length).toBeGreaterThan(1);
+  });
+
   it('lets roles and connectors follow the cli-style catalog workflow', async () => {
     const props = createProps();
 
