@@ -1,6 +1,7 @@
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
+using Aevatar.Workflow.Abstractions;
 using Microsoft.Extensions.Logging;
 using System.Runtime.ExceptionServices;
 
@@ -49,10 +50,27 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort : INyxIdAuthorizationCa
         return RefreshAsync(PersonalOwner(verifiedOwnerSubject), bearerToken, ct);
     }
 
-    public async Task<NyxIdAuthorizationCatalogRefreshResult> RefreshAsync(
+    public Task<NyxIdAuthorizationCatalogRefreshResult> RefreshAsync(
         AuthorizationOwnerIdentity owner,
         string bearerToken,
+        CancellationToken ct = default) =>
+        RefreshAsync(owner, bearerToken, requiredServiceIds: null, ct);
+
+    public Task<NyxIdAuthorizationCatalogRefreshResult> RefreshAsync(
+        AuthorizationOwnerIdentity owner,
+        string bearerToken,
+        IReadOnlyList<NyxIdUserServiceCapabilityRef> requiredServices,
         CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(requiredServices);
+        return RefreshAsync(owner, bearerToken, NormalizeRequiredServiceIds(requiredServices), ct);
+    }
+
+    private async Task<NyxIdAuthorizationCatalogRefreshResult> RefreshAsync(
+        AuthorizationOwnerIdentity owner,
+        string bearerToken,
+        IReadOnlySet<string>? requiredServiceIds,
+        CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(owner);
         ArgumentException.ThrowIfNullOrWhiteSpace(bearerToken);
@@ -84,6 +102,7 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort : INyxIdAuthorizationCa
                 bearerToken,
                 refreshId,
                 startedAt,
+                requiredServiceIds,
                 (refreshId, startedAt, dispatchCancellation) =>
                     _commandPort.BeginRefreshAsync(
                         normalizedOwner,
@@ -94,6 +113,15 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort : INyxIdAuthorizationCa
                 ct)
             .ConfigureAwait(false);
     }
+
+    private static IReadOnlySet<string> NormalizeRequiredServiceIds(
+        IReadOnlyList<NyxIdUserServiceCapabilityRef> requiredServices) =>
+        requiredServices
+            .Select(static service => service.UserServiceId?.Trim() ?? string.Empty)
+            .Where(static serviceId => !string.IsNullOrWhiteSpace(serviceId))
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(static serviceId => serviceId, StringComparer.Ordinal)
+            .ToHashSet(StringComparer.Ordinal);
 
     private static AuthorizationOwnerIdentity PersonalOwner(string verifiedOwnerSubject) => new()
     {
@@ -112,7 +140,6 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
 
     private const string CatalogMismatchFailureCode = "nyxid_scope_plan_catalog_mismatch";
     private const string ProviderTimedOutFailureCode = "nyxid_catalog_refresh_provider_timed_out";
-    private const string RouteUnresolvedFailureCode = "api_key_scope_plan_route_unresolved";
 
     private readonly INyxIdAuthorizationCatalogCommandPort _commandPort;
     private readonly INyxIdApiClientFactory _nyxClientFactory;
@@ -146,6 +173,7 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
         string bearerToken,
         string refreshId,
         DateTimeOffset startedAt,
+        IReadOnlySet<string>? requiredServiceIds,
         Func<string, DateTimeOffset, CancellationToken, Task> beginRefresh,
         CancellationToken ct)
     {
@@ -197,6 +225,7 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
                         normalizedOwner,
                         bearerToken,
                         refreshId,
+                        requiredServiceIds,
                         sink,
                         ct)
                     .ConfigureAwait(false);
@@ -219,6 +248,7 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
         AuthorizationOwnerIdentity normalizedOwner,
         string bearerToken,
         string refreshId,
+        IReadOnlySet<string>? requiredServiceIds,
         EventChannel<NyxIdAuthorizationCatalogRefreshCommittedOutcome> sink,
         CancellationToken ct)
     {
@@ -232,6 +262,7 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
                 normalizedOwner,
                 bearerToken,
                 refreshId,
+                requiredServiceIds,
                 providerCancellation.Token);
             var completed = await Task.WhenAny(terminalTask, providerTask).ConfigureAwait(false);
             if (ReferenceEquals(completed, terminalTask))
@@ -344,6 +375,7 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
         AuthorizationOwnerIdentity normalizedOwner,
         string bearerToken,
         string refreshId,
+        IReadOnlySet<string>? requiredServiceIds,
         CancellationToken ct)
     {
         var client = _nyxClientFactory.CreateClient();
@@ -369,7 +401,8 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
         }
 
         var eligibleServices = inventoryResult.Value!.Services
-            .Where(IsEligible)
+            .Where(service => IsEligible(service) &&
+                              (requiredServiceIds is null || requiredServiceIds.Contains(service.Id)))
             .OrderBy(static service => service.Id, StringComparer.Ordinal)
             .ToArray();
         var selectedServiceIds = eligibleServices.Select(static service => service.Id).ToArray();
@@ -405,18 +438,6 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
         var scopePlanResult = NyxIdApiAccessResponseParser.ParseScopePlan(scopePlanResponse);
         if (!scopePlanResult.Succeeded)
         {
-            if (IsIsolatableRouteFailure(scopePlanResult.Failure))
-            {
-                await ObserveIsolatedScopePlansAsync(
-                    client,
-                    normalizedOwner,
-                    bearerToken,
-                    refreshId,
-                    eligibleServices,
-                    ct).ConfigureAwait(false);
-                return;
-            }
-
             await HandleFailureAsync(
                 normalizedOwner,
                 refreshId,
@@ -450,79 +471,6 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
             services,
             ct).ConfigureAwait(false);
 
-    }
-
-    private async Task ObserveIsolatedScopePlansAsync(
-        NyxIdApiClient client,
-        AuthorizationOwnerIdentity normalizedOwner,
-        string bearerToken,
-        string refreshId,
-        IReadOnlyList<NyxIdUserService> eligibleServices,
-        CancellationToken ct)
-    {
-        var services = new List<NyxIdAuthorizationServiceEvidence>();
-        DateTimeOffset? evaluatedAt = null;
-        var contractVersion = NyxIdApiAccessResponseParser.ScopePlanContractVersion;
-        var policyVersion = NyxIdApiAccessResponseParser.ScopePlanPolicyVersion;
-        foreach (var service in eligibleServices)
-        {
-            string scopePlanResponse;
-            try
-            {
-                scopePlanResponse = await client.PlanApiKeyScopeAsync(
-                    bearerToken,
-                    [service.Id],
-                    targetOrganizationId: null,
-                    ct).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-            {
-                await RecordProviderTimeoutAsync(normalizedOwner, refreshId, ct).ConfigureAwait(false);
-                return;
-            }
-
-            var scopePlanResult = NyxIdApiAccessResponseParser.ParseScopePlan(scopePlanResponse);
-            if (!scopePlanResult.Succeeded)
-            {
-                if (IsIsolatableRouteFailure(scopePlanResult.Failure))
-                    continue;
-
-                await HandleFailureAsync(
-                    normalizedOwner,
-                    refreshId,
-                    scopePlanResult.Failure,
-                    ct).ConfigureAwait(false);
-                return;
-            }
-
-            var scopePlan = scopePlanResult.Value!;
-            if (!MatchesPersonalCatalog(scopePlan, normalizedOwner, [service]))
-            {
-                await InvalidateUnstableAsync(
-                    normalizedOwner,
-                    refreshId,
-                    CatalogMismatchFailureCode,
-                    ct).ConfigureAwait(false);
-                return;
-            }
-
-            contractVersion = scopePlan.ContractVersion;
-            policyVersion = scopePlan.PolicyVersion;
-            if (evaluatedAt is null || scopePlan.EvaluatedAtUtc > evaluatedAt.Value)
-                evaluatedAt = scopePlan.EvaluatedAtUtc;
-            services.Add(MapServiceEvidence(service, scopePlan.Services.Single()));
-        }
-
-        var observedAt = _timeProvider.GetUtcNow();
-        await ObserveCatalogAsync(
-            normalizedOwner,
-            refreshId,
-            observedAt,
-            evaluatedAt ?? observedAt,
-            contractVersion,
-            policyVersion,
-            services,
-            ct).ConfigureAwait(false);
     }
 
     private async Task ObserveCatalogAsync(
@@ -848,10 +796,6 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
         (service.CredentialSource.Kind == NyxIdUserServiceCredentialSourceKind.Personal ||
          service.CredentialSource.Kind == NyxIdUserServiceCredentialSourceKind.Organization &&
          service.CredentialSource.Allowed);
-
-    private static bool IsIsolatableRouteFailure(NyxIdApiAccessFailure? failure) =>
-        failure?.Kind == NyxIdApiAccessFailureKind.Conflict &&
-        string.Equals(failure.Code, RouteUnresolvedFailureCode, StringComparison.Ordinal);
 
     private static bool MatchesPersonalCatalog(
         NyxIdApiKeyScopePlan scopePlan,

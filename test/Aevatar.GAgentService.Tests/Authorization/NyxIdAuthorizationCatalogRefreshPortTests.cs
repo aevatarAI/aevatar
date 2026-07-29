@@ -5,6 +5,7 @@ using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Infrastructure.Schedules.Authorization;
+using Aevatar.Workflow.Abstractions;
 using FluentAssertions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -791,55 +792,32 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
     }
 
     [Fact]
-    public async Task RefreshPersonalAsync_WhenBulkScopePlanHasUnrelatedRouteFailure_ShouldObserveIsolatedServices()
+    public async Task RefreshAsync_WhenRequiredServicesAreProvided_ShouldRequestOnlyRequiredScopePlanServices()
     {
         var commands = new RecordingCommandPort();
-        var clock = new FakeTimeProvider(Now);
         var handler = new RoutingJsonHandler(
             Ok(UserServicesJson()),
-            Error(HttpStatusCode.Conflict, "api_key_scope_plan_route_unresolved", 9007),
-            Ok(ScopePlanJsonForServiceA()),
-            Error(HttpStatusCode.Conflict, "api_key_scope_plan_route_unresolved", 9007))
-        {
-            OnRequest = requestIndex =>
-            {
-                if (requestIndex >= 2)
-                    clock.Advance(TimeSpan.FromMinutes(1));
-            },
-        };
+            Ok(ScopePlanJsonForServiceA()));
 
-        var result = await Create(commands, handler, timeProvider: clock)
-            .RefreshPersonalAsync("owner-alpha", "bearer-secret");
+        var result = await Create(commands, handler)
+            .RefreshAsync(
+                Owner(),
+                "bearer-secret",
+                [new NyxIdUserServiceCapabilityRef { UserServiceId = "service-a" }]);
 
         result.Status.Should().Be(NyxIdAuthorizationCatalogRefreshStatus.Observed);
         result.FailureCode.Should().BeEmpty();
         handler.Requests.Select(static request => (request.Method, request.Path))
             .Should().Equal(
                 (HttpMethod.Get, "/api/v1/user-services"),
-                (HttpMethod.Post, "/api/v1/api-keys/scope-plan"),
-                (HttpMethod.Post, "/api/v1/api-keys/scope-plan"),
                 (HttpMethod.Post, "/api/v1/api-keys/scope-plan"));
-        handler.RequestBodies.Should().HaveCount(3);
-        using (var bulkRequest = JsonDocument.Parse(handler.RequestBodies[0]))
+        handler.RequestBodies.Should().ContainSingle();
+        using (var request = JsonDocument.Parse(handler.RequestBodies.Single()))
         {
-            bulkRequest.RootElement.GetProperty("selected_service_ids")
-                .EnumerateArray()
-                .Select(static item => item.GetString())
-                .Should().Equal("service-a", "service-b");
-        }
-        using (var serviceARequest = JsonDocument.Parse(handler.RequestBodies[1]))
-        {
-            serviceARequest.RootElement.GetProperty("selected_service_ids")
+            request.RootElement.GetProperty("selected_service_ids")
                 .EnumerateArray()
                 .Select(static item => item.GetString())
                 .Should().Equal("service-a");
-        }
-        using (var serviceBRequest = JsonDocument.Parse(handler.RequestBodies[2]))
-        {
-            serviceBRequest.RootElement.GetProperty("selected_service_ids")
-                .EnumerateArray()
-                .Select(static item => item.GetString())
-                .Should().Equal("service-b");
         }
 
         var observation = commands.Observations.Should().ContainSingle().Subject;
@@ -849,8 +827,8 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
         observation.ContractVersion.Should().Be("1");
         observation.PolicyVersion.Should().Be("api-key-scope-v1");
         observation.EvaluatedAtUtc.Should().Be(EvaluatedAt);
-        observation.ObservedAtUtc.Should().Be(Now.AddMinutes(2));
-        observation.FreshUntilUtc.Should().Be(Now.AddMinutes(17));
+        observation.ObservedAtUtc.Should().Be(Now);
+        observation.FreshUntilUtc.Should().Be(Now.AddMinutes(15));
         commands.Invalidations.Should().BeEmpty();
         commands.Failures.Should().BeEmpty();
     }

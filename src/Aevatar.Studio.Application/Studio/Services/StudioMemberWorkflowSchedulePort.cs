@@ -143,6 +143,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
 
         var refresh = await RefreshRecoverableNyxIdCatalogSnapshotAsync(
             resolved.AuthorizationRequest,
+            first.RequiredNyxIdServices,
             cancellationToken => ResolveProvisioningBearerTokenAsync(request, cancellationToken),
             first.FailureCode,
             first.Detail,
@@ -192,6 +193,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
 
         var refresh = await RefreshRecoverableNyxIdCatalogSnapshotAsync(
             authorizationRequest,
+            first.RequiredNyxIdServices,
             provisioningBearerTokenResolver,
             first.FailureCode,
             first.Detail,
@@ -814,6 +816,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
 
     private async Task<CatalogRefreshRecoveryResult> RefreshRecoverableNyxIdCatalogSnapshotAsync(
         ScheduledInvocationAuthorizationRequest authorizationRequest,
+        IReadOnlyList<NyxIdUserServiceCapabilityRef>? resolvedRequiredServices,
         Func<CancellationToken, Task<string>> provisioningBearerTokenResolver,
         ScheduledInvocationAuthorizationFailureCode failureCode,
         string detail,
@@ -842,7 +845,11 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         NyxIdAuthorizationCatalogRefreshResult refresh;
         try
         {
-            refresh = await _catalogRefreshPort.RefreshAsync(authorizationRequest.Owner, bearerToken, ct);
+            refresh = await _catalogRefreshPort.RefreshAsync(
+                authorizationRequest.Owner,
+                bearerToken,
+                ResolveCatalogRefreshRequiredServices(authorizationRequest, resolvedRequiredServices),
+                ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -885,6 +892,15 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         }
 
         return CatalogRefreshRecoveryResult.Succeeded(refresh);
+    }
+
+    private static IReadOnlyList<NyxIdUserServiceCapabilityRef> ResolveCatalogRefreshRequiredServices(
+        ScheduledInvocationAuthorizationRequest authorizationRequest,
+        IReadOnlyList<NyxIdUserServiceCapabilityRef>? resolvedRequiredServices)
+    {
+        if (resolvedRequiredServices is { Count: > 0 })
+            return resolvedRequiredServices;
+        return authorizationRequest.RequiredNyxIdServices;
     }
 
     private async Task<ResolvedStudioAuthorizationRequest> ResolveAuthorizationRequestAsync(

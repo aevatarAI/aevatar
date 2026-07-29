@@ -35,7 +35,8 @@ public sealed record ScheduledInvocationAuthorizationPlanResult(
     ScheduledInvocationAuthorizationPlan? Plan,
     ScheduledInvocationAuthorizationFailureCode FailureCode,
     string Detail,
-    long ObservedCatalogStateVersion = 0)
+    long ObservedCatalogStateVersion = 0,
+    IReadOnlyList<NyxIdUserServiceCapabilityRef>? RequiredNyxIdServices = null)
 {
     public bool Success => Plan is not null;
 
@@ -50,8 +51,9 @@ public sealed record ScheduledInvocationAuthorizationPlanResult(
     public static ScheduledInvocationAuthorizationPlanResult Failed(
         ScheduledInvocationAuthorizationFailureCode failureCode,
         string detail,
-        long observedCatalogStateVersion = 0) =>
-        new(null, failureCode, detail, observedCatalogStateVersion);
+        long observedCatalogStateVersion = 0,
+        IReadOnlyList<NyxIdUserServiceCapabilityRef>? requiredNyxIdServices = null) =>
+        new(null, failureCode, detail, observedCatalogStateVersion, requiredNyxIdServices);
 }
 
 public sealed class ValidatedScheduledInvocationAuthorizationPlan
@@ -110,7 +112,8 @@ public sealed record ScheduledInvocationAuthorizationValidationResult(
     ScheduledInvocationAuthorizationFailureCode FailureCode,
     string Detail,
     long RequiredStateVersion = 0,
-    long ObservedCatalogStateVersion = 0)
+    long ObservedCatalogStateVersion = 0,
+    IReadOnlyList<NyxIdUserServiceCapabilityRef>? RequiredNyxIdServices = null)
 {
     public bool Success => ValidatedPlan is not null;
 
@@ -124,12 +127,14 @@ public sealed record ScheduledInvocationAuthorizationValidationResult(
     public static ScheduledInvocationAuthorizationValidationResult Failed(
         ScheduledInvocationAuthorizationFailureCode failureCode,
         string detail,
-        long observedCatalogStateVersion = 0) =>
+        long observedCatalogStateVersion = 0,
+        IReadOnlyList<NyxIdUserServiceCapabilityRef>? requiredNyxIdServices = null) =>
         new(
             null,
             failureCode,
             detail,
-            ObservedCatalogStateVersion: observedCatalogStateVersion);
+            ObservedCatalogStateVersion: observedCatalogStateVersion,
+            RequiredNyxIdServices: requiredNyxIdServices);
 
     public static ScheduledInvocationAuthorizationValidationResult ProjectionPending(
         long requiredStateVersion,
@@ -341,6 +346,12 @@ public interface INyxIdAuthorizationCatalogRefreshPort
     Task<NyxIdAuthorizationCatalogRefreshResult> RefreshAsync(
         AuthorizationOwnerIdentity owner,
         string bearerToken,
+        CancellationToken ct = default);
+
+    Task<NyxIdAuthorizationCatalogRefreshResult> RefreshAsync(
+        AuthorizationOwnerIdentity owner,
+        string bearerToken,
+        IReadOnlyList<NyxIdUserServiceCapabilityRef> requiredServices,
         CancellationToken ct = default);
 
     Task<NyxIdAuthorizationCatalogRefreshResult> RefreshPersonalAsync(

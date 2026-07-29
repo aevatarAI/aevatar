@@ -50,22 +50,28 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
 
         var snapshot = await _catalogQueryPort.GetAsync(request.Owner, ct);
         if (snapshot == null)
-            return Failed(ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound, "nyxid_catalog_snapshot_not_found");
+            return Failed(
+                ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+                "nyxid_catalog_snapshot_not_found",
+                requiredServices: evidence.RequiredServices);
         if (!OwnerEquals(request.Owner, snapshot.Owner))
             return Failed(
                 ScheduledInvocationAuthorizationFailureCode.OwnerMismatch,
                 "nyxid_catalog_owner_mismatch",
-                snapshot.StateVersion);
+                snapshot.StateVersion,
+                evidence.RequiredServices);
         if (snapshot.Invalidated)
             return Failed(
                 ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
                 "nyxid_catalog_snapshot_invalidated",
-                snapshot.StateVersion);
+                snapshot.StateVersion,
+                evidence.RequiredServices);
         if (snapshot.Cleaned)
             return Failed(
                 ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
                 "nyxid_catalog_lifecycle_invalid",
-                snapshot.StateVersion);
+                snapshot.StateVersion,
+                evidence.RequiredServices);
         if (snapshot.StateVersion <= 0 ||
             !snapshot.Activated ||
             snapshot.ObservedAtUtc == default ||
@@ -76,7 +82,8 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
             return Failed(
                 ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
                 "nyxid_catalog_lifecycle_invalid",
-                snapshot.StateVersion);
+                snapshot.StateVersion,
+                evidence.RequiredServices);
         }
         if (string.IsNullOrWhiteSpace(snapshot.ContentDigest) ||
             !string.Equals(
@@ -87,20 +94,28 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
             return Failed(
                 ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
                 "nyxid_catalog_content_digest_invalid",
-                snapshot.StateVersion);
+                snapshot.StateVersion,
+                evidence.RequiredServices);
         }
         if (snapshot.ObservedAtUtc > request.EvaluatedAtUtc || snapshot.FreshUntilUtc <= request.EvaluatedAtUtc)
             return Failed(
                 ScheduledInvocationAuthorizationFailureCode.SnapshotStale,
                 "nyxid_catalog_snapshot_stale",
-                snapshot.StateVersion);
+                snapshot.StateVersion,
+                evidence.RequiredServices);
 
         var grants = ResolveGrants(
             evidence.RequiredServices,
             evidence.ServiceGrantRequirement,
             snapshot.Services);
         if (grants.Failure != null)
-            return grants.Failure with { ObservedCatalogStateVersion = snapshot.StateVersion };
+        {
+            return grants.Failure with
+            {
+                ObservedCatalogStateVersion = snapshot.StateVersion,
+                RequiredNyxIdServices = CloneRequiredServices(evidence.RequiredServices),
+            };
+        }
 
         var plan = new ScheduledInvocationAuthorizationPlan
         {
@@ -715,8 +730,17 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
     private static ScheduledInvocationAuthorizationPlanResult Failed(
         ScheduledInvocationAuthorizationFailureCode code,
         string detail,
-        long observedCatalogStateVersion = 0) =>
-        ScheduledInvocationAuthorizationPlanResult.Failed(code, detail, observedCatalogStateVersion);
+        long observedCatalogStateVersion = 0,
+        IReadOnlyList<NyxIdUserServiceCapabilityRef>? requiredServices = null) =>
+        ScheduledInvocationAuthorizationPlanResult.Failed(
+            code,
+            detail,
+            observedCatalogStateVersion,
+            CloneRequiredServices(requiredServices));
+
+    private static IReadOnlyList<NyxIdUserServiceCapabilityRef>? CloneRequiredServices(
+        IReadOnlyList<NyxIdUserServiceCapabilityRef>? services) =>
+        services?.Select(static service => service.Clone()).ToArray();
 
     private sealed record TargetEvidenceResolution(
         IReadOnlyList<NyxIdUserServiceCapabilityRef> RequiredServices,
