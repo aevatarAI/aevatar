@@ -1,0 +1,136 @@
+<style>
+  .fact-bar {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+    margin: 18px 0 24px;
+  }
+  .fact {
+    padding: 13px 14px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--surface) 88%, #eef7f1);
+  }
+  .fact strong { display: block; margin-bottom: 5px; }
+  .diagram-card { min-height: 300px; }
+  .mini-flow {
+    display: grid;
+    gap: 8px;
+    padding: 16px;
+    min-height: 175px;
+    background: #f7f8f6;
+    color: #17211c;
+  }
+  .flow-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .node {
+    padding: 8px 10px;
+    border: 1px solid #9aa9a0;
+    border-radius: 5px;
+    background: #fff;
+    font: 600 12px/1.25 ui-monospace, SFMono-Regular, Menlo, monospace;
+    text-align: center;
+  }
+  .node.aevatar { border-color: #397354; background: #edf7f0; }
+  .node.nyxid { border-color: #23728a; background: #ecf7fa; }
+  .node.chrono { border-color: #aa6c24; background: #fff6e8; }
+  .node.runtime { border-color: #774d82; background: #f7eff9; }
+  .arrow { color: #66736b; font-weight: 700; }
+  .plane {
+    width: 100%;
+    padding: 7px;
+    border: 1px dashed #9aa9a0;
+    border-radius: 5px;
+  }
+  .plane-label {
+    margin-bottom: 6px;
+    color: #59655e;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+  }
+  .trust {
+    padding: 8px 10px;
+    border-left: 4px solid #b94e48;
+    background: #fff1f0;
+    font-size: 11px;
+    line-height: 1.35;
+  }
+  .recommendation {
+    display: inline-block;
+    margin-left: 7px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: #2f6f4e;
+    color: white;
+    font-size: 10px;
+    vertical-align: 2px;
+  }
+  @media (max-width: 760px) {
+    .fact-bar { grid-template-columns: 1fr; }
+  }
+</style>
+
+<h2>codex_exec 架构图应该画到多深？</h2>
+<p class="subtitle">已核实当前 managed_sandbox 主链由 Aevatar 经 NyxID 调用用户的 chrono-sandbox；Aevatar 不直接操作 OpenSandbox。</p>
+
+<div class="fact-bar">
+  <div class="fact"><strong>业务入口</strong><code>NyxIdCodexExecTool</code> + 强类型 target/workspace</div>
+  <div class="fact"><strong>代理边界</strong>NyxID 校验 invocation key，注入 5 分钟 delegation token</div>
+  <div class="fact"><strong>执行边界</strong>chrono-sandbox 创建 gVisor sandbox，运行固定 Codex CLI</div>
+</div>
+
+<div class="cards">
+  <div class="card diagram-card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image mini-flow">
+      <div class="flow-row">
+        <div class="node aevatar">codex_exec</div><span class="arrow">→</span>
+        <div class="node nyxid">NyxID Proxy</div><span class="arrow">→</span>
+        <div class="node chrono">chrono-sandbox</div><span class="arrow">→</span>
+        <div class="node runtime">Codex CLI</div>
+      </div>
+      <div class="trust">只保留一次请求的核心组件、请求和返回值。</div>
+    </div>
+    <div class="card-body">
+      <h3>A. 一张主链图</h3>
+      <p>适合快速同步。最简洁，但不会展开凭证控制面、Actor/read model 和隔离边界。</p>
+    </div>
+  </div>
+
+  <div class="card diagram-card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image mini-flow">
+      <div class="plane">
+        <div class="plane-label">执行面</div>
+        <div class="flow-row"><div class="node aevatar">Tool / Port</div><span class="arrow">→</span><div class="node nyxid">Proxy</div><span class="arrow">→</span><div class="node chrono">Sandbox</div></div>
+      </div>
+      <div class="plane">
+        <div class="plane-label">凭证控制面</div>
+        <div class="flow-row"><div class="node aevatar">Credential Actor</div><span class="arrow">↔</span><div class="node aevatar">ReadModel + Vault</div><span class="arrow">↔</span><div class="node nyxid">Agent Key</div></div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B. 总览 + 两张细图 <span class="recommendation">推荐</span></h3>
+      <p>一张总览、一张运行时序列、一张凭证与信任边界图。适合文档和架构评审。</p>
+    </div>
+  </div>
+
+  <div class="card diagram-card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image mini-flow">
+      <div class="flow-row"><div class="node">Persistent agent key</div><span class="arrow">止于</span><div class="node nyxid">NyxID</div></div>
+      <div class="flow-row"><div class="node">5 min delegation token</div><span class="arrow">进入</span><div class="node chrono">Sandbox env</div></div>
+      <div class="flow-row"><div class="node runtime">gVisor</div><span class="arrow">保护</span><div class="node">one-shot runner</div></div>
+      <div class="trust">突出 mutable forward_access_token policy、IP-level egress 与 internal-only 风险。</div>
+    </div>
+    <div class="card-body">
+      <h3>C. 安全评审深挖</h3>
+      <p>重点解释三类凭证、gVisor、NetworkPolicy 和已知信任缺口；业务调用细节相对弱化。</p>
+    </div>
+  </div>
+</div>
+
+<p class="subtitle" style="margin-top:20px">点击选择一种最终颗粒度。建议选 B，既能回答“现在怎么执行”，也能避免凭证和职责边界被误解。</p>

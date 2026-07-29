@@ -1,0 +1,376 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>/admin 运行观测台布局选择</title>
+  <style>
+    :root {
+      --ink: #18202b;
+      --muted: #637083;
+      --faint: #8d98a8;
+      --line: #dfe4ea;
+      --line-strong: #cbd3dc;
+      --canvas: #f3f5f7;
+      --panel: #ffffff;
+      --panel-soft: #f8f9fb;
+      --blue: #1f62d4;
+      --blue-soft: #eaf1ff;
+      --green: #17894c;
+      --green-soft: #e9f7ef;
+      --amber: #b56608;
+      --amber-soft: #fff4df;
+      --red: #c33131;
+      --red-soft: #fceded;
+      --violet: #7651b5;
+      --sans: "Alibaba PuHuiTi 2.0", "PingFang SC", "Microsoft YaHei", sans-serif;
+      --mono: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: #eef1f4;
+      font-family: var(--sans);
+    }
+    button, input { font: inherit; }
+    .page { width: min(1540px, calc(100% - 40px)); margin: 0 auto; padding: 34px 0 60px; }
+    .intro { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin-bottom: 24px; }
+    .eyebrow { color: var(--blue); font-size: 12px; font-weight: 700; margin-bottom: 7px; }
+    h1 { margin: 0; font-size: 26px; line-height: 1.2; letter-spacing: 0; }
+    .intro p { max-width: 780px; margin: 10px 0 0; color: var(--muted); font-size: 14px; line-height: 1.65; }
+    .shared-rule { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+    .rule-pill { border: 1px solid var(--line-strong); background: var(--panel); border-radius: 999px; padding: 5px 10px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+
+    .option {
+      position: relative;
+      margin-bottom: 24px;
+      border: 2px solid transparent;
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: 0 8px 28px rgba(24, 32, 43, 0.08);
+      overflow: hidden;
+      cursor: pointer;
+      transition: border-color 150ms ease, box-shadow 150ms ease, transform 150ms ease;
+    }
+    .option:hover { border-color: #a8bee6; box-shadow: 0 12px 32px rgba(24, 32, 43, 0.12); transform: translateY(-1px); }
+    .option.selected { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(31, 98, 212, 0.14), 0 12px 32px rgba(24, 32, 43, 0.12); }
+    .option-head { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; align-items: center; gap: 14px; padding: 18px 20px; border-bottom: 1px solid var(--line); }
+    .letter { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 6px; background: var(--ink); color: white; font: 700 16px var(--mono); }
+    .option-title { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+    .option-title h2 { margin: 0; font-size: 17px; letter-spacing: 0; }
+    .recommended { color: #fff; background: var(--blue); border-radius: 4px; padding: 2px 7px; font-size: 10px; font-weight: 700; }
+    .option-copy { margin-top: 4px; color: var(--muted); font-size: 12.5px; }
+    .tradeoff { max-width: 370px; color: var(--muted); font-size: 12px; line-height: 1.5; text-align: right; }
+    .tradeoff b { color: var(--ink); }
+
+    .browser { height: 560px; display: flex; flex-direction: column; background: var(--canvas); overflow: hidden; }
+    .browser-top { height: 38px; flex: 0 0 38px; display: flex; align-items: center; gap: 8px; padding: 0 13px; color: #748093; background: #e8ebef; border-bottom: 1px solid #d8dde4; font-size: 10px; }
+    .dot { width: 7px; height: 7px; border-radius: 50%; background: #bdc5cf; }
+    .address { margin-left: 5px; padding: 4px 12px; min-width: 260px; border-radius: 4px; background: rgba(255, 255, 255, 0.72); font-family: var(--mono); }
+    .app { flex: 1; min-height: 0; display: flex; }
+    .rail { width: 176px; flex: 0 0 176px; padding: 14px 10px; color: #cfd7e3; background: #202936; }
+    .brand { display: flex; align-items: center; gap: 8px; padding: 2px 6px 16px; color: #fff; font-weight: 700; font-size: 12px; }
+    .brand-mark { width: 23px; height: 23px; border-radius: 5px; display: grid; place-items: center; background: var(--blue); font-size: 11px; }
+    .nav-label { margin: 12px 7px 5px; color: #7e8a9b; font-size: 8px; text-transform: uppercase; }
+    .nav-item { display: flex; align-items: center; gap: 8px; padding: 7px 8px; margin: 2px 0; border-radius: 5px; font-size: 10px; }
+    .nav-item.active { color: white; background: #344154; }
+    .nav-icon { width: 12px; color: #8996a8; }
+    .workspace { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+    .global-head { height: 45px; flex: 0 0 45px; display: flex; align-items: center; gap: 10px; padding: 0 15px; background: white; border-bottom: 1px solid var(--line); }
+    .crumb { font-size: 11px; font-weight: 700; }
+    .grow { flex: 1; }
+    .live { color: var(--green); font-size: 9px; }
+    .avatar { width: 24px; height: 24px; display: grid; place-items: center; border-radius: 50%; color: #fff; background: #53647a; font-size: 9px; }
+
+    .obs-head { display: flex; align-items: center; gap: 10px; padding: 9px 14px; background: white; border-bottom: 1px solid var(--line); }
+    .obs-title { font-size: 13px; font-weight: 700; }
+    .scope-mode { display: inline-flex; align-items: center; padding: 2px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-soft); }
+    .scope-mode span { padding: 5px 10px; color: var(--muted); border-radius: 4px; font-size: 9px; white-space: nowrap; }
+    .scope-mode .on { color: var(--ink); background: white; box-shadow: 0 1px 2px rgba(24, 32, 43, 0.1); font-weight: 700; }
+    .scope-mode .danger { color: var(--red); }
+    .scope-caption { color: var(--muted); font-size: 9px; }
+    .admin-tools { display: inline-flex; align-items: center; gap: 5px; padding-left: 10px; border-left: 1px solid var(--line); }
+    .tiny-input { height: 25px; width: 150px; padding: 0 8px; border: 1px solid var(--line); border-radius: 4px; color: var(--muted); background: white; font-size: 9px; }
+    .icon-btn, .text-btn { height: 25px; border: 1px solid var(--line); border-radius: 4px; background: white; color: var(--muted); font-size: 9px; }
+    .icon-btn { width: 27px; padding: 0; }
+    .text-btn { padding: 0 9px; }
+    .text-btn.primary { border-color: var(--blue); color: white; background: var(--blue); }
+
+    .filterbar { display: flex; align-items: center; gap: 7px; padding: 7px 14px; background: #fafbfc; border-bottom: 1px solid var(--line); }
+    .filter-search { min-width: 190px; height: 26px; display: flex; align-items: center; padding: 0 8px; border: 1px solid var(--line); border-radius: 4px; color: var(--faint); background: white; font-size: 9px; }
+    .filter-chip { height: 24px; display: inline-flex; align-items: center; gap: 4px; padding: 0 7px; border: 1px solid var(--line); border-radius: 4px; color: var(--muted); background: white; font-size: 9px; white-space: nowrap; }
+    .filter-chip.on { border-color: #b9cdf2; color: var(--blue); background: var(--blue-soft); }
+    .filter-count { min-width: 15px; height: 15px; display: grid; place-items: center; border-radius: 8px; color: white; background: var(--blue); font: 8px var(--mono); }
+    .link-state { color: var(--violet); font-size: 8px; white-space: nowrap; }
+
+    .split { flex: 1; min-height: 0; display: flex; }
+    .run-rail { width: 292px; flex: 0 0 292px; display: flex; flex-direction: column; background: white; border-right: 1px solid var(--line); }
+    .list-head { display: flex; align-items: center; padding: 8px 10px; color: var(--muted); border-bottom: 1px solid var(--line); font-size: 9px; }
+    .run-list { padding: 5px; overflow: hidden; }
+    .run-row { display: grid; grid-template-columns: 7px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 8px; margin: 2px 0; border-radius: 5px; }
+    .run-row.active { background: var(--blue-soft); box-shadow: inset 2px 0 0 var(--blue); }
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); }
+    .status-dot.run { background: var(--blue); }
+    .status-dot.fail { background: var(--red); }
+    .run-main { min-width: 0; }
+    .run-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; font-weight: 700; }
+    .run-meta { margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--faint); font: 8px var(--mono); }
+    .tag { padding: 2px 5px; border-radius: 3px; color: var(--green); background: var(--green-soft); font-size: 8px; }
+    .tag.running { color: var(--blue); background: var(--blue-soft); }
+    .tag.failed { color: var(--red); background: var(--red-soft); }
+
+    .detail { flex: 1; min-width: 0; overflow: hidden; background: white; }
+    .detail-scroll { height: 100%; overflow: hidden; padding: 13px 16px; }
+    .detail-head { display: flex; align-items: start; gap: 10px; }
+    .detail-name { font-size: 14px; font-weight: 700; }
+    .detail-id { margin-top: 4px; color: var(--faint); font: 8px var(--mono); }
+    .detail-actions { display: flex; gap: 5px; margin-left: auto; }
+    .meta-strip { display: flex; gap: 6px; margin-top: 9px; flex-wrap: wrap; }
+    .meta-pill { padding: 3px 6px; border-radius: 3px; color: var(--muted); background: var(--panel-soft); border: 1px solid var(--line); font: 8px var(--mono); }
+    .metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; margin: 11px 0; }
+    .metric { padding: 8px 9px; border: 1px solid var(--line); border-radius: 5px; }
+    .metric-label { color: var(--faint); font-size: 8px; }
+    .metric-value { margin-top: 3px; font: 700 13px var(--mono); }
+    .tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); }
+    .tab { padding: 7px 8px; color: var(--muted); font-size: 9px; }
+    .tab.on { color: var(--blue); box-shadow: inset 0 -2px 0 var(--blue); font-weight: 700; }
+    .timeline { padding-top: 7px; }
+    .timeline-row { display: grid; grid-template-columns: 48px 9px minmax(0, 1fr) auto; gap: 7px; align-items: start; padding: 6px 0; font-size: 9px; }
+    .time { color: var(--faint); font-family: var(--mono); }
+    .event { font-weight: 700; }
+    .event-copy { margin-top: 2px; color: var(--muted); font-size: 8px; }
+
+    /* Option B */
+    .dense-body { flex: 1; min-height: 0; display: grid; grid-template-rows: 172px minmax(0, 1fr); }
+    .dense-table { overflow: hidden; background: white; border-bottom: 1px solid var(--line); }
+    .dense-table-head, .dense-table-row { display: grid; grid-template-columns: minmax(220px, 1.5fr) 110px 100px 135px 110px 80px; align-items: center; gap: 7px; padding: 6px 13px; font-size: 8px; }
+    .dense-table-head { color: var(--faint); background: #fafbfc; border-bottom: 1px solid var(--line); }
+    .dense-table-row { border-bottom: 1px solid #edf0f3; }
+    .dense-table-row.active { background: var(--blue-soft); }
+    .dense-table-row b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 9px; }
+    .mono { font-family: var(--mono); }
+    .dense-detail { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(280px, 0.8fr); min-height: 0; }
+    .trace-panel { padding: 11px 15px; background: white; overflow: hidden; }
+    .side-panel { padding: 11px; background: #f8f9fb; border-left: 1px solid var(--line); overflow: hidden; }
+    .side-title { font-size: 10px; font-weight: 700; margin-bottom: 8px; }
+    .diag { padding: 8px; margin-bottom: 6px; border: 1px solid #efc3c3; border-radius: 4px; color: var(--red); background: var(--red-soft); font-size: 8px; line-height: 1.45; }
+
+    /* Option C */
+    .focus .rail { width: 46px; flex-basis: 46px; padding: 13px 7px; }
+    .focus .brand { padding: 0 4px 15px; }
+    .focus .brand span:last-child, .focus .nav-label, .focus .nav-item span:last-child { display: none; }
+    .focus .nav-item { justify-content: center; }
+    .focus .obs-head { background: #202936; color: white; border-bottom: 0; }
+    .focus .obs-title { color: white; }
+    .focus .scope-caption { color: #aeb8c6; }
+    .focus .scope-mode { border-color: #465367; background: #2b3645; }
+    .focus .scope-mode span { color: #aeb8c6; }
+    .focus .scope-mode .on { color: white; background: #435167; box-shadow: none; }
+    .focus-body { flex: 1; min-height: 0; display: flex; flex-direction: column; background: white; }
+    .focus-context { display: flex; align-items: center; gap: 8px; padding: 8px 15px; border-bottom: 1px solid var(--line); background: #fafbfc; }
+    .back-button { height: 24px; padding: 0 8px; border: 1px solid var(--line); border-radius: 4px; color: var(--muted); background: white; font-size: 9px; }
+    .focus-detail { flex: 1; min-height: 0; padding: 14px max(20px, 6vw); overflow: hidden; }
+    .focus-title { display: flex; align-items: center; gap: 9px; }
+    .focus-title h3 { margin: 0; font-size: 16px; }
+    .focus-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(250px, .72fr); gap: 16px; margin-top: 12px; }
+    .focus-trace { border-top: 1px solid var(--line); }
+    .focus-aside { padding-left: 14px; border-left: 1px solid var(--line); }
+    .keyval { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 5px; padding: 6px 0; border-bottom: 1px solid #edf0f3; font-size: 8px; }
+    .keyval span:first-child { color: var(--faint); }
+    .drawer-hint { position: absolute; left: 59px; top: 184px; width: 205px; padding: 9px; border: 1px solid var(--line-strong); border-radius: 6px; color: var(--muted); background: rgba(255, 255, 255, 0.97); box-shadow: 0 8px 22px rgba(24, 32, 43, 0.16); font-size: 9px; }
+    .drawer-hint b { display: block; margin-bottom: 3px; color: var(--ink); }
+
+    .principles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 18px; }
+    .principle { padding: 13px; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); background: white; font-size: 12px; line-height: 1.55; }
+    .principle b { display: block; margin-bottom: 3px; color: var(--ink); }
+
+    @media (max-width: 950px) {
+      .page { width: min(100% - 20px, 1540px); padding-top: 20px; }
+      .intro { align-items: start; flex-direction: column; }
+      .shared-rule { justify-content: flex-start; }
+      .option-head { grid-template-columns: 38px minmax(0, 1fr); }
+      .tradeoff { grid-column: 2; max-width: none; text-align: left; }
+      .browser { height: 510px; }
+      .rail { display: none; }
+      .run-rail { width: 235px; flex-basis: 235px; }
+      .admin-tools { display: none; }
+      .dense-table-head, .dense-table-row { grid-template-columns: minmax(180px, 1.5fr) 85px 80px 110px; }
+      .dense-table-head > :nth-child(n+5), .dense-table-row > :nth-child(n+5) { display: none; }
+      .principles { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="intro">
+      <div>
+        <div class="eyebrow">/ADMIN · RUN OBSERVATORY</div>
+        <h1>哪种空间关系更适合持续观测？</h1>
+        <p>三种方案都使用真实产品语义：管理员默认仍看“我的 scope”，只有显式切换才读取所有 scope；从排班、技能、Fleet 或分享链接进入时，scope、run 与筛选条件会成为可分享的 URL 状态。</p>
+      </div>
+      <div class="shared-rule">
+        <span class="rule-pill">默认：我的 scope</span>
+        <span class="rule-pill">显式：所有 scope</span>
+        <span class="rule-pill">筛选可分享</span>
+      </div>
+    </section>
+
+    <article class="option" data-choice="a-focus-rail" onclick="toggleSelect(this)">
+      <header class="option-head">
+        <div class="letter">A</div>
+        <div>
+          <div class="option-title"><h2>可折叠运行轨 + 大详情画布</h2><span class="recommended">推荐</span></div>
+          <div class="option-copy">常态适合扫运行，按下“沉浸”后收起侧栏与全局导航，详情画布立即扩展。</div>
+        </div>
+        <div class="tradeoff"><b>平衡最好：</b>保留上下文和高效切换，同时让 Timeline / Steps / Logs 获得明显更大的阅读面积。</div>
+      </header>
+      <div class="browser">
+        <div class="browser-top"><i class="dot"></i><i class="dot"></i><i class="dot"></i><span class="address">/admin#/observatory?scope=mine&amp;status=running,failed&amp;run=run-7f29</span></div>
+        <div class="app">
+          <aside class="rail">
+            <div class="brand"><span class="brand-mark">A</span><span>Aevatar Admin</span></div>
+            <div class="nav-label">运行观测</div>
+            <div class="nav-item active"><span class="nav-icon">◉</span><span>运行观测台</span></div>
+            <div class="nav-item"><span class="nav-icon">⌁</span><span>投影管道</span></div>
+            <div class="nav-label">治理</div>
+            <div class="nav-item"><span class="nav-icon">◇</span><span>审计日志</span></div>
+            <div class="nav-item"><span class="nav-icon">◫</span><span>系统状态</span></div>
+          </aside>
+          <section class="workspace">
+            <div class="global-head"><span class="crumb">运行观测台</span><span class="grow"></span><span class="live">● LIVE · 3s</span><span class="avatar">EZ</span></div>
+            <div class="obs-head">
+              <span class="obs-title">运行观测</span>
+              <div class="scope-mode"><span class="on">我的 scope</span><span class="danger">所有 scope</span></div>
+              <span class="scope-caption">scope-eanzhao</span>
+              <div class="admin-tools"><input class="tiny-input" value="email 或 scope id"><button class="text-btn">前往</button><button class="icon-btn" title="用完整 run id 打开">⌕</button></div>
+              <span class="grow"></span>
+              <button class="icon-btn" title="刷新">↻</button><button class="text-btn primary">⛶ 沉浸</button>
+            </div>
+            <div class="filterbar">
+              <div class="filter-search">⌕ 搜索 workflow / run id</div>
+              <span class="filter-chip on">状态 <b>运行中 + 失败</b><i class="filter-count">2</i></span>
+              <span class="filter-chip">来源 <b>全部</b></span>
+              <span class="filter-chip">定义 <b>全部</b></span>
+              <span class="filter-chip">最近 24 小时</span>
+              <span class="grow"></span><span class="link-state">已从排班跳转 · schedule sch-nightly</span><button class="icon-btn">×</button>
+            </div>
+            <div class="split">
+              <aside class="run-rail">
+                <div class="list-head"><b>运行</b>&nbsp; 18 <span class="grow"></span><span>按更新时间 ↓</span><button class="icon-btn">‹</button></div>
+                <div class="run-list">
+                  <div class="run-row active"><i class="status-dot run"></i><div class="run-main"><div class="run-name">Nightly customer digest</div><div class="run-meta">run-7f29 · 18:42:09 · wf-digest</div></div><span class="tag running">运行中</span></div>
+                  <div class="run-row"><i class="status-dot fail"></i><div class="run-main"><div class="run-name">Invoice anomaly review</div><div class="run-meta">run-3ce1 · 18:38:44 · wf-review</div></div><span class="tag failed">失败</span></div>
+                  <div class="run-row"><i class="status-dot"></i><div class="run-main"><div class="run-name">Support handoff summary</div><div class="run-meta">run-a913 · 18:31:18 · wf-support</div></div><span class="tag">完成</span></div>
+                  <div class="run-row"><i class="status-dot"></i><div class="run-main"><div class="run-name">Campaign audience sync</div><div class="run-meta">run-b288 · 18:29:04 · wf-sync</div></div><span class="tag">完成</span></div>
+                </div>
+              </aside>
+              <section class="detail">
+                <div class="detail-scroll">
+                  <div class="detail-head"><div><div class="detail-name">Nightly customer digest</div><div class="detail-id">run-7f29b4a2-2451-4d34 · state v38 · updated 18:42:12</div></div><span class="tag running">运行中</span><div class="detail-actions"><button class="icon-btn">⧉</button><button class="icon-btn">⋯</button></div></div>
+                  <div class="meta-strip"><span class="meta-pill">scope scope-eanzhao</span><span class="meta-pill">definition wf-digest</span><span class="meta-pill">origin schedule</span><span class="meta-pill">schedule sch-nightly</span></div>
+                  <div class="metrics"><div class="metric"><div class="metric-label">TOKENS</div><div class="metric-value">18.4k</div></div><div class="metric"><div class="metric-label">STEPS</div><div class="metric-value">7 / 9</div></div><div class="metric"><div class="metric-label">耗时</div><div class="metric-value">2m 41s</div></div><div class="metric"><div class="metric-label">成本</div><div class="metric-value">$0.38</div></div></div>
+                  <div class="tabs"><span class="tab on">Timeline</span><span class="tab">Steps 9</span><span class="tab">Diagnostics 1</span><span class="tab">Logs</span><span class="tab">Artifacts</span><span class="tab">Graph</span></div>
+                  <div class="timeline">
+                    <div class="timeline-row"><span class="time">18:42:09</span><i class="status-dot"></i><div><div class="event">Run started</div><div class="event-copy">definition wf-digest · triggered by sch-nightly</div></div><span class="tag">完成</span></div>
+                    <div class="timeline-row"><span class="time">18:42:11</span><i class="status-dot"></i><div><div class="event">Load customer changes · fetch-updates</div><div class="event-copy">Read 142 committed customer updates from the current-state query.</div></div><span class="tag">1.3s</span></div>
+                    <div class="timeline-row"><span class="time">18:42:21</span><i class="status-dot"></i><div><div class="event">Compose digest · summarize</div><div class="event-copy">Generated 12 account summaries and grouped outstanding actions.</div></div><span class="tag">8.7s</span></div>
+                    <div class="timeline-row"><span class="time">18:42:39</span><i class="status-dot run"></i><div><div class="event">Policy review · verify-content</div><div class="event-copy">Waiting for downstream policy service response.</div></div><span class="tag running">运行中</span></div>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </section>
+        </div>
+      </div>
+    </article>
+
+    <article class="option" data-choice="b-dense-operations" onclick="toggleSelect(this)">
+      <header class="option-head">
+        <div class="letter">B</div>
+        <div>
+          <div class="option-title"><h2>高密度运行表 + 下方诊断工作台</h2></div>
+          <div class="option-copy">先把同一筛选下的运行做横向比较，再在下半屏分析选中 Run。</div>
+        </div>
+        <div class="tradeoff"><b>批量排障更强：</b>状态、scope、origin、definition 可横向扫描；单 Run 的 Timeline 纵向空间仍受限制。</div>
+      </header>
+      <div class="browser">
+        <div class="browser-top"><i class="dot"></i><i class="dot"></i><i class="dot"></i><span class="address">/admin#/observatory?scope=all&amp;origin=schedule&amp;from=2026-07-24T00:00</span></div>
+        <div class="app">
+          <aside class="rail">
+            <div class="brand"><span class="brand-mark">A</span><span>Aevatar Admin</span></div>
+            <div class="nav-label">运行观测</div><div class="nav-item active"><span class="nav-icon">◉</span><span>运行观测台</span></div><div class="nav-item"><span class="nav-icon">⌁</span><span>投影管道</span></div>
+          </aside>
+          <section class="workspace">
+            <div class="global-head"><span class="crumb">运行观测台</span><span class="grow"></span><span class="live">● LIVE · 3s</span><span class="avatar">EZ</span></div>
+            <div class="obs-head"><span class="obs-title">运行观测</span><div class="scope-mode"><span>我的 scope</span><span class="on danger">所有 scope</span></div><span class="scope-caption">管理员显式全局模式</span><span class="grow"></span><button class="text-btn">退出全局模式</button></div>
+            <div class="filterbar"><div class="filter-search">⌕ 搜索运行</div><span class="filter-chip on">来源 <b>排班</b><i class="filter-count">1</i></span><span class="filter-chip">状态 <b>全部</b></span><span class="filter-chip">scope <b>全部</b></span><span class="filter-chip">今天</span><span class="grow"></span><button class="text-btn">重置</button></div>
+            <div class="dense-body">
+              <div class="dense-table">
+                <div class="dense-table-head"><span>运行 / ID</span><span>状态</span><span>scope</span><span>definition</span><span>origin</span><span>更新时间</span></div>
+                <div class="dense-table-row active"><b>Nightly customer digest<br><span class="mono">run-7f29</span></b><span class="tag running">运行中</span><span class="mono">scope-eanzhao</span><span class="mono">wf-digest</span><span>schedule</span><span class="mono">18:42:12</span></div>
+                <div class="dense-table-row"><b>Security report<br><span class="mono">run-b281</span></b><span class="tag failed">失败</span><span class="mono">scope-ops</span><span class="mono">wf-security</span><span>schedule</span><span class="mono">18:38:40</span></div>
+                <div class="dense-table-row"><b>Support handoff<br><span class="mono">run-a913</span></b><span class="tag">完成</span><span class="mono">scope-care</span><span class="mono">wf-support</span><span>schedule</span><span class="mono">18:31:18</span></div>
+              </div>
+              <div class="dense-detail">
+                <section class="trace-panel">
+                  <div class="detail-head"><div><div class="detail-name">Nightly customer digest</div><div class="detail-id">run-7f29 · scope-eanzhao · state v38</div></div><span class="tag running">运行中</span></div>
+                  <div class="tabs" style="margin-top:10px"><span class="tab on">Timeline</span><span class="tab">Steps 9</span><span class="tab">Logs</span><span class="tab">Graph</span></div>
+                  <div class="timeline"><div class="timeline-row"><span class="time">18:42:09</span><i class="status-dot"></i><div><div class="event">Run started</div><div class="event-copy">Triggered by sch-nightly</div></div><span class="tag">完成</span></div><div class="timeline-row"><span class="time">18:42:39</span><i class="status-dot run"></i><div><div class="event">Policy review</div><div class="event-copy">Waiting for downstream policy service.</div></div><span class="tag running">运行中</span></div></div>
+                </section>
+                <aside class="side-panel"><div class="side-title">诊断与资源</div><div class="diag"><b>DOWNSTREAM_WAIT</b><br>Policy service has not acknowledged step verify-content after 36s.</div><div class="keyval"><span>Tokens</span><b class="mono">18.4k</b></div><div class="keyval"><span>Steps</span><b class="mono">7 / 9</b></div><div class="keyval"><span>Duration</span><b class="mono">2m 41s</b></div><div class="keyval"><span>Cost</span><b class="mono">$0.38</b></div></aside>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </article>
+
+    <article class="option" data-choice="c-run-focus" onclick="toggleSelect(this)">
+      <header class="option-head">
+        <div class="letter">C</div>
+        <div>
+          <div class="option-title"><h2>单 Run 全屏阅读 + 运行抽屉</h2></div>
+          <div class="option-copy">进入 Run 后几乎隐藏所有外围 UI，运行列表通过左侧抽屉或快捷搜索呼出。</div>
+        </div>
+        <div class="tradeoff"><b>最沉浸：</b>复杂日志和长 Timeline 的可读性最高；连续比较多个运行需要多一步呼出列表。</div>
+      </header>
+      <div class="browser focus" style="position:relative">
+        <div class="browser-top"><i class="dot"></i><i class="dot"></i><i class="dot"></i><span class="address">/admin#/observatory/run/run-7f29?scope=mine&amp;tab=timeline</span></div>
+        <div class="app">
+          <aside class="rail"><div class="brand"><span class="brand-mark">A</span><span>Aevatar</span></div><div class="nav-item active"><span class="nav-icon">◉</span><span>观测</span></div><div class="nav-item"><span class="nav-icon">⌁</span><span>投影</span></div><div class="nav-item"><span class="nav-icon">◇</span><span>审计</span></div></aside>
+          <section class="workspace">
+            <div class="obs-head"><span class="obs-title">运行观测 · 专注模式</span><div class="scope-mode"><span class="on">我的 scope</span><span>所有 scope</span></div><span class="scope-caption">scope-eanzhao</span><span class="grow"></span><button class="icon-btn">⌕</button><button class="text-btn">退出专注</button></div>
+            <div class="focus-body">
+              <div class="focus-context"><button class="back-button">☰ 运行 18</button><span class="filter-chip on">运行中 + 失败</span><span class="filter-chip">最近 24 小时</span><span class="link-state">筛选已写入链接</span><span class="grow"></span><span class="live">● LIVE · 18:42:12</span></div>
+              <div class="focus-detail">
+                <div class="focus-title"><h3>Nightly customer digest</h3><span class="tag running">运行中</span><span class="grow"></span><button class="icon-btn">⧉</button><button class="icon-btn">⋯</button></div>
+                <div class="detail-id">run-7f29b4a2-2451-4d34 · definition wf-digest · origin schedule · state v38</div>
+                <div class="metrics"><div class="metric"><div class="metric-label">TOKENS</div><div class="metric-value">18.4k</div></div><div class="metric"><div class="metric-label">STEPS</div><div class="metric-value">7 / 9</div></div><div class="metric"><div class="metric-label">耗时</div><div class="metric-value">2m 41s</div></div><div class="metric"><div class="metric-label">成本</div><div class="metric-value">$0.38</div></div></div>
+                <div class="tabs"><span class="tab on">Timeline</span><span class="tab">Steps 9</span><span class="tab">Diagnostics 1</span><span class="tab">Logs</span><span class="tab">Artifacts</span><span class="tab">Graph</span></div>
+                <div class="focus-grid">
+                  <section class="focus-trace">
+                    <div class="timeline-row"><span class="time">18:42:09</span><i class="status-dot"></i><div><div class="event">Run started</div><div class="event-copy">definition wf-digest · triggered by sch-nightly</div></div><span class="tag">完成</span></div>
+                    <div class="timeline-row"><span class="time">18:42:11</span><i class="status-dot"></i><div><div class="event">Load customer changes</div><div class="event-copy">Read 142 committed updates from the current-state query.</div></div><span class="tag">1.3s</span></div>
+                    <div class="timeline-row"><span class="time">18:42:21</span><i class="status-dot"></i><div><div class="event">Compose digest</div><div class="event-copy">Generated 12 account summaries and grouped outstanding actions.</div></div><span class="tag">8.7s</span></div>
+                    <div class="timeline-row"><span class="time">18:42:39</span><i class="status-dot run"></i><div><div class="event">Policy review</div><div class="event-copy">Waiting for downstream policy service response.</div></div><span class="tag running">运行中</span></div>
+                  </section>
+                  <aside class="focus-aside"><div class="side-title">运行上下文</div><div class="keyval"><span>Scope</span><b class="mono">scope-eanzhao</b></div><div class="keyval"><span>Definition</span><b class="mono">wf-digest</b></div><div class="keyval"><span>Schedule</span><b class="mono">sch-nightly</b></div><div class="keyval"><span>Started</span><b class="mono">18:42:09</b></div><div class="diag" style="margin-top:10px"><b>DOWNSTREAM_WAIT</b><br>Policy service has not acknowledged verify-content after 36s.</div></aside>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+        <div class="drawer-hint"><b>运行抽屉</b>点击左上角“运行 18”呼出筛选后的列表；选中另一条后抽屉自动收起。</div>
+      </div>
+    </article>
+
+    <section class="principles">
+      <div class="principle"><b>范围不是身份</b>Admin 只增加可切换能力，不改变进入观测台时的默认数据所有权。</div>
+      <div class="principle"><b>跳转携带意图</b>从排班进入时保留 schedule；从 Fleet 进入时携带准确 scope + run，不再强制全局查询。</div>
+      <div class="principle"><b>筛选即 URL 状态</b>scope、status、origin、definition、schedule、from、to、run、tab 都可刷新和分享。</div>
+    </section>
+  </main>
+</body>
+</html>

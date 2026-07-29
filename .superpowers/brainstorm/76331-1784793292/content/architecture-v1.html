@@ -1,0 +1,731 @@
+<style>
+  #codex-architecture {
+    --arch-ink: var(--foreground, #18211d);
+    --arch-muted: var(--muted-foreground, #5f6b64);
+    --arch-line: var(--border, #cbd4ce);
+    --arch-paper: var(--surface, #ffffff);
+    --arch-soft: color-mix(in srgb, var(--arch-paper) 90%, #7f9187);
+    --arch-aevatar: color-mix(in srgb, var(--arch-paper) 86%, #4b9a6d);
+    --arch-nyxid: color-mix(in srgb, var(--arch-paper) 86%, #3d91aa);
+    --arch-chrono: color-mix(in srgb, var(--arch-paper) 86%, #d28a36);
+    --arch-runtime: color-mix(in srgb, var(--arch-paper) 86%, #9367a0);
+    --arch-risk: color-mix(in srgb, var(--arch-paper) 86%, #c85b55);
+    color: var(--arch-ink);
+  }
+
+  #codex-architecture * {
+    box-sizing: border-box;
+    letter-spacing: 0;
+  }
+
+  #codex-architecture code {
+    overflow-wrap: anywhere;
+  }
+
+  .arch-verdict {
+    margin: 12px 0 18px;
+    padding: 14px 16px;
+    border-left: 4px solid #347655;
+    background: var(--arch-aevatar);
+  }
+
+  .arch-verdict strong {
+    display: block;
+    margin-bottom: 5px;
+  }
+
+  .arch-baseline {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin: 0 0 18px;
+  }
+
+  .arch-chip {
+    display: inline-flex;
+    align-items: center;
+    min-height: 30px;
+    padding: 5px 9px;
+    border: 1px solid var(--arch-line);
+    border-radius: 5px;
+    background: var(--arch-soft);
+    color: var(--arch-ink);
+    font-size: 12px;
+  }
+
+  .arch-tabs {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--arch-line);
+  }
+
+  .arch-tab {
+    min-height: 38px;
+    padding: 8px 12px;
+    border: 1px solid var(--arch-line);
+    border-radius: 5px;
+    background: var(--arch-paper);
+    color: var(--arch-ink);
+    cursor: pointer;
+    font: inherit;
+  }
+
+  .arch-tab[aria-selected="true"] {
+    border-color: #347655;
+    background: var(--arch-aevatar);
+    font-weight: 600;
+  }
+
+  .arch-panel {
+    display: none;
+    min-height: 690px;
+  }
+
+  .arch-panel.is-active {
+    display: block;
+  }
+
+  .arch-panel h3 {
+    margin: 0 0 6px;
+  }
+
+  .arch-caption {
+    margin: 0 0 18px;
+    color: var(--arch-muted);
+  }
+
+  .owner-flow {
+    display: grid;
+    grid-template-columns: minmax(180px, 1fr) 34px minmax(180px, 1fr) 34px minmax(180px, 1fr) 34px minmax(180px, 1fr);
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .owner-zone {
+    min-width: 0;
+    padding: 12px;
+    border: 1px solid var(--arch-line);
+    border-radius: 6px;
+  }
+
+  .owner-zone.aevatar { background: var(--arch-aevatar); }
+  .owner-zone.nyxid { background: var(--arch-nyxid); }
+  .owner-zone.chrono { background: var(--arch-chrono); }
+  .owner-zone.runtime { background: var(--arch-runtime); }
+
+  .owner-title {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 10px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--arch-line);
+  }
+
+  .owner-title strong {
+    min-width: 0;
+  }
+
+  .owner-title span {
+    color: var(--arch-muted);
+    font-size: 11px;
+    text-align: right;
+  }
+
+  .arch-node {
+    margin-top: 8px;
+    padding: 9px;
+    border: 1px solid color-mix(in srgb, var(--arch-line) 78%, transparent);
+    border-radius: 5px;
+    background: color-mix(in srgb, var(--arch-paper) 82%, transparent);
+  }
+
+  .arch-node strong {
+    display: block;
+    margin-bottom: 3px;
+    overflow-wrap: anywhere;
+  }
+
+  .arch-node span {
+    display: block;
+    color: var(--arch-muted);
+    font-size: 12px;
+    line-height: 1.4;
+  }
+
+  .owner-arrow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--arch-muted);
+    font-size: 22px;
+    font-weight: 700;
+  }
+
+  .second-hop {
+    display: grid;
+    grid-template-columns: minmax(160px, 1fr) 46px minmax(190px, 1.2fr) 46px minmax(160px, 1fr);
+    align-items: center;
+    gap: 8px;
+    margin-top: 16px;
+    padding: 13px;
+    border-top: 1px solid var(--arch-line);
+    border-bottom: 1px solid var(--arch-line);
+  }
+
+  .hop-node {
+    min-width: 0;
+    padding: 10px;
+    border-radius: 5px;
+    text-align: center;
+  }
+
+  .hop-node.runtime { background: var(--arch-runtime); }
+  .hop-node.nyxid { background: var(--arch-nyxid); }
+  .hop-node.provider { background: var(--arch-soft); }
+
+  .hop-arrow {
+    color: var(--arch-muted);
+    font-size: 12px;
+    text-align: center;
+  }
+
+  .hop-arrow b {
+    display: block;
+    font-size: 20px;
+  }
+
+  .fact-strip {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 9px;
+    margin-top: 16px;
+  }
+
+  .fact-item {
+    padding: 10px;
+    border-left: 3px solid var(--arch-line);
+    background: var(--arch-soft);
+    font-size: 12px;
+    line-height: 1.4;
+  }
+
+  .fact-item strong {
+    display: block;
+    margin-bottom: 3px;
+  }
+
+  .sequence {
+    border-top: 1px solid var(--arch-line);
+  }
+
+  .seq-row {
+    display: grid;
+    grid-template-columns: 34px minmax(125px, .85fr) 44px minmax(150px, 1fr) minmax(220px, 1.8fr);
+    align-items: stretch;
+    gap: 8px;
+    padding: 9px 0;
+    border-bottom: 1px solid var(--arch-line);
+  }
+
+  .seq-no {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    background: var(--arch-soft);
+    font-weight: 700;
+  }
+
+  .seq-party {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    padding: 7px 9px;
+    border-radius: 5px;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+
+  .seq-party.aevatar { background: var(--arch-aevatar); }
+  .seq-party.nyxid { background: var(--arch-nyxid); }
+  .seq-party.chrono { background: var(--arch-chrono); }
+  .seq-party.runtime { background: var(--arch-runtime); }
+
+  .seq-direction {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--arch-muted);
+    font-size: 20px;
+    font-weight: 700;
+  }
+
+  .seq-message {
+    min-width: 0;
+    padding: 5px 0;
+    color: var(--arch-muted);
+    font-size: 12px;
+    line-height: 1.45;
+  }
+
+  .seq-message strong {
+    display: block;
+    margin-bottom: 2px;
+    color: var(--arch-ink);
+  }
+
+  .terminal-note {
+    margin-top: 14px;
+    padding: 12px 14px;
+    border-left: 4px solid #b8792e;
+    background: var(--arch-chrono);
+  }
+
+  .control-map {
+    display: grid;
+    grid-template-columns: minmax(160px, .8fr) 36px minmax(190px, 1fr) 36px minmax(190px, 1fr) 36px minmax(190px, 1fr);
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .control-column {
+    min-width: 0;
+    padding: 12px;
+    border: 1px solid var(--arch-line);
+    border-radius: 6px;
+  }
+
+  .control-column.entry { background: var(--arch-soft); }
+  .control-column.app { background: var(--arch-aevatar); }
+  .control-column.authority { background: var(--arch-chrono); }
+  .control-column.read { background: var(--arch-nyxid); }
+
+  .control-column h4 {
+    margin: 0 0 8px;
+  }
+
+  .control-column ul {
+    margin: 0;
+    padding-left: 18px;
+  }
+
+  .control-column li {
+    margin: 6px 0;
+    font-size: 12px;
+    line-height: 1.4;
+  }
+
+  .control-arrow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--arch-muted);
+    font-size: 20px;
+    font-weight: 700;
+  }
+
+  .authority-split {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 9px;
+    margin: 14px 0 18px;
+  }
+
+  .authority-item {
+    padding: 11px;
+    border-top: 3px solid var(--arch-line);
+    background: var(--arch-soft);
+  }
+
+  .authority-item.actor { border-top-color: #347655; }
+  .authority-item.vault { border-top-color: #7f5790; }
+  .authority-item.nyxid { border-top-color: #2a7d98; }
+
+  .authority-item strong {
+    display: block;
+    margin-bottom: 5px;
+  }
+
+  .authority-item span {
+    color: var(--arch-muted);
+    font-size: 12px;
+    line-height: 1.4;
+  }
+
+  .credential-table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+  }
+
+  .credential-table th,
+  .credential-table td {
+    padding: 9px 8px;
+    border-bottom: 1px solid var(--arch-line);
+    text-align: left;
+    vertical-align: top;
+    overflow-wrap: anywhere;
+  }
+
+  .credential-table th {
+    color: var(--arch-muted);
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  .credential-table td {
+    font-size: 12px;
+    line-height: 1.4;
+  }
+
+  .risk-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 9px;
+    margin-top: 16px;
+  }
+
+  .risk-item {
+    padding: 11px;
+    border-left: 3px solid #b64f49;
+    background: var(--arch-risk);
+    font-size: 12px;
+    line-height: 1.45;
+  }
+
+  .risk-item strong {
+    display: block;
+    margin-bottom: 4px;
+  }
+
+  .arch-legend {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin: 16px 0 0;
+    color: var(--arch-muted);
+    font-size: 11px;
+  }
+
+  .legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+
+  .legend-swatch {
+    width: 12px;
+    height: 12px;
+    border: 1px solid var(--arch-line);
+    border-radius: 3px;
+  }
+
+  .legend-swatch.aevatar { background: var(--arch-aevatar); }
+  .legend-swatch.nyxid { background: var(--arch-nyxid); }
+  .legend-swatch.chrono { background: var(--arch-chrono); }
+  .legend-swatch.runtime { background: var(--arch-runtime); }
+
+  .review-choice {
+    margin-top: 22px;
+  }
+
+  @media (max-width: 980px) {
+    .owner-flow,
+    .control-map {
+      grid-template-columns: 1fr;
+    }
+
+    .owner-arrow,
+    .control-arrow {
+      min-height: 28px;
+      transform: rotate(90deg);
+    }
+
+    .fact-strip {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  @media (max-width: 720px) {
+    .arch-panel { min-height: 0; }
+
+    .second-hop,
+    .authority-split,
+    .risk-grid,
+    .fact-strip {
+      grid-template-columns: 1fr;
+    }
+
+    .hop-arrow b {
+      transform: rotate(90deg);
+    }
+
+    .seq-row {
+      grid-template-columns: 32px 1fr 28px 1fr;
+    }
+
+    .seq-message {
+      grid-column: 2 / -1;
+      padding: 0 0 4px;
+    }
+
+    .credential-table {
+      table-layout: auto;
+    }
+  }
+</style>
+
+<div id="codex-architecture">
+  <h2>当前 codex_exec managed_sandbox 架构</h2>
+  <p class="subtitle">以 Aevatar 当前实现、NyxID proxy contract，以及线上 chrono-sandbox PR #8 为事实基线。</p>
+
+  <div class="arch-verdict">
+    <strong>结论：是通过 NyxID 的 chrono-sandbox 执行。</strong>
+    主链为 <code>Aevatar codex_exec → NyxID Proxy → chrono-sandbox → OpenSandbox/gVisor runner → Codex CLI → NyxID LLM Gateway</code>。Aevatar 不直接创建或管理 OpenSandbox。
+  </div>
+
+  <div class="arch-baseline" aria-label="实现基线">
+    <span class="arch-chip">Aevatar：managed_sandbox adapter</span>
+    <span class="arch-chip">chrono-sandbox：线上 PR #8</span>
+    <span class="arch-chip">commit：c215d97</span>
+    <span class="arch-chip">开关：Aevatar Enabled + chrono MANAGED_CODEX_ENABLED</span>
+  </div>
+
+  <div class="arch-tabs" role="tablist" aria-label="架构图视图">
+    <button class="arch-tab" type="button" role="tab" aria-selected="true" aria-controls="arch-overview" data-panel="arch-overview" onclick="showCodexArchPanel(this)">1. 职责总览</button>
+    <button class="arch-tab" type="button" role="tab" aria-selected="false" aria-controls="arch-sequence" data-panel="arch-sequence" onclick="showCodexArchPanel(this)">2. 单次执行时序</button>
+    <button class="arch-tab" type="button" role="tab" aria-selected="false" aria-controls="arch-credentials" data-panel="arch-credentials" onclick="showCodexArchPanel(this)">3. 凭证与信任边界</button>
+  </div>
+
+  <section id="arch-overview" class="arch-panel is-active" role="tabpanel">
+    <h3>职责总览</h3>
+    <p class="arch-caption">四个责任域只有一条 managed execution 主链；private_ssh 是同一工具入口下的另一套基础设施 target，不进入本图。</p>
+
+    <div class="owner-flow" aria-label="Managed Codex ownership flow">
+      <div class="owner-zone aevatar">
+        <div class="owner-title"><strong>Aevatar</strong><span>业务与凭证编排</span></div>
+        <div class="arch-node"><strong>Workflow Run Actor</strong><span>拥有 workflow step 的运行与终态事实</span></div>
+        <div class="arch-node"><strong>NyxIdCodexExecTool</strong><span>校验 target、empty_git、prompt ≤ 6000 bytes、timeout ≤ 180s</span></div>
+        <div class="arch-node"><strong>ICodexExecutionPort</strong><span>按 managed_sandbox 选择 ChronoSandbox adapter</span></div>
+        <div class="arch-node"><strong>ReadModel + ISecretVault</strong><span>读取非秘密 descriptor；即时解析 invocation key</span></div>
+      </div>
+
+      <div class="owner-arrow" aria-hidden="true">→</div>
+
+      <div class="owner-zone nyxid">
+        <div class="owner-title"><strong>NyxID</strong><span>代理与委托授权</span></div>
+        <div class="arch-node"><strong>Exact Proxy Route</strong><span><code>/proxy/s/chrono-sandbox/codex/execute?_nyxid_via=...</code></span></div>
+        <div class="arch-node"><strong>Invocation Key Policy</strong><span>scope=proxy，只允许该用户的 chrono-sandbox UserService</span></div>
+        <div class="arch-node"><strong>UserService Policy</strong><span>不转发 caller token；注入 5 分钟 llm:proxy delegation JWT</span></div>
+        <div class="arch-node"><strong>LLM Gateway</strong><span>沙箱内 Codex 的第二次 NyxID 调用入口</span></div>
+      </div>
+
+      <div class="owner-arrow" aria-hidden="true">→</div>
+
+      <div class="owner-zone chrono">
+        <div class="owner-title"><strong>chrono-sandbox</strong><span>线上 PR #8 / c215d97</span></div>
+        <div class="arch-node"><strong>POST /codex/execute</strong><span>独立于通用 arbitrary-script /execute</span></div>
+        <div class="arch-node"><strong>DelegationVerifier</strong><span>拒绝 Authorization；本地校验 RS256/JWKS 与精确 claims</span></div>
+        <div class="arch-node"><strong>ManagedCodexService</strong><span>并发容量、固定 profile、超时、输出边界和 cleanup</span></div>
+        <div class="arch-node"><strong>SandboxService</strong><span>唯一负责 OpenSandbox create / exec / delete</span></div>
+      </div>
+
+      <div class="owner-arrow" aria-hidden="true">→</div>
+
+      <div class="owner-zone runtime">
+        <div class="owner-title"><strong>Managed Runtime</strong><span>隔离执行面</span></div>
+        <div class="arch-node"><strong>OpenSandbox v0.2</strong><span>管理 sandbox 生命周期并解析 execd endpoint</span></div>
+        <div class="arch-node"><strong>gVisor Tenant</strong><span>外层 Sentry 是逃逸隔离边界</span></div>
+        <div class="arch-node"><strong>execd + codex-runner</strong><span>固定镜像 digest、非 root UID/GID 10001、empty Git workspace</span></div>
+        <div class="arch-node"><strong>Codex CLI</strong><span>固定命令；inner sandbox 关闭；one-shot ephemeral run</span></div>
+      </div>
+    </div>
+
+    <div class="second-hop" aria-label="Second NyxID hop">
+      <div class="hop-node runtime"><strong>Codex CLI</strong><br><code>NYXID_LLM_TOKEN</code></div>
+      <div class="hop-arrow"><b>→</b>HTTPS Responses API</div>
+      <div class="hop-node nyxid"><strong>NyxID LLM Gateway</strong><br><code>chrono-llm-public</code></div>
+      <div class="hop-arrow"><b>→</b>用户可用 provider</div>
+      <div class="hop-node provider"><strong>LLM Provider</strong><br>用户配额与凭证由 NyxID 管理</div>
+    </div>
+
+    <div class="fact-strip">
+      <div class="fact-item"><strong>不是 Aevatar 直连 OpenSandbox</strong>OpenSandbox API key、sandbox ID 与 execd endpoint 都由 chrono-sandbox 持有。</div>
+      <div class="fact-item"><strong>调用方不可选 profile</strong>镜像、模型、provider URL、command、flags、network 和资源均由服务端固定。</div>
+      <div class="fact-item"><strong>隔离不在 Codex 内层</strong><code>danger-full-access</code> 是 Codex 视角；真正隔离来自 gVisor。</div>
+      <div class="fact-item"><strong>当前是终态 HTTP</strong>Port 虽支持 Output event，managed adapter 目前只发 Started + Completed/Failed。</div>
+    </div>
+
+    <div class="arch-legend" aria-label="颜色图例">
+      <span class="legend-item"><span class="legend-swatch aevatar"></span>Aevatar</span>
+      <span class="legend-item"><span class="legend-swatch nyxid"></span>NyxID</span>
+      <span class="legend-item"><span class="legend-swatch chrono"></span>chrono-sandbox</span>
+      <span class="legend-item"><span class="legend-swatch runtime"></span>OpenSandbox / runner</span>
+    </div>
+  </section>
+
+  <section id="arch-sequence" class="arch-panel" role="tabpanel" hidden>
+    <h3>单次 managed_sandbox 执行时序</h3>
+    <p class="arch-caption">前半段建立调用授权，后半段建立隔离执行；只有 cleanup 被确认后才允许返回成功。</p>
+
+    <div class="sequence" aria-label="Managed Codex runtime sequence">
+      <div class="seq-row">
+        <div class="seq-no">1</div><div class="seq-party aevatar">Workflow Run Actor</div><div class="seq-direction">→</div><div class="seq-party aevatar">codex_exec tool</div>
+        <div class="seq-message"><strong>调用强类型 target</strong><code>managed_sandbox + empty_git + prompt + timeout</code>，并携带 typed NyxID authority / run / step / tool-call context。</div>
+      </div>
+      <div class="seq-row">
+        <div class="seq-no">2</div><div class="seq-party aevatar">codex_exec tool</div><div class="seq-direction">→</div><div class="seq-party aevatar">Chrono adapter</div>
+        <div class="seq-message"><strong>Admission + target dispatch</strong>拒绝 mixed target 和 caller-selected runtime controls；发出 <code>Started</code>。</div>
+      </div>
+      <div class="seq-row">
+        <div class="seq-no">3</div><div class="seq-party aevatar">Chrono client</div><div class="seq-direction">→</div><div class="seq-party aevatar">Projection + Vault</div>
+        <div class="seq-message"><strong>即时取执行凭证</strong>按完整 NyxID authority 查 current-state read model，校验 active/expiry/exact service，再从 Vault 解析 raw key。</div>
+      </div>
+      <div class="seq-row">
+        <div class="seq-no">4</div><div class="seq-party aevatar">Aevatar</div><div class="seq-direction">→</div><div class="seq-party nyxid">NyxID Proxy</div>
+        <div class="seq-message"><strong>固定代理请求</strong><code>POST /proxy/s/chrono-sandbox/codex/execute?_nyxid_via=&lt;exact-id&gt;</code>；Authorization 仅使用 persistent invocation key；body 只有 3 个字段。</div>
+      </div>
+      <div class="seq-row">
+        <div class="seq-no">5</div><div class="seq-party nyxid">NyxID Proxy</div><div class="seq-direction">→</div><div class="seq-party chrono">chrono PR #8</div>
+        <div class="seq-message"><strong>换成短期委托</strong>NyxID 校验 key 与 exact UserService，按 policy 不转发 caller credential，注入单个 <code>X-NyxID-Delegation-Token</code>。</div>
+      </div>
+      <div class="seq-row">
+        <div class="seq-no">6</div><div class="seq-party chrono">chrono route</div><div class="seq-direction">→</div><div class="seq-party nyxid">NyxID JWKS</div>
+        <div class="seq-message"><strong>Fail-closed JWT 验证</strong>RS256、issuer、audience、exp/nbf、exact llm:proxy、access、delegated=true、UUID sub、act.sub=chrono-sandbox；key 可缓存。</div>
+      </div>
+      <div class="seq-row">
+        <div class="seq-no">7</div><div class="seq-party chrono">ManagedCodexService</div><div class="seq-direction">→</div><div class="seq-party runtime">OpenSandbox</div>
+        <div class="seq-message"><strong>创建 one-shot sandbox</strong>服务端固定 runner digest、arch、CPU/memory/storage、TTL 与 secure access；create payload 不含 <code>networkPolicy</code> 或 <code>credentialProxy</code>。</div>
+      </div>
+      <div class="seq-row">
+        <div class="seq-no">8</div><div class="seq-party chrono">chrono SandboxService</div><div class="seq-direction">→</div><div class="seq-party runtime">execd</div>
+        <div class="seq-message"><strong>准备与执行</strong>写固定 config、prompt.txt、README，初始化 Git；通过 execd envs 注入 <code>NYXID_LLM_TOKEN</code>，以 UID/GID 10001 运行固定 Codex command。</div>
+      </div>
+      <div class="seq-row">
+        <div class="seq-no">9</div><div class="seq-party runtime">Codex CLI</div><div class="seq-direction">→</div><div class="seq-party nyxid">NyxID LLM Gateway</div>
+        <div class="seq-message"><strong>第二次经过 NyxID</strong>Codex provider profile 使用短期 delegation token 调 <code>chrono-llm-public</code> Responses API；不是直接使用 Aevatar 或用户长期 key。</div>
+      </div>
+      <div class="seq-row">
+        <div class="seq-no">10</div><div class="seq-party runtime">execd SSE</div><div class="seq-direction">→</div><div class="seq-party chrono">chrono parser</div>
+        <div class="seq-message"><strong>受界输出解析</strong>必须看到 execd terminal、Codex <code>turn.completed</code> 和 final agent_message；合并 stdout/stderr 受 1 MiB 上限，并对 delegation token 做精确脱敏。</div>
+      </div>
+      <div class="seq-row">
+        <div class="seq-no">11</div><div class="seq-party chrono">chrono cleanup guard</div><div class="seq-direction">→</div><div class="seq-party runtime">OpenSandbox</div>
+        <div class="seq-message"><strong>删除并确认</strong><code>DELETE /v1/sandboxes/{id}</code> 后轮询直到 404；cleanup 无法确认时，即使命令成功也返回失败。</div>
+      </div>
+      <div class="seq-row">
+        <div class="seq-no">12</div><div class="seq-party chrono">chrono → NyxID</div><div class="seq-direction">→</div><div class="seq-party aevatar">Tool → Run Actor</div>
+        <div class="seq-message"><strong>固定终态响应</strong><code>success/output/diagnostic_id</code> 逐层返回；Aevatar 映射 typed Completed/Failed，Workflow Run Actor 最终记录 step terminal state。</div>
+      </div>
+    </div>
+
+    <div class="terminal-note"><strong>流式边界：</strong>execd → chrono 内部使用 SSE，Codex → LLM Gateway 也可流式；但 chrono → NyxID → Aevatar 当前返回一个 terminal JSON，因此用户侧不是端到端 streaming。</div>
+  </section>
+
+  <section id="arch-credentials" class="arch-panel" role="tabpanel" hidden>
+    <h3>凭证控制面与信任边界</h3>
+    <p class="arch-caption">凭证的“生命周期事实”“秘密字节”“NyxID 外部授权事实”由不同权威源负责，执行路径只读 projection，不直读 Actor state。</p>
+
+    <div class="control-map" aria-label="Credential control plane">
+      <div class="control-column entry">
+        <h4>Self-service API</h4>
+        <ul>
+          <li><code>GET /api/managed-codex/credential</code></li>
+          <li><code>POST</code> provision / rotate</li>
+          <li><code>DELETE</code> revoke</li>
+          <li>认证用户 bearer + internal allowlist</li>
+        </ul>
+      </div>
+      <div class="control-arrow" aria-hidden="true">→</div>
+      <div class="control-column app">
+        <h4>Application Lifecycle</h4>
+        <ul>
+          <li>用 <code>/users/me</code> 校验 subject</li>
+          <li>Garnet 分布式 mutation lease</li>
+          <li>校验 chrono-sandbox + chrono-llm readiness</li>
+          <li>issue / rotate / revoke / compensate</li>
+        </ul>
+      </div>
+      <div class="control-arrow" aria-hidden="true">→</div>
+      <div class="control-column authority">
+        <h4>Authoritative Writes</h4>
+        <ul>
+          <li>NyxID：创建 exact-scope agent key</li>
+          <li>Vault：只存 raw key bytes</li>
+          <li>Command Port：accepted-only dispatch</li>
+          <li>Credential GAgent：提交 Protobuf domain event</li>
+        </ul>
+      </div>
+      <div class="control-arrow" aria-hidden="true">→</div>
+      <div class="control-column read">
+        <h4>Projection Read Path</h4>
+        <ul>
+          <li>Committed state publication</li>
+          <li>Projection Pipeline materialization</li>
+          <li><code>ManagedCodexCredentialDocument</code></li>
+          <li>execution 只查 read model + Vault ref</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="authority-split">
+      <div class="authority-item actor"><strong>Actor 是 Aevatar 生命周期事实源</strong><span>owner、key ID、SecretReference、service ID、status、expiry、pending cleanup；不含 raw secret。</span></div>
+      <div class="authority-item vault"><strong>Vault 是 raw secret 唯一持有者</strong><span>每次发行使用独立 deterministic ref；rotation 不覆盖当前 descriptor 指向的旧 secret。</span></div>
+      <div class="authority-item nyxid"><strong>NyxID 是外部授权事实源</strong><span>agent key 是否 active、exact grants、UserService policy 与 delegation JWT 均由 NyxID 决定。</span></div>
+    </div>
+
+    <div class="table-responsive">
+      <table class="credential-table" aria-label="Credential classes">
+        <thead>
+          <tr><th>凭证</th><th>存在位置</th><th>传输边界</th><th>用途与寿命</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><strong>Interactive NyxID bearer</strong></td><td>HTTP caller / lifecycle call</td><td>用户 → Aevatar → NyxID lifecycle APIs</td><td>只用于自助 provision/rotate/revoke；managed runtime request 不使用它。</td></tr>
+          <tr><td><strong>Persistent invocation agent key</strong></td><td>raw value 仅在 <code>ISecretVault</code></td><td>Aevatar → NyxID Proxy Authorization</td><td>有限过期，默认 30 天；scope=proxy，只授予 exact chrono-sandbox UserService，无 node grants。</td></tr>
+          <tr><td><strong>5-minute delegation JWT</strong></td><td>NyxID 生成；chrono request-local；runner env</td><td>NyxID → chrono header → execd env → Codex</td><td>exact <code>llm:proxy</code>；Codex 用它调用 NyxID LLM Gateway；运行结束后销毁。</td></tr>
+          <tr><td><strong>OpenSandbox management key</strong></td><td>chrono 基础设施配置 / mounted secret</td><td>chrono-sandbox → OpenSandbox management API</td><td>服务级基础设施凭证；不会进入 codex-runner，也不是用户凭证。</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="risk-grid">
+      <div class="risk-item"><strong>仍有 mutable UserService policy 信任边界</strong>Aevatar 在 provision/rotate 时校验 <code>forward_access_token=false</code>，但无法把之后的 policy 变更绑定到每次执行。PR #8 会拒绝收到的 Authorization，但 broad rollout 仍由 #2899 跟踪更强的不可变/请求级保证。</div>
+      <div class="risk-item"><strong>短期 token 直接存在 runner env</strong>这是 ADR-0044 的明确选择，没有 sandbox Credential Vault。完全攻破 sandbox 的最坏影响是该用户最多 5 分钟的 LLM quota。</div>
+      <div class="risk-item"><strong>网络控制是平台级且较粗</strong>OpenSandbox create request 不声明 network policy；operations 应用 IP-level Kubernetes NetworkPolicy。因为 NyxID 在共享 CDN 后，不宣称 FQDN allow-list。</div>
+      <div class="risk-item"><strong>成功依赖 cleanup confirmation</strong>chrono 删除 sandbox 后必须观察到 404。命令完成但 cleanup 未确认时不会向 Aevatar报告成功。</div>
+    </div>
+  </section>
+
+  <div class="review-choice">
+    <div class="options">
+      <div class="option" data-choice="architecture-accurate" onclick="toggleSelect(this)">
+        <div class="letter">A</div><div class="content"><h3>架构准确</h3><p>按这版整理进仓库文档。</p></div>
+      </div>
+      <div class="option" data-choice="architecture-adjust" onclick="toggleSelect(this)">
+        <div class="letter">B</div><div class="content"><h3>需要调整</h3><p>告诉我缺少或画错的边界。</p></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  function showCodexArchPanel(button) {
+    var root = document.getElementById('codex-architecture');
+    var panelId = button.getAttribute('data-panel');
+    root.querySelectorAll('.arch-tab').forEach(function (tab) {
+      tab.setAttribute('aria-selected', tab === button ? 'true' : 'false');
+    });
+    root.querySelectorAll('.arch-panel').forEach(function (panel) {
+      var active = panel.id === panelId;
+      panel.classList.toggle('is-active', active);
+      panel.hidden = !active;
+    });
+  }
+</script>
