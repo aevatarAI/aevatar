@@ -71,6 +71,7 @@ message ChatRequestEvent  {
   // Identity of this dispatch attempt. It is distinct from session_id, which
   // remains the idempotent turn identity and may already name a final session.
   string command_attempt_id = 14;
+  WorkflowLlmToolApprovalContinuation workflow_llm_tool_approval_continuation = 15;
 }
 message ChatResponseEvent { string content = 1; string session_id = 2; }
 
@@ -205,6 +206,22 @@ message AgentToolNyxIdAuthorityContextPayload {
   string platform = 1;
   string tenant = 2;
   string external_user_id = 3;
+  string scope = 4;
+}
+
+message WorkflowLlmToolApprovalContinuation {
+  string run_id = 1;
+  string step_id = 2;
+  string session_id = 3;
+  repeated string tool_set_refs = 4;
+  repeated string allowed_tool_names = 5;
+  bool restrict_tool_sets = 6;
+  bool restrict_allowed_tool_names = 7;
+  string model = 8;
+  optional int32 max_tool_rounds = 9;
+  string user_memory_prompt = 10;
+  string route_preference = 11;
+  int32 timeout_ms = 12;
 }
 
 message AgentToolChannelContextPayload {
@@ -835,6 +852,7 @@ message PendingToolApprovalState {
   int32 remote_status_check_attempt = 12;
   int64 remote_approval_expires_at_unix_ms = 13;
   string scope_id = 15;
+  WorkflowLlmToolApprovalContinuation workflow_llm_continuation = 16;
 }
 
 // Domain event: approval pending persisted.

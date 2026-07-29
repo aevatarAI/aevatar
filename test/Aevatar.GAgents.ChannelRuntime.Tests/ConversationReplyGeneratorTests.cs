@@ -3558,8 +3558,10 @@ public sealed class ConversationReplyGeneratorTests
                 MediaType = request.MediaType,
                 SizeBytes = content.LongLength,
                 Sha256 = $"sha-{fileId}",
-                CreatedAtUnixMs = 1_000 + _nextId,
-                ExpiresAtUnixMs = 2_000 + _nextId,
+                CreatedAtUnixMs = new DateTimeOffset(2026, 7, 29, 0, 0, 0, TimeSpan.Zero)
+                    .ToUnixTimeMilliseconds(),
+                ExpiresAtUnixMs = new DateTimeOffset(2100, 1, 1, 0, 0, 0, TimeSpan.Zero)
+                    .ToUnixTimeMilliseconds(),
                 OwnerRunId = request.OwnerRunId,
                 OwnerScopeId = request.OwnerScopeId,
             };
