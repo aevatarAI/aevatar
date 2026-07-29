@@ -394,7 +394,6 @@ let mockConnectorCatalog: any;
 let mockConnectorDraftResponse: any;
 let mockRoleCatalog: any;
 let mockRoleDraftResponse: any;
-let mockSettings: any;
 let mockLastWorkflowBuildPanelProps: any;
 const defaultStudioAppContext = {
   mode: "proxy",
@@ -578,34 +577,6 @@ function resetMockState(): void {
     fileExists: false,
     updatedAtUtc: null,
     draft: null,
-  };
-  mockSettings = {
-    runtimeBaseUrl: "https://aevatar-console-backend-api.aevatar.ai",
-    defaultProviderName: "tornado",
-    providerTypes: [
-      {
-        id: "openai",
-        displayName: "OpenAI",
-        category: "llm",
-        description: "OpenAI compatible provider",
-        recommended: true,
-        defaultEndpoint: "https://api.openai.test",
-        defaultModel: "gpt-4.1-mini",
-      },
-    ],
-    providers: [
-      {
-        providerName: "tornado",
-        providerType: "openai",
-        displayName: "Tornado",
-        category: "llm",
-        description: "Local provider",
-        model: "gpt-test",
-        endpoint: "https://aevatar-console-backend-api.aevatar.ai",
-        apiKey: "",
-        apiKeyConfigured: true,
-      },
-    ],
   };
 }
 
@@ -1638,36 +1609,6 @@ jest.mock("@/shared/studio/api", () => ({
         importedCount: mockRoleCatalog.roles.length,
       };
     }),
-    getSettings: jest.fn(async () => ({
-      ...mockSettings,
-    })),
-    saveSettings: jest.fn(
-      async (input: {
-        runtimeBaseUrl?: string;
-        defaultProviderName?: string;
-        providers?: typeof mockSettings.providers;
-      }) => {
-        mockSettings = {
-          ...mockSettings,
-          runtimeBaseUrl: input.runtimeBaseUrl || mockSettings.runtimeBaseUrl,
-          defaultProviderName:
-            input.defaultProviderName || mockSettings.defaultProviderName,
-          providers: input.providers || mockSettings.providers,
-        };
-        return mockSettings;
-      }
-    ),
-    testRuntimeConnection: jest.fn(
-      async (input: { runtimeBaseUrl?: string }) => ({
-        runtimeBaseUrl: input.runtimeBaseUrl || mockSettings.runtimeBaseUrl,
-        reachable: true,
-        checkedUrl: `${
-          input.runtimeBaseUrl || mockSettings.runtimeBaseUrl
-        }/health`,
-        statusCode: 200,
-        message: "Runtime responded with 200 OK.",
-      })
-    ),
     addWorkflowDirectory: jest.fn(async () => ({
       runtimeBaseUrl: "https://aevatar-console-backend-api.aevatar.ai",
       directories: [
