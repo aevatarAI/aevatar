@@ -31,6 +31,13 @@ It does not mean:
 
 Readmodel visibility remains eventually consistent and must be surfaced honestly through existing query/status paths such as `/whoami`, turn gate checks, and `/api/oauth/aevatar-client/status`.
 
+The operator HMAC recovery endpoint `POST /api/oauth/aevatar-client/rotate-hmac` also follows this accepted-ACK boundary and requires both request preconditions:
+
+- exactly one non-empty `Idempotency-Key`;
+- exactly one strong quoted entity tag, for example `If-Match: "v3"`, naming the expected current committed `hmac_kid`. Bare, weak, wildcard, and multi-tag values are rejected before dispatch.
+
+The actor owns rotation idempotency. It persists the idempotency key only with a successful rotation event. Redelivery of the same key is a no-op, and a command whose `expected_current_kid` is stale is also a no-op; neither case generates new key material, advances the actor version, or demotes another key. A `202 Accepted` still promises only dispatch acceptance, so operators must poll `/api/oauth/aevatar-client/status` and retry a lost response with the same idempotency key and original strong `If-Match` value.
+
 ## Superseded ADR-0018 Sections
 
 This ADR supersedes only ADR-0018 sections that required OAuth callback or `/unbind` handlers to synchronously wait for projection readiness.

@@ -12,16 +12,25 @@ namespace Aevatar.Workflow.Application.Tests;
 public sealed class WorkflowExternalCapabilityAdmissionServiceTests
 {
     [Fact]
-    public void AdmissionPlanContract_ShouldUseV3CallSiteAdmissionsAsTheOnlyCurrentFactSource()
+    public void AdmissionPlanContract_ShouldUseV4McpEndpointAdmissionsAsTheOnlyCurrentFactSource()
     {
         WorkflowCapabilityAdmissionPlanIntegrity.SchemaVersion.Should()
-            .Be("external-capability-admission.v3");
+            .Be("external-capability-admission.v4");
 
         var create = typeof(WorkflowCapabilityAdmissionPlanIntegrity)
             .GetMethods()
             .Single(method => method.Name == nameof(WorkflowCapabilityAdmissionPlanIntegrity.Create));
         create.GetParameters()[3].ParameterType.Should()
             .Be(typeof(IEnumerable<WorkflowCapabilityInvocationAdmission>));
+    }
+
+    [Fact]
+    public void NyxIdSelectorAndProof_ShouldUseEndpointIdentityFields()
+    {
+        NyxIdOperationSelector.Descriptor.FindFieldByName("endpoint_id").Should().NotBeNull();
+        NyxIdOperationSelector.Descriptor.FindFieldByName("operation_id").Should().BeNull();
+        NyxIdUserServiceCapabilityRef.Descriptor.FindFieldByName("endpoint_id").Should().NotBeNull();
+        NyxIdUserServiceCapabilityRef.Descriptor.FindFieldByName("operation_id").Should().BeNull();
     }
 
     [Fact]
@@ -334,7 +343,7 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
                 NyxIdOperation = new NyxIdOperationSelector
                 {
                     UserServiceId = "us-alpha",
-                    OperationId = "get-resource",
+                    EndpointId = "get-resource",
                 },
             },
             Blockers =
@@ -386,8 +395,7 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
         plan.InvocationAdmissions[0].CallSiteId.Should().Be(CallSiteId);
         plan.InvocationAdmissions[0].Capability.NyxIdUserService.UserServiceId.Should().Be("us-home-alpha");
         plan.SourceStamps.Select(static source => source.SourceKind).Should().BeEquivalentTo([
-            ExternalCapabilitySourceKind.NyxIdUserServices,
-            ExternalCapabilitySourceKind.NyxIdOpenApi,
+            ExternalCapabilitySourceKind.NyxIdMcpConfig,
         ]);
         plan.ExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Interactive);
         plan.AdmissionDigest.Should().Be(
@@ -483,13 +491,13 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
     }
 
     [Fact]
-    public async Task AdmitAsync_ShouldRejectReadyProofWithoutExactNyxIdOpenApiSource()
+    public async Task AdmitAsync_ShouldRejectReadyProofWithoutNyxIdMcpCatalogSource()
     {
         var capability = NyxIdCapability();
         var readiness = Ready(capability);
-        var openApi = readiness.Sources.Single(static source =>
-            source.SourceKind == ExternalCapabilitySourceKind.NyxIdOpenApi);
-        readiness.Sources.Remove(openApi);
+        var catalog = readiness.Sources.Single(static source =>
+            source.SourceKind == ExternalCapabilitySourceKind.NyxIdMcpConfig);
+        readiness.Sources.Remove(catalog);
         var service = new WorkflowExternalCapabilityAdmissionService(
             new StubParser(WorkflowYamlParseResult.Success("wf-alpha", Dependencies(capability))),
             new StubReadinessPort(readiness),
@@ -628,12 +636,15 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
             .Be(ExternalCapabilityRemediationActionKind.RebindWorkflow);
     }
 
-    [Fact]
-    public async Task RevalidatePersistedAsync_ShouldClassifyLegacySchemaBeforeParsingLegacyAuthoring()
+    [Theory]
+    [InlineData("external-capability-admission.v2")]
+    [InlineData("external-capability-admission.v3")]
+    public async Task RevalidatePersistedAsync_ShouldClassifyRebindSchemaBeforeParsingOldAuthoring(
+        string schemaVersion)
     {
         var legacyPlan = new WorkflowCapabilityAdmissionPlan
         {
-            SchemaVersion = WorkflowCapabilityAdmissionPlanIntegrity.LegacySchemaVersion,
+            SchemaVersion = schemaVersion,
             ExecutionMode = ExternalCapabilityExecutionMode.Interactive,
         };
         var parser = new StubParser(WorkflowYamlParseResult.Invalid("legacy proof fields are invalid"));
@@ -927,7 +938,7 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
             NyxIdOperation = new NyxIdOperationSelector
             {
                 UserServiceId = capability.NyxIdUserService.UserServiceId,
-                OperationId = capability.NyxIdUserService.OperationId,
+                EndpointId = capability.NyxIdUserService.EndpointId,
             },
         };
 
@@ -954,19 +965,11 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
             {
                 new ExternalCapabilitySourceStamp
                 {
-                    SourceKind = ExternalCapabilitySourceKind.NyxIdUserServices,
-                    SourceId = "nyxid-user-services:caller",
+                    SourceKind = ExternalCapabilitySourceKind.NyxIdMcpConfig,
+                    SourceId = "nyxid-mcp-config:caller:nyx-user-alpha",
                     ObservedAt = Timestamp.FromDateTimeOffset(FixedTimeProvider.Now),
                     FreshUntil = Timestamp.FromDateTimeOffset(FixedTimeProvider.Now.AddMinutes(5)),
-                    ContentDigest = "source-digest",
-                },
-                new ExternalCapabilitySourceStamp
-                {
-                    SourceKind = ExternalCapabilitySourceKind.NyxIdOpenApi,
-                    SourceId = capability.NyxIdUserService.UserServiceId,
-                    ObservedAt = Timestamp.FromDateTimeOffset(FixedTimeProvider.Now),
-                    FreshUntil = Timestamp.FromDateTimeOffset(FixedTimeProvider.Now.AddMinutes(5)),
-                    ContentDigest = "openapi-digest",
+                    ContentDigest = "mcp-config-digest",
                 },
             },
         };
@@ -1000,7 +1003,7 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
             {
                 UserServiceId = "us-home-alpha",
                 ServiceSlugSnapshot = "home-assistant",
-                OperationId = "get-state",
+                EndpointId = "get-state",
                 HttpMethod = "GET",
                 PathTemplate = "/states/{entity_id}",
                 ContractDigest = "operation-digest",

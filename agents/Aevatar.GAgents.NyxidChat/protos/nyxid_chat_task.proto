@@ -616,12 +616,26 @@ message NyxIdChatHistoryDeliveryReservationState {
   bool expose_create_recovery = 11;
   bool dispatched = 12;
   google.protobuf.Timestamp dispatched_at = 13;
+  int32 attempt = 14;
+}
+
+// Actor-owned retry signal; delivery content remains in the committed reservation.
+message NyxIdChatHistoryDeliveryReservationDispatchRequested {
+  string delivery_id = 1;
+  int32 attempt = 2;
 }
 
 message NyxIdChatHistoryDeliveryReservationDispatchedEvent {
   string delivery_id = 1;
   string source_command_id = 2;
   google.protobuf.Timestamp dispatched_at = 3;
+}
+
+message NyxIdChatHistoryDeliveryReservationRetryScheduledEvent {
+  string delivery_id = 1;
+  int32 attempt = 2;
+  string failure_code = 3;
+  google.protobuf.Timestamp scheduled_at = 4;
 }
 
 message NyxIdChatHistoryTerminalOutbox {

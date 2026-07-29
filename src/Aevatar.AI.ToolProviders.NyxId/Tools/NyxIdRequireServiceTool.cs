@@ -218,9 +218,7 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
         }
 
         var authority = AgentToolRequestContext.NyxIdAuthority;
-        var callerId = Normalize(authority.IsComplete
-            ? authority.ExternalUserId
-            : AgentToolRequestContext.OwnerSubject);
+        var callerId = Normalize(authority.IsComplete ? authority.ExternalUserId : null);
         if (callerId is null)
         {
             access = null;

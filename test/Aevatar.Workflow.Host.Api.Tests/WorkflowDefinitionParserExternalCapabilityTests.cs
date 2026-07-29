@@ -89,7 +89,7 @@ public sealed class WorkflowDefinitionParserExternalCapabilityTests
                 capability:
                   nyxid_operation:
                     user_service_id: us-alpha
-                    operation_id: get-resource
+                    endpoint_id: get-resource
                 parameters:
                   tool: nyxid_proxy
                   arguments: '{"contract_digest":"caller-controlled-digest"}'
@@ -119,7 +119,7 @@ public sealed class WorkflowDefinitionParserExternalCapabilityTests
                     capability:
                       nyxid_operation:
                         user_service_id: us-alpha
-                        operation_id: get-resource
+                        endpoint_id: get-resource
                     parameters:
                       tool: nyxid_proxy
                       arguments: '{"contract_digest":"caller-controlled-digest"}'
@@ -137,7 +137,7 @@ public sealed class WorkflowDefinitionParserExternalCapabilityTests
                     capability:
                       nyxid_operation:
                         user_service_id: ${input}
-                        operation_id: get-resource
+                        endpoint_id: get-resource
                     parameters:
                       tool: nyxid_proxy
                       arguments: '{"query":{}}'
@@ -155,7 +155,7 @@ public sealed class WorkflowDefinitionParserExternalCapabilityTests
                     capability:
                       nyxid_operation:
                         user_service_id: us-alpha
-                        operation_id: get-resource
+                        endpoint_id: get-resource
                     parameters:
                       tool: nyxid_proxy
                       arguments: '{"unsupported_slot":{}}'

@@ -3,6 +3,7 @@ syntax = "proto3";
 package aevatar.gagentservice.schedules.authorization;
 option csharp_namespace = "Aevatar.GAgentService.Abstractions.Schedules.Authorization";
 
+import "google/protobuf/timestamp.proto";
 import "workflow_capability_admission.proto";
 
 enum AuthorizationOwnerKind {
@@ -41,6 +42,11 @@ message NyxIdAuthorizationServiceEvidence {
   AuthorizationGrantRequirement node_grant_requirement = 5;
   AuthorizationOwnerIdentity resource_owner = 7;
   repeated string node_ids = 8;
+  google.protobuf.Timestamp observed_at = 9;
+  google.protobuf.Timestamp fresh_until = 10;
+  google.protobuf.Timestamp evaluated_at = 11;
+  string authority_contract_version = 12;
+  string authority_policy_version = 13;
 }
 
 message NyxIdAuthorizationCatalogContent {

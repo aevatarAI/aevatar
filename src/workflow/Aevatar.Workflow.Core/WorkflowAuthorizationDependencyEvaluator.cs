@@ -28,6 +28,7 @@ public static class WorkflowAuthorizationDependencyEvaluator
         "slug",
         "service_slug_snapshot",
         "operation_id",
+        "endpoint_id",
         "method",
         "http_method",
         "path",
@@ -171,12 +172,12 @@ public static class WorkflowAuthorizationDependencyEvaluator
     private static void ValidateNyxIdSelector(StepDefinition step, NyxIdOperationSelector selector)
     {
         if (string.IsNullOrWhiteSpace(selector.UserServiceId) ||
-            string.IsNullOrWhiteSpace(selector.OperationId))
+            string.IsNullOrWhiteSpace(selector.EndpointId))
         {
             throw SelectionInvalid(step, "NyxID capability must select an exact connected service and operation.");
         }
 
-        if (ContainsTemplate(selector.UserServiceId) || ContainsTemplate(selector.OperationId))
+        if (ContainsTemplate(selector.UserServiceId) || ContainsTemplate(selector.EndpointId))
             throw SelectionInvalid(step, "NyxID service and operation selectors must be static.");
     }
 
@@ -447,11 +448,11 @@ public static class WorkflowAuthorizationDependencyEvaluator
         }
 
         var userServiceId = selector.NyxIdOperation.UserServiceId;
-        var operationId = selector.NyxIdOperation.OperationId;
+        var endpointId = selector.NyxIdOperation.EndpointId;
         return string.IsNullOrWhiteSpace(userServiceId) ||
-               string.IsNullOrWhiteSpace(operationId) ||
+               string.IsNullOrWhiteSpace(endpointId) ||
                ContainsTemplate(userServiceId) ||
-               ContainsTemplate(operationId)
+               ContainsTemplate(endpointId)
             ? null
             : selector.Clone();
     }

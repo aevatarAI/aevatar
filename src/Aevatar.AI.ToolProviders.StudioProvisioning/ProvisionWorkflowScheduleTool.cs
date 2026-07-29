@@ -16,10 +16,9 @@ namespace Aevatar.AI.ToolProviders.StudioProvisioning;
 /// runs surface in <c>/workflow/observatory</c>.
 ///
 /// The tool takes ONLY workflow/scheduling inputs from the LLM. The owning scope and
-/// caller identity come from the tool execution context (W1 threads
-/// <c>Caller.ScopeId</c>/<c>OwnerSubject</c> on the workflow llm_call path; the
-/// forwarded NyxID access token remains a boundary input and is not persisted in
-/// schedule auth). There are NO
+/// owning scope and NyxID caller identity come from distinct typed fields in the
+/// tool execution context. The forwarded NyxID access token remains a boundary
+/// input and is not persisted in schedule auth. There are NO
 /// channel / Lark / owner / scope / credential inputs, and the result carries only
 /// the Team/member/schedule ids plus Studio and Observatory links.
 /// </summary>
@@ -137,6 +136,15 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool
 
         var scheduleCron = Normalize(args.ScheduleCron);
         var runImmediately = args.RunImmediately ?? true;
+        var capabilityAdmission = StudioWorkflowCapabilityToolContext.Resolve(
+            ExternalCapabilityExecutionMode.Durable);
+        if (capabilityAdmission is null)
+        {
+            return ErrorJson(
+                "caller_identity_unavailable",
+                "Verified NyxID caller identity is required in AgentToolRequestContext.");
+        }
+
         var shouldSchedule = runImmediately || scheduleCron is not null;
         StudioMemberWorkflowScheduleAuthorizationContext? scheduleAuthorization = null;
         ScheduleOperationIdentity? operationIdentity = null;
@@ -175,15 +183,10 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool
             ScheduleCron = scheduleCron,
             ScheduleTimezone = Normalize(args.ScheduleTimezone),
             RunImmediately = runImmediately,
-            CallerSubjectPlatform = typedAuthority.IsComplete
-                ? Normalize(typedAuthority.Platform) ?? "nyxid"
-                : "nyxid",
-            CallerSubjectTenant = typedAuthority.IsComplete ? Normalize(typedAuthority.Tenant) : null,
-            CallerSubjectExternalUserId = typedAuthority.IsComplete
-                ? Normalize(typedAuthority.ExternalUserId)
-                : Normalize(AgentToolRequestContext.OwnerSubject),
-            CapabilityAdmission = StudioWorkflowCapabilityToolContext.Create(
-                ExternalCapabilityExecutionMode.Durable),
+            CallerSubjectPlatform = Normalize(typedAuthority.Platform) ?? "nyxid",
+            CallerSubjectTenant = Normalize(typedAuthority.Tenant),
+            CallerSubjectExternalUserId = Normalize(typedAuthority.ExternalUserId),
+            CapabilityAdmission = capabilityAdmission,
             AuthenticatedOwner = scheduleAuthorization?.AuthenticatedOwner,
             ProvisioningBearerToken = scheduleAuthorization?.ProvisioningBearerToken,
             ScheduleOperationId = operationIdentity?.OperationId,

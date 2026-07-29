@@ -7,18 +7,23 @@ namespace Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 internal static class NyxIdOperationAdmissionProofBuilder
 {
     private const int MaxSchemaDepth = 16;
+    private static readonly HashSet<string> SupportedSchemaKeywords = new(StringComparer.Ordinal)
+    {
+        "type", "enum", "properties", "required", "items", "additionalProperties",
+        "title", "description", "default", "example", "examples", "deprecated",
+    };
 
     public static ExternalWorkflowCapabilityRef Build(
         string userServiceId,
         string serviceSlug,
-        ConnectedServiceToolOperation operation,
+        NyxIdMcpEndpoint operation,
         string contractDigest)
     {
         var proof = new NyxIdUserServiceCapabilityRef
         {
             UserServiceId = userServiceId,
             ServiceSlugSnapshot = serviceSlug,
-            OperationId = operation.OperationId,
+            EndpointId = operation.EndpointId,
             HttpMethod = operation.Method.ToUpperInvariant(),
             PathTemplate = operation.PathTemplate,
             ContractDigest = contractDigest,
@@ -26,22 +31,27 @@ internal static class NyxIdOperationAdmissionProofBuilder
             ResponsePolicy = new NyxIdOperationResponsePolicy
             {
                 TextAllowed = true,
-                FileArtifactAllowed = operation.ResponseMediaTypes.Any(IsBinaryMediaType),
+                FileArtifactAllowed = false,
             },
         };
-        proof.ResponsePolicy.MediaTypes.Add(operation.ResponseMediaTypes);
 
         foreach (var parameter in operation.Parameters
                      .OrderBy(static parameter => parameter.In)
                      .ThenBy(static parameter => parameter.Name, StringComparer.Ordinal))
         {
-            proof.Parameters.Add(new NyxIdOperationParameterContract
+            var contract = new NyxIdOperationParameterContract
             {
                 Name = parameter.Name,
                 Location = MapLocation(parameter.In),
                 Required = parameter.Required || parameter.In == ParameterLocation.Path,
                 Schema = ConvertSchema(parameter.Schema, depth: 0),
-            });
+            };
+            if (!IsRequiredHeaderSatisfiable(contract))
+            {
+                throw new NyxIdOperationSchemaUnsupportedException(
+                    $"Required header '{contract.Name}' has no value accepted by the workflow header policy.");
+            }
+            proof.Parameters.Add(contract);
         }
 
         if (operation.RequestBodySchema is not null)
@@ -66,6 +76,7 @@ internal static class NyxIdOperationAdmissionProofBuilder
             return new NyxIdOperationSchema { ValueKind = NyxIdOperationValueKind.String };
         if (node is not JsonObject schema)
             throw new NyxIdOperationSchemaUnsupportedException("OpenAPI parameter schema must be an object.");
+        EnsureSupportedSchema(schema);
 
         if (schema.ContainsKey("oneOf") || schema.ContainsKey("anyOf") ||
             schema.ContainsKey("allOf") || schema.ContainsKey("not"))
@@ -74,15 +85,13 @@ internal static class NyxIdOperationAdmissionProofBuilder
                 "OpenAPI composed schemas are not supported by workflow operation admission.");
         }
 
-        var type = schema["type"]?.GetValue<string>()?.Trim().ToLowerInvariant();
-        if (string.IsNullOrEmpty(type))
-            type = schema["properties"] is JsonObject ? "object" : "string";
+        var type = ReadSchemaType(schema);
         var result = new NyxIdOperationSchema { ValueKind = MapValueKind(type) };
 
         if (schema["enum"] is JsonArray allowedValues)
         {
             foreach (var value in allowedValues)
-                result.AllowedValues.Add(ToCanonicalScalar(value));
+                result.AllowedValues.Add(ToCanonicalScalar(value, result.ValueKind));
         }
 
         if (result.ValueKind == NyxIdOperationValueKind.Object)
@@ -97,16 +106,18 @@ internal static class NyxIdOperationAdmissionProofBuilder
                 result.AdditionalPropertiesAllowed = false;
             }
 
-            if (schema["required"] is JsonArray required)
+            var properties = schema["properties"] as JsonObject;
+            var required = schema["required"] is JsonArray requiredArray
+                ? ReadRequiredProperties(requiredArray).ToArray()
+                : [];
+            if (required.Any(name => properties is null || !properties.ContainsKey(name)))
             {
-                result.RequiredProperties.Add(required
-                    .Select(static item => item?.GetValue<string>()?.Trim() ?? string.Empty)
-                    .Where(static value => value.Length > 0)
-                    .Distinct(StringComparer.Ordinal)
-                    .OrderBy(static value => value, StringComparer.Ordinal));
+                throw new NyxIdOperationSchemaUnsupportedException(
+                    "OpenAPI required properties must name declared object properties.");
             }
+            result.RequiredProperties.Add(required);
 
-            if (schema["properties"] is JsonObject properties)
+            if (properties is not null)
             {
                 foreach (var (name, propertySchema) in properties.OrderBy(static item => item.Key, StringComparer.Ordinal))
                 {
@@ -120,10 +131,117 @@ internal static class NyxIdOperationAdmissionProofBuilder
         }
         else if (result.ValueKind == NyxIdOperationValueKind.Array)
         {
+            if (schema["items"] is not JsonObject)
+            {
+                throw new NyxIdOperationSchemaUnsupportedException(
+                    "OpenAPI array schemas must publish an item schema.");
+            }
             result.Items = ConvertSchema(schema["items"], depth + 1);
         }
 
         return result;
+    }
+
+    private static bool IsRequiredHeaderSatisfiable(NyxIdOperationParameterContract parameter)
+    {
+        if (!parameter.Required || parameter.Location != NyxIdOperationParameterLocation.Header)
+            return true;
+
+        var candidates = parameter.Schema.AllowedValues.Count > 0
+            ? parameter.Schema.AllowedValues
+            : parameter.Schema.ValueKind switch
+            {
+                NyxIdOperationValueKind.String =>
+                    [string.Equals(parameter.Name, "Accept", StringComparison.OrdinalIgnoreCase)
+                        ? "application/json"
+                        : "*"],
+                NyxIdOperationValueKind.Integer or NyxIdOperationValueKind.Number => ["1"],
+                NyxIdOperationValueKind.Boolean => ["true"],
+                _ => [],
+            };
+        return candidates.Any(value =>
+            NyxIdServiceRequestHeaderPolicy.IsValidWorkflowHeader(parameter.Name, value));
+    }
+
+    private static void EnsureSupportedSchema(JsonObject schema)
+    {
+        if (HasMalformedKeyword(schema) || HasContradictoryKeywords(schema))
+        {
+            throw new NyxIdOperationSchemaUnsupportedException(
+                "OpenAPI schema contains unsupported or malformed validation keywords.");
+        }
+
+        if (schema["properties"] is JsonObject properties &&
+            properties.Any(static property => property.Value is not JsonObject))
+        {
+            throw new NyxIdOperationSchemaUnsupportedException(
+                "OpenAPI object properties must contain schema objects.");
+        }
+    }
+
+    private static bool HasMalformedKeyword(JsonObject schema) =>
+        schema.Any(static property => !SupportedSchemaKeywords.Contains(property.Key)) ||
+        schema.ContainsKey("type") && !IsNormalizedSchemaType(schema["type"]) ||
+        schema.ContainsKey("enum") && schema["enum"] is not JsonArray ||
+        schema["enum"] is JsonArray { Count: 0 } ||
+        schema.ContainsKey("properties") && schema["properties"] is not JsonObject ||
+        schema.ContainsKey("required") && schema["required"] is not JsonArray ||
+        schema.ContainsKey("items") && schema["items"] is not JsonObject ||
+        schema.ContainsKey("additionalProperties") && !IsBoolean(schema["additionalProperties"]);
+
+    private static bool HasContradictoryKeywords(JsonObject schema)
+    {
+        var type = NormalizedSchemaType(schema["type"]);
+        var hasObjectKeywords = schema.ContainsKey("properties") ||
+                                schema.ContainsKey("required") ||
+                                schema.ContainsKey("additionalProperties");
+        var hasItems = schema.ContainsKey("items");
+        return type == "object" && hasItems ||
+               type == "array" && (hasObjectKeywords || !hasItems) ||
+               type is not (null or "object" or "array") && (hasObjectKeywords || hasItems) ||
+               type is null && (hasItems || !schema.ContainsKey("properties") && hasObjectKeywords);
+    }
+
+    private static bool IsNormalizedSchemaType(JsonNode? node) =>
+        NormalizedSchemaType(node) is { Length: > 0 };
+
+    private static string? NormalizedSchemaType(JsonNode? node) =>
+        node is JsonValue value && value.TryGetValue<string>(out var type)
+            ? type.Trim().ToLowerInvariant()
+            : null;
+
+    private static bool IsString(JsonNode? node) =>
+        node is JsonValue value && value.TryGetValue<string>(out _);
+
+    private static bool IsBoolean(JsonNode? node) =>
+        node is JsonValue value && value.TryGetValue<bool>(out _);
+
+    private static IEnumerable<string> ReadRequiredProperties(JsonArray required)
+    {
+        var properties = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var item in required)
+        {
+            if (item is not JsonValue value ||
+                !value.TryGetValue<string>(out var property) ||
+                string.IsNullOrEmpty(property) ||
+                !string.Equals(property, property.Trim(), StringComparison.Ordinal))
+            {
+                throw new NyxIdOperationSchemaUnsupportedException(
+                    "OpenAPI required properties must be normalized non-empty strings.");
+            }
+
+            properties.Add(property);
+        }
+
+        return properties.OrderBy(static property => property, StringComparer.Ordinal);
+    }
+
+    private static string ReadSchemaType(JsonObject schema)
+    {
+        var type = NormalizedSchemaType(schema["type"]);
+        if (type is null)
+            return schema["properties"] is JsonObject ? "object" : "string";
+        return type;
     }
 
     private static NyxIdOperationValueKind MapValueKind(string type) => type switch
@@ -146,33 +264,36 @@ internal static class NyxIdOperationAdmissionProofBuilder
         _ => NyxIdOperationParameterLocation.Unspecified,
     };
 
-    private static string ToCanonicalScalar(JsonNode? node)
+    private static string ToCanonicalScalar(
+        JsonNode? node,
+        NyxIdOperationValueKind valueKind)
     {
         if (node is null)
-            return "null";
+            throw new NyxIdOperationSchemaUnsupportedException("OpenAPI enum values must not be null.");
         if (node is not JsonValue value)
             throw new NyxIdOperationSchemaUnsupportedException("OpenAPI enum values must be scalar.");
-        if (value.TryGetValue<string>(out var text))
+
+        if (valueKind == NyxIdOperationValueKind.String &&
+            value.TryGetValue<string>(out var text))
             return text;
-        if (value.TryGetValue<bool>(out var boolean))
+        if (valueKind == NyxIdOperationValueKind.Boolean &&
+            value.TryGetValue<bool>(out var boolean))
             return boolean ? "true" : "false";
-        if (value.TryGetValue<long>(out var integer))
+        if (valueKind == NyxIdOperationValueKind.Integer &&
+            value.TryGetValue<long>(out var integer))
             return integer.ToString(CultureInfo.InvariantCulture);
-        if (value.TryGetValue<double>(out var number))
-            return number.ToString("R", CultureInfo.InvariantCulture);
-        throw new NyxIdOperationSchemaUnsupportedException("OpenAPI enum values must be scalar.");
+        if (valueKind == NyxIdOperationValueKind.Number)
+        {
+            if (value.TryGetValue<long>(out var wholeNumber))
+                return wholeNumber.ToString(CultureInfo.InvariantCulture);
+            if (value.TryGetValue<double>(out var number))
+                return number.ToString("R", CultureInfo.InvariantCulture);
+        }
+
+        throw new NyxIdOperationSchemaUnsupportedException(
+            "OpenAPI enum values must match the schema type and use a runtime-enforced scalar kind.");
     }
 
-    private static bool IsBinaryMediaType(string mediaType)
-    {
-        var normalized = mediaType.Trim().ToLowerInvariant();
-        return normalized == "application/octet-stream" ||
-               normalized == "application/pdf" ||
-               normalized == "application/zip" ||
-               normalized.StartsWith("image/", StringComparison.Ordinal) ||
-               normalized.StartsWith("audio/", StringComparison.Ordinal) ||
-               normalized.StartsWith("video/", StringComparison.Ordinal);
-    }
 }
 
 internal sealed class NyxIdOperationSchemaUnsupportedException(string message)

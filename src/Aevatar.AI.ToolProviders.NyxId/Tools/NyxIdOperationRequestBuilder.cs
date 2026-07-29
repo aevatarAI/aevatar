@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 
 namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 
@@ -264,7 +265,17 @@ internal static class NyxIdOperationRequestBuilder
             return string.Empty;
         }
 
-        return path;
+        try
+        {
+            return "/" + NyxIdApiClient.NormalizeExactProxyPath(path);
+        }
+        catch (InvalidOperationException)
+        {
+            failure = new NyxIdOperationRequestFailure(
+                "NYXID_OPERATION_PATH_TEMPLATE_INVALID",
+                "The admitted path template does not resolve to a safe relative path.");
+            return string.Empty;
+        }
     }
 
     private static string EncodePathSegment(
@@ -314,7 +325,8 @@ internal static class NyxIdOperationRequestBuilder
 
         // Reject pre-encoded traversal delimiters so a caller cannot smuggle a separator through
         // an extra decode hop in a downstream service.
-        foreach (var encoded in (ReadOnlySpan<string>)["%2f", "%5c", "%00", "%2e%2e", "%252f", "%255c"])
+        foreach (var encoded in (ReadOnlySpan<string>)[
+                     "%2f", "%5c", "%00", "%2e%2e", "%252f", "%255c", "%252e%252e"])
         {
             if (raw.Contains(encoded, StringComparison.OrdinalIgnoreCase))
                 return false;
@@ -337,6 +349,15 @@ internal static class NyxIdOperationRequestBuilder
             static parameter => parameter.Name,
             static parameter => parameter,
             StringComparer.Ordinal);
+        var forbidden = declared.Keys.Concat(supplied.Keys).FirstOrDefault(static name =>
+            name.StartsWith("_nyxid_", StringComparison.OrdinalIgnoreCase));
+        if (forbidden is not null)
+        {
+            failure = new NyxIdOperationRequestFailure(
+                "NYXID_OPERATION_QUERY_PARAMETER_FORBIDDEN",
+                $"query parameter '{forbidden}' is reserved by NyxID.");
+            return string.Empty;
+        }
         var extra = supplied.Keys.FirstOrDefault(name => !declared.ContainsKey(name));
         if (extra is not null)
         {
@@ -359,22 +380,20 @@ internal static class NyxIdOperationRequestBuilder
         var pairs = new List<string>();
         foreach (var name in supplied.Keys.OrderBy(static key => key, StringComparer.Ordinal))
         {
+            failure = ValidateSchema(
+                $"query.{name}",
+                declared[name].Schema,
+                supplied[name],
+                "NYXID_OPERATION_QUERY_PARAMETER_INVALID");
+            if (failure is not null)
+                return string.Empty;
+
             var raw = ToScalarText(supplied[name]);
             if (raw is null)
             {
                 failure = new NyxIdOperationRequestFailure(
                     "NYXID_OPERATION_QUERY_PARAMETER_INVALID",
                     $"query parameter '{name}' must be a scalar value.");
-                return string.Empty;
-            }
-            var schemaFailure = ValidateSchema(
-                $"query.{name}",
-                declared[name].Schema,
-                supplied[name],
-                "NYXID_OPERATION_QUERY_PARAMETER_INVALID");
-            if (schemaFailure is not null)
-            {
-                failure = schemaFailure;
                 return string.Empty;
             }
 
@@ -399,8 +418,7 @@ internal static class NyxIdOperationRequestBuilder
             static parameter => parameter,
             StringComparer.OrdinalIgnoreCase);
         var missing = declared.Values.FirstOrDefault(parameter =>
-            parameter.Required &&
-            !supplied.Keys.Contains(parameter.Name, StringComparer.OrdinalIgnoreCase));
+            parameter.Required && !supplied.ContainsKey(parameter.Name));
         if (missing is not null)
         {
             failure = new NyxIdOperationRequestFailure(
@@ -408,6 +426,8 @@ internal static class NyxIdOperationRequestBuilder
                 $"header '{missing.Name}' is required by the admitted operation.");
             return null;
         }
+        if (supplied.Count == 0)
+            return null;
 
         var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var (name, value) in supplied)
@@ -428,6 +448,14 @@ internal static class NyxIdOperationRequestBuilder
                 return null;
             }
 
+            failure = ValidateSchema(
+                $"headers.{name}",
+                parameter.Schema,
+                value,
+                "NYXID_OPERATION_HEADER_INVALID");
+            if (failure is not null)
+                return null;
+
             var raw = ToScalarText(value);
             if (raw is null)
             {
@@ -436,14 +464,11 @@ internal static class NyxIdOperationRequestBuilder
                     $"header '{name}' must be a scalar value.");
                 return null;
             }
-            var schemaFailure = ValidateSchema(
-                $"headers.{name}",
-                parameter.Schema,
-                value,
-                "NYXID_OPERATION_HEADER_INVALID");
-            if (schemaFailure is not null)
+            if (!NyxIdServiceRequestHeaderPolicy.IsValidWorkflowHeader(name, raw))
             {
-                failure = schemaFailure;
+                failure = new NyxIdOperationRequestFailure(
+                    "NYXID_OPERATION_HEADER_INVALID",
+                    $"header '{name}' does not satisfy the admitted workflow header policy.");
                 return null;
             }
 
@@ -498,48 +523,15 @@ internal static class NyxIdOperationRequestBuilder
         string path,
         AgentToolOperationValueSchema schema,
         JsonElement value,
-        string failureCode)
+        string errorCode)
     {
         switch (schema.Kind)
         {
             case AgentToolOperationValueKind.Object:
-                if (value.ValueKind != JsonValueKind.Object)
-                    return SchemaMismatch(path, "object", failureCode);
-                foreach (var required in schema.RequiredProperties)
-                {
-                    if (!value.TryGetProperty(required, out _))
-                    {
-                        return new NyxIdOperationRequestFailure(
-                            failureCode,
-                            $"'{path}.{required}' is required by the admitted operation contract.");
-                    }
-                }
-
-                foreach (var property in value.EnumerateObject())
-                {
-                    var propertySchema = schema.FindProperty(property.Name);
-                    if (propertySchema is null)
-                    {
-                        if (schema.AdditionalPropertiesAllowed)
-                            continue;
-                        return new NyxIdOperationRequestFailure(
-                            failureCode,
-                            $"'{path}.{property.Name}' is not declared by the admitted operation contract.");
-                    }
-
-                    var nested = ValidateSchema(
-                        $"{path}.{property.Name}",
-                        propertySchema,
-                        property.Value,
-                        failureCode);
-                    if (nested is not null)
-                        return nested;
-                }
-
-                return null;
+                return ValidateObjectSchema(path, schema, value, errorCode);
             case AgentToolOperationValueKind.Array:
                 if (value.ValueKind != JsonValueKind.Array)
-                    return SchemaMismatch(path, "array", failureCode);
+                    return SchemaMismatch(path, "array", errorCode);
                 if (schema.Items is null)
                     return null;
                 var itemIndex = 0;
@@ -549,7 +541,7 @@ internal static class NyxIdOperationRequestBuilder
                         $"{path}[{itemIndex++}]",
                         schema.Items,
                         item,
-                        failureCode);
+                        errorCode);
                     if (nested is not null)
                         return nested;
                 }
@@ -557,78 +549,94 @@ internal static class NyxIdOperationRequestBuilder
                 return null;
             case AgentToolOperationValueKind.String:
                 if (value.ValueKind != JsonValueKind.String)
-                    return SchemaMismatch(path, "string", failureCode);
+                    return SchemaMismatch(path, "string", errorCode);
                 return ValidateAllowedValues(
-                    path,
-                    schema,
-                    value.GetString() ?? string.Empty,
-                    failureCode);
+                    path, schema, value.GetString() ?? string.Empty, errorCode);
             case AgentToolOperationValueKind.Integer:
                 if (value.ValueKind != JsonValueKind.Number || !value.TryGetInt64(out var integer))
-                    return SchemaMismatch(path, "integer", failureCode);
+                    return SchemaMismatch(path, "integer", errorCode);
                 return ValidateAllowedValues(
                     path,
                     schema,
                     integer.ToString(CultureInfo.InvariantCulture),
-                    failureCode);
+                    errorCode);
             case AgentToolOperationValueKind.Number:
-                return ValidateNumber(path, schema, value, failureCode);
+                if (value.ValueKind != JsonValueKind.Number || !value.TryGetDouble(out var number))
+                    return SchemaMismatch(path, "number", errorCode);
+                return ValidateAllowedValues(
+                    path, schema, number.ToString("R", CultureInfo.InvariantCulture), errorCode);
             case AgentToolOperationValueKind.Boolean:
-                return ValidateBoolean(path, schema, value, failureCode);
+                if (value.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                    return SchemaMismatch(path, "boolean", errorCode);
+                return ValidateAllowedValues(
+                    path, schema, value.GetBoolean() ? "true" : "false", errorCode);
             default:
                 return new NyxIdOperationRequestFailure(
-                    failureCode,
+                    errorCode,
                     $"'{path}' has no supported admitted contract type.");
         }
     }
 
-    private static NyxIdOperationRequestFailure? ValidateNumber(
+    private static NyxIdOperationRequestFailure? ValidateObjectSchema(
         string path,
         AgentToolOperationValueSchema schema,
         JsonElement value,
-        string failureCode)
+        string errorCode)
     {
-        if (value.ValueKind != JsonValueKind.Number || !value.TryGetDouble(out var number))
-            return SchemaMismatch(path, "number", failureCode);
-        return ValidateAllowedValues(
-            path,
-            schema,
-            number.ToString("R", CultureInfo.InvariantCulture),
-            failureCode);
-    }
+        if (value.ValueKind != JsonValueKind.Object)
+            return SchemaMismatch(path, "object", errorCode);
 
-    private static NyxIdOperationRequestFailure? ValidateBoolean(
-        string path,
-        AgentToolOperationValueSchema schema,
-        JsonElement value,
-        string failureCode)
-    {
-        if (value.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
-            return SchemaMismatch(path, "boolean", failureCode);
-        return ValidateAllowedValues(
-            path,
-            schema,
-            value.GetBoolean() ? "true" : "false",
-            failureCode);
+        foreach (var required in schema.RequiredProperties)
+        {
+            if (!value.TryGetProperty(required, out _))
+            {
+                return new NyxIdOperationRequestFailure(
+                    errorCode,
+                    $"'{path}.{required}' is required by the admitted operation contract.");
+            }
+        }
+
+        foreach (var property in value.EnumerateObject())
+        {
+            var propertySchema = schema.FindProperty(property.Name);
+            if (propertySchema is null)
+            {
+                if (schema.AdditionalPropertiesAllowed)
+                    continue;
+                return new NyxIdOperationRequestFailure(
+                    errorCode,
+                    $"'{path}.{property.Name}' is not declared by the admitted operation contract.");
+            }
+
+            var nested = ValidateSchema(
+                $"{path}.{property.Name}",
+                propertySchema,
+                property.Value,
+                errorCode);
+            if (nested is not null)
+                return nested;
+        }
+
+        return null;
     }
 
     private static NyxIdOperationRequestFailure? ValidateAllowedValues(
         string path,
         AgentToolOperationValueSchema schema,
         string value,
-        string failureCode) =>
+        string errorCode) =>
         schema.AllowedValues.Count == 0 || schema.AllowedValues.Contains(value, StringComparer.Ordinal)
             ? null
             : new NyxIdOperationRequestFailure(
-                failureCode,
+                errorCode,
                 $"'{path}' is not one of the admitted operation's allowed values.");
 
     private static NyxIdOperationRequestFailure SchemaMismatch(
         string path,
         string expected,
-        string failureCode) =>
+        string errorCode) =>
         new(
-            failureCode,
+            errorCode,
             $"'{path}' must be {expected} according to the admitted operation contract.");
 
     private static Dictionary<string, JsonElement> ReadObjectSlot(
@@ -637,7 +645,8 @@ internal static class NyxIdOperationRequestBuilder
         out NyxIdOperationRequestFailure? failure)
     {
         failure = null;
-        var values = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+        var values = new Dictionary<string, JsonElement>(
+            slot == HeadersSlot ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
         if (!root.TryGetProperty(slot, out var value) || value.ValueKind == JsonValueKind.Null)
             return values;
 

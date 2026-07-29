@@ -128,7 +128,7 @@ public sealed class NyxIdWorkflowAdmissionEnforcementStartupGuardTests
                 capability:
                   nyxid_operation:
                     user_service_id: us-yaml-alpha
-                    operation_id: read-yaml-alpha
+                    endpoint_id: read-yaml-alpha
                 parameters:
                   tool: nyxid_proxy
                   arguments: '{"query":{}}'
@@ -262,7 +262,7 @@ public sealed class NyxIdWorkflowAdmissionEnforcementStartupGuardTests
                 NyxIdUserService = new NyxIdUserServiceCapabilityRef
                 {
                     UserServiceId = "us-alpha",
-                    OperationId = "read-alpha",
+                    EndpointId = "read-alpha",
                 },
             },
         });
@@ -285,7 +285,7 @@ public sealed class NyxIdWorkflowAdmissionEnforcementStartupGuardTests
                     {
                         UserServiceId = "us-plan-alpha",
                         ServiceSlugSnapshot = "service-alpha",
-                        OperationId = "read-plan-alpha",
+                        EndpointId = "read-plan-alpha",
                         HttpMethod = "GET",
                         PathTemplate = "/items",
                         ContractDigest = "sha256:plan-alpha",

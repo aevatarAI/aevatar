@@ -50,6 +50,7 @@ using Aevatar.GAgents.StreamingProxy;
 using Aevatar.Foundation.Runtime.Hosting.Maintenance;
 using Aevatar.Foundation.VoicePresence;
 using Aevatar.Mainnet.Host.Api.BackendConsole;
+using Aevatar.Mainnet.Host.Api.Chat;
 using Aevatar.Mainnet.Host.Api.ChatCompletions;
 using Aevatar.Mainnet.Host.Api.ChatRouting;
 using Aevatar.Mainnet.Host.Api.Cqrs;
@@ -140,6 +141,7 @@ public static class MainnetHostBuilderExtensions
             // tenant-supplied C#) must never be composed into this host. Stated explicitly so a
             // future change to the platform default cannot silently re-enable it here.
             options.EnableScriptingCapability = false;
+            options.MapWorkflowChatPost = false;
             options.ConfigureAIFeatures = ConfigureMainnetAIFeatures;
         });
         // Hosted services start in registration order. Register the provider-local index
@@ -450,6 +452,8 @@ public static class MainnetHostBuilderExtensions
         ArgumentNullException.ThrowIfNull(app);
 
         app.UseAevatarDefaultHost();
+        app.MapMainnetChatEndpoints();
+        app.MapNyxIdChatPublicEndpoints();
         app.MapNyxIdChatEndpoints();
         app.MapChatRoutePolicyAdminEndpoints();
         app.MapVoicePresenceCapabilityAdminEndpoints();

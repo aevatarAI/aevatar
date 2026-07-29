@@ -98,6 +98,9 @@ message AevatarOAuthClientState {
   // rotation grace window. Set only when a rotation demoted an existing
   // ref-backed key; empty on initial seed and for legacy state.
   aevatar.credentials.SecretReference previous_hmac_key_ref = 27;
+  // Last successfully applied operator rotation request. Business idempotency
+  // is actor-owned because transport envelope ids change when a lost 202 is retried.
+  string last_hmac_rotation_idempotency_key = 30;
 }
 
 // Issued by the bootstrap startup service from every silo on cluster cold-
@@ -165,7 +168,10 @@ message ProvisionAevatarOAuthClientCommand {
 // Issued by ops to force a fresh HMAC key rotation. Old tokens signed with
 // the previous key fail decode after the next provision; production rolls
 // out via grace window.
-message RotateAevatarOAuthClientHmacKeyCommand {}
+message RotateAevatarOAuthClientHmacKeyCommand {
+  string idempotency_key = 1;
+  string expected_current_kid = 2;
+}
 
 // Issued by the operator rebuild endpoint: re-materialize the wiped/reset
 // current-state readmodel from the surviving actor state. Appends no event
@@ -269,6 +275,7 @@ message AevatarOAuthClientHmacKeyRotatedEvent {
   // Secret-vault reference for the demoted previous key on rotation. Empty on
   // initial seed and when the demoted key was legacy plaintext-only.
   aevatar.credentials.SecretReference previous_hmac_key_ref = 9;
+  string idempotency_key = 10;
 }
 
 // Persisted when the OAuth callback observes the broker capability for

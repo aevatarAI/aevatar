@@ -381,7 +381,8 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         var planner = new RecordingAuthorizationPlanner();
         planner.Results.Enqueue(ScheduledInvocationAuthorizationPlanResult.Failed(
             failureCode,
-            detail));
+            detail,
+            requiredNyxIdServices: [new NyxIdUserServiceCapabilityRef { UserServiceId = "nyx-service-alpha" }]));
         planner.Results.Enqueue(RecordingAuthorizationPlanner.SuccessResult());
         var refresh = new RecordingCatalogRefreshPort();
         var materializer = new RecordingCredentialMaterializer();
@@ -401,9 +402,42 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         refresh.RefreshCallCount.Should().Be(1);
         refresh.LastOwner.Should().BeEquivalentTo(request.AuthenticatedOwner.Owner);
         refresh.LastBearerToken.Should().Be("bearer-alpha");
+        refresh.LastRequiredServices.Select(static service => service.UserServiceId)
+            .Should().Equal("nyx-service-alpha");
         materializer.MaterializeCallCount.Should().Be(0);
         scheduleService.BeginCallCount.Should().Be(0);
         scheduleService.EnsureCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task PreflightForWriteAsync_WhenCatalogSnapshotUnavailableWithoutRequiredServices_ShouldNotRefresh()
+    {
+        var planner = new RecordingAuthorizationPlanner();
+        planner.Results.Enqueue(ScheduledInvocationAuthorizationPlanResult.Failed(
+            ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+            "nyxid_catalog_snapshot_not_found",
+            requiredNyxIdServices: []));
+        planner.Results.Enqueue(RecordingAuthorizationPlanner.SuccessResult());
+        var refresh = new RecordingCatalogRefreshPort();
+        var tokenProvider = new RecordingWorkflowCallerAccessTokenProvider();
+        var request = Request("scope-1", "member-1") with
+        {
+            ProvisioningBearerToken = null,
+        };
+        var port = NewPort(
+            new RecordingScheduleService(),
+            planner: planner,
+            catalogRefresh: refresh,
+            callerAccessTokenProvider: tokenProvider);
+
+        var result = await port.PreflightForWriteAsync(request);
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound);
+        result.Detail.Should().Be("nyxid_catalog_refresh_required_services_unavailable:nyxid_catalog_snapshot_not_found");
+        planner.Requests.Should().ContainSingle();
+        refresh.RefreshCallCount.Should().Be(0);
+        tokenProvider.Requests.Should().BeEmpty();
     }
 
     [Fact]
@@ -688,6 +722,38 @@ public sealed class StudioMemberWorkflowSchedulePortTests
 
         await action.Should().ThrowAsync<StudioMemberAutomationNotFoundException>()
             .WithMessage("The requested Team automation was not found.");
+    }
+
+    [Fact]
+    public async Task PreflightForWriteAsync_WhenMemberReadModelMissingButAcceptedBindingProvided_ShouldUseAcceptedBindingContext()
+    {
+        var memberService = new RecordingMemberService { Detail = null };
+        var planner = new RecordingAuthorizationPlanner();
+        var port = NewPort(
+            new RecordingScheduleService(),
+            memberService,
+            planner);
+        var request = Request("scope-1", "member-1") with
+        {
+            AcceptedBinding = new StudioMemberWorkflowAcceptedBindingContext(
+                "team-1",
+                "published-member-accepted",
+                "workflow-accepted",
+                "rev-accepted"),
+        };
+
+        var result = await port.PreflightForWriteAsync(request);
+
+        result.Success.Should().BeTrue();
+        memberService.GetScopeId.Should().Be("scope-1");
+        memberService.GetMemberId.Should().Be("member-1");
+        planner.Requests.Should().ContainSingle();
+        var target = planner.Requests[0].InvocationTarget.StudioMember;
+        target.TeamId.Should().Be("team-1");
+        target.MemberId.Should().Be("member-1");
+        target.PublishedServiceId.Should().Be("published-member-accepted");
+        target.DraftWorkflowId.Should().Be("workflow-accepted");
+        target.WorkflowRevisionId.Should().Be("rev-accepted");
     }
 
     [Fact]
@@ -2168,6 +2234,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         public int RefreshCallCount { get; private set; }
         public AuthorizationOwnerIdentity? LastOwner { get; private set; }
         public string? LastBearerToken { get; private set; }
+        public IReadOnlyList<NyxIdUserServiceCapabilityRef> LastRequiredServices { get; private set; } = [];
         public List<string>? Calls { get; init; }
         public Exception? Exception { get; init; }
         public NyxIdAuthorizationCatalogRefreshResult Result { get; init; } =
@@ -2176,12 +2243,26 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         public Task<NyxIdAuthorizationCatalogRefreshResult> RefreshAsync(
             AuthorizationOwnerIdentity owner,
             string bearerToken,
-            CancellationToken ct = default)
+            CancellationToken ct = default) =>
+            RecordRefreshAsync(owner, bearerToken, []);
+
+        public Task<NyxIdAuthorizationCatalogRefreshResult> RefreshAsync(
+            AuthorizationOwnerIdentity owner,
+            string bearerToken,
+            IReadOnlyList<NyxIdUserServiceCapabilityRef> requiredServices,
+            CancellationToken ct = default) =>
+            RecordRefreshAsync(owner, bearerToken, requiredServices);
+
+        private Task<NyxIdAuthorizationCatalogRefreshResult> RecordRefreshAsync(
+            AuthorizationOwnerIdentity owner,
+            string bearerToken,
+            IReadOnlyList<NyxIdUserServiceCapabilityRef> requiredServices)
         {
             RefreshCallCount++;
             Calls?.Add("refresh");
             LastOwner = owner.Clone();
             LastBearerToken = bearerToken;
+            LastRequiredServices = requiredServices.Select(static service => service.Clone()).ToArray();
             return Exception == null
                 ? Task.FromResult(Result)
                 : Task.FromException<NyxIdAuthorizationCatalogRefreshResult>(Exception);

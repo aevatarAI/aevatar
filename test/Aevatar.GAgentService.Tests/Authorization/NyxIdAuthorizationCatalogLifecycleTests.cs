@@ -99,6 +99,37 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
     }
 
     [Fact]
+    public async Task CatalogUnstableRefreshFailure_ShouldNotInvalidateOwnerCatalog()
+    {
+        var owner = Owner();
+        var agent = CreateAgent(owner);
+
+        await BeginRefreshAsync(agent, owner, "refresh-1", ObservedAt.AddSeconds(1));
+        await agent.HandleObserveAsync(ObservationCommand(owner, "refresh-1", ObservedAt.AddMinutes(1)));
+
+        await BeginRefreshAsync(
+            agent,
+            owner,
+            "refresh-scoped-miss",
+            ObservedAt.AddMinutes(2),
+            agent.State.LifecycleFence);
+        await agent.HandleRefreshFailureAsync(new RecordNyxIdAuthorizationCatalogRefreshFailureCommand
+        {
+            Owner = owner.Clone(),
+            RefreshId = "refresh-scoped-miss",
+            FailedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(2)),
+            FailureCode = "nyxid_required_service_not_found:svc-missing",
+            OutcomeStatus = NyxIdAuthorizationCatalogRefreshOutcomeStatusState.CatalogUnstable,
+        });
+
+        agent.State.Invalidated.Should().BeFalse();
+        agent.State.InvalidationReason.Should().BeEmpty();
+        agent.State.ActiveRefreshId.Should().BeEmpty();
+        agent.State.LastRefreshFailureCode.Should().Be("nyxid_required_service_not_found:svc-missing");
+        agent.State.Services.Select(static service => service.UserServiceId).Should().Equal("svc-alpha");
+    }
+
+    [Fact]
     public async Task RefreshSession_ShouldFenceDelayedOlderBeginWhileNewerRefreshIsActive()
     {
         var owner = Owner();
@@ -1425,6 +1456,65 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
         service.NodeIds.Should().Equal("node-a", "node-z");
     }
 
+    [Fact]
+    public async Task RequiredServiceSubsetObservation_ShouldMergeIntoOwnerCatalogWithoutDroppingOtherServices()
+    {
+        var owner = Owner();
+        var eventStore = new InMemoryEventStore();
+        var agent = CreateAgent(owner, eventStore);
+        await BeginRefreshAsync(agent, owner, "refresh-full", ObservedAt.AddSeconds(1));
+        var fullObservation = ObservationCommand(owner, "refresh-full", ObservedAt.AddMinutes(1));
+        fullObservation.Services.Add(ServiceEvidence("svc-beta", "mail"));
+        fullObservation.ContentDigest = NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(
+            fullObservation.Owner,
+            fullObservation.Services);
+        await agent.HandleObserveAsync(fullObservation);
+
+        await BeginRefreshAsync(
+            agent,
+            owner,
+            "refresh-subset",
+            ObservedAt.AddMinutes(2),
+            agent.State.LifecycleFence);
+        var subsetObservation = ObservationCommand(owner, "refresh-subset", ObservedAt.AddMinutes(3));
+        subsetObservation.CoverageKind =
+            NyxIdAuthorizationCatalogObservationCoverageKind.RequiredServiceSubset;
+        subsetObservation.CoveredUserServiceIds.Add("svc-alpha");
+        subsetObservation.ContentDigest = string.Empty;
+        subsetObservation.Services[0].DisplayName = "Calendar Updated";
+        await agent.HandleObserveAsync(subsetObservation);
+
+        agent.State.Services.Select(static service => service.UserServiceId)
+            .Should().Equal("svc-alpha", "svc-beta");
+        agent.State.Services.Single(static service => service.UserServiceId == "svc-alpha")
+            .DisplayName.Should().Be("Calendar Updated");
+        agent.State.Services.Single(static service => service.UserServiceId == "svc-beta")
+            .DisplayName.Should().Be("Mail");
+        agent.State.ObservedAt.Should().Be(Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(1)));
+        agent.State.FreshUntil.Should().Be(Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(16)));
+        agent.State.ContentDigest.Should().Be(
+            NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(owner, agent.State.Services));
+
+        var actorId = NyxIdAuthorizationCatalogActorIds.Build(owner);
+        var store = new RecordingDocumentStore<NyxIdAuthorizationCatalogDocument>(static document => document.Id);
+        var projector = new NyxIdAuthorizationCatalogCurrentStateProjector(
+            store,
+            new FixedProjectionClock(ObservedAt.AddMinutes(4)));
+        await projector.ProjectAsync(
+            new NyxIdAuthorizationCatalogProjectionContext
+            {
+                RootActorId = actorId,
+                ProjectionKind = NyxIdAuthorizationCatalogGAgent.ProjectionKind,
+            },
+            CommittedEnvelope(agent.State, await eventStore.GetVersionAsync(actorId), "evt-subset"));
+        var snapshot = await new ProjectionNyxIdAuthorizationCatalogQueryPort(store).GetAsync(owner);
+
+        snapshot.Should().NotBeNull();
+        snapshot!.Services.Select(static service => service.UserServiceId)
+            .Should().Equal("svc-alpha", "svc-beta");
+        snapshot.ContentDigest.Should().Be(agent.State.ContentDigest);
+    }
+
     private static AuthorizationOwnerIdentity Owner() => new()
     {
         Authority = NyxIdAuthorizationAuthorities.NyxId,
@@ -1519,13 +1609,15 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
         return observed;
     }
 
-    private static NyxIdAuthorizationServiceEvidence ServiceEvidence()
+    private static NyxIdAuthorizationServiceEvidence ServiceEvidence(
+        string userServiceId = "svc-alpha",
+        string serviceSlug = "calendar")
     {
         var service = new NyxIdAuthorizationServiceEvidence
         {
-            UserServiceId = "svc-alpha",
-            ServiceSlug = "calendar",
-            DisplayName = "Calendar",
+            UserServiceId = userServiceId,
+            ServiceSlug = serviceSlug,
+            DisplayName = ToDisplayName(serviceSlug),
             Access = NyxIdAuthorizationAccess.Permitted,
             NodeGrantRequirement = AuthorizationGrantRequirement.Required,
             ResourceOwner = ResourceOwner(),
@@ -1534,6 +1626,13 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
         service.NodeIds.Add("node-z");
         return service;
     }
+
+    private static string ToDisplayName(string serviceSlug) => serviceSlug switch
+    {
+        "calendar" => "Calendar",
+        "mail" => "Mail",
+        _ => serviceSlug,
+    };
 
     private static async Task BeginRefreshAsync(
         NyxIdAuthorizationCatalogGAgent agent,

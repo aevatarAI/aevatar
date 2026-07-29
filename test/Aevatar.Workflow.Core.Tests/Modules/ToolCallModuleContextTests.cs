@@ -45,7 +45,7 @@ public sealed class ToolCallModuleContextTests
 
         var admission = tool.Requests.Should().ContainSingle().Subject.InvocationAdmission;
         admission.Should().NotBeNull();
-        admission!.NyxIdUserService.OperationId.Should().Be("get_item");
+        admission!.NyxIdUserService.EndpointId.Should().Be("get_item");
         admission.NyxIdUserService.PathTemplate.Should().Be("/items/{item_id}");
         admission.NyxIdUserService.ContractDigest.Should().Be("server-derived-digest");
     }
@@ -464,7 +464,7 @@ public sealed class ToolCallModuleContextTests
                 NyxIdOperation = new NyxIdOperationSelector
                 {
                     UserServiceId = userServiceId,
-                    OperationId = operationId,
+                    EndpointId = operationId,
                 },
             },
         };
@@ -487,7 +487,7 @@ public sealed class ToolCallModuleContextTests
                 {
                     UserServiceId = userServiceId,
                     ServiceSlugSnapshot = "api-shop",
-                    OperationId = operationId,
+                    EndpointId = operationId,
                     HttpMethod = "GET",
                     PathTemplate = "/items/{item_id}",
                     ContractDigest = "server-derived-digest",

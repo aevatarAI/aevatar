@@ -9,6 +9,7 @@ using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 using Aevatar.AI.ToolProviders.NyxId.Tools;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
@@ -187,6 +188,25 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
         request.Method.Should().Be("GET");
     }
 
+    [Theory]
+    [InlineData("../../../api-keys")]
+    [InlineData("/%2e%2e/%2e%2e/api-keys")]
+    public async Task ExecuteAsync_ShouldRejectUnsafeStaticProofPathBeforeAnyHttpRequest(string pathTemplate)
+    {
+        var handler = new RecordingHandler();
+        var tool = CreateTool(handler);
+        using var scope = PushContext(ListMessagesAdmission() with
+        {
+            PathTemplate = pathTemplate,
+            Parameters = [],
+        });
+
+        var result = await tool.ExecuteAsync("{}");
+
+        result.Should().Contain("NYXID_OPERATION_PATH_TEMPLATE_INVALID");
+        handler.RequestCount.Should().Be(0);
+    }
+
     [Fact]
     public async Task ExecuteAsync_ShouldAcceptDynamicMessageResourceAsAFileArtifact()
     {
@@ -241,12 +261,219 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
     }
 
     [Theory]
+    [InlineData("""{"query":{"container_id":"blocked","page_size":50}}""")]
+    [InlineData("""{"query":{"container_id":"chat","page_size":"50"}}""")]
+    public async Task ExecuteAsync_ShouldEnforceQueryParameterSchemasBeforeAnyHttpRequest(
+        string argumentsJson)
+    {
+        var handler = new RecordingHandler();
+        var tool = CreateTool(handler);
+        using var scope = PushContext(ListMessagesAdmission() with
+        {
+            Parameters =
+            [
+                QueryParameter("container_id", required: true, TextSchema("chat")),
+                QueryParameter("page_size", required: false, ScalarSchema(AgentToolOperationValueKind.Integer)),
+            ],
+        });
+
+        var result = await tool.ExecuteAsync(argumentsJson);
+
+        result.Should().Contain("NYXID_OPERATION_QUERY_PARAMETER_INVALID");
+        handler.RequestCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldEnforcePathParameterSchemasBeforeAnyHttpRequest()
+    {
+        var handler = new RecordingHandler();
+        var tool = CreateTool(handler);
+        using var scope = PushContext(GetApprovalInstanceAdmission() with
+        {
+            Parameters =
+            [
+                new AgentToolOperationParameter(
+                    "instance_code",
+                    AgentToolOperationParameterLocation.Path,
+                    true,
+                    ScalarSchema(AgentToolOperationValueKind.Integer)),
+            ],
+        });
+
+        var result = await tool.ExecuteAsync(
+            """{"path_params":{"instance_code":"approval_runtime_42"}}""");
+
+        result.Should().Contain("NYXID_OPERATION_PATH_PARAMETER_INVALID");
+        handler.RequestCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldMatchAdmittedHeaderNamesCaseInsensitively()
+    {
+        var handler = new RecordingHandler();
+        var tool = CreateTool(handler);
+        using var scope = PushContext(ListMessagesAdmission() with
+        {
+            Parameters =
+            [
+                QueryParameter("container_id", required: true),
+                new AgentToolOperationParameter(
+                    "If-Match",
+                    AgentToolOperationParameterLocation.Header,
+                    true,
+                    AgentToolOperationValueSchema.Text),
+            ],
+        });
+
+        var result = await tool.ExecuteAsync(
+            """{"query":{"container_id":"oc_1"},"headers":{"if-match":"etag-alpha"}}""");
+
+        result.Should().NotContain("NYXID_OPERATION_HEADER_MISSING");
+        handler.ProxyRequests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldRevalidateCommittedProofAgainstLiveMcpCatalog()
+    {
+        var handler = new RecordingHandler();
+        var tool = CreateTool(handler);
+        using var scope = PushContext(ListMessagesAdmission(), "organization-token");
+
+        var result = await tool.ExecuteAsync(
+            """{"query":{"container_id":"oc_1"}}""");
+
+        result.Should().NotContain("error_code");
+        handler.McpConfigRequests.Should().ContainSingle();
+        handler.ProxyRequests.Should().ContainSingle();
+        handler.AuthorizationBearers.Should().OnlyContain(static bearer => bearer == "user-token");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldRejectLiveRouteDriftBeforeProxyDispatch()
+    {
+        var handler = new RecordingHandler
+        {
+            McpConfigJson = McpConfig(ListMessagesAdmission() with { ServiceSlug = "api-lark-bot-v2" }),
+        };
+        var tool = CreateTool(handler);
+        using var scope = PushContext(ListMessagesAdmission());
+
+        var result = await tool.ExecuteAsync(
+            """{"query":{"container_id":"oc_1"}}""");
+
+        result.Should().Contain("NYXID_OPERATION_AUTHORITY_DRIFT");
+        handler.McpConfigRequests.Should().ContainSingle();
+        handler.ProxyRequests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldRejectLiveContractDigestDriftBeforeProxyDispatch()
+    {
+        var handler = new RecordingHandler
+        {
+            McpConfigJson = McpConfig(ListMessagesAdmission() with { PathTemplate = "/open-apis/im/v2/messages" }),
+        };
+        var tool = CreateTool(handler);
+        using var scope = PushContext(ListMessagesAdmission());
+
+        var result = await tool.ExecuteAsync(
+            """{"query":{"container_id":"oc_1"}}""");
+
+        result.Should().Contain("NYXID_OPERATION_CONTRACT_DRIFT");
+        handler.McpConfigRequests.Should().ContainSingle();
+        handler.ProxyRequests.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("_nyxid_via")]
+    [InlineData("_NYXID_ROUTE")]
+    public async Task ExecuteAsync_ShouldRejectReservedProofQueryNamesBeforeAnyHttpRequest(string name)
+    {
+        var handler = new RecordingHandler();
+        var tool = CreateTool(handler);
+        using var scope = PushContext(ListMessagesAdmission() with
+        {
+            Parameters = [QueryParameter(name, required: false)],
+        });
+
+        var result = await tool.ExecuteAsync("{}");
+
+        result.Should().Contain("NYXID_OPERATION_QUERY_PARAMETER_FORBIDDEN");
+        handler.RequestCount.Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData("If-Match", "")]
+    [InlineData("If-Match", "etag\rsmuggled")]
+    [InlineData("If-Match", "etag\nsmuggled")]
+    [InlineData("Accept", "text/plain")]
+    public async Task ExecuteAsync_ShouldRejectInvalidAdmittedHeadersBeforeAnyHttpRequest(
+        string name,
+        string value)
+    {
+        var handler = new RecordingHandler();
+        var tool = CreateTool(handler);
+        using var scope = PushContext(ListMessagesAdmission() with
+        {
+            Parameters =
+            [
+                QueryParameter("container_id", required: true),
+                new AgentToolOperationParameter(
+                    name,
+                    AgentToolOperationParameterLocation.Header,
+                    false,
+                    AgentToolOperationValueSchema.Text),
+            ],
+        });
+        var arguments = JsonSerializer.Serialize(new
+        {
+            query = new { container_id = "oc_1" },
+            headers = new Dictionary<string, string> { [name] = value },
+        });
+
+        var result = await tool.ExecuteAsync(arguments);
+
+        result.Should().Contain("NYXID_OPERATION_HEADER_INVALID");
+        handler.RequestCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldRejectOversizedConditionalHeaderBeforeAnyHttpRequest()
+    {
+        var handler = new RecordingHandler();
+        var tool = CreateTool(handler);
+        using var scope = PushContext(ListMessagesAdmission() with
+        {
+            Parameters =
+            [
+                QueryParameter("container_id", required: true),
+                new AgentToolOperationParameter(
+                    "If-None-Match",
+                    AgentToolOperationParameterLocation.Header,
+                    false,
+                    AgentToolOperationValueSchema.Text),
+            ],
+        });
+        var arguments = JsonSerializer.Serialize(new
+        {
+            query = new { container_id = "oc_1" },
+            headers = new Dictionary<string, string> { ["If-None-Match"] = new string('x', 1025) },
+        });
+
+        var result = await tool.ExecuteAsync(arguments);
+
+        result.Should().Contain("NYXID_OPERATION_HEADER_INVALID");
+        handler.RequestCount.Should().Be(0);
+    }
+
+    [Theory]
     [InlineData("""{"path_params":{"message_id":"om_1"}}""", "NYXID_OPERATION_PATH_PARAMETER_MISSING")]
     [InlineData("""{"path_params":{"message_id":"om_1","file_key":"f1","extra":"x"}}""", "NYXID_OPERATION_PATH_PARAMETER_UNKNOWN")]
     [InlineData("""{"path_params":{"message_id":"a/b","file_key":"f1"}}""", "NYXID_OPERATION_PATH_PARAMETER_INVALID")]
     [InlineData("""{"path_params":{"message_id":"a%2Fb","file_key":"f1"}}""", "NYXID_OPERATION_PATH_PARAMETER_INVALID")]
     [InlineData("""{"path_params":{"message_id":"..","file_key":"f1"}}""", "NYXID_OPERATION_PATH_PARAMETER_INVALID")]
     [InlineData("""{"path_params":{"message_id":"%2e%2e","file_key":"f1"}}""", "NYXID_OPERATION_PATH_PARAMETER_INVALID")]
+    [InlineData("""{"path_params":{"message_id":"%252e%252e","file_key":"f1"}}""", "NYXID_OPERATION_PATH_PARAMETER_INVALID")]
     [InlineData("""{"path_params":{"message_id":"${input}","file_key":"f1"}}""", "NYXID_OPERATION_PATH_PARAMETER_INVALID")]
     [InlineData("""{"path_params":{"message_id":"om_1","file_key":"f1"},"query":{"nope":"1"}}""", "NYXID_OPERATION_QUERY_PARAMETER_UNKNOWN")]
     [InlineData("""{"path_params":{"message_id":"om_1","file_key":"f1"},"headers":{"X-Trace":"1"}}""", "NYXID_OPERATION_HEADER_NOT_DECLARED")]
@@ -345,10 +572,10 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
     }
 
     [Theory]
-    [InlineData("""{"path_params":{"item_id":"7"},"query":{"ratio":1.5},"headers":{"X-Enabled":true}}""", "NYXID_OPERATION_PATH_PARAMETER_INVALID")]
-    [InlineData("""{"path_params":{"item_id":7},"query":{"ratio":2.5},"headers":{"X-Enabled":true}}""", "NYXID_OPERATION_QUERY_PARAMETER_INVALID")]
-    [InlineData("""{"path_params":{"item_id":7},"query":{"ratio":1.5,"mode":"brief"},"headers":{"X-Enabled":true}}""", "NYXID_OPERATION_QUERY_PARAMETER_INVALID")]
-    [InlineData("""{"path_params":{"item_id":7},"query":{"ratio":1.5},"headers":{"X-Enabled":"true"}}""", "NYXID_OPERATION_HEADER_INVALID")]
+    [InlineData("""{"path_params":{"item_id":"7"},"query":{"ratio":1.5},"headers":{"If-Match":true}}""", "NYXID_OPERATION_PATH_PARAMETER_INVALID")]
+    [InlineData("""{"path_params":{"item_id":7},"query":{"ratio":2.5},"headers":{"If-Match":true}}""", "NYXID_OPERATION_QUERY_PARAMETER_INVALID")]
+    [InlineData("""{"path_params":{"item_id":7},"query":{"ratio":1.5,"mode":"brief"},"headers":{"If-Match":true}}""", "NYXID_OPERATION_QUERY_PARAMETER_INVALID")]
+    [InlineData("""{"path_params":{"item_id":7},"query":{"ratio":1.5},"headers":{"If-Match":"true"}}""", "NYXID_OPERATION_HEADER_INVALID")]
     public async Task ExecuteAsync_ShouldValidateNonBodyValuesAgainstAdmittedSchemas(
         string argumentsJson,
         string expectedCode)
@@ -371,7 +598,7 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
         using var scope = PushContext(TypedParametersAdmission());
 
         var result = await tool.ExecuteAsync(
-            """{"path_params":{"item_id":7},"query":{"ratio":1.5,"mode":"full"},"headers":{"X-Enabled":true}}""");
+            """{"path_params":{"item_id":7},"query":{"ratio":1.5,"mode":"full"},"headers":{"If-Match":true}}""");
 
         result.Should().NotContain("error_code");
         var request = handler.ProxyRequests.Should().ContainSingle().Subject;
@@ -473,8 +700,9 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
             new AgentToolOperationResponsePolicy(false, true, ["application/octet-stream"]),
             ReadOnlyPolicy());
 
-    private static AgentToolOperationAdmission ListMessagesAdmission() =>
-        new(
+    private static AgentToolOperationAdmission ListMessagesAdmission()
+    {
+        var admission = new AgentToolOperationAdmission(
             "us-lark-alpha",
             "api-lark-bot-2",
             "lark_list_messages",
@@ -488,6 +716,96 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
             null,
             AgentToolOperationResponsePolicy.TextOnly,
             ReadOnlyPolicy());
+        var catalog = NyxIdMcpOperationCatalog.Parse(
+            McpConfig(admission),
+            "test",
+            DateTimeOffset.UnixEpoch,
+            TimeSpan.FromMinutes(5));
+        return admission with
+        {
+            ContractDigest = catalog.Services.Single().Endpoints.Single().ContractDigest,
+        };
+    }
+
+    private static string McpConfig(AgentToolOperationAdmission admission) =>
+        JsonSerializer.Serialize(new
+        {
+            user_id = "nyx-user-alpha",
+            services = new[]
+            {
+                new
+                {
+                    service_id = admission.ServiceInstanceId,
+                    service_name = "Lark",
+                    service_slug = admission.ServiceSlug,
+                    is_user_service = true,
+                    is_generic_proxy = false,
+                    endpoints = new[]
+                    {
+                        new
+                        {
+                            endpoint_id = admission.OperationId,
+                            name = admission.OperationId,
+                            method = admission.HttpMethod,
+                            path = admission.PathTemplate,
+                            parameters = admission.Parameters.Select(static parameter => new
+                            {
+                                name = parameter.Name,
+                                @in = parameter.Location.ToString().ToLowerInvariant(),
+                                required = parameter.Required,
+                                schema = new { type = parameter.Schema.Kind.ToString().ToLowerInvariant() },
+                            }),
+                            request_body_schema = admission.RequestBody is null
+                                ? null
+                                : SchemaJson(admission.RequestBody.Schema),
+                            request_content_type = admission.RequestBody?.MediaType,
+                            request_body_required = admission.RequestBody?.Required ?? false,
+                        },
+                    },
+                },
+            },
+        });
+
+    private static object SchemaJson(AgentToolOperationValueSchema schema)
+    {
+        var result = new Dictionary<string, object?>
+        {
+            ["type"] = schema.Kind.ToString().ToLowerInvariant(),
+        };
+        if (schema.Kind == AgentToolOperationValueKind.Object)
+        {
+            result["properties"] = schema.Properties.ToDictionary(
+                static property => property.Name,
+                static property => SchemaJson(property.Schema),
+                StringComparer.Ordinal);
+            result["required"] = schema.RequiredProperties;
+            result["additionalProperties"] = schema.AdditionalPropertiesAllowed;
+        }
+        else if (schema.Kind == AgentToolOperationValueKind.Array)
+        {
+            result["items"] = SchemaJson(schema.Items!);
+        }
+        else if (schema.AllowedValues.Count > 0)
+        {
+            result["enum"] = schema.AllowedValues;
+        }
+
+        return result;
+    }
+
+    private static AgentToolOperationAdmission WithLiveDigest(AgentToolOperationAdmission admission)
+    {
+        var catalog = NyxIdMcpOperationCatalog.Parse(
+            McpConfig(admission),
+            "test",
+            DateTimeOffset.UnixEpoch,
+            TimeSpan.FromMinutes(5));
+        var endpoint = catalog.Services.SingleOrDefault()?.Endpoints.SingleOrDefault();
+        return endpoint is null ? admission : admission with
+        {
+            ContractDigest = endpoint.ContractDigest,
+        };
+    }
 
     private static AgentToolOperationAdmission CreateApprovalAdmission() =>
         new(
@@ -552,7 +870,7 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
                     false,
                     ValueSchema(AgentToolOperationValueKind.String, "full")),
                 new AgentToolOperationParameter(
-                    "X-Enabled",
+                    "If-Match",
                     AgentToolOperationParameterLocation.Header,
                     true,
                     ValueSchema(AgentToolOperationValueKind.Boolean)),
@@ -589,8 +907,25 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
     private static AgentToolOperationParameter PathParameter(string name) =>
         new(name, AgentToolOperationParameterLocation.Path, true, AgentToolOperationValueSchema.Text);
 
-    private static AgentToolOperationParameter QueryParameter(string name, bool required) =>
-        new(name, AgentToolOperationParameterLocation.Query, required, AgentToolOperationValueSchema.Text);
+    private static AgentToolOperationParameter QueryParameter(
+        string name,
+        bool required,
+        AgentToolOperationValueSchema? schema = null) =>
+        new(name, AgentToolOperationParameterLocation.Query, required, schema ?? AgentToolOperationValueSchema.Text);
+
+    private static AgentToolOperationValueSchema TextSchema(params string[] allowedValues) =>
+        ScalarSchema(AgentToolOperationValueKind.String, allowedValues);
+
+    private static AgentToolOperationValueSchema ScalarSchema(
+        AgentToolOperationValueKind kind,
+        IReadOnlyList<string>? allowedValues = null) =>
+        new(
+            kind,
+            [],
+            new HashSet<string>(StringComparer.Ordinal),
+            null,
+            allowedValues ?? [],
+            false);
 
     private static NyxIdProxyTool CreateTool(
         RecordingHandler handler,
@@ -603,10 +938,12 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
             fileArtifactIngress: ingress,
             managedWorkflowAdmissionMode: managedWorkflowAdmissionMode);
 
-    private static AgentToolContextScope PushContext(AgentToolOperationAdmission admission) =>
+    private static AgentToolContextScope PushContext(
+        AgentToolOperationAdmission admission,
+        string? organizationToken = null) =>
         AgentToolContextScope.Push(new AgentToolExecutionContext(
             AgentToolRequestIdentity.Empty,
-            new AgentToolCredentials("user-token", null, null),
+            new AgentToolCredentials("user-token", organizationToken, null),
             new AgentToolCallerContext("scope-alpha", null, null),
             AgentToolChannelContext.Empty,
             AgentToolSenderBindingContext.Empty,
@@ -615,7 +952,7 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
             AgentSkillRecoveryContext.Empty,
             new Dictionary<string, string>(StringComparer.Ordinal))
         {
-            OperationAdmission = admission,
+            OperationAdmission = WithLiveDigest(admission),
             WorkflowRuntime = new AgentWorkflowRuntimeContext(
                 "workflow-run-actor-alpha",
                 "run-alpha",
@@ -653,6 +990,8 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
 
     private sealed class RecordingHandler(bool binaryResponse = false) : HttpMessageHandler
     {
+        public string? McpConfigJson { get; init; }
+
         public int RequestCount { get; private set; }
 
         public List<RecordedProxyRequest> ProxyRequests { get; } = [];
@@ -660,6 +999,10 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
         public List<string> RequestBodies { get; } = [];
 
         public List<string> RequestUris { get; } = [];
+
+        public List<string> AuthorizationBearers { get; } = [];
+
+        public List<string> McpConfigRequests { get; } = [];
 
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
@@ -671,7 +1014,21 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
                 : await request.Content.ReadAsStringAsync(cancellationToken);
             RequestBodies.Add(body);
             RequestUris.Add(request.RequestUri!.ToString());
-            if (request.RequestUri!.AbsolutePath.StartsWith("/api/v1/proxy/", StringComparison.Ordinal))
+            AuthorizationBearers.Add(request.Headers.Authorization?.Parameter ?? string.Empty);
+            if (request.RequestUri!.AbsolutePath == "/api/v1/mcp/config")
+            {
+                McpConfigRequests.Add(request.RequestUri.AbsolutePath);
+                var admission = AgentToolRequestContext.Current?.OperationAdmission ?? ListMessagesAdmission();
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(
+                        McpConfigJson ?? McpConfig(admission),
+                        Encoding.UTF8,
+                        "application/json"),
+                };
+            }
+
+            if (request.RequestUri.AbsolutePath.StartsWith("/api/v1/proxy/", StringComparison.Ordinal))
             {
                 ProxyRequests.Add(new RecordedProxyRequest(
                     request.Method.Method,

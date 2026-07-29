@@ -798,11 +798,36 @@ public static class IdentityOAuthEndpoints
         if (authorization.Rejection is not null)
             return authorization.Rejection;
 
+        var idempotencyKeys = http.Request.Headers["Idempotency-Key"];
+        var idempotencyKey = idempotencyKeys.ToString().Trim();
+        var ifMatch = http.Request.Headers.IfMatch.ToString().Trim();
+        var strongIfMatch = ifMatch.Length >= 3 &&
+                            ifMatch[0] == '"' &&
+                            ifMatch[^1] == '"' &&
+                            !ifMatch.AsSpan(1, ifMatch.Length - 2).Contains('"');
+        var expectedCurrentKid = strongIfMatch ? ifMatch[1..^1] : string.Empty;
+        if (idempotencyKeys.Count != 1 ||
+            idempotencyKey.Length is 0 or > 200 ||
+            idempotencyKey.Contains(',') ||
+            expectedCurrentKid.Length is 0 or > 128 ||
+            expectedCurrentKid.Contains(','))
+        {
+            return Results.BadRequest(new
+            {
+                error = "rotation_precondition_required",
+                detail = "Supply one Idempotency-Key and the expected current kid as If-Match.",
+            });
+        }
+
         CommandDispatchResult<ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> accepted;
         try
         {
             accepted = await rotateDispatch
-                .DispatchAsync(new RotateAevatarOAuthClientHmacKeyCommand(), ct)
+                .DispatchAsync(new RotateAevatarOAuthClientHmacKeyCommand
+                {
+                    IdempotencyKey = idempotencyKey,
+                    ExpectedCurrentKid = expectedCurrentKid,
+                }, ct)
                 .ConfigureAwait(false);
         }
         catch (Exception ex)

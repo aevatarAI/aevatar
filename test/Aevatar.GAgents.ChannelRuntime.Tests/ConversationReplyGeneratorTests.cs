@@ -2224,7 +2224,11 @@ public sealed class ConversationReplyGeneratorTests
             Control(),
             AgentToolExecutionContext.Empty with
             {
-                Caller = new AgentToolCallerContext("scope-1", "scope-1", null),
+                Caller = new AgentToolCallerContext("scope-alpha", "owner-alpha", null),
+                NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                    "nyxid",
+                    "tenant-alpha",
+                    "nyx-user-alpha"),
             },
             streamingSink: null,
             CancellationToken.None);
@@ -2235,8 +2239,10 @@ public sealed class ConversationReplyGeneratorTests
         reply.Text.Should().NotContain("scope workflow command port is not available in this host");
         commandPort.Requests.Should().ContainSingle()
             .Which.Should().Match<ScopeWorkflowUpsertRequest>(request =>
-                request.ScopeId == "scope-1" &&
-                request.WorkflowId == "demo_dinner");
+                request.ScopeId == "scope-alpha" &&
+                request.WorkflowId == "demo_dinner" &&
+                request.CapabilityAdmission != null &&
+                request.CapabilityAdmission.CallerId == "nyx-user-alpha");
     }
 
     [Fact]
@@ -3552,8 +3558,10 @@ public sealed class ConversationReplyGeneratorTests
                 MediaType = request.MediaType,
                 SizeBytes = content.LongLength,
                 Sha256 = $"sha-{fileId}",
-                CreatedAtUnixMs = 1_000 + _nextId,
-                ExpiresAtUnixMs = 2_000 + _nextId,
+                CreatedAtUnixMs = new DateTimeOffset(2026, 7, 29, 0, 0, 0, TimeSpan.Zero)
+                    .ToUnixTimeMilliseconds(),
+                ExpiresAtUnixMs = new DateTimeOffset(2100, 1, 1, 0, 0, 0, TimeSpan.Zero)
+                    .ToUnixTimeMilliseconds(),
                 OwnerRunId = request.OwnerRunId,
                 OwnerScopeId = request.OwnerScopeId,
             };

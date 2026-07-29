@@ -163,7 +163,8 @@ public static class AgentToolExecutionContextMapper
             NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
                 AgentToolExecutionContext.Normalize(payload.NyxIdAuthority?.Platform),
                 AgentToolExecutionContext.Normalize(payload.NyxIdAuthority?.Tenant),
-                AgentToolExecutionContext.Normalize(payload.NyxIdAuthority?.ExternalUserId)),
+                AgentToolExecutionContext.Normalize(payload.NyxIdAuthority?.ExternalUserId),
+                AgentToolExecutionContext.Normalize(payload.NyxIdAuthority?.Scope)),
             InvocationSurface = FromInvocationSurfacePayload(payload.InvocationSurface),
         };
     }
@@ -320,6 +321,7 @@ public static class AgentToolExecutionContextMapper
             Platform = context.Platform ?? string.Empty,
             Tenant = context.Tenant ?? string.Empty,
             ExternalUserId = context.ExternalUserId ?? string.Empty,
+            Scope = context.Scope ?? string.Empty,
         };
 
     private static void CopyExternalMetadata(

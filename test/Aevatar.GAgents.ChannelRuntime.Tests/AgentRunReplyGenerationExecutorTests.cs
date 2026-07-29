@@ -117,6 +117,47 @@ public sealed class AgentRunReplyGenerationExecutorTests
     }
 
     [Fact]
+    public async Task BuildLlmStepContinuation_WhenHistoricalFileRefHasExpired_ShouldSendUnavailableMarker()
+    {
+        var provider = new RecordingProvider();
+        var artifactPort = Substitute.For<IFileArtifactReadPort>();
+        var executor = CreateExecutor(provider, fileArtifactReadPort: artifactPort);
+        var workItem = BuildFinalNoToolsWorkItem();
+        var expiredPart = new ContentPart
+        {
+            Kind = ContentPartKind.Text,
+            MediaType = "application/pdf",
+            Name = "expired.pdf",
+            FileRef = new LlmChatFileRef
+            {
+                FileId = "wf-file-expired",
+                ArtifactId = "workflow-file://wf-file-expired",
+                SourceKind = LlmChatFileSourceKind.ChatInput,
+                FileName = "expired.pdf",
+                MediaType = "application/pdf",
+                ExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(-1).ToUnixTimeMilliseconds(),
+            },
+        };
+        workItem.StepState.Messages.Clear();
+        workItem.StepState.Messages.Add(AgentRunReplyStepMappers.ToProto(ChatMessage.User([
+            ContentPart.TextPart("summarize the earlier attachment"),
+            expiredPart,
+        ])));
+
+        await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
+
+        var providerPart = provider.Requests.Should().ContainSingle().Subject
+            .Messages.Last(message => message.Role == "user")
+            .ContentParts.Should().NotBeNull().And.Subject
+            .Single(part => part.Text?.Contains("Attachment unavailable", StringComparison.Ordinal) == true);
+        providerPart.FileRef.Should().BeNull();
+        workItem.StepState.Messages.Single().ContentParts
+            .Single(part => part.FileRef is not null)
+            .FileRef.ArtifactId.Should().Be("workflow-file://wf-file-expired");
+        artifactPort.ReceivedCalls().Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task BuildLlmStepContinuation_WhenFileRefMaterializationExceedsLimit_ShouldThrowGenericInvalidOperation()
     {
         var provider = new RecordingProvider();

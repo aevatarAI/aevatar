@@ -1,4 +1,6 @@
 using Aevatar.Capabilities;
+using Aevatar.GAgents.Channel.Identity.Abstractions;
+using Aevatar.GAgentService.Hosting.Endpoints.Schedules;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Workflow.Abstractions;
@@ -64,6 +66,7 @@ internal static class StudioProvisioningEndpoints
         string scopeId,
         ProvisionWorkflowRequest request,
         [FromServices] IStudioWorkflowProvisioningService provisioningService,
+        [FromServices] IExternalIdentityBindingQueryPort bindingQuery,
         CancellationToken ct)
     {
         if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
@@ -80,14 +83,20 @@ internal static class StudioProvisioningEndpoints
 
         try
         {
-            var executionMode = request.RunImmediately || !string.IsNullOrWhiteSpace(request.Cron)
+            var shouldSchedule = request.RunImmediately || !string.IsNullOrWhiteSpace(request.Cron);
+            var executionMode = shouldSchedule
                 ? ExternalCapabilityExecutionMode.Durable
                 : ExternalCapabilityExecutionMode.Interactive;
+            var scheduleAuthority = shouldSchedule
+                ? await StudioMemberAutomationHttpAuthorityResolver.ResolveAsync(http, bindingQuery, ct)
+                : null;
             var admittedRequest = request with
             {
                 CapabilityAdmission = StudioWorkflowCapabilityAdmissionHttpContext.Create(
                     http,
                     executionMode),
+                AuthenticatedOwner = scheduleAuthority?.AuthenticatedOwner,
+                ProvisioningBearerToken = scheduleAuthority?.ProvisioningBearerToken,
             };
             var response = await provisioningService.ProvisionAsync(
                 scopeId, callerCredential, admittedRequest, ct);
@@ -99,6 +108,22 @@ internal static class StudioProvisioningEndpoints
             return Results.Accepted(
                 BuildScheduleLocation(response.ScheduleId),
                 response);
+        }
+        catch (StudioMemberAutomationAuthorizationBindingRequiredException)
+        {
+            return Results.Json(
+                new
+                {
+                    code = "PROVISION_WORKFLOW_AUTHORIZATION_BINDING_REQUIRED",
+                    message = "Reconnect NyxID to authorize this workflow schedule.",
+                },
+                statusCode: StatusCodes.Status409Conflict);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Results.Json(
+                new { code = "PROVISION_WORKFLOW_UNAUTHORIZED", message = ex.Message },
+                statusCode: StatusCodes.Status401Unauthorized);
         }
         catch (InvalidOperationException ex)
         {

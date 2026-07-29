@@ -186,6 +186,7 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
                 teamId,
                 memberId,
                 publishedServiceId,
+                bindReceipt,
                 displayName,
                 request.Prompt ?? string.Empty,
                 callerCredential,
@@ -266,6 +267,7 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         string teamId,
         string memberId,
         string publishedServiceId,
+        StudioMemberWorkflowBindingResult bindReceipt,
         string displayName,
         string prompt,
         ProvisionWorkflowCallerCredential callerCredential,
@@ -290,6 +292,11 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
             Enabled = true,
             ScheduleMode = timing.ScheduleMode,
             OneShotFireAt = timing.OneShotFireAt,
+            AcceptedBinding = new StudioMemberWorkflowAcceptedBindingContext(
+                teamId,
+                publishedServiceId,
+                NormalizeOptional(bindReceipt.WorkflowId) ?? $"workflow-{BuildProvisionKey(scopeId, teamId, displayName)}",
+                NormalizeOptional(bindReceipt.RevisionId)),
         };
 
         var preflight = await _schedulePort.PreflightForWriteAsync(baseScheduleRequest, ct);

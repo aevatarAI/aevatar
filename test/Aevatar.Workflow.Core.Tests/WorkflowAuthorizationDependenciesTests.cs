@@ -21,7 +21,7 @@ public sealed class WorkflowAuthorizationDependenciesTests
                 capability:
                   nyxid_operation:
                     user_service_id: us-shop-alpha
-                    operation_id: get_item
+                    endpoint_id: endpoint-get-item
                 parameters:
                   tool: nyxid_proxy
                   arguments: '{"path_params":{"item_id":"${input}"}}'
@@ -35,7 +35,7 @@ public sealed class WorkflowAuthorizationDependenciesTests
         step.Capability.Should().NotBeNull();
         step.Capability!.NyxIdOperation.Should().NotBeNull();
         step.Capability.NyxIdOperation!.UserServiceId.Should().Be("us-shop-alpha");
-        step.Capability.NyxIdOperation.OperationId.Should().Be("get_item");
+        step.Capability.NyxIdOperation.EndpointId.Should().Be("endpoint-get-item");
         step.Parameters.Should().NotContainKey("capability");
     }
 
@@ -51,7 +51,7 @@ public sealed class WorkflowAuthorizationDependenciesTests
                 capability:
                   nyxid_operation:
                     user_service_id: us-shop-alpha
-                    operation_id: get_item
+                    endpoint_id: endpoint-get-item
                 parameters:
                   tool: nyxid_proxy
                   arguments: '{"path_params":{"item_id":"${input}"}}'
@@ -64,7 +64,7 @@ public sealed class WorkflowAuthorizationDependenciesTests
         invocation.CallSiteId.Should().Be("selector-workflow/read-item");
         invocation.ToolName.Should().Be("nyxid_proxy");
         invocation.Selector.NyxIdOperation.UserServiceId.Should().Be("us-shop-alpha");
-        invocation.Selector.NyxIdOperation.OperationId.Should().Be("get_item");
+        invocation.Selector.NyxIdOperation.EndpointId.Should().Be("endpoint-get-item");
         dependencies.ServiceGrantPolicy.Should().Be(WorkflowServiceGrantPolicy.Required);
     }
 
@@ -235,7 +235,7 @@ public sealed class WorkflowAuthorizationDependenciesTests
                 capability:
                   nyxid_operation:
                     user_service_id: us-home-alpha
-                    operation_id: list-items
+                    endpoint_id: list-items
                 parameters:
                   tool: nyxid_proxy
                   arguments: '{"query":{}}'
@@ -247,7 +247,7 @@ public sealed class WorkflowAuthorizationDependenciesTests
                     capability:
                       nyxid_operation:
                         user_service_id: us-home-beta
-                        operation_id: list-items
+                        endpoint_id: list-items
                     parameters:
                       tool: nyxid_proxy
                       arguments: '{"query":{}}'
@@ -261,7 +261,7 @@ public sealed class WorkflowAuthorizationDependenciesTests
                 invocation.Selector.NyxIdOperation.UserServiceId)
             .Should().Equal("us-home-alpha", "us-home-beta");
         result.ExternalInvocations.Should().OnlyContain(static invocation =>
-            invocation.Selector.NyxIdOperation.OperationId == "list-items");
+            invocation.Selector.NyxIdOperation.EndpointId == "list-items");
         result.ServiceGrantPolicy.Should().Be(WorkflowServiceGrantPolicy.Required);
     }
 
@@ -270,6 +270,7 @@ public sealed class WorkflowAuthorizationDependenciesTests
     [InlineData("service")]
     [InlineData("slug")]
     [InlineData("operation_id")]
+    [InlineData("endpoint_id")]
     [InlineData("method")]
     [InlineData("path")]
     [InlineData("path_template")]
@@ -287,7 +288,7 @@ public sealed class WorkflowAuthorizationDependenciesTests
                 capability:
                   nyxid_operation:
                     user_service_id: us-home-alpha
-                    operation_id: list-items
+                    endpoint_id: list-items
                 parameters:
                   tool: nyxid_proxy
                   arguments: '{"{{derivedField}}":"forged"}'
@@ -311,7 +312,7 @@ public sealed class WorkflowAuthorizationDependenciesTests
                 capability:
                   nyxid_operation:
                     user_service_id: ${service_id}
-                    operation_id: list-items
+                    endpoint_id: list-items
                 parameters:
                   tool: nyxid_proxy
                   arguments: '{"query":{}}'
@@ -354,7 +355,7 @@ public sealed class WorkflowAuthorizationDependenciesTests
                 capability:
                   nyxid_operation:
                     user_service_id: us-home-alpha
-                    operation_id: list-items
+                    endpoint_id: list-items
                 parameters:
                   tool: nyxid_proxy
                   arguments: '{"unsupported_slot":{}}'
@@ -383,7 +384,7 @@ public sealed class WorkflowAuthorizationDependenciesTests
                 capability:
                   nyxid_operation:
                     user_service_id: us-home-alpha
-                    operation_id: list-items
+                    endpoint_id: list-items
                 parameters:
                   tool: nyxid_proxy
                   arguments: '{"headers":{"{{{headerName}}}":"must-not-enter-workflow"}}'
@@ -407,7 +408,7 @@ public sealed class WorkflowAuthorizationDependenciesTests
                 capability:
                   nyxid_operation:
                     user_service_id: us-home-alpha
-                    operation_id: list-items
+                    endpoint_id: list-items
                 parameters:
                   tool: nyxid_proxy
                   arguments: '{"query":{}}'
@@ -422,7 +423,7 @@ public sealed class WorkflowAuthorizationDependenciesTests
                 NyxIdOperation = new NyxIdOperationSelector
                 {
                     UserServiceId = "us-forged-beta",
-                    OperationId = "forged-operation",
+                    EndpointId = "forged-operation",
                 },
             },
         });
@@ -542,7 +543,7 @@ public sealed class WorkflowAuthorizationDependenciesTests
             capability:
               nyxid_operation:
                 user_service_id: us-home-alpha
-                operation_id: get-state
+                endpoint_id: get-state
             parameters:
               tool: nyxid_proxy
               arguments: '{"path_params":{"entity_id":"${input}"}}'
@@ -567,7 +568,7 @@ public sealed class WorkflowAuthorizationDependenciesTests
                         {
                             UserServiceId = invocation.Selector.NyxIdOperation.UserServiceId,
                             ServiceSlugSnapshot = "home-assistant",
-                            OperationId = invocation.Selector.NyxIdOperation.OperationId,
+                            EndpointId = invocation.Selector.NyxIdOperation.EndpointId,
                             HttpMethod = "GET",
                             PathTemplate = "/states/{entity_id}",
                             ContractDigest = "operation-digest",
@@ -593,23 +594,13 @@ public sealed class WorkflowAuthorizationDependenciesTests
         [
             new()
             {
-                SourceKind = ExternalCapabilitySourceKind.NyxIdUserServices,
-                SourceId = "nyxid-user-services:caller",
+                SourceKind = ExternalCapabilitySourceKind.NyxIdMcpConfig,
+                SourceId = "nyxid-mcp-config:caller:nyx-user-alpha",
                 ObservedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
                     new DateTimeOffset(2026, 7, 21, 10, 0, 0, TimeSpan.Zero)),
                 FreshUntil = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
                     new DateTimeOffset(2026, 7, 21, 10, 5, 0, TimeSpan.Zero)),
-                ContentDigest = "source-digest",
-            },
-            new()
-            {
-                SourceKind = ExternalCapabilitySourceKind.NyxIdOpenApi,
-                SourceId = userServiceId,
-                ObservedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
-                    new DateTimeOffset(2026, 7, 21, 10, 0, 0, TimeSpan.Zero)),
-                FreshUntil = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
-                    new DateTimeOffset(2026, 7, 21, 10, 5, 0, TimeSpan.Zero)),
-                ContentDigest = "openapi-digest",
+                ContentDigest = "mcp-config-digest",
             },
         ];
 

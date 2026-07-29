@@ -28,11 +28,16 @@ public static class WorkflowCapabilityEndpoints
         "UNSUPPORTED_MEDIA_TYPE",
         "Content-Type must be application/json or multipart/form-data.");
 
-    public static IEndpointRouteBuilder MapWorkflowCapabilityEndpoints(this IEndpointRouteBuilder app)
+    public static IEndpointRouteBuilder MapWorkflowCapabilityEndpoints(
+        this IEndpointRouteBuilder app,
+        bool mapChatPost = true)
     {
         var group = app.MapGroup("/api").WithTags("Chat");
-        group.MapPost("/chat", HandleChatPost)
-            .WithName("StartWorkflowChat");
+        if (mapChatPost)
+        {
+            group.MapPost("/chat", HandleChatPost)
+                .WithName("StartWorkflowChat");
+        }
         group.MapGet(
                 "/ws/chat",
                 async (
@@ -56,6 +61,13 @@ public static class WorkflowCapabilityEndpoints
 
         return app;
     }
+
+    public static Task HandleChatPostAsync(HttpContext http, CancellationToken ct = default) =>
+        HandleChatPost(
+            http,
+            http.RequestServices.GetRequiredService<IWorkflowChatRunInteractionPort>(),
+            http.RequestServices.GetRequiredService<WorkflowMultipartChatRequestParser>(),
+            ct);
 
     internal static async Task HandleChatPost(
         HttpContext http,

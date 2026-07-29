@@ -21,7 +21,7 @@ public static class WorkflowOperationAdmissionToolContextMapper
         return new AgentToolOperationAdmission(
             proof.UserServiceId,
             proof.ServiceSlugSnapshot,
-            proof.OperationId,
+            proof.EndpointId,
             proof.HttpMethod,
             proof.PathTemplate,
             proof.ContractDigest,

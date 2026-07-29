@@ -77,6 +77,39 @@ public class NyxIdChatGAgentTests
     }
 
     [Fact]
+    public async Task CreateTargetResolver_ShouldPreserveFirstDispatchOwnershipWhenRequestedActorAlreadyExists()
+    {
+        var runtime = new RecordingActorRuntime();
+        var source = new FixedAgentProfileSnapshotSource(BuildSealedProfile("profile-v1", "profile.route"));
+        var routeQueryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
+            new ChatRouteAction
+            {
+                ForwardToModel = new ForwardToModel
+                {
+                    ToolSetRef = new ChatRouteToolSetRef { Name = "profile.route" },
+                },
+            },
+            []));
+        var resolver = new NyxIdChatConversationCreateCommandTargetResolver(
+            runtime,
+            routeQueryPort,
+            NewChatRouteResolver(),
+            source);
+        var command = new NyxIdChatConversationCreateCommand
+        {
+            ScopeId = "scope-a",
+            RequestedActorId = "nyxid-chat-retry",
+        };
+
+        var result = await resolver.ResolveAsync(command);
+
+        result.Succeeded.Should().BeTrue();
+        result.Target!.CreatedLocally.Should().BeTrue();
+        source.ActorIds.Should().Equal("nyxid-chat-retry");
+        AgentProfileSnapshotCodec.ByteEquivalent(command.AgentProfile, source.Snapshot).Should().BeTrue();
+    }
+
+    [Fact]
     public async Task CreateTargetResolver_ShouldRejectProfileRouteDriftBeforeCreatingActor()
     {
         var runtime = new RecordingActorRuntime();
@@ -207,6 +240,43 @@ public class NyxIdChatGAgentTests
     }
 
     [Fact]
+    public async Task HandleCreateConversationAsync_WithFirstTurn_ShouldRegisterBeforeStartingTurn()
+    {
+        var operations = new List<string>();
+        var registry = new RecordingGAgentActorRegistryCommandPort(operations);
+        var history = new RecordingChatHistoryCommandPort(operations);
+        var runtime = new RecordingActorRuntime(operations);
+        var dispatch = new RecordingSelfDispatchPort(operations);
+        using var provider = BuildServiceProvider(registry, runtime, history);
+        const string actorId = "nyxid-chat-first-turn";
+        var agent = CreateConversationAgent(provider, actorId, dispatch);
+        var firstTurn = new NyxIdChatStartTurnCommand
+        {
+            ScopeId = "scope-a",
+            ConversationActorId = actorId,
+            TurnId = "turn-first",
+            TaskId = "task-first",
+            ClientRequestId = "client-first",
+            CommandId = "command-first",
+            CorrelationId = "correlation-first",
+            Prompt = "hello",
+        };
+
+        await agent.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatConversationCreateCommand
+        {
+            ScopeId = "scope-a",
+            CreatedLocally = true,
+            FirstTurn = firstTurn,
+        }));
+
+        operations.IndexOf("registry.register").Should().BeLessThan(
+            operations.IndexOf("history.reserve"));
+        agent.State.ActiveTurn.TurnId.Should().Be("turn-first");
+        dispatch.Calls.Should().Contain(call =>
+            call.Envelope.Payload.Is(NyxIdChatOperationDispatchCommand.Descriptor));
+    }
+
+    [Fact]
     public async Task HandleCreateConversationAsync_WhenInitializationContinuationDispatchFails_ShouldKeepAcceptedConversationPendingRecovery()
     {
         var registry = new RecordingGAgentActorRegistryCommandPort();
@@ -258,6 +328,42 @@ public class NyxIdChatGAgentTests
         agent.State.PendingHistoryInitialization.Should().BeNull();
         agent.State.HistoryInitializationOperationId.Should().BeEmpty();
         dispatch.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleCreateConversationAsync_ShouldRetryRegistrationBeforeStartingFirstTurn()
+    {
+        var registry = new RecordingGAgentActorRegistryCommandPort
+        {
+            RegisterStage = GAgentActorRegistryCommandStage.AcceptedForDispatch,
+        };
+        var dispatch = new RecordingSelfDispatchPort();
+        using var provider = BuildServiceProvider(registry, new RecordingActorRuntime());
+        const string actorId = "nyxid-chat-registration-retry";
+        var agent = CreateConversationAgent(provider, actorId, dispatch);
+        var command = new NyxIdChatConversationCreateCommand
+        {
+            ScopeId = "scope-a",
+            CreatedLocally = true,
+            FirstTurn = new NyxIdChatStartTurnCommand
+            {
+                ScopeId = "scope-a",
+                ConversationActorId = actorId,
+                TurnId = "turn-retry",
+                TaskId = "task-retry",
+                ClientRequestId = "client-retry",
+                CommandId = "command-retry",
+                CorrelationId = "correlation-retry",
+                Prompt = "retry",
+            },
+        };
+
+        await agent.HandleEventAsync(CreateEnvelope(actorId, command));
+        registry.RegisterStage = GAgentActorRegistryCommandStage.AdmissionVisible;
+        await agent.HandleEventAsync(CreateEnvelope(actorId, command.Clone()));
+
+        registry.RegisteredActors.Should().HaveCount(2);
+        agent.State.ActiveTurn.TurnId.Should().Be("turn-retry");
     }
 
     [Fact]
@@ -2264,9 +2370,9 @@ public class NyxIdChatGAgentTests
         }
     }
 
-    private sealed class RecordingGAgentActorRegistryCommandPort : IGAgentActorRegistryCommandPort
+    private sealed class RecordingGAgentActorRegistryCommandPort(List<string>? operations = null) : IGAgentActorRegistryCommandPort
     {
-        public GAgentActorRegistryCommandStage RegisterStage { get; init; } =
+        public GAgentActorRegistryCommandStage RegisterStage { get; set; } =
             GAgentActorRegistryCommandStage.AdmissionVisible;
 
         public List<GAgentActorRegistration> RegisteredActors { get; } = [];
@@ -2276,6 +2382,7 @@ public class NyxIdChatGAgentTests
             GAgentActorRegistration registration,
             CancellationToken cancellationToken = default)
         {
+            operations?.Add("registry.register");
             RegisteredActors.Add(registration);
             return Task.FromResult(new GAgentActorRegistryCommandReceipt(registration, RegisterStage));
         }
@@ -2291,7 +2398,7 @@ public class NyxIdChatGAgentTests
         }
     }
 
-    private sealed class RecordingChatHistoryCommandPort : IChatHistoryCommandPort
+    private sealed class RecordingChatHistoryCommandPort(List<string>? operations = null) : IChatHistoryCommandPort
     {
         public Exception? InitializeException { get; init; }
         public List<ChatHistoryConversationInitialization> Initializations { get; } = [];
@@ -2310,7 +2417,11 @@ public class NyxIdChatGAgentTests
 
         public Task ReserveTurnDeliveryAsync(
             ChatHistoryTurnDeliveryReservation request,
-            CancellationToken ct = default) => Task.CompletedTask;
+            CancellationToken ct = default)
+        {
+            operations?.Add("history.reserve");
+            return Task.CompletedTask;
+        }
 
         public Task NotifyTurnTerminalAsync(
             ChatHistoryTurnTerminalNotification notification,
@@ -2411,7 +2522,7 @@ public class NyxIdChatGAgentTests
             Task.CompletedTask;
     }
 
-    private sealed class RecordingSelfDispatchPort : IActorDispatchPort
+    private sealed class RecordingSelfDispatchPort(List<string>? operations = null) : IActorDispatchPort
     {
         public Exception? DispatchException { get; init; }
         public List<(string ActorId, EventEnvelope Envelope)> Calls { get; } = [];
@@ -2422,6 +2533,7 @@ public class NyxIdChatGAgentTests
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            operations?.Add("dispatch");
             Calls.Add((actorId, envelope.Clone()));
             if (DispatchException is not null)
                 throw DispatchException;
@@ -2429,7 +2541,7 @@ public class NyxIdChatGAgentTests
         }
     }
 
-    private sealed class RecordingActorRuntime : IActorRuntime
+    private sealed class RecordingActorRuntime(List<string>? operations = null) : IActorRuntime
     {
         public List<(System.Type Type, string? Id)> CreateCalls { get; } = [];
         public List<string> DestroyedActors { get; } = [];
@@ -2439,6 +2551,7 @@ public class NyxIdChatGAgentTests
         public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
             where TAgent : IAgent
         {
+            operations?.Add("runtime.create");
             CreateCalls.Add((typeof(TAgent), id));
             return Task.FromResult<IActor>(new RecordingActor(id ?? Guid.NewGuid().ToString("N")));
         }

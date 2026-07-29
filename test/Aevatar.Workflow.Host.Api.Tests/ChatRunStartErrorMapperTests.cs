@@ -132,8 +132,8 @@ public class ChatRunStartErrorMapperTests
         });
         readiness.Sources.Add(new ExternalCapabilitySourceStamp
         {
-            SourceKind = ExternalCapabilitySourceKind.NyxIdOpenApi,
-            SourceId = "source-1",
+            SourceKind = ExternalCapabilitySourceKind.ConnectorCatalog,
+            SourceId = "connector-catalog:scope-alpha",
             SourceVersion = 7,
         });
         var detail = WorkflowChatRunStartFailureDetail.Create(
@@ -148,13 +148,44 @@ public class ChatRunStartErrorMapperTests
         var readinessJson = root.GetProperty("externalCapabilityReadiness");
         readinessJson.GetProperty("status").GetString().Should().Be("contract_drift");
         readinessJson.GetProperty("selectedCapability").GetProperty("userServiceId").ValueKind.Should().Be(JsonValueKind.Null);
+        readinessJson.GetProperty("selectedCapability").GetProperty("endpointId").ValueKind.Should().Be(JsonValueKind.Null);
         readinessJson.GetProperty("selectedCapability").GetProperty("operationId").GetString().Should().Be("operation-1");
         readinessJson.GetProperty("selectedCapability").GetProperty("connectorCapabilityRef").GetString().Should().Be("connector/ref");
         readinessJson.GetProperty("blockers")[0].GetProperty("code").GetString().Should().Be("NYXID_OPERATION_AUTHORING_MIGRATION_REQUIRED");
         readinessJson.GetProperty("blockers")[0].GetProperty("status").GetString().Should().Be("contract_drift");
         readinessJson.GetProperty("remediations")[0].GetProperty("actionKind").GetString().Should().Be("rebind_workflow");
         readinessJson.GetProperty("remediations")[0].GetProperty("trustedLocator").GetString().Should().Be("nyxid:services");
-        readinessJson.GetProperty("sources")[0].GetProperty("sourceKind").GetString().Should().Be("nyx_id_open_api");
+        readinessJson.GetProperty("sources")[0].GetProperty("sourceKind").GetString().Should().Be("connector_catalog");
         readinessJson.GetProperty("sources")[0].GetProperty("sourceVersion").GetInt64().Should().Be(7);
+    }
+
+    [Fact]
+    public void ToErrorBody_ShouldKeepNyxIdEndpointIdentityOutOfConnectorOperationField()
+    {
+        var readiness = new ExternalCapabilityReadiness
+        {
+            Status = ExternalCapabilityReadinessStatus.OperationSelectionRequired,
+            SelectedSelector = new ExternalWorkflowCapabilitySelector
+            {
+                NyxIdOperation = new NyxIdOperationSelector
+                {
+                    UserServiceId = "usvc-alpha",
+                    EndpointId = "endpoint-alpha",
+                },
+            },
+        };
+        var detail = WorkflowChatRunStartFailureDetail.Create(
+            WorkflowChatRunStartError.InvalidWorkflowYaml,
+            "External workflow capability admission failed.",
+            readiness);
+
+        using var json = JsonDocument.Parse(JsonSerializer.Serialize(ChatRunStartErrorMapper.ToErrorBody(detail)));
+        var selected = json.RootElement.GetProperty("externalCapabilityReadiness")
+            .GetProperty("selectedCapability");
+
+        selected.GetProperty("userServiceId").GetString().Should().Be("usvc-alpha");
+        selected.GetProperty("endpointId").GetString().Should().Be("endpoint-alpha");
+        selected.GetProperty("operationId").ValueKind.Should().Be(JsonValueKind.Null);
+        selected.GetProperty("connectorCapabilityRef").ValueKind.Should().Be(JsonValueKind.Null);
     }
 }

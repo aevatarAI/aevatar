@@ -52,6 +52,7 @@ enum ExternalCapabilitySourceKind {
   EXTERNAL_CAPABILITY_SOURCE_KIND_NYX_ID_USER_SERVICES = 2;
   EXTERNAL_CAPABILITY_SOURCE_KIND_NYX_ID_OPEN_API = 3;
   EXTERNAL_CAPABILITY_SOURCE_KIND_DURABLE_AUTHORIZATION_CATALOG = 4;
+  EXTERNAL_CAPABILITY_SOURCE_KIND_NYX_ID_MCP_CONFIG = 5;
 }
 
 enum ExternalCapabilityAuthorizationOwnerKind {
@@ -73,8 +74,10 @@ message HostConnectorCapabilityRef {
 }
 
 message NyxIdOperationSelector {
+  reserved 2;
+  reserved "operation_id";
   string user_service_id = 1;
-  string operation_id = 2;
+  string endpoint_id = 3;
 }
 
 message ExternalWorkflowCapabilitySelector {
@@ -91,9 +94,10 @@ message ExternalToolInvocationSpec {
 }
 
 message NyxIdUserServiceCapabilityRef {
+  reserved 3;
+  reserved "operation_id";
   string user_service_id = 1;
   string service_slug_snapshot = 2;
-  string operation_id = 3;
   string http_method = 4;
   string path_template = 5;
   string contract_digest = 6;
@@ -101,6 +105,7 @@ message NyxIdUserServiceCapabilityRef {
   NyxIdOperationRequestBodyContract request_body = 8;
   NyxIdOperationResponsePolicy response_policy = 9;
   NyxIdOperationExecutionPolicy execution_policy = 10;
+  string endpoint_id = 11;
 }
 
 enum NyxIdOperationRisk {
@@ -219,6 +224,34 @@ message ExternalWorkflowCapabilityDescriptor {
   bool destructive = 4;
   ExternalCapabilitySourceStamp source = 5;
   ExternalWorkflowCapabilitySelector selector = 6;
+}
+
+enum ExternalCapabilityDiscoveryDiagnosticCode {
+  EXTERNAL_CAPABILITY_DISCOVERY_DIAGNOSTIC_CODE_UNSPECIFIED = 0;
+  EXTERNAL_CAPABILITY_DISCOVERY_DIAGNOSTIC_CODE_SOURCE_UNAVAILABLE = 1;
+  EXTERNAL_CAPABILITY_DISCOVERY_DIAGNOSTIC_CODE_NO_EXACT_USER_SERVICE = 2;
+  EXTERNAL_CAPABILITY_DISCOVERY_DIAGNOSTIC_CODE_GENERIC_PROXY_REJECTED = 3;
+  EXTERNAL_CAPABILITY_DISCOVERY_DIAGNOSTIC_CODE_INVALID_SERVICE_IDENTITY = 4;
+  EXTERNAL_CAPABILITY_DISCOVERY_DIAGNOSTIC_CODE_AMBIGUOUS_SERVICE_IDENTITY = 5;
+  EXTERNAL_CAPABILITY_DISCOVERY_DIAGNOSTIC_CODE_INVALID_ENDPOINT_IDENTITY = 6;
+  EXTERNAL_CAPABILITY_DISCOVERY_DIAGNOSTIC_CODE_AMBIGUOUS_ENDPOINT_IDENTITY = 7;
+  EXTERNAL_CAPABILITY_DISCOVERY_DIAGNOSTIC_CODE_UNSUPPORTED_PARAMETER = 8;
+  EXTERNAL_CAPABILITY_DISCOVERY_DIAGNOSTIC_CODE_UNSUPPORTED_REQUEST_BODY = 9;
+  EXTERNAL_CAPABILITY_DISCOVERY_DIAGNOSTIC_CODE_UNSUPPORTED_SCHEMA = 10;
+}
+
+message ExternalCapabilityDiscoveryDiagnostic {
+  ExternalCapabilityDiscoveryDiagnosticCode code = 1;
+  string safe_message = 2;
+  int32 count = 3;
+  ExternalCapabilitySourceStamp source = 4;
+}
+
+message ExternalWorkflowCapabilityDiscoveryResult {
+  repeated ExternalWorkflowCapabilityDescriptor capabilities = 1;
+  int32 candidate_count = 2;
+  int32 rejected_count = 3;
+  repeated ExternalCapabilityDiscoveryDiagnostic diagnostics = 4;
 }
 
 message ExternalCapabilityReadiness {

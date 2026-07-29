@@ -161,7 +161,7 @@ public interface IExternalWorkflowCapabilitySource
 {
     ExternalWorkflowCapabilitySelector.SelectorOneofCase SelectorKind { get; }
 
-    Task<IReadOnlyList<ExternalWorkflowCapabilityDescriptor>> ListAsync(
+    Task<ExternalWorkflowCapabilityDiscoveryResult> ListAsync(
         ExternalWorkflowCapabilityAccessContext access,
         CancellationToken cancellationToken = default);
 
@@ -174,7 +174,7 @@ public interface IExternalWorkflowCapabilitySource
 
 public interface IExternalWorkflowCapabilityListPort
 {
-    Task<IReadOnlyList<ExternalWorkflowCapabilityDescriptor>> ListAsync(
+    Task<ExternalWorkflowCapabilityDiscoveryResult> ListAsync(
         ListExternalWorkflowCapabilitiesRequest request,
         CancellationToken cancellationToken = default);
 }

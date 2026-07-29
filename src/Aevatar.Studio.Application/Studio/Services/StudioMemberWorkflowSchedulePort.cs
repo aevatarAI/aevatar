@@ -143,6 +143,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
 
         var refresh = await RefreshRecoverableNyxIdCatalogSnapshotAsync(
             resolved.AuthorizationRequest,
+            first.RequiredNyxIdServices,
             cancellationToken => ResolveProvisioningBearerTokenAsync(request, cancellationToken),
             first.FailureCode,
             first.Detail,
@@ -192,6 +193,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
 
         var refresh = await RefreshRecoverableNyxIdCatalogSnapshotAsync(
             authorizationRequest,
+            first.RequiredNyxIdServices,
             provisioningBearerTokenResolver,
             first.FailureCode,
             first.Detail,
@@ -814,12 +816,21 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
 
     private async Task<CatalogRefreshRecoveryResult> RefreshRecoverableNyxIdCatalogSnapshotAsync(
         ScheduledInvocationAuthorizationRequest authorizationRequest,
+        IReadOnlyList<NyxIdUserServiceCapabilityRef>? resolvedRequiredServices,
         Func<CancellationToken, Task<string>> provisioningBearerTokenResolver,
         ScheduledInvocationAuthorizationFailureCode failureCode,
         string detail,
         long observedCatalogStateVersion,
         CancellationToken ct)
     {
+        var requiredServices = ResolveCatalogRefreshRequiredServices(authorizationRequest, resolvedRequiredServices);
+        if (resolvedRequiredServices is { Count: 0 } && requiredServices.Count == 0)
+        {
+            return CatalogRefreshRecoveryResult.Failed(
+                failureCode,
+                $"nyxid_catalog_refresh_required_services_unavailable:{detail}");
+        }
+
         string bearerToken;
         try
         {
@@ -842,7 +853,11 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         NyxIdAuthorizationCatalogRefreshResult refresh;
         try
         {
-            refresh = await _catalogRefreshPort.RefreshAsync(authorizationRequest.Owner, bearerToken, ct);
+            refresh = await _catalogRefreshPort.RefreshAsync(
+                authorizationRequest.Owner,
+                bearerToken,
+                requiredServices,
+                ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -887,6 +902,15 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         return CatalogRefreshRecoveryResult.Succeeded(refresh);
     }
 
+    private static IReadOnlyList<NyxIdUserServiceCapabilityRef> ResolveCatalogRefreshRequiredServices(
+        ScheduledInvocationAuthorizationRequest authorizationRequest,
+        IReadOnlyList<NyxIdUserServiceCapabilityRef>? resolvedRequiredServices)
+    {
+        if (resolvedRequiredServices is { Count: > 0 })
+            return resolvedRequiredServices;
+        return authorizationRequest.RequiredNyxIdServices;
+    }
+
     private async Task<ResolvedStudioAuthorizationRequest> ResolveAuthorizationRequestAsync(
         StudioMemberWorkflowScheduleRequest request,
         CancellationToken ct,
@@ -901,7 +925,12 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         }
         catch (StudioMemberNotFoundException)
         {
-            throw new StudioMemberAutomationNotFoundException();
+            return ResolveAcceptedBindingAuthorizationRequest(
+                request,
+                scopeId,
+                memberId,
+                credentialExpiresAtUtc)
+                ?? throw new StudioMemberAutomationNotFoundException();
         }
         if (!string.Equals(member.Summary.ImplementationKind, MemberImplementationKindNames.Workflow, StringComparison.Ordinal))
             throw new InvalidOperationException($"member_id '{memberId}' is not a workflow member and cannot be scheduled as a workflow.");
@@ -913,9 +942,74 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         {
             throw new StudioMemberAutomationNotFoundException();
         }
-        EnsureWorkflowBindingCanBeScheduled(member, memberId, publishedServiceId);
+
+        try
+        {
+            EnsureWorkflowBindingCanBeScheduled(member, memberId, publishedServiceId);
+        }
+        catch (InvalidOperationException) when (request.AcceptedBinding is not null)
+        {
+            return BuildResolvedAuthorizationRequest(
+                request,
+                scopeId,
+                teamId,
+                memberId,
+                publishedServiceId,
+                NormalizeRequired(request.AcceptedBinding.WorkflowId, nameof(request.AcceptedBinding.WorkflowId)),
+                NormalizeOptional(request.AcceptedBinding.WorkflowRevisionId) ?? string.Empty,
+                credentialExpiresAtUtc);
+        }
+
         var workflowRevision = member.LastBinding?.RevisionId ?? member.Summary.LastBoundRevisionId ?? string.Empty;
         var workflowId = NormalizeRequired(member.ImplementationRef?.WorkflowId, "workflowId");
+        return BuildResolvedAuthorizationRequest(
+            request,
+            scopeId,
+            teamId,
+            memberId,
+            publishedServiceId,
+            workflowId,
+            workflowRevision,
+            credentialExpiresAtUtc);
+    }
+
+    private ResolvedStudioAuthorizationRequest? ResolveAcceptedBindingAuthorizationRequest(
+        StudioMemberWorkflowScheduleRequest request,
+        string scopeId,
+        string memberId,
+        DateTimeOffset? credentialExpiresAtUtc)
+    {
+        if (request.AcceptedBinding is not { } acceptedBinding)
+            return null;
+
+        var acceptedTeamId = NormalizeRequired(acceptedBinding.TeamId, nameof(acceptedBinding.TeamId));
+        if (!string.IsNullOrWhiteSpace(request.TeamId) &&
+            !string.Equals(acceptedTeamId, request.TeamId.Trim(), StringComparison.Ordinal))
+        {
+            throw new StudioMemberAutomationNotFoundException();
+        }
+
+        return BuildResolvedAuthorizationRequest(
+            request,
+            scopeId,
+            acceptedTeamId,
+            memberId,
+            NormalizeRequired(acceptedBinding.PublishedServiceId, nameof(acceptedBinding.PublishedServiceId)),
+            NormalizeRequired(acceptedBinding.WorkflowId, nameof(acceptedBinding.WorkflowId)),
+            NormalizeOptional(acceptedBinding.WorkflowRevisionId) ?? string.Empty,
+            credentialExpiresAtUtc);
+    }
+
+    private ResolvedStudioAuthorizationRequest BuildResolvedAuthorizationRequest(
+        StudioMemberWorkflowScheduleRequest request,
+        string scopeId,
+        string teamId,
+        string memberId,
+        string publishedServiceId,
+        string workflowId,
+        string workflowRevision,
+        DateTimeOffset? credentialExpiresAtUtc)
+    {
         var target = new ScheduledInvocationTarget
         {
             StudioMember = new StudioMemberInvocationTarget
@@ -1224,8 +1318,9 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         ArgumentNullException.ThrowIfNull(plan);
         var policy = plan.CredentialPolicy
             ?? throw new InvalidOperationException("scheduled_authorization_policy_missing");
-        var catalog = plan.CatalogAuthority
-            ?? throw new InvalidOperationException("scheduled_authorization_catalog_authority_missing");
+        var catalog = plan.CatalogAuthority;
+        if (catalog is null && policy.ServiceGrantRequirement != AuthorizationGrantRequirement.NotRequired)
+            throw new InvalidOperationException("scheduled_authorization_catalog_authority_missing");
         var disclosure = plan.Disclosures.ToHashSet();
         var grants = plan.NyxIdServiceGrants.Select(static grant =>
             new ScheduledInvocationAuthorizationServiceGrant(
@@ -1255,13 +1350,13 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                 SourceVersion(plan, AuthorizationSourceKind.WorkflowRevision),
                 SourceVersion(plan, AuthorizationSourceKind.ConnectorCatalog),
                 SourceVersion(plan, AuthorizationSourceKind.OwnerLlmRoute),
-                catalog.ActorStateVersion,
-                catalog.ObservedAt.ToDateTimeOffset(),
-                catalog.FreshUntil.ToDateTimeOffset(),
-                catalog.ContentDigest,
-                catalog.ContractVersion,
-                catalog.PolicyVersion,
-                catalog.EvaluatedAt.ToDateTimeOffset()),
+                catalog?.ActorStateVersion ?? 0,
+                catalog?.ObservedAt?.ToDateTimeOffset() ?? default,
+                catalog?.FreshUntil?.ToDateTimeOffset() ?? default,
+                catalog?.ContentDigest ?? string.Empty,
+                catalog?.ContractVersion ?? string.Empty,
+                catalog?.PolicyVersion ?? string.Empty,
+                catalog?.EvaluatedAt?.ToDateTimeOffset() ?? default),
             plan.OwnerLlmSelection?.Clone());
     }
 

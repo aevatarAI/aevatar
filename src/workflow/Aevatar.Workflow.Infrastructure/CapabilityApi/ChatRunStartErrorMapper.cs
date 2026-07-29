@@ -131,14 +131,16 @@ public static class ChatRunStartErrorMapper
                     return new
                     {
                         userServiceId = readiness.SelectedSelector.NyxIdOperation.UserServiceId,
-                        operationId = readiness.SelectedSelector.NyxIdOperation.OperationId,
+                        endpointId = (string?)readiness.SelectedSelector.NyxIdOperation.EndpointId,
+                        operationId = (string?)null,
                         connectorCapabilityRef = (string?)null,
                     };
                 case ExternalWorkflowCapabilitySelector.SelectorOneofCase.HostConnector:
                     return new
                     {
                         userServiceId = (string?)null,
-                        operationId = readiness.SelectedSelector.HostConnector.OperationId,
+                        endpointId = (string?)null,
+                        operationId = (string?)readiness.SelectedSelector.HostConnector.OperationId,
                         connectorCapabilityRef = readiness.SelectedSelector.HostConnector.ConnectorCapabilityRef,
                     };
             }
@@ -149,13 +151,15 @@ public static class ChatRunStartErrorMapper
             ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService => new
             {
                 userServiceId = (string?)readiness.SelectedCapability.NyxIdUserService.UserServiceId,
-                operationId = readiness.SelectedCapability.NyxIdUserService.OperationId,
+                endpointId = (string?)readiness.SelectedCapability.NyxIdUserService.EndpointId,
+                operationId = (string?)null,
                 connectorCapabilityRef = (string?)null,
             },
             ExternalWorkflowCapabilityRef.CapabilityOneofCase.HostConnector => new
             {
                 userServiceId = (string?)null,
-                operationId = readiness.SelectedCapability.HostConnector.OperationId,
+                endpointId = (string?)null,
+                operationId = (string?)readiness.SelectedCapability.HostConnector.OperationId,
                 connectorCapabilityRef = (string?)readiness.SelectedCapability.HostConnector.ConnectorCapabilityRef,
             },
             _ => null,
@@ -204,6 +208,7 @@ public static class ChatRunStartErrorMapper
         ExternalCapabilitySourceKind.ConnectorCatalog => "connector_catalog",
         ExternalCapabilitySourceKind.NyxIdUserServices => "nyx_id_user_services",
         ExternalCapabilitySourceKind.NyxIdOpenApi => "nyx_id_open_api",
+        ExternalCapabilitySourceKind.NyxIdMcpConfig => "nyx_id_mcp_config",
         ExternalCapabilitySourceKind.DurableAuthorizationCatalog => "durable_authorization_catalog",
         _ => "unspecified",
     };

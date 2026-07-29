@@ -39,8 +39,12 @@ public sealed class ConnectorExternalWorkflowCapabilitySourceTests
             new StubCatalogQueryPort(catalog),
             new FixedTimeProvider());
 
-        var descriptors = await source.ListAsync(Access(), CancellationToken.None);
+        var discovery = await source.ListAsync(Access(), CancellationToken.None);
+        var descriptors = discovery.Capabilities;
 
+        discovery.CandidateCount.Should().Be(3);
+        discovery.RejectedCount.Should().Be(0);
+        discovery.Diagnostics.Should().BeEmpty();
         descriptors.Should().HaveCount(3);
         descriptors.Should().OnlyContain(static item => item.Selector.SelectorCase ==
             ExternalWorkflowCapabilitySelector.SelectorOneofCase.HostConnector);
@@ -108,7 +112,8 @@ public sealed class ConnectorExternalWorkflowCapabilitySourceTests
                 [connector],
                 Version: 8)),
             new FixedTimeProvider());
-        var descriptor = (await source.ListAsync(Access(), CancellationToken.None)).Single();
+        var descriptor = (await source.ListAsync(Access(), CancellationToken.None))
+            .Capabilities.Single();
         var forged = descriptor.Selector.Clone();
         forged.HostConnector.ContractDigest = "changed-contract-digest";
 

@@ -311,9 +311,9 @@ public sealed class ScopeServiceDraftRunEndpointTests : ScopeServiceEndpointTest
                 {
                     new ExternalCapabilitySourceStamp
                     {
-                        SourceKind = ExternalCapabilitySourceKind.NyxIdOpenApi,
-                        SourceId = "user-service-1",
-                        SourceVersion = 7,
+                        SourceKind = ExternalCapabilitySourceKind.NyxIdMcpConfig,
+                        SourceId = "nyxid-mcp-config:caller:nyx-user-alpha",
+                        SourceVersion = 0,
                     },
                 },
                 SelectedSelector = new ExternalWorkflowCapabilitySelector
@@ -321,7 +321,7 @@ public sealed class ScopeServiceDraftRunEndpointTests : ScopeServiceEndpointTest
                     NyxIdOperation = new NyxIdOperationSelector
                     {
                         UserServiceId = "user-service-1",
-                        OperationId = "operation-1",
+                        EndpointId = "endpoint-1",
                     },
                 },
             });
@@ -342,10 +342,12 @@ public sealed class ScopeServiceDraftRunEndpointTests : ScopeServiceEndpointTest
         readiness.GetProperty("status").GetString().Should().Be("admission_rebind_required");
         readiness.GetProperty("blockers")[0].GetProperty("code").GetString().Should().Be("admission_rebind_required");
         readiness.GetProperty("selectedCapability").GetProperty("userServiceId").GetString().Should().Be("user-service-1");
+        readiness.GetProperty("selectedCapability").GetProperty("endpointId").GetString().Should().Be("endpoint-1");
+        readiness.GetProperty("selectedCapability").GetProperty("operationId").ValueKind.Should().Be(JsonValueKind.Null);
         readiness.GetProperty("remediations")[0].GetProperty("actionKind").GetString().Should().Be("rebind_workflow");
         readiness.GetProperty("remediations")[0].GetProperty("trustedLocator").GetString().Should().Be("nyxid:services");
-        readiness.GetProperty("sources")[0].GetProperty("sourceKind").GetString().Should().Be("nyx_id_open_api");
-        readiness.GetProperty("sources")[0].GetProperty("sourceVersion").GetInt64().Should().Be(7);
+        readiness.GetProperty("sources")[0].GetProperty("sourceKind").GetString().Should().Be("nyx_id_mcp_config");
+        readiness.GetProperty("sources")[0].GetProperty("sourceVersion").GetInt64().Should().Be(0);
         host.InteractionService.LastRequest.Should().NotBeNull();
         host.InteractionService.LastRequest!.Source.WorkflowYamls.Should().ContainSingle();
     }

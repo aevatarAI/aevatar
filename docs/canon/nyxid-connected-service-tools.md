@@ -6,7 +6,9 @@ owner: eanzhao
 
 # NyxID Connected-Service LLM Tools
 
-NyxID connected-service 工具以 `user_service_id` 为实例身份。NyxID 是 catalog service、exact UserService 及其 effective OpenAPI 的唯一权威 owner；Aevatar 在请求期从 NyxID `/keys` live surface 读取调用者可见的实例，并只通过 `GET /api/v1/proxy/services/{user_service_id}/openapi.json` 读取该 exact UserService 的有效契约。Aevatar 不托管 OpenAPI、不保存 service/endpoint 影子目录、不从 slug 猜实例，也不在 prompt 里另建权限目录。
+NyxID connected-service 工具以 `user_service_id` 为实例身份。NyxID 是 catalog service、exact UserService、effective OpenAPI 与 normalized MCP operation facts 的唯一权威 owner。Aevatar 不托管 OpenAPI、不保存 UserService/endpoint 影子目录、不从 slug 猜实例，也不在 prompt 里另建权限目录。
+
+当前存在两个明确分工的消费路径：普通 current-turn 动态工具仍从 `/api/v1/keys` 与 `GET /api/v1/proxy/services/{user_service_id}/openapi.json` 生成 request-local tools；workflow authoring/admission 只调用 `GET /api/v1/mcp/config`，以 `service_id + endpoint_id` 选择 exact MCP endpoint。两条路径共享最终 NyxID proxy 执行边界，但 workflow 不回退到 `/keys + OpenAPI`。普通动态工具后续统一到 MCP catalog 由 #3025 跟踪，不属于当前 workflow contract。
 
 模型看到的最终 tool schema 与实际执行对象来自同一份 `LLMRequest.Tools`。工具调用仍经 NyxID proxy 下发；凭证注入、proxy/broker 审计、node routing 和 delegation 由 NyxID 负责。Aevatar 负责本地动态工具审批以及 workflow proof 中明确归 Aevatar 的审批，记录平台 tool invocation 与 typed receipt 审计。
 
@@ -40,28 +42,33 @@ NyxID connected-service 工具以 `user_service_id` 为实例身份。NyxID 是 
 
 OpenAPI 中通过 `x-aevatar-tool` 准入的 operation 还会生成 `nyxid_service_operation__{name|operationId}` 工具。名称不嵌入 slug 或实例 ID；contract 与 route constraint 完全相同的多个实例共用一个 operation tool，并在 schema 的 `user_service_id` 枚举中显式选择。相同工具名若出现不同 contract、不同 route constraint 或同 ID 不同对象，整名删除，而不是保留任一候选。
 
-## 3. OpenAPI 准入
+## 3. Dynamic OpenAPI 与 Workflow MCP 准入
 
-有效契约遵循一条权威链：
+Workflow 使用一条权威主链：
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart LR
-    A["NyxID catalog or UserService override"] --> B["Exact UserService effective OpenAPI"]
-    B --> C["Aevatar typed operation discovery"]
-    C --> D["Server-owned workflow admission proof"]
-    D --> E["Proof-bound NyxID Proxy request"]
+    A["NyxID GET /api/v1/mcp/config"] --> B["Typed Aevatar boundary"]
+    B --> C["Exact service_id + endpoint_id selector"]
+    C --> D["Server-owned v4 definition proof"]
+    D --> E["Workflow run actor"]
+    E --> F["Proof-bound NyxID Proxy request"]
 ```
 
-Workflow admission 只读 exact UserService effective contract。无 contract、读取失败、无权访问、文档无效或 contract drift 都 fail closed，并返回 typed blocker/remediation；不存在 Aevatar contract pack、catalog contract fallback、本地 OpenAPI cache 或 runtime/query-time side read。
+Workflow live discovery 只使用当前 caller token 读取 `/api/v1/mcp/config`；NyxID 的该 catalog 已包含这个 caller 当前可调用的个人与组织共享 UserService。Host adapter 只接受 `is_user_service=true && is_generic_proxy=false` 的服务，并要求非空且唯一的 `service_id` 与每个服务内非空且唯一的 `endpoint_id`。平台服务、generic proxy、cookie、required sensitive/unsupported header、不支持的 body/schema，以及无法验证的 binary response 语义都 fail closed，并返回 typed candidate/rejection counts 与 diagnostics。
 
-同一个 `x-aevatar-tool` marker 被三个彼此独立的策略消费，不能把其中一个策略的通过当成另两个策略的授权：
+身份边界必须保持独立：`scope_id`、`owner_scope_id` 与 `owner_subject` 只表达 Aevatar 的资源所有权/调用上下文，不能作为 NyxID caller identity。NyxID caller 只能来自认证 principal 映射出的 typed `NyxIdAuthority`；缺失时 live discovery/admission 必须 fail closed，禁止从 scope、route、member、workflow 或 owner 字符串推导。
+
+NyxID MCP config 当前只发布 free-form `response_description`，不能证明 binary media type。因此 v4 workflow proof 保守为 text-only；`response_mode=file_artifact` 会在 dispatch 前拒绝。Aevatar 记录真实 observation time、canonical content digest 与 `NYX_ID_MCP_CONFIG` source stamp，但不缓存或持久化另一份 UserService/OpenAPI catalog。Durable readiness 另外要求现有 owner-scoped authorization catalog 对 exact `user_service_id` 的授权证据。
+
+Dynamic exposure、workflow admission 与 runtime authorization 是三个彼此独立的策略，不能把其中一个策略的通过当成另两个策略的授权：
 
 1. **Dynamic exposure**：marker 只决定 operation 是否能进入 request-local LLM tool catalog。缺 marker 默认不暴露，operation-level `false` 覆盖 service-level `true`。
-2. **Workflow definition admission**：作者只提交 `user_service_id + operation_id` selector；live admission 重新读取 exact contract，并由 definition actor 提交 call-site scoped v3 proof。marker 通过只是 admission 条件之一，不是 runtime authorization。
+2. **Workflow definition admission**：作者只复制 typed listing 返回的 `user_service_id + endpoint_id` selector；live admission 读取 MCP config，并由 definition actor 提交 call-site scoped v4 proof。它不消费 `x-aevatar-tool` marker。
 3. **Runtime authorization**：managed workflow 的 raw `nyxid_proxy` 只接受当前 call site 的 actor-owned proof。普通 non-workflow human session 的 raw proxy surface 不因 workflow policy 获得或失去权限。
 
-注册是 allow-list：没有标记的 operation 不会成为工具。标记可写在文档根、`info` 或单个 operation 上：
+以下 marker 规则只属于普通 current-turn dynamic OpenAPI exposure。注册是 allow-list：没有标记的 operation 不会成为动态工具。标记可写在文档根、`info` 或单个 operation 上：
 
 ```yaml
 x-aevatar-tool: true
@@ -79,7 +86,7 @@ paths:
         approval: always
 ```
 
-准入规则默认拒绝：operation `enabled: false` 始终排除；operation `enabled: true` 始终准入；没有 operation 标记时才继承 service 级 `enabled: true`。标记只能收紧方法推导出的安全属性：`GET`/`HEAD`/`OPTIONS` 才可只读，写方法和 destructive operation 必须审批，标记不能把它们降成免审批。Workflow operation identity 必须来自文档中显式且全局唯一、大小写敏感的 `operationId`；缺失或重复时整份 admission fail closed，不生成 method/path fallback，也不任选一个重复候选。
+准入规则默认拒绝：operation `enabled: false` 始终排除；operation `enabled: true` 始终准入；没有 operation 标记时才继承 service 级 `enabled: true`。标记只能收紧方法推导出的安全属性：`GET`/`HEAD`/`OPTIONS` 才可只读，写方法和 destructive operation 必须审批，标记不能把它们降成免审批。普通动态 OpenAPI operation identity 必须来自文档中显式且全局唯一、大小写敏感的 `operationId`；缺失或重复时整份 dynamic exposure fail closed，不生成 method/path fallback，也不任选一个重复候选。Workflow identity 独立使用 MCP catalog 的 `service_id + endpoint_id`。
 
 OpenAPI 参数通过结构化解析生成 JSON Schema：path/query/header 参数成为顶层属性，path 参数恒为 required；JSON request body 使用 `body`，冲突时使用 `request_body`；本地 `$ref` 会做带环保护的内联。operation tool 只接受其 spec 声明的参数，并额外要求 exact `user_service_id`。
 
@@ -101,11 +108,13 @@ sequenceDiagram
 
 每次 update、route、delete、request 或 operation 执行，都先用发现时绑定的 token 调用 exact `/keys/{user_service_id}`。当前记录必须与冻结记录在 identity、credential/token source、credential-allowed、catalog/slug、endpoint、`node_id`、route constraint 和 proxy spec 上一致，而且仍为 active；否则在副作用前 fail closed。
 
-Managed workflow proof 还携带 typed `risk / approval / enforcement_owner / allowed_execution_modes`。GET/HEAD/OPTIONS 默认是 read-only；POST/PUT/PATCH 是 write；DELETE 或 destructive marker 是 destructive。仓库内从 OpenAPI 派生的 write/destructive operation 必须由 Aevatar 审批，且首版只允许 interactive execution；read-only operation 可允许 interactive 与 durable。任意第三方 OpenAPI marker 不能把 enforcement owner 改为 NyxID。typed policy 进入现有 contract/admission digest，policy drift 必须重新 admission/rebind，不新增第二个 digest。
+Managed workflow proof 还携带 typed `risk / approval / enforcement_owner / allowed_execution_modes`。GET/HEAD/OPTIONS 默认是 read-only；POST/PUT/PATCH 是 write；DELETE 是 destructive。MCP config 当前不发布可作为授权依据的 execution policy，因此 Aevatar 保守推导：write/destructive operation 必须由 Aevatar 审批且只允许 interactive；read-only operation 可允许 interactive 与 durable。typed policy 进入现有 contract/admission digest，policy drift 必须重新 admission/rebind，不新增第二个 digest。
+
+每次 proof-bound dispatch 在发送 proxy 请求前，必须用本次 caller token 重新读取同一权威 MCP config，按 exact `service_id + endpoint_id` 定位 live endpoint，并逐项比对 `service_slug` 与既有 `contract_digest`。service/slug drift 返回 `NYXID_OPERATION_AUTHORITY_DRIFT`，endpoint 缺失或 digest drift 返回 `NYXID_OPERATION_CONTRACT_DRIFT`；两者都必须发生在任何 downstream proxy dispatch 或 file ingress 之前。
 
 `NyxIdProxyTool` 是共享 runtime enforcement boundary。`Aevatar:NyxId:ManagedWorkflowAdmissionMode=Enforce` 时，managed workflow 缺 proof 或携带无效 policy 会在 token 解析、exact-service read、file ingress 和 proxy HTTP 前返回 `NYXID_OPERATION_ADMISSION_REQUIRED`；`Shadow` 只记录同一 decision 并继续 legacy path。proof 存在时，method/path/schema 仍完全由 `NyxIdOperationRequestBuilder` 从 proof 构造，调用参数不能覆盖 route facts。
 
-proxy 请求只接受相对路径，拒绝绝对 URL、fragment、query-in-path 和 dot segment。路由只来自冻结并重验后的 catalog ID 或 custom slug；Aevatar 追加 URL 编码后的 `_nyxid_via={user_service_id}`，调用参数不得提供任何 `_nyxid_*` query。header allow-list 仅含 JSON `Accept`/`Content-Type` 与条件头 `If-Match`/`If-None-Match`，禁止调用者注入 authorization、routing 或 hop-by-hop header。非 safe method 由客户端生成 typed idempotency key。
+proxy 请求只接受相对路径，拒绝绝对 URL、fragment、query-in-path 和 dot segment。路由只来自冻结并重验后的 catalog ID 或 custom slug；Aevatar 追加 URL 编码后的 `_nyxid_via={user_service_id}`，调用参数不得提供任何 `_nyxid_*` query。普通 connected-service header allow-list 仅含 JSON `Accept`/`Content-Type` 与条件头 `If-Match`/`If-None-Match`；workflow proof-bound 调用的 `Content-Type` 由 typed body contract 独占，caller header 只允许 JSON `Accept` 与条件头。所有路径都禁止调用者注入 authorization、routing 或 hop-by-hop header。非 safe method 由客户端生成 typed idempotency key。
 
 ## 5. 请求期能力边界
 
@@ -127,7 +136,7 @@ Voice realtime attach 也遵循同一边界。带 `voice-tool:` credential ref �
 
 ## 6. 审计与架构边界
 
-- NyxID 是实例、credential、route 与 exact UserService effective OpenAPI 的唯一真实源；Aevatar 不维护 process-local catalog、contract pack 或 spec cache。
+- NyxID 是实例、credential、route、exact UserService effective OpenAPI 与 MCP operation facts 的唯一真实源；Aevatar 不维护 process-local catalog、contract pack 或 spec cache。
 - Aevatar 不新增 NyxID endpoint，不绕过 proxy 直连下游，不引入第二条投影或 read model。
 - 外部 JSON 只在 NyxID adapter 边界解析；内部实例、请求与结果语义使用 Protobuf。
 - 平台审计只由 canonical `ToolExecutionAuditMiddleware` 消费 typed execution context、credential source 和 receipt；默认不记录完整 arguments、result 或 `receipt.result_json`。

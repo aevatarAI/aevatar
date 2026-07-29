@@ -77,7 +77,7 @@ internal sealed class NyxIdWorkflowAdmissionEnforcementStartupGuard(
                 if (deactivatedServiceDefinitions.Contains(document.ActorId))
                     continue;
 
-                if (!await HasValidV3PlanAsync(
+                if (!await HasValidV4PlanAsync(
                         document.CapabilityAdmissionPlan,
                         document.WorkflowYaml,
                         document.InlineWorkflowYamlEntries,
@@ -161,7 +161,7 @@ internal sealed class NyxIdWorkflowAdmissionEnforcementStartupGuard(
             foreach (var document in page.Items)
             {
                 if (!IsTerminal(document.Status) &&
-                    !await HasValidV3PlanAsync(
+                    !await HasValidV4PlanAsync(
                         document.CapabilityAdmissionPlan,
                         document.WorkflowYaml,
                         document.InlineWorkflowYamlEntries,
@@ -177,7 +177,7 @@ internal sealed class NyxIdWorkflowAdmissionEnforcementStartupGuard(
         return failures;
     }
 
-    private async Task<bool> HasValidV3PlanAsync(
+    private async Task<bool> HasValidV4PlanAsync(
         WorkflowCapabilityAdmissionPlan? plan,
         string? workflowYaml,
         IReadOnlyDictionary<string, string> inlineWorkflowYamls,

@@ -33,7 +33,7 @@ internal static class NyxIdServiceRequestHeaderPolicy
             var value = requestedHeader.Value;
             if (requestedHeader.Name is NyxIdServiceHeaderName.Accept or NyxIdServiceHeaderName.ContentType)
             {
-                if (!string.Equals(value, "application/json", StringComparison.OrdinalIgnoreCase))
+                if (!IsJsonMediaType(value))
                 {
                     error = "unsupported_media_type";
                     return false;
@@ -46,8 +46,7 @@ internal static class NyxIdServiceRequestHeaderPolicy
                 continue;
             }
 
-            if (string.IsNullOrEmpty(value) || value.Length > MaximumConditionalHeaderLength ||
-                value.Contains('\r') || value.Contains('\n'))
+            if (!IsValidConditionalValue(value))
             {
                 error = "invalid_conditional_header";
                 return false;
@@ -58,4 +57,21 @@ internal static class NyxIdServiceRequestHeaderPolicy
 
         return true;
     }
+
+    public static bool IsValidWorkflowHeader(string name, string value) =>
+        string.Equals(name, "Accept", StringComparison.OrdinalIgnoreCase)
+            ? IsJsonMediaType(value)
+            : name is not null &&
+              (string.Equals(name, "If-Match", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(name, "If-None-Match", StringComparison.OrdinalIgnoreCase)) &&
+              IsValidConditionalValue(value);
+
+    private static bool IsJsonMediaType(string value) =>
+        string.Equals(value, "application/json", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsValidConditionalValue(string value) =>
+        !string.IsNullOrEmpty(value) &&
+        value.Length <= MaximumConditionalHeaderLength &&
+        !value.Contains('\r') &&
+        !value.Contains('\n');
 }

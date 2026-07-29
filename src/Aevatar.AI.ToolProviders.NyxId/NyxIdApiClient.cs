@@ -718,6 +718,9 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
     public Task<string> DiscoverProxyServicesAsync(string token, CancellationToken ct) =>
         GetAsync(token, NyxIdLlmCatalogRoutes.ProxyServicesPath, ct);
 
+    public Task<string> GetMcpConfigAsync(string token, CancellationToken ct) =>
+        GetAsync(token, "/api/v1/mcp/config", ct);
+
     /// <summary>
     /// Fetches the NyxID proxy-aware OpenAPI document for a connected service
     /// (<c>GET /api/v1/proxy/services/{service_id}/openapi.json</c>). NyxID rewrites
@@ -1224,7 +1227,7 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
         return callerSpecifiedUserAgent;
     }
 
-    private static string NormalizeExactProxyPath(string relativePath)
+    internal static string NormalizeExactProxyPath(string relativePath)
     {
         var candidate = relativePath.Trim();
         var withoutLeadingSlash = candidate.TrimStart('/');

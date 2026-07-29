@@ -83,37 +83,38 @@ BindWorkflowDefinition(yaml)
 
 ### External operation admission proof handoff
 
-NyxID external operation 使用一条 actor-owned proof 主链。作者只持久化 step 级 `NyxIdOperationSelector { user_service_id, operation_id }`；definition admission 读取 NyxID exact UserService effective OpenAPI，应用 `x-aevatar-tool` 与 schema 安全策略，并生成 server-owned method、path template、parameter/body contract、response policy、source stamp 与 digest。Aevatar 不保存整份 OpenAPI。
+NyxID external operation 使用一条 actor-owned proof 主链。作者只持久化 step 级 `NyxIdOperationSelector { user_service_id, endpoint_id }`；definition admission 读取 NyxID `/api/v1/mcp/config`，typed adapter 只接受 exact non-generic UserService endpoint，并生成 server-owned service slug、method、path template、parameter/body contract、text-only response policy、source stamp 与 digest。Aevatar 不保存另一份 UserService/OpenAPI catalog。
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart LR
-    A["Step selector"] --> B["Definition live admission"]
-    B --> C["WorkflowGAgent v3 invocation_admissions"]
-    C --> D["BindWorkflowRunDefinitionEvent.capability_admission_plan"]
-    D --> E["WorkflowRunState.capability_admission_plan"]
-    E --> F["StepRequestEvent.external_invocation"]
-    F --> G["WorkflowToolExecutionRequest.InvocationAdmission"]
-    G --> H["AgentToolExecutionContext.OperationAdmission"]
-    H --> I["NyxIdOperationRequestBuilder"]
-    I --> J["NyxID Proxy HTTP request"]
+    A["NyxID /api/v1/mcp/config"] --> B["Typed Aevatar boundary"]
+    B --> C["Step selector: service_id + endpoint_id"]
+    C --> D["WorkflowGAgent v4 invocation_admissions"]
+    D --> E["BindWorkflowRunDefinitionEvent.capability_admission_plan"]
+    E --> F["WorkflowRunState.capability_admission_plan"]
+    F --> G["StepRequestEvent.external_invocation"]
+    G --> H["WorkflowToolExecutionRequest.InvocationAdmission"]
+    H --> I["AgentToolExecutionContext.OperationAdmission"]
+    I --> J["NyxIdOperationRequestBuilder"]
+    J --> K["NyxID Proxy HTTP request"]
 ```
 
 `WorkflowRunActorPort` 从权威 definition binding 复制 plan 到 `BindWorkflowRunDefinitionEvent`，`WorkflowRunGAgent` 把它提交到本 run 的 state。`WorkflowExecutionKernel` 与 admission 共用 compiler，为 ordinary、nested、`foreach`/`for_each`/`foreach_llm` 和 `while`/`loop` 派生同一稳定 call-site；`ToolCallModule` 只从 run actor state 解析该 call-site 的唯一 proof。missing plan、missing/duplicate call-site、selector mismatch 或 tool mismatch 都在 dispatch 前 fail closed。foreach backpressure、while state 与 tool approval suspend/resume 都复制同一个 typed invocation，不按动态 item id 猜 proof。
 
-AI adapter 把当前 proof 映射到 provider-neutral `AgentToolExecutionContext.OperationAdmission`；proof 包含 typed `risk / approval / enforcement_owner / allowed_execution_modes`，并参与既有 contract/admission digest。`NyxIdOperationRequestBuilder` 只接受 `path_params`、`query`、`headers`、`body`、`response_mode`，从 proof template 构造 concrete path 并校验 schema。NyxID Proxy wire 只接收服务 route、exact `user_service_id` 与 HTTP request；`operation_id` 和 digest 不进入 wire。
+AI adapter 把当前 proof 映射到 provider-neutral `AgentToolExecutionContext.OperationAdmission`；其中 provider-neutral execution identity 的值来自 typed `endpoint_id`，不改变 workflow selector 的字段语义。proof 包含 typed `risk / approval / enforcement_owner / allowed_execution_modes`，并参与既有 contract/admission digest。`NyxIdOperationRequestBuilder` 只接受 `path_params`、`query`、`headers`、`body`、`response_mode`，从 proof template 构造 concrete path 并校验 schema。NyxID Proxy wire 只接收服务 route、exact `user_service_id` 与 HTTP request；`endpoint_id` 和 digest 不进入 wire。
 
-Dynamic LLM exposure、definition admission 与 runtime authorization 是三条独立 policy：`x-aevatar-tool` 控制 request-local exposure；definition actor 用 live exact contract 把 selector 解析为 v3 proof；shared `NyxIdProxyTool` 只对 managed workflow 要求 exact proof。`Shadow` 只记录 proofless/invalid-policy decision 并保留 legacy behavior；`Enforce` 在任何 downstream read/request 前返回 `NYXID_OPERATION_ADMISSION_REQUIRED`。普通 non-workflow human session 不受 managed-workflow guard 影响。
+Dynamic LLM exposure、definition admission 与 runtime authorization 是三条独立 policy：普通 current-turn dynamic tools 仍由 effective OpenAPI 的 `x-aevatar-tool` 控制 request-local exposure；definition actor 用 live MCP config 把 selector 解析为 v4 proof；shared `NyxIdProxyTool` 只对 managed workflow 要求 exact proof。`Shadow` 只记录 proofless/invalid-policy decision 并保留 legacy behavior；`Enforce` 在任何 downstream read/request 前返回 `NYXID_OPERATION_ADMISSION_REQUIRED`。普通 non-workflow human session 不受 managed-workflow guard 影响。
 
-Runtime 不读取 OpenAPI、definition actor、read model 或 event store，不 refresh/prime admission，也不维护 process-local proof registry。OpenAPI/source access 只发生在显式 live definition admission；persisted revalidation 只校验已提交 plan、definition、execution mode、source freshness 与 digest。
+Runtime 不读取 MCP config、OpenAPI、definition actor、read model 或 event store，不 refresh/prime admission，也不维护 process-local proof registry。MCP config access 只发生在显式 live definition admission；persisted revalidation 只校验已提交 plan、definition、execution mode、source freshness 与 digest。
 
-### Admission v3 与 forward-only migration
+### Admission v4 与 forward-only migration
 
-`external-capability-admission.v3` 只以 call-site scoped `invocation_admissions` 表达当前事实。proto field 4 `external_capabilities` 是 deprecated v2 deserialization slot；v3 creation 保持为空，v3 validation 对非空值 fail closed，禁止双事实源。
+`external-capability-admission.v4` 只以 call-site scoped `invocation_admissions` 表达当前事实。proto field 4 `external_capabilities` 是 deprecated v2 deserialization slot；v4 creation 保持为空，v4 validation 对非空值 fail closed，禁止双事实源。NyxID v4 proof 必须带 `NYX_ID_MCP_CONFIG` source stamp；旧 `NYX_ID_USER_SERVICES + NYX_ID_OPEN_API` 不能满足 v4 admission。
 
-升级采用 forward-only 语义：旧 serving definition/run 不热替换；持久化 v2 plan 一旦进入 reprepare、publish 或 rebind，就返回 typed `CAPABILITY_ADMISSION_REBIND_REQUIRED` 与 rebind remediation，要求使用同一 YAML 重新执行在线 exact-contract admission 并创建 v3 revision。runtime 不把 v2 raw route 当 fallback，也不 query-time 迁移。向 protobuf 增加一个空 repeated field 不改变 v2 canonical bytes 或旧 `admission_digest`；明确的 `schema_version` 字符串是 v2/v3 唯一版本边界。
+升级采用 forward-only 语义：旧 serving definition/run 不热替换；持久化 v2/v3 plan 一旦进入 reprepare、publish 或 rebind，就在解析旧 authoring 前返回 typed `CAPABILITY_ADMISSION_REBIND_REQUIRED` 与 rebind remediation，要求使用 `endpoint_id` selector 重新执行在线 MCP admission 并创建 v4 revision。runtime 不把旧 raw route 或 OpenAPI identity 当 fallback，也不 query-time 迁移。明确的 `schema_version` 字符串是版本边界。
 
-Mainnet 的 `Enforce` startup gate 只读 actor-scoped current-state read models，不 activate、prime、replay 或 mutate projection。它分页校验所有未被 typed deployment state 明确标记为 deactivated 的 definition binding，以及所有非 `completed / failed / stopped` run current state；每个对象都必须携带完整且 digest-valid 的 v3 plan。已 deactivated service definition 可作为历史 revision 留存；缺 deployment relationship、active/failed/unknown deployment、普通 definition 和非终态 run 一律保守校验。失败使用稳定 blocker `CAPABILITY_ADMISSION_REBIND_REQUIRED`，仅含总数与每类最多八个 actor ID sample。`Shadow` 不执行 startup inventory scan。
+Mainnet 的 `Enforce` startup gate 只读 actor-scoped current-state read models，不 activate、prime、replay 或 mutate projection。它分页校验所有未被 typed deployment state 明确标记为 deactivated 的 definition binding，以及所有非 `completed / failed / stopped` run current state；每个对象都必须携带完整且 digest-valid 的 v4 plan。已 deactivated service definition 可作为历史 revision 留存；缺 deployment relationship、active/failed/unknown deployment、普通 definition 和非终态 run 一律保守校验。失败使用稳定 blocker `CAPABILITY_ADMISSION_REBIND_REQUIRED`，仅含总数与每类最多八个 actor ID sample。`Shadow` 不执行 startup inventory scan。
 
 ### Event Module
 

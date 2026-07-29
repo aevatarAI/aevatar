@@ -528,7 +528,7 @@ public sealed class StudioMemberEndpointsTests
                 NyxIdOperation = new NyxIdOperationSelector
                 {
                     UserServiceId = "us-alpha",
-                    OperationId = "get-resource",
+                    EndpointId = "get-resource",
                 },
             },
             SelectedCapability = new ExternalWorkflowCapabilityRef
@@ -537,7 +537,7 @@ public sealed class StudioMemberEndpointsTests
                 {
                     UserServiceId = "us-alpha",
                     ServiceSlugSnapshot = secret,
-                    OperationId = "get-resource",
+                    EndpointId = "get-resource",
                     HttpMethod = "GET",
                     PathTemplate = "/internal/{id}",
                     ContractDigest = secret,
@@ -558,9 +558,9 @@ public sealed class StudioMemberEndpointsTests
         });
         readiness.Sources.Add(new ExternalCapabilitySourceStamp
         {
-            SourceKind = ExternalCapabilitySourceKind.NyxIdOpenApi,
-            SourceId = "us-alpha",
-            SourceVersion = 7,
+            SourceKind = ExternalCapabilitySourceKind.NyxIdMcpConfig,
+            SourceId = "nyxid-mcp-config:caller:nyx-user-alpha",
+            SourceVersion = 0,
             ObservedAt = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 7, 28, 1, 0, 0, TimeSpan.Zero)),
             FreshUntil = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 7, 28, 1, 5, 0, TimeSpan.Zero)),
             ContentDigest = secret,
@@ -594,13 +594,14 @@ public sealed class StudioMemberEndpointsTests
             .Be("operation_selection_required");
         var selected = readinessJson.GetProperty("selectedCapability");
         selected.GetProperty("userServiceId").GetString().Should().Be("us-alpha");
-        selected.GetProperty("operationId").GetString().Should().Be("get-resource");
+        selected.GetProperty("endpointId").GetString().Should().Be("get-resource");
+        selected.GetProperty("operationId").ValueKind.Should().Be(JsonValueKind.Null);
         readinessJson.GetProperty("blockers")[0].GetProperty("code").GetString().Should()
             .Be("OPERATION_NOT_ALLOWLISTED");
         readinessJson.GetProperty("remediations")[0].GetProperty("actionKind").GetString().Should()
             .Be("select_operation");
         readinessJson.GetProperty("sources")[0].GetProperty("sourceKind").GetString().Should()
-            .Be("nyx_id_open_api");
+            .Be("nyx_id_mcp_config");
 
         var responseJson = root.GetRawText();
         responseJson.Should().NotContain(secret);

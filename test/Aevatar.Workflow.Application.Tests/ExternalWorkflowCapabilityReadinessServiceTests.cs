@@ -10,6 +10,38 @@ namespace Aevatar.Workflow.Application.Tests;
 public sealed class ExternalWorkflowCapabilityReadinessServiceTests
 {
     [Fact]
+    public async Task ListAsync_ShouldPreserveTypedDiscoveryDiagnosticsAndCounts()
+    {
+        var discovery = new ExternalWorkflowCapabilityDiscoveryResult
+        {
+            CandidateCount = 2,
+            RejectedCount = 1,
+        };
+        discovery.Capabilities.Add(Descriptor(NyxIdSelector()));
+        discovery.Diagnostics.Add(new ExternalCapabilityDiscoveryDiagnostic
+        {
+            Code = ExternalCapabilityDiscoveryDiagnosticCode.GenericProxyRejected,
+            Count = 1,
+            SafeMessage = "Generic proxy services are not eligible for workflow admission.",
+        });
+        var service = new ExternalWorkflowCapabilityReadinessService(
+            [new StubSource(
+                ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdOperation,
+                [],
+                discovery: discovery)]);
+
+        var result = await service.ListAsync(
+            new ListExternalWorkflowCapabilitiesRequest(Access()),
+            CancellationToken.None);
+
+        result.Capabilities.Should().ContainSingle();
+        result.CandidateCount.Should().Be(2);
+        result.RejectedCount.Should().Be(1);
+        result.Diagnostics.Should().ContainSingle().Which.Code.Should()
+            .Be(ExternalCapabilityDiscoveryDiagnosticCode.GenericProxyRejected);
+    }
+
+    [Fact]
     public void AddWorkflowApplication_ShouldRegisterExternalCapabilityQueryPorts()
     {
         var services = new ServiceCollection();
@@ -48,12 +80,12 @@ public sealed class ExternalWorkflowCapabilityReadinessServiceTests
             new ListExternalWorkflowCapabilitiesRequest(access),
             CancellationToken.None);
 
-        result.Should().HaveCount(2);
-        result.Select(static item => item.Selector.SelectorCase).Should().Contain([
+        result.Capabilities.Should().HaveCount(2);
+        result.Capabilities.Select(static item => item.Selector.SelectorCase).Should().Contain([
             ExternalWorkflowCapabilitySelector.SelectorOneofCase.HostConnector,
             ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdOperation,
         ]);
-        result.Single(item => item.Selector.SelectorCase ==
+        result.Capabilities.Single(item => item.Selector.SelectorCase ==
                               ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdOperation)
             .Selector.NyxIdOperation.UserServiceId.Should().Be("us-home-alpha");
         connectorSource.ListCalls.Should().Be(1);
@@ -67,7 +99,7 @@ public sealed class ExternalWorkflowCapabilityReadinessServiceTests
 
         NyxIdOperationSelector.Descriptor.Fields.InFieldNumberOrder()
             .Select(static field => field.Name)
-            .Should().BeEquivalentTo(["user_service_id", "operation_id"]);
+            .Should().BeEquivalentTo(["user_service_id", "endpoint_id"]);
         descriptor.Selector.NyxIdOperation.UserServiceId.Should().Be("us-home-alpha");
         descriptor.Capability.Should().BeNull();
     }
@@ -82,7 +114,7 @@ public sealed class ExternalWorkflowCapabilityReadinessServiceTests
             {
                 UserServiceId = "us-home-alpha",
                 ServiceSlugSnapshot = "home-assistant",
-                OperationId = "get-state",
+                EndpointId = "get-state",
                 HttpMethod = "GET",
                 PathTemplate = "/states/{entity_id}",
                 ContractDigest = "nyxid-digest",
@@ -160,7 +192,7 @@ public sealed class ExternalWorkflowCapabilityReadinessServiceTests
             NyxIdOperation = new NyxIdOperationSelector
             {
                 UserServiceId = "us-home-alpha",
-                OperationId = "get-state",
+                EndpointId = "get-state",
             },
         };
 
@@ -174,7 +206,8 @@ public sealed class ExternalWorkflowCapabilityReadinessServiceTests
     private sealed class StubSource(
         ExternalWorkflowCapabilitySelector.SelectorOneofCase selectorKind,
         IReadOnlyList<ExternalWorkflowCapabilityDescriptor> descriptors,
-        ExternalCapabilityReadiness? readiness = null) : IExternalWorkflowCapabilitySource
+        ExternalCapabilityReadiness? readiness = null,
+        ExternalWorkflowCapabilityDiscoveryResult? discovery = null) : IExternalWorkflowCapabilitySource
     {
         public ExternalWorkflowCapabilitySelector.SelectorOneofCase SelectorKind => selectorKind;
 
@@ -182,12 +215,19 @@ public sealed class ExternalWorkflowCapabilityReadinessServiceTests
 
         public int InspectCalls { get; private set; }
 
-        public Task<IReadOnlyList<ExternalWorkflowCapabilityDescriptor>> ListAsync(
+        public Task<ExternalWorkflowCapabilityDiscoveryResult> ListAsync(
             ExternalWorkflowCapabilityAccessContext access,
             CancellationToken cancellationToken = default)
         {
             ListCalls++;
-            return Task.FromResult(descriptors);
+            if (discovery is not null)
+                return Task.FromResult(discovery);
+            var result = new ExternalWorkflowCapabilityDiscoveryResult
+            {
+                CandidateCount = descriptors.Count,
+            };
+            result.Capabilities.Add(descriptors);
+            return Task.FromResult(result);
         }
 
         public Task<ExternalCapabilityReadiness> InspectAsync(
