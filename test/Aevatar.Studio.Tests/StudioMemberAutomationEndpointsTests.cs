@@ -348,17 +348,28 @@ public sealed class StudioMemberAutomationEndpointsTests
     }
 
     [Theory]
-    [InlineData("authorization_plan_changed", "TEAM_AUTOMATION_AUTHORIZATION_PLAN_CHANGED")]
-    [InlineData("reauthorization_required", "TEAM_AUTOMATION_REAUTHORIZATION_REQUIRED")]
+    [InlineData(
+        "authorization_plan_changed",
+        "TEAM_AUTOMATION_AUTHORIZATION_PLAN_CHANGED",
+        ScheduledAuthorizationPlanMismatchReason.AllowedNodeIdsMismatch,
+        "allowed_node_ids_mismatch")]
+    [InlineData(
+        "reauthorization_required",
+        "TEAM_AUTOMATION_REAUTHORIZATION_REQUIRED",
+        ScheduledAuthorizationPlanMismatchReason.Unspecified,
+        null)]
     public async Task Update_ShouldReturnTypedConflictWithCanonicalPreflightLocator(
         string conflictCode,
-        string expectedWireCode)
+        string expectedWireCode,
+        ScheduledAuthorizationPlanMismatchReason mismatchReason,
+        string? expectedMismatchReason)
     {
         var schedules = new StubSchedules
         {
             Exception = new StudioMemberAutomationPlanConflictException(
                 conflictCode,
-                "sensitive backend detail must not cross the boundary"),
+                "sensitive backend detail must not cross the boundary",
+                mismatchReason),
         };
 
         var result = await StudioMemberAutomationEndpoints.HandleUpdateAsync(
@@ -384,7 +395,13 @@ public sealed class StudioMemberAutomationEndpointsTests
         StringProperty(value, "code").Should().Be(expectedWireCode);
         StringProperty(value, "preflightLocator").Should().Be(
             $"/api/scopes/{ScopeId}/teams/{TeamId}/members/{MemberId}/automations/preflight");
-        JsonSerializer.Serialize(value).Should().NotContain("sensitive backend detail");
+        StringProperty(value, "authorizationPlanMismatchReason").Should().Be(expectedMismatchReason);
+        var serialized = JsonSerializer.Serialize(value, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        serialized.Should().NotContain("sensitive backend detail");
+        if (expectedMismatchReason is null)
+            serialized.Should().NotContain("authorizationPlanMismatchReason");
+        else
+            serialized.Should().Contain(expectedMismatchReason);
         AssertNoCredentialMaterial(value);
         schedules.LastUpdate.Should().NotBeNull();
         schedules.LastUpdate!.ScopeId.Should().Be(ScopeId);

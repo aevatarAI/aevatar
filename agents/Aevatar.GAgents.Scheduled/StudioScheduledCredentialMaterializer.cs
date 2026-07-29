@@ -100,11 +100,29 @@ public sealed class StudioScheduledCredentialMaterializer : IStudioScheduledCred
                     issued.ApiKeyId,
                     effectLocator,
                     issueFailure);
+                if (string.Equals(issued.Error, "authorization_plan_changed", StringComparison.Ordinal) &&
+                    issued.AuthorizationPlanMismatchReason != ScheduledAuthorizationPlanMismatchReason.Unspecified)
+                {
+                    throw new StudioMemberAutomationPlanConflictException(
+                        "authorization_plan_changed",
+                        "authorization_plan_changed",
+                        issued.AuthorizationPlanMismatchReason);
+                }
+
                 throw new StudioScheduledCredentialMaterializationException(
                     issueFailure.Message,
                     effectsCleaned: true,
                     issueFailure);
             }
+            if (string.Equals(issued.Error, "authorization_plan_changed", StringComparison.Ordinal) &&
+                issued.AuthorizationPlanMismatchReason != ScheduledAuthorizationPlanMismatchReason.Unspecified)
+            {
+                throw new StudioMemberAutomationPlanConflictException(
+                    "authorization_plan_changed",
+                    "authorization_plan_changed",
+                    issued.AuthorizationPlanMismatchReason);
+            }
+
             throw new InvalidOperationException(issued.Error ?? "scheduled_credential_materialization_failed");
         }
 

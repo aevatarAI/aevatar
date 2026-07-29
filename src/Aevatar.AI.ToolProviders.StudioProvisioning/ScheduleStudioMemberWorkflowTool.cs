@@ -206,7 +206,8 @@ internal sealed class ScheduleStudioMemberWorkflowTool : IAgentTool
         {
             return ErrorJson(
                 ToPlanConflictCode(ex.Code),
-                ToPlanConflictMessage(ex.Code));
+                ToPlanConflictMessage(ex.Code),
+                ScheduledAuthorizationPlanMismatchReasons.ToWireValue(ex.AuthorizationPlanMismatchReason));
         }
         catch (Exception ex)
         {
@@ -230,9 +231,12 @@ internal sealed class ScheduleStudioMemberWorkflowTool : IAgentTool
         _ => "The schedule request conflicts with the current authorization state.",
     };
 
-    private static string ErrorJson(string code, string message) =>
+    private static string ErrorJson(
+        string code,
+        string message,
+        string? authorizationPlanMismatchReason = null) =>
         JsonSerializer.Serialize(new ScheduleStudioMemberWorkflowErrorJson(
-            new ScheduleStudioMemberWorkflowErrorBody(code, message)),
+            new ScheduleStudioMemberWorkflowErrorBody(code, message, authorizationPlanMismatchReason)),
             s_jsonOptions);
 
     private static string? Normalize(string? value) =>
@@ -314,7 +318,10 @@ internal sealed class ScheduleStudioMemberWorkflowTool : IAgentTool
 
     private sealed record ScheduleStudioMemberWorkflowErrorJson(ScheduleStudioMemberWorkflowErrorBody Error);
 
-    private sealed record ScheduleStudioMemberWorkflowErrorBody(string Code, string Message);
+    private sealed record ScheduleStudioMemberWorkflowErrorBody(
+        string Code,
+        string Message,
+        string? AuthorizationPlanMismatchReason = null);
 }
 
 internal static class StudioMemberWorkflowScheduleAuthorizationResolver
