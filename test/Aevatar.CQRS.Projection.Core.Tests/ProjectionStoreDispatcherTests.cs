@@ -158,6 +158,20 @@ public class ProjectionStoreDispatcherTests
     }
 
     [Fact]
+    public async Task DeleteAsync_WithMarker_WhenSinkDoesNotSupportMarkers_ShouldFailClosed()
+    {
+        var binding = new IdOnlyBinding("document");
+        var dispatcher = new ProjectionStoreDispatcher<TestReadModel>([binding]);
+        var marker = NewDeleteMarker();
+
+        Func<Task> act = () => dispatcher.DeleteAsync(marker);
+
+        await act.Should().ThrowAsync<NotSupportedException>()
+            .WithMessage("*versioned read-model deletes*");
+        binding.Deletes.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ObservedProjectionWriteDispatcher_ShouldEmitUpsertAndDeleteActivities()
     {
         var stopped = new ConcurrentQueue<Activity>();
@@ -310,6 +324,20 @@ public class ProjectionStoreDispatcherTests
     }
 
     [Fact]
+    public async Task ProjectionDocumentBinding_DeleteAsync_WithMarker_WhenWriterDoesNotSupportMarkers_ShouldFailClosed()
+    {
+        var writer = new IdOnlyDocumentWriter();
+        var binding = new ProjectionDocumentStoreBinding<TestReadModel>(writer);
+        var marker = NewDeleteMarker();
+
+        Func<Task> act = () => binding.DeleteAsync(marker);
+
+        await act.Should().ThrowAsync<NotSupportedException>()
+            .WithMessage("*versioned read-model deletes*");
+        writer.Deletes.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ProjectionDocumentBinding_DeleteAsync_WhenWriterMissing_ShouldNoOpAsApplied()
     {
         var binding = new ProjectionDocumentStoreBinding<TestReadModel>();
@@ -352,6 +380,30 @@ public class ProjectionStoreDispatcherTests
         42,
         "event-42",
         new DateTimeOffset(2026, 7, 29, 1, 2, 3, TimeSpan.Zero));
+
+    private sealed class IdOnlyBinding(string sinkName) : IProjectionWriteSink<TestReadModel>
+    {
+        public string SinkName { get; } = sinkName;
+
+        public bool IsEnabled => true;
+
+        public string DisabledReason => "enabled";
+
+        public List<string> Deletes { get; } = [];
+
+        public Task<ProjectionWriteResult> UpsertAsync(TestReadModel readModel, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(ProjectionWriteResult.Applied());
+        }
+
+        public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Deletes.Add(id);
+            return Task.FromResult(ProjectionWriteResult.Applied());
+        }
+    }
 
     private sealed class RecordingBinding : IProjectionWriteSink<TestReadModel>
     {
@@ -400,6 +452,24 @@ public class ProjectionStoreDispatcherTests
             DeleteCount++;
             LastDeletedId = marker.Id;
             LastDeleteMarker = marker;
+            return Task.FromResult(ProjectionWriteResult.Applied());
+        }
+    }
+
+    private sealed class IdOnlyDocumentWriter : IProjectionDocumentWriter<TestReadModel>
+    {
+        public List<string> Deletes { get; } = [];
+
+        public Task<ProjectionWriteResult> UpsertAsync(TestReadModel readModel, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(ProjectionWriteResult.Applied());
+        }
+
+        public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Deletes.Add(id);
             return Task.FromResult(ProjectionWriteResult.Applied());
         }
     }

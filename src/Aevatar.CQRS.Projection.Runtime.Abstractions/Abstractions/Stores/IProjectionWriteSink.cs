@@ -16,5 +16,6 @@ public interface IProjectionWriteSink<in TReadModel>
     Task<ProjectionWriteResult> DeleteAsync(
         ProjectionDocumentDeleteMarker marker,
         CancellationToken ct = default) =>
-        DeleteAsync(marker.Id, ct);
+        throw new NotSupportedException(
+            $"Projection write sink '{GetType().FullName}' does not support versioned read-model deletes.");
 }
