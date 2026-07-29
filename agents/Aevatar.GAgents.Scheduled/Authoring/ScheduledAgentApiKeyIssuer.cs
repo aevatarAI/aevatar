@@ -183,11 +183,13 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
             .Distinct(StringComparer.Ordinal)
             .Order(StringComparer.Ordinal)
             .ToArray();
+        var serviceCatalogRequired = serviceIds.Length > 0 ||
+                                     policy.ServiceGrantRequirement == AuthorizationGrantRequirement.Required;
         if (!IsCanonicalIdSequence(serviceIds) ||
             plan.NyxIdServiceGrants.Any(static grant => !IsValidServiceGrant(grant)) ||
-            plan.CatalogAuthority == null ||
-            !IsNormalized(plan.CatalogAuthority.ContractVersion) ||
-            !IsNormalized(plan.CatalogAuthority.PolicyVersion) ||
+            serviceCatalogRequired && (plan.CatalogAuthority == null ||
+                !IsNormalized(plan.CatalogAuthority.ContractVersion) ||
+                !IsNormalized(plan.CatalogAuthority.PolicyVersion)) ||
             serviceIds.Length == 0 && policy.ServiceGrantRequirement == AuthorizationGrantRequirement.Required ||
             nodeIds.Length == 0 && policy.NodeGrantRequirement == AuthorizationGrantRequirement.Required)
         {
@@ -449,8 +451,7 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
         IReadOnlyList<string> nodeIds)
     {
         if (!string.Equals(scopePlan.Authority, NyxIdAuthorizationAuthorities.NyxId, StringComparison.Ordinal) ||
-            !string.Equals(scopePlan.ContractVersion, plan.CatalogAuthority.ContractVersion, StringComparison.Ordinal) ||
-            !string.Equals(scopePlan.PolicyVersion, plan.CatalogAuthority.PolicyVersion, StringComparison.Ordinal) ||
+            !MatchesScopePlanVersions(scopePlan, plan.CatalogAuthority) ||
             !MatchesPrincipal(scopePlan.IntendedKeyOwner, ownerKind, ownerSubject) ||
             !MatchesPrincipal(scopePlan.AuthenticatedActor, plan.AuthenticatedActor) ||
             scopePlan.Freshness.Mode != NyxIdScopePlanFreshnessMode.MutationRevalidatedSnapshot ||
@@ -482,6 +483,21 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
 
         return true;
     }
+
+    private static bool MatchesScopePlanVersions(
+        NyxIdApiKeyScopePlan scopePlan,
+        NyxIdCatalogAuthorityStamp? catalogAuthority) =>
+        catalogAuthority is null
+            ? string.Equals(
+                  scopePlan.ContractVersion,
+                  NyxIdApiAccessResponseParser.ScopePlanContractVersion,
+                  StringComparison.Ordinal) &&
+              string.Equals(
+                  scopePlan.PolicyVersion,
+                  NyxIdApiAccessResponseParser.ScopePlanPolicyVersion,
+                  StringComparison.Ordinal)
+            : string.Equals(scopePlan.ContractVersion, catalogAuthority.ContractVersion, StringComparison.Ordinal) &&
+              string.Equals(scopePlan.PolicyVersion, catalogAuthority.PolicyVersion, StringComparison.Ordinal);
 
     private static bool MatchesPrincipal(
         NyxIdScopePlanPrincipal principal,

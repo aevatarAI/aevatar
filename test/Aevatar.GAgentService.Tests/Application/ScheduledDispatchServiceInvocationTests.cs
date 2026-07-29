@@ -350,6 +350,52 @@ public sealed class ScheduledDispatchServiceInvocationTests
     }
 
     [Fact]
+    public async Task ScheduledServiceInvocationDispatchPort_WithNoServiceGrants_ShouldNotRequireCatalogAuthority()
+    {
+        var now = new DateTimeOffset(2026, 7, 15, 8, 0, 0, TimeSpan.Zero);
+        var invocationPort = new RecordingServiceInvocationPort();
+        var port = new ScheduledServiceInvocationDispatchPort(
+            invocationPort,
+            new RecordingScheduledServiceInvocationCredentialExchangePort(),
+            secretVault: null,
+            timeProvider: new FixedTimeProvider(now));
+        var dispatch = new ScheduledServiceInvocationDispatchRequest(
+            new ServiceInvocationRequest
+            {
+                CommandId = "cmd-no-service-grants",
+                CorrelationId = "corr-no-service-grants",
+                Identity = new ServiceIdentity { ServiceId = "svc-alpha" },
+                EndpointId = "chat",
+                Payload = Any.Pack(new ChatRequestEvent { Prompt = "run" }),
+            },
+            CreateScheduledAgentKeyAuth(now.AddHours(1)),
+            ProjectNyxIdAccessTokenToWorkflowCallerCredential: true,
+            ScheduleId: "schedule-no-service-grants",
+            AuthorizationFact: CreateAuthorizationFactDispatch(now).AuthorizationFact! with
+            {
+                ServiceGrants = [],
+                ServiceGrantsNotRequired = true,
+                Authority = new ScheduledInvocationAuthorizationAuthority(
+                    11,
+                    12,
+                    13,
+                    0,
+                    0,
+                    default,
+                    default,
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    default),
+                OwnerLLMSelection = null,
+            });
+
+        await port.DispatchAsync(dispatch);
+
+        invocationPort.Requests.Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task ScheduledServiceInvocationDispatchPort_WithExpiredCatalogFreshness_ShouldUseCommittedFact()
     {
         var now = new DateTimeOffset(2026, 7, 15, 8, 0, 0, TimeSpan.Zero);
