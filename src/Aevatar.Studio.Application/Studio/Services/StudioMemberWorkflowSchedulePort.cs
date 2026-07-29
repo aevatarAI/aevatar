@@ -818,6 +818,14 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         long observedCatalogStateVersion,
         CancellationToken ct)
     {
+        var requiredServices = ResolveCatalogRefreshRequiredServices(authorizationRequest, resolvedRequiredServices);
+        if (resolvedRequiredServices is { Count: 0 } && requiredServices.Count == 0)
+        {
+            return CatalogRefreshRecoveryResult.Failed(
+                failureCode,
+                $"nyxid_catalog_refresh_required_services_unavailable:{detail}");
+        }
+
         string bearerToken;
         try
         {
@@ -843,7 +851,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             refresh = await _catalogRefreshPort.RefreshAsync(
                 authorizationRequest.Owner,
                 bearerToken,
-                ResolveCatalogRefreshRequiredServices(authorizationRequest, resolvedRequiredServices),
+                requiredServices,
                 ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
