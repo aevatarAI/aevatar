@@ -1423,6 +1423,15 @@ function loginResources(requested){
   [OIDC.resources,Array.isArray(requested)?requested:[]].forEach(function(group){ group.forEach(function(value){ var resource=typeof value==='string'?value.trim():''; if(resource&&merged.indexOf(resource)<0) merged.push(resource); }); });
   return merged;
 }
+function loginResourcesGranted(){
+  var t=getToken(), granted=[];
+  var claims=decodeJwt(t&&t.access_token);
+  [t&&t.oauth_resources,t&&t.resource,claims&&claims.resources].forEach(function(group){
+    if(typeof group==='string')group=[group];
+    (Array.isArray(group)?group:[]).forEach(function(value){ if(typeof value==='string'&&granted.indexOf(value)<0)granted.push(value); });
+  });
+  return OIDC.resources.every(function(resource){return granted.indexOf(resource)>=0;});
+}
 function loginReturnTo(){
   var h=(location.hash&&location.hash.indexOf('#/')===0&&/^#[A-Za-z0-9._~!$&'()*+,;=:@/?%-]*$/.test(location.hash))?location.hash:'';
   return location.pathname + h;
@@ -1813,7 +1822,7 @@ async function loadCqrs(rerender){
 
 /* ⑥ 技能调用 Skills —— /api/workflow/skills/* */
 var SKILLS_DATA=[];
-var SKILLS_LOADED=false, SKILLS_ERR=null, SKILLS_FORBIDDEN=false;
+var SKILLS_LOADED=false, SKILLS_ERR=null, SKILLS_FORBIDDEN=false, SKILLS_AUTH_REQUIRED=false;
 var SKILL_DETAIL={};   /* guid -> {inputs:[...], whenToUse} (lazy, cached) */
 /* real list item: {guid,name,description,category,tags[],private,runKind} -> internal skill shape. */
 function mapSkill(it){
@@ -1825,6 +1834,11 @@ function mapSkill(it){
 function mapInputs(arr){ return (Array.isArray(arr)?arr:[]).map(function(f){
   return { key:f.name, label:f.label||f.name, ph:'', req:!!f.required, help:f.description||'' }; }); }
 async function loadSkills(rerender){
+  if(!loginResourcesGranted()){
+    SKILLS_AUTH_REQUIRED=true; SKILLS_DATA=[]; SKILLS_ERR=null; SKILLS_FORBIDDEN=false;
+    SKILLS_LOADED=true; if(rerender) rerender(); return;
+  }
+  SKILLS_AUTH_REQUIRED=false;
   try{ var j=await adminJson('/api/workflow/skills');
     if(j && j.forbidden){ SKILLS_FORBIDDEN=true; SKILLS_DATA=[]; SKILLS_ERR=null; }
     else { SKILLS_FORBIDDEN=false; SKILLS_DATA=(j.items||[]).map(mapSkill); SKILLS_ERR=j.error||null;
@@ -3389,7 +3403,15 @@ function obsDetail(r){
         (a.content!=null?'<pre class="art-preview" style="width:100%">'+esc(a.content)+'</pre>':'')+'</div>';
     }).join('')+'</div>':emptyBlock('run').replace('暂无 Run','暂无产出').replace('该员工还没有执行记录。','本次 Run 尚未生成最终产出。');
   } else { content=obsGraphView(r); }
-  return head+usage+obsDiagnosticStrip(r)+obsNarrativeView(r)+
+  var cross='';
+  if(ACCOUNT&&ACCOUNT.admin){
+    var ownerScope=(r.scope&&r.scope!=='—')?r.scope:'';
+    cross='<div class="obs-crosslinks" style="display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 4px">'+
+      (ownerScope?'<button class="ibtn" style="height:28px" data-act="obsToCqrs" data-owner="'+esc(ownerScope)+'" title="打开投影页并按该 owner 过滤">投影健康 · scope</button>':'')+
+      '<button class="ibtn" style="height:28px" data-act="obsToAudit" data-run="'+esc(r.id)+'" title="在审计日志中搜索此 run">审计 · run</button>'+
+    '</div>';
+  }
+  return head+usage+obsDiagnosticStrip(r)+obsNarrativeView(r)+cross+
     '<div class="obs-tabs">'+tabs+'</div><div class="obs-tab-body">'+content+'</div>';
 }
 function usageCell(k,v){
@@ -3521,6 +3543,14 @@ function bindObservatory(root){
       if(bodyEl){ var open2=!!OBS_STATE.expandedReply[rid]; bodyEl.classList.toggle('clamp',!open2); act.setAttribute('aria-expanded',open2?'true':'false'); act.textContent=open2?'收起':'展开'; }
     } else if(a==='obsCopyJson'){
       copyWithToast(act.getAttribute('data-copy')||'', '已复制 JSON', '复制失败，请手动选择');
+    }
+    else if(a==='obsToCqrs'){
+      var owner=act.getAttribute('data-owner')||'';
+      navigate(['cqrs'], owner?{owner:owner}:{});
+    } else if(a==='obsToAudit'){
+      var rid=act.getAttribute('data-run')||'';
+      AUDIT_STATE.text=rid||'';
+      navigate(['audit'], {});
     }
     else if(a==='artDl'){ var sel=obsSelected(), cache=sel&&OBS_DETAIL[sel.id], d=cache&&cache.detail;
       var art=d&&(d.artifacts||[]).filter(function(x){return x.name===act.getAttribute('data-name');})[0];
@@ -3748,6 +3778,7 @@ function loadSkillTeams(done){
 function skillListSkeleton(){ var r='<div class="skill-row skel"><span class="sk-line w70"></span><span class="sk-line w90"></span><span class="sk-line w40"></span></div>'; return r+r+r+r+r; }
 function skillList(){
   if(SKILL_STATE.loading||!SKILLS_LOADED) return skillListSkeleton();
+  if(SKILLS_AUTH_REQUIRED) return '<div class="empty" style="padding:30px"><div class="et">当前登录未授权技能服务</div><div class="es">请重新授权 NyxID 的 Ornn 访问后加载技能。</div><button class="btn btn-primary" data-act="skAuthorize" style="margin-top:10px">重新授权</button></div>';
   if(SKILLS_FORBIDDEN) return '<div class="empty" style="padding:30px"><div class="et">需要授权</div><div class="es">当前账号无权列出技能（403），已按诚实态屏蔽。</div></div>';
   if(SKILLS_ERR) return '<div class="empty" style="padding:30px"><div class="et">技能加载失败</div><div class="es">'+esc(SKILLS_ERR)+'</div><button class="btn" data-act="skReload" style="margin-top:10px">重试</button></div>';
   var q=(SKILL_STATE.search||'').toLowerCase();
@@ -3948,6 +3979,7 @@ function bindSkills(root){
     var sr=ev.target.closest('[data-skill]'); if(sr){ capture(); selectSkill(sr.getAttribute('data-skill')); reList(); reDetail(); loadSkillDetail(SKILL_STATE.selected, reDetail); return; }
     var act=ev.target.closest('[data-act]'); if(!act||act.hasAttribute('disabled')) return; var a=act.getAttribute('data-act');
     if(a==='skBack'){ SKILL_STATE.mobileDetail=false; reDetail(); }
+    else if(a==='skAuthorize'){ beginLogin(); }
     else if(a==='skInvoke'){ capture(); runInvoke(); }
     else if(a==='skCopy'){ copyWithToast(act.getAttribute('data-copy')); }
     else if(a==='skOpenRun'){ obsNavigate({run:act.getAttribute('data-run'),scope:'mine'}); }
@@ -4070,7 +4102,14 @@ function embedTrim(f){ try{ var d=f.contentDocument; if(d&&d.head){ var s=d.crea
 function suiteFrame(src,title){ return '<iframe class="suite-embed" src="'+src+'" title="'+title+'" data-console-frame="1" onload="embedTrim(this)"></iframe>'; }
 /* CQRS/Studio/Channels/Voice 使用同源真页 iframe；运行观测台在 /admin 内保留本地实现，承载 admin run-id 直查与失败诊断。 */
 function viewObservatoryFrame(){ return {html:suiteFrame('/workflow/observatory','运行观测台')}; }
-function viewCqrs(){ if(!(ACCOUNT&&ACCOUNT.admin)) return {html:moduleSubHeader('cqrs','')+'<div class="view-scroll">'+auth403('CQRS 投影管道仅平台管理员可见。')+'</div>'}; return {html:suiteFrame('/cqrs','投影管道 CQRS')}; }
+function viewCqrs(){
+  if(!(ACCOUNT&&ACCOUNT.admin)) return {html:moduleSubHeader('cqrs','')+'<div class="view-scroll">'+auth403('CQRS 投影管道仅平台管理员可见。')+'</div>'};
+  var q=parseHash().q||{},p=new URLSearchParams();
+  if(q.owner) p.set('owner',q.owner);
+  if(q.family||q.fam) p.set('family',q.family||q.fam);
+  var src='/cqrs'+(p.toString()?'?'+p.toString():'');
+  return {html:suiteFrame(src,'投影管道 CQRS')};
+}
 function viewStudio(){ return {html:suiteFrame('/workflow/studio','编排工作台')}; }
 function viewChannels(){ return {html:suiteFrame('/channels','通道接入')}; }
 function viewVoice(){ return {html:suiteFrame('/voice','语音台')}; }
@@ -4332,6 +4371,14 @@ function bindAudit(root){
     if(!r) return null;
     var cat=auditActionCategory(r.action);
     var catLabel=(AUDIT_CATEGORIES.filter(function(c){return c.k===cat;})[0]||{label:cat}).label;
+    var runCandidate='';
+    var rid=r.resourceId||'', cid=r.correlationId||'';
+    /* Prefer explicit run-shaped resource ids; never invent identity from prefixes beyond simple contains. */
+    if(rid && (/:run:|workflow\.run|\/runs\//i.test(rid) || /run/i.test(r.resourceType||''))) runCandidate=rid;
+    else if(cid && /:run:/i.test(cid)) runCandidate=cid;
+    var runBtn=runCandidate
+      ? '<div class="kv-row"><span class="kk">关联运行</span><span class="vv"><button class="ibtn" style="height:26px" data-act="auditOpenRun" data-run="'+esc(runCandidate)+'">打开 run</button></span></div>'
+      : '';
     return '<div class="kv">'+
       '<div class="kv-row"><span class="kk">记录 ID</span><span class="vv">'+esc(r.id)+'</span></div>'+
       '<div class="kv-row"><span class="kk">发生时间</span><span class="vv sans">'+esc(auditFmtTime(r.occurredAtUtc))+' <span class="faint">('+esc(auditAgo(r.occurredAtUtc))+')</span></span></div>'+
@@ -4344,6 +4391,7 @@ function bindAudit(root){
       '<div class="kv-row"><span class="kk">资源类型</span><span class="vv sans">'+esc(r.resourceType||'—')+'</span></div>'+
       '<div class="kv-row"><span class="kk">资源 ID</span><span class="vv">'+esc(r.resourceId||'—')+'</span></div>'+
       '<div class="kv-row"><span class="kk">关联 ID</span><span class="vv">'+esc(r.correlationId||'—')+'</span></div>'+
+      runBtn+
       '<div class="kv-row"><span class="kk" style="align-self:center">操作者 ID</span><span class="vv"><button class="ibtn" data-act="auditCopy" data-copy="'+esc(r.auditActorId||'')+'" style="height:24px">复制 auditActorId</button></span></div>'+
     '</div>';
   }
@@ -4372,6 +4420,12 @@ function bindAudit(root){
       openInspector(detailFor(id),{title:'审计记录详情',sub:id,drawerKind:'audit'});
     } else if(a==='auditCopy'){
       copyWithToast(act.getAttribute('data-copy'),'已复制 auditActorId');
+    } else if(a==='auditOpenRun'){
+      var runId=(act.getAttribute('data-run')||'').trim();
+      if(!runId) return;
+      closeDrawer();
+      /* Direct run lookup (admin endpoints when owner unknown); hash goes to observatory. */
+      obsOpenDirectRun(runId);
     }
   });
   /* 输入类用 change/input：scope/actor/from/to 改变不立即请求（按“查询”触发），text 即时筛选 */

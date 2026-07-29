@@ -448,6 +448,31 @@ public sealed class BackendConsoleStaticAssetEndpointTests
     }
 
     [Fact]
+    public async Task AdminShell_CrossLinks_ShouldBridgeObservatoryCqrsAndAudit()
+    {
+        await using var app = await CreateAppAsync();
+        var client = app.GetTestClient();
+        var admin = await client.GetStringAsync("/admin");
+        var cqrs = await client.GetStringAsync("/cqrs");
+
+        admin.Should().Contain("data-act=\"obsToCqrs\"");
+        admin.Should().Contain("data-act=\"obsToAudit\"");
+        admin.Should().Contain("data-act=\"auditOpenRun\"");
+        admin.Should().Contain("function viewCqrs()");
+        admin.Should().Contain("p.set('owner',q.owner)");
+        admin.Should().Contain("AUDIT_STATE.text=rid||''");
+
+        cqrs.Should().Contain("function renderPurposeBanner()");
+        cqrs.Should().Contain("function healthOf(s)");
+        cqrs.Should().Contain("版本滞后");
+        cqrs.Should().Contain("规划中能力");
+        cqrs.Should().Contain("function openAdminObservatory(scopeId)");
+        cqrs.Should().Contain("function readDeepLinkFilters()");
+        cqrs.Should().Contain("本页回答：读侧投影是否健康");
+        cqrs.Should().Contain("StateVersion 差，不是毫秒");
+    }
+
+    [Fact]
     public async Task WorkflowSkillScheduleProducers_ShouldSendSelectedTeamId()
     {
         await using var app = await CreateAppAsync();
@@ -470,6 +495,17 @@ public sealed class BackendConsoleStaticAssetEndpointTests
                 "adminApi('/api/workflow/skills/'+encodeURIComponent(s.guid)+'/schedule'")
             .Should()
             .Contain("teamId:");
+    }
+
+    [Fact]
+    public async Task AdminShell_SkillsWithLegacyToken_ShouldOfferResourceReauthorization()
+    {
+        await using var app = await CreateAppAsync();
+        var admin = await app.GetTestClient().GetStringAsync("/admin");
+
+        admin.Should().Contain("if(!loginResourcesGranted())");
+        admin.Should().Contain("当前登录未授权技能服务");
+        admin.Should().Contain("data-act=\"skAuthorize\"");
     }
 
     private static string ScheduleRequestSnippet(string html, string scheduleCall)
