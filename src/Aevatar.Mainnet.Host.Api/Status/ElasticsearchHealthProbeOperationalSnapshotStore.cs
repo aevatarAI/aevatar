@@ -2,7 +2,6 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
-using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgents.StatusDashboard;
@@ -32,13 +31,16 @@ internal sealed class ElasticsearchHealthProbeOperationalSnapshotStore :
     private readonly ILogger _logger;
 
     public ElasticsearchHealthProbeOperationalSnapshotStore(
-        ElasticsearchProjectionDocumentStoreOptions options,
+        IReadOnlyList<string>? endpoints,
+        string? indexPrefix,
+        int requestTimeoutMs,
+        string? username,
+        string? password,
         HttpMessageHandler? httpMessageHandler = null,
         ILogger<ElasticsearchHealthProbeOperationalSnapshotStore>? logger = null)
     {
-        ArgumentNullException.ThrowIfNull(options);
         _logger = logger ?? NullLogger<ElasticsearchHealthProbeOperationalSnapshotStore>.Instance;
-        IndexAlias = $"{NormalizeToken(options.IndexPrefix, "aevatar")}-{IndexScope}";
+        IndexAlias = $"{NormalizeToken(indexPrefix, "aevatar")}-{IndexScope}";
         _metadata = new DocumentIndexMetadata(
             IndexAlias,
             new Dictionary<string, object?>(StringComparer.Ordinal) { ["dynamic"] = true },
@@ -47,12 +49,12 @@ internal sealed class ElasticsearchHealthProbeOperationalSnapshotStore :
         _httpClient = httpMessageHandler == null
             ? new HttpClient()
             : new HttpClient(httpMessageHandler, disposeHandler: true);
-        _httpClient.BaseAddress = ResolvePrimaryEndpoint(options.Endpoints);
-        _httpClient.Timeout = TimeSpan.FromMilliseconds(Math.Max(500, options.RequestTimeoutMs));
-        if (!string.IsNullOrWhiteSpace(options.Username))
+        _httpClient.BaseAddress = ResolvePrimaryEndpoint(endpoints);
+        _httpClient.Timeout = TimeSpan.FromMilliseconds(Math.Max(500, requestTimeoutMs));
+        if (!string.IsNullOrWhiteSpace(username))
         {
             var credentials = Convert.ToBase64String(
-                Encoding.UTF8.GetBytes($"{options.Username}:{options.Password}"));
+                Encoding.UTF8.GetBytes($"{username}:{password}"));
             _httpClient.DefaultRequestHeaders.Authorization =
                 new AuthenticationHeaderValue("Basic", credentials);
         }

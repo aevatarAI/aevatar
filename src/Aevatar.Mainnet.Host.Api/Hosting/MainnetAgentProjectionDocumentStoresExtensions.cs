@@ -222,9 +222,16 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         IConfiguration configuration)
     {
         services.TryAddSingleton<ElasticsearchHealthProbeOperationalSnapshotStore>(sp =>
-            new ElasticsearchHealthProbeOperationalSnapshotStore(
-                ProjectionDocumentProviderConfiguration.BindRequiredElasticsearchOptions(configuration),
-                logger: sp.GetRequiredService<ILogger<ElasticsearchHealthProbeOperationalSnapshotStore>>()));
+        {
+            var options = ProjectionDocumentProviderConfiguration.BindRequiredElasticsearchOptions(configuration);
+            return new ElasticsearchHealthProbeOperationalSnapshotStore(
+                options.Endpoints,
+                options.IndexPrefix,
+                options.RequestTimeoutMs,
+                options.Username,
+                options.Password,
+                logger: sp.GetRequiredService<ILogger<ElasticsearchHealthProbeOperationalSnapshotStore>>());
+        });
         services.Replace(ServiceDescriptor.Singleton<IHealthProbeOperationalSnapshotStore>(static sp =>
             sp.GetRequiredService<ElasticsearchHealthProbeOperationalSnapshotStore>()));
         services.AddSingleton<IProjectionIndexReconcileTarget>(static sp =>

@@ -90,13 +90,11 @@ public sealed class ElasticsearchHealthProbeOperationalSnapshotStoreTests
     private static ElasticsearchHealthProbeOperationalSnapshotStore CreateStore(
         HttpMessageHandler handler) =>
         new(
-            new ElasticsearchProjectionDocumentStoreOptions
-            {
-                Endpoints = ["http://localhost:9200"],
-                IndexPrefix = " Test ",
-                AutoCreateIndex = false,
-                MissingIndexBehavior = ElasticsearchMissingIndexBehavior.Throw,
-            },
+            ["http://localhost:9200"],
+            " Test ",
+            requestTimeoutMs: 10_000,
+            username: "",
+            password: "",
             handler);
 
     private static HealthProbeOperationalSnapshot BuildSnapshot() => new()
