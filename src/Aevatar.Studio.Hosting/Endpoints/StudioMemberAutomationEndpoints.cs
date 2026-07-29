@@ -28,18 +28,6 @@ internal static class StudioMemberAutomationEndpoints
     {
         ArgumentNullException.ThrowIfNull(app);
         app.MapPost($"{BasePath}/preflight", HandlePreflightAsync).WithTags("StudioTeamAutomations");
-        app.MapGet(BasePath, HandleListAsync).WithTags("StudioTeamAutomations");
-        app.MapPost(BasePath, HandleCreateAsync).WithTags("StudioTeamAutomations");
-        app.MapGet($"{BasePath}/{{scheduleId}}", HandleGetAsync).WithTags("StudioTeamAutomations");
-        app.MapPut($"{BasePath}/{{scheduleId}}", HandleUpdateAsync).WithTags("StudioTeamAutomations");
-        app.MapPost($"{BasePath}/{{scheduleId}}/reauthorize", HandleReauthorizeAsync)
-            .WithTags("StudioTeamAutomations");
-        app.MapPost($"{BasePath}/{{scheduleId}}/pause", HandlePauseAsync).WithTags("StudioTeamAutomations");
-        app.MapPost($"{BasePath}/{{scheduleId}}/resume", HandleResumeAsync).WithTags("StudioTeamAutomations");
-        app.MapPost($"{BasePath}/{{scheduleId}}/run-now", HandleRunNowAsync).WithTags("StudioTeamAutomations");
-        app.MapDelete($"{BasePath}/{{scheduleId}}", HandleDeleteAsync).WithTags("StudioTeamAutomations");
-        app.MapPost($"{BasePath}/{{scheduleId}}/retry-revocation", HandleRetryRevocationAsync)
-            .WithTags("StudioTeamAutomations");
     }
 
     internal static async Task<IResult> HandlePreflightAsync(
@@ -366,6 +354,7 @@ internal static class StudioMemberAutomationEndpoints
         string teamId,
         string memberId,
         string scheduleId,
+        StudioMemberAutomationActionRequest body,
         [FromServices] IStudioMemberWorkflowSchedulePort schedules,
         [FromServices] IExternalIdentityBindingQueryPort bindingQuery,
         CancellationToken ct)
@@ -380,11 +369,13 @@ internal static class StudioMemberAutomationEndpoints
                     bindingQuery,
                     ct);
             var receipt = await schedules.RetryRevocationAsync(
-                new StudioMemberAutomationRetryRevocationCommand(
+                new StudioMemberAutomationActionCommand(
                     scopeId,
                     teamId,
                     memberId,
-                    scheduleId)
+                    scheduleId,
+                    body.OperationId,
+                    body.IdempotencyKey)
                 {
                     AuthenticatedOwner = authority.AuthenticatedOwner,
                     ProvisioningBearerToken = authority.ProvisioningBearerToken,
@@ -458,13 +449,6 @@ internal static class StudioMemberAutomationEndpoints
     {
         result = exception switch
         {
-            StudioMemberAutomationAuthorizationBindingRequiredException => Results.Json(
-                new
-                {
-                    code = "TEAM_AUTOMATION_AUTHORIZATION_BINDING_REQUIRED",
-                    message = "Reconnect NyxID to authorize this automation.",
-                },
-                statusCode: StatusCodes.Status409Conflict),
             UnauthorizedAccessException => Results.Json(
                 new { code = "TEAM_AUTOMATION_UNAUTHORIZED", message = exception.Message },
                 statusCode: StatusCodes.Status401Unauthorized),

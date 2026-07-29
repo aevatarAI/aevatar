@@ -634,14 +634,6 @@ public static class ScheduledDispatchEndpoints
     {
         result = exception switch
         {
-            StudioMemberAutomationAuthorizationBindingRequiredException => Results.Json(
-                new
-                {
-                    code = "TEAM_AUTOMATION_UNAUTHORIZED",
-                    message =
-                        "Authenticated Team automation authority is required.",
-                },
-                statusCode: StatusCodes.Status401Unauthorized),
             UnauthorizedAccessException => Results.Json(
                 new
                 {

@@ -1,5 +1,4 @@
 using Aevatar.AI.Abstractions;
-using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
@@ -745,71 +744,6 @@ public sealed class ScheduledDispatchApplicationServiceTests
             actorPort.Created.Should().ContainSingle();
         else
             actorPort.Ensured.Should().ContainSingle();
-    }
-
-    [Fact]
-    public async Task RetryTeamAutomationRevocationAsync_ShouldUseActorOwnedOperationIdentity()
-    {
-        const string scheduleId = "schedule-revocation-alpha";
-        var projectedOwner = new TeamMemberAutomationOwner("scope-alpha", "m-alpha", "team-alpha");
-        var projectedOperationId = "delete-operation-actor-owned";
-        var projectedIdempotencyKey = "delete-idempotency-actor-owned";
-        var authenticatedCredentialOwner = new ScheduledInvocationAuthorizationOwner(
-            "nyxid",
-            "Personal",
-            "credential-owner-alpha");
-        var baseDetail = CreateSummaryDetail(
-            scheduleId,
-            ScheduledDispatchTargetKind.ServiceInvocation,
-            ScheduledDispatchScheduleKind.Workflow,
-            ScheduledDispatchCredentialRequirementTargetKind.WorkflowService,
-            ScheduledDispatchCredentialSourceKind.ScheduledInvocationAgentKey);
-        var detail = baseDetail with
-        {
-            Schedule = baseDetail.Schedule with
-            {
-                TeamOwned = true,
-                TeamOwnerScopeId = projectedOwner.ScopeId,
-                TeamId = projectedOwner.TeamId,
-                TeamOwnerMemberId = projectedOwner.MemberId,
-                RevocationPending = true,
-                TeamAutomationOperationId = $" {projectedOperationId} ",
-                TeamAutomationIdempotencyKey = $" {projectedIdempotencyKey} ",
-            },
-        };
-        var observationPort = new RecordingTeamAutomationObservationPort();
-        var actorPort = new RecordingScheduledDispatchActorPort
-        {
-            RetryOutcomeScheduleId = scheduleId,
-            RetryOutcomeSink = observationPort.Push,
-        };
-        var service = new ScheduledDispatchApplicationService(
-            actorPort,
-            new RecordingScheduledDispatchQueryPort { Detail = detail },
-            new ScheduledDispatchTargetPreparationService(),
-            new NoopScheduledDispatchCredentialAdmissionPort(),
-            teamOperationObservationPreparation: observationPort,
-            teamOperationObservationProjection: observationPort);
-
-        var receipt = await service.RetryTeamAutomationRevocationAsync(
-            $" {scheduleId} ",
-            new TeamMemberAutomationOwner(" scope-alpha ", " m-alpha ", " team-alpha "),
-            new ScheduledInvocationAuthorizationOwner(
-                " nyxid ",
-                " Personal ",
-                " credential-owner-alpha "));
-
-        var retry = actorPort.TeamRevocationRetries.Should().ContainSingle().Which;
-        retry.ActorId.Should().Be($"actor:{scheduleId}");
-        retry.Owner.Should().Be(projectedOwner);
-        retry.OperationId.Should().Be(projectedOperationId);
-        retry.IdempotencyKey.Should().Be(projectedIdempotencyKey);
-        retry.AuthenticatedCredentialOwner.Should().Be(authenticatedCredentialOwner);
-        retry.ObservationRequestId.Should().NotBeNullOrWhiteSpace();
-        receipt.Admission.ScheduleId.Should().Be(scheduleId);
-        receipt.Outcome.OperationId.Should().Be(projectedOperationId);
-        receipt.Outcome.IdempotencyKey.Should().Be(projectedIdempotencyKey);
-        receipt.Outcome.Stage.Should().Be(TeamAutomationOperationObservationStages.Delete);
     }
 
     [Fact]
@@ -2976,15 +2910,6 @@ public sealed class ScheduledDispatchApplicationServiceTests
         public List<(string ActorId, TeamMemberAutomationOwner Owner, string Reason)> TeamDeleted { get; } = [];
         public List<(string ActorId, DateTimeOffset ScheduledFireAt)> RunNow { get; } = [];
         public List<(string ActorId, TeamMemberAutomationOwner Owner, DateTimeOffset ScheduledFireAt, string OperationId, string IdempotencyKey)> TeamRunNow { get; } = [];
-        public List<(
-            string ActorId,
-            TeamMemberAutomationOwner Owner,
-            string OperationId,
-            string IdempotencyKey,
-            ScheduledInvocationAuthorizationOwner AuthenticatedCredentialOwner,
-            string ObservationRequestId)> TeamRevocationRetries { get; } = [];
-        public string RetryOutcomeScheduleId { get; init; } = string.Empty;
-        public Action<TeamAutomationOperationCommittedOutcome>? RetryOutcomeSink { get; init; }
 
         public Task<string> EnsureScheduleActorAsync(string scheduleId, CancellationToken ct = default)
         {
@@ -3087,42 +3012,6 @@ public sealed class ScheduledDispatchApplicationServiceTests
             return Task.FromResult(CreateAdmission(actorId));
         }
 
-        public Task<DispatchAdmission> DispatchRetryTeamAutomationRevocationAsync(
-            string actorId,
-            TeamMemberAutomationOwner owner,
-            string operationId,
-            string idempotencyKey,
-            ScheduledInvocationAuthorizationOwner authenticatedCredentialOwner,
-            string observationRequestId,
-            CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            TeamRevocationRetries.Add((
-                actorId,
-                owner,
-                operationId,
-                idempotencyKey,
-                authenticatedCredentialOwner,
-                observationRequestId));
-            RetryOutcomeSink.Should().NotBeNull();
-            RetryOutcomeSink!.Invoke(new TeamAutomationOperationCommittedOutcome(
-                RetryOutcomeScheduleId,
-                operationId,
-                idempotencyKey,
-                TeamAutomationOperationObservationStages.Delete,
-                OwnsEffectAttempt: false,
-                StateVersion: 11,
-                ErrorCode: string.Empty,
-                ErrorMessage: string.Empty,
-                ObservedAtUtc: DateTimeOffset.UtcNow,
-                PendingRevocationCredential: null,
-                PendingRevocationOwner: null,
-                NyxIdRevocationPending: true,
-                VaultRevocationPending: true,
-                ObservationRequestId: observationRequestId));
-            return Task.FromResult(CreateAdmission(actorId));
-        }
-
         public Task<DispatchAdmission> DispatchRunTeamAutomationNowAsync(
             string actorId,
             TeamMemberAutomationOwner owner,
@@ -3138,63 +3027,6 @@ public sealed class ScheduledDispatchApplicationServiceTests
 
         private static DispatchAdmission CreateAdmission(string actorId) =>
             new(true, "cmd-1", DateTimeOffset.UtcNow, actorId, "corr-1");
-    }
-
-    private sealed class RecordingTeamAutomationObservationPort
-        : ITeamAutomationOperationObservationScopeLeasePreparationPort,
-          ITeamAutomationOperationObservationProjectionPort
-    {
-        private IEventSink<TeamAutomationOperationCommittedOutcome>? _sink;
-
-        public bool ProjectionEnabled => true;
-
-        public Task<TeamAutomationOperationObservationScopeLeasePreparation?> PrepareAsync(
-            string actorId,
-            string operationId,
-            CancellationToken ct = default) =>
-            Task.FromResult<TeamAutomationOperationObservationScopeLeasePreparation?>(
-                new TeamAutomationOperationObservationScopeLeasePreparation(actorId, operationId));
-
-        public Task ReleaseAsync(
-            TeamAutomationOperationObservationScopeLeasePreparation preparation,
-            CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task<EventSinkProjectionAttachment<ITeamAutomationOperationObservationProjectionLease>?>
-            AttachExistingOperationProjectionAsync(
-                string actorId,
-                string operationId,
-                IEventSink<TeamAutomationOperationCommittedOutcome> sink,
-                CancellationToken ct = default)
-        {
-            _sink = sink;
-            return Task.FromResult<EventSinkProjectionAttachment<ITeamAutomationOperationObservationProjectionLease>?>(
-                new EventSinkProjectionAttachment<ITeamAutomationOperationObservationProjectionLease>(
-                    new RecordingTeamAutomationObservationLease(actorId, operationId),
-                    null));
-        }
-
-        public Task<IAsyncDisposable?> AttachLiveSinkAsync(
-            ITeamAutomationOperationObservationProjectionLease lease,
-            IEventSink<TeamAutomationOperationCommittedOutcome> sink,
-            CancellationToken ct = default) => throw new NotSupportedException();
-
-        public Task DetachLiveSinkAsync(
-            IAsyncDisposable? liveSinkLease,
-            CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task ReleaseActorProjectionAsync(
-            ITeamAutomationOperationObservationProjectionLease lease,
-            CancellationToken ct = default) => Task.CompletedTask;
-
-        public void Push(TeamAutomationOperationCommittedOutcome outcome)
-        {
-            _sink.Should().NotBeNull();
-            _sink!.Push(outcome);
-        }
-
-        private sealed record RecordingTeamAutomationObservationLease(
-            string ActorId,
-            string OperationId) : ITeamAutomationOperationObservationProjectionLease;
     }
 
     private static void SetRequiredStringProperty(object target, string propertyName, string value)

@@ -11,14 +11,6 @@ public sealed record StudioMemberAutomationHttpAuthority(
     AuthenticatedAuthorizationOwnerContext AuthenticatedOwner,
     string ProvisioningBearerToken);
 
-public sealed class StudioMemberAutomationAuthorizationBindingRequiredException : Exception
-{
-    public StudioMemberAutomationAuthorizationBindingRequiredException()
-        : base("Reconnect NyxID to authorize this automation.")
-    {
-    }
-}
-
 public static class StudioMemberAutomationHttpAuthorityResolver
 {
     public static async Task<StudioMemberAutomationHttpAuthority> ResolveAsync(
@@ -45,7 +37,7 @@ public static class StudioMemberAutomationHttpAuthorityResolver
             },
             ct);
         if (binding == null || string.IsNullOrWhiteSpace(binding.Value))
-            throw new StudioMemberAutomationAuthorizationBindingRequiredException();
+            throw new UnauthorizedAccessException("nyxid_binding_missing");
 
         return new StudioMemberAutomationHttpAuthority(
             new AuthenticatedAuthorizationOwnerContext(

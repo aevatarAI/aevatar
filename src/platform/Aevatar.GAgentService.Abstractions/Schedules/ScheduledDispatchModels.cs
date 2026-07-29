@@ -832,6 +832,8 @@ public interface IScheduledDispatchApplicationService
     Task<TeamAutomationCommittedMutationReceipt> RetryTeamAutomationRevocationAsync(
         string scheduleId,
         TeamMemberAutomationOwner owner,
+        string operationId,
+        string idempotencyKey,
         ScheduledInvocationAuthorizationOwner authenticatedCredentialOwner,
         CancellationToken ct = default) =>
         throw new NotSupportedException();

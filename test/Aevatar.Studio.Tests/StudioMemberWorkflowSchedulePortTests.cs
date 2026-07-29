@@ -1271,11 +1271,13 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         var materializer = new RecordingCredentialMaterializer();
         var port = NewPort(scheduleService, materializer: materializer);
         var request = Request("scope-1", "member-1");
-        var command = new StudioMemberAutomationRetryRevocationCommand(
+        var command = new StudioMemberAutomationActionCommand(
             "scope-1",
             "team-1",
             "member-1",
-            "schedule-1")
+            "schedule-1",
+            "operation-delete",
+            "idempotency-delete")
         {
             AuthenticatedOwner = request.AuthenticatedOwner,
             ProvisioningBearerToken = "fresh-bearer",
@@ -1304,11 +1306,13 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             logger: loggerFactory.CreateLogger<StudioMemberWorkflowSchedulePort>(),
             auditLoggerFactory: loggerFactory);
         var request = Request("scope-1", "member-1");
-        var command = new StudioMemberAutomationRetryRevocationCommand(
+        var command = new StudioMemberAutomationActionCommand(
             "scope-1",
             "team-1",
             "member-1",
-            "schedule-1")
+            "schedule-1",
+            "operation-delete",
+            "idempotency-delete")
         {
             AuthenticatedOwner = request.AuthenticatedOwner,
             ProvisioningBearerToken = "fresh-bearer-sensitive",
@@ -1402,11 +1406,13 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             auditLoggerFactory: loggerFactory);
         var request = Request("scope-1", "member-1");
 
-        await port.RetryRevocationAsync(new StudioMemberAutomationRetryRevocationCommand(
+        await port.RetryRevocationAsync(new StudioMemberAutomationActionCommand(
             "scope-1",
             "team-1",
             "member-1",
-            "schedule-1")
+            "schedule-1",
+            "operation-delete",
+            "idempotency-delete")
         {
             AuthenticatedOwner = request.AuthenticatedOwner,
             ProvisioningBearerToken = "fresh-bearer-sensitive",
@@ -2564,6 +2570,8 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         public Task<TeamAutomationCommittedMutationReceipt> RetryTeamAutomationRevocationAsync(
             string scheduleId,
             TeamMemberAutomationOwner owner,
+            string operationId,
+            string idempotencyKey,
             ScheduledInvocationAuthorizationOwner authenticatedCredentialOwner,
             CancellationToken ct = default)
         {
@@ -2573,8 +2581,8 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                 CredentialSecretPurposes.ScheduledInvocationAgentKey);
             return Task.FromResult(Committed(
                 scheduleId,
-                "operation-delete",
-                "idempotency-delete",
+                operationId,
+                idempotencyKey,
                 TeamAutomationOperationObservationStages.Delete,
                 ownsEffectAttempt: ReturnPendingRevocationOnRetry && RetryOwnsEffectAttempt,
                 "cmd-retry-revocation",

@@ -513,6 +513,8 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
     public async Task<TeamAutomationCommittedMutationReceipt> RetryTeamAutomationRevocationAsync(
         string scheduleId,
         TeamMemberAutomationOwner owner,
+        string operationId,
+        string idempotencyKey,
         ScheduledInvocationAuthorizationOwner authenticatedCredentialOwner,
         CancellationToken ct = default)
     {
@@ -525,12 +527,15 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         if (!existing.Schedule.RevocationPending)
             throw new InvalidOperationException("team_automation_revocation_not_pending");
 
-        var normalizedOperationId = NormalizeRequired(
-            existing.Schedule.TeamAutomationOperationId,
-            nameof(existing.Schedule.TeamAutomationOperationId));
-        var normalizedIdempotencyKey = NormalizeRequired(
-            existing.Schedule.TeamAutomationIdempotencyKey,
-            nameof(existing.Schedule.TeamAutomationIdempotencyKey));
+        var normalizedOperationId = NormalizeRequired(operationId, nameof(operationId));
+        var normalizedIdempotencyKey = NormalizeRequired(idempotencyKey, nameof(idempotencyKey));
+        if (!string.Equals(existing.Schedule.TeamAutomationOperationId, normalizedOperationId, StringComparison.Ordinal) ||
+            !string.Equals(existing.Schedule.TeamAutomationIdempotencyKey, normalizedIdempotencyKey, StringComparison.Ordinal))
+        {
+            throw new ScheduledDispatchConflictException(
+                normalizedScheduleId,
+                "team_automation_revocation_operation_conflict");
+        }
 
         var actorId = await ResolveScheduleActorAsync(normalizedScheduleId, ct);
         return await DispatchObservedTeamOperationAsync(

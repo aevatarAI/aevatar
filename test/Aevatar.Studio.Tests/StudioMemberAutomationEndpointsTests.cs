@@ -45,54 +45,16 @@ public sealed class StudioMemberAutomationEndpointsTests
 
         const string canonicalBase =
             "/api/scopes/{scopeId}/teams/{teamId}/members/{memberId}/automations";
-        routes.Should().ContainSingle(route => route == $"{canonicalBase}/preflight");
-        routes.Count(route => route == canonicalBase).Should().Be(2);
-        routes.Count(route => route == $"{canonicalBase}/{{scheduleId}}").Should().Be(3);
-        routes.Should().ContainSingle(route => route == $"{canonicalBase}/{{scheduleId}}/reauthorize");
-        routes.Should().ContainSingle(route => route == $"{canonicalBase}/{{scheduleId}}/retry-revocation");
-        routes.Should().ContainSingle(route => route == $"{canonicalBase}/{{scheduleId}}/pause");
-        routes.Should().ContainSingle(route => route == $"{canonicalBase}/{{scheduleId}}/resume");
-        routes.Should().ContainSingle(route => route == $"{canonicalBase}/{{scheduleId}}/run-now");
+        routes.Should().ContainSingle()
+            .Which.Should().Be($"{canonicalBase}/preflight");
+        routes.Should().NotContain(canonicalBase);
+        routes.Should().NotContain($"{canonicalBase}/{{scheduleId}}");
+        routes.Should().NotContain($"{canonicalBase}/{{scheduleId}}/reauthorize");
+        routes.Should().NotContain($"{canonicalBase}/{{scheduleId}}/retry-revocation");
+        routes.Should().NotContain($"{canonicalBase}/{{scheduleId}}/pause");
+        routes.Should().NotContain($"{canonicalBase}/{{scheduleId}}/resume");
+        routes.Should().NotContain($"{canonicalBase}/{{scheduleId}}/run-now");
         routes.Should().NotContain(route => route != null && route.StartsWith("/api/teams/", StringComparison.Ordinal));
-    }
-
-    [Fact]
-    public void RetryRevocation_ShouldNotAcceptBrowserOwnedOperationIdentity()
-    {
-        var method = typeof(StudioMemberAutomationEndpoints)
-            .GetMethod("HandleRetryRevocationAsync", System.Reflection.BindingFlags.Static |
-                System.Reflection.BindingFlags.NonPublic);
-
-        method.Should().NotBeNull();
-        method!.GetParameters()
-            .Should().NotContain(parameter =>
-                parameter.ParameterType == typeof(StudioMemberAutomationActionRequest));
-    }
-
-    [Fact]
-    public async Task Preflight_WhenNyxIdBindingIsMissing_ShouldReturnRecoverableTypedConflict()
-    {
-        var result = await StudioMemberAutomationEndpoints.HandlePreflightAsync(
-            CreateContext(ScopeId),
-            ScopeId,
-            TeamId,
-            MemberId,
-            new StudioMemberAutomationPreflightRequest(
-                "0 9 * * *",
-                "UTC",
-                "run daily digest",
-                "Daily digest",
-                true),
-            new StubSchedules(),
-            new StubBindingQuery { Binding = null },
-            CancellationToken.None);
-
-        StatusCode(result).Should().Be(StatusCodes.Status409Conflict);
-        var value = Value(result);
-        StringProperty(value, "code")
-            .Should().Be("TEAM_AUTOMATION_AUTHORIZATION_BINDING_REQUIRED");
-        StringProperty(value, "message")
-            .Should().Be("Reconnect NyxID to authorize this automation.");
     }
 
     [Fact]
@@ -169,7 +131,7 @@ public sealed class StudioMemberAutomationEndpointsTests
     }
 
     [Fact]
-    public async Task Preflight_WhenNyxIdBindingIsMissing_ShouldReturnTypedConflictWithoutSecrets()
+    public async Task Preflight_WhenNyxIdBindingIsMissing_ShouldReturnUnauthorizedWithoutSecrets()
     {
         var schedules = new StubSchedules();
         var result = await StudioMemberAutomationEndpoints.HandlePreflightAsync(
@@ -187,9 +149,9 @@ public sealed class StudioMemberAutomationEndpointsTests
             new StubBindingQuery { Binding = null },
             CancellationToken.None);
 
-        StatusCode(result).Should().Be(StatusCodes.Status409Conflict);
+        StatusCode(result).Should().Be(StatusCodes.Status401Unauthorized);
         StringProperty(Value(result), "code").Should().Be(
-            "TEAM_AUTOMATION_AUTHORIZATION_BINDING_REQUIRED");
+            "TEAM_AUTOMATION_UNAUTHORIZED");
         schedules.LastPreflight.Should().BeNull();
         var json = JsonSerializer.Serialize(Value(result));
         json.Should().NotContain("binding-alpha");
@@ -630,7 +592,7 @@ public sealed class StudioMemberAutomationEndpointsTests
     }
 
     [Fact]
-    public async Task RetryRevocation_ShouldPassOnlyCanonicalIdentityAndFreshOwnerCredentialToApplicationBoundary()
+    public async Task RetryRevocation_ShouldPassStableIdentityAndFreshOwnerCredentialOnlyToApplicationBoundary()
     {
         var schedules = new StubSchedules();
 
@@ -640,6 +602,7 @@ public sealed class StudioMemberAutomationEndpointsTests
             TeamId,
             MemberId,
             ScheduleId,
+            new StudioMemberAutomationActionRequest("op-cleanup", "idem-cleanup"),
             schedules,
             new StubBindingQuery(),
             CancellationToken.None);
@@ -647,10 +610,12 @@ public sealed class StudioMemberAutomationEndpointsTests
         StatusCode(result).Should().Be(StatusCodes.Status202Accepted);
         var response = Value(result).Should().BeOfType<StudioMemberAutomationMutationReceipt>().Subject;
         response.Status.Should().Be("pending");
-        response.OperationId.Should().Be("op-delete-committed");
+        response.OperationId.Should().Be("op-cleanup");
         AssertNoCredentialMaterial(response);
         schedules.LastRetryRevocation.Should().NotBeNull();
-        schedules.LastRetryRevocation!.AuthenticatedOwner!.Owner.OwnerSubject.Should().Be("nyx-owner-alpha");
+        schedules.LastRetryRevocation!.OperationId.Should().Be("op-cleanup");
+        schedules.LastRetryRevocation.IdempotencyKey.Should().Be("idem-cleanup");
+        schedules.LastRetryRevocation.AuthenticatedOwner!.Owner.OwnerSubject.Should().Be("nyx-owner-alpha");
         schedules.LastRetryRevocation.ProvisioningBearerToken.Should().Be("fresh-owner-bearer");
         schedules.LastRetryRevocation.ScopeId.Should().Be(ScopeId);
         schedules.LastRetryRevocation.TeamId.Should().Be(TeamId);
@@ -804,7 +769,7 @@ public sealed class StudioMemberAutomationEndpointsTests
         public StudioMemberAutomationActionCommand? LastAction { get; private set; }
         public string? LastActionName { get; private set; }
         public StudioMemberAutomationActionCommand? LastDelete { get; private set; }
-        public StudioMemberAutomationRetryRevocationCommand? LastRetryRevocation { get; private set; }
+        public StudioMemberAutomationActionCommand? LastRetryRevocation { get; private set; }
         public (string ScopeId, string TeamId, string MemberId, int Take, string? Cursor)? LastList { get; private set; }
         public (string ScopeId, string TeamId, string MemberId, string ScheduleId)? LastGet { get; private set; }
 
@@ -927,7 +892,7 @@ public sealed class StudioMemberAutomationEndpointsTests
         }
 
         public Task<StudioMemberAutomationMutationReceipt> RetryRevocationAsync(
-            StudioMemberAutomationRetryRevocationCommand command,
+            StudioMemberAutomationActionCommand command,
             CancellationToken ct = default)
         {
             LastRetryRevocation = command;
@@ -935,7 +900,7 @@ public sealed class StudioMemberAutomationEndpointsTests
                 command.ScopeId,
                 command.TeamId,
                 command.MemberId,
-                Receipt("op-delete-committed", "pending"));
+                Receipt(command.OperationId, "pending"));
         }
 
         private Task<StudioMemberAutomationMutationReceipt> ActionResult(
