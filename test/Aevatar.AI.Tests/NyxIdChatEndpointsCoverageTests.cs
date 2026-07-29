@@ -1054,6 +1054,7 @@ public partial class NyxIdChatEndpointsCoverageTests
             .AddSingleton<IUserMemoryStore>(new StubUserMemoryStore("remember this"))
             .BuildServiceProvider();
         context.Request.Headers["X-NyxID-Delegation-Token"] = "delegation-token";
+        context.Request.Headers.Authorization = "Bearer forwarded-access-token";
         context.Request.Headers["X-Nyx-Refresh-Token"] = "refresh-token";
 
         var runtime = new StubActorRuntime();
@@ -1088,7 +1089,7 @@ public partial class NyxIdChatEndpointsCoverageTests
         command.ActorId.Should().Be("actor-1");
         command.Prompt.Should().Be("hello there");
         command.ScopeId.Should().Be("scope-a");
-        command.AccessToken.Should().Be("delegation-token");
+        command.AccessToken.Should().Be("forwarded-access-token");
         command.Metadata.Should().NotBeNull();
         command.Metadata!.Should().NotContainKey(NyxRefreshTokenMetadataKey);
         command.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
@@ -1096,7 +1097,7 @@ public partial class NyxIdChatEndpointsCoverageTests
         command.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.MaxToolRoundsOverride);
         command.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.UserMemoryPrompt);
         command.LlmControl.Should().Be(new LLMControlContext(
-            NyxIdAccessToken: "delegation-token",
+            NyxIdAccessToken: "forwarded-access-token",
             NyxIdOrgToken: null,
             SenderNyxIdAccessToken: null,
             ModelOverride: "relay-model",
