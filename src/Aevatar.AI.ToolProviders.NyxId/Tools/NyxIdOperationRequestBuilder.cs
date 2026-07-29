@@ -97,6 +97,13 @@ internal static class NyxIdOperationRequestBuilder
             var responseMode = ResolveResponseMode(root, admission, out var responseModeFailure);
             if (responseModeFailure is not null)
                 return new NyxIdOperationRequestBuildResult(null, responseModeFailure);
+            var method = admission.HttpMethod.Trim().ToUpperInvariant();
+            if (responseMode == FileArtifactResponseMode && method != "GET")
+            {
+                return NyxIdOperationRequestBuildResult.Failed(
+                    "NYXID_OPERATION_RESPONSE_MODE_REJECTED",
+                    "response_mode=file_artifact only supports an admitted GET operation.");
+            }
 
             var path = BuildPath(admission, root, out var pathFailure);
             if (pathFailure is not null)
@@ -124,7 +131,7 @@ internal static class NyxIdOperationRequestBuilder
             return NyxIdOperationRequestBuildResult.Success(new NyxIdOperationRequest(
                 admission.ServiceInstanceId,
                 admission.ServiceSlug,
-                admission.HttpMethod.Trim().ToUpperInvariant(),
+                method,
                 path + query,
                 body,
                 headers,
@@ -226,18 +233,21 @@ internal static class NyxIdOperationRequestBuilder
             if (!declared.TryGetValue(name, out var parameter))
             {
                 failure = new NyxIdOperationRequestFailure(
-                    "NYXID_OPERATION_PATH_PARAMETER_UNKNOWN",
+                    "NYXID_OPERATION_PATH_TEMPLATE_INVALID",
                     $"path parameter '{name}' is not declared by the admitted operation.");
                 return string.Empty;
             }
 
-            failure = ValidateSchema(
+            var schemaFailure = ValidateSchema(
                 $"path_params.{name}",
                 parameter.Schema,
                 value,
                 "NYXID_OPERATION_PATH_PARAMETER_INVALID");
-            if (failure is not null)
+            if (schemaFailure is not null)
+            {
+                failure = schemaFailure;
                 return string.Empty;
+            }
 
             var segment = EncodePathSegment(name, value, out failure);
             if (failure is not null)

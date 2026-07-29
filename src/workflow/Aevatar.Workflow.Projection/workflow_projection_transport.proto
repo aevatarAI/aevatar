@@ -143,6 +143,7 @@ message WorkflowExecutionStepTrace {
   int32 suspension_timeout_seconds_value = 18;
   string requested_variable_name = 19;
   WorkflowUsageMetricsReadModel usage_value = 20;
+  string suspension_content = 21;
 }
 
 message WorkflowUsageMetricsReadModel {

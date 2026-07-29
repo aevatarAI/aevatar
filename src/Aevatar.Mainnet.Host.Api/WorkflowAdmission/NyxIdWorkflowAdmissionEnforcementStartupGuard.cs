@@ -12,6 +12,7 @@ namespace Aevatar.Mainnet.Host.Api.WorkflowAdmission;
 
 internal sealed class NyxIdWorkflowAdmissionEnforcementStartupGuard(
     IOptions<NyxIdToolOptions> options,
+    IWorkflowDefinitionParser workflowDefinitionParser,
     IProjectionDocumentReader<WorkflowActorBindingDocument, string> definitionReader,
     IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string> runReader,
     IProjectionDocumentReader<ServiceDeploymentCatalogReadModel, string> deploymentReader) : IHostedService
@@ -76,10 +77,11 @@ internal sealed class NyxIdWorkflowAdmissionEnforcementStartupGuard(
                 if (deactivatedServiceDefinitions.Contains(document.ActorId))
                     continue;
 
-                if (!HasValidV3Plan(
+                if (!await HasValidV4PlanAsync(
                         document.CapabilityAdmissionPlan,
                         document.WorkflowYaml,
-                        document.InlineWorkflowYamlEntries))
+                        document.InlineWorkflowYamlEntries,
+                        ct))
                 {
                     failures.Add(document.ActorId);
                 }
@@ -159,10 +161,11 @@ internal sealed class NyxIdWorkflowAdmissionEnforcementStartupGuard(
             foreach (var document in page.Items)
             {
                 if (!IsTerminal(document.Status) &&
-                    !HasValidV3Plan(
+                    !await HasValidV4PlanAsync(
                         document.CapabilityAdmissionPlan,
                         document.WorkflowYaml,
-                        document.InlineWorkflowYamlEntries))
+                        document.InlineWorkflowYamlEntries,
+                        ct))
                 {
                     failures.Add(document.RootActorId);
                 }
@@ -174,57 +177,53 @@ internal sealed class NyxIdWorkflowAdmissionEnforcementStartupGuard(
         return failures;
     }
 
-    private static bool HasValidV3Plan(
+    private async Task<bool> HasValidV4PlanAsync(
         WorkflowCapabilityAdmissionPlan? plan,
         string? workflowYaml,
-        IReadOnlyDictionary<string, string> inlineWorkflowYamls)
+        IReadOnlyDictionary<string, string> inlineWorkflowYamls,
+        CancellationToken ct)
     {
-        if (plan is null ||
-            !string.Equals(plan.SchemaVersion, WorkflowCapabilityAdmissionPlanIntegrity.SchemaVersion, StringComparison.Ordinal))
-        {
-            return false;
-        }
-
         try
         {
+            var expectedInvocations = new List<ExternalToolInvocationSpec>();
+            foreach (var yaml in new[] { workflowYaml ?? string.Empty }
+                         .Concat(inlineWorkflowYamls
+                             .OrderBy(static item => item.Key, StringComparer.Ordinal)
+                             .Select(static item => item.Value)))
+            {
+                var parsed = await workflowDefinitionParser.ParseWorkflowYamlAsync(yaml, ct);
+                if (!parsed.Succeeded)
+                    return false;
+                expectedInvocations.AddRange(
+                    parsed.AuthorizationDependencies?.ExternalInvocations
+                        .Select(static invocation => invocation.Clone()) ?? []);
+            }
+
+            if (expectedInvocations.Count == 0 && (plan is null || plan.CalculateSize() == 0))
+            {
+                return true;
+            }
+            if (plan is null ||
+                !string.Equals(
+                    plan.SchemaVersion,
+                    WorkflowCapabilityAdmissionPlanIntegrity.SchemaVersion,
+                    StringComparison.Ordinal))
+            {
+                return false;
+            }
+
             WorkflowCapabilityAdmissionPlanIntegrity.ValidateOrThrow(
                 plan,
                 workflowYaml ?? string.Empty,
                 inlineWorkflowYamls,
                 plan.ExecutionMode,
-                plan.InvocationAdmissions.Select(ToExpectedInvocation));
+                expectedInvocations);
             return true;
         }
         catch (InvalidOperationException)
         {
             return false;
         }
-    }
-
-    private static ExternalToolInvocationSpec ToExpectedInvocation(
-        WorkflowCapabilityInvocationAdmission admission)
-    {
-        var selector = new ExternalWorkflowCapabilitySelector();
-        switch (admission.Capability?.CapabilityCase)
-        {
-            case ExternalWorkflowCapabilityRef.CapabilityOneofCase.HostConnector:
-                selector.HostConnector = admission.Capability.HostConnector.Clone();
-                break;
-            case ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService:
-                selector.NyxIdOperation = new NyxIdOperationSelector
-                {
-                    UserServiceId = admission.Capability.NyxIdUserService.UserServiceId,
-                    EndpointId = admission.Capability.NyxIdUserService.EndpointId,
-                };
-                break;
-        }
-
-        return new ExternalToolInvocationSpec
-        {
-            CallSiteId = admission.CallSiteId,
-            ToolName = "inventory_validation",
-            Selector = selector,
-        };
     }
 
     private static bool IsTerminal(string? status) =>

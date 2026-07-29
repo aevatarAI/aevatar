@@ -5,6 +5,8 @@ using Aevatar.GAgentService.Projection.ReadModels;
 using Aevatar.Mainnet.Host.Api.WorkflowAdmission;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Core;
+using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Projection.ReadModels;
 using FluentAssertions;
 using Microsoft.Extensions.Options;
@@ -99,6 +101,53 @@ public sealed class NyxIdWorkflowAdmissionEnforcementStartupGuardTests
     }
 
     [Fact]
+    public async Task StartAsync_WhenEnforce_ShouldAllowProoflessInventoryWithoutExternalCallSites()
+    {
+        var definitions = new PagedReader<WorkflowActorBindingDocument>(
+            [[Definition("wf-internal", plan: null, "name: wf-internal\nsteps: []\n")]]);
+        var runs = new PagedReader<WorkflowExecutionCurrentStateDocument>(
+            [[Run("run-internal", "running", plan: null, "name: wf-internal\nsteps: []\n")]]);
+        var guard = CreateGuard(
+            NyxIdManagedWorkflowAdmissionMode.Enforce,
+            definitions,
+            runs,
+            new PagedReader<ServiceDeploymentCatalogReadModel>([]));
+
+        await guard.StartAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task StartAsync_WhenEnforce_ShouldRejectPlanThatDoesNotMatchParsedYamlInvocations()
+    {
+        const string yaml = """
+            name: wf-v3
+            roles: []
+            steps:
+              - id: read-alpha
+                type: tool_call
+                capability:
+                  nyxid_operation:
+                    user_service_id: us-yaml-alpha
+                    endpoint_id: read-yaml-alpha
+                parameters:
+                  tool: nyxid_proxy
+                  arguments: '{"query":{}}'
+            """;
+        var definitions = new PagedReader<WorkflowActorBindingDocument>(
+            [[Definition("wf-v3", ValidNyxIdPlan(yaml), yaml)]]);
+        var guard = CreateGuard(
+            NyxIdManagedWorkflowAdmissionMode.Enforce,
+            definitions,
+            new PagedReader<WorkflowExecutionCurrentStateDocument>([]),
+            new PagedReader<ServiceDeploymentCatalogReadModel>([]));
+
+        var act = () => guard.StartAsync(CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*CAPABILITY_ADMISSION_REBIND_REQUIRED*definitions=1*wf-v3*");
+    }
+
+    [Fact]
     public async Task StartAsync_WhenEnforce_ShouldIgnoreOnlyExplicitlyDeactivatedServiceDefinitions()
     {
         var definitions = new PagedReader<WorkflowActorBindingDocument>(
@@ -144,32 +193,37 @@ public sealed class NyxIdWorkflowAdmissionEnforcementStartupGuardTests
         IProjectionDocumentReader<ServiceDeploymentCatalogReadModel, string> deployments) =>
         new(
             Options.Create(new NyxIdToolOptions { ManagedWorkflowAdmissionMode = mode }),
+            new TestWorkflowDefinitionParser(),
             definitions,
             runs,
             deployments);
 
-    private static WorkflowActorBindingDocument Definition(string id, WorkflowCapabilityAdmissionPlan plan) =>
+    private static WorkflowActorBindingDocument Definition(
+        string id,
+        WorkflowCapabilityAdmissionPlan? plan,
+        string workflowYaml = "name: wf-v3") =>
         new()
         {
             Id = id,
             ActorId = id,
             ActorKind = WorkflowActorKind.Definition,
-            WorkflowYaml = "name: wf-v3",
-            CapabilityAdmissionPlan = plan.Clone(),
+            WorkflowYaml = workflowYaml,
+            CapabilityAdmissionPlan = plan?.Clone(),
         };
 
     private static WorkflowExecutionCurrentStateDocument Run(
         string id,
         string status,
-        WorkflowCapabilityAdmissionPlan plan) =>
+        WorkflowCapabilityAdmissionPlan? plan,
+        string workflowYaml = "name: wf-v3") =>
         new()
         {
             Id = id,
             RootActorId = id,
             RunId = id,
             Status = status,
-            WorkflowYaml = "name: wf-v3",
-            CapabilityAdmissionPlan = plan.Clone(),
+            WorkflowYaml = workflowYaml,
+            CapabilityAdmissionPlan = plan?.Clone(),
         };
 
     private static WorkflowCapabilityAdmissionPlan ValidV3Plan() =>
@@ -215,6 +269,59 @@ public sealed class NyxIdWorkflowAdmissionEnforcementStartupGuardTests
         return plan;
     }
 
+    private static WorkflowCapabilityAdmissionPlan ValidNyxIdPlan(string workflowYaml)
+    {
+        var observedAt = new DateTimeOffset(2026, 7, 29, 0, 0, 0, TimeSpan.Zero);
+        return WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            workflowYaml,
+            inlineWorkflowYamls: null,
+            ExternalCapabilityExecutionMode.Interactive,
+            [new WorkflowCapabilityInvocationAdmission
+            {
+                CallSiteId = "wf-v3/read-alpha",
+                Capability = new ExternalWorkflowCapabilityRef
+                {
+                    NyxIdUserService = new NyxIdUserServiceCapabilityRef
+                    {
+                        UserServiceId = "us-plan-alpha",
+                        ServiceSlugSnapshot = "service-alpha",
+                        EndpointId = "read-plan-alpha",
+                        HttpMethod = "GET",
+                        PathTemplate = "/items",
+                        ContractDigest = "sha256:plan-alpha",
+                        ExecutionPolicy = new NyxIdOperationExecutionPolicy
+                        {
+                            Risk = NyxIdOperationRisk.ReadOnly,
+                            Approval = NyxIdOperationApproval.None,
+                            EnforcementOwner = NyxIdOperationEnforcementOwner.Aevatar,
+                            AllowedExecutionModes =
+                            {
+                                ExternalCapabilityExecutionMode.Interactive,
+                                ExternalCapabilityExecutionMode.Durable,
+                            },
+                        },
+                    },
+                },
+            }],
+            [
+                Source(ExternalCapabilitySourceKind.NyxIdUserServices, "nyxid-user-services:caller", observedAt),
+                Source(ExternalCapabilitySourceKind.NyxIdOpenApi, "us-plan-alpha", observedAt),
+            ]);
+    }
+
+    private static ExternalCapabilitySourceStamp Source(
+        ExternalCapabilitySourceKind kind,
+        string sourceId,
+        DateTimeOffset observedAt) =>
+        new()
+        {
+            SourceKind = kind,
+            SourceId = sourceId,
+            ObservedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(observedAt),
+            FreshUntil = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(observedAt.AddMinutes(5)),
+            ContentDigest = "sha256:source-alpha",
+        };
+
     private sealed class PagedReader<T>(IReadOnlyList<IReadOnlyList<T>> pages)
         : IProjectionDocumentReader<T, string>
         where T : class, IProjectionReadModel
@@ -235,5 +342,31 @@ public sealed class NyxIdWorkflowAdmissionEnforcementStartupGuardTests
                 NextCursor = index + 1 < pages.Count ? (index + 1).ToString() : null,
             });
         }
+    }
+
+    private sealed class TestWorkflowDefinitionParser : IWorkflowDefinitionParser
+    {
+        public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(
+            string workflowYaml,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                var workflow = new WorkflowParser().Parse(workflowYaml);
+                return Task.FromResult(WorkflowYamlParseResult.Success(
+                    workflow.Name,
+                    WorkflowAuthorizationDependencyEvaluator.Evaluate(workflow)));
+            }
+            catch (Exception exception)
+            {
+                return Task.FromResult(WorkflowYamlParseResult.Invalid(exception.Message));
+            }
+        }
+
+        public Task<WorkflowInlineYamlBundleParseResult> ParseInlineWorkflowBundleAsync(
+            IReadOnlyList<WorkflowChatInlineYamlDocument> inlineWorkflowDocuments,
+            CancellationToken ct = default) =>
+            Task.FromResult(WorkflowInlineYamlBundleParseResult.Invalid("Not used by the startup guard."));
     }
 }

@@ -35,7 +35,8 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         html.Should().Contain("https://id.example.test");
         html.Should().Contain("client-example");
         html.Should().Contain("console:test");
-        html.Should().Contain("\"resources\":[\"https://api.example.test/api/v1/proxy/s/aevatar\"]");
+        html.Should().Contain(
+            "\"resources\":[\"https://api.example.test/api/v1/proxy/s/aevatar\",\"https://api.example.test/api/v1/proxy/s/ornn-api\"]");
         html.Should().NotContain("__BACKEND_CONSOLE_CONFIG__");
         html.Should().NotContain("https://nyx.chrono-ai.fun");
         html.Should().NotContain("https://nyx-api.chrono-ai.fun");
@@ -225,6 +226,166 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         var error = await errorTask;
 
         process.ExitCode.Should().Be(0, $"the causal polling regression should pass. stdout: {output} stderr: {error}");
+    }
+
+    [Fact]
+    public async Task AdminShell_ObservatoryHumanApproval_ShouldBeTypedOwnerOnlyAndUseScopeResume()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            (async function() {
+            function functionSource(name) {
+              const asyncStart = html.indexOf('async function ' + name + '(');
+              const syncStart = html.indexOf('function ' + name + '(');
+              const start = asyncStart !== -1 ? asyncStart : syncStart;
+              assert.notEqual(start, -1, name + ' must exist in the served admin asset');
+              const nextStarts = [
+                html.indexOf('\nfunction ', start + 1),
+                html.indexOf('\nasync function ', start + 1)
+              ].filter(function(index) { return index !== -1; });
+              assert.ok(nextStarts.length, 'a following function must delimit ' + name);
+              return html.slice(start, Math.min.apply(null, nextStarts));
+            }
+
+            const context = { assert };
+            vm.createContext(context);
+            vm.runInContext(`
+              var ACCOUNT = null, OBS_APPROVAL = {}, requests = [];
+              function adminJson(path, options) {
+                requests.push({ path: path, options: options });
+                return Promise.resolve({ accepted: true });
+              }
+              function esc(value) {
+                return String(value == null ? '' : value).replace(/[&<>"]/g, function(character) {
+                  return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[character];
+                });
+              }
+              function obsStepStatus() { return 'running'; }
+              function obsDurMs() { return '—'; }
+              function obsNum(value) { return value == null ? '—' : String(value); }
+              function obsTimeline_span() { return '—'; }
+              function obsCost() { return '$0.00'; }
+              function obsTime() { return '—'; }
+              function obsEventTitle() { return 'event'; }
+              function obsStepHint() { return ''; }
+              function obsMapGraph() { return { rootNodeId: '', nodes: [], edges: [] }; }
+              function obsMapStatus(status) { return status === 'failed' ? 'failed' : 'running'; }
+              function obsBytes(value) { return String(value || '').length; }
+              function obsIssuePayload() { return {}; }
+
+              ${functionSource('mapObsDetail')}
+              ${functionSource('obsApprovalState')}
+              ${functionSource('obsActiveApproval')}
+              ${functionSource('obsCanApprove')}
+              ${functionSource('obsApprovalPanel')}
+              ${functionSource('obsSubmitApproval')}
+              ${functionSource('obsDiagnosticStrip')}
+            `, context);
+
+            await vm.runInContext(`(async function() {
+              const raw = {
+                summary: {
+                  runId: 'run-approval',
+                  workflowName: 'auto_review',
+                  status: 'running',
+                  scopeId: 'scope-owner',
+                  stateVersion: 58
+                },
+                steps: [{
+                  stepId: 'show_for_approval',
+                  stepType: 'human_approval',
+                  requestedAtUtc: '2026-07-29T02:38:47Z',
+                  suspensionType: 'human_approval',
+                  suspensionPrompt: 'Review this workflow',
+                  suspensionContent: 'name: daily_tech_digest\\nsteps: []',
+                  suspensionTimeoutSeconds: 3600
+                }],
+                diagnostics: [{ severity: 'info', code: 'active_step', message: 'waiting' }]
+              };
+
+              const run = mapObsDetail(raw, null);
+              assert.equal(run.steps[0].suspensionType, 'human_approval');
+              assert.equal(run.steps[0].suspensionContent, 'name: daily_tech_digest\\nsteps: []');
+              assert.equal(obsActiveApproval({
+                steps: [{ stepId: 'show_for_approval', suspensionType: '', completedAtUtc: '' }]
+              }), null, 'step names must not infer approval eligibility');
+
+              ACCOUNT = { scope: 'scope-owner', admin: false };
+              assert.equal(obsCanApprove(run), true);
+              let panel = obsApprovalPanel(run);
+              assert.match(panel, /需要审批/);
+              assert.match(panel, /daily_tech_digest/);
+              assert.match(panel, /data-act="obsApprovalApprove"/);
+              assert.doesNotMatch(obsDiagnosticStrip(run), /失败诊断/);
+              assert.match(obsDiagnosticStrip(run), /当前位置/);
+
+              assert.equal(await obsSubmitApproval(run, true, function() {}), true);
+              assert.equal(requests[0].path, '/api/scopes/scope-owner/runs/run-approval:resume');
+              assert.deepEqual(JSON.parse(requests[0].options.body), {
+                stepId: 'show_for_approval',
+                approved: true
+              });
+
+              ACCOUNT = { scope: 'scope-admin', admin: true };
+              assert.equal(obsCanApprove(run), false);
+              panel = obsApprovalPanel(run);
+              assert.match(panel, /只读/);
+              assert.doesNotMatch(panel, /obsApprovalApprove/);
+
+              ACCOUNT = { scope: 'scope-owner', admin: false };
+              const state = obsApprovalState(run.id);
+              state.accepted = false;
+              state.rejecting = true;
+              state.feedback = '  ';
+              assert.equal(await obsSubmitApproval(run, false, function() {}), false);
+              assert.equal(requests.length, 1);
+              state.feedback = '请补充来源';
+              assert.equal(await obsSubmitApproval(run, false, function() {}), true);
+              assert.deepEqual(JSON.parse(requests[1].options.body), {
+                stepId: 'show_for_approval',
+                approved: false,
+                userInput: '请补充来源'
+              });
+
+              assert.match(obsDiagnosticStrip({
+                status: 'failed',
+                rawStatus: 'failed',
+                diagnostics: [{ severity: 'error', code: 'step_failed', message: 'boom' }]
+              }), /失败诊断/);
+            })()`, context);
+            })().catch(function(error) {
+              console.error(error);
+              process.exitCode = 1;
+            });
+            """;
+
+        var startInfo = new ProcessStartInfo("node")
+        {
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        startInfo.ArgumentList.Add("--eval");
+        startInfo.ArgumentList.Add(script);
+
+        using var process = Process.Start(startInfo);
+        process.Should().NotBeNull("Node.js is required to execute the shipped admin approval behavior");
+        var outputTask = process!.StandardOutput.ReadToEndAsync();
+        var errorTask = process.StandardError.ReadToEndAsync();
+        await process.StandardInput.WriteAsync(html);
+        process.StandardInput.Close();
+        await process.WaitForExitAsync();
+        var output = await outputTask;
+        var error = await errorTask;
+
+        process.ExitCode.Should().Be(0, $"the observatory approval behavior should pass. stdout: {output} stderr: {error}");
     }
 
     [Fact]
@@ -448,6 +609,31 @@ public sealed class BackendConsoleStaticAssetEndpointTests
     }
 
     [Fact]
+    public async Task AdminShell_CrossLinks_ShouldBridgeObservatoryCqrsAndAudit()
+    {
+        await using var app = await CreateAppAsync();
+        var client = app.GetTestClient();
+        var admin = await client.GetStringAsync("/admin");
+        var cqrs = await client.GetStringAsync("/cqrs");
+
+        admin.Should().Contain("data-act=\"obsToCqrs\"");
+        admin.Should().Contain("data-act=\"obsToAudit\"");
+        admin.Should().Contain("data-act=\"auditOpenRun\"");
+        admin.Should().Contain("function viewCqrs()");
+        admin.Should().Contain("p.set('owner',q.owner)");
+        admin.Should().Contain("AUDIT_STATE.text=rid||''");
+
+        cqrs.Should().Contain("function renderPurposeBanner()");
+        cqrs.Should().Contain("function healthOf(s)");
+        cqrs.Should().Contain("版本滞后");
+        cqrs.Should().Contain("规划中能力");
+        cqrs.Should().Contain("function openAdminObservatory(scopeId)");
+        cqrs.Should().Contain("function readDeepLinkFilters()");
+        cqrs.Should().Contain("本页回答：读侧投影是否健康");
+        cqrs.Should().Contain("StateVersion 差，不是毫秒");
+    }
+
+    [Fact]
     public async Task WorkflowSkillScheduleProducers_ShouldSendSelectedTeamId()
     {
         await using var app = await CreateAppAsync();
@@ -470,6 +656,17 @@ public sealed class BackendConsoleStaticAssetEndpointTests
                 "adminApi('/api/workflow/skills/'+encodeURIComponent(s.guid)+'/schedule'")
             .Should()
             .Contain("teamId:");
+    }
+
+    [Fact]
+    public async Task AdminShell_SkillsWithLegacyToken_ShouldOfferResourceReauthorization()
+    {
+        await using var app = await CreateAppAsync();
+        var admin = await app.GetTestClient().GetStringAsync("/admin");
+
+        admin.Should().Contain("if(!loginResourcesGranted())");
+        admin.Should().Contain("当前登录未授权技能服务");
+        admin.Should().Contain("data-act=\"skAuthorize\"");
     }
 
     private static string ScheduleRequestSnippet(string html, string scheduleCall)

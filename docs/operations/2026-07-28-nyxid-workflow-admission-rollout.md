@@ -100,12 +100,15 @@ validates:
 - every run current state whose status is not `completed`, `failed`, or
   `stopped`.
 
-Each retained object must carry a complete, digest-valid
+The guard reparses each retained root and inline YAML through the canonical
+workflow parser and compares those call sites with the persisted plan. An object
+with no external call sites may omit the plan (or carry an empty plan). Every
+object with an external call site must carry a complete, digest-valid
 `external-capability-admission.v3` plan and valid typed execution policy. Missing
-deployment evidence, `Active`, `Failed`, or unknown deployment state remains
-fail closed. A service-invocation schedule pinned to a callable revision is
-therefore covered by the active deployment's exact `PrimaryActorId`; a direct
-actor schedule is covered by the ordinary definition binding.
+deployment evidence, `Active`, `Failed`, or unknown deployment state remains fail
+closed. A service-invocation schedule pinned to a callable revision is therefore
+covered by the active deployment's exact `PrimaryActorId`; a direct actor schedule
+is covered by the ordinary definition binding.
 
 On failure, startup throws the stable bounded form:
 

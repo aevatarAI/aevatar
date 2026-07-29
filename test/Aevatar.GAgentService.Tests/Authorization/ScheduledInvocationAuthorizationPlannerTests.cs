@@ -216,7 +216,7 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
     }
 
     [Fact]
-    public async Task PlanAsync_WithNonNyxIdResourceOwnerOnUnrequestedService_ShouldFailDurableAuthorization()
+    public async Task PlanAsync_WithNonNyxIdResourceOwnerOnUnrequestedService_ShouldIgnoreUnrequestedEvidence()
     {
         var invalidService = Service(
             "us-home-beta",
@@ -229,11 +229,52 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
 
         var result = await planner.PlanAsync(Request(["us-home-alpha"]));
 
+        result.Success.Should().BeTrue();
+        result.Plan!.NyxIdServiceGrants.Select(static grant => grant.UserServiceId)
+            .Should().Equal("us-home-alpha");
+    }
+
+    [Fact]
+    public async Task PlanAsync_WhenCatalogStampIsStaleButRequiredServiceEvidenceIsFresh_ShouldSucceed()
+    {
+        var service = Service(
+            "us-home-alpha",
+            "home-assistant",
+            AuthorizationGrantRequirement.NotRequired);
+        service.ObservedAt = Timestamp.FromDateTimeOffset(Now.AddMinutes(-1));
+        service.FreshUntil = Timestamp.FromDateTimeOffset(Now.AddMinutes(10));
+        var snapshot = Snapshot(service) with
+        {
+            FreshUntilUtc = Now.AddMinutes(-1),
+        };
+        var planner = NewPlanner(new MutableCatalogQueryPort(snapshot));
+
+        var result = await planner.PlanAsync(Request(["us-home-alpha"]));
+
+        result.Success.Should().BeTrue();
+        result.Plan!.NyxIdServiceGrants.Should().ContainSingle()
+            .Which.UserServiceId.Should().Be("us-home-alpha");
+    }
+
+    [Fact]
+    public async Task PlanAsync_WhenStaleCatalogDoesNotContainRequiredService_ShouldReturnSnapshotStale()
+    {
+        var snapshot = Snapshot(Service(
+            "us-home-alpha",
+            "home-assistant",
+            AuthorizationGrantRequirement.NotRequired)) with
+        {
+            FreshUntilUtc = Now.AddMinutes(-1),
+        };
+        var planner = NewPlanner(new MutableCatalogQueryPort(snapshot));
+
+        var result = await planner.PlanAsync(Request(["us-home-beta"]));
+
         result.Success.Should().BeFalse();
-        result.FailureCode.Should().Be(
-            ScheduledInvocationAuthorizationFailureCode.DurableAuthorizationUnavailable);
-        result.Detail.Should().Be("nyxid_resource_owner_invalid:us-home-beta");
-        result.ObservedCatalogStateVersion.Should().Be(7);
+        result.FailureCode.Should().Be(ScheduledInvocationAuthorizationFailureCode.SnapshotStale);
+        result.Detail.Should().Be("nyxid_catalog_snapshot_stale");
+        result.RequiredNyxIdServices.Select(static service => service.UserServiceId)
+            .Should().Equal("us-home-beta");
     }
 
     [Theory]

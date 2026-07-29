@@ -4,6 +4,8 @@ using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Abstractions.Security;
+using Aevatar.Workflow.Application.Abstractions.Security;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Projection;
 using Aevatar.Workflow.Projection.Projectors;
@@ -753,6 +755,52 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         report.Timeline.Should().Contain(x => x.Stage == "workflow.stopped" && x.Message == "manual");
         report.FinalError.Should().Be("manual");
         report.CompletionStatus.Should().Be(WorkflowExecutionCompletionStatus.Stopped);
+    }
+
+    [Fact]
+    public void ApplyObservedPayloadToReport_ShouldPreserveSanitizedApprovalContent_AndHideSecureContent()
+    {
+        const string secret = "suspension-secret";
+        var document = new WorkflowRunInsightReportDocument();
+
+        WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(
+            document,
+            PackStateEvent(
+                new WorkflowSuspendedEvent
+                {
+                    StepId = "review",
+                    SuspensionType = "human_approval",
+                    Prompt = "Review the draft",
+                    Content = $$"""{"draft":"ready","access_token":"{{secret}}"}""",
+                    TimeoutSeconds = 3600,
+                },
+                1,
+                "evt-review"),
+            DateTimeOffset.UnixEpoch);
+        WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(
+            document,
+            PackStateEvent(
+                new WorkflowSuspendedEvent
+                {
+                    StepId = "secret",
+                    SuspensionType = "secure_input",
+                    Content = "must-not-materialize",
+                    Secure = true,
+                },
+                2,
+                "evt-secret"),
+            DateTimeOffset.UnixEpoch.AddSeconds(1));
+
+        var report = new WorkflowExecutionReadModelMapper().ToRunReport(document);
+        var sanitized = WorkflowAuditReportSanitizer.Sanitize(report);
+
+        var review = sanitized.Steps.Single(step => step.StepId == "review");
+        review.SuspensionContent.Should().Contain("\"draft\":\"ready\"");
+        review.SuspensionContent.Should().Contain(WorkflowAuditTextSanitizer.RedactedValue);
+        review.SuspensionContent.Should().NotContain(secret);
+        review.SuspensionTimeoutSeconds.Should().Be(3600);
+        sanitized.Steps.Single(step => step.StepId == "secret")
+            .SuspensionContent.Should().BeEmpty();
     }
 
     [Fact]

@@ -1,9 +1,14 @@
 using System.Reflection;
 using System.Security.Claims;
 using System.Text.Json;
+using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.GAgents.StudioMember;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Hosting.Endpoints;
+using Aevatar.Studio.Projection.QueryPorts;
+using Aevatar.Studio.Projection.ReadModels;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using FluentAssertions;
@@ -397,6 +402,68 @@ public sealed class StudioMemberEndpointsTests
 
         service.DeleteInvoked.Should().BeFalse();
         AssertIsJsonStatus(result, expectedStatus: StatusCodes.Status403Forbidden);
+    }
+
+    [Fact]
+    public async Task DeleteAccepted_WhenCommittedDeleteIsProjected_ShouldMakeDetail404AndRosterEmpty()
+    {
+        var actorId = StudioMemberConventions.BuildActorId(ScopeId, "m-alpha");
+        var store = new InMemoryProjectionDocumentStore<StudioMemberCurrentStateDocument, string>(
+            keySelector: model => model.Id);
+        await store.UpsertAsync(new StudioMemberCurrentStateDocument
+        {
+            Id = actorId,
+            ActorId = actorId,
+            StateVersion = 7,
+            LastEventId = "evt-7",
+            UpdatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-29T00:00:07Z")),
+            MemberId = "m-alpha",
+            ScopeId = ScopeId,
+            DisplayName = "Alpha",
+            ImplementationKind = MemberImplementationKindNames.Workflow,
+            LifecycleStage = MemberLifecycleStageNames.BindReady,
+            PublishedServiceId = "svc-alpha",
+            CreatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-28T00:00:00Z")),
+        });
+        var service = new ProjectionBackedMemberService(new ProjectionStudioMemberQueryPort(store));
+
+        var acceptedResult = await InvokeHandle<IResult>(
+            "HandleDeleteAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            "m-alpha",
+            service,
+            CancellationToken.None);
+
+        var accepted = acceptedResult.Should().BeOfType<Accepted<StudioMemberCommandResponse>>().Subject;
+        accepted.Value!.Status.Should().Be(StudioMemberCommandStatusNames.DeleteAccepted);
+
+        await store.DeleteAsync(new ProjectionDocumentDeleteMarker(
+            actorId,
+            actorId,
+            8,
+            "evt-8-delete",
+            DateTimeOffset.Parse("2026-07-29T00:00:08Z")));
+
+        var getResult = await InvokeHandle<IResult>(
+            "HandleGetAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            "m-alpha",
+            service,
+            CancellationToken.None);
+        var listResult = await InvokeHandle<IResult>(
+            "HandleListAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            service,
+            (int?)null,
+            (string?)null,
+            CancellationToken.None);
+
+        AssertNotFoundResult(getResult, "STUDIO_MEMBER_NOT_FOUND");
+        listResult.Should().BeOfType<Ok<StudioMemberRosterResponse>>()
+            .Which.Value!.Members.Should().BeEmpty();
     }
 
     [Fact]
@@ -1194,6 +1261,87 @@ public sealed class StudioMemberEndpointsTests
                 memberId,
                 DateTimeOffset.UtcNow));
         }
+    }
+
+    private sealed class ProjectionBackedMemberService(
+        ProjectionStudioMemberQueryPort queryPort) : IStudioMemberService
+    {
+        public Task<StudioMemberSummaryResponse> CreateAsync(
+            string scopeId,
+            CreateStudioMemberRequest request,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("delete projection regression must not create members.");
+
+        public Task<StudioMemberRosterResponse> ListAsync(
+            string scopeId,
+            StudioMemberRosterPageRequest? page = null,
+            CancellationToken ct = default) =>
+            queryPort.ListAsync(scopeId, page, ct);
+
+        public async Task<StudioMemberDetailResponse> GetAsync(
+            string scopeId,
+            string memberId,
+            CancellationToken ct = default) =>
+            await queryPort.GetAsync(scopeId, memberId, ct)
+            ?? throw new StudioMemberNotFoundException(scopeId, memberId);
+
+        public Task<StudioMemberBindingAcceptedResponse> BindAsync(
+            string scopeId,
+            string memberId,
+            UpdateStudioMemberBindingRequest request,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("delete projection regression must not bind members.");
+
+        public Task<StudioMemberBindingViewResponse> GetBindingAsync(
+            string scopeId,
+            string memberId,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("delete projection regression must not read bindings.");
+
+        public Task<StudioMemberBindingRunStatusResponse> GetBindingRunAsync(
+            string scopeId,
+            string memberId,
+            string bindingRunId,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("delete projection regression must not read binding runs.");
+
+        public Task<StudioMemberEndpointContractResponse?> GetEndpointContractAsync(
+            string scopeId,
+            string memberId,
+            string endpointId,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("delete projection regression must not read endpoint contracts.");
+
+        public Task<StudioMemberBindingActivationResponse> ActivateBindingRevisionAsync(
+            string scopeId,
+            string memberId,
+            string revisionId,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("delete projection regression must not activate revisions.");
+
+        public Task<StudioMemberBindingRevisionActionResponse> RetireBindingRevisionAsync(
+            string scopeId,
+            string memberId,
+            string revisionId,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("delete projection regression must not retire revisions.");
+
+        public Task<StudioMemberCommandResponse> UpdateAsync(
+            string scopeId,
+            string memberId,
+            UpdateStudioMemberRequest request,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("delete projection regression must not update members.");
+
+        public Task<StudioMemberCommandResponse> DeleteAsync(
+            string scopeId,
+            string memberId,
+            CancellationToken ct = default) =>
+            Task.FromResult(new StudioMemberCommandResponse(
+                StudioMemberCommandStatusNames.DeleteAccepted,
+                scopeId,
+                memberId,
+                DateTimeOffset.Parse("2026-07-29T00:00:08Z")));
     }
 
     private sealed class TestHostEnvironment : IHostEnvironment

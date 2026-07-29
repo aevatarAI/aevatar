@@ -381,7 +381,8 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         var planner = new RecordingAuthorizationPlanner();
         planner.Results.Enqueue(ScheduledInvocationAuthorizationPlanResult.Failed(
             failureCode,
-            detail));
+            detail,
+            requiredNyxIdServices: [new NyxIdUserServiceCapabilityRef { UserServiceId = "nyx-service-alpha" }]));
         planner.Results.Enqueue(RecordingAuthorizationPlanner.SuccessResult());
         var refresh = new RecordingCatalogRefreshPort();
         var materializer = new RecordingCredentialMaterializer();
@@ -401,9 +402,42 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         refresh.RefreshCallCount.Should().Be(1);
         refresh.LastOwner.Should().BeEquivalentTo(request.AuthenticatedOwner.Owner);
         refresh.LastBearerToken.Should().Be("bearer-alpha");
+        refresh.LastRequiredServices.Select(static service => service.UserServiceId)
+            .Should().Equal("nyx-service-alpha");
         materializer.MaterializeCallCount.Should().Be(0);
         scheduleService.BeginCallCount.Should().Be(0);
         scheduleService.EnsureCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task PreflightForWriteAsync_WhenCatalogSnapshotUnavailableWithoutRequiredServices_ShouldNotRefresh()
+    {
+        var planner = new RecordingAuthorizationPlanner();
+        planner.Results.Enqueue(ScheduledInvocationAuthorizationPlanResult.Failed(
+            ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+            "nyxid_catalog_snapshot_not_found",
+            requiredNyxIdServices: []));
+        planner.Results.Enqueue(RecordingAuthorizationPlanner.SuccessResult());
+        var refresh = new RecordingCatalogRefreshPort();
+        var tokenProvider = new RecordingWorkflowCallerAccessTokenProvider();
+        var request = Request("scope-1", "member-1") with
+        {
+            ProvisioningBearerToken = null,
+        };
+        var port = NewPort(
+            new RecordingScheduleService(),
+            planner: planner,
+            catalogRefresh: refresh,
+            callerAccessTokenProvider: tokenProvider);
+
+        var result = await port.PreflightForWriteAsync(request);
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound);
+        result.Detail.Should().Be("nyxid_catalog_refresh_required_services_unavailable:nyxid_catalog_snapshot_not_found");
+        planner.Requests.Should().ContainSingle();
+        refresh.RefreshCallCount.Should().Be(0);
+        tokenProvider.Requests.Should().BeEmpty();
     }
 
     [Fact]
@@ -1271,13 +1305,11 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         var materializer = new RecordingCredentialMaterializer();
         var port = NewPort(scheduleService, materializer: materializer);
         var request = Request("scope-1", "member-1");
-        var command = new StudioMemberAutomationActionCommand(
+        var command = new StudioMemberAutomationRetryRevocationCommand(
             "scope-1",
             "team-1",
             "member-1",
-            "schedule-1",
-            "operation-delete",
-            "idempotency-delete")
+            "schedule-1")
         {
             AuthenticatedOwner = request.AuthenticatedOwner,
             ProvisioningBearerToken = "fresh-bearer",
@@ -1306,13 +1338,11 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             logger: loggerFactory.CreateLogger<StudioMemberWorkflowSchedulePort>(),
             auditLoggerFactory: loggerFactory);
         var request = Request("scope-1", "member-1");
-        var command = new StudioMemberAutomationActionCommand(
+        var command = new StudioMemberAutomationRetryRevocationCommand(
             "scope-1",
             "team-1",
             "member-1",
-            "schedule-1",
-            "operation-delete",
-            "idempotency-delete")
+            "schedule-1")
         {
             AuthenticatedOwner = request.AuthenticatedOwner,
             ProvisioningBearerToken = "fresh-bearer-sensitive",
@@ -1406,13 +1436,11 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             auditLoggerFactory: loggerFactory);
         var request = Request("scope-1", "member-1");
 
-        await port.RetryRevocationAsync(new StudioMemberAutomationActionCommand(
+        await port.RetryRevocationAsync(new StudioMemberAutomationRetryRevocationCommand(
             "scope-1",
             "team-1",
             "member-1",
-            "schedule-1",
-            "operation-delete",
-            "idempotency-delete")
+            "schedule-1")
         {
             AuthenticatedOwner = request.AuthenticatedOwner,
             ProvisioningBearerToken = "fresh-bearer-sensitive",
@@ -2174,6 +2202,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         public int RefreshCallCount { get; private set; }
         public AuthorizationOwnerIdentity? LastOwner { get; private set; }
         public string? LastBearerToken { get; private set; }
+        public IReadOnlyList<NyxIdUserServiceCapabilityRef> LastRequiredServices { get; private set; } = [];
         public List<string>? Calls { get; init; }
         public Exception? Exception { get; init; }
         public NyxIdAuthorizationCatalogRefreshResult Result { get; init; } =
@@ -2182,12 +2211,26 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         public Task<NyxIdAuthorizationCatalogRefreshResult> RefreshAsync(
             AuthorizationOwnerIdentity owner,
             string bearerToken,
-            CancellationToken ct = default)
+            CancellationToken ct = default) =>
+            RecordRefreshAsync(owner, bearerToken, []);
+
+        public Task<NyxIdAuthorizationCatalogRefreshResult> RefreshAsync(
+            AuthorizationOwnerIdentity owner,
+            string bearerToken,
+            IReadOnlyList<NyxIdUserServiceCapabilityRef> requiredServices,
+            CancellationToken ct = default) =>
+            RecordRefreshAsync(owner, bearerToken, requiredServices);
+
+        private Task<NyxIdAuthorizationCatalogRefreshResult> RecordRefreshAsync(
+            AuthorizationOwnerIdentity owner,
+            string bearerToken,
+            IReadOnlyList<NyxIdUserServiceCapabilityRef> requiredServices)
         {
             RefreshCallCount++;
             Calls?.Add("refresh");
             LastOwner = owner.Clone();
             LastBearerToken = bearerToken;
+            LastRequiredServices = requiredServices.Select(static service => service.Clone()).ToArray();
             return Exception == null
                 ? Task.FromResult(Result)
                 : Task.FromException<NyxIdAuthorizationCatalogRefreshResult>(Exception);
@@ -2570,8 +2613,6 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         public Task<TeamAutomationCommittedMutationReceipt> RetryTeamAutomationRevocationAsync(
             string scheduleId,
             TeamMemberAutomationOwner owner,
-            string operationId,
-            string idempotencyKey,
             ScheduledInvocationAuthorizationOwner authenticatedCredentialOwner,
             CancellationToken ct = default)
         {
@@ -2581,8 +2622,8 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                 CredentialSecretPurposes.ScheduledInvocationAgentKey);
             return Task.FromResult(Committed(
                 scheduleId,
-                operationId,
-                idempotencyKey,
+                "operation-delete",
+                "idempotency-delete",
                 TeamAutomationOperationObservationStages.Delete,
                 ownsEffectAttempt: ReturnPendingRevocationOnRetry && RetryOwnsEffectAttempt,
                 "cmd-retry-revocation",

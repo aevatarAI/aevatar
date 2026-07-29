@@ -143,6 +143,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
 
         var refresh = await RefreshRecoverableNyxIdCatalogSnapshotAsync(
             resolved.AuthorizationRequest,
+            first.RequiredNyxIdServices,
             cancellationToken => ResolveProvisioningBearerTokenAsync(request, cancellationToken),
             first.FailureCode,
             first.Detail,
@@ -192,6 +193,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
 
         var refresh = await RefreshRecoverableNyxIdCatalogSnapshotAsync(
             authorizationRequest,
+            first.RequiredNyxIdServices,
             provisioningBearerTokenResolver,
             first.FailureCode,
             first.Detail,
@@ -367,7 +369,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         ApplyActionAsync(command, TeamAutomationAction.Delete, ct);
 
     public async Task<StudioMemberAutomationMutationReceipt> RetryRevocationAsync(
-        StudioMemberAutomationActionCommand command,
+        StudioMemberAutomationRetryRevocationCommand command,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -378,12 +380,9 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         var bearerToken = NormalizeRequired(
             command.ProvisioningBearerToken,
             nameof(command.ProvisioningBearerToken));
-        var operationId = NormalizeRequired(command.OperationId, nameof(command.OperationId));
         var retry = await _scheduleService.RetryTeamAutomationRevocationAsync(
             NormalizeRequired(command.ScheduleId, nameof(command.ScheduleId)),
             scheduleOwner,
-            operationId,
-            NormalizeRequired(command.IdempotencyKey, nameof(command.IdempotencyKey)),
             ToAuthorizationOwner(authenticatedOwner),
             ct);
         _ = await ExecutePendingRevocationAsync(
@@ -393,7 +392,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             scheduleOwner,
             resolved.TeamId,
             CancellationToken.None);
-        return ToMutationReceipt(retry.Admission, operationId, "pending");
+        return ToMutationReceipt(retry.Admission, retry.Outcome.OperationId, "pending");
     }
 
     private async Task<StudioMemberAutomationMutationReceipt> ApplyActionAsync(
@@ -580,8 +579,6 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             var retry = await _scheduleService.RetryTeamAutomationRevocationAsync(
                 scheduleId,
                 teamOwner,
-                operationId,
-                idempotencyKey,
                 ToAuthorizationOwner(request.AuthenticatedOwner),
                 ct);
             _ = await ExecutePendingRevocationAsync(
@@ -814,12 +811,21 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
 
     private async Task<CatalogRefreshRecoveryResult> RefreshRecoverableNyxIdCatalogSnapshotAsync(
         ScheduledInvocationAuthorizationRequest authorizationRequest,
+        IReadOnlyList<NyxIdUserServiceCapabilityRef>? resolvedRequiredServices,
         Func<CancellationToken, Task<string>> provisioningBearerTokenResolver,
         ScheduledInvocationAuthorizationFailureCode failureCode,
         string detail,
         long observedCatalogStateVersion,
         CancellationToken ct)
     {
+        var requiredServices = ResolveCatalogRefreshRequiredServices(authorizationRequest, resolvedRequiredServices);
+        if (resolvedRequiredServices is { Count: 0 } && requiredServices.Count == 0)
+        {
+            return CatalogRefreshRecoveryResult.Failed(
+                failureCode,
+                $"nyxid_catalog_refresh_required_services_unavailable:{detail}");
+        }
+
         string bearerToken;
         try
         {
@@ -842,7 +848,11 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         NyxIdAuthorizationCatalogRefreshResult refresh;
         try
         {
-            refresh = await _catalogRefreshPort.RefreshAsync(authorizationRequest.Owner, bearerToken, ct);
+            refresh = await _catalogRefreshPort.RefreshAsync(
+                authorizationRequest.Owner,
+                bearerToken,
+                requiredServices,
+                ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -885,6 +895,15 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         }
 
         return CatalogRefreshRecoveryResult.Succeeded(refresh);
+    }
+
+    private static IReadOnlyList<NyxIdUserServiceCapabilityRef> ResolveCatalogRefreshRequiredServices(
+        ScheduledInvocationAuthorizationRequest authorizationRequest,
+        IReadOnlyList<NyxIdUserServiceCapabilityRef>? resolvedRequiredServices)
+    {
+        if (resolvedRequiredServices is { Count: > 0 })
+            return resolvedRequiredServices;
+        return authorizationRequest.RequiredNyxIdServices;
     }
 
     private async Task<ResolvedStudioAuthorizationRequest> ResolveAuthorizationRequestAsync(

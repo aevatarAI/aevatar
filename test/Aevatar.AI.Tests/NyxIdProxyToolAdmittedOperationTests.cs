@@ -21,6 +21,22 @@ namespace Aevatar.AI.Tests;
 /// </summary>
 public sealed class NyxIdProxyToolAdmittedOperationTests
 {
+    [Fact]
+    public void ParametersSchema_ShouldDescribeProofBoundSlotsWithoutRequiringLegacyRouting()
+    {
+        var tool = CreateTool(new RecordingHandler());
+
+        using var document = JsonDocument.Parse(tool.ParametersSchema);
+        var root = document.RootElement;
+        var properties = root.GetProperty("properties");
+        properties.TryGetProperty("path_params", out _).Should().BeTrue();
+        properties.TryGetProperty("query", out _).Should().BeTrue();
+        properties.TryGetProperty("headers", out _).Should().BeTrue();
+        properties.TryGetProperty("body", out _).Should().BeTrue();
+        properties.TryGetProperty("response_mode", out _).Should().BeTrue();
+        root.TryGetProperty("required", out _).Should().BeFalse();
+    }
+
     [Theory]
     [InlineData("text")]
     [InlineData("file_artifact")]
@@ -191,6 +207,22 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_ShouldRejectNonGetFileArtifactProofBeforeAnyHttpRequest()
+    {
+        var handler = new RecordingHandler(binaryResponse: true);
+        var ingress = new RecordingFileArtifactIngress();
+        var tool = CreateTool(handler, ingress);
+        using var scope = PushContext(MessageResourceAdmission() with { HttpMethod = "POST" });
+
+        var result = await tool.ExecuteAsync(
+            """{"path_params":{"message_id":"om_runtime_7","file_key":"file_runtime_9"},"response_mode":"file_artifact"}""");
+
+        result.Should().Contain("NYXID_OPERATION_RESPONSE_MODE_REJECTED");
+        handler.RequestCount.Should().Be(0);
+        ingress.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ExecuteAsync_ShouldKeepQueryOutOfThePathAndOffTheWire_ForProofIdentity()
     {
         var handler = new RecordingHandler();
@@ -252,31 +284,6 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
             """{"path_params":{"instance_code":"approval_runtime_42"}}""");
 
         result.Should().Contain("NYXID_OPERATION_PATH_PARAMETER_INVALID");
-        handler.RequestCount.Should().Be(0);
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_ShouldRequireAdmittedHeadersBeforeAnyHttpRequest()
-    {
-        var handler = new RecordingHandler();
-        var tool = CreateTool(handler);
-        using var scope = PushContext(ListMessagesAdmission() with
-        {
-            Parameters =
-            [
-                QueryParameter("container_id", required: true),
-                new AgentToolOperationParameter(
-                    "If-Match",
-                    AgentToolOperationParameterLocation.Header,
-                    true,
-                    AgentToolOperationValueSchema.Text),
-            ],
-        });
-
-        var result = await tool.ExecuteAsync(
-            """{"query":{"container_id":"oc_1"}}""");
-
-        result.Should().Contain("NYXID_OPERATION_HEADER_MISSING");
         handler.RequestCount.Should().Be(0);
     }
 
@@ -479,6 +486,55 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_ShouldRequireAdmittedHeadersBeforeAnyHttpRequest()
+    {
+        var handler = new RecordingHandler();
+        var tool = CreateTool(handler);
+        using var scope = PushContext(TypedParametersAdmission());
+
+        var result = await tool.ExecuteAsync(
+            """{"path_params":{"item_id":7},"query":{"ratio":1.5}}""");
+
+        result.Should().Contain("NYXID_OPERATION_HEADER_MISSING");
+        handler.RequestCount.Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData("""{"path_params":{"item_id":"7"},"query":{"ratio":1.5},"headers":{"If-Match":true}}""", "NYXID_OPERATION_PATH_PARAMETER_INVALID")]
+    [InlineData("""{"path_params":{"item_id":7},"query":{"ratio":2.5},"headers":{"If-Match":true}}""", "NYXID_OPERATION_QUERY_PARAMETER_INVALID")]
+    [InlineData("""{"path_params":{"item_id":7},"query":{"ratio":1.5,"mode":"brief"},"headers":{"If-Match":true}}""", "NYXID_OPERATION_QUERY_PARAMETER_INVALID")]
+    [InlineData("""{"path_params":{"item_id":7},"query":{"ratio":1.5},"headers":{"If-Match":"true"}}""", "NYXID_OPERATION_HEADER_INVALID")]
+    public async Task ExecuteAsync_ShouldValidateNonBodyValuesAgainstAdmittedSchemas(
+        string argumentsJson,
+        string expectedCode)
+    {
+        var handler = new RecordingHandler();
+        var tool = CreateTool(handler);
+        using var scope = PushContext(TypedParametersAdmission());
+
+        var result = await tool.ExecuteAsync(argumentsJson);
+
+        result.Should().Contain(expectedCode);
+        handler.RequestCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldAcceptTypedNonBodyValuesThatMatchTheProof()
+    {
+        var handler = new RecordingHandler();
+        var tool = CreateTool(handler);
+        using var scope = PushContext(TypedParametersAdmission());
+
+        var result = await tool.ExecuteAsync(
+            """{"path_params":{"item_id":7},"query":{"ratio":1.5,"mode":"full"},"headers":{"If-Match":true}}""");
+
+        result.Should().NotContain("error_code");
+        var request = handler.ProxyRequests.Should().ContainSingle().Subject;
+        request.Path.Should().EndWith("/items/7");
+        request.Query.Should().Contain("ratio=1.5");
+    }
+
+    [Fact]
     public async Task ExecuteAsync_ShouldBuildDynamicApprovalInstancePathFromTheProof()
     {
         var handler = new RecordingHandler();
@@ -625,6 +681,51 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
             null,
             AgentToolOperationResponsePolicy.TextOnly,
             ReadOnlyPolicy());
+
+    private static AgentToolOperationAdmission TypedParametersAdmission() =>
+        new(
+            "us-items-alpha",
+            "items-alpha",
+            "get_item",
+            "GET",
+            "/items/{item_id}",
+            "sha256:get-item",
+            [
+                new AgentToolOperationParameter(
+                    "item_id",
+                    AgentToolOperationParameterLocation.Path,
+                    true,
+                    ValueSchema(AgentToolOperationValueKind.Integer)),
+                new AgentToolOperationParameter(
+                    "ratio",
+                    AgentToolOperationParameterLocation.Query,
+                    true,
+                    ValueSchema(AgentToolOperationValueKind.Number, "1.5")),
+                new AgentToolOperationParameter(
+                    "mode",
+                    AgentToolOperationParameterLocation.Query,
+                    false,
+                    ValueSchema(AgentToolOperationValueKind.String, "full")),
+                new AgentToolOperationParameter(
+                    "If-Match",
+                    AgentToolOperationParameterLocation.Header,
+                    true,
+                    ValueSchema(AgentToolOperationValueKind.Boolean)),
+            ],
+            null,
+            AgentToolOperationResponsePolicy.TextOnly,
+            ReadOnlyPolicy());
+
+    private static AgentToolOperationValueSchema ValueSchema(
+        AgentToolOperationValueKind kind,
+        params string[] allowedValues) =>
+        new(
+            kind,
+            [],
+            new HashSet<string>(StringComparer.Ordinal),
+            null,
+            allowedValues,
+            false);
 
     private static AgentToolOperationExecutionPolicy ReadOnlyPolicy() =>
         new(
