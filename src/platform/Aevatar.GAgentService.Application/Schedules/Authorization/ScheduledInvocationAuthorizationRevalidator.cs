@@ -30,7 +30,8 @@ public sealed class ScheduledInvocationAuthorizationRevalidator
             return ScheduledInvocationAuthorizationValidationResult.Failed(
                 ScheduledInvocationAuthorizationFailureCode.AuthorizationPlanChanged,
                 current.Detail,
-                current.ObservedCatalogStateVersion);
+                current.ObservedCatalogStateVersion,
+                current.RequiredNyxIdServices);
         }
 
         var plan = current.Plan!;

@@ -12,6 +12,7 @@ using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Application.Schedules.Authorization;
 using Aevatar.Studio.Hosting.Endpoints;
+using Aevatar.Workflow.Abstractions;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
@@ -1232,6 +1233,12 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
             AuthorizationOwnerIdentity owner,
             string bearerToken,
             CancellationToken ct = default) => throw new NotSupportedException();
+
+        public Task<NyxIdAuthorizationCatalogRefreshResult> RefreshAsync(
+            AuthorizationOwnerIdentity owner,
+            string bearerToken,
+            IReadOnlyList<NyxIdUserServiceCapabilityRef> requiredServices,
+            CancellationToken ct = default) => throw new NotSupportedException();
     }
 
     private sealed class RecordingCatalogQueryPort(NyxIdAuthorizationCatalogSnapshot? snapshot)
@@ -1295,6 +1302,12 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
         public Task<NyxIdAuthorizationCatalogRefreshResult> RefreshAsync(
             AuthorizationOwnerIdentity owner,
             string bearerToken,
+            CancellationToken ct = default) => throw new NotSupportedException();
+
+        public Task<NyxIdAuthorizationCatalogRefreshResult> RefreshAsync(
+            AuthorizationOwnerIdentity owner,
+            string bearerToken,
+            IReadOnlyList<NyxIdUserServiceCapabilityRef> requiredServices,
             CancellationToken ct = default) => throw new NotSupportedException();
     }
 
