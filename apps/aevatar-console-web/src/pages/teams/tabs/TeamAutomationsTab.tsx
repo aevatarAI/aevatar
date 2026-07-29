@@ -33,6 +33,7 @@ import {
   type ScheduledDispatchConfigurationInput,
   type ScheduledDispatchListResult,
   type ScheduledDispatchMutationReceipt,
+  type ScheduledDispatchOwner,
   type ScheduledDispatchPreview,
   type ScheduledDispatchRunNowReceipt,
   type ScheduledDispatchSummary,
@@ -91,6 +92,10 @@ type ManualRunFeedback = Pick<
   ScheduledDispatchRunNowReceipt,
   "ackedAt" | "commandId" | "correlationId" | "scheduledFireAt"
 >;
+
+type TeamScheduledDispatchListResult = ScheduledDispatchListResult & {
+  readonly ownerMemberIdByScheduleId: ReadonlyMap<string, string>;
+};
 
 const scheduleListTake = 200;
 const scheduleListRetryLimit = 4;
@@ -385,6 +390,19 @@ const modalSectionStyle: React.CSSProperties = {
 
 function trimText(value: string | null | undefined): string {
   return value?.trim() ?? "";
+}
+
+function buildStudioMemberAutomationOwner(
+  scopeId: string,
+  teamId: string,
+  memberId: string,
+): ScheduledDispatchOwner {
+  return {
+    kind: "studio_member_automation",
+    scopeId: trimText(scopeId),
+    teamId: trimText(teamId),
+    memberId: trimText(memberId),
+  };
 }
 
 function buildServiceIdentityKey(identity: ServiceIdentity | null | undefined): string {
@@ -703,6 +721,20 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
     () => surfaceMembers.filter((member) => member.canAutomateMember),
     [surfaceMembers],
   );
+  const ownerMemberIds = React.useMemo(
+    () =>
+      Array.from(
+        new Set(
+          (routeMemberId
+            ? [routeMemberId]
+            : automatableMembers.map((member) => member.memberId)
+          )
+            .map(trimText)
+            .filter(Boolean),
+        ),
+      ),
+    [automatableMembers, routeMemberId],
+  );
   const selectedMember =
     automatableMembers.find((member) => member.isSelectedMember) ??
     automatableMembers[0] ??
@@ -741,8 +773,8 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
   }));
   const scheduleQueryKey = React.useMemo(
     () =>
-      ["scheduled-dispatches", "team", scopeId, teamId, routeMemberId] as const,
-    [routeMemberId, scopeId, teamId],
+      ["scheduled-dispatches", "team", scopeId, teamId, ownerMemberIds] as const,
+    [ownerMemberIds, scopeId, teamId],
   );
   const serviceKeyToMember = React.useMemo(() => {
     const next = new Map<string, TeamAutomationMemberRow>();
@@ -755,25 +787,70 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
 
     return next;
   }, [automatableMembers]);
-  const findMemberForSchedule = React.useCallback(
-    (schedule: ScheduledDispatchSummary): TeamAutomationMemberRow | undefined =>
-      serviceKeyToMember.get(buildScheduleServiceKey(schedule)),
-    [serviceKeyToMember],
+  const memberIdToMember = React.useMemo(
+    () =>
+      new Map(
+        automatableMembers.map((member) => [trimText(member.memberId), member]),
+      ),
+    [automatableMembers],
   );
   const schedulesQuery = useQuery({
-    enabled: scopeId.length > 0 && teamId.length > 0,
-    queryFn: () =>
-      scheduledDispatchApi.listAll({
-        includeTotalCount: true,
-        ...(routeMemberId ? { memberId: routeMemberId } : {}),
-        scopeId,
-        take: scheduleListTake,
-        teamId,
-      }),
+    enabled:
+      scopeId.length > 0 && teamId.length > 0 && ownerMemberIds.length > 0,
+    queryFn: async () => {
+      const ownerResults = await Promise.all(
+        ownerMemberIds.map((memberId) =>
+          scheduledDispatchApi.listAll({
+            includeTotalCount: true,
+            owner: buildStudioMemberAutomationOwner(scopeId, teamId, memberId),
+            take: scheduleListTake,
+          }),
+        ),
+      );
+      const ownerMemberIdByScheduleId = new Map<string, string>();
+      ownerResults.forEach((result, index) => {
+        const memberId = ownerMemberIds[index];
+        for (const schedule of result.items) {
+          const scheduleId = trimText(schedule.scheduleId);
+          const existingMemberId = ownerMemberIdByScheduleId.get(scheduleId);
+          if (existingMemberId && existingMemberId !== memberId) {
+            throw new Error(
+              `Schedule '${scheduleId}' was returned for multiple owners.`,
+            );
+          }
+          ownerMemberIdByScheduleId.set(scheduleId, memberId);
+        }
+      });
+      const hasCompleteTotalCount = ownerResults.every(
+        (result) => result.totalCount !== null,
+      );
+      return {
+        items: ownerResults.flatMap((result) => result.items),
+        nextCursor: null,
+        ownerMemberIdByScheduleId,
+        totalCount: hasCompleteTotalCount
+          ? ownerResults.reduce(
+              (total, result) => total + (result.totalCount ?? 0),
+              0,
+            )
+          : null,
+      };
+    },
     queryKey: scheduleQueryKey,
     retry: (failureCount) => failureCount < scheduleListRetryLimit,
     retryDelay: scheduleListRetryDelay,
   });
+  const findMemberForSchedule = React.useCallback(
+    (schedule: ScheduledDispatchSummary): TeamAutomationMemberRow | undefined => {
+      const ownerMemberId = schedulesQuery.data?.ownerMemberIdByScheduleId.get(
+        trimText(schedule.scheduleId),
+      );
+      return ownerMemberId
+        ? memberIdToMember.get(ownerMemberId)
+        : serviceKeyToMember.get(buildScheduleServiceKey(schedule));
+    },
+    [memberIdToMember, schedulesQuery.data?.ownerMemberIdByScheduleId, serviceKeyToMember],
+  );
   const teamSchedules = React.useMemo(
     () => {
       const backendSchedules = schedulesQuery.data?.items ?? [];
@@ -812,6 +889,20 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
       schedulesQuery.data?.items,
       findMemberForSchedule,
     ],
+  );
+  const resolveScheduleOwner = React.useCallback(
+    (scheduleId: string): ScheduledDispatchOwner => {
+      const schedule = teamSchedules.find(
+        (candidate) => trimText(candidate.scheduleId) === trimText(scheduleId),
+      );
+      const member = schedule ? findMemberForSchedule(schedule) : undefined;
+      if (!member) {
+        throw new Error("The schedule owner member is not available.");
+      }
+
+      return buildStudioMemberAutomationOwner(scopeId, teamId, member.memberId);
+    },
+    [findMemberForSchedule, scopeId, teamId, teamSchedules],
   );
   const activeFormMember =
     automatableMembers.find((member) => member.memberId === formState.memberId) ??
@@ -889,7 +980,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
         return;
       }
 
-      queryClient.setQueriesData<ScheduledDispatchListResult>(
+      queryClient.setQueriesData<TeamScheduledDispatchListResult>(
         { queryKey: ["scheduled-dispatches"] },
         (current) => {
           if (!current) {
@@ -1230,7 +1321,8 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
     },
   });
   const runNowMutation = useMutation({
-    mutationFn: (scheduleId: string) => scheduledDispatchApi.runNow(scheduleId),
+    mutationFn: (scheduleId: string) =>
+      scheduledDispatchApi.runNow(scheduleId, resolveScheduleOwner(scheduleId)),
     onError: (error) => {
       void message.error(
         intl.formatMessage(
@@ -1258,6 +1350,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
       scheduledDispatchApi.enable(
         scheduleId,
         "Enabled from Team Automations",
+        resolveScheduleOwner(scheduleId),
       ),
     onSuccess: (_receipt, scheduleId) => {
       updateScheduleEnabledLocally(scheduleId, true);
@@ -1275,6 +1368,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
       scheduledDispatchApi.disable(
         scheduleId,
         "Disabled from Team Automations",
+        resolveScheduleOwner(scheduleId),
       ),
     onSuccess: (_receipt, scheduleId) => {
       updateScheduleEnabledLocally(scheduleId, false);
@@ -1292,6 +1386,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
       scheduledDispatchApi.delete(
         scheduleId,
         "Deleted from Team Automations",
+        resolveScheduleOwner(scheduleId),
       ),
     onSuccess: (_receipt, scheduleId) => {
       hideDeletedSchedule(scheduleId);
@@ -1465,6 +1560,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
       headers: {
         source: "team-automations",
       },
+      owner: buildStudioMemberAutomationOwner(scopeId, teamId, member.memberId),
       workflowChatTarget: {
         identity: serviceIdentity,
         prompt,
@@ -1492,8 +1588,10 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
     formState.timezone,
     intl,
     isEditingAutomation,
+    scopeId,
     serviceIdentitiesLoading,
     showCreatedScheduleFeedback,
+    teamId,
     updateMutation,
   ]);
 
