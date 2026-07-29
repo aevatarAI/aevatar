@@ -146,14 +146,6 @@ type AuthorizationFlow =
       readonly state: "pending";
       readonly baselineStateVersion: number;
       readonly scheduleId: string;
-    }
-  | {
-      readonly state: "error";
-      readonly code: string;
-      readonly draft: TeamAutomationCreateDraft;
-      readonly message: string;
-      readonly mode: AuthorizationMode;
-      readonly scheduleId?: string;
     };
 
 const listTake = 200;
@@ -779,29 +771,23 @@ const TeamAutomationsTab: React.FC<Props> = ({
               scheduleId,
             });
             return;
-          } catch (redirectError) {
-            setAuthorizationFlow({
-              state: "error",
-              code: "TEAM_AUTOMATION_AUTHORIZATION_REDIRECT_FAILED",
-              draft: nextDraft,
-              message: redirectError instanceof Error ? redirectError.message : String(redirectError),
-              mode,
-              scheduleId,
-            });
+          } catch {
+            void message.error(copy(
+              "teams.automations.authorization.error",
+              "Authorization could not continue",
+            ));
+            setAuthorizationFlow({ state: "idle" });
             return;
           }
         }
-        setAuthorizationFlow({
-          state: "error",
-          code: error instanceof TeamAutomationApiError ? error.code ?? "TEAM_AUTOMATION_PREFLIGHT_FAILED" : "TEAM_AUTOMATION_PREFLIGHT_FAILED",
-          draft: nextDraft,
-          message: error instanceof Error ? error.message : String(error),
-          mode,
-          scheduleId,
-        });
+        void message.error(copy(
+          "teams.automations.authorization.error",
+          "Authorization could not continue",
+        ));
+        setAuthorizationFlow({ state: "idle" });
       }
     },
-    [redirectToBindingRecovery],
+    [copy, redirectToBindingRecovery],
   );
 
   React.useEffect(() => {
@@ -942,18 +928,12 @@ const TeamAutomationsTab: React.FC<Props> = ({
             scheduleId,
           });
           return;
-        } catch (redirectError) {
-          setAuthorizationFlow({
-            state: "error",
-            code: "TEAM_AUTOMATION_AUTHORIZATION_REDIRECT_FAILED",
-            draft: confirmedDraft,
-            message:
-              redirectError instanceof Error
-                ? redirectError.message
-                : String(redirectError),
-            mode,
-            scheduleId,
-          });
+        } catch {
+          void message.error(copy(
+            "teams.automations.authorization.error",
+            "Authorization could not continue",
+          ));
+          setAuthorizationFlow({ state: "idle" });
           return;
         }
       }
@@ -969,14 +949,11 @@ const TeamAutomationsTab: React.FC<Props> = ({
         });
         return;
       }
-      setAuthorizationFlow({
-        state: "error",
-        code: error instanceof TeamAutomationApiError ? error.code ?? "TEAM_AUTOMATION_SUBMIT_FAILED" : "TEAM_AUTOMATION_SUBMIT_FAILED",
-        draft: confirmedDraft,
-        message: error instanceof Error ? error.message : String(error),
-        mode,
-        scheduleId,
-      });
+      void message.error(copy(
+        "teams.automations.authorization.error",
+        "Authorization could not continue",
+      ));
+      setAuthorizationFlow({ state: "idle" });
     }
   };
 
@@ -1975,17 +1952,6 @@ const TeamAutomationsTab: React.FC<Props> = ({
                 message={copy("teams.automations.planChanged.title", "Authorization plan changed")}
                 showIcon
                 type="warning"
-              />
-            ) : null}
-            {authorizationFlow.state === "error" ? (
-              <Alert
-                description={authorizationFlow.message}
-                message={copy(
-                  "teams.automations.authorization.error",
-                  "Authorization could not continue",
-                )}
-                showIcon
-                type="error"
               />
             ) : null}
           </div>
