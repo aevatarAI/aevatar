@@ -88,7 +88,11 @@ internal static class StudioProvisioningEndpoints
                 ? ExternalCapabilityExecutionMode.Durable
                 : ExternalCapabilityExecutionMode.Interactive;
             var scheduleAuthority = shouldSchedule
-                ? await StudioMemberAutomationHttpAuthorityResolver.ResolveAsync(http, bindingQuery, ct)
+                ? await StudioMemberAutomationHttpAuthorityResolver.ResolveAsync(
+                    http,
+                    bindingQuery,
+                    ResolveAuthDisabledScheduleOwnerFallback(http, callerCredential),
+                    ct)
                 : null;
             var admittedRequest = request with
             {
@@ -130,6 +134,13 @@ internal static class StudioProvisioningEndpoints
             return BadRequest("INVALID_PROVISION_WORKFLOW_REQUEST", ex.Message);
         }
     }
+
+    private static string? ResolveAuthDisabledScheduleOwnerFallback(
+        HttpContext http,
+        ProvisionWorkflowCallerCredential callerCredential) =>
+        AevatarScopeAccessGuard.IsAuthenticationEnabled(http.RequestServices)
+            ? null
+            : callerCredential.ExternalUserId;
 
     /// <summary>
     /// Resolves the caller NyxID subject reference from the request body. The

@@ -49,7 +49,11 @@ public sealed record StudioMemberWorkflowAcceptedBindingContext(
     string TeamId,
     string PublishedServiceId,
     string WorkflowId,
-    string? WorkflowRevisionId);
+    string? WorkflowRevisionId)
+{
+    [JsonIgnore]
+    public ScheduledInvocationWorkflowEvidence? WorkflowEvidence { get; init; }
+}
 
 public sealed class StudioMemberWorkflowSchedulePolicy
 {

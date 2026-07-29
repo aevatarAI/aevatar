@@ -91,6 +91,7 @@ public sealed class StudioMemberWorkflowBindingPort : IStudioMemberWorkflowBindi
             request.ScopeId,
             request.MemberId,
             new UpdateStudioMemberBindingRequest(
+                RevisionId: NormalizeOptional(request.RevisionId),
                 Workflow: new StudioMemberWorkflowBindingSpec(
                     workflowId,
                     [request.WorkflowYaml])
@@ -181,6 +182,12 @@ public sealed class StudioMemberWorkflowBindingPort : IStudioMemberWorkflowBindi
         string.IsNullOrWhiteSpace(request.WorkflowId)
             ? $"workflow-{BuildWorkflowKey(request.ScopeId, request.MemberId)}"
             : request.WorkflowId.Trim();
+
+    private static string? NormalizeOptional(string? value)
+    {
+        var normalized = value?.Trim() ?? string.Empty;
+        return normalized.Length == 0 ? null : normalized;
+    }
 
     private static string BuildWorkflowKey(string scopeId, string memberId)
     {

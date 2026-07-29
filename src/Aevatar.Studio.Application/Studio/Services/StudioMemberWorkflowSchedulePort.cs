@@ -1034,7 +1034,61 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                 [],
                 AuthorizationGrantRequirement.Required,
                 credentialExpiresAtUtc ?? _schedulePolicy.ResolveCredentialExpiresAtUtc(evaluatedAtUtc),
-                evaluatedAtUtc));
+                evaluatedAtUtc,
+                TrustedMemberEvidence: BuildTrustedMemberEvidence(
+                    request,
+                    publishedServiceId,
+                    workflowId,
+                    workflowRevision),
+                TrustedWorkflowEvidence: BuildTrustedWorkflowEvidence(
+                    request,
+                    publishedServiceId,
+                    workflowId,
+                    workflowRevision)));
+    }
+
+    private static ScheduledInvocationMemberEvidence? BuildTrustedMemberEvidence(
+        StudioMemberWorkflowScheduleRequest request,
+        string publishedServiceId,
+        string workflowId,
+        string workflowRevision)
+    {
+        if (request.AcceptedBinding is not { } acceptedBinding)
+            return null;
+
+        var acceptedPublishedServiceId = NormalizeRequired(
+            acceptedBinding.PublishedServiceId,
+            nameof(acceptedBinding.PublishedServiceId));
+        var acceptedWorkflowId = NormalizeRequired(
+            acceptedBinding.WorkflowId,
+            nameof(acceptedBinding.WorkflowId));
+        var acceptedWorkflowRevision = NormalizeRequired(
+            acceptedBinding.WorkflowRevisionId,
+            nameof(acceptedBinding.WorkflowRevisionId));
+        if (!string.Equals(acceptedPublishedServiceId, publishedServiceId, StringComparison.Ordinal) ||
+            !string.Equals(acceptedWorkflowId, workflowId, StringComparison.Ordinal) ||
+            !string.Equals(acceptedWorkflowRevision, workflowRevision, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        return new ScheduledInvocationMemberEvidence(
+            StateVersion: 0,
+            DraftWorkflowId: acceptedWorkflowId,
+            WorkflowRevisionId: acceptedWorkflowRevision,
+            PublishedServiceId: acceptedPublishedServiceId);
+    }
+
+    private static ScheduledInvocationWorkflowEvidence? BuildTrustedWorkflowEvidence(
+        StudioMemberWorkflowScheduleRequest request,
+        string publishedServiceId,
+        string workflowId,
+        string workflowRevision)
+    {
+        if (BuildTrustedMemberEvidence(request, publishedServiceId, workflowId, workflowRevision) is null)
+            return null;
+
+        return request.AcceptedBinding?.WorkflowEvidence;
     }
 
     private async Task<string> ResolveProvisioningBearerTokenAsync(

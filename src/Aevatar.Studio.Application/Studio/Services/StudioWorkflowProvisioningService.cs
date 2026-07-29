@@ -8,6 +8,8 @@ using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Core;
+using Aevatar.Workflow.Core.Primitives;
 
 namespace Aevatar.Studio.Application.Studio.Services;
 
@@ -153,13 +155,16 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         //    bind contract requires; deriving it from the provision key keeps one
         //    logical workflow identity across re-binds of the same member.
         //    The bind is asynchronous — we do NOT poll it to completion.
+        var workflowId = $"workflow-{provisionKey}";
+        var revisionId = $"revision-{provisionKey}";
         var bindReceipt = await _bindingPort.BindAsync(
             new StudioMemberWorkflowBindingRequest(
                 normalizedScopeId,
                 memberId,
                 workflowYaml)
             {
-                WorkflowId = $"workflow-{provisionKey}",
+                WorkflowId = workflowId,
+                RevisionId = revisionId,
                 CapabilityAdmission = trustedAdmission,
             },
             ct);
@@ -187,10 +192,14 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
                 memberId,
                 publishedServiceId,
                 bindReceipt,
+                workflowId,
+                revisionId,
                 displayName,
+                workflowYaml,
                 request.Prompt ?? string.Empty,
                 callerCredential,
                 request,
+                capabilityAdmissionPlan,
                 timing,
                 ct);
         }
@@ -268,10 +277,14 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         string memberId,
         string publishedServiceId,
         StudioMemberWorkflowBindingResult bindReceipt,
+        string workflowId,
+        string revisionId,
         string displayName,
+        string workflowYaml,
         string prompt,
         ProvisionWorkflowCallerCredential callerCredential,
         ProvisionWorkflowRequest request,
+        WorkflowCapabilityAdmissionPlan capabilityAdmissionPlan,
         ProvisionScheduleTiming timing,
         CancellationToken ct)
     {
@@ -295,8 +308,13 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
             AcceptedBinding = new StudioMemberWorkflowAcceptedBindingContext(
                 teamId,
                 publishedServiceId,
-                NormalizeOptional(bindReceipt.WorkflowId) ?? $"workflow-{BuildProvisionKey(scopeId, teamId, displayName)}",
-                NormalizeOptional(bindReceipt.RevisionId)),
+                NormalizeOptional(bindReceipt.WorkflowId) ?? workflowId,
+                NormalizeOptional(bindReceipt.RevisionId) ?? revisionId)
+            {
+                WorkflowEvidence = BuildTrustedWorkflowEvidence(
+                    workflowYaml,
+                    capabilityAdmissionPlan),
+            },
         };
 
         var preflight = await _schedulePort.PreflightForWriteAsync(baseScheduleRequest, ct);
@@ -338,6 +356,23 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
 
         throw new InvalidOperationException(
             $"Provisioning for service '{publishedServiceId}' exhausted {maxGenerations} deleted schedule generations.");
+    }
+
+    private static ScheduledInvocationWorkflowEvidence BuildTrustedWorkflowEvidence(
+        string workflowYaml,
+        WorkflowCapabilityAdmissionPlan capabilityAdmissionPlan)
+    {
+        var workflow = new WorkflowParser().Parse(workflowYaml);
+        var authorizationDependencies = WorkflowAuthorizationDependencyEvaluator.Evaluate(workflow);
+        var admittedCapabilities = WorkflowCapabilityAdmissionPlanIntegrity.DistinctCapabilities(capabilityAdmissionPlan);
+        return new ScheduledInvocationWorkflowEvidence(
+            StateVersion: 0,
+            ExternalCapabilities: admittedCapabilities,
+            OwnerLLMRouteRequired: authorizationDependencies.OwnerLlmRouteRequired,
+            ServiceGrantRequirement: admittedCapabilities.Any(static capability =>
+                capability.CapabilityCase == ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService)
+                    ? AuthorizationGrantRequirement.Required
+                    : AuthorizationGrantRequirement.NotRequired);
     }
 
     /// <summary>

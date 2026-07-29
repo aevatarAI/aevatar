@@ -10,6 +10,8 @@ public sealed record StudioMemberWorkflowBindingRequest(
 {
     public string? WorkflowId { get; init; }
 
+    public string? RevisionId { get; init; }
+
     [JsonIgnore]
     public WorkflowCapabilityAdmissionContext? CapabilityAdmission { get; init; }
 }

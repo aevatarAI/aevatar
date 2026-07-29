@@ -204,6 +204,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
         member.BindScopeId.Should().Be(ScopeId);
         member.BindRequest!.Workflow!.WorkflowYamls.Should().ContainSingle().Which.Should().Be("name: monitor");
         member.BindRequest.Workflow.WorkflowId.Should().NotBeNullOrWhiteSpace();
+        member.BindRequest.RevisionId.Should().NotBeNullOrWhiteSpace();
 
         // The bind is asynchronous; the service must NOT poll it to completion.
         member.GetBindingRunCallCount.Should().Be(0);
@@ -224,6 +225,9 @@ public sealed class StudioWorkflowProvisioningServiceTests
         owner!.ScopeId.Should().Be(ScopeId);
         owner.TeamId.Should().Be(TeamId);
         owner.MemberId.Should().Be(MemberId);
+        var acceptedBinding = schedule.LastCreateRequest!.AcceptedBinding;
+        acceptedBinding.Should().NotBeNull();
+        acceptedBinding!.WorkflowRevisionId.Should().Be(member.BindRequest.RevisionId);
     }
 
     [Fact]
@@ -821,6 +825,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
                 request.ScopeId,
                 request.MemberId,
                 new UpdateStudioMemberBindingRequest(
+                    RevisionId: request.RevisionId,
                     Workflow: new StudioMemberWorkflowBindingSpec(
                         request.WorkflowId ?? "workflow-test",
                         [request.WorkflowYaml])
@@ -879,6 +884,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
             string confirmedPermissionDigest,
             CancellationToken ct = default)
         {
+            _schedule.LastCreateRequest = request;
             var scheduleId = request.ScheduleId ?? "schedule-test";
             var owner = new TeamMemberAutomationOwner(request.ScopeId, request.MemberId, request.TeamId ?? TeamId);
             var receipt = await _schedule.EnsureAsync(
@@ -1105,6 +1111,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
         public string ScheduleId { get; set; } = "schedule-xyz";
         public Exception? ThrowOnEnsure { get; set; }
         public bool Ensured { get; private set; }
+        public StudioMemberWorkflowScheduleRequest? LastCreateRequest { get; set; }
         public ScheduledDispatchConfiguration? Configuration { get; private set; }
         public ScheduledDispatchMutationContext? MutationContext { get; private set; }
 

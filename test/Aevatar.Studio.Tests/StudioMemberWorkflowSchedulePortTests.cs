@@ -739,7 +739,14 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                 "team-1",
                 "published-member-accepted",
                 "workflow-accepted",
-                "rev-accepted"),
+                "rev-accepted")
+            {
+                WorkflowEvidence = new ScheduledInvocationWorkflowEvidence(
+                    StateVersion: 0,
+                    ExternalCapabilities: [],
+                    OwnerLLMRouteRequired: false,
+                    ServiceGrantRequirement: AuthorizationGrantRequirement.NotRequired),
+            },
         };
 
         var result = await port.PreflightForWriteAsync(request);
@@ -754,6 +761,18 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         target.PublishedServiceId.Should().Be("published-member-accepted");
         target.DraftWorkflowId.Should().Be("workflow-accepted");
         target.WorkflowRevisionId.Should().Be("rev-accepted");
+        planner.Requests[0].TrustedMemberEvidence.Should().BeEquivalentTo(
+            new ScheduledInvocationMemberEvidence(
+                StateVersion: 0,
+                DraftWorkflowId: "workflow-accepted",
+                WorkflowRevisionId: "rev-accepted",
+                PublishedServiceId: "published-member-accepted"));
+        planner.Requests[0].TrustedWorkflowEvidence.Should().BeEquivalentTo(
+            new ScheduledInvocationWorkflowEvidence(
+                StateVersion: 0,
+                ExternalCapabilities: [],
+                OwnerLLMRouteRequired: false,
+                ServiceGrantRequirement: AuthorizationGrantRequirement.NotRequired));
     }
 
     [Fact]

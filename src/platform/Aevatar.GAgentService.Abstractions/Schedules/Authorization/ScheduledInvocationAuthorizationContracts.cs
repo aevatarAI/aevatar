@@ -26,7 +26,9 @@ public sealed record ScheduledInvocationAuthorizationRequest(
     AuthorizationGrantRequirement ServiceGrantRequirement,
     DateTimeOffset ExpiresAtUtc,
     DateTimeOffset EvaluatedAtUtc,
-    IReadOnlyList<AuthorizationSourceStamp>? SourceStamps = null)
+    IReadOnlyList<AuthorizationSourceStamp>? SourceStamps = null,
+    ScheduledInvocationMemberEvidence? TrustedMemberEvidence = null,
+    ScheduledInvocationWorkflowEvidence? TrustedWorkflowEvidence = null)
 {
     public AuthorizationOwnerIdentity Owner => OwnerContext.Owner;
 }

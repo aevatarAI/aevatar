@@ -471,6 +471,7 @@ public static class MainnetHostBuilderExtensions
         app.MapDeviceEventEndpoints();
         app.MapIdentityOAuthEndpoints();
         app.MapScheduledAgentCredentialRepairAdminEndpoints();
+        app.MapDevelopmentNyxIdApiKeyEndpoints();
         app.MapProjectionVersionRegressionRepairAdminEndpoints();
         app.MapManagedCodexCredentialEndpoints();
         app.MapWorkflowSkillsEndpoints();

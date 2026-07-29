@@ -140,6 +140,32 @@ public sealed class StudioProvisioningEndpointsTests
     }
 
     [Fact]
+    public async Task HandleProvisionWorkflowAsync_ShouldUseCallerSubjectAsScheduleOwner_WhenAuthenticationDisabled()
+    {
+        var service = new RecordingProvisioningService { Response = NewResponse() };
+        var bindingQuery = new RecordingIdentityBindingQueryPort { Binding = null };
+
+        await InvokeHandle<IResult>(
+            CreateAuthDisabledContext(),
+            ScopeId,
+            new ProvisionWorkflowRequest("Monitor", "name: monitor", Caller: Caller)
+            {
+                TeamId = TeamId,
+            },
+            service,
+            bindingQuery,
+            CancellationToken.None);
+
+        service.ProvisionInvoked.Should().BeTrue();
+        bindingQuery.Subject.Should().NotBeNull();
+        bindingQuery.Subject!.ExternalUserId.Should().Be("user-42");
+        service.ProvisionRequest!.AuthenticatedOwner.Should().NotBeNull();
+        service.ProvisionRequest.AuthenticatedOwner!.SubjectExternalUserId.Should().Be("user-42");
+        service.ProvisionRequest.AuthenticatedOwner.VerifiedBindingId.Should().Be("auth-disabled:user-42");
+        service.ProvisionRequest.ProvisioningBearerToken.Should().Be("user-42");
+    }
+
+    [Fact]
     public async Task HandleProvisionWorkflowAsync_ShouldDefaultScope_WhenCallerScopeOmitted()
     {
         var service = new RecordingProvisioningService { Response = NewResponse() };
@@ -316,6 +342,17 @@ public sealed class StudioProvisioningEndpointsTests
             RequestServices = BuildAuthEnabledServices(),
         };
 
+    private static HttpContext CreateAuthDisabledContext()
+    {
+        var http = new DefaultHttpContext
+        {
+            User = new ClaimsPrincipal(new ClaimsIdentity()),
+            RequestServices = BuildAuthDisabledServices(),
+        };
+        http.Request.Headers.Authorization = "Bearer runtime-caller-credential";
+        return http;
+    }
+
     private static IServiceProvider BuildAuthEnabledServices() =>
         new ServiceCollection()
             .AddSingleton<IConfiguration>(new ConfigurationBuilder()
@@ -325,6 +362,20 @@ public sealed class StudioProvisioningEndpointsTests
                 })
                 .Build())
             .AddSingleton<IHostEnvironment>(new TestHostEnvironment())
+            .BuildServiceProvider();
+
+    private static IServiceProvider BuildAuthDisabledServices() =>
+        new ServiceCollection()
+            .AddSingleton<IConfiguration>(new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Aevatar:Authentication:Enabled"] = "false",
+                })
+                .Build())
+            .AddSingleton<IHostEnvironment>(new TestHostEnvironment
+            {
+                EnvironmentName = Environments.Development,
+            })
             .BuildServiceProvider();
 
     private static void AssertIsJsonStatus(IResult result, int expectedStatus)
