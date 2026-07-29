@@ -161,6 +161,8 @@ public sealed class ScheduledAgentApiKeyIssuerTests
 
         result.Success.Should().BeFalse();
         result.Error.Should().Be("authorization_plan_changed");
+        result.Detail.Should().Be("authorization_plan_changed:authenticated_actor_mismatch");
+        result.ToErrorJson().Should().NotContain("admin-alpha").And.NotContain("admin-other");
         handler.Requests.Should().ContainSingle().Which.Should().Be("/api/v1/api-keys/scope-plan");
     }
 
@@ -185,18 +187,21 @@ public sealed class ScheduledAgentApiKeyIssuerTests
 
         result.Success.Should().BeFalse();
         result.Error.Should().Be("authorization_plan_changed");
+        result.Detail.Should().Be("authorization_plan_changed:allowed_node_ids_mismatch");
+        result.ToErrorJson().Should().NotContain("node-other");
         handler.Requests.Should().ContainSingle().Which.Should().Be("/api/v1/api-keys/scope-plan");
     }
 
     [Theory]
-    [InlineData("contract_version")]
-    [InlineData("policy_version")]
-    [InlineData("principal")]
-    [InlineData("service_identity")]
-    [InlineData("resource_owner")]
-    [InlineData("node_requirement")]
+    [InlineData("contract_version", "scope_plan_versions_mismatch")]
+    [InlineData("policy_version", "scope_plan_versions_mismatch")]
+    [InlineData("principal", "intended_key_owner_mismatch")]
+    [InlineData("service_identity", "allowed_service_ids_mismatch")]
+    [InlineData("resource_owner", "service_grant_resource_owner_mismatch")]
+    [InlineData("node_requirement", "allowed_node_ids_mismatch")]
     public async Task IssueAsync_WhenCurrentScopeFactDiffersFromValidatedPlan_FailsBeforeCreate(
-        string mismatch)
+        string mismatch,
+        string expectedReason)
     {
         var plan = ValidPlan();
         var scopePlanJson = PersonalScopePlanJson();
@@ -251,6 +256,13 @@ public sealed class ScheduledAgentApiKeyIssuerTests
 
         result.Success.Should().BeFalse();
         result.Error.Should().Be("authorization_plan_changed");
+        result.Detail.Should().Be($"authorization_plan_changed:{expectedReason}");
+        result.ToErrorJson().Should()
+            .NotContain("owner-alpha")
+            .And.NotContain("owner-other")
+            .And.NotContain("us-other")
+            .And.NotContain("resource-other")
+            .And.NotContain("node-a");
         handler.Requests.Should().ContainSingle().Which.Should().Be("/api/v1/api-keys/scope-plan");
     }
 
