@@ -12,4 +12,9 @@ public interface IProjectionWriteSink<in TReadModel>
     Task<ProjectionWriteResult> UpsertAsync(TReadModel readModel, CancellationToken ct = default);
 
     Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default);
+
+    Task<ProjectionWriteResult> DeleteAsync(
+        ProjectionDocumentDeleteMarker marker,
+        CancellationToken ct = default) =>
+        DeleteAsync(marker.Id, ct);
 }

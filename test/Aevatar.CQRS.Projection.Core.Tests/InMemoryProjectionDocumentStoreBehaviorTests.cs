@@ -215,6 +215,44 @@ public sealed class InMemoryProjectionDocumentStoreBehaviorTests
     }
 
     [Fact]
+    public async Task DeleteAsync_WithAuthoritativeMarker_ShouldRejectDelayedOlderUpsert()
+    {
+        var store = new InMemoryProjectionDocumentStore<TestStoreReadModel, string>(
+            keySelector: model => model.Id);
+        await store.UpsertAsync(new TestStoreReadModel
+        {
+            Id = "actor-tombstone",
+            ActorId = "actor-tombstone",
+            StateVersion = 7,
+            LastEventId = "evt-7",
+            UpdatedAt = DateTimeOffset.Parse("2026-07-29T00:00:07Z"),
+            Value = "live",
+        });
+
+        var delete = await store.DeleteAsync(new ProjectionDocumentDeleteMarker(
+            "actor-tombstone",
+            "actor-tombstone",
+            8,
+            "evt-8-delete",
+            DateTimeOffset.Parse("2026-07-29T00:00:08Z")));
+        var delayed = await store.UpsertAsync(new TestStoreReadModel
+        {
+            Id = "actor-tombstone",
+            ActorId = "actor-tombstone",
+            StateVersion = 7,
+            LastEventId = "evt-7",
+            UpdatedAt = DateTimeOffset.Parse("2026-07-29T00:00:07Z"),
+            Value = "delayed",
+        });
+
+        delete.Disposition.Should().Be(ProjectionWriteDisposition.Applied);
+        delayed.Disposition.Should().Be(ProjectionWriteDisposition.Stale);
+        (await store.GetAsync("actor-tombstone")).Should().BeNull();
+        var query = await store.QueryAsync(new ProjectionDocumentQuery { Take = 10 });
+        query.Items.Should().NotContain(x => x.Id == "actor-tombstone");
+    }
+
+    [Fact]
     public async Task UpsertAsync_WhenIncomingAuthoritativeVersionSkipsAhead_ShouldApply()
     {
         var store = new InMemoryProjectionDocumentStore<TestStoreReadModel, string>(
