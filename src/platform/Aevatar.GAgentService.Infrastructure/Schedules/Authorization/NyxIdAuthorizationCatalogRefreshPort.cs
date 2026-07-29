@@ -112,6 +112,7 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
 
     private const string CatalogMismatchFailureCode = "nyxid_scope_plan_catalog_mismatch";
     private const string ProviderTimedOutFailureCode = "nyxid_catalog_refresh_provider_timed_out";
+    private const string RouteUnresolvedFailureCode = "api_key_scope_plan_route_unresolved";
 
     private readonly INyxIdAuthorizationCatalogCommandPort _commandPort;
     private readonly INyxIdApiClientFactory _nyxClientFactory;
@@ -404,6 +405,18 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
         var scopePlanResult = NyxIdApiAccessResponseParser.ParseScopePlan(scopePlanResponse);
         if (!scopePlanResult.Succeeded)
         {
+            if (IsIsolatableRouteFailure(scopePlanResult.Failure))
+            {
+                await ObserveIsolatedScopePlansAsync(
+                    client,
+                    normalizedOwner,
+                    bearerToken,
+                    refreshId,
+                    eligibleServices,
+                    ct).ConfigureAwait(false);
+                return;
+            }
+
             await HandleFailureAsync(
                 normalizedOwner,
                 refreshId,
@@ -437,6 +450,79 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
             services,
             ct).ConfigureAwait(false);
 
+    }
+
+    private async Task ObserveIsolatedScopePlansAsync(
+        NyxIdApiClient client,
+        AuthorizationOwnerIdentity normalizedOwner,
+        string bearerToken,
+        string refreshId,
+        IReadOnlyList<NyxIdUserService> eligibleServices,
+        CancellationToken ct)
+    {
+        var services = new List<NyxIdAuthorizationServiceEvidence>();
+        var observedAt = _timeProvider.GetUtcNow();
+        DateTimeOffset? evaluatedAt = null;
+        var contractVersion = NyxIdApiAccessResponseParser.ScopePlanContractVersion;
+        var policyVersion = NyxIdApiAccessResponseParser.ScopePlanPolicyVersion;
+        foreach (var service in eligibleServices)
+        {
+            string scopePlanResponse;
+            try
+            {
+                scopePlanResponse = await client.PlanApiKeyScopeAsync(
+                    bearerToken,
+                    [service.Id],
+                    targetOrganizationId: null,
+                    ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                await RecordProviderTimeoutAsync(normalizedOwner, refreshId, ct).ConfigureAwait(false);
+                return;
+            }
+
+            var scopePlanResult = NyxIdApiAccessResponseParser.ParseScopePlan(scopePlanResponse);
+            if (!scopePlanResult.Succeeded)
+            {
+                if (IsIsolatableRouteFailure(scopePlanResult.Failure))
+                    continue;
+
+                await HandleFailureAsync(
+                    normalizedOwner,
+                    refreshId,
+                    scopePlanResult.Failure,
+                    ct).ConfigureAwait(false);
+                return;
+            }
+
+            var scopePlan = scopePlanResult.Value!;
+            if (!MatchesPersonalCatalog(scopePlan, normalizedOwner, [service]))
+            {
+                await InvalidateUnstableAsync(
+                    normalizedOwner,
+                    refreshId,
+                    CatalogMismatchFailureCode,
+                    ct).ConfigureAwait(false);
+                return;
+            }
+
+            contractVersion = scopePlan.ContractVersion;
+            policyVersion = scopePlan.PolicyVersion;
+            if (evaluatedAt is null || scopePlan.EvaluatedAtUtc > evaluatedAt.Value)
+                evaluatedAt = scopePlan.EvaluatedAtUtc;
+            services.Add(MapServiceEvidence(service, scopePlan.Services.Single()));
+        }
+
+        await ObserveCatalogAsync(
+            normalizedOwner,
+            refreshId,
+            observedAt,
+            evaluatedAt ?? observedAt,
+            contractVersion,
+            policyVersion,
+            services,
+            ct).ConfigureAwait(false);
     }
 
     private async Task ObserveCatalogAsync(
@@ -762,6 +848,10 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
         (service.CredentialSource.Kind == NyxIdUserServiceCredentialSourceKind.Personal ||
          service.CredentialSource.Kind == NyxIdUserServiceCredentialSourceKind.Organization &&
          service.CredentialSource.Allowed);
+
+    private static bool IsIsolatableRouteFailure(NyxIdApiAccessFailure? failure) =>
+        failure?.Kind == NyxIdApiAccessFailureKind.Conflict &&
+        string.Equals(failure.Code, RouteUnresolvedFailureCode, StringComparison.Ordinal);
 
     private static bool MatchesPersonalCatalog(
         NyxIdApiKeyScopePlan scopePlan,

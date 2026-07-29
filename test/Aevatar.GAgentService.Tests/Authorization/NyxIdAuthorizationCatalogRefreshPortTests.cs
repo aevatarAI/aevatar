@@ -791,6 +791,61 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
     }
 
     [Fact]
+    public async Task RefreshPersonalAsync_WhenBulkScopePlanHasUnrelatedRouteFailure_ShouldObserveIsolatedServices()
+    {
+        var commands = new RecordingCommandPort();
+        var handler = new RoutingJsonHandler(
+            Ok(UserServicesJson()),
+            Error(HttpStatusCode.Conflict, "api_key_scope_plan_route_unresolved", 9007),
+            Ok(ScopePlanJsonForServiceA()),
+            Error(HttpStatusCode.Conflict, "api_key_scope_plan_route_unresolved", 9007));
+
+        var result = await Create(commands, handler)
+            .RefreshPersonalAsync("owner-alpha", "bearer-secret");
+
+        result.Status.Should().Be(NyxIdAuthorizationCatalogRefreshStatus.Observed);
+        result.FailureCode.Should().BeEmpty();
+        handler.Requests.Select(static request => (request.Method, request.Path))
+            .Should().Equal(
+                (HttpMethod.Get, "/api/v1/user-services"),
+                (HttpMethod.Post, "/api/v1/api-keys/scope-plan"),
+                (HttpMethod.Post, "/api/v1/api-keys/scope-plan"),
+                (HttpMethod.Post, "/api/v1/api-keys/scope-plan"));
+        handler.RequestBodies.Should().HaveCount(3);
+        using (var bulkRequest = JsonDocument.Parse(handler.RequestBodies[0]))
+        {
+            bulkRequest.RootElement.GetProperty("selected_service_ids")
+                .EnumerateArray()
+                .Select(static item => item.GetString())
+                .Should().Equal("service-a", "service-b");
+        }
+        using (var serviceARequest = JsonDocument.Parse(handler.RequestBodies[1]))
+        {
+            serviceARequest.RootElement.GetProperty("selected_service_ids")
+                .EnumerateArray()
+                .Select(static item => item.GetString())
+                .Should().Equal("service-a");
+        }
+        using (var serviceBRequest = JsonDocument.Parse(handler.RequestBodies[2]))
+        {
+            serviceBRequest.RootElement.GetProperty("selected_service_ids")
+                .EnumerateArray()
+                .Select(static item => item.GetString())
+                .Should().Equal("service-b");
+        }
+
+        var observation = commands.Observations.Should().ContainSingle().Subject;
+        observation.Services.Select(static service => service.UserServiceId)
+            .Should().Equal("service-a");
+        observation.Services.Single().Access.Should().Be(NyxIdAuthorizationAccess.Permitted);
+        observation.ContractVersion.Should().Be("1");
+        observation.PolicyVersion.Should().Be("api-key-scope-v1");
+        observation.EvaluatedAtUtc.Should().Be(EvaluatedAt);
+        commands.Invalidations.Should().BeEmpty();
+        commands.Failures.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task RefreshPersonalAsync_WhenNoServicesAreEligible_ShouldObserveEmptyCatalog()
     {
         var commands = new RecordingCommandPort();
@@ -880,6 +935,11 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
 
         result.Status.Should().Be(NyxIdAuthorizationCatalogRefreshStatus.AccessDenied);
         result.FailureCode.Should().Be("api_key_scope_plan_denied");
+        handler.Requests.Select(static request => (request.Method, request.Path))
+            .Should().Equal(
+                (HttpMethod.Get, "/api/v1/user-services"),
+                (HttpMethod.Post, "/api/v1/api-keys/scope-plan"));
+        handler.RequestBodies.Should().ContainSingle();
         commands.Beginnings.Should().ContainSingle();
         commands.Invalidations.Should().ContainSingle();
         commands.Invalidations[0].RefreshId.Should().Be(commands.Beginnings[0].RefreshId);
@@ -1069,6 +1129,25 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
           "allowed_node_ids":["node-a","node-b"],
           "evaluated_at":"{{{EvaluatedAt:O}}}",
           "normalized_grant_digest":"sha256:{{{new string('a', 64)}}}",
+          "freshness":{"mode":"mutation_revalidated_snapshot","precondition_field":"scope_plan_digest","post_creation_drift":"fail_closed"},
+          "completeness":{"list_complete":true,"no_duplicates":true,"route_candidate_basis":"active_configured_routes","transient_node_state_excluded":true}
+        }
+        """;
+
+    private static string ScopePlanJsonForServiceA() => $$$"""
+        {
+          "authority":"nyxid",
+          "contract_version":"1",
+          "policy_version":"api-key-scope-v1",
+          "authenticated_actor":{"id":"owner-alpha","type":"personal"},
+          "intended_key_owner":{"id":"owner-alpha","type":"personal"},
+          "services":[
+            {"user_service_id":"service-a","resource_owner":{"id":"owner-alpha","type":"personal"},"node_grant":{"type":"not_required"}}
+          ],
+          "allowed_service_ids":["service-a"],
+          "allowed_node_ids":[],
+          "evaluated_at":"{{{EvaluatedAt:O}}}",
+          "normalized_grant_digest":"sha256:{{{new string('b', 64)}}}",
           "freshness":{"mode":"mutation_revalidated_snapshot","precondition_field":"scope_plan_digest","post_creation_drift":"fail_closed"},
           "completeness":{"list_complete":true,"no_duplicates":true,"route_candidate_basis":"active_configured_routes","transient_node_state_excluded":true}
         }
