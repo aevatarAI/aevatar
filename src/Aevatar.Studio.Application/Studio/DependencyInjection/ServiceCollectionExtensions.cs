@@ -26,7 +26,6 @@ public static class ServiceCollectionExtensions
             IExternalWorkflowCapabilitySource,
             ConnectorExternalWorkflowCapabilitySource>());
         services.AddSingleton<RoleCatalogService>();
-        services.AddSingleton<SettingsService>();
         // Refactor (iter21/cluster-001):
         //   Old pattern: Host registered Ask AI authoring orchestrators and fake actor services.
         //   New principle: Application owns request-scoped authoring preview orchestration behind typed ports.
