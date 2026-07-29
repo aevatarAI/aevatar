@@ -2,6 +2,7 @@ using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Mainnet.Host.Api.Skills;
 using Aevatar.Studio.Application.Provisioning;
+using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 
@@ -39,6 +40,48 @@ public sealed class UserSkillRunServiceTests
         dispatch.Request.CallerCredential.Should().BeSameAs(callerCredential);
         dispatch.Request.CallerCredential!.NyxIdAuthority!.ExternalUserId.Should().Be("nyx-user-alpha");
         dispatch.Request.CallerCredential.NyxIdAuthority.BindingId.Should().Be("binding-alpha");
+    }
+
+    [Fact]
+    public async Task ScheduleAsync_ShouldForwardAuthenticatedOwnerAndProvisioningBearer()
+    {
+        var fetcher = new RecordingRemoteSkillFetcher(WorkflowSkill());
+        var dispatch = new RecordingWorkflowChatDispatch();
+        var schedule = new RecordingScheduleProvisioningPort();
+        var service = new UserSkillRunService(fetcher, dispatch, schedule);
+        var callerCredential = new WorkflowCallerCredential(
+            "  caller-token  ",
+            new WorkflowCallerNyxIdAuthority(
+                "nyxid",
+                string.Empty,
+                "nyx-user-alpha",
+                "proxy",
+                "binding-alpha"));
+
+        var outcome = await service.ScheduleAsync(
+            "skill-alpha",
+            callerCredential,
+            "scope-alpha",
+            "run the check",
+            "*/15 * * * *",
+            "Asia/Shanghai",
+            "Codex Check",
+            "team-alpha",
+            CancellationToken.None);
+
+        outcome.Succeeded.Should().BeTrue();
+        fetcher.AccessToken.Should().Be("caller-token");
+        schedule.Request.Should().NotBeNull();
+        schedule.Request!.ScopeId.Should().Be("scope-alpha");
+        schedule.Request.TeamId.Should().Be("team-alpha");
+        schedule.Request.DisplayName.Should().Be("Codex Check");
+        schedule.Request.ScheduleCron.Should().Be("*/15 * * * *");
+        schedule.Request.ScheduleTimezone.Should().Be("Asia/Shanghai");
+        schedule.Request.RunImmediately.Should().BeFalse();
+        schedule.Request.ProvisioningBearerToken.Should().Be("caller-token");
+        schedule.Request.AuthenticatedOwner.Should().NotBeNull();
+        schedule.Request.AuthenticatedOwner!.SubjectExternalUserId.Should().Be("nyx-user-alpha");
+        schedule.Request.AuthenticatedOwner.VerifiedBindingId.Should().Be("binding-alpha");
     }
 
     [Theory]
@@ -118,6 +161,28 @@ public sealed class UserSkillRunServiceTests
                     "codex-check",
                     "command-alpha",
                     "correlation-alpha")));
+        }
+    }
+
+    private sealed class RecordingScheduleProvisioningPort : IWorkflowScheduleProvisioningPort
+    {
+        public WorkflowScheduleProvisioningRequest? Request { get; private set; }
+
+        public Task<WorkflowScheduleProvisioningResult> ProvisionAsync(
+            WorkflowScheduleProvisioningRequest request,
+            CancellationToken ct = default)
+        {
+            Request = request;
+            return Task.FromResult(new WorkflowScheduleProvisioningResult(
+                "member-alpha",
+                request.ScopeId,
+                request.TeamId,
+                ProvisionWorkflowBindingStatusNames.Accepted,
+                "/workflow/observatory",
+                "/studio/member")
+            {
+                ScheduleId = "schedule-alpha",
+            });
         }
     }
 

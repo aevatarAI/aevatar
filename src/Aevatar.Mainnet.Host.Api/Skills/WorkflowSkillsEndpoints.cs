@@ -1,4 +1,3 @@
-using System.Security.Claims;
 using Aevatar.BackendConsole.Hosting;
 using Aevatar.Capabilities;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
@@ -169,10 +168,21 @@ internal static class WorkflowSkillsEndpoints
         ArgumentNullException.ThrowIfNull(http);
         ArgumentNullException.ThrowIfNull(runService);
 
-        if (!TryGetBearerToken(http, out var token))
-            return Results.Unauthorized();
         if (!AevatarScopeAccessGuard.TryGetCallerScopeId(http, out var scopeId))
             return Results.Unauthorized();
+
+        var loggerFactory = http.RequestServices.GetService<ILoggerFactory>();
+        var callerCredential = await WorkflowCallerCredentialExtractor.ExtractAsync(
+            http,
+            http.RequestServices.GetService<IExternalIdentityBindingQueryPort>(),
+            loggerFactory?.CreateLogger("Aevatar.Mainnet.Host.Api.WorkflowSkills"),
+            ct);
+        if (!callerCredential.Succeeded ||
+            callerCredential.Credential == null ||
+            string.IsNullOrWhiteSpace(callerCredential.Credential.BearerToken))
+        {
+            return Results.Unauthorized();
+        }
 
         SkillScheduleHttpRequest body;
         try
@@ -191,9 +201,8 @@ internal static class WorkflowSkillsEndpoints
 
         var outcome = await runService.ScheduleAsync(
             guid,
-            token,
+            callerCredential.Credential,
             scopeId,
-            ResolveOwnerSubject(http),
             body.Prompt ?? string.Empty,
             body.CronExpression!,
             body.Timezone ?? string.Empty,
@@ -207,20 +216,6 @@ internal static class WorkflowSkillsEndpoints
             ? StatusCodes.Status404NotFound
             : StatusCodes.Status502BadGateway;
         return Results.Json(new { code = outcome.ErrorCode, message = outcome.ErrorMessage }, statusCode: scheduleStatus);
-    }
-
-    // The caller's NyxID subject (uid/sub claim) is the schedule's owner subject; the provisioning adapter
-    // substitutes the scope id when this is absent.
-    private static string? ResolveOwnerSubject(HttpContext http)
-    {
-        foreach (var claimType in new[] { "uid", "sub", ClaimTypes.NameIdentifier, "user_id" })
-        {
-            var value = http.User.FindFirst(claimType)?.Value?.Trim();
-            if (!string.IsNullOrWhiteSpace(value))
-                return value;
-        }
-
-        return null;
     }
 
     private static bool TryGetBearerToken(HttpContext http, out string token)

@@ -1,5 +1,6 @@
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using WorkflowCallerCredentialTokens = Aevatar.Workflow.Abstractions.WorkflowCallerCredentialTokens;
@@ -67,9 +68,8 @@ internal sealed class UserSkillRunService : IUserSkillRunService
 
     public async Task<SkillScheduleOutcome> ScheduleAsync(
         string skillGuid,
-        string accessToken,
+        WorkflowCallerCredential callerCredential,
         string scopeId,
-        string? ownerSubjectExternalUserId,
         string prompt,
         string cronExpression,
         string timezone,
@@ -77,6 +77,18 @@ internal sealed class UserSkillRunService : IUserSkillRunService
         string teamId,
         CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(callerCredential);
+        var parsedToken = WorkflowCallerCredentialTokens.ParseOptional(callerCredential.BearerToken);
+        if (!parsedToken.IsValid)
+            return SkillScheduleOutcome.Failed("invalid_caller_credential", "Caller credential is invalid.");
+
+        var authenticatedOwner = BuildAuthenticatedOwner(callerCredential.NyxIdAuthority);
+        if (authenticatedOwner is null)
+            return SkillScheduleOutcome.Failed(
+                "authenticated_authorization_owner_required",
+                "Caller NyxID authority with verified binding is required to schedule the skill workflow.");
+
+        var accessToken = parsedToken.NormalizedBearerToken!;
         var skill = await _remoteSkillFetcher.FetchSkillAsync(accessToken, skillGuid, ct);
         if (skill == null)
             return SkillScheduleOutcome.Failed("skill_not_found", $"Skill '{skillGuid}' was not found or is not accessible.");
@@ -96,7 +108,11 @@ internal sealed class UserSkillRunService : IUserSkillRunService
             ScheduleCron = cronExpression,
             ScheduleTimezone = string.IsNullOrWhiteSpace(timezone) ? null : timezone,
             RunImmediately = false,
-            CallerSubjectExternalUserId = string.IsNullOrWhiteSpace(ownerSubjectExternalUserId) ? null : ownerSubjectExternalUserId,
+            CallerSubjectPlatform = authenticatedOwner.SubjectPlatform,
+            CallerSubjectTenant = authenticatedOwner.SubjectTenant,
+            CallerSubjectExternalUserId = authenticatedOwner.SubjectExternalUserId,
+            AuthenticatedOwner = authenticatedOwner,
+            ProvisioningBearerToken = accessToken,
         };
 
         try
@@ -114,6 +130,32 @@ internal sealed class UserSkillRunService : IUserSkillRunService
         {
             return SkillScheduleOutcome.Failed("schedule_failed", ex.Message);
         }
+    }
+
+    private static AuthenticatedAuthorizationOwnerContext? BuildAuthenticatedOwner(
+        WorkflowCallerNyxIdAuthority? authority)
+    {
+        if (authority == null ||
+            string.IsNullOrWhiteSpace(authority.Platform) ||
+            string.IsNullOrWhiteSpace(authority.ExternalUserId) ||
+            string.IsNullOrWhiteSpace(authority.BindingId))
+        {
+            return null;
+        }
+
+        var tenant = string.IsNullOrWhiteSpace(authority.Tenant) ? string.Empty : authority.Tenant.Trim();
+        var externalUserId = authority.ExternalUserId.Trim();
+        return new AuthenticatedAuthorizationOwnerContext(
+            new AuthorizationOwnerIdentity
+            {
+                Authority = NyxIdAuthorizationAuthorities.NyxId,
+                OwnerKind = AuthorizationOwnerKind.Personal,
+                OwnerSubject = externalUserId,
+            },
+            authority.Platform.Trim(),
+            tenant,
+            externalUserId,
+            authority.BindingId.Trim());
     }
 
     // Skills carrying workflow YAML run as-is; skills without one run a synthesized single llm_call workflow

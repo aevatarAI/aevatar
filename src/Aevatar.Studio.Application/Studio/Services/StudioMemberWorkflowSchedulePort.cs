@@ -340,7 +340,9 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                 NormalizeRequired(command.ScheduleCron, nameof(command.ScheduleCron)),
                 NormalizeRequired(command.ScheduleTimezone, nameof(command.ScheduleTimezone)),
                 command.Enabled,
-                owner),
+                owner,
+                ScheduledDispatchScheduleMode.RecurringCron,
+                null),
             new ScheduledDispatchMutationContext(TeamAutomationOwner: owner),
             ct);
         return ToMutationReceipt(receipt, command.OperationId);
@@ -503,8 +505,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
 
         var scopeId = resolved.ScopeId;
         var memberId = resolved.MemberId;
-        var scheduleCron = NormalizeRequired(request.ScheduleCron, nameof(request.ScheduleCron));
-        var scheduleTimezone = NormalizeRequired(request.ScheduleTimezone, nameof(request.ScheduleTimezone));
+        var timing = ResolveScheduleTiming(request);
         var publishedServiceId = resolved.PublishedServiceId;
         var teamOwner = new TeamMemberAutomationOwner(scopeId, memberId, resolved.TeamId);
         var operationId = NormalizeRequired(request.OperationId, nameof(request.OperationId));
@@ -531,9 +532,11 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             chatPayload,
             callerAuthority,
             authorizationFact,
-            scheduleCron,
-            scheduleTimezone,
-            request.Enabled);
+            timing.CronExpression,
+            timing.Timezone,
+            request.Enabled,
+            timing.ScheduleMode,
+            timing.OneShotFireAt);
         var mutationDigest = BuildTeamAutomationMutationDigest(activationDecision);
         var ownerScope = BuildOwnerScope(request);
         var bearerToken = await ResolveProvisioningBearerTokenAsync(request, ct);
@@ -671,10 +674,12 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                 prompt,
                 BuildScheduleAuth(credential, callerAuthority),
                 CloneScheduleAuthorizationFact(activationDecision.AuthorizationFact),
-                scheduleCron,
-                scheduleTimezone,
+                timing.CronExpression,
+                timing.Timezone,
                 request.Enabled,
                 teamOwner,
+                timing.ScheduleMode,
+                timing.OneShotFireAt,
                 activationDecision.Payload.Clone());
 
             activationAttempted = true;
@@ -1099,7 +1104,9 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                 cronExpression,
                 timezone,
                 enabled,
-                mutationContext.TeamAutomationOwner!),
+                mutationContext.TeamAutomationOwner!,
+                ScheduledDispatchScheduleMode.RecurringCron,
+                null),
             mutationContext,
             ct);
 
@@ -1140,6 +1147,32 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         _ => false,
     };
 
+    private static StudioMemberWorkflowScheduleTiming ResolveScheduleTiming(
+        StudioMemberWorkflowScheduleRequest request)
+    {
+        return request.ScheduleMode switch
+        {
+            ScheduledDispatchScheduleMode.RecurringCron => new StudioMemberWorkflowScheduleTiming(
+                NormalizeRequired(request.ScheduleCron, nameof(request.ScheduleCron)),
+                NormalizeRequired(request.ScheduleTimezone, nameof(request.ScheduleTimezone)),
+                ScheduledDispatchScheduleMode.RecurringCron,
+                null),
+            ScheduledDispatchScheduleMode.OneShotAtUtc => new StudioMemberWorkflowScheduleTiming(
+                NormalizeOptional(request.ScheduleCron) ?? string.Empty,
+                NormalizeOptional(request.ScheduleTimezone) ?? ScheduledDispatchCalculator.DefaultTimezone,
+                ScheduledDispatchScheduleMode.OneShotAtUtc,
+                request.OneShotFireAt?.ToUniversalTime()
+                    ?? throw new InvalidOperationException("one_shot_fire_at_required")),
+            _ => throw new InvalidOperationException("schedule_mode_invalid"),
+        };
+    }
+
+    private readonly record struct StudioMemberWorkflowScheduleTiming(
+        string CronExpression,
+        string Timezone,
+        ScheduledDispatchScheduleMode ScheduleMode,
+        DateTimeOffset? OneShotFireAt);
+
     private static ScheduledDispatchConfiguration BuildScheduleConfiguration(
         string scheduleId,
         string? displayName,
@@ -1153,6 +1186,8 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         string timezone,
         bool enabled,
         TeamMemberAutomationOwner teamOwner,
+        ScheduledDispatchScheduleMode scheduleMode,
+        DateTimeOffset? oneShotFireAt,
         Any? payload = null) =>
         new(
             ScheduleId: scheduleId,
@@ -1175,7 +1210,9 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             Timezone: timezone,
             Enabled: enabled,
             Headers: new Dictionary<string, string>(StringComparer.Ordinal),
-            ScheduleKind: ScheduledDispatchScheduleKind.Workflow)
+            ScheduleKind: ScheduledDispatchScheduleKind.Workflow,
+            ScheduleMode: scheduleMode,
+            OneShotFireAt: oneShotFireAt)
         {
             TeamAutomationOwner = teamOwner,
             CredentialRequirementTargetKind = ScheduledDispatchCredentialRequirementTargetKind.WorkflowService,
@@ -1482,7 +1519,9 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         ScheduledInvocationAuthorizationFact authorizationFact,
         string cronExpression,
         string timezone,
-        bool enabled) =>
+        bool enabled,
+        ScheduledDispatchScheduleMode scheduleMode,
+        DateTimeOffset? oneShotFireAt) =>
         new(
             scheduleId,
             displayName,
@@ -1503,8 +1542,8 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             enabled,
             ScheduledDispatchScheduleKind.Workflow,
             new Dictionary<string, string>(StringComparer.Ordinal),
-            ScheduledDispatchScheduleMode.RecurringCron,
-            null,
+            scheduleMode,
+            oneShotFireAt,
             ScheduledDispatchCredentialRequirementTargetKind.WorkflowService,
             string.Empty,
             null);

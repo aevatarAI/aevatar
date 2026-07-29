@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aevatar.AI.Abstractions;
@@ -134,6 +135,35 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool
         if (displayName is null)
             return ErrorJson("invalid_arguments", "display_name is required.");
 
+        var scheduleCron = Normalize(args.ScheduleCron);
+        var runImmediately = args.RunImmediately ?? true;
+        var shouldSchedule = runImmediately || scheduleCron is not null;
+        StudioMemberWorkflowScheduleAuthorizationContext? scheduleAuthorization = null;
+        ScheduleOperationIdentity? operationIdentity = null;
+        if (shouldSchedule)
+        {
+            var authorizationContext = StudioMemberWorkflowScheduleAuthorizationResolver.Resolve();
+            if (authorizationContext.Error is { } authorizationError)
+            {
+                return ErrorJson(
+                    authorizationError.Code,
+                    authorizationError.Message);
+            }
+
+            scheduleAuthorization = authorizationContext.Resolved!;
+            operationIdentity = TryBuildOperationIdentity(
+                scopeId,
+                teamId,
+                displayName,
+                scheduleAuthorization.OwnerSubject);
+            if (operationIdentity is null)
+            {
+                return ErrorJson(
+                    "operation_identity_unavailable",
+                    "A trusted idempotency key or request and tool-call identity is required to create a schedule.");
+            }
+        }
+
         var typedAuthority = AgentToolRequestContext.NyxIdAuthority;
         var request = new WorkflowScheduleProvisioningRequest(
             ScopeId: scopeId,
@@ -142,9 +172,9 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool
             WorkflowYaml: workflowYaml)
         {
             Prompt = Normalize(args.Prompt),
-            ScheduleCron = Normalize(args.ScheduleCron),
+            ScheduleCron = scheduleCron,
             ScheduleTimezone = Normalize(args.ScheduleTimezone),
-            RunImmediately = args.RunImmediately ?? true,
+            RunImmediately = runImmediately,
             CallerSubjectPlatform = typedAuthority.IsComplete
                 ? Normalize(typedAuthority.Platform) ?? "nyxid"
                 : "nyxid",
@@ -154,6 +184,10 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool
                 : Normalize(AgentToolRequestContext.OwnerSubject),
             CapabilityAdmission = StudioWorkflowCapabilityToolContext.Create(
                 ExternalCapabilityExecutionMode.Durable),
+            AuthenticatedOwner = scheduleAuthorization?.AuthenticatedOwner,
+            ProvisioningBearerToken = scheduleAuthorization?.ProvisioningBearerToken,
+            ScheduleOperationId = operationIdentity?.OperationId,
+            ScheduleIdempotencyKey = operationIdentity?.IdempotencyKey,
         };
 
         try
@@ -186,6 +220,51 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool
 
     private static string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static ScheduleOperationIdentity? TryBuildOperationIdentity(
+        string scopeId,
+        string teamId,
+        string displayName,
+        string ownerSubject)
+    {
+        var callerIdempotencyKey = Normalize(AgentToolRequestContext.IdempotencyKey);
+        var requestId = Normalize(AgentToolRequestContext.RequestId);
+        var callId = Normalize(AgentToolRequestContext.CallId);
+        if (callerIdempotencyKey is null && (requestId is null || callId is null))
+            return null;
+
+        var invocation = callerIdempotencyKey is null
+            ? new ScheduleToolInvocationIdentity("request_call", string.Empty, requestId!, callId!)
+            : new ScheduleToolInvocationIdentity("idempotency_key", callerIdempotencyKey, string.Empty, string.Empty);
+        var canonical = new ScheduleOperationFingerprint(
+            "studio-workflow-provision-schedule/v1",
+            scopeId,
+            teamId,
+            displayName,
+            ownerSubject,
+            invocation);
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(canonical, s_jsonOptions);
+        var fingerprint = Convert.ToHexStringLower(SHA256.HashData(bytes));
+        return new ScheduleOperationIdentity(
+            $"studio-workflow-provision-create:{fingerprint}",
+            $"studio-workflow-provision-schedule:{fingerprint}");
+    }
+
+    private sealed record ScheduleOperationIdentity(string OperationId, string IdempotencyKey);
+
+    private sealed record ScheduleOperationFingerprint(
+        string SchemaVersion,
+        string ScopeId,
+        string TeamId,
+        string DisplayName,
+        string OwnerSubject,
+        ScheduleToolInvocationIdentity Invocation);
+
+    private sealed record ScheduleToolInvocationIdentity(
+        string Kind,
+        string IdempotencyKey,
+        string RequestId,
+        string CallId);
 
     private sealed record ProvisionWorkflowScheduleArguments(
         [property: JsonPropertyName("team_id")] string? TeamId,
