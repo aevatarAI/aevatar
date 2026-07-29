@@ -1,13 +1,19 @@
 using System.Text.Json;
-using System.Text.Json.Nodes;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 
 internal static class ElasticsearchProjectionDeleteMarkerPayload
 {
     internal const string TombstoneField = "__projection_tombstone";
-    internal const string DeletedAtUtcField = "__projection_deleted_at_utc";
+    private static readonly JsonFormatter Formatter = new(
+        JsonFormatter.Settings.Default
+            .WithFormatDefaultValues(true));
+    private static readonly JsonParser Parser = new(
+        JsonParser.Settings.Default
+            .WithIgnoreUnknownFields(true));
 
     internal static bool IsDeleteMarker(JsonElement source)
     {
@@ -25,45 +31,50 @@ internal static class ElasticsearchProjectionDeleteMarkerPayload
         if (!IsDeleteMarker(source))
             return null;
 
-        var id = ReadString(source, "id");
-        var actorId = ReadString(source, "actor_id");
-        var stateVersion = ReadInt64(source, "state_version");
-        var lastEventId = ReadString(source, "last_event_id");
-        var updatedAt = ReadDateTimeOffset(source, "updated_at_utc_value")
-            ?? ReadDateTimeOffset(source, DeletedAtUtcField)
-            ?? DateTimeOffset.MinValue;
-
-        if (string.IsNullOrWhiteSpace(id) ||
-            string.IsNullOrWhiteSpace(actorId) ||
-            stateVersion <= 0 ||
-            string.IsNullOrWhiteSpace(lastEventId))
+        ProjectionDocumentDeleteMarkerRecord record;
+        try
+        {
+            record = Parser.Parse<ProjectionDocumentDeleteMarkerRecord>(source.GetRawText());
+        }
+        catch (InvalidProtocolBufferException)
         {
             return null;
         }
 
+        if (string.IsNullOrWhiteSpace(record.Id) ||
+            string.IsNullOrWhiteSpace(record.ActorId) ||
+            record.StateVersion <= 0 ||
+            string.IsNullOrWhiteSpace(record.LastEventId))
+        {
+            return null;
+        }
+
+        var updatedAt = record.UpdatedAtUtcValue?.ToDateTimeOffset()
+            ?? record.DeletedAtUtcValue?.ToDateTimeOffset()
+            ?? DateTimeOffset.MinValue;
         return new ProjectionDocumentDeleteMarker(
-            id.Trim(),
-            actorId.Trim(),
-            stateVersion,
-            lastEventId.Trim(),
+            record.Id.Trim(),
+            record.ActorId.Trim(),
+            record.StateVersion,
+            record.LastEventId.Trim(),
             updatedAt);
     }
 
     internal static string Serialize(ProjectionDocumentDeleteMarker marker, string keyValue)
     {
         var normalized = Normalize(marker);
-        var payload = new JsonObject
+        var record = new ProjectionDocumentDeleteMarkerRecord
         {
-            [TombstoneField] = true,
-            ["id"] = normalized.Id,
-            ["actor_id"] = normalized.ActorId,
-            ["state_version"] = normalized.StateVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            ["last_event_id"] = normalized.LastEventId,
-            ["updated_at_utc_value"] = normalized.UpdatedAt.UtcDateTime.ToString("O"),
-            [DeletedAtUtcField] = normalized.UpdatedAt.UtcDateTime.ToString("O"),
-            [ElasticsearchProjectionDocumentStorePayloadSupport.StableSortDocumentIdField] = keyValue,
+            ProjectionTombstone = true,
+            Id = normalized.Id,
+            ActorId = normalized.ActorId,
+            StateVersion = normalized.StateVersion,
+            LastEventId = normalized.LastEventId,
+            UpdatedAtUtcValue = Timestamp.FromDateTimeOffset(normalized.UpdatedAt),
+            DeletedAtUtcValue = Timestamp.FromDateTimeOffset(normalized.UpdatedAt),
+            ProjectionDocumentId = keyValue,
         };
-        return payload.ToJsonString();
+        return Formatter.Format(record);
     }
 
     internal static ProjectionDocumentDeleteMarker Normalize(ProjectionDocumentDeleteMarker marker)
@@ -100,35 +111,5 @@ internal static class ElasticsearchProjectionDeleteMarkerPayload
         }
 
         return ProjectionWriteResult.Applied();
-    }
-
-    private static string ReadString(JsonElement source, string propertyName)
-    {
-        return source.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String
-            ? value.GetString() ?? string.Empty
-            : string.Empty;
-    }
-
-    private static long ReadInt64(JsonElement source, string propertyName)
-    {
-        if (!source.TryGetProperty(propertyName, out var value))
-            return 0;
-
-        return value.ValueKind switch
-        {
-            JsonValueKind.Number when value.TryGetInt64(out var number) => number,
-            JsonValueKind.String when long.TryParse(value.GetString(), out var parsed) => parsed,
-            _ => 0,
-        };
-    }
-
-    private static DateTimeOffset? ReadDateTimeOffset(JsonElement source, string propertyName)
-    {
-        if (!source.TryGetProperty(propertyName, out var value) || value.ValueKind != JsonValueKind.String)
-            return null;
-
-        return DateTimeOffset.TryParse(value.GetString(), out var parsed)
-            ? parsed
-            : null;
     }
 }
