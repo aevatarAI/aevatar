@@ -381,7 +381,8 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         var planner = new RecordingAuthorizationPlanner();
         planner.Results.Enqueue(ScheduledInvocationAuthorizationPlanResult.Failed(
             failureCode,
-            detail));
+            detail,
+            requiredNyxIdServices: [new NyxIdUserServiceCapabilityRef { UserServiceId = "nyx-service-alpha" }]));
         planner.Results.Enqueue(RecordingAuthorizationPlanner.SuccessResult());
         var refresh = new RecordingCatalogRefreshPort();
         var materializer = new RecordingCredentialMaterializer();
@@ -401,6 +402,8 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         refresh.RefreshCallCount.Should().Be(1);
         refresh.LastOwner.Should().BeEquivalentTo(request.AuthenticatedOwner.Owner);
         refresh.LastBearerToken.Should().Be("bearer-alpha");
+        refresh.LastRequiredServices.Select(static service => service.UserServiceId)
+            .Should().Equal("nyx-service-alpha");
         materializer.MaterializeCallCount.Should().Be(0);
         scheduleService.BeginCallCount.Should().Be(0);
         scheduleService.EnsureCallCount.Should().Be(0);
@@ -2174,6 +2177,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         public int RefreshCallCount { get; private set; }
         public AuthorizationOwnerIdentity? LastOwner { get; private set; }
         public string? LastBearerToken { get; private set; }
+        public IReadOnlyList<NyxIdUserServiceCapabilityRef> LastRequiredServices { get; private set; } = [];
         public List<string>? Calls { get; init; }
         public Exception? Exception { get; init; }
         public NyxIdAuthorizationCatalogRefreshResult Result { get; init; } =
@@ -2182,12 +2186,26 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         public Task<NyxIdAuthorizationCatalogRefreshResult> RefreshAsync(
             AuthorizationOwnerIdentity owner,
             string bearerToken,
-            CancellationToken ct = default)
+            CancellationToken ct = default) =>
+            RecordRefreshAsync(owner, bearerToken, []);
+
+        public Task<NyxIdAuthorizationCatalogRefreshResult> RefreshAsync(
+            AuthorizationOwnerIdentity owner,
+            string bearerToken,
+            IReadOnlyList<NyxIdUserServiceCapabilityRef> requiredServices,
+            CancellationToken ct = default) =>
+            RecordRefreshAsync(owner, bearerToken, requiredServices);
+
+        private Task<NyxIdAuthorizationCatalogRefreshResult> RecordRefreshAsync(
+            AuthorizationOwnerIdentity owner,
+            string bearerToken,
+            IReadOnlyList<NyxIdUserServiceCapabilityRef> requiredServices)
         {
             RefreshCallCount++;
             Calls?.Add("refresh");
             LastOwner = owner.Clone();
             LastBearerToken = bearerToken;
+            LastRequiredServices = requiredServices.Select(static service => service.Clone()).ToArray();
             return Exception == null
                 ? Task.FromResult(Result)
                 : Task.FromException<NyxIdAuthorizationCatalogRefreshResult>(Exception);

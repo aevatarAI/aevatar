@@ -821,6 +821,9 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
         }
 
         var observation = commands.Observations.Should().ContainSingle().Subject;
+        observation.Coverage.Should().Be(NyxIdAuthorizationCatalogObservationCoverage.RequiredServiceSubset);
+        observation.CoveredUserServiceIds.Should().Equal("service-a");
+        observation.ContentDigest.Should().BeEmpty();
         observation.Services.Select(static service => service.UserServiceId)
             .Should().Equal("service-a");
         observation.Services.Single().Access.Should().Be(NyxIdAuthorizationAccess.Permitted);
@@ -831,6 +834,34 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
         observation.FreshUntilUtc.Should().Be(Now.AddMinutes(15));
         commands.Invalidations.Should().BeEmpty();
         commands.Failures.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RefreshAsync_WhenRequiredServiceIsMissing_ShouldFailClosedWithoutObservation()
+    {
+        var commands = new RecordingCommandPort();
+        var handler = new RoutingJsonHandler(Ok(UserServicesJson()));
+
+        var result = await Create(commands, handler)
+            .RefreshAsync(
+                Owner(),
+                "bearer-secret",
+                [new NyxIdUserServiceCapabilityRef { UserServiceId = "service-missing" }]);
+
+        result.Status.Should().Be(NyxIdAuthorizationCatalogRefreshStatus.CatalogUnstable);
+        result.FailureCode.Should().Be("nyxid_required_service_not_found:service-missing");
+        handler.Requests.Select(static request => (request.Method, request.Path))
+            .Should().Equal((HttpMethod.Get, "/api/v1/user-services"));
+        commands.Invalidations.Should().BeEmpty();
+        commands.Observations.Should().BeEmpty();
+        commands.Failures.Should().ContainSingle().Which.Should().Match<(
+            AuthorizationOwnerIdentity Owner,
+            string RefreshId,
+            DateTimeOffset FailedAt,
+            string FailureCode,
+            NyxIdAuthorizationCatalogRefreshStatus Status)>(failure =>
+            failure.FailureCode == "nyxid_required_service_not_found:service-missing" &&
+            failure.Status == NyxIdAuthorizationCatalogRefreshStatus.CatalogUnstable);
     }
 
     [Fact]
@@ -1516,7 +1547,7 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
             long MinimumSourceStateVersion,
             string RepairRequestId)> RepairBeginnings { get; } = [];
         public List<NyxIdAuthorizationCatalogObservation> Observations { get; } = [];
-        public List<(AuthorizationOwnerIdentity Owner, string RefreshId, DateTimeOffset At, string Code)> Failures { get; } = [];
+        public List<(AuthorizationOwnerIdentity Owner, string RefreshId, DateTimeOffset At, string Code, NyxIdAuthorizationCatalogRefreshStatus Status)> Failures { get; } = [];
         public List<(
             AuthorizationOwnerIdentity Owner,
             string RefreshId,
@@ -1604,16 +1635,19 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
             string refreshId,
             DateTimeOffset failedAtUtc,
             string failureCode,
+            NyxIdAuthorizationCatalogRefreshStatus status = NyxIdAuthorizationCatalogRefreshStatus.Failed,
             CancellationToken ct = default)
         {
-            Failures.Add((owner.Clone(), refreshId, failedAtUtc, failureCode));
+            Failures.Add((owner.Clone(), refreshId, failedAtUtc, failureCode, status));
             if (RefreshFailureException != null)
                 return Task.FromException(RefreshFailureException);
             if (PublishTerminalOutcomes)
             {
                 Observation?.Publish(
                     refreshId,
-                    NyxIdAuthorizationCatalogRefreshOutcomeStatus.Failed,
+                    status == NyxIdAuthorizationCatalogRefreshStatus.CatalogUnstable
+                        ? NyxIdAuthorizationCatalogRefreshOutcomeStatus.CatalogUnstable
+                        : NyxIdAuthorizationCatalogRefreshOutcomeStatus.Failed,
                     failureCode,
                     failedAtUtc);
             }

@@ -97,7 +97,7 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
                 snapshot.StateVersion,
                 evidence.RequiredServices);
         }
-        if (snapshot.ObservedAtUtc > request.EvaluatedAtUtc || snapshot.FreshUntilUtc <= request.EvaluatedAtUtc)
+        if (!HasFreshAuthorityForRequiredServices(snapshot, evidence.RequiredServices, request.EvaluatedAtUtc))
             return Failed(
                 ScheduledInvocationAuthorizationFailureCode.SnapshotStale,
                 "nyxid_catalog_snapshot_stale",
@@ -371,16 +371,22 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
         if (normalizedRequiredServices.Failure != null)
             return GrantResolution.Failed(normalizedRequiredServices.Failure);
 
+        var requiredServiceIds = normalizedRequiredServices.Services
+            .Select(static service => service.UserServiceId)
+            .ToHashSet(StringComparer.Ordinal);
         var servicesById = new Dictionary<string, NyxIdAuthorizationServiceEvidence>(StringComparer.Ordinal);
         foreach (var service in services)
         {
+            var serviceId = service.UserServiceId?.Trim() ?? string.Empty;
+            if (requiredServiceIds.Count > 0 && !requiredServiceIds.Contains(serviceId))
+                continue;
             if (!TryValidateServiceEvidence(service, out var failureCode, out var detail))
                 return GrantResolution.Failed(Failed(failureCode, detail));
-            if (!servicesById.TryAdd(service.UserServiceId.Trim(), service))
+            if (!servicesById.TryAdd(serviceId, service))
             {
                 return GrantResolution.Failed(Failed(
                     ScheduledInvocationAuthorizationFailureCode.ServiceAmbiguous,
-                    $"nyxid_service_identity_ambiguous:{service.UserServiceId.Trim()}"));
+                    $"nyxid_service_identity_ambiguous:{serviceId}"));
             }
         }
 
@@ -425,6 +431,41 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
             serviceGrants.Add(grant);
         }
         return new GrantResolution(serviceGrants, null);
+    }
+
+    private static bool HasFreshAuthorityForRequiredServices(
+        NyxIdAuthorizationCatalogSnapshot snapshot,
+        IReadOnlyList<NyxIdUserServiceCapabilityRef> requiredServices,
+        DateTimeOffset evaluatedAtUtc)
+    {
+        var normalizedRequiredServices = NormalizeRequiredServices(requiredServices);
+        if (normalizedRequiredServices.Failure != null || normalizedRequiredServices.Services.Count == 0)
+            return snapshot.ObservedAtUtc <= evaluatedAtUtc && snapshot.FreshUntilUtc > evaluatedAtUtc;
+
+        var requiredServiceIds = normalizedRequiredServices.Services
+            .Select(static service => service.UserServiceId)
+            .ToHashSet(StringComparer.Ordinal);
+        var freshServiceIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var service in snapshot.Services)
+        {
+            var serviceId = service.UserServiceId?.Trim() ?? string.Empty;
+            if (!requiredServiceIds.Contains(serviceId))
+                continue;
+            if (service.ObservedAt == null || service.FreshUntil == null)
+            {
+                if (snapshot.ObservedAtUtc > evaluatedAtUtc || snapshot.FreshUntilUtc <= evaluatedAtUtc)
+                    return false;
+                freshServiceIds.Add(serviceId);
+                continue;
+            }
+            if (service.ObservedAt.ToDateTimeOffset() > evaluatedAtUtc ||
+                service.FreshUntil.ToDateTimeOffset() <= evaluatedAtUtc)
+            {
+                return false;
+            }
+            freshServiceIds.Add(serviceId);
+        }
+        return freshServiceIds.SetEquals(requiredServiceIds);
     }
 
     private static bool TryValidateServiceEvidence(

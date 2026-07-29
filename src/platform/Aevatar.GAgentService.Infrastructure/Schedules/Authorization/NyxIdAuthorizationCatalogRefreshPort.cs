@@ -63,7 +63,12 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort : INyxIdAuthorizationCa
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(requiredServices);
-        return RefreshAsync(owner, bearerToken, NormalizeRequiredServiceIds(requiredServices), ct);
+        var requiredServiceIds = NormalizeRequiredServiceIds(requiredServices);
+        return requiredServiceIds.Count == 0
+            ? Task.FromResult(new NyxIdAuthorizationCatalogRefreshResult(
+                NyxIdAuthorizationCatalogRefreshStatus.CatalogUnstable,
+                "nyxid_exact_service_identity_unavailable"))
+            : RefreshAsync(owner, bearerToken, requiredServiceIds, ct);
     }
 
     private async Task<NyxIdAuthorizationCatalogRefreshResult> RefreshAsync(
@@ -116,12 +121,11 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort : INyxIdAuthorizationCa
 
     private static IReadOnlySet<string> NormalizeRequiredServiceIds(
         IReadOnlyList<NyxIdUserServiceCapabilityRef> requiredServices) =>
-        requiredServices
-            .Select(static service => service.UserServiceId?.Trim() ?? string.Empty)
-            .Where(static serviceId => !string.IsNullOrWhiteSpace(serviceId))
-            .Distinct(StringComparer.Ordinal)
-            .OrderBy(static serviceId => serviceId, StringComparer.Ordinal)
-            .ToHashSet(StringComparer.Ordinal);
+        new SortedSet<string>(
+            requiredServices
+                .Select(static service => service.UserServiceId?.Trim() ?? string.Empty)
+                .Where(static serviceId => !string.IsNullOrWhiteSpace(serviceId)),
+            StringComparer.Ordinal);
 
     private static AuthorizationOwnerIdentity PersonalOwner(string verifiedOwnerSubject) => new()
     {
@@ -401,22 +405,40 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
         }
 
         var eligibleServices = inventoryResult.Value!.Services
-            .Where(service => IsEligible(service) &&
-                              (requiredServiceIds is null || requiredServiceIds.Contains(service.Id)))
+            .Where(IsEligible)
             .OrderBy(static service => service.Id, StringComparer.Ordinal)
             .ToArray();
+        if (requiredServiceIds is not null)
+        {
+            var missingRequiredServiceId = requiredServiceIds
+                .FirstOrDefault(serviceId => !eligibleServices.Any(service => string.Equals(service.Id, serviceId, StringComparison.Ordinal)));
+            if (missingRequiredServiceId != null)
+            {
+                await RecordCatalogUnstableRefreshAsync(
+                    normalizedOwner,
+                    refreshId,
+                    $"nyxid_required_service_not_found:{missingRequiredServiceId}",
+                    ct).ConfigureAwait(false);
+                return;
+            }
+
+            eligibleServices = eligibleServices
+                .Where(service => requiredServiceIds.Contains(service.Id))
+                .ToArray();
+        }
         var selectedServiceIds = eligibleServices.Select(static service => service.Id).ToArray();
         if (selectedServiceIds.Length == 0)
         {
-            var observedAt = _timeProvider.GetUtcNow();
+            var emptyCatalogObservedAt = _timeProvider.GetUtcNow();
             await ObserveCatalogAsync(
                 normalizedOwner,
                 refreshId,
-                observedAt,
-                observedAt,
+                emptyCatalogObservedAt,
+                emptyCatalogObservedAt,
                 NyxIdApiAccessResponseParser.ScopePlanContractVersion,
                 NyxIdApiAccessResponseParser.ScopePlanPolicyVersion,
                 [],
+                requiredServiceIds,
                 ct).ConfigureAwait(false);
             return;
         }
@@ -458,17 +480,27 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
         }
 
         var inventoryById = eligibleServices.ToDictionary(static service => service.Id, StringComparer.Ordinal);
+        var observedAt = _timeProvider.GetUtcNow();
+        var freshUntil = observedAt.Add(CatalogFreshnessLifetime);
         var services = scopePlan.Services
-            .Select(grant => MapServiceEvidence(inventoryById[grant.UserServiceId], grant))
+            .Select(grant => MapServiceEvidence(
+                inventoryById[grant.UserServiceId],
+                grant,
+                observedAt,
+                freshUntil,
+                scopePlan.EvaluatedAtUtc,
+                scopePlan.ContractVersion,
+                scopePlan.PolicyVersion))
             .ToArray();
         await ObserveCatalogAsync(
             normalizedOwner,
             refreshId,
-            _timeProvider.GetUtcNow(),
+            observedAt,
             scopePlan.EvaluatedAtUtc,
             scopePlan.ContractVersion,
             scopePlan.PolicyVersion,
             services,
+            requiredServiceIds,
             ct).ConfigureAwait(false);
 
     }
@@ -481,9 +513,15 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
         string contractVersion,
         string policyVersion,
         IReadOnlyList<NyxIdAuthorizationServiceEvidence> services,
+        IReadOnlySet<string>? requiredServiceIds,
         CancellationToken ct)
     {
-        var contentDigest = NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(owner, services);
+        var coverage = requiredServiceIds is null
+            ? NyxIdAuthorizationCatalogObservationCoverage.FullOwner
+            : NyxIdAuthorizationCatalogObservationCoverage.RequiredServiceSubset;
+        var contentDigest = coverage == NyxIdAuthorizationCatalogObservationCoverage.FullOwner
+            ? NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(owner, services)
+            : string.Empty;
         await _commandPort.ObserveAsync(new NyxIdAuthorizationCatalogObservation(
             owner,
             refreshId,
@@ -493,7 +531,9 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
             policyVersion,
             evaluatedAt,
             contentDigest,
-            services), ct).ConfigureAwait(false);
+            services,
+            coverage,
+            requiredServiceIds?.ToArray()), ct).ConfigureAwait(false);
     }
 
     private async Task RecordProviderTimeoutAsync(
@@ -506,7 +546,7 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
             refreshId,
             _timeProvider.GetUtcNow(),
             ProviderTimedOutFailureCode,
-            ct);
+            ct: ct);
         LogWithoutThrowing(
             LogLevel.Warning,
             "NyxID authorization catalog provider request timed out. ownerKind={OwnerKind} failureCode={FailureCode}",
@@ -545,7 +585,7 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
             NyxIdApiAccessFailureKind.Transport or
             NyxIdApiAccessFailureKind.Transient)
         {
-            await _commandPort.RecordRefreshFailureAsync(owner, refreshId, now, code, ct);
+            await _commandPort.RecordRefreshFailureAsync(owner, refreshId, now, code, ct: ct);
             LogWithoutThrowing(
                 LogLevel.Warning,
                 "NyxID authorization catalog refresh failed transiently. ownerKind={OwnerKind} failureCode={FailureCode}",
@@ -570,12 +610,31 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
             code,
             NyxIdAuthorizationCatalogRefreshOutcomeStatus.CatalogUnstable,
             ct);
+        LogCatalogUnstable(owner, code);
+    }
+
+    private async Task RecordCatalogUnstableRefreshAsync(
+        AuthorizationOwnerIdentity owner,
+        string refreshId,
+        string code,
+        CancellationToken ct)
+    {
+        await _commandPort.RecordRefreshFailureAsync(
+            owner,
+            refreshId,
+            _timeProvider.GetUtcNow(),
+            code,
+            NyxIdAuthorizationCatalogRefreshStatus.CatalogUnstable,
+            ct).ConfigureAwait(false);
+        LogCatalogUnstable(owner, code);
+    }
+
+    private void LogCatalogUnstable(AuthorizationOwnerIdentity owner, string code) =>
         LogWithoutThrowing(
             LogLevel.Warning,
             "NyxID authorization catalog response was unstable. ownerKind={OwnerKind} failureCode={FailureCode}",
             owner.OwnerKind,
             code);
-    }
 
     private async Task ObserveAfterCancellationAsync(Task task)
     {
@@ -841,7 +900,12 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
 
     private static NyxIdAuthorizationServiceEvidence MapServiceEvidence(
         NyxIdUserService inventory,
-        NyxIdScopePlanServiceGrant grant)
+        NyxIdScopePlanServiceGrant grant,
+        DateTimeOffset observedAt,
+        DateTimeOffset freshUntil,
+        DateTimeOffset evaluatedAt,
+        string contractVersion,
+        string policyVersion)
     {
         var service = new NyxIdAuthorizationServiceEvidence
         {
@@ -866,6 +930,11 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
                 },
                 OwnerSubject = grant.ResourceOwner.Id,
             },
+            ObservedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(observedAt),
+            FreshUntil = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(freshUntil),
+            EvaluatedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(evaluatedAt),
+            AuthorityContractVersion = contractVersion,
+            AuthorityPolicyVersion = policyVersion,
         };
         service.NodeIds.Add(grant.NodeGrant.NodeIds);
         return service;

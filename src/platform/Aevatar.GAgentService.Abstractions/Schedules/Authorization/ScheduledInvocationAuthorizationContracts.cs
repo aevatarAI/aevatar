@@ -203,6 +203,13 @@ public sealed record NyxIdAuthorizationCatalogVisibilityResult(
             "nyxid_catalog_visibility_unavailable");
 }
 
+public enum NyxIdAuthorizationCatalogObservationCoverage
+{
+    Unspecified = 0,
+    FullOwner = 1,
+    RequiredServiceSubset = 2,
+}
+
 public sealed record NyxIdAuthorizationCatalogObservation(
     AuthorizationOwnerIdentity Owner,
     string RefreshId,
@@ -212,7 +219,9 @@ public sealed record NyxIdAuthorizationCatalogObservation(
     string PolicyVersion,
     DateTimeOffset EvaluatedAtUtc,
     string ContentDigest,
-    IReadOnlyList<NyxIdAuthorizationServiceEvidence> Services);
+    IReadOnlyList<NyxIdAuthorizationServiceEvidence> Services,
+    NyxIdAuthorizationCatalogObservationCoverage Coverage = NyxIdAuthorizationCatalogObservationCoverage.FullOwner,
+    IReadOnlyList<string>? CoveredUserServiceIds = null);
 
 public enum NyxIdAuthorizationCatalogRefreshStatus
 {
@@ -307,6 +316,7 @@ public interface INyxIdAuthorizationCatalogCommandPort
         string refreshId,
         DateTimeOffset failedAtUtc,
         string failureCode,
+        NyxIdAuthorizationCatalogRefreshStatus status = NyxIdAuthorizationCatalogRefreshStatus.Failed,
         CancellationToken ct = default);
 
     Task InvalidateAsync(
