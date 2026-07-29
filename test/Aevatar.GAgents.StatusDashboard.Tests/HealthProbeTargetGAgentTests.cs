@@ -154,6 +154,28 @@ public sealed class HealthProbeTargetGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Tick_SuccessfulProbe_CommitsOneTerminalEventAndClearsExecution()
+    {
+        await _agent.HandleConfigureAsync(new HealthProbeConfigureCommand
+        {
+            Spec = NewDescriptor("nyxid-auth"),
+        });
+        var versionBeforeTick = _agent.EventSourcing!.CurrentVersion;
+
+        _executor.NextOutcome = new HealthProbeOutcome
+        {
+            Status = HealthOutcomeStatus.Ok,
+            Detail = "http_200",
+        };
+        await _agent.HandleTickAsync(new HealthProbeTickRequested { Slug = "nyxid-auth" });
+
+        _agent.EventSourcing.CurrentVersion.Should().Be(versionBeforeTick + 2,
+            "one execution-started event and one terminal observation are sufficient for a probe turn");
+        _agent.State.ActiveExecution.Should().BeNull();
+        _eventStore.CountEvents(HealthProbeObserved.Descriptor).Should().Be(1);
+    }
+
+    [Fact]
     public async Task Tick_SuccessfulProbe_DeliversCompletionThroughSelfHandlingGate()
     {
         await _agent.HandleConfigureAsync(new HealthProbeConfigureCommand

@@ -1,3 +1,5 @@
+using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.StatusDashboard.Configuration;
 using Aevatar.GAgents.StatusDashboard.Executors;
@@ -10,8 +12,9 @@ namespace Aevatar.GAgents.StatusDashboard;
 /// <summary>
 /// Dispatches one probe-target actor configuration command per manifest entry
 /// at host startup. Once active, each actor self-reschedules its probe tick
-/// from inside its own event loop — the startup service does not own the
-/// ongoing schedule or projection lifecycle.
+/// from inside its own event loop. The startup service also releases legacy
+/// nested status scopes left by older hosts, but does not own normal projection
+/// activation, the ongoing schedule, or long-lived projection state.
 ///
 /// Failures here only affect the affected target's first activation; the host
 /// continues to start so unrelated services are not blocked by a single bad
@@ -23,6 +26,8 @@ public sealed class HealthProbeStartupService : IHostedService
     private readonly IActorRuntime _actorRuntime;
     private readonly IActorDispatchPort _dispatchPort;
     private readonly IHealthProbeExecutorRegistry _executorRegistry;
+    private readonly IProjectionScopeAttachExistingLeaseLookup<ProjectionScopeStatusRuntimeLease>? _statusScopeLookup;
+    private readonly IProjectionScopeReleaseService<ProjectionScopeStatusRuntimeLease>? _statusScopeReleaseService;
     private readonly ILogger<HealthProbeStartupService> _logger;
 
     public HealthProbeStartupService(
@@ -30,13 +35,17 @@ public sealed class HealthProbeStartupService : IHostedService
         IActorRuntime actorRuntime,
         IActorDispatchPort dispatchPort,
         IHealthProbeExecutorRegistry executorRegistry,
-        ILogger<HealthProbeStartupService> logger)
+        ILogger<HealthProbeStartupService> logger,
+        IProjectionScopeAttachExistingLeaseLookup<ProjectionScopeStatusRuntimeLease>? statusScopeLookup = null,
+        IProjectionScopeReleaseService<ProjectionScopeStatusRuntimeLease>? statusScopeReleaseService = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         _manifest = StatusDashboardManifest.FromOptions(options.Value ?? new StatusDashboardOptions());
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _executorRegistry = executorRegistry ?? throw new ArgumentNullException(nameof(executorRegistry));
+        _statusScopeLookup = statusScopeLookup;
+        _statusScopeReleaseService = statusScopeReleaseService;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -46,6 +55,15 @@ public sealed class HealthProbeStartupService : IHostedService
             .Select(static descriptor => descriptor.Slug)
             .Where(static slug => !RetiredStatusProbeTargets.Contains(slug))
             .ToHashSet(StringComparer.Ordinal);
+
+        foreach (var slug in _manifest.Descriptors
+                     .Select(static descriptor => descriptor.Slug)
+                     .Concat(RetiredStatusProbeTargets.Slugs)
+                     .Where(static slug => !string.IsNullOrWhiteSpace(slug))
+                     .Distinct(StringComparer.Ordinal))
+        {
+            await ReleaseLegacyStatusScopeIfExistsAsync(slug, ct);
+        }
 
         if (_manifest.Descriptors.Count == 0)
         {
@@ -90,6 +108,45 @@ public sealed class HealthProbeStartupService : IHostedService
             TimeoutMs = 5_000,
             Enabled = false,
         };
+
+    private async Task ReleaseLegacyStatusScopeIfExistsAsync(string slug, CancellationToken ct)
+    {
+        if (_statusScopeLookup == null || _statusScopeReleaseService == null)
+            return;
+
+        var healthScopeActorId = ProjectionScopeActorId.Build(new ProjectionRuntimeScopeKey(
+            HealthProbeStoreCommands.BuildActorId(slug),
+            HealthProbeTargetGAgent.ProjectionKind,
+            ProjectionRuntimeMode.DurableMaterialization));
+        var request = new ProjectionScopeStartRequest
+        {
+            RootActorId = healthScopeActorId,
+            ProjectionKind = ProjectionScopeStatusMaterializationContext.ProjectionKindValue,
+            Mode = ProjectionRuntimeMode.DurableMaterialization,
+        };
+
+        try
+        {
+            var lease = await _statusScopeLookup.TryGetAsync(request, ct);
+            if (lease == null)
+                return;
+
+            await _statusScopeReleaseService.ReleaseIfIdleAsync(lease, ct);
+            _logger.LogInformation(
+                "Dispatched release for legacy health projection status scope {Slug}.",
+                slug);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to release legacy health projection status scope for {Slug}; startup will continue.",
+                slug);
+        }
+    }
 
     private async Task RetireProbeIfExistsAsync(string slug, CancellationToken ct)
     {

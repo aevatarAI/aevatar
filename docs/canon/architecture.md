@@ -113,7 +113,7 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 - `InMemoryStream` / `InMemoryStreamProvider`：内存流与订阅分发
 - `InMemoryStateStore` / `InMemoryEventStore`：默认内存持久化
 - `MemoryCacheDeduplicator`：事件去重
-- `IActorDeactivationHook*` / `EventStoreCompactionDeactivationHook`：停用钩子与裁剪触发
+- `IActorDeactivationHook*`：通用停用扩展点；EventStore 快照后裁剪由 `EventSourcingBehavior` 在 actor turn 内完成，不依赖停用钩子
 
 `Aevatar.Foundation.Runtime.Implementations.Local`（本地实现层）包含：
 

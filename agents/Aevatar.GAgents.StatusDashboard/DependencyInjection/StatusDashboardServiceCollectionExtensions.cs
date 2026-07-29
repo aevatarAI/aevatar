@@ -52,7 +52,8 @@ public static class StatusDashboardServiceCollectionExtensions
                 RootActorId = scopeKey.RootActorId,
                 ProjectionKind = scopeKey.ProjectionKind,
             },
-            static context => new HealthProbeMaterializationRuntimeLease(context));
+            static context => new HealthProbeMaterializationRuntimeLease(context),
+            materializeScopeStatus: false);
         services.AddCurrentStateProjectionMaterializer<
             HealthProbeMaterializationContext,
             HealthProbeTargetProjector>();

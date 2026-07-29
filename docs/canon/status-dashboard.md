@@ -72,10 +72,11 @@ flowchart LR
 `HealthProbeStartupService` 在 host 启动时读取 manifest。每个有效 target 会执行：
 
 1. 用 `HealthProbeStoreCommands.BuildActorId(slug)` 得到稳定 actor id。
-2. 通过 `HealthProbeStoreCommands.DispatchConfigureAsync(...)` 创建或获取 `HealthProbeTargetGAgent`，再投递 `HealthProbeConfigureCommand`。
-3. actor 持久化 `HealthProbeConfigured` / `HealthProbeObserved` 后，committed-state publication hook 根据 `HealthProbeCommittedStateProjectionActivationPlanProvider` 生成 `ProjectionScopeStartRequest`，由 projection dispatcher 激活 durable materialization scope。
+2. 通过 typed attach-existing lease lookup 查找旧版本曾为 health projection 建立的嵌套 `projection-scope-status` scope；仅在已存在时通过 typed release service 释放，绝不为迁移创建 scope。清理集合同时覆盖当前 manifest 与 `RetiredStatusProbeTargets`。
+3. 通过 `HealthProbeStoreCommands.DispatchConfigureAsync(...)` 创建或获取 `HealthProbeTargetGAgent`，再投递 `HealthProbeConfigureCommand`。
+4. actor 持久化 `HealthProbeConfigured` / `HealthProbeObserved` 后，committed-state publication hook 根据 `HealthProbeCommittedStateProjectionActivationPlanProvider` 生成 `ProjectionScopeStartRequest`，由 projection dispatcher 激活 durable materialization scope。
 
-启动服务只负责 startup dispatch，不拥有投影激活或长期调度状态。投影激活由 committed-state hook 触发，长期调度由每个 probe actor 自己维护。
+启动服务只负责显式的历史 scope 修复与 startup configure dispatch，不拥有正常投影激活或长期调度状态。投影激活由 committed-state hook 触发，长期调度由每个 probe actor 自己维护。
 
 ## 5. Probe Actor
 
@@ -97,6 +98,8 @@ Actor 处理两类消息：
 | `HealthProbeTickRequested` | actor durable timeout | 执行 executor，持久化 `HealthProbeObserved`，再安排下一次 self tick |
 
 tick 通过 `ScheduleSelfDurableTimeoutAsync` 调度，回到同一个 actor inbox，由 actor 单线程事件处理流程消费。禁用 target 时 actor 不再重排下一次 tick。
+
+正常异步探针每轮只提交两个领域事件：`HealthProbeExecutionStarted` 与携带同一 `operation_id` 的 `HealthProbeObserved`。terminal observation 同时清理 `ActiveExecution`；旧流中的 `HealthProbeExecutionCleared` 仍可回放，但新执行不再为同一个完成事实追加第三个事件。executor/registry 在 execution 注册前立即失败的路径没有 active execution，只提交一个 `HealthProbeObserved`。
 
 ## 6. Executor 边界
 
@@ -156,6 +159,8 @@ Mainnet Host 额外注册 `aevatar_core_loop` 与 `audit_query_index` executor�
 
 `HealthProbeTargetGAgent` 实现 `IProjectedActor`。当 actor 持久化状态事件后，current-state projection pipeline 会把 `HealthProbeTargetState` 物化为 `HealthProbeTargetDocument`。
 
+health materialization runtime 显式关闭 scope-status 二次物化。`HealthProbeTargetDocument` 本身就是稳定消费方需要的运维状态面，再为它的 projection scope 建一个 `projection-scope-status` readmodel 没有独立消费场景，只会形成递归 durable write amplification。升级时，启动服务会幂等释放旧版本遗留的嵌套 status scope 并移除其 observation relay；正常路径不会再创建它。
+
 `HealthProbeTargetProjector` 的职责是纯物化：
 
 1. 从 committed state event envelope 解包 `HealthProbeTargetState`。
@@ -171,6 +176,8 @@ Mainnet Host 额外注册 `aevatar_core_loop` 与 `audit_query_index` executor�
 5. 不执行 query-time replay 或 priming。
 
 退役 target 的历史 readmodel 可能仍在 document store 中，但查询端口不会把它们返回给 `/api/status`。启动服务也会对已知退役 target 下发 disabled descriptor，使旧 actor 停止后续 tick。
+
+探针 actor 与保留的主 health projection scope 都服从全局 `ActorRuntime:EventSourcing:*` 快照/裁剪策略；持续活跃时达到 `SnapshotInterval` 就会快照并裁剪，不依赖 deactivation。探针频率由每个 target 的 `IntervalSeconds` 控制，可用于容量调整，但它不是替代事件数收敛、移除无消费场景 projection chain 或通用 EventStore retention 的结构性修复。
 
 ## 8. HTTP Surface
 
@@ -248,7 +255,8 @@ Mainnet Host 额外注册 `aevatar_core_loop` 与 `audit_query_index` executor�
 1. 内置 manifest 不再生成这些 target。
 2. `/api/status` 只返回当前 manifest 中仍声明的 target，旧 readmodel 不再展示。
 3. `HealthProbeStartupService` 会对这些旧 slug 下发 disabled descriptor，停止旧 actor 的后续 tick。
-4. 若需要临时诊断某条业务链路，应通过 `Aevatar:Status:Targets` 显式增加普通 `http_status` target，或使用业务侧 readmodel / tracing 工具定位，不把固定业务编排长期放进默认状态面板。
+4. `HealthProbeStartupService` 也会查找并释放这些旧 slug 遗留的嵌套 projection-scope-status lease，不让历史 relay 继续放大写入。
+5. 若需要临时诊断某条业务链路，应通过 `Aevatar:Status:Targets` 显式增加普通 `http_status` target，或使用业务侧 readmodel / tracing 工具定位，不把固定业务编排长期放进默认状态面板。
 
 ## 10. 扩展新探针
 

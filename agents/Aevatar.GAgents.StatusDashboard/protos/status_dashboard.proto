@@ -102,6 +102,7 @@ message HealthProbeConfigured {
 
 message HealthProbeObserved {
   HealthProbeOutcome outcome = 1;
+  string operation_id = 2;
 }
 
 message HealthProbeExecutionStarted {

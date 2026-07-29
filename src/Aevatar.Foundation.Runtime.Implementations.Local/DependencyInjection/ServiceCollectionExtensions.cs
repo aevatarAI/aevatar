@@ -81,8 +81,6 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IEventStore, InMemoryEventStore>();
         services.TryAddSingleton<IEventStoreMaintenance>(sp =>
             (IEventStoreMaintenance)sp.GetRequiredService<IEventStore>());
-        services.TryAddSingleton<IEventStoreCompactionScheduler, DeferredEventStoreCompactionScheduler>();
-        services.TryAddSingleton<IActorDeactivationHook, EventStoreCompactionDeactivationHook>();
         services.TryAddSingleton<IActorDeactivationHookDispatcher, ActorDeactivationHookDispatcher>();
         services.TryAddSingleton<ILocalActivationIndexStore, InMemoryLocalActivationIndexStore>();
 

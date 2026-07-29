@@ -153,18 +153,12 @@ public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
         await EnsureNextTickAsync(initial: false);
     }
 
-    private Task PersistProbeTerminalEventsAsync(HealthProbeOutcome outcome, string operationId)
-    {
-        // Refactor (iter158/cluster-157-004-timeout-cts):
-        // Old: HealthProbeObserved also cleared ActiveExecution, leaving the typed
-        //      HealthProbeExecutionCleared domain event with no producer.
-        // New: probe completion persists observed outcome and explicit clear event
-        //      together, so execution lifecycle remains actor-owned and observable.
-        return PersistDomainEventsAsync([
-            new HealthProbeObserved { Outcome = outcome },
-            new HealthProbeExecutionCleared { OperationId = operationId },
-        ]);
-    }
+    private Task PersistProbeTerminalEventsAsync(HealthProbeOutcome outcome, string operationId) =>
+        PersistDomainEventAsync(new HealthProbeObserved
+        {
+            Outcome = outcome,
+            OperationId = operationId,
+        });
 
     // ─── Probe execution ───
 
@@ -388,6 +382,14 @@ public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
         {
             next.ConsecutiveFailures += 1;
         }
+
+        if (next.ActiveExecution != null &&
+            !string.IsNullOrWhiteSpace(evt.OperationId) &&
+            string.Equals(next.ActiveExecution.OperationId, evt.OperationId, StringComparison.Ordinal))
+        {
+            next.ActiveExecution = null;
+        }
+
         return next;
     }
 
