@@ -738,3 +738,9 @@ export const scheduledDispatchApi = {
     );
   },
 };
+
+export function previewScheduledDispatch(
+  input: ScheduledDispatchPreviewInput,
+): Promise<ScheduledDispatchPreview> {
+  return scheduledDispatchApi.preview(input);
+}
