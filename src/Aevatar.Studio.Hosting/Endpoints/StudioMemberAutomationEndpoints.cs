@@ -497,12 +497,12 @@ internal static class StudioMemberAutomationEndpoints
                 },
                 statusCode: StatusCodes.Status503ServiceUnavailable),
             StudioMemberAutomationPlanConflictException conflict => Results.Json(
-                new
-                {
-                    code = ToPlanConflictCode(conflict.Code),
-                    message = ToPlanConflictMessage(conflict.Code),
-                    preflightLocator = BuildPreflightLocator(scopeId, teamId, memberId),
-                },
+                new StudioMemberAutomationConflictResponse(
+                    ToPlanConflictCode(conflict.Code),
+                    ToPlanConflictMessage(conflict.Code),
+                    BuildPreflightLocator(scopeId, teamId, memberId),
+                    ScheduledAuthorizationPlanMismatchReasons.ToWireValue(
+                        conflict.AuthorizationPlanMismatchReason)),
                 statusCode: StatusCodes.Status409Conflict),
             ScheduledDispatchConflictException => Results.Conflict(
                 new { code = "TEAM_AUTOMATION_CONFLICT", message = exception.Message }),
@@ -540,6 +540,13 @@ internal static class StudioMemberAutomationEndpoints
     private static string BuildPreflightLocator(string scopeId, string teamId, string memberId) =>
         $"/api/scopes/{Uri.EscapeDataString(scopeId.Trim())}/teams/{Uri.EscapeDataString(teamId.Trim())}" +
         $"/members/{Uri.EscapeDataString(memberId.Trim())}/automations/preflight";
+
+    private sealed record StudioMemberAutomationConflictResponse(
+        string code,
+        string message,
+        string preflightLocator,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        string? authorizationPlanMismatchReason);
 }
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]

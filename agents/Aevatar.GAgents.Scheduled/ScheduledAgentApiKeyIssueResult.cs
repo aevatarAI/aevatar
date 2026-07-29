@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 
 namespace Aevatar.GAgents.Scheduled;
 
@@ -20,7 +21,8 @@ public sealed class ScheduledAgentApiKeyIssueResult
         int? httpStatus,
         string? serviceSlug,
         string? skillRef,
-        long keyExpiresAtUnixMs)
+        long keyExpiresAtUnixMs,
+        ScheduledAuthorizationPlanMismatchReason authorizationPlanMismatchReason)
     {
         Success = success;
         ApiKeyId = apiKeyId;
@@ -32,6 +34,7 @@ public sealed class ScheduledAgentApiKeyIssueResult
         ServiceSlug = serviceSlug;
         SkillRef = skillRef;
         KeyExpiresAtUnixMs = keyExpiresAtUnixMs;
+        AuthorizationPlanMismatchReason = authorizationPlanMismatchReason;
     }
 
     private readonly ScheduledAgentOpaqueSecret? _secret;
@@ -45,12 +48,24 @@ public sealed class ScheduledAgentApiKeyIssueResult
     public string? ServiceSlug { get; }
     public string? SkillRef { get; }
     public long KeyExpiresAtUnixMs { get; }
+    public ScheduledAuthorizationPlanMismatchReason AuthorizationPlanMismatchReason { get; }
 
     public static ScheduledAgentApiKeyIssueResult Succeeded(
         string apiKeyId,
         string fullKey,
         long keyExpiresAtUnixMs = 0) =>
-        new(true, apiKeyId, new ScheduledAgentOpaqueSecret(fullKey), null, null, null, null, null, null, keyExpiresAtUnixMs);
+        new(
+            true,
+            apiKeyId,
+            new ScheduledAgentOpaqueSecret(fullKey),
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            keyExpiresAtUnixMs,
+            ScheduledAuthorizationPlanMismatchReason.Unspecified);
 
     public static ScheduledAgentApiKeyIssueResult Failed(
         string error,
@@ -58,8 +73,21 @@ public sealed class ScheduledAgentApiKeyIssueResult
         string? hint = null,
         int? httpStatus = null,
         string? serviceSlug = null,
-        string? skillRef = null) =>
-        new(false, null, null, error, detail, hint, httpStatus, serviceSlug, skillRef, 0);
+        string? skillRef = null,
+        ScheduledAuthorizationPlanMismatchReason authorizationPlanMismatchReason =
+            ScheduledAuthorizationPlanMismatchReason.Unspecified) =>
+        new(
+            false,
+            null,
+            null,
+            error,
+            detail,
+            hint,
+            httpStatus,
+            serviceSlug,
+            skillRef,
+            0,
+            authorizationPlanMismatchReason);
 
     public static ScheduledAgentApiKeyIssueResult FailedAfterIssue(
         string apiKeyId,
@@ -68,8 +96,21 @@ public sealed class ScheduledAgentApiKeyIssueResult
         string? hint = null,
         int? httpStatus = null,
         string? serviceSlug = null,
-        string? skillRef = null) =>
-        new(false, apiKeyId, null, error, detail, hint, httpStatus, serviceSlug, skillRef, 0);
+        string? skillRef = null,
+        ScheduledAuthorizationPlanMismatchReason authorizationPlanMismatchReason =
+            ScheduledAuthorizationPlanMismatchReason.Unspecified) =>
+        new(
+            false,
+            apiKeyId,
+            null,
+            error,
+            detail,
+            hint,
+            httpStatus,
+            serviceSlug,
+            skillRef,
+            0,
+            authorizationPlanMismatchReason);
 
     public Task<Aevatar.Foundation.Abstractions.Credentials.StoreSecretResult> StoreSecretAsync(
         Aevatar.Foundation.Abstractions.Credentials.ISecretVault secretVault,
@@ -91,6 +132,8 @@ public sealed class ScheduledAgentApiKeyIssueResult
             http_status = HttpStatus,
             service_slug = ServiceSlug,
             skill_ref = SkillRef,
+            authorization_plan_mismatch_reason = ScheduledAuthorizationPlanMismatchReasons.ToWireValue(
+                AuthorizationPlanMismatchReason),
         }, ErrorJsonOptions);
 
     public override string ToString() =>

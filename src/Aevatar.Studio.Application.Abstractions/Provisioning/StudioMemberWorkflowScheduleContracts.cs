@@ -181,13 +181,20 @@ public sealed class StudioMemberAutomationNotFoundException : Exception
 
 public sealed class StudioMemberAutomationPlanConflictException : Exception
 {
-    public StudioMemberAutomationPlanConflictException(string code, string message)
+    public StudioMemberAutomationPlanConflictException(
+        string code,
+        string message,
+        ScheduledAuthorizationPlanMismatchReason authorizationPlanMismatchReason =
+            ScheduledAuthorizationPlanMismatchReason.Unspecified)
         : base(message)
     {
         Code = string.IsNullOrWhiteSpace(code) ? "authorization_plan_changed" : code.Trim();
+        AuthorizationPlanMismatchReason = authorizationPlanMismatchReason;
     }
 
     public string Code { get; }
+
+    public ScheduledAuthorizationPlanMismatchReason AuthorizationPlanMismatchReason { get; }
 }
 
 public sealed class StudioMemberAutomationProjectionPendingException : Exception

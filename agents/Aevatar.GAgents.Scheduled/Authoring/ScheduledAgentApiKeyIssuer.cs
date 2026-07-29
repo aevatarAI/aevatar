@@ -226,15 +226,27 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
         }
 
         var scopePlan = scopePlanResult.Value!;
-        if (!MatchesAuthorizationPlan(
+        if (!TryResolveAuthorizationPlanMismatch(
                 scopePlan,
                 plan,
                 ownerKind,
                 ownerSubject,
                 serviceIds,
-                nodeIds))
+                nodeIds,
+                out var mismatchReason))
         {
-            return ScheduledAgentApiKeyIssueResult.Failed("authorization_plan_changed");
+            if (_logger != null)
+            {
+                _logger.Log(
+                    LogLevel.Warning,
+                    new EventId(),
+                    $"NyxID scheduled API key scope-plan no longer matches the validated authorization plan. reason={ScheduledAuthorizationPlanMismatchReasons.ToWireValue(mismatchReason)} planned_service_count={plan.NyxIdServiceGrants.Count()} current_service_count={scopePlan.Services.Count()} planned_node_count={nodeIds.Count()} current_node_count={scopePlan.AllowedNodeIds.Count()}",
+                    null,
+                    static (state, _) => state);
+            }
+            return ScheduledAgentApiKeyIssueResult.Failed(
+                "authorization_plan_changed",
+                authorizationPlanMismatchReason: mismatchReason);
         }
 
         var response = await client.CreateApiKeyAsync(
@@ -442,30 +454,71 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
         }
     }
 
-    private static bool MatchesAuthorizationPlan(
+    private static bool TryResolveAuthorizationPlanMismatch(
         NyxIdApiKeyScopePlan scopePlan,
         ScheduledInvocationAuthorizationPlan plan,
         AuthorizationOwnerKind ownerKind,
         string ownerSubject,
         IReadOnlyList<string> serviceIds,
-        IReadOnlyList<string> nodeIds)
+        IReadOnlyList<string> nodeIds,
+        out ScheduledAuthorizationPlanMismatchReason mismatchReason)
     {
-        if (!string.Equals(scopePlan.Authority, NyxIdAuthorizationAuthorities.NyxId, StringComparison.Ordinal) ||
-            !MatchesScopePlanVersions(scopePlan, plan.CatalogAuthority) ||
-            !MatchesPrincipal(scopePlan.IntendedKeyOwner, ownerKind, ownerSubject) ||
-            !MatchesPrincipal(scopePlan.AuthenticatedActor, plan.AuthenticatedActor) ||
-            scopePlan.Freshness.Mode != NyxIdScopePlanFreshnessMode.MutationRevalidatedSnapshot ||
-            !string.Equals(scopePlan.Freshness.PreconditionField, "scope_plan_digest", StringComparison.Ordinal) ||
-            scopePlan.Freshness.PostCreationDrift != NyxIdScopePlanPostCreationDrift.FailClosed ||
-            !scopePlan.Completeness.ListComplete ||
-            !scopePlan.Completeness.NoDuplicates ||
-            scopePlan.Completeness.RouteCandidateBasis !=
-            NyxIdScopePlanRouteCandidateBasis.ActiveConfiguredRoutes ||
-            !scopePlan.Completeness.TransientNodeStateExcluded ||
-            !scopePlan.AllowedServiceIds.SequenceEqual(serviceIds, StringComparer.Ordinal) ||
-            !scopePlan.AllowedNodeIds.SequenceEqual(nodeIds, StringComparer.Ordinal) ||
-            scopePlan.Services.Count != plan.NyxIdServiceGrants.Count)
+        if (!string.Equals(scopePlan.Authority, NyxIdAuthorizationAuthorities.NyxId, StringComparison.Ordinal))
         {
+            mismatchReason = ScheduledAuthorizationPlanMismatchReason.ScopePlanAuthorityMismatch;
+            return false;
+        }
+
+        if (!MatchesScopePlanVersions(scopePlan, plan.CatalogAuthority))
+        {
+            mismatchReason = ScheduledAuthorizationPlanMismatchReason.ScopePlanVersionsMismatch;
+            return false;
+        }
+
+        if (!MatchesPrincipal(scopePlan.IntendedKeyOwner, ownerKind, ownerSubject))
+        {
+            mismatchReason = ScheduledAuthorizationPlanMismatchReason.IntendedKeyOwnerMismatch;
+            return false;
+        }
+
+        if (!MatchesPrincipal(scopePlan.AuthenticatedActor, plan.AuthenticatedActor))
+        {
+            mismatchReason = ScheduledAuthorizationPlanMismatchReason.AuthenticatedActorMismatch;
+            return false;
+        }
+
+        if (scopePlan.Freshness.Mode != NyxIdScopePlanFreshnessMode.MutationRevalidatedSnapshot ||
+            !string.Equals(scopePlan.Freshness.PreconditionField, "scope_plan_digest", StringComparison.Ordinal) ||
+            scopePlan.Freshness.PostCreationDrift != NyxIdScopePlanPostCreationDrift.FailClosed)
+        {
+            mismatchReason = ScheduledAuthorizationPlanMismatchReason.ScopePlanFreshnessMismatch;
+            return false;
+        }
+
+        if (!scopePlan.Completeness.ListComplete ||
+            !scopePlan.Completeness.NoDuplicates ||
+            scopePlan.Completeness.RouteCandidateBasis != NyxIdScopePlanRouteCandidateBasis.ActiveConfiguredRoutes ||
+            !scopePlan.Completeness.TransientNodeStateExcluded)
+        {
+            mismatchReason = ScheduledAuthorizationPlanMismatchReason.ScopePlanCompletenessMismatch;
+            return false;
+        }
+
+        if (!scopePlan.AllowedServiceIds.SequenceEqual(serviceIds, StringComparer.Ordinal))
+        {
+            mismatchReason = ScheduledAuthorizationPlanMismatchReason.AllowedServiceIdsMismatch;
+            return false;
+        }
+
+        if (!scopePlan.AllowedNodeIds.SequenceEqual(nodeIds, StringComparer.Ordinal))
+        {
+            mismatchReason = ScheduledAuthorizationPlanMismatchReason.AllowedNodeIdsMismatch;
+            return false;
+        }
+
+        if (scopePlan.Services.Count != plan.NyxIdServiceGrants.Count)
+        {
+            mismatchReason = ScheduledAuthorizationPlanMismatchReason.ServiceGrantCountMismatch;
             return false;
         }
 
@@ -473,14 +526,26 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
         {
             var plannedGrant = plan.NyxIdServiceGrants[index];
             var currentGrant = scopePlan.Services[index];
-            if (!string.Equals(currentGrant.UserServiceId, plannedGrant.UserServiceId, StringComparison.Ordinal) ||
-                !MatchesPrincipal(currentGrant.ResourceOwner, plannedGrant.ResourceOwner) ||
-                !MatchesNodeGrant(currentGrant.NodeGrant, plannedGrant))
+            if (!string.Equals(currentGrant.UserServiceId, plannedGrant.UserServiceId, StringComparison.Ordinal))
             {
+                mismatchReason = ScheduledAuthorizationPlanMismatchReason.ServiceGrantIdentityMismatch;
+                return false;
+            }
+
+            if (!MatchesPrincipal(currentGrant.ResourceOwner, plannedGrant.ResourceOwner))
+            {
+                mismatchReason = ScheduledAuthorizationPlanMismatchReason.ServiceGrantResourceOwnerMismatch;
+                return false;
+            }
+
+            if (!MatchesNodeGrant(currentGrant.NodeGrant, plannedGrant))
+            {
+                mismatchReason = ScheduledAuthorizationPlanMismatchReason.ServiceGrantNodeMismatch;
                 return false;
             }
         }
 
+        mismatchReason = ScheduledAuthorizationPlanMismatchReason.Unspecified;
         return true;
     }
 
