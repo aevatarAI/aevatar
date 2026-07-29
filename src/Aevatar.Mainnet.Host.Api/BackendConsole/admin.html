@@ -3617,8 +3617,8 @@ function bindObservatory(root){
     else if(a==='obsImmersive'){ obsSetImmersive(true); }
     else if(a==='obsImmersiveExit'){ obsSetImmersive(false); render(); }
     else if(a==='obsApprovalApprove'){ var approvalRun=selectedDetail(); if(approvalRun) obsSubmitApproval(approvalRun,true,reDetail); }
-    else if(a==='obsApprovalReject'){ var rejectRun=selectedDetail(); if(rejectRun){ var rejectState=obsApprovalState(rejectRun.id); rejectState.rejecting=true; rejectState.error=''; reDetail(); } }
-    else if(a==='obsApprovalRejectCancel'){ var cancelRun=selectedDetail(); if(cancelRun){ var cancelState=obsApprovalState(cancelRun.id); cancelState.rejecting=false; cancelState.error=''; reDetail(); } }
+    else if(a==='obsApprovalReject'){ var rejectRun=selectedDetail(); if(rejectRun){ var rejectState=obsApprovalState(rejectRun,obsActiveApproval(rejectRun)); rejectState.rejecting=true; rejectState.error=''; reDetail(); } }
+    else if(a==='obsApprovalRejectCancel'){ var cancelRun=selectedDetail(); if(cancelRun){ var cancelState=obsApprovalState(cancelRun,obsActiveApproval(cancelRun)); cancelState.rejecting=false; cancelState.error=''; reDetail(); } }
     else if(a==='obsApprovalRejectSubmit'){ var rejectSubmitRun=selectedDetail(); if(rejectSubmitRun) obsSubmitApproval(rejectSubmitRun,false,reDetail); }
     else if(a==='obsCopy'){ var cv=act.getAttribute('data-copy');
       copyWithToast(cv, '已复制 run id：'+cv, '复制失败，请手动选择：'+cv); }
@@ -3684,7 +3684,7 @@ function bindObservatory(root){
     if(inputAct==='obsLocalSearch'){
       OBS_STATE.localSearch=ev.target.value||''; reList();
     } else if(inputAct==='obsApprovalFeedback'){
-      var approvalRun=selectedDetail(); if(approvalRun) obsApprovalState(approvalRun.id).feedback=ev.target.value||'';
+      var approvalRun=selectedDetail(); if(approvalRun) obsApprovalState(approvalRun,obsActiveApproval(approvalRun)).feedback=ev.target.value||'';
     }
   });
 }

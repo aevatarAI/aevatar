@@ -258,10 +258,25 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             vm.createContext(context);
             vm.runInContext(`
               var ACCOUNT = null, OBS_APPROVAL = {}, requests = [];
+              var OBS_DETAIL = {}, OBS_RUNS = [], OBS_POLL_TIMER = null;
+              var OBS_STATE = { selectedId: 'run-approval', immersive: false };
+              var approvalClickHandler = null, approvalInputHandler = null;
               function adminJson(path, options) {
                 requests.push({ path: path, options: options });
                 return Promise.resolve({ accepted: true });
               }
+              function obsSelected() { return { id: OBS_STATE.selectedId }; }
+              function obsRunsFiltered() { return OBS_RUNS; }
+              function obsSetImmersive() {}
+              function obsList() { return ''; }
+              function obsDetail(run) { return run ? obsApprovalPanel(run) : ''; }
+              function obsFilterBar() { return ''; }
+              function loadObsRuns() { return Promise.resolve(); }
+              function loadObsDetail() { return Promise.resolve(); }
+              function curParts() { return ['observatory']; }
+              function defaultModule() { return 'observatory'; }
+              function setInterval() { return 1; }
+              function clearInterval() {}
               function esc(value) {
                 return String(value == null ? '' : value).replace(/[&<>"]/g, function(character) {
                   return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[character];
@@ -289,6 +304,7 @@ public sealed class BackendConsoleStaticAssetEndpointTests
               ${functionSource('obsApprovalPanel')}
               ${functionSource('obsSubmitApproval')}
               ${functionSource('obsDiagnosticStrip')}
+              ${functionSource('bindObservatory')}
             `, context);
 
             await vm.runInContext(`(async function() {
@@ -327,6 +343,31 @@ public sealed class BackendConsoleStaticAssetEndpointTests
               assert.match(panel, /data-act="obsApprovalApprove"/);
               assert.doesNotMatch(obsDiagnosticStrip(run), /失败诊断/);
               assert.match(obsDiagnosticStrip(run), /当前位置/);
+
+              OBS_DETAIL[run.id] = { detail: run };
+              bindObservatory({
+                querySelector: function() { return null; },
+                addEventListener: function(type, handler) {
+                  if (type === 'click') approvalClickHandler = handler;
+                  if (type === 'input') approvalInputHandler = handler;
+                }
+              });
+              function clickApproval(action) {
+                const element = { getAttribute: function() { return action; } };
+                approvalClickHandler({ target: {
+                  closest: function(selector) { return selector === '[data-act]' ? element : null; }
+                }});
+              }
+
+              clickApproval('obsApprovalReject');
+              assert.match(obsApprovalPanel(run), /id="obs-approval-feedback"/);
+              approvalInputHandler({ target: {
+                value: '请补充来源',
+                getAttribute: function() { return 'obsApprovalFeedback'; }
+              }});
+              assert.ok(obsApprovalPanel(run).includes('>请补充来源</textarea>'));
+              clickApproval('obsApprovalRejectCancel');
+              assert.doesNotMatch(obsApprovalPanel(run), /id="obs-approval-feedback"/);
 
               assert.equal(await obsSubmitApproval(run, true, function() {}), true);
               assert.equal(requests[0].path, '/api/scopes/scope-owner/runs/run-approval:resume');
