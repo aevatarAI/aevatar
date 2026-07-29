@@ -798,6 +798,15 @@ public sealed class NyxIdChatConversationGAgent
         var now = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow());
         var decision = NyxIdChatBrowserActions.Continue(State, command, now);
         var terminalPrepared = false;
+        if (!decision.ShouldCommit &&
+            decision.Outcome == NyxIdChatTransitionOutcome.Rejected)
+        {
+            await PersistActionContinuationRejectionAsync(
+                command,
+                decision.ReasonCode,
+                decision.SafeMessage);
+            return;
+        }
         if (decision.ShouldCommit)
         {
             var nextState = decision.State.Clone();
@@ -2340,6 +2349,21 @@ public sealed class NyxIdChatConversationGAgent
         {
             ConversationActorId = Id,
             RequestedTurnId = command.TurnId.Trim(),
+            ActiveTurnId = State.ActiveTurn?.TurnId ?? string.Empty,
+            CommandId = command.CommandId.Trim(),
+            CorrelationId = command.CorrelationId.Trim(),
+            ReasonCode = reasonCode,
+            SafeMessage = safeMessage,
+        }, CancellationToken.None);
+
+    private Task PersistActionContinuationRejectionAsync(
+        NyxIdChatActionContinueCommand command,
+        string reasonCode,
+        string safeMessage) =>
+        PersistDomainEventAsync(new NyxIdChatTurnAdmissionRejectedEvent
+        {
+            ConversationActorId = Id,
+            RequestedTurnId = command.ContinuationTurnId.Trim(),
             ActiveTurnId = State.ActiveTurn?.TurnId ?? string.Empty,
             CommandId = command.CommandId.Trim(),
             CorrelationId = command.CorrelationId.Trim(),

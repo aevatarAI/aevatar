@@ -44,6 +44,7 @@ public sealed class NyxIdChatPublicEndpointsTests
 
         var command = chat.Commands.Should().ContainSingle().Which;
         command.ScopeId.Should().Be("scope-alpha");
+        command.OwnerSubject.Should().Be("user-alpha");
         command.ClientRequestId.Should().Be("body-request");
         command.CreateIfMissing.Should().BeTrue();
         command.ActorId.Should().Be(NyxIdChatPublicIdentity.CreateConversationActorId(
@@ -52,6 +53,24 @@ public sealed class NyxIdChatPublicEndpointsTests
         command.TurnId.Should().Be(NyxIdChatPublicIdentity.CreateTurnId(
             command.ActorId,
             "body-request"));
+
+        var envelope = new NyxIdChatCommandEnvelopeFactory().CreateEnvelope(
+            command,
+            new CommandContext(
+                command.ActorId,
+                "command-alpha",
+                "correlation-alpha",
+                new Dictionary<string, string>()));
+        var start = envelope.Payload
+            .Unpack<NyxIdChatConversationCreateCommand>()
+            .FirstTurn;
+        start.ToolContext.Caller.ScopeId.Should().Be("scope-alpha");
+        start.ToolContext.Caller.OwnerScopeId.Should().Be("scope-alpha");
+        start.ToolContext.Caller.OwnerSubject.Should().Be("user-alpha");
+        start.ToolContext.Caller.ResponseId.Should().Be(command.TurnId);
+        start.ToolContext.NyxIdAuthority.Platform.Should().Be("nyxid");
+        start.ToolContext.NyxIdAuthority.ExternalUserId.Should().Be("user-alpha");
+        start.ToolContext.NyxIdAuthority.Scope.Should().Be("proxy");
 
         context.Response.Body.Position = 0;
         var body = await new StreamReader(context.Response.Body).ReadToEndAsync();

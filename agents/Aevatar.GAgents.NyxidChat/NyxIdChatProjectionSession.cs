@@ -359,8 +359,11 @@ public sealed class NyxIdChatSessionEventProjector
         if (payload.Is(NyxIdChatContinuationAdmissionCommittedEvent.Descriptor))
         {
             var committed = payload.Unpack<NyxIdChatContinuationAdmissionCommittedEvent>();
+            var sessionTurnId = committed.Admission?.Kind == NyxIdChatContinuationKind.Action
+                ? committed.Admission.ContinuationTurnId
+                : committed.Admission?.OriginTurnId;
             if (!string.Equals(
-                    committed.Admission?.OriginTurnId,
+                    sessionTurnId,
                     context.SessionId,
                     StringComparison.Ordinal))
             {
@@ -369,6 +372,8 @@ public sealed class NyxIdChatSessionEventProjector
             return Entries(
                 context,
                 NyxIdChatConversationAguiFrameBuilder.BuildContinuationChanged(
+                    context.RootActorId,
+                    context.SessionId,
                     committed,
                     stateVersion));
         }

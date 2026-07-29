@@ -26,7 +26,8 @@ public sealed record NyxIdChatCommand(
     string? CommandId = null,
     string? CorrelationId = null,
     string? ClientRequestId = null,
-    bool CreateIfMissing = false)
+    bool CreateIfMissing = false,
+    string? OwnerSubject = null)
     : ICommandContextSeed
 {
     public IReadOnlyDictionary<string, string>? Headers => null;
@@ -417,9 +418,18 @@ internal sealed class NyxIdChatCommandEnvelopeFactory : ICommandEnvelopeFactory<
         {
             Request = new AgentToolRequestIdentity(command.TurnId, null),
             Credentials = new AgentToolCredentials(command.AccessToken, null, null),
-            Caller = new AgentToolCallerContext(command.ScopeId, command.ScopeId, command.TurnId),
+            Caller = new AgentToolCallerContext(
+                command.ScopeId,
+                command.OwnerSubject,
+                command.TurnId,
+                command.ScopeId),
             Channel = new AgentToolChannelContext("nyxid-chat", null, command.ScopeId, null, null),
             SkillRecovery = skillRecovery,
+            NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                "nyxid",
+                string.Empty,
+                command.OwnerSubject,
+                "proxy"),
         };
         return effectiveControl.ToToolContext(toolContext);
     }

@@ -849,10 +849,32 @@ public partial class NyxIdChatEndpointsCoverageTests
     }
 
     [Fact]
-    public async Task HandleStreamMessageAsync_ShouldRejectWhenNoPromptAndNoInputParts()
+    public async Task HandleStreamMessageAsync_ShouldRejectWithoutAuthenticatedSubject()
     {
         var context = new DefaultHttpContext();
         context.Request.Headers.Authorization = "Bearer valid-token";
+        var interactionService = new StubNyxIdChatInteractionService<NyxIdChatCommand>();
+
+        await InvokeTaskAsync(
+            "HandleStreamMessageAsync",
+            context,
+            "scope-a",
+            "actor-1",
+            new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello", Type: "text"),
+            new StubActorRuntime(),
+            new StubGAgentActorStore(),
+            interactionService,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
+        interactionService.Commands.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleStreamMessageAsync_ShouldRejectWhenNoPromptAndNoInputParts()
+    {
+        var context = CreateAuthorizedStreamContext();
         var runtime = new StubActorRuntime();
 
         await InvokeTaskAsync(
@@ -896,8 +918,7 @@ public partial class NyxIdChatEndpointsCoverageTests
     [Fact]
     public async Task HandleStreamMessageAsync_ShouldReturnNotFound_WhenConversationIsUnregistered()
     {
-        var context = new DefaultHttpContext();
-        context.Request.Headers.Authorization = "Bearer valid-token";
+        var context = CreateAuthorizedStreamContext();
         var actorStore = new StubGAgentActorStore
         {
             AdmissionResult = ScopeResourceAdmissionResult.NotFound(),
@@ -1026,18 +1047,14 @@ public partial class NyxIdChatEndpointsCoverageTests
     [Fact]
     public async Task HandleStreamMessageAsync_ShouldDispatchChatRequest_AndWriteRunFinished()
     {
-        var context = new DefaultHttpContext
-        {
-            RequestServices = new ServiceCollection()
-                .AddLogging()
-                .AddSingleton<INyxIdUserLlmPreferencesStore>(new StubPreferencesStore("relay-model", "/relay-route", 7))
-                .AddSingleton<IUserMemoryStore>(new StubUserMemoryStore("remember this"))
-                .BuildServiceProvider(),
-        };
-        context.Request.Headers.Authorization = "Bearer valid-token";
+        var context = CreateAuthorizedStreamContext();
+        context.RequestServices = new ServiceCollection()
+            .AddLogging()
+            .AddSingleton<INyxIdUserLlmPreferencesStore>(new StubPreferencesStore("relay-model", "/relay-route", 7))
+            .AddSingleton<IUserMemoryStore>(new StubUserMemoryStore("remember this"))
+            .BuildServiceProvider();
         context.Request.Headers["X-NyxID-Delegation-Token"] = "delegation-token";
         context.Request.Headers["X-Nyx-Refresh-Token"] = "refresh-token";
-        context.Response.Body = new MemoryStream();
 
         var runtime = new StubActorRuntime();
         runtime.Actors["actor-1"] = new StubActor("actor-1");
@@ -1104,8 +1121,7 @@ public partial class NyxIdChatEndpointsCoverageTests
         try
         {
             NyxIdChatEndpoints.StreamKeepAliveInterval = TimeSpan.FromMilliseconds(10);
-            var context = new DefaultHttpContext();
-            context.Request.Headers.Authorization = "Bearer valid-token";
+            var context = CreateAuthorizedStreamContext();
             context.Response.Body = bodyStream;
 
             var runtime = new StubActorRuntime();
@@ -1155,9 +1171,7 @@ public partial class NyxIdChatEndpointsCoverageTests
     [Fact]
     public async Task HandleStreamMessageAsync_ShouldWriteNotFoundRunError_WhenResolverReportsMissingActor()
     {
-        var context = new DefaultHttpContext();
-        context.Request.Headers.Authorization = "Bearer valid-token";
-        context.Response.Body = new MemoryStream();
+        var context = CreateAuthorizedStreamContext();
         var interactionService = new StubNyxIdChatInteractionService<NyxIdChatCommand>
         {
             Failure = NyxIdChatStartError.ActorNotFound,
@@ -2956,7 +2970,12 @@ public partial class NyxIdChatEndpointsCoverageTests
 
     private static DefaultHttpContext CreateAuthorizedStreamContext()
     {
-        var context = new DefaultHttpContext();
+        var context = new DefaultHttpContext
+        {
+            User = new ClaimsPrincipal(new ClaimsIdentity(
+                [new Claim("sub", "owner-alpha")],
+                authenticationType: "test")),
+        };
         context.Request.Headers.Authorization = "Bearer valid-token";
         context.Response.Body = new MemoryStream();
         return context;

@@ -1295,6 +1295,130 @@ public sealed class NyxIdChatProjectionSessionTests
     }
 
     [Fact]
+    public async Task Projector_EmptyActionWakeNoOp_ShouldEmitProgressAndTerminalForContinuationTurn()
+    {
+        var hub = new RecordingSessionEventHub();
+        var projector = new NyxIdChatSessionEventProjector(hub);
+        var context = new NyxIdChatSessionProjectionContext
+        {
+            RootActorId = "conversation-alpha",
+            SessionId = "turn-action-alpha",
+            ProjectionKind = "nyxid-chat-session",
+        };
+        var admission = new NyxIdChatContinuationAdmissionState
+        {
+            Kind = NyxIdChatContinuationKind.Action,
+            RequestId = "command-action-alpha",
+            ClientRequestId = "client-action-alpha",
+            OriginTurnId = string.Empty,
+            ContinuationTurnId = context.SessionId,
+            Status = NyxIdChatContinuationAdmissionStatus.Accepted,
+            ReasonCode = NyxIdChatBrowserActions.ActionContinuationAccepted,
+            OwnerSubject = "owner-alpha",
+        };
+        var state = new NyxIdChatConversationGAgentState
+        {
+            ConversationActorId = context.RootActorId,
+            ScopeId = "scope-alpha",
+            ContinuationAdmission = admission.Clone(),
+            ActiveTurn = new NyxIdChatTurnState
+            {
+                TurnId = context.SessionId,
+                TaskId = "task-action-alpha",
+                Status = NyxIdChatTurnStatus.Succeeded,
+            },
+            LatestTurn = new NyxIdChatTurnState
+            {
+                TurnId = context.SessionId,
+                TaskId = "task-action-alpha",
+                Status = NyxIdChatTurnStatus.Succeeded,
+            },
+            ActiveTask = new NyxIdChatTaskState
+            {
+                TurnId = context.SessionId,
+                TaskId = "task-action-alpha",
+                Status = NyxIdChatTaskStatus.Succeeded,
+            },
+            ProgressSequence = 21,
+        };
+
+        await projector.ProjectAsync(
+            context,
+            CommittedEnvelope(
+                context.RootActorId,
+                new NyxIdChatContinuationAdmissionCommittedEvent
+                {
+                    Admission = admission,
+                    State = state,
+                },
+                stateVersion: 21),
+            CancellationToken.None);
+
+        hub.Published.Select(entry => entry.Event.EventCase).Should().Equal(
+            AGUIEvent.EventOneofCase.Custom,
+            AGUIEvent.EventOneofCase.Custom,
+            AGUIEvent.EventOneofCase.TextMessageEnd,
+            AGUIEvent.EventOneofCase.RunFinished);
+        hub.Published[0].Event.Custom.Name.Should().Be(
+            NyxIdChatConversationAguiFrameBuilder.ContinuationChangedEventName);
+        hub.Published[1].Event.Custom.Name.Should().Be(
+            NyxIdChatConversationAguiFrameBuilder.TaskSnapshotEventName);
+        hub.Published[^1].Event.RunFinished.RunId.Should().Be(context.SessionId);
+        hub.Published[^1].Event.RunFinished.Status.Should().Be(
+            RunCompletionStatus.Completed);
+        hub.Published.Should().OnlyContain(entry => entry.Event.Sequence == 21);
+    }
+
+    [Fact]
+    public async Task Projector_RejectedActionContinuation_ShouldEmitTerminalForContinuationTurn()
+    {
+        var hub = new RecordingSessionEventHub();
+        var projector = new NyxIdChatSessionEventProjector(hub);
+        var context = new NyxIdChatSessionProjectionContext
+        {
+            RootActorId = "conversation-alpha",
+            SessionId = "turn-action-alpha",
+            ProjectionKind = "nyxid-chat-session",
+        };
+        var admission = new NyxIdChatContinuationAdmissionState
+        {
+            Kind = NyxIdChatContinuationKind.Action,
+            RequestId = "command-action-alpha",
+            ClientRequestId = "client-action-alpha",
+            ContinuationTurnId = context.SessionId,
+            Status = NyxIdChatContinuationAdmissionStatus.Rejected,
+            ReasonCode = NyxIdChatBrowserActions.ActionContinuationActiveTurn,
+            SafeMessage = "Another conversation turn is active.",
+            OwnerSubject = "owner-alpha",
+        };
+
+        await projector.ProjectAsync(
+            context,
+            CommittedEnvelope(
+                context.RootActorId,
+                new NyxIdChatContinuationAdmissionCommittedEvent
+                {
+                    Admission = admission,
+                    State = new NyxIdChatConversationGAgentState
+                    {
+                        ConversationActorId = context.RootActorId,
+                        ScopeId = "scope-alpha",
+                        ContinuationAdmission = admission.Clone(),
+                    },
+                },
+                stateVersion: 22),
+            CancellationToken.None);
+
+        hub.Published.Select(entry => entry.Event.EventCase).Should().Equal(
+            AGUIEvent.EventOneofCase.Custom,
+            AGUIEvent.EventOneofCase.RunError);
+        var terminal = hub.Published[^1].Event.RunError;
+        terminal.RunId.Should().Be(context.SessionId);
+        terminal.Code.Should().Be(NyxIdChatBrowserActions.ActionContinuationActiveTurn);
+        terminal.Message.Should().Be("Another conversation turn is active.");
+    }
+
+    [Fact]
     public async Task Projector_LateToolEvidence_ShouldRefineStepWithoutRepeatingTerminal()
     {
         var hub = new RecordingSessionEventHub();

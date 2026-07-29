@@ -330,6 +330,8 @@ An out-of-band change can wake the conversation without claiming that any action
 
 This form intentionally omits `originTurnId`. It starts a distinct continuation turn and rechecks every actor-owned pending action through its existing typed postcondition. It creates no synthetic disposition, completion report, or resource hint. Only authoritative read-model evidence can confirm a step. Its transcript input is the fixed safe text `NyxID state changed; recheck pending actions.`
 
+If the actor-owned pending set is already empty, the wake commits a zero-step succeeded continuation and immediately emits its task snapshot and terminal frames; it never waits on keepalive alone.
+
 ## Conditional current-state query
 
 ```http
