@@ -113,6 +113,18 @@ message HealthProbeExecutionCleared {
   string operation_id = 1;
 }
 
+// Ephemeral operational status. This is overwritten by the owning probe actor
+// and intentionally has no committed state version or projection identity.
+message HealthProbeOperationalSnapshot {
+  HealthProbeTargetDescriptor target = 1;
+  HealthProbeOutcome last_outcome = 2;
+  int32 consecutive_failures = 3;
+  google.protobuf.Timestamp last_success_at = 4;
+  google.protobuf.Timestamp last_check_at = 5;
+  repeated HealthProbeOutcome recent_outcomes = 6;
+  google.protobuf.Timestamp updated_at = 7;
+}
+
 // ─── Projection read model ───
 
 message HealthProbeTargetDocument {
