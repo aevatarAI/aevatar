@@ -144,6 +144,14 @@ public sealed class NyxIdChatConversationGAgent
     {
         ArgumentNullException.ThrowIfNull(command);
         var scopeId = NormalizeRequired(command.ScopeId, nameof(command.ScopeId));
+        if (command.FirstTurn is not null &&
+            string.Equals(State.ScopeId, scopeId, StringComparison.Ordinal) &&
+            string.Equals(State.ConversationActorId, Id, StringComparison.Ordinal) &&
+            !string.IsNullOrWhiteSpace(State.HistoryInitializationOperationId))
+        {
+            await HandleStartTurnAsync(command.FirstTurn);
+            return;
+        }
         var commandId = ActiveInboundEnvelope?.Id ?? string.Empty;
         var correlationId = ActiveInboundEnvelope?.Propagation?.CorrelationId ?? commandId;
 
@@ -201,6 +209,9 @@ public sealed class NyxIdChatConversationGAgent
                     correlationId);
             return;
         }
+
+        if (command.FirstTurn is not null)
+            await HandleStartTurnAsync(command.FirstTurn);
 
         if (State.PendingHistoryInitialization is not { } pendingInitialization)
             return;
@@ -524,18 +535,21 @@ public sealed class NyxIdChatConversationGAgent
             if (SameTurnAdmission(State, command))
                 return;
 
+            if (SameTurnIdentity(State, command))
+            {
+                await PersistTurnAdmissionRejectionAsync(
+                    command,
+                    "IDEMPOTENCY_CONFLICT",
+                    "This client request id was already used for different input.");
+                return;
+            }
+
             if (State.ActiveTurn.Status == NyxIdChatTurnStatus.Active)
             {
-                await PersistDomainEventAsync(new NyxIdChatTurnAdmissionRejectedEvent
-                {
-                    ConversationActorId = Id,
-                    RequestedTurnId = command.TurnId.Trim(),
-                    ActiveTurnId = State.ActiveTurn.TurnId,
-                    CommandId = command.CommandId.Trim(),
-                    CorrelationId = command.CorrelationId.Trim(),
-                    ReasonCode = NyxIdChatControlCommands.ActiveTurnRequiresSteering,
-                    SafeMessage = NyxIdChatControlCommands.ActiveTurnRequiresSteeringMessage,
-                }, CancellationToken.None);
+                await PersistTurnAdmissionRejectionAsync(
+                    command,
+                    NyxIdChatControlCommands.ActiveTurnRequiresSteering,
+                    NyxIdChatControlCommands.ActiveTurnRequiresSteeringMessage);
                 return;
             }
         }
@@ -976,28 +990,44 @@ public sealed class NyxIdChatConversationGAgent
                 AuthorizationRequired: not null,
             })
         {
-            var actionDecision = NyxIdChatBrowserActions.RequestAuthorization(
-                State,
-                signal,
-                Services.GetRequiredService<NyxIdAssistantActionRegistry>(),
-                now);
-            if (!actionDecision.ShouldCommit)
-                return;
-
-            var actionState = actionDecision.State.Clone();
-            var authorizationTerminalPrepared = PrepareHistoryTerminalOutbox(actionState);
-
-            await PersistDomainEventAsync(new NyxIdChatActionRequestedEvent
+            try
             {
-                Request = actionDecision.Request.Clone(),
-                Task = actionState.ActiveTask.Clone(),
-                OriginTurn = actionState.ActiveTurn.Clone(),
-                State = actionState,
-            }, CancellationToken.None);
+                var actionDecision = NyxIdChatBrowserActions.RequestAuthorization(
+                    State,
+                    signal,
+                    Services.GetRequiredService<NyxIdAssistantActionRegistry>(),
+                    now);
+                if (!actionDecision.ShouldCommit)
+                    return;
 
-            if (authorizationTerminalPrepared)
-                await DispatchPendingHistoryTerminalAsync();
-            return;
+                var actionState = actionDecision.State.Clone();
+                var authorizationTerminalPrepared = PrepareHistoryTerminalOutbox(actionState);
+
+                await PersistDomainEventAsync(new NyxIdChatActionRequestedEvent
+                {
+                    Request = actionDecision.Request.Clone(),
+                    Task = actionState.ActiveTask.Clone(),
+                    OriginTurn = actionState.ActiveTurn.Clone(),
+                    State = actionState,
+                }, CancellationToken.None);
+
+                if (authorizationTerminalPrepared)
+                    await DispatchPendingHistoryTerminalAsync();
+                return;
+            }
+            catch (NyxIdAssistantActionRegistryException exception)
+            {
+                signal = new NyxIdChatOperationResultSignal
+                {
+                    Key = signal.Key.Clone(),
+                    Failure = new NyxIdChatOperationFailure
+                    {
+                        FailureCode = exception.Code,
+                        SafeMessage = "The requested NyxID action is unavailable.",
+                        ExternalEffect = NyxIdChatEffectEvidence.NotApplied,
+                    },
+                };
+            }
         }
 
         var decision = NyxIdChatTaskLifecycle.ApplyOperationResult(State, signal, now);
@@ -1735,10 +1765,14 @@ public sealed class NyxIdChatConversationGAgent
     }
 
     private static string BuildActionContinuationHistoryText(
-        IEnumerable<NyxIdChatActionReport> reports) =>
-        $"NyxID action update: {string.Join(
+        IEnumerable<NyxIdChatActionReport> reports)
+    {
+        var values = reports.ToArray();
+        return values.Length == 0
+            ? "NyxID state changed; recheck pending actions."
+            : $"NyxID action update: {string.Join(
             ", ",
-            reports.Select(static report => report.Disposition switch
+            values.Select(static report => report.Disposition switch
             {
                 NyxIdChatActionDisposition.Completed => "completed",
                 NyxIdChatActionDisposition.Declined => "declined",
@@ -1748,6 +1782,7 @@ public sealed class NyxIdChatConversationGAgent
                 _ => throw new InvalidOperationException(
                     "Action continuation history requires a closed disposition."),
             }))}.";
+    }
 
     private Task ReserveHistoryDeliveryAsync(
         NyxIdChatHistoryDeliveryReservationState reservation,
@@ -2185,6 +2220,30 @@ public sealed class NyxIdChatConversationGAgent
                 command,
                 state.HistoryDeliveryReservation?.SourceCommandId ?? command.CommandId.Trim()),
             StringComparison.Ordinal);
+
+    private static bool SameTurnIdentity(
+        NyxIdChatConversationGAgentState state,
+        NyxIdChatStartTurnCommand command) =>
+        string.Equals(state.ConversationActorId, command.ConversationActorId.Trim(), StringComparison.Ordinal) &&
+        string.Equals(state.ScopeId, command.ScopeId.Trim(), StringComparison.Ordinal) &&
+        string.Equals(state.ActiveTurn?.TurnId, command.TurnId.Trim(), StringComparison.Ordinal) &&
+        string.Equals(state.ActiveTurn?.TaskId, command.TaskId.Trim(), StringComparison.Ordinal) &&
+        string.Equals(state.ActiveTurn?.ClientRequestId, command.ClientRequestId.Trim(), StringComparison.Ordinal);
+
+    private Task PersistTurnAdmissionRejectionAsync(
+        NyxIdChatStartTurnCommand command,
+        string reasonCode,
+        string safeMessage) =>
+        PersistDomainEventAsync(new NyxIdChatTurnAdmissionRejectedEvent
+        {
+            ConversationActorId = Id,
+            RequestedTurnId = command.TurnId.Trim(),
+            ActiveTurnId = State.ActiveTurn?.TurnId ?? string.Empty,
+            CommandId = command.CommandId.Trim(),
+            CorrelationId = command.CorrelationId.Trim(),
+            ReasonCode = reasonCode,
+            SafeMessage = safeMessage,
+        }, CancellationToken.None);
 
     private string BuildHistoryRequestFingerprint(
         NyxIdChatStartTurnCommand command,

@@ -29,6 +29,29 @@ public static partial class NyxIdChatEndpoints
         [FromServices] ICommandInteractionService<NyxIdChatCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus> interactionService,
         [FromServices] ICommandInteractionService<NyxIdActionContinuationCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus> actionContinuationInteractionService,
         [FromServices] ILoggerFactory loggerFactory,
+        CancellationToken ct) =>
+        await HandleStreamMessageCoreAsync(
+            http,
+            scopeId,
+            actorId,
+            request,
+            admissionPort,
+            interactionService,
+            actionContinuationInteractionService,
+            loggerFactory,
+            createIfMissing: false,
+            ct);
+
+    private static async Task HandleStreamMessageCoreAsync(
+        HttpContext http,
+        string scopeId,
+        string actorId,
+        NyxIdChatStreamRequest request,
+        IScopeResourceAdmissionPort admissionPort,
+        ICommandInteractionService<NyxIdChatCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus> interactionService,
+        ICommandInteractionService<NyxIdActionContinuationCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus> actionContinuationInteractionService,
+        ILoggerFactory loggerFactory,
+        bool createIfMissing,
         CancellationToken ct)
     {
         var logger = loggerFactory.CreateLogger("Aevatar.NyxId.Chat.Endpoints");
@@ -69,8 +92,8 @@ public static partial class NyxIdChatEndpoints
             else if (string.Equals(streamType, "action.continue", StringComparison.Ordinal))
             {
                 ownerSubject = ResolveAuthenticatedOwnerSubject(http) ?? string.Empty;
+                var originTurnId = request.OriginTurnId?.Trim() ?? string.Empty;
                 if (!TryValidateControlIdentity(clientRequestId, out clientRequestId) ||
-                    !TryValidateControlIdentity(request.OriginTurnId, out var originTurnId) ||
                     string.IsNullOrWhiteSpace(ownerSubject) ||
                     !string.IsNullOrWhiteSpace(request.Prompt) ||
                     request.InputParts is { Count: > 0 } ||
@@ -88,7 +111,7 @@ public static partial class NyxIdChatEndpoints
                 return;
             }
 
-            if (!await TryAuthorizeConversationAsync(
+            if (!createIfMissing && !await TryAuthorizeConversationAsync(
                     http,
                     admissionPort,
                     scopeId,
@@ -170,7 +193,7 @@ public static partial class NyxIdChatEndpoints
                     new NyxIdActionContinuationCommand(
                         actorId,
                         scopeId,
-                        request.OriginTurnId!.Trim(),
+                        request.OriginTurnId?.Trim() ?? string.Empty,
                         turnId,
                         ownerSubject,
                         clientRequestId!,
@@ -196,7 +219,8 @@ public static partial class NyxIdChatEndpoints
                         request.InputParts,
                         metadata,
                         llmControl,
-                        ClientRequestId: clientRequestId),
+                        ClientRequestId: clientRequestId,
+                        CreateIfMissing: createIfMissing),
                     EmitAsync,
                     null,
                     interactionCancellation.Token);
@@ -294,10 +318,31 @@ public static partial class NyxIdChatEndpoints
         [FromServices] IScopeResourceAdmissionPort admissionPort,
         [FromServices] ICommandInteractionService<NyxIdApprovalCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus> interactionService,
         [FromServices] ILoggerFactory loggerFactory,
+        CancellationToken ct) =>
+        await HandleApproveCoreAsync(
+            http,
+            scopeId,
+            actorId,
+            request,
+            admissionPort,
+            interactionService,
+            loggerFactory,
+            clientRequestId: null,
+            ct);
+
+    private static async Task HandleApproveCoreAsync(
+        HttpContext http,
+        string scopeId,
+        string actorId,
+        NyxIdApprovalRequest request,
+        IScopeResourceAdmissionPort admissionPort,
+        ICommandInteractionService<NyxIdApprovalCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus> interactionService,
+        ILoggerFactory loggerFactory,
+        string? clientRequestId,
         CancellationToken ct)
     {
         var logger = loggerFactory.CreateLogger("Aevatar.NyxId.Chat.Endpoints");
-        var turnId = CreateTurnId(actorId, clientRequestId: null);
+        var turnId = CreateTurnId(actorId, clientRequestId);
 
         try
         {
@@ -545,7 +590,11 @@ public static partial class NyxIdChatEndpoints
         out IReadOnlyList<NyxIdChatActionReport> mapped)
     {
         mapped = [];
-        if (reports is not { Count: > 0 })
+        if (reports is null)
+            return false;
+        if (reports.Count == 0)
+            return string.IsNullOrEmpty(originTurnId);
+        if (!TryValidateControlIdentity(originTurnId, out originTurnId))
             return false;
 
         var values = new List<NyxIdChatActionReport>(reports.Count);
@@ -950,6 +999,7 @@ public static partial class NyxIdChatEndpoints
     [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
     public sealed record NyxIdChatDeviceRefDto(string? DeviceId);
 
+    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
     public sealed record ContentPartDto(
         string Type,
         string? Text = null,

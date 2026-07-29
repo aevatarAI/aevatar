@@ -539,6 +539,66 @@ public sealed class MainnetHostCompositionTests
     }
 
     [Fact]
+    public void MapAevatarMainnetHost_ShouldOwnTheSingleChatPostRoute()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder();
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        app.MapAevatarMainnetHost();
+
+        var chatPosts = ((IEndpointRouteBuilder)app).DataSources
+            .SelectMany(static source => source.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Where(static endpoint =>
+                endpoint.RoutePattern.RawText == "/api/chat" &&
+                endpoint.Metadata
+                    .OfType<HttpMethodMetadata>()
+                    .Single()
+                    .HttpMethods
+                    .Contains(HttpMethods.Post, StringComparer.OrdinalIgnoreCase))
+            .ToList();
+
+        chatPosts.Should().ContainSingle();
+        chatPosts.Single().Metadata.GetMetadata<IEndpointNameMetadata>()
+            ?.EndpointName.Should().Be("StartMainnetChat");
+
+        var publicConversationRoutes = ((IEndpointRouteBuilder)app).DataSources
+            .SelectMany(static source => source.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Where(static endpoint =>
+                endpoint.RoutePattern.RawText?.StartsWith(
+                    "/api/chat/conversations",
+                    StringComparison.Ordinal) == true)
+            .Select(static endpoint => new
+            {
+                Route = endpoint.RoutePattern.RawText,
+                Methods = endpoint.Metadata.GetMetadata<HttpMethodMetadata>()!.HttpMethods,
+            })
+            .ToList();
+
+        publicConversationRoutes.Should().ContainSingle(route =>
+            route.Route == "/api/chat/conversations" &&
+            route.Methods.Contains(HttpMethods.Get));
+        publicConversationRoutes.Should().ContainSingle(route =>
+            route.Route == "/api/chat/conversations/{conversationId}" &&
+            route.Methods.Contains(HttpMethods.Get));
+        publicConversationRoutes.Should().ContainSingle(route =>
+            route.Route == "/api/chat/conversations/{conversationId}/state" &&
+            route.Methods.Contains(HttpMethods.Get));
+        publicConversationRoutes.Should().ContainSingle(route =>
+            route.Route == "/api/chat/conversations/{conversationId}" &&
+            route.Methods.Contains(HttpMethods.Delete));
+        publicConversationRoutes.Should().OnlyContain(route =>
+            !route.Route!.Contains("scopeId", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task AddAevatarMainnetHost_ShouldRegisterDefaultToolSets()
     {
         using var home = new TemporaryAevatarHomeScope();

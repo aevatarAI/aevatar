@@ -227,7 +227,9 @@ public sealed class NyxIdActionPostconditionPort : INyxIdActionPostconditionPort
     }
 
     private static bool IsValidCommonInput(NyxIdChatActionPostconditionInput input) =>
-        input.ReportedDisposition == NyxIdChatActionDisposition.Completed &&
+        input.ReportedDisposition is
+            NyxIdChatActionDisposition.Completed or
+            NyxIdChatActionDisposition.Unspecified &&
         !string.IsNullOrWhiteSpace(input.ScopeId) &&
         !string.IsNullOrWhiteSpace(input.OwnerSubject) &&
         !string.IsNullOrWhiteSpace(input.OriginTurnId) &&
@@ -299,7 +301,7 @@ public sealed class NyxIdActionPostconditionPort : INyxIdActionPostconditionPort
         new()
         {
             ActionRequestId = input.ActionRequestId,
-            Disposition = input.ReportedDisposition,
+            Disposition = NyxIdChatActionDisposition.Completed,
             Verified = true,
             Resource = resource,
             FailureCode = string.Empty,

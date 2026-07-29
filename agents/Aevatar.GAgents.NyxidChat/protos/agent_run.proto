@@ -740,6 +740,8 @@ message NyxIdChatConversationCreateCommand {
   string scope_id = 1;
   bool created_locally = 2;
   aevatar.ai.AgentProfileSnapshot agent_profile = 3;
+  NyxIdChatStartTurnCommand first_turn = 4;
+  string requested_actor_id = 5;
 }
 
 message NyxIdChatConversationDeleteCommand {
