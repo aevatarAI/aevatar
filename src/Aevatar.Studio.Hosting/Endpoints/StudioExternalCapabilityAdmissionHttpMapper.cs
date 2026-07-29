@@ -49,10 +49,12 @@ internal static class StudioExternalCapabilityAdmissionHttpMapper
                 case ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdOperation:
                     return new StudioExternalCapabilitySelectionResponse(
                         readiness.SelectedSelector.NyxIdOperation.UserServiceId,
-                        readiness.SelectedSelector.NyxIdOperation.OperationId,
+                        readiness.SelectedSelector.NyxIdOperation.EndpointId,
+                        null,
                         null);
                 case ExternalWorkflowCapabilitySelector.SelectorOneofCase.HostConnector:
                     return new StudioExternalCapabilitySelectionResponse(
+                        null,
                         null,
                         readiness.SelectedSelector.HostConnector.OperationId,
                         readiness.SelectedSelector.HostConnector.ConnectorCapabilityRef);
@@ -64,10 +66,12 @@ internal static class StudioExternalCapabilityAdmissionHttpMapper
             ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService =>
                 new StudioExternalCapabilitySelectionResponse(
                     readiness.SelectedCapability.NyxIdUserService.UserServiceId,
-                    readiness.SelectedCapability.NyxIdUserService.OperationId,
+                    readiness.SelectedCapability.NyxIdUserService.EndpointId,
+                    null,
                     null),
             ExternalWorkflowCapabilityRef.CapabilityOneofCase.HostConnector =>
                 new StudioExternalCapabilitySelectionResponse(
+                    null,
                     null,
                     readiness.SelectedCapability.HostConnector.OperationId,
                     readiness.SelectedCapability.HostConnector.ConnectorCapabilityRef),
@@ -117,6 +121,7 @@ internal static class StudioExternalCapabilityAdmissionHttpMapper
         ExternalCapabilitySourceKind.ConnectorCatalog => "connector_catalog",
         ExternalCapabilitySourceKind.NyxIdUserServices => "nyx_id_user_services",
         ExternalCapabilitySourceKind.NyxIdOpenApi => "nyx_id_open_api",
+        ExternalCapabilitySourceKind.NyxIdMcpConfig => "nyx_id_mcp_config",
         ExternalCapabilitySourceKind.DurableAuthorizationCatalog => "durable_authorization_catalog",
         _ => "unspecified",
     };
@@ -139,7 +144,8 @@ internal sealed record StudioExternalCapabilityReadinessResponse(
 
 internal sealed record StudioExternalCapabilitySelectionResponse(
     string? UserServiceId,
-    string OperationId,
+    string? EndpointId,
+    string? OperationId,
     string? ConnectorCapabilityRef);
 
 internal sealed record StudioExternalCapabilityBlockerResponse(

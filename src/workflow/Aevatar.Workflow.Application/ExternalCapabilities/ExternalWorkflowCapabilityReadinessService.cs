@@ -11,7 +11,7 @@ public sealed class ExternalWorkflowCapabilityReadinessService(
     private readonly IReadOnlyList<IExternalWorkflowCapabilitySource> _sources =
         sources?.ToArray() ?? throw new ArgumentNullException(nameof(sources));
 
-    public async Task<IReadOnlyList<ExternalWorkflowCapabilityDescriptor>> ListAsync(
+    public async Task<ExternalWorkflowCapabilityDiscoveryResult> ListAsync(
         ListExternalWorkflowCapabilitiesRequest request,
         CancellationToken cancellationToken = default)
     {
@@ -20,12 +20,20 @@ public sealed class ExternalWorkflowCapabilityReadinessService(
 
         var batches = await Task.WhenAll(_sources.Select(source =>
             source.ListAsync(request.Access, cancellationToken)));
-        return batches
-            .SelectMany(static batch => batch)
+        var capabilities = batches
+            .SelectMany(static batch => batch.Capabilities)
             .Select(static descriptor => descriptor.Clone())
             .OrderBy(static descriptor => descriptor.Selector.SelectorCase)
             .ThenBy(IdentityKey, StringComparer.Ordinal)
             .ToArray();
+        var result = new ExternalWorkflowCapabilityDiscoveryResult
+        {
+            CandidateCount = batches.Sum(static batch => batch.CandidateCount),
+            RejectedCount = batches.Sum(static batch => batch.RejectedCount),
+        };
+        result.Capabilities.Add(capabilities);
+        result.Diagnostics.Add(batches.SelectMany(static batch => batch.Diagnostics));
+        return result;
     }
 
     public async Task<ExternalCapabilityReadiness> InspectAsync(
@@ -82,7 +90,7 @@ public sealed class ExternalWorkflowCapabilityReadinessService(
             ExternalWorkflowCapabilitySelector.SelectorOneofCase.HostConnector =>
                 $"{descriptor.Selector.HostConnector.ConnectorCapabilityRef}\n{descriptor.Selector.HostConnector.OperationId}",
             ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdOperation =>
-                $"{descriptor.Selector.NyxIdOperation.UserServiceId}\n{descriptor.Selector.NyxIdOperation.OperationId}",
+                $"{descriptor.Selector.NyxIdOperation.UserServiceId}\n{descriptor.Selector.NyxIdOperation.EndpointId}",
             _ => string.Empty,
         };
 }

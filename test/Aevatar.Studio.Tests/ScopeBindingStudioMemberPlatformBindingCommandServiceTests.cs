@@ -655,7 +655,7 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
             {
                 UserServiceId = "us-gamma",
                 ServiceSlugSnapshot = "service-gamma",
-                OperationId = "invoke-gamma",
+                EndpointId = "invoke-gamma",
                 HttpMethod = "GET",
                 PathTemplate = "/invoke",
                 ContractDigest = "operation-gamma-digest",
@@ -691,15 +691,10 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
                 }],
                 [
                     Source(
-                        ExternalCapabilitySourceKind.NyxIdUserServices,
-                        "nyxid-user-services:caller-alpha",
+                        ExternalCapabilitySourceKind.NyxIdMcpConfig,
+                        "nyxid-mcp-config:caller:nyx-user-gamma",
                         observedAt,
-                        "user-services-gamma-digest"),
-                    Source(
-                        ExternalCapabilitySourceKind.NyxIdOpenApi,
-                        "us-gamma",
-                        observedAt,
-                        "openapi-gamma-digest"),
+                        "mcp-config-gamma-digest"),
                     Source(
                         ExternalCapabilitySourceKind.DurableAuthorizationCatalog,
                         NyxIdAuthorizationCatalogActorIds.Build(new AuthorizationOwnerIdentity

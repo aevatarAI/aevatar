@@ -15,6 +15,40 @@ namespace Aevatar.Workflow.Core.Tests.Modules;
 public sealed class WorkflowRoleGAgentMappingTests
 {
     [Fact]
+    public void WorkflowRunScopeMapper_ShouldFillMissingOwnerScopeWhenCallerScopeAlreadyExists()
+    {
+        var context = AgentToolExecutionContext.Empty with
+        {
+            Caller = new AgentToolCallerContext("scope-caller-alpha", null, null),
+        };
+
+        var mapped = WorkflowRunScopeToolContextMapper.Apply(" scope-owner-alpha ", context);
+
+        mapped.Caller.ScopeId.Should().Be("scope-caller-alpha");
+        mapped.Caller.OwnerScopeId.Should().Be("scope-owner-alpha");
+        mapped.Caller.OwnerSubject.Should().Be("scope-owner-alpha");
+    }
+
+    [Fact]
+    public void WorkflowRunScopeMapper_ShouldPreserveExistingIndependentOwnerScope()
+    {
+        var context = AgentToolExecutionContext.Empty with
+        {
+            Caller = new AgentToolCallerContext(
+                "scope-caller-alpha",
+                "owner-subject-alpha",
+                null,
+                "scope-owner-beta"),
+        };
+
+        var mapped = WorkflowRunScopeToolContextMapper.Apply("scope-owner-alpha", context);
+
+        mapped.Caller.ScopeId.Should().Be("scope-caller-alpha");
+        mapped.Caller.OwnerScopeId.Should().Be("scope-owner-beta");
+        mapped.Caller.OwnerSubject.Should().Be("owner-subject-alpha");
+    }
+
+    [Fact]
     public async Task WorkflowRoleGAgent_ShouldMapWorkflowCredentialAndRouteAtAiBoundary()
     {
         var provider = new RecordingLlmProvider();
@@ -30,6 +64,7 @@ public sealed class WorkflowRoleGAgentMappingTests
             StepId = "reply",
             SessionId = "session-1",
             Prompt = "hello",
+            ScopeId = " scope-owner-alpha ",
             ScheduleId = " schedule-1 ",
             Model = "model-a",
             UserMemoryPrompt = "memory",
@@ -55,6 +90,9 @@ public sealed class WorkflowRoleGAgentMappingTests
         provider.LastRequest.ToolContext.Should().NotBeNull();
         provider.LastRequest.ToolContext!.Credentials.NyxIdAccessToken.Should().Be("raw-token");
         provider.LastRequest.ToolContext.Credentials.NyxIdOrgToken.Should().Be("raw-token");
+        provider.LastRequest.ToolContext.Caller.ScopeId.Should().Be("scope-owner-alpha");
+        provider.LastRequest.ToolContext.Caller.OwnerScopeId.Should().Be("scope-owner-alpha");
+        provider.LastRequest.ToolContext.Caller.OwnerSubject.Should().Be("scope-owner-alpha");
         provider.LastRequest.ToolContext.Routing.NyxIdRoutePreference.Should().Be("route-a");
         provider.LastRequest.ToolContext.WorkflowRuntime.ParentActorId.Should().Be("parent-actor");
         provider.LastRequest.ToolContext.WorkflowRuntime.ParentRunId.Should().Be("parent-run");

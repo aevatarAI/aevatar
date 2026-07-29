@@ -208,7 +208,7 @@ public sealed class NyxIdWorkflowAdmissionEnforcementStartupGuardTests
                 NyxIdUserService = new NyxIdUserServiceCapabilityRef
                 {
                     UserServiceId = "us-alpha",
-                    OperationId = "read-alpha",
+                    EndpointId = "read-alpha",
                 },
             },
         });

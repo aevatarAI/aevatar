@@ -395,7 +395,7 @@ public sealed class WorkflowRunActorPortBranchTests
     public async Task ParseWorkflowYamlAsync_WhenNyxIdCapabilityIsNotExact_ShouldReturnInvalid(
         string arguments,
         string userServiceId,
-        string operationId,
+        string endpointId,
         string expectedError)
     {
         var port = CreatePort(new RecordingActorRuntime());
@@ -410,7 +410,7 @@ public sealed class WorkflowRunActorPortBranchTests
                 capability:
                   nyxid_operation:
                     user_service_id: '{{userServiceId}}'
-                    operation_id: '{{operationId}}'
+                    endpoint_id: '{{endpointId}}'
                 parameters:
                   tool: nyxid_proxy
                   arguments: '{{arguments}}'

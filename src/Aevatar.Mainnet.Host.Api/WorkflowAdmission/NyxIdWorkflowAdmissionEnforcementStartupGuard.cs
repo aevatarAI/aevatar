@@ -214,7 +214,7 @@ internal sealed class NyxIdWorkflowAdmissionEnforcementStartupGuard(
                 selector.NyxIdOperation = new NyxIdOperationSelector
                 {
                     UserServiceId = admission.Capability.NyxIdUserService.UserServiceId,
-                    OperationId = admission.Capability.NyxIdUserService.OperationId,
+                    EndpointId = admission.Capability.NyxIdUserService.EndpointId,
                 };
                 break;
         }

@@ -66,22 +66,18 @@ public sealed class AgentWorkflowToolSourceAdapter(
             var credentialContext = WorkflowCallerCredentialToolContextMapper.FromCredential(
                 request.CallerCredential,
                 workflowRuntimeContext);
-            var toolContext = credentialContext with
+            var toolContext = WorkflowRunScopeToolContextMapper.Apply(request.ScopeId, credentialContext with
             {
                 Request = credentialContext.Request with
                 {
                     CallId = Normalize(request.CallId),
                     IdempotencyKey = Normalize(request.IdempotencyKey),
                 },
-                Caller = credentialContext.Caller with
-                {
-                    ScopeId = Normalize(request.ScopeId),
-                },
                 Schedule = new AgentToolScheduleContext(Normalize(request.ScheduleId)),
                 OperationAdmission = WorkflowOperationAdmissionToolContextMapper.Map(
                     request.InvocationAdmission),
                 InvocationSurface = AgentToolInvocationSurface.WorkflowToolCall,
-            };
+            });
             _logger.LogInformation(
                 "Workflow tool credential context prepared. toolName={ToolName} scopeId={ScopeId} rootRunId={RootRunId} parentRunId={ParentRunId} parentStepId={ParentStepId} hasCallerCredentialBearer={HasCallerCredentialBearer} hasNyxIdAccessToken={HasNyxIdAccessToken} hasNyxIdOrgToken={HasNyxIdOrgToken}",
                 _tool.Name,

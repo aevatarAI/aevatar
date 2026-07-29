@@ -769,7 +769,7 @@ public sealed class ChatEndpointsInternalTests
             new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerNyxIdAuthority(
                 "nyxid",
                 string.Empty,
-                "caller-scope",
+                "different-uid",
                 "proxy"));
     }
 
@@ -974,7 +974,11 @@ public sealed class ChatEndpointsInternalTests
         var bindingQueryPort = new RecordingBindingQueryPort("bnd_sender");
         var http = CreateHttpContext("Bearer trusted-token");
         http.RequestServices = CreateRequestServices(bindingQueryPort: bindingQueryPort);
-        http.User = AuthenticatedScopePrincipal("trusted-scope");
+        http.User = new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim("scope_id", "trusted-scope"),
+            new Claim("uid", "nyx-user-alpha"),
+        ], "test"));
         http.Request.ContentType = "application/json";
         http.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(
             """
@@ -997,8 +1001,21 @@ public sealed class ChatEndpointsInternalTests
         {
             Platform = "nyxid",
             Tenant = string.Empty,
-            ExternalUserId = "trusted-scope",
+            ExternalUserId = "nyx-user-alpha",
         });
+    }
+
+    [Fact]
+    public void WorkflowCallerCredentialExtractor_ShouldNotTreatScopeAsNyxIdUser()
+    {
+        var http = CreateHttpContext("Bearer trusted-token");
+        http.User = AuthenticatedScopePrincipal("scope-owner-alpha");
+
+        var result = WorkflowCallerCredentialExtractor.Extract(http);
+
+        result.Succeeded.Should().BeTrue();
+        result.Credential!.BearerToken.Should().Be("trusted-token");
+        result.Credential.NyxIdAuthority.Should().BeNull();
     }
 
     [Fact]

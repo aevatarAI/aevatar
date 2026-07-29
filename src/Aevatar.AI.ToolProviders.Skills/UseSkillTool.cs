@@ -413,11 +413,9 @@ public sealed class UseSkillTool : IAgentTool
     private static string ResolveCapabilityCallerId()
     {
         var authority = AgentToolRequestContext.NyxIdAuthority;
-        if (authority.IsComplete)
-            return authority.ExternalUserId!;
-
-        return AgentToolRequestContext.OwnerSubject?.Trim()
-            ?? string.Empty;
+        return authority.IsComplete
+            ? authority.ExternalUserId!.Trim()
+            : string.Empty;
     }
 
     private static UseSkillArguments ParseArguments(string argumentsJson)

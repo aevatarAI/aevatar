@@ -86,10 +86,7 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        if (string.Equals(
-                request.Plan.SchemaVersion,
-                WorkflowCapabilityAdmissionPlanIntegrity.LegacySchemaVersion,
-                StringComparison.Ordinal))
+        if (WorkflowCapabilityAdmissionPlanIntegrity.RequiresRebind(request.Plan.SchemaVersion))
         {
             throw new WorkflowExternalCapabilityAdmissionException(
                 BuildRebindRequiredReadiness(request.ExpectedExecutionMode));

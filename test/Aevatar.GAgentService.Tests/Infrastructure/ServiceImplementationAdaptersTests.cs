@@ -521,7 +521,7 @@ public sealed class ServiceImplementationAdaptersTests
                 {
                     UserServiceId = "us-home-alpha",
                     ServiceSlugSnapshot = "home-assistant",
-                    OperationId = "read_states",
+                    EndpointId = "read_states",
                     HttpMethod = "GET",
                     PathTemplate = "/api/states",
                     ContractDigest = "nyxid-digest-alpha",
@@ -534,7 +534,7 @@ public sealed class ServiceImplementationAdaptersTests
                 {
                     UserServiceId = "us-home-beta",
                     ServiceSlugSnapshot = "home-assistant",
-                    OperationId = "read_states",
+                    EndpointId = "read_states",
                     HttpMethod = "GET",
                     PathTemplate = "/api/states",
                     ContractDigest = "nyxid-digest-beta",
@@ -604,7 +604,7 @@ public sealed class ServiceImplementationAdaptersTests
             {
                 UserServiceId = "us-home-alpha",
                 ServiceSlugSnapshot = "home-assistant",
-                OperationId = "read_states",
+                EndpointId = "read_states",
                 HttpMethod = "GET",
                 PathTemplate = "/api/states",
                 ContractDigest = "nyxid-digest-alpha",
@@ -742,7 +742,7 @@ public sealed class ServiceImplementationAdaptersTests
             {
                 UserServiceId = "us-home-alpha",
                 ServiceSlugSnapshot = "home-assistant",
-                OperationId = "read_states",
+                EndpointId = "read_states",
                 HttpMethod = "GET",
                 PathTemplate = "/api/states",
                 ContractDigest = "nyxid-digest-alpha",
@@ -764,7 +764,7 @@ public sealed class ServiceImplementationAdaptersTests
                 NyxIdOperation = new NyxIdOperationSelector
                 {
                     UserServiceId = "us-home-alpha",
-                    OperationId = "read_states",
+                    EndpointId = "read_states",
                 },
             },
         });

@@ -203,6 +203,30 @@ public sealed class ToolProviderHttpClientRegistrationTests
         }
     }
 
+    [Fact]
+    public async Task NyxIdRequireServiceTool_ShouldRejectOwnerSubjectWithoutNyxIdAuthority()
+    {
+        var handler = new StubUserServiceListHandler("""{ "keys": [] }""");
+        var tool = CreateRequireServiceTool(handler);
+        var previous = AgentToolRequestContext.Current;
+        AgentToolRequestContext.Current = CapabilityContext() with
+        {
+            NyxIdAuthority = AgentToolNyxIdAuthorityContext.Empty,
+        };
+
+        try
+        {
+            var result = await tool.ExecuteAsync("""{"service_slug":"api-github"}""");
+
+            result.Should().Contain("verified caller identity not available");
+            handler.Requests.Should().BeEmpty();
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = previous;
+        }
+    }
+
     private static IAgentTool CreateRequireServiceTool(StubUserServiceListHandler handler)
     {
         var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
@@ -238,6 +262,10 @@ public sealed class ToolProviderHttpClientRegistrationTests
                 "runtime-caller-credential",
                 "runtime-organization-credential",
                 null),
+            NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                "nyxid",
+                string.Empty,
+                "nyx-user-alpha"),
         };
 
     [Fact]

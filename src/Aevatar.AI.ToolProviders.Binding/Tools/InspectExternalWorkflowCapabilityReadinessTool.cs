@@ -34,9 +34,9 @@ public sealed class InspectExternalWorkflowCapabilityReadinessTool : IAgentTool
                   "type": "object",
                   "properties": {
                     "user_service_id": { "type": "string" },
-                    "operation_id": { "type": "string" }
+                    "endpoint_id": { "type": "string" }
                   },
-                  "required": ["user_service_id", "operation_id"],
+                  "required": ["user_service_id", "endpoint_id"],
                   "additionalProperties": false
                 }
               },

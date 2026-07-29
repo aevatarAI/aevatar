@@ -7,8 +7,9 @@ namespace Aevatar.Workflow.Abstractions;
 
 public static class WorkflowCapabilityAdmissionPlanIntegrity
 {
-    public const string SchemaVersion = "external-capability-admission.v3";
+    public const string SchemaVersion = "external-capability-admission.v4";
     public const string LegacySchemaVersion = "external-capability-admission.v2";
+    public const string OpenApiSchemaVersion = "external-capability-admission.v3";
     public const string RebindRequiredCode = "CAPABILITY_ADMISSION_REBIND_REQUIRED";
     public const string NyxIdAuthority = "nyxid";
 
@@ -78,12 +79,12 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
         IEnumerable<ExternalToolInvocationSpec> expectedInvocations)
     {
         ArgumentNullException.ThrowIfNull(plan);
-        if (string.Equals(plan.SchemaVersion, LegacySchemaVersion, StringComparison.Ordinal))
+        if (RequiresRebind(plan.SchemaVersion))
             throw new WorkflowCapabilityAdmissionRebindRequiredException();
         if (!string.Equals(plan.SchemaVersion, SchemaVersion, StringComparison.Ordinal))
             throw new InvalidOperationException("Workflow capability admission schema version is invalid.");
         if (plan.ExternalCapabilities.Count != 0)
-            throw new InvalidOperationException("Workflow capability admission v3 cannot contain legacy external capabilities.");
+            throw new InvalidOperationException("Workflow capability admission v4 cannot contain legacy external capabilities.");
 
         var expectedDefinitionDigest = ComputeDefinitionDigest(workflowYaml, inlineWorkflowYamls);
         if (!FixedTimeEquals(plan.DefinitionDigest, expectedDefinitionDigest))
@@ -179,7 +180,7 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
                 "\n",
                 "nyxid",
                 selector.NyxIdOperation.UserServiceId,
-                selector.NyxIdOperation.OperationId),
+                selector.NyxIdOperation.EndpointId),
             _ => "none",
         };
     }
@@ -209,8 +210,8 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
                     capability.NyxIdUserService.UserServiceId,
                     StringComparison.Ordinal) &&
                 string.Equals(
-                    selector.NyxIdOperation.OperationId,
-                    capability.NyxIdUserService.OperationId,
+                    selector.NyxIdOperation.EndpointId,
+                    capability.NyxIdUserService.EndpointId,
                     StringComparison.Ordinal),
             _ => false,
         };
@@ -232,7 +233,7 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
                 "nyxid",
                 capability.NyxIdUserService.UserServiceId,
                 capability.NyxIdUserService.ServiceSlugSnapshot,
-                capability.NyxIdUserService.OperationId,
+                capability.NyxIdUserService.EndpointId,
                 capability.NyxIdUserService.HttpMethod,
                 capability.NyxIdUserService.PathTemplate,
                 capability.NyxIdUserService.ContractDigest),
@@ -331,7 +332,7 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
             ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdOperation => new[]
             {
                 selector.NyxIdOperation.UserServiceId,
-                selector.NyxIdOperation.OperationId,
+                selector.NyxIdOperation.EndpointId,
             },
             _ => [],
         };
@@ -360,6 +361,10 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
             throw new InvalidOperationException("Workflow external invocation call site id is invalid.");
         }
     }
+
+    public static bool RequiresRebind(string? schemaVersion) =>
+        string.Equals(schemaVersion, LegacySchemaVersion, StringComparison.Ordinal) ||
+        string.Equals(schemaVersion, OpenApiSchemaVersion, StringComparison.Ordinal);
 
     private static void EnsureUniqueCallSites(IEnumerable<string> callSiteIds)
     {
@@ -412,14 +417,8 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
                         return false;
                     break;
                 case ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService:
-                    if (!HasSource(sources, ExternalCapabilitySourceKind.NyxIdUserServices) ||
-                        !HasSource(
-                            sources,
-                            ExternalCapabilitySourceKind.NyxIdOpenApi,
-                            capability.NyxIdUserService.UserServiceId))
-                    {
+                    if (!HasSource(sources, ExternalCapabilitySourceKind.NyxIdMcpConfig))
                         return false;
-                    }
                     break;
                 default:
                     return false;

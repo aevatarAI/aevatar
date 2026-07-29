@@ -99,11 +99,23 @@ public class BindingToolsTests
     {
         const string callerBearer = "caller-secret-that-must-not-be-serialized";
         const string organizationBearer = "organization-secret-that-must-not-be-serialized";
-        var listPort = new StubExternalWorkflowCapabilityListPort(
+        var discovery = new ExternalWorkflowCapabilityDiscoveryResult
+        {
+            CandidateCount = 3,
+            RejectedCount = 1,
+        };
+        discovery.Capabilities.Add(
         [
             Descriptor(NyxIdSelector("us-home-alpha"), "Home alpha"),
             Descriptor(NyxIdSelector("us-home-beta"), "Home beta"),
         ]);
+        discovery.Diagnostics.Add(new ExternalCapabilityDiscoveryDiagnostic
+        {
+            Code = ExternalCapabilityDiscoveryDiagnosticCode.GenericProxyRejected,
+            SafeMessage = "Generic proxy services are not eligible for workflow admission.",
+            Count = 1,
+        });
+        var listPort = new StubExternalWorkflowCapabilityListPort(discovery);
         var tool = new ListExternalWorkflowCapabilitiesTool(listPort);
 
         tool.Name.Should().Be("list_external_workflow_capabilities");
@@ -125,6 +137,10 @@ public class BindingToolsTests
             listPort.Request.Access.NyxIdOrganizationBearerToken.Should().Be(organizationBearer);
 
             using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("candidate_count").GetInt32().Should().Be(3);
+            document.RootElement.GetProperty("rejected_count").GetInt32().Should().Be(1);
+            document.RootElement.GetProperty("diagnostics")[0].GetProperty("code").GetString().Should()
+                .Be("EXTERNAL_CAPABILITY_DISCOVERY_DIAGNOSTIC_CODE_GENERIC_PROXY_REJECTED");
             var capabilities = document.RootElement.GetProperty("capabilities");
             capabilities.GetArrayLength().Should().Be(2);
             capabilities[0].GetProperty("selector").GetProperty("nyx_id_operation")
@@ -134,6 +150,35 @@ public class BindingToolsTests
             result.Should().NotContain("contract_digest");
             result.Should().NotContain(callerBearer);
             result.Should().NotContain(organizationBearer);
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
+    public async Task ListExternalWorkflowCapabilitiesTool_RejectsOwnerSubjectWithoutNyxIdAuthority()
+    {
+        var listPort = new StubExternalWorkflowCapabilityListPort(
+            new ExternalWorkflowCapabilityDiscoveryResult());
+        var tool = new ListExternalWorkflowCapabilitiesTool(listPort);
+        AgentToolRequestContext.Current = OwnerContext("scope-owner-alpha") with
+        {
+            Caller = new AgentToolCallerContext(
+                "scope-owner-alpha",
+                "scope-owner-alpha",
+                ResponseId: null,
+                OwnerScopeId: "scope-owner-alpha"),
+            Credentials = new AgentToolCredentials("caller-bearer-alpha", null, null),
+        };
+
+        try
+        {
+            var result = await tool.ExecuteAsync("{}");
+
+            result.Should().Contain("verified caller identity not available");
+            listPort.Request.Should().BeNull();
         }
         finally
         {
@@ -163,7 +208,7 @@ public class BindingToolsTests
                   "selector": {
                     "nyx_id_operation": {
                       "user_service_id": "us-home-alpha",
-                      "operation_id": "read_states"
+                      "endpoint_id": "read_states"
                     }
                   },
                   "execution_mode": "interactive"
@@ -175,7 +220,9 @@ public class BindingToolsTests
             readinessPort.Request.Access.CallerId.Should().Be("caller-subject-alpha");
             readinessPort.Request.ExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Interactive);
             readinessPort.Request.Selector.NyxIdOperation.UserServiceId.Should().Be("us-home-alpha");
-            readinessPort.Request.Selector.NyxIdOperation.OperationId.Should().Be("read_states");
+            readinessPort.Request.Selector.NyxIdOperation.EndpointId.Should().Be("read_states");
+            tool.ParametersSchema.Should().Contain("endpoint_id");
+            tool.ParametersSchema.Should().NotContain("operation_id");
             tool.ParametersSchema.Should().NotContain("contract_digest");
 
             using var document = JsonDocument.Parse(result);
@@ -198,7 +245,8 @@ public class BindingToolsTests
     {
         var source = new BindingAgentToolSource(
             new BindingToolOptions(),
-            externalCapabilityListPort: new StubExternalWorkflowCapabilityListPort([]),
+            externalCapabilityListPort: new StubExternalWorkflowCapabilityListPort(
+                new ExternalWorkflowCapabilityDiscoveryResult()),
             externalCapabilityReadinessPort: new StubExternalWorkflowCapabilityReadinessPort());
 
         var tools = await source.DiscoverToolsAsync();
@@ -847,16 +895,16 @@ public class BindingToolsTests
     }
 
     private sealed class StubExternalWorkflowCapabilityListPort(
-        IReadOnlyList<ExternalWorkflowCapabilityDescriptor> descriptors) : IExternalWorkflowCapabilityListPort
+        ExternalWorkflowCapabilityDiscoveryResult discovery) : IExternalWorkflowCapabilityListPort
     {
         public ListExternalWorkflowCapabilitiesRequest? Request { get; private set; }
 
-        public Task<IReadOnlyList<ExternalWorkflowCapabilityDescriptor>> ListAsync(
+        public Task<ExternalWorkflowCapabilityDiscoveryResult> ListAsync(
             ListExternalWorkflowCapabilitiesRequest request,
             CancellationToken cancellationToken = default)
         {
             Request = request;
-            return Task.FromResult(descriptors);
+            return Task.FromResult(discovery.Clone());
         }
     }
 
@@ -880,7 +928,7 @@ public class BindingToolsTests
                     {
                         UserServiceId = request.Selector.NyxIdOperation.UserServiceId,
                         ServiceSlugSnapshot = "home-assistant",
-                        OperationId = request.Selector.NyxIdOperation.OperationId,
+                        EndpointId = request.Selector.NyxIdOperation.EndpointId,
                         HttpMethod = "GET",
                         PathTemplate = "/api/states",
                         ContractDigest = "server-derived-contract-digest",
@@ -906,7 +954,7 @@ public class BindingToolsTests
             NyxIdOperation = new NyxIdOperationSelector
             {
                 UserServiceId = userServiceId,
-                OperationId = "read_states",
+                EndpointId = "read_states",
             },
         };
 

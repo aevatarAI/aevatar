@@ -38,6 +38,7 @@ public sealed class AgentWorkflowToolSourceAdapterTests
         agentTool.ObservedAccessToken.Should().Be("token-123");
         agentTool.ObservedOrgToken.Should().Be("token-123");
         agentTool.ObservedScopeId.Should().Be("scope-1");
+        agentTool.ObservedOwnerScopeId.Should().Be("scope-1");
         agentTool.ObservedCallId.Should().Be("call-1");
         agentTool.ObservedIdempotencyKey.Should().Be("idem-agent-tool-1");
         agentTool.ObservedScheduleId.Should().Be("schedule-1");
@@ -414,6 +415,8 @@ public sealed class AgentWorkflowToolSourceAdapterTests
 
         public string? ObservedScopeId { get; private set; }
 
+        public string? ObservedOwnerScopeId { get; private set; }
+
         public string? ObservedCallId { get; private set; }
 
         public string? ObservedIdempotencyKey { get; private set; }
@@ -448,6 +451,7 @@ public sealed class AgentWorkflowToolSourceAdapterTests
             ObservedAccessToken = AgentToolRequestContext.NyxIdAccessToken;
             ObservedOrgToken = AgentToolRequestContext.NyxIdOrgToken;
             ObservedScopeId = AgentToolRequestContext.ScopeId;
+            ObservedOwnerScopeId = AgentToolRequestContext.OwnerScopeId;
             ObservedCallId = AgentToolRequestContext.CallId;
             ObservedIdempotencyKey = AgentToolRequestContext.IdempotencyKey;
             ObservedScheduleId = AgentToolRequestContext.Current?.Schedule.ScheduleId;
@@ -493,7 +497,7 @@ public sealed class AgentWorkflowToolSourceAdapterTests
             {
                 UserServiceId = "us-write-alpha",
                 ServiceSlugSnapshot = "calendar-alpha",
-                OperationId = "create-event",
+                EndpointId = "create-event",
                 HttpMethod = "POST",
                 PathTemplate = "/events",
                 ContractDigest = "digest-write-alpha",

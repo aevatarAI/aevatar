@@ -209,12 +209,192 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
     }
 
     [Theory]
+    [InlineData("""{"query":{"container_id":"blocked","page_size":50}}""")]
+    [InlineData("""{"query":{"container_id":"chat","page_size":"50"}}""")]
+    public async Task ExecuteAsync_ShouldEnforceQueryParameterSchemasBeforeAnyHttpRequest(
+        string argumentsJson)
+    {
+        var handler = new RecordingHandler();
+        var tool = CreateTool(handler);
+        using var scope = PushContext(ListMessagesAdmission() with
+        {
+            Parameters =
+            [
+                QueryParameter("container_id", required: true, TextSchema("chat")),
+                QueryParameter("page_size", required: false, ScalarSchema(AgentToolOperationValueKind.Integer)),
+            ],
+        });
+
+        var result = await tool.ExecuteAsync(argumentsJson);
+
+        result.Should().Contain("NYXID_OPERATION_QUERY_PARAMETER_INVALID");
+        handler.RequestCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldEnforcePathParameterSchemasBeforeAnyHttpRequest()
+    {
+        var handler = new RecordingHandler();
+        var tool = CreateTool(handler);
+        using var scope = PushContext(GetApprovalInstanceAdmission() with
+        {
+            Parameters =
+            [
+                new AgentToolOperationParameter(
+                    "instance_code",
+                    AgentToolOperationParameterLocation.Path,
+                    true,
+                    ScalarSchema(AgentToolOperationValueKind.Integer)),
+            ],
+        });
+
+        var result = await tool.ExecuteAsync(
+            """{"path_params":{"instance_code":"approval_runtime_42"}}""");
+
+        result.Should().Contain("NYXID_OPERATION_PATH_PARAMETER_INVALID");
+        handler.RequestCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldRequireAdmittedHeadersBeforeAnyHttpRequest()
+    {
+        var handler = new RecordingHandler();
+        var tool = CreateTool(handler);
+        using var scope = PushContext(ListMessagesAdmission() with
+        {
+            Parameters =
+            [
+                QueryParameter("container_id", required: true),
+                new AgentToolOperationParameter(
+                    "If-Match",
+                    AgentToolOperationParameterLocation.Header,
+                    true,
+                    AgentToolOperationValueSchema.Text),
+            ],
+        });
+
+        var result = await tool.ExecuteAsync(
+            """{"query":{"container_id":"oc_1"}}""");
+
+        result.Should().Contain("NYXID_OPERATION_HEADER_MISSING");
+        handler.RequestCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldMatchAdmittedHeaderNamesCaseInsensitively()
+    {
+        var handler = new RecordingHandler();
+        var tool = CreateTool(handler);
+        using var scope = PushContext(ListMessagesAdmission() with
+        {
+            Parameters =
+            [
+                QueryParameter("container_id", required: true),
+                new AgentToolOperationParameter(
+                    "If-Match",
+                    AgentToolOperationParameterLocation.Header,
+                    true,
+                    AgentToolOperationValueSchema.Text),
+            ],
+        });
+
+        var result = await tool.ExecuteAsync(
+            """{"query":{"container_id":"oc_1"},"headers":{"if-match":"etag-alpha"}}""");
+
+        result.Should().NotContain("NYXID_OPERATION_HEADER_MISSING");
+        handler.ProxyRequests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldDispatchCommittedProofWithoutLiveServiceDiscovery()
+    {
+        var handler = new RecordingHandler();
+        var tool = CreateTool(handler);
+        using var scope = PushContext(ListMessagesAdmission(), "organization-token");
+
+        var result = await tool.ExecuteAsync(
+            """{"query":{"container_id":"oc_1"}}""");
+
+        result.Should().NotContain("error_code");
+        handler.RequestUris.Should().ContainSingle();
+        handler.RequestUris.Should().OnlyContain(uri =>
+            !uri.Contains("/api/v1/keys", StringComparison.Ordinal));
+        handler.ProxyRequests.Should().ContainSingle();
+        handler.AuthorizationBearers.Should().ContainSingle().Which.Should().Be("user-token");
+    }
+
+    [Theory]
+    [InlineData("If-Match", "")]
+    [InlineData("If-Match", "etag\rsmuggled")]
+    [InlineData("If-Match", "etag\nsmuggled")]
+    [InlineData("Accept", "text/plain")]
+    public async Task ExecuteAsync_ShouldRejectInvalidAdmittedHeadersBeforeAnyHttpRequest(
+        string name,
+        string value)
+    {
+        var handler = new RecordingHandler();
+        var tool = CreateTool(handler);
+        using var scope = PushContext(ListMessagesAdmission() with
+        {
+            Parameters =
+            [
+                QueryParameter("container_id", required: true),
+                new AgentToolOperationParameter(
+                    name,
+                    AgentToolOperationParameterLocation.Header,
+                    false,
+                    AgentToolOperationValueSchema.Text),
+            ],
+        });
+        var arguments = JsonSerializer.Serialize(new
+        {
+            query = new { container_id = "oc_1" },
+            headers = new Dictionary<string, string> { [name] = value },
+        });
+
+        var result = await tool.ExecuteAsync(arguments);
+
+        result.Should().Contain("NYXID_OPERATION_HEADER_INVALID");
+        handler.RequestCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldRejectOversizedConditionalHeaderBeforeAnyHttpRequest()
+    {
+        var handler = new RecordingHandler();
+        var tool = CreateTool(handler);
+        using var scope = PushContext(ListMessagesAdmission() with
+        {
+            Parameters =
+            [
+                QueryParameter("container_id", required: true),
+                new AgentToolOperationParameter(
+                    "If-None-Match",
+                    AgentToolOperationParameterLocation.Header,
+                    false,
+                    AgentToolOperationValueSchema.Text),
+            ],
+        });
+        var arguments = JsonSerializer.Serialize(new
+        {
+            query = new { container_id = "oc_1" },
+            headers = new Dictionary<string, string> { ["If-None-Match"] = new string('x', 1025) },
+        });
+
+        var result = await tool.ExecuteAsync(arguments);
+
+        result.Should().Contain("NYXID_OPERATION_HEADER_INVALID");
+        handler.RequestCount.Should().Be(0);
+    }
+
+    [Theory]
     [InlineData("""{"path_params":{"message_id":"om_1"}}""", "NYXID_OPERATION_PATH_PARAMETER_MISSING")]
     [InlineData("""{"path_params":{"message_id":"om_1","file_key":"f1","extra":"x"}}""", "NYXID_OPERATION_PATH_PARAMETER_UNKNOWN")]
     [InlineData("""{"path_params":{"message_id":"a/b","file_key":"f1"}}""", "NYXID_OPERATION_PATH_PARAMETER_INVALID")]
     [InlineData("""{"path_params":{"message_id":"a%2Fb","file_key":"f1"}}""", "NYXID_OPERATION_PATH_PARAMETER_INVALID")]
     [InlineData("""{"path_params":{"message_id":"..","file_key":"f1"}}""", "NYXID_OPERATION_PATH_PARAMETER_INVALID")]
     [InlineData("""{"path_params":{"message_id":"%2e%2e","file_key":"f1"}}""", "NYXID_OPERATION_PATH_PARAMETER_INVALID")]
+    [InlineData("""{"path_params":{"message_id":"%252e%252e","file_key":"f1"}}""", "NYXID_OPERATION_PATH_PARAMETER_INVALID")]
     [InlineData("""{"path_params":{"message_id":"${input}","file_key":"f1"}}""", "NYXID_OPERATION_PATH_PARAMETER_INVALID")]
     [InlineData("""{"path_params":{"message_id":"om_1","file_key":"f1"},"query":{"nope":"1"}}""", "NYXID_OPERATION_QUERY_PARAMETER_UNKNOWN")]
     [InlineData("""{"path_params":{"message_id":"om_1","file_key":"f1"},"headers":{"X-Trace":"1"}}""", "NYXID_OPERATION_HEADER_NOT_DECLARED")]
@@ -463,8 +643,25 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
     private static AgentToolOperationParameter PathParameter(string name) =>
         new(name, AgentToolOperationParameterLocation.Path, true, AgentToolOperationValueSchema.Text);
 
-    private static AgentToolOperationParameter QueryParameter(string name, bool required) =>
-        new(name, AgentToolOperationParameterLocation.Query, required, AgentToolOperationValueSchema.Text);
+    private static AgentToolOperationParameter QueryParameter(
+        string name,
+        bool required,
+        AgentToolOperationValueSchema? schema = null) =>
+        new(name, AgentToolOperationParameterLocation.Query, required, schema ?? AgentToolOperationValueSchema.Text);
+
+    private static AgentToolOperationValueSchema TextSchema(params string[] allowedValues) =>
+        ScalarSchema(AgentToolOperationValueKind.String, allowedValues);
+
+    private static AgentToolOperationValueSchema ScalarSchema(
+        AgentToolOperationValueKind kind,
+        IReadOnlyList<string>? allowedValues = null) =>
+        new(
+            kind,
+            [],
+            new HashSet<string>(StringComparer.Ordinal),
+            null,
+            allowedValues ?? [],
+            false);
 
     private static NyxIdProxyTool CreateTool(
         RecordingHandler handler,
@@ -477,10 +674,12 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
             fileArtifactIngress: ingress,
             managedWorkflowAdmissionMode: managedWorkflowAdmissionMode);
 
-    private static AgentToolContextScope PushContext(AgentToolOperationAdmission admission) =>
+    private static AgentToolContextScope PushContext(
+        AgentToolOperationAdmission admission,
+        string? organizationToken = null) =>
         AgentToolContextScope.Push(new AgentToolExecutionContext(
             AgentToolRequestIdentity.Empty,
-            new AgentToolCredentials("user-token", null, null),
+            new AgentToolCredentials("user-token", organizationToken, null),
             new AgentToolCallerContext("scope-alpha", null, null),
             AgentToolChannelContext.Empty,
             AgentToolSenderBindingContext.Empty,
@@ -535,6 +734,8 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
 
         public List<string> RequestUris { get; } = [];
 
+        public List<string> AuthorizationBearers { get; } = [];
+
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken)
@@ -545,6 +746,7 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
                 : await request.Content.ReadAsStringAsync(cancellationToken);
             RequestBodies.Add(body);
             RequestUris.Add(request.RequestUri!.ToString());
+            AuthorizationBearers.Add(request.Headers.Authorization?.Parameter ?? string.Empty);
             if (request.RequestUri!.AbsolutePath.StartsWith("/api/v1/proxy/", StringComparison.Ordinal))
             {
                 ProxyRequests.Add(new RecordedProxyRequest(

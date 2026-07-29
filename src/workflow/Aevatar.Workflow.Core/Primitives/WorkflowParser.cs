@@ -220,7 +220,7 @@ public sealed class WorkflowParser
             NyxIdOperation = new NyxIdOperationSelector
             {
                 UserServiceId = NormalizeText(capability.NyxIdOperation.UserServiceId) ?? string.Empty,
-                OperationId = NormalizeText(capability.NyxIdOperation.OperationId) ?? string.Empty,
+                EndpointId = NormalizeText(capability.NyxIdOperation.EndpointId) ?? string.Empty,
             },
         };
     }
@@ -1448,7 +1448,7 @@ public sealed class WorkflowParser
     private sealed class RawNyxIdOperationSelector
     {
         public string? UserServiceId { get; set; }
-        public string? OperationId { get; set; }
+        public string? EndpointId { get; set; }
     }
     private sealed class RawStepPresentation
     {

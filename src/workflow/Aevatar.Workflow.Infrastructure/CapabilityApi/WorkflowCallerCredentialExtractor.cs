@@ -118,7 +118,6 @@ public static class WorkflowCallerCredentialExtractor
 
         var externalUserId = ReadFirstClaim(
             principal,
-            "scope_id",
             "uid",
             "sub",
             ClaimTypes.NameIdentifier,
@@ -144,7 +143,6 @@ public static class WorkflowCallerCredentialExtractor
 
         var externalUserId = ReadFirstClaim(
             principal,
-            "scope_id",
             "uid",
             "sub",
             ClaimTypes.NameIdentifier,

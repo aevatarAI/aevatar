@@ -23,7 +23,7 @@ public sealed class ConnectorExternalWorkflowCapabilitySource : IExternalWorkflo
     public ExternalWorkflowCapabilitySelector.SelectorOneofCase SelectorKind =>
         ExternalWorkflowCapabilitySelector.SelectorOneofCase.HostConnector;
 
-    public async Task<IReadOnlyList<ExternalWorkflowCapabilityDescriptor>> ListAsync(
+    public async Task<ExternalWorkflowCapabilityDiscoveryResult> ListAsync(
         ExternalWorkflowCapabilityAccessContext access,
         CancellationToken cancellationToken = default)
     {
@@ -31,12 +31,18 @@ public sealed class ConnectorExternalWorkflowCapabilitySource : IExternalWorkflo
         var catalog = await _catalogQueryPort.GetConnectorCatalogAsync(cancellationToken);
         var source = BuildSourceStamp(catalog);
 
-        return catalog.Connectors
+        var capabilities = catalog.Connectors
             .Where(static connector => connector.Enabled)
             .OrderBy(static connector => connector.Name, StringComparer.OrdinalIgnoreCase)
             .SelectMany(connector => EnumerateOperations(connector)
                 .Select(operation => BuildDescriptor(connector, operation, source)))
             .ToArray();
+        var result = new ExternalWorkflowCapabilityDiscoveryResult
+        {
+            CandidateCount = capabilities.Length,
+        };
+        result.Capabilities.Add(capabilities);
+        return result;
     }
 
     public async Task<ExternalCapabilityReadiness> InspectAsync(

@@ -2224,7 +2224,11 @@ public sealed class ConversationReplyGeneratorTests
             Control(),
             AgentToolExecutionContext.Empty with
             {
-                Caller = new AgentToolCallerContext("scope-1", "scope-1", null),
+                Caller = new AgentToolCallerContext("scope-alpha", "owner-alpha", null),
+                NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                    "nyxid",
+                    "tenant-alpha",
+                    "nyx-user-alpha"),
             },
             streamingSink: null,
             CancellationToken.None);
@@ -2235,8 +2239,10 @@ public sealed class ConversationReplyGeneratorTests
         reply.Text.Should().NotContain("scope workflow command port is not available in this host");
         commandPort.Requests.Should().ContainSingle()
             .Which.Should().Match<ScopeWorkflowUpsertRequest>(request =>
-                request.ScopeId == "scope-1" &&
-                request.WorkflowId == "demo_dinner");
+                request.ScopeId == "scope-alpha" &&
+                request.WorkflowId == "demo_dinner" &&
+                request.CapabilityAdmission != null &&
+                request.CapabilityAdmission.CallerId == "nyx-user-alpha");
     }
 
     [Fact]

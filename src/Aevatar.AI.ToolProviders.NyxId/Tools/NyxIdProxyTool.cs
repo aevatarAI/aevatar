@@ -348,7 +348,6 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool
 
         var request = build.Request!;
         var token = AgentToolRequestContext.NyxIdAccessToken;
-        var orgToken = AgentToolRequestContext.NyxIdOrgToken;
         if (string.IsNullOrWhiteSpace(token))
         {
             return request.FileArtifact
@@ -356,24 +355,22 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool
                 : """{"error":"No NyxID access token available. User must be authenticated."}""";
         }
 
-        var effectiveToken = await ResolveTokenForServiceAsync(token, orgToken, request.ServiceId, ct);
         _logger.LogInformation(
-            "[nyxid_proxy] admitted {Method} slug={Slug} operationId={OperationId} tokenSource={Source}",
+            "[nyxid_proxy] admitted {Method} slug={Slug} operationId={OperationId}",
             request.Method,
             request.Slug,
-            admission.OperationId,
-            effectiveToken == token ? "user" : "org");
+            admission.OperationId);
 
         if (request.FileArtifact)
         {
             return await ExecuteAdmittedFileArtifactAsync(
-                effectiveToken,
+                token,
                 request,
                 ct);
         }
 
         return await _client.ProxyRequestAsync(
-            effectiveToken,
+            token,
             request.Slug,
             request.ServiceId,
             request.Path,
