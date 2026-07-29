@@ -1227,7 +1227,7 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
         return callerSpecifiedUserAgent;
     }
 
-    private static string NormalizeExactProxyPath(string relativePath)
+    internal static string NormalizeExactProxyPath(string relativePath)
     {
         var candidate = relativePath.Trim();
         var withoutLeadingSlash = candidate.TrimStart('/');

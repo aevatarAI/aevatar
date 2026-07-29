@@ -225,13 +225,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 using (AgentToolContextScope.Push(pendingToolContext))
                 {
                     // Execute the yielded tool call
-                    var toolResult = await Tools.ExecuteToolCallAsync(
-                        new ToolCall
-                        {
-                            Id = pending.ToolCallId,
-                            Name = pending.ToolName,
-                            ArgumentsJson = pending.ArgumentsJson,
-                        },
+                    var toolResult = await ExecuteApprovedToolAsync(
+                        pending,
+                        pendingToolContext,
                         CancellationToken.None);
 
                     Logger.LogInformation(
@@ -256,6 +252,11 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                         ScopeId = pending.ScopeId,
                         ToolContext = pendingToolContext.ToPayload(),
                     };
+                    if (pending.WorkflowLlmContinuation != null)
+                    {
+                        continuationRequest.WorkflowLlmToolApprovalContinuation =
+                            pending.WorkflowLlmContinuation.Clone();
+                    }
                     await SendToAsync(Id, continuationRequest);
 
                     Logger.LogInformation(
@@ -528,11 +529,12 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
 
     // ─── Approval helpers ───
 
-    private PendingToolApprovalState? DetectPendingApproval(
-        SessionReplayRecord replayRecord,
+    protected PendingToolApprovalState? DetectPendingApproval(
+        IReadOnlyList<AgentToolReceipt> toolReceipts,
+        IReadOnlyList<ToolCall> toolCalls,
         ChatRequestEvent request)
     {
-        var receipt = replayRecord.ToolReceipts
+        var receipt = toolReceipts
             .LastOrDefault(static candidate =>
                 candidate.Status == AgentToolReceiptStatus.ApprovalRequired &&
                 !string.IsNullOrWhiteSpace(candidate.ApprovalRequestId));
@@ -545,7 +547,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             SessionId = request.SessionId ?? string.Empty,
             ToolName = receipt.ToolName ?? string.Empty,
             ToolCallId = receipt.CallId ?? string.Empty,
-            ArgumentsJson = ResolveToolArguments(replayRecord.ToolCalls, receipt.CallId),
+            ArgumentsJson = ResolveToolArguments(toolCalls, receipt.CallId),
             IsDestructive = receipt.IsDestructive,
             ToolContext = ResolveToolContext(
                 request,
@@ -554,6 +556,43 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             ScopeId = request.ScopeId ?? string.Empty,
         };
     }
+
+    protected async Task SuspendForToolApprovalAsync(PendingToolApprovalState pending)
+    {
+        ArgumentNullException.ThrowIfNull(pending);
+        await PersistDomainEventAsync(new PendingToolApprovalPersistedEvent { Pending = pending });
+        await PublishAsync(new ToolApprovalRequestEvent
+        {
+            RequestId = pending.RequestId,
+            SessionId = pending.SessionId,
+            ToolName = pending.ToolName,
+            ToolCallId = pending.ToolCallId,
+            ArgumentsJson = pending.ArgumentsJson,
+            IsDestructive = pending.IsDestructive,
+            ApprovalMode = "yield",
+            TimeoutSeconds = ApprovalLocalTimeoutSeconds,
+        }, TopologyAudience.Parent);
+        await ScheduleApprovalTimeoutAsync(pending);
+    }
+
+    protected virtual Task<ChatMessage> ExecuteApprovedToolAsync(
+        PendingToolApprovalState pending,
+        AgentToolExecutionContext toolContext,
+        CancellationToken ct) =>
+        Tools.ExecuteToolCallAsync(
+            new ToolCall
+            {
+                Id = pending.ToolCallId,
+                Name = pending.ToolName,
+                ArgumentsJson = pending.ArgumentsJson,
+            },
+            ct);
+
+    protected virtual Task OnApprovalTerminalFailureAsync(
+        PendingToolApprovalState pending,
+        string reasonCode,
+        string reasonMessage) =>
+        Task.CompletedTask;
 
     private static string ResolveToolArguments(IReadOnlyList<ToolCall> toolCalls, string? callId)
     {
@@ -1085,7 +1124,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         }
 
         // ─── Detect approval-pending tool result and set up continuation ───
-        var pendingApproval = DetectPendingApproval(replayRecord, request);
+        var pendingApproval = DetectPendingApproval(replayRecord.ToolReceipts, replayRecord.ToolCalls, request);
         OnPlanOrHandoffObserved(pendingApproval is not null);
         if (pendingApproval != null)
         {
@@ -1094,25 +1133,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 {
                     Pending = pendingApproval.Clone(),
                 });
-            await PersistDomainEventsAsync(
-            [
-                new PendingToolApprovalPersistedEvent { Pending = pendingApproval },
-                approvalProgress,
-            ]);
-
-            await PublishAsync(new ToolApprovalRequestEvent
-            {
-                RequestId = pendingApproval.RequestId,
-                SessionId = pendingApproval.SessionId,
-                ToolName = pendingApproval.ToolName,
-                ToolCallId = pendingApproval.ToolCallId,
-                ArgumentsJson = pendingApproval.ArgumentsJson,
-                IsDestructive = pendingApproval.IsDestructive,
-                ApprovalMode = "yield",
-                TimeoutSeconds = ApprovalLocalTimeoutSeconds,
-            }, TopologyAudience.Parent);
-
-            await ScheduleApprovalTimeoutAsync(pendingApproval);
+            await PersistDomainEventAsync(approvalProgress);
+            await SuspendForToolApprovalAsync(pendingApproval);
         }
 
         // Refactor (iter164/cluster-001-role-completion):
@@ -1725,6 +1747,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         string reasonMessage,
         string? terminalTurnId = null)
     {
+        await OnApprovalTerminalFailureAsync(pending, reasonCode, reasonMessage);
         await PersistApprovalTerminalFailureAsync(pending, reasonCode, reasonMessage, terminalTurnId);
         await PersistDomainEventAsync(new ClearPendingApprovalEvent { RequestId = pending.RequestId });
     }
@@ -1737,6 +1760,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
     {
         try
         {
+            await OnApprovalTerminalFailureAsync(pending, reasonCode, reasonMessage);
             await PersistApprovalTerminalFailureAsync(pending, reasonCode, reasonMessage, terminalTurnId);
         }
         catch (Exception ex)

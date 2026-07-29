@@ -280,8 +280,10 @@ public sealed class BackendConsoleStaticAssetEndpointTests
               function obsIssuePayload() { return {}; }
 
               ${functionSource('mapObsDetail')}
+              ${functionSource('obsApprovalKey')}
               ${functionSource('obsApprovalState')}
               ${functionSource('obsActiveApproval')}
+              ${functionSource('obsReconcileApprovalState')}
               ${functionSource('obsCanApprove')}
               ${functionSource('obsApprovalPanel')}
               ${functionSource('obsSubmitApproval')}
@@ -331,6 +333,24 @@ public sealed class BackendConsoleStaticAssetEndpointTests
                 stepId: 'show_for_approval',
                 approved: true
               });
+              assert.match(obsApprovalPanel(run), /审批决定已接受/);
+
+              obsReconcileApprovalState(run);
+              assert.match(
+                obsApprovalPanel(run),
+                /data-act="obsApprovalApprove"/,
+                'the next committed read must clear the optimistic 202 latch when the same approval is still pending'
+              );
+              const nextApprovalRun = Object.assign({}, run, { steps: [{
+                stepId: 'second_approval',
+                stepType: 'human_approval',
+                requestedAtUtc: '2026-07-29T02:39:47Z',
+                completedAtUtc: '',
+                suspensionType: 'human_approval',
+                suspensionContent: 'second decision'
+              }] });
+              obsReconcileApprovalState(nextApprovalRun);
+              assert.match(obsApprovalPanel(nextApprovalRun), /data-act="obsApprovalApprove"/);
 
               ACCOUNT = { scope: 'scope-admin', admin: true };
               assert.equal(obsCanApprove(run), false);
@@ -339,8 +359,7 @@ public sealed class BackendConsoleStaticAssetEndpointTests
               assert.doesNotMatch(panel, /obsApprovalApprove/);
 
               ACCOUNT = { scope: 'scope-owner', admin: false };
-              const state = obsApprovalState(run.id);
-              state.accepted = false;
+              const state = obsApprovalState(run, obsActiveApproval(run));
               state.rejecting = true;
               state.feedback = '  ';
               assert.equal(await obsSubmitApproval(run, false, function() {}), false);

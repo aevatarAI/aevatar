@@ -486,6 +486,45 @@ public sealed class NyxIdChatConversationGAgentTests
     }
 
     [Fact]
+    public async Task ActivateAsync_WhenPendingReservationRecoveryFails_ShouldScheduleRetryAndContinueOperationRecovery()
+    {
+        const string conversationActorId = "conversation-alpha";
+        var operations = new List<string>();
+        var history = new RecordingChatHistoryCommandPort(operations)
+        {
+            ReserveException = new OperationCanceledException("crash after turn commit"),
+        };
+        var eventStore = new InMemoryEventStoreForTests();
+        var callbacks = new RecordingRuntimeCallbackScheduler();
+        using var services = BuildEventSourcingServices(eventStore, history, callbacks);
+        var initial = CreateController(services, conversationActorId);
+        await initial.ActivateAsync();
+        await FluentActions.Invoking(() => initial.HandleEventAsync(
+                CreateEnvelope(conversationActorId, CreateStartTurnCommand())))
+            .Should().ThrowAsync<OperationCanceledException>();
+
+        history.ReserveException = new InvalidOperationException("history unavailable");
+        operations.Clear();
+        var recoveryDispatch = new RecordingActorDispatchPort(
+            operations,
+            static (_, _) => Task.CompletedTask);
+        var recovered = CreateController(services, conversationActorId, recoveryDispatch);
+
+        await recovered.ActivateAsync();
+
+        recovered.State.HistoryDeliveryReservation.Dispatched.Should().BeFalse();
+        callbacks.TimeoutRequests.Should().ContainSingle();
+        recoveryDispatch.Calls.Should().ContainSingle(call =>
+            call.Envelope.Payload.Is(NyxIdChatRecoveryRequestedSignal.Descriptor),
+            "history recovery failure must not suppress operation recovery");
+
+        history.ReserveException = null;
+        await recovered.HandleEventAsync(callbacks.TimeoutRequests.Single().TriggerEnvelope.Clone());
+
+        recovered.State.HistoryDeliveryReservation.Dispatched.Should().BeTrue();
+    }
+
+    [Fact]
     public async Task ChildResult_ShouldBecomeProductFactOnlyAfterCompleteKeyReconciliationCommit()
     {
         const string conversationActorId = "conversation-alpha";
