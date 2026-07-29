@@ -462,18 +462,74 @@ function defaultTimezone(): string {
 function describeDraftCadence(
   cronExpression: string,
   timezone: string,
+  copy: (
+    id: string,
+    defaultMessage: string,
+    values?: Record<string, string | number>,
+  ) => string,
 ): { readonly detail: string; readonly summary: string } {
   const cron = trim(cronExpression).replace(/\s+/g, " ");
   const zone = trim(timezone) || "UTC";
   const descriptions: Record<string, { readonly detail: string; readonly summary: string }> = {
-    "0 9 * * 1-5": { detail: `Weekdays at 09:00 · ${zone}`, summary: "Weekdays · 09:00" },
-    "0 9 * * *": { detail: `Every day at 09:00 · ${zone}`, summary: "Daily · 09:00" },
-    "0 9 * * 1": { detail: `Monday at 09:00 · ${zone}`, summary: "Monday · 09:00" },
-    "0 * * * *": { detail: `Every hour at minute 00 · ${zone}`, summary: "Hourly · :00" },
+    "0 9 * * 1-5": {
+      detail: copy(
+        "teams.automations.cron.weekdaysDetail",
+        "Weekdays at {time} · {timezone}",
+        { time: "09:00", timezone: zone },
+      ),
+      summary: copy(
+        "teams.automations.cron.weekdays",
+        "Weekdays · {time}",
+        { time: "09:00" },
+      ),
+    },
+    "0 9 * * *": {
+      detail: copy(
+        "teams.automations.cron.dailyDetail",
+        "Every day at {time} · {timezone}",
+        { time: "09:00", timezone: zone },
+      ),
+      summary: copy(
+        "teams.automations.cron.daily",
+        "Daily · {time}",
+        { time: "09:00" },
+      ),
+    },
+    "0 9 * * 1": {
+      detail: copy(
+        "teams.automations.cron.weeklyDetail",
+        "{weekday} at {time} · {timezone}",
+        {
+          weekday: copy("teams.automations.weekdays.monday", "Monday"),
+          time: "09:00",
+          timezone: zone,
+        },
+      ),
+      summary: copy(
+        "teams.automations.cron.weekly",
+        "{weekday} · {time}",
+        {
+          weekday: copy("teams.automations.weekdays.monday", "Monday"),
+          time: "09:00",
+        },
+      ),
+    },
+    "0 * * * *": {
+      detail: copy(
+        "teams.automations.cron.hourlyDetail",
+        "Every hour at minute {minute} · {timezone}",
+        { minute: "00", timezone: zone },
+      ),
+      summary: copy(
+        "teams.automations.cron.hourly",
+        "Hourly · :{minute}",
+        { minute: "00" },
+      ),
+    },
   };
   return descriptions[cron] ?? {
     detail: `${cron || "--"} · ${zone}`,
-    summary: "Custom schedule",
+    summary: copy("teams.automations.cron.custom", "Custom schedule"),
   };
 }
 
@@ -1326,7 +1382,7 @@ const TeamAutomationsTab: React.FC<Props> = ({
   };
 
   const renderRow = (view: TeamAutomationView) => {
-    const cadence = describeDraftCadence(view.cronExpression, view.timezone);
+    const cadence = describeDraftCadence(view.cronExpression, view.timezone, copy);
     const status = automationStatus(view);
     const rowBorderColor =
       status === "error"
@@ -1449,7 +1505,7 @@ const TeamAutomationsTab: React.FC<Props> = ({
           "Use a 5-field cron expression: minute hour day month weekday.",
         )
       : "";
-  const formCadence = describeDraftCadence(draft.cronExpression, draft.timezone);
+  const formCadence = describeDraftCadence(draft.cronExpression, draft.timezone, copy);
   const promptTooLong = draft.prompt.trim().length > promptMaxLength;
   const automationItems = automationsQuery.data?.items ?? [];
   const activeAutomationCount = automationItems.filter(
@@ -1658,7 +1714,12 @@ const TeamAutomationsTab: React.FC<Props> = ({
                         {copy(
                           "teams.automations.upcoming.memberCaption",
                           "{memberName} recurring work",
-                          { memberName: routeMember?.name ?? selectedMember?.name ?? "Member" },
+                          {
+                            memberName:
+                              routeMember?.name ??
+                              selectedMember?.name ??
+                              copy("teams.automations.columns.member", "Member"),
+                          },
                         )}
                       </Typography.Text>
                     </div>

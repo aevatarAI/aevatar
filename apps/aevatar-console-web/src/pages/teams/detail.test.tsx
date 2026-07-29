@@ -1441,8 +1441,9 @@ describe("TeamDetailPage", () => {
     await screen.findByRole("button", { name: "编辑团队" });
     fireEvent.click(screen.getByRole("button", { name: "自动化" }));
 
-    expect(await screen.findByRole("heading", { name: "选择团队成员" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Team Alpha Operator" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "自动化" })).toBeTruthy();
+    expect(screen.getByText("这个成员还没有自动化")).toBeTruthy();
+    expect(screen.getByText("Team Alpha Operator")).toBeTruthy();
     expect(window.location.search).toContain("tab=automations");
 
     fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
@@ -2525,7 +2526,8 @@ describe("TeamDetailPage", () => {
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    expect(await screen.findByText("选择团队成员")).toBeTruthy();
+    expect(await screen.findByText("这个成员还没有自动化")).toBeTruthy();
+    expect(screen.getByText("Team Alpha Operator")).toBeTruthy();
     expect(teamAutomationApi.listAll).not.toHaveBeenCalled();
     expect(scheduledDispatchApi.listAll).not.toHaveBeenCalled();
   });
