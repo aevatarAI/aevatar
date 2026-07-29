@@ -21,6 +21,26 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
     }
 
     [Fact]
+    public async Task PlanAsync_WhenNoServiceGrantsRequired_ShouldNotReadCatalog()
+    {
+        var catalog = new MutableCatalogQueryPort(Snapshot() with { Invalidated = true });
+        var planner = NewPlanner(catalog);
+        var request = Request(Array.Empty<string>()) with
+        {
+            ServiceGrantRequirement = AuthorizationGrantRequirement.NotRequired,
+        };
+
+        var result = await planner.PlanAsync(request);
+
+        result.Success.Should().BeTrue();
+        result.Plan!.CatalogAuthority.Should().BeNull();
+        result.Plan.NyxIdServiceGrants.Should().BeEmpty();
+        result.Plan.CredentialPolicy.ServiceGrantRequirement.Should()
+            .Be(AuthorizationGrantRequirement.NotRequired);
+        catalog.QueryCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task PlanAsync_ShouldCanonicalizeServiceAndNodePermissionSets()
     {
         var catalog = new MutableCatalogQueryPort(Snapshot(

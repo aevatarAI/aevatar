@@ -70,6 +70,48 @@ public sealed class ScheduledAgentApiKeyIssuerTests
     }
 
     [Fact]
+    public async Task IssueAsync_WhenNoServiceGrantsRequired_CreatesEmptyAllowlistKey()
+    {
+        var handler = new RoutingJsonHandler(
+            EmptyScopePlanJson(),
+            """{"id":"key-empty","full_key":"secret"}""");
+        var issuer = CreateIssuer(handler);
+        var plan = ValidPlan();
+        plan.NyxIdServiceGrants.Clear();
+        plan.CatalogAuthority = null;
+        plan.CredentialPolicy.ServiceGrantRequirement = AuthorizationGrantRequirement.NotRequired;
+        plan.CredentialPolicy.NodeGrantRequirement = AuthorizationGrantRequirement.NotRequired;
+        plan.PermissionDigest = ScheduledInvocationAuthorizationPlanIntegrity.ComputeDigest(plan);
+
+        var result = await issuer.IssueAsync(
+            "session-token",
+            new ValidatedScheduledInvocationAuthorizationPlan(plan),
+            "scheduled-empty-key",
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.ApiKeyId.Should().Be("key-empty");
+        handler.Requests.Should().Equal(
+            "/api/v1/api-keys/scope-plan",
+            "/api/v1/api-keys");
+        using var scopeRequest = System.Text.Json.JsonDocument.Parse(handler.RequestBodies[0]);
+        scopeRequest.RootElement.GetProperty("selected_service_ids")
+            .EnumerateArray()
+            .Should().BeEmpty();
+
+        using var createRequest = System.Text.Json.JsonDocument.Parse(handler.RequestBodies[1]);
+        createRequest.RootElement.GetProperty("allowed_service_ids")
+            .EnumerateArray()
+            .Should().BeEmpty();
+        createRequest.RootElement.GetProperty("allowed_node_ids")
+            .EnumerateArray()
+            .Should().BeEmpty();
+        createRequest.RootElement.GetProperty("allow_all_services").GetBoolean().Should().BeFalse();
+        createRequest.RootElement.GetProperty("allow_all_nodes").GetBoolean().Should().BeFalse();
+        createRequest.RootElement.GetProperty("scope_plan_digest").GetString().Should().Be(TargetedScopePlanDigest);
+    }
+
+    [Fact]
     public async Task IssueAsync_ForOrganizationOwner_ShouldMapExactTargetOrganization()
     {
         var handler = new RoutingJsonHandler(
@@ -639,6 +681,32 @@ public sealed class ScheduledAgentApiKeyIssuerTests
           ],
           "allowed_service_ids": ["us-alpha", "us-beta"],
           "allowed_node_ids": ["node-a", "node-shared"],
+          "evaluated_at": "2026-07-16T00:00:01Z",
+          "normalized_grant_digest": "{{TargetedScopePlanDigest}}",
+          "freshness": {
+            "mode": "mutation_revalidated_snapshot",
+            "precondition_field": "scope_plan_digest",
+            "post_creation_drift": "fail_closed"
+          },
+          "completeness": {
+            "list_complete": true,
+            "no_duplicates": true,
+            "route_candidate_basis": "active_configured_routes",
+            "transient_node_state_excluded": true
+          }
+        }
+        """;
+
+    private static string EmptyScopePlanJson() => $$"""
+        {
+          "authority": "nyxid",
+          "contract_version": "1",
+          "policy_version": "api-key-scope-v1",
+          "authenticated_actor": { "id": "owner-alpha", "type": "personal" },
+          "intended_key_owner": { "id": "owner-alpha", "type": "personal" },
+          "services": [],
+          "allowed_service_ids": [],
+          "allowed_node_ids": [],
           "evaluated_at": "2026-07-16T00:00:01Z",
           "normalized_grant_digest": "{{TargetedScopePlanDigest}}",
           "freshness": {
