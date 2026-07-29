@@ -2,6 +2,7 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.Credentials.Testing;
@@ -66,7 +67,8 @@ public abstract class WorkflowGAgentTestBase
             IEventStore eventStore,
             ILLMProviderFactory llmProviderFactory,
             string agentId,
-            IEnumerable<IAgentTool>? tools = null)
+            IEnumerable<IAgentTool>? tools = null,
+            IToolSetRegistry? toolSetRegistry = null)
         {
             var services = new ServiceCollection()
                 .AddSingleton<IEventStore>(eventStore)
@@ -75,7 +77,7 @@ public abstract class WorkflowGAgentTestBase
                 .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
                 .BuildServiceProvider();
             var publisher = new RecordingEventPublisher();
-            var agent = new TestWorkflowRoleGAgent(llmProviderFactory)
+            var agent = new TestWorkflowRoleGAgent(llmProviderFactory, toolSetRegistry)
             {
                 Services = services,
                 EventPublisher = publisher,
@@ -105,8 +107,10 @@ public abstract class WorkflowGAgentTestBase
                 Task.FromResult("{}");
         }
 
-        private sealed class TestWorkflowRoleGAgent(ILLMProviderFactory llmProviderFactory)
-            : WorkflowRoleGAgent(llmProviderFactory)
+        private sealed class TestWorkflowRoleGAgent(
+            ILLMProviderFactory llmProviderFactory,
+            IToolSetRegistry? toolSetRegistry)
+            : WorkflowRoleGAgent(llmProviderFactory, toolSetRegistry: toolSetRegistry)
         {
             public void RegisterToolForTest(IAgentTool tool) => RegisterTool(tool);
         }

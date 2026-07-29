@@ -264,7 +264,17 @@ internal static class NyxIdOperationRequestBuilder
             return string.Empty;
         }
 
-        return path;
+        try
+        {
+            return "/" + NyxIdApiClient.NormalizeExactProxyPath(path);
+        }
+        catch (InvalidOperationException)
+        {
+            failure = new NyxIdOperationRequestFailure(
+                "NYXID_OPERATION_PATH_TEMPLATE_INVALID",
+                "The admitted path template does not resolve to a safe relative path.");
+            return string.Empty;
+        }
     }
 
     private static string EncodePathSegment(
@@ -337,6 +347,15 @@ internal static class NyxIdOperationRequestBuilder
             static parameter => parameter.Name,
             static parameter => parameter,
             StringComparer.Ordinal);
+        var forbidden = declared.Keys.Concat(supplied.Keys).FirstOrDefault(static name =>
+            name.StartsWith("_nyxid_", StringComparison.OrdinalIgnoreCase));
+        if (forbidden is not null)
+        {
+            failure = new NyxIdOperationRequestFailure(
+                "NYXID_OPERATION_QUERY_PARAMETER_FORBIDDEN",
+                $"query parameter '{forbidden}' is reserved by NyxID.");
+            return string.Empty;
+        }
         var extra = supplied.Keys.FirstOrDefault(name => !declared.ContainsKey(name));
         if (extra is not null)
         {

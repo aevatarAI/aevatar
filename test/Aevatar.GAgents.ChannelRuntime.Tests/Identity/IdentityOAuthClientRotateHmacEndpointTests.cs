@@ -74,15 +74,41 @@ public sealed class IdentityOAuthClientRotateHmacEndpointTests
         var result = await InvokeRotateAsync(
             authorizer: new FakePlatformAdminAuthorizer(elevated: true),
             bearer: AdminBearer,
-            dispatch: dispatch);
+            dispatch: dispatch,
+            idempotencyKey: "rotation-request-alpha",
+            expectedCurrentKid: "v1");
 
-        dispatch.Commands.Should().ContainSingle();
+        var command = dispatch.Commands.Should().ContainSingle().Subject;
+        command.IdempotencyKey.Should().Be("rotation-request-alpha");
+        command.ExpectedCurrentKid.Should().Be("v1");
 
         var (doc, statusCode) = await ReadJsonWithStatusAsync(result);
         statusCode.Should().Be(StatusCodes.Status202Accepted);
         doc.RootElement.GetProperty("status").GetString().Should().Be("rotate_pending");
         doc.RootElement.GetProperty("command_id").GetString().Should().Be("rotate-1");
         doc.RootElement.GetProperty("status_url").GetString().Should().Be("/api/oauth/aevatar-client/status");
+    }
+
+    [Theory]
+    [InlineData(null, "v1")]
+    [InlineData("rotation-request-alpha", null)]
+    public async Task Returns400_WhenRotationPreconditionIsMissing(
+        string? idempotencyKey,
+        string? expectedCurrentKid)
+    {
+        var dispatch = new RecordingCommandDispatch<RotateAevatarOAuthClientHmacKeyCommand>();
+
+        var result = await InvokeRotateAsync(
+            new FakePlatformAdminAuthorizer(elevated: true),
+            AdminBearer,
+            dispatch,
+            idempotencyKey,
+            expectedCurrentKid);
+
+        var (doc, statusCode) = await ReadJsonWithStatusAsync(result);
+        statusCode.Should().Be(StatusCodes.Status400BadRequest);
+        doc.RootElement.GetProperty("error").GetString().Should().Be("rotation_precondition_required");
+        dispatch.Commands.Should().BeEmpty();
     }
 
     [Fact]
@@ -114,11 +140,17 @@ public sealed class IdentityOAuthClientRotateHmacEndpointTests
     private static Task<IResult> InvokeRotateAsync(
         IPlatformAdminAuthorizer? authorizer,
         string? bearer,
-        ICommandDispatchService<RotateAevatarOAuthClientHmacKeyCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> dispatch)
+        ICommandDispatchService<RotateAevatarOAuthClientHmacKeyCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> dispatch,
+        string? idempotencyKey = "rotation-request-alpha",
+        string? expectedCurrentKid = "v1")
     {
         var http = NewHttpContext();
         if (!string.IsNullOrEmpty(bearer))
             http.Request.Headers.Authorization = "Bearer " + bearer;
+        if (idempotencyKey is not null)
+            http.Request.Headers["Idempotency-Key"] = idempotencyKey;
+        if (expectedCurrentKid is not null)
+            http.Request.Headers.IfMatch = $"\"{expectedCurrentKid}\"";
 
         return IdentityOAuthEndpoints.HandleAevatarOAuthClientRotateHmacCoreAsync(
             http: http,

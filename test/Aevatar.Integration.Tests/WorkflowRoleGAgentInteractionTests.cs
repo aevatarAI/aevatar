@@ -2,6 +2,7 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.EventModules;
@@ -539,6 +540,68 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
         }
 
         [Fact]
+        public async Task WorkflowRoleGAgent_WhenRequestLocalWriteToolNeedsApproval_ShouldResumeOriginalStepAfterApproval()
+        {
+            var eventStore = new InMemoryEventStore();
+            var tool = new ApprovalRequiredWorkflowTool();
+            var registry = new FixedToolSetRegistry(
+                "studio.write",
+                new FixedToolSource(tool));
+            var (agent, publisher) = await CreateActivatedWorkflowRoleAgentAsync(
+                eventStore,
+                new ApprovalWorkflowIntentLlmProvider(tool.Name),
+                "workflow-role-agent-approval",
+                toolSetRegistry: registry);
+
+            await agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
+            {
+                RunId = "run-approval",
+                StepId = "step-approval",
+                SessionId = "session-approval",
+                Prompt = "update service",
+                ScopeId = "scope-alpha",
+                AgentToolScope = new WorkflowAgentToolScope
+                {
+                    RestrictToolSets = true,
+                    RestrictAllowedToolNames = true,
+                    ToolSetRefs = { "studio.write" },
+                    AllowedToolNames = { tool.Name },
+                },
+            });
+
+            agent.State.PendingApproval.Should().NotBeNull();
+            tool.ExecuteCount.Should().Be(0);
+            publisher.Published.Select(static item => item.evt)
+                .OfType<ToolApprovalRequestEvent>().Should().ContainSingle();
+            publisher.Published.Select(static item => item.evt)
+                .OfType<WorkflowLlmInvocationCompletedEvent>().Should().BeEmpty();
+
+            await agent.HandleToolApprovalDecision(new ToolApprovalDecisionEvent
+            {
+                RequestId = agent.State.PendingApproval.RequestId,
+                Approved = true,
+                ContinuationTurnId = "approval-continuation",
+            });
+
+            var continuation = publisher.Sent
+                .Select(static item => item.evt)
+                .OfType<ChatRequestEvent>()
+                .Should().ContainSingle().Subject;
+            await agent.HandleChatRequest(continuation);
+
+            tool.ExecuteCount.Should().Be(1);
+            agent.State.PendingApproval.Should().BeNull();
+            publisher.Published.Select(static item => item.evt)
+                .OfType<WorkflowLlmInvocationCompletedEvent>()
+                .Should().ContainSingle(completed =>
+                    completed.Success &&
+                    completed.RunId == "run-approval" &&
+                    completed.StepId == "step-approval" &&
+                    completed.SessionId == "session-approval" &&
+                    completed.Content == "approved completion");
+        }
+
+        [Fact]
         public async Task WorkflowRoleGAgent_WhenWorkflowInitializationUsesSparsePayload_ShouldNormalizeDefaults()
         {
             var eventStore = new InMemoryEventStore();
@@ -732,5 +795,76 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
             toolCalls[0].Id.Should().Be("known");
             toolCalls[0].Name.Should().BeEmpty();
             toolCalls[0].ArgumentsJson.Should().BeEmpty();
+        }
+
+        private sealed class ApprovalRequiredWorkflowTool : IAgentTool
+        {
+            public int ExecuteCount { get; private set; }
+            public string Name => "nyxid_service_update";
+            public string Description => "Updates a connected service.";
+            public string ParametersSchema => "{}";
+            public ToolApprovalMode ApprovalMode => ToolApprovalMode.AlwaysRequire;
+
+            public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+            {
+                ct.ThrowIfCancellationRequested();
+                ExecuteCount++;
+                return Task.FromResult("""{"updated":true}""");
+            }
+        }
+
+        private sealed class FixedToolSource(params IAgentTool[] tools) : IAgentToolSource
+        {
+            public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
+            {
+                ct.ThrowIfCancellationRequested();
+                return Task.FromResult<IReadOnlyList<IAgentTool>>(tools);
+            }
+        }
+
+        private sealed class FixedToolSetRegistry(string name, IAgentToolSource source) : IToolSetRegistry
+        {
+            public IReadOnlyList<string> GetRegisteredNames() => [name];
+
+            public ToolSetResolveResult Resolve(Aevatar.ChatRouting.Abstractions.ChatRouteToolSetRef? toolSetRef) =>
+                string.Equals(toolSetRef?.Name, name, StringComparison.Ordinal)
+                    ? ToolSetResolveResult.Success(name, [source])
+                    : ToolSetResolveResult.Failure(new ToolSetResolveError(
+                        ToolSetResolveError.UnknownNameCode,
+                        toolSetRef?.Name ?? string.Empty,
+                        "unknown",
+                        [name]));
+        }
+
+        private sealed class ApprovalWorkflowIntentLlmProvider(string toolName)
+            : WorkflowIntentLlmProviderBase
+        {
+            private int _calls;
+
+            public override async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+                LLMRequest request,
+                [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+            {
+                _ = request;
+                ct.ThrowIfCancellationRequested();
+                if (Interlocked.Increment(ref _calls) == 1)
+                {
+                    yield return new LLMStreamChunk
+                    {
+                        DeltaToolCall = new ToolCall
+                        {
+                            Id = "call-approval",
+                            Name = toolName,
+                            ArgumentsJson = "{}",
+                        },
+                    };
+                    yield return new LLMStreamChunk { IsLast = true, FinishReason = "tool_calls" };
+                    yield break;
+                }
+
+                yield return new LLMStreamChunk { DeltaContent = "approved completion" };
+                yield return new LLMStreamChunk { IsLast = true, FinishReason = "stop" };
+                await Task.CompletedTask;
+            }
         }
 }

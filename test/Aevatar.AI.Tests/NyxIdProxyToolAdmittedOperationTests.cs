@@ -187,6 +187,25 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
         request.Method.Should().Be("GET");
     }
 
+    [Theory]
+    [InlineData("../../../api-keys")]
+    [InlineData("/%2e%2e/%2e%2e/api-keys")]
+    public async Task ExecuteAsync_ShouldRejectUnsafeStaticProofPathBeforeAnyHttpRequest(string pathTemplate)
+    {
+        var handler = new RecordingHandler();
+        var tool = CreateTool(handler);
+        using var scope = PushContext(ListMessagesAdmission() with
+        {
+            PathTemplate = pathTemplate,
+            Parameters = [],
+        });
+
+        var result = await tool.ExecuteAsync("{}");
+
+        result.Should().Contain("NYXID_OPERATION_PATH_TEMPLATE_INVALID");
+        handler.RequestCount.Should().Be(0);
+    }
+
     [Fact]
     public async Task ExecuteAsync_ShouldAcceptDynamicMessageResourceAsAFileArtifact()
     {
@@ -238,6 +257,24 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
         handler.RequestBodies.Should().OnlyContain(body => !body.Contains("lark_list_messages"));
         handler.RequestUris.Should().OnlyContain(uri =>
             !uri.Contains("operation_id") && !uri.Contains("contract_digest"));
+    }
+
+    [Theory]
+    [InlineData("_nyxid_via")]
+    [InlineData("_NYXID_ROUTE")]
+    public async Task ExecuteAsync_ShouldRejectReservedProofQueryNamesBeforeAnyHttpRequest(string name)
+    {
+        var handler = new RecordingHandler();
+        var tool = CreateTool(handler);
+        var admission = ListMessagesAdmission() with
+        {
+            Parameters = [QueryParameter(name, required: false)],
+        };
+        using var scope = PushContext(admission);
+        var result = await tool.ExecuteAsync("{}");
+
+        result.Should().Contain("NYXID_OPERATION_QUERY_PARAMETER_FORBIDDEN");
+        handler.RequestCount.Should().Be(0);
     }
 
     [Theory]
