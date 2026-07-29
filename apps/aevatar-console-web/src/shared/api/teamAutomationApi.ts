@@ -284,10 +284,10 @@ function normalizeStatus(value: unknown): TeamAutomationAuthorizationStatus {
 
 function normalizeScope(value: unknown): string {
   const normalized = String(value ?? "").trim().toLowerCase();
-  if (normalized === "1" || normalized.endsWith("_read")) {
+  if (normalized === "1" || normalized === "nyx_id_credential_scope_read") {
     return "read";
   }
-  if (normalized === "2" || normalized.endsWith("_proxy")) {
+  if (normalized === "2" || normalized === "nyx_id_credential_scope_proxy") {
     return "proxy";
   }
   throw new Error(`Unknown NyxID credential scope: ${String(value)}.`);
@@ -322,10 +322,16 @@ function normalizeNodeGrantRequirement(
   value: unknown,
 ): TeamAutomationServiceGrant["nodeGrantRequirement"] {
   const normalized = String(value ?? "").trim().toLowerCase();
-  if (normalized === "1" || normalized.endsWith("_required") && !normalized.endsWith("_not_required")) {
+  if (
+    normalized === "1" ||
+    normalized === "authorization_grant_requirement_required"
+  ) {
     return "required";
   }
-  if (normalized === "2" || normalized.endsWith("_not_required")) {
+  if (
+    normalized === "2" ||
+    normalized === "authorization_grant_requirement_not_required"
+  ) {
     return "not_required";
   }
   throw new Error(`Unknown NyxID node grant requirement: ${String(value)}.`);
@@ -333,10 +339,16 @@ function normalizeNodeGrantRequirement(
 
 function normalizeOwnerLLMRouteKind(value: unknown): "gateway" | "nyx_id_user_service" {
   const normalized = String(value ?? "").trim().toLowerCase();
-  if (normalized === "1" || normalized.endsWith("_gateway")) {
+  if (
+    normalized === "1" ||
+    normalized === "scheduled_invocation_owner_llm_route_kind_gateway"
+  ) {
     return "gateway";
   }
-  if (normalized === "2" || normalized.endsWith("_nyx_id_user_service")) {
+  if (
+    normalized === "2" ||
+    normalized === "scheduled_invocation_owner_llm_route_kind_nyx_id_user_service"
+  ) {
     return "nyx_id_user_service";
   }
   throw new Error(`Unknown Team automation owner LLM route kind: ${String(value)}.`);
@@ -870,13 +882,58 @@ async function refreshAuthorizationCatalog(): Promise<void> {
     await response.json(),
     "NyxIdAuthorizationCatalogRefreshResponse",
   );
-  if (!readBoolean(payload, ["ready", "Ready"], "authorizationCatalog.ready")) {
+  if (readBoolean(payload, ["ready", "Ready"], "authorizationCatalog.ready")) {
+    return;
+  }
+
+  const refreshStatus = requiredString(
+    payload,
+    ["refreshStatus", "RefreshStatus"],
+    "authorizationCatalog.refreshStatus",
+  );
+  const refreshFailureCode = optionalString(
+    payload,
+    ["refreshFailureCode", "RefreshFailureCode"],
+  );
+  const visibilityStatus = requiredString(
+    payload,
+    ["visibilityStatus", "VisibilityStatus"],
+    "authorizationCatalog.visibilityStatus",
+  );
+  const visibilityFailureCode = optionalString(
+    payload,
+    ["visibilityFailureCode", "VisibilityFailureCode"],
+  );
+  const requiredStateVersion = requiredNonNegativeInteger(
+    payload,
+    ["requiredStateVersion", "RequiredStateVersion"],
+    "authorizationCatalog.requiredStateVersion",
+  );
+
+  if (visibilityStatus === "projection_pending") {
     throw new TeamAutomationApiError(
-      "NyxID authorization catalog is not ready.",
-      503,
-      optionalString(payload, ["failureCode", "FailureCode"], "NYXID_AUTHORIZATION_CATALOG_NOT_READY"),
+      visibilityFailureCode || "NyxID authorization catalog projection is pending.",
+      response.status,
+      "TEAM_AUTOMATION_AUTHORIZATION_PROJECTION_PENDING",
+      { requiredStateVersion, retryable: true },
     );
   }
+  if (refreshStatus === "superseded") {
+    throw new TeamAutomationApiError(
+      refreshFailureCode || "NyxID authorization catalog refresh was superseded.",
+      response.status,
+      "TEAM_AUTOMATION_AUTHORIZATION_REFRESH_SUPERSEDED",
+      { requiredStateVersion, retryable: true },
+    );
+  }
+  throw new TeamAutomationApiError(
+    visibilityFailureCode ||
+      refreshFailureCode ||
+      "NyxID authorization catalog is not ready.",
+    response.status,
+    "TEAM_AUTOMATION_AUTHORIZATION_REFRESH_UNAVAILABLE",
+    { requiredStateVersion, retryable: true },
+  );
 }
 
 function listTeamAutomations(

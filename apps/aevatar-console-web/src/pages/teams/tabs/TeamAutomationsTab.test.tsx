@@ -1,9 +1,15 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import * as React from "react";
-import TeamAutomationsTab from "./TeamAutomationsTab";
-import { teamAutomationApi } from "@/shared/api/teamAutomationApi";
+import TeamAutomationsTab, {
+  mutationObservationComplete,
+} from "./TeamAutomationsTab";
+import {
+  teamAutomationApi,
+  TeamAutomationApiError,
+} from "@/shared/api/teamAutomationApi";
 import { scheduledDispatchApi } from "@/shared/api/scheduledDispatchApi";
+import { NyxIDAuthClient } from "@/shared/auth/client";
 import { history } from "@/shared/navigation/history";
 
 jest.mock("@umijs/max", () => ({
@@ -177,11 +183,32 @@ function automationView(overrides: Record<string, unknown> = {}) {
 describe("TeamAutomationsTab canonical member authority", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    Object.values(teamAutomationApi).forEach((apiMethod) => {
+      (apiMethod as jest.Mock).mockReset();
+    });
+    window.sessionStorage.clear();
     (teamAutomationApi.listAll as jest.Mock).mockResolvedValue({
       items: [],
       nextCursor: null,
       totalCount: 0,
     });
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it("completes revocation retry observation when the scoped row disappears", () => {
+    expect(
+      mutationObservationComplete(
+        {
+          kind: "retryRevocation",
+          scheduleId: "sch-alpha",
+          baselineStateVersion: 4,
+        },
+        [],
+      ),
+    ).toBe(true);
   });
 
   it("makes zero automation requests without a path member", async () => {
@@ -256,6 +283,142 @@ describe("TeamAutomationsTab canonical member authority", () => {
     expect(screen.queryByText("Automation created")).not.toBeInTheDocument();
   });
 
+  it("clears accepted create observation after the authoritative row becomes terminal", async () => {
+    const now = Date.parse("2026-07-29T00:00:00Z");
+    const nowSpy = jest.spyOn(Date, "now").mockReturnValue(now);
+    (teamAutomationApi.listAll as jest.Mock)
+      .mockResolvedValueOnce({ items: [], nextCursor: null, totalCount: 0 })
+      .mockResolvedValueOnce({
+        items: [
+          automationView({
+            authorizationStatus: "provisioning_pending",
+            stateVersion: 1,
+          }),
+        ],
+        nextCursor: null,
+        totalCount: 1,
+      })
+      .mockResolvedValue({
+        items: [automationView({ stateVersion: 2 })],
+        nextCursor: null,
+        totalCount: 1,
+      });
+    (teamAutomationApi.preflightCreate as jest.Mock).mockResolvedValue(
+      authorizationReview(),
+    );
+    (teamAutomationApi.create as jest.Mock).mockResolvedValue({
+      accepted: true,
+      status: "accepted",
+      scheduleId: "sch-alpha",
+      operationId: "op-alpha",
+      commandId: "cmd-alpha",
+    });
+    renderTab("m-alpha");
+
+    fireEvent.click(await screen.findByRole("button", { name: "New automation" }));
+    fireEvent.change(screen.getByLabelText("Recurring prompt"), {
+      target: { value: "Summarize open work." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Review authorization" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Authorize and continue" }));
+
+    expect(await screen.findByText("Preparing authorization")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Credential active", {}, { timeout: 3_500 }),
+    ).toBeInTheDocument();
+    expect(teamAutomationApi.listAll).toHaveBeenCalledTimes(3);
+    nowSpy.mockReturnValue(now + 61_000);
+    const callsBeforeRefresh = (teamAutomationApi.listAll as jest.Mock).mock.calls.length;
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() =>
+      expect(teamAutomationApi.listAll).toHaveBeenCalledTimes(callsBeforeRefresh + 1),
+    );
+    await waitFor(() =>
+      expect(screen.queryByText("Still pending")).not.toBeInTheDocument(),
+    );
+  });
+
+  it("recovers a confirmed create when the fresh binding is missing", async () => {
+    (teamAutomationApi.preflightCreate as jest.Mock).mockResolvedValue(
+      authorizationReview(),
+    );
+    (teamAutomationApi.create as jest.Mock).mockRejectedValue(
+      new TeamAutomationApiError(
+        "Reconnect NyxID to authorize this automation.",
+        409,
+        "TEAM_AUTOMATION_AUTHORIZATION_BINDING_REQUIRED",
+      ),
+    );
+    renderTab("m-alpha");
+
+    fireEvent.click(await screen.findByRole("button", { name: "New automation" }));
+    fireEvent.change(screen.getByLabelText("Automation name"), {
+      target: { value: "Daily review" },
+    });
+    fireEvent.change(screen.getByLabelText("Recurring prompt"), {
+      target: { value: "Summarize open work." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Review authorization" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Authorize and continue" }));
+
+    await waitFor(() => expect(NyxIDAuthClient).toHaveBeenCalledTimes(1));
+    const loginWithRedirect = (NyxIDAuthClient as jest.Mock).mock.results[0].value
+      .loginWithRedirect as jest.Mock;
+    expect(loginWithRedirect).toHaveBeenCalledWith({
+      returnTo:
+        "/scopes/scope-alpha/teams/team-alpha/members/m-alpha/automations",
+      prompt: "consent",
+    });
+
+    const stored = JSON.parse(
+      String(window.sessionStorage.getItem(window.sessionStorage.key(0) ?? "")),
+    ) as Record<string, unknown>;
+    expect(stored).toEqual(
+      expect.objectContaining({
+        mode: "create",
+        scopeId: "scope-alpha",
+        teamId: "team-alpha",
+        memberId: "m-alpha",
+      }),
+    );
+    expect(stored).not.toHaveProperty("permissionDigest");
+    expect(stored).not.toHaveProperty("operationId");
+    expect(stored).not.toHaveProperty("idempotencyKey");
+  });
+
+  it("recovers update as a fresh reauthorization draft", async () => {
+    (teamAutomationApi.listAll as jest.Mock).mockResolvedValue({
+      items: [automationView()],
+      nextCursor: null,
+      totalCount: 1,
+    });
+    (teamAutomationApi.update as jest.Mock).mockRejectedValue(
+      new TeamAutomationApiError(
+        "Reconnect NyxID to authorize this automation.",
+        409,
+        "TEAM_AUTOMATION_AUTHORIZATION_BINDING_REQUIRED",
+      ),
+    );
+    renderTab("m-alpha");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(NyxIDAuthClient).toHaveBeenCalledTimes(1));
+    const loginWithRedirect = (NyxIDAuthClient as jest.Mock).mock.results[0].value
+      .loginWithRedirect as jest.Mock;
+    expect(loginWithRedirect).toHaveBeenCalled();
+    const stored = JSON.parse(
+      String(window.sessionStorage.getItem(window.sessionStorage.key(0) ?? "")),
+    ) as Record<string, unknown>;
+    expect(stored).toEqual(
+      expect.objectContaining({
+        mode: "reauthorize",
+        scheduleId: "sch-alpha",
+      }),
+    );
+  });
+
   it("allows run now while an active automation is paused", async () => {
     (teamAutomationApi.listAll as jest.Mock).mockResolvedValue({
       items: [automationView({ enabled: false })],
@@ -284,6 +447,86 @@ describe("TeamAutomationsTab canonical member authority", () => {
     expect(screen.getByRole("button", { name: "Resume" })).toBeInTheDocument();
   });
 
+  it("keeps observing a pause after the first post-202 read is still stale", async () => {
+    const active = automationView({ enabled: true, stateVersion: 4 });
+    const paused = automationView({ enabled: false, stateVersion: 5 });
+    (teamAutomationApi.listAll as jest.Mock)
+      .mockResolvedValueOnce({
+        items: [active],
+        nextCursor: null,
+        totalCount: 1,
+      })
+      .mockResolvedValueOnce({
+        items: [active],
+        nextCursor: null,
+        totalCount: 1,
+      })
+      .mockResolvedValue({
+        items: [paused],
+        nextCursor: null,
+        totalCount: 1,
+      });
+    (teamAutomationApi.pause as jest.Mock).mockResolvedValue({
+      accepted: true,
+      status: "accepted",
+      scheduleId: "sch-alpha",
+      operationId: "op-pause",
+      commandId: "cmd-pause",
+    });
+    renderTab("m-alpha");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Pause" }));
+
+    expect(await screen.findByText("Pause request accepted")).toBeInTheDocument();
+    await waitFor(
+      () => expect(screen.getByRole("button", { name: "Resume" })).toBeInTheDocument(),
+      { timeout: 3_500 },
+    );
+    expect(teamAutomationApi.listAll).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps observing delete until the authoritative row disappears", async () => {
+    const active = automationView({ stateVersion: 4 });
+    (teamAutomationApi.listAll as jest.Mock)
+      .mockResolvedValueOnce({
+        items: [active],
+        nextCursor: null,
+        totalCount: 1,
+      })
+      .mockResolvedValueOnce({
+        items: [active],
+        nextCursor: null,
+        totalCount: 1,
+      })
+      .mockResolvedValue({
+        items: [],
+        nextCursor: null,
+        totalCount: 0,
+      });
+    (teamAutomationApi.delete as jest.Mock).mockResolvedValue({
+      accepted: true,
+      status: "accepted",
+      scheduleId: "sch-alpha",
+      operationId: "op-delete",
+      commandId: "cmd-delete",
+    });
+    renderTab("m-alpha");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+    const confirmation = await screen.findByRole("dialog");
+    fireEvent.click(
+      within(confirmation).getByRole("button", { name: "Delete" }),
+    );
+
+    expect(await screen.findByText("Delete request accepted")).toBeInTheDocument();
+    await waitFor(
+      () =>
+        expect(screen.getByText("No automations for this member")).toBeInTheDocument(),
+      { timeout: 3_500 },
+    );
+    expect(teamAutomationApi.listAll).toHaveBeenCalledTimes(3);
+  });
+
   it("offers reauthorization for a projected authorization failure", async () => {
     (teamAutomationApi.listAll as jest.Mock).mockResolvedValue({
       items: [automationView({ authorizationStatus: "needs_authorization" })],
@@ -304,18 +547,26 @@ describe("TeamAutomationsTab canonical member authority", () => {
   });
 
   it("retries actor-owned revocation after refresh without a browser operation ledger", async () => {
-    (teamAutomationApi.listAll as jest.Mock).mockResolvedValue({
-      items: [
-        automationView({
-          authorizationStatus: "revocation_pending",
-          revocationPending: true,
-          nyxIdRevocationStatus: "Completed",
-          vaultRevocationStatus: "Pending",
-        }),
-      ],
-      nextCursor: null,
-      totalCount: 1,
+    const now = Date.parse("2026-07-29T00:00:00Z");
+    const nowSpy = jest.spyOn(Date, "now").mockReturnValue(now);
+    const revoking = automationView({
+      authorizationStatus: "revocation_pending",
+      revocationPending: true,
+      nyxIdRevocationStatus: "Completed",
+      vaultRevocationStatus: "Pending",
     });
+    (teamAutomationApi.listAll as jest.Mock)
+      .mockResolvedValueOnce({
+        items: [revoking],
+        nextCursor: null,
+        totalCount: 1,
+      })
+      .mockResolvedValueOnce({
+        items: [revoking],
+        nextCursor: null,
+        totalCount: 1,
+      })
+      .mockResolvedValue({ items: [], nextCursor: null, totalCount: 0 });
     (teamAutomationApi.retryRevocation as jest.Mock).mockResolvedValue({
       accepted: true,
       status: "accepted",
@@ -335,5 +586,81 @@ describe("TeamAutomationsTab canonical member authority", () => {
         "sch-alpha",
       ),
     );
+    expect(
+      await screen.findByText("No automations for this member", {}, { timeout: 3_500 }),
+    ).toBeInTheDocument();
+    expect(teamAutomationApi.listAll).toHaveBeenCalledTimes(3);
+    nowSpy.mockReturnValue(now + 61_000);
+    const callsBeforeRefresh = (teamAutomationApi.listAll as jest.Mock).mock.calls.length;
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() =>
+      expect(teamAutomationApi.listAll).toHaveBeenCalledTimes(callsBeforeRefresh + 1),
+    );
+    await waitFor(() =>
+      expect(screen.queryByText("Still pending")).not.toBeInTheDocument(),
+    );
+  });
+
+  it("reconnects NyxID for revocation retry without persisting an action ledger", async () => {
+    (teamAutomationApi.listAll as jest.Mock).mockResolvedValue({
+      items: [
+        automationView({
+          authorizationStatus: "revocation_pending",
+          revocationPending: true,
+          nyxIdRevocationStatus: "Completed",
+          vaultRevocationStatus: "Pending",
+        }),
+      ],
+      nextCursor: null,
+      totalCount: 1,
+    });
+    (teamAutomationApi.retryRevocation as jest.Mock).mockRejectedValue(
+      new TeamAutomationApiError(
+        "Reconnect NyxID to authorize this automation.",
+        409,
+        "TEAM_AUTOMATION_AUTHORIZATION_BINDING_REQUIRED",
+      ),
+    );
+    renderTab("m-alpha");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Retry revocation" }));
+
+    await waitFor(() => expect(NyxIDAuthClient).toHaveBeenCalledTimes(1));
+    const loginWithRedirect = (NyxIDAuthClient as jest.Mock).mock.results[0].value
+      .loginWithRedirect as jest.Mock;
+    expect(loginWithRedirect).toHaveBeenCalledWith({
+      returnTo:
+        "/scopes/scope-alpha/teams/team-alpha/members/m-alpha/automations",
+      prompt: "consent",
+    });
+    expect(window.sessionStorage.length).toBe(0);
+  });
+
+  it("keeps delete unavailable while replacement or revocation is pending", async () => {
+    (teamAutomationApi.listAll as jest.Mock).mockResolvedValue({
+      items: [
+        automationView({
+          scheduleId: "sch-replacement",
+          authorizationStatus: "replacement_pending",
+        }),
+        automationView({
+          scheduleId: "sch-revocation",
+          authorizationStatus: "failed",
+          revocationPending: true,
+          nyxIdRevocationStatus: "Failed",
+          vaultRevocationStatus: "Pending",
+        }),
+      ],
+      nextCursor: null,
+      totalCount: 2,
+    });
+    renderTab("m-alpha");
+
+    expect(await screen.findByText("Replacing authorization")).toBeInTheDocument();
+    expect(screen.getByText("Revocation needs attention")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Retry revocation" }),
+    ).toBeInTheDocument();
   });
 });

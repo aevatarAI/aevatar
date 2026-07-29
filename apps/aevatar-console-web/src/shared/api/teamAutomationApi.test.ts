@@ -189,6 +189,29 @@ describe("teamAutomationApi", () => {
     );
   });
 
+  it("fails closed when future enum names merely share a known suffix", () => {
+    const futureScope = authorizationResult();
+    futureScope.plan.credentialPolicy.scopes[0] =
+      "NYX_ID_CREDENTIAL_SCOPE_ARCHIVE_READ";
+    expect(() => teamAutomationApiDecoders.permissionReview(futureScope)).toThrow(
+      "Unknown NyxID credential scope",
+    );
+
+    const futureRequirement = authorizationResult();
+    futureRequirement.plan.nyxIdServiceGrants[0].nodeGrantRequirement =
+      "AUTHORIZATION_GRANT_REQUIREMENT_CONDITIONAL_REQUIRED";
+    expect(() =>
+      teamAutomationApiDecoders.permissionReview(futureRequirement),
+    ).toThrow("Unknown NyxID node grant requirement");
+
+    const futureRouteKind = authorizationResult();
+    futureRouteKind.plan.ownerLlmSelection.routeKind =
+      "SCHEDULED_INVOCATION_OWNER_LLM_ROUTE_KIND_FUTURE_GATEWAY";
+    expect(() =>
+      teamAutomationApiDecoders.permissionReview(futureRouteKind),
+    ).toThrow("Unknown Team automation owner LLM route kind");
+  });
+
   it("preserves duplicate grants and their order in the review", () => {
     const result = authorizationResult();
     result.plan.nyxIdServiceGrants[0].nodeIds.push("node-alpha");
@@ -275,6 +298,30 @@ describe("teamAutomationApi", () => {
     );
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(init.body).toBeUndefined();
+  });
+
+  it("turns a catalog refresh 202 projection into a typed retryable state", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 202,
+      json: async () => ({
+        ready: false,
+        refreshStatus: "observed",
+        refreshFailureCode: "",
+        visibilityStatus: "projection_pending",
+        visibilityFailureCode: "projection_pending",
+        requiredStateVersion: 19,
+        visibleStateVersion: 18,
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(teamAutomationApi.refreshAuthorizationCatalog()).rejects.toMatchObject({
+      code: "TEAM_AUTOMATION_AUTHORIZATION_PROJECTION_PENDING",
+      requiredStateVersion: 19,
+      retryable: true,
+      status: 202,
+    });
   });
 
   it("uses one scoped create command after confirmation", async () => {

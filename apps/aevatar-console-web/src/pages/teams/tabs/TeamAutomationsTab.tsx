@@ -85,6 +85,21 @@ type Draft = {
 
 type AuthorizationMode = "create" | "reauthorize";
 
+export type MutationObservation = {
+  readonly kind:
+    | AuthorizationMode
+    | "update"
+    | "pause"
+    | "resume"
+    | "runNow"
+    | "delete"
+    | "retryRevocation";
+  readonly scheduleId: string;
+  readonly baselineStateVersion: number;
+  readonly expectedDraft?: TeamAutomationCreateDraft;
+  readonly baselineLastFireAt?: string | null;
+};
+
 type AuthorizationFlow =
   | { readonly state: "idle" }
   | {
@@ -201,6 +216,65 @@ function isPending(view: TeamAutomationView): boolean {
   ].includes(view.authorizationStatus);
 }
 
+function matchesDraft(
+  view: TeamAutomationView,
+  expectedDraft: TeamAutomationCreateDraft,
+): boolean {
+  return (
+    view.displayName === expectedDraft.displayName &&
+    view.prompt === expectedDraft.prompt &&
+    view.cronExpression === expectedDraft.cronExpression &&
+    view.timezone === (expectedDraft.timezone || "UTC") &&
+    view.enabled === expectedDraft.enabled
+  );
+}
+
+export function mutationObservationComplete(
+  observation: MutationObservation,
+  items: readonly TeamAutomationView[],
+): boolean {
+  const view = items.find((item) => item.scheduleId === observation.scheduleId);
+  if (!view && ["delete", "retryRevocation"].includes(observation.kind)) {
+    return true;
+  }
+  if (observation.kind === "delete") {
+    return false;
+  }
+  if (!view || view.stateVersion <= observation.baselineStateVersion) {
+    return false;
+  }
+  switch (observation.kind) {
+    case "create":
+    case "reauthorize":
+      return ["active", "needs_authorization", "failed"].includes(
+        view.authorizationStatus,
+      );
+    case "update":
+      return (
+        (observation.expectedDraft
+          ? matchesDraft(view, observation.expectedDraft)
+          : false) ||
+        ["needs_authorization", "failed"].includes(view.authorizationStatus)
+      );
+    case "pause":
+      return !view.enabled;
+    case "resume":
+      return view.enabled;
+    case "runNow":
+      return (
+        view.lastFireAt !== (observation.baselineLastFireAt ?? null) ||
+        view.authorizationStatus === "failed"
+      );
+    case "retryRevocation":
+      return (
+        view.revocationPending &&
+        view.authorizationStatus === "failed" &&
+        (view.nyxIdRevocationStatus === "Failed" ||
+          view.vaultRevocationStatus === "Failed")
+      );
+  }
+}
+
 function credentialLabel(view: TeamAutomationView): string {
   switch (view.authorizationStatus) {
     case "provisioning_pending":
@@ -267,6 +341,13 @@ function recoveryDraft(
   };
 }
 
+function requiresBindingRecovery(error: unknown): error is TeamAutomationApiError {
+  return (
+    error instanceof TeamAutomationApiError &&
+    error.code === "TEAM_AUTOMATION_AUTHORIZATION_BINDING_REQUIRED"
+  );
+}
+
 async function retryTypedPreflight<T>(operation: () => Promise<T>): Promise<T> {
   const delays = [500, 1_000, 2_000];
   for (let attempt = 0; ; attempt += 1) {
@@ -315,6 +396,8 @@ const TeamAutomationsTab: React.FC<Props> = ({
   const [formOpen, setFormOpen] = React.useState(false);
   const [editing, setEditing] = React.useState<TeamAutomationView | null>(null);
   const [authorizationFlow, setAuthorizationFlow] = React.useState<AuthorizationFlow>({ state: "idle" });
+  const [mutationObservation, setMutationObservation] =
+    React.useState<MutationObservation | null>(null);
   const [notice, setNotice] = React.useState("");
   const [busyScheduleId, setBusyScheduleId] = React.useState("");
   const [previewText, setPreviewText] = React.useState("");
@@ -333,7 +416,7 @@ const TeamAutomationsTab: React.FC<Props> = ({
     refetchInterval: (query) => {
       const data = query.state.data;
       const pending =
-        authorizationFlow.state === "pending" ||
+        mutationObservation !== null ||
         Boolean(data?.items.some(isPending));
       if (!pending) {
         pollingStartedAtRef.current = null;
@@ -347,9 +430,53 @@ const TeamAutomationsTab: React.FC<Props> = ({
     refetchOnWindowFocus: true,
   });
 
+  React.useEffect(() => {
+    const data = automationsQuery.data;
+    if (
+      !mutationObservation ||
+      !data ||
+      !mutationObservationComplete(mutationObservation, data.items)
+    ) {
+      return;
+    }
+    setMutationObservation((current) =>
+      current === mutationObservation ? null : current,
+    );
+    setAuthorizationFlow((current) =>
+      current.state === "pending" &&
+      current.scheduleId === mutationObservation.scheduleId
+        ? { state: "idle" }
+        : current,
+    );
+    pollingStartedAtRef.current = null;
+  }, [automationsQuery.data, mutationObservation]);
+
   const invalidate = React.useCallback(
     () => queryClient.invalidateQueries({ queryKey }),
     [queryClient, queryKey],
+  );
+
+  const redirectToBindingRecovery = React.useCallback(
+    async (input?: {
+      readonly draft: TeamAutomationCreateDraft;
+      readonly mode: AuthorizationMode;
+      readonly scheduleId?: string;
+    }) => {
+      if (typeof window === "undefined") {
+        throw new Error("NyxID authorization recovery requires a browser environment.");
+      }
+      if (input) {
+        saveTeamAutomationAuthorizationDraft(
+          window.sessionStorage,
+          recoveryDraft(input.draft, input.mode, input.scheduleId),
+        );
+      }
+      await new NyxIDAuthClient(getNyxIDRuntimeConfig()).loginWithRedirect({
+        returnTo: buildTeamMemberAutomationsHref(route),
+        prompt: "consent",
+      });
+    },
+    [route],
   );
 
   const beginPreflight = React.useCallback(
@@ -366,20 +493,12 @@ const TeamAutomationsTab: React.FC<Props> = ({
         }
         setAuthorizationFlow({ state: "reviewing", draft: nextDraft, mode, review, scheduleId });
       } catch (error) {
-        if (
-          error instanceof TeamAutomationApiError &&
-          error.code === "TEAM_AUTOMATION_AUTHORIZATION_BINDING_REQUIRED" &&
-          typeof window !== "undefined"
-        ) {
-          saveTeamAutomationAuthorizationDraft(
-            window.sessionStorage,
-            recoveryDraft(nextDraft, mode, scheduleId),
-          );
+        if (requiresBindingRecovery(error)) {
           try {
-            const returnTo = buildTeamMemberAutomationsHref(route);
-            await new NyxIDAuthClient(getNyxIDRuntimeConfig()).loginWithRedirect({
-              returnTo,
-              prompt: "consent",
+            await redirectToBindingRecovery({
+              draft: nextDraft,
+              mode,
+              scheduleId,
             });
             return;
           } catch (redirectError) {
@@ -404,7 +523,7 @@ const TeamAutomationsTab: React.FC<Props> = ({
         });
       }
     },
-    [route],
+    [redirectToBindingRecovery],
   );
 
   React.useEffect(() => {
@@ -510,6 +629,13 @@ const TeamAutomationsTab: React.FC<Props> = ({
         scheduleId: receipt.scheduleId,
         baselineStateVersion: editing?.stateVersion ?? 0,
       });
+      setMutationObservation({
+        kind: mode,
+        scheduleId: receipt.scheduleId,
+        baselineStateVersion: mode === "reauthorize" ? editing?.stateVersion ?? 0 : 0,
+        expectedDraft: confirmedDraft,
+      });
+      pollingStartedAtRef.current = Date.now();
       setNotice(copy(
         "teams.automations.messages.authorizationAccepted",
         "Authorization request accepted",
@@ -517,6 +643,29 @@ const TeamAutomationsTab: React.FC<Props> = ({
       setFormOpen(false);
       await invalidate();
     } catch (error) {
+      if (requiresBindingRecovery(error)) {
+        try {
+          await redirectToBindingRecovery({
+            draft: confirmedDraft,
+            mode,
+            scheduleId,
+          });
+          return;
+        } catch (redirectError) {
+          setAuthorizationFlow({
+            state: "error",
+            code: "TEAM_AUTOMATION_AUTHORIZATION_REDIRECT_FAILED",
+            draft: confirmedDraft,
+            message:
+              redirectError instanceof Error
+                ? redirectError.message
+                : String(redirectError),
+            mode,
+            scheduleId,
+          });
+          return;
+        }
+      }
       if (
         error instanceof TeamAutomationApiError &&
         error.code === "TEAM_AUTOMATION_AUTHORIZATION_PLAN_CHANGED"
@@ -547,17 +696,41 @@ const TeamAutomationsTab: React.FC<Props> = ({
     const identity = createTeamAutomationOperationIdentity();
     setBusyScheduleId(editing.scheduleId);
     try {
-      await teamAutomationApi.update(route, editing.scheduleId, {
+      const receipt = await teamAutomationApi.update(route, editing.scheduleId, {
         displayName: next.displayName,
         prompt: next.prompt,
         cronExpression: next.cronExpression,
         timezone: next.timezone,
         enabled: next.enabled,
       }, identity);
+      setMutationObservation({
+        kind: "update",
+        scheduleId: receipt.scheduleId,
+        baselineStateVersion: editing.stateVersion,
+        expectedDraft: next,
+      });
+      pollingStartedAtRef.current = Date.now();
       setNotice(copy("teams.automations.messages.updateAccepted", "Update request accepted"));
       setFormOpen(false);
       await invalidate();
     } catch (error) {
+      if (requiresBindingRecovery(error)) {
+        try {
+          await redirectToBindingRecovery({
+            draft: next,
+            mode: "reauthorize",
+            scheduleId: editing.scheduleId,
+          });
+          return;
+        } catch (redirectError) {
+          void message.error(
+            redirectError instanceof Error
+              ? redirectError.message
+              : String(redirectError),
+          );
+          return;
+        }
+      }
       if (
         error instanceof TeamAutomationApiError &&
         error.code === "TEAM_AUTOMATION_REAUTHORIZATION_REQUIRED"
@@ -577,15 +750,16 @@ const TeamAutomationsTab: React.FC<Props> = ({
   ) => {
     setBusyScheduleId(view.scheduleId);
     try {
+      let receipt;
       if (action === "retryRevocation") {
-        await teamAutomationApi.retryRevocation(route, view.scheduleId);
+        receipt = await teamAutomationApi.retryRevocation(route, view.scheduleId);
         setNotice(copy(
           "teams.automations.messages.revocationRetryAccepted",
           "Revocation retry accepted",
         ));
       } else {
         const identity = createTeamAutomationOperationIdentity();
-        await teamAutomationApi[action](route, view.scheduleId, identity);
+        receipt = await teamAutomationApi[action](route, view.scheduleId, identity);
         setNotice(
           action === "runNow"
             ? copy("teams.automations.messages.runAccepted", "Run request accepted")
@@ -596,8 +770,28 @@ const TeamAutomationsTab: React.FC<Props> = ({
                 : copy("teams.automations.messages.resumeAccepted", "Resume request accepted"),
         );
       }
+      setMutationObservation({
+        kind: action,
+        scheduleId: receipt.scheduleId,
+        baselineStateVersion: view.stateVersion,
+        baselineLastFireAt: action === "runNow" ? view.lastFireAt : undefined,
+      });
+      pollingStartedAtRef.current = Date.now();
       await invalidate();
     } catch (error) {
+      if (requiresBindingRecovery(error)) {
+        try {
+          await redirectToBindingRecovery();
+          return;
+        } catch (redirectError) {
+          void message.error(
+            redirectError instanceof Error
+              ? redirectError.message
+              : String(redirectError),
+          );
+          return;
+        }
+      }
       void message.error(error instanceof Error ? error.message : String(error));
     } finally {
       setBusyScheduleId("");
@@ -625,7 +819,11 @@ const TeamAutomationsTab: React.FC<Props> = ({
     const canReauthorize =
       view.authorizationStatus === "needs_authorization" ||
       (view.authorizationStatus === "failed" && !view.revocationPending);
-    const canDelete = !["deleting", "revocation_pending"].includes(view.authorizationStatus);
+    const canDelete =
+      !view.revocationPending &&
+      ["provisioning_pending", "active", "needs_authorization", "failed"].includes(
+        view.authorizationStatus,
+      );
     return (
       <div className="team-automation-actions">
         {active ? (
@@ -851,7 +1049,7 @@ const TeamAutomationsTab: React.FC<Props> = ({
 
       <div aria-live="polite" style={{ marginTop: 14 }}>
         {notice ? <Alert closable message={notice} onClose={() => setNotice("")} showIcon type="info" /> : null}
-        {authorizationFlow.state === "pending" && pollingStartedAtRef.current &&
+        {mutationObservation && pollingStartedAtRef.current &&
         Date.now() - pollingStartedAtRef.current >= pendingPollDurationMs ? (
           <Alert
             message={copy("teams.automations.pending.title", "Still pending")}
