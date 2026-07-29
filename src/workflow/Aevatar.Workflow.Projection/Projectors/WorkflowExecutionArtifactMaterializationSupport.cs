@@ -276,6 +276,9 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         var step = GetOrCreateStep(readModel.Steps, evt.StepId);
         step.SuspensionType = evt.SuspensionType ?? string.Empty;
         step.SuspensionPrompt = SanitizeAuditText(evt.Prompt);
+        step.SuspensionContent = evt.Secure
+            ? string.Empty
+            : SanitizeAuditText(evt.Content);
         step.SuspensionTimeoutSeconds = evt.TimeoutSeconds == 0 ? null : evt.TimeoutSeconds;
         step.RequestedVariableName = evt.VariableName ?? string.Empty;
         readModel.CompletionStatus = WorkflowExecutionCompletionStatus.WaitingForSignal;
@@ -627,6 +630,7 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
             AssignedValue = source.AssignedValue,
             SuspensionType = source.SuspensionType,
             SuspensionPrompt = source.SuspensionPrompt,
+            SuspensionContent = source.SuspensionContent,
             SuspensionTimeoutSeconds = source.SuspensionTimeoutSeconds,
             RequestedVariableName = source.RequestedVariableName,
             Usage = CloneUsage(source.Usage),
