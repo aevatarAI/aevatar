@@ -167,6 +167,13 @@ public static class MainnetHostBuilderExtensions
             builder.Configuration,
             builder.Environment.ContentRootPath);
         builder.Services.AddSingleton(agentProfileRolloutSelector);
+        if (builder.Configuration[$"{NyxIdAssistantActionsOptions.ConfigSection}:Enabled"] is null)
+        {
+            builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [$"{NyxIdAssistantActionsOptions.ConfigSection}:Enabled"] = bool.TrueString,
+            });
+        }
         builder.Services.AddNyxIdChat(builder.Configuration);
         AddNyxIdChatAgentProfile(builder);
         builder.Services.AddStreamingProxy(builder.Configuration);

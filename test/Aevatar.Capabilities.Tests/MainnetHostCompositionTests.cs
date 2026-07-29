@@ -259,6 +259,8 @@ public sealed class MainnetHostCompositionTests
         app.MapAevatarMainnetHost();
         await app.StartAsync();
 
+        app.Services.GetRequiredService<NyxIdAssistantActionRegistry>()
+            .TryGetDefinition("service.connect", out _).Should().BeTrue();
         var brokerOptions = app.Services.GetRequiredService<IOptions<NyxIdBrokerOptions>>().Value;
         brokerOptions.RequiredLlmServiceSlug.Should().Be(LlmDefaults.NyxIdRoute);
         brokerOptions.AdditionalRequiredServiceSlugs.Should().Equal(
