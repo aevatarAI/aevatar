@@ -55,9 +55,9 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool
 
     public string Description =>
         "Make HTTP requests to downstream services through NyxID's credential-injecting proxy. " +
-        "NyxID automatically injects the user's stored credentials. " +
-        "Use typed capability discovery to select an exact service instance, then provide " +
-        "service_id + slug + path to send a proxied request.";
+        "Admitted workflow calls provide only path_params, query, headers, body, and response_mode; " +
+        "the committed proof supplies service, method, path template, and schemas. Ordinary human " +
+        "calls use service_id + slug + path after typed capability discovery.";
 
     public ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
 
@@ -134,7 +134,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool
             },
             "path": {
               "type": "string",
-              "description": "API path relative to the service's base URL (e.g. '/chat/completions', '/getMe')"
+              "description": "Ordinary human raw-proxy path. Never provide this field for a proof-bound workflow call."
             },
             "method": {
               "type": "string",
@@ -142,12 +142,21 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool
               "description": "HTTP method (default: GET)"
             },
             "body": {
-              "type": "string",
-              "description": "Request body as JSON string (for POST/PUT/PATCH)"
+              "description": "Proof-bound JSON request body, or an ordinary raw-proxy JSON string."
+            },
+            "path_params": {
+              "type": "object",
+              "additionalProperties": true,
+              "description": "Proof-bound path parameter values. Names and scalar types come from the committed operation proof."
+            },
+            "query": {
+              "type": "object",
+              "additionalProperties": true,
+              "description": "Proof-bound query parameter values. Names and scalar types come from the committed operation proof."
             },
             "headers": {
               "type": "object",
-              "additionalProperties": { "type": "string" },
+              "additionalProperties": true,
               "description": "Non-sensitive operation headers. Authorization, cookies, API keys, and tokens are forbidden; NyxID injects credentials."
             },
             "response_mode": {
@@ -156,7 +165,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool
               "description": "Response handling mode. Omit or use text for the existing JSON/string response. Use file_artifact only for GET binary downloads in a managed workflow run."
             }
           },
-          "required": ["service_id", "slug", "path"]
+          "additionalProperties": false
         }
         """;
 
