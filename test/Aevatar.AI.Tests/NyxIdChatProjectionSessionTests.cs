@@ -406,6 +406,82 @@ public sealed class NyxIdChatProjectionSessionTests
     }
 
     [Fact]
+    public async Task ProjectionPort_ShouldDeliverContinuationTerminalAcrossCommittedControllerEvents()
+    {
+        var hub = new RecordingSessionEventHub();
+        var runtime = new RecordingActorRuntime();
+        runtime.MarkExists("projection.session.scope:nyxid-chat-session:conversation-alpha:turn-alpha");
+        var port = new NyxIdChatSessionProjectionPort(
+            new RecordingReleaseService(),
+            hub,
+            CreateAttachExistingLookup(runtime));
+        var sink = new RecordingEventSink();
+        var projector = new NyxIdChatSessionEventProjector(hub);
+        var context = ControllerContext();
+        var admission = new NyxIdChatContinuationAdmissionState
+        {
+            Kind = NyxIdChatContinuationKind.Action,
+            RequestId = "command-action-alpha",
+            ClientRequestId = "client-action-alpha",
+            ContinuationTurnId = context.SessionId,
+            Status = NyxIdChatContinuationAdmissionStatus.Accepted,
+            ReasonCode = NyxIdChatBrowserActions.ActionContinuationAccepted,
+            OwnerSubject = "owner-alpha",
+        };
+        var active = ControllerState(NyxIdChatTaskStatus.Active, NyxIdChatTurnStatus.Active);
+        active.ProgressSequence = 5;
+        active.ContinuationAdmission = admission.Clone();
+
+        var attachment = await port.AttachExistingChatProjectionAsync(
+            context.RootActorId,
+            context.SessionId,
+            sink,
+            CancellationToken.None);
+        attachment.Should().NotBeNull();
+        await projector.ProjectAsync(
+            context,
+            CommittedEnvelope(
+                context.RootActorId,
+                new NyxIdChatContinuationAdmissionCommittedEvent
+                {
+                    Admission = admission,
+                    State = active,
+                },
+                stateVersion: 12),
+            CancellationToken.None);
+        foreach (var published in hub.Published.ToArray())
+            await hub.Handler!(published.Event);
+
+        hub.Published.Clear();
+        var blocked = active.Clone();
+        blocked.ProgressSequence = 6;
+        blocked.ActiveTask.Status = NyxIdChatTaskStatus.Blocked;
+        blocked.ActiveTask.ActiveOperationId = string.Empty;
+        blocked.ActiveTask.FailureCode = "NYXID_ACTION_POSTCONDITION_STALE";
+        blocked.ActiveTask.SafeMessage = "The NyxID action postcondition read model is stale.";
+        blocked.ActiveTask.Steps[0].Status = NyxIdChatStepStatus.Waiting;
+        blocked.ActiveTurn.Status = NyxIdChatTurnStatus.Blocked;
+        blocked.ActiveTurn.FailureCode = blocked.ActiveTask.FailureCode;
+        blocked.ActiveTurn.SafeMessage = blocked.ActiveTask.SafeMessage;
+        blocked.LatestTurn = blocked.ActiveTurn.Clone();
+        await projector.ProjectAsync(
+            context,
+            CommittedEnvelope(
+                context.RootActorId,
+                ControllerReconciled(blocked),
+                stateVersion: 15),
+            CancellationToken.None);
+        foreach (var published in hub.Published.ToArray())
+            await hub.Handler!(published.Event);
+
+        sink.Events.Select(static entry => entry.Sequence).Should().Equal(5, 5, 5, 6, 6, 6, 6);
+        sink.Events.Should().Contain(entry =>
+            entry.EventCase == AGUIEvent.EventOneofCase.RunFinished &&
+            entry.RunFinished.RunId == context.SessionId &&
+            entry.RunFinished.Status == RunCompletionStatus.Blocked);
+    }
+
+    [Fact]
     public void ProjectionPort_ShouldNotExposePublicEnsureProjectionApi()
     {
         typeof(INyxIdChatSessionProjectionPort)
@@ -1287,7 +1363,7 @@ public sealed class NyxIdChatProjectionSessionTests
             CancellationToken.None);
 
         var frame = hub.Published.Should().ContainSingle().Which.Event;
-        frame.Sequence.Should().Be(20);
+        frame.Sequence.Should().Be(state.ProgressSequence);
         frame.EventCase.Should().Be(AGUIEvent.EventOneofCase.Custom);
         frame.Custom.Name.Should().Be("nyxid.continuation.changed");
         frame.Custom.Payload.Unpack<NyxIdChatContinuationAdmissionState>()
@@ -1404,6 +1480,7 @@ public sealed class NyxIdChatProjectionSessionTests
                         ConversationActorId = context.RootActorId,
                         ScopeId = "scope-alpha",
                         ContinuationAdmission = admission.Clone(),
+                        ProgressSequence = 10,
                     },
                 },
                 stateVersion: 22),
@@ -1526,7 +1603,7 @@ public sealed class NyxIdChatProjectionSessionTests
             entry.Event.EventCase == AGUIEvent.EventOneofCase.Custom &&
             entry.Event.Custom.Name ==
                 NyxIdChatConversationAguiFrameBuilder.StepControlChangedEventName).Which.Event;
-        control.Sequence.Should().Be(22);
+        control.Sequence.Should().Be(state.ProgressSequence);
         control.Custom.Payload.Unpack<NyxIdChatStepControlResultState>()
             .Should().BeEquivalentTo(result);
         hub.Published.Should().ContainSingle(entry =>

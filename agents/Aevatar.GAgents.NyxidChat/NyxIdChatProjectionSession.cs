@@ -322,7 +322,7 @@ public sealed class NyxIdChatSessionEventProjector
                 context,
                 NyxIdChatConversationAguiFrameBuilder.BuildLateOperationEvidence(
                     committed,
-                    stateVersion));
+                    committed.ProgressSequence));
         }
 
         if (payload.Is(NyxIdChatControlFenceCommittedEvent.Descriptor))
@@ -336,7 +336,7 @@ public sealed class NyxIdChatSessionEventProjector
                     context.RootActorId,
                     context.SessionId,
                     committed,
-                    stateVersion));
+                    committed.State?.ProgressSequence ?? 0));
         }
 
         if (payload.Is(NyxIdChatActionRequestedEvent.Descriptor))
@@ -353,7 +353,7 @@ public sealed class NyxIdChatSessionEventProjector
                     context.RootActorId,
                     context.SessionId,
                     committed,
-                    stateVersion));
+                    committed.State?.ProgressSequence ?? 0));
         }
 
         if (payload.Is(NyxIdChatContinuationAdmissionCommittedEvent.Descriptor))
@@ -375,7 +375,7 @@ public sealed class NyxIdChatSessionEventProjector
                     context.RootActorId,
                     context.SessionId,
                     committed,
-                    stateVersion));
+                    committed.State?.ProgressSequence ?? 0));
         }
 
         if (payload.Is(NyxIdChatStepControlCommittedEvent.Descriptor))
@@ -397,7 +397,7 @@ public sealed class NyxIdChatSessionEventProjector
                 context,
                 NyxIdChatConversationAguiFrameBuilder.BuildStepControlChanged(
                     committed,
-                    stateVersion));
+                    committed.State?.ProgressSequence ?? 0));
         }
 
         if (payload.Is(NyxIdChatTurnAdmissionRejectedEvent.Descriptor))

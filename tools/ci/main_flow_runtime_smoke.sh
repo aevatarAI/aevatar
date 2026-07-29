@@ -53,6 +53,7 @@ start_host() {
     ASPNETCORE_URLS="http://127.0.0.1:${HTTP_PORT}" \
     AEVATAR_NYXID_AUTHORITY="http://127.0.0.1:${HTTP_PORT}" \
     AEVATAR_Aevatar__NyxId__ApiBaseUrl="http://127.0.0.1:${HTTP_PORT}" \
+    AEVATAR_Aevatar__NyxId__AssistantActions__Enabled=false \
     AEVATAR_OAUTH_REDIRECT_BASE_URL="http://127.0.0.1:${HTTP_PORT}" \
     Aevatar__Authentication__Enabled=false \
     AEVATAR_ActorRuntime__Provider=Orleans \
