@@ -853,8 +853,22 @@ button{font-family:inherit;cursor:pointer;}
 .datamore{width:100%;margin-top:6px;font-size:12px;color:var(--muted);}
 .datatable{display:grid;grid-template-columns:minmax(90px,auto) 1fr;gap:4px 10px;margin-top:6px;font-family:var(--mono);font-size:11.5px;}
 .dt-k{color:var(--faint);} .dt-v{color:var(--fg);white-space:pre-wrap;word-break:break-word;}
-.diag-strip{margin:10px 0 4px;padding:10px 12px;border:1px solid var(--failed-bd);background:var(--failed-bg);border-radius:8px;}
-.diag-strip .ds-title{font-size:12px;font-weight:600;color:var(--failed);margin-bottom:6px;}
+.approval-panel{margin:14px 0 4px;padding:14px;border:1px solid var(--waiting-bd);background:var(--waiting-bg);border-radius:8px;}
+.approval-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;color:var(--heading);font-size:13px;font-weight:650;}
+.approval-head span{color:#8a5107;font-size:11.5px;font-weight:500;}
+.approval-content{margin:10px 0 0;padding:10px 12px;max-height:300px;overflow:auto;border:1px solid var(--waiting-bd);border-radius:6px;background:var(--surface);color:var(--fg);font:12px/1.55 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;}
+.approval-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:12px;}
+.approval-actions .btn:disabled{cursor:not-allowed;opacity:.55;}
+.approval-feedback{display:flex;flex-direction:column;gap:7px;margin-top:12px;}
+.approval-feedback label{font-size:12px;font-weight:600;color:var(--heading);}
+.approval-feedback textarea{width:100%;min-height:76px;resize:vertical;padding:9px 10px;border:1px solid var(--border-strong);border-radius:6px;background:var(--surface);color:var(--fg);font:13px/1.45 var(--sans);}
+.approval-feedback textarea:focus{outline:0;border-color:var(--primary);box-shadow:0 0 0 2px var(--primary-weak);}
+.approval-feedback .approval-error{color:var(--failed);font-size:12px;}
+.diag-strip{margin:10px 0 4px;padding:10px 12px;border:1px solid var(--border);background:var(--surface-2);border-radius:8px;}
+.diag-strip.info{border-color:var(--running-bd);background:var(--running-bg);}
+.diag-strip.problem{border-color:var(--failed-bd);background:var(--failed-bg);}
+.diag-strip .ds-title{font-size:12px;font-weight:600;color:var(--primary-strong);margin-bottom:6px;}
+.diag-strip.problem .ds-title{color:var(--failed);}
 .diag-strip .ds-item{font-size:12.5px;color:var(--fg);line-height:1.45;margin-top:4px;}
 .art-preview{margin-top:8px;font-family:var(--mono);font-size:12px;line-height:1.5;white-space:pre-wrap;max-height:200px;overflow:auto;color:var(--fg);background:var(--surface-3);border:1px solid var(--border);border-radius:6px;padding:10px;}
 .logs-note{font-size:11.5px;color:var(--faint);margin:0 0 8px;}
@@ -1507,6 +1521,7 @@ var OBS_DETAIL={};               /* runId -> {loading,err,detail}；detail 为 o
 var OBS_DETAIL_REQUESTS={};      /* runId -> monotonic detail request generation */
 var OBS_DETAIL_SCOPE_VERSION=0;  /* invalidates detail responses started under an older scope */
 var OBS_DIRECT_RUNS={};          /* explicit admin run-id lookups with unknown owner scope */
+var OBS_APPROVAL={};             /* runId -> transient form/submission state; committed facts stay in OBS_DETAIL */
 var OBS_QUERY_KEYS=['scope','status','origin','definition','schedule','from','to','run','tab'];
 var OBS_STATUS_VALUES=['running','completed','failed','stopped'];
 var OBS_TAB_VALUES=['timeline','steps','diagnostics','logs','artifacts','graph'];
@@ -1574,7 +1589,9 @@ function mapObsDetail(d,graph){
       targetRole:s.targetRole||'', requestedAtUtc:s.requestedAtUtc||'', completedAtUtc:s.completedAtUtc||'',
       success:s.success, status:obsStepStatus(s), duration:obsDurMs(s.durationMs), durationMs:s.durationMs,
       outputPreview:s.outputPreview||'', error:s.error||'', params:s.requestParameters||{},
-      nextStepId:s.nextStepId||'', branchKey:s.branchKey||'', usage:s.usage||{} }; });
+      nextStepId:s.nextStepId||'', branchKey:s.branchKey||'', suspensionType:s.suspensionType||'',
+      suspensionPrompt:s.suspensionPrompt||'', suspensionContent:s.suspensionContent||'',
+      suspensionTimeoutSeconds:s.suspensionTimeoutSeconds, usage:s.usage||{} }; });
   var events=rawTimeline.map(function(e){
     e=e||{}; var tc=e.toolCall||null;
     var mappedTc=tc?{ toolName:tc.toolName||'', callId:tc.callId||'', argumentsJson:tc.argumentsJson||'',
@@ -3170,16 +3187,77 @@ function obsNarrativeView(r){
     '<details class="obs-io-block" open><summary>最终输出 · finalOutput</summary>'+outBody+'</details>'+
     err+'</div>';
 }
+function obsApprovalState(runId){
+  return OBS_APPROVAL[runId]||(OBS_APPROVAL[runId]={rejecting:false,feedback:'',submitting:false,accepted:false,error:''});
+}
+function obsActiveApproval(run){
+  return ((run&&run.steps)||[]).filter(function(step){
+    return !step.completedAtUtc&&String(step.suspensionType||'').toLowerCase()==='human_approval';
+  }).slice(-1)[0]||null;
+}
+function obsCanApprove(run){
+  return !!(ACCOUNT&&ACCOUNT.scope&&run&&run.scope===ACCOUNT.scope);
+}
+function obsApprovalPanel(run){
+  var approval=obsActiveApproval(run);
+  if(!approval){ if(run&&run.id) delete OBS_APPROVAL[run.id]; return ''; }
+  var state=obsApprovalState(run.id),owner=obsCanApprove(run),disabled=state.submitting||state.accepted?' disabled':'',timeout='';
+  if(approval.suspensionTimeoutSeconds!=null) timeout='<span>审批时限 '+esc(approval.suspensionTimeoutSeconds)+' 秒</span>';
+  var prompt=approval.suspensionPrompt?'<div style="margin-top:7px;font-size:12.5px;color:var(--muted)">'+esc(approval.suspensionPrompt)+'</div>':'';
+  var content='<pre class="approval-content" tabindex="0" aria-label="待审批内容">'+esc(approval.suspensionContent||'（无待审内容）')+'</pre>';
+  var actions='';
+  if(!owner){
+    actions='<div class="approval-actions"><span>该 Run 属于其他 scope；管理员观测为只读</span></div>';
+  } else if(state.accepted){
+    actions='<div class="approval-actions"><span>审批决定已接受，等待运行状态更新</span></div>';
+  } else {
+    actions='<div class="approval-actions"><button type="button" class="btn btn-primary" data-act="obsApprovalApprove"'+disabled+'>批准并继续</button>'+
+      '<button type="button" class="btn" data-act="obsApprovalReject"'+disabled+'>驳回</button></div>';
+    if(state.rejecting){
+      actions+='<div class="approval-feedback"><label for="obs-approval-feedback">驳回反馈（必填）</label>'+
+        '<textarea id="obs-approval-feedback" data-act="obsApprovalFeedback" rows="3" placeholder="说明需要修改的内容"'+disabled+'>'+esc(state.feedback)+'</textarea>'+
+        (state.error?'<div class="approval-error" role="alert">'+esc(state.error)+'</div>':'')+
+        '<div class="approval-actions"><button type="button" class="btn btn-primary" data-act="obsApprovalRejectSubmit"'+disabled+'>提交驳回</button>'+
+        '<button type="button" class="btn" data-act="obsApprovalRejectCancel"'+disabled+'>取消</button></div></div>';
+    } else if(state.error){
+      actions+='<div class="approval-feedback"><div class="approval-error" role="alert">'+esc(state.error)+'</div></div>';
+    }
+  }
+  return '<section class="approval-panel" aria-labelledby="obs-approval-title"><div class="approval-head"><div id="obs-approval-title">需要审批</div>'+timeout+'</div>'+prompt+content+actions+'</section>';
+}
+async function obsSubmitApproval(run,approved,rerender){
+  var approval=obsActiveApproval(run),state=obsApprovalState(run.id);
+  if(!approval||!obsCanApprove(run)||state.submitting||state.accepted) return false;
+  var feedback=(state.feedback||'').trim();
+  if(!approved&&!feedback){ state.error='请填写驳回反馈'; if(rerender) rerender(); return false; }
+  state.submitting=true; state.error=''; if(rerender) rerender();
+  var body={stepId:approval.stepId,approved:!!approved};
+  if(!approved) body.userInput=feedback;
+  try{
+    await adminJson('/api/scopes/'+encodeURIComponent(run.scope)+'/runs/'+encodeURIComponent(run.id)+':resume',{
+      method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)
+    });
+    state.accepted=true; state.rejecting=false; return true;
+  }catch(e){
+    state.error=(e&&(e.body||e.message))||'审批提交失败'; return false;
+  }finally{
+    state.submitting=false; if(rerender) rerender();
+  }
+}
 function obsDiagnosticStrip(r){
   var bad=r.status==='failed'||r.status==='stopped'||r.rawStatus==='timed_out'||r.rawStatus==='failed'||r.rawStatus==='stopped';
   if(!bad&&!(r.diagnostics&&r.diagnostics.length)) return '';
   var items=(r.diagnostics||[]).slice(0,3);
   if(!items.length&&!bad) return '';
+  var problem=bad||(r.diagnostics||[]).some(function(item){
+    return item.severity==='warning'||item.severity==='error';
+  });
   var body=items.length?items.map(function(t){
     return '<div class="ds-item"><b>'+esc((t.severity||'info').toUpperCase())+' · '+esc(t.code)+'</b> — '+esc(t.message||'')+
       (t.stepId?' <span class="tnum">('+esc(t.stepId)+')</span>':'')+'</div>';
   }).join(''):'<div class="ds-item">运行已进入终止态，但诊断尚未物化。请复制 run id 与 state version 排查。</div>';
-  return '<div class="diag-strip"><div class="ds-title">失败诊断 · '+(items.length||0)+' 条</div>'+body+'</div>';
+  var title=problem?'失败诊断':'当前位置';
+  return '<div class="diag-strip '+(problem?'problem':'info')+'"><div class="ds-title">'+title+' · '+(items.length||0)+' 条</div>'+body+'</div>';
 }
 function obsTimelineView(r){
   var rows=r.events&&r.events.length?r.events:r.timeline;
@@ -3234,7 +3312,7 @@ function obsStepsView(r){
 }
 function obsDiagnosticsView(r){
   var top='<div class="issue-box"><div class="issue-actions"><button class="ibtn" data-act="obsCopyIssue" style="height:26px">复制 issue payload</button></div></div>';
-  if(!r.diagnostics.length) return top+emptyBlock('run').replace('暂无 Run','暂无诊断信息').replace('该员工还没有执行记录。','后端暂未返回本次 Run 的失败诊断。');
+  if(!r.diagnostics.length) return top+emptyBlock('run').replace('暂无 Run','暂无诊断信息').replace('该员工还没有执行记录。','后端暂未返回本次 Run 的诊断信息。');
   return top+'<div class="diag-list">'+r.diagnostics.map(function(t){
     return '<div class="diag-card '+esc(t.severity)+'">'+
       '<div class="diag-head"><span class="diag-title">'+esc((t.severity||'info').toUpperCase())+' · '+esc(t.code||'diagnostic')+'</span>'+
@@ -3411,7 +3489,7 @@ function obsDetail(r){
       '<button class="ibtn" style="height:28px" data-act="obsToAudit" data-run="'+esc(r.id)+'" title="在审计日志中搜索此 run">审计 · run</button>'+
     '</div>';
   }
-  return head+usage+obsDiagnosticStrip(r)+obsNarrativeView(r)+cross+
+  return head+usage+obsApprovalPanel(r)+obsDiagnosticStrip(r)+obsNarrativeView(r)+cross+
     '<div class="obs-tabs">'+tabs+'</div><div class="obs-tab-body">'+content+'</div>';
 }
 function usageCell(k,v){
@@ -3485,6 +3563,7 @@ function bindObservatory(root){
   function reDetail(resetScroll){ var d=root.querySelector('#obs-detail'),inner=d&&d.querySelector('.obs-detail-inner'); if(d&&inner){ var scrollTop=resetScroll?0:d.scrollTop;
     inner.innerHTML=obsDetail(obsSelected()); d.scrollTop=scrollTop; bindGraph(); } }
   function reBar(){ var b=root.querySelector('.obs-filterbar'); if(b) b.outerHTML=obsFilterBar(); }
+  function selectedDetail(){ var selected=obsSelected(),cache=selected&&OBS_DETAIL[selected.id]; return cache&&cache.detail; }
   function selectRun(id){ obsNavigate({run:id}); }
   if(typeof window!=='undefined'){
     if(bindObservatory.graphResizeHandler) window.removeEventListener('resize',bindObservatory.graphResizeHandler);
@@ -3526,6 +3605,10 @@ function bindObservatory(root){
     else if(a==='obsRailToggle'){ obsSetRailCollapsed(!OBS_STATE.railCollapsed); render(); }
     else if(a==='obsImmersive'){ obsSetImmersive(true); }
     else if(a==='obsImmersiveExit'){ obsSetImmersive(false); render(); }
+    else if(a==='obsApprovalApprove'){ var approvalRun=selectedDetail(); if(approvalRun) obsSubmitApproval(approvalRun,true,reDetail); }
+    else if(a==='obsApprovalReject'){ var rejectRun=selectedDetail(); if(rejectRun){ var rejectState=obsApprovalState(rejectRun.id); rejectState.rejecting=true; rejectState.error=''; reDetail(); } }
+    else if(a==='obsApprovalRejectCancel'){ var cancelRun=selectedDetail(); if(cancelRun){ var cancelState=obsApprovalState(cancelRun.id); cancelState.rejecting=false; cancelState.error=''; reDetail(); } }
+    else if(a==='obsApprovalRejectSubmit'){ var rejectSubmitRun=selectedDetail(); if(rejectSubmitRun) obsSubmitApproval(rejectSubmitRun,false,reDetail); }
     else if(a==='obsCopy'){ var cv=act.getAttribute('data-copy');
       copyWithToast(cv, '已复制 run id：'+cv, '复制失败，请手动选择：'+cv); }
     else if(a==='obsCopyIssue'){ var si=obsSelected(), cd=si&&OBS_DETAIL[si.id], iv=(cd&&cd.detail&&cd.detail.issue)||'{}';
@@ -3586,8 +3669,11 @@ function bindObservatory(root){
     var patch={}; patch[field]=(ev.target.value||'').trim()||null; obsNavigate(patch);
   });
   root.addEventListener('input',function(ev){
-    if(ev.target&&ev.target.getAttribute&&ev.target.getAttribute('data-act')==='obsLocalSearch'){
+    var inputAct=ev.target&&ev.target.getAttribute&&ev.target.getAttribute('data-act');
+    if(inputAct==='obsLocalSearch'){
       OBS_STATE.localSearch=ev.target.value||''; reList();
+    } else if(inputAct==='obsApprovalFeedback'){
+      var approvalRun=selectedDetail(); if(approvalRun) obsApprovalState(approvalRun.id).feedback=ev.target.value||'';
     }
   });
 }
