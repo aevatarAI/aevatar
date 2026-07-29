@@ -43,6 +43,9 @@ public sealed class StatusDashboardServiceCollectionExtensionsTests
         services.Should().ContainSingle(descriptor =>
             descriptor.ServiceType == typeof(IHealthStatusQueryPort) &&
             descriptor.ImplementationType == typeof(HealthStatusQueryPort));
+        services.Should().ContainSingle(descriptor =>
+            descriptor.ServiceType == typeof(IHealthProbeOperationalSnapshotStore) &&
+            descriptor.ImplementationType == typeof(InMemoryHealthProbeOperationalSnapshotStore));
     }
 
     [Fact]

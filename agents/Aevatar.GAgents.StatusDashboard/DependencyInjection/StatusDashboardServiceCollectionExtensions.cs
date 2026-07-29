@@ -41,6 +41,7 @@ public static class StatusDashboardServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHealthProbeExecutor, HttpStatusProbeExecutor>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHealthProbeExecutor, ReadmodelFreshnessProbeExecutor>());
         services.TryAddSingleton<IHealthProbeExecutorRegistry, HealthProbeExecutorRegistry>();
+        services.TryAddSingleton<IHealthProbeOperationalSnapshotStore, InMemoryHealthProbeOperationalSnapshotStore>();
 
         // Projection pipeline (per-actor current-state replica)
         services.AddProjectionMaterializationRuntimeCore<
