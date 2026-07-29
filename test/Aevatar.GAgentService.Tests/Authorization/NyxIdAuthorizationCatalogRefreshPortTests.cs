@@ -794,13 +794,21 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
     public async Task RefreshPersonalAsync_WhenBulkScopePlanHasUnrelatedRouteFailure_ShouldObserveIsolatedServices()
     {
         var commands = new RecordingCommandPort();
+        var clock = new FakeTimeProvider(Now);
         var handler = new RoutingJsonHandler(
             Ok(UserServicesJson()),
             Error(HttpStatusCode.Conflict, "api_key_scope_plan_route_unresolved", 9007),
             Ok(ScopePlanJsonForServiceA()),
-            Error(HttpStatusCode.Conflict, "api_key_scope_plan_route_unresolved", 9007));
+            Error(HttpStatusCode.Conflict, "api_key_scope_plan_route_unresolved", 9007))
+        {
+            OnRequest = requestIndex =>
+            {
+                if (requestIndex >= 2)
+                    clock.Advance(TimeSpan.FromMinutes(1));
+            },
+        };
 
-        var result = await Create(commands, handler)
+        var result = await Create(commands, handler, timeProvider: clock)
             .RefreshPersonalAsync("owner-alpha", "bearer-secret");
 
         result.Status.Should().Be(NyxIdAuthorizationCatalogRefreshStatus.Observed);
@@ -841,6 +849,8 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
         observation.ContractVersion.Should().Be("1");
         observation.PolicyVersion.Should().Be("api-key-scope-v1");
         observation.EvaluatedAtUtc.Should().Be(EvaluatedAt);
+        observation.ObservedAtUtc.Should().Be(Now.AddMinutes(2));
+        observation.FreshUntilUtc.Should().Be(Now.AddMinutes(17));
         commands.Invalidations.Should().BeEmpty();
         commands.Failures.Should().BeEmpty();
     }
@@ -1193,6 +1203,8 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
 
         public List<bool> CancellationStates { get; } = [];
 
+        public Action<int>? OnRequest { get; set; }
+
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken)
@@ -1202,6 +1214,7 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
             CancellationStates.Add(cancellationToken.IsCancellationRequested);
             if (request.Content != null)
                 RequestBodies.Add(await request.Content.ReadAsStringAsync(cancellationToken));
+            OnRequest?.Invoke(Requests.Count - 1);
             if (!_responses.TryDequeue(out var response))
                 throw new InvalidOperationException("No queued response remains.");
             if (response.Failure != null)

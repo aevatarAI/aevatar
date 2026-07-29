@@ -461,7 +461,6 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
         CancellationToken ct)
     {
         var services = new List<NyxIdAuthorizationServiceEvidence>();
-        var observedAt = _timeProvider.GetUtcNow();
         DateTimeOffset? evaluatedAt = null;
         var contractVersion = NyxIdApiAccessResponseParser.ScopePlanContractVersion;
         var policyVersion = NyxIdApiAccessResponseParser.ScopePlanPolicyVersion;
@@ -514,6 +513,7 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
             services.Add(MapServiceEvidence(service, scopePlan.Services.Single()));
         }
 
+        var observedAt = _timeProvider.GetUtcNow();
         await ObserveCatalogAsync(
             normalizedOwner,
             refreshId,
