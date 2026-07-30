@@ -306,6 +306,39 @@ public sealed class AgentRunReplyGenerationExecutorTests
     }
 
     [Fact]
+    public void NyxIdCatalogTool_HttpErrorEnvelope_ShouldReturnTypedFailureReceipt()
+    {
+        using var client = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example" });
+        var tool = new NyxIdCatalogTool(client);
+
+        var receipt = ((IAgentTool)tool).CreateResultReceipt(
+            "call-1",
+            tool.Name,
+            "{}",
+            "{\"error\":true,\"status\":401,\"body\":\"secret upstream body\"}");
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ErrorCode.Should().Be("NYXID_CATALOG_HTTP_401");
+        receipt.ResultJson.Should().NotContain("secret upstream body");
+    }
+
+    [Fact]
+    public void NyxIdCatalogTool_UnrecognizedJson_ShouldLeaveOutcomeUnverified()
+    {
+        using var client = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example" });
+        var tool = new NyxIdCatalogTool(client);
+
+        var receipt = ((IAgentTool)tool).CreateResultReceipt(
+            "call-1",
+            tool.Name,
+            "{}",
+            "{}");
+
+        receipt.Should().BeNull();
+    }
+
+    [Fact]
     public async Task BuildLlmStepContinuation_WhenMiddlewareRemovesTools_ShouldRejectFabricatedToolCall()
     {
         var tool = new CountingTool("use_skill");

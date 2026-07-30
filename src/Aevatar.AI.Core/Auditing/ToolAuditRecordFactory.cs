@@ -13,6 +13,7 @@ namespace Aevatar.AI.Core.Auditing;
 public sealed class ToolAuditRecordFactory
 {
     private const string NyxIdProxyHttpFailurePrefix = "NYXID_PROXY_HTTP_";
+    private const string WebFetchHttpFailurePrefix = "WEB_FETCH_HTTP_";
 
     private readonly IAuditActorIdentityHasher _identityHasher;
     private readonly TimeProvider _timeProvider;
@@ -159,6 +160,7 @@ public sealed class ToolAuditRecordFactory
     {
         var normalized = value?.Trim();
         if (IsOwnedNyxIdProxyFailureCode(normalized) ||
+            IsOwnedWebFetchFailureCode(normalized) ||
             CodexExecutionAuditFailureSemantics.IsOwned(normalized))
             return normalized!;
 
@@ -170,6 +172,7 @@ public sealed class ToolAuditRecordFactory
             "middleware_terminated" => "middleware_terminated",
             "tool_call_terminated" => "tool_call_terminated",
             "tool_execution_exception" => "tool_execution_exception",
+            "CODE_EXECUTE_FAILED" => "CODE_EXECUTE_FAILED",
             _ => DefaultErrorCode(status),
         };
     }
@@ -185,6 +188,25 @@ public sealed class ToolAuditRecordFactory
                value[NyxIdProxyHttpFailurePrefix.Length] is >= '1' and <= '5' &&
                value[NyxIdProxyHttpFailurePrefix.Length + 1] is >= '0' and <= '9' &&
                value[NyxIdProxyHttpFailurePrefix.Length + 2] is >= '0' and <= '9';
+    }
+
+    private static bool IsOwnedWebFetchFailureCode(string? value)
+    {
+        if (value is "WEB_FETCH_DNS_FAILURE" or
+            "WEB_FETCH_TLS_FAILURE" or
+            "WEB_FETCH_TIMEOUT" or
+            "WEB_FETCH_TRANSPORT_FAILURE" or
+            "WEB_FETCH_URL_REJECTED")
+        {
+            return true;
+        }
+
+        return value != null &&
+               value.Length == WebFetchHttpFailurePrefix.Length + 3 &&
+               value.StartsWith(WebFetchHttpFailurePrefix, StringComparison.Ordinal) &&
+               value[WebFetchHttpFailurePrefix.Length] is >= '1' and <= '5' &&
+               value[WebFetchHttpFailurePrefix.Length + 1] is >= '0' and <= '9' &&
+               value[WebFetchHttpFailurePrefix.Length + 2] is >= '0' and <= '9';
     }
 
     private static AuditCorrelation BuildCorrelation(
@@ -282,24 +304,29 @@ public sealed class ToolAuditRecordFactory
             AgentToolReceiptStatus.ApprovalRequired => AuditOutcome.Accepted,
             AgentToolReceiptStatus.Denied => AuditOutcome.Denied,
             AgentToolReceiptStatus.Error => AuditOutcome.Error,
-            _ => AuditOutcome.Error,
+            _ => AuditOutcome.Unspecified,
         };
 
     private static AuditLifecyclePhase MapLifecyclePhase(AgentToolReceiptStatus status) =>
-        status == AgentToolReceiptStatus.ApprovalRequired
-            ? AuditLifecyclePhase.WaitingApproval
-            : AuditLifecyclePhase.Terminal;
+        status switch
+        {
+            AgentToolReceiptStatus.ApprovalRequired => AuditLifecyclePhase.WaitingApproval,
+            AgentToolReceiptStatus.Unspecified => AuditLifecyclePhase.Running,
+            _ => AuditLifecyclePhase.Terminal,
+        };
 
     private static AuditTerminalOutcome MapTerminalOutcome(AgentToolReceipt receipt) =>
         ResolveFailureCode(receipt.ErrorCode, receipt.Status) switch
         {
             "approval_timeout" => AuditTerminalOutcome.TimedOut,
             "codex_execution_timed_out" => AuditTerminalOutcome.TimedOut,
+            "WEB_FETCH_TIMEOUT" => AuditTerminalOutcome.TimedOut,
             "codex_execution_cancelled" => AuditTerminalOutcome.Cancelled,
             _ => receipt.Status switch
             {
                 AgentToolReceiptStatus.Success => AuditTerminalOutcome.Succeeded,
                 AgentToolReceiptStatus.ApprovalRequired => AuditTerminalOutcome.Unspecified,
+                AgentToolReceiptStatus.Unspecified => AuditTerminalOutcome.Unspecified,
                 _ => AuditTerminalOutcome.Failed,
             },
         };

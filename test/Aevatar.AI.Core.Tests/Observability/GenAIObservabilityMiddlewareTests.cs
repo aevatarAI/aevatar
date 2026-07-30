@@ -337,6 +337,7 @@ public class GenAIObservabilityMiddlewareTests : IDisposable
     [InlineData(AgentToolReceiptStatus.Error)]
     [InlineData(AgentToolReceiptStatus.Denied)]
     [InlineData(AgentToolReceiptStatus.AuthorizationRequired)]
+    [InlineData(AgentToolReceiptStatus.Unspecified)]
     public async Task ToolCall_WithSensitiveDataEnabled_ExcludesArgumentsAndResultForFailedReceipt(
         AgentToolReceiptStatus status)
     {
@@ -499,6 +500,18 @@ public class GenAIObservabilityMiddlewareTests : IDisposable
         public string Name => name;
         public string Description => "";
         public string ParametersSchema => "{}";
+        public AgentToolReceipt? CreateResultReceipt(
+            string callId,
+            string toolName,
+            string argumentsJson,
+            string resultJson) =>
+            new()
+            {
+                CallId = callId,
+                ToolName = toolName,
+                Status = AgentToolReceiptStatus.Success,
+                ResultJson = resultJson,
+            };
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct) =>
             Task.FromResult("fake");
     }

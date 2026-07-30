@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
@@ -240,6 +241,10 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         handler.Authorization.Should().BeNull("the bot owner's credential must never be used for sender inventory");
         using var document = JsonDocument.Parse(result);
         document.RootElement.GetProperty("error").GetString().Should().Be("inventory_capability_unavailable");
+        var receipt = tool.CreateResultReceipt("call-1", tool.Name, "{}", result);
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ErrorCode.Should().Be("NYXID_SERVICE_INVENTORY_FAILED");
         result.Should().NotContain("/init");
     }
 

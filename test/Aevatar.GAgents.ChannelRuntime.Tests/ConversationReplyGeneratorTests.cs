@@ -2656,7 +2656,10 @@ public sealed class ConversationReplyGeneratorTests
             [
                 new SingleToolSource(new FixedResultTool("ornn_search_skills", "Found 1 skills:\n- **project-summary**")),
                 new SingleToolSource(new FixedResultTool("use_skill", "# project-summary\n## Instructions\nFetch project data.")),
-                new SingleToolSource(new FixedResultTool("chrono_storage_query", "Error: Invalid URI: The hostname could not be parsed.")),
+                new SingleToolSource(new FixedResultTool(
+                    "chrono_storage_query",
+                    "Error: Invalid URI: The hostname could not be parsed.",
+                    AgentToolReceiptStatus.Error)),
             ]);
         var skillRecovery = new AgentSkillRecoveryContext(
             RequireInitialOrnnSearch: true,
@@ -4207,13 +4210,30 @@ public sealed class ConversationReplyGeneratorTests
         }
     }
 
-    private sealed class FixedResultTool(string name, string result) : IAgentTool
+    private sealed class FixedResultTool(
+        string name,
+        string result,
+        AgentToolReceiptStatus status = AgentToolReceiptStatus.Success) : IAgentTool
     {
         public string Name => name;
 
         public string Description => "Returns a fixed test result.";
 
         public string ParametersSchema => "{}";
+
+        public AgentToolReceipt? CreateResultReceipt(
+            string callId,
+            string toolName,
+            string argumentsJson,
+            string resultJson) =>
+            new()
+            {
+                CallId = callId,
+                ToolName = toolName,
+                Status = status,
+                ResultJson = resultJson,
+                ErrorCode = status == AgentToolReceiptStatus.Error ? "test_tool_error" : string.Empty,
+            };
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
             Task.FromResult(result);

@@ -453,36 +453,18 @@ public sealed class StreamingToolExecutor
                         error,
                         safeFailureResult);
                 }
-                else
-                {
-                    toolCallContext.Receipt = AgentToolReceiptFactory.CreateSuccess(
-                        effectiveTool,
-                        toolCallContext.ToolCallId,
-                        toolCallContext.ToolName,
-                        effectiveTool.GetCallSafety(toolCallContext.ArgumentsJson),
-                        result,
-                        toolCallContext.ArgumentsJson);
-                }
             });
 
             var toolResult = toolCallContext.Result
                 ?? (toolCallContext.Terminate
                     ? "Tool call terminated by middleware"
                     : $"Tool '{toolCallContext.ToolName}' returned no result");
-            var receipt = toolCallContext.Receipt;
-            if (receipt is null && toolCallContext.Terminate)
-                receipt = ToolCallReceiptFinalizer.Finalize(toolCallContext).Receipt;
-            receipt ??= AgentToolReceiptFactory.CreateSuccess(
-                effectiveTool,
-                toolCallContext.ToolCallId,
-                toolCallContext.ToolName,
-                effectiveTool.GetCallSafety(toolCallContext.ArgumentsJson),
-                toolResult,
-                toolCallContext.ArgumentsJson);
+            var receipt = toolCallContext.Receipt ?? ToolCallReceiptFinalizer.Finalize(toolCallContext).Receipt;
             var isErrorReceipt = executionFailed ||
                 receipt?.Status is AgentToolReceiptStatus.Error or
                 AgentToolReceiptStatus.Denied or
-                AgentToolReceiptStatus.AuthorizationRequired;
+                AgentToolReceiptStatus.AuthorizationRequired or
+                AgentToolReceiptStatus.Unspecified;
             var safeToolResult = isErrorReceipt && !string.IsNullOrWhiteSpace(receipt?.ResultJson)
                 ? receipt.ResultJson
                 : toolResult;

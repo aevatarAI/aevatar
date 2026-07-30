@@ -716,6 +716,17 @@ public sealed class SkillRecoveryPlannerTests
         public string Name => name;
         public string Description => "delegate";
         public string ParametersSchema => "{}";
+        public AgentToolReceipt? CreateSuccessReceipt(
+            string callId,
+            string toolName,
+            string resultJson) =>
+            new()
+            {
+                CallId = callId,
+                ToolName = toolName,
+                Status = AgentToolReceiptStatus.Success,
+                ResultJson = resultJson,
+            };
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
         {

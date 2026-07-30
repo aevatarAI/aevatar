@@ -1389,6 +1389,17 @@ public class RoleGAgentReplayContractTests
                                 ArgumentsJson = "{\"x\":1}",
                             },
                         },
+                        ToolReceipts =
+                        {
+                            new AgentToolReceipt
+                            {
+                                CallId = "call-approval",
+                                ToolName = "dangerous_tool",
+                                Status = AgentToolReceiptStatus.ApprovalRequired,
+                                ApprovalRequestId = "approval-1",
+                                ResultJson = "{\"status\":\"approval_required\"}",
+                            },
+                        },
                         OutputParts =
                         {
                             new ChatContentPart
@@ -1428,6 +1439,13 @@ public class RoleGAgentReplayContractTests
             .OfType<ToolCallEvent>()
             .Should()
             .ContainSingle(x => x.CallId == "call-1" && x.ToolName == "lookup");
+        replayPublisher.Published
+            .OfType<ToolResultEvent>()
+            .Should()
+            .ContainSingle(x =>
+                x.CallId == "call-approval" &&
+                !x.Success &&
+                x.Receipt.Status == AgentToolReceiptStatus.ApprovalRequired);
         replayPublisher.Published
             .OfType<MediaContentEvent>()
             .Should()

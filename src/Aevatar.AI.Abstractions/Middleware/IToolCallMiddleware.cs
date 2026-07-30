@@ -66,6 +66,9 @@ public sealed class ToolCallContext
     /// <summary>Typed receipt for receipt-worthy tool execution or approval yield.</summary>
     public AgentToolReceipt? Receipt { get; set; }
 
+    /// <summary>Whether the current receipt was synthesized by the canonical finalizer.</summary>
+    public bool ReceiptIsSynthetic { get; set; }
+
     /// <summary>Typed business keys for a tool approval yield.</summary>
     public ToolApprovalPendingContext? PendingApproval { get; set; }
 
