@@ -383,8 +383,10 @@ docs/                             # 架构文档
 
 ## 构建与测试
 
+普通开发优先运行最窄的受影响测试类、方法或项目；CI / release 才通过 `aevatar.slnx` 运行权威全量测试。完整规则见 [测试规范](docs/canon/testing.md)。
+
 ```bash
-# 恢复、构建、测试
+# 恢复、构建、CI / release 权威全量测试
 dotnet restore aevatar.slnx --nologo
 dotnet build aevatar.slnx --nologo
 dotnet test aevatar.slnx --nologo

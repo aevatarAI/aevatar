@@ -356,7 +356,7 @@ sequenceDiagram
 
 ## 给开发者
 
-- **运行测试**：`dotnet test test/Aevatar.Foundation.Core.Tests/Aevatar.Foundation.Core.Tests.csproj`
-- **默认全量测试**：`dotnet test aevatar.slnx --nologo`
+- **运行受影响测试（示例）**：`dotnet test test/Aevatar.Foundation.Core.Tests/Aevatar.Foundation.Core.Tests.csproj --nologo`；普通开发优先运行最窄的受影响测试范围，详见 [测试规范](docs/canon/testing.md)。
+- **CI / release 权威全量测试**：`dotnet test aevatar.slnx --nologo`
 - **按域构建**：`dotnet build aevatar.foundation.slnf` / `dotnet build aevatar.ai.slnf` / `dotnet build aevatar.cqrs.slnf` / `dotnet build aevatar.workflow.slnf` / `dotnet build aevatar.capabilities.slnf`
 - **Agent 命名约定**：带 **GAgent** 的类负责框架能力（事件分发、状态、路由）；业务逻辑放在基于 GAgent 的扩展或自定义步骤/Connector 里。
