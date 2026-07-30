@@ -28,6 +28,8 @@ internal sealed class StudioWorkflowCapabilityAdmissionTestService :
 
     public Action<PersistedWorkflowCapabilityAdmissionRequest>? OnRevalidate { get; init; }
 
+    public WorkflowCapabilityAdmissionPlan? AdmissionPlan { get; init; }
+
     public Task<WorkflowCapabilityAdmissionPlan> AdmitAsync(
         WorkflowExternalCapabilityAdmissionRequest request,
         CancellationToken cancellationToken = default)
@@ -39,6 +41,9 @@ internal sealed class StudioWorkflowCapabilityAdmissionTestService :
 
         if (_inner is not null)
             return _inner.AdmitAsync(request, cancellationToken);
+
+        if (AdmissionPlan is not null)
+            return Task.FromResult(AdmissionPlan.Clone());
 
         return Task.FromResult(WorkflowCapabilityAdmissionPlanIntegrity.Create(
             request.WorkflowYaml,

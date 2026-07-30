@@ -102,6 +102,54 @@ public sealed class StudioWorkflowProvisioningServiceTests
             .Which.NyxIdUserRequest.Request.UserServiceId.Should().Be("usvc-alpha");
     }
 
+    [Fact]
+    public async Task ProvisionAsync_WithUnknownAdmittedCapability_ShouldFailClosed()
+    {
+        var admission = new StudioWorkflowCapabilityAdmissionTestService
+        {
+            AdmissionPlan = CapabilityPlan(new ExternalWorkflowCapabilityRef()),
+        };
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var sut = NewService(NewMemberService(), schedule, admission);
+
+        var action = () => sut.ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest("Monitor", "name: monitor") { TeamId = TeamId });
+
+        await action.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*capability*");
+        schedule.PreflightRequests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_WithKnownAndUnknownAdmittedCapabilities_ShouldFailClosed()
+    {
+        var admission = new StudioWorkflowCapabilityAdmissionTestService
+        {
+            AdmissionPlan = CapabilityPlan(
+                new ExternalWorkflowCapabilityRef
+                {
+                    NyxIdUserService = new NyxIdUserServiceCapabilityRef
+                    {
+                        UserServiceId = "usvc-published-alpha",
+                    },
+                },
+                new ExternalWorkflowCapabilityRef()),
+        };
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var sut = NewService(NewMemberService(), schedule, admission);
+
+        var action = () => sut.ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest("Monitor", "name: monitor") { TeamId = TeamId });
+
+        await action.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*capability*");
+        schedule.PreflightRequests.Should().BeEmpty();
+    }
+
     [Theory]
     [InlineData("missing", "NYXID_EXPLICIT_REQUEST_GRANT_REQUIRED")]
     [InlineData("unknown", "NYXID_EXPLICIT_REQUEST_CONFIRMATION_CALL_SITE_MISMATCH")]
@@ -950,6 +998,21 @@ public sealed class StudioWorkflowProvisioningServiceTests
             new RecordingWorkflowSchedulePort(schedule),
             admission,
             time);
+    }
+
+    private static WorkflowCapabilityAdmissionPlan CapabilityPlan(
+        params ExternalWorkflowCapabilityRef[] capabilities)
+    {
+        var plan = new WorkflowCapabilityAdmissionPlan();
+        for (var index = 0; index < capabilities.Length; index++)
+        {
+            plan.InvocationAdmissions.Add(new WorkflowCapabilityInvocationAdmission
+            {
+                CallSiteId = $"monitor/call-{index}",
+                Capability = capabilities[index],
+            });
+        }
+        return plan;
     }
 
     private static RecordingMemberService NewMemberService() =>

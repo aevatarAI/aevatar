@@ -261,6 +261,42 @@ public sealed class WorkflowAuthorizationDependenciesTests
             .Which.Selector.NyxIdRequest.UserServiceId.Should().Be("usvc-explicit-alpha");
     }
 
+    [Fact]
+    public async Task BindWorkflowDefinition_WithExplicitRequestOnlyInInlineWorkflow_ShouldRequireServiceGrant()
+    {
+        const string rootYaml = """
+            name: root-workflow
+            roles: []
+            steps:
+              - id: root-transform
+                type: transform
+            """;
+        var inlineYaml = ExactNyxIdRequestWorkflowYaml();
+        var inlineWorkflowYamls = new Dictionary<string, string>
+        {
+            ["explicit-workflow"] = inlineYaml,
+        };
+        var agent = NewAgent();
+        var inlineDependencies = agent.EvaluateAuthorizationDependencies(inlineYaml)!;
+        var plan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            rootYaml,
+            inlineWorkflowYamls,
+            ExternalCapabilityExecutionMode.Interactive,
+            ReadyAdmissions(inlineDependencies),
+            ReadyExplicitRequestSourceStamps());
+
+        await agent.BindWorkflowDefinitionAsync(
+            rootYaml,
+            "root-workflow",
+            inlineWorkflowYamls,
+            capabilityAdmissionPlan: plan);
+
+        agent.State.AuthorizationDependencies.ServiceGrantPolicy.Should()
+            .Be(WorkflowServiceGrantPolicy.Required);
+        agent.State.AuthorizationDependencies.ExternalInvocations.Should().ContainSingle()
+            .Which.Selector.NyxIdRequest.UserServiceId.Should().Be("usvc-explicit-alpha");
+    }
+
     [Theory]
     [InlineData("foreach", "sub_step_type")]
     [InlineData("for_each", "sub_step_type")]

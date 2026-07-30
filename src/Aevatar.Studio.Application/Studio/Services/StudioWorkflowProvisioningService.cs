@@ -3,6 +3,7 @@ using System.Text;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
+using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
@@ -373,12 +374,7 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
             StateVersion: 0,
             ExternalCapabilities: admittedCapabilities,
             OwnerLLMRouteRequired: authorizationDependencies.OwnerLlmRouteRequired,
-            ServiceGrantRequirement: admittedCapabilities.Any(static capability =>
-                capability.CapabilityCase is
-                    ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService or
-                    ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest)
-                    ? AuthorizationGrantRequirement.Required
-                    : AuthorizationGrantRequirement.NotRequired);
+            ServiceGrantRequirement: WorkflowServiceGrantRequirementClassifier.Classify(admittedCapabilities));
     }
 
     /// <summary>

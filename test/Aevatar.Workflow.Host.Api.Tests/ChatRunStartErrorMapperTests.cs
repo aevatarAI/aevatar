@@ -191,6 +191,36 @@ public class ChatRunStartErrorMapperTests
         selected.GetProperty("endpointId").GetString().Should().Be("endpoint-alpha");
         selected.GetProperty("operationId").ValueKind.Should().Be(JsonValueKind.Null);
         selected.GetProperty("connectorCapabilityRef").ValueKind.Should().Be(JsonValueKind.Null);
+        selected.TryGetProperty("requestContractDigest", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public void ToErrorBody_ShouldKeepPublishedCapabilityJsonShapeUnchanged()
+    {
+        var readiness = new ExternalCapabilityReadiness
+        {
+            Status = ExternalCapabilityReadinessStatus.ContractDrift,
+            SelectedCapability = new ExternalWorkflowCapabilityRef
+            {
+                NyxIdUserService = new NyxIdUserServiceCapabilityRef
+                {
+                    UserServiceId = "usvc-published-alpha",
+                    EndpointId = "endpoint-published-alpha",
+                },
+            },
+        };
+        var detail = WorkflowChatRunStartFailureDetail.Create(
+            WorkflowChatRunStartError.InvalidWorkflowYaml,
+            "External workflow capability admission failed.",
+            readiness);
+
+        using var json = JsonDocument.Parse(JsonSerializer.Serialize(ChatRunStartErrorMapper.ToErrorBody(detail)));
+        var selected = json.RootElement.GetProperty("externalCapabilityReadiness")
+            .GetProperty("selectedCapability");
+
+        selected.GetProperty("userServiceId").GetString().Should().Be("usvc-published-alpha");
+        selected.GetProperty("endpointId").GetString().Should().Be("endpoint-published-alpha");
+        selected.TryGetProperty("requestContractDigest", out _).Should().BeFalse();
     }
 
     [Fact]

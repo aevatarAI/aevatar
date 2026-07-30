@@ -48,15 +48,44 @@ public sealed class WorkflowServiceRevisionArtifactBuilderTests
             .Be(AuthorizationGrantRequirement.NotRequired);
     }
 
+    [Fact]
+    public void Build_WithUnknownCapability_ShouldFailClosed()
+    {
+        var action = () => BuildArtifact(new ExternalWorkflowCapabilityRef());
+
+        action.Should().Throw<InvalidOperationException>()
+            .WithMessage("*capability*");
+    }
+
+    [Fact]
+    public void Build_WithKnownAndUnknownCapabilities_ShouldFailClosed()
+    {
+        var action = () => BuildArtifact(
+            new ExternalWorkflowCapabilityRef
+            {
+                NyxIdUserService = new NyxIdUserServiceCapabilityRef
+                {
+                    UserServiceId = "usvc-published-alpha",
+                },
+            },
+            new ExternalWorkflowCapabilityRef());
+
+        action.Should().Throw<InvalidOperationException>()
+            .WithMessage("*capability*");
+    }
+
     private static PreparedServiceRevisionArtifact BuildArtifact(
-        ExternalWorkflowCapabilityRef capability)
+        params ExternalWorkflowCapabilityRef[] capabilities)
     {
         var plan = new WorkflowCapabilityAdmissionPlan();
-        plan.InvocationAdmissions.Add(new WorkflowCapabilityInvocationAdmission
+        for (var index = 0; index < capabilities.Length; index++)
         {
-            CallSiteId = "wf-artifact-alpha/call-alpha",
-            Capability = capability,
-        });
+            plan.InvocationAdmissions.Add(new WorkflowCapabilityInvocationAdmission
+            {
+                CallSiteId = $"wf-artifact-alpha/call-{index}",
+                Capability = capabilities[index],
+            });
+        }
         return WorkflowServiceRevisionArtifactBuilder.Build(
             new ServiceRevisionSpec
             {

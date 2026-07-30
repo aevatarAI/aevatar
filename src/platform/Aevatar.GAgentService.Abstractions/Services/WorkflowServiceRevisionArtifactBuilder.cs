@@ -31,12 +31,7 @@ public static class WorkflowServiceRevisionArtifactBuilder
         var authorizationEvidence = new WorkflowRevisionAuthorizationEvidence
         {
             OwnerLlmRouteRequired = authorizationDependencies.OwnerLlmRouteRequired,
-            ServiceGrantRequirement = admittedCapabilities.Any(static capability =>
-                capability.CapabilityCase is
-                    ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService or
-                    ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest)
-                ? AuthorizationGrantRequirement.Required
-                : AuthorizationGrantRequirement.NotRequired,
+            ServiceGrantRequirement = WorkflowServiceGrantRequirementClassifier.Classify(admittedCapabilities),
         };
         authorizationEvidence.ExternalCapabilities.Add(admittedCapabilities);
 
