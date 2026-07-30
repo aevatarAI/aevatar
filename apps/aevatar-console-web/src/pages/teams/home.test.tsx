@@ -257,6 +257,125 @@ describe("TeamsHomePage", () => {
     expect(screen.queryByRole("button", { name: "切换到卡片视图" })).toBeNull();
   });
 
+  it("excludes archived Teams from the roster, summary counts, and runtime sampling", async () => {
+    (studioApi.listTeams as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-a",
+      teams: [
+        defaultTeams[0],
+        {
+          teamId: "t-archived",
+          scopeId: "scope-a",
+          displayName: "已归档团队",
+          description: "不再参与当前 Team roster",
+          lifecycleStage: "archived",
+          entryMemberId: "member-archived",
+          memberCount: 1,
+          createdAt: "2026-05-01T09:00:00Z",
+          updatedAt: "2026-05-01T10:03:00Z",
+        },
+      ],
+      nextPageToken: null,
+    });
+    (studioApi.listMembers as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-a",
+      members: [
+        ...defaultMembers,
+        {
+          ...defaultMembers[0],
+          memberId: "member-archived",
+          displayName: "归档团队成员",
+          publishedServiceId: "service-archived",
+          teamId: "t-archived",
+        },
+      ],
+      nextPageToken: null,
+    });
+    (scopeRuntimeApi.listServices as jest.Mock).mockResolvedValueOnce([
+      ...defaultServices,
+      {
+        ...defaultServices[0],
+        serviceId: "service-archived",
+        displayName: "归档团队运行时",
+      },
+    ]);
+
+    renderWithQueryClient(React.createElement(TeamsHomePage));
+
+    expect(
+      await screen.findByRole("heading", { level: 3, name: "客服团队" }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("heading", { level: 3, name: "已归档团队" }),
+    ).toBeNull();
+    expect(
+      screen.getByText("AI 团队总数").previousElementSibling,
+    ).toHaveTextContent("1");
+    expect(
+      screen.getByText("待启动团队").previousElementSibling,
+    ).toHaveTextContent("1");
+    expect(
+      screen.getByText("已有稳定运行").previousElementSibling,
+    ).toHaveTextContent("0");
+    await waitFor(() => {
+      expect(scopeRuntimeApi.listServiceRuns).toHaveBeenCalledTimes(1);
+    });
+    expect(scopeRuntimeApi.listServiceRuns).toHaveBeenCalledWith(
+      "scope-a",
+      "service-alpha",
+      { take: 1 },
+    );
+    expect(scopeRuntimeApi.listServiceRuns).not.toHaveBeenCalledWith(
+      "scope-a",
+      "service-archived",
+      { take: 1 },
+    );
+  });
+
+  it("shows the empty roster when every Team is archived", async () => {
+    (studioApi.listTeams as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-a",
+      teams: [
+        {
+          teamId: "t-archived",
+          scopeId: "scope-a",
+          displayName: "已归档团队",
+          description: "不再参与当前 Team roster",
+          lifecycleStage: "archived",
+          entryMemberId: "member-archived",
+          memberCount: 1,
+          createdAt: "2026-05-01T09:00:00Z",
+          updatedAt: "2026-05-01T10:03:00Z",
+        },
+      ],
+      nextPageToken: null,
+    });
+    (studioApi.listMembers as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-a",
+      members: [
+        {
+          ...defaultMembers[0],
+          memberId: "member-archived",
+          displayName: "归档团队成员",
+          publishedServiceId: "service-archived",
+          teamId: "t-archived",
+        },
+      ],
+      nextPageToken: null,
+    });
+
+    renderWithQueryClient(React.createElement(TeamsHomePage));
+
+    expect(
+      await screen.findByText(
+        "当前账号还没有创建任何团队。创建后，这里会展示你的 AI 团队列表。",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("heading", { level: 3, name: "已归档团队" }),
+    ).toBeNull();
+    expect(scopeRuntimeApi.listServiceRuns).not.toHaveBeenCalled();
+  });
+
   it("keeps the homepage visible without warning on sampled runtime failures", async () => {
     (scopeRuntimeApi.listServiceRuns as jest.Mock).mockRejectedValueOnce(
       new Error("No stub for /api/scopes/scope-a/services/service-alpha/runs"),

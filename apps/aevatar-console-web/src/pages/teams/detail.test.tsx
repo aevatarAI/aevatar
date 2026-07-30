@@ -1443,7 +1443,12 @@ describe("TeamDetailPage", () => {
     expect(await screen.findByRole("heading", { name: "自动化" })).toBeTruthy();
     expect(screen.getByText("这个成员还没有自动化")).toBeTruthy();
     expect(screen.getByText("Team Alpha Operator")).toBeTruthy();
-    expect(window.location.search).toContain("tab=automations");
+    await waitFor(() =>
+      expect(window.location.pathname).toBe(
+        "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/automations",
+      ),
+    );
+    expect(window.location.search).toBe("");
 
     fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
 
@@ -2516,7 +2521,7 @@ describe("TeamDetailPage", () => {
 
   });
 
-  it("makes zero automation requests from the Team-level selector shell", async () => {
+  it("canonicalizes the selected Team member and queries its automations", async () => {
     window.history.replaceState(
       {},
       "",
@@ -2525,9 +2530,21 @@ describe("TeamDetailPage", () => {
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    expect(await screen.findByText("这个成员还没有自动化")).toBeTruthy();
-    expect(screen.getByText("Team Alpha Operator")).toBeTruthy();
-    expect(teamAutomationApi.listAll).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(window.location.pathname).toBe(
+        "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/automations",
+      );
+      expect(teamAutomationApi.listAll).toHaveBeenCalledWith(
+        {
+          scopeId: "scope-1",
+          teamId: "t-alpha",
+          memberId: "member-team-alpha",
+        },
+        { take: 200 },
+      );
+    });
+    expect(window.location.search).toBe("");
+    expect(teamAutomationApi.listAll).toHaveBeenCalledTimes(1);
     expect(scheduledDispatchApi.listAll).not.toHaveBeenCalled();
   });
 
@@ -2550,6 +2567,7 @@ describe("TeamDetailPage", () => {
         { take: 200 },
       );
     });
+    expect(teamAutomationApi.listAll).toHaveBeenCalledTimes(1);
     expect(scheduledDispatchApi.listAll).not.toHaveBeenCalled();
   });
 
