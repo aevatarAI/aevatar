@@ -65,7 +65,7 @@ jest.mock("@/shared/api/scheduledDispatchApi", () => ({
 }));
 
 jest.mock("@/shared/navigation/history", () => ({
-  history: { push: jest.fn() },
+  history: { push: jest.fn(), replace: jest.fn() },
 }));
 
 jest.mock("@/shared/auth/client", () => ({
@@ -90,14 +90,17 @@ const member = {
   workflowSupported: true,
 };
 
-function renderTab(routeMemberId = "") {
+function renderTab(
+  routeMemberId = "",
+  members = [member],
+) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
   return render(
     <QueryClientProvider client={queryClient}>
       <TeamAutomationsTab
-        members={[member]}
+        members={members}
         routeMemberId={routeMemberId}
         scopeId="scope-alpha"
         teamId="team-alpha"
@@ -212,21 +215,56 @@ describe("TeamAutomationsTab canonical member authority", () => {
     ).toBe(true);
   });
 
-  it("keeps the full Automations shell without querying before a member is selected", async () => {
+  it("canonicalizes the sole eligible member from the Team shell", async () => {
     renderTab();
 
     expect(await screen.findByRole("heading", { name: "Automations" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Give a member recurring work" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Upcoming" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "New automation" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Add recurring work" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Refresh" })).not.toBeInTheDocument();
-    expect(screen.queryByText("View member run history")).not.toBeInTheDocument();
-    expect(screen.getByText("Planner")).toBeInTheDocument();
-    expect(screen.getByText("No automations for this member")).toBeInTheDocument();
-    expect(screen.getByText("No upcoming runs are visible yet.")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(history.replace).toHaveBeenCalledWith(member.automationsHref),
+    );
     expect(teamAutomationApi.listAll).not.toHaveBeenCalled();
     expect(scheduledDispatchApi.listAll).not.toHaveBeenCalled();
+  });
+
+  it("canonicalizes the explicitly selected eligible member", async () => {
+    const selectedMember = {
+      ...member,
+      automationsHref: "/scopes/scope-alpha/teams/team-alpha/members/m-beta/automations",
+      isSelectedMember: true,
+      key: "m-beta",
+      memberId: "m-beta",
+      name: "Reviewer",
+      serviceId: "svc-beta",
+    };
+
+    renderTab("", [member, selectedMember]);
+
+    await waitFor(() =>
+      expect(history.replace).toHaveBeenCalledWith(selectedMember.automationsHref),
+    );
+    expect(teamAutomationApi.listAll).not.toHaveBeenCalled();
+  });
+
+  it("requires an explicit choice when multiple eligible members are unresolved", async () => {
+    const otherMember = {
+      ...member,
+      automationsHref: "/scopes/scope-alpha/teams/team-alpha/members/m-beta/automations",
+      key: "m-beta",
+      memberId: "m-beta",
+      name: "Reviewer",
+      serviceId: "svc-beta",
+    };
+
+    renderTab("", [member, otherMember]);
+
+    expect(await screen.findByRole("combobox", { name: "Automation member" })).toBeInTheDocument();
+    expect(history.replace).not.toHaveBeenCalled();
+    expect(teamAutomationApi.listAll).not.toHaveBeenCalled();
+
+    fireEvent.mouseDown(screen.getByRole("combobox", { name: "Automation member" }));
+    fireEvent.click(await screen.findByText("Reviewer"));
+
+    expect(history.push).toHaveBeenCalledWith(otherMember.automationsHref);
   });
 
   it("opens the complete dev form directly from the Team shell", async () => {
@@ -283,6 +321,8 @@ describe("TeamAutomationsTab canonical member authority", () => {
     expect(await screen.findByText("Member unavailable for automation")).toBeInTheDocument();
     expect(teamAutomationApi.listAll).not.toHaveBeenCalled();
     expect(scheduledDispatchApi.listAll).not.toHaveBeenCalled();
+    expect(history.push).not.toHaveBeenCalled();
+    expect(history.replace).not.toHaveBeenCalled();
   });
 
   it("requires preflight and explicit review before create", async () => {
