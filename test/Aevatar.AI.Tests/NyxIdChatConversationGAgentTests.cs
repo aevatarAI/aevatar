@@ -1213,6 +1213,20 @@ public sealed class NyxIdChatConversationGAgentTests
             stateEvent.EventData.Is(NyxIdChatContinuationAdmissionCommittedEvent.Descriptor) &&
             stateEvent.EventData.Unpack<NyxIdChatContinuationAdmissionCommittedEvent>()
                 .State.ActiveTurn.Status == NyxIdChatTurnStatus.Succeeded);
+        var stateAfterFirst = agent.State.ToByteArray();
+        var operationsAfterFirst = operations.ToArray();
+        var eventCountAfterFirst = committed.Count;
+        var reservationCountAfterFirst = history.Reservations.Count;
+        var dispatchCountAfterFirst = dispatch.Calls.Count;
+
+        await agent.HandleEventAsync(CreateEnvelope(conversationActorId, command.Clone()));
+
+        (await eventStore.GetEventsAsync(conversationActorId)).Should()
+            .HaveCount(eventCountAfterFirst);
+        agent.State.ToByteArray().Should().Equal(stateAfterFirst);
+        operations.Should().Equal(operationsAfterFirst);
+        history.Reservations.Should().HaveCount(reservationCountAfterFirst);
+        dispatch.Calls.Should().HaveCount(dispatchCountAfterFirst);
     }
 
     [Theory]

@@ -463,7 +463,7 @@ internal static class NyxIdChatConversationAguiFrameBuilder
         frames.Add(BuildTerminal(actorId, turnId, state, sequence));
     }
 
-    private static AGUIEvent BuildTerminal(
+    internal static AGUIEvent BuildTerminal(
         string actorId,
         string turnId,
         NyxIdChatConversationGAgentState state,
