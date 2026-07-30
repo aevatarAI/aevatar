@@ -4,6 +4,7 @@ using Aevatar.AI.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Services;
+using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
@@ -156,12 +157,13 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         //    bind contract requires; deriving it from the provision key keeps one
         //    logical workflow identity across re-binds of the same member.
         //    The bind is asynchronous — we do NOT poll it to completion.
+        var workflowId = $"workflow-{provisionKey}";
         var bindReceipt = await _memberService.BindAsync(
             normalizedScopeId,
             memberId,
             new UpdateStudioMemberBindingRequest(
                 Workflow: new StudioMemberWorkflowBindingSpec(
-                    WorkflowId: $"workflow-{provisionKey}",
+                    WorkflowId: workflowId,
                     WorkflowYamls: [workflowYaml])
                 {
                     CapabilityAdmissionPlan = capabilityAdmissionPlan,
@@ -184,12 +186,31 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         //    The schedule id is deterministic (provision-{publishedServiceId}) and
         //    the write goes through EnsureAsync, so a re-provision updates the one
         //    existing schedule instead of stacking a new enabled schedule per retry.
-        string? scheduleId = null;
-        if (ShouldSchedule(request))
+        var response = new ProvisionWorkflowResponse(
+            MemberId: memberId,
+            WorkflowId: workflowId,
+            ScopeId: normalizedScopeId,
+            TeamId: teamId,
+            BindingStatus: ProvisionWorkflowBindingStatusNames.Accepted,
+            ObservatoryUrl: ObservatoryPath)
         {
-            var cronExpression = ResolveCron(request, out var timezone);
-            var auth = BuildScheduleAuth(subjectRef);
-            scheduleId = await EnsureProvisionScheduleAsync(
+            BindingRunId = NormalizeOptional(bindReceipt.BindingRunId),
+            StudioUrl = BuildStudioUrl(normalizedScopeId, teamId, memberId),
+        };
+        if (!ShouldSchedule(request))
+        {
+            return response with
+            {
+                ProvisioningStage = WorkflowScheduleProvisioningStageNames.BindAccepted,
+                ScheduleStatus = WorkflowScheduleProvisioningScheduleStatusNames.NotRequested,
+            };
+        }
+
+        var cronExpression = ResolveCron(request, out var timezone);
+        var auth = BuildScheduleAuth(subjectRef);
+        try
+        {
+            var scheduleId = await EnsureProvisionScheduleAsync(
                 normalizedScopeId,
                 publishedServiceId,
                 request.Prompt ?? string.Empty,
@@ -197,19 +218,22 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
                 cronExpression,
                 timezone,
                 ct);
+            return response with
+            {
+                ScheduleId = scheduleId,
+                ProvisioningStage = WorkflowScheduleProvisioningStageNames.ScheduleAccepted,
+                ScheduleStatus = WorkflowScheduleProvisioningScheduleStatusNames.Accepted,
+            };
         }
-
-        return new ProvisionWorkflowResponse(
-            MemberId: memberId,
-            ScopeId: normalizedScopeId,
-            TeamId: teamId,
-            BindingStatus: ProvisionWorkflowBindingStatusNames.Accepted,
-            ObservatoryUrl: ObservatoryPath)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            BindingRunId = NormalizeOptional(bindReceipt.BindingRunId),
-            ScheduleId = scheduleId,
-            StudioUrl = BuildStudioUrl(normalizedScopeId, teamId, memberId),
-        };
+            return response with
+            {
+                ProvisioningStage = WorkflowScheduleProvisioningStageNames.ScheduleBlocked,
+                ScheduleStatus = WorkflowScheduleProvisioningScheduleStatusNames.Blocked,
+                StageFailure = BuildScheduleStageFailure(ex),
+            };
+        }
     }
 
     /// <summary>
@@ -433,5 +457,25 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         var normalized = value?.Trim() ?? string.Empty;
         return normalized.Length == 0 ? null : normalized;
     }
+
+    private static WorkflowScheduleProvisioningStageFailure BuildScheduleStageFailure(Exception exception) =>
+        new(
+            Stage: WorkflowScheduleProvisioningStageNames.ScheduleBlocked,
+            Code: ResolveScheduleFailureCode(exception),
+            Message: NormalizeOptional(exception.Message) ?? "schedule provisioning failed.");
+
+    private static string ResolveScheduleFailureCode(Exception exception) => exception switch
+    {
+        ScheduledServiceInvocationAuthorizationException authorization => authorization.StableCode,
+        ScheduledDispatchConflictException => "scheduled_dispatch_conflict",
+        ScheduledDispatchApplicationException => "scheduled_dispatch_failed",
+        InvalidOperationException { Message: { Length: > 0 } message }
+            when IsStableFailureCode(message) => message,
+        _ => "schedule_ensure_failed",
+    };
+
+    private static bool IsStableFailureCode(string value) =>
+        value.Length <= 128 && value.All(static c =>
+            char.IsAsciiLetterOrDigit(c) || c is '_' or '-' or '.');
 
 }

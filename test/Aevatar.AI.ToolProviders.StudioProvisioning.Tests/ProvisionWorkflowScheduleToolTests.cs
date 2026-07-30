@@ -1337,6 +1337,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
     {
         var port = new RecordingProvisioningPort(new WorkflowScheduleProvisioningResult(
             MemberId: "member-1",
+            WorkflowId: "workflow-1",
             ScopeId: "scope-1",
             TeamId: "team-alpha",
             BindingStatus: "accepted",
@@ -1385,11 +1386,66 @@ public sealed class ProvisionWorkflowScheduleToolTests
         var root = document.RootElement;
         root.GetProperty("status").GetString().Should().Be("accepted");
         root.GetProperty("member_id").GetString().Should().Be("member-1");
+        root.GetProperty("workflow_id").GetString().Should().Be("workflow-1");
         root.GetProperty("team_id").GetString().Should().Be("team-alpha");
         root.GetProperty("schedule_id").GetString().Should().Be("schedule-1");
+        root.GetProperty("provisioning_stage").GetString().Should()
+            .Be(WorkflowScheduleProvisioningStageNames.ScheduleAccepted);
+        root.GetProperty("schedule_status").GetString().Should()
+            .Be(WorkflowScheduleProvisioningScheduleStatusNames.Accepted);
+        root.TryGetProperty("stage_failure", out var stageFailure).Should().BeFalse();
         root.GetProperty("studio_url").GetString().Should()
             .Be("/scopes/scope-1/teams/team-alpha/members/member-1/workflow");
         root.GetProperty("observatory_url").GetString().Should().Be("/workflow/observatory");
+    }
+
+    [Fact]
+    public async Task Execute_WhenScheduleBlockedAfterBind_ShouldReturnReceiptWithoutError()
+    {
+        var port = new RecordingProvisioningPort(new WorkflowScheduleProvisioningResult(
+            MemberId: "m-alpha",
+            WorkflowId: "wf-alpha",
+            ScopeId: "scope-1",
+            TeamId: "team-alpha",
+            BindingStatus: "accepted",
+            ObservatoryUrl: "/workflow/observatory",
+            StudioUrl: "/scopes/scope-1/teams/team-alpha/members/m-alpha/workflow")
+        {
+            BindingRunId = "bind-alpha",
+            ProvisioningStage = WorkflowScheduleProvisioningStageNames.ScheduleBlocked,
+            ScheduleStatus = WorkflowScheduleProvisioningScheduleStatusNames.Blocked,
+            StageFailure = new WorkflowScheduleProvisioningStageFailure(
+                WorkflowScheduleProvisioningStageNames.ScheduleBlocked,
+                "owner_llm_authorization_evidence_not_found",
+                "owner_llm_authorization_evidence_not_found"),
+        });
+        var tool = await DiscoverToolAsync(port);
+
+        using var _ = PushContext(scopeId: "scope-1", ownerSubject: "owner-1", accessToken: "access-token-1");
+        var output = await tool.ExecuteAsync("""
+            {
+              "team_id": "team-alpha",
+              "workflow_yaml": "name: demo\n",
+              "display_name": "Weekly Report"
+            }
+            """);
+
+        ErrorCode(output).Should().BeNull(output);
+        using var document = JsonDocument.Parse(output);
+        var root = document.RootElement;
+        root.GetProperty("status").GetString().Should().Be("accepted");
+        root.GetProperty("member_id").GetString().Should().Be("m-alpha");
+        root.GetProperty("workflow_id").GetString().Should().Be("wf-alpha");
+        root.TryGetProperty("schedule_id", out var scheduleId).Should().BeFalse();
+        root.GetProperty("binding_run_id").GetString().Should().Be("bind-alpha");
+        root.GetProperty("provisioning_stage").GetString().Should()
+            .Be(WorkflowScheduleProvisioningStageNames.ScheduleBlocked);
+        root.GetProperty("schedule_status").GetString().Should()
+            .Be(WorkflowScheduleProvisioningScheduleStatusNames.Blocked);
+        var failure = root.GetProperty("stage_failure");
+        failure.GetProperty("stage").GetString().Should().Be(WorkflowScheduleProvisioningStageNames.ScheduleBlocked);
+        failure.GetProperty("code").GetString().Should().Be("owner_llm_authorization_evidence_not_found");
+        failure.GetProperty("message").GetString().Should().Be("owner_llm_authorization_evidence_not_found");
     }
 
     [Fact]
@@ -1397,6 +1453,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
     {
         var port = new RecordingProvisioningPort(new WorkflowScheduleProvisioningResult(
             MemberId: "member-1",
+            WorkflowId: "workflow-1",
             ScopeId: "owner-scope",
             TeamId: "team-alpha",
             BindingStatus: "accepted",
@@ -1530,6 +1587,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
     {
         var port = new RecordingProvisioningPort(new WorkflowScheduleProvisioningResult(
             MemberId: "member-1",
+            WorkflowId: "workflow-1",
             ScopeId: "scope-1",
             TeamId: "team-alpha",
             BindingStatus: "accepted",
@@ -1717,6 +1775,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         {
             _result = result ?? new WorkflowScheduleProvisioningResult(
                 MemberId: "member-default",
+                WorkflowId: "workflow-default",
                 ScopeId: "scope-default",
                 TeamId: "team-alpha",
                 BindingStatus: "accepted",

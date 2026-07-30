@@ -21,8 +21,8 @@ namespace Aevatar.AI.ToolProviders.StudioProvisioning;
 /// forwarded NyxID access token remains a boundary input and is not persisted in
 /// schedule auth). There are NO
 /// channel / Lark / owner / scope / credential inputs, and the result carries no
-/// channel/Lark fields — only the Team/member/schedule ids plus Studio and
-/// Observatory links.
+/// channel/Lark fields — only the Team/member/workflow/schedule ids, typed
+/// provisioning stage, plus Studio and Observatory links.
 ///
 /// Because its outcome lands in the Observatory and never in a chat, it declares the
 /// <see cref="AgentToolCapabilities.ExcludeFromDirectChannelChat"/> capability so any
@@ -59,7 +59,8 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool, IAgentToolCapa
         "automation, and pick a distinct display_name for a different automation. " +
         "Provide schedule_cron + schedule_timezone for a recurring monitor; omit them for a single near-future demo run (unless run_immediately is false). " +
         "This is the Observatory-delivered alternative to scheduled_agent_creator: use it for workflow automation instead of publishing a prose skill or scheduling a bot delivery. " +
-        "Returns the Team id, member id, schedule id, Studio member workflow URL, and Observatory link; the scope and caller identity are taken from the session context, not from arguments. " +
+        "Returns the Team id, member id, workflow id, optional schedule id, typed provisioning stage, Studio member workflow URL, and Observatory link; the scope and caller identity are taken from the session context, not from arguments. " +
+        "If provisioning_stage is 'schedule_blocked', the member/workflow side effects are already accepted; do not create another member or workflow fallback for the same user intent, and instead report the returned stage_failure. " +
         "A status of 'accepted' means the YAML was validated and the bind was dispatched — the bind and any run complete " +
         "asynchronously, so verify the run in the Observatory before reporting the workflow as running.";
 
@@ -174,10 +175,19 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool, IAgentToolCapa
             return JsonSerializer.Serialize(new ProvisionWorkflowScheduleResultJson(
                 Status: result.BindingStatus,
                 MemberId: result.MemberId,
+                WorkflowId: result.WorkflowId,
                 ScopeId: result.ScopeId,
                 TeamId: result.TeamId,
                 ScheduleId: result.ScheduleId,
                 BindingRunId: result.BindingRunId,
+                ProvisioningStage: result.ProvisioningStage,
+                ScheduleStatus: result.ScheduleStatus,
+                StageFailure: result.StageFailure is null
+                    ? null
+                    : new ProvisionWorkflowScheduleStageFailureJson(
+                        result.StageFailure.Stage,
+                        result.StageFailure.Code,
+                        result.StageFailure.Message),
                 StudioUrl: result.StudioUrl,
                 ObservatoryUrl: result.ObservatoryUrl),
                 s_jsonOptions);
@@ -211,12 +221,21 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool, IAgentToolCapa
     private sealed record ProvisionWorkflowScheduleResultJson(
         string Status,
         string MemberId,
+        string WorkflowId,
         string ScopeId,
         string TeamId,
         string? ScheduleId,
         string? BindingRunId,
+        string ProvisioningStage,
+        string ScheduleStatus,
+        ProvisionWorkflowScheduleStageFailureJson? StageFailure,
         string StudioUrl,
         string ObservatoryUrl);
+
+    private sealed record ProvisionWorkflowScheduleStageFailureJson(
+        string Stage,
+        string Code,
+        string Message);
 
     private sealed record ProvisionWorkflowScheduleErrorJson(ProvisionWorkflowScheduleErrorBody Error);
 

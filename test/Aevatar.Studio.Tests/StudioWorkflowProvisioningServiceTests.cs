@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
+using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Application.Studio.Services;
@@ -35,8 +36,8 @@ namespace Aevatar.Studio.Tests;
 ///   token);</item>
 ///   <item>the bind is NEVER polled to completion — the service never calls
 ///   <c>GetBindingRunAsync</c>;</item>
-///   <item>the response is "accepted" (202) carrying the schedule id + binding run
-///   id + Observatory link.</item>
+///   <item>the response is "accepted" (202) carrying the workflow id, schedule
+///   stage, optional schedule id, binding run id, and Observatory link.</item>
 /// </list>
 /// </summary>
 public sealed class StudioWorkflowProvisioningServiceTests
@@ -653,16 +654,18 @@ public sealed class StudioWorkflowProvisioningServiceTests
     }
 
     [Fact]
-    public async Task ProvisionAsync_PropagatesScheduleEnsureFailure()
+    public async Task ProvisionAsync_WhenScheduleFailsAfterBind_ShouldReturnStagefulReceiptForCreatedResources()
     {
         var member = NewMemberService();
+        member.MemberId = "m-alpha";
+        member.PublishedServiceId = "svc-alpha";
         var schedule = new RecordingScheduleService
         {
-            ThrowOnEnsure = new InvalidOperationException("cron is invalid"),
+            ThrowOnEnsure = new InvalidOperationException("owner_llm_authorization_evidence_not_found"),
         };
         var sut = NewService(member, schedule);
 
-        var act = async () => await sut.ProvisionAsync(
+        var response = await sut.ProvisionAsync(
             ScopeId,
             Caller,
             new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor")
@@ -670,8 +673,21 @@ public sealed class StudioWorkflowProvisioningServiceTests
                 TeamId = TeamId,
             });
 
-        (await act.Should().ThrowAsync<InvalidOperationException>())
-            .Which.Message.Should().Contain("cron is invalid");
+        response.BindingStatus.Should().Be(ProvisionWorkflowBindingStatusNames.Accepted);
+        response.MemberId.Should().Be("m-alpha");
+        response.WorkflowId.Should().NotBeNullOrWhiteSpace();
+        response.WorkflowId.Should().NotBe(response.MemberId);
+        response.ScheduleId.Should().BeNull();
+        response.ProvisioningStage.Should().Be(WorkflowScheduleProvisioningStageNames.ScheduleBlocked);
+        response.ScheduleStatus.Should().Be(WorkflowScheduleProvisioningScheduleStatusNames.Blocked);
+        response.StageFailure.Should().BeEquivalentTo(new WorkflowScheduleProvisioningStageFailure(
+            Stage: WorkflowScheduleProvisioningStageNames.ScheduleBlocked,
+            Code: "owner_llm_authorization_evidence_not_found",
+            Message: "owner_llm_authorization_evidence_not_found"));
+
+        member.CreateInvoked.Should().BeTrue();
+        member.BindRequest.Should().NotBeNull();
+        schedule.Ensured.Should().BeFalse();
     }
 
     [Theory]

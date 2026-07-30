@@ -3,6 +3,29 @@ using Aevatar.GAgentService.Abstractions;
 
 namespace Aevatar.Studio.Application.Provisioning;
 
+public static class WorkflowScheduleProvisioningStageNames
+{
+    public const string BindAccepted = "bind_accepted";
+
+    public const string ScheduleAccepted = "schedule_accepted";
+
+    public const string ScheduleBlocked = "schedule_blocked";
+}
+
+public static class WorkflowScheduleProvisioningScheduleStatusNames
+{
+    public const string NotRequested = "not_requested";
+
+    public const string Accepted = "accepted";
+
+    public const string Blocked = "blocked";
+}
+
+public sealed record WorkflowScheduleProvisioningStageFailure(
+    string Stage,
+    string Code,
+    string Message);
+
 /// <summary>
 /// Request to provision a runnable, Observatory-delivered workflow schedule.
 ///
@@ -68,13 +91,16 @@ public sealed record WorkflowScheduleProvisioningRequest(
 }
 
 /// <summary>
-/// Result of provisioning a workflow schedule. The bind and the run are both
-/// asynchronous, so no run id is returned; the runs appear in the Observatory
-/// (<see cref="ObservatoryUrl"/>) as the <see cref="ScheduleId"/> fires.
-/// Contains NO channel / Lark / bot fields.
+/// Result of provisioning a workflow schedule. The bind and any run are
+/// asynchronous, so no run id is returned; runs appear in the Observatory
+/// (<see cref="ObservatoryUrl"/>) only when <see cref="ScheduleStatus"/> is
+/// <see cref="WorkflowScheduleProvisioningScheduleStatusNames.Accepted"/> and
+/// the accepted <see cref="ScheduleId"/> fires. Contains NO channel / Lark / bot
+/// fields.
 /// </summary>
 public sealed record WorkflowScheduleProvisioningResult(
     string MemberId,
+    string WorkflowId,
     string ScopeId,
     string TeamId,
     string BindingStatus,
@@ -84,4 +110,10 @@ public sealed record WorkflowScheduleProvisioningResult(
     public string? ScheduleId { get; init; }
 
     public string? BindingRunId { get; init; }
+
+    public string ProvisioningStage { get; init; } = WorkflowScheduleProvisioningStageNames.ScheduleAccepted;
+
+    public string ScheduleStatus { get; init; } = WorkflowScheduleProvisioningScheduleStatusNames.Accepted;
+
+    public WorkflowScheduleProvisioningStageFailure? StageFailure { get; init; }
 }
