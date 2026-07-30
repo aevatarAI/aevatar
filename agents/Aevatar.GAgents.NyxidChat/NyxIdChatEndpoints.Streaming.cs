@@ -225,6 +225,15 @@ public static partial class NyxIdChatEndpoints
             {
                 var metadata = new Dictionary<string, string>(StringComparer.Ordinal);
                 var llmControl = await BuildLlmControlAsync(http, accessToken, ct);
+                var commandId = NyxIdChatPublicIdentity.CreateChatCommandId(
+                    actorId,
+                    scopeId,
+                    ownerSubject,
+                    clientRequestId,
+                    turnId,
+                    prompt,
+                    request.InputParts?.Select(static part => part.ToProto()) ?? [],
+                    agentProfileReference);
 
                 // Streaming endpoints do not pre-read runtime state before command dispatch.
                 // The shared CQRS resolver owns actor lookup and attach-existing observation.
@@ -238,6 +247,8 @@ public static partial class NyxIdChatEndpoints
                         request.InputParts,
                         metadata,
                         llmControl,
+                        CommandId: commandId,
+                        CorrelationId: commandId,
                         ClientRequestId: clientRequestId,
                         CreateIfMissing: createIfMissing,
                         OwnerSubject: ownerSubject,

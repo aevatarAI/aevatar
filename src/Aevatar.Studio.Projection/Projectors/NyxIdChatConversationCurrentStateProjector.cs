@@ -101,6 +101,7 @@ public sealed class NyxIdChatConversationCurrentStateProjector
                 SafeMessage = turn.SafeMessage,
                 CreatedAt = turn.CreatedAt?.Clone(),
                 TerminalAt = turn.TerminalAt?.Clone(),
+                CommandId = turn.CommandId,
             };
 
     private static NyxIdChatConversationTurnDocument ToTurn(NyxIdChatTurnSummary turn) =>

@@ -530,6 +530,46 @@ public sealed class DefaultCommandInteractionServiceTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WhenDurableProbeIsEnabled_ShouldResolveBeforeDispatchAndPreserveFreshLiveFrames()
+    {
+        var order = new List<string>();
+        var sink = new EventChannel<string>();
+        sink.Push("rich-card");
+        sink.Push("done:live");
+        sink.Complete();
+        var target = new TestTarget("target-1", sink);
+        var receipt = new TestReceipt("target-1", "receipt-live-buffered");
+        var durableResolver = new RecordingDurableResolver(
+            CommandDurableCompletionObservation<string>.Incomplete,
+            order);
+        var finalizeEmitter = new RecordingFinalizeEmitter();
+        var frames = new List<string>();
+        var service = CreateService(
+            new RecordingInteractionPipeline(
+                CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string>.Success(
+                    CreateExecution(target, receipt, commandId: "cmd-live-buffered")),
+                order),
+            finalizeEmitter: finalizeEmitter,
+            durableResolver: durableResolver,
+            probeDurableCompletionWhileLive: true);
+
+        var result = await service.ExecuteAsync(
+            "command-live-buffered",
+            (frame, _) =>
+            {
+                frames.Add(frame);
+                return ValueTask.CompletedTask;
+            });
+
+        result.FinalizeResult.Should().Be(
+            new CommandInteractionFinalizeResult<string>("live", true));
+        frames.Should().Equal("rich-card", "done:live");
+        order.IndexOf("durable").Should().BeLessThan(order.IndexOf("dispatch"));
+        finalizeEmitter.Calls.Should().ContainSingle();
+        finalizeEmitter.Calls[0].Completion.Should().Be("live");
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WhenCleanupFailsAfterSuccess_ShouldThrowCleanupFailure()
     {
         var sink = new EventChannel<string>();
@@ -589,6 +629,28 @@ public sealed class DefaultCommandInteractionServiceTests
         durableResolver.Calls.Should().Be(1);
         target.ReleaseCalls.Should().ContainSingle();
         target.ReleaseCalls[0].Cleanup.ObservedCompleted.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenPreDispatchDurableProbeThrows_ShouldReleaseInteractionResources()
+    {
+        var target = new TestTarget("target-1", new EventChannel<string>());
+        var receipt = new TestReceipt("target-1", "receipt-preflight-failure");
+        var durableResolver = new ThrowingDurableResolver(new TimeoutException("durable-timeout"));
+        var service = CreateService(
+            new TestDispatchPipeline(CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string>.Success(
+                CreateExecution(target, receipt, commandId: "cmd-preflight-failure"))),
+            durableResolver: durableResolver,
+            probeDurableCompletionWhileLive: true);
+
+        var act = () => service.ExecuteAsync(
+            "command-preflight-failure",
+            static (_, _) => ValueTask.CompletedTask);
+
+        await act.Should().ThrowAsync<TimeoutException>()
+            .WithMessage("durable-timeout");
+        durableResolver.Calls.Should().Be(1);
+        target.ReleaseCalls.Should().ContainSingle();
     }
 
     [Fact]
@@ -997,7 +1059,8 @@ public sealed class DefaultCommandInteractionServiceTests
     }
 
     private sealed class RecordingDurableResolver(
-        CommandDurableCompletionObservation<string> observation)
+        CommandDurableCompletionObservation<string> observation,
+        List<string>? order = null)
         : ICommandDurableCompletionResolver<TestReceipt, string>
     {
         public int Calls { get; private set; }
@@ -1009,6 +1072,7 @@ public sealed class DefaultCommandInteractionServiceTests
             _ = receipt;
             ct.ThrowIfCancellationRequested();
             Calls++;
+            order?.Add("durable");
             return Task.FromResult(observation);
         }
     }

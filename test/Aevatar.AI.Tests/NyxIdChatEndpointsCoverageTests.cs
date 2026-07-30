@@ -1523,7 +1523,8 @@ public partial class NyxIdChatEndpointsCoverageTests
             actor.Id,
             "command-explicit",
             "correlation-explicit",
-            "session-1"));
+            "session-1",
+            "scope-a"));
         projectionPort.AttachExistingCalls.Should().ContainSingle(x =>
             x.ActorId == actor.Id &&
             x.SessionId == "session-1");

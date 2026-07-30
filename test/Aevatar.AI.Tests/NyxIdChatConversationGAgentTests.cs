@@ -213,6 +213,7 @@ public sealed class NyxIdChatConversationGAgentTests
         stateObservedAtDispatch.ScopeId.Should().Be("scope-alpha");
         stateObservedAtDispatch.ActiveTurn.TurnId.Should().Be("turn-alpha");
         stateObservedAtDispatch.ActiveTurn.TaskId.Should().Be("task-alpha");
+        stateObservedAtDispatch.ActiveTurn.CommandId.Should().Be("command-alpha");
         stateObservedAtDispatch.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Active);
         stateObservedAtDispatch.ActiveTask.TaskId.Should().Be("task-alpha");
         stateObservedAtDispatch.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Active);
@@ -239,6 +240,51 @@ public sealed class NyxIdChatConversationGAgentTests
         agent.State.HistoryDeliveryReservation.Dispatched.Should().BeTrue();
         agent.State.ActiveTask.Steps.Single().Operation.Phase.Should()
             .Be(NyxIdChatOperationPhase.Dispatched);
+    }
+
+    [Fact]
+    public async Task StartTurn_ExactReplay_ShouldNotMutateOrRepeatSideEffects()
+    {
+        const string conversationActorId = "conversation-alpha";
+        var operations = new List<string>();
+        var runtime = new RecordingActorRuntime(operations);
+        var history = new RecordingChatHistoryCommandPort(operations);
+        var dispatch = new RecordingActorDispatchPort(
+            operations,
+            static (_, _) => Task.CompletedTask);
+        var eventStore = new InMemoryEventStoreForTests();
+        using var services = BuildEventSourcingServices(eventStore, history);
+        var agent = new NyxIdChatConversationGAgent(
+            runtime,
+            dispatch,
+            new FixedTimeProvider(new DateTimeOffset(2026, 7, 31, 8, 0, 0, TimeSpan.Zero)))
+        {
+            Services = services,
+            EventSourcingBehaviorFactory = services.GetRequiredService<
+                IEventSourcingBehaviorFactory<NyxIdChatConversationGAgentState>>(),
+        };
+        AssignActorId(agent, conversationActorId);
+        await agent.ActivateAsync();
+        var command = CreateStartTurnCommand();
+        await agent.HandleEventAsync(CreateEnvelope(conversationActorId, command));
+        var stateAfterFirst = agent.State.ToByteArray();
+        var operationsAfterFirst = operations.ToArray();
+        var eventCountAfterFirst = (await eventStore.GetEventsAsync(conversationActorId)).Count;
+        var reservationCountAfterFirst = history.Reservations.Count;
+        var createCountAfterFirst = runtime.CreateCalls.Count;
+        var linkCountAfterFirst = runtime.LinkCalls.Count;
+        var dispatchCountAfterFirst = dispatch.Calls.Count;
+
+        await agent.HandleEventAsync(CreateEnvelope(conversationActorId, command.Clone()));
+
+        (await eventStore.GetEventsAsync(conversationActorId)).Should()
+            .HaveCount(eventCountAfterFirst);
+        agent.State.ToByteArray().Should().Equal(stateAfterFirst);
+        operations.Should().Equal(operationsAfterFirst);
+        history.Reservations.Should().HaveCount(reservationCountAfterFirst);
+        runtime.CreateCalls.Should().HaveCount(createCountAfterFirst);
+        runtime.LinkCalls.Should().HaveCount(linkCountAfterFirst);
+        dispatch.Calls.Should().HaveCount(dispatchCountAfterFirst);
     }
 
     [Fact]
@@ -586,6 +632,38 @@ public sealed class NyxIdChatConversationGAgentTests
             .Should().BeTrue();
         history.Reservations.Should().ContainSingle();
         operations.Should().Equal("history.reserve", "create", "link", "dispatch");
+    }
+
+    [Fact]
+    public async Task StartTurn_ReusedIdentityWithDifferentCommandId_ShouldRejectInsteadOfExactReplay()
+    {
+        const string conversationActorId = "conversation-alpha";
+        var operations = new List<string>();
+        var eventStore = new InMemoryEventStoreForTests();
+        using var services = BuildEventSourcingServices(eventStore);
+        var agent = new NyxIdChatConversationGAgent(
+            new RecordingActorRuntime(operations),
+            new RecordingActorDispatchPort(operations, static (_, _) => Task.CompletedTask),
+            new FixedTimeProvider(new DateTimeOffset(2026, 7, 31, 8, 0, 0, TimeSpan.Zero)))
+        {
+            Services = services,
+            EventSourcingBehaviorFactory = services.GetRequiredService<
+                IEventSourcingBehaviorFactory<NyxIdChatConversationGAgentState>>(),
+        };
+        AssignActorId(agent, conversationActorId);
+        await agent.ActivateAsync();
+        var command = CreateStartTurnCommand();
+        await agent.HandleEventAsync(CreateEnvelope(conversationActorId, command));
+        var beforeConflict = await eventStore.GetEventsAsync(conversationActorId);
+
+        var conflicting = command.Clone();
+        conflicting.CommandId = "different-command";
+        await agent.HandleEventAsync(CreateEnvelope(conversationActorId, conflicting));
+
+        var committed = await eventStore.GetEventsAsync(conversationActorId);
+        committed.Should().HaveCount(beforeConflict.Count + 1);
+        committed[^1].EventData.Unpack<NyxIdChatTurnAdmissionRejectedEvent>()
+            .ReasonCode.Should().Be("IDEMPOTENCY_CONFLICT");
     }
 
     [Theory]

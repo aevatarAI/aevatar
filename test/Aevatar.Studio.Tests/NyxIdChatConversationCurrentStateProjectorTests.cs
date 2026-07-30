@@ -49,8 +49,10 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
 
         document.ActiveTurn.TurnId.Should().Be("turn-alpha");
         document.ActiveTurn.TaskId.Should().Be("task-alpha");
+        document.ActiveTurn.CommandId.Should().Be("command-alpha");
         document.ActiveTurn.Status.Should().Be("active");
         document.LatestTurn.TurnId.Should().Be("turn-alpha");
+        document.LatestTurn.CommandId.Should().Be("command-alpha");
         document.RecentTerminalTurns.Should().ContainSingle(turn =>
             turn.TurnId == "turn-before" && turn.Status == "failed");
 
@@ -242,6 +244,7 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
                 TurnId = "turn-alpha",
                 TaskId = "task-alpha",
                 ClientRequestId = "client-alpha",
+                CommandId = "command-alpha",
                 Status = NyxIdChatTurnStatus.Active,
                 Prompt = "prompt-secret-alpha",
                 CreatedAt = now.Clone(),
@@ -250,6 +253,7 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
             {
                 TurnId = "turn-alpha",
                 TaskId = "task-alpha",
+                CommandId = "command-alpha",
                 Status = NyxIdChatTurnStatus.Active,
                 Prompt = "prompt-secret-alpha",
                 CreatedAt = now.Clone(),
