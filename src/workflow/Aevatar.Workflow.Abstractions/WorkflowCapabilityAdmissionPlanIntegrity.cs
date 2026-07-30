@@ -121,8 +121,6 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
             .Select(static admission => admission.Capability)
             .ToArray();
 
-        if (actual.Length > 0 && plan.SourceStamps.Count == 0)
-            throw new InvalidOperationException("Workflow capability admission source evidence is required.");
         var requiresDurableAuthorizationCatalog = RequiresDurableAuthorizationCatalog(
             executionMode,
             expectedCapabilityArray);

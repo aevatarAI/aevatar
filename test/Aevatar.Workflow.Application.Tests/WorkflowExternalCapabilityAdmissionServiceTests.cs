@@ -331,37 +331,27 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
     [InlineData("request_body_mode")]
     [InlineData("request_body_required")]
     [InlineData("request_response_mode")]
-    [InlineData("service_slug_snapshot")]
     [InlineData("admission_call_site_id")]
-    [InlineData("grant_missing")]
-    [InlineData("grant_call_site_id")]
-    [InlineData("grant_request_contract_digest")]
-    [InlineData("grant_authority")]
-    [InlineData("grant_owner_kind")]
-    [InlineData("grant_owner_subject")]
-    [InlineData("grant_risk")]
-    [InlineData("grant_modes")]
-    [InlineData("proof_request_missing")]
-    [InlineData("proof_contract_digest")]
-    [InlineData("proof_grant_digest")]
-    [InlineData("proof_policy_missing")]
-    [InlineData("proof_policy_risk")]
-    [InlineData("proof_policy_approval")]
-    [InlineData("proof_policy_owner")]
-    [InlineData("proof_policy_modes")]
-    public void AdmissionPlanIntegrity_ShouldRejectRehashedExplicitProofOrGrantMutation(string mutation)
+    public void AdmissionPlanIntegrity_ShouldRejectRehashedCanonicalBoundInvocationMutation(string mutation)
     {
         const string yaml = "name: explicit-workflow\nsteps: []\n";
-        var selector = ExplicitSelector();
+        var selector = ExplicitSelectorForMutation(mutation);
+        var capability = ExplicitCapability(selector.NyxIdRequest);
+        if (mutation is "request_body_mode" or "request_body_required")
+        {
+            capability.NyxIdUserRequest.ExecutionPolicy = ExplicitPolicy(
+                NyxIdOperationRisk.Write,
+                ExternalCapabilityExecutionMode.Interactive);
+        }
         var plan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
             yaml,
             new Dictionary<string, string>(),
             ExternalCapabilityExecutionMode.Interactive,
-            [ExplicitAdmission(ExplicitCapability(selector.NyxIdRequest))],
+            [ExplicitAdmission(capability)],
             [ExplicitSource()]);
         var originalDigest = plan.AdmissionDigest;
 
-        MutateExplicitAdmission(plan.InvocationAdmissions.Single(), mutation);
+        MutateCanonicalBoundInvocation(plan.InvocationAdmissions.Single(), mutation);
         plan.AdmissionDigest = WorkflowCapabilityAdmissionPlanIntegrity.ComputeAdmissionDigest(plan);
 
         plan.AdmissionDigest.Should().NotBe(originalDigest);
@@ -371,7 +361,114 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
             new Dictionary<string, string>(),
             ExternalCapabilityExecutionMode.Interactive,
             [ExplicitInvocation(selector)]);
-        act.Should().Throw<InvalidOperationException>();
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("Workflow capability invocation admissions do not match the bound definition.");
+    }
+
+    [Theory]
+    [InlineData("service_slug_snapshot", "*explicit request proof digest is invalid*")]
+    [InlineData("grant_call_site_id", "*explicit request grant scope is invalid*")]
+    [InlineData("grant_request_contract_digest", "*explicit request grant scope is invalid*")]
+    [InlineData("grant_owner_kind", "*explicit request grant digest is invalid*")]
+    [InlineData("grant_owner_subject", "*explicit request grant digest is invalid*")]
+    [InlineData("grant_risk", "*explicit request proof policy does not match its grant*")]
+    [InlineData("grant_modes", "*explicit request proof policy does not match its grant*")]
+    [InlineData("proof_contract_digest", "*explicit request proof digest is invalid*")]
+    [InlineData("proof_grant_digest", "*explicit request grant digest is invalid*")]
+    [InlineData("proof_policy_risk", "*explicit request proof policy does not match its grant*")]
+    [InlineData("proof_policy_modes", "*explicit request proof policy does not match its grant*")]
+    public void AdmissionPlanIntegrity_ShouldRejectRehashedValidProofOrGrantCorrespondenceMutation(
+        string mutation,
+        string expectedMessage)
+    {
+        const string yaml = "name: explicit-workflow\nsteps: []\n";
+        var selector = ExplicitSelector();
+        var capability = ExplicitCapability(selector.NyxIdRequest);
+        if (mutation == "grant_risk")
+        {
+            capability.NyxIdUserRequest.ExecutionPolicy = ExplicitPolicy(
+                NyxIdOperationRisk.ReadOnly,
+                ExternalCapabilityExecutionMode.Interactive);
+        }
+        var plan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            yaml,
+            new Dictionary<string, string>(),
+            ExternalCapabilityExecutionMode.Interactive,
+            [ExplicitAdmission(capability)],
+            [ExplicitSource()]);
+
+        MutateValidProofOrGrantCorrespondence(plan.InvocationAdmissions.Single(), mutation);
+        plan.AdmissionDigest = WorkflowCapabilityAdmissionPlanIntegrity.ComputeAdmissionDigest(plan);
+
+        var act = () => WorkflowCapabilityAdmissionPlanIntegrity.ValidateOrThrow(
+            plan,
+            yaml,
+            new Dictionary<string, string>(),
+            ExternalCapabilityExecutionMode.Interactive,
+            [ExplicitInvocation(selector)]);
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage(expectedMessage);
+    }
+
+    [Theory]
+    [InlineData("grant_missing", "*explicit request grant is required*")]
+    [InlineData("grant_authority", "*explicit request grantor is invalid*")]
+    [InlineData("proof_request_missing", "*explicit request proof request is required*")]
+    [InlineData("proof_policy_missing", "*execution policy is invalid*")]
+    [InlineData("proof_policy_approval", "*execution policy is invalid*")]
+    [InlineData("proof_policy_owner", "*execution policy is invalid*")]
+    public void AdmissionPlanIntegrity_ShouldRejectExplicitGrantOrProofPolicyIntegrityMutation(
+        string mutation,
+        string expectedMessage)
+    {
+        const string yaml = "name: explicit-workflow\nsteps: []\n";
+        var selector = ExplicitSelector();
+        var plan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            yaml,
+            new Dictionary<string, string>(),
+            ExternalCapabilityExecutionMode.Interactive,
+            [ExplicitAdmission(ExplicitCapability(selector.NyxIdRequest))],
+            [ExplicitSource()]);
+
+        MutateGrantOrProofPolicyIntegrity(plan.InvocationAdmissions.Single(), mutation);
+        plan.AdmissionDigest = WorkflowCapabilityAdmissionPlanIntegrity.ComputeAdmissionDigest(plan);
+
+        var act = () => WorkflowCapabilityAdmissionPlanIntegrity.ValidateOrThrow(
+            plan,
+            yaml,
+            new Dictionary<string, string>(),
+            ExternalCapabilityExecutionMode.Interactive,
+            [ExplicitInvocation(selector)]);
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage(expectedMessage);
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("wrong_kind")]
+    [InlineData("unusable_stamp")]
+    public void ValidateOrThrow_ShouldFailClosedWhenExplicitRequestSourceEvidenceIsInvalid(string sourceCase)
+    {
+        const string yaml = "name: explicit-workflow\nsteps: []\n";
+        var selector = ExplicitSelector();
+        var plan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            yaml,
+            new Dictionary<string, string>(),
+            ExternalCapabilityExecutionMode.Interactive,
+            [ExplicitAdmission(ExplicitCapability(selector.NyxIdRequest))],
+            [ExplicitSource()]);
+
+        MutateExplicitSourceEvidence(plan, sourceCase);
+        plan.AdmissionDigest = WorkflowCapabilityAdmissionPlanIntegrity.ComputeAdmissionDigest(plan);
+
+        var act = () => WorkflowCapabilityAdmissionPlanIntegrity.ValidateOrThrow(
+            plan,
+            yaml,
+            new Dictionary<string, string>(),
+            ExternalCapabilityExecutionMode.Interactive,
+            [ExplicitInvocation(selector)]);
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("Workflow capability admission required source evidence is invalid.");
     }
 
     [Fact]
@@ -1312,6 +1409,17 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
         return new ExternalWorkflowCapabilitySelector { NyxIdRequest = request };
     }
 
+    private static ExternalWorkflowCapabilitySelector ExplicitSelectorForMutation(string mutation)
+    {
+        var selector = ExplicitSelector();
+        if (mutation is "request_body_mode" or "request_body_required")
+        {
+            selector.NyxIdRequest.Method = NyxIdRequestMethod.Post;
+            selector.NyxIdRequest.BodyMode = NyxIdRequestBodyMode.Json;
+        }
+        return selector;
+    }
+
     private static ExternalWorkflowCapabilityRef ExplicitCapability(NyxIdRequestSelector request)
     {
         const string slug = "svc-alpha";
@@ -1452,7 +1560,7 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
                 .Order()
                 .Select(static mode => mode.ToString(System.Globalization.CultureInfo.InvariantCulture))));
 
-    private static void MutateExplicitAdmission(
+    private static void MutateCanonicalBoundInvocation(
         WorkflowCapabilityInvocationAdmission admission,
         string mutation)
     {
@@ -1465,19 +1573,19 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
                 request.UserServiceId = "usvc-beta";
                 break;
             case "request_method":
-                request.Method = NyxIdRequestMethod.Post;
+                request.Method = NyxIdRequestMethod.Head;
                 break;
             case "request_path_template":
                 request.PathTemplate = "/api/other/{resource_id}";
                 break;
             case "request_query_parameters":
-                request.QueryParameters.Add("filter");
+                request.QueryParameters.Insert(0, "filter");
                 break;
             case "request_header_parameters":
                 request.HeaderParameters.Add("If-None-Match");
                 break;
             case "request_body_mode":
-                request.BodyMode = NyxIdRequestBodyMode.Json;
+                request.BodyMode = NyxIdRequestBodyMode.None;
                 break;
             case "request_body_required":
                 request.BodyRequired = true;
@@ -1490,9 +1598,25 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
                 break;
             case "admission_call_site_id":
                 admission.CallSiteId = "explicit-workflow/request-beta";
+                grant.CallSiteId = admission.CallSiteId;
                 break;
-            case "grant_missing":
-                admission.NyxIdExplicitRequestGrant = null;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(mutation));
+        }
+
+        RehashExplicitAdmissionCorrespondence(admission);
+    }
+
+    private static void MutateValidProofOrGrantCorrespondence(
+        WorkflowCapabilityInvocationAdmission admission,
+        string mutation)
+    {
+        var proof = admission.Capability.NyxIdUserRequest;
+        var grant = admission.NyxIdExplicitRequestGrant;
+        switch (mutation)
+        {
+            case "service_slug_snapshot":
+                proof.ServiceSlugSnapshot = "svc-beta";
                 break;
             case "grant_call_site_id":
                 grant.CallSiteId = "explicit-workflow/request-beta";
@@ -1516,26 +1640,18 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
                 grant.AllowedExecutionModes.Clear();
                 grant.AllowedExecutionModes.Add(ExternalCapabilityExecutionMode.Interactive);
                 break;
-            case "proof_request_missing":
-                proof.Request = null;
-                break;
             case "proof_contract_digest":
                 proof.ContractDigest = "forged-proof-digest";
                 break;
             case "proof_grant_digest":
                 proof.ExplicitRequestGrantDigest = "forged-grant-digest";
                 break;
-            case "proof_policy_missing":
-                proof.ExecutionPolicy = null;
-                break;
             case "proof_policy_risk":
                 proof.ExecutionPolicy.Risk = NyxIdOperationRisk.Write;
-                break;
-            case "proof_policy_approval":
                 proof.ExecutionPolicy.Approval = NyxIdOperationApproval.Required;
-                break;
-            case "proof_policy_owner":
-                proof.ExecutionPolicy.EnforcementOwner = NyxIdOperationEnforcementOwner.NyxId;
+                proof.ExecutionPolicy.AllowedExecutionModes.Clear();
+                proof.ExecutionPolicy.AllowedExecutionModes.Add(
+                    ExternalCapabilityExecutionMode.Interactive);
                 break;
             case "proof_policy_modes":
                 proof.ExecutionPolicy.AllowedExecutionModes.Clear();
@@ -1543,6 +1659,67 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(mutation));
+        }
+    }
+
+    private static void MutateGrantOrProofPolicyIntegrity(
+        WorkflowCapabilityInvocationAdmission admission,
+        string mutation)
+    {
+        var proof = admission.Capability.NyxIdUserRequest;
+        switch (mutation)
+        {
+            case "grant_missing":
+                admission.NyxIdExplicitRequestGrant = null;
+                break;
+            case "grant_authority":
+                admission.NyxIdExplicitRequestGrant.GrantorAuthority =
+                    NyxIdExplicitRequestGrantorAuthority.Unspecified;
+                break;
+            case "proof_request_missing":
+                proof.Request = null;
+                break;
+            case "proof_policy_missing":
+                proof.ExecutionPolicy = null;
+                break;
+            case "proof_policy_approval":
+                proof.ExecutionPolicy.Approval = NyxIdOperationApproval.Required;
+                break;
+            case "proof_policy_owner":
+                proof.ExecutionPolicy.EnforcementOwner = NyxIdOperationEnforcementOwner.NyxId;
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(mutation));
+        }
+    }
+
+    private static void RehashExplicitAdmissionCorrespondence(
+        WorkflowCapabilityInvocationAdmission admission)
+    {
+        var proof = admission.Capability.NyxIdUserRequest;
+        var grant = admission.NyxIdExplicitRequestGrant;
+        grant.RequestContractDigest = ExplicitRequestContractDigest(proof.Request);
+        proof.ContractDigest = ExplicitProofDigest(proof.Request, proof.ServiceSlugSnapshot);
+        proof.ExplicitRequestGrantDigest = ExplicitGrantDigest(grant);
+    }
+
+    private static void MutateExplicitSourceEvidence(
+        WorkflowCapabilityAdmissionPlan plan,
+        string sourceCase)
+    {
+        switch (sourceCase)
+        {
+            case "missing":
+                plan.SourceStamps.Clear();
+                break;
+            case "wrong_kind":
+                plan.SourceStamps.Single().SourceKind = ExternalCapabilitySourceKind.ConnectorCatalog;
+                break;
+            case "unusable_stamp":
+                plan.SourceStamps.Single().ContentDigest = string.Empty;
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(sourceCase));
         }
     }
 
