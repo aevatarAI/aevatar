@@ -12,6 +12,7 @@ using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -706,7 +707,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                     continue;
                 }
 
-                var resourceKey = NormalizeOptional(attachment.AttachmentId);
+                var resourceKey = LarkAttachmentResourceKeys.Normalize(attachment.AttachmentId);
                 if (resourceKey is null)
                 {
                     _logger.LogWarning(
@@ -882,7 +883,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             return false;
         }
 
-        var resourceKey = NormalizeOptional(attachment.AttachmentId);
+        var resourceKey = LarkAttachmentResourceKeys.Normalize(attachment.AttachmentId);
         if (resourceKey is null)
         {
             _logger.LogWarning(
@@ -974,7 +975,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             return false;
         }
 
-        var resourceKey = NormalizeOptional(attachment.AttachmentId);
+        var resourceKey = LarkAttachmentResourceKeys.Normalize(attachment.AttachmentId);
         if (resourceKey is null)
         {
             _logger.LogWarning(

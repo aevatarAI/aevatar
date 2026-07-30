@@ -2,6 +2,7 @@ using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Google.Protobuf;
@@ -261,7 +262,7 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
         var inputParts = new List<WorkflowChatInputPart>(attachments.Length);
         foreach (var attachment in attachments)
         {
-            var resourceKey = NormalizeOptional(attachment.AttachmentId);
+            var resourceKey = LarkAttachmentResourceKeys.Normalize(attachment.AttachmentId);
             if (resourceKey is null)
                 throw new WorkflowAttachmentIngressException("resource_key_missing");
 
@@ -363,10 +364,8 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
         {
             if (attachment.Kind is not (AttachmentKind.Image or AttachmentKind.File))
                 continue;
-            var resourceKey = NormalizeOptional(attachment.AttachmentId);
-            if (resourceKey is null || IsHttpUrl(resourceKey))
-                continue;
-            if (!string.IsNullOrWhiteSpace(attachment.ExternalUrl))
+            var resourceKey = LarkAttachmentResourceKeys.Normalize(attachment.AttachmentId);
+            if (resourceKey is null)
                 continue;
 
             yield return attachment;
@@ -380,10 +379,6 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
         return string.Equals(platform, "lark", StringComparison.OrdinalIgnoreCase) ||
                string.Equals(platform, "feishu", StringComparison.OrdinalIgnoreCase);
     }
-
-    private static bool IsHttpUrl(string value) =>
-        Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
-        (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
 
     private static string? NormalizeOptional(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
