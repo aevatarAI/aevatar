@@ -8,7 +8,7 @@ owner: eanzhao
 
 NyxID 是 exact UserService、credential、route、effective OpenAPI 与 normalized operation catalog 的唯一权威 owner。Aevatar 不托管 OpenAPI、不保存 UserService/endpoint 影子目录、不从 slug 推导实例身份，也不在 prompt 中维护第二份权限目录。
 
-NyxID `GET /api/v1/mcp/config` 是 Aevatar 唯一的 operation descriptor source。`GET /api/v1/keys` 及其 exact instance endpoint 只负责实例 inventory、credential ownership、管理动作与执行前实例重验；Aevatar 不再从 `/keys` 的 `openapi_url` 拉取或解析 raw OpenAPI。
+NyxID `GET /api/v1/mcp/config` is the only descriptor source for published operations. `GET /api/v1/keys` supplies exact UserService inventory only for bind-time authored-request admission, credential ownership, and management actions. Aevatar never fetches or parses raw OpenAPI from `/keys`. Published-operation runtime retains exact MCP endpoint-digest revalidation; authored-request runtime reads neither MCP, OpenAPI, nor inventory.
 
 ## 1. 实例与 operation 身份
 
@@ -26,7 +26,7 @@ MCP catalog 中 `is_user_service=true` 的 `service_id` 是 exact UserService id
 
 ## 2. Shared MCP catalog adapter
 
-普通 current-turn discovery、workflow authoring/admission 与 proof-bound runtime revalidation 共用 `NyxIdMcpOperationCatalog`。adapter 只接受稳定 contract：
+普通 current-turn discovery 与 published-operation workflow admission 共用 `NyxIdMcpOperationCatalog`; published runtime keeps its exact MCP endpoint-digest revalidation. Authored-request runtime does not use this adapter. The adapter accepts only stable contract:
 
 - `contract_version == "1.0"`；
 - `catalog_digest` 为 `sha256:<64 lowercase hex>`，并直接作为 NyxID normalized descriptor revision；
@@ -70,7 +70,7 @@ flowchart LR
     E --> F["Proof-bound NyxID Proxy request"]
 ```
 
-Workflow live discovery 使用当前 caller token 读取 MCP catalog，列出 exact non-generic UserService endpoints。作者只持久化 typed selector；definition actor 提交 call-site-scoped v4 proof，其中包含 service slug、endpoint identity、method/path、parameter/body schema、typed response policy、execution policy、source stamp 与 contract digest。
+Workflow live discovery uses the caller token to read MCP only for `nyxid_operation`, which is `PublishedEndpoint(endpoint_id)`. Its definition actor commits a call-site-scoped proof with server-derived slug, endpoint identity, request schema, response policy, execution policy, source stamp, and contract digest. `nyxid_request` is instead `AuthoredRequest(request_contract_digest)`: bind-time admission reads one active, caller-visible, credential-allowed exact `user_service_id` from inventory, derives the slug constraint server-side, and does zero MCP/OpenAPI read. The definition actor persists the request proof only after an authenticated binder explicitly confirms its current request-contract digest and derived risk as `NyxIdExplicitRequestGrant`; apply/save cannot grant it.
 
 Studio authoring 在 exact descriptor 缺失时不再把“当前不可运行”误报成“不能创建 workflow”。`/api/chat` 的 Studio agent 仍先调用 `list_external_workflow_capabilities`；若没有匹配项，可用 `web_search` / `web_fetch` 查询官方文档，官方文档也不可用时可根据用户描述推导最小 authoring shape。搜索或推导只用于生成可编辑 YAML，不是 route authority：不得据此生成 `user_service_id`、`endpoint_id`、selector、admission proof、HTTP method 或 path authority。
 
@@ -79,29 +79,25 @@ Studio authoring 在 exact descriptor 缺失时不再把“当前不可运行”
 因此 workflow 外部能力有四个诚实阶段：
 
 1. **Authoring draft**：允许无 exact descriptor 保存不可运行草稿；搜索/推导只影响可编辑内容。
-2. **Workflow definition admission**：有 exact `user_service_id + endpoint_id` 后，live MCP catalog 才能把 selector 解析为 actor-owned proof。
-3. **Binding / publication**：只有 admission 成功的定义才能进入 bind/publish；draft save 不能冒充该阶段。
-4. **Runtime authorization**：run 仍必须按 committed proof、execution mode 和当前 NyxID authority 重验；前面任一阶段不能扩大 runtime 权限。
+2. **Workflow definition admission**：`nyxid_operation` uses exact `user_service_id + endpoint_id` and live MCP; `nyxid_request` uses its exact UserService inventory observation and typed request contract.
+3. **Binding / publication**：only an authenticated binder can confirm the current authored-request digest/risk and create its grant; admission plus grant are required before bind/publish, while draft save cannot impersonate either.
+4. **Runtime authorization**：run validates committed proof, matching grant when authored, execution mode, and digests, then makes one exact proxy request. PublishedEndpoint retains MCP endpoint-digest revalidation; AuthoredRequest performs no MCP/OpenAPI/inventory re-read. No earlier stage expands runtime permission.
 
 身份边界保持独立：`scope_id`、`owner_scope_id` 与 `owner_subject` 只表达 Aevatar 资源所有权/调用上下文；NyxID caller 只能来自认证 principal 映射出的 typed `NyxIdAuthority`。缺失 authority 时 live discovery/admission fail closed，禁止从 scope、member、workflow、route 或 owner 字符串推导。
 
 Dynamic exposure、workflow definition admission 与 runtime authorization 是三个独立 policy；authoring draft 位于这些授权 policy 之前，不授予执行权限：
 
 1. **Current-turn exposure**：缺 NyxID typed exposure policy，因此 operation 数量为零。
-2. **Workflow definition admission**：live MCP catalog 把 exact selector 解析并提交为 actor-owned proof。
-3. **Runtime authorization**：managed workflow 只接受当前 call site 的 proof；durable mode 还要求 owner-scoped catalog 对 exact `user_service_id` 的 durable grant。
+2. **Workflow definition admission**：MCP resolves only `PublishedEndpoint`; exact inventory plus authenticated binder grant resolves `AuthoredRequest`.
+3. **Runtime authorization**：managed workflow accepts only its committed call-site proof and matching authored-request grant. Durable additionally requires exact-service catalog authorization, but only for trusted `READ_ONLY` GET/HEAD/OPTIONS.
 
-GET/HEAD/OPTIONS 默认为 read-only；POST/PUT/PATCH 为 write；DELETE 为 destructive。write/destructive operation 必须由 Aevatar 审批并只允许 interactive；read-only operation 可允许 interactive 与 durable。一个 policy 的通过不能冒充另两个 policy 的授权。
+GET/HEAD/OPTIONS are durable-capable only when the binder attests `READ_ONLY` and exact-service durable authorization exists. Without that attestation they are conservative writes: approval-required and interactive-only. POST/PUT/PATCH are always write, approval-required, interactive-only; DELETE is destructive, approval-required, interactive-only. A selector, route proof, source observation, or service durable authorization cannot replace the explicit grant or required approval.
 
 ## 5. 执行与重验
 
 update、route 与 delete 在 mutation 前使用发现时绑定的 token 读取 exact `/keys/{user_service_id}`。当前 instance 必须与冻结 instance 的 identity、credential/token source、credential allowance、route、endpoint 与 node facts 一致且仍为 active，否则在副作用前 fail closed。
 
-proof-bound runtime 不重新 discovery、prime 或刷新 admission，也不读取 raw OpenAPI。每次 dispatch 只使用本次 caller token 读取同一 MCP config，按 exact `service_id + endpoint_id` 定位 endpoint，并比对 service slug 与 committed endpoint digest：
-
-- service/slug drift 返回 `NYXID_OPERATION_AUTHORITY_DRIFT`；
-- endpoint missing 或 contract drift 返回 `NYXID_OPERATION_CONTRACT_DRIFT`；
-- 两者都发生在 downstream proxy request 或 file ingress 前。
+Proof-bound runtime does not rediscover, prime, refresh admission, or read raw OpenAPI. PublishedEndpoint dispatch retains its existing current-MCP exact `service_id + endpoint_id` endpoint-digest revalidation. AuthoredRequest dispatch reads neither MCP nor inventory: before downstream proxy request or file ingress it validates committed request proof/grant digests, policy, and allowed execution mode, then calls only the exact proxy route with exact `user_service_id` and server-derived slug constraint. Proxy authority drift/access rejection maps to typed failure. Slug-only lookup and any authored-request runtime source fallback are forbidden.
 
 `NyxIdProxyTool` 是共享 runtime enforcement boundary。Mainnet 的 `Distributed` 配置显式设置 `Aevatar:NyxId:ManagedWorkflowAdmissionMode=Enforce`，且 proxy 与 startup inventory guard 读取同一个 `NyxIdToolOptions` singleton。managed workflow 缺 proof 或携带无效 policy 会在 token resolution、exact revalidation、file ingress 和 proxy HTTP 前返回 `NYXID_OPERATION_ADMISSION_REQUIRED`；显式 `Shadow` 回滚只记录相同 decision 并继续 legacy behavior。普通 non-workflow human raw proxy surface 不因 workflow guard 获得或失去权限。
 

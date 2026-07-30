@@ -108,9 +108,9 @@ Runtime semantics:
 
 External operation 先按 authority owner 选 primitive，而不是按“是否需要认证”判断：部署配置并 allowlist 的 operation 使用 `connector_call`，即使它的 Connector 使用 `client_credentials` 或 `secret_ref_header`；用户/org credential、OAuth connection、NyxID UserService 或 local Node 拥有的 operation 使用 `tool_call -> nyxid_proxy`。任意未发现 URL 不允许 authoring。
 
-Chat authoring 先调用只读 `list_external_workflow_capabilities`，从 structured descriptor 中选择一个 exact operation，再把 descriptor 的 typed `selector` 原样交给 `inspect_external_workflow_capability_readiness` 并指定 `interactive` 或 `durable`。UI、CLI 与 LLM 都只复制选择结果；不得生成、猜测或要求人类键入 `user_service_id`、NyxID `endpoint_id`、Connector `operation_id` 或 proof 字段。只有每个 external capability 的 typed readiness status 都是 `READY` 才尝试 Workflow write；其他 status 只展示 typed blocker 和 trusted remediation。Readiness 是 point-in-time decision，不是 Workflow lifecycle，也不会创建连接、approval 或 projection。
+Chat authoring 先调用只读 `list_external_workflow_capabilities` 选择 `nyxid_operation` 的 `PublishedEndpoint(endpoint_id)`；已知静态 HTTP contract 则可作者化 `nyxid_request` 的 `AuthoredRequest(request_contract_digest)`。两者都是 typed step-owned selector，绝不从 display name、slug 或 ID 字符串规则推导身份。`nyxid_request` 只是 contract proposal：Apply/save 可保存它，但不能创建授权；authenticated binder 必须显式确认当前 canonical digest 与 risk，definition actor 才持久化 `NyxIdExplicitRequestGrant`。只有每个 external capability 的 typed readiness status 都是 `READY` 且显式 request grant 匹配，才尝试 bind/publish；其他 status 只展示 typed blocker 和 trusted remediation。
 
-NyxID 的 `durable` readiness 不会永久返回 unavailable。它在 live `/api/v1/mcp/config` endpoint contract 校验之外，只读一次 verified caller 对应的 owner-scoped authorization catalog current-state read model；查询不得触发 refresh、activation、lease、polling、replay 或 projection priming。只有 catalog 已 activated、未 invalidated/cleaned、仍在 freshness window 内，且 exact `user_service_id` 的 slug snapshot、`PERMITTED` access、normalized resource owner、node-grant requirement 与 canonical Node ids 全部一致时才返回 `READY`。该结果必须携带 `DURABLE_AUTHORIZATION_CATALOG` source stamp；统一 admission 还会校验 execution mode、exact capability identity 与 stamp，已有 durable plan 缺少该证据同样 fail closed。Catalog snapshot 本身还必须具有正 authoritative version、完整 lifecycle facts，以及与 typed owner/services 一致的 canonical content digest；非 exact ordinal `nyxid` resource owner authority 一律拒绝。
+NyxID durable admission is deliberately narrow. `nyxid_operation` obtains its published contract from MCP; `nyxid_request` obtains only exact UserService facts at bind time and performs zero MCP/OpenAPI reads. Durable is allowed only for GET/HEAD/OPTIONS whose binder-attested grant is `READ_ONLY`, and only when the exact-service durable authorization catalog is activated, fresh, exact-owner matched, and emits `DURABLE_AUTHORIZATION_CATALOG`. A safe method without trusted read-only attestation is conservatively a write; POST/PUT/PATCH and DELETE are always approval-required and interactive-only. Querying this read model must not refresh, activate, lease, poll, replay, or prime projection.
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
@@ -143,8 +143,8 @@ V4 plan 以 call-site scoped `invocation_admissions` 作为唯一当前事实，
 YAML 的 exact capability 规则：
 
 - `connector_call` 使用静态 `connector + operation + contract_digest`，对应 `HostConnectorCapabilityRef`。
-- `nyxid_proxy` 只在 step 级 typed `capability.nyxid_operation` 保存静态 `user_service_id + endpoint_id` selector；`parameters.arguments` 只允许 `path_params`、`query`、`headers`、`body`、`response_mode`。
-- service slug、method、path template、schema、source stamp 与 contract digest 全部由 `/api/v1/mcp/config` 的 typed adapter 生成。Dynamic selector、缺失 selector、caller-authored proof 字段和 secret-bearing header 都 fail closed，并返回 typed migration/remediation。
+- `nyxid_proxy` has exactly one selector: `capability.nyxid_operation { user_service_id, endpoint_id }` (`PublishedEndpoint`) or `capability.nyxid_request { user_service_id, method, path_template, query_parameters, header_parameters, body_mode, body_required, response_mode }` (`AuthoredRequest`). Both are static and mutually exclusive.
+- Published-operation slug/method/path/schema/source facts come from `/api/v1/mcp/config` at admission. Authored-request admission reads only exact UserService inventory, derives the slug constraint server-side, and requires a separate authenticated binder confirmation to create the typed grant. Dynamic selector, missing selector/grant, caller-authored proof fields, secret-bearing headers, and runtime route/policy overrides fail closed.
 - ordinary、nested、`foreach`/`for_each`/`foreach_llm` 与 `while`/`loop` 共享同一 invocation compiler。循环 primitive 的 selector 写在 owner step 的 `capability` 上，编译器为其 synthesized tool sub-step 生成稳定 `<workflow>/<step>/sub-step` call-site；每个 item/iteration 只能改变 runtime arguments，不能改变服务或 endpoint。
 - `sub_param_` 仍是通用的 synthesized sub-step 参数前缀；`sub_param_prompt`、`sub_param_workflow`、`sub_param_prompt_prefix` 与其他非工具用法保持原语义，不承载 capability proof。
 - API key、bearer、OAuth secret、cookie 和 downstream credential 不得进入 Chat、YAML、actor state、read model、receipt 或 log。Credential setup 只在 NyxID 或 Host Connector trusted boundary 完成。
@@ -446,7 +446,7 @@ steps:
       tool: "web_search"
 ```
 
-NyxID external operation 从 typed listing/readiness 复制 selector；raw YAML 的 canonical representation 只保存 step 级 `capability.nyxid_operation.{user_service_id, endpoint_id}`。下例中的运行参数只表达本次调用值：
+NyxID external operation copies a `PublishedEndpoint` selector from typed listing/readiness. An `AuthoredRequest` YAML is also valid when its request shape is known, but it remains inert until the independent binder grant is persisted. Runtime parameters express only declared call values; they cannot override selector, exact UserService identity, method, route, policy, or response mode:
 
 ```yaml
 steps:
@@ -479,7 +479,7 @@ steps:
         {"path_params":{"object_id":"${input}"},"response_mode":"text"}
 ```
 
-`while`/`loop` 使用 `step: tool_call` 时遵循同一规则。编译期缺少静态 selector 就直接产生 typed admission blocker，不能以空 capability plan 进入运行时。当前 MCP config 不发布可验证的 binary media-type contract，因此 v4 proof 为 text-only，`response_mode=file_artifact` 会在 dispatch 前拒绝。
+`while`/`loop` 使用 `step: tool_call` 时遵循同一规则。编译期缺少静态 selector，或 authored request 缺少匹配 grant，就直接产生 typed admission blocker，不能以空 capability plan 进入运行时。`file_artifact` is allowed only for an authored GET with `body_mode=none`; it retains managed workflow context, exact proxy authority, ingress byte limits, and `IWorkflowFileIngressPort` handling.
 
 #### NyxID `codex_exec` 工具
 

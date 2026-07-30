@@ -4,7 +4,7 @@
 
 **Goal:** Fix #3052, #3061, and #3062 and add an actor-owned explicit NyxID request capability so the six finance workflow artifacts can use known APIs without requiring OpenAPI.
 
-**Architecture:** Keep `nyxid_proxy` as the single runtime adapter. Add `nyxid_request` beside `nyxid_operation` as a typed selector/proof source, then project both proof kinds into the existing `AgentToolOperationAdmission` request builder. Studio, admission, actor state, and runtime all preserve the same strong identities.
+**Architecture:** Keep `nyxid_proxy` as the single runtime adapter. `nyxid_operation` is the typed `PublishedEndpoint(endpoint_id)` origin; `nyxid_request` is the typed `AuthoredRequest(request_contract_digest)` origin. An authored request becomes executable only after an authenticated binder explicitly confirms the current digest/risk and the definition actor persists `NyxIdExplicitRequestGrant`. Studio save/apply preserves a selector but never grants it. Both origins project into the same request builder while keeping member, workflow, published-service, and UserService identities distinct.
 
 **Tech Stack:** .NET 10, C#, Protobuf, Orleans, xUnit, FluentAssertions, YamlDotNet.
 
@@ -14,6 +14,8 @@
 - All stable internal contracts are Protobuf; no JSON bag becomes authoritative state.
 - `user_service_id`, member identity, workflow identity, and published service identity remain distinct.
 - No legacy raw-route fallback and no tenant-specific values in repository fixtures or GitHub issues.
+- Runtime authored requests make no MCP/OpenAPI or inventory read: they validate the committed proof/grant and use one exact proxy route with the exact `user_service_id` and server-derived slug constraint.
+- Durable execution is only for binder-attested `READ_ONLY` GET/HEAD/OPTIONS plus exact-service durable authorization. Unattested safe methods, POST/PUT/PATCH, and DELETE are approval-required and interactive-only.
 - Use TDD for every behavior change and run `test_stability_guards.sh` after test edits.
 
 ---
@@ -82,13 +84,13 @@
 - Test: `test/Aevatar.AI.Tests/NyxIdExplicitWorkflowCapabilitySourceTests.cs`
 
 **Interfaces:**
-- Produces: `NyxIdRequestSelector` and `NyxIdUserRequestCapabilityRef`; source kind `NYX_ID_USER_SERVICES`; both are call-site scoped and digest-covered.
+- Produces: `NyxIdRequestSelector`, `NyxIdUserRequestCapabilityRef`, and binder-owned `NyxIdExplicitRequestGrant`; source kind `NYX_ID_USER_SERVICES`; all are call-site scoped and digest-covered.
 - Consumes: live exact service inventory and existing durable authorization catalog.
 
 - [ ] Add failing parser/integrity tests for the canonical YAML and invalid methods, unsafe templates, duplicate parameter names, sensitive headers, file/body conflicts, and selector/proof mismatch.
 - [ ] Add failing source tests proving exact active service resolution without calling MCP config and typed failures for missing/ambiguous/inactive services.
 - [ ] Run focused tests and confirm failures for missing contracts/source.
-- [ ] Add the minimal Protobuf selectors/proofs, parser mapping, authoring validation, source implementation, source evidence rules, and DI registration.
+- [ ] Add the minimal Protobuf selectors/proofs/grant, parser mapping, authoring validation, source implementation, source evidence rules, and DI registration. Apply/save must not synthesize a grant.
 - [ ] Re-run focused Core/Application/AI tests and confirm they pass.
 
 ### Task 5: Project explicit proofs into the existing runtime
@@ -96,18 +98,18 @@
 **Files:**
 - Modify: `src/Aevatar.AI.Abstractions/ToolProviders/AgentToolOperationAdmission.cs`
 - Modify: `src/workflow/Aevatar.Workflow.Integration.AI/WorkflowOperationAdmissionToolContextMapper.cs`
-- Modify: `src/Aevatar.AI.ToolProviders.NyxId/Tools/NyxIdOperationRequestBuilder.cs`
+- Modify: `src/Aevatar.AI.ToolProviders.NyxId/Tools/NyxIdAdmittedRequestBuilder.cs`
 - Modify: `src/Aevatar.AI.ToolProviders.NyxId/Tools/NyxIdProxyTool.cs`
 - Test: `test/Aevatar.Workflow.Core.Tests/Modules/ToolCallModuleContextTests.cs`
 - Test: `test/Aevatar.AI.Tests/NyxIdProxyToolAdmittedOperationTests.cs`
 
 **Interfaces:**
 - Produces: provider-neutral `AgentToolOperationAuthorizationBasis.PublishedContract|ExplicitRequest`.
-- Reuses: one `NyxIdOperationRequestBuilder`, proxy client, binary ingress, and runtime drift boundary.
+- Reuses: one `NyxIdAdmittedRequestBuilder`, proxy client, binary ingress, and runtime drift boundary.
 
-- [ ] Add failing tests proving explicit GET text/file requests dispatch without MCP reads, route fields remain rejected, service authority is revalidated, and explicit POST durable policy is accepted only with an actor-owned proof.
+- [ ] Add failing tests proving explicit GET text/file requests dispatch with no runtime MCP/OpenAPI/inventory read, route fields remain rejected, the exact proxy route uses committed authority, and POST/PUT/PATCH/DELETE durable execution is rejected even with a grant.
 - [ ] Run focused tests and confirm explicit proofs are not mapped/executable.
-- [ ] Map explicit proofs, support declared scalar query/header parameters and JSON body mode, branch revalidation by authorization basis, and preserve all existing file bounds.
+- [ ] Map explicit proofs, support declared scalar query/header parameters and JSON body mode, validate committed proof/grant by authorization basis without a runtime source read, and preserve all existing file bounds and managed artifact ingress.
 - [ ] Re-run focused runtime tests and confirm both published and explicit proof paths pass.
 
 ### Task 6: Canon and sanitized finance acceptance fixtures
@@ -123,7 +125,7 @@
 **Interfaces:**
 - Documents and exercises the exact public YAML contract without production identifiers or side effects.
 
-- [ ] Add failing fixture tests that parse, admit, bind, and preserve explicit request selectors for budget read and invoice file download shapes.
+- [ ] Add failing fixture tests that parse, admit through an explicit binder grant, bind, and preserve explicit request selectors plus declared runtime path slots for budget read and invoice file download shapes.
 - [ ] Add the sanitized fixtures and canonical documentation.
 - [ ] Run Host API fixture tests and docs lint.
 
