@@ -38,6 +38,8 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
             request.ExecutionMode,
             cancellationToken);
 
+        EnsureConfirmationCallSitesAreExpected(request, definition.Invocations);
+
         var admissions = new List<WorkflowCapabilityInvocationAdmission>();
         var sources = new List<ExternalCapabilitySourceStamp>();
         foreach (var invocation in definition.Invocations)
@@ -48,6 +50,16 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
             {
                 throw new WorkflowExternalCapabilityAdmissionException(
                     BuildNyxIdOperationSelectionRequiredReadiness(request.ExecutionMode));
+            }
+
+            if (RequiresInteractiveExplicitRequest(request.ExecutionMode, invocation.Selector))
+            {
+                throw ExplicitRequestConfirmationFailure(
+                    invocation,
+                    null,
+                    request.ExecutionMode,
+                    "NYXID_EXPLICIT_REQUEST_INTERACTIVE_REQUIRED",
+                    "This explicit request can only be admitted for interactive execution.");
             }
 
             var readiness = await _readinessPort.InspectAsync(
@@ -73,8 +85,6 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
             admissions.Add(BuildInvocationAdmission(request, invocation, readiness.SelectedCapability));
             sources.AddRange(readiness.Sources.Select(static source => source.Clone()));
         }
-
-        EnsureNoUnusedExplicitRequestConfirmations(request, admissions);
 
         return WorkflowCapabilityAdmissionPlanIntegrity.Create(
             definition.WorkflowYaml,
@@ -110,17 +120,12 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
             .ToArray();
         if (confirmations.Length == 0)
         {
-            var hasAnotherConfirmation = request.ExplicitRequestConfirmations.Count > 0;
             throw ExplicitRequestConfirmationFailure(
                 invocation,
                 capability,
                 request.ExecutionMode,
-                hasAnotherConfirmation
-                    ? "NYXID_EXPLICIT_REQUEST_CONFIRMATION_CALL_SITE_MISMATCH"
-                    : "NYXID_EXPLICIT_REQUEST_GRANT_REQUIRED",
-                hasAnotherConfirmation
-                    ? "The explicit request confirmation belongs to a different workflow call site."
-                    : "Confirm the exact explicit request contract before binding this workflow.");
+                "NYXID_EXPLICIT_REQUEST_GRANT_REQUIRED",
+                "Confirm the exact explicit request contract before binding this workflow.");
         }
         if (confirmations.Length != 1)
         {
@@ -199,25 +204,25 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
         };
     }
 
-    private static void EnsureNoUnusedExplicitRequestConfirmations(
+    private static void EnsureConfirmationCallSitesAreExpected(
         WorkflowExternalCapabilityAdmissionRequest request,
-        IReadOnlyCollection<WorkflowCapabilityInvocationAdmission> admissions)
+        IReadOnlyCollection<ExternalToolInvocationSpec> invocations)
     {
-        var explicitAdmissionCallSites = admissions
-            .Where(static admission =>
-                admission.Capability.CapabilityCase ==
-                ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest)
-            .Select(static admission => admission.CallSiteId)
+        var expectedCallSites = invocations
+            .Where(static invocation =>
+                invocation.Selector.SelectorCase ==
+                ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdRequest)
+            .Select(static invocation => invocation.CallSiteId)
             .ToHashSet(StringComparer.Ordinal);
-        var unused = request.ExplicitRequestConfirmations.FirstOrDefault(confirmation =>
-            !explicitAdmissionCallSites.Contains(confirmation.CallSiteId));
-        if (unused is null)
+        var unknown = request.ExplicitRequestConfirmations.FirstOrDefault(confirmation =>
+            !expectedCallSites.Contains(confirmation.CallSiteId));
+        if (unknown is null)
             return;
 
         throw ExplicitRequestConfirmationFailure(
             new ExternalToolInvocationSpec
             {
-                CallSiteId = unused.CallSiteId,
+                CallSiteId = unknown.CallSiteId,
                 Selector = new ExternalWorkflowCapabilitySelector(),
             },
             null,
@@ -225,6 +230,14 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
             "NYXID_EXPLICIT_REQUEST_CONFIRMATION_CALL_SITE_MISMATCH",
             "The explicit request confirmation does not match an explicit request call site in this workflow.");
     }
+
+    private static bool RequiresInteractiveExplicitRequest(
+        ExternalCapabilityExecutionMode executionMode,
+        ExternalWorkflowCapabilitySelector selector) =>
+        executionMode == ExternalCapabilityExecutionMode.Durable &&
+        selector.SelectorCase == ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdRequest &&
+        selector.NyxIdRequest.Method is NyxIdRequestMethod.Post or NyxIdRequestMethod.Put or
+            NyxIdRequestMethod.Patch or NyxIdRequestMethod.Delete;
 
     private static bool IsAttestedRiskAllowed(
         NyxIdRequestMethod method,

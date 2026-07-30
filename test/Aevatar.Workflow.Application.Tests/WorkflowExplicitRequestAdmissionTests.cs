@@ -47,6 +47,39 @@ public sealed class WorkflowExplicitRequestAdmissionTests
               arguments: '{}'
         """;
 
+    private const string MultiExplicitWorkflowYaml = """
+        name: wf-alpha
+        steps:
+          - id: request-alpha
+            type: tool_call
+            capability:
+              nyxid_request:
+                user_service_id: usvc-alpha
+                method: GET
+                path_template: /api/resources/{resource_id}
+                query_parameters: [page_size]
+                header_parameters: [If-Match]
+                body_mode: none
+                response_mode: text
+            parameters:
+              tool: nyxid_proxy
+              arguments: '{}'
+          - id: request-beta
+            type: tool_call
+            capability:
+              nyxid_request:
+                user_service_id: usvc-alpha
+                method: GET
+                path_template: /api/resources/{resource_id}
+                query_parameters: [page_size]
+                header_parameters: [If-Match]
+                body_mode: none
+                response_mode: text
+            parameters:
+              tool: nyxid_proxy
+              arguments: '{}'
+        """;
+
     [Fact]
     public void ConfirmationContract_ShouldExposeOnlyCallerAttestationFields()
     {
@@ -61,6 +94,22 @@ public sealed class WorkflowExplicitRequestAdmissionTests
         var service = CreateService();
 
         Func<Task> act = async () => await service.AdmitAsync(Request());
+
+        var exception = await act.Should().ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
+        exception.Which.Readiness.Status.Should().Be(ExternalCapabilityReadinessStatus.ContractDrift);
+        exception.Which.Readiness.Blockers.Should().ContainSingle().Which.Code.Should()
+            .Be("NYXID_EXPLICIT_REQUEST_GRANT_REQUIRED");
+    }
+
+    [Fact]
+    public async Task AdmitAsync_WithTwoExplicitRequestsButOnlyFirstConfirmed_ShouldRequireSecondGrant()
+    {
+        var service = CreateService();
+
+        Func<Task> act = async () => await service.AdmitAsync(Request(
+            MultiExplicitWorkflowYaml,
+            ExternalCapabilityExecutionMode.Interactive,
+            [MatchingConfirmation()]));
 
         var exception = await act.Should().ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
         exception.Which.Readiness.Status.Should().Be(ExternalCapabilityReadinessStatus.ContractDrift);
@@ -146,6 +195,65 @@ public sealed class WorkflowExplicitRequestAdmissionTests
         admission.NyxIdExplicitRequestGrant.Should().BeNull();
     }
 
+    [Theory]
+    [InlineData("POST", NyxIdOperationRisk.Write)]
+    [InlineData("PUT", NyxIdOperationRisk.Write)]
+    [InlineData("PATCH", NyxIdOperationRisk.Write)]
+    [InlineData("DELETE", NyxIdOperationRisk.Destructive)]
+    public async Task AdmitAsync_WithDurableApprovalRequiredExplicitRequest_ShouldRequireInteractive(
+        string method,
+        NyxIdOperationRisk risk)
+    {
+        var service = CreateService();
+        var workflowYaml = MutatingWorkflowYaml(method);
+        var confirmation = new NyxIdExplicitRequestConfirmation
+        {
+            CallSiteId = "wf-mutating/request-mutating",
+            RequestContractDigest = WorkflowCapabilityAdmissionPlanIntegrity
+                .ComputeNyxIdRequestContractDigest(MutatingSelector(method)),
+            AttestedRisk = risk,
+        };
+
+        Func<Task> act = async () => await service.AdmitAsync(Request(
+            workflowYaml,
+            ExternalCapabilityExecutionMode.Durable,
+            [confirmation]));
+
+        var exception = await act.Should().ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
+        exception.Which.Readiness.Status.Should().Be(ExternalCapabilityReadinessStatus.ContractDrift);
+        exception.Which.Readiness.Blockers.Should().ContainSingle().Which.Code.Should()
+            .Be("NYXID_EXPLICIT_REQUEST_INTERACTIVE_REQUIRED");
+    }
+
+    [Theory]
+    [InlineData("GET")]
+    [InlineData("HEAD")]
+    [InlineData("OPTIONS")]
+    public async Task AdmitAsync_WithDurableReadOnlyExplicitRequest_ShouldContinueToCatalogAdmission(
+        string method)
+    {
+        var service = CreateService();
+        var workflowYaml = SafeWorkflowYaml(method);
+        var confirmation = new NyxIdExplicitRequestConfirmation
+        {
+            CallSiteId = "wf-safe/request-safe",
+            RequestContractDigest = WorkflowCapabilityAdmissionPlanIntegrity
+                .ComputeNyxIdRequestContractDigest(SafeSelector(method)),
+            AttestedRisk = NyxIdOperationRisk.ReadOnly,
+        };
+
+        Func<Task> act = async () => await service.AdmitAsync(Request(
+            workflowYaml,
+            ExternalCapabilityExecutionMode.Durable,
+            [confirmation]));
+
+        var exception = await act.Should().ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
+        exception.Which.Readiness.Status.Should()
+            .Be(ExternalCapabilityReadinessStatus.DurableAuthorizationUnavailable);
+        exception.Which.Readiness.Blockers.Should().ContainSingle().Which.Code.Should()
+            .Be("DURABLE_AUTHORIZATION_SOURCE_REQUIRED");
+    }
+
     [Fact]
     public void FromWorkflowYamls_ShouldCloneExplicitRequestConfirmations()
     {
@@ -176,12 +284,18 @@ public sealed class WorkflowExplicitRequestAdmissionTests
 
     private static WorkflowExternalCapabilityAdmissionRequest Request(
         IReadOnlyList<NyxIdExplicitRequestConfirmation>? confirmations = null) =>
+        Request(WorkflowYaml, ExternalCapabilityExecutionMode.Interactive, confirmations);
+
+    private static WorkflowExternalCapabilityAdmissionRequest Request(
+        string workflowYaml,
+        ExternalCapabilityExecutionMode executionMode,
+        IReadOnlyList<NyxIdExplicitRequestConfirmation>? confirmations = null) =>
         new(
             Access(),
-            WorkflowYaml,
+            workflowYaml,
             new Dictionary<string, string>(),
             "scope_workflow_save_and_bind",
-            ExternalCapabilityExecutionMode.Interactive,
+            executionMode,
             confirmations);
 
     private static ExternalWorkflowCapabilityAccessContext Access() =>
@@ -210,6 +324,75 @@ public sealed class WorkflowExplicitRequestAdmissionTests
         selector.HeaderParameters.Add("If-Match");
         return selector;
     }
+
+    private static string MutatingWorkflowYaml(string method) => $$"""
+        name: wf-mutating
+        steps:
+          - id: request-mutating
+            type: tool_call
+            capability:
+              nyxid_request:
+                user_service_id: usvc-alpha
+                method: {{method}}
+                path_template: /api/resources
+                body_mode: json
+                body_required: true
+                response_mode: text
+            parameters:
+              tool: nyxid_proxy
+              arguments: '{}'
+        """;
+
+    private static NyxIdRequestSelector MutatingSelector(string method) =>
+        new()
+        {
+            UserServiceId = "usvc-alpha",
+            Method = method switch
+            {
+                "POST" => NyxIdRequestMethod.Post,
+                "PUT" => NyxIdRequestMethod.Put,
+                "PATCH" => NyxIdRequestMethod.Patch,
+                "DELETE" => NyxIdRequestMethod.Delete,
+                _ => throw new ArgumentOutOfRangeException(nameof(method)),
+            },
+            PathTemplate = "/api/resources",
+            BodyMode = NyxIdRequestBodyMode.Json,
+            BodyRequired = true,
+            ResponseMode = NyxIdRequestResponseMode.Text,
+        };
+
+    private static string SafeWorkflowYaml(string method) => $$"""
+        name: wf-safe
+        steps:
+          - id: request-safe
+            type: tool_call
+            capability:
+              nyxid_request:
+                user_service_id: usvc-alpha
+                method: {{method}}
+                path_template: /api/resources
+                body_mode: none
+                response_mode: text
+            parameters:
+              tool: nyxid_proxy
+              arguments: '{}'
+        """;
+
+    private static NyxIdRequestSelector SafeSelector(string method) =>
+        new()
+        {
+            UserServiceId = "usvc-alpha",
+            Method = method switch
+            {
+                "GET" => NyxIdRequestMethod.Get,
+                "HEAD" => NyxIdRequestMethod.Head,
+                "OPTIONS" => NyxIdRequestMethod.Options,
+                _ => throw new ArgumentOutOfRangeException(nameof(method)),
+            },
+            PathTemplate = "/api/resources",
+            BodyMode = NyxIdRequestBodyMode.None,
+            ResponseMode = NyxIdRequestResponseMode.Text,
+        };
 
     private sealed class ExplicitRequestSource : IExternalWorkflowCapabilitySource
     {
