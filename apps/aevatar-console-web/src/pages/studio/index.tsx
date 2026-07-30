@@ -5111,6 +5111,8 @@ const StudioPage: React.FC = () => {
           workflowYaml,
           inlineWorkflowYamls,
           executionMode: 'interactive',
+          revisionId:
+            trimOptional(buildPendingMemberSummary?.lastBoundRevisionId) || undefined,
         });
         const explicitRequestConfirmations =
           await confirmInteractiveExplicitRequestPreview(explicitRequestPreview);

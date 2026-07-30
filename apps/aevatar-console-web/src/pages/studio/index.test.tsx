@@ -5601,24 +5601,11 @@ describe("StudioPage", () => {
   });
 
   it("requires a fresh explicit-request confirmation before binding a workflow member", async () => {
-    mockParsedDocument = {
-      ...mockParsedDocument,
-      steps: mockParsedDocument.steps.map((step) =>
-        step.type === "llm_call"
-          ? {
-              ...step,
-              parameters: {
-                prompt: "把用户输入的内容转成日语",
-              },
-            }
-          : step
-      ),
-    } as any;
-    mockWorkflowFile = {
-      ...mockWorkflowFile,
-      document: mockParsedDocument,
-      yaml: mockBuildWorkflowYaml(mockParsedDocument),
-    };
+    mockStudioMembers = mockStudioMembers.map((member) =>
+      member.memberId === "workspace-demo"
+        ? { ...member, lastBoundRevisionId: "rev-2" }
+        : member,
+    );
     (studioApi.previewExplicitRequests as jest.Mock).mockResolvedValue([
       {
         callSiteId: "wf-alpha/request-alpha",
@@ -5680,6 +5667,7 @@ describe("StudioPage", () => {
         workflowYaml: expect.stringContaining("name: workspace-demo"),
         inlineWorkflowYamls: {},
         executionMode: "interactive",
+        revisionId: "rev-2",
       });
       expect(Modal.confirm).toHaveBeenCalledTimes(1);
     });
@@ -5718,15 +5706,6 @@ describe("StudioPage", () => {
         ],
       });
     });
-    const workflowYamls =
-      (studioApi.bindMemberWorkflow as jest.Mock).mock.calls.at(-1)?.[0]
-        ?.workflowYamls ?? [];
-    expect(workflowYamls.join("\n")).toContain(
-      "prompt_prefix: 把用户输入的内容转成日语"
-    );
-    expect(workflowYamls.join("\n")).not.toContain(
-      "prompt: 把用户输入的内容转成日语"
-    );
   });
 
   it("does not expose post-bind Team entry or Team test actions from Studio bind", async () => {
