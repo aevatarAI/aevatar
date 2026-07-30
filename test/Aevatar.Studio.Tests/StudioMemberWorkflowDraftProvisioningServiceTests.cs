@@ -92,6 +92,56 @@ public sealed class StudioMemberWorkflowDraftProvisioningServiceTests
     }
 
     [Fact]
+    public async Task SaveAsync_WithSameWorkflowNameAcrossTeams_ShouldUseDistinctDraftPaths()
+    {
+        var parser = new StubWorkflowDefinitionParser(UnresolvedParseResult());
+        var members = new RecordingMemberPorts();
+        var workspace = new RecordingStudioWorkspacePorts();
+        var service = NewService(parser, members, workspace, workspace);
+
+        var first = await service.SaveAsync(new StudioMemberWorkflowDraftProvisioningRequest(
+            ScopeId,
+            TeamId,
+            "X Digest",
+            UnresolvedYaml));
+        var second = await service.SaveAsync(new StudioMemberWorkflowDraftProvisioningRequest(
+            ScopeId,
+            "team-beta",
+            "X Digest",
+            UnresolvedYaml));
+
+        first.WorkflowId.Should().Be(WorkflowId);
+        second.WorkflowId.Should().Be("workflow-df0d5cf4c0f1d4ab5bb2752366282b04");
+        var drafts = (await workspace.GetAsync(ScopeId)).Drafts;
+        drafts.Should().ContainSingle(draft =>
+            draft.WorkflowId == first.WorkflowId &&
+            draft.FileName == $"{first.WorkflowId}.yaml");
+        drafts.Should().ContainSingle(draft =>
+            draft.WorkflowId == second.WorkflowId &&
+            draft.FileName == $"{second.WorkflowId}.yaml");
+    }
+
+    [Fact]
+    public async Task SaveAsync_WithExactNyxIdSelector_ShouldRemainUnboundAndNotRunnable()
+    {
+        var parser = new StubWorkflowDefinitionParser(ExactParseResult());
+        var members = new RecordingMemberPorts();
+        var workspace = new RecordingStudioWorkspacePorts();
+        var service = NewService(parser, members, workspace, workspace);
+
+        var result = await service.SaveAsync(new StudioMemberWorkflowDraftProvisioningRequest(
+            ScopeId,
+            TeamId,
+            "X Digest",
+            UnresolvedYaml));
+
+        result.Runnable.Should().BeFalse();
+        result.BindingStatus.Should().Be("not_bound");
+        result.Blockers.Should().ContainSingle().Which.Code
+            .Should().Be("WORKFLOW_BIND_REQUIRED");
+    }
+
+    [Fact]
     public async Task SaveAsync_WhenYamlInvalid_ShouldMutateNothing()
     {
         var parser = new StubWorkflowDefinitionParser(WorkflowYamlParseResult.Invalid("invalid yaml"));
@@ -196,6 +246,28 @@ public sealed class StudioMemberWorkflowDraftProvisioningServiceTests
             CallSiteId = "x_digest/fetch",
             ToolName = "nyxid_proxy",
             Selector = new ExternalWorkflowCapabilitySelector(),
+        });
+        return WorkflowYamlParseResult.Success("x_digest", dependencies);
+    }
+
+    private static WorkflowYamlParseResult ExactParseResult()
+    {
+        var dependencies = new WorkflowAuthorizationDependencies
+        {
+            ServiceGrantPolicy = WorkflowServiceGrantPolicy.Required,
+        };
+        dependencies.ExternalInvocations.Add(new ExternalToolInvocationSpec
+        {
+            CallSiteId = "x_digest/fetch",
+            ToolName = "nyxid_proxy",
+            Selector = new ExternalWorkflowCapabilitySelector
+            {
+                NyxIdOperation = new NyxIdOperationSelector
+                {
+                    UserServiceId = "us-x-alpha",
+                    EndpointId = "list-following",
+                },
+            },
         });
         return WorkflowYamlParseResult.Success("x_digest", dependencies);
     }

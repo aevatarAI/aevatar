@@ -106,7 +106,7 @@ public sealed class StudioMemberWorkflowDraftProvisioningService :
                 new SaveWorkflowDraftRequest(
                     AppScopedWorkflowService.BuildScopeDirectoryId(scopeId),
                     workflowName,
-                    FileName: null,
+                    FileName: $"{workflowId}.yaml",
                     workflowYaml),
                 ct);
         }
