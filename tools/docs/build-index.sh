@@ -99,7 +99,6 @@ extract_field() {
       basename=$(basename "$file")
       echo "- [${basename}](templates/${basename})"
     done
-    echo ""
   fi
 
 } > "$OUTPUT"

@@ -7,7 +7,7 @@ using Microsoft.AspNetCore.Http;
 
 namespace Aevatar.AI.Tests;
 
-public sealed class NyxIdChatEndpointsHelperCoverageTests
+public sealed class NyxIdChatEndpointHelperTests
 {
     private static readonly MethodInfo ExtractNyxIdAccessTokenMethod = typeof(NyxIdChatEndpoints)
         .GetMethod("ExtractNyxIdAccessToken", BindingFlags.NonPublic | BindingFlags.Static)

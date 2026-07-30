@@ -19,6 +19,21 @@ public class ProjectionConstraintTests
     }
 
     [Fact]
+    public void ConcreteProjectors_ShouldImplementProjectionMaterializerContract()
+    {
+        IArchRule rule = Classes().That()
+            .HaveNameMatching(".*Projector$")
+            .And().AreNotAbstract()
+            .And().ResideInNamespaceMatching(@"Aevatar(\..+)?")
+            .Should().BeAssignableTo(
+                Types().That().HaveNameMatching(".*IProjectionMaterializer.*"))
+            .OrShould().BeAssignableTo(
+                Types().That().HaveNameMatching(".*IProjectionProjector.*"))
+            .Because("concrete projectors must implement IProjectionMaterializer or IProjectionProjector");
+        rule.Check(Arch);
+    }
+
+    [Fact]
     public void ProjectionContextReverseLookup_ShouldNot_Exist()
     {
         IArchRule rule = MethodMembers().That()

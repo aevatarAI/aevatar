@@ -138,7 +138,7 @@
 ## 构建、测试与本地运行
 - `dotnet restore aevatar.slnx --nologo`：还原依赖。
 - `dotnet build aevatar.slnx --nologo`：编译全部项目。
-- `dotnet test aevatar.slnx --nologo`：运行全量测试。
+- `dotnet test aevatar.slnx --nologo`：运行 CI / release 权威全量测试；普通开发任务使用下方增量测试策略。
 - 端口约束：仓库内禁止出现 `5000` 端口，这会与系统冲突；所有 Web API 服务同时禁止使用 `5000` 与 `5050` 端口。新增或修改 Host、启动脚本、`launchSettings`、README、CLI 示例、测试样例、SDK 默认值或任何代码/脚本文案时，不得写入 `5000`，并必须保持代码、脚本与文档一致。若需要提供默认示例，统一使用其他端口（当前文档默认使用 `5100`）。
 - `bash tools/ci/architecture_guards.sh`：本地执行 CI 架构门禁（与 CI 同步）。
 - `bash tools/ci/workflow_binding_boundary_guard.sh`：单独执行 workflow binding 边界门禁。
@@ -175,7 +175,11 @@
 
 ## 测试与质量门禁
 - 测试栈：xUnit、FluentAssertions、`coverlet.collector`。
-- 测试文件命名：`*Tests.cs`，单文件聚焦一个行为域。
+- 普通开发任务只运行受影响的最窄测试范围：优先单个测试类/方法或前端单个测试文件；无法形成有效过滤时再运行受影响测试项目。不得因“不确定”而静默退化为仓库全量测试。
+- `aevatar.slnx` 是后端全量测试的唯一权威入口，`Aevatar.Integration.Slow.Tests` 只由 `slow_test_guards.sh` 承载；`.slnf` 只用于构建边界，不作为测试执行入口。
+- 测试文件和测试类必须按可观察行为、契约或架构规则命名，后端使用 `*Tests.cs`，前端使用 `*.test.ts(x)`；禁止新增以覆盖率指标组织的 `*CoverageTests.cs`。
+- 单个测试文件只聚焦一个行为域和一套 fixture 生命周期。现有 coverage bucket 或超大测试文件只能缩小、拆分或迁移，不能继续扩张。
+- 测试 kit、fake、fixture、attribute 等支撑类型应按职责命名，不得伪装成可执行测试 suite。
 - 行为变更必须补测试；重构不得降低关键路径覆盖率。
 - 自动生成代码（脚手架生成）不纳入代码覆盖率考核，不将覆盖率作为其合并门禁。
 - 轮询等待门禁（`tools/ci/test_stability_guards.sh`）为强制项：测试中禁止随意引入 `Task.Delay(...)`/`WaitUntilAsync(...)`。

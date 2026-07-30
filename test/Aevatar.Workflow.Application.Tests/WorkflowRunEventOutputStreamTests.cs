@@ -5,7 +5,7 @@ using Any = Google.Protobuf.WellKnownTypes.Any;
 
 namespace Aevatar.Workflow.Application.Tests;
 
-public sealed class WorkflowRunEventOutputStreamCoverageTests
+public sealed class WorkflowRunEventOutputStreamTests
 {
     [Fact]
     public async Task PumpAsync_ShouldStopAfterTerminalEvent()

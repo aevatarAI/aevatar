@@ -7,7 +7,7 @@ using FluentAssertions;
 
 namespace Aevatar.Scripting.Core.Tests.Projection;
 
-public sealed class ScriptProjectionReadModelSupportCoverageTests
+public sealed class ScriptProjectionReadModelSupportTests
 {
     [Fact]
     public void ToStruct_AndToDictionary_ShouldRoundTripRichObjectGraph()

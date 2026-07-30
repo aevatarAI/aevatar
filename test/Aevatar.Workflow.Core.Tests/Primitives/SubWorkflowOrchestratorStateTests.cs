@@ -7,7 +7,7 @@ using FluentAssertions;
 
 namespace Aevatar.Workflow.Core.Tests.Primitives;
 
-public sealed class SubWorkflowOrchestratorStateCoverageTests
+public sealed class SubWorkflowOrchestratorStateTests
 {
     private static readonly MethodInfo TryResolveInlineWorkflowDefinitionSnapshotMethod = typeof(SubWorkflowOrchestrator)
         .GetMethod("TryResolveInlineWorkflowDefinitionSnapshot", BindingFlags.NonPublic | BindingFlags.Static)

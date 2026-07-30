@@ -57,6 +57,15 @@ public class ProjectionStoreDispatcherTests
     }
 
     [Fact]
+    public void Ctor_WhenBindingsCollectionIsEmpty_ShouldThrow()
+    {
+        Action act = () => new ProjectionStoreDispatcher<TestReadModel>([]);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*No configured projection store bindings*");
+    }
+
+    [Fact]
     public void Ctor_WhenNoConfiguredBindings_ShouldLogSkippedBindings()
     {
         var unconfiguredDocumentBinding = new ProjectionDocumentStoreBinding<TestReadModel>();

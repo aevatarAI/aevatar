@@ -8,7 +8,7 @@ using ProtobufValue = Google.Protobuf.WellKnownTypes.Value;
 
 namespace Aevatar.Scripting.Core.Tests.Serialization;
 
-public class ScriptMessageSupportCoverageTests
+public class ScriptMessageSupportTests
 {
     [Fact]
     public void ScriptMessageTypes_CreateMessage_ShouldReturnProtobufInstance_AndRejectNonMessageTypes()

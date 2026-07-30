@@ -4,7 +4,7 @@ using Aevatar.Foundation.Runtime.Deduplication;
 
 namespace Aevatar.Foundation.Core.Tests;
 
-public sealed class RuntimeRoutingAndDeduplicationCoverageTests
+public sealed class RuntimeRoutingAndDeduplicationTests
 {
     [Fact]
     public async Task MemoryCacheDeduplicator_ShouldRejectDuplicateEventId()

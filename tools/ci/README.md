@@ -13,7 +13,9 @@ This directory keeps CI gate scripts and smoke tests.
 - `tools/ci/channel_mega_interface_guard.sh`: blocks regressions that merge channel runtime and outbound methods back into one mega interface.
 - `tools/ci/frontend_static_boundary_guard.sh`: blocks frontend regressions that call actor-state/replay/projection-refresh endpoints, parse actorId prefixes, or depend on internal EventEnvelope routing fields.
 - `tools/ci/fetch_latest_ci_failure.sh`: downloads the latest failed GitHub Actions run metadata and failed logs into `artifacts/ci-failures/latest/` via `gh`.
-- `tools/ci/test_stability_guards.sh`: polling/unstable test pattern guard.
+- `tools/ci/test_stability_guards.sh`: polling/unstable test pattern guard and entrypoint for test-governance meta-tests.
+- `tools/ci/test_coverage_file_guard.sh`: blocks new coverage-metric files/classes, rejects allowlist additions or budget increases unless they register debt already present at the immutable pre-change commit, and freezes every historical coverage artifact at its reviewed line budget. Pull requests use their base SHA, pushes use the event's `before` SHA, scheduled/release checks use `HEAD^`, and CI fails closed when none can be resolved.
+- `tools/ci/tests/test_coverage_file_guard.sh`: regression tests for file/class naming bypasses, C# comment/string handling, partial fragments, real Git baseline enforcement, growth budgets, stale entries, build-output exclusions, and invalid owners.
 - `tools/ci/solution_split_guards.sh`: split build guard.
 - `tools/ci/test_solution_ownership_guard.sh`: verifies every `test/*.csproj` is owned by `aevatar.slnx` or the single slow-test project.
 - `tools/ci/projection_route_mapping_guard.sh`: projection reducer routing static guard.

@@ -6,7 +6,7 @@ using FluentAssertions;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
-public sealed class ChatWebSocketProtocolCoverageTests
+public sealed class ChatWebSocketProtocolTests
 {
     [Fact]
     public async Task ReceiveAsync_ShouldAggregateFrames_AndSkipUnsupportedMessageTypes()

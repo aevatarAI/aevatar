@@ -5,7 +5,7 @@ using Shouldly;
 
 namespace Aevatar.Foundation.Abstractions.Tests;
 
-public class FoundationAbstractionsProtoCoverageTests
+public class FoundationAbstractionsProtoContractTests
 {
     [Fact]
     public void HierarchyEvents_ShouldCoverMergeCloneNullAndDescriptors()

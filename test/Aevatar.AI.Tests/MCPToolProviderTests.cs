@@ -6,7 +6,7 @@ using FluentAssertions;
 
 namespace Aevatar.AI.Tests;
 
-public sealed class MCPToolProvidersCoverageTests
+public sealed class MCPToolProviderTests
 {
     [Fact]
     public void SanitizeToolName_ShouldNormalizeAndFallback()

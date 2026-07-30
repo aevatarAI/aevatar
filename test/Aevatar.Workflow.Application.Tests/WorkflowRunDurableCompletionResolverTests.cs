@@ -7,7 +7,7 @@ using FluentAssertions;
 
 namespace Aevatar.Workflow.Application.Tests;
 
-public sealed class WorkflowRunDurableCompletionResolverCoverageTests
+public sealed class WorkflowRunDurableCompletionResolverTests
 {
     [Theory]
     [InlineData(WorkflowRunCompletionStatus.Completed, WorkflowProjectionCompletionStatus.Completed)]

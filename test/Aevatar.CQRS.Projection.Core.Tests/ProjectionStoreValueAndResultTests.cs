@@ -3,7 +3,7 @@ using FluentAssertions;
 
 namespace Aevatar.CQRS.Projection.Core.Tests;
 
-public sealed class ProjectionStoreValueAndResultCoverageTests
+public sealed class ProjectionStoreValueAndResultTests
 {
     [Fact]
     public void ProjectionDocumentValue_FactoryMethods_ShouldNormalizeNullsAndUtcValues()

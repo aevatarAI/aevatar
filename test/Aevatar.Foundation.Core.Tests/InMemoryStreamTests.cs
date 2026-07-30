@@ -7,7 +7,7 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Foundation.Core.Tests;
 
-public sealed class InMemoryStreamCoverageTests
+public sealed class InMemoryStreamTests
 {
     [Fact]
     public async Task ProduceAsync_WithTypedMessage_ShouldWrapAndDispatchToTypedSubscriber()

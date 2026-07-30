@@ -5,7 +5,7 @@ using FluentAssertions;
 
 namespace Aevatar.Workflow.Core.Tests.Primitives;
 
-public sealed class SubWorkflowOrchestratorBranchCoverageTests
+public sealed class SubWorkflowOrchestratorBranchTests
 {
     [Fact]
     public void ApplySubWorkflowBindingUpserted_ShouldMatchExistingDefinitionScopedBinding()

@@ -6,7 +6,7 @@ using FluentAssertions;
 
 namespace Aevatar.AI.Tests;
 
-public class ToolCallLoopMediaContentCoverageTests
+public class ToolCallLoopMediaContentTests
 {
     [Fact]
     public void ComposeFinalCallId_WhenRequestIdMissing_ShouldReturnNull()

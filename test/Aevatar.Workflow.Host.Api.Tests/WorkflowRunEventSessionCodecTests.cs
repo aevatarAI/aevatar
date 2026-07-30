@@ -8,7 +8,7 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
-public sealed class WorkflowRunEventSessionCodecCoverageTests
+public sealed class WorkflowRunEventSessionCodecTests
 {
     [Fact]
     public void Channel_ShouldBeWorkflowRun()
