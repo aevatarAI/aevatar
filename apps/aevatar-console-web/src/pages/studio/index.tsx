@@ -76,6 +76,7 @@ import {
   buildStudioGraphElements,
   buildStudioWorkflowLayout,
 } from '@/shared/studio/graph';
+import { confirmInteractiveExplicitRequestPreview } from '@/shared/studio/explicitRequestConfirmation';
 import { isStudioApiStatus, studioApi } from '@/shared/studio/api';
 import { scriptsApi } from '@/shared/studio/scriptsApi';
 import type { ScopedScriptDetail } from '@/shared/studio/scriptsModels';
@@ -670,6 +671,23 @@ function hasValidationError(findings: StudioValidationFinding[]): boolean {
 
 function trimOptional(value: string | null | undefined): string {
   return value?.trim() ?? '';
+}
+
+function splitWorkflowYamlBundle(workflowYamls: readonly string[]): {
+  readonly inlineWorkflowYamls: Record<string, string>;
+  readonly workflowYaml: string;
+} {
+  const [workflowYaml, ...inlineWorkflowYamls] = workflowYamls;
+  if (!workflowYaml) {
+    throw new Error('Workflow YAML is required.');
+  }
+
+  return {
+    workflowYaml,
+    inlineWorkflowYamls: Object.fromEntries(
+      inlineWorkflowYamls.map((yaml, index) => [`workflow_${index + 1}`, yaml]),
+    ),
+  };
 }
 
 function normalizeWorkflowSaveResult(
@@ -5083,12 +5101,32 @@ const StudioPage: React.FC = () => {
           throw new Error('Resolve a stable workflow draft id before binding this member.');
         }
 
+        const workflowYamls = await buildWorkflowYamlBundle();
+        const { workflowYaml, inlineWorkflowYamls } = splitWorkflowYamlBundle(
+          workflowYamls,
+        );
+        const explicitRequestPreview = await studioApi.previewExplicitRequests({
+          scopeId: resolvedStudioScopeId,
+          workflowId: workflowIdForBinding,
+          workflowYaml,
+          inlineWorkflowYamls,
+          executionMode: 'interactive',
+        });
+        const explicitRequestConfirmations =
+          await confirmInteractiveExplicitRequestPreview(explicitRequestPreview);
+        if (explicitRequestConfirmations === null) {
+          return;
+        }
+
         const receipt = await studioApi.bindMemberWorkflow({
           scopeId: resolvedStudioScopeId,
           memberId: resolvedBuildMemberId,
           displayName: buildPendingBindCandidate.displayName,
           workflowId: workflowIdForBinding,
-          workflowYamls: await buildWorkflowYamlBundle(),
+          workflowYamls,
+          ...(explicitRequestConfirmations.length > 0
+            ? { explicitRequestConfirmations }
+            : {}),
         });
         await queryClient.invalidateQueries({
           queryKey: [

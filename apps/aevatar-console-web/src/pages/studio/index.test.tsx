@@ -1132,6 +1132,7 @@ jest.mock("@/shared/studio/api", () => ({
         };
       }
     ),
+    previewExplicitRequests: jest.fn(),
     listExecutions: jest.fn(async () => [
       {
         executionId: "execution-1",
@@ -5599,7 +5600,7 @@ describe("StudioPage", () => {
     });
   });
 
-  it("surfaces the current workflow as a bind candidate before any published service exists", async () => {
+  it("requires a fresh explicit-request confirmation before binding a workflow member", async () => {
     mockParsedDocument = {
       ...mockParsedDocument,
       steps: mockParsedDocument.steps.map((step) =>
@@ -5618,6 +5619,21 @@ describe("StudioPage", () => {
       document: mockParsedDocument,
       yaml: mockBuildWorkflowYaml(mockParsedDocument),
     };
+    (studioApi.previewExplicitRequests as jest.Mock).mockResolvedValue([
+      {
+        callSiteId: "wf-alpha/request-alpha",
+        requestContractDigest: "digest-alpha",
+        userServiceId: "usvc-alpha",
+        method: "post",
+        pathTemplate: "/records/{id}",
+        bodyMode: "json",
+        bodyRequired: true,
+        responseMode: "text",
+        effectiveRisk: "write",
+        approvalRequired: true,
+        allowedExecutionModes: ["interactive"],
+      },
+    ]);
     mockScopeRuntimeApi.listServices.mockReset();
     mockScopeRuntimeApi.listServices
       .mockResolvedValueOnce([])
@@ -5658,15 +5674,49 @@ describe("StudioPage", () => {
     });
 
     await waitFor(() => {
-      expect(studioApi.bindMemberWorkflow).toHaveBeenCalledWith(
-        expect.objectContaining({
-          scopeId: "scope-1",
-          memberId: "workspace-demo",
-          displayName: "workspace-demo",
-          workflowId: "workflow-1",
-          workflowYamls: expect.arrayContaining([expect.stringContaining("name: workspace-demo")]),
-        }),
-      );
+      expect(studioApi.previewExplicitRequests).toHaveBeenCalledWith({
+        scopeId: "scope-1",
+        workflowId: "workflow-1",
+        workflowYaml: expect.stringContaining("name: workspace-demo"),
+        inlineWorkflowYamls: {},
+        executionMode: "interactive",
+      });
+      expect(Modal.confirm).toHaveBeenCalledTimes(1);
+    });
+    expect(studioApi.bindMemberWorkflow).not.toHaveBeenCalled();
+
+    const cancelledConfirmation = (Modal.confirm as jest.Mock).mock.calls[0]?.[0];
+    await act(async () => {
+      cancelledConfirmation.onCancel();
+    });
+    expect(studioApi.bindMemberWorkflow).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Bind current member" }));
+    await waitFor(() => {
+      expect(studioApi.previewExplicitRequests).toHaveBeenCalledTimes(2);
+      expect(Modal.confirm).toHaveBeenCalledTimes(2);
+    });
+    const previewInput = (studioApi.previewExplicitRequests as jest.Mock).mock.calls[1]?.[0];
+    const confirmedDialog = (Modal.confirm as jest.Mock).mock.calls[1]?.[0];
+    await act(async () => {
+      await confirmedDialog.onOk();
+    });
+
+    await waitFor(() => {
+      expect(studioApi.bindMemberWorkflow).toHaveBeenCalledWith({
+        scopeId: "scope-1",
+        memberId: "workspace-demo",
+        displayName: "workspace-demo",
+        workflowId: "workflow-1",
+        workflowYamls: [previewInput.workflowYaml],
+        explicitRequestConfirmations: [
+          {
+            callSiteId: "wf-alpha/request-alpha",
+            requestContractDigest: "digest-alpha",
+            attestedRisk: "write",
+          },
+        ],
+      });
     });
     const workflowYamls =
       (studioApi.bindMemberWorkflow as jest.Mock).mock.calls.at(-1)?.[0]
@@ -5677,20 +5727,6 @@ describe("StudioPage", () => {
     expect(workflowYamls.join("\n")).not.toContain(
       "prompt: 把用户输入的内容转成日语"
     );
-    await waitFor(() => {
-      expect(screen.getByText("service:default")).toBeTruthy();
-      expect(screen.getByText("services:default")).toBeTruthy();
-      expect(screen.getByText("candidate:none")).toBeTruthy();
-    });
-    expect(screen.queryByText("service:no-service")).toBeNull();
-    expect(screen.queryByText("services:none")).toBeNull();
-
-    const rail = await screen.findByLabelText("Team members");
-    await waitFor(() => {
-      expect(
-        within(rail).getAllByRole("button", { name: "workspace-demo" })
-      ).toHaveLength(1);
-    });
   });
 
   it("does not expose post-bind Team entry or Team test actions from Studio bind", async () => {

@@ -191,6 +191,19 @@ function readExplicitRequestEnum<T extends string>(
   return value as T;
 }
 
+function readNonBlankExplicitRequestString(
+  record: Record<string, unknown>,
+  key: string,
+  label: string,
+): string {
+  const value = readString(record, key, label);
+  if (!value.trim()) {
+    throw new Error(`${label} must not be blank.`);
+  }
+
+  return value;
+}
+
 function decodeStudioExplicitRequestPreviewItem(
   value: unknown,
   label = "StudioExplicitRequestPreviewItem",
@@ -212,20 +225,32 @@ function decodeStudioExplicitRequestPreviewItem(
   }
 
   return {
-    callSiteId: readString(record, "callSiteId", `${label}.callSiteId`),
-    requestContractDigest: readString(
+    callSiteId: readNonBlankExplicitRequestString(
+      record,
+      "callSiteId",
+      `${label}.callSiteId`,
+    ),
+    requestContractDigest: readNonBlankExplicitRequestString(
       record,
       "requestContractDigest",
       `${label}.requestContractDigest`,
     ),
-    userServiceId: readString(record, "userServiceId", `${label}.userServiceId`),
+    userServiceId: readNonBlankExplicitRequestString(
+      record,
+      "userServiceId",
+      `${label}.userServiceId`,
+    ),
     method: readExplicitRequestEnum<StudioExplicitRequestMethod>(
       record,
       "method",
       `${label}.method`,
       ["get", "head", "options", "post", "put", "patch", "delete"],
     ),
-    pathTemplate: readString(record, "pathTemplate", `${label}.pathTemplate`),
+    pathTemplate: readNonBlankExplicitRequestString(
+      record,
+      "pathTemplate",
+      `${label}.pathTemplate`,
+    ),
     bodyMode: readExplicitRequestEnum<StudioExplicitRequestBodyMode>(
       record,
       "bodyMode",
@@ -256,11 +281,23 @@ function decodeStudioExplicitRequestPreviewItem(
 
 function decodeStudioExplicitRequestPreview(value: unknown): StudioExplicitRequestPreviewItem[] {
   const record = expectRecord(value, "StudioExplicitRequestPreview");
-  return expectArray(
+  const items = expectArray(
     record.items,
     "StudioExplicitRequestPreview.items",
     decodeStudioExplicitRequestPreviewItem,
   );
+  const callSiteIds = new Set<string>();
+  for (const item of items) {
+    if (callSiteIds.has(item.callSiteId)) {
+      throw new Error(
+        `StudioExplicitRequestPreview.items contains duplicate callSiteId '${item.callSiteId}'.`,
+      );
+    }
+
+    callSiteIds.add(item.callSiteId);
+  }
+
+  return items;
 }
 
 function toScopeWorkflowDirectoryId(scopeId: string): string {

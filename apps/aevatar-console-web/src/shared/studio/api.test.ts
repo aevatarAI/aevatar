@@ -1249,6 +1249,58 @@ describe('studioApi host-session requests', () => {
     });
   });
 
+  it.each([
+    ['callSiteId', { callSiteId: ' ' }],
+    ['requestContractDigest', { requestContractDigest: ' ' }],
+    ['userServiceId', { userServiceId: ' ' }],
+    ['pathTemplate', { pathTemplate: ' ' }],
+    ['duplicate callSiteId', { callSiteId: 'wf-alpha/request-alpha' }],
+  ])('rejects malformed explicit-request preview item: %s', async (_label, override) => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const previewItem = {
+      callSiteId: 'wf-alpha/request-alpha',
+      requestContractDigest: 'digest-alpha',
+      userServiceId: 'usvc-alpha',
+      method: 'post',
+      pathTemplate: '/records/{id}',
+      bodyMode: 'json',
+      bodyRequired: true,
+      responseMode: 'text',
+      effectiveRisk: 'write',
+      approvalRequired: true,
+      allowedExecutionModes: ['interactive'],
+      ...override,
+    };
+    const previewItems = _label === 'duplicate callSiteId'
+      ? [previewItem, { ...previewItem }]
+      : [previewItem];
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ items: previewItems }),
+    } as Response) as typeof global.fetch;
+
+    await expect(
+      studioApi.previewExplicitRequests({
+        scopeId: 'scope-alpha',
+        workflowId: 'wf-alpha',
+        workflowYaml: 'name: Workflow Alpha\nsteps: []\n',
+        executionMode: 'interactive',
+      }),
+    ).rejects.toThrow();
+  });
+
   it('rejects member workflow binding without a stable workflow id', async () => {
     expect(() =>
       studioApi.bindMemberWorkflow({

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Modal, Typography, message } from "antd";
+import { message } from "antd";
 import React from "react";
 import {
   applyRuntimeEvent,
@@ -14,6 +14,7 @@ import {
   subscribeToLocationChanges,
 } from "@/shared/navigation/history";
 import { t } from "@/shared/i18n/messages";
+import { confirmInteractiveExplicitRequestPreview } from "@/shared/studio/explicitRequestConfirmation";
 import {
   buildTeamDetailHref,
   buildTeamMemberAutomationsHref,
@@ -55,8 +56,6 @@ import { normalizeStudioMemberLifecycleStage } from "@/shared/studio/models";
 import type {
   StudioExecutionDetail,
   StudioExecutionFrame,
-  StudioExplicitRequestConfirmation,
-  StudioExplicitRequestPreviewItem,
   StudioMemberBindingRunStatusResponse,
   StudioMemberDetail,
   StudioSaveAndBindWorkflowAcceptedResult,
@@ -120,109 +119,6 @@ class PublishWorkflowStatusError extends Error {
     this.name = "PublishWorkflowStatusError";
     this.showAsError = showAsError;
   }
-}
-
-async function confirmExplicitRequestPreview(
-  previewItems: readonly StudioExplicitRequestPreviewItem[],
-): Promise<readonly StudioExplicitRequestConfirmation[] | null> {
-  if (previewItems.length === 0) {
-    return [];
-  }
-
-  if (
-    previewItems.some(
-      (item) => !item.allowedExecutionModes.includes("interactive"),
-    )
-  ) {
-    throw new Error(
-      t(
-        "teamMemberWorkflowStudio.explicitRequest.interactiveUnavailable",
-        "An external request is not available for interactive publication.",
-      ),
-    );
-  }
-
-  return new Promise((resolve) => {
-    Modal.confirm({
-      autoFocusButton: "cancel",
-      cancelText: t("teamMemberWorkflowStudio.explicitRequest.cancel", "Cancel"),
-      centered: true,
-      content: React.createElement(
-        "div",
-        { style: { display: "grid", gap: 12 } },
-        React.createElement(
-          Typography.Text,
-          null,
-          t(
-            "teamMemberWorkflowStudio.explicitRequest.description",
-            "Review each external request before publishing this workflow.",
-          ),
-        ),
-        ...previewItems.map((item) =>
-          React.createElement(
-            "div",
-            { key: item.callSiteId, style: { display: "grid", gap: 4 } },
-            React.createElement(
-              Typography.Text,
-              { strong: true },
-              `${t("teamMemberWorkflowStudio.explicitRequest.service", "Service")}: ${item.userServiceId}`,
-            ),
-            React.createElement(
-              Typography.Text,
-              null,
-              `${t("teamMemberWorkflowStudio.explicitRequest.methodPath", "Method and path")}: ${item.method.toUpperCase()} ${item.pathTemplate}`,
-            ),
-            React.createElement(
-              Typography.Text,
-              null,
-              `${t("teamMemberWorkflowStudio.explicitRequest.risk", "Risk")}: ${item.effectiveRisk}`,
-            ),
-            React.createElement(
-              Typography.Text,
-              null,
-              `${t("teamMemberWorkflowStudio.explicitRequest.approval", "Approval")}: ${item.approvalRequired
-                ? t("teamMemberWorkflowStudio.explicitRequest.required", "Required")
-                : t("teamMemberWorkflowStudio.explicitRequest.notRequired", "Not required")}`,
-            ),
-            React.createElement(
-              Typography.Text,
-              null,
-              `${t("teamMemberWorkflowStudio.explicitRequest.body", "Request body")}: ${item.bodyMode} (${item.bodyRequired
-                ? t("teamMemberWorkflowStudio.explicitRequest.required", "Required")
-                : t("teamMemberWorkflowStudio.explicitRequest.notRequired", "Not required")})`,
-            ),
-            React.createElement(
-              Typography.Text,
-              null,
-              `${t("teamMemberWorkflowStudio.explicitRequest.response", "Response")}: ${item.responseMode}`,
-            ),
-            React.createElement(
-              Typography.Text,
-              null,
-              `${t("teamMemberWorkflowStudio.explicitRequest.executionModes", "Allowed execution modes")}: ${item.allowedExecutionModes.join(", ")}`,
-            ),
-          ),
-        ),
-      ),
-      okText: t(
-        "teamMemberWorkflowStudio.explicitRequest.confirm",
-        "Confirm and publish",
-      ),
-      onCancel: () => resolve(null),
-      onOk: () =>
-        resolve(
-          previewItems.map((item) => ({
-            callSiteId: item.callSiteId,
-            requestContractDigest: item.requestContractDigest,
-            attestedRisk: item.effectiveRisk,
-          })),
-        ),
-      title: t(
-        "teamMemberWorkflowStudio.explicitRequest.title",
-        "Review external requests",
-      ),
-    });
-  });
 }
 
 type CreatedWorkflowMember = {
@@ -1134,7 +1030,7 @@ async function saveAndBindPublishedWorkflowDraft(input: {
     inlineWorkflowYamls: {},
     revisionId: trimOptional(revisionId) || undefined,
   });
-  const explicitRequestConfirmations = await confirmExplicitRequestPreview(
+  const explicitRequestConfirmations = await confirmInteractiveExplicitRequestPreview(
     explicitRequestPreview,
   );
   if (explicitRequestConfirmations === null) {
@@ -2561,7 +2457,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         inlineWorkflowYamls: {},
         revisionId: trimOptional(currentMember.lastBinding?.revisionId) || undefined,
       });
-      const explicitRequestConfirmations = await confirmExplicitRequestPreview(
+      const explicitRequestConfirmations = await confirmInteractiveExplicitRequestPreview(
         explicitRequestPreview,
       );
       if (explicitRequestConfirmations === null) {
