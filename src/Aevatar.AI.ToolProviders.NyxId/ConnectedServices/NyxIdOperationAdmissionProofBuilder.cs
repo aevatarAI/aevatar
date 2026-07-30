@@ -30,10 +30,11 @@ internal static class NyxIdOperationAdmissionProofBuilder
             ExecutionPolicy = operation.ExecutionPolicy,
             ResponsePolicy = new NyxIdOperationResponsePolicy
             {
-                TextAllowed = true,
-                FileArtifactAllowed = false,
+                TextAllowed = operation.BinaryArtifact is not true,
+                FileArtifactAllowed = operation.BinaryArtifact is true,
             },
         };
+        proof.ResponsePolicy.MediaTypes.Add(operation.ResponseMediaTypes);
 
         foreach (var parameter in operation.Parameters
                      .OrderBy(static parameter => parameter.In)
@@ -160,7 +161,7 @@ internal static class NyxIdOperationAdmissionProofBuilder
                 _ => [],
             };
         return candidates.Any(value =>
-            NyxIdServiceRequestHeaderPolicy.IsValidWorkflowHeader(parameter.Name, value));
+            NyxIdOperationHeaderPolicy.IsValidWorkflowHeader(parameter.Name, value));
     }
 
     private static void EnsureSupportedSchema(JsonObject schema)

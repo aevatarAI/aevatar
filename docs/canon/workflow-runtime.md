@@ -83,7 +83,7 @@ BindWorkflowDefinition(yaml)
 
 ### External operation admission proof handoff
 
-NyxID external operation 使用一条 actor-owned proof 主链。作者只持久化 step 级 `NyxIdOperationSelector { user_service_id, endpoint_id }`；definition admission 读取 NyxID `/api/v1/mcp/config`，typed adapter 只接受 exact non-generic UserService endpoint，并生成 server-owned service slug、method、path template、parameter/body contract、text-only response policy、source stamp 与 digest。Aevatar 不保存另一份 UserService/OpenAPI catalog。
+NyxID external operation 使用一条 actor-owned proof 主链。作者只持久化 step 级 `NyxIdOperationSelector { user_service_id, endpoint_id }`；definition admission 读取 NyxID `/api/v1/mcp/config`，shared typed adapter 只接受 exact non-generic UserService endpoint，并生成 server-owned service slug、method、path template、parameter/body contract、typed response policy、source stamp 与 digest。NyxID `catalog_digest` 是 normalized descriptor revision；Aevatar 不保存另一份 UserService/OpenAPI catalog，也不以 observation time 或本地 counter 冒充 revision。
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
@@ -104,9 +104,9 @@ flowchart LR
 
 AI adapter 把当前 proof 映射到 provider-neutral `AgentToolExecutionContext.OperationAdmission`；其中 provider-neutral execution identity 的值来自 typed `endpoint_id`，不改变 workflow selector 的字段语义。proof 包含 typed `risk / approval / enforcement_owner / allowed_execution_modes`，并参与既有 contract/admission digest。`NyxIdOperationRequestBuilder` 只接受 `path_params`、`query`、`headers`、`body`、`response_mode`，从 proof template 构造 concrete path 并校验 schema。NyxID Proxy wire 只接收服务 route、exact `user_service_id` 与 HTTP request；`endpoint_id` 和 digest 不进入 wire。
 
-Dynamic LLM exposure、definition admission 与 runtime authorization 是三条独立 policy：普通 current-turn dynamic tools 仍由 effective OpenAPI 的 `x-aevatar-tool` 控制 request-local exposure；definition actor 用 live MCP config 把 selector 解析为 v4 proof；shared `NyxIdProxyTool` 只对 managed workflow 要求 exact proof。`Shadow` 只记录 proofless/invalid-policy decision 并保留 legacy behavior；`Enforce` 在任何 downstream read/request 前返回 `NYXID_OPERATION_ADMISSION_REQUIRED`。普通 non-workflow human session 不受 managed-workflow guard 影响。
+Dynamic LLM exposure、definition admission 与 runtime authorization 是三条独立 policy，并共用同一个 MCP descriptor adapter。NyxID `contract_version=1.0` 尚未发布 typed current-turn exposure policy，因此普通 connected-service source fail closed，不暴露 operation 或 arbitrary method/path，只保留四个 `/keys` 管理工具；definition actor 可独立用 live MCP config 把 exact selector 解析为 v4 proof；shared `NyxIdProxyTool` 只对 managed workflow 要求 exact proof。`Shadow` 只记录 proofless/invalid-policy decision 并保留 legacy behavior；`Enforce` 在任何 downstream read/request 前返回 `NYXID_OPERATION_ADMISSION_REQUIRED`。普通 non-workflow human session 不受 managed-workflow guard 影响，workflow admission 也不能扩大其 current-turn tool exposure。
 
-Runtime 不读取 MCP config、OpenAPI、definition actor、read model 或 event store，不 refresh/prime admission，也不维护 process-local proof registry。MCP config access 只发生在显式 live definition admission；persisted revalidation 只校验已提交 plan、definition、execution mode、source freshness 与 digest。
+Runtime 不做 MCP discovery，不读取 raw OpenAPI、definition actor、read model 或 event store，不 refresh/prime admission，也不维护 process-local proof registry。MCP config discovery 只发生在显式 live definition admission；proof-bound dispatch 前只按 committed `service_id + endpoint_id` 做 exact MCP authority/contract drift revalidation，并继续校验已提交 plan、definition、execution mode、source freshness 与 digest。
 
 ### Admission v4 与 forward-only migration
 

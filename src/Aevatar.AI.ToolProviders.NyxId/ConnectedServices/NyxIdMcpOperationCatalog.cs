@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Net.Http.Headers;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Google.Protobuf.WellKnownTypes;
@@ -22,7 +23,9 @@ internal sealed record NyxIdMcpEndpoint(
     IReadOnlyList<ConnectedServiceToolParameter> Parameters,
     JsonNode? RequestBodySchema,
     bool RequestBodyRequired,
-    string? RequestBodyMediaType)
+    string? RequestBodyMediaType,
+    IReadOnlyList<string> ResponseMediaTypes,
+    bool? BinaryArtifact)
 {
     public bool IsReadOnly => Method is "GET" or "HEAD" or "OPTIONS";
 
@@ -68,9 +71,11 @@ internal sealed record NyxIdMcpEndpoint(
         RequestBodySchema?.ToJsonString(),
         RequestBodyRequired.ToString(),
         RequestBodyMediaType,
+        string.Join("\n", ResponseMediaTypes.Order(StringComparer.Ordinal)),
+        BinaryArtifact?.ToString() ?? "unknown",
         ExecutionPolicy.Risk.ToString(),
         ExecutionPolicy.Approval.ToString(),
-        "text-only");
+        BinaryArtifact is true ? "file-artifact" : "text");
 }
 
 internal sealed record NyxIdMcpCatalogIssue(
@@ -130,15 +135,21 @@ internal static class NyxIdMcpOperationCatalog
         {
             var root = document.RootElement;
             var userId = ExactString(root, "user_id");
+            var catalogDigest = ExactString(root, "catalog_digest");
             var source = BuildSource(
                 sourceSuffix,
                 userId,
                 observedAt,
                 freshnessWindow,
-                ExternalWorkflowCapabilityContractDigest.Compute(Canonicalize(root)));
+                IsCatalogDigest(catalogDigest)
+                    ? catalogDigest!
+                    : ExternalWorkflowCapabilityContractDigest.Compute(Canonicalize(root)));
             if (NyxIdUserServiceListJson.IsErrorEnvelope(root, out var status))
                 return SourceFailure(source, status is 401 or 403);
-            if (root.ValueKind != JsonValueKind.Object || userId is null ||
+            if (root.ValueKind != JsonValueKind.Object ||
+                !string.Equals(ExactString(root, "contract_version"), "1.0", StringComparison.Ordinal) ||
+                !IsCatalogDigest(catalogDigest) ||
+                userId is null ||
                 !root.TryGetProperty("services", out var servicesElement) ||
                 servicesElement.ValueKind != JsonValueKind.Array)
             {
@@ -341,6 +352,9 @@ internal static class NyxIdMcpOperationCatalog
         var body = ParseRequestBody(entry, serviceId, endpointId, issues);
         if (!body.Supported)
             return null;
+        var response = ParseResponse(entry, serviceId, endpointId, method, issues);
+        if (!response.Supported)
+            return null;
 
         return new NyxIdMcpEndpoint(
             endpointId,
@@ -350,7 +364,9 @@ internal static class NyxIdMcpOperationCatalog
             parameters,
             body.Schema,
             body.Required,
-            body.MediaType);
+            body.MediaType,
+            response.MediaTypes,
+            response.BinaryArtifact);
     }
 
     private static IReadOnlyList<ConnectedServiceToolParameter>? ParseParameters(
@@ -471,6 +487,67 @@ internal static class NyxIdMcpOperationCatalog
             "The endpoint request body is not a verifiable JSON contract.",
             serviceId, endpointId));
         return (false, null, false, null);
+    }
+
+    private static (bool Supported, IReadOnlyList<string> MediaTypes, bool? BinaryArtifact)
+        ParseResponse(
+            JsonElement endpoint,
+            string serviceId,
+            string endpointId,
+            string method,
+            ICollection<NyxIdMcpCatalogIssue> issues)
+    {
+        if (!endpoint.TryGetProperty("response", out var response) ||
+            response.ValueKind != JsonValueKind.Object ||
+            !response.TryGetProperty("content_types", out var contentTypes) ||
+            contentTypes.ValueKind != JsonValueKind.Array ||
+            !response.TryGetProperty("binary_artifact", out var binaryArtifact))
+        {
+            return UnsupportedResponse(issues, serviceId, endpointId);
+        }
+
+        var mediaTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in contentTypes.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.String ||
+                item.GetString() is not { Length: > 0 } mediaType ||
+                !string.Equals(mediaType, mediaType.Trim(), StringComparison.Ordinal) ||
+                !MediaTypeHeaderValue.TryParse(mediaType, out _))
+            {
+                return UnsupportedResponse(issues, serviceId, endpointId);
+            }
+            mediaTypes.Add(mediaType);
+        }
+
+        bool? binary = binaryArtifact.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            JsonValueKind.Null => null,
+            _ => null,
+        };
+        if (binaryArtifact.ValueKind is not (
+                JsonValueKind.True or JsonValueKind.False or JsonValueKind.Null) ||
+            binary is true && !string.Equals(method, "GET", StringComparison.Ordinal))
+        {
+            return UnsupportedResponse(issues, serviceId, endpointId);
+        }
+
+        return (true, mediaTypes.Order(StringComparer.Ordinal).ToArray(), binary);
+    }
+
+    private static (bool Supported, IReadOnlyList<string> MediaTypes, bool? BinaryArtifact)
+        UnsupportedResponse(
+            ICollection<NyxIdMcpCatalogIssue> issues,
+            string serviceId,
+            string endpointId)
+    {
+        issues.Add(new NyxIdMcpCatalogIssue(
+            ExternalCapabilityDiscoveryDiagnosticCode.UnsupportedResponse,
+            "The endpoint response is outside the supported workflow contract subset.",
+            serviceId,
+            endpointId));
+        return (false, [], null);
     }
 
     private static ExternalWorkflowCapabilityDescriptor BuildDescriptor(
@@ -679,6 +756,12 @@ internal static class NyxIdMcpOperationCatalog
             ? text
             : null;
     }
+
+    private static bool IsCatalogDigest(string? value) =>
+        value is { Length: 71 } &&
+        value.StartsWith("sha256:", StringComparison.Ordinal) &&
+        value[7..].All(static character =>
+            character is >= '0' and <= '9' or >= 'a' and <= 'f');
 
     private static string? OptionalString(JsonElement owner, string name)
     {

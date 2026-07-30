@@ -67,12 +67,6 @@ public sealed class NyxIdServiceInstanceClient
             throw new InvalidOperationException("connected_service_inventory_unavailable");
     }
 
-    internal Task<string> GetSpecAsync(NyxIdServiceInstanceBinding binding, CancellationToken ct) =>
-        _client.GetProxyServiceOpenApiAsync(
-            binding.AccessToken,
-            binding.Instance.ProxySpecServiceId,
-            ct);
-
     internal async Task<NyxIdServiceInstanceBinding?> RevalidateAsync(
         NyxIdServiceInstanceBinding candidate,
         CancellationToken ct)
@@ -168,54 +162,10 @@ public sealed class NyxIdServiceInstanceClient
         };
     }
 
-    internal async Task<NyxIdServiceRequestResult> RequestAsync(
-        NyxIdServiceInstanceBinding candidate,
-        NyxIdServiceRequest request,
-        CancellationToken ct)
-    {
-        var current = await RevalidateAsync(candidate, ct);
-        if (current is null)
-            return RequestResult(candidate.Instance.UserServiceId, Error("identity_revalidation_failed"));
-        if (!NyxIdServiceRequestHeaderPolicy.TryBuild(
-                request.Headers,
-                request.HasJsonBody,
-                out var headers,
-                out var headerError))
-        {
-            return RequestResult(current.Instance.UserServiceId, Error(headerError!));
-        }
-
-        try
-        {
-            var response = await _client.ProxyExactServiceRequestAsync(
-                current.AccessToken,
-                current.Instance.RouteConstraint,
-                current.Instance.UserServiceId,
-                request.RelativePath,
-                request.Method,
-                request.Query.Select(static entry =>
-                    new KeyValuePair<string, string>(entry.Name, entry.Value)).ToArray(),
-                request.HasJsonBody ? request.JsonBody : null,
-                headers,
-                ct);
-            return RequestResult(current.Instance.UserServiceId, response);
-        }
-        catch (InvalidOperationException ex)
-        {
-            return RequestResult(current.Instance.UserServiceId, Error(ex.Message));
-        }
-    }
-
     private static NyxIdServiceMutationResult MutationResult(string userServiceId, string response) => new()
     {
         UserServiceId = userServiceId,
         Accepted = !IsErrorResponse(response),
-        ResponseJson = response,
-    };
-
-    private static NyxIdServiceRequestResult RequestResult(string userServiceId, string response) => new()
-    {
-        UserServiceId = userServiceId,
         ResponseJson = response,
     };
 
@@ -307,7 +257,6 @@ public sealed class NyxIdServiceInstanceClient
             routeConstraint.CatalogServiceId = catalogId;
         else
             routeConstraint.ServiceSlug = slug;
-        var proxySpecServiceId = ResolveProxySpecServiceId(item, id);
         var instance = new NyxIdServiceInstance
         {
             UserServiceId = id,
@@ -318,7 +267,6 @@ public sealed class NyxIdServiceInstanceClient
             IsActive = active.Value,
             CredentialSource = credentialSource,
             AccessTokenSource = tokenSource,
-            ProxySpecServiceId = proxySpecServiceId ?? string.Empty,
             RouteConstraint = routeConstraint,
             CredentialAllowed = credentialAllowed,
         };
@@ -328,31 +276,6 @@ public sealed class NyxIdServiceInstanceClient
         if (!string.IsNullOrWhiteSpace(nodeId))
             instance.NodeId = nodeId;
         return new NyxIdServiceInstanceBinding(instance, token);
-    }
-
-    private static string? ResolveProxySpecServiceId(JsonElement item, string userServiceId)
-    {
-        var openApiUrl = ReadString(item, "openapi_url");
-        if (!Uri.TryCreate(openApiUrl, UriKind.Absolute, out var uri) ||
-            (!string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) &&
-             !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)))
-        {
-            return null;
-        }
-
-        var segments = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        if (segments.Length < 4 ||
-            !string.Equals(segments[^1], "openapi.json", StringComparison.Ordinal) ||
-            !string.Equals(segments[^3], "services", StringComparison.Ordinal) ||
-            !string.Equals(segments[^4], "proxy", StringComparison.Ordinal))
-        {
-            return null;
-        }
-
-        var specServiceId = Uri.UnescapeDataString(segments[^2]);
-        return string.Equals(specServiceId, userServiceId, StringComparison.Ordinal)
-            ? specServiceId
-            : null;
     }
 
     private static bool TryReadCredentialSource(
@@ -407,7 +330,6 @@ public sealed class NyxIdServiceInstanceClient
         string.Equals(left.EndpointId, right.EndpointId, StringComparison.Ordinal) &&
         string.Equals(left.EndpointUrl, right.EndpointUrl, StringComparison.Ordinal) &&
         string.Equals(left.NodeId, right.NodeId, StringComparison.Ordinal) &&
-        string.Equals(left.ProxySpecServiceId, right.ProxySpecServiceId, StringComparison.Ordinal) &&
         Equals(left.RouteConstraint, right.RouteConstraint);
 
     private static string? ReadString(JsonElement item, string name) =>

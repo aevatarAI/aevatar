@@ -22,6 +22,9 @@ namespace Aevatar.AI.Tests;
 /// </summary>
 public sealed class NyxIdProxyToolAdmittedOperationTests
 {
+    private const string CatalogDigest =
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
     [Fact]
     public void ParametersSchema_ShouldDescribeProofBoundSlotsWithoutRequiringLegacyRouting()
     {
@@ -730,6 +733,8 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
     private static string McpConfig(AgentToolOperationAdmission admission) =>
         JsonSerializer.Serialize(new
         {
+            contract_version = "1.0",
+            catalog_digest = CatalogDigest,
             user_id = "nyx-user-alpha",
             services = new[]
             {
@@ -760,6 +765,15 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
                                 : SchemaJson(admission.RequestBody.Schema),
                             request_content_type = admission.RequestBody?.MediaType,
                             request_body_required = admission.RequestBody?.Required ?? false,
+                            response = new
+                            {
+                                content_types = admission.ResponsePolicy.MediaTypes,
+                                binary_artifact = admission.ResponsePolicy.FileArtifactAllowed
+                                    ? true
+                                    : admission.ResponsePolicy.TextAllowed
+                                        ? false
+                                        : (bool?)null,
+                            },
                         },
                     },
                 },

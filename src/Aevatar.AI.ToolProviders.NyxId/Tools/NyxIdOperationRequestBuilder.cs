@@ -464,7 +464,7 @@ internal static class NyxIdOperationRequestBuilder
                     $"header '{name}' must be a scalar value.");
                 return null;
             }
-            if (!NyxIdServiceRequestHeaderPolicy.IsValidWorkflowHeader(name, raw))
+            if (!NyxIdOperationHeaderPolicy.IsValidWorkflowHeader(name, raw))
             {
                 failure = new NyxIdOperationRequestFailure(
                     "NYXID_OPERATION_HEADER_INVALID",

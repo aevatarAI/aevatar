@@ -465,6 +465,7 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
         ExternalCapabilityDiscoveryDiagnosticCode.UnsupportedParameter => "NYXID_ENDPOINT_PARAMETER_UNSUPPORTED",
         ExternalCapabilityDiscoveryDiagnosticCode.UnsupportedRequestBody => "NYXID_ENDPOINT_BODY_UNSUPPORTED",
         ExternalCapabilityDiscoveryDiagnosticCode.UnsupportedSchema => "NYXID_ENDPOINT_SCHEMA_UNSUPPORTED",
+        ExternalCapabilityDiscoveryDiagnosticCode.UnsupportedResponse => "NYXID_ENDPOINT_RESPONSE_UNSUPPORTED",
         _ => "NYXID_ENDPOINT_CONTRACT_UNAVAILABLE",
     };
 
