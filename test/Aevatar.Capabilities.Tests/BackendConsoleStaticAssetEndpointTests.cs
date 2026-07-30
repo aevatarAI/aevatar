@@ -85,6 +85,141 @@ public sealed class BackendConsoleStaticAssetEndpointTests
     }
 
     [Fact]
+    public async Task AdminShell_AuditTrail_ShouldRenderCurrentContract()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name, nextName) {
+              const asyncStart = html.indexOf('async function ' + name + '(');
+              const syncStart = html.indexOf('function ' + name + '(');
+              const start = asyncStart !== -1 ? asyncStart : syncStart;
+              const nextStarts = [
+                html.indexOf('\nfunction ' + nextName + '(', start),
+                html.indexOf('\nasync function ' + nextName + '(', start)
+              ].filter(function(index) { return index !== -1; });
+              const end = nextStarts.length ? Math.min.apply(null, nextStarts) : -1;
+              assert.notEqual(start, -1, name + ' must exist in the served admin asset');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return html.slice(start, end);
+            }
+
+            const context = { assert };
+            vm.createContext(context);
+            vm.runInContext(`
+              var AUDIT_DATA = [], AUDIT_LOADED = false, AUDIT_LOADING = false;
+              var AUDIT_ERR = null, AUDIT_FORBIDDEN = false, AUDIT_CURSOR = null;
+              var AUDIT_HAS_MORE = false, AUDIT_WATERMARK = null;
+              var AUDIT_STATE = { cat: 'all', result: 'all', text: '' };
+              var response = {
+                records: [
+                  {
+                    id: 'audit-1',
+                    occurredAtUtc: '2026-07-30T03:26:31Z',
+                    lifecyclePhase: 'terminal',
+                    terminalOutcome: 'succeeded',
+                    operationKind: 'Workflow',
+                    operationName: 'workflow.run.completed',
+                    scopeId: 'scope-a',
+                    auditActorId: 'audit_actor:abc',
+                    identityKeyId: 'key-2026-07',
+                    target: { kind: 'workflow_run', id: 'run-1', displayName: 'Run One' },
+                    correlation: { correlationId: 'corr-1', workflowRunId: 'run-1' },
+                    provenance: { runId: 'run-1' }
+                  },
+                  {
+                    id: 'audit-2',
+                    occurredAtUtc: '2026-07-30T03:25:31Z',
+                    lifecyclePhase: 'accepted',
+                    terminalOutcome: null,
+                    operationKind: 'Api',
+                    operationName: 'scope.binding.upsert.attempted',
+                    scopeId: 'scope-a',
+                    auditActorId: 'audit_actor:abc',
+                    identityKeyId: 'key-2026-07',
+                    target: { kind: 'scope_binding', id: 'binding-1' },
+                    correlation: { correlationId: 'corr-2' },
+                    provenance: null
+                  }
+                ],
+                coverage: {
+                  continuationCursor: 'cursor-2',
+                  ingestionWatermark: '2026-07-30T03:26:30Z'
+                }
+              };
+              function adminJson() { return Promise.resolve(response); }
+              function auditBuildQuery() { return ''; }
+              function esc(value) {
+                return String(value == null ? '' : value)
+                  .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+                  .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+              }
+
+              ${functionSource('auditResultTag', 'auditActionCategory')}
+              ${functionSource('auditActionCategory', 'auditRerender')}
+              ${functionSource('auditRerender', 'auditAgo')}
+              ${functionSource('auditAgo', 'auditFmtTime')}
+              ${functionSource('auditFmtTime', 'auditBuildQuery')}
+              ${functionSource('auditApplyPage', 'loadAuditTrail')}
+              ${functionSource('loadAuditTrail', 'loadAuditMore')}
+              ${functionSource('auditFilteredRows', 'auditGate')}
+              ${functionSource('auditTable', 'auditPager')}
+            `, context);
+
+            vm.runInContext(`(async function() {
+              await loadAuditTrail();
+              assert.equal(AUDIT_CURSOR, 'cursor-2');
+              assert.equal(AUDIT_WATERMARK, '2026-07-30T03:26:30Z');
+
+              const table = auditTable();
+              assert.match(table, /workflow\.run\.completed/);
+              assert.match(table, /成功/);
+              assert.match(table, /已接受/);
+              assert.match(table, /workflow_run/);
+              assert.match(table, /run-1/);
+              assert.match(table, /corr-1/);
+              assert.doesNotMatch(table, />未知</);
+
+              AUDIT_STATE.cat = 'workflow';
+              AUDIT_STATE.result = 'succeeded';
+              const filtered = auditFilteredRows();
+              assert.equal(filtered.length, 1);
+              assert.equal(filtered[0].id, 'audit-1');
+            })()`, context).catch(function(error) {
+              console.error(error);
+              process.exitCode = 1;
+            });
+            """;
+
+        var startInfo = new ProcessStartInfo("node")
+        {
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        startInfo.ArgumentList.Add("--eval");
+        startInfo.ArgumentList.Add(script);
+
+        using var process = Process.Start(startInfo);
+        process.Should().NotBeNull("Node.js is required to execute the shipped admin audit behavior");
+        var outputTask = process!.StandardOutput.ReadToEndAsync();
+        var errorTask = process.StandardError.ReadToEndAsync();
+        await process.StandardInput.WriteAsync(html);
+        process.StandardInput.Close();
+        await process.WaitForExitAsync();
+        var output = await outputTask;
+        var error = await errorTask;
+
+        process.ExitCode.Should().Be(0, $"the audit contract regression should pass. stdout: {output} stderr: {error}");
+    }
+
+    [Fact]
     public async Task AdminShell_Channels_ShouldEmbedCanonicalSurfaceWithoutDuplicateMutations()
     {
         await using var app = await CreateAppAsync();

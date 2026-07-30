@@ -4214,7 +4214,7 @@ function viewVoice(){ return {html:suiteFrame('/voice','语音台')}; }
 /* ================= ⑩ 审计日志 Audit Trail —— /api/audit/trail =================
    真实接口（最新优先的 cursor 分页，无 totalCount）：scope 三态 —— mine（调用者自身 scope，默认）、
    all（平台管理员跨组织通配，后端 __all__ 分支）、custom（指定具体 scope id，跨 scope 需 admin）。
-   分类/结果筛选在前端对当前页做客户端过滤（接口未暴露 category query）。 */
+   分类/状态结果筛选在前端对当前页做客户端过滤（接口未暴露 category query）。 */
 var AUDIT_DATA=[];                  /* 已加载的记录行（累积，支持“加载更多”） */
 var AUDIT_LOADED=false, AUDIT_LOADING=false, AUDIT_ERR=null, AUDIT_FORBIDDEN=false;
 var AUDIT_CURSOR=null,              /* 下一页游标，null 表示无更多 */
@@ -4225,25 +4225,34 @@ var AUDIT_STATE={                   /* 筛选/分类 UI 态 */
   customScope:'',                   /* scope==='custom' 时填的具体 scope id */
   actor:'',                         /* auditActorId 精确过滤（服务端） */
   from:'', to:'',                   /* ISO 时间范围（服务端） */
-  cat:'all',                        /* 客户端分类：按 action 前缀/资源类型 */
-  outcome:'all',                    /* 客户端结果过滤：Success/Denied/Error/... */
-  text:''                           /* 客户端关键词（action/resource/id/correlation） */
+  cat:'all',                        /* 客户端分类：按 operation kind/name */
+  result:'all',                     /* 客户端状态/结果过滤：accepted/succeeded/failed/... */
+  text:''                           /* 客户端关键词（operation/target/correlation） */
 };
-/* outcome -> 渲染 tag 配色。后端返回 PascalCase 名字（Success/Denied/Error/Accepted/Cancelled）。 */
-function auditOutcomeTag(o){
+/* lifecycle / terminal outcome -> 渲染 tag 配色。后端返回稳定的小写 wire name。 */
+function auditResultTag(o){
   var map={
-    Success:['tag-success','成功'],
-    Accepted:['tag-running','已接受'],
-    Denied:['tag-failed','拒绝'],
-    Error:['tag-failed','错误'],
-    Cancelled:['tag-idle','取消']
+    succeeded:['tag-success','成功'],
+    accepted:['tag-running','已接受'],
+    running:['tag-running','进行中'],
+    waiting_approval:['tag-waiting','等待审批'],
+    failed:['tag-failed','失败'],
+    cancelled:['tag-idle','取消'],
+    timed_out:['tag-failed','超时'],
+    unspecified:['tag-idle','未指定']
   };
-  var m=map[o]||['tag-idle',o||'未知'];
+  var m=map[o]||['tag-idle',o||'未指定'];
   return '<span class="tag '+m[0]+'"><span class="tdot"></span>'+esc(m[1])+'</span>';
 }
-/* action 多为 `<name>.attempted` / `<name>` 形式；取前缀做分类桶。 */
-function auditActionCategory(action){
-  var a=(action||'').toLowerCase();
+function auditResult(r){ return (r&&r.terminalOutcome)||(r&&r.lifecyclePhase)||'unspecified'; }
+/* operationName 多为 `<name>.attempted` / `<name>` 形式；结合 typed operationKind 做分类桶。 */
+function auditActionCategory(operationName,operationKind){
+  var kind=(operationKind||'').toLowerCase();
+  if(kind==='authorization') return 'auth';
+  if(kind==='workflow') return 'workflow';
+  if(kind==='tool') return 'tool';
+  if(kind==='schedule') return 'schedule';
+  var a=(operationName||'').toLowerCase();
   if(a.indexOf('login')>=0||a.indexOf('auth')>=0||a.indexOf('token')>=0) return 'auth';
   if(a.indexOf('workflow')>=0||a.indexOf('run')>=0) return 'workflow';
   if(a.indexOf('skill')>=0||a.indexOf('invoke')>=0||a.indexOf('tool')>=0) return 'tool';
@@ -4264,13 +4273,16 @@ var AUDIT_CATEGORIES=[
   {k:'config',label:'配置变更'},
   {k:'other',label:'其他'}
 ];
-var AUDIT_OUTCOMES=[
-  {k:'all',label:'全部结果'},
-  {k:'Success',label:'成功'},
-  {k:'Accepted',label:'已接受'},
-  {k:'Denied',label:'拒绝'},
-  {k:'Error',label:'错误'},
-  {k:'Cancelled',label:'取消'}
+var AUDIT_RESULTS=[
+  {k:'all',label:'全部状态 / 结果'},
+  {k:'succeeded',label:'成功'},
+  {k:'accepted',label:'已接受'},
+  {k:'running',label:'进行中'},
+  {k:'waiting_approval',label:'等待审批'},
+  {k:'failed',label:'失败'},
+  {k:'cancelled',label:'取消'},
+  {k:'timed_out',label:'超时'},
+  {k:'unspecified',label:'未指定'}
 ];
 function auditRerender(){ if(typeof AUDIT_RERENDER==='function') AUDIT_RERENDER(); }
 function auditAgo(iso){
@@ -4314,16 +4326,23 @@ function auditBuildQuery(opts){
   q.push('take='+(opts.take||50));
   return q.length?('?'+q.join('&')):'';
 }
+function auditApplyPage(j,append){
+  var records=(j&&j.records)||[], coverage=(j&&j.coverage)||{};
+  if(append) Array.prototype.push.apply(AUDIT_DATA,records);
+  else AUDIT_DATA=records;
+  AUDIT_CURSOR=coverage.continuationCursor||null;
+  AUDIT_HAS_MORE=!!AUDIT_CURSOR;
+  AUDIT_WATERMARK=coverage.ingestionWatermark||AUDIT_WATERMARK;
+}
 /* 重置列表并重新加载（筛选条件变化、手动刷新时调用） */
 async function loadAuditTrail(){
   AUDIT_LOADING=true; AUDIT_ERR=null; AUDIT_FORBIDDEN=false;
-  AUDIT_DATA=[]; AUDIT_CURSOR=null; AUDIT_HAS_MORE=false;
+  AUDIT_DATA=[]; AUDIT_CURSOR=null; AUDIT_HAS_MORE=false; AUDIT_WATERMARK=null;
   auditRerender();
   try{
     var j=await adminJson('/api/audit/trail'+auditBuildQuery({take:50}));
     if(j&&j.forbidden){ AUDIT_FORBIDDEN=true; AUDIT_DATA=[]; }
-    else { AUDIT_DATA=(j&&j.records)||[]; AUDIT_CURSOR=(j&&j.nextCursor)||null;
-      AUDIT_HAS_MORE=!!AUDIT_CURSOR; AUDIT_WATERMARK=(j&&j.queryWatermark)||null; }
+    else auditApplyPage(j,false);
   }catch(e){
     if(e&&e.unauthorized){ AUDIT_LOADING=false; return; }
     AUDIT_ERR=(e&&(e.body||e.message))||'审计日志加载失败';
@@ -4331,29 +4350,26 @@ async function loadAuditTrail(){
   }
   AUDIT_LOADED=true; AUDIT_LOADING=false; auditRerender();
 }
-/* “加载更多”：用上一页返回的 nextCursor 继续取下一页，追加到 AUDIT_DATA */
+/* “加载更多”：用上一页 coverage.continuationCursor 继续取下一页，追加到 AUDIT_DATA */
 async function loadAuditMore(){
   if(!AUDIT_CURSOR||AUDIT_LOADING) return;
   AUDIT_LOADING=true; auditRerender();
   try{
     var j=await adminJson('/api/audit/trail'+auditBuildQuery({take:50,cursor:AUDIT_CURSOR}));
     if(j&&j.forbidden){ AUDIT_FORBIDDEN=true; }
-    else {
-      var more=(j&&j.records)||[];
-      Array.prototype.push.apply(AUDIT_DATA,more);
-      AUDIT_CURSOR=(j&&j.nextCursor)||null; AUDIT_HAS_MORE=!!AUDIT_CURSOR;
-    }
+    else auditApplyPage(j,true);
   }catch(e){ if(!(e&&e.unauthorized)){ AUDIT_ERR=(e&&(e.body||e.message))||'加载更多失败'; } }
   AUDIT_LOADING=false; auditRerender();
 }
-/* 客户端分类/结果/关键词过滤当前已加载记录 */
+/* 客户端分类/状态结果/关键词过滤当前已加载记录 */
 function auditFilteredRows(){
-  var cat=AUDIT_STATE.cat, out=AUDIT_STATE.outcome, text=(AUDIT_STATE.text||'').trim().toLowerCase();
+  var cat=AUDIT_STATE.cat, result=AUDIT_STATE.result, text=(AUDIT_STATE.text||'').trim().toLowerCase();
   return AUDIT_DATA.filter(function(r){
-    if(cat!=='all' && auditActionCategory(r.action)!==cat) return false;
-    if(out!=='all' && r.outcome!==out) return false;
+    var target=r.target||{}, correlation=r.correlation||{};
+    if(cat!=='all' && auditActionCategory(r.operationName,r.operationKind)!==cat) return false;
+    if(result!=='all' && auditResult(r)!==result) return false;
     if(text){
-      var hay=[r.action,r.resourceType,r.resourceId,r.correlationId,r.auditActorId,r.id].join(' ').toLowerCase();
+      var hay=[r.operationName,target.kind,target.id,correlation.correlationId,r.auditActorId,r.id].join(' ').toLowerCase();
       if(hay.indexOf(text)<0) return false;
     }
     return true;
@@ -4388,8 +4404,8 @@ function auditFilters(){
   var catButtons=AUDIT_CATEGORIES.map(function(c){
     return '<button class="chip'+(AUDIT_STATE.cat===c.k?' on':'')+'" data-act="auditCat" data-cat="'+c.k+'">'+esc(c.label)+'</button>';
   }).join('');
-  var outcomeButtons=AUDIT_OUTCOMES.map(function(o){
-    return '<button class="chip'+(AUDIT_STATE.outcome===o.k?' on':'')+'" data-act="auditOutcome" data-outcome="'+o.k+'">'+esc(o.label)+'</button>';
+  var resultButtons=AUDIT_RESULTS.map(function(o){
+    return '<button class="chip'+(AUDIT_STATE.result===o.k?' on':'')+'" data-act="auditResult" data-result="'+o.k+'">'+esc(o.label)+'</button>';
   }).join('');
   return '<div class="audit-filters">'+
     scopeToggle+scopeInput+
@@ -4400,8 +4416,8 @@ function auditFilters(){
     '<button class="btn" data-act="auditReset">重置</button>'+
     '</div>'+
     '<div class="audit-chips"><div class="chip-group"><span class="chip-label">分类</span>'+catButtons+'</div></div>'+
-    '<div class="audit-chips"><div class="chip-group"><span class="chip-label">结果</span>'+outcomeButtons+'<div class="grow"></div>'+
-      '<input class="audit-search" type="search" data-act="auditText" placeholder="筛选当前页（action/资源/correlation）…" value="'+esc(AUDIT_STATE.text)+'"></div></div>';
+    '<div class="audit-chips"><div class="chip-group"><span class="chip-label">状态 / 结果</span>'+resultButtons+'<div class="grow"></div>'+
+      '<input class="audit-search" type="search" data-act="auditText" placeholder="筛选当前页（操作/目标/correlation）…" value="'+esc(AUDIT_STATE.text)+'"></div></div>';
 }
 function auditWatermarkNote(){
   if(!AUDIT_WATERMARK) return '';
@@ -4414,23 +4430,24 @@ function auditTable(){
     return '<div class="empty">'+ICON.empty+'<div class="et">暂无审计记录</div>'+(msg?'<div class="es">'+esc(msg)+'</div>':'')+'</div>';
   }
   var body=rows.map(function(r){
-    var cat=auditActionCategory(r.action);
+    var target=r.target||{}, correlation=r.correlation||{};
+    var cat=auditActionCategory(r.operationName,r.operationKind);
     var catLabel=(AUDIT_CATEGORIES.filter(function(c){return c.k===cat;})[0]||{label:cat}).label;
-    var targetTitle=[r.resourceType,r.resourceId].filter(Boolean).join(' / ');
-    var res=(r.resourceType||r.resourceId)
-      ? '<span class="audit-target" title="'+esc(targetTitle)+'"><span class="audit-res-kind">'+esc(r.resourceType||'—')+'</span><span class="audit-res-id">'+esc(r.resourceId||'')+'</span></span>'
+    var targetTitle=[target.kind,target.id].filter(Boolean).join(' / ');
+    var res=(target.kind||target.id)
+      ? '<span class="audit-target" title="'+esc(targetTitle)+'"><span class="audit-res-kind">'+esc(target.kind||'—')+'</span><span class="audit-res-id">'+esc(target.id||'')+'</span></span>'
       : '<span class="faint">—</span>';
     return '<tr data-act="auditRow" data-id="'+esc(r.id)+'">'+
       '<td><div class="audit-time"><b class="num">'+esc(auditFmtTime(r.occurredAtUtc))+'</b><span class="audit-ago faint">'+esc(auditAgo(r.occurredAtUtc))+'</span></div></td>'+
-      '<td>'+auditOutcomeTag(r.outcome)+'</td>'+
-      '<td><div class="audit-action"><b>'+esc(r.action||'—')+'</b><span class="audit-cat chip">'+esc(catLabel)+'</span></div></td>'+
+      '<td>'+auditResultTag(auditResult(r))+'</td>'+
+      '<td><div class="audit-action"><b>'+esc(r.operationName||'—')+'</b><span class="audit-cat chip">'+esc(catLabel)+'</span></div></td>'+
       '<td>'+res+'</td>'+
       '<td><span class="audit-actor mono" title="'+esc(r.auditActorId||'')+'">'+esc(r.auditActorId||'—')+'</span><div class="audit-actor-sub faint" title="'+esc(r.identityKeyId||'')+'">'+esc(r.identityKeyId||'')+'</div></td>'+
-      '<td><span class="audit-corr mono" title="'+esc(r.correlationId||'')+'">'+esc(r.correlationId||'—')+'</span></td>'+
+      '<td><span class="audit-corr mono" title="'+esc(correlation.correlationId||'')+'">'+esc(correlation.correlationId||'—')+'</span></td>'+
     '</tr>';
   }).join('');
   return '<div class="protable-wrap audit-table-wrap"><table class="protable audit-table"><thead><tr>'+
-    '<th class="col-time">时间</th><th class="col-result">结果</th><th class="col-action">操作</th><th class="col-target">目标资源</th><th class="col-actor">操作者</th><th class="col-corr">关联 ID</th>'+
+    '<th class="col-time">时间</th><th class="col-result">状态 / 结果</th><th class="col-action">操作</th><th class="col-target">目标资源</th><th class="col-actor">操作者</th><th class="col-corr">Correlation ID</th>'+
     '</tr></thead><tbody>'+body+'</tbody></table></div>';
 }
 function auditPager(){
@@ -4451,7 +4468,7 @@ function auditRoot(){
     auditFilters()+
     auditTable()+
     auditPager()+
-    '<p class="chan-note">游标分页：无总数；按操作时间倒序。“加载更多”沿 nextCursor 追加。分类/结果/关键词为当前已加载数据的客户端筛选。</p>'+
+    '<p class="chan-note">游标分页：无总数；按操作时间倒序。“加载更多”沿 continuationCursor 追加。分类/状态结果/关键词为当前已加载数据的客户端筛选。</p>'+
   '</div>';
 }
 function viewAudit(){
@@ -4466,28 +4483,25 @@ function bindAudit(root){
   function detailFor(id){
     var r=AUDIT_DATA.filter(function(x){return x.id===id;})[0];
     if(!r) return null;
-    var cat=auditActionCategory(r.action);
+    var target=r.target||{}, correlation=r.correlation||{}, provenance=r.provenance||{};
+    var cat=auditActionCategory(r.operationName,r.operationKind);
     var catLabel=(AUDIT_CATEGORIES.filter(function(c){return c.k===cat;})[0]||{label:cat}).label;
-    var runCandidate='';
-    var rid=r.resourceId||'', cid=r.correlationId||'';
-    /* Prefer explicit run-shaped resource ids; never invent identity from prefixes beyond simple contains. */
-    if(rid && (/:run:|workflow\.run|\/runs\//i.test(rid) || /run/i.test(r.resourceType||''))) runCandidate=rid;
-    else if(cid && /:run:/i.test(cid)) runCandidate=cid;
+    var runCandidate=provenance.runId||correlation.workflowRunId||'';
     var runBtn=runCandidate
       ? '<div class="kv-row"><span class="kk">关联运行</span><span class="vv"><button class="ibtn" style="height:26px" data-act="auditOpenRun" data-run="'+esc(runCandidate)+'">打开 run</button></span></div>'
       : '';
     return '<div class="kv">'+
       '<div class="kv-row"><span class="kk">记录 ID</span><span class="vv">'+esc(r.id)+'</span></div>'+
       '<div class="kv-row"><span class="kk">发生时间</span><span class="vv sans">'+esc(auditFmtTime(r.occurredAtUtc))+' <span class="faint">('+esc(auditAgo(r.occurredAtUtc))+')</span></span></div>'+
-      '<div class="kv-row"><span class="kk">操作</span><span class="vv sans">'+esc(r.action||'—')+'</span></div>'+
+      '<div class="kv-row"><span class="kk">操作</span><span class="vv sans">'+esc(r.operationName||'—')+'</span></div>'+
       '<div class="kv-row"><span class="kk">分类（前端推导）</span><span class="vv sans">'+esc(catLabel)+'</span></div>'+
-      '<div class="kv-row"><span class="kk">结果</span><span class="vv sans">'+auditOutcomeTag(r.outcome)+'</span></div>'+
+      '<div class="kv-row"><span class="kk">状态 / 结果</span><span class="vv sans">'+auditResultTag(auditResult(r))+'</span></div>'+
       '<div class="kv-row"><span class="kk">组织 scope</span><span class="vv">'+esc(r.scopeId||'—')+'</span></div>'+
       '<div class="kv-row"><span class="kk">操作者</span><span class="vv">'+esc(r.auditActorId||'—')+'</span></div>'+
       '<div class="kv-row"><span class="kk">身份 key</span><span class="vv">'+esc(r.identityKeyId||'—')+'</span></div>'+
-      '<div class="kv-row"><span class="kk">资源类型</span><span class="vv sans">'+esc(r.resourceType||'—')+'</span></div>'+
-      '<div class="kv-row"><span class="kk">资源 ID</span><span class="vv">'+esc(r.resourceId||'—')+'</span></div>'+
-      '<div class="kv-row"><span class="kk">关联 ID</span><span class="vv">'+esc(r.correlationId||'—')+'</span></div>'+
+      '<div class="kv-row"><span class="kk">资源类型</span><span class="vv sans">'+esc(target.kind||'—')+'</span></div>'+
+      '<div class="kv-row"><span class="kk">资源 ID</span><span class="vv">'+esc(target.id||'—')+'</span></div>'+
+      '<div class="kv-row"><span class="kk">Correlation ID</span><span class="vv">'+esc(correlation.correlationId||'—')+'</span></div>'+
       runBtn+
       '<div class="kv-row"><span class="kk" style="align-self:center">操作者 ID</span><span class="vv"><button class="ibtn" data-act="auditCopy" data-copy="'+esc(r.auditActorId||'')+'" style="height:24px">复制 auditActorId</button></span></div>'+
     '</div>';
@@ -4497,7 +4511,7 @@ function bindAudit(root){
     if(a==='auditReload'){
       AUDIT_LOADED=false; loadAuditTrail();
     } else if(a==='auditReset'){
-      AUDIT_STATE={scope:'mine',customScope:'',actor:'',from:'',to:'',cat:'all',outcome:'all',text:''};
+      AUDIT_STATE={scope:'mine',customScope:'',actor:'',from:'',to:'',cat:'all',result:'all',text:''};
       AUDIT_LOADED=false; loadAuditTrail();
     } else if(a==='auditMore'){
       loadAuditMore();
@@ -4510,8 +4524,8 @@ function bindAudit(root){
       else { AUDIT_LOADED=false; loadAuditTrail(); }
     } else if(a==='auditCat'){
       AUDIT_STATE.cat=act.getAttribute('data-cat'); re();
-    } else if(a==='auditOutcome'){
-      AUDIT_STATE.outcome=act.getAttribute('data-outcome'); re();
+    } else if(a==='auditResult'){
+      AUDIT_STATE.result=act.getAttribute('data-result'); re();
     } else if(a==='auditRow'){
       var id=act.getAttribute('data-id');
       openInspector(detailFor(id),{title:'审计记录详情',sub:id,drawerKind:'audit'});
