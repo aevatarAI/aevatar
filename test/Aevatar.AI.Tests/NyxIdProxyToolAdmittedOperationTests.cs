@@ -189,6 +189,38 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
     }
 
     [Theory]
+    [InlineData(
+        AgentToolOperationParameterLocation.Query,
+        AgentToolOperationValueKind.Integer,
+        """{"path_params":{"event_id":"evt-alpha"},"query":{"notify":7}}""",
+        "NYXID_OPERATION_QUERY_PARAMETER_INVALID")]
+    [InlineData(
+        AgentToolOperationParameterLocation.Header,
+        AgentToolOperationValueKind.Boolean,
+        """{"path_params":{"event_id":"evt-alpha"},"headers":{"If-Match":true}}""",
+        "NYXID_OPERATION_HEADER_INVALID")]
+    public void AdmittedRequestBuilder_ShouldRejectNonStringAuthoredQueryOrHeader_WhenSchemaMatchesScalar(
+        AgentToolOperationParameterLocation location,
+        AgentToolOperationValueKind kind,
+        string argumentsJson,
+        string errorCode)
+    {
+        var admission = AuthoredRequestAdmission();
+        admission = admission with
+        {
+            Parameters = admission.Parameters.Select(parameter =>
+                parameter.Location == location
+                    ? parameter with { Schema = ScalarSchema(kind) }
+                    : parameter).ToArray(),
+        };
+
+        var result = NyxIdAdmittedRequestBuilder.Build(admission, argumentsJson);
+
+        result.Succeeded.Should().BeFalse();
+        result.Failure!.Code.Should().Be(errorCode);
+    }
+
+    [Theory]
     [InlineData("text")]
     [InlineData("file_artifact")]
     public async Task ExecuteAsync_ShouldRejectProoflessManagedWorkflowBeforeDownstreamWork(
