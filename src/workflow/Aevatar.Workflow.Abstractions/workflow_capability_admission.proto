@@ -192,6 +192,12 @@ message NyxIdExplicitRequestGrant {
   repeated ExternalCapabilityExecutionMode allowed_execution_modes = 7;
 }
 
+message NyxIdExplicitRequestConfirmation {
+  string call_site_id = 1;
+  string request_contract_digest = 2;
+  NyxIdOperationRisk attested_risk = 3;
+}
+
 enum NyxIdOperationParameterLocation {
   NYX_ID_OPERATION_PARAMETER_LOCATION_UNSPECIFIED = 0;
   NYX_ID_OPERATION_PARAMETER_LOCATION_PATH = 1;

@@ -55,13 +55,15 @@ public sealed class WorkflowExternalCapabilityAdmissionRequest
         string workflowYaml,
         IReadOnlyDictionary<string, string>? inlineWorkflowYamls,
         string sourceKind,
-        ExternalCapabilityExecutionMode executionMode)
+        ExternalCapabilityExecutionMode executionMode,
+        IEnumerable<NyxIdExplicitRequestConfirmation>? explicitRequestConfirmations = null)
     {
         Access = access ?? throw new ArgumentNullException(nameof(access));
         WorkflowYaml = workflowYaml ?? string.Empty;
         InlineWorkflowYamls = inlineWorkflowYamls ?? new Dictionary<string, string>();
         SourceKind = sourceKind?.Trim() ?? string.Empty;
         ExecutionMode = executionMode;
+        ExplicitRequestConfirmations = CloneConfirmations(explicitRequestConfirmations);
     }
 
     public ExternalWorkflowCapabilityAccessContext Access { get; }
@@ -74,13 +76,16 @@ public sealed class WorkflowExternalCapabilityAdmissionRequest
 
     public ExternalCapabilityExecutionMode ExecutionMode { get; }
 
+    public IReadOnlyList<NyxIdExplicitRequestConfirmation> ExplicitRequestConfirmations { get; }
+
     public IReadOnlyList<string>? WorkflowYamls { get; private init; }
 
     public static WorkflowExternalCapabilityAdmissionRequest FromWorkflowYamls(
         ExternalWorkflowCapabilityAccessContext access,
         IReadOnlyList<string> workflowYamls,
         string sourceKind,
-        ExternalCapabilityExecutionMode executionMode)
+        ExternalCapabilityExecutionMode executionMode,
+        IEnumerable<NyxIdExplicitRequestConfirmation>? explicitRequestConfirmations = null)
     {
         ArgumentNullException.ThrowIfNull(workflowYamls);
         if (workflowYamls.Count == 0)
@@ -91,7 +96,8 @@ public sealed class WorkflowExternalCapabilityAdmissionRequest
             string.Empty,
             new Dictionary<string, string>(),
             sourceKind,
-            executionMode)
+            executionMode,
+            explicitRequestConfirmations)
         {
             WorkflowYamls = workflowYamls.ToArray(),
         };
@@ -99,6 +105,14 @@ public sealed class WorkflowExternalCapabilityAdmissionRequest
 
     public override string ToString() =>
         $"{nameof(WorkflowExternalCapabilityAdmissionRequest)} {{ Access = {Access}, SourceKind = {SourceKind}, ExecutionMode = {ExecutionMode}, Definition = [REDACTED] }}";
+
+    private static IReadOnlyList<NyxIdExplicitRequestConfirmation> CloneConfirmations(
+        IEnumerable<NyxIdExplicitRequestConfirmation>? confirmations) =>
+        confirmations?.Select(static confirmation =>
+                confirmation?.Clone() ?? throw new ArgumentException(
+                    "Explicit request confirmations cannot contain null values.",
+                    nameof(confirmations)))
+            .ToArray() ?? [];
 }
 
 public sealed class PersistedWorkflowCapabilityAdmissionRequest
