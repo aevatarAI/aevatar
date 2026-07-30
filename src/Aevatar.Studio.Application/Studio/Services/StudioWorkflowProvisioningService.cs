@@ -105,10 +105,15 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         var workflowYaml = NormalizeRequired(request.WorkflowYaml, nameof(request.WorkflowYaml));
 
         var suppliedAdmission = request.CapabilityAdmission;
+        var callerId = suppliedAdmission?.CallerId ?? string.Empty;
+        var callerBearerToken = suppliedAdmission?.NyxIdCallerBearerToken;
+        var organizationBearerToken = suppliedAdmission?.NyxIdOrganizationBearerToken;
+        var existingPlan = suppliedAdmission?.ExistingPlan?.Clone();
+        var explicitRequestConfirmations = suppliedAdmission?.ExplicitRequestConfirmations ?? [];
         var executionMode = ShouldSchedule(request)
             ? ExternalCapabilityExecutionMode.Durable
             : ExternalCapabilityExecutionMode.Interactive;
-        var capabilityAdmissionPlan = suppliedAdmission?.ExistingPlan is { } existingPlan
+        var capabilityAdmissionPlan = existingPlan is not null
             ? await _capabilityAdmissionService.RevalidatePersistedAsync(
                 new PersistedWorkflowCapabilityAdmissionRequest(
                     existingPlan,
@@ -121,20 +126,19 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
                 new WorkflowExternalCapabilityAdmissionRequest(
                 new ExternalWorkflowCapabilityAccessContext(
                     normalizedScopeId,
-                    suppliedAdmission?.CallerId ?? string.Empty,
-                    suppliedAdmission?.NyxIdCallerBearerToken,
-                    suppliedAdmission?.NyxIdOrganizationBearerToken),
+                    callerId,
+                    callerBearerToken,
+                    organizationBearerToken),
                 workflowYaml,
                 new Dictionary<string, string>(),
                 "studio_workflow_provisioning",
-                executionMode),
+                executionMode,
+                explicitRequestConfirmations),
                 ct);
         var trustedAdmission = new WorkflowCapabilityAdmissionContext(
-            suppliedAdmission?.CallerId ?? string.Empty,
-            suppliedAdmission?.NyxIdCallerBearerToken,
-            suppliedAdmission?.NyxIdOrganizationBearerToken,
-            executionMode,
-            capabilityAdmissionPlan);
+            callerId,
+            executionMode: executionMode,
+            existingPlan: capabilityAdmissionPlan);
 
         // Provision identity: one (scope, team, display name) tuple owns exactly
         // one member + workflow id + schedule, so retries converge on the same

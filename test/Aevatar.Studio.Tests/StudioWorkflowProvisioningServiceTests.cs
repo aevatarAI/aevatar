@@ -8,6 +8,7 @@ using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Application.Studio.Services;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
@@ -55,6 +56,108 @@ public sealed class StudioWorkflowProvisioningServiceTests
 
     private static ProvisionWorkflowCallerCredential Caller =>
         new(Platform: "nyxid", ExternalUserId: "user-42", Scope: "proxy", Tenant: "tenant-1");
+
+    [Fact]
+    public async Task ProvisionAsync_WithMatchingExplicitConfirmation_ShouldAdmitBeforeStudioMutation()
+    {
+        var member = NewMemberService();
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var admission = StudioExplicitRequestAdmissionTestKit.CreateAdmissionService();
+        var sut = NewService(member, schedule, admission);
+
+        await sut.ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest("Monitor", StudioExplicitRequestAdmissionTestKit.WorkflowYaml)
+            {
+                TeamId = TeamId,
+                CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(
+                    [StudioExplicitRequestAdmissionTestKit.MatchingConfirmation()],
+                    ExternalCapabilityExecutionMode.Durable),
+            });
+
+        admission.Requests.Should().ContainSingle()
+            .Which.ExplicitRequestConfirmations.Should().ContainSingle();
+        var plan = member.BindRequest!.Workflow!.CapabilityAdmissionPlan;
+        plan.Should().NotBeNull();
+        plan!.InvocationAdmissions.Should().ContainSingle()
+            .Which.NyxIdExplicitRequestGrant.GrantorOwnerSubject.Should()
+            .Be(StudioExplicitRequestAdmissionTestKit.CallerId);
+        member.BindRequest.CapabilityAdmission!.NyxIdCallerBearerToken.Should().BeNull();
+        member.BindRequest.CapabilityAdmission.ExplicitRequestConfirmations.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("missing", "NYXID_EXPLICIT_REQUEST_GRANT_REQUIRED")]
+    [InlineData("unknown", "NYXID_EXPLICIT_REQUEST_CONFIRMATION_CALL_SITE_MISMATCH")]
+    [InlineData("duplicate", "NYXID_EXPLICIT_REQUEST_CONFIRMATION_CALL_SITE_MISMATCH")]
+    [InlineData("stale_digest", "NYXID_EXPLICIT_REQUEST_CONFIRMATION_DIGEST_MISMATCH")]
+    [InlineData("stale_risk", "NYXID_EXPLICIT_REQUEST_CONFIRMATION_RISK_MISMATCH")]
+    public async Task ProvisionAsync_WithInvalidExplicitConfirmation_ShouldMutateNothing(
+        string scenario,
+        string expectedCode)
+    {
+        var member = NewMemberService();
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var admission = StudioExplicitRequestAdmissionTestKit.CreateAdmissionService();
+        var sut = NewService(member, schedule, admission);
+
+        var action = () => sut.ProvisionAsync(
+            "scope-studio-alpha",
+            Caller,
+            new ProvisionWorkflowRequest("Monitor", StudioExplicitRequestAdmissionTestKit.WorkflowYaml)
+            {
+                TeamId = "team-alpha",
+                CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(
+                    StudioExplicitRequestAdmissionTestKit.Confirmations(scenario),
+                    ExternalCapabilityExecutionMode.Durable),
+            });
+
+        var exception = await action.Should()
+            .ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
+        exception.Which.Readiness.Blockers.Should().ContainSingle()
+            .Which.Code.Should().Be(expectedCode);
+        member.GetCallCount.Should().Be(0);
+        member.CreateInvoked.Should().BeFalse();
+        member.BindRequest.Should().BeNull();
+        schedule.Ensured.Should().BeFalse();
+        schedule.LastCreateRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_WithExistingPlan_ShouldOnlyRevalidateWithoutFreshConfirmation()
+    {
+        var admission = StudioExplicitRequestAdmissionTestKit.CreateAdmissionService();
+        var plan = await admission.AdmitAsync(new WorkflowExternalCapabilityAdmissionRequest(
+            new ExternalWorkflowCapabilityAccessContext(
+                "scope-studio-alpha",
+                StudioExplicitRequestAdmissionTestKit.CallerId,
+                StudioExplicitRequestAdmissionTestKit.CallerBearer),
+            StudioExplicitRequestAdmissionTestKit.WorkflowYaml,
+            new Dictionary<string, string>(),
+            "test_prepare_plan",
+            ExternalCapabilityExecutionMode.Durable,
+            [StudioExplicitRequestAdmissionTestKit.MatchingConfirmation()]));
+        admission.Requests.Clear();
+        var member = NewMemberService();
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var sut = NewService(member, schedule, admission);
+
+        await sut.ProvisionAsync(
+            "scope-studio-alpha",
+            Caller,
+            new ProvisionWorkflowRequest("Monitor", StudioExplicitRequestAdmissionTestKit.WorkflowYaml)
+            {
+                TeamId = "team-alpha",
+                CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(
+                    existingPlan: plan,
+                    executionMode: ExternalCapabilityExecutionMode.Durable),
+            });
+
+        admission.Requests.Should().BeEmpty();
+        admission.PersistedRequests.Should().ContainSingle();
+        member.BindRequest.Should().NotBeNull();
+    }
 
     [Fact]
     public async Task ProvisionAsync_RejectsMissingTeamId_BeforeAdmissionOrProvisioning()
@@ -763,7 +866,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
     private static StudioWorkflowProvisioningService NewService(
         RecordingMemberService member,
         RecordingScheduleService schedule,
-        StudioWorkflowCapabilityAdmissionTestService admission) =>
+        IWorkflowExternalCapabilityAdmissionService admission) =>
         NewService(member, schedule, admission, out _);
 
     private static StudioWorkflowProvisioningService NewService(
@@ -775,7 +878,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
     private static StudioWorkflowProvisioningService NewService(
         RecordingMemberService member,
         RecordingScheduleService schedule,
-        StudioWorkflowCapabilityAdmissionTestService admission,
+        IWorkflowExternalCapabilityAdmissionService admission,
         out FakeTimeProvider time)
     {
         time = new FakeTimeProvider();

@@ -37,9 +37,14 @@ public sealed class StudioMemberWorkflowBindingPort : IStudioMemberWorkflowBindi
         ArgumentNullException.ThrowIfNull(request);
 
         var suppliedAdmission = request.CapabilityAdmission;
+        var callerId = suppliedAdmission?.CallerId ?? string.Empty;
+        var callerBearerToken = suppliedAdmission?.NyxIdCallerBearerToken;
+        var organizationBearerToken = suppliedAdmission?.NyxIdOrganizationBearerToken;
+        var existingPlan = suppliedAdmission?.ExistingPlan?.Clone();
+        var explicitRequestConfirmations = suppliedAdmission?.ExplicitRequestConfirmations ?? [];
         var executionMode = suppliedAdmission?.ExecutionMode
             ?? ExternalCapabilityExecutionMode.Interactive;
-        var capabilityAdmissionPlan = suppliedAdmission?.ExistingPlan is { } existingPlan
+        var capabilityAdmissionPlan = existingPlan is not null
             ? await _capabilityAdmissionService.RevalidatePersistedAsync(
                 new PersistedWorkflowCapabilityAdmissionRequest(
                     existingPlan,
@@ -52,20 +57,19 @@ public sealed class StudioMemberWorkflowBindingPort : IStudioMemberWorkflowBindi
                 new WorkflowExternalCapabilityAdmissionRequest(
                 new ExternalWorkflowCapabilityAccessContext(
                     request.ScopeId,
-                    suppliedAdmission?.CallerId ?? string.Empty,
-                    suppliedAdmission?.NyxIdCallerBearerToken,
-                    suppliedAdmission?.NyxIdOrganizationBearerToken),
+                    callerId,
+                    callerBearerToken,
+                    organizationBearerToken),
                 request.WorkflowYaml,
                 new Dictionary<string, string>(),
                 "studio_member_workflow_binding",
-                executionMode),
+                executionMode,
+                explicitRequestConfirmations),
                 ct);
         var trustedAdmission = new WorkflowCapabilityAdmissionContext(
-            suppliedAdmission?.CallerId ?? string.Empty,
-            suppliedAdmission?.NyxIdCallerBearerToken,
-            suppliedAdmission?.NyxIdOrganizationBearerToken,
-            executionMode,
-            capabilityAdmissionPlan);
+            callerId,
+            executionMode: executionMode,
+            existingPlan: capabilityAdmissionPlan);
 
         try
         {

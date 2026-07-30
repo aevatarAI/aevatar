@@ -106,7 +106,11 @@ public sealed class StudioMemberService : IStudioMemberService
         if (request.Workflow is { } workflow)
         {
             var suppliedAdmission = request.CapabilityAdmission;
-            var existingPlan = workflow.CapabilityAdmissionPlan ?? suppliedAdmission?.ExistingPlan;
+            var callerId = suppliedAdmission?.CallerId ?? string.Empty;
+            var callerBearerToken = suppliedAdmission?.NyxIdCallerBearerToken;
+            var organizationBearerToken = suppliedAdmission?.NyxIdOrganizationBearerToken;
+            var existingPlan = (workflow.CapabilityAdmissionPlan ?? suppliedAdmission?.ExistingPlan)?.Clone();
+            var explicitRequestConfirmations = suppliedAdmission?.ExplicitRequestConfirmations ?? [];
             var executionMode = suppliedAdmission?.ExecutionMode
                 ?? ExternalCapabilityExecutionMode.Interactive;
             var capabilityAdmissionPlan = existingPlan is not null
@@ -121,15 +125,17 @@ public sealed class StudioMemberService : IStudioMemberService
                     WorkflowExternalCapabilityAdmissionRequest.FromWorkflowYamls(
                     new ExternalWorkflowCapabilityAccessContext(
                         normalizedScopeId,
-                        suppliedAdmission?.CallerId ?? string.Empty,
-                        suppliedAdmission?.NyxIdCallerBearerToken,
-                        suppliedAdmission?.NyxIdOrganizationBearerToken),
+                        callerId,
+                        callerBearerToken,
+                        organizationBearerToken),
                     workflow.WorkflowYamls,
                     "studio_member_binding_run",
-                    executionMode),
+                    executionMode,
+                    explicitRequestConfirmations),
                     ct);
             request = request with
             {
+                CapabilityAdmission = null,
                 Workflow = workflow with
                 {
                     CapabilityAdmissionPlan = capabilityAdmissionPlan,
