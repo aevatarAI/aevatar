@@ -23,6 +23,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
     private const string ListTeamsToolName = "aevatar_list_teams";
     private const string GetTeamToolName = "aevatar_get_team";
     private const string CreateMemberToolName = "aevatar_create_member";
+    private const string CreateMemberWorkflowDraftToolName = "aevatar_create_member_workflow_draft";
     private const string ListMembersToolName = "aevatar_list_members";
     private const string GetMemberToolName = "aevatar_get_member";
     private const string ListWorkflowsToolName = "aevatar_list_workflows";
@@ -73,6 +74,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         services.AddSingleton<IStudioTeamProvisioningPort, RecordingTeamProvisioningPort>();
         services.AddSingleton<IStudioTeamQueryPort, RecordingTeamQueryPort>();
         services.AddSingleton<IStudioMemberProvisioningPort, RecordingMemberProvisioningPort>();
+        services.AddSingleton<IStudioMemberWorkflowDraftProvisioningPort, RecordingMemberWorkflowDraftProvisioningPort>();
         services.AddSingleton<IStudioMemberQueryPort, RecordingMemberQueryPort>();
         services.AddSingleton<IStudioMemberAutomationQueryPort, RecordingMemberAutomationQueryPort>();
         services.AddSingleton<IStudioMemberWorkflowBindingPort, RecordingMemberWorkflowBindingPort>();
@@ -93,6 +95,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         toolNames.Should().Contain(ListTeamsToolName);
         toolNames.Should().Contain(GetTeamToolName);
         toolNames.Should().Contain(CreateMemberToolName);
+        toolNames.Should().Contain(CreateMemberWorkflowDraftToolName);
         toolNames.Should().Contain(ListMembersToolName);
         toolNames.Should().Contain(GetMemberToolName);
         toolNames.Should().Contain(ListWorkflowsToolName);
@@ -2333,6 +2336,15 @@ public sealed class ProvisionWorkflowScheduleToolTests
                 TeamId = request.TeamId,
             });
         }
+    }
+
+    private sealed class RecordingMemberWorkflowDraftProvisioningPort :
+        IStudioMemberWorkflowDraftProvisioningPort
+    {
+        public Task<StudioMemberWorkflowDraftProvisioningResult> SaveAsync(
+            StudioMemberWorkflowDraftProvisioningRequest request,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
     }
 
     private sealed class RecordingMemberQueryPort : IStudioMemberQueryPort
