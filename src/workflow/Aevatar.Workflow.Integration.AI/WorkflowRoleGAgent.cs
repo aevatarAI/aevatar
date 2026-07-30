@@ -196,8 +196,40 @@ public class WorkflowRoleGAgent(
             Uri = ResolveFileRefUri(fileRef),
             MediaType = Normalize(fileRef.MediaType) ?? string.Empty,
             Name = Normalize(fileRef.FileName) ?? string.Empty,
+            FileRef = ToChatFileRef(fileRef),
         };
     }
+
+    private static Aevatar.AI.Abstractions.ChatFileRef ToChatFileRef(WorkflowFileRef fileRef) =>
+        new()
+        {
+            FileId = Normalize(fileRef.FileId) ?? string.Empty,
+            ArtifactId = Normalize(fileRef.ArtifactId) ?? string.Empty,
+            SourceKind = ToChatFileSourceKind(fileRef.SourceKind),
+            SourceMessageId = Normalize(fileRef.SourceMessageId) ?? string.Empty,
+            SourceResourceKey = Normalize(fileRef.SourceResourceKey) ?? string.Empty,
+            FileName = Normalize(fileRef.FileName) ?? string.Empty,
+            MediaType = Normalize(fileRef.MediaType) ?? string.Empty,
+            SizeBytes = fileRef.SizeBytes,
+            Sha256 = Normalize(fileRef.Sha256) ?? string.Empty,
+            CreatedAtUnixMs = fileRef.CreatedAtUnixMs,
+            ExpiresAtUnixMs = fileRef.ExpiresAtUnixMs,
+            OwnerRunId = Normalize(fileRef.OwnerRunId) ?? string.Empty,
+            OwnerScopeId = Normalize(fileRef.OwnerScopeId) ?? string.Empty,
+        };
+
+    private static Aevatar.AI.Abstractions.ChatFileSourceKind ToChatFileSourceKind(
+        WorkflowFileSourceKind sourceKind) =>
+        sourceKind switch
+        {
+            WorkflowFileSourceKind.ChatInput => Aevatar.AI.Abstractions.ChatFileSourceKind.ChatInput,
+            WorkflowFileSourceKind.FormUpload => Aevatar.AI.Abstractions.ChatFileSourceKind.FormUpload,
+            WorkflowFileSourceKind.ConnectedServiceResource =>
+                Aevatar.AI.Abstractions.ChatFileSourceKind.ConnectedServiceResource,
+            WorkflowFileSourceKind.ExternalResource => Aevatar.AI.Abstractions.ChatFileSourceKind.ExternalResource,
+            WorkflowFileSourceKind.Generated => Aevatar.AI.Abstractions.ChatFileSourceKind.Generated,
+            _ => Aevatar.AI.Abstractions.ChatFileSourceKind.Unspecified,
+        };
 
     private static ChatContentPartKind ResolveChatContentPartKind(string? mediaType)
     {

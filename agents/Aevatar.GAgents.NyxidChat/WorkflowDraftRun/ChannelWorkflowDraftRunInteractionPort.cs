@@ -308,16 +308,11 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
                 throw new WorkflowAttachmentIngressException("ingress_failed", ex);
             }
 
-            inputParts.Add(new WorkflowChatInputPart
-            {
-                Kind = attachment.Kind == AttachmentKind.Image
+            inputParts.Add(WorkflowChatInputParts.FromFileRef(
+                ingress.FileRef,
+                attachment.Kind == AttachmentKind.Image
                     ? WorkflowChatInputPartKind.Image
-                    : WorkflowChatInputPartKind.Text,
-                MediaType = ingress.FileRef.MediaType,
-                Uri = ingress.FileRef.ArtifactId,
-                Name = ingress.FileRef.FileName,
-                FileRef = ingress.FileRef,
-            });
+                    : WorkflowChatInputPartKind.File));
         }
 
         return inputParts;
