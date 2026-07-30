@@ -84,6 +84,41 @@ public sealed class UserSkillRunServiceTests
         schedule.Request.AuthenticatedOwner.VerifiedBindingId.Should().Be("binding-alpha");
     }
 
+    [Fact]
+    public async Task ScheduleAsync_ShouldReturnFailure_WhenAuthorizationProjectionIsPending()
+    {
+        var fetcher = new RecordingRemoteSkillFetcher(WorkflowSkill());
+        var dispatch = new RecordingWorkflowChatDispatch();
+        var schedule = new RecordingScheduleProvisioningPort
+        {
+            Exception = new StudioMemberAutomationProjectionPendingException(23),
+        };
+        var service = new UserSkillRunService(fetcher, dispatch, schedule);
+        var callerCredential = new WorkflowCallerCredential(
+            "caller-token",
+            new WorkflowCallerNyxIdAuthority(
+                "nyxid",
+                string.Empty,
+                "nyx-user-alpha",
+                "proxy",
+                "binding-alpha"));
+
+        var outcome = await service.ScheduleAsync(
+            "skill-alpha",
+            callerCredential,
+            "scope-alpha",
+            "run the check",
+            "*/15 * * * *",
+            "UTC",
+            "Codex Check",
+            "team-alpha",
+            CancellationToken.None);
+
+        outcome.Succeeded.Should().BeFalse();
+        outcome.ErrorCode.Should().Be("schedule_authorization_projection_pending");
+        outcome.ErrorMessage.Should().Contain("Required state version: 23");
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]
@@ -167,12 +202,14 @@ public sealed class UserSkillRunServiceTests
     private sealed class RecordingScheduleProvisioningPort : IWorkflowScheduleProvisioningPort
     {
         public WorkflowScheduleProvisioningRequest? Request { get; private set; }
+        public Exception? Exception { get; init; }
 
         public Task<WorkflowScheduleProvisioningResult> ProvisionAsync(
             WorkflowScheduleProvisioningRequest request,
             CancellationToken ct = default)
         {
             Request = request;
+            if (Exception != null) throw Exception;
             return Task.FromResult(new WorkflowScheduleProvisioningResult(
                 "member-alpha",
                 request.ScopeId,

@@ -1,6 +1,7 @@
 using Aevatar.Capabilities;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgentService.Hosting.Endpoints.Schedules;
+using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Workflow.Abstractions;
@@ -129,11 +130,70 @@ internal static class StudioProvisioningEndpoints
                 new { code = "PROVISION_WORKFLOW_UNAUTHORIZED", message = ex.Message },
                 statusCode: StatusCodes.Status401Unauthorized);
         }
+        catch (Exception ex) when (TryMapProvisioningError(ex, out var result))
+        {
+            return result;
+        }
         catch (InvalidOperationException ex)
         {
             return BadRequest("INVALID_PROVISION_WORKFLOW_REQUEST", ex.Message);
         }
     }
+
+    private static bool TryMapProvisioningError(Exception exception, out IResult result)
+    {
+        result = exception switch
+        {
+            StudioMemberAutomationProjectionPendingException pending => Results.Json(
+                new
+                {
+                    code = "PROVISION_WORKFLOW_AUTHORIZATION_PROJECTION_PENDING",
+                    message = "The refreshed authorization catalog is still being projected. Retry this request.",
+                    retryable = true,
+                    requiredStateVersion = pending.RequiredStateVersion,
+                },
+                statusCode: StatusCodes.Status503ServiceUnavailable),
+            StudioMemberAutomationCatalogRefreshSupersededException => Results.Json(
+                new
+                {
+                    code = "PROVISION_WORKFLOW_AUTHORIZATION_REFRESH_SUPERSEDED",
+                    message = "A newer authorization catalog refresh superseded this request. Retry this request.",
+                    retryable = true,
+                },
+                statusCode: StatusCodes.Status503ServiceUnavailable),
+            StudioMemberAutomationCatalogRefreshUnavailableException => Results.Json(
+                new
+                {
+                    code = "PROVISION_WORKFLOW_AUTHORIZATION_REFRESH_UNAVAILABLE",
+                    message = "The authorization catalog could not be refreshed. Retry this request.",
+                    retryable = true,
+                },
+                statusCode: StatusCodes.Status503ServiceUnavailable),
+            StudioMemberAutomationPlanConflictException conflict => Results.Json(
+                new
+                {
+                    code = ToPlanConflictCode(conflict.Code),
+                    message = ToPlanConflictMessage(conflict.Code),
+                },
+                statusCode: StatusCodes.Status409Conflict),
+            _ => null!,
+        };
+        return result != null;
+    }
+
+    private static string ToPlanConflictCode(string code) => code switch
+    {
+        "authorization_plan_changed" => "PROVISION_WORKFLOW_AUTHORIZATION_PLAN_CHANGED",
+        "reauthorization_required" => "PROVISION_WORKFLOW_REAUTHORIZATION_REQUIRED",
+        _ => "PROVISION_WORKFLOW_AUTHORIZATION_CONFLICT",
+    };
+
+    private static string ToPlanConflictMessage(string code) => code switch
+    {
+        "authorization_plan_changed" => "The authorization plan changed before the schedule write. Retry this request.",
+        "reauthorization_required" => "Reconnect NyxID to authorize this workflow schedule.",
+        _ => "The workflow schedule authorization plan conflicted with the current state.",
+    };
 
     private static string? ResolveAuthDisabledScheduleOwnerFallback(
         HttpContext http,

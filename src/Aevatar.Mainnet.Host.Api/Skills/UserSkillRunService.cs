@@ -126,11 +126,49 @@ internal sealed class UserSkillRunService : IUserSkillRunService
                 ObservatoryUrl: result.ObservatoryUrl,
                 StudioUrl: result.StudioUrl));
         }
+        catch (StudioMemberAutomationProjectionPendingException ex)
+        {
+            return SkillScheduleOutcome.Failed(
+                "schedule_authorization_projection_pending",
+                $"The refreshed authorization catalog is still being projected. Retry this request. Required state version: {ex.RequiredStateVersion}.");
+        }
+        catch (StudioMemberAutomationCatalogRefreshUnavailableException ex)
+        {
+            return SkillScheduleOutcome.Failed(
+                "schedule_authorization_refresh_unavailable",
+                ex.Message);
+        }
+        catch (StudioMemberAutomationCatalogRefreshSupersededException ex)
+        {
+            return SkillScheduleOutcome.Failed(
+                "schedule_authorization_refresh_superseded",
+                ex.Message);
+        }
+        catch (StudioMemberAutomationPlanConflictException ex)
+        {
+            return SkillScheduleOutcome.Failed(
+                ToPlanConflictCode(ex.Code),
+                ToPlanConflictMessage(ex.Code));
+        }
         catch (InvalidOperationException ex)
         {
             return SkillScheduleOutcome.Failed("schedule_failed", ex.Message);
         }
     }
+
+    private static string ToPlanConflictCode(string code) => code switch
+    {
+        "authorization_plan_changed" => "schedule_authorization_plan_changed",
+        "reauthorization_required" => "schedule_reauthorization_required",
+        _ => "schedule_authorization_conflict",
+    };
+
+    private static string ToPlanConflictMessage(string code) => code switch
+    {
+        "authorization_plan_changed" => "The authorization plan changed before the schedule write. Retry this request.",
+        "reauthorization_required" => "Reconnect NyxID to authorize this workflow schedule.",
+        _ => "The workflow schedule authorization plan conflicted with the current state.",
+    };
 
     private static AuthenticatedAuthorizationOwnerContext? BuildAuthenticatedOwner(
         WorkflowCallerNyxIdAuthority? authority)

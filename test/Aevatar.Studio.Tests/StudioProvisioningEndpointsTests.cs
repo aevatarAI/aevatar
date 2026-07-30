@@ -3,6 +3,7 @@ using System.Security.Claims;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Hosting.Endpoints;
@@ -244,6 +245,33 @@ public sealed class StudioProvisioningEndpointsTests
             CancellationToken.None);
 
         AssertBadRequestResult(result, "INVALID_PROVISION_WORKFLOW_REQUEST");
+    }
+
+    [Fact]
+    public async Task HandleProvisionWorkflowAsync_ShouldReturnRetryableProjectionPending()
+    {
+        var service = new RecordingProvisioningService
+        {
+            ProvisionException = new StudioMemberAutomationProjectionPendingException(23),
+        };
+
+        var result = await InvokeHandle<IResult>(
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            new ProvisionWorkflowRequest("Monitor", "name: monitor", Caller: Caller)
+            {
+                TeamId = TeamId,
+            },
+            service,
+            CancellationToken.None);
+
+        AssertIsJsonStatus(result, StatusCodes.Status503ServiceUnavailable);
+        var value = result.GetType().GetProperty("Value")?.GetValue(result);
+        value.Should().NotBeNull();
+        value!.GetType().GetProperty("code")?.GetValue(value)
+            .Should().Be("PROVISION_WORKFLOW_AUTHORIZATION_PROJECTION_PENDING");
+        value.GetType().GetProperty("retryable")?.GetValue(value).Should().Be(true);
+        value.GetType().GetProperty("requiredStateVersion")?.GetValue(value).Should().Be(23L);
     }
 
     [Fact]
