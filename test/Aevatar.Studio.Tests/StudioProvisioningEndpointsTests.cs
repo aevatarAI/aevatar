@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Security.Claims;
+using System.Text.Json;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgentService.Abstractions;
@@ -186,6 +187,30 @@ public sealed class StudioProvisioningEndpointsTests
             CancellationToken.None);
 
         service.ProvisionCaller!.Scope.Should().Be(ProvisionWorkflowCallerCredential.DefaultScope);
+    }
+
+    [Fact]
+    public void ProvisionWorkflowRequest_ShouldNotBindScheduleIdentityFromHttpJson()
+    {
+        var request = JsonSerializer.Deserialize<ProvisionWorkflowRequest>("""
+            {
+              "displayName": "Monitor",
+              "workflowYaml": "name: monitor",
+              "caller": {
+                "platform": "nyxid",
+                "externalUserId": "user-42",
+                "scope": "proxy"
+              },
+              "teamId": "team-alpha",
+              "scheduleOperationId": "caller-pinned-operation",
+              "scheduleIdempotencyKey": "caller-pinned-key"
+            }
+            """,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+
+        request.Should().NotBeNull();
+        request!.ScheduleOperationId.Should().BeNull();
+        request.ScheduleIdempotencyKey.Should().BeNull();
     }
 
     [Fact]

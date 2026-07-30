@@ -95,8 +95,10 @@ public sealed record ProvisionWorkflowRequest(
     [JsonIgnore]
     public string? ProvisioningBearerToken { get; init; }
 
+    [JsonIgnore]
     public string? ScheduleOperationId { get; init; }
 
+    [JsonIgnore]
     public string? ScheduleIdempotencyKey { get; init; }
 
     /// <summary>

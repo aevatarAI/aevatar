@@ -1658,6 +1658,51 @@ public sealed class ProvisionWorkflowScheduleToolTests
     }
 
     [Fact]
+    public async Task CreateResultReceipt_WithAcceptedSchedule_ShouldReturnSuccessReceipt()
+    {
+        var tool = await DiscoverToolAsync(new RecordingProvisioningPort());
+        var resultJson = JsonSerializer.Serialize(new
+        {
+            status = "accepted",
+            member_id = "member-1",
+            scope_id = "scope-1",
+            team_id = "team-alpha",
+            schedule_id = "schedule-1",
+            studio_url = "/scopes/scope-1/teams/team-alpha/members/member-1/workflow",
+            observatory_url = "/workflow/observatory",
+        });
+
+        var receipt = tool.CreateResultReceipt("call-1", ScheduleToolName, "{}", resultJson);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        receipt.CallId.Should().Be("call-1");
+        receipt.ToolName.Should().Be(ScheduleToolName);
+        receipt.SideEffectKind.Should().Be("studio.workflow.schedule.provision");
+        receipt.SubjectKind.Should().Be("studio_member_workflow_schedule");
+        receipt.SubjectId.Should().Be("schedule-1");
+        receipt.ResultJson.Should().Be(resultJson);
+    }
+
+    [Fact]
+    public async Task CreateResultReceipt_WithToolError_ShouldReturnErrorReceipt()
+    {
+        var tool = await DiscoverToolAsync(new RecordingProvisioningPort());
+        var resultJson = """
+            {"error":{"code":"caller_identity_unavailable","message":"Verified NyxID caller identity is required in AgentToolRequestContext."}}
+            """;
+
+        var receipt = tool.CreateResultReceipt("call-1", ScheduleToolName, "{}", resultJson);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ErrorCode.Should().Be("caller_identity_unavailable");
+        receipt.ErrorMessage.Should().Be("Verified NyxID caller identity is required in AgentToolRequestContext.");
+        receipt.SideEffectKind.Should().Be("studio.workflow.schedule.provision");
+        receipt.ResultJson.Should().Be(resultJson);
+    }
+
+    [Fact]
     public async Task Execute_ShouldMapArgumentsAndContextOntoProvisioningRequest()
     {
         var port = new RecordingProvisioningPort(new WorkflowScheduleProvisioningResult(
@@ -1708,6 +1753,12 @@ public sealed class ProvisionWorkflowScheduleToolTests
         request.CapabilityAdmission.NyxIdOrganizationBearerToken.Should().Be("org-token");
         request.CapabilityAdmission.ExecutionMode.Should()
             .Be(ExternalCapabilityExecutionMode.Durable);
+        request.AuthenticatedOwner.Should().NotBeNull();
+        request.ProvisioningBearerToken.Should().Be("access-token-1");
+        request.ScheduleOperationId.Should()
+            .MatchRegex("^studio-workflow-provision-create:[0-9a-f]{64}$");
+        request.ScheduleIdempotencyKey.Should()
+            .MatchRegex("^studio-workflow-provision-schedule:[0-9a-f]{64}$");
 
         // Result surfaces the schedule + Observatory link.
         using var document = JsonDocument.Parse(output);
@@ -1775,6 +1826,8 @@ public sealed class ProvisionWorkflowScheduleToolTests
 
         port.LastRequest.Should().NotBeNull();
         port.LastRequest!.RunImmediately.Should().BeTrue();
+        port.LastRequest.ScheduleOperationId.Should().BeNull();
+        port.LastRequest.ScheduleIdempotencyKey.Should().BeNull();
     }
 
     [Fact]
@@ -1908,7 +1961,11 @@ public sealed class ProvisionWorkflowScheduleToolTests
         });
         var tool = await DiscoverToolAsync(port);
 
-        using var _ = PushContext(scopeId: "scope-1", ownerSubject: "owner-1", accessToken: "access-token-1");
+        using var _ = PushContext(
+            scopeId: "scope-1",
+            ownerSubject: "owner-1",
+            accessToken: "access-token-1",
+            nyxIdAuthority: new AgentToolNyxIdAuthorityContext("nyxid", "tenant-alpha", "nyx-user-alpha"));
         var output = await tool.ExecuteAsync("""
             {
               "team_id": "team-alpha",
@@ -1917,6 +1974,9 @@ public sealed class ProvisionWorkflowScheduleToolTests
             }
             """);
 
+        ErrorCode(output).Should().BeNull();
+        using var document = JsonDocument.Parse(output);
+        document.RootElement.GetProperty("status").GetString().Should().Be("accepted");
         var lower = output.ToLowerInvariant();
         lower.Should().NotContain("lark");
         lower.Should().NotContain("feishu");

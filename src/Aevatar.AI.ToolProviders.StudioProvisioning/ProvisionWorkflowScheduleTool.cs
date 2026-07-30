@@ -98,6 +98,48 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool
     public ToolApprovalMode ApprovalMode => ToolApprovalPolicies.CreateScopedResource;
     public bool IsReadOnly => false;
     public bool IsDestructive => false;
+    public string SideEffectKind => "studio.workflow.schedule.provision";
+
+    public AgentToolReceipt? CreateResultReceipt(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        string resultJson)
+    {
+        if (TryReadError(resultJson, out var error) && error is not null)
+        {
+            return new AgentToolReceipt
+            {
+                CallId = callId ?? string.Empty,
+                ToolName = string.IsNullOrWhiteSpace(toolName) ? Name : toolName,
+                Status = AgentToolReceiptStatus.Error,
+                ApprovalMode = AgentToolReceiptApprovalMode.Unspecified,
+                SideEffectKind = SideEffectKind,
+                ErrorCode = error.Code,
+                ErrorMessage = error.Message,
+                ResultJson = resultJson ?? string.Empty,
+            };
+        }
+
+        if (!TryReadResult(resultJson, out var result) || result is null)
+            return null;
+
+        return new AgentToolReceipt
+        {
+            CallId = callId ?? string.Empty,
+            ToolName = string.IsNullOrWhiteSpace(toolName) ? Name : toolName,
+            Status = AgentToolReceiptStatus.Success,
+            ApprovalMode = AgentToolReceiptApprovalMode.Unspecified,
+            SideEffectKind = SideEffectKind,
+            SubjectKind = string.IsNullOrWhiteSpace(result.ScheduleId)
+                ? "studio_member_workflow_binding"
+                : "studio_member_workflow_schedule",
+            SubjectId = string.IsNullOrWhiteSpace(result.ScheduleId)
+                ? result.MemberId
+                : result.ScheduleId,
+            ResultJson = resultJson ?? string.Empty,
+        };
+    }
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
@@ -159,16 +201,19 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool
             }
 
             scheduleAuthorization = authorizationContext.Resolved!;
-            operationIdentity = TryBuildOperationIdentity(
-                scopeId,
-                teamId,
-                displayName,
-                scheduleAuthorization.OwnerSubject);
-            if (operationIdentity is null)
+            if (scheduleCron is not null)
             {
-                return ErrorJson(
-                    "operation_identity_unavailable",
-                    "A trusted idempotency key or request and tool-call identity is required to create a schedule.");
+                operationIdentity = TryBuildOperationIdentity(
+                    scopeId,
+                    teamId,
+                    displayName,
+                    scheduleAuthorization.OwnerSubject);
+                if (operationIdentity is null)
+                {
+                    return ErrorJson(
+                        "operation_identity_unavailable",
+                        "A trusted idempotency key or request and tool-call identity is required to create a schedule.");
+                }
             }
         }
 
@@ -223,6 +268,58 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool
 
     private static string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static bool TryReadResult(string? resultJson, out ProvisionWorkflowScheduleResultJson? result)
+    {
+        result = null;
+        if (string.IsNullOrWhiteSpace(resultJson))
+            return false;
+
+        try
+        {
+            result = JsonSerializer.Deserialize<ProvisionWorkflowScheduleResultJson>(resultJson, s_jsonOptions);
+            return result is not null && !string.IsNullOrWhiteSpace(result.MemberId);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryReadError(string? resultJson, out ProvisionWorkflowScheduleErrorBody? error)
+    {
+        error = null;
+        if (string.IsNullOrWhiteSpace(resultJson))
+            return false;
+
+        try
+        {
+            using var document = JsonDocument.Parse(resultJson);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                !root.TryGetProperty("error", out var errorElement) ||
+                errorElement.ValueKind != JsonValueKind.Object ||
+                !errorElement.TryGetProperty("code", out var codeElement) ||
+                !errorElement.TryGetProperty("message", out var messageElement) ||
+                codeElement.ValueKind != JsonValueKind.String ||
+                messageElement.ValueKind != JsonValueKind.String)
+            {
+                return false;
+            }
+
+            var code = Normalize(codeElement.GetString());
+            var message = Normalize(messageElement.GetString());
+            if (code is null || message is null)
+                return false;
+
+            error = new ProvisionWorkflowScheduleErrorBody(code, message);
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
 
     private static ScheduleOperationIdentity? TryBuildOperationIdentity(
         string scopeId,
