@@ -131,6 +131,44 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
     }
 
     [Fact]
+    public async Task ChatRequest_WithFileIdOnlyInputFileRef_ShouldBindArtifactOwnerBeforeStartingWorkflow()
+    {
+        var runId = "run-1917-" + Guid.NewGuid().ToString("N");
+        var ownershipPort = new RecordingWorkflowFileArtifactOwnershipPort();
+        var harness = await CreateRunAsync(runId, WorkflowYaml(onFailure: false), ownershipPort);
+
+        await harness.Agent.HandleEventAsync(EnvelopeFrom("api", new WorkflowChatRequestEvent
+        {
+            Prompt = "hello",
+            ScopeId = "scope-1",
+            InputParts =
+            {
+                new WorkflowChatInputPartPayload
+                {
+                    Kind = WorkflowChatInputPartKind.File,
+                    FileRef = new WorkflowFileRef
+                    {
+                        FileId = "wf-file-only-123",
+                        SourceKind = WorkflowFileSourceKind.ChatInput,
+                        FileName = "invoice.txt",
+                        MediaType = "text/plain",
+                    },
+                },
+            },
+        }));
+
+        ownershipPort.Bindings.Should().ContainSingle().Which.Should().BeEquivalentTo(new FileOwnerBinding(
+            "wf-file-only-123",
+            string.Empty,
+            runId,
+            "scope-1"));
+        harness.Publisher.Published
+            .Where(x => x.Event is StepRequestEvent)
+            .Should()
+            .ContainSingle();
+    }
+
+    [Fact]
     public async Task ChatRequest_WhenInputFileOwnerBindingFails_ShouldNotStartWorkflow()
     {
         var runId = "run-1917-" + Guid.NewGuid().ToString("N");

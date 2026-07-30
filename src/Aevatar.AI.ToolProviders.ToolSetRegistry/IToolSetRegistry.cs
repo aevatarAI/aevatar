@@ -1,5 +1,4 @@
 using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.ChatRouting.Abstractions;
 
 namespace Aevatar.AI.ToolProviders.ToolSetRegistry;
 
@@ -8,17 +7,6 @@ public interface IToolSetRegistry
     IReadOnlyList<string> GetRegisteredNames();
 
     ToolSetResolveResult Resolve(string? name);
-}
-
-public static class ToolSetRegistryExtensions
-{
-    public static ToolSetResolveResult Resolve(
-        this IToolSetRegistry registry,
-        ChatRouteToolSetRef? toolSetRef)
-    {
-        ArgumentNullException.ThrowIfNull(registry);
-        return registry.Resolve(toolSetRef?.Name);
-    }
 }
 
 public sealed class ToolSetResolveResult

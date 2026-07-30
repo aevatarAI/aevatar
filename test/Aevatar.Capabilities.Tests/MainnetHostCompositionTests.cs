@@ -213,7 +213,7 @@ public sealed class MainnetHostCompositionTests
             var registry = app.Services.GetRequiredService<IToolSetRegistry>();
 
             registry.GetRegisteredNames().Should().Contain("profile.route.v1");
-            registry.Resolve(new ChatRouteToolSetRef { Name = "profile.route.v1" })
+            registry.Resolve("profile.route.v1")
                 .IsSuccess.Should().BeTrue();
         }
         finally
@@ -639,7 +639,7 @@ public sealed class MainnetHostCompositionTests
             ToolSetNames.NyxIdConnectedServices,
             ToolSetNames.WorkspaceDefault);
 
-        var workspace = registry.Resolve(new ChatRouteToolSetRef { Name = ToolSetNames.WorkspaceDefault });
+        var workspace = registry.Resolve(ToolSetNames.WorkspaceDefault);
         workspace.IsSuccess.Should().BeTrue(workspace.Error?.Message);
         workspace.Sources.Should().Contain(source => source is InvokeGAgentToolSource);
         workspace.Sources.Should().Contain(source => source is InvokeTeamToolSource);
@@ -708,23 +708,23 @@ public sealed class MainnetHostCompositionTests
         }
         workflowToolNames.Should().ContainSingle(name => name == "workflow_connected_service_resource_fetch");
 
-        var larkSelfNotify = registry.Resolve(new ChatRouteToolSetRef { Name = ToolSetNames.LarkSelfNotify });
+        var larkSelfNotify = registry.Resolve(ToolSetNames.LarkSelfNotify);
         larkSelfNotify.IsSuccess.Should().BeTrue(larkSelfNotify.Error?.Message);
         larkSelfNotify.Sources.Select(static source => source.GetType()).Should()
             .Equal(workspace.Sources.Select(static source => source.GetType()));
         larkSelfNotify.Sources.Should().Contain(source => source is LarkAgentToolSource);
         larkSelfNotify.Sources.Should().Contain(source => source is NyxIdAgentToolSource);
 
-        var nyxIdConnectedServices = registry.Resolve(new ChatRouteToolSetRef { Name = ToolSetNames.NyxIdConnectedServices });
+        var nyxIdConnectedServices = registry.Resolve(ToolSetNames.NyxIdConnectedServices);
         nyxIdConnectedServices.IsSuccess.Should().BeTrue(nyxIdConnectedServices.Error?.Message);
         nyxIdConnectedServices.Sources.Should().ContainSingle(source => source is NyxIdConnectedServiceToolSource);
         workspace.Sources.Should().NotContain(source => source is NyxIdConnectedServiceToolSource);
 
-        var voice = registry.Resolve(new ChatRouteToolSetRef { Name = "voice.realtime" });
+        var voice = registry.Resolve("voice.realtime");
         voice.IsSuccess.Should().BeFalse();
         voice.Error!.Code.Should().Be(ToolSetResolveError.UnknownNameCode);
 
-        var unknown = registry.Resolve(new ChatRouteToolSetRef { Name = "missing.set" });
+        var unknown = registry.Resolve("missing.set");
         unknown.IsSuccess.Should().BeFalse();
         unknown.Error!.Code.Should().Be(ToolSetResolveError.UnknownNameCode);
     }

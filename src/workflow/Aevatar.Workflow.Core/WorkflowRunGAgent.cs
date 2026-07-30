@@ -796,7 +796,7 @@ public sealed partial class WorkflowRunGAgent
         if (fileRefs.Count == 0 || _fileArtifactOwnership == null)
             return true;
 
-        foreach (var fileRef in fileRefs.Where(static x => !string.IsNullOrWhiteSpace(x.ArtifactId)))
+        foreach (var fileRef in fileRefs)
         {
             try
             {

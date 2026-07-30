@@ -41,7 +41,7 @@ internal sealed class AevatarCoreLoopStatusProbeExecutor : IHealthProbeExecutor
         ToolSetResolveResult toolSet;
         try
         {
-            toolSet = _toolSetRegistry.Resolve(new ChatRouteToolSetRef { Name = toolSetName });
+            toolSet = _toolSetRegistry.Resolve(toolSetName);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
