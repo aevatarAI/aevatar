@@ -706,7 +706,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                     continue;
                 }
 
-                var resourceKey = NormalizeOptional(attachment.AttachmentId);
+                var resourceKey = LarkAttachmentResourceKeys.Normalize(attachment.AttachmentId);
                 if (resourceKey is null)
                 {
                     _logger.LogWarning(
@@ -882,7 +882,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             return false;
         }
 
-        var resourceKey = NormalizeOptional(attachment.AttachmentId);
+        var resourceKey = LarkAttachmentResourceKeys.Normalize(attachment.AttachmentId);
         if (resourceKey is null)
         {
             _logger.LogWarning(
@@ -974,7 +974,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             return false;
         }
 
-        var resourceKey = NormalizeOptional(attachment.AttachmentId);
+        var resourceKey = LarkAttachmentResourceKeys.Normalize(attachment.AttachmentId);
         if (resourceKey is null)
         {
             _logger.LogWarning(

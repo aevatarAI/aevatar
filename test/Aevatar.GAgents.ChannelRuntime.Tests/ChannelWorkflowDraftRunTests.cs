@@ -285,6 +285,53 @@ public sealed class ChannelWorkflowDraftRunTests
     }
 
     [Fact]
+    public async Task InteractionPort_ShouldNormalizeLarkResourceUrlAttachmentIds()
+    {
+        var lark = Substitute.For<ILarkNyxClient>();
+        lark.DownloadMessageResourceAsync(
+                "user-token-1",
+                Arg.Any<LarkMessageResourceDownloadRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new LarkMessageResourceDownloadResult(
+                true,
+                [4, 5, 6, 7],
+                "application/pdf",
+                "invoice.pdf")));
+        var ingress = new RecordingWorkflowFileIngressPort();
+        var workflow = new RecordingWorkflowChatRunInteractionPort();
+        var dispatch = new RecordingActorDispatchPort();
+        var port = CreateInteractionPort(dispatch, workflow, lark, ingress);
+        var request = BuildWorkflowRequestWithLarkAttachments();
+        request.Activity.Content.Attachments.Clear();
+        request.Activity.Content.Attachments.Add(new AttachmentRef
+        {
+            AttachmentId = "https://open.larksuite.com/open-apis/im/v1/messages/om_123/resources/file_v3_1?type=file",
+            ExternalUrl = "https://open.larksuite.com/open-apis/im/v1/messages/om_123/resources/file_v3_1?type=file",
+            Kind = AttachmentKind.File,
+            Name = "invoice.pdf",
+            ContentType = "file",
+        });
+
+        await port.StartWorkflowInteractionAsync(
+            "channel-workflow-draft-run:workflow-draft-run-1",
+            request,
+            CancellationToken.None);
+
+        var workflowRequest = await workflow.WaitForRequestAsync();
+        workflowRequest.InputParts.Should().ContainSingle();
+        workflowRequest.InputParts![0].FileRef.Should().NotBeNull();
+        workflowRequest.InputParts[0].FileRef!.SourceResourceKey.Should().Be("file_v3_1");
+        ingress.Requests.Should().ContainSingle().Which.SourceResourceKey.Should().Be("file_v3_1");
+        await lark.Received(1).DownloadMessageResourceAsync(
+            "user-token-1",
+            Arg.Is<LarkMessageResourceDownloadRequest>(x =>
+                x.MessageId == "om_123" &&
+                x.ResourceKey == "file_v3_1" &&
+                x.Kind == LarkMessageResourceKind.File),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task InteractionPort_ShouldRouteLarkAttachmentDownloadsThroughInboundProviderSlug()
     {
         var defaultLark = Substitute.For<ILarkNyxClient>();

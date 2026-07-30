@@ -1109,7 +1109,8 @@ public sealed class ConversationReplyGeneratorTests
             token: "user-token");
         activity.Content.Attachments.Add(new AttachmentRef
         {
-            AttachmentId = "file_key",
+            AttachmentId = "https://open.larksuite.com/open-apis/im/v1/messages/om_file_pdf/resources/file_key?type=file",
+            ExternalUrl = "https://open.larksuite.com/open-apis/im/v1/messages/om_file_pdf/resources/file_key?type=file",
             Kind = AttachmentKind.File,
             ContentType = "application/pdf",
             Name = "report.pdf",
