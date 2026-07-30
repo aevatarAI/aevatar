@@ -1461,7 +1461,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 {
                     CallId = completed.CallId,
                     ResultJson = completed.ResultJson,
-                    Success = completed.Success,
+                    Success = completed.Receipt?.Status == AgentToolReceiptStatus.Success,
                     Error = completed.Error,
                 };
                 if (completed.Receipt != null)
@@ -1513,7 +1513,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             {
                 CallId = toolResult.ToolCallId,
                 ResultJson = toolResult.Content ?? string.Empty,
-                Success = receipt?.Status is null or AgentToolReceiptStatus.Success or AgentToolReceiptStatus.ApprovalRequired,
+                Success = receipt?.Status == AgentToolReceiptStatus.Success,
                 Error = receipt?.ErrorMessage ?? string.Empty,
             };
             if (receipt is not null)
@@ -1945,7 +1945,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             {
                 CallId = receipt.CallId ?? string.Empty,
                 ResultJson = receipt.ResultJson ?? string.Empty,
-                Success = receipt.Status is AgentToolReceiptStatus.Success or AgentToolReceiptStatus.ApprovalRequired,
+                Success = receipt.Status == AgentToolReceiptStatus.Success,
                 Error = receipt.ErrorMessage ?? string.Empty,
                 Receipt = receipt.Clone(),
             };

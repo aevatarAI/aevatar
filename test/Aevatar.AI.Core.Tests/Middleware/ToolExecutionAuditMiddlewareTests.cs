@@ -72,7 +72,7 @@ public sealed class ToolExecutionAuditMiddlewareTests
     }
 
     [Fact]
-    public async Task InvokeAsync_WhenReceiptLessSuccess_ShouldAppendMinimalSyntheticAuditRecord()
+    public async Task InvokeAsync_WhenErrorJsonReturnsWithoutReceipt_ShouldAppendUnknownAttemptAuditRecord()
     {
         var appender = new RecordingAuditTrailAppender();
         var middleware = NewMiddleware(appender);
@@ -87,18 +87,52 @@ public sealed class ToolExecutionAuditMiddlewareTests
         await middleware.InvokeAsync(context, () =>
         {
             context.CredentialSource = AgentToolCredentialSource.System;
-            context.Result = """{"status":"ok"}""";
+            context.Result = """{"error":true,"status":503}""";
             return Task.CompletedTask;
         });
 
         var record = appender.Records.Should().ContainSingle().Subject;
         record.AuditId.Should().Be("tool:request-2:call-2");
-        record.Outcome.Should().Be(AuditOutcome.Success);
+        record.Outcome.Should().Be(AuditOutcome.Unspecified);
+        record.LifecyclePhase.Should().Be(AuditLifecyclePhase.Running);
+        record.TerminalOutcome.Should().Be(AuditTerminalOutcome.Unspecified);
         record.Target.Kind.Should().Be("tool");
         record.Target.Id.Should().Be("call-2");
         record.CredentialSource.Should().Be(AuditCredentialSource.System);
         record.Annotations.Should().Contain("receipt_synthetic", "true");
+        record.Annotations.Should().Contain(
+            "tool_receipt_status",
+            AgentToolReceiptStatus.Unspecified.ToString());
         record.Annotations.Should().Contain("is_destructive", "false");
+        context.Receipt.Should().NotBeNull();
+        context.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Unspecified);
+    }
+
+    [Fact]
+    public async Task InvokeAsync_WhenReceiptClassifierThrows_ShouldAppendUnknownAttemptAuditRecord()
+    {
+        var appender = new RecordingAuditTrailAppender();
+        var middleware = NewMiddleware(appender);
+        var context = NewContext(
+            new ThrowingReceiptAgentTool(),
+            AgentToolExecutionContext.Empty with
+            {
+                Request = new AgentToolRequestIdentity("request-classifier", "call-classifier"),
+            });
+
+        await middleware.InvokeAsync(context, () =>
+        {
+            context.Result = "{\"status\":{}}";
+            return Task.CompletedTask;
+        });
+
+        var record = appender.Records.Should().ContainSingle().Subject;
+        record.Outcome.Should().Be(AuditOutcome.Unspecified);
+        record.LifecyclePhase.Should().Be(AuditLifecyclePhase.Running);
+        record.TerminalOutcome.Should().Be(AuditTerminalOutcome.Unspecified);
+        record.Annotations.Should().Contain("receipt_synthetic", "true");
+        context.Receipt.Should().NotBeNull();
+        context.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Unspecified);
     }
 
     [Fact]
@@ -387,6 +421,75 @@ public sealed class ToolExecutionAuditMiddlewareTests
         AuditText(record).Should().NotContain("provider-secret-must-not-appear");
     }
 
+    [Theory]
+    [InlineData("WEB_FETCH_HTTP_503")]
+    [InlineData("WEB_FETCH_DNS_FAILURE")]
+    [InlineData("WEB_FETCH_TLS_FAILURE")]
+    [InlineData("WEB_FETCH_TIMEOUT")]
+    public async Task InvokeAsync_WhenReceiptUsesOwnedWebFetchFailureCode_ShouldPreserveIt(
+        string failureCode)
+    {
+        var appender = new RecordingAuditTrailAppender();
+        var middleware = NewMiddleware(appender);
+        var context = NewContext(
+            new FakeAgentTool("web_fetch", isReadOnly: true),
+            AgentToolExecutionContext.Empty with
+            {
+                Caller = new AgentToolCallerContext("scope-web", "owner-web", null),
+            });
+
+        await middleware.InvokeAsync(context, () =>
+        {
+            context.Receipt = new AgentToolReceipt
+            {
+                CallId = "call-web",
+                ToolName = "web_fetch",
+                Status = AgentToolReceiptStatus.Error,
+                ErrorCode = failureCode,
+                ErrorMessage = "The web fetch failed.",
+            };
+            return Task.CompletedTask;
+        });
+
+        var record = appender.Records.Should().ContainSingle().Subject;
+        record.ErrorCode.Should().Be(failureCode);
+        record.Failure.Code.Should().Be(failureCode);
+        record.TerminalOutcome.Should().Be(
+            failureCode == "WEB_FETCH_TIMEOUT"
+                ? AuditTerminalOutcome.TimedOut
+                : AuditTerminalOutcome.Failed);
+    }
+
+    [Fact]
+    public async Task InvokeAsync_WhenCodeExecuteReturnsTypedFailure_ShouldPreserveFailureCode()
+    {
+        var appender = new RecordingAuditTrailAppender();
+        var middleware = NewMiddleware(appender);
+        var context = NewContext(
+            new FakeAgentTool("code_execute"),
+            AgentToolExecutionContext.Empty with
+            {
+                Caller = new AgentToolCallerContext("scope-code", "owner-code", null),
+            });
+
+        await middleware.InvokeAsync(context, () =>
+        {
+            context.Receipt = new AgentToolReceipt
+            {
+                CallId = "call-code",
+                ToolName = "code_execute",
+                Status = AgentToolReceiptStatus.Error,
+                ErrorCode = "CODE_EXECUTE_FAILED",
+                ErrorMessage = "Code execution failed.",
+            };
+            return Task.CompletedTask;
+        });
+
+        var record = appender.Records.Should().ContainSingle().Subject;
+        record.ErrorCode.Should().Be("CODE_EXECUTE_FAILED");
+        record.Failure.Code.Should().Be("CODE_EXECUTE_FAILED");
+    }
+
     [Fact]
     public async Task InvokeAsync_ShouldNotRecordFullArgumentsResultsTokensOrReceiptResultJson()
     {
@@ -575,5 +678,23 @@ public sealed class ToolExecutionAuditMiddlewareTests
         public bool IsDestructive { get; } = isDestructive;
         public string SideEffectKind { get; } = sideEffectKind;
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) => Task.FromResult("{}");
+    }
+
+    private sealed class ThrowingReceiptAgentTool : IAgentTool
+    {
+        public string Name => "throwing_receipt_classifier";
+        public string Description => "fake";
+        public string ParametersSchema => "{}";
+        public bool IsReadOnly => true;
+
+        public AgentToolReceipt? CreateResultReceipt(
+            string callId,
+            string toolName,
+            string argumentsJson,
+            string resultJson) =>
+            throw new InvalidOperationException("Malformed provider result.");
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult("{}");
     }
 }

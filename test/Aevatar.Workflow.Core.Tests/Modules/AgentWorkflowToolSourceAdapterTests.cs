@@ -373,7 +373,7 @@ public sealed class AgentWorkflowToolSourceAdapterTests
     }
 
     [Fact]
-    public async Task WorkflowTool_WhenUnclassifiedResultContainsErrorField_ShouldRemainSuccessful()
+    public async Task WorkflowTool_WhenResultHasNoReceipt_ShouldFailWithUnknownOutcome()
     {
         const string resultJson = """{"error":true,"status":503,"historical":true}""";
         var agentTool = new ResultReceiptAgentTool(resultJson, receipt: null);
@@ -391,8 +391,11 @@ public sealed class AgentWorkflowToolSourceAdapterTests
                 CallerCredential: new WorkflowCallerCredential()),
             CancellationToken.None);
 
-        result.ResultJson.Should().Be(resultJson);
-        result.Failure.Should().BeNull();
+        result.Failure.Should().NotBeNull();
+        result.ResultJson.Should().Be(
+            """{"status":"unknown","message":"The tool outcome could not be verified."}""");
+        result.Failure!.ErrorCode.Should().Be("tool_outcome_unknown");
+        result.Failure.ErrorMessage.Should().Be("The tool outcome could not be verified.");
     }
 
     private sealed class CapturingAgentTool(ToolApprovalMode approvalMode = ToolApprovalMode.NeverRequire) : IAgentTool
@@ -404,6 +407,19 @@ public sealed class AgentWorkflowToolSourceAdapterTests
         public string ParametersSchema => "{}";
 
         public ToolApprovalMode ApprovalMode { get; } = approvalMode;
+
+        public AgentToolReceipt? CreateResultReceipt(
+            string callId,
+            string toolName,
+            string argumentsJson,
+            string resultJson) =>
+            new()
+            {
+                CallId = callId,
+                ToolName = toolName,
+                Status = AgentToolReceiptStatus.Success,
+                ResultJson = resultJson,
+            };
 
         public int ExecuteCount { get; private set; }
 
@@ -473,6 +489,19 @@ public sealed class AgentWorkflowToolSourceAdapterTests
         public ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
 
         public int ExecuteCount { get; private set; }
+
+        public AgentToolReceipt? CreateResultReceipt(
+            string callId,
+            string toolName,
+            string argumentsJson,
+            string resultJson) =>
+            new()
+            {
+                CallId = callId,
+                ToolName = toolName,
+                Status = AgentToolReceiptStatus.Success,
+                ResultJson = resultJson,
+            };
 
         public AgentToolCallSafety GetCallSafety(string argumentsJson)
         {

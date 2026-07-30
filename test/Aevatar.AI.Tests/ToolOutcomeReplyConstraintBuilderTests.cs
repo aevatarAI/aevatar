@@ -46,6 +46,7 @@ public sealed class ToolOutcomeReplyConstraintBuilderTests
     [InlineData(AgentToolReceiptStatus.Error)]
     [InlineData(AgentToolReceiptStatus.Denied)]
     [InlineData(AgentToolReceiptStatus.ApprovalRequired)]
+    [InlineData(AgentToolReceiptStatus.Unspecified)]
     public void BuildFinalNoToolsConstraints_WhenMutatingToolDidNotSucceed_ShouldReturnConstraint(
         AgentToolReceiptStatus status)
     {
@@ -111,7 +112,7 @@ public sealed class ToolOutcomeReplyConstraintBuilderTests
     }
 
     private static ToolOutcomeReplyFact Succeeded(IAgentTool tool) =>
-        new(tool, "{}", Succeeded: true);
+        new(tool, "{}", Succeeded: true, Receipt(AgentToolReceiptStatus.Success));
 
     private static AgentToolReceipt Receipt(
         AgentToolReceiptStatus status,

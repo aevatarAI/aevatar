@@ -13,46 +13,84 @@ public sealed record FinalizedToolCallReceipt(
 
 public static class ToolCallReceiptFinalizer
 {
+    public const string UnknownErrorCode = "tool_outcome_unknown";
+    public const string UnknownErrorMessage = "The tool outcome could not be verified.";
+    public const string UnknownResultJson =
+        "{\"status\":\"unknown\",\"message\":\"The tool outcome could not be verified.\"}";
+
     public static FinalizedToolCallReceipt Finalize(ToolCallContext context, Exception? exception = null)
     {
         ArgumentNullException.ThrowIfNull(context);
         var callSafety = context.Tool.GetCallSafety(context.ArgumentsJson);
 
         if (context.Receipt != null)
-            return new FinalizedToolCallReceipt(
+            return Complete(context,
                 NormalizeReceipt(context, context.Receipt, callSafety),
-                IsSynthetic: false);
+                isSynthetic: context.ReceiptIsSynthetic);
 
         if (exception != null)
         {
-            return new FinalizedToolCallReceipt(
+            return Complete(context,
                 CreateMinimalReceipt(
                     context,
                     callSafety,
                     AgentToolReceiptStatus.Error,
                     errorCode: ResolveExceptionErrorCode(exception),
                     errorMessage: ResolveSafeExceptionClass(exception)),
-                IsSynthetic: true);
+                isSynthetic: true);
         }
 
         if (context.Terminate)
-            return new FinalizedToolCallReceipt(
+            return Complete(context,
                 CreateTerminationReceipt(context, callSafety),
-                IsSynthetic: true);
+                isSynthetic: true);
 
-        var successReceipt = AgentToolReceiptFactory.CreateSuccess(
-            context.Tool,
-            context.ToolCallId,
-            context.ToolName,
-            callSafety,
-            context.Result ?? string.Empty,
-            context.ArgumentsJson);
+        AgentToolReceipt? providerReceipt;
+        try
+        {
+            providerReceipt = AgentToolReceiptFactory.CreateResult(
+                context.Tool,
+                context.ToolCallId,
+                context.ToolName,
+                callSafety,
+                context.Result ?? string.Empty,
+                context.ArgumentsJson);
+        }
+        catch (Exception)
+        {
+            return Complete(
+                context,
+                CreateMinimalReceipt(
+                    context,
+                    callSafety,
+                    AgentToolReceiptStatus.Unspecified,
+                    errorCode: UnknownErrorCode,
+                    errorMessage: UnknownErrorMessage,
+                    resultJson: UnknownResultJson),
+                isSynthetic: true);
+        }
 
-        return new FinalizedToolCallReceipt(
-            successReceipt == null
-                ? CreateMinimalReceipt(context, callSafety, AgentToolReceiptStatus.Success)
-                : NormalizeReceipt(context, successReceipt, callSafety),
-            IsSynthetic: successReceipt == null);
+        return Complete(context,
+            providerReceipt == null
+                ? CreateMinimalReceipt(
+                    context,
+                    callSafety,
+                    AgentToolReceiptStatus.Unspecified,
+                    errorCode: UnknownErrorCode,
+                    errorMessage: UnknownErrorMessage,
+                    resultJson: UnknownResultJson)
+                : NormalizeReceipt(context, providerReceipt, callSafety),
+            isSynthetic: providerReceipt == null);
+    }
+
+    private static FinalizedToolCallReceipt Complete(
+        ToolCallContext context,
+        AgentToolReceipt receipt,
+        bool isSynthetic)
+    {
+        context.Receipt = receipt;
+        context.ReceiptIsSynthetic = isSynthetic;
+        return new FinalizedToolCallReceipt(receipt, isSynthetic);
     }
 
     private static AgentToolReceipt CreateTerminationReceipt(
@@ -93,10 +131,16 @@ public static class ToolCallReceiptFinalizer
             normalized.ToolName = string.IsNullOrWhiteSpace(context.ToolName)
                 ? context.Tool.Name ?? string.Empty
                 : context.ToolName;
-        if (normalized.Status == AgentToolReceiptStatus.Unspecified)
-            normalized.Status = AgentToolReceiptStatus.Success;
         if (normalized.ApprovalMode == AgentToolReceiptApprovalMode.Unspecified)
             normalized.ApprovalMode = AgentToolReceiptFactory.MapApprovalMode(context.Tool.ApprovalMode);
+        if (normalized.Status == AgentToolReceiptStatus.Unspecified)
+        {
+            if (string.IsNullOrWhiteSpace(normalized.ErrorCode))
+                normalized.ErrorCode = UnknownErrorCode;
+            if (string.IsNullOrWhiteSpace(normalized.ErrorMessage))
+                normalized.ErrorMessage = UnknownErrorMessage;
+            normalized.ResultJson = UnknownResultJson;
+        }
         normalized.IsDestructive = normalized.IsDestructive || callSafety.IsDestructive;
         normalized.SideEffectKind = NormalizeSideEffectKind(
             string.IsNullOrWhiteSpace(normalized.SideEffectKind)
@@ -111,7 +155,8 @@ public static class ToolCallReceiptFinalizer
         AgentToolReceiptStatus status,
         string approvalRequestId = "",
         string errorCode = "",
-        string errorMessage = "") =>
+        string errorMessage = "",
+        string resultJson = "") =>
         new()
         {
             CallId = context.ToolCallId ?? string.Empty,
@@ -125,6 +170,7 @@ public static class ToolCallReceiptFinalizer
             ApprovalRequestId = approvalRequestId ?? string.Empty,
             ErrorCode = errorCode ?? string.Empty,
             ErrorMessage = errorMessage ?? string.Empty,
+            ResultJson = resultJson ?? string.Empty,
         };
 
     private static string ResolveTerminationErrorCode(ToolCallContext context) =>

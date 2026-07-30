@@ -14,7 +14,7 @@ internal static class AgentToolReceiptFactory
                !string.IsNullOrWhiteSpace(tool.SideEffectKind);
     }
 
-    public static AgentToolReceipt? CreateSuccess(
+    public static AgentToolReceipt? CreateResult(
         IAgentTool tool,
         string callId,
         string toolName,
@@ -30,12 +30,7 @@ internal static class AgentToolReceiptFactory
         if (providerReceipt is not null)
             return NormalizeProviderResultReceipt(tool, callId, toolName, callSafety, resultJson, providerReceipt);
 
-        if (!IsReceiptWorthy(tool, callSafety))
-            return null;
-
-        var receipt = CreateBase(tool, callId, toolName, callSafety, AgentToolReceiptStatus.Success);
-        receipt.ResultJson = resultJson ?? string.Empty;
-        return receipt;
+        return null;
     }
 
     public static AgentToolReceipt? CreateError(
@@ -147,8 +142,6 @@ internal static class AgentToolReceiptFactory
         normalized.ToolName = string.IsNullOrWhiteSpace(normalized.ToolName)
             ? string.IsNullOrWhiteSpace(toolName) ? tool.Name ?? string.Empty : toolName
             : normalized.ToolName;
-        if (normalized.Status == AgentToolReceiptStatus.Unspecified)
-            normalized.Status = AgentToolReceiptStatus.Success;
         if (normalized.ApprovalMode == AgentToolReceiptApprovalMode.Unspecified)
             normalized.ApprovalMode = MapApprovalMode(tool.ApprovalMode);
         normalized.IsDestructive = normalized.IsDestructive || callSafety.IsDestructive;
