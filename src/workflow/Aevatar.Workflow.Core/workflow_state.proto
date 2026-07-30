@@ -337,6 +337,10 @@ message WorkflowExecutionKernelState
   map<string, string> compensation_execution_ids_by_step_id = 16;
   WorkflowRuntimeCallbackLeaseState compensation_phase_deadline_lease = 17;
   string compensation_phase_deadline_callback_id = 18;
+  // Producer command id for the active workflow execution. Used as the default
+  // side-effect idempotency key for steps when the workflow author did not
+  // define a narrower explicit step key.
+  string command_id = 19;
 }
 
 message WorkflowUsageMetricsState

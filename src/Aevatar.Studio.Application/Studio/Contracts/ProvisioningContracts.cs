@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.Studio.Application.Provisioning;
 
 namespace Aevatar.Studio.Application.Studio.Contracts;
 
@@ -11,10 +12,10 @@ namespace Aevatar.Studio.Application.Studio.Contracts;
 /// the (multi-minute, asynchronous) bind. The status therefore describes the
 /// provisioning hand-off, not the bind terminal state:
 /// <list type="bullet">
-///   <item><c>accepted</c> — the member was created, the inline workflow YAML bind
-///   was accepted, and a scheduled-dispatch was created to produce the run once
-///   the member is bound. Runs appear in the Observatory as the schedule fires;
-///   the caller watches the Observatory, there is no synchronous run id.</item>
+///   <item><c>accepted</c> — the member was created and the inline workflow YAML
+///   bind was accepted. <see cref="ProvisionWorkflowResponse.ScheduleStatus"/>
+///   separately reports whether the scheduled-dispatch was accepted, not
+///   requested, or blocked after the bind side effect committed.</item>
 /// </list>
 /// A validation failure (missing YAML / caller credential) is surfaced as an
 /// exception, not a status value, so the endpoint maps it to a 4xx.
@@ -22,8 +23,8 @@ namespace Aevatar.Studio.Application.Studio.Contracts;
 public static class ProvisionWorkflowBindingStatusNames
 {
     /// <summary>
-    /// The member + bind + schedule were accepted; the run is produced
-    /// asynchronously by the scheduled-dispatch (HTTP 202).
+    /// The member + bind hand-off was accepted. Schedule outcome is reported by
+    /// <see cref="ProvisionWorkflowResponse.ScheduleStatus"/>.
     /// </summary>
     public const string Accepted = "accepted";
 }
@@ -82,6 +83,13 @@ public sealed record ProvisionWorkflowRequest(
     public WorkflowCapabilityAdmissionContext? CapabilityAdmission { get; init; }
 
     /// <summary>
+    /// Trusted operation idempotency key. When supplied, it owns deterministic
+    /// member/workflow identities across the provision tool and any create/bind
+    /// fallback for the same Chat turn.
+    /// </summary>
+    public string? IdempotencyKey { get; init; }
+
+    /// <summary>
     /// Target Studio Team that owns the provisioned workflow member. Required:
     /// Chat-created workflows must be discoverable through the Team member route
     /// before any member, binding, or schedule side effects are created.
@@ -98,15 +106,23 @@ public sealed record ProvisionWorkflowRequest(
 }
 
 /// <summary>
-/// Result of a single-call provision. The bind and the run are both asynchronous,
-/// so no run id is returned at provision time; the run appears in the Observatory
-/// (<see cref="ObservatoryUrl"/>) as the <see cref="ScheduleId"/> fires.
+/// Result of a single-call provision. The bind and any run are both
+/// asynchronous, so no run id is returned at provision time; the run appears in
+/// the Observatory (<see cref="ObservatoryUrl"/>) only when
+/// <see cref="ScheduleStatus"/> is
+/// <see cref="WorkflowScheduleProvisioningScheduleStatusNames.Accepted"/> and
+/// the accepted <see cref="ScheduleId"/> fires.
 /// <see cref="BindingRunId"/> lets the caller poll the bind status if desired.
 /// <see cref="StudioUrl"/> is the editable Studio member page under the owning
-/// Team.
+/// Team. <see cref="ProvisioningStage"/> and <see cref="ScheduleStatus"/> are the
+/// typed reconciliation receipt: callers must treat a post-bind
+/// <see cref="WorkflowScheduleProvisioningStageNames.ScheduleBlocked"/> response
+/// as proof that the member/workflow side effects committed and must not start a
+/// fallback create path for the same Chat turn.
 /// </summary>
 public sealed record ProvisionWorkflowResponse(
     string MemberId,
+    string WorkflowId,
     string ScopeId,
     string TeamId,
     string BindingStatus,
@@ -117,4 +133,10 @@ public sealed record ProvisionWorkflowResponse(
     public string? ScheduleId { get; init; }
 
     public string StudioUrl { get; init; } = string.Empty;
+
+    public string ProvisioningStage { get; init; } = WorkflowScheduleProvisioningStageNames.ScheduleAccepted;
+
+    public string ScheduleStatus { get; init; } = WorkflowScheduleProvisioningScheduleStatusNames.Accepted;
+
+    public WorkflowScheduleProvisioningStageFailure? StageFailure { get; init; }
 }

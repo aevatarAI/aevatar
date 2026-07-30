@@ -1,7 +1,60 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json.Serialization;
 using Aevatar.GAgentService.Abstractions;
 
 namespace Aevatar.Studio.Application.Provisioning;
+
+public static class WorkflowScheduleProvisioningStageNames
+{
+    public const string BindAccepted = "bind_accepted";
+
+    public const string ScheduleAccepted = "schedule_accepted";
+
+    public const string ScheduleBlocked = "schedule_blocked";
+}
+
+public static class WorkflowScheduleProvisioningScheduleStatusNames
+{
+    public const string NotRequested = "not_requested";
+
+    public const string Accepted = "accepted";
+
+    public const string Blocked = "blocked";
+}
+
+public sealed record WorkflowScheduleProvisioningStageFailure(
+    string Stage,
+    string Code,
+    string Message);
+
+public static class WorkflowProvisioningIdentity
+{
+    private const string SchemaVersion = "studio-workflow-provisioning/v1";
+
+    public static string BuildMemberId(string scopeId, string idempotencyKey) =>
+        $"wf-{BuildResourceKey(scopeId, idempotencyKey)}";
+
+    public static string BuildWorkflowId(string scopeId, string idempotencyKey) =>
+        $"workflow-{BuildResourceKey(scopeId, idempotencyKey)}";
+
+    public static string BuildResourceKey(string scopeId, string idempotencyKey)
+    {
+        var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
+        var normalizedIdempotencyKey = NormalizeRequired(idempotencyKey, nameof(idempotencyKey));
+        var identity = Encoding.UTF8.GetBytes($"{SchemaVersion}\n{normalizedScopeId}\n{normalizedIdempotencyKey}");
+        var hash = SHA256.HashData(identity);
+        return Convert.ToHexString(hash.AsSpan(0, 16)).ToLowerInvariant();
+    }
+
+    private static string NormalizeRequired(string? value, string fieldName)
+    {
+        var normalized = value?.Trim() ?? string.Empty;
+        if (normalized.Length == 0)
+            throw new ArgumentException($"{fieldName} is required.", fieldName);
+        return normalized;
+    }
+}
 
 /// <summary>
 /// Request to provision a runnable, Observatory-delivered workflow schedule.
@@ -28,6 +81,13 @@ public sealed record WorkflowScheduleProvisioningRequest(
 {
     [JsonIgnore]
     public WorkflowCapabilityAdmissionContext? CapabilityAdmission { get; init; }
+
+    /// <summary>
+    /// Trusted operation idempotency key for the Chat turn or caller operation.
+    /// When present, it owns the deterministic member/workflow identities so
+    /// retries and fallback create/bind paths converge even if display text drifts.
+    /// </summary>
+    public string? IdempotencyKey { get; init; }
 
     /// <summary>Optional user prompt the scheduled run starts from.</summary>
     public string? Prompt { get; init; }
@@ -68,13 +128,16 @@ public sealed record WorkflowScheduleProvisioningRequest(
 }
 
 /// <summary>
-/// Result of provisioning a workflow schedule. The bind and the run are both
-/// asynchronous, so no run id is returned; the runs appear in the Observatory
-/// (<see cref="ObservatoryUrl"/>) as the <see cref="ScheduleId"/> fires.
-/// Contains NO channel / Lark / bot fields.
+/// Result of provisioning a workflow schedule. The bind and any run are
+/// asynchronous, so no run id is returned; runs appear in the Observatory
+/// (<see cref="ObservatoryUrl"/>) only when <see cref="ScheduleStatus"/> is
+/// <see cref="WorkflowScheduleProvisioningScheduleStatusNames.Accepted"/> and
+/// the accepted <see cref="ScheduleId"/> fires. Contains NO channel / Lark / bot
+/// fields.
 /// </summary>
 public sealed record WorkflowScheduleProvisioningResult(
     string MemberId,
+    string WorkflowId,
     string ScopeId,
     string TeamId,
     string BindingStatus,
@@ -84,4 +147,10 @@ public sealed record WorkflowScheduleProvisioningResult(
     public string? ScheduleId { get; init; }
 
     public string? BindingRunId { get; init; }
+
+    public string ProvisioningStage { get; init; } = WorkflowScheduleProvisioningStageNames.ScheduleAccepted;
+
+    public string ScheduleStatus { get; init; } = WorkflowScheduleProvisioningScheduleStatusNames.Accepted;
+
+    public WorkflowScheduleProvisioningStageFailure? StageFailure { get; init; }
 }

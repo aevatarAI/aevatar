@@ -60,6 +60,7 @@ public sealed class WorkflowScheduleProvisioningPort : IWorkflowScheduleProvisio
         {
             TeamId = request.TeamId,
             CapabilityAdmission = request.CapabilityAdmission,
+            IdempotencyKey = request.IdempotencyKey,
         };
 
         var response = await _provisioningService.ProvisionAsync(
@@ -70,6 +71,7 @@ public sealed class WorkflowScheduleProvisioningPort : IWorkflowScheduleProvisio
 
         return new WorkflowScheduleProvisioningResult(
             MemberId: response.MemberId,
+            WorkflowId: response.WorkflowId,
             ScopeId: response.ScopeId,
             TeamId: response.TeamId,
             BindingStatus: response.BindingStatus,
@@ -78,6 +80,9 @@ public sealed class WorkflowScheduleProvisioningPort : IWorkflowScheduleProvisio
         {
             ScheduleId = response.ScheduleId,
             BindingRunId = response.BindingRunId,
+            ProvisioningStage = response.ProvisioningStage,
+            ScheduleStatus = response.ScheduleStatus,
+            StageFailure = response.StageFailure,
         };
     }
 }

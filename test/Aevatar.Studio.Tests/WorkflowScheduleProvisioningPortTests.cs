@@ -34,9 +34,55 @@ public sealed class WorkflowScheduleProvisioningPortTests
         service.Request!.CapabilityAdmission.Should().BeSameAs(context);
     }
 
+    [Fact]
+    public async Task ProvisionAsync_ShouldMapStagefulReceipt()
+    {
+        var service = new RecordingProvisioningService
+        {
+            Response = new ProvisionWorkflowResponse(
+                "m-alpha",
+                "wf-alpha",
+                "scope-alpha",
+                "team-alpha",
+                ProvisionWorkflowBindingStatusNames.Accepted,
+                "/workflow/observatory")
+            {
+                BindingRunId = "bind-alpha",
+                ProvisioningStage = WorkflowScheduleProvisioningStageNames.ScheduleBlocked,
+                ScheduleStatus = WorkflowScheduleProvisioningScheduleStatusNames.Blocked,
+                StageFailure = new WorkflowScheduleProvisioningStageFailure(
+                    WorkflowScheduleProvisioningStageNames.ScheduleBlocked,
+                    "owner_llm_authorization_evidence_not_found",
+                    "owner_llm_authorization_evidence_not_found"),
+            },
+        };
+        var port = new WorkflowScheduleProvisioningPort(service);
+
+        var result = await port.ProvisionAsync(new WorkflowScheduleProvisioningRequest(
+            "scope-alpha",
+            "team-alpha",
+            "Monitor",
+            "name: monitor\nsteps: []\n"));
+
+        result.MemberId.Should().Be("m-alpha");
+        result.WorkflowId.Should().Be("wf-alpha");
+        result.ScheduleId.Should().BeNull();
+        result.BindingRunId.Should().Be("bind-alpha");
+        result.ProvisioningStage.Should().Be(WorkflowScheduleProvisioningStageNames.ScheduleBlocked);
+        result.ScheduleStatus.Should().Be(WorkflowScheduleProvisioningScheduleStatusNames.Blocked);
+        result.StageFailure.Should().BeSameAs(service.Response.StageFailure);
+    }
+
     private sealed class RecordingProvisioningService : IStudioWorkflowProvisioningService
     {
         public ProvisionWorkflowRequest? Request { get; private set; }
+        public ProvisionWorkflowResponse Response { get; set; } = new(
+            "member-alpha",
+            "workflow-alpha",
+            "scope-alpha",
+            "team-alpha",
+            ProvisionWorkflowBindingStatusNames.Accepted,
+            "/workflow/observatory");
 
         public Task<ProvisionWorkflowResponse> ProvisionAsync(
             string scopeId,
@@ -45,12 +91,11 @@ public sealed class WorkflowScheduleProvisioningPortTests
             CancellationToken ct = default)
         {
             Request = request;
-            return Task.FromResult(new ProvisionWorkflowResponse(
-                "member-alpha",
-                scopeId,
-                request.TeamId ?? string.Empty,
-                ProvisionWorkflowBindingStatusNames.Accepted,
-                "/workflow/observatory"));
+            return Task.FromResult(Response with
+            {
+                ScopeId = scopeId,
+                TeamId = request.TeamId ?? string.Empty,
+            });
         }
     }
 }

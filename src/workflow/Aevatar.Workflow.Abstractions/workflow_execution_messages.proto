@@ -271,6 +271,10 @@ message StartWorkflowEvent
   WorkflowRunForkSeed fork_seed = 5;
   WorkflowToolRuntimeContextPayload workflow_runtime = 6;
   repeated WorkflowFileRef input_file_refs = 7;
+  // Producer command id for this workflow execution. Workflow steps inherit it
+  // as their default side-effect idempotency key so retries and tool fallbacks
+  // converge on the caller-owned operation identity instead of run attempts.
+  string command_id = 8;
 }
 message BindWorkflowRunDefinitionEvent
 {
@@ -829,6 +833,10 @@ message WorkflowLlmExecutionIntent
   string scope_id = 18;
   // Per-schedule correlation id threaded from the owning workflow run for tool audit identity.
   string schedule_id = 19;
+  // Stable idempotency key for this workflow LLM step. Tool calls produced by
+  // the step inherit this key so effectful tools can converge across retry and
+  // fallback branches of the same Chat operation.
+  string idempotency_key = 20;
 }
 
 message WorkflowToolRuntimeContextPayload

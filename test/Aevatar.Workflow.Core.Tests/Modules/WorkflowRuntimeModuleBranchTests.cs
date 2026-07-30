@@ -749,6 +749,28 @@ public sealed class WorkflowRuntimeModuleBranchTests
     }
 
     [Fact]
+    public async Task LlmCallModule_ShouldCopyStepIdempotencyKeyToIntent()
+    {
+        var module = new LLMCallModule();
+        var ctx = new RecordingWorkflowContext();
+
+        await module.HandleAsync(
+            Wrap(new StepRequestEvent
+            {
+                StepId = "llm-idempotent",
+                StepType = "llm_call",
+                RunId = "run-llm-idempotent",
+                Input = "draft",
+                IdempotencyKey = "chat-command-alpha:llm-idempotent:1",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        DispatchedLlmIntent(ctx).IdempotencyKey.Should()
+            .Be("chat-command-alpha:llm-idempotent:1");
+    }
+
+    [Fact]
     public async Task LlmCallModule_WithNoAgentToolScope_ShouldLeaveIntentUnrestricted()
     {
         var module = new LLMCallModule();

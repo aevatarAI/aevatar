@@ -7,8 +7,9 @@ namespace Aevatar.Studio.Application.Studio.Abstractions;
 /// services so a caller (e.g. a Claude Code session reaching aevatar through the
 /// nyxid proxy) provisions a runnable, scope-owned workflow in a single request:
 /// create a member (kind = workflow) → bind the inline workflow YAML → create a
-/// scheduled-dispatch that produces the run under the caller scope → return the
-/// schedule id plus the Observatory and Studio links.
+/// scheduled-dispatch that produces the run under the caller scope when
+/// scheduling is requested and accepted → return the member/workflow receipt,
+/// schedule stage, plus the Observatory and Studio links.
 ///
 /// The flow is NON-BLOCKING: the bind is asynchronous (it can take minutes), so
 /// the service does not poll it to completion. The run is produced by the

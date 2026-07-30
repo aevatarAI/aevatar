@@ -20,6 +20,7 @@ export type ChatConversationIntent = {
 };
 
 export type ChatStreamRequest = {
+  commandId?: string;
   prompt: string;
   conversation?: ChatConversationIntent;
   sessionId: string;
@@ -282,7 +283,7 @@ export function extractChatStreamArtifacts(frames: readonly unknown[]): {
 
 function normalizeConversationIntent(
   conversation: ChatConversationIntent | undefined
-): ChatConversationIntent | undefined {
+): { conversationId?: string | null } | undefined {
   if (conversation === undefined) {
     return undefined;
   }
@@ -336,17 +337,45 @@ function normalizeConversationIntent(
     );
   }
 
-  return compactObject({ conversationId, createIdempotencyKey });
+  if (createIdempotencyKey) {
+    return { conversationId: null };
+  }
+
+  return compactObject({ conversationId });
+}
+
+function normalizeCommandId(
+  commandId: string | undefined,
+  conversation: ChatConversationIntent | undefined
+): string | undefined {
+  const normalizedCommandId = commandId?.trim();
+  if (commandId !== undefined && !normalizedCommandId) {
+    throw new ChatApiError(
+      "Command id is invalid.",
+      400,
+      "INVALID_CONVERSATION_INPUT"
+    );
+  }
+
+  if (normalizedCommandId) {
+    return normalizedCommandId;
+  }
+
+  const createIdempotencyKey = conversation?.createIdempotencyKey?.trim();
+  return createIdempotencyKey || undefined;
 }
 
 export async function startChatStream(
   request: ChatStreamRequest,
   signal: AbortSignal
 ): Promise<Response> {
+  const conversation = normalizeConversationIntent(request.conversation);
+  const commandId = normalizeCommandId(request.commandId, request.conversation);
   const response = await authFetch("/api/chat", {
     body: JSON.stringify(
       compactObject({
-        conversation: normalizeConversationIntent(request.conversation),
+        commandId,
+        conversation,
         prompt: request.prompt.trim(),
         sessionId: request.sessionId.trim(),
         workflow: "studio",

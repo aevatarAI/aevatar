@@ -28,6 +28,7 @@ internal sealed class BindStudioMemberWorkflowTool : IAgentTool
         "Bind workflow YAML to an existing Studio member in the caller's current Aevatar scope. " +
         "Use this after creating a team/member when the workflow should appear on that member's Studio workflow page. " +
         "Supply member_id and workflow_yaml, plus optional workflow_id; do not provide scope_id because scope is taken from the session context. " +
+        "When member_id is the trusted workflow provisioning member for this Chat request, workflow_id is derived from the same idempotency key and a conflicting supplied workflow_id is rejected. " +
         "The result acknowledges dispatch and includes a binding_run_url for observing completion.";
 
     public string ParametersSchema => """
@@ -92,9 +93,25 @@ internal sealed class BindStudioMemberWorkflowTool : IAgentTool
         if (workflowYaml is null)
             return ErrorJson("invalid_arguments", "workflow_yaml is required.");
 
+        var workflowId = Normalize(args.WorkflowId);
+        var idempotencyKey = StudioWorkflowProvisioningToolIdentity.ResolveTrustedIdempotencyKey();
+        if (idempotencyKey is not null &&
+            StudioWorkflowProvisioningToolIdentity.IsProvisioningMember(scopeId, idempotencyKey, memberId))
+        {
+            var operationWorkflowId = StudioWorkflowProvisioningToolIdentity.BuildWorkflowId(scopeId, idempotencyKey);
+            if (workflowId is not null && !string.Equals(workflowId, operationWorkflowId, StringComparison.Ordinal))
+            {
+                return ErrorJson(
+                    StudioWorkflowProvisioningToolIdentity.ConflictErrorCode,
+                    "workflow_id conflicts with the trusted workflow provisioning operation identity.");
+            }
+
+            workflowId = operationWorkflowId;
+        }
+
         var request = new StudioMemberWorkflowBindingRequest(scopeId, memberId, workflowYaml)
         {
-            WorkflowId = Normalize(args.WorkflowId),
+            WorkflowId = workflowId,
             CapabilityAdmission = StudioWorkflowCapabilityToolContext.Create(
                 ExternalCapabilityExecutionMode.Interactive),
         };

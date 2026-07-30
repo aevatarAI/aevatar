@@ -1119,6 +1119,9 @@ const ChatPage: React.FC = () => {
       let streamingConversation = startedConversation;
       const createIdempotencyKey =
         conversation.createIdempotencyKey ?? conversation.clientId;
+      const commandId = conversation.conversationId
+        ? createClientId()
+        : createIdempotencyKey;
 
       abortControllerRef.current?.abort();
       if (conversation.conversationId) {
@@ -1141,6 +1144,7 @@ const ChatPage: React.FC = () => {
       try {
         const response = await startChatStreamWithProjectionRetry(
           {
+            commandId,
             conversation: conversation.conversationId
               ? { conversationId: conversation.conversationId }
               : { createIdempotencyKey },
