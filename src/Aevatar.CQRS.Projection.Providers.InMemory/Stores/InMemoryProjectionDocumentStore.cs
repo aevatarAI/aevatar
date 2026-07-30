@@ -16,6 +16,7 @@ public sealed class InMemoryProjectionDocumentStore<TReadModel, TKey>
     private const string ProviderName = "InMemory";
     private readonly object _gate = new();
     private readonly Dictionary<string, TReadModel> _itemsByKey = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ProjectionDocumentDeleteMarker> _deleteMarkersByKey = new(StringComparer.Ordinal);
     private readonly Func<TReadModel, TKey> _keySelector;
     private readonly Func<TKey, string> _keyFormatter;
     private readonly Func<TReadModel, object?>? _defaultSortSelector;
@@ -51,9 +52,24 @@ public sealed class InMemoryProjectionDocumentStore<TReadModel, TKey>
             lock (_gate)
             {
                 _itemsByKey.TryGetValue(key, out var existing);
-                result = ProjectionWriteResultEvaluator.Evaluate(existing, readModel);
+                if (existing != null)
+                {
+                    result = ProjectionWriteResultEvaluator.Evaluate(existing, readModel);
+                }
+                else if (_deleteMarkersByKey.TryGetValue(key, out var marker))
+                {
+                    result = EvaluateUpsertAgainstDeleteMarker(marker, readModel);
+                }
+                else
+                {
+                    result = ProjectionWriteResult.Applied();
+                }
+
                 if (result.IsApplied)
+                {
                     _itemsByKey[key] = Clone(readModel);
+                    _deleteMarkersByKey.Remove(key);
+                }
             }
 
             var elapsedMs = (DateTimeOffset.UtcNow - startedAt).TotalMilliseconds;
@@ -124,6 +140,73 @@ public sealed class InMemoryProjectionDocumentStore<TReadModel, TKey>
         }
     }
 
+    public Task<ProjectionWriteResult> DeleteAsync(
+        ProjectionDocumentDeleteMarker marker,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(marker);
+        ct.ThrowIfCancellationRequested();
+
+        marker = NormalizeDeleteMarker(marker);
+        var key = marker.Id;
+        var startedAt = DateTimeOffset.UtcNow;
+        try
+        {
+            ProjectionWriteResult result;
+            lock (_gate)
+            {
+                if (_itemsByKey.TryGetValue(key, out var existing))
+                {
+                    result = ProjectionWriteResultEvaluator.Evaluate(existing, marker);
+                    if (result.IsApplied)
+                    {
+                        _itemsByKey.Remove(key);
+                        _deleteMarkersByKey[key] = marker;
+                    }
+                }
+                else if (_deleteMarkersByKey.TryGetValue(key, out var existingMarker))
+                {
+                    result = EvaluateDeleteMarker(existingMarker, marker);
+                    if (result.IsApplied)
+                        _deleteMarkersByKey[key] = marker;
+                }
+                else
+                {
+                    result = ProjectionWriteResult.Applied();
+                    _deleteMarkersByKey[key] = marker;
+                }
+            }
+
+            var elapsedMs = (DateTimeOffset.UtcNow - startedAt).TotalMilliseconds;
+            _logger.LogInformation(
+                "Projection read-model versioned delete completed. provider={Provider} readModelType={ReadModelType} key={Key} stateVersion={StateVersion} lastEventId={LastEventId} elapsedMs={ElapsedMs} result={Result}",
+                ProviderName,
+                typeof(TReadModel).FullName,
+                key,
+                marker.StateVersion,
+                marker.LastEventId,
+                elapsedMs,
+                result.Disposition);
+            return Task.FromResult(result);
+        }
+        catch (Exception ex)
+        {
+            var elapsedMs = (DateTimeOffset.UtcNow - startedAt).TotalMilliseconds;
+            _logger.LogError(
+                ex,
+                "Projection read-model versioned delete failed. provider={Provider} readModelType={ReadModelType} key={Key} stateVersion={StateVersion} lastEventId={LastEventId} elapsedMs={ElapsedMs} result={Result} errorType={ErrorType}",
+                ProviderName,
+                typeof(TReadModel).FullName,
+                key,
+                marker.StateVersion,
+                marker.LastEventId,
+                elapsedMs,
+                "failed",
+                ex.GetType().Name);
+            throw;
+        }
+    }
+
     public Task<TReadModel?> GetAsync(TKey key, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
@@ -150,9 +233,12 @@ public sealed class InMemoryProjectionDocumentStore<TReadModel, TKey>
         lock (_gate)
             snapshot = _itemsByKey.Values.ToList();
 
-        var filtered = query.Filters.Count == 0
+        var filtered = query.Filters.Count == 0 && query.AnyOfFilters.Count == 0
             ? snapshot
-            : snapshot.Where(item => MatchesAllFilters(item, query.Filters)).ToList();
+            : snapshot.Where(item =>
+                MatchesAllFilters(item, query.Filters) &&
+                (query.AnyOfFilters.Count == 0 || query.AnyOfFilters.Any(filter => MatchesFilter(item, filter))))
+                .ToList();
         filtered.Sort((left, right) => CompareReadModels(left, right, query.Sorts));
 
         var totalCount = query.IncludeTotalCount ? filtered.Count : (long?)null;
@@ -195,6 +281,52 @@ public sealed class InMemoryProjectionDocumentStore<TReadModel, TKey>
     }
 
     private string FormatKey(TKey key) => _keyFormatter(key)?.Trim() ?? "";
+
+    private static ProjectionDocumentDeleteMarker NormalizeDeleteMarker(ProjectionDocumentDeleteMarker marker)
+    {
+        var normalized = marker with
+        {
+            Id = marker.Id?.Trim() ?? string.Empty,
+            ActorId = marker.ActorId?.Trim() ?? string.Empty,
+            LastEventId = marker.LastEventId?.Trim() ?? string.Empty,
+        };
+
+        _ = ProjectionWriteResultEvaluator.Evaluate(null, normalized);
+        if (normalized.StateVersion <= 0)
+            throw new InvalidOperationException("Projection delete marker state version must be positive.");
+
+        return normalized;
+    }
+
+    private static ProjectionWriteResult EvaluateUpsertAgainstDeleteMarker(
+        ProjectionDocumentDeleteMarker existing,
+        IProjectionReadModel incoming)
+    {
+        if (!string.Equals(existing.ActorId, incoming.ActorId, StringComparison.Ordinal))
+            return ProjectionWriteResult.Conflict();
+
+        if (incoming.StateVersion < existing.StateVersion)
+            return ProjectionWriteResult.Stale();
+
+        if (incoming.StateVersion == existing.StateVersion)
+        {
+            return string.Equals(existing.LastEventId, incoming.LastEventId, StringComparison.Ordinal)
+                ? ProjectionWriteResult.Duplicate()
+                : ProjectionWriteResult.Conflict();
+        }
+
+        return ProjectionWriteResult.Applied();
+    }
+
+    private static ProjectionWriteResult EvaluateDeleteMarker(
+        ProjectionDocumentDeleteMarker existing,
+        ProjectionDocumentDeleteMarker incoming)
+    {
+        var evaluated = EvaluateUpsertAgainstDeleteMarker(existing, incoming);
+        return evaluated.Disposition == ProjectionWriteDisposition.Duplicate
+            ? ProjectionWriteResult.Duplicate()
+            : evaluated;
+    }
 
     private int CompareReadModels(
         TReadModel left,
@@ -355,6 +487,12 @@ public sealed class InMemoryProjectionDocumentStore<TReadModel, TKey>
                 continue;
             }
 
+            if (current is IMessage message && message.Descriptor.FindFieldByName(segment) is { } field)
+            {
+                current = field.Accessor.GetValue(message);
+                continue;
+            }
+
             var property = current.GetType().GetProperty(
                 segment,
                 BindingFlags.Instance | BindingFlags.Public);
@@ -412,9 +550,9 @@ public sealed class InMemoryProjectionDocumentStore<TReadModel, TKey>
         return filter.Operator switch
         {
             ProjectionDocumentFilterOperator.Exists => actualValue != null,
-            ProjectionDocumentFilterOperator.Eq => CompareNormalizedValues(actualValue, GetScalarValue(filter.Value)) == 0,
+            ProjectionDocumentFilterOperator.Eq => EqualsFilterValue(actualValue, GetScalarValue(filter.Value)),
             ProjectionDocumentFilterOperator.EqOrMissing =>
-                actualValue == null || CompareNormalizedValues(actualValue, GetScalarValue(filter.Value)) == 0,
+                actualValue == null || EqualsFilterValue(actualValue, GetScalarValue(filter.Value)),
             ProjectionDocumentFilterOperator.In => GetCollectionValues(filter.Value)
                 .Any(expected => CompareNormalizedValues(actualValue, expected) == 0),
             ProjectionDocumentFilterOperator.Gt => CompareNormalizedValues(actualValue, GetScalarValue(filter.Value)) > 0,
@@ -424,6 +562,12 @@ public sealed class InMemoryProjectionDocumentStore<TReadModel, TKey>
             _ => false,
         };
     }
+
+    private static bool EqualsFilterValue(object? actualValue, object? expectedValue) =>
+        actualValue is IEnumerable values and not string
+            ? values.Cast<object?>().Any(value =>
+                CompareNormalizedValues(NormalizeComparableValue(value), expectedValue) == 0)
+            : CompareNormalizedValues(actualValue, expectedValue) == 0;
 
     private static object? GetScalarValue(ProjectionDocumentValue value)
     {

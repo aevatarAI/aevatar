@@ -18,10 +18,6 @@
 - `memberId`、`workflowId`、`publishedServiceId` 是隔离身份，不是同一资源在不同阶段的别名：`memberId` 表示 Studio team member authority；`workflowId` 表示 workspace workflow draft / definition document；`publishedServiceId` 表示 callable service runtime identity。
 - 禁止把 `workflowId` 传给 member API，禁止把 `memberId` 传给 workflow draft API，禁止把二者冒充 `publishedServiceId`。任何身份转换都必须来自明确后端 contract/read model，不能靠字符串规则、前缀、相等关系或路由位置猜测。
 - 正常业务语义下不得假设 `memberId === workflowId`。若历史 repair/migration/materialization 代码中出现从 workflow draft 派生 member 的逻辑，只能作为命名明确的后台修复路径理解，不能进入新前端、路由、API helper、普通业务逻辑或测试 fixture。
-- 前端 Team 资源 canonical 路由必须表达 `scope -> team -> member` 所有权：Team 集合为 `/scopes/:scopeId/teams`，Team detail 为 `/scopes/:scopeId/teams/:teamId`，Team member surface 为 `/scopes/:scopeId/teams/:teamId/members/:memberId/...`。`/scopes` 只能作为登录后解析 scope 的技术入口，不是 Team 集合资源 URL。
-- 前端 team member workflow editor 的 canonical 路由是 `/scopes/:scopeId/teams/:teamId/members/:memberId/workflow` 或 `/scopes/:scopeId/teams/:teamId/members/new/workflow`。其中 `workflow` 是 member implementation editor surface，不是 workflow resource identity；query `workflowId` 若存在，只能表示 draft workflow identity hint，不能覆盖或替代 path `memberId`。
-- 不保留 `/teams/:scopeId...` 或 `/teams/:scopeId/:teamId...` hidden 兼容入口；新代码、测试主断言、跳转 builder 不得继续生成或解析旧路由。解析 path 时必须按资源名读取 `scopeId / teamId / memberId`，不得依赖会把 scope/team/member 顺序混掉的旧 segment index。
-- 前端变量命名必须保留身份边界：从 path 读出的成员身份命名为 `routeMemberId` / `memberId`；从 query 或 draft API 读出的 workflow 身份命名为 `routeDraftWorkflowId` / `draftWorkflowId`；从 member summary 读出的服务身份命名为 `publishedServiceId`。禁止用一个 `workflowId` 变量同时承载 member、service、draft 候选身份。
 - 凡是需要在 `workflowId / memberId / publishedServiceId` 之间做身份判别的值，都不得命名为其中任何一个确定身份；必须先命名为 `routeIdentityCandidate` / `bindingIdentityCandidate` 等候选身份，并在确定来源后一次性解析成具体 ID。解析后的确定身份才能进入对应 API。
 - 测试 fixture 必须使用不同 ID 形态暴露错传：例如 `memberId = "m-alpha"`、`workflowId = "wf-alpha"`、`publishedServiceId = "svc-alpha"`。禁止用同一个字符串或同一前缀规律同时代表多个身份。
 
@@ -150,10 +146,6 @@
 - `bash tools/ci/test_solution_ownership_guard.sh`：校验测试项目只由 `aevatar.slnx` 或慢测守卫拥有。
 - `bash tools/ci/slow_test_guards.sh`：执行独立慢测门禁。
 - `bash tools/docs/lint.sh`：执行文档 lint（也由架构门禁调用）。
-- `pnpm --dir apps/aevatar-console-web install --frozen-lockfile`：还原前端依赖。
-- `pnpm --dir apps/aevatar-console-web tsc`：前端类型检查。
-- `pnpm --dir apps/aevatar-console-web test --runInBand`：前端测试。
-- `pnpm --dir apps/aevatar-console-web build`：前端生产构建。
 - `dotnet test test/Aevatar.Workflow.Host.Api.Tests/Aevatar.Workflow.Host.Api.Tests.csproj --collect:"XPlat Code Coverage"`：单项目覆盖率。
 - `dotnet run --project src/workflow/Aevatar.Workflow.Host.Api`：启动 Workflow API（`/api/chat`、`/api/ws/chat`）。
 
@@ -164,13 +156,11 @@
 - 公开 API 与领域对象命名要表达业务意图，避免含糊词。
 - 把不需要的直接删除, 无需考虑兼容性
 
-## 前端设计默认规则
-- 前端相关请求（页面、组件、控制台、playground、样式重构、视觉 polish）默认遵循 `aevatar-frontend-design` 规范；若运行环境存在同名 skill，优先使用。
-- 先确定一个明确审美方向，再开始编码；禁止把多个弱风格混在一起，禁止生成无记忆点的通用 SaaS 外观。
-- 禁止默认回落到通用 AI 审美：避免把 `Inter/Arial/Roboto/system-ui` 作为首选字体，避免紫白渐变、模板化卡片网格、无差异面板堆叠。
-- 优先抽取 design tokens / CSS variables / theme tokens，统一颜色、字体、间距、圆角、阴影与动效，不接受大面积零散硬编码。
-- 在现有信息架构和交互模型内提升层次、比例、对比、质感与动效；除非用户明确要求大改，否则不要破坏既有导航和工作流。
-- 结果必须可用：响应式、键盘可达、基本可访问性达标，真实内容密度下仍可读。
+## 前端工作边界与规则路由
+- 前端工作边界是 `apps/aevatar-console-web/`。普通前端任务不得顺带修改 `src/`、`test/`、`tools/ci/` 或外部同级仓库；确需跨边界修改时，必须先明确扩展任务范围。
+- 处理 `apps/aevatar-console-web/` 下的文件前，必须完整阅读 `apps/aevatar-console-web/AGENTS.md`。该文件负责具体前端开发、运行、设计与验证流程。
+- 添加、修改、选择或运行前端测试前，还必须完整阅读 `apps/aevatar-console-web/docs/testing-policy.md`。
+- 根文件中的跨栈身份语义、仓库级架构、测试门禁、Git、文档和外部依赖规则继续适用；子目录规则只能细化或收紧，不能放松这些约束。
 
 
 ## 测试与质量门禁
@@ -212,19 +202,26 @@
 
 ## 外部依赖仓库（强制）
 
-本仓库依赖以下同级目录下的外部仓库。遇到相关问题时，**必须先回退到上一级目录（`../`）检查对应仓库是否存在，若存在则先阅读其源代码再继续工作**，禁止仅凭本仓库内的接口定义或猜测进行实现。
+本仓库集成以下同级目录下的外部仓库。是否需要检查外部源码必须按任务性质判定，不能仅因任务或文件中出现相关关键词就强制检查或 clone 仓库。
 
 | 关键词 / 涉及范围 | 外部仓库路径 | 说明 |
 |---|---|---|
 | `NyxID`、`NyxId`、nyxid 相关服务/工具/GAgent | `../NyxID` | NyxID 身份服务仓库，包含 NyxID 协议、服务端实现与 SDK |
 | `chrono-storage`、ChronoStorage、存储 API/客户端 | `../chrono-storage` | ChronoStorage 存储服务仓库，包含 API 定义、存储引擎与客户端 SDK |
-| `chrono-ornn`、Ornn、编排/运行时引擎 | `../chrono-ornn` | Chrono Ornn 编排引擎仓库，包含运行时核心与调度逻辑 |
+| `chrono-ornn`、Ornn、编排/运行时引擎 | `../Ornn` | Ornn 编排引擎仓库，包含运行时核心与调度逻辑 |
+
+### 适用边界
+
+1. **源码级集成与问题排查**：新增或修改本仓库中面向外部依赖的 adapter、协议映射、SDK 调用代码、认证流程，或者调查已发布行为与契约不一致时，必须检查对应外部仓库的相关源码、proto 和公开 SDK，禁止仅凭本仓库内的抽象猜测外部行为。
+2. **已发布能力的正常使用**：仅通过官方 CLI 配置 service、使用已安装且版本化的 skill、按照正式 API/CLI 文档调用稳定能力，或通过已发布产品界面完成登录、凭据绑定、代理请求时，以对应的已发布契约为准，不强制要求本地存在外部源码仓库。
+3. **契约歧义升级**：当官方文档不足、CLI 行为不明确、版本化契约无法解释实际结果，或出现疑似外部 bug 时，才从已发布契约升级到外部源码核验。
 
 ### 工作流程
-1. 当任务涉及上述关键词时，先执行 `ls ../NyxID`、`ls ../chrono-storage`、`ls ../chrono-ornn`（按需）确认目录存在。
-2. 若目录存在，阅读相关源代码（重点关注接口定义、proto 文件、SDK 公开 API）以理解真实契约。
-3. 基于外部仓库的实际实现进行本仓库的开发、调试或问题排查，禁止仅依赖本仓库内的抽象猜测行为。
-4. 若目录不存在，向用户说明缺少对应仓库，询问是否需要 clone 或提供替代方案。
+
+1. 先按上述适用边界判断任务属于“已发布能力的正常使用”还是“源码级集成与问题排查”；关键词命中本身不构成源码检查理由。
+2. 属于已发布能力正常使用时，直接依据对应版本的官方 CLI、versioned skill、正式 API 文档或产品 UI 契约继续工作，无需检查同级源码目录。
+3. 需要源码核验时，再执行 `ls ../NyxID`、`ls ../chrono-storage`、`ls ../Ornn`（按需）确认对应目录是否存在。若目录存在，阅读与任务直接相关的接口定义、proto、SDK 公开 API 和实现；若任务针对特定发布版本，应优先核对对应 tag 或 commit，不能用默认分支的最新行为替代已发布契约。
+4. 仅在确实需要源码核验时处理缺失仓库：若 `../NyxID` 不存在，直接执行 `cd .. && git clone https://github.com/ChronoAIProject/NyxID.git`；若 `../Ornn` 不存在，直接执行 `cd .. && git clone https://github.com/ChronoAIProject/Ornn.git`。在上一级目录创建对应的同级仓库后继续核验相关源码，无需先询问用户；若缺少其他外部仓库且未明确其官方 clone 地址，再向用户说明并询问是否 clone 或提供替代方案。不得让普通 CLI、service 配置、versioned skill 或产品 UI 使用任务因缺少源码目录而中断。
 
 ### 外部仓库改动权（强制）
 - **本仓库的功能实现禁止依赖外部仓库的新增 / 修改**。NyxID、chrono-storage、chrono-ornn 等都是独立产品，aevatar 的需求不是它们的功能路线图。

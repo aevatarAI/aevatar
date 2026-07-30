@@ -1,6 +1,8 @@
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Application.CodexExecution;
+using Aevatar.AI.Infrastructure.ChronoSandbox;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.ToolProviders.AgentCatalog;
 using Aevatar.AI.ToolProviders.AevatarInvocation;
@@ -15,6 +17,7 @@ using Aevatar.AI.ToolProviders.StudioProvisioning;
 using Aevatar.AI.ToolProviders.Telegram;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.AI.ToolProviders.Web;
+using Aevatar.AI.ToolProviders.Workflow;
 using Aevatar.Authentication.Hosting;
 using Aevatar.Authentication.Providers.NyxId;
 using Aevatar.Authentication.ScopeServiceTokens;
@@ -25,10 +28,13 @@ using Aevatar.Bootstrap.Extensions.AI;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.ChatRouting.Core;
 using Aevatar.GAgentService.Abstractions.Responses;
+using Aevatar.GAgentService.Abstractions.AgentProfiles;
+using Aevatar.GAgentService.Application.AgentProfiles;
 using Aevatar.GAgentService.Application.Responses;
 using Aevatar.GAgentService.Hosting.Endpoints;
-using Aevatar.GAgents.Authoring.Lark;
+using Aevatar.GAgentService.Infrastructure.AgentProfiles;
 using Aevatar.GAgents.Channel.Identity;
+using Aevatar.GAgents.Channel.Identity.Broker;
 using Aevatar.GAgents.Channel.Identity.DependencyInjection;
 using Aevatar.GAgents.Channel.Identity.Endpoints;
 using Aevatar.GAgents.Channel.NyxIdRelay;
@@ -47,17 +53,20 @@ using Aevatar.GAgents.StreamingProxy;
 using Aevatar.Foundation.Runtime.Hosting.Maintenance;
 using Aevatar.Foundation.VoicePresence;
 using Aevatar.Mainnet.Host.Api.BackendConsole;
+using Aevatar.Mainnet.Host.Api.Chat;
 using Aevatar.Mainnet.Host.Api.ChatCompletions;
 using Aevatar.Mainnet.Host.Api.ChatRouting;
 using Aevatar.Mainnet.Host.Api.Cqrs;
 using Aevatar.Mainnet.Host.Api.Messages;
+using Aevatar.Mainnet.Host.Api.ManagedCodex;
 using Aevatar.Mainnet.Host.Api.AgentProfiles;
-using Aevatar.Mainnet.Host.Api.Profiles;
+using Aevatar.Mainnet.Host.Api.ProjectionRecovery;
 using Aevatar.Mainnet.Host.Api.Responses;
 using Aevatar.Mainnet.Host.Api.Scheduled;
 using Aevatar.Mainnet.Host.Api.Skills;
 using Aevatar.Mainnet.Host.Api.Status;
 using Aevatar.Mainnet.Host.Api.Voice;
+using Aevatar.Mainnet.Host.Api.WorkflowAdmission;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Hosting;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -134,6 +143,7 @@ public static class MainnetHostBuilderExtensions
             // tenant-supplied C#) must never be composed into this host. Stated explicitly so a
             // future change to the platform default cannot silently re-enable it here.
             options.EnableScriptingCapability = false;
+            options.MapWorkflowChatPost = false;
             options.ConfigureAIFeatures = ConfigureMainnetAIFeatures;
         });
         // Hosted services start in registration order. Register the provider-local index
@@ -142,6 +152,9 @@ public static class MainnetHostBuilderExtensions
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IHostedService, ElasticsearchProjectionIndexReconcileHostedService>());
         builder.AddGAgentServiceCapabilityBundle();
+        builder.Services.AddAgentProfileApplication();
+        builder.Services.TryAddSingleton<IAgentProfileActorPort, AgentProfileActorPort>();
+        builder.Services.TryAddSingleton<AgentProfileApplicationService>();
         builder.AddStudioCapability();
         builder.Services.AddAuditTrailCore(builder.Configuration);
         builder.AddAuditTrailCapabilityBundle();
@@ -154,9 +167,14 @@ public static class MainnetHostBuilderExtensions
         // Authentication: config-driven, provider-agnostic
         builder.Services.AddNyxIdAuthentication();
         builder.AddAevatarAuthentication();
-        builder.Services.AddSingleton(MainnetAgentProfileRolloutSelector.Create(
-            builder.Configuration,
-            builder.Environment.ContentRootPath));
+        builder.AddNyxIdIdentityAssertionAuthentication();
+        if (builder.Configuration[$"{NyxIdAssistantActionsOptions.ConfigSection}:Enabled"] is null)
+        {
+            builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [$"{NyxIdAssistantActionsOptions.ConfigSection}:Enabled"] = bool.TrueString,
+            });
+        }
         builder.Services.AddNyxIdChat(builder.Configuration);
         AddNyxIdChatAgentProfile(builder);
         builder.Services.AddStreamingProxy(builder.Configuration);
@@ -164,15 +182,33 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddRetiredActorCleanup();
         builder.Services.AddChannelRuntime(builder.Configuration);
         builder.Services.AddChannelIdentity(builder.Configuration);
-        builder.Services.Configure<AevatarOAuthClientEsAclOptions>(options =>
+        var configuredSandboxServiceSlug = builder.Configuration["Aevatar:NyxId:SandboxServiceSlug"];
+        var sandboxServiceSlug = string.IsNullOrWhiteSpace(configuredSandboxServiceSlug)
+            ? NyxIdToolOptions.DefaultSandboxServiceSlug
+            : configuredSandboxServiceSlug.Trim();
+        builder.Services.Configure<NyxIdBrokerOptions>(options =>
         {
-            // Mainnet stores the cluster-singleton OAuth client readmodel in Elasticsearch.
-            // Its read grant is intentionally scoped to the same internal services that can
-            // read actor events, so the module-level fail-closed ES ACL guard may pass.
-            options.GrantMatchesGrainEventStoreInternal = true;
-            options.GrantDescription =
-                "Mainnet aevatar-oauth-clients read grant matches grain/event-store internal services.";
+            var configuredRoute = builder.Configuration["Aevatar:NyxId:DefaultRoute"];
+            options.RequiredLlmServiceSlug = string.IsNullOrWhiteSpace(configuredRoute)
+                ? LlmDefaults.NyxIdRoute
+                : configuredRoute.Trim();
+            var configuredOrnnSlug = builder.Configuration["Aevatar:Ornn:NyxIdSlug"];
+            var ornnSlug = string.IsNullOrWhiteSpace(configuredOrnnSlug)
+                ? OrnnOptions.DefaultNyxIdSlug
+                : configuredOrnnSlug.Trim();
+            options.AdditionalRequiredServiceSlugs = builder.Configuration
+                .GetSection("Aevatar:NyxId:AdditionalRequiredServiceSlugs")
+                .GetChildren()
+                .Select(static child => child.Value)
+                .Where(static serviceSlug => !string.IsNullOrWhiteSpace(serviceSlug))
+                .Select(static serviceSlug => serviceSlug!.Trim())
+                .Append(ornnSlug)
+                .Append(sandboxServiceSlug)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
         });
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IValidateOptions<NyxIdBrokerOptions>, MainnetNyxIdResourcePolicyValidator>());
         builder.Services.AddDeviceRegistration(builder.Configuration);
         builder.Services.AddScheduledAgents(builder.Configuration);
         builder.Services.AddStatusDashboard(builder.Configuration);
@@ -180,6 +216,8 @@ public static class MainnetHostBuilderExtensions
             ServiceDescriptor.Singleton<IReadmodelFreshnessSource, ChannelBotRegistrationFreshnessSource>());
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IHealthProbeExecutor, AevatarCoreLoopStatusProbeExecutor>());
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IHealthProbeExecutor, AuditQueryIndexStatusProbeExecutor>());
         // Self-issued scope service token source for credentialed orchestration/observatory probes.
         // IScopeServiceTokenIssuer is only registered when scope service tokens are enabled, so it is
         // resolved optionally — absent it the provider returns null and those probes read "unknown".
@@ -249,12 +287,11 @@ public static class MainnetHostBuilderExtensions
         builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IResponsesToolProvider, ResponsesAevatarToolProvider>());
         builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IResponsesToolProvider, ResponsesUserSkillsToolProvider>());
         // Bridge Studio's IUserConfigQueryPort onto the AI-layer IOwnerLlmConfigSource port so
-        // SkillRunner / WorkflowAgent / NyxidChat honor the bot owner's pre-configured LLM model
-        // + route (issue #509). The bridge lives here, not in any agent or AI package, so
+        // scheduled workflow dispatch, workflow agents, and NyxidChat honor the bot owner's
+        // pre-configured LLM model + route (issue #509). The bridge lives here, not in any agent or AI package, so
         // neither side has to depend on Studio.Application — the host is the natural composition
         // layer between Studio and the AI/agent packages that consume the port.
         builder.Services.TryAddSingleton<IOwnerLlmConfigSource, StudioUserConfigOwnerLlmConfigSource>();
-        builder.Services.AddLarkAgentAuthoring();
         builder.Services.AddSkillBackedHumanInteractionDelivery();
         builder.Services.AddChannelBackedHumanInteractionTools();
         builder.Services.AddNyxIdRelayChannel();
@@ -278,15 +315,20 @@ public static class MainnetHostBuilderExtensions
         deviceEventOptions.EnsureNotSkippingHmacInProduction(builder.Environment.IsProduction());
         // NyxID-backed current-user resolver plus aevatar admin access policy.
         builder.Services.AddNyxIdPlatformAuthorization(builder.Configuration);
+        builder.Services.AddChronoSandboxCodexExecution(
+            builder.Configuration,
+            builder.Environment.IsDevelopment() || builder.Environment.IsEnvironment("Testing"));
         builder.Services.AddNyxIdTools(o =>
         {
             // Override the single default (NyxIdToolOptions.DefaultBaseUrl) only when config provides a
             // non-empty value; an absent/empty config key must NOT clobber the default to null.
-            var nyxAuthority = builder.Configuration["Aevatar:NyxId:Authority"]
+            var nyxAuthority = builder.Configuration["Aevatar:NyxId:ApiBaseUrl"]
+                               ?? builder.Configuration["Aevatar:NyxId:Authority"]
                                ?? builder.Configuration["Cli:App:NyxId:Authority"]
                                ?? builder.Configuration["Aevatar:Authentication:Authority"];
             if (!string.IsNullOrWhiteSpace(nyxAuthority))
                 o.BaseUrl = nyxAuthority;
+            o.SandboxServiceSlug = sandboxServiceSlug;
             // Opt-in: only the mainnet host (which runs the channel relay's approval-aware
             // tool execution pipeline) advertises ssh_exec to the LLM. Other hosts that pull
             // in NyxId tools (CLI, workflow runner) leave this off so a generic agent can't
@@ -298,9 +340,19 @@ public static class MainnetHostBuilderExtensions
             else
                 o.EnableSshExecTool = true; // mainnet default: enabled (Lark bot needs it)
             o.BypassSshExecApproval = true; // mainnet Lark bot internal-only
+            o.EnableManagedCodexExecTool = builder.Configuration.GetValue<bool>(
+                $"{ManagedCodexOptions.SectionName}:Enabled");
+            o.MaxRequestDurationSeconds = builder.Configuration.GetValue(
+                "Aevatar:NyxId:MaxRequestDurationSeconds",
+                o.MaxRequestDurationSeconds);
             if (long.TryParse(builder.Configuration["Aevatar:NyxId:ProxyFileArtifactMaxBytes"], out var maxBytes))
                 o.ProxyFileArtifactMaxBytes = maxBytes;
+            o.ManagedWorkflowAdmissionMode = builder.Configuration.GetValue(
+                "Aevatar:NyxId:ManagedWorkflowAdmissionMode",
+                o.ManagedWorkflowAdmissionMode);
         });
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IHostedService, NyxIdWorkflowAdmissionEnforcementStartupGuard>());
         builder.Services.Replace(ServiceDescriptor.Singleton<
             IWorkflowFileMultipartUploadPolicyResolver,
             MainnetWorkflowFileMultipartUploadSafetyPolicyResolver>());
@@ -336,12 +388,19 @@ public static class MainnetHostBuilderExtensions
                 [
                     CreateToolSource<InvokeGAgentToolSource>,
                     CreateToolSource<InvokeTeamToolSource>,
+                    CreateToolSource<InvokeMemberToolSource>,
                     CreateToolSource<StartWorkflowToolSource>,
                     CreateToolSource<ObserveRunToolSource>,
                     CreateToolSource<ReadWorkflowRunArtifactToolSource>,
+                    CreateToolSource<WorkflowCatalogAgentToolSource>,
                     CreateToolSource<ProvisionWorkflowScheduleToolSource>,
                     CreateToolSource<CreateStudioTeamToolSource>,
+                    CreateToolSource<StudioTeamQueryToolSource>,
                     CreateToolSource<CreateStudioMemberToolSource>,
+                    CreateToolSource<CreateStudioMemberWorkflowDraftToolSource>,
+                    CreateToolSource<StudioMemberQueryToolSource>,
+                    CreateToolSource<StudioScheduleQueryToolSource>,
+                    CreateToolSource<StudioWorkflowQueryToolSource>,
                     CreateToolSource<BindStudioMemberWorkflowToolSource>,
                     CreateToolSource<ScheduleStudioMemberWorkflowToolSource>,
                     CreateToolSource<ResponsesAevatarToolProvider>,
@@ -369,6 +428,11 @@ public static class MainnetHostBuilderExtensions
                 ToolSetNames.NyxIdConnectedServices,
                 [CreateToolSource<NyxIdConnectedServiceToolSource>],
                 "NyxID connected-service operations explicitly marked x-aevatar-tool, registered as individual tools.");
+            options.AddToolSet(
+                AgentProfilePolicies.NyxIdChatRouteToolSet,
+                [ToolSetNames.WorkspaceDefault],
+                [],
+                "NyxID chat profile route tool composition with the default workspace tools.");
         });
 
         return builder;
@@ -376,18 +440,9 @@ public static class MainnetHostBuilderExtensions
 
     private static void AddNyxIdChatAgentProfile(WebApplicationBuilder builder)
     {
-        builder.Services.TryAddSingleton(
-            new NyxIdChatAgentProfileValidationBaseline([], []));
-        builder.Services
-            .AddOptions<NyxIdChatAgentProfileOptions>()
-            .Bind(builder.Configuration.GetSection(NyxIdChatAgentProfileOptions.SectionName))
-            .ValidateOnStart();
-        builder.Services.TryAddEnumerable(
-            ServiceDescriptor.Singleton<IValidateOptions<NyxIdChatAgentProfileOptions>,
-                NyxIdChatAgentProfileOptionsValidator>());
         builder.Services.Replace(
-            ServiceDescriptor.Singleton<INyxIdChatAgentProfileSnapshotSource>(serviceProvider =>
-                serviceProvider.GetRequiredService<MainnetAgentProfileRolloutSelector>()));
+            ServiceDescriptor.Singleton<INyxIdChatAgentProfileResolver,
+                MainnetNyxIdChatAgentProfileResolver>());
     }
 
     private static IAgentToolSource CreateToolSource<TSource>(IServiceProvider serviceProvider)
@@ -399,8 +454,11 @@ public static class MainnetHostBuilderExtensions
         ArgumentNullException.ThrowIfNull(app);
 
         app.UseAevatarDefaultHost();
+        app.MapMainnetChatEndpoints();
+        app.MapNyxIdChatPublicEndpoints();
         app.MapNyxIdChatEndpoints();
         app.MapChatRoutePolicyAdminEndpoints();
+        app.MapAgentProfileEndpoints();
         app.MapVoicePresenceCapabilityAdminEndpoints();
         app.MapVoiceConsoleEndpoints();
         app.MapAutoConsoleCallbackEndpoints();
@@ -415,8 +473,10 @@ public static class MainnetHostBuilderExtensions
         app.MapChannels();
         app.MapDeviceEventEndpoints();
         app.MapIdentityOAuthEndpoints();
-        app.MapSkillRunnerExternalTriggerEndpoints();
         app.MapScheduledAgentCredentialRepairAdminEndpoints();
+        app.MapDevelopmentNyxIdApiKeyEndpoints();
+        app.MapProjectionVersionRegressionRepairAdminEndpoints();
+        app.MapManagedCodexCredentialEndpoints();
         app.MapWorkflowSkillsEndpoints();
         app.MapStatusEndpoints();
 
@@ -492,6 +552,8 @@ public static class MainnetHostBuilderExtensions
 
     private static void ConfigureMainnetAIFeatures(AevatarAIFeatureOptions options)
     {
+        options.EnableBindingTools = true;
+
         if (!options.VoicePresence.Module.DirectExternalEventTypeUrls.Contains(
                 DeviceInboundDirectExternalEventTypeUrl,
                 StringComparer.Ordinal))

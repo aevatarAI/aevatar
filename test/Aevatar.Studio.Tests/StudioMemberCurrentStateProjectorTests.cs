@@ -217,10 +217,18 @@ public sealed class StudioMemberCurrentStateProjectorTests
                 },
                 state,
                 6,
-                "evt-deleted"));
+                "evt-deleted",
+                DateTimeOffset.Parse("2026-07-09T06:40:00Z")));
 
         dispatcher.Upserts.Should().BeEmpty();
         dispatcher.Deletes.Should().ContainSingle().Which.Should().Be(RootActorId);
+        dispatcher.DeleteMarkers.Should().ContainSingle().Which.Should().Be(
+            new ProjectionDocumentDeleteMarker(
+                RootActorId,
+                RootActorId,
+                6,
+                "evt-deleted",
+                DateTimeOffset.Parse("2026-07-09T06:40:00Z")));
     }
 
     [Fact]
@@ -284,12 +292,14 @@ public sealed class StudioMemberCurrentStateProjectorTests
         IMessage payload,
         StudioMemberState state,
         long version,
-        string eventId)
+        string eventId,
+        DateTimeOffset? timestamp = null)
     {
+        var timestampValue = timestamp ?? DateTimeOffset.UtcNow;
         return new EventEnvelope
         {
             Id = eventId,
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Timestamp = Timestamp.FromDateTimeOffset(timestampValue),
             Route = EnvelopeRouteSemantics.CreateObserverPublication(RootActorId),
             Payload = Any.Pack(new CommittedStateEventPublished
             {
@@ -298,7 +308,7 @@ public sealed class StudioMemberCurrentStateProjectorTests
                     EventId = eventId,
                     Version = version,
                     EventData = Any.Pack(payload),
-                    Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+                    Timestamp = Timestamp.FromDateTimeOffset(timestampValue),
                 },
                 StateRoot = Any.Pack(state),
             }),
@@ -310,6 +320,7 @@ public sealed class StudioMemberCurrentStateProjectorTests
     {
         public List<TReadModel> Upserts { get; } = [];
         public List<string> Deletes { get; } = [];
+        public List<ProjectionDocumentDeleteMarker> DeleteMarkers { get; } = [];
 
         public Task<ProjectionWriteResult> UpsertAsync(TReadModel readModel, CancellationToken ct = default)
         {
@@ -322,6 +333,16 @@ public sealed class StudioMemberCurrentStateProjectorTests
         {
             ct.ThrowIfCancellationRequested();
             Deletes.Add(id);
+            return Task.FromResult(ProjectionWriteResult.Applied());
+        }
+
+        public Task<ProjectionWriteResult> DeleteAsync(
+            ProjectionDocumentDeleteMarker marker,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Deletes.Add(marker.Id);
+            DeleteMarkers.Add(marker);
             return Task.FromResult(ProjectionWriteResult.Applied());
         }
     }

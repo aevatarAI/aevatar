@@ -84,7 +84,7 @@ public sealed class LarkChannelNativeMessageSenderTests
                 "legacy-conversation",
                 new ChannelAddressEndpointModel("oc_dm_chat_1", "chat_id"),
                 new ChannelAddressEndpointModel("on_user_1", "union_id")),
-            OutputFormat: SkillRunnerOutputFormat.Auto,
+            OutputFormat: ScheduledAgentOutputFormat.Auto,
             TemplateName: string.Empty,
             AgentType: string.Empty));
 
@@ -121,7 +121,7 @@ public sealed class LarkChannelNativeMessageSenderTests
                 "legacy-conversation",
                 new ChannelAddressEndpointModel("oc_dm_chat_1", "chat_id"),
                 new ChannelAddressEndpointModel("on_user_1", "union_id")),
-            OutputFormat: SkillRunnerOutputFormat.Auto,
+            OutputFormat: ScheduledAgentOutputFormat.Auto,
             TemplateName: string.Empty,
             AgentType: string.Empty);
 

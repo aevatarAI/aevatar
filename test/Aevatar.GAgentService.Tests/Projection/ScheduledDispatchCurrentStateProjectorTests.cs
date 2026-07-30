@@ -4,6 +4,7 @@ using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Abstractions.Schedules;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Core.Schedules;
 using Aevatar.GAgentService.Projection.Contexts;
 using Aevatar.GAgentService.Projection.Projectors;
@@ -41,6 +42,7 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
 
         var document = await store.GetAsync("schedule-1");
         document.Should().NotBeNull();
+        (await store.GetAsync("scheduled-dispatch:schedule-1")).Should().BeNull();
         document!.ServiceKey.Should().Be(ServiceKeys.Build(identity));
         document.ServiceId.Should().Be("svc");
         document.ServiceEndpointId.Should().Be("chat");
@@ -48,6 +50,46 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
         document.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Generic.ToString());
         document.StateVersion.Should().Be(9);
         document.LastEventId.Should().Be("evt-9");
+    }
+
+    [Theory]
+    [InlineData("Connector.Http.Authorization")]
+    [InlineData("CONNECTOR.HTTP.AUTHORIZATION")]
+    public async Task ProjectAsync_ShouldNotProjectCaseVariantConnectorAuthorizationHeader(
+        string authorizationHeader)
+    {
+        var store = new RecordingDocumentStore<ScheduledDispatchDocument>(x => x.Id);
+        var projector = new ScheduledDispatchCurrentStateProjector(
+            store,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-06-18T00:00:00+00:00")));
+        var state = CreateServiceInvocationState(
+            "schedule-header-case-variant",
+            new ServiceIdentity
+            {
+                TenantId = "tenant",
+                AppId = "app",
+                Namespace = "default",
+                ServiceId = "svc",
+            });
+        state.Headers[authorizationHeader] = "redacted";
+        state.Headers["trace"] = "kept";
+
+        await projector.ProjectAsync(
+            CreateContext("scheduled-dispatch:schedule-header-case-variant"),
+            WrapCommitted(
+                state,
+                version: 10,
+                eventId: "evt-header-case-variant",
+                observedAt: DateTimeOffset.Parse("2026-06-18T01:15:00+00:00")));
+
+        var document = await store.GetAsync("schedule-header-case-variant");
+        document.Should().NotBeNull();
+        document!.Headers.Keys.Should().NotContain(key =>
+            string.Equals(
+                key,
+                ScheduledServiceInvocationPayloadPolicy.ConnectorHttpAuthorizationKey,
+                StringComparison.OrdinalIgnoreCase));
+        document.Headers.Should().Contain("trace", "kept");
     }
 
     [Fact]
@@ -350,6 +392,223 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
         document.LastOverdueFireAt.Should().Be(lastOverdueFireAt);
     }
 
+    [Fact]
+    public async Task ProjectAsync_ShouldProjectTeamOwnerAndHealthWithoutCredentialReferences()
+    {
+        var store = new RecordingDocumentStore<ScheduledDispatchDocument>(x => x.Id);
+        var projector = new ScheduledDispatchCurrentStateProjector(
+            store,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-07-16T00:00:00+00:00")));
+        var state = CreateServiceInvocationState(
+            "team-schedule",
+            new ServiceIdentity
+            {
+                TenantId = "scope-alpha",
+                AppId = "app",
+                Namespace = "default",
+                ServiceId = "service-alpha",
+            });
+        state.TeamAutomationOwner = new TeamMemberAutomationOwnerState
+        {
+            ScopeId = "scope-alpha",
+            MemberId = "member-alpha",
+            TeamId = "team-alpha",
+        };
+        state.TeamAutomationLifecycleStatus = TeamAutomationLifecycleStatusState.RevocationPending;
+        state.TeamAutomationOperationId = "operation-alpha";
+        state.TeamAutomationPermissionDigest = "digest-alpha";
+        state.TeamCredentialGeneration = 3;
+        state.LastAuthorizationErrorCode = "vault_revoke_pending";
+        state.TeamCredentialExpiresAt = Timestamp.FromDateTimeOffset(
+            DateTimeOffset.Parse("2026-08-16T00:00:00+00:00"));
+        state.PendingRevocationTeamCredential = new ScheduledInvocationAgentKeyCredentialReferenceState
+        {
+            ApiKeyId = "api-key-sensitive-id",
+            KeyExpiresAtUnixMs = DateTimeOffset.Parse("2026-08-16T00:00:00+00:00")
+                .ToUnixTimeMilliseconds(),
+            SecretReference = new SecretReference
+            {
+                Ref = "sec-sensitive-reference",
+                Purpose = CredentialSecretPurposes.ScheduledInvocationAgentKey,
+                OwnerScopeKey = "scope-alpha:member-alpha",
+            },
+        };
+
+        await projector.ProjectAsync(
+            CreateContext("scheduled-dispatch:team-schedule"),
+            WrapCommitted(
+                state,
+                version: 17,
+                eventId: "evt-team",
+                observedAt: DateTimeOffset.Parse("2026-07-16T01:00:00+00:00")));
+
+        var document = await store.GetAsync("team-schedule");
+        document.Should().NotBeNull();
+        document!.TeamOwned.Should().BeTrue();
+        document.TeamAutomationOwner.Should().BeEquivalentTo(new TeamMemberAutomationOwnerDocument
+        {
+            ScopeId = "scope-alpha",
+            MemberId = "member-alpha",
+        });
+        document.TeamId.Should().Be("team-alpha");
+        document.TeamAutomationLifecycleStatus.Should().Be(TeamAutomationLifecycleStatusDocument.RevocationPending);
+        document.RevocationPending.Should().BeTrue();
+        document.StateVersion.Should().Be(17);
+        AssertDocumentDoesNotContain(document, "api-key-sensitive-id");
+        AssertDocumentDoesNotContain(document, "sec-sensitive-reference");
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldExposeNeedsAuthorizationWithStableCredentialFailureCode()
+    {
+        var store = new RecordingDocumentStore<ScheduledDispatchDocument>(x => x.Id);
+        var projector = new ScheduledDispatchCurrentStateProjector(
+            store,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-07-16T00:00:00+00:00")));
+        var state = CreateServiceInvocationState(
+            "team-needs-authorization",
+            new ServiceIdentity
+            {
+                TenantId = "scope-alpha",
+                AppId = "app",
+                Namespace = "default",
+                ServiceId = "service-alpha",
+            });
+        state.TeamAutomationOwner = new TeamMemberAutomationOwnerState
+        {
+            ScopeId = "scope-alpha",
+            MemberId = "member-alpha",
+        };
+        state.TeamAutomationLifecycleStatus = TeamAutomationLifecycleStatusState.NeedsAuthorization;
+        state.LastAuthorizationErrorCode = "credential_unresolvable";
+
+        await projector.ProjectAsync(
+            CreateContext("scheduled-dispatch:team-needs-authorization"),
+            WrapCommitted(
+                state,
+                version: 18,
+                eventId: "evt-needs-authorization",
+                observedAt: DateTimeOffset.Parse("2026-07-16T02:00:00+00:00")));
+
+        var document = await store.GetAsync("team-needs-authorization");
+        document.Should().NotBeNull();
+        document!.TeamAutomationLifecycleStatus.Should()
+            .Be(TeamAutomationLifecycleStatusDocument.NeedsAuthorization);
+        document.LastAuthorizationErrorCode.Should().Be("credential_unresolvable");
+        document.StateVersion.Should().Be(18);
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldExposePersistedOwnerLLMRuntimeEvidenceFromActiveAuthorizationFact()
+    {
+        var store = new RecordingDocumentStore<ScheduledDispatchDocument>(x => x.Id);
+        var projector = new ScheduledDispatchCurrentStateProjector(
+            store,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-07-24T00:00:00+00:00")));
+        var state = CreateServiceInvocationState(
+            "team-owner-llm",
+            new ServiceIdentity
+            {
+                TenantId = "scope-alpha",
+                AppId = "app",
+                Namespace = "default",
+                ServiceId = "service-alpha",
+            });
+        state.Target.ServiceInvocation.AuthorizationFact = new ScheduledInvocationAuthorizationFactState
+        {
+            OwnerLlmSelection = new ScheduledInvocationOwnerLLMSelection
+            {
+                RouteKind = ScheduledInvocationOwnerLLMRouteKind.Gateway,
+                RouteValue = "/api/v1/llm/gateway/v1",
+                Model = "fallback-model",
+            },
+        };
+        state.ActiveTeamAuthorizationFact = new ScheduledInvocationAuthorizationFactState
+        {
+            Owner = new ScheduledInvocationAuthorizationOwnerState
+            {
+                Authority = "caller-authority-sensitive",
+                OwnerKind = "Personal",
+                OwnerSubject = "caller-subject-sensitive",
+            },
+            OwnerLlmSelection = new ScheduledInvocationOwnerLLMSelection
+            {
+                RouteKind = ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService,
+                RouteValue = "/api/v1/proxy/s/chrono-llm-public",
+                NyxIdUserServiceId = "us-chrono",
+                ServiceSlugSnapshot = "chrono-llm-public",
+                Model = "gpt-5.5",
+            },
+        };
+
+        await projector.ProjectAsync(
+            CreateContext("scheduled-dispatch:team-owner-llm"),
+            WrapCommitted(
+                state,
+                version: 23,
+                eventId: "evt-owner-llm",
+                observedAt: DateTimeOffset.Parse("2026-07-24T01:00:00+00:00")));
+
+        var document = await store.GetAsync("team-owner-llm");
+        document.Should().NotBeNull();
+        ReadRequiredStringProperty(document!, "OwnerLlmRouteKind").Should().Be("nyx_id_user_service");
+        ReadRequiredStringProperty(document, "OwnerLlmRoute").Should()
+            .Be("/api/v1/proxy/s/chrono-llm-public");
+        ReadRequiredStringProperty(document, "OwnerLlmUserServiceId").Should().Be("us-chrono");
+        ReadRequiredStringProperty(document, "OwnerLlmServiceSlug").Should().Be("chrono-llm-public");
+        ReadRequiredStringProperty(document, "OwnerLlmModel").Should().Be("gpt-5.5");
+        document.StateVersion.Should().Be(23);
+        AssertDocumentDoesNotContain(document, "caller-authority-sensitive");
+        AssertDocumentDoesNotContain(document, "caller-subject-sensitive");
+        AssertDocumentDoesNotContain(document, "fallback-model");
+    }
+
+    [Theory]
+    [InlineData(ScheduledInvocationOwnerLLMRouteKind.Unspecified, "unspecified", "")]
+    [InlineData(ScheduledInvocationOwnerLLMRouteKind.Gateway, "gateway", "/api/v1/llm/gateway/v1")]
+    public async Task ProjectAsync_ShouldExposeExplicitRouteKindFromTargetAuthorizationFact(
+        ScheduledInvocationOwnerLLMRouteKind routeKind,
+        string expectedRouteKind,
+        string route)
+    {
+        var store = new RecordingDocumentStore<ScheduledDispatchDocument>(x => x.Id);
+        var projector = new ScheduledDispatchCurrentStateProjector(
+            store,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-07-24T00:00:00+00:00")));
+        var state = CreateServiceInvocationState(
+            "target-owner-llm",
+            new ServiceIdentity
+            {
+                TenantId = "scope-alpha",
+                AppId = "app",
+                Namespace = "default",
+                ServiceId = "service-alpha",
+            });
+        state.Target.ServiceInvocation.AuthorizationFact = new ScheduledInvocationAuthorizationFactState
+        {
+            OwnerLlmSelection = new ScheduledInvocationOwnerLLMSelection
+            {
+                RouteKind = routeKind,
+                RouteValue = route,
+                Model = routeKind == ScheduledInvocationOwnerLLMRouteKind.Gateway ? "gpt-5.5" : string.Empty,
+            },
+        };
+
+        await projector.ProjectAsync(
+            CreateContext("scheduled-dispatch:target-owner-llm"),
+            WrapCommitted(
+                state,
+                version: 24,
+                eventId: $"evt-owner-llm-{expectedRouteKind}",
+                observedAt: DateTimeOffset.Parse("2026-07-24T02:00:00+00:00")));
+
+        var document = await store.GetAsync("target-owner-llm");
+        document.Should().NotBeNull();
+        ReadRequiredStringProperty(document!, "OwnerLlmRouteKind").Should().Be(expectedRouteKind);
+        ReadRequiredStringProperty(document, "OwnerLlmRoute").Should().Be(route);
+        document.StateVersion.Should().Be(24);
+    }
+
     private static ScheduledDispatchProjectionContext CreateContext(string rootActorId) =>
         new()
         {
@@ -405,5 +664,12 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
     {
         document.ToByteArray().AsSpan().IndexOf(ByteString.CopyFromUtf8(value).ToByteArray()).Should().Be(-1);
         document.ToString().Should().NotContain(value);
+    }
+
+    private static string ReadRequiredStringProperty(object value, string propertyName)
+    {
+        var property = value.GetType().GetProperty(propertyName);
+        property.Should().NotBeNull($"{propertyName} is part of the runtime evidence contract");
+        return property!.GetValue(value).Should().BeOfType<string>().Which;
     }
 }

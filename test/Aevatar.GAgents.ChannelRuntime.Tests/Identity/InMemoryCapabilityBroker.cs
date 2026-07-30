@@ -54,7 +54,10 @@ internal sealed class InMemoryCapabilityBroker : INyxIdCapabilityBroker, IExtern
         CancellationToken ct = default)
     {
         ExternalSubjectRefExtensions.EnsureValid(externalSubject);
-        return Task.FromResult(_challengeFactory(externalSubject));
+        var challenge = _challengeFactory(externalSubject);
+        challenge.RenewsExistingBinding =
+            challenge.RenewsExistingBinding || _bindings.ContainsKey(externalSubject.ToActorId());
+        return Task.FromResult(challenge);
     }
 
     public Task<BindingId?> ResolveAsync(

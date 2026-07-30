@@ -39,16 +39,18 @@ Nyx/OIDC deployment facts are host configuration, not page source:
 | Config key | Meaning |
 |---|---|
 | `Aevatar:BackendConsole:OidcAuthority` | Browser OIDC authority; falls back to existing Nyx/Auth authority config when empty. |
-| `Aevatar:BackendConsole:OidcClientId` | Public OIDC client id used by browser PKCE. |
+| `Aevatar:BackendConsole:OidcClientId` | Canonical public OAuth client id used by embedded-console PKCE, Studio login/finalization, broker token-exchange, and binding revoke. Bootstrap materializes this value into the OAuth Client Actor; no runtime path may fall back to an older projected client id. |
 | `Aevatar:BackendConsole:OidcScope` | Browser OIDC scope. |
-| `Aevatar:BackendConsole:OidcResources` | Additional RFC 8707 resource indicators. The host always includes `{NyxApiBaseUrl}/api/v1/proxy/s/aevatar`. |
+| `Aevatar:BackendConsole:OidcResources` | Additional RFC 8707 resource indicators. The host always includes `{NyxApiBaseUrl}/api/v1/proxy/s/aevatar` and the Ornn proxy resource resolved from `Aevatar:Ornn:NyxIdSlug` (default `ornn-api`). |
 | `Aevatar:BackendConsole:NyxApiBaseUrl` | Canonical NyxID API/resource-server base. It falls back only to `Aevatar:NyxId:ApiBaseUrl`, never to the browser OIDC authority. |
 | `Aevatar:BackendConsole:StorageKey` | Shared browser localStorage/sessionStorage prefix. |
 | `Aevatar:BackendConsole:DefaultReturnPath` | Safe default redirect path after `/auto/callback`. |
 
 Each configurable HTML asset contains `__BACKEND_CONSOLE_CONFIG__`. The serving helper replaces that placeholder with JSON rendered from `BackendConsoleOptions`. The six `HOST_BACKEND_CONSOLE_*` environment variables are optional overrides for host deployment, but `.refactor-loop/host.env` is not a production configuration source.
 
-The OIDC client id and resource indicators are public browser values, not secrets. Every configurable console page appends each injected resource to both `/oauth/authorize` and the authorization-code exchange at `/oauth/token`; the shared `/auto/callback` follows the same contract. The OIDC authority owns browser authorization, while `NyxApiBaseUrl` owns RFC 8707 resource identity; these hosts may differ and must not be substituted for each other. Secrets still belong in the existing host secret/config mechanisms and must not be injected into page assets.
+The OIDC client id and resource indicators are public browser values, not secrets. Every configurable console page appends each injected resource to both `/oauth/authorize` and the authorization-code exchange at `/oauth/token`; the shared `/auto/callback` follows the same contract. The OIDC authority owns browser authorization, while `NyxApiBaseUrl` owns RFC 8707 resource identity and NyxID REST/admin routing; these hosts may differ and must not be substituted for each other. Secrets still belong in the existing host secret/config mechanisms and must not be injected into page assets.
+
+Studio's `/api/auth/nyxid/config` still returns an actor-backed snapshot so authority, callback/scope contract, HMAC state, and broker observation remain cluster-coherent. Its `clientId` must match `Aevatar:BackendConsole:OidcClientId`; while Actor projection still carries another id, the provider fails closed instead of combining new configuration with stale runtime facts. Startup and the admin reconcile endpoint materialize the configured id into Actor state, but neither DCR output nor an API request body is an alternative client-id authority.
 
 ## 3. Endpoint Boundary
 
@@ -64,10 +66,51 @@ Aevatar admins resolved by `IPlatformAdminAuthorizer` may use
 drilldown endpoints still read only workflow current-state/readmodel artifacts; they do not replay events, prime
 projections, or dispatch actor commands.
 
+`/workflow/observatory` is the only Workflow Observatory renderer and data client. `/admin#/observatory` is a
+shell route that embeds that page in a same-origin iframe; it does not retain a second run cache, renderer,
+poller, or API path. The shell forwards only `scope`, `status`, `origin`, `definition`, `schedule`, `from`, `to`,
+`run`, and `tab`, preserving exact values so standalone and embedded deep links express the same observation
+intent. Typed same-origin messages carry CQRS/audit navigation back to the shell without duplicating data reads.
+
+The authoritative page defaults every caller, including an administrator, to the caller's own scope.
+`scope=all` is an explicit administrator viewing mode that maps to the backend-only `__all__` sentinel; exact
+scope IDs remain exact and are never inferred from role.
+
+Fleet links carry exact `scope + run`, and schedule links carry `schedule` while clearing an unrelated selected
+run. The embedded page writes canonical route changes back to the parent hash without reloading its iframe.
+
+Own-scope detail and graph reads use normal endpoints without `scope`; exact-scope reads use normal endpoints
+with that scope; all-scope selections and unknown-owner manual run lookup use the administrator endpoints.
+Administrator identity by itself does not select the administrator endpoint.
+
+An active human approval is recognized only from a typed step with `suspensionType=human_approval` and no
+completion timestamp. Only the run owner (`detail.summary.scopeId == /api/workflow/observatory/me.scopeId`) may
+submit the existing scope resume command; an administrator inspecting another scope remains read-only. HTTP
+`202` means accepted for dispatch, not committed. The UI waits for a newer committed state version before
+treating the approval as resolved. The Artifacts tab is deliberately labelled as a download derived from
+`finalOutput`; the current detail contract does not claim a formal artifact collection.
+
 Run detail responses expose `diagnostics` assembled from the committed workflow current-state snapshot and the
 materialized run-report artifact. Diagnostics are query-time explanations for operators; they are not durable log
 entries or deletion tombstones and must not be presented as either. Admin controls accept a run id through an
 explicit run-id input. The browser must not infer run identity from actor-id prefixes or delimiters.
+
+The CQRS observatory exposes three platform-admin-only projection-scope reads: the existing scope list,
+`GET /api/cqrs/scopes/{scopeActorId}`, and
+`GET /api/cqrs/scopes/{scopeActorId}/recent-envelopes?take=20`. All three read the materialized
+`ProjectionScopeStatusDocument`; they do not activate a scope, read actor state, replay events, rebuild a view, or
+prime a projection. The detail `StateVersion` is the authoritative projection-scope actor version copied into that
+current-state read model. Each recent-envelope `stateVersion` is instead the version of its source committed state
+event. Both surfaces are eventually consistent and expose the read-model refresh timestamp so operators can judge
+freshness honestly.
+
+Projection-scope actor state retains at most the newest 50 committed-envelope metadata records, and the endpoint
+returns newest first with a default of 20 and a maximum of 50. Each record contains only `eventId`, `typeUrl`, source
+`stateVersion`, and an optional source timestamp. Missing timestamps remain absent/null; neither the actor nor the
+projector fabricates them from a processing clock. Payloads, outer-envelope data, projector-local counters, generic
+state dumps, `lastError`, and query-time failure aggregation are not part of this contract. The CQRS page loads detail
+and recent metadata only after an operator selects a scope, renders an explicit empty state when the materialized
+window is empty, and offers no mutation controls.
 
 ## 4. Governance
 

@@ -7,7 +7,8 @@ public sealed record MemberPublishedServiceResolveRequest(
 public sealed record MemberPublishedServiceResolution(
     string ScopeId,
     string MemberId,
-    string PublishedServiceId);
+    string PublishedServiceId,
+    bool IsMemberAuthorityBacked = false);
 
 public interface IMemberPublishedServiceResolver
 {

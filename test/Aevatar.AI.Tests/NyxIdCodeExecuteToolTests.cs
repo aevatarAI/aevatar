@@ -1,3 +1,4 @@
+using System.Net;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
@@ -60,20 +61,27 @@ public class NyxIdCodeExecuteToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_NoSandboxInContext_FallsBackToDiscoveryOrProbe()
+    public async Task ExecuteAsync_NoSandboxInContext_UsesDefaultConfiguredRoute()
     {
-        var tool = new NyxIdCodeExecuteTool(CreateDummyClient());
-        // Token present but no connected services context
-        // With a dummy client (unreachable URL), discovery and probe will fail,
-        // but the tool should attempt them before giving up.
+        var handler = new CaptureHandler();
+        using var httpClient = new HttpClient(handler);
+        var client = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+            httpClient);
+        var tool = new NyxIdCodeExecuteTool(client);
         SetMetadata("test-token", null);
 
-        var result = await tool.ExecuteAsync("""{"language":"python","code":"print(1)"}""");
+        try
+        {
+            await tool.ExecuteAsync("""{"language":"python","code":"print(1)"}""");
 
-        // With an unreachable dummy server, the probe may succeed (connection error ≠ 404)
-        // or fail entirely. Either way, the tool should not crash.
-        result.Should().NotBeNull();
-        ClearMetadata();
+            handler.LastRequestUri.Should().Be(
+                "https://nyx.example/api/v1/proxy/s/chrono-sandbox/execute");
+        }
+        finally
+        {
+            ClearMetadata();
+        }
     }
 
     [Fact]
@@ -82,7 +90,7 @@ public class NyxIdCodeExecuteToolTests
         var tool = new NyxIdCodeExecuteTool(CreateDummyClient());
         var servicesContext = """
             <connected-services>
-            - **Chrono Sandbox** (slug: `chrono-sandbox-service`) — base: https://sandbox.example.com
+            - **Chrono Sandbox** (slug: `chrono-sandbox`) — base: https://sandbox.example.com
             </connected-services>
             """;
         SetMetadata("test-token", servicesContext);
@@ -93,6 +101,32 @@ public class NyxIdCodeExecuteToolTests
         // Should NOT contain "No sandbox" error — slug was resolved
         result.Should().NotContain("No sandbox service connected");
         ClearMetadata();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WithoutSandboxContext_UsesConfiguredServiceSlug()
+    {
+        var handler = new CaptureHandler();
+        using var httpClient = new HttpClient(handler);
+        var client = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+            httpClient);
+        var tool = new NyxIdCodeExecuteTool(
+            client,
+            sandboxServiceSlug: "sandbox-custom");
+        SetMetadata("test-token", null);
+
+        try
+        {
+            await tool.ExecuteAsync("""{"language":"python","code":"print(1)"}""");
+
+            handler.LastRequestUri.Should().Be(
+                "https://nyx.example/api/v1/proxy/s/sandbox-custom/execute");
+        }
+        finally
+        {
+            ClearMetadata();
+        }
     }
 
     private static NyxIdApiClient CreateDummyClient()
@@ -114,5 +148,21 @@ public class NyxIdCodeExecuteToolTests
     private static void ClearMetadata()
     {
         AgentToolRequestContext.Current = null;
+    }
+
+    private sealed class CaptureHandler : HttpMessageHandler
+    {
+        public string? LastRequestUri { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            LastRequestUri = request.RequestUri?.ToString();
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"success":true}"""),
+            });
+        }
     }
 }

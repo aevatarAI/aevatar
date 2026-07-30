@@ -9,6 +9,7 @@ type TeamMemberPublishedRunsRouteState = {
   readonly actorId: string;
   readonly memberId: string;
   readonly runId: string;
+  readonly scheduleId: string;
   readonly scopeId: string;
   readonly teamId: string;
 };
@@ -42,6 +43,7 @@ function readTeamMemberPublishedRunsRouteState(
       actorId: "",
       memberId: "",
       runId: "",
+      scheduleId: "",
       scopeId: "",
       teamId: "",
     };
@@ -51,6 +53,7 @@ function readTeamMemberPublishedRunsRouteState(
     actorId: trimOptional(params.get("actorId")),
     memberId: trimOptional(segments[5]),
     runId: trimOptional(params.get("runId")),
+    scheduleId: trimOptional(params.get("scheduleId")),
     scopeId: trimOptional(segments[1]),
     teamId: trimOptional(segments[3]),
   };
@@ -72,6 +75,7 @@ const TeamMemberPublishedRunsPage: React.FC = () => {
       initialActorId={route.actorId || undefined}
       initialRunId={route.runId || undefined}
       memberId={route.memberId}
+      scheduleId={route.scheduleId || undefined}
       scopeId={route.scopeId}
       teamId={route.teamId}
     />

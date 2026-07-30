@@ -8,18 +8,30 @@ import type {
 
 export type { RuntimeEvent };
 
+type ExtensibleString<T extends string> = T | (string & Record<never, never>);
+
+export type ChatMessageRole = ExtensibleString<"user" | "assistant">;
+
+export type ChatMessageStatus = ExtensibleString<
+  "complete" | "streaming" | "error"
+>;
+
+export type StoredChatMessageStatus = ExtensibleString<"complete" | "error">;
+
 export type ChatMessage = {
   id: string;
-  role: "user" | "assistant";
+  role: ChatMessageRole;
   content: string;
   timestamp: number;
-  status: "complete" | "streaming" | "error";
-  error?: string;
+  status: ChatMessageStatus;
+  authorId?: string | null;
+  authorName?: string | null;
+  error?: string | null;
   events?: RuntimeEvent[];
   pendingApproval?: PendingApprovalInfo;
   pendingRunIntervention?: PendingRunInterventionInfo;
   steps?: StepInfo[];
-  thinking?: string;
+  thinking?: string | null;
   toolCalls?: ToolCallInfo[];
 };
 
@@ -92,51 +104,60 @@ export type ConversationSessionSnapshot = {
   runtime?: ConversationRuntimeIdentity;
 };
 
+export type ChatHistoryContext = {
+  scopeId: string;
+  conversationId: string;
+  stateVersion: number;
+  turnId: string;
+};
+
 export type ConversationMeta = {
   id: string;
-  actorId?: string;
-  commandId?: string;
-  runId?: string;
-  llmModel?: string;
-  llmRoute?: string;
-  session?: ConversationSessionSnapshot;
+  llmModel?: string | null;
+  llmRoute?: string | null;
   title: string;
-  serviceId: string;
-  serviceKind: string;
-  scopeId?: string;
-  status?: LocalChatStatus;
-  target?: ChatStudioTarget;
-  usage?: ChatUsageSummary;
+  serviceId?: string;
+  serviceKind?: string;
   createdAt: string;
   updatedAt: string;
   messageCount: number;
 };
 
-export type StoredChatMessage = {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  timestamp: number;
-  status: "complete" | "error";
-  error?: string;
-  events?: RuntimeEvent[];
-  pendingApproval?: PendingApprovalInfo;
-  pendingRunIntervention?: PendingRunInterventionInfo;
-  steps?: StepInfo[];
-  thinking?: string;
-  toolCalls?: ToolCallInfo[];
+export type ConversationSessionMeta = ConversationMeta & {
+  actorId?: string;
+  commandId?: string;
+  runId?: string;
+  session?: ConversationSessionSnapshot;
 };
 
-export type LocalChatConversation = {
-  createdAt: string;
+export type StoredChatMessage = {
   id: string;
+  turnId?: string | null;
+  role: ChatMessageRole;
+  content: string;
+  timestamp: number;
+  status: StoredChatMessageStatus;
+  error?: string | null;
+  authorId?: string | null;
+  authorName?: string | null;
+  thinking?: string | null;
+};
+
+export type ChatConversationDetail = {
   messages: StoredChatMessage[];
-  scopeId: string;
-  status: LocalChatStatus;
-  target?: ChatStudioTarget;
-  title: string;
-  updatedAt: string;
-  usage?: ChatUsageSummary;
+  stateVersion: number;
+};
+
+export type ChatHistoryIndex = {
+  conversations: ConversationMeta[];
+  nextCursor?: string | null;
+};
+
+export type ChatCreateRecovery = {
+  conversationId: string;
+  stateVersion: number;
+  status: string;
+  turnId: string;
 };
 
 export type ChatSessionState = {

@@ -156,7 +156,7 @@
   .reg-row .rm { font-size:12px; color:var(--muted); display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:2px; }
   .reg-row .rm .id { font-family:var(--mono); font-size:11.5px; color:var(--muted-2); }
   .reg-row .rm .sep { color:var(--border); }
-  .reg-row .ra { display:flex; align-items:center; gap:10px; }
+  .reg-row .ra { display:flex; align-items:center; justify-content:flex-end; gap:8px; flex-wrap:wrap; }
   .manage-btn { font-size:12.5px; font-weight:600; color:var(--fg); background:var(--panel-2); border:1px solid var(--border); border-radius:var(--r-sm); padding:6px 12px; }
   .manage-btn:hover { border-color:var(--muted-2); }
 
@@ -296,6 +296,7 @@
   .kv .k { color:var(--muted); }
   .kv .v { color:var(--fg); font-family:var(--mono); font-size:12.5px; text-align:right; word-break:break-all; }
   .kv .v.plain { font-family:var(--sans); }
+  .repair-detail { font-family:var(--mono); font-size:11.5px; color:var(--muted-2); margin-top:5px; word-break:break-word; }
 
   /* =========================================================================
      Responsive
@@ -375,10 +376,93 @@
      GET    /api/channels/registrations                connected list
      DELETE /api/channels/registrations/{id}            delete / recreate
      GET    /api/channels/registrations/{id}/status     live NyxID bot status
+     POST   /api/channels/registrations/{id}/workflow-result-delivery/repair
      GET/PUT /api/user-config/llm                        owner reply-model config
    =========================================================================== */
 
 const DEFAULT_LLM = { route: "chrono-llm-public", model: "gpt-5.5" };
+const USER_LLM_GATEWAY_ROUTE = "/api/v1/llm/gateway/v1";
+const USER_LLM_GATEWAY_SELECTION = "gateway";
+const USER_LLM_SERVICE_SELECTION_PREFIX = "user-service:";
+const USER_LLM_SAVE_OBSERVATION_DELAYS_MS = [0,250,500,1000,2000,3000,5000];
+const USER_LLM_SAVE_FINAL_ATTEMPT_SETTLE_MS = 5000;
+
+function llmServiceSelectionValue(userServiceId){
+  return USER_LLM_SERVICE_SELECTION_PREFIX + encodeURIComponent(userServiceId);
+}
+function buildLlmSelectionOptions(llm){
+  const routeOptions = (llm && llm.routeOptions) || [];
+  const gateway = routeOptions.find(option=>option.source==="gateway_provider");
+  const options = [];
+  if(gateway && gateway.ready && gateway.allowed){
+    options.push({
+      value:USER_LLM_GATEWAY_SELECTION,
+      label:gateway.label || "NyxID Gateway",
+      kind:"gateway",
+      routeValue:USER_LLM_GATEWAY_ROUTE,
+      userServiceId:null,
+      defaultModel:normalizeOptionalLlmModel(gateway.defaultModel),
+      ready:true,
+      allowed:true
+    });
+  }
+  const seenUserServiceIds = new Set();
+  routeOptions.forEach(option=>{
+    if(option.source!=="user_service") return;
+    const userServiceId=String(option.userServiceId||"").trim();
+    if(!userServiceId || seenUserServiceIds.has(userServiceId) || !option.ready || !option.allowed) return;
+    seenUserServiceIds.add(userServiceId);
+    options.push({
+      value:llmServiceSelectionValue(userServiceId),
+      label:String(option.label||option.serviceSlug||userServiceId),
+      kind:"nyx_id_user_service",
+      routeValue:String(option.routeValue||"").trim(),
+      userServiceId,
+      defaultModel:normalizeOptionalLlmModel(option.defaultModel),
+      ready:true,
+      allowed:true
+    });
+  });
+  return options;
+}
+function savedLlmSelectionValue(llm){
+  if(!llm) return null;
+  if(llm.savedRouteKind==="gateway"){
+    return String(llm.savedRoute||"").trim()===USER_LLM_GATEWAY_ROUTE
+      ? USER_LLM_GATEWAY_SELECTION
+      : null;
+  }
+  if(llm.savedRouteKind!=="nyx_id_user_service") return null;
+  const userServiceId=String(llm.savedUserServiceId||"").trim();
+  return userServiceId ? llmServiceSelectionValue(userServiceId) : null;
+}
+function normalizeLlmModel(value){
+  return String(value==null?"":value).trim();
+}
+function normalizeOptionalLlmModel(value){
+  const normalized=normalizeLlmModel(value);
+  return normalized || null;
+}
+function expectedLlmModel(option,requestedModel,llm){
+  const explicitModel=normalizeLlmModel(requestedModel);
+  if(explicitModel) return { known:true, value:explicitModel };
+  if(option.kind==="gateway") return { known:true, value:"" };
+  if(requestedModel==null) return { known:false, value:"" };
+  return { known:true, value:option.defaultModel || "" };
+}
+function llmSelectionObserved(target,llm){
+  if(!target || !llm) return false;
+  let identityObserved=false;
+  if(target.kind==="gateway"){
+    identityObserved=llm.savedRouteKind==="gateway" &&
+      String(llm.savedRoute||"").trim()===USER_LLM_GATEWAY_ROUTE;
+  } else {
+    identityObserved=llm.savedRouteKind==="nyx_id_user_service" &&
+      String(llm.savedUserServiceId||"").trim()===target.userServiceId;
+  }
+  if(!identityObserved || !target.expectedModelKnown) return false;
+  return normalizeLlmModel(llm.defaultModel)===target.expectedCommittedDraft.model;
+}
 
 /* Lark Tier-1 minimum scopes (skill §7 — the #1 silent-bot fix). */
 const LARK_SCOPES_T1 = [
@@ -420,6 +504,12 @@ const esc=(s)=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;
 const initials=(s)=>(s||"?").trim().charAt(0).toUpperCase();
 
 const STATUS_LABEL = { active:"已激活", pending:"待激活", pending_webhook:"待激活", error:"异常", registered:"已注册", bound:"已绑定", soon:"即将上线", available:"可接入", loading:"查询中", foreign:"非本账户", unknown:"状态未知" };
+const WORKFLOW_DELIVERY_STATUS = {
+  enabled:{ label:"工作流回传正常", badge:"active" },
+  repair_required:{ label:"工作流回传待修复", badge:"warn" },
+  repairing:{ label:"工作流回传修复中", badge:"running" },
+  repair_failed:{ label:"工作流回传失败", badge:"failed" }
+};
 
 const ICON={
   sun:'<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2.4M12 19.6V22M2 12h2.4M19.6 12H22M4.6 4.6l1.7 1.7M17.7 17.7l1.7 1.7M19.4 4.6l-1.7 1.7M6.3 17.7l-1.7 1.7"/></svg>',
@@ -477,11 +567,12 @@ const PLATFORMS = {
       { name:"app_id", ph:"cli_xxxxxxxxxxxx", help:"开发者后台 → 凭证与基础信息 → App ID" },
       { name:"app_secret", ph:"••••••••••••••••", help:"开发者后台 → 凭证与基础信息 → App Secret", secret:true },
       { name:"verification_token", ph:"事件订阅页的 Verification Token", help:"开发者后台 → 事件订阅 → Verification Token（第③步在 Lark 后台还会用到）" },
+      { name:"encrypt_key", ph:"事件订阅页的 Encrypt Key（可选）", help:"仅当 Lark 事件订阅启用了加密时填写；Aevatar 不会留存或回显", secret:true, optional:true },
       { name:"label", ph:"给这个 bot 起个名字（可选）", help:"便于在「已接入」列表里区分；可留空", optional:true }
     ],
-    requiredOk:(c)=> !!(c.app_id.trim() && c.app_secret.trim()),
-    requiredMsg:"请先填写 app_id 和 app_secret",
-    buildBody:(c)=>({ platform:"lark", webhook_base_url:location.origin, app_id:c.app_id.trim(), app_secret:c.app_secret, verification_token:c.verification_token.trim(), label:(c.label||"").trim() }),
+    requiredOk:(c)=> !!(c.app_id.trim() && c.app_secret.trim() && c.verification_token.trim()),
+    requiredMsg:"请先填写 app_id、app_secret 和 verification_token",
+    buildBody:(c)=>({ platform:"lark", webhook_base_url:location.origin, app_id:c.app_id.trim(), app_secret:c.app_secret, verification_token:c.verification_token.trim(), encrypt_key:c.encrypt_key.trim(), label:(c.label||"").trim() }),
     step3Title:"Lark 后台配置", stepSub3:"lark console",
     step2Next:"下一步：去 Lark 后台配置"
   },
@@ -521,14 +612,23 @@ const state = {
   s:"idle",                           // idle | running | done | failed
   err:null,                           // step2: 'auth' | '409' | 'cred' | 'infra' | 'other' | 'network'
   errMsg:null,
-  cred:{ app_id:"", app_secret:"", verification_token:"", bot_token:"", label:"" },
+  cred:{ app_id:"", app_secret:"", verification_token:"", encrypt_key:"", bot_token:"", label:"" },
   reg:null,                           // last registration result
   registrations:[],                   // GET /api/channels/registrations
   statuses:{},                        // registrationId -> { status, last_event_at }
   llm:null,                           // GET /api/user-config/llm
-  llmSel:{ route:null, model:null },  // step4 selections
-  llmSaving:false, llmSaved:false,
+  llmSel:{ value:null, model:null },  // step4 exact service selection + model
+  llmDraftOption:null,                // immutable display/runtime snapshot for a newer draft identity
+  llmSaveToken:0,
+  llmDraftRevision:0,
+  llmPending:null,                    // immutable exact target for the active save generation
+  llmSaveState:"idle",               // idle | saving | accepted | accepted_unobserved | observed | failed
+  llmSaveError:null,
+  llmSaved:false,
   manageReg:null,                     // registration row being managed
+  workflowRepairing:{},               // registrationId -> request in flight
+  workflowRepairNotice:null,          // safe user-facing result message
+  registrationActionError:null,       // authoritative delete/replace failure
   lights:["pending","pending"],
   _statusTimer:null
 };
@@ -628,18 +728,22 @@ function decodeJwt(token){
 function resolveScopeId(){ const t=getToken(); if(!t) return null; const c=decodeJwt(t); return c ? (c.scope_id||c.scopeId||c.sub||null) : null; }
 
 function signOut(){ clearToken(); beginLogin(); }
-function signOutSilent(){ clearToken(); state.signedIn=false; stopStatusPolling(); render(); }
+function signOutSilent(){ clearToken(); state.signedIn=false; state.llmSaveToken+=1; state.llmPending=null; stopStatusPolling(); render(); }
 
 /* ===========================================================================
    API helpers (relative, scope-gated bearer)
    =========================================================================== */
-async function apiGet(path){
+async function apiGet(path,signal){
   const token = getToken(); if(!token) throw new Error("not-authenticated");
-  const res = await fetch(path, { headers:{ Authorization:"Bearer " + token.access_token } });
+  const opts = { headers:{ Authorization:"Bearer " + token.access_token } };
+  if(signal) opts.signal=signal;
+  const res = await fetch(path, opts);
+  if(signal && signal.aborted) throw new Error("aborted");
   if(res.status === 401){ signOutSilent(); throw new Error("unauthorized"); }
   if(res.status === 404) return null;
   if(!res.ok) throw new Error("api-error-" + res.status);
   const txt = await res.text(); if(!txt) return null;
+  if(signal && signal.aborted) throw new Error("aborted");
   try { return JSON.parse(txt); } catch(e){ return null; }
 }
 async function apiSend(path, method, body){
@@ -674,9 +778,15 @@ async function loadRegistrations(){
 }
 async function loadLlm(force){
   if(state.llm && !force) return state.llm;
-  try { state.llm = await apiGet("/api/user-config/llm"); }
-  catch(e){ if(e.message!=="unauthorized") console.warn("channels: llm read failed", e); state.llm = null; }
+  try {
+    const loadedLlm=await readLlm();
+    if(loadedLlm) state.llm=loadedLlm;
+  }
+  catch(e){ if(e.message!=="unauthorized") console.warn("channels: llm read failed", e); }
   return state.llm;
+}
+async function readLlm(signal){
+  return apiGet("/api/user-config/llm",signal);
 }
 async function fetchStatus(regId){
   try { return await apiGet("/api/channels/registrations/" + encodeURIComponent(regId) + "/status"); }
@@ -698,6 +808,69 @@ function normStatus(s){
 }
 const BADGE_BY_STATUS = { active:["b-active","s-active"], pending:["b-pending","s-pending"], error:["b-error","s-error"], loading:["b-soon","s-running"], foreign:["b-soon","s-unknown"], unknown:["b-warn","s-warn"] };
 
+function workflowDeliveryStatus(registration){
+  if(!registration) return "repair_required";
+  const live = state.statuses[registration.id];
+  return (live && live.workflow_result_delivery_status) ||
+    registration.workflow_result_delivery_status || "repair_required";
+}
+function workflowDeliveryView(registration){
+  const status = workflowDeliveryStatus(registration);
+  if(status==="repair_required" && (registration.platform||"").toLowerCase()!=="lark"){
+    return { label:"工作流回传未启用", badge:"soon" };
+  }
+  return WORKFLOW_DELIVERY_STATUS[status] || WORKFLOW_DELIVERY_STATUS.repair_required;
+}
+function applyWorkflowDeliveryResult(registration, data, fallbackStatus){
+  const status = (data && data.workflow_result_delivery_status) || fallbackStatus;
+  registration.workflow_result_delivery_status = status;
+  registration.workflow_result_delivery_failure_phase = data && data.failure_phase || null;
+  registration.workflow_result_delivery_failure_reason = data && data.failure_reason || null;
+  const live = state.statuses[registration.id];
+  if(live){
+    live.workflow_result_delivery_status = status;
+    live.workflow_result_delivery_failure_phase = registration.workflow_result_delivery_failure_phase;
+    live.workflow_result_delivery_failure_reason = registration.workflow_result_delivery_failure_reason;
+  }
+}
+async function repairWorkflowReplies(registration){
+  if(!registration || !registration.id || state.workflowRepairing[registration.id]) return;
+  state.workflowRepairing[registration.id] = true;
+  state.workflowRepairNotice = null;
+  render();
+  let result;
+  try {
+    result = await apiSend(
+      "/api/channels/registrations/" + encodeURIComponent(registration.id) +
+        "/workflow-result-delivery/repair",
+      "POST",
+      null);
+  } catch(e) {
+    state.workflowRepairing[registration.id] = false;
+    if(e.message!=="unauthorized"){
+      applyWorkflowDeliveryResult(registration, null, "repair_failed");
+      state.workflowRepairNotice = { registrationId:registration.id, message:"工作流回传修复请求失败，请重试。" };
+      render();
+    }
+    return;
+  }
+
+  state.workflowRepairing[registration.id] = false;
+  const data = result.data || {};
+  applyWorkflowDeliveryResult(
+    registration,
+    data,
+    result.ok ? "enabled" : "repair_failed");
+  if(result.ok && workflowDeliveryStatus(registration)==="enabled"){
+    state.workflowRepairNotice = { registrationId:registration.id, message:"工作流回传已恢复，无需修改 Lark 后台配置。" };
+  } else if(workflowDeliveryStatus(registration)==="repairing") {
+    state.workflowRepairNotice = { registrationId:registration.id, message:"工作流回传修复正在完成。" };
+  } else {
+    state.workflowRepairNotice = { registrationId:registration.id, message:data.note || "工作流回传修复未完成，请重试。" };
+  }
+  render();
+}
+
 /* ---- register / delete / llm save ---- */
 async function doRegister(){
   state.step=2; state.s="running"; state.err=null; state.errMsg=null; render();
@@ -715,8 +888,10 @@ async function doRegister(){
       routeId: d.nyx_conversation_route_id || "",
       webhookUrl: d.webhook_url || "",
       relayCallbackUrl: d.relay_callback_url || "",
+      workflowDeliveryStatus: d.workflow_result_delivery_status || "repair_required",
       scope: state.scopeId || (r.data && r.data.scope_id) || "",
       verificationToken: (c.verification_token||"").trim(),
+      encryptKey: (c.encrypt_key||"").trim(),
       label: (c.label||"").trim()
     };
     state.s="done"; render();
@@ -736,22 +911,231 @@ function classifyRegError(status, errText){
   if(t.includes("nyx_base_url")) return "infra";
   return "other";
 }
-async function doDelete(regId, after){
-  try { await apiSend("/api/channels/registrations/" + encodeURIComponent(regId), "DELETE", null); }
-  catch(e){ if(e.message==="unauthorized") return; }
+async function doDelete(regId){
+  state.registrationActionError=null;
+  let result;
+  try { result=await apiSend("/api/channels/registrations/" + encodeURIComponent(regId), "DELETE", null); }
+  catch(e){
+    if(e.message==="unauthorized") return false;
+    state.registrationActionError="删除失败，请重试。";
+    render();
+    return false;
+  }
+  if(!result.ok){
+    state.registrationActionError=(result.data && (result.data.error||result.data.note)) || ("删除失败 · HTTP " + result.status);
+    render();
+    return false;
+  }
   delete state.statuses[regId];
   await loadRegistrations();
-  if(typeof after==="function") after();
+  return true;
+}
+function freezeLlmPending(target){
+  return Object.freeze({
+    ...target,
+    submittedDraft:Object.freeze({...target.submittedDraft}),
+    expectedCommittedDraft:Object.freeze({...target.expectedCommittedDraft})
+  });
+}
+function snapshotLlmSelectionOption(option){
+  if(!option) return null;
+  return Object.freeze({
+    value:option.value,
+    label:option.label,
+    kind:option.kind,
+    routeValue:option.routeValue,
+    userServiceId:option.userServiceId,
+    defaultModel:option.defaultModel
+  });
+}
+function isCurrentLlmSave(target){
+  return !!target && state.llmSaveToken===target.saveToken &&
+    !!state.llmPending && state.llmPending.saveToken===target.saveToken;
+}
+function llmDraftStillMatches(target){
+  return state.llmDraftRevision===target.submittedRevision &&
+    state.llmSel.value===target.submittedDraft.value &&
+    normalizeLlmModel(state.llmSel.model)===target.submittedDraft.model;
+}
+function completeLlmObservation(target){
+  if(!isCurrentLlmSave(target)) return;
+  const draftStillMatches=llmDraftStillMatches(target);
+  state.llmPending=null;
+  state.llmSaveState="observed";
+  state.llmSaveError=null;
+  state.llmSaved=draftStillMatches;
+  if(draftStillMatches){
+    state.llmSel={
+      value:target.expectedCommittedDraft.value,
+      model:target.expectedCommittedDraft.model
+    };
+    state.llmDraftOption=null;
+  }
+  render();
+}
+function startLlmObservation(target){
+  return new Promise(resolve=>{
+    let active=true;
+    let attemptGeneration=0;
+    let currentController=null;
+    let foregroundSettled=false;
+    let elapsedMilliseconds=0;
+    const timers=[];
+    const settleForeground=()=>{
+      if(foregroundSettled) return;
+      foregroundSettled=true;
+      resolve();
+    };
+    const stopObservation=()=>{
+      if(!active) return;
+      active=false;
+      attemptGeneration+=1;
+      timers.forEach(timer=>clearTimeout(timer));
+      if(currentController) currentController.abort();
+      currentController=null;
+      settleForeground();
+    };
+    const schedule=(callback,milliseconds)=>{
+      const timer=setTimeout(callback,milliseconds);
+      if(timer && typeof timer.unref==="function") timer.unref();
+      timers.push(timer);
+    };
+    const launchRead=(attemptIndex)=>{
+      if(!active) return;
+      if(!isCurrentLlmSave(target)){
+        stopObservation();
+        return;
+      }
+
+      if(currentController) currentController.abort();
+      currentController=null;
+      attemptGeneration+=1;
+      const generation=attemptGeneration;
+      const controller=new AbortController();
+      currentController=controller;
+      const isAuthoritative=()=>active && generation===attemptGeneration &&
+        !controller.signal.aborted && currentController===controller;
+      const handleError=(error)=>{
+        if(!isAuthoritative()) return;
+        currentController=null;
+        if(!isCurrentLlmSave(target)){
+          stopObservation();
+          return;
+        }
+        if(error.message!=="unauthorized") console.warn("channels: llm observation read failed", error);
+        if(attemptIndex===0) settleForeground();
+      };
+
+      let pendingRead;
+      try { pendingRead=readLlm(controller.signal); }
+      catch(error){ handleError(error); return; }
+      void pendingRead.then(observedLlm=>{
+        if(!isAuthoritative()) return;
+        currentController=null;
+        if(!isCurrentLlmSave(target)){
+          stopObservation();
+          return;
+        }
+        if(observedLlm){
+          state.llm=observedLlm;
+          if(llmSelectionObserved(target,observedLlm)){
+            completeLlmObservation(target);
+            stopObservation();
+            return;
+          }
+          render();
+        }
+        if(attemptIndex===0) settleForeground();
+      },handleError);
+    };
+
+    USER_LLM_SAVE_OBSERVATION_DELAYS_MS.forEach((delayMilliseconds,attemptIndex)=>{
+      elapsedMilliseconds+=delayMilliseconds;
+      schedule(()=>launchRead(attemptIndex),elapsedMilliseconds);
+    });
+    schedule(()=>{
+      const stillCurrent=isCurrentLlmSave(target);
+      stopObservation();
+      if(!stillCurrent) return;
+      state.llmPending=freezeLlmPending({...state.llmPending,phase:"accepted_unobserved"});
+      state.llmSaveState="accepted_unobserved";
+      state.llmSaved=false;
+      render();
+    },elapsedMilliseconds+USER_LLM_SAVE_FINAL_ATTEMPT_SETTLE_MS);
+  });
+}
+function retryLlmObservation(){
+  const pending=state.llmPending;
+  if(!pending || pending.phase!=="accepted_unobserved" || !isCurrentLlmSave(pending)) return;
+  const acceptedTarget=freezeLlmPending({...pending,phase:"accepted"});
+  state.llmPending=acceptedTarget;
+  state.llmSaveState="accepted";
+  state.llmSaved=false;
+  render();
+  void startLlmObservation(acceptedTarget);
+}
+function noteLlmDraftEdit(){
+  state.llmDraftRevision+=1;
+  state.llmSaveError=null;
+  state.llmSaved=false;
+  if(!state.llmPending) state.llmSaveState="idle";
+}
+function completeLlmWriteFailure(target,message){
+  if(!isCurrentLlmSave(target)) return;
+  const draftStillMatches=llmDraftStillMatches(target);
+  state.llmPending=null;
+  state.llmSaveState=draftStillMatches ? "failed" : "idle";
+  state.llmSaveError=draftStillMatches ? message : null;
 }
 async function saveLlm(){
-  if(!state.llmSel.route && state.llmSel.route!=="") return;
-  state.llmSaving=true; state.llmSaved=false; render();
+  const option=buildLlmSelectionOptions(state.llm).find(item=>item.value===state.llmSel.value);
+  if(!option) return;
+  const requestedModel=normalizeLlmModel(state.llmSel.model);
+  const modelExpectation=expectedLlmModel(option,state.llmSel.model,state.llm);
+  const saveToken=state.llmSaveToken+1;
+  state.llmSaveToken=saveToken;
+  const pending=freezeLlmPending({
+    saveToken,
+    submittedRevision:state.llmDraftRevision,
+    submittedDraft:{ value:option.value, model:requestedModel },
+    expectedCommittedDraft:{ value:option.value, model:modelExpectation.value },
+    selectionLabel:option.label,
+    phase:"saving",
+    kind:option.kind,
+    userServiceId:option.userServiceId,
+    routeValue:option.routeValue,
+    requestedModel,
+    expectedModelKnown:modelExpectation.known
+  });
+  state.llmPending=pending;
+  state.llmDraftOption=snapshotLlmSelectionOption(option);
+  state.llmSel.model=requestedModel;
+  state.llmSaveState="saving"; state.llmSaveError=null; state.llmSaved=false; render();
   try {
-    await apiSend("/api/user-config/llm", "PUT", { routeValue: state.llmSel.route, model: state.llmSel.model || null });
-    state.llmSaved=true;
-    await loadLlm(true);
-  } catch(e){ if(e.message!=="unauthorized") console.warn("channels: llm save failed", e); }
-  state.llmSaving=false; render();
+    const body=option.kind==="gateway"
+      ? { routeValue:USER_LLM_GATEWAY_ROUTE, model:requestedModel }
+      : { userServiceId:option.userServiceId, model:requestedModel };
+    const result=await apiSend("/api/user-config/llm", "PUT", body);
+    if(!isCurrentLlmSave(pending)) return;
+    if(!result.ok || !result.data || result.data.accepted!==true){
+      completeLlmWriteFailure(
+        pending,
+        (result.data && (result.data.error||result.data.note)) ||
+          (result.ok ? "保存请求未被接受" : ("HTTP " + result.status))
+      );
+      return;
+    }
+
+    const acceptedTarget=freezeLlmPending({...pending,phase:"accepted"});
+    state.llmPending=acceptedTarget;
+    state.llmSaveState="accepted";
+    await startLlmObservation(acceptedTarget);
+  } catch(e){
+    if(isCurrentLlmSave(pending) && e.message!=="unauthorized"){
+      console.warn("channels: llm save failed", e);
+      completeLlmWriteFailure(pending,String(e.message||e));
+    }
+  } finally { if(state.llmSaveToken===saveToken) render(); }
 }
 
 /* ---- live status polling (verify step) ---- */
@@ -870,6 +1254,7 @@ function renderCatalog(){
     regs.forEach(r=>{
       const st = normStatus(state.statuses[r.id]);
       const [badgeCls,dotCls] = BADGE_BY_STATUS[st] || ["b-soon","s-unknown"];
+      const delivery = workflowDeliveryView(r);
       const row=el("div",{class:"reg-row",role:"listitem"});
       row.innerHTML=`
         <div class="rl" style="background:linear-gradient(150deg,var(--accent),color-mix(in oklab,var(--accent) 55%,#7c4dff))">${chLogo(r.platform||"lark")}</div>
@@ -878,7 +1263,8 @@ function renderCatalog(){
           <div class="rm"><span class="id">${esc(r.nyx_channel_bot_id||r.id)}</span><span class="sep">·</span><span class="id">${esc(r.scope_id||"")}</span></div>
         </div>
         <div class="ra">
-          <span class="badge ${badgeCls}"><span class="dot ${dotCls}"></span>${STATUS_LABEL[st]||st}</span>
+          <span class="badge ${badgeCls}" title="消息入站状态"><span class="dot ${dotCls}"></span>${STATUS_LABEL[st]||st}</span>
+          <span title="工作流结果回传状态">${badge(delivery.badge,delivery.label)}</span>
           <button class="manage-btn">管理</button>
         </div>`;
       row.querySelector(".manage-btn").addEventListener("click",()=>{ state.view="manage"; state.manageReg=r; render(); fetchStatus(r.id).then(s=>{ if(s){ state.statuses[r.id]=s; render(); } }); });
@@ -1064,13 +1450,20 @@ function renderStep2(){
     }
   } else { // done
     const P=curP();
+    const workflowReady = state.reg && state.reg.workflowDeliveryStatus === "enabled";
     wrap.appendChild(regProgress(["done","done","done","done"]));
     const rc=el("div",{class:"result-card"});
-    rc.innerHTML=`<div class="rc-h">${ICON.check} 注册成功 · mirror 已写入</div>`;
+    rc.innerHTML=`<div class="rc-h">${ICON.check} ${workflowReady?"注册完成":"入站接入完成 · 工作流回传待修复"} · mirror 已写入</div>`;
     rc.appendChild(copyRow("bot_id", state.reg.botId));
     if(P.consoleStep) rc.appendChild(copyRow("webhook_url（回调地址）", state.reg.webhookUrl));
     if(state.reg.scope) rc.appendChild(copyRow("scope", state.reg.scope));
     wrap.appendChild(rc);
+    if(!workflowReady){
+      const capabilityCopy = P.id==="lark"
+        ? `完成接入后可在管理页选择 <b>Repair workflow replies</b>；修复会保留当前 bot 和 webhook。`
+        : `当前渠道尚未提供工作流结果回传修复操作。`;
+      wrap.appendChild(el("div",{class:"callout warn"},`${ICON.warn}<div class="body"><span class="ct-title">部分配置已完成</span>bot 已具备消息入站能力，但工作流结束后的结果回传尚未启用。${capabilityCopy}</div>`));
+    }
     if(P.consoleStep){
       wrap.appendChild(el("div",{class:"callout info"},`${ICON.info}<div class="body">下一步要把上面的 <b>webhook_url</b> 和 Verification Token 填到 Lark 后台 —— 这一步只能你手动做。</div>`));
     } else {
@@ -1097,7 +1490,11 @@ async function deleteExistingThenRegister(){
   try {
     const list = (await apiGet("/api/channels/registrations")) || [];
     const existing = list.filter(r => (r.platform||"").toLowerCase()===state.platform);
-    for(const r of existing){ await apiSend("/api/channels/registrations/" + encodeURIComponent(r.id), "DELETE", null); }
+    for(const r of existing){
+      if(!await doDelete(r.id)){
+        state.s="failed"; state.err="other"; state.errMsg=state.registrationActionError||"删除旧接入失败"; render(); return;
+      }
+    }
   } catch(e){ if(e.message==="unauthorized") return; }
   doRegister();
 }
@@ -1135,7 +1532,7 @@ function renderStep3(){
   wrap.appendChild(sub("① 事件订阅 —— 回调地址 & Token"));
   wrap.appendChild(copyRow("事件订阅 Request URL（回调地址）", reg.webhookUrl||""));
   wrap.appendChild(copyRow("Verification Token", reg.verificationToken||""));
-  wrap.appendChild(copyRow("Encrypt Key", "（留空）"));
+  wrap.appendChild(copyRow("Encrypt Key", reg.encryptKey||"（未启用）"));
 
   wrap.appendChild(el("div",{class:"callout warn"},`${ICON.warn}<div class="body"><span class="ct-title">别填错回调地址</span>Lark 后台填的是上面这个 <b>webhook_url</b>（指向 NyxID）。⚠️ <b>不要</b>填 relay 内部用的 <code class="kbd">callback_url</code>${reg.relayCallbackUrl?`（<span class="mono">${esc(reg.relayCallbackUrl)}</span>，仅供参考，勿填）`:""}。卡片回调（如有单独字段）也填同一个 webhook_url。</div>`));
 
@@ -1154,7 +1551,7 @@ function renderStep3(){
   wrap.appendChild(jb);
 
   const jumpRow=el("div",{style:"display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:2px 0"});
-  jumpRow.appendChild(el("a",{class:"copybtn",href:"https://open.larksuite.com",target:"_blank",rel:"noopener"},`${ICON.ext}<span>去权限管理</span>`));
+  jumpRow.appendChild(el("a",{class:"copybtn",href:"https://open.larksuite.com/app",target:"_blank",rel:"noopener"},`${ICON.ext}<span>打开 Lark 开发者后台</span>`));
   jumpRow.appendChild(el("span",{style:"font-size:11.5px;color:var(--muted-2)"},"导入后点「确认申请」，再到「版本管理与发布」发布版本才生效。"));
   wrap.appendChild(jumpRow);
 
@@ -1186,9 +1583,29 @@ function renderStep3(){
 function renderStep4(){
   const wrap=el("section",{});
   const llm = state.llm;
-  const unset = !llm || !llm.savedRoute || llm.routeFallbackActive;
-  wrap.innerHTML=stepHead("STEP 4 / 5 · reply model", "配回复模型（owner LLM）", badge(state.llmSaved?"registered":"pending", state.llmSaved?"已保存":(unset?"未设置":"已设置")));
+  const unset = !savedLlmSelectionValue(llm) || !!(llm && llm.routeFallbackActive);
+  const saveState=state.llmSaveState||"idle";
+  const saveBadgeLabel=state.llmSaved
+    ? "已保存"
+    : saveState==="accepted" || saveState==="accepted_unobserved"
+      ? "待确认"
+      : saveState==="failed"
+        ? "保存失败"
+        : unset
+          ? "未设置"
+          : "已设置";
+  wrap.innerHTML=stepHead("STEP 4 / 5 · reply model", "配回复模型（owner LLM）", badge(state.llmSaved?"registered":"pending", saveBadgeLabel));
   wrap.insertAdjacentHTML("beforeend",`<p class="step-desc">bot 收到消息后，要用<b style="color:var(--fg)">一个 LLM</b> 生成回复 —— 用的是<b style="color:var(--fg)">你账户（bot owner）的回复模型配置</b>。没有模型，bot 收得到消息但回不了话。</p>`);
+
+  if(saveState==="failed"){
+    wrap.appendChild(el("div",{class:"callout err"},`${ICON.warn}<div class="body"><span class="ct-title">保存失败</span>回复模型没有保存，请检查选择后重试。${state.llmSaveError?`<div class="errnote mono">${esc(state.llmSaveError)}</div>`:""}</div>`));
+  } else if(saveState==="accepted" || saveState==="accepted_unobserved"){
+    const pendingLabel=state.llmPending ? state.llmPending.selectionLabel : "所选服务";
+    const pendingCopy=saveState==="accepted_unobserved"
+      ? `服务端暂未确认 ${esc(pendingLabel)} 的精确服务和模型，保存请求仍然有效。`
+      : `正在等待服务端确认 ${esc(pendingLabel)} 的精确服务和模型。`;
+    wrap.appendChild(el("div",{class:"callout warn"},`${ICON.warn}<div class="body"><span class="ct-title">保存请求已接受</span>${pendingCopy}</div>`));
+  }
 
   if(!llm){
     wrap.appendChild(el("div",{class:"live-chip"},`<span class="dot s-running"></span><span>正在读取你的回复模型配置…</span>`));
@@ -1202,38 +1619,108 @@ function renderStep4(){
     wrap.appendChild(el("div",{class:"callout info"},`${ICON.info}<div class="body"><span class="ct-title">当前回复模型</span><span class="mono">${esc(llm.effectiveRoute||llm.savedRoute||"")}</span>${llm.effectiveRouteLabel?` · ${esc(llm.effectiveRouteLabel)}`:""}。下面可以修改。</div>`));
   }
 
-  // route + model selectors
-  const routeOpts = (llm.routeOptions||[]).slice();
-  if(state.llmSel.route==null) state.llmSel.route = llm.savedRoute || llm.effectiveRoute || (routeOpts[0]&&routeOpts[0].routeValue) || "";
-  const curRoute = state.llmSel.route;
+  // Exact service identity drives persistence; route only scopes model choices.
+  const liveSelectionOpts = buildLlmSelectionOptions(llm);
+  const selectionOpts = liveSelectionOpts.slice();
+  const addRetainedOption=(value,label,kind,routeValue,userServiceId,defaultModel)=>{
+    if(!value || selectionOpts.some(option=>option.value===value)) return;
+    selectionOpts.push({
+      value,
+      label:`${label||userServiceId||"LLM 服务"}（暂不可用）`,
+      kind,
+      routeValue,
+      userServiceId,
+      defaultModel:normalizeOptionalLlmModel(defaultModel),
+      ready:false,
+      allowed:false,
+      disabled:true
+    });
+  };
+  if(state.llmDraftOption && state.llmDraftOption.value===state.llmSel.value){
+    addRetainedOption(
+      state.llmDraftOption.value,
+      state.llmDraftOption.label,
+      state.llmDraftOption.kind,
+      state.llmDraftOption.routeValue,
+      state.llmDraftOption.userServiceId,
+      state.llmDraftOption.defaultModel
+    );
+  }
+  if(state.llmPending){
+    addRetainedOption(
+      state.llmPending.submittedDraft.value,
+      state.llmPending.selectionLabel,
+      state.llmPending.kind,
+      state.llmPending.routeValue,
+      state.llmPending.userServiceId,
+      state.llmPending.expectedCommittedDraft.model
+    );
+  }
+  const committedSelectionValue=savedLlmSelectionValue(llm);
+  if(committedSelectionValue){
+    const committedKind=llm.savedRouteKind;
+    addRetainedOption(
+      committedSelectionValue,
+      llm.savedRouteLabel,
+      committedKind,
+      String(llm.savedRoute||"").trim(),
+      committedKind==="nyx_id_user_service" ? String(llm.savedUserServiceId||"").trim() : null,
+      llm.defaultModel
+    );
+  }
+  const initializingSavedDraft=state.llmSel.value==null;
+  if(initializingSavedDraft){
+    state.llmSel.value = savedLlmSelectionValue(llm);
+    if(state.llmSel.model==null) state.llmSel.model=normalizeLlmModel(llm.defaultModel);
+  }
+  const selectedOption = selectionOpts.find(option=>option.value===state.llmSel.value);
+  const liveSelectedOption = liveSelectionOpts.find(option=>option.value===state.llmSel.value);
+  const curRoute = selectedOption ? selectedOption.routeValue : String(llm.effectiveRoute||"").trim();
   const modelsForRoute = (llm.modelGroupsByRoute||[]).filter(g=>g.routeValue===curRoute).flatMap(g=>g.models||[]);
   // No fabricated model names: only offer what NyxID actually lists for this route.
   // When the live catalog has a defaultModel it is a real option; otherwise the only honest
   // choice is the platform default (empty value -> server resolves it on save).
   const liveModels = modelsForRoute.length
     ? modelsForRoute.slice()
-    : (llm.defaultModel ? [llm.defaultModel] : []);
+    : (selectedOption && selectedOption.defaultModel ? [selectedOption.defaultModel] : []);
   if(state.llmSel.model==null) state.llmSel.model = liveModels[0] || "";
 
   const grid=el("div",{class:"select-grid"});
-  const routeSel=selField("LLM 路由（route）", routeOpts.map(o=>({value:o.routeValue,label:o.label||o.routeValue})), curRoute);
-  routeSel.querySelector("select").addEventListener("change",(e)=>{ state.llmSel.route=e.target.value; state.llmSel.model=null; state.llmSaved=false; render(); });
-  grid.appendChild(routeSel);
+  const selectionChoices = (state.llmSel.value==null ? [{value:"",label:"请选择 LLM 服务",disabled:true}] : []).concat(selectionOpts);
+  const serviceSel=selField("LLM 服务", selectionChoices, state.llmSel.value||"");
+  serviceSel.querySelector("select").addEventListener("change",(e)=>{ state.llmSel.value=e.target.value; state.llmSel.model=null; state.llmDraftOption=snapshotLlmSelectionOption(selectionOpts.find(option=>option.value===e.target.value)); noteLlmDraftEdit(); render(); });
+  grid.appendChild(serviceSel);
   // Always offer the genuine "(平台默认)" sentinel; append real models when the catalog has them.
-  const modelChoices = [{value:"",label:"（平台默认）"}].concat(liveModels.map(m=>({value:m,label:m})));
+  const currentModel=normalizeLlmModel(state.llmSel.model);
+  const currentModelChoice=currentModel && !liveModels.includes(currentModel)
+    ? [{value:currentModel,label:currentModel}]
+    : [];
+  const modelChoices = [{value:"",label:"（平台默认）"}].concat(currentModelChoice,liveModels.map(m=>({value:m,label:m})));
   const modelSel=selField("模型 model", modelChoices, state.llmSel.model);
-  modelSel.querySelector("select").addEventListener("change",(e)=>{ state.llmSel.model=e.target.value; state.llmSaved=false; });
+  modelSel.querySelector("select").addEventListener("change",(e)=>{ state.llmSel.model=e.target.value; noteLlmDraftEdit(); render(); });
   grid.appendChild(modelSel);
   wrap.appendChild(grid);
 
-  const saveBtn = btn(state.llmSaving?"保存中…":(state.llmSaved?"已保存 ✓":"保存回复模型"),"ghost",ICON.gear, ()=>saveLlm(), {disabled:state.llmSaving});
+  const saveLabel=saveState==="saving"
+    ? "保存中…"
+    : state.llmSaved
+      ? "已保存 ✓"
+      : saveState==="accepted_unobserved" && state.llmPending && llmDraftStillMatches(state.llmPending)
+        ? "重新检查"
+      : saveState==="accepted"
+        ? "重新确认保存"
+        : saveState==="failed"
+          ? "重试保存"
+          : "保存回复模型";
+  const retryingObservation=saveLabel==="重新检查";
+  const saveBtn = btn(saveLabel,"ghost",ICON.gear, retryingObservation?()=>retryLlmObservation():()=>saveLlm(), {disabled:saveState==="saving"||(!retryingObservation&&!liveSelectedOption)});
   const nextBtn = btn("下一步：验证","primary",ICON.arrow,()=>{ goStep(5); });
   wrap.appendChild(footer([ saveBtn, nextBtn, "spacer", btn("上一步","ghost",ICON.back,()=>{ goStep(3); }) ]));
   return wrap;
 }
 function selField(label,opts,sel){
   const f=el("div",{class:"field",style:"margin-bottom:0"});
-  f.innerHTML=`<label>${esc(label)}</label><div class="sel"><select aria-label="${esc(label)}">${opts.map(o=>`<option value="${esc(o.value)}" ${o.value===sel?"selected":""}>${esc(o.label)}</option>`).join("")}</select><span class="chev">${ICON.chev}</span></div>`;
+  f.innerHTML=`<label>${esc(label)}</label><div class="sel"><select aria-label="${esc(label)}">${opts.map(o=>`<option value="${esc(o.value)}" ${o.value===sel?"selected":""} ${o.disabled?"disabled":""}>${esc(o.label)}</option>`).join("")}</select><span class="chev">${ICON.chev}</span></div>`;
   return f;
 }
 
@@ -1277,6 +1764,17 @@ function renderStep5(){
 }
 function findReg(regId){ return (state.registrations||[]).find(r=>r.id===regId) || null; }
 
+async function replaceRegistration(registration){
+  if(!registration || !registration.id) return;
+  const platform=(registration.platform||"lark").toLowerCase();
+  const manual=hasConsole(platform)
+    ? "替换会生成新的 bot_id 和 Request URL，你必须随后更新 Lark Event Subscriptions。"
+    : "替换会删除当前 bot 和路由，再创建一个新的接入。";
+  if(!confirm("替换该接入？\n\n"+manual)) return;
+  if(!await doDelete(registration.id)) return;
+  enterWizard((registration.platform||"lark").toLowerCase());
+}
+
 /* ===========================================================================
    Manage
    =========================================================================== */
@@ -1284,6 +1782,15 @@ function renderManage(){
   const p=el("main",{class:"page"});
   const r = state.manageReg || {};
   const st = normStatus(state.statuses[r.id]);
+  const repairInFlight = !!state.workflowRepairing[r.id];
+  const committedDeliveryStatus = workflowDeliveryStatus(r);
+  const deliveryStatus = repairInFlight ? "repairing" : committedDeliveryStatus;
+  const delivery = repairInFlight
+    ? WORKFLOW_DELIVERY_STATUS.repairing
+    : workflowDeliveryView(r);
+  const liveStatus = state.statuses[r.id] || {};
+  const failurePhase = liveStatus.workflow_result_delivery_failure_phase || r.workflow_result_delivery_failure_phase || "";
+  const failureReason = liveStatus.workflow_result_delivery_failure_reason || r.workflow_result_delivery_failure_reason || "";
   const crumb=el("nav",{class:"crumb"});
   const back=el("button",{},`${ICON.back}<span>渠道目录</span>`); back.addEventListener("click",()=>{ state.view="catalog"; render(); });
   crumb.appendChild(back); crumb.insertAdjacentHTML("beforeend",`<span class="sep">/</span><span>${esc(connectName(r.platform))} · 管理</span>`);
@@ -1299,6 +1806,8 @@ function renderManage(){
     </div>`;
   const rows=[
     ["渠道", r.platform||"lark","plain"],
+    ["消息入站", STATUS_LABEL[st]||st,"plain"],
+    ["工作流回传", delivery.label,"plain"],
     ["bot_id", r.nyx_channel_bot_id||""],
     ["scope", r.scope_id||""],
     ["provider", r.nyx_provider_slug||""],
@@ -1306,6 +1815,21 @@ function renderManage(){
   ];
   rows.forEach(([k,v,pl])=> card.appendChild(el("div",{class:"kv"},`<span class="k">${esc(k)}</span><span class="v ${pl||""}">${esc(v||"—")}</span>`)) );
   p.appendChild(card);
+
+  const ownedLark = r.owned === true && (r.platform||"").toLowerCase()==="lark";
+  if(ownedLark && st==="pending"){
+    const recovery=el("section",{class:"status-card",style:"margin-top:16px"});
+    recovery.appendChild(el("div",{class:"sec-title",style:"margin:0 0 10px"},"Lark pending_webhook 恢复清单"));
+    recovery.appendChild(copyRow("Event Subscriptions Request URL", r.webhook_url||""));
+    recovery.appendChild(el("div",{class:"callout warn",style:"margin-top:12px"},`${ICON.warn}<div class="body"><ol style="margin:0;padding-left:20px"><li>把上面的精确 Request URL 粘贴到 Lark <b>Event Subscriptions</b>。</li><li>确认 Lark 中的 Verification Token，以及启用加密时的 Encrypt Key，与本次注册输入完全一致；Aevatar 不保存或回显这些秘密。</li><li>在权限管理中导入页面提供的权限 JSON。</li><li>订阅事件 <code class="kbd">im.message.receive_v1</code>。</li><li>创建、发布并由管理员批准应用版本。</li><li>给 bot 发送一条测试消息，刷新状态直到 <code class="kbd">active</code>。</li></ol><div style="margin-top:10px"><b>只有收到验证通过的入站消息并变为 active 才算完成</b>；Aevatar 无法代替你修改 Lark 后台。</div></div>`));
+    const actions=el("div",{style:"display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px"});
+    const copyPermissions=el("button",{class:"copybtn"},`${ICON.copy}<span>复制权限 JSON</span>`);
+    bindCopy(copyPermissions,LARK_SCOPE_IMPORT_JSON);
+    actions.appendChild(copyPermissions);
+    actions.appendChild(el("a",{class:"copybtn",href:"https://open.larksuite.com/app",target:"_blank",rel:"noopener"},`${ICON.ext}<span>打开 Lark 开发者后台</span>`));
+    recovery.appendChild(actions);
+    p.appendChild(recovery);
+  }
 
   if(st!=="active"){
     const pf=(r.platform||"lark").toLowerCase();
@@ -1316,10 +1840,36 @@ function renderManage(){
     p.appendChild(el("div",{class:"callout warn",style:"margin-top:16px"},`${ICON.warn}<div class="body"><span class="ct-title">bot 还没激活</span>${warnBody}</div>`));
   }
 
+  if(ownedLark && (deliveryStatus==="repair_required" || deliveryStatus==="repair_failed")){
+    const failedDetail = deliveryStatus==="repair_failed" && (failurePhase || failureReason)
+      ? `<div class="repair-detail">${esc(failurePhase||"unspecified")} · ${esc(failureReason||"unspecified")}</div>`
+      : "";
+    p.appendChild(el("div",{class:`callout ${deliveryStatus==="repair_failed"?"err":"warn"}`,style:"margin-top:16px"},`${ICON.warn}<div class="body"><span class="ct-title">工作流结果回传${deliveryStatus==="repair_failed"?"修复未完成":"尚未启用"}</span>消息入站状态与工作流回传能力相互独立；当前 bot 仍可接收消息。使用下方修复操作会保留现有 bot、webhook 和 Lark 后台配置。${failedDetail}</div>`));
+  } else if(ownedLark && deliveryStatus==="repairing") {
+    p.appendChild(el("div",{class:"callout info",style:"margin-top:16px",role:"status","aria-live":"polite"},`${ICON.refresh}<div class="body"><span class="ct-title">工作流回传修复中</span>正在轮换内部回传凭据并更新现有路由。</div>`));
+  }
+
+  if(state.workflowRepairNotice && state.workflowRepairNotice.registrationId===r.id){
+    const noticeKind = deliveryStatus==="enabled" ? "info" : "warn";
+    p.appendChild(el("div",{class:`callout ${noticeKind}`,style:"margin-top:16px",role:"status","aria-live":"polite"},`${deliveryStatus==="enabled"?ICON.check:ICON.info}<div class="body">${esc(state.workflowRepairNotice.message)}</div>`));
+  }
+
+  if(state.registrationActionError){
+    p.appendChild(el("div",{class:"callout err",style:"margin-top:16px",role:"alert"},`${ICON.warn}<div class="body"><span class="ct-title">操作未完成</span>${esc(state.registrationActionError)}</div>`));
+  }
+
   const foot=el("div",{class:"step-foot",style:"border-top:0;margin-top:18px;padding-top:0"});
+  if(ownedLark && (committedDeliveryStatus==="repair_required" || committedDeliveryStatus==="repair_failed")){
+    foot.appendChild(btn(
+      "Repair workflow replies",
+      "primary",
+      repairInFlight ? '<span class="spin"></span>' : ICON.refresh,
+      ()=>repairWorkflowReplies(r),
+      {disabled:repairInFlight}));
+  }
   foot.appendChild(btn("刷新状态","ghost",ICON.refresh,()=>{ if(r.id) fetchStatus(r.id).then(s=>{ if(s){ state.statuses[r.id]=s; render(); } }); }));
-  foot.appendChild(btn("重新接入","ghost",ICON.gear,()=>{ enterWizard((r.platform||"lark").toLowerCase()); }));
-  foot.appendChild(btn("删除接入","danger",ICON.trash,()=>{ const recover = hasConsole((r.platform||"lark").toLowerCase()) ? "如需恢复要重新注册并回后台改回调。" : "如需恢复重新注册即可（Telegram 无需后台改动）。"; if(confirm("删除该接入？\n\n这会删除 registration 和 mirror，bot 将不再路由。"+recover)){ doDelete(r.id, ()=>{ state.view="catalog"; render(); }); } }));
+  foot.appendChild(btn("替换接入","ghost",ICON.gear,()=>replaceRegistration(r)));
+  foot.appendChild(btn("删除接入","danger",ICON.trash,async()=>{ const recover = hasConsole((r.platform||"lark").toLowerCase()) ? "如需恢复要重新注册并回后台改回调。" : "如需恢复重新注册即可（Telegram 无需后台改动）。"; if(confirm("删除该接入？\n\n这会删除 registration 和 mirror，bot 将不再路由。"+recover) && await doDelete(r.id)){ state.view="catalog"; state.manageReg=null; render(); } }));
   p.appendChild(foot);
   return p;
 }
@@ -1327,7 +1877,7 @@ function renderManage(){
 /* ===========================================================================
    Compose / render
    =========================================================================== */
-function enterWizard(platformId){ state.platform=(platformId&&PLATFORMS[platformId])?platformId:"lark"; state.view="wizard"; state.step=1; state.s="idle"; state.err=null; state.reg=null; state.cred={ app_id:"", app_secret:"", verification_token:"", bot_token:"", label:"" }; render(); }
+function enterWizard(platformId){ state.llmSaveToken+=1; state.llmDraftRevision+=1; state.platform=(platformId&&PLATFORMS[platformId])?platformId:"lark"; state.view="wizard"; state.step=1; state.s="idle"; state.err=null; state.reg=null; state.manageReg=null; state.registrationActionError=null; state.llmSel={ value:null, model:null }; state.llmDraftOption=null; state.llmPending=null; state.llmSaveState="idle"; state.llmSaveError=null; state.llmSaved=false; state.cred={ app_id:"", app_secret:"", verification_token:"", encrypt_key:"", bot_token:"", label:"" }; render(); }
 function render(){
   const app=$("#app"); app.innerHTML="";
   app.appendChild(renderTopbar());

@@ -6,19 +6,149 @@ using Aevatar.Audit.Abstractions.Models;
 using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.Audit.Core.Projection;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Mainnet.Host.Api.Hosting;
 using FluentAssertions;
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Capabilities.Tests;
 
 public sealed class ElasticsearchAuditTrailArtifactStoreTests
 {
     [Fact]
+    public async Task ReconcileIndexAsync_WhenIndexMissingAndAutoCreateDisabled_ShouldProvisionVersionedAlias()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.NotFound, """{"error":"alias_missing"}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.NotFound, """{}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.NotFound, """{}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"acknowledged":true}"""));
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions
+            {
+                AutoCreateIndex = false,
+                MissingIndexBehavior = ElasticsearchMissingIndexBehavior.Throw,
+            },
+            handler);
+
+        store.Should().BeAssignableTo<IProjectionIndexReconcileTarget>();
+        await ((IProjectionIndexReconcileTarget)(object)store).ReconcileIndexAsync();
+
+        handler.CapturedRequests.Select(static request => $"{request.Method} {request.PathAndQuery}")
+            .Should()
+            .SatisfyRespectively(
+                request => request.Should().Be("GET /_alias/audit-tests-audit-trail-current"),
+                request => request.Should().Be("HEAD /audit-tests-audit-trail-current"),
+                request => request.Should().Be("HEAD /audit-tests-audit-trail"),
+                request => request.Should().StartWith("PUT /audit-tests-audit-trail-current-v"));
+
+        using var createPayload = JsonDocument.Parse(handler.CapturedRequests[3].Body);
+        var mappings = createPayload.RootElement.GetProperty("mappings");
+        var artifactProperties = mappings.GetProperty("properties")
+            .GetProperty("artifact")
+            .GetProperty("properties");
+        artifactProperties.GetProperty("schema_version")
+            .GetProperty("type")
+            .GetString()
+            .Should()
+            .Be("keyword");
+        artifactProperties.GetProperty("schema_version").TryGetProperty("fields", out _)
+            .Should().BeFalse();
+        artifactProperties.GetProperty("scope_id")
+            .GetProperty("fields")
+            .GetProperty("keyword")
+            .GetProperty("type")
+            .GetString()
+            .Should()
+            .Be("keyword");
+        createPayload.RootElement.GetProperty("aliases")
+            .TryGetProperty("audit-tests-audit-trail-current", out _)
+            .Should()
+            .BeTrue();
+    }
+
+    [Fact]
+    public async Task ReconcileIndexAsync_WhenLegacyBareIndexHasDriftedMapping_ShouldReindexWithoutDeletingLegacyData()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.NotFound, """{"error":"alias_missing"}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.NotFound, """{}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"acknowledged":true}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """{"timed_out":false,"failures":[],"created":3}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"acknowledged":true}"""));
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions
+            {
+                AutoCreateIndex = false,
+                MissingIndexBehavior = ElasticsearchMissingIndexBehavior.Throw,
+            },
+            handler);
+
+        await ((IProjectionIndexReconcileTarget)(object)store).ReconcileIndexAsync();
+
+        var reindexRequest = handler.CapturedRequests.Single(static request =>
+            request.PathAndQuery.StartsWith("/_reindex", StringComparison.Ordinal));
+        using var reindexPayload = JsonDocument.Parse(reindexRequest.Body);
+        reindexPayload.RootElement.GetProperty("conflicts").GetString().Should().Be("proceed");
+        reindexPayload.RootElement.GetProperty("source").GetProperty("index").GetString()
+            .Should().Be("audit-tests-audit-trail");
+        reindexPayload.RootElement.GetProperty("dest").GetProperty("index").GetString()
+            .Should().StartWith("audit-tests-audit-trail-current-v");
+
+        var aliasRequest = handler.CapturedRequests.Single(static request => request.PathAndQuery == "/_aliases");
+        aliasRequest.Body.Should().Contain("audit-tests-audit-trail-current");
+        aliasRequest.Body.Should().NotContain("remove_index");
+        aliasRequest.Body.Should().NotContain("\"remove\"");
+        handler.CapturedRequests.Should().NotContain(static request =>
+            request.Method == "DELETE" || request.PathAndQuery.Contains("_delete_by_query", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ReconcileIndexAsync_WhenAliasPointsToDriftedPhysical_ShouldReindexAndRetainOldPhysical()
+    {
+        const string oldPhysical = "audit-tests-audit-trail-current-vold";
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            JsonSerializer.Serialize(new Dictionary<string, object?>
+            {
+                [oldPhysical] = new Dictionary<string, object?>
+                {
+                    ["aliases"] = new Dictionary<string, object?>
+                    {
+                        ["audit-tests-audit-trail-current"] = new Dictionary<string, object?>(),
+                    },
+                },
+            })));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.NotFound, """{}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"acknowledged":true}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """{"timed_out":false,"failures":[],"created":3}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"acknowledged":true}"""));
+        using var store = CreateStore(new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = false }, handler);
+
+        await ((IProjectionIndexReconcileTarget)(object)store).ReconcileIndexAsync();
+
+        var aliasRequest = handler.CapturedRequests.Single(static request => request.PathAndQuery == "/_aliases");
+        aliasRequest.Body.Should().Contain(oldPhysical);
+        aliasRequest.Body.Should().Contain("\"remove\"");
+        aliasRequest.Body.Should().NotContain("remove_index");
+        handler.CapturedRequests.Should().NotContain(static request => request.Method == "DELETE");
+    }
+
+    [Fact]
     public async Task UpsertAsync_WhenDocumentIsNew_ShouldCreateIndexDocumentAndRoundTripWithGetAsync()
     {
         var handler = new ScriptedHttpMessageHandler();
         handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.NotFound, """{"found":false}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.NotFound, """{"error":"alias_missing"}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.NotFound, """{}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.NotFound, """{}"""));
         handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"acknowledged":true}"""));
         handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.Created, """{"result":"created"}"""));
         handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, BuildHitPayload(BuildDocument("audit-1", "hash-1"))));
@@ -31,13 +161,19 @@ public sealed class ElasticsearchAuditTrailArtifactStoreTests
         roundTripped.Should().NotBeNull();
         roundTripped!.AuditId.Should().Be("audit-1");
         roundTripped.ContentHash.Should().Be("hash-1");
-        handler.CapturedRequests.Select(static request => $"{request.Method} {request.PathAndQuery}")
-            .Should()
-            .Equal(
-                "GET /audit-tests-audit-trail/_doc/audit-1",
-                "PUT /audit-tests-audit-trail",
-                "PUT /audit-tests-audit-trail/_create/audit-1",
-                "GET /audit-tests-audit-trail/_doc/audit-1");
+        handler.CapturedRequests.Should().HaveCount(7);
+        handler.CapturedRequests.Take(4).Select(static request => $"{request.Method} {request.PathAndQuery}")
+            .Should().Equal(
+                "GET /audit-tests-audit-trail-current/_doc/audit-1",
+                "GET /_alias/audit-tests-audit-trail-current",
+                "HEAD /audit-tests-audit-trail-current",
+                "HEAD /audit-tests-audit-trail");
+        handler.CapturedRequests[4].Method.Should().Be("PUT");
+        handler.CapturedRequests[4].PathAndQuery.Should().StartWith("/audit-tests-audit-trail-current-v");
+        handler.CapturedRequests.Skip(5).Select(static request => $"{request.Method} {request.PathAndQuery}")
+            .Should().Equal(
+                "PUT /audit-tests-audit-trail-current/_create/audit-1",
+                "GET /audit-tests-audit-trail-current/_doc/audit-1");
 
         var createRequest = handler.CapturedRequests.Single(static request =>
             request.PathAndQuery.EndsWith("/_create/audit-1", StringComparison.Ordinal));
@@ -63,7 +199,7 @@ public sealed class ElasticsearchAuditTrailArtifactStoreTests
 
         write.Disposition.Should().Be(expectedDisposition);
         handler.CapturedRequests.Should().ContainSingle()
-            .Which.PathAndQuery.Should().Be("/audit-tests-audit-trail/_doc/audit-1");
+            .Which.PathAndQuery.Should().Be("/audit-tests-audit-trail-current/_doc/audit-1");
     }
 
     [Theory]
@@ -75,6 +211,9 @@ public sealed class ElasticsearchAuditTrailArtifactStoreTests
     {
         var handler = new ScriptedHttpMessageHandler();
         handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.NotFound, """{"found":false}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.NotFound, """{"error":"alias_missing"}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.NotFound, """{}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.NotFound, """{}"""));
         handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"acknowledged":true}"""));
         handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.Conflict, """{"result":"conflict"}"""));
         handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, BuildHitPayload(BuildDocument("audit-1", existingContentHash))));
@@ -83,13 +222,18 @@ public sealed class ElasticsearchAuditTrailArtifactStoreTests
         var write = await store.UpsertAsync(BuildDocument("audit-1", "hash-1"));
 
         write.Disposition.Should().Be(expectedDisposition);
-        handler.CapturedRequests.Select(static request => $"{request.Method} {request.PathAndQuery}")
-            .Should()
-            .Equal(
-                "GET /audit-tests-audit-trail/_doc/audit-1",
-                "PUT /audit-tests-audit-trail",
-                "PUT /audit-tests-audit-trail/_create/audit-1",
-                "GET /audit-tests-audit-trail/_doc/audit-1");
+        handler.CapturedRequests.Should().HaveCount(7);
+        handler.CapturedRequests.Take(4).Select(static request => $"{request.Method} {request.PathAndQuery}")
+            .Should().Equal(
+                "GET /audit-tests-audit-trail-current/_doc/audit-1",
+                "GET /_alias/audit-tests-audit-trail-current",
+                "HEAD /audit-tests-audit-trail-current",
+                "HEAD /audit-tests-audit-trail");
+        handler.CapturedRequests[4].PathAndQuery.Should().StartWith("/audit-tests-audit-trail-current-v");
+        handler.CapturedRequests.Skip(5).Select(static request => $"{request.Method} {request.PathAndQuery}")
+            .Should().Equal(
+                "PUT /audit-tests-audit-trail-current/_create/audit-1",
+                "GET /audit-tests-audit-trail-current/_doc/audit-1");
     }
 
     [Fact]
@@ -108,14 +252,16 @@ public sealed class ElasticsearchAuditTrailArtifactStoreTests
     }
 
     [Fact]
-    public async Task QueryAsync_ShouldSearchNewestAuditArtifactsAndReturnCursorAndWatermark()
+    public async Task QueryAsync_ShouldSearchNewestAuditArtifactsAndReturnCursorAndCoverage()
     {
         var handler = new ScriptedHttpMessageHandler();
         handler.EnqueueResponse(_ => CreateJsonResponse(
             HttpStatusCode.OK,
             BuildSearchPayload(
                 BuildDocument("audit-1", "hash-1"),
-                """["2026-07-03T09:00:00Z","audit-1"]""")));
+                """["2026-07-03T09:00:00Z","audit-1"]""",
+                BuildDocument("audit-2", "hash-2"),
+                """["2026-07-03T08:00:00Z","audit-2"]""")));
         using var store = CreateStore(new ElasticsearchProjectionDocumentStoreOptions(), handler);
 
         var page = await ((IAuditTrailQueryPort)store).QueryAsync(new AuditTrailQuery
@@ -125,6 +271,10 @@ public sealed class ElasticsearchAuditTrailArtifactStoreTests
             IdentityKeyId = "identity-key-1",
             OperationName = "audit.test",
             Outcome = AuditOutcome.Success,
+            LifecyclePhase = AuditLifecyclePhase.Terminal,
+            TerminalOutcome = AuditTerminalOutcome.Succeeded,
+            TraceId = "trace-1",
+            CorrelationId = "correlation-1",
             OccurredFrom = DateTimeOffset.Parse("2026-07-03T00:00:00+00:00"),
             OccurredTo = DateTimeOffset.Parse("2026-07-04T00:00:00+00:00"),
             Take = 1,
@@ -133,9 +283,11 @@ public sealed class ElasticsearchAuditTrailArtifactStoreTests
         page.Records.Should().ContainSingle()
             .Which.AuditId.Should().Be("audit-1");
         page.NextCursor.Should().NotBeNullOrWhiteSpace();
-        page.Watermark.Should().Be(DateTimeOffset.Parse("2026-07-03T09:00:00Z"));
+        page.Coverage.IngestionWatermark.Should().Be(DateTimeOffset.Parse("2026-07-03T09:01:00Z"));
+        page.Coverage.Truncated.Should().BeTrue();
+        page.Coverage.SchemaCompatibility.Should().Be(AuditSchemaCompatibility.Current);
         handler.CapturedRequests.Should().ContainSingle()
-            .Which.PathAndQuery.Should().Be("/audit-tests-audit-trail/_search");
+            .Which.PathAndQuery.Should().Be("/audit-tests-audit-trail-current/_search");
         using var requestBody = JsonDocument.Parse(handler.CapturedRequests[0].Body);
         var filterJson = requestBody.RootElement
             .GetProperty("query")
@@ -152,19 +304,35 @@ public sealed class ElasticsearchAuditTrailArtifactStoreTests
         filterJson.Should().Contain("audit.test");
         filterJson.Should().Contain("artifact.outcome.keyword");
         filterJson.Should().Contain("AUDIT_OUTCOME_SUCCESS");
+        filterJson.Should().Contain("artifact.lifecycle_phase.keyword");
+        filterJson.Should().Contain("AUDIT_LIFECYCLE_PHASE_TERMINAL");
+        filterJson.Should().Contain("artifact.terminal_outcome.keyword");
+        filterJson.Should().Contain("AUDIT_TERMINAL_OUTCOME_SUCCEEDED");
+        filterJson.Should().Contain("artifact.trace_id.keyword");
+        filterJson.Should().Contain("artifact.correlation_id.keyword");
         filterJson.Should().Contain("artifact.occurred_at");
-        requestBody.RootElement.GetProperty("size").GetInt32().Should().Be(1);
+        requestBody.RootElement.GetProperty("size").GetInt32().Should().Be(2);
         var sort = requestBody.RootElement.GetProperty("sort");
         sort[0].GetProperty("artifact.occurred_at").GetProperty("order").GetString().Should().Be("desc");
         sort[1].GetProperty("id.keyword").GetProperty("order").GetString().Should().Be("asc");
         requestBody.RootElement
             .GetProperty("aggs")
-            .GetProperty("query_watermark")
+            .GetProperty("ingestion")
+            .GetProperty("aggs")
+            .GetProperty("watermark")
             .GetProperty("max")
             .GetProperty("field")
             .GetString()
             .Should()
-            .Be("artifact.occurred_at");
+            .Be("artifact.recorded_at");
+        var incompatibleSchemaFilter = requestBody.RootElement
+            .GetProperty("aggs")
+            .GetProperty("incompatible_schema_records")
+            .GetProperty("filter")
+            .GetRawText();
+        incompatibleSchemaFilter.Should().Contain(AuditContractSemantics.CurrentSchemaVersion);
+        incompatibleSchemaFilter.Should().Contain("artifact.schema_version");
+        incompatibleSchemaFilter.Should().NotContain("artifact.schema_version.keyword");
     }
 
     [Fact]
@@ -189,6 +357,61 @@ public sealed class ElasticsearchAuditTrailArtifactStoreTests
     }
 
     [Fact]
+    public async Task QueryAsync_WhenAnyNonCurrentSchemaExists_ShouldReportIncompatible()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """
+            {
+              "aggregations": {
+                "ingestion": { "watermark": { "value": null } },
+                "incompatible_schema_records": { "doc_count": 1 },
+                "legacy_schema_records": { "doc_count": 0 }
+              },
+              "hits": { "hits": [] }
+            }
+            """));
+        using var store = CreateStore(new ElasticsearchProjectionDocumentStoreOptions(), handler);
+
+        var page = await ((IAuditTrailQueryPort)store).QueryAsync(new AuditTrailQuery());
+
+        page.Coverage.SchemaCompatibility.Should().Be(AuditSchemaCompatibility.Incompatible);
+    }
+
+    [Fact]
+    public async Task QueryAsync_WhenNoRecordsMatch_ShouldReturnValidEmptyPage()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """
+            {
+              "aggregations": {
+                "ingestion": { "watermark": { "value": null } },
+                "incompatible_schema_records": { "doc_count": 0 },
+                "legacy_schema_records": { "doc_count": 0 }
+              },
+              "hits": { "hits": [] }
+            }
+            """));
+        using var store = CreateStore(new ElasticsearchProjectionDocumentStoreOptions(), handler);
+
+        var page = await ((IAuditTrailQueryPort)store).QueryAsync(new AuditTrailQuery
+        {
+            ScopeId = "scope-1",
+            OccurredFrom = DateTimeOffset.Parse("2100-01-01T00:00:00Z"),
+            OccurredTo = DateTimeOffset.Parse("2100-01-02T00:00:00Z"),
+            Take = 1,
+        });
+
+        page.Records.Should().BeEmpty();
+        page.NextCursor.Should().BeNull();
+        page.Coverage.Truncated.Should().BeFalse();
+        page.Coverage.SchemaCompatibility.Should().Be(AuditSchemaCompatibility.Current);
+    }
+
+    [Fact]
     public async Task UpsertAsync_WhenCreateFails_ShouldSurfaceHttpFailure()
     {
         var handler = new ScriptedHttpMessageHandler();
@@ -199,7 +422,7 @@ public sealed class ElasticsearchAuditTrailArtifactStoreTests
         var act = () => store.UpsertAsync(BuildDocument("audit-1", "hash-1"));
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*audit artifact create failed*500*mapping failed*");
+            .WithMessage("*audit artifact create failed*500*errorType=backend_rejected*");
     }
 
     private static MainnetAgentProjectionDocumentStoresExtensions.ElasticsearchAuditTrailArtifactStore CreateStore(
@@ -222,24 +445,38 @@ public sealed class ElasticsearchAuditTrailArtifactStoreTests
             AuditId = auditId,
             ContentHash = contentHash,
             OperationName = "audit.test",
+            EventKind = "audit.test",
+            SchemaVersion = "1.0",
+            LifecyclePhase = AuditLifecyclePhase.Terminal,
+            TerminalOutcome = AuditTerminalOutcome.Succeeded,
+            Subject = "test-target/target-1",
+            Source = "urn:aevatar:audit:test",
             ScopeId = "scope-1",
             TargetKind = "test-target",
             TargetId = "target-1",
             Record = new AuditRecord
             {
                 AuditId = auditId,
+                EventKind = "audit.test",
+                Subject = "test-target/target-1",
+                SchemaVersion = "1.0",
+                Source = "urn:aevatar:audit:test",
                 OperationName = "audit.test",
                 ScopeId = "scope-1",
                 AuditActorId = "audit_actor:abc",
                 IdentityKeyId = "identity-key-1",
                 Outcome = AuditOutcome.Success,
+                LifecyclePhase = AuditLifecyclePhase.Terminal,
+                TerminalOutcome = AuditTerminalOutcome.Succeeded,
                 Target = new AuditTarget
                 {
                     Kind = "test-target",
                     Id = "target-1",
                 },
+                Correlation = new AuditCorrelation { CorrelationId = "correlation-1" },
             },
             OccurredAtDateTimeOffset = DateTimeOffset.Parse("2026-07-03T09:00:00+00:00"),
+            RecordedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-03T09:01:00+00:00")),
             UpdatedAtDateTimeOffset = DateTimeOffset.Parse("2026-07-03T09:01:00+00:00"),
         };
     }
@@ -255,18 +492,27 @@ public sealed class ElasticsearchAuditTrailArtifactStoreTests
         return "{\"_source\":" + formatter.Format(storageDocument) + "}";
     }
 
-    private static string BuildSearchPayload(AuditTrailDocument document, string sortJson)
+    private static string BuildSearchPayload(
+        AuditTrailDocument firstDocument,
+        string firstSortJson,
+        AuditTrailDocument secondDocument,
+        string secondSortJson)
     {
-        var storageDocument = AuditTrailArtifactStorageDocument.FromArtifact(document);
+        var firstStorageDocument = AuditTrailArtifactStorageDocument.FromArtifact(firstDocument);
+        var secondStorageDocument = AuditTrailArtifactStorageDocument.FromArtifact(secondDocument);
         var formatter = new JsonFormatter(
             JsonFormatter.Settings.Default
                 .WithPreserveProtoFieldNames(true)
                 .WithFormatDefaultValues(true));
 
-        return "{\"aggregations\":{\"query_watermark\":{\"value\":1783069200000,\"value_as_string\":\"2026-07-03T09:00:00.000Z\"}},\"hits\":{\"hits\":[{\"_source\":"
-            + formatter.Format(storageDocument)
+        return "{\"aggregations\":{\"ingestion\":{\"watermark\":{\"value\":1783069260000,\"value_as_string\":\"2026-07-03T09:01:00.000Z\"}},\"incompatible_schema_records\":{\"doc_count\":0},\"legacy_schema_records\":{\"doc_count\":0}},\"hits\":{\"hits\":[{\"_source\":"
+            + formatter.Format(firstStorageDocument)
             + ",\"sort\":"
-            + sortJson
+            + firstSortJson
+            + "},{\"_source\":"
+            + formatter.Format(secondStorageDocument)
+            + ",\"sort\":"
+            + secondSortJson
             + "}]}}";
     }
 

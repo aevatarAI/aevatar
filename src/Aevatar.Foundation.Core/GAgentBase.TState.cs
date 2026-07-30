@@ -226,6 +226,7 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
             _state = eventSourcing.TransitionState(_state, evt);
 
         await OnStateChangedAsync(_state, ct);
+        await eventSourcing.PersistSnapshotAsync(_state, ct);
         await PublishCommittedDomainEventsAsync(commitResult, ct);
     }
 
@@ -309,11 +310,15 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
     /// <remarks>
     /// CONTRACT: this re-broadcasts a committed fact to <em>all</em>
     /// <see cref="ObserverAudience.CommittedFacts"/> consumers of this actor, at the
-    /// actor's current committed version with a deterministic synthetic event id. It is
-    /// therefore only safe for facts whose consumers are idempotent w.r.t. version — in
-    /// particular it must not be used on actor types whose committed events feed an audit
-    /// translator, or the audit trail would gain a duplicate entry. It appends nothing to
-    /// the event store (no <c>RaiseEvent</c>/<c>ConfirmEventsAsync</c>).
+    /// actor's current committed version with the deterministic synthetic event id
+    /// built by <see cref="CommittedStateRepublish.BuildEventId"/>. It is therefore
+    /// only safe for facts whose consumers are idempotent w.r.t. version. Consumers
+    /// that must only react to genuinely new committed facts recognize the marker
+    /// via <see cref="CommittedStateRepublish.IsRepublishEventId"/> and skip the
+    /// envelope — the committed-fact audit materializer does this, so audited actor
+    /// types may republish without duplicating governance records (the maintenance
+    /// action itself is captured by the invoking endpoint's audit). It appends
+    /// nothing to the event store (no <c>RaiseEvent</c>/<c>ConfirmEventsAsync</c>).
     /// </remarks>
     protected Task RepublishCommittedStateAsync(IMessage stateEventPayload, CancellationToken ct = default)
     {
@@ -324,7 +329,7 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
         {
             StateEvent = new StateEvent
             {
-                EventId = $"rebuild:{Id}:{version}",
+                EventId = CommittedStateRepublish.BuildEventId(Id, version),
                 Version = version,
                 EventType = stateEventPayload.Descriptor.FullName,
                 EventData = Any.Pack(stateEventPayload),

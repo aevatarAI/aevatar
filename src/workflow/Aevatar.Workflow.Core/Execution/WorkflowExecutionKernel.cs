@@ -1909,12 +1909,35 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             ApplyAgentToolScope(request, roleScope: null, step.AgentToolScope);
         }
 
+        ApplyExternalInvocation(request, step);
         ApplyTransformOperation(request, step.TransformOperation, state);
         ApplyHumanApprovalOptions(request, step.HumanApprovalOptions);
         ApplyExternalApprovalOptions(request, step.ExternalApprovalOptions, state);
+        ApplyConnectorApprovalOptions(request, step.ConnectorApprovalOptions, state);
         ApplyInteractionPresentation(request, step.Presentation, state);
 
         return request;
+    }
+
+    // The call-site identity a step carries at runtime must be the one admission committed, so both
+    // sides derive it from the compiler. Looping primitives receive their synthesized sub-step
+    // call site here and copy it onto every item/iteration they dispatch.
+    private void ApplyExternalInvocation(StepRequestEvent request, StepDefinition step)
+    {
+        var workflowName = _workflow?.Name ?? string.Empty;
+        try
+        {
+            var invocation =
+                WorkflowAuthorizationDependencyEvaluator.TryCompileDirectInvocation(workflowName, step)
+                ?? WorkflowAuthorizationDependencyEvaluator.TryCompileSynthesizedSubStepInvocation(workflowName, step);
+            if (invocation is not null)
+                request.ExternalInvocation = invocation;
+        }
+        catch (WorkflowExternalCapabilityValidationException)
+        {
+            // A step that cannot be compiled into a call site stays unadmitted. Tools that require
+            // admission fail closed before dispatch instead of aborting the whole execution turn.
+        }
     }
 
     private void ApplyTransformOperation(
@@ -1996,6 +2019,36 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             ? string.Empty
             : _expressionEvaluator.Evaluate(value, state.Variables).Trim();
 
+    private void ApplyConnectorApprovalOptions(
+        StepRequestEvent request,
+        ConnectorApprovalOptionsDefinition? options,
+        WorkflowExecutionKernelState state)
+    {
+        if (options == null)
+            return;
+
+        (request.StepParameters ??= new WorkflowStepParameters()).ConnectorApproval =
+            new WorkflowConnectorApprovalOptions
+            {
+                Policy = WorkflowExternalActionApprovalPolicy.Required,
+                ServiceRef = EvaluateOption(options.ServiceRef, state),
+                NodeId = EvaluateOption(options.NodeId, state),
+                HttpVerb = EvaluateOption(options.HttpVerb, state),
+                Resource = EvaluateOption(options.Resource, state),
+                PermissionScope = EvaluateOption(options.PermissionScope, state),
+                ExpirationSeconds = options.ExpirationSeconds,
+                StatusCheckIntervalSeconds = options.StatusCheckIntervalSeconds,
+                Destructive = options.Destructive,
+                TeamId = EvaluateOption(options.TeamId, state),
+                MemberId = EvaluateOption(options.MemberId, state),
+                WorkflowId = EvaluateOption(options.WorkflowId, state),
+                PublishedServiceId = EvaluateOption(options.PublishedServiceId, state),
+                PolicyReason = string.IsNullOrWhiteSpace(options.PolicyReason)
+                    ? "workflow-step-required-approval"
+                    : EvaluateOption(options.PolicyReason, state),
+            };
+    }
+
     private static string NormalizeOptionToken(string? value) =>
         string.IsNullOrWhiteSpace(value)
             ? string.Empty
@@ -2010,9 +2063,15 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         if (effectiveScope == null)
             return;
 
-        var payload = (request.StepParameters ??= new WorkflowStepParameters()).AgentToolScope = new WorkflowAgentToolScope();
+        var payload = (request.StepParameters ??= new WorkflowStepParameters()).AgentToolScope = new WorkflowAgentToolScope
+        {
+            RestrictAllowedToolNames = effectiveScope.RestrictAllowedToolNames,
+            RestrictToolSets = effectiveScope.RestrictToolSets,
+        };
         foreach (var toolName in effectiveScope.AllowedToolNames)
             payload.AllowedToolNames.Add(toolName);
+        foreach (var toolSetRef in effectiveScope.ToolSetRefs)
+            payload.ToolSetRefs.Add(toolSetRef);
     }
 
     private static WorkflowAgentToolScopeDefinition? IntersectAgentToolScope(
@@ -2025,20 +2084,57 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         if (stepScope == null)
             return CloneAgentToolScope(roleScope);
 
-        var stepAllowed = new HashSet<string>(stepScope.AllowedToolNames, StringComparer.OrdinalIgnoreCase);
+        var roleRestrictsAllowed = RestrictsAllowedToolNames(roleScope);
+        var stepRestrictsAllowed = RestrictsAllowedToolNames(stepScope);
+        var roleRestrictsToolSets = RestrictsToolSets(roleScope);
+        var stepRestrictsToolSets = RestrictsToolSets(stepScope);
         return new WorkflowAgentToolScopeDefinition
         {
-            AllowedToolNames = roleScope.AllowedToolNames
-                .Where(stepAllowed.Contains)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList(),
+            RestrictAllowedToolNames = roleRestrictsAllowed || stepRestrictsAllowed,
+            RestrictToolSets = roleRestrictsToolSets || stepRestrictsToolSets,
+            AllowedToolNames = IntersectScopeDimension(
+                roleScope.AllowedToolNames,
+                roleRestrictsAllowed,
+                stepScope.AllowedToolNames,
+                stepRestrictsAllowed),
+            ToolSetRefs = IntersectScopeDimension(
+                roleScope.ToolSetRefs,
+                roleRestrictsToolSets,
+                stepScope.ToolSetRefs,
+                stepRestrictsToolSets),
         };
     }
+
+    private static List<string> IntersectScopeDimension(
+        IEnumerable<string> roleValues,
+        bool roleRestricts,
+        IEnumerable<string> stepValues,
+        bool stepRestricts)
+    {
+        if (!roleRestricts)
+            return stepValues.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (!stepRestricts)
+            return roleValues.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+
+        var stepSet = new HashSet<string>(stepValues, StringComparer.OrdinalIgnoreCase);
+        return roleValues.Where(stepSet.Contains).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private static bool RestrictsAllowedToolNames(WorkflowAgentToolScopeDefinition scope) =>
+        scope.RestrictAllowedToolNames || scope.AllowedToolNames.Count > 0;
+
+    private static bool RestrictsToolSets(WorkflowAgentToolScopeDefinition scope) =>
+        scope.RestrictToolSets || scope.ToolSetRefs.Count > 0;
 
     private static WorkflowAgentToolScopeDefinition CloneAgentToolScope(WorkflowAgentToolScopeDefinition scope) =>
         new()
         {
+            RestrictAllowedToolNames = RestrictsAllowedToolNames(scope),
+            RestrictToolSets = RestrictsToolSets(scope),
             AllowedToolNames = scope.AllowedToolNames
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList(),
+            ToolSetRefs = scope.ToolSetRefs
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList(),
         };

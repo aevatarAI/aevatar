@@ -69,6 +69,7 @@ public sealed class ExternalIdentityBindingRebuildTests : IAsyncLifetime
         {
             ExternalSubject = Subject(),
             BindingId = "bnd_first",
+            OwnerScopeId = "owner-user-1",
         });
         var committedVersion = _agent.EventSourcing!.CurrentVersion;
         _publications.Captured.Clear();
@@ -99,6 +100,7 @@ public sealed class ExternalIdentityBindingRebuildTests : IAsyncLifetime
         {
             ExternalSubject = Subject(),
             BindingId = "bnd_first",
+            OwnerScopeId = "owner-user-1",
         });
         var committedVersion = _agent.EventSourcing!.CurrentVersion;
         _publications.Captured.Clear();
@@ -111,6 +113,7 @@ public sealed class ExternalIdentityBindingRebuildTests : IAsyncLifetime
         {
             ExternalSubject = Subject(),
             BindingId = "bnd_second",
+            OwnerScopeId = "owner-user-1",
         });
 
         _agent.EventSourcing!.CurrentVersion.Should().Be(committedVersion);

@@ -1,10 +1,16 @@
 import {
   LogoutOutlined,
+  SafetyCertificateOutlined,
   UserOutlined,
 } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
-import { Avatar, Button, Empty, Space, Typography, theme } from "antd";
-import React, { useMemo } from "react";
+import { Alert, Avatar, Button, Empty, Space, Typography, theme } from "antd";
+import React, { useMemo, useState } from "react";
+import {
+  NyxIDAuthClient,
+  SERVICE_ACCESS_REVIEW_RETURN_TO,
+} from "@/shared/auth/client";
+import { getNyxIDRuntimeConfig } from "@/shared/auth/config";
 import {
   clearStoredAuthSession,
   loadRestorableAuthSession,
@@ -53,6 +59,12 @@ const AccountSettingsContent: React.FC<AccountSettingsContentProps> = ({
   const { token } = theme.useToken();
   const settingsPanelStyle = buildSettingsPanelStyle(token);
   const authSession = useMemo(() => loadRestorableAuthSession(), []);
+  const authConfig = useMemo(() => getNyxIDRuntimeConfig(), []);
+  const [serviceAccessReviewPending, setServiceAccessReviewPending] =
+    useState(false);
+  const [serviceAccessReviewError, setServiceAccessReviewError] = useState<
+    string | undefined
+  >(undefined);
   const authMeQuery = useQuery({
     queryKey: ["settings", "auth-me"],
     queryFn: () => studioApi.getAuthSession(),
@@ -99,6 +111,21 @@ const AccountSettingsContent: React.FC<AccountSettingsContentProps> = ({
   const handleSignOut = () => {
     clearStoredAuthSession();
     window.location.replace("/login");
+  };
+
+  const startServiceAccessReview = async () => {
+    try {
+      setServiceAccessReviewPending(true);
+      setServiceAccessReviewError(undefined);
+      const client = new NyxIDAuthClient(authConfig);
+      await client.loginWithRedirect({
+        flow: "serviceAccessReview",
+        returnTo: SERVICE_ACCESS_REVIEW_RETURN_TO,
+      });
+    } catch {
+      setServiceAccessReviewPending(false);
+      setServiceAccessReviewError(t("pages.settings.accountcontent.service.access.review.start.failed", "Could not start service access review. Try again."));
+    }
   };
 
   return (
@@ -181,29 +208,48 @@ const AccountSettingsContent: React.FC<AccountSettingsContentProps> = ({
         )}
       </AevatarPanel>
 
-      <AevatarPanel style={settingsPanelStyle} title="Authentication">
-        <div style={summaryFieldGridStyle}>
-          <SummaryField
-            label={t("pages.settings.accountcontent.session.expires", "Session expires")}
-            value={
-              backendSession?.expiresAtUtc
-                ? formatIsoSessionExpiry(backendSession.expiresAtUtc)
-                : formatSessionExpiry(authSession?.tokens.expiresAt)
-            }
-          />
-          <SummaryField
-            label="Provider"
-            value={authMeQuery.data?.providerDisplayName || "Unavailable"}
-          />
-          <SummaryField
-            label="Scope"
-            value={authMeQuery.data?.scopeId || authSession?.tokens.scope || "Unavailable"}
-          />
-          <SummaryField
-            label={t("pages.settings.accountcontent.browser.token.refresh", "Browser token refresh")}
-            value={t("pages.settings.accountcontent.browser.token.refresh.disabled", "Disabled")}
-          />
-        </div>
+      <AevatarPanel
+        extra={
+          authenticated ? (
+            <Button
+              icon={<SafetyCertificateOutlined />}
+              loading={serviceAccessReviewPending}
+              onClick={() => void startServiceAccessReview()}
+            >
+              {t("pages.settings.accountcontent.manage.service.access", "Manage service access")}
+            </Button>
+          ) : null
+        }
+        style={settingsPanelStyle}
+        title="Authentication"
+      >
+        <Space orientation="vertical" size={12} style={{ width: "100%" }}>
+          <div style={summaryFieldGridStyle}>
+            <SummaryField
+              label={t("pages.settings.accountcontent.session.expires", "Session expires")}
+              value={
+                backendSession?.expiresAtUtc
+                  ? formatIsoSessionExpiry(backendSession.expiresAtUtc)
+                  : formatSessionExpiry(authSession?.tokens.expiresAt)
+              }
+            />
+            <SummaryField
+              label="Provider"
+              value={authMeQuery.data?.providerDisplayName || "Unavailable"}
+            />
+            <SummaryField
+              label="Scope"
+              value={authMeQuery.data?.scopeId || authSession?.tokens.scope || "Unavailable"}
+            />
+            <SummaryField
+              label={t("pages.settings.accountcontent.browser.token.refresh", "Browser token refresh")}
+              value={t("pages.settings.accountcontent.browser.token.refresh.disabled", "Disabled")}
+            />
+          </div>
+          {serviceAccessReviewError ? (
+            <Alert message={serviceAccessReviewError} role="alert" showIcon type="error" />
+          ) : null}
+        </Space>
       </AevatarPanel>
     </>
   );

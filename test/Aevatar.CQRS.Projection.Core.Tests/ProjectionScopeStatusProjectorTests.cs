@@ -25,6 +25,14 @@ public sealed class ProjectionScopeStatusProjectorTests
             LastSuccessfulVersion = 11,
         };
         state.Failures.Add(new ProjectionScopeFailure { FailureId = "failure-1" });
+        state.RecentObservedEnvelopes.Add(new ProjectionObservedEnvelopeMetadata
+        {
+            EventId = "source-event-12",
+            TypeUrl = "type.googleapis.com/aevatar.SourceEvent",
+            StateVersion = 12,
+            TimestampUtc = Timestamp.FromDateTimeOffset(
+                new DateTimeOffset(2026, 5, 20, 3, 4, 5, TimeSpan.Zero)),
+        });
 
         await sut.ProjectAsync(
             new ProjectionScopeStatusMaterializationContext { RootActorId = "root-actor" },
@@ -47,6 +55,7 @@ public sealed class ProjectionScopeStatusProjectorTests
         document.LastObservedVersion.Should().Be(12);
         document.LastSuccessfulVersion.Should().Be(11);
         document.FailureCount.Should().Be(1);
+        document.RecentObservedEnvelopes.Should().BeEquivalentTo(state.RecentObservedEnvelopes);
     }
 
     [Fact]

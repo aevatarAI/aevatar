@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package aevatar.ai.codex_execution;
+
+option csharp_namespace = "Aevatar.AI.Abstractions.CodexExecution";
+
+message CodexExecutionTarget {
+  oneof target {
+    CodexPrivateSshTarget private_ssh = 1;
+    CodexManagedSandboxTarget managed_sandbox = 2;
+  }
+}
+
+message CodexPrivateSshTarget {
+  string service = 1;
+  string principal = 2;
+}
+
+message CodexManagedSandboxTarget {}
+
+message CodexExecutionWorkspace {
+  oneof workspace {
+    CodexEmptyGitWorkspace empty_git = 1;
+  }
+}
+
+message CodexEmptyGitWorkspace {}

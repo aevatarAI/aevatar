@@ -691,88 +691,6 @@ button{font-family:inherit;cursor:pointer;}
   .status-count{flex:1 1 0;}
 }
 
-/* ---------------- ③ Observatory ---------------- */
-.obs-region{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;}
-.obs-adminbar{display:flex;align-items:center;gap:10px;padding:11px 20px;background:var(--failed-bg);border-bottom:1px solid var(--failed-bd);flex-wrap:wrap;}
-.obs-adminbar .ab-label{font-size:12.5px;color:var(--failed);font-weight:550;}
-.ab-input{height:30px;padding:0 10px;border:1px solid var(--border);border-radius:6px;font:13px var(--sans);background:var(--surface);min-width:200px;}
-.obs-adminbar .ab-input{flex:0 1 420px;min-width:280px;}
-.ab-input:focus{outline:0;border-color:var(--primary);}
-.ab-hint{font-size:12px;color:var(--muted);}
-.obs-filterbar{border-bottom:1px solid var(--border);background:var(--surface);}
-.filter-toggle{display:flex;align-items:center;gap:8px;padding:10px 20px;border:0;background:none;font-size:13px;color:var(--muted);width:100%;}
-.filter-toggle:hover{color:var(--heading);}
-.filter-badge{background:var(--primary);color:#fff;border-radius:999px;font-size:10px;padding:1px 6px;}
-.ft-caret{margin-left:auto;color:var(--faint);}
-.filter-body{display:none;padding:4px 20px 14px;flex-direction:column;gap:9px;}
-.obs-filterbar.open .filter-body{display:flex;}
-.filter-row{display:flex;align-items:center;gap:10px;}
-.fr-l{font-size:12px;color:var(--faint);width:72px;flex:0 0 auto;}
-.obs-split{flex:1 1 auto;min-height:0;display:flex;}
-.obs-list{width:320px;flex:0 0 320px;border-right:1px solid var(--border);overflow:auto;background:var(--surface);padding:8px;}
-.obs-row{width:100%;display:flex;align-items:center;gap:8px;padding:9px 10px;border:0;background:none;border-radius:7px;text-align:left;margin-bottom:2px;}
-.obs-row:hover{background:var(--surface-3);}
-.obs-row.on{background:var(--primary-weak);}
-.obs-dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto;}
-.obs-row-main{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;}
-.obs-row-name{font-size:13px;color:var(--heading);font-weight:550;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.obs-row-id{font-size:11px;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;display:block;}
-.origin-pill{font-size:10.5px;color:var(--subtle);background:var(--surface-3);border:1px solid var(--border);border-radius:4px;padding:1px 6px;flex:0 0 auto;white-space:nowrap;}
-.obs-detail{flex:1 1 auto;min-width:0;overflow:auto;padding:20px;}
-.obs-detail-head .odh-top{display:flex;align-items:center;gap:10px;margin-bottom:11px;}
-.run-chips{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
-.run-chip{font-family:var(--mono);font-size:11.5px;padding:3px 9px;border-radius:5px;}
-.run-chip.c-scope{background:var(--primary-weak);color:var(--primary-strong);}
-.run-chip.c-def{background:#f3eefe;color:#7a4fcf;}
-.run-chip.c-run{background:var(--surface-3);color:var(--muted);}
-.usage-strip{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:16px 0;}
-.usage-cell{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-card);padding:12px 14px;}
-.uc-l{font-size:11.5px;color:var(--faint);display:block;margin-bottom:4px;}
-.uc-v{font-size:20px;font-weight:600;color:var(--heading);}
-.obs-tabs{display:flex;gap:2px;border-bottom:1px solid var(--border);margin-bottom:16px;}
-.obs-tab{border:0;background:none;padding:9px 14px;font-size:13px;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px;}
-.obs-tab.on{color:var(--primary-strong);border-bottom-color:var(--primary);font-weight:550;}
-.obs-tab:hover{color:var(--heading);}
-.timeline{display:flex;flex-direction:column;}
-.tl-item{display:flex;align-items:flex-start;gap:12px;padding:10px 0;position:relative;}
-.tl-time{font-size:11.5px;color:var(--faint);width:64px;flex:0 0 auto;padding-top:2px;}
-.tl-dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto;margin-top:4px;background:var(--idle);}
-.tl-success .tl-dot{background:var(--success);}.tl-running .tl-dot{background:var(--running);}.tl-failed .tl-dot{background:var(--failed);}
-.tl-body{display:flex;align-items:center;gap:9px;flex-wrap:wrap;}
-.tl-step{font-size:13px;color:var(--heading);font-weight:550;}
-.tl-dur{font-size:11.5px;color:var(--faint);}
-.tl-msg{font-size:12px;color:var(--muted);width:100%;line-height:1.5;}
-.tl-err{font-family:var(--mono);font-size:11.5px;color:var(--failed);background:var(--failed-bg);padding:2px 7px;border-radius:4px;width:100%;}
-.logs{font-family:var(--mono);font-size:12px;line-height:1.7;color:var(--fg);background:var(--surface-3);border:1px solid var(--border);border-radius:var(--r-panel);padding:14px 16px;white-space:pre-wrap;}
-.step-list,.diag-list{display:flex;flex-direction:column;gap:10px;}
-.step-card,.diag-card{border:1px solid var(--border);border-radius:7px;background:var(--surface);padding:12px 14px;}
-.step-card.failed,.diag-card.error{border-color:var(--failed-bd);background:var(--failed-bg);}
-.diag-card.warning{border-color:var(--waiting-bd);background:var(--waiting-bg);}
-.step-head,.diag-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;}
-.step-title,.diag-title{font-size:13px;color:var(--heading);font-weight:600;}
-.step-meta,.diag-meta{font-size:11.5px;color:var(--faint);font-family:var(--mono);}
-.step-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 14px;margin-top:8px;}
-.step-kv{font-size:12px;color:var(--muted);min-width:0;}
-.step-kv b{display:block;color:var(--faint);font-weight:500;margin-bottom:2px;}
-.step-kv span{font-family:var(--mono);color:var(--heading);word-break:break-word;}
-.param-pills{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;}
-.param-pill{font-family:var(--mono);font-size:11px;color:var(--muted);background:var(--surface-3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;max-width:100%;word-break:break-all;}
-.diag-msg{font-size:13px;color:var(--fg);line-height:1.55;white-space:pre-wrap;}
-.diag-hint{font-size:12px;color:var(--muted);line-height:1.45;margin-top:6px;}
-.issue-box{display:flex;flex-direction:column;gap:10px;}
-.issue-actions{display:flex;justify-content:flex-end;}
-.issue-pre{font-family:var(--mono);font-size:12px;line-height:1.55;color:var(--fg);background:var(--surface-3);border:1px solid var(--border);border-radius:var(--r-panel);padding:14px 16px;white-space:pre-wrap;overflow:auto;}
-.artifacts{display:flex;flex-direction:column;gap:8px;}
-.artifact-item{display:flex;align-items:center;gap:12px;padding:10px 12px;border:1px solid var(--border);border-radius:6px;}
-.art-name{font-size:13px;color:var(--heading);flex:1 1 auto;}
-.art-size{font-size:11.5px;color:var(--faint);}
-.dag{display:flex;flex-direction:column;}
-.dag-node{display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--border);border-radius:7px;background:var(--surface);}
-.dag-dot{width:8px;height:8px;border-radius:50%;}
-.dag-name{font-size:13px;color:var(--heading);font-weight:550;flex:1 1 auto;}
-.dag-io{font-size:11px;color:var(--faint);}
-.dag-link{width:2px;height:14px;background:var(--border);margin-left:18px;}
-
 /* ---------------- ④ CQRS ---------------- */
 .cqrs-pipe{width:100%;height:150px;}
 .cqrs-legend{display:flex;gap:18px;margin-top:6px;font-size:11.5px;color:var(--muted);}
@@ -899,6 +817,68 @@ button{font-family:inherit;cursor:pointer;}
 .sched-card.off{opacity:.66;}
 .sc-top{display:flex;align-items:center;gap:10px;margin-bottom:9px;}
 .sc-name{font-size:13.5px;font-weight:600;color:var(--heading);}
+
+/* ---------------- Agent Profile ---------------- */
+.ap-shell{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;background:var(--bg);}
+.ap-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:12px var(--pad);background:var(--surface);border-bottom:1px solid var(--border);}
+.ap-toolbar .search{width:min(280px,100%);}
+.ap-layout{flex:1 1 auto;min-height:0;display:grid;grid-template-columns:minmax(280px,340px) minmax(0,1fr);}
+.ap-list-pane{min-height:0;overflow:auto;border-right:1px solid var(--border);background:var(--surface);padding:10px;}
+.ap-list{display:flex;flex-direction:column;gap:4px;}
+.ap-row{width:100%;border:1px solid transparent;background:transparent;border-radius:6px;padding:10px 11px;text-align:left;display:flex;flex-direction:column;gap:5px;}
+.ap-row:hover{background:var(--surface-3);}
+.ap-row.on{background:var(--primary-weak);border-color:#c4d6ff;}
+.ap-row-head,.ap-row-meta,.ap-head,.ap-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.ap-row-head{justify-content:space-between;}
+.ap-row-name{font-weight:600;color:var(--heading);min-width:0;overflow-wrap:anywhere;}
+.ap-row-meta{font-size:11.5px;color:var(--faint);}
+.ap-workspace{min-width:0;min-height:0;overflow:auto;padding:18px 20px 28px;}
+.ap-workspace-inner{max-width:1040px;margin:0 auto;}
+.ap-head{align-items:flex-start;margin-bottom:14px;}
+.ap-title{font-size:18px;font-weight:650;color:var(--heading);overflow-wrap:anywhere;}
+.ap-sub{font-size:12px;color:var(--faint);margin-top:3px;}
+.ap-actions{margin-left:auto;justify-content:flex-end;}
+.ap-status{display:inline-flex;align-items:center;min-height:22px;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:600;border:1px solid var(--border);background:var(--surface-3);color:var(--muted);}
+.ap-status.published{background:var(--success-bg);border-color:var(--success-bd);color:var(--success);}
+.ap-status.pending{background:var(--waiting-bg);border-color:var(--waiting-bd);color:#9a5b07;}
+.ap-banner{display:flex;align-items:flex-start;gap:9px;padding:10px 12px;border:1px solid var(--border);border-radius:6px;background:var(--surface);margin-bottom:12px;font-size:12.5px;color:var(--muted);}
+.ap-banner.pending{background:var(--waiting-bg);border-color:var(--waiting-bd);color:#8a5309;}
+.ap-banner.error{background:var(--failed-bg);border-color:var(--failed-bd);color:var(--failed);}
+.ap-section{padding:16px 0;border-top:1px solid var(--border);}
+.ap-section:first-of-type{border-top:0;}
+.ap-section h3{font-size:13px;color:var(--heading);font-weight:650;margin-bottom:11px;}
+.ap-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 14px;}
+.ap-grid.three{grid-template-columns:repeat(3,minmax(0,1fr));}
+.ap-field{display:flex;flex-direction:column;gap:5px;min-width:0;}
+.ap-field.wide{grid-column:1/-1;}
+.ap-field label,.ap-field legend{font-size:11.5px;color:var(--muted);font-weight:550;}
+.ap-field input,.ap-field textarea,.ap-field select{width:100%;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--fg);font:13px var(--sans);padding:8px 9px;}
+.ap-field textarea{min-height:110px;resize:vertical;line-height:1.55;}
+.ap-field input:focus,.ap-field textarea:focus,.ap-field select:focus{outline:0;border-color:var(--primary);box-shadow:0 0 0 2px var(--primary-weak);}
+.ap-field input[disabled],.ap-field textarea[disabled],.ap-field select[disabled]{background:var(--surface-3);color:var(--subtle);cursor:not-allowed;}
+.ap-help{font-size:11px;color:var(--faint);}
+.ap-member{border:1px solid var(--border);border-radius:6px;padding:13px;margin-bottom:10px;background:var(--surface);}
+.ap-member-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:11px;}
+.ap-diagnostics{display:flex;flex-direction:column;gap:6px;}
+.ap-diagnostic{border-left:3px solid var(--failed);background:var(--failed-bg);padding:7px 9px;font-size:12px;color:var(--failed);}
+.ap-empty{padding:34px 18px;text-align:center;color:var(--faint);font-size:12.5px;}
+.ap-create{display:flex;align-items:center;gap:7px;margin-left:auto;}
+.ap-create input{height:30px;width:190px;border:1px solid var(--border);border-radius:6px;padding:0 9px;font:12.5px var(--sans);}
+.ap-rollout{display:flex;align-items:end;gap:10px;flex-wrap:wrap;padding:11px;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);}
+.ap-rollout .ap-field{width:170px;}
+.ap-skill-search{display:flex;align-items:end;gap:8px;grid-column:1/-1;}
+.ap-skill-search .ap-field{flex:1 1 auto;}
+.ap-skill-results{grid-column:1/-1;border:1px solid var(--border);border-radius:6px;overflow:hidden;background:var(--surface);}
+.ap-skill-result{width:100%;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 10px;border:0;border-bottom:1px solid var(--border);background:transparent;text-align:left;}
+.ap-skill-result:last-child{border-bottom:0;}.ap-skill-result:hover{background:var(--surface-3);}
+.ap-skill-result span{min-width:0;overflow-wrap:anywhere;}.ap-skill-result small{color:var(--faint);}
+.ap-skill-proof{grid-column:1/-1;font-size:11.5px;color:var(--success);overflow-wrap:anywhere;}
+@media (max-width:900px){.ap-layout{grid-template-columns:minmax(240px,300px) minmax(0,1fr)}.ap-grid.three{grid-template-columns:repeat(2,minmax(0,1fr));}}
+@media (max-width:768px){
+  .ap-toolbar{align-items:stretch}.ap-toolbar .search{width:100%}.ap-create{width:100%;margin-left:0}.ap-create input{flex:1 1 auto;width:auto}
+  .ap-layout{display:block;overflow:auto}.ap-list-pane{max-height:36vh;border-right:0;border-bottom:1px solid var(--border)}.ap-workspace{overflow:visible;padding:14px}
+  .ap-grid,.ap-grid.three{grid-template-columns:1fr}.ap-actions{width:100%;margin-left:0;justify-content:flex-start}.ap-field.wide{grid-column:auto}
+}
 .sc-cron{font-size:11.5px;background:var(--surface-3);border:1px solid var(--border);padding:1px 7px;border-radius:4px;color:var(--muted);}
 .sc-state{margin-left:auto;font-size:11px;font-weight:600;padding:2px 9px;border-radius:999px;}
 .sc-state.on{color:var(--success);background:var(--success-bg);}
@@ -926,143 +906,27 @@ button{font-family:inherit;cursor:pointer;}
 .sched-create .sc-row label{font-size:12.5px;color:var(--muted);width:48px;}
 .sched-create .sc-row .std-select{flex:1 1 auto;max-width:320px;}
 
-/* ---------------- ⑧ Channels ---------------- */
-.chan-type{font-size:11px;font-weight:550;padding:2px 8px;border-radius:4px;}
-.chan-lark{background:#e7f3ff;color:#1d6fd6;}
-.chan-feishu{background:#e7f3ff;color:#1d6fd6;}
-.chan-telegram{background:#e6f4fb;color:#2a8fc4;}
-.chan-slack{background:#f4ecfb;color:#7a4fcf;}
-.chan-discord{background:#eceefb;color:#5865f2;}
-.chan-webhook{background:var(--surface-3);color:var(--subtle);}
+/* Shared form, action, and modal primitives used by Skills and Audit. */
 .chan-note{margin-top:14px;font-size:11.5px;color:var(--faint);}
 .btn-danger{background:var(--failed);border-color:var(--failed);color:#fff;}
 .btn-danger:hover{background:#b91c1c;border-color:#b91c1c;color:#fff;}
 .link-btn{border:0;background:none;color:var(--primary-strong);font-size:12.5px;cursor:pointer;padding:0;text-decoration:underline;text-underline-offset:2px;}
 .link-btn:hover{color:var(--primary);}
-
-/* root 容器 + 全屏向导骨架 */
-.chan-root{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;overflow:hidden;}
-.wz2{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;}
-.wz2-top{flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;padding:13px 20px;border-bottom:1px solid var(--border);background:var(--surface);}
-.wz2-title{font-size:15px;font-weight:600;color:var(--heading);}
-.wz2-body{flex:1 1 auto;min-height:0;display:flex;}
-.wz2-rail{width:230px;flex:0 0 230px;border-right:1px solid var(--border);overflow:auto;padding:18px 14px;background:var(--surface);}
-.wz2-main{flex:1 1 auto;min-width:0;overflow:auto;padding:24px 28px;}
-.wz2-foot{display:flex;align-items:center;gap:10px;border-top:1px solid var(--border);margin-top:22px;padding-top:16px;max-width:680px;}
-.wz-h{font-size:17px;font-weight:600;color:var(--heading);margin-bottom:6px;}
-.wz-sub{font-size:13px;color:var(--muted);margin-bottom:16px;}
-
-/* 竖向 stepper */
-.vstepper{display:flex;flex-direction:column;gap:2px;}
-.vstep{display:flex;align-items:center;gap:11px;padding:10px;border:0;background:none;border-radius:8px;text-align:left;width:100%;}
-.vstep:not([disabled]):hover{background:var(--surface-3);}
-.vstep[disabled]{opacity:.5;cursor:default;}
-.vstep-num{width:24px;height:24px;border-radius:50%;flex:0 0 auto;display:grid;place-items:center;font-size:11px;font-weight:700;border:1.5px solid var(--border-strong);color:var(--faint);background:var(--surface);}
-.vstep.cur .vstep-num{border-color:var(--primary);background:var(--primary);}
-.vstep.done .vstep-num{border-color:var(--success);background:var(--success);color:#fff;}
-.vstep-body{display:flex;flex-direction:column;line-height:1.3;}
-.vstep-k{font-size:13px;color:var(--muted);font-weight:500;}
-.vstep.cur .vstep-k{color:var(--heading);font-weight:600;}
-.vstep.done .vstep-k{color:var(--fg);}
-.vstep-sub{font-size:10.5px;color:var(--faint);font-family:var(--mono);}
-
-/* 渠道卡（Step 0） */
-.chan-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;max-width:700px;}
-.chan-card{display:flex;align-items:center;gap:12px;padding:14px;border:1px solid var(--border);border-radius:var(--r-panel);background:var(--surface);text-align:left;width:100%;transition:.14s;}
-.chan-card:not(.disabled):hover{border-color:var(--border-strong);box-shadow:var(--shadow-card);transform:translateY(-1px);}
-.chan-card.on{border-color:var(--primary);background:var(--primary-weak);}
-.chan-card.disabled{opacity:.5;}
-.chan-card-ico{width:40px;height:40px;border-radius:10px;flex:0 0 auto;display:grid;place-items:center;font-size:13px;font-weight:700;}
-.chan-card-main{flex:1 1 auto;min-width:0;}
-.chan-card-name{font-size:14px;font-weight:600;color:var(--heading);display:flex;align-items:center;gap:7px;}
-.chan-card-desc{font-size:12px;color:var(--muted);margin-top:2px;}
-.chan-card-cta{font-size:12.5px;color:var(--primary-strong);font-weight:550;flex:0 0 auto;}
-.chan-ok{font-size:10px;font-weight:600;color:var(--success);background:var(--success-bg);border:1px solid var(--success-bd);border-radius:4px;padding:1px 6px;}
-
-/* 凭据表单（Step 1） */
-.wz-form{display:flex;flex-direction:column;gap:13px;max-width:460px;}
 .wz-field{display:flex;flex-direction:column;gap:5px;}
 .wz-field>label{font-size:12.5px;color:var(--muted);}
 .wz-field input{height:34px;border:1px solid var(--border);border-radius:7px;padding:0 11px;font:13px var(--sans);background:var(--surface);}
-.wz-field input.mono-in{font-family:var(--mono);}
 .wz-field input:focus{outline:0;border-color:var(--primary);}
 .wz-field.has-err input{border-color:var(--failed);background:var(--failed-bg);}
 .req{color:var(--failed);}
 .opt{color:var(--faint);font-size:11px;}
 .field-help{font-size:11.5px;color:var(--faint);}
 .field-err{font-size:11.5px;color:var(--failed);}
-.dev-link{display:inline-block;margin-top:13px;font-size:12.5px;color:var(--primary-strong);text-decoration:none;}
-.dev-link:hover{text-decoration:underline;}
-
-/* 注册（Step 2） */
-.reg-intro{font-size:13px;color:var(--muted);margin-bottom:14px;}
-.reg-plan{margin:8px 0 0 18px;font-size:12.5px;color:var(--fg);line-height:1.95;}
 .reg-actions{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:8px;}
-.reg-demo{font-size:11.5px;color:var(--faint);}
-.reg-steps{display:flex;flex-direction:column;gap:9px;margin-bottom:16px;max-width:520px;}
-.rs-row{display:flex;align-items:center;gap:11px;font-size:13px;color:var(--muted);padding:9px 13px;border:1px solid var(--border);border-radius:7px;}
-.rs-row.done{color:var(--heading);border-color:var(--success-bd);background:var(--success-bg);}
-.rs-row.fail{color:var(--failed);border-color:var(--failed-bd);background:var(--failed-bg);}
-.rs-ico{width:18px;height:18px;border-radius:50%;flex:0 0 auto;display:grid;place-items:center;font-size:11px;font-weight:700;}
-.rs-ico.ok{background:var(--success);color:#fff;}
-.rs-ico.fail{background:var(--failed);color:#fff;}
-.rs-ico.todo{border:1.5px solid var(--border-strong);}
-.reg-result{border:1px solid var(--success-bd);background:var(--success-bg);border-radius:var(--r-panel);padding:14px 16px;max-width:560px;}
-.rr-title{font-size:13.5px;font-weight:600;color:var(--success);margin-bottom:10px;}
-.reg-fail{border:1px solid var(--failed-bd);background:var(--failed-bg);border-radius:var(--r-panel);padding:14px 16px;margin-top:8px;max-width:520px;}
-.rf-title{font-size:13.5px;font-weight:600;color:var(--failed);}
-.rf-msg{font-size:12.5px;color:var(--fg);margin:6px 0 12px;font-family:var(--mono);}
-
-/* 平台配置（Step 3） */
-.cfg-card{border:1px solid var(--border);border-radius:var(--r-panel);padding:14px 16px;margin-bottom:14px;max-width:640px;}
-.cfg-card.auto{border-color:var(--success-bd);background:var(--success-bg);}
-.cfg-title{font-size:13px;font-weight:600;color:var(--heading);margin-bottom:11px;}
-.cfg-p{font-size:12.5px;color:var(--muted);line-height:1.6;}
-.cfg-p code,.warn-box code{font-family:var(--mono);background:var(--surface);padding:1px 5px;border-radius:4px;color:var(--heading);border:1px solid var(--border);}
-.cfg-pub{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);}
-.warn-box{margin-top:11px;font-size:12px;color:#9a5b07;background:var(--waiting-bg);border:1px solid var(--waiting-bd);border-radius:6px;padding:9px 11px;line-height:1.6;}
-.copy-field{display:flex;align-items:center;gap:10px;margin-bottom:8px;}
-.cf-l{font-size:12px;color:var(--faint);width:140px;flex:0 0 auto;}
-.cf-v{font-family:var(--mono);font-size:12px;background:var(--surface-3);border:1px solid var(--border);padding:6px 9px;border-radius:6px;color:var(--heading);flex:1 1 auto;overflow:auto;white-space:nowrap;}
-.perm-badges{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:4px;}
-.pb{font-size:11.5px;font-weight:600;padding:2px 9px;border-radius:999px;}
-.pb-t1{background:var(--running-bg);color:var(--primary-strong);}
-.pb-t2{background:#f1ebfd;color:#7a4fcf;}
-.perm-list{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px;}
-.perm-list code{font-family:var(--mono);font-size:11px;background:var(--surface-3);border:1px solid var(--border);padding:2px 7px;border-radius:4px;color:var(--heading);}
-
-/* 回复模型（Step 4） */
-.std-select{width:100%;height:34px;border:1px solid var(--border);border-radius:6px;padding:0 10px;font:13px var(--sans);background:var(--surface);}
-
-/* 验证（Step 5） */
-.verify-tip{font-size:13px;color:var(--muted);margin-bottom:16px;line-height:1.6;}
-.vlamps{display:flex;flex-direction:column;gap:12px;max-width:520px;}
-.vlamp{display:flex;align-items:center;gap:12px;padding:14px 16px;border:1px solid var(--border);border-radius:var(--r-panel);}
-.vlamp.ok{border-color:var(--success-bd);background:var(--success-bg);}
-.lamp-dot{width:14px;height:14px;border-radius:50%;flex:0 0 auto;}
-.lamp-dot.ok{background:var(--success);box-shadow:0 0 0 4px var(--success-bg);}
-.vlamp-body{flex:1 1 auto;}
-.vlamp-l{font-size:13px;color:var(--heading);font-weight:550;}
-.vlamp-s{font-size:11.5px;color:var(--faint);margin-top:2px;}
-.poll-tag{font-size:11px;color:var(--faint);font-family:var(--mono);}
-.verify-done{display:flex;flex-direction:column;align-items:center;gap:6px;margin-top:24px;}
-.vd-emoji{font-size:42px;line-height:1;}
-.vd-title{font-size:15px;font-weight:600;color:var(--success);}
-
-/* 解绑确认弹窗 */
 .modal-back{position:fixed;inset:0;background:rgba(17,24,39,.34);z-index:78;}
 .modal{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(420px,92vw);background:var(--surface);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow-hover);z-index:79;padding:20px 22px;}
 .modal-title{font-size:15px;font-weight:600;color:var(--heading);margin-bottom:10px;}
 .modal-body{font-size:13px;color:var(--muted);line-height:1.6;margin-bottom:18px;}
 .modal-foot{display:flex;justify-content:flex-end;gap:10px;}
-
-@media (max-width:768px){
-  .wz2-body{flex-direction:column;}
-  .wz2-rail{width:auto;flex:0 0 auto;border-right:0;border-bottom:1px solid var(--border);padding:10px;}
-  .vstepper{flex-direction:row;overflow:auto;gap:4px;}
-  .vstep{flex:0 0 auto;}
-  .cf-l{width:96px;}
-}
 
 /* ---------------- ⑨ Voice ---------------- */
 .voice-region{max-width:840px;}
@@ -1140,12 +1004,9 @@ button{font-family:inherit;cursor:pointer;}
   .rail-name,.rail-group-label,.rail-tag,.rail .app-mark .name,.acc-meta{display:revert;}
   .rail-item{justify-content:flex-start;padding:8px 9px;}
   .account-chip{justify-content:flex-start;padding:7px 8px;}
-  .obs-split,.two-pane{flex-direction:column;}
-  .obs-list,.tp-list{width:auto;flex:0 0 auto;max-height:240px;border-right:0;border-bottom:1px solid var(--border);}
+  .two-pane{flex-direction:column;}
   .studio-region{flex-direction:column;}
   .studio-aside{width:auto;flex:0 0 auto;border-left:0;border-top:1px solid var(--border);}
-  .usage-strip{grid-template-columns:repeat(2,1fr);}
-  .obs-adminbar{gap:8px;}
 }
 
 </style>
@@ -1216,7 +1077,7 @@ function sparkSVG(data,color,w,h){
 }
 
 var STATUS_CN={busy:'忙',idle:'闲',stuck:'卡',failed:'失败'};
-var RUN_CN={running:'运行中',success:'完成',failed:'失败',waiting:'等待',stuck:'卡住'};
+var RUN_CN={running:'运行中',success:'完成',failed:'失败',waiting:'等待',stopped:'已停止',stuck:'卡住'};
 
 /* =====================================================================
    ① 全景看板 Fleet —— 真实跨组织（nyxid 账号）数据
@@ -1400,6 +1261,15 @@ function loginResources(requested){
   [OIDC.resources,Array.isArray(requested)?requested:[]].forEach(function(group){ group.forEach(function(value){ var resource=typeof value==='string'?value.trim():''; if(resource&&merged.indexOf(resource)<0) merged.push(resource); }); });
   return merged;
 }
+function loginResourcesGranted(){
+  var t=getToken(), granted=[];
+  var claims=decodeJwt(t&&t.access_token);
+  [t&&t.oauth_resources,t&&t.resource,claims&&claims.resources].forEach(function(group){
+    if(typeof group==='string')group=[group];
+    (Array.isArray(group)?group:[]).forEach(function(value){ if(typeof value==='string'&&granted.indexOf(value)<0)granted.push(value); });
+  });
+  return OIDC.resources.every(function(resource){return granted.indexOf(resource)>=0;});
+}
 function loginReturnTo(){
   var h=(location.hash&&location.hash.indexOf('#/')===0&&/^#[A-Za-z0-9._~!$&'()*+,;=:@/?%-]*$/.test(location.hash))?location.hash:'';
   return location.pathname + h;
@@ -1466,201 +1336,6 @@ async function loadStatus(rerender){
   STATUS_LOADED=true; if(rerender) rerender();
 }
 
-/* ③ 运行观测台 Run Observatory —— /api/workflow/observatory/*（真实接口） */
-/* 列表是 SUMMARY（无内联 timeline/graph/logs/usage）；详情 + DAG 选中时按 runId 懒加载并缓存。 */
-var OBS_RUNS=[];                 /* 已映射的 summary 行：{id,name,status,origin,scope,definition,...} */
-var OBS_RUNS_LOADED=false, OBS_RUNS_ERR=null, OBS_RUNS_LOADING=false;
-var OBS_RUNS_REQUEST=0, OBS_POLL_TIMER=null;
-var OBS_DETAIL={};               /* runId -> {loading,err,detail}；detail 为 obsDetail 渲染所需结构 */
-/* 真实 status 枚举 -> 渲染内部枚举 running|success|failed|stuck */
-function obsMapStatus(s){
-  return ({ running:'running', completed:'success', failed:'failed', timed_out:'failed',
-    stopped:'stuck', disabled:'stuck', unknown:'stuck', not_found:'stuck' })[s]||'stuck';
-}
-/* 步骤级 success/失败 -> timeline/dag 内部 st 枚举 */
-function obsStepStatus(st){
-  if(st.success===true) return 'success';
-  if(st.success===false||st.error) return 'failed';
-  if(st.completedAtUtc) return 'success';
-  if(st.requestedAtUtc) return 'running';
-  return 'waiting';
-}
-function obsTime(iso){ if(!iso) return '—'; var d=new Date(iso); if(isNaN(d.getTime())) return '—';
-  function p2(n){ return (n<10?'0':'')+n; } return p2(d.getHours())+':'+p2(d.getMinutes())+':'+p2(d.getSeconds()); }
-function obsDurMs(ms){ if(ms==null) return '—'; var s=Math.max(0,ms/1000);
-  if(s<60) return (Math.round(s*10)/10)+'s'; var m=Math.floor(s/60); return m+'m'+Math.round(s-m*60)+'s'; }
-function obsNum(n){ if(n==null) return '—'; if(n>=1000) return (Math.round(n/100)/10)+'k'; return String(n); }
-function obsCost(c){ if(c==null) return '—'; return '$'+(Math.round(c*100)/100).toFixed(2); }
-/* summary[] -> 渲染列表内部形态 */
-function mapObsRuns(list){
-  return (list||[]).map(function(r){
-    return { id:r.runId, name:r.workflowName||r.runId, status:obsMapStatus(r.status),
-      origin:r.runOrigin||'—', scope:r.scopeId||'—', definition:r.definitionId||r.workflowName||'—',
-      success:r.success, stateVersion:r.stateVersion, startedAtUtc:r.startedAtUtc, updatedAtUtc:r.updatedAtUtc,
-      rawStatus:r.status }; });
-}
-/* /runs/{id} (+ /graph) -> obsDetail 渲染所需结构（usage/timeline/logs/artifacts/graph） */
-function mapObsDetail(d,graph){
-  d=d||{}; var sum=d.summary||{};
-  var rawSteps=d.steps||[]; var rawTimeline=d.timeline||[];
-  var ut=d.usageTotals||{}; var stats=d.statistics||{};
-  var steps=rawSteps.map(function(s,i){
-    s=s||{}; return { idx:i+1, id:s.stepId||'', stepId:s.stepId||'', stepType:s.stepType||'',
-      targetRole:s.targetRole||'', requestedAtUtc:s.requestedAtUtc||'', completedAtUtc:s.completedAtUtc||'',
-      success:s.success, status:obsStepStatus(s), duration:obsDurMs(s.durationMs), durationMs:s.durationMs,
-      outputPreview:s.outputPreview||'', error:s.error||'', params:s.requestParameters||{},
-      nextStepId:s.nextStepId||'', branchKey:s.branchKey||'', usage:s.usage||{} }; });
-  var events=rawTimeline.map(function(e){
-    e=e||{}; var tc=e.toolCall||null;
-    var msg=e.content||e.message||(tc&&(tc.error||tc.toolName))||'';
-    var st=(e.kind==='RunError'||(tc&&tc.success===false))?'failed':(e.kind==='RunStopped'?'stuck':(e.kind==='RunFinished'?'success':'running'));
-    return { t:obsTime(e.timestampUtc), timestampUtc:e.timestampUtc||'', kind:e.kind||'Event', stage:e.stage||'',
-      stepId:e.stepId||'', stepType:e.stepType||'', agentId:e.agentId||'', text:msg, message:e.message||'',
-      content:e.content||'', toolCall:tc, data:e.data||{}, st:st }; });
-  var usage={
-    tokens:obsNum(ut.totalTokens!=null?ut.totalTokens:(ut.promptTokens||0)+(ut.completionTokens||0)),
-    steps:(stats.completedSteps!=null?stats.completedSteps:steps.filter(function(s){return s.completedAtUtc;}).length)
-      +'/'+(stats.totalSteps!=null?stats.totalSteps:steps.length),
-    time:obsTimeline_span(steps,sum), cost:obsCost(ut.cost) };
-  var timeline;
-  if(events.length){
-    timeline=events.map(function(e){
-      return { t:e.t, step:obsEventTitle(e), st:e.st, dur:'', err:e.st==='failed'?e.text:null,
-        msg:e.text, kind:e.kind, stage:e.stage, stepId:e.stepId, agentId:e.agentId };
-    });
-  } else {
-    timeline=steps.map(function(s){
-      return { t:obsTime(s.requestedAtUtc||s.completedAtUtc), step:(s.stepType||s.targetRole||s.stepId||'步骤'),
-        st:s.status, dur:s.duration, err:s.error||null, msg:s.outputPreview||'', kind:'Step', stage:'step.trace', stepId:s.stepId, agentId:s.targetRole };
-    });
-  }
-  var diagnostics=(d.diagnostics||[]).map(function(t){
-    t=t||{}; return { t:obsTime(t.timestampUtc), timestampUtc:t.timestampUtc||'', severity:t.severity||'info',
-      code:t.code||'diagnostic', source:t.source||'observatory', message:t.message||'',
-      hint:t.hint||'', stepId:t.stepId||'', stepType:t.stepType||'', targetRole:t.targetRole||'' }; });
-  if(!diagnostics.length){
-    if(d.finalError){ diagnostics.push({t:'—',severity:'error',code:'final_error',source:'client-fallback',message:d.finalError,hint:'后端未返回诊断信息，前端从 finalError 构造。',stepId:'',stepType:'',targetRole:''}); }
-    steps.forEach(function(s){ if(s.error){ diagnostics.push({t:obsTime(s.completedAtUtc||s.requestedAtUtc),severity:'error',code:'step_failed',source:'client-fallback',message:s.error,hint:obsStepHint(s),stepId:s.stepId,stepType:s.stepType,targetRole:s.targetRole}); } });
-  }
-  /* logs：失败诊断优先；然后输出 committed timeline 内容；回退到步骤错误/产出预览 */
-  var logs=[];
-  diagnostics.forEach(function(t){ logs.push((t.t||'—')+' DIAGNOSTIC '+(t.severity||'info').toUpperCase()+' ['+t.code+'] '+(t.stepId?'step='+t.stepId+' ':'')+t.message+(t.hint?' | '+t.hint:'')); });
-  events.forEach(function(e){ if(e.text){ logs.push((e.timestampUtc?obsTime(e.timestampUtc)+' ':'')+(e.stage?'['+e.stage+'] ':'')+e.text); } });
-  if(!logs.length){ steps.forEach(function(s){ if(s.error){ logs.push(obsTime(s.requestedAtUtc)+' ERROR '+s.error); } else if(s.outputPreview){ logs.push(obsTime(s.completedAtUtc||s.requestedAtUtc)+' '+(s.stepType||'')+' '+s.outputPreview); } }); }
-  if(d.finalError) logs.push('FINAL ERROR '+d.finalError);
-  /* graph：优先真实 DAG nodes/edges；回退到步骤序列 */
-  var gnodes;
-  if(graph && graph.nodes && graph.nodes.length){
-    var byStep={}; steps.forEach(function(s){ byStep[s.stepId]=s; });
-    gnodes=graph.nodes.map(function(n){ var s=byStep[n.stepId]||{};
-      return { name:(n.nodeType||s.stepType||n.nodeId), st:(s.stepId?s.status:'waiting'),
-        io:obsNodeIo(n,graph), stepId:n.stepId||'', nodeId:n.nodeId||'' }; });
-  } else {
-    gnodes=steps.map(function(s){ return { name:(s.stepType||s.targetRole||s.stepId), st:s.status, io:'—', stepId:s.stepId, nodeId:s.stepId }; });
-  }
-  /* artifacts：summary 无文件列表；finalOutput 视为单一产出 */
-  var artifacts=[]; if(d.finalOutput){ artifacts.push({ name:'finalOutput', size:obsBytes(d.finalOutput), content:d.finalOutput }); }
-  var mapped={ id:sum.runId, name:sum.workflowName||sum.runId, status:obsMapStatus(sum.status),
-    rawStatus:sum.status||'', origin:sum.runOrigin||'—', stateVersion:sum.stateVersion,
-    scope:sum.scopeId||'—', definition:sum.definitionId||sum.workflowName||'—',
-    input:d.input||'', finalOutput:d.finalOutput||'', finalError:d.finalError||'',
-    usage:usage, steps:steps, timeline:timeline, events:events, diagnostics:diagnostics, logs:logs, graph:gnodes, artifacts:artifacts };
-  mapped.issue=obsIssuePayload(mapped);
-  return mapped;
-}
-function obsEventTitle(e){
-  var label={RunStarted:'Run started',RunFinished:'Run finished',RunError:'Run error',RunStopped:'Run stopped',
-    StepStarted:'Step started',StepFinished:'Step finished',ToolCall:'Tool call',Message:'Message',
-    HumanInputRequest:'Human input',SignalWaiting:'Signal waiting',SignalBuffered:'Signal buffered'}[e.kind]||e.kind||'Event';
-  if(e.stepId) label+=' · '+e.stepId;
-  else if(e.agentId) label+=' · @'+e.agentId;
-  if(e.stage) label+=' · '+e.stage;
-  return label;
-}
-function obsStepHint(s){
-  var p=[]; if(s.stepType)p.push('type='+s.stepType); if(s.targetRole)p.push('target='+s.targetRole);
-  if(s.nextStepId)p.push('next='+s.nextStepId); if(s.branchKey)p.push('branch='+s.branchKey);
-  return p.join(', ');
-}
-function obsIssuePayload(d){
-  return JSON.stringify({
-    runId:d.id, scopeId:d.scope, workflow:d.name, status:d.rawStatus||d.status,
-    stateVersion:d.stateVersion, finalError:d.finalError||'',
-    diagnostics:(d.diagnostics||[]).map(function(t){return {severity:t.severity,code:t.code,source:t.source,stepId:t.stepId,stepType:t.stepType,targetRole:t.targetRole,message:t.message,hint:t.hint,timestampUtc:t.timestampUtc};}),
-    failedSteps:(d.steps||[]).filter(function(s){return s.status==='failed'||s.error;}).map(function(s){return {stepId:s.stepId,stepType:s.stepType,targetRole:s.targetRole,error:s.error,requestedAtUtc:s.requestedAtUtc,completedAtUtc:s.completedAtUtc,nextStepId:s.nextStepId,branchKey:s.branchKey};}),
-    lastKnownStep:(d.steps||[]).slice().reverse().filter(function(s){return s.stepId||s.stepType||s.targetRole;})[0]||null
-  }, null, 2);
-}
-function obsTimeline_span(steps,sum){
-  var ts=steps.map(function(s){return s.requestedAtUtc;}).filter(Boolean).map(function(x){return new Date(x).getTime();});
-  var te=steps.map(function(s){return s.completedAtUtc;}).filter(Boolean).map(function(x){return new Date(x).getTime();});
-  if(sum.startedAtUtc) ts.push(new Date(sum.startedAtUtc).getTime());
-  if(sum.updatedAtUtc) te.push(new Date(sum.updatedAtUtc).getTime());
-  ts=ts.filter(function(x){return !isNaN(x);}); te=te.filter(function(x){return !isNaN(x);});
-  if(!ts.length||!te.length) return '—'; return obsDurMs(Math.max(0,Math.max.apply(null,te)-Math.min.apply(null,ts)));
-}
-function obsNodeIo(n,graph){
-  var inc=0,out=0; (graph.edges||[]).forEach(function(e){ if(e.toNodeId===n.nodeId) inc++; if(e.fromNodeId===n.nodeId) out++; });
-  return 'in '+inc+' / out '+out;
-}
-function obsBytes(s){ var n=(s==null?'':String(s)).length; if(n<1024) return n+' B'; return (Math.round(n/102.4)/10)+' KB'; }
-/* 加载 summary 列表（admin 跨 scope 用 OBS_SCOPE：'__all__' 或具体 id） */
-function loadObsRuns(rerender){
-  var requestId=++OBS_RUNS_REQUEST;
-  OBS_RUNS_LOADING=true; if(rerender) rerender();
-  var scope=(ACCOUNT&&ACCOUNT.admin)?((OBS_STATE&&OBS_STATE.scope)||'__all__'):'__self__';
-  var q=scope&&scope!=='__self__'?('?scope='+encodeURIComponent(scope)):'';
-  return adminJson('/api/workflow/observatory/runs'+q).then(function(j){
-    if(requestId!==OBS_RUNS_REQUEST) return;
-    if(j&&j.forbidden){ OBS_RUNS=[]; OBS_RUNS_ERR='需要平台管理员权限才能跨 scope 观测'; }
-    else { OBS_RUNS=mapObsRuns(Array.isArray(j)?j:(j&&j.items)||[]); OBS_RUNS_ERR=null;
-      if(OBS_STATE.selectedId && !OBS_RUNS.filter(function(r){return r.id===OBS_STATE.selectedId;})[0]){
-        obsUpsertRunFromDetail(OBS_STATE.selectedId,(OBS_DETAIL[OBS_STATE.selectedId]&&OBS_DETAIL[OBS_STATE.selectedId].detail)||null);
-      }
-      if(OBS_RUNS.length && !OBS_STATE.selectedId){
-        OBS_STATE.selectedId=OBS_RUNS[0].id; } }
-  }).catch(function(e){ if(requestId===OBS_RUNS_REQUEST){ OBS_RUNS=[]; OBS_RUNS_ERR=(e&&(e.body||e.message))||'运行列表加载失败'; } })
-  .then(function(){ if(requestId===OBS_RUNS_REQUEST){ OBS_RUNS_LOADED=true; OBS_RUNS_LOADING=false; if(rerender) rerender(); } });
-}
-function obsOpenDirectRun(runId,rerenderList,rerenderDetail){
-  runId=(runId||'').trim(); if(!runId) return;
-  OBS_STATE.selectedId=runId;
-  obsUpsertRunFromDetail(runId,null);
-  if(rerenderList) rerenderList();
-  if(rerenderDetail) rerenderDetail();
-  delete OBS_DETAIL[runId];
-  loadObsDetail(runId,function(){ if(rerenderList) rerenderList(); if(rerenderDetail) rerenderDetail(); });
-}
-/* 选中 run 时懒加载详情 + DAG，缓存到 OBS_DETAIL[runId]。 */
-function loadObsDetail(runId,rerender){
-  if(!runId) return Promise.resolve();
-  if(OBS_DETAIL[runId] && (OBS_DETAIL[runId].loading || OBS_DETAIL[runId].detail)) { if(rerender) rerender(); return Promise.resolve(); }
-  OBS_DETAIL[runId]={loading:true,err:null,detail:null}; if(rerender) rerender();
-  var base=(ACCOUNT&&ACCOUNT.admin)
-    ? '/api/workflow/observatory/admin/runs/'+encodeURIComponent(runId)
-    : '/api/workflow/observatory/runs/'+encodeURIComponent(runId);
-  return Promise.all([
-    adminJson(base).catch(function(e){ if(e&&e.status===404) return null; throw e; }),
-    loadObsGraph(runId).catch(function(){ return null; })
-  ]).then(function(res){ var d=res[0], g=res[1];
-    if(d&&d.forbidden){ OBS_DETAIL[runId]={loading:false,err:'无权查看该 run（403）',detail:null}; }
-    else if(!d){ OBS_DETAIL[runId]={loading:false,err:'该 run 不存在或不在当前账号的可见范围',detail:null}; }
-    else { var detail=mapObsDetail(d,g); OBS_DETAIL[runId]={loading:false,err:null,detail:detail}; obsUpsertRunFromDetail(runId,detail); }
-  }).catch(function(e){ OBS_DETAIL[runId]={loading:false,err:(e&&(e.body||e.message))||'详情加载失败',detail:null}; })
-  .then(function(){ if(rerender) rerender(); });
-}
-function loadObsGraph(runId){
-  var path=(ACCOUNT&&ACCOUNT.admin)
-    ? '/api/workflow/observatory/admin/runs/'+encodeURIComponent(runId)+'/graph'
-    : '/api/workflow/observatory/runs/'+encodeURIComponent(runId)+'/graph';
-  return adminJson(path).then(function(g){
-    return (g&&g.forbidden)?null:g; });
-}
-/* admin 跨 scope：email -> 候选 scope（仅管理员；403 诚实降级） */
-function loadObsResolveScope(email){
-  return adminJson('/api/workflow/observatory/resolve-scope?email='+encodeURIComponent(email));
-}
-
 /* ④ 投影管道 CQRS —— /api/cqrs/*（platform-admin） */
 var CQRS_DATA={ metrics:{ customQuery:null, liveLag:null, projections:null }, scopes:[], readmodels:[], envelopes:[], stateRoot:[] };
 var CQRS_LOADED=false, CQRS_ERR=null, CQRS_FORBIDDEN=false;
@@ -1709,7 +1384,7 @@ async function loadCqrs(rerender){
 
 /* ⑥ 技能调用 Skills —— /api/workflow/skills/* */
 var SKILLS_DATA=[];
-var SKILLS_LOADED=false, SKILLS_ERR=null, SKILLS_FORBIDDEN=false;
+var SKILLS_LOADED=false, SKILLS_ERR=null, SKILLS_FORBIDDEN=false, SKILLS_AUTH_REQUIRED=false;
 var SKILL_DETAIL={};   /* guid -> {inputs:[...], whenToUse} (lazy, cached) */
 /* real list item: {guid,name,description,category,tags[],private,runKind} -> internal skill shape. */
 function mapSkill(it){
@@ -1721,6 +1396,11 @@ function mapSkill(it){
 function mapInputs(arr){ return (Array.isArray(arr)?arr:[]).map(function(f){
   return { key:f.name, label:f.label||f.name, ph:'', req:!!f.required, help:f.description||'' }; }); }
 async function loadSkills(rerender){
+  if(!loginResourcesGranted()){
+    SKILLS_AUTH_REQUIRED=true; SKILLS_DATA=[]; SKILLS_ERR=null; SKILLS_FORBIDDEN=false;
+    SKILLS_LOADED=true; if(rerender) rerender(); return;
+  }
+  SKILLS_AUTH_REQUIRED=false;
   try{ var j=await adminJson('/api/workflow/skills');
     if(j && j.forbidden){ SKILLS_FORBIDDEN=true; SKILLS_DATA=[]; SKILLS_ERR=null; }
     else { SKILLS_FORBIDDEN=false; SKILLS_DATA=(j.items||[]).map(mapSkill); SKILLS_ERR=j.error||null;
@@ -1767,8 +1447,8 @@ var SCHED_LOADED=false, SCHED_ERR=null, SCHED_BUSY=null, SCHED_PREVIEW=null;
 var SCHED_FILTER='all';        /* all | enabled | disabled | failing —— 真实页无过滤，此为增强项 */
 var SCHED_TIMER=null;          /* 3s 轮询句柄（对齐真实页 startSchedulePolling 的 3000ms） */
 var SCHED_OPEN={};             /* 展开了详情（serviceKey/serviceId/payloadTypeUrl）的行 id 集合 */
-/* scheduleKind 0=Generic 1=Workflow 2=SkillRunner（数值，后端无 string 枚举转换器） */
-var SCHED_KIND_LABEL={0:'Generic',1:'Workflow',2:'SkillRunner'};
+/* scheduleKind 0=Generic 1=Workflow（数值，后端无 string 枚举转换器） */
+var SCHED_KIND_LABEL={0:'Generic',1:'Workflow'};
 function _schKind(k){ return SCHED_KIND_LABEL[k]!=null?SCHED_KIND_LABEL[k]:('kind '+k); }
 /* targetKind 0=Envelope 1=ServiceInvocation */
 var SCHED_TARGET_LABEL={0:'Envelope',1:'ServiceInvocation'};
@@ -1869,124 +1549,6 @@ function schedRowDetail(x){
   bits.push('<div class="kv-row"><span class="kk">timezone</span><span class="vv">'+esc(x.tz||'—')+'</span></div>');
   bits.push('<div class="kv-row"><span class="kk">上次触发</span><span class="vv">'+esc(x.lastRel)+'</span></div>');
   return '<div class="kv" style="margin:6px 0 2px">'+bits.join('')+'</div>';
-}
-
-/* ⑧ 通道管理 Channels —— /channels（relay 注册与状态） */
-var CHANNELS_DATA=[];
-/* ---- Channels live state (NyxID relay) ---- */
-var CHAN_LOADED=false, CHAN_LOADING=false, CHAN_ERR=null, CHAN_FORBIDDEN=false;
-var CHAN_RERENDER=null;   /* set by bindChannels; lets async loaders refresh the view */
-function chanRerender(){ if(typeof CHAN_RERENDER==='function') CHAN_RERENDER(); }
-var CHANNEL_TYPE_LABEL={ lark:'飞书 Lark', feishu:'飞书（国内）', telegram:'Telegram', slack:'Slack', discord:'Discord', webhook:'Webhook' };
-/* relay health derives ONLY from the per-registration /status endpoint
-   (active|pending_webhook|unknown); never fabricated. */
-function _chanRelay(st){ return {active:'healthy', pending_webhook:'degraded', unknown:'unknown'}[st]||'unknown'; }
-function _chanAgo(iso){ if(!iso) return '—'; var t=new Date(iso); if(isNaN(t.getTime())) return '—';
-  var s=Math.max(0,(Date.now()-t.getTime())/1000);
-  if(s<60) return Math.round(s)+'秒前'; if(s<3600) return Math.round(s/60)+'分钟前';
-  if(s<86400) return Math.round(s/3600)+'小时前'; return Math.round(s/86400)+'天前'; }
-function _chanShort(id){ id=String(id||''); return id.length>8?id.slice(0,8):id; }
-/* map one real registration row -> the internal shape the render code expects.
-   No friendly name in the real API -> platform label + short bot id.
-   relay/lastEvent are filled later by mapChannelStatus from the /status feed. */
-function mapChannel(r){
-  r=r||{};
-  var type=r.platform||'webhook';
-  var botId=r.nyx_channel_bot_id||r.id||'';
-  var label=(CHANNEL_TYPE_LABEL[type]||type)+(botId?' · '+_chanShort(botId):'');
-  return { id:r.id||'', name:label, type:type, botId:botId, relay:'unknown', bound:'—',
-    lastEvent:r.owned?'查询中…':'非本账户', scope:r.scope_id||'',
-    apiKeyId:r.nyx_agent_api_key_id||'', routeId:r.nyx_conversation_route_id||'',
-    provider:r.nyx_provider_slug||'', callbackUrl:r.callback_url||'', owned:r.owned!==false,
-    statusState:r.owned===false?'foreign':'loading' };
-}
-/* fold one real /status payload onto the matching row (by registration id). */
-function mapChannelStatus(c,s){
-  if(!c||!s) return; var st=(s.status||'').toLowerCase()||'unknown';
-  c.statusState=st; c.relay=_chanRelay(st);
-  c.lastEvent=s.last_event_at?_chanAgo(s.last_event_at):(st==='active'?'已激活':st==='pending_webhook'?'等待入站':'—');
-}
-async function loadChannelStatus(c){
-  if(!c||!c.id||c.owned===false) return;
-  try{ var s=await adminJson('/api/channels/registrations/'+encodeURIComponent(c.id)+'/status');
-    if(s&&!s.forbidden){ mapChannelStatus(c,s); chanRerender(); } }
-  catch(e){ /* status probe failed: leave row as 'unknown', don't fabricate */ }
-}
-/* Step 4 reply-model options come from the owner LLM config (GET /api/user-config/llm) —
-   the real routes/models NyxID lists for this account, NOT a hardcoded vendor menu. Mirrors
-   the /channels facade page. On failure WZ.model.llm stays null and the step degrades to the
-   genuine "（平台默认）" choice only. */
-async function loadWzLlm(){
-  WZ.model.llmLoading=true; chanRerender();
-  try{ var v=await adminJson('/api/user-config/llm');
-    WZ.model.llm=(v&&!v.forbidden)?v:null; }
-  catch(e){ if(!(e&&e.unauthorized)) WZ.model.llm=null; }
-  WZ.model.llmLoading=false; chanRerender();
-}
-async function loadChannels(){
-  CHAN_LOADING=true; CHAN_ERR=null; CHAN_FORBIDDEN=false; chanRerender();
-  var q=(CHAN_ACCT==='all') ? '?scope=all' : '';
-  try{
-    var arr=await adminJson('/api/channels/registrations'+q);
-    if(arr&&arr.forbidden){
-      /* not a platform admin: drop back to own-account view honestly */
-      if(CHAN_ACCT==='all'){ CHAN_ACCT='mine'; CHAN_LOADING=false; return loadChannels(); }
-      CHAN_FORBIDDEN=true; CHANNELS_DATA.length=0; CHAN_LOADED=true; CHAN_LOADING=false; chanRerender(); return;
-    }
-    var rows=(arr||[]).map(mapChannel);
-    CHANNELS_DATA.length=0; Array.prototype.push.apply(CHANNELS_DATA, rows);
-    CHAN_ERR=null;
-  }catch(e){
-    if(e&&e.unauthorized){ CHAN_LOADING=false; return; }
-    CHAN_ERR=(e&&(e.body||e.message))||'加载失败'; CHANNELS_DATA.length=0;
-  }
-  CHAN_LOADED=true; CHAN_LOADING=false; chanRerender();
-  /* fan out live status for owned rows */
-  CHANNELS_DATA.forEach(function(c){ loadChannelStatus(c); });
-}
-/* Build the snake_case POST body from the captured wizard credentials.
-   webhook_base_url is the relay-facing origin (same convention as the proven
-   console page). Lark vs Telegram carry different secret fields. */
-function chanRegBody(){
-  var d=WZ.data||{}, p=WZ.provider, label=(d.label||'').trim();
-  if(p==='telegram') return { platform:'telegram', webhook_base_url:location.origin,
-    bot_token:(d.bot_token||'').trim(), label:label };
-  return { platform:'lark', webhook_base_url:location.origin, app_id:(d.app_id||'').trim(),
-    app_secret:(d.app_secret||''), verification_token:(d.verification_token||'').trim(), label:label };
-}
-/* REAL registration. No setTimeout, no simulated 409/cred branches.
-   Renders WZ.reg from the actual response so chanStep2's existing success
-   (regResult) and failure (r.fail) render paths display real data. */
-async function doRegister(){
-  WZ.reg={ state:'running', ticks:[true,true,true,true], botId:null, webhookUrl:null,
-    apiKeyId:null, routeId:null, relayCallbackUrl:null, fail:null }; chanRerender();
-  var res;
-  try{ res=await adminApi('/api/channels/registrations', { method:'POST',
-        headers:{'Content-Type':'application/json'}, body:JSON.stringify(chanRegBody()) }); }
-  catch(e){ if(e&&e.unauthorized){ return; }
-    WZ.reg.state='done'; WZ.reg.fail={code:'net',at:0,msg:(e&&(e.body||e.message))||'网络错误'}; chanRerender(); return; }
-  if(res&&res.forbidden){
-    WZ.reg.state='done'; WZ.reg.fail={code:'auth',at:0,msg:'当前账号无权在该 scope 注册通道（403）'}; chanRerender(); return; }
-  var data=null, txt='';
-  try{ txt=await res.text(); }catch(e){}
-  if(txt){ try{ data=JSON.parse(txt); }catch(e){ data={raw:txt}; } }
-  data=data||{};
-  if(res.ok){
-    WZ.reg.botId=data.nyx_channel_bot_id||''; WZ.reg.apiKeyId=data.nyx_agent_api_key_id||'';
-    WZ.reg.routeId=data.nyx_conversation_route_id||''; WZ.reg.webhookUrl=data.webhook_url||'';
-    WZ.reg.relayCallbackUrl=data.relay_callback_url||''; WZ.reg.registrationId=data.registration_id||'';
-    WZ.reg.state='done'; WZ.reg.fail=null; chanRerender(); return;
-  }
-  /* real failure: surface error/note from the body; classify for the right render branch */
-  var errText=((data.error||'')+' '+(data.note||'')).toLowerCase();
-  var msg=data.error||data.note||('HTTP '+res.status);
-  var code='other';
-  if(res.status===409||errText.indexOf('unsupported_platform')>=0||errText.indexOf('already')>=0||errText.indexOf('409')>=0) code='409';
-  else if(res.status===401) code='cred';
-  else if(errText.indexOf('secret')>=0||errText.indexOf('invalid')>=0||errText.indexOf('nyx_status=401')>=0||errText.indexOf('nyx_status=400')>=0) code='cred';
-  else if(res.status===400) code='cred';
-  else if(errText.indexOf('nyx_base_url')>=0) code='infra';
-  WZ.reg.state='done'; WZ.reg.fail={code:code,at:0,msg:msg}; chanRerender();
 }
 
 /* ⑨ 语音台 Voice —— /api/voice-presence/* */
@@ -2233,6 +1795,12 @@ function renderMiniFlow(container, runs){
 var ICON={
   search:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>',
   refresh:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg>',
+  filter:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5h16M7 12h10M10 19h4"/></svg>',
+  panel:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/></svg>',
+  maximize:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/></svg>',
+  minimize:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/></svg>',
+  copy:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>',
+  more:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="5" cy="12" r="1" fill="currentColor"/><circle cx="12" cy="12" r="1" fill="currentColor"/><circle cx="19" cy="12" r="1" fill="currentColor"/></svg>',
   warn:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>',
   clock:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
   calendar:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>',
@@ -2279,7 +1847,7 @@ function srcLegendRows(){
 /* run 语义：完成=绿 / 运行中=蓝 / 等待=琥珀 / 失败=红；颜色之外配形状 icon + 文字 */
 function statusTag(s){
   var map={running:['tag-running','运行中','▶'],success:['tag-success','完成','✓'],failed:['tag-failed','失败','✕'],
-    waiting:['tag-waiting','等待','◷'],stuck:['tag-failed','卡住','▌'],idle:['tag-idle','空闲','○']};
+    waiting:['tag-waiting','等待','◷'],stopped:['tag-idle','已停止','■'],stuck:['tag-failed','卡住','▌'],idle:['tag-idle','空闲','○']};
   var m=map[s]||map.idle;
   var ic=s==='running'?'<i class="tdot" aria-hidden="true"></i>':'<span class="tg" aria-hidden="true">'+m[2]+'</span>';
   return '<span class="tag '+m[0]+'">'+ic+m[1]+'</span>';
@@ -2466,8 +2034,9 @@ function l1Roster(detail,coId){
     '</tr></thead><tbody>'+wfRows+'</tbody></table></div></div>';
   /* 真实运行列表（点击行 -> foundation data-run 深链进 observatory，选中该 run） */
   var runRows=detail.runs.slice(0,80).map(function(r){
-    var rstatus={running:'running',completed:'success',failed:'failed',timed_out:'failed',stopped:'stuck',disabled:'stuck'}[r.status]||'stuck';
-    return '<tr data-run="'+esc(r.id)+'">'+
+    var rstatus={running:'running',completed:'success',failed:'failed',timed_out:'failed',stopped:'stopped',disabled:'stopped'}[r.status]||'stuck';
+    var scopeId=r.scope||coId;
+    return '<tr data-run="'+esc(r.id)+'" data-scope="'+esc(scopeId)+'">'+
       '<td><b style="color:var(--heading);font-weight:550">'+esc(r.name)+'</b><div style="font-size:11px;color:var(--faint)" class="tnum">'+esc(r.id)+'</div></td>'+
       '<td>'+statusTag(rstatus)+'</td>'+
       '<td>'+originPill(r.origin)+'</td>'+
@@ -2566,7 +2135,7 @@ function viewL2(coId,empId){
 function l2Employee(e,coId){
   var runs=runsForEmployee(e.id), st=statsForEmployee(e.id);
   var rows=runs.map(function(r){
-    return '<tr data-run="'+r.id+'" data-co="'+coId+'" data-emp="'+e.id+'">'+
+    return '<tr data-run="'+r.id+'" data-scope="'+esc(coId)+'" data-co="'+coId+'" data-emp="'+e.id+'">'+
       '<td><b style="color:var(--heading);font-weight:550">'+esc(r.wf)+'</b><div style="font-size:11px;color:var(--faint)" class="tnum">'+r.id+'</div></td>'+
       '<td>'+statusTag(r.status)+'</td>'+
       '<td class="tnum">'+r.dur+'</td>'+
@@ -2607,7 +2176,7 @@ function l2Employee(e,coId){
 function l2Task(coId,empId){
   var t=TASK_DEMO, pct=Math.round(t.done/t.total*100);
   var rows=t.runs.map(function(r){
-    return '<tr class="'+(r.stuck?'run-stuck':'')+'" data-run="'+r.id+'" data-co="'+coId+'" data-emp="'+empId+'">'+
+    return '<tr class="'+(r.stuck?'run-stuck':'')+'" data-run="'+r.id+'" data-scope="'+esc(coId)+'" data-co="'+coId+'" data-emp="'+empId+'">'+
       '<td><b style="color:var(--heading);font-weight:550">'+esc(r.wf)+'</b>'+(r.stuck?'<span class="stuck-tag">卡在这里</span>':'')+'<div style="font-size:11px;color:var(--faint)" class="tnum">'+r.id+'</div></td>'+
       '<td>'+statusTag(r.status)+'</td><td class="tnum">'+r.dur+'</td><td class="tnum">'+fmtMoney(r.cost)+'</td></tr>';
   }).join('');
@@ -2644,7 +2213,7 @@ function viewL3(coId,empId,runId){
       '<span class="sub-title" style="font-size:16px">Run '+esc(runId)+'</span></div>'+
     '<div class="task-note" style="margin-bottom:18px">'+ICON.ext.replace('width="2"','width="1.8" style="width:15px;height:15px"')+
       '<span>Run 详情由<b>运行观测台</b>承载（逐步 trace / DAG / usage / 最终产出，真实接口 /api/workflow/observatory/runs/'+esc(runId)+'）。点击下方进入观测台并选中该 run。</span></div>'+
-    '<div style="margin-top:6px;display:flex;gap:10px"><button class="btn btn-primary" data-run="'+esc(runId)+'">'+ICON.ext+'打开运行观测台</button>'+
+    '<div style="margin-top:6px;display:flex;gap:10px"><button class="btn btn-primary" data-run="'+esc(runId)+'" data-scope="'+esc(coId)+'">'+ICON.ext+'打开运行观测台</button>'+
       '<button class="btn" data-co="'+esc(coId)+'">返回组织运行列表</button></div>'+
   '</div></div>', mount:bindFleet};
 }
@@ -2703,7 +2272,7 @@ function emptyBlock(kind){
     'company-filter':['没有符合条件的公司','当前筛选下无公司，调整快筛或排序。',null],
     roster:['这家公司还没有员工','部门下尚未配置 AI 员工（member），先去添加一个 workflow / script / gagent。','添加员工'],
     graph:['暂无数据流','该公司近 24h 没有产生 Run 交接，跑一次 workflow 后这里会出现活的流水线。',null],
-    run:['暂无 Run','该员工还没有执行记录。',null]
+    run:['暂无 Run','当前没有可展示的运行记录。',null]
   };
   var m=map[kind]||map.run;
   return '<div class="empty">'+ICON.empty+'<div class="et">'+m[0]+'</div><div class="es">'+m[1]+'</div>'+
@@ -2725,6 +2294,7 @@ var NAV_ICON={
   obs:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>',
   cqrs:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="5" rx="1"/><rect x="3" y="15" width="18" height="5" rx="1"/><path d="M8 9v6M16 9v6"/></svg>',
   studio:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12a8 8 0 0 1-11.3 7.3L3 21l1.7-6.7A8 8 0 1 1 21 12Z"/></svg>',
+  agentProfiles:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3 4 7v5c0 5 3.4 8 8 9 4.6-1 8-4 8-9V7l-8-4Z"/><path d="M9 12h6M12 9v6"/></svg>',
   skills:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M13 2 3 14h8l-1 8 10-12h-8l1-8Z"/></svg>',
   sched:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>',
   channels:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 17H7A5 5 0 0 1 7 7h2M15 7h2a5 5 0 0 1 0 10h-2M8 12h8"/></svg>',
@@ -2735,7 +2305,7 @@ var NAV_ICON={
 var NAV=[
   {group:'总览',   items:['fleet','status','audit']},
   {group:'运行观测', items:['observatory','cqrs']},
-  {group:'编排调度', items:['studio','skills','schedules']},
+  {group:'编排调度', items:['studio','agent-profiles','skills','schedules']},
   {group:'接入',   items:['channels','voice']}
 ];
 var MODULE_META={
@@ -2744,6 +2314,7 @@ var MODULE_META={
   observatory:{name:'运行观测台', auth:'login', icon:NAV_ICON.obs, live:true},
   cqrs:{name:'投影管道 CQRS', auth:'platform-admin', icon:NAV_ICON.cqrs},
   studio:{name:'编排工作台', auth:'login', icon:NAV_ICON.studio},
+  'agent-profiles':{name:'Agent Profile', auth:'login', icon:NAV_ICON.agentProfiles},
   skills:{name:'技能调用', auth:'login', icon:NAV_ICON.skills},
   schedules:{name:'排班调度', auth:'login', icon:NAV_ICON.sched},
   channels:{name:'通道管理', auth:'login', icon:NAV_ICON.channels},
@@ -2798,6 +2369,396 @@ function renderRail(active){
           '<span class="acc-meta"><b>未登录</b><span>点击使用 NyxID 登录</span></span></button>')+
     '</div>'+
   '</aside>';
+}
+
+/* ---------------- Agent Profile ---------------- */
+var AGENT_PROFILE_STATE={owner:'mine',status:'all',search:'',items:[],selected:null,detail:null,
+  loaded:false,loading:false,error:null,forbidden:false,dirty:false,busy:false,notice:null,diagnostics:[],etag:null,
+  binding:null,systemBinding:null,rolloutDraft:null,skillRequest:0,skillMemberIndex:null,skillQuery:'',skillResults:[],skillLoading:false,skillError:null,skillProof:null,
+  pending:null,pollTimer:null};
+
+function agentProfileResetSkillSearch(){
+  AGENT_PROFILE_STATE.skillRequest=Number(AGENT_PROFILE_STATE.skillRequest||0)+1;AGENT_PROFILE_STATE.skillMemberIndex=null;
+  AGENT_PROFILE_STATE.skillQuery='';AGENT_PROFILE_STATE.skillResults=[];AGENT_PROFILE_STATE.skillLoading=false;AGENT_PROFILE_STATE.skillError=null;AGENT_PROFILE_STATE.skillProof=null;
+}
+function agentProfileOwnerEndpoint(owner,scope){
+  return owner==='system'?'/api/agent-profiles/system':'/api/scopes/'+encodeURIComponent(scope)+'/agent-profiles';
+}
+function agentProfileCanWrite(profile,account){
+  return !!profile && (profile.ownerKind!=='system'||!!(account&&account.admin));
+}
+function agentProfileProblem(status){
+  if(status===403)return {kind:'forbidden',title:'没有权限执行此操作'};
+  if(status===412)return {kind:'stale',title:'其他人已修改此 Profile'};
+  if(status===422)return {kind:'validation',title:'Profile 校验未通过'};
+  if(status===428)return {kind:'precondition',title:'缺少并发控制版本'};
+  if(status===503)return {kind:'unavailable',title:'投影暂时不可用'};
+  return {kind:'error',title:'请求失败'};
+}
+function agentProfileDraftFromFields(fields){
+  function csv(value){return String(value||'').split(',').map(function(x){return x.trim();}).filter(Boolean);}
+  function member(value){return {
+    intentId:String(value.intentId||'primary').trim(),routingDescription:String(value.routingDescription||'').trim(),
+    skillRef:{guid:String(value.exactSkillGuid||'').trim(),literalVersion:String(value.literalVersion||'').trim()},
+    explicitTriggerAliases:csv(value.triggerAliases),sideEffectClass:value.sideEffectClass||'READ_ONLY',
+    expectedSkillName:String(value.expectedSkillName||'').trim(),reviewedPublisherId:String(value.reviewedPublisherId||'').trim(),
+    taskToolPolicy:{toolNames:csv(value.taskTools),toolSetRefs:csv(value.taskToolSets)}
+  };}
+  var memberFields=Array.isArray(fields.members)&&fields.members.length?fields.members:[fields];
+  return {displayName:String(fields.displayName||'').trim(),purpose:String(fields.purpose||'').trim(),instructions:String(fields.instructions||''),runtimeProfile:{
+    agentKind:'nyxid.chat',routeToolSetRef:'agent-profile.nyxid-chat',activationMode:fields.activationMode||'SHADOW',
+    maximumToolPolicy:{toolNames:csv(fields.maximumTools),toolSetRefs:csv(fields.maximumToolSets)},
+    recoveryToolPolicy:{toolNames:csv(fields.recoveryTools),toolSetRefs:csv(fields.recoveryToolSets)},
+    maxPlanSteps:Number(fields.maxPlanSteps||4),handoffTtlSeconds:Number(fields.handoffTtlSeconds||900),
+    classifierTimeoutMs:Number(fields.classifierTimeoutMs||600),exactSkillFetchTimeoutMs:Number(fields.exactSkillFetchTimeoutMs||1500),
+    maxSelectedSkillBytes:Number(fields.maxSelectedSkillBytes||24576),members:memberFields.map(member)}};
+}
+function agentProfileEmptyDraft(){
+  return agentProfileDraftFromFields({activationMode:'SHADOW',maxPlanSteps:4,handoffTtlSeconds:900,classifierTimeoutMs:600,
+    exactSkillFetchTimeoutMs:1500,maxSelectedSkillBytes:24576,sideEffectClass:'READ_ONLY'});
+}
+function agentProfileRolloutFromBinding(binding){
+  return {enabled:!!(binding&&binding.enabled),cohortBasisPoints:Number(binding&&binding.cohortBasisPoints||0)};
+}
+function agentProfileApplyExactSkill(draft,detail,memberIndex){
+  var runtime=draft.runtimeProfile,member=runtime.members[Number(memberIndex||0)];if(!member)return draft;member.skillRef=member.skillRef||{};
+  member.skillRef.guid=detail.guid||'';member.skillRef.literalVersion=detail.literalVersion||'';
+  member.expectedSkillName=detail.name||'';member.reviewedPublisherId=detail.publisher||'';return draft;
+}
+function agentProfileCaptureDraft(root){
+  if(!root||!AGENT_PROFILE_STATE.detail)return;
+  var fields=agentProfileCollectFields(root);AGENT_PROFILE_STATE.detail.draft=agentProfileDraftFromFields(fields);
+  if(Object.prototype.hasOwnProperty.call(fields,'rolloutEnabled'))AGENT_PROFILE_STATE.rolloutDraft={
+    enabled:fields.rolloutEnabled!=='false',cohortBasisPoints:Number(fields.cohortBasisPoints||0)};
+}
+function agentProfileScope(){return ACCOUNT&&ACCOUNT.scope?ACCOUNT.scope:'';}
+function agentProfileCollectionEndpoint(){
+  if(AGENT_PROFILE_STATE.owner==='system'&&ACCOUNT&&ACCOUNT.admin)return '/api/admin/agent-profiles';
+  return agentProfileOwnerEndpoint(AGENT_PROFILE_STATE.owner,agentProfileScope());
+}
+function agentProfileItemEndpoint(item){
+  var slug=encodeURIComponent(item.profileSlug);
+  if(item.ownerKind==='system'&&ACCOUNT&&ACCOUNT.admin)return '/api/admin/agent-profiles/'+slug;
+  return agentProfileOwnerEndpoint(item.ownerKind==='system'?'system':'mine',agentProfileScope())+'/'+slug;
+}
+function agentProfileIdempotencyKey(){
+  if(globalThis.crypto&&typeof globalThis.crypto.randomUUID==='function')return globalThis.crypto.randomUUID();
+  return 'ap-'+Date.now()+'-'+Math.random().toString(16).slice(2);
+}
+async function agentProfileJson(path,opts){
+  var res=await adminApi(path,opts);
+  if(res&&res.forbidden)throw {status:403,problem:agentProfileProblem(403)};
+  var body=null;try{body=await res.json();}catch(_){body=null;}
+  if(!res.ok)throw {status:res.status,problem:agentProfileProblem(res.status),body:body};
+  return {body:body,etag:res.headers&&res.headers.get?res.headers.get('ETag'):null,status:res.status};
+}
+function agentProfileNormalizeItem(item,owner){
+  return {ownerKind:item.ownerKind||(owner==='system'?'system':'scope'),profileSlug:item.profileSlug||'',profileId:item.profileId||'',
+    displayName:item.displayName||item.profileSlug||'',purpose:item.purpose||'',publishedRevision:Number(item.publishedRevision||0),
+    isDefault:!!item.isDefault,available:item.available!==false,etag:item.etag||null};
+}
+async function loadAgentProfileBindings(){
+  AGENT_PROFILE_STATE.binding=null;AGENT_PROFILE_STATE.systemBinding=null;
+  var scope=agentProfileScope();if(!scope)return;
+  try{
+    var personal=await agentProfileJson('/api/scopes/'+encodeURIComponent(scope)+'/agent-profile-bindings/nyxid.chat');
+    AGENT_PROFILE_STATE.binding=Object.assign({},personal.body||{},{etag:personal.etag||(personal.body&&personal.body.etag)||null});
+    agentProfileReconcilePending(personal.body&&personal.body.lastMutation);
+  }catch(e){if(!e||e.status!==404)AGENT_PROFILE_STATE.error=e&&e.problem?e.problem:agentProfileProblem(e&&e.status);}
+  if(ACCOUNT&&ACCOUNT.admin){
+    try{
+      var system=await agentProfileJson('/api/admin/agent-profile-bindings/nyxid.chat');
+      AGENT_PROFILE_STATE.systemBinding=Object.assign({},system.body||{},{etag:system.etag||(system.body&&system.body.etag)||null});
+      agentProfileReconcilePending(system.body&&system.body.lastMutation);
+    }catch(e){if(e&&e.status!==403&&e.status!==404)AGENT_PROFILE_STATE.error=e.problem||agentProfileProblem(e.status);}
+  }
+}
+function agentProfileApplyBinding(items){
+  var target=AGENT_PROFILE_STATE.binding&&AGENT_PROFILE_STATE.binding.target;
+  items.forEach(function(item){item.isDefault=!!target&&target.profileId===item.profileId&&target.ownerKind===item.ownerKind;});
+  return items;
+}
+async function loadAgentProfiles(){
+  if(AGENT_PROFILE_STATE.loading)return;
+  AGENT_PROFILE_STATE.loading=true;AGENT_PROFILE_STATE.error=null;AGENT_PROFILE_STATE.forbidden=false;
+  try{
+    var q='?take=100',result=await agentProfileJson(agentProfileCollectionEndpoint()+q);
+    AGENT_PROFILE_STATE.items=(result.body&&result.body.items||[]).map(function(x){return agentProfileNormalizeItem(x,AGENT_PROFILE_STATE.owner);});
+    agentProfileReconcilePending(result.body&&result.body.lastMutation);
+    await loadAgentProfileBindings();agentProfileApplyBinding(AGENT_PROFILE_STATE.items);
+    AGENT_PROFILE_STATE.loaded=true;
+    if(AGENT_PROFILE_STATE.selected&&!AGENT_PROFILE_STATE.items.some(function(x){return x.profileSlug===AGENT_PROFILE_STATE.selected;}))AGENT_PROFILE_STATE.selected=null;
+    if(!AGENT_PROFILE_STATE.selected&&AGENT_PROFILE_STATE.items.length)AGENT_PROFILE_STATE.selected=AGENT_PROFILE_STATE.items[0].profileSlug;
+    if(AGENT_PROFILE_STATE.selected)await loadAgentProfileDetail(AGENT_PROFILE_STATE.selected,false);
+  }catch(e){AGENT_PROFILE_STATE.loaded=true;AGENT_PROFILE_STATE.forbidden=e&&e.status===403;AGENT_PROFILE_STATE.error=e&&e.problem?e.problem:agentProfileProblem(e&&e.status);}
+  AGENT_PROFILE_STATE.loading=false;render();
+}
+async function loadAgentProfileDetail(slug,rerender){
+  var item=AGENT_PROFILE_STATE.items.filter(function(x){return x.profileSlug===slug;})[0];if(!item)return;
+  agentProfileResetSkillSearch();AGENT_PROFILE_STATE.selected=slug;AGENT_PROFILE_STATE.diagnostics=[];
+  try{
+    var result=await agentProfileJson(agentProfileItemEndpoint(item));
+    AGENT_PROFILE_STATE.detail=Object.assign({},item,result.body||{});
+    AGENT_PROFILE_STATE.etag=result.etag||(result.body&&result.body.etag)||item.etag||null;
+    AGENT_PROFILE_STATE.rolloutDraft=null;AGENT_PROFILE_STATE.dirty=false;
+    if(result.body&&result.body.lastMutation)agentProfileReconcilePending(Object.assign({},result.body.lastMutation,{executionAvailable:result.body.executionAvailable===true}));
+  }catch(e){AGENT_PROFILE_STATE.error=e&&e.problem?e.problem:agentProfileProblem(e&&e.status);}
+  if(rerender!==false)render();
+}
+function agentProfileRows(){
+  var text=AGENT_PROFILE_STATE.search.trim().toLowerCase(),status=AGENT_PROFILE_STATE.status;
+  return AGENT_PROFILE_STATE.items.filter(function(x){
+    var hit=!text||(x.profileSlug+' '+x.displayName+' '+x.purpose).toLowerCase().indexOf(text)>=0;
+    var state=x.publishedRevision>0?'published':'draft';return hit&&(status==='all'||status===state);
+  });
+}
+function agentProfileStatus(item){
+  if(!item||!item.publishedRevision)return '<span class="ap-status">未发布</span>';
+  if(item.available===false)return '<span class="ap-status pending">投影滞后</span>';
+  return '<span class="ap-status published">已发布 r'+esc(item.publishedRevision)+'</span>';
+}
+function agentProfileListHtml(){
+  var rows=agentProfileRows();if(!rows.length)return '<div class="ap-empty">'+(AGENT_PROFILE_STATE.search?'没有匹配的 Profile':'还没有 Profile')+'</div>';
+  return '<div class="ap-list">'+rows.map(function(x){return '<button class="ap-row'+(x.profileSlug===AGENT_PROFILE_STATE.selected?' on':'')+'" data-ap-select="'+esc(x.profileSlug)+'">'+
+    '<span class="ap-row-head"><span class="ap-row-name">'+esc(x.displayName||x.profileSlug)+'</span>'+agentProfileStatus(x)+'</span>'+
+    '<span class="ap-row-meta"><span>'+esc((x.ownerKind==='system'?'system/':'mine/')+x.profileSlug)+'</span>'+(x.purpose?'<span>'+esc(x.purpose)+'</span>':'')+
+      (x.isDefault?'<span class="ap-status published">默认</span>':'')+'</span></button>';}).join('')+'</div>';
+}
+function agentProfileField(label,name,value,opts){
+  opts=opts||{};var member=opts.memberIndex,memberAttr=member==null?'':' data-ap-member="'+member+'"';
+  var id='ap-'+name+(member==null?'':'-'+member),disabled=opts.disabled?' disabled':'',readonly=opts.readonly?' readonly':'',wide=opts.wide?' wide':'';
+  var control=opts.textarea?'<textarea id="'+id+'" data-ap-field="'+name+'"'+memberAttr+disabled+readonly+'>'+esc(value||'')+'</textarea>':
+    '<input id="'+id+'" data-ap-field="'+name+'"'+memberAttr+' type="'+(opts.type||'text')+'" value="'+esc(value==null?'':value)+'"'+disabled+readonly+
+      (opts.min!=null?' min="'+opts.min+'"':'')+(opts.max!=null?' max="'+opts.max+'"':'')+(opts.required?' required':'')+'>';
+  return '<div class="ap-field'+wide+'"><label for="'+id+'">'+esc(label)+'</label>'+control+(opts.help?'<span class="ap-help">'+esc(opts.help)+'</span>':'')+'</div>';
+}
+function agentProfileSelect(label,name,value,options,disabled,memberIndex){
+  var memberAttr=memberIndex==null?'':' data-ap-member="'+memberIndex+'"',id='ap-'+name+(memberIndex==null?'':'-'+memberIndex);
+  return '<div class="ap-field"><label for="'+id+'">'+esc(label)+'</label><select id="'+id+'" data-ap-field="'+name+'"'+memberAttr+(disabled?' disabled':'')+'>'+options.map(function(o){
+    return '<option value="'+esc(o.value)+'"'+(o.value===value?' selected':'')+'>'+esc(o.label)+'</option>';}).join('')+'</select></div>';
+}
+function agentProfileRuntime(detail){return detail&&detail.draft&&detail.draft.runtimeProfile?detail.draft.runtimeProfile:(detail&&detail.runtimeProfile)||agentProfileEmptyDraft().runtimeProfile;}
+function agentProfileMemberHtml(member,index,count,disabled){
+  var ref=member.skillRef||{},task=member.taskToolPolicy||{},opts={memberIndex:index,disabled:disabled};
+  return '<div class="ap-member" data-ap-member-card="'+index+'"><div class="ap-member-head"><b>Member '+(index+1)+' · '+esc(member.intentId||'未命名 intent')+'</b>'+
+    (!disabled&&count>1?'<button type="button" class="btn" data-ap-remove-member="'+index+'">删除</button>':'')+'</div><div class="ap-grid three">'+agentProfileSkillSearchHtml(disabled,index)+
+    agentProfileField('Intent ID','intentId',member.intentId,Object.assign({required:true},opts))+agentProfileField('Exact skill GUID','exactSkillGuid',ref.guid,Object.assign({required:true},opts))+
+    agentProfileField('Literal version','literalVersion',ref.literalVersion,Object.assign({required:true},opts))+agentProfileField('Expected name','expectedSkillName',member.expectedSkillName,Object.assign({required:true},opts))+
+    agentProfileField('Publisher','reviewedPublisherId',member.reviewedPublisherId,Object.assign({required:true},opts))+agentProfileSelect('Side-effect class','sideEffectClass',String(member.sideEffectClass||'READ_ONLY').replace(/^AGENT_PROFILE_SIDE_EFFECT_CLASS_/,''),[
+      {value:'READ_ONLY',label:'Read only'},{value:'EXTERNAL_HANDOFF',label:'External handoff'},{value:'SERVICE_CALL',label:'Service call'},{value:'MAINTENANCE',label:'Maintenance'}],disabled,index)+
+    agentProfileField('Routing description','routingDescription',member.routingDescription,Object.assign({wide:true},opts))+agentProfileField('Trigger aliases','triggerAliases',(member.explicitTriggerAliases||[]).join(', '),Object.assign({wide:true,help:'逗号分隔；路由只使用发布后 sealed aliases。'},opts))+
+    agentProfileField('Task tools','taskTools',(task.toolNames||[]).join(', '),opts)+agentProfileField('Task tool sets','taskToolSets',(task.toolSetRefs||[]).join(', '),opts)+'</div></div>';
+}
+function agentProfileDiagnosticsHtml(){
+  if(!AGENT_PROFILE_STATE.diagnostics.length)return '';
+  return '<section class="ap-section" aria-live="polite"><h3>校验结果</h3><div class="ap-diagnostics">'+AGENT_PROFILE_STATE.diagnostics.map(function(d){
+    return '<div class="ap-diagnostic" data-ap-diagnostic="'+esc(d.field||'profile')+'"><b>'+esc(d.code||'INVALID_PROFILE')+'</b> · '+esc(d.message||d.field||'请检查字段')+'</div>';}).join('')+'</div></section>';
+}
+function agentProfileSkillSearchHtml(disabled,memberIndex){
+  if(disabled)return '';
+  var active=Number(AGENT_PROFILE_STATE.skillMemberIndex)===memberIndex,results=active?(AGENT_PROFILE_STATE.skillResults||[]):[];
+  var list=results.length?'<div class="ap-skill-results">'+results.map(function(item){return '<button type="button" class="ap-skill-result" data-ap-skill="'+esc(item.guid||'')+'" data-ap-member="'+memberIndex+'"><span><b>'+esc(item.name||item.guid)+'</b><br><small>'+esc(item.description||'')+'</small></span><small>'+esc(item.guid||'')+'</small></button>';}).join('')+'</div>':'';
+  var problem=active&&AGENT_PROFILE_STATE.skillError?'<div class="ap-diagnostic">'+esc(AGENT_PROFILE_STATE.skillError)+'</div>':'';
+  var proof=active&&AGENT_PROFILE_STATE.skillProof?'<div class="ap-skill-proof">已固定 '+esc(AGENT_PROFILE_STATE.skillProof.literalVersion)+' · '+esc(AGENT_PROFILE_STATE.skillProof.publisher)+' · SHA-256 '+esc(AGENT_PROFILE_STATE.skillProof.skillHash)+'</div>':'';
+  return '<div class="ap-skill-search">'+agentProfileField('搜索可用 Ornn skill','skillQuery',active?AGENT_PROFILE_STATE.skillQuery:'',{memberIndex:memberIndex})+'<button type="button" class="btn" data-ap-skill-search="'+memberIndex+'"'+(AGENT_PROFILE_STATE.skillLoading?' disabled':'')+'>'+ICON.search+' 搜索</button></div>'+list+problem+proof;
+}
+async function agentProfileSearchSkills(root,memberIndex){
+  var input=root.querySelector('[data-ap-field="skillQuery"][data-ap-member="'+memberIndex+'"]'),query=String(input&&input.value||'').trim();
+  agentProfileCaptureDraft(root);var request=Number(AGENT_PROFILE_STATE.skillRequest||0)+1;AGENT_PROFILE_STATE.skillRequest=request;AGENT_PROFILE_STATE.skillMemberIndex=Number(memberIndex);AGENT_PROFILE_STATE.skillQuery=query;AGENT_PROFILE_STATE.skillResults=[];AGENT_PROFILE_STATE.skillLoading=true;AGENT_PROFILE_STATE.skillError=null;AGENT_PROFILE_STATE.skillProof=null;render();
+  try{
+    var result=await agentProfileJson('/api/workflow/skills?query='+encodeURIComponent(query)+'&page=1&pageSize=20');
+    if(request!==AGENT_PROFILE_STATE.skillRequest)return;
+    AGENT_PROFILE_STATE.skillResults=result.body&&result.body.items||[];
+  }catch(e){if(request!==AGENT_PROFILE_STATE.skillRequest)return;AGENT_PROFILE_STATE.skillResults=[];AGENT_PROFILE_STATE.skillError=e&&e.problem?e.problem.title:'无法读取 Ornn skills';}
+  AGENT_PROFILE_STATE.skillLoading=false;render();
+}
+async function agentProfileSelectSkill(guid,root,memberIndex){
+  agentProfileCaptureDraft(root);var request=Number(AGENT_PROFILE_STATE.skillRequest||0)+1;AGENT_PROFILE_STATE.skillRequest=request;AGENT_PROFILE_STATE.skillMemberIndex=Number(memberIndex);AGENT_PROFILE_STATE.skillResults=[];AGENT_PROFILE_STATE.skillLoading=true;AGENT_PROFILE_STATE.skillError=null;AGENT_PROFILE_STATE.skillProof=null;render();
+  try{
+    var result=await agentProfileJson('/api/workflow/skills/'+encodeURIComponent(guid)+'/exact');
+    if(request!==AGENT_PROFILE_STATE.skillRequest)return;
+    var detail=result.body||{};AGENT_PROFILE_STATE.detail.draft=agentProfileApplyExactSkill(AGENT_PROFILE_STATE.detail.draft,detail,memberIndex);
+    AGENT_PROFILE_STATE.skillProof=detail;AGENT_PROFILE_STATE.skillResults=[];AGENT_PROFILE_STATE.dirty=true;
+  }catch(e){if(request!==AGENT_PROFILE_STATE.skillRequest)return;AGENT_PROFILE_STATE.skillError=e&&e.problem?e.problem.title:'无法固定 exact skill';}
+  AGENT_PROFILE_STATE.skillLoading=false;render();
+}
+function agentProfilePublicSummaryHtml(d){
+  var actionDisabled=AGENT_PROFILE_STATE.busy||!!AGENT_PROFILE_STATE.pending;
+  return '<div class="ap-workspace-inner"><div class="ap-head"><div><div class="ap-title">'+esc(d.displayName||d.profileSlug)+'</div>'+
+    '<div class="ap-sub">'+esc('system/'+d.profileSlug)+'</div></div>'+agentProfileStatus(d)+'<div class="ap-actions">'+
+    '<button class="btn btn-primary" data-ap-action="personal-default"'+(actionDisabled?' disabled':'')+'>设为我的默认</button>'+
+    (d.isDefault?'<button class="btn" data-ap-action="clear-default"'+(actionDisabled?' disabled':'')+'>清除默认</button>':'')+'</div></div>'+
+    '<div class="ap-banner"><b>公开的已发布摘要</b><span>完整 runtime 配置由 system/ Profile 保护；绑定仅影响之后新建的 Conversation。</span></div>'+
+    '<section class="ap-section"><h3>Profile 摘要</h3><div class="kv"><div class="kv-row"><span class="kk">用途</span><span class="vv sans">'+esc(d.purpose||'未填写')+'</span></div>'+
+    '<div class="kv-row"><span class="kk">Published revision</span><span class="vv">r'+esc(d.publishedRevision||0)+'</span></div>'+
+    '<div class="kv-row"><span class="kk">可用状态</span><span class="vv sans">'+esc(d.available===false?'暂不可用于新实例':'可用于新实例')+'</span></div></div></section></div>';
+}
+function agentProfileEditorHtml(){
+  var d=AGENT_PROFILE_STATE.detail;if(!d)return '<div class="ap-empty">从左侧选择一个 Profile，或创建新 Profile。</div>';
+  if(d.ownerKind==='system'&&!agentProfileCanWrite(d,ACCOUNT))return agentProfilePublicSummaryHtml(d);
+  var writable=agentProfileCanWrite(d,ACCOUNT),draft=d.draft||d,rt=agentProfileRuntime(d);
+  var members=rt.members&&rt.members.length?rt.members:agentProfileEmptyDraft().runtimeProfile.members,max=rt.maximumToolPolicy||{},recovery=rt.recoveryToolPolicy||{};
+  var rollout=AGENT_PROFILE_STATE.rolloutDraft||agentProfileRolloutFromBinding(AGENT_PROFILE_STATE.systemBinding);
+  var notice=AGENT_PROFILE_STATE.notice?'<div class="ap-banner pending" role="status">'+esc(AGENT_PROFILE_STATE.notice)+'</div>':'';
+  var error=AGENT_PROFILE_STATE.error?'<div class="ap-banner error" role="alert">'+esc(AGENT_PROFILE_STATE.error.title)+'</div>':'';
+  var dis=!writable||!!AGENT_PROFILE_STATE.pending,actionDisabled=AGENT_PROFILE_STATE.busy||!!AGENT_PROFILE_STATE.pending;
+  return '<div class="ap-workspace-inner">'+
+    '<div class="ap-head"><div><div class="ap-title">'+esc(d.displayName||d.profileSlug)+'</div><div class="ap-sub">'+esc((d.ownerKind==='system'?'system/':'mine/')+d.profileSlug)+
+      ' · ETag '+esc(AGENT_PROFILE_STATE.etag||'等待投影')+' · state '+esc(d.authorityStateVersion||0)+'</div></div>'+agentProfileStatus(d)+
+      '<div class="ap-actions">'+(writable?'<button class="btn" data-ap-action="save"'+(actionDisabled?' disabled':'')+'>保存草稿</button><button class="btn" data-ap-action="validate"'+(actionDisabled?' disabled':'')+'>校验</button><button class="btn btn-primary" data-ap-action="publish"'+(actionDisabled?' disabled':'')+'>发布</button>':'')+
+      '<button class="btn" data-ap-action="personal-default"'+(actionDisabled?' disabled':'')+'>设为我的默认</button>'+(d.isDefault?'<button class="btn" data-ap-action="clear-default"'+(actionDisabled?' disabled':'')+'>清除默认</button>':'')+'</div></div>'+notice+error+
+    '<div class="ap-banner"><b>仅影响新建实例</b><span>发布新 revision 不会热更新已经运行的 Conversation。</span></div>'+
+    '<form data-ap-form novalidate><section class="ap-section"><h3>基础信息</h3><div class="ap-grid">'+
+      agentProfileField('显示名称','displayName',draft.displayName,{required:true,disabled:dis})+agentProfileField('用途','purpose',draft.purpose,{disabled:dis})+
+      agentProfileField('Instructions','instructions',draft.instructions,{textarea:true,wide:true,required:true,disabled:dis})+
+      agentProfileSelect('Activation mode','activationMode',String(rt.activationMode||'SHADOW').replace(/^AGENT_PROFILE_ACTIVATION_MODE_/,''),[
+        {value:'SHADOW',label:'Shadow'},{value:'ENFORCED',label:'Enforced'}],dis)+'</div></section>'+
+    '<section class="ap-section"><div class="ap-member-head"><div><h3>Exact Ornn members</h3><span class="ap-help">每个 intent 绑定一个 exact skill，最多 32 个。</span></div>'+
+      (!dis?'<button type="button" class="btn" data-ap-add-member'+(members.length>=32?' disabled':'')+'>添加 member · '+members.length+'/32</button>':'')+'</div>'+
+      members.map(function(member,index){return agentProfileMemberHtml(member,index,members.length,dis);}).join('')+'</section>'+
+    '<section class="ap-section"><h3>Tool policy ceiling</h3><div class="ap-grid">'+
+      agentProfileField('Maximum tools','maximumTools',(max.toolNames||[]).join(', '),{disabled:dis})+agentProfileField('Maximum tool sets','maximumToolSets',(max.toolSetRefs||[]).join(', '),{disabled:dis})+
+      agentProfileField('Recovery tools','recoveryTools',(recovery.toolNames||[]).join(', '),{disabled:dis})+agentProfileField('Recovery tool sets','recoveryToolSets',(recovery.toolSetRefs||[]).join(', '),{disabled:dis})+'</div></section>'+
+    '<section class="ap-section"><h3>高级运行参数</h3><div class="ap-grid three">'+
+      agentProfileField('Max plan steps','maxPlanSteps',rt.maxPlanSteps||4,{type:'number',readonly:true,disabled:dis})+
+      agentProfileField('Handoff TTL (s)','handoffTtlSeconds',rt.handoffTtlSeconds||900,{type:'number',readonly:true,disabled:dis})+
+      agentProfileField('Classifier timeout (ms)','classifierTimeoutMs',rt.classifierTimeoutMs||600,{type:'number',readonly:true,disabled:dis})+
+      agentProfileField('Exact fetch timeout (ms)','exactSkillFetchTimeoutMs',rt.exactSkillFetchTimeoutMs||1500,{type:'number',readonly:true,disabled:dis})+
+      agentProfileField('Max selected skill bytes','maxSelectedSkillBytes',rt.maxSelectedSkillBytes||24576,{type:'number',readonly:true,disabled:dis})+'</div><span class="ap-help">当前 nyxid.chat runtime 固定参数；由服务端 editor options 定义。</span></section>'+agentProfileDiagnosticsHtml()+'</form>'+
+    ((d.ownerKind==='system'&&ACCOUNT&&ACCOUNT.admin)?'<section class="ap-section"><h3>System default rollout</h3><div class="ap-rollout">'+
+      agentProfileSelect('Enabled','rolloutEnabled',String(rollout.enabled),[{value:'true',label:'启用'},{value:'false',label:'停用'}],false)+
+      agentProfileField('Cohort basis points','cohortBasisPoints',rollout.cohortBasisPoints,{type:'number',min:0,max:10000})+
+      '<button class="btn" data-ap-action="system-default"'+(actionDisabled?' disabled':'')+'>保存 system 默认</button></div></section>':'')+'</div>';
+}
+function agentProfileCollectFields(root){
+  var out={members:[]};root.querySelectorAll('[data-ap-field]').forEach(function(el){
+    var name=el.getAttribute('data-ap-field'),member=el.getAttribute('data-ap-member');
+    if(member==null)out[name]=el.value;
+    else{member=Number(member);out.members[member]=out.members[member]||{};out.members[member][name]=el.value;}
+  });out.members=out.members.filter(Boolean);return out;
+}
+function agentProfileLocalDiagnostics(draft){
+  var out=[];if(!draft.displayName)out.push({code:'DISPLAY_NAME_REQUIRED',field:'displayName',message:'显示名称不能为空'});
+  if(!draft.instructions)out.push({code:'INSTRUCTIONS_REQUIRED',field:'instructions',message:'Instructions 不能为空'});
+  var rt=draft.runtimeProfile;if(!rt.members.length||rt.members.length>32)out.push({code:'PROFILE_MEMBER_COUNT_INVALID',field:'members',message:'Member 数量范围为 1..32'});
+  rt.members.forEach(function(m,index){
+    if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(m.skillRef.guid))out.push({code:'INVALID_SKILL_GUID',field:'members['+index+'].exactSkillGuid',message:'Member '+(index+1)+' 请输入 canonical lowercase GUID'});
+    if(!/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(m.skillRef.literalVersion))out.push({code:'INVALID_LITERAL_VERSION',field:'members['+index+'].literalVersion',message:'Member '+(index+1)+' 版本必须是 major.minor'});
+    if(!m.expectedSkillName)out.push({code:'EXPECTED_SKILL_NAME_REQUIRED',field:'members['+index+'].expectedSkillName',message:'Member '+(index+1)+' Expected name 不能为空'});
+    if(!m.reviewedPublisherId)out.push({code:'PUBLISHER_REQUIRED',field:'members['+index+'].reviewedPublisherId',message:'Member '+(index+1)+' Publisher 不能为空'});
+  });
+  if(rt.maxPlanSteps!==4)out.push({code:'PROFILE_MAX_PLAN_STEPS_INVALID',field:'maxPlanSteps',message:'当前必须为 4'});
+  if(rt.handoffTtlSeconds!==900)out.push({code:'PROFILE_HANDOFF_TTL_INVALID',field:'handoffTtlSeconds',message:'当前必须为 900'});
+  if(rt.classifierTimeoutMs!==600)out.push({code:'PROFILE_CLASSIFIER_TIMEOUT_INVALID',field:'classifierTimeoutMs',message:'当前必须为 600'});
+  if(rt.exactSkillFetchTimeoutMs!==1500)out.push({code:'PROFILE_EXACT_SKILL_TIMEOUT_INVALID',field:'exactSkillFetchTimeoutMs',message:'当前必须为 1500'});
+  if(rt.maxSelectedSkillBytes!==24576)out.push({code:'PROFILE_SELECTED_SKILL_BYTES_INVALID',field:'maxSelectedSkillBytes',message:'当前必须为 24576'});
+  return out;
+}
+async function agentProfileMutation(path,method,body,etag){
+  var headers={'Content-Type':'application/json','Idempotency-Key':agentProfileIdempotencyKey()};if(etag)headers['If-Match']=etag;
+  return agentProfileJson(path,{method:method,headers:headers,body:body==null?null:JSON.stringify(body)});
+}
+function agentProfileTrackAccepted(result,kind){
+  var operationId=result&&result.status===202&&result.body&&result.body.operationId;
+  if(!operationId)return false;
+  if(AGENT_PROFILE_STATE.pollTimer){clearTimeout(AGENT_PROFILE_STATE.pollTimer);AGENT_PROFILE_STATE.pollTimer=null;}
+  AGENT_PROFILE_STATE.pending={operationId:operationId,kind:kind,attempts:0};
+  AGENT_PROFILE_STATE.notice='已接受，等待提交/投影';AGENT_PROFILE_STATE.error=null;return true;
+}
+function agentProfileOutcomeIsTerminal(pending,outcome){
+  if(!pending||!outcome)return false;
+  if(outcome.status==='REJECTED')return true;
+  if(pending.kind==='catalog')return outcome.code==='PROFILE_ACTIVE'||outcome.code==='PROFILE_PROVISIONING_FAILED'||outcome.code==='PROFILE_PROVISIONING_TIMED_OUT';
+  if(pending.kind==='publish')return outcome.code==='PROFILE_PUBLISHED'&&outcome.executionAvailable===true;
+  return outcome.status==='SUCCEEDED'||outcome.status==='NO_CHANGE';
+}
+function agentProfileReconcilePending(outcome){
+  var pending=AGENT_PROFILE_STATE.pending;
+  if(!pending||!outcome||outcome.operationId!==pending.operationId||!agentProfileOutcomeIsTerminal(pending,outcome))return false;
+  if(AGENT_PROFILE_STATE.pollTimer){clearTimeout(AGENT_PROFILE_STATE.pollTimer);AGENT_PROFILE_STATE.pollTimer=null;}
+  var failed=outcome.status==='REJECTED'||outcome.code==='PROFILE_PROVISIONING_FAILED'||outcome.code==='PROFILE_PROVISIONING_TIMED_OUT';
+  AGENT_PROFILE_STATE.pending=null;
+  if(failed){AGENT_PROFILE_STATE.notice=null;AGENT_PROFILE_STATE.error={kind:'mutation',title:outcome.code||'AGENT_PROFILE_MUTATION_REJECTED'};}
+  else{AGENT_PROFILE_STATE.error=null;AGENT_PROFILE_STATE.notice=(outcome.code||'操作完成')+'，完成投影';}
+  return true;
+}
+function agentProfileScheduleRefresh(){
+  var pending=AGENT_PROFILE_STATE.pending;if(!pending)return;
+  if(pending.attempts>=20){AGENT_PROFILE_STATE.pending=null;AGENT_PROFILE_STATE.pollTimer=null;AGENT_PROFILE_STATE.notice='已接受，但投影尚未可见，可手动刷新';render();return;}
+  if(AGENT_PROFILE_STATE.pollTimer)clearTimeout(AGENT_PROFILE_STATE.pollTimer);
+  AGENT_PROFILE_STATE.pollTimer=setTimeout(async function(){
+    AGENT_PROFILE_STATE.pollTimer=null;if(!AGENT_PROFILE_STATE.pending)return;
+    if(AGENT_PROFILE_STATE.loading){agentProfileScheduleRefresh();return;}
+    AGENT_PROFILE_STATE.pending.attempts+=1;await loadAgentProfiles();
+    if(AGENT_PROFILE_STATE.pending)agentProfileScheduleRefresh();
+  },750);
+}
+async function agentProfileHandleAction(action,root){
+  var d=AGENT_PROFILE_STATE.detail;if(!d||AGENT_PROFILE_STATE.busy||AGENT_PROFILE_STATE.pending)return;
+  var base=agentProfileItemEndpoint(d),fields=agentProfileCollectFields(root),draft=agentProfileDraftFromFields(fields);
+  AGENT_PROFILE_STATE.error=null;AGENT_PROFILE_STATE.notice=null;
+  if((action==='validate'||action==='publish')&&AGENT_PROFILE_STATE.dirty){AGENT_PROFILE_STATE.error={kind:'stale-draft',title:'请先保存草稿并等待投影'};render();return;}
+  try{
+    AGENT_PROFILE_STATE.busy=true;
+    if(action==='save'){
+      AGENT_PROFILE_STATE.diagnostics=agentProfileLocalDiagnostics(draft);if(AGENT_PROFILE_STATE.diagnostics.length){AGENT_PROFILE_STATE.busy=false;render();return;}
+      var saved=await agentProfileMutation(base+'/draft','PUT',{draft:draft},AGENT_PROFILE_STATE.etag);agentProfileTrackAccepted(saved,'draft');AGENT_PROFILE_STATE.dirty=false;
+    }else if(action==='validate'){
+      var validated=await agentProfileJson(base+':validate',{method:'POST'});AGENT_PROFILE_STATE.diagnostics=validated.body&&validated.body.diagnostics||[];
+      AGENT_PROFILE_STATE.notice=AGENT_PROFILE_STATE.diagnostics.length?'校验完成，请修正标记字段':'校验通过，可以发布';
+    }else if(action==='publish'){
+      if(!confirm('发布只影响新建实例，已有 Conversation 保持当前 revision。确定发布？')){AGENT_PROFILE_STATE.busy=false;return;}
+      var published=await agentProfileMutation(base+':publish','POST',null,AGENT_PROFILE_STATE.etag);agentProfileTrackAccepted(published,'publish');
+    }else if(action==='personal-default'||action==='clear-default'){
+      var bind='/api/scopes/'+encodeURIComponent(agentProfileScope())+'/agent-profile-bindings/nyxid.chat';
+      var bindingResult=action==='personal-default'
+        ?await agentProfileMutation(bind,'PUT',{agentProfile:{ownerKind:d.ownerKind==='system'?'system':'caller',profileSlug:d.profileSlug}},AGENT_PROFILE_STATE.binding&&AGENT_PROFILE_STATE.binding.etag)
+        :await agentProfileMutation(bind,'DELETE',null,AGENT_PROFILE_STATE.binding&&AGENT_PROFILE_STATE.binding.etag);
+      agentProfileTrackAccepted(bindingResult,'binding');
+    }else if(action==='system-default'){
+      var enabled=fields.rolloutEnabled!=='false',cohort=Number(fields.cohortBasisPoints||0);
+      var systemResult=await agentProfileMutation('/api/admin/agent-profile-bindings/nyxid.chat','PUT',{agentProfile:{ownerKind:'system',profileSlug:d.profileSlug},enabled:enabled,cohortBasisPoints:cohort},AGENT_PROFILE_STATE.systemBinding&&AGENT_PROFILE_STATE.systemBinding.etag);
+      agentProfileTrackAccepted(systemResult,'systemBinding');
+    }
+    if(AGENT_PROFILE_STATE.pending)agentProfileScheduleRefresh();
+  }catch(e){AGENT_PROFILE_STATE.error=e&&e.problem?e.problem:agentProfileProblem(e&&e.status);AGENT_PROFILE_STATE.diagnostics=e&&e.body&&e.body.diagnostics||[];}
+  AGENT_PROFILE_STATE.busy=false;render();
+}
+function agentProfileBeforeUnload(event){
+  if(!AGENT_PROFILE_STATE.dirty)return;event.preventDefault();event.returnValue='';
+}
+window.addEventListener('beforeunload',agentProfileBeforeUnload);
+function viewAgentProfiles(){
+  var mine=AGENT_PROFILE_STATE.owner==='mine',canCreate=mine||!!(ACCOUNT&&ACCOUNT.admin);
+  var body=moduleSubHeader('agent-profiles','<span class="ap-status">Actor-backed read model</span>')+
+    '<div class="ap-shell"><div class="ap-toolbar"><div class="segmented" role="tablist" aria-label="Profile owner">'+
+      '<button role="tab" data-ap-owner="mine" class="'+(mine?'on':'')+'">我的 Profile</button><button role="tab" data-ap-owner="system" class="'+(!mine?'on':'')+'">system/</button></div>'+
+      '<div class="search" role="search">'+ICON.search+'<input aria-label="搜索 Profile" data-ap-search value="'+esc(AGENT_PROFILE_STATE.search)+'" placeholder="搜索 slug / 名称"></div>'+
+      '<select class="std-select" style="width:120px" aria-label="发布状态" data-ap-status><option value="all">全部状态</option><option value="published"'+(AGENT_PROFILE_STATE.status==='published'?' selected':'')+'>已发布</option><option value="draft"'+(AGENT_PROFILE_STATE.status==='draft'?' selected':'')+'>未发布</option></select>'+
+      (canCreate?'<div class="ap-create"><label class="sr-only" for="ap-new-slug">Profile slug</label><input id="ap-new-slug" data-ap-new-slug placeholder="new-profile-slug" pattern="[a-z0-9]+(?:-[a-z0-9]+)*"><button class="btn btn-primary" data-ap-create>新建</button></div>':'')+'</div>'+
+    '<div class="ap-layout"><aside class="ap-list-pane" aria-label="Profile 列表">'+(AGENT_PROFILE_STATE.loading&&!AGENT_PROFILE_STATE.loaded?'<div class="ap-empty">正在加载 Profile…</div>':
+      AGENT_PROFILE_STATE.forbidden?auth403('当前账号不能读取该 Profile 管理面。'):AGENT_PROFILE_STATE.error&&!AGENT_PROFILE_STATE.detail?'<div class="ap-empty">'+esc(AGENT_PROFILE_STATE.error.title)+'</div>':agentProfileListHtml())+'</aside>'+
+      '<main class="ap-workspace">'+agentProfileEditorHtml()+'</main></div></div>';
+  return {html:body,mount:mountAgentProfiles};
+}
+function mountAgentProfiles(root){
+  if(!AGENT_PROFILE_STATE.loaded&&!AGENT_PROFILE_STATE.loading){loadAgentProfiles();return;}
+  root.addEventListener('click',function(ev){
+    var owner=ev.target.closest('[data-ap-owner]');if(owner){if(AGENT_PROFILE_STATE.pending){toast('当前操作仍在等待投影');return;}if(AGENT_PROFILE_STATE.dirty&&!confirm('有未保存修改，确定离开？'))return;agentProfileResetSkillSearch();AGENT_PROFILE_STATE.owner=owner.getAttribute('data-ap-owner');AGENT_PROFILE_STATE.loaded=false;AGENT_PROFILE_STATE.detail=null;AGENT_PROFILE_STATE.selected=null;loadAgentProfiles();return;}
+    var row=ev.target.closest('[data-ap-select]');if(row){if(AGENT_PROFILE_STATE.pending){toast('当前操作仍在等待投影');return;}if(AGENT_PROFILE_STATE.dirty&&!confirm('有未保存修改，确定离开？'))return;AGENT_PROFILE_STATE.error=null;loadAgentProfileDetail(row.getAttribute('data-ap-select'));return;}
+    var create=ev.target.closest('[data-ap-create]');if(create){if(AGENT_PROFILE_STATE.pending){toast('当前操作仍在等待投影');return;}var slug=(root.querySelector('[data-ap-new-slug]')||{}).value||'';slug=slug.trim();if(!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)){toast('slug 只能使用小写字母、数字和单连字符');return;}
+      var path=agentProfileCollectionEndpoint();agentProfileMutation(path,'POST',{profileSlug:slug},null).then(function(result){agentProfileTrackAccepted(result,'catalog');AGENT_PROFILE_STATE.notice='已接受，等待提交/投影';AGENT_PROFILE_STATE.loaded=false;agentProfileScheduleRefresh();render();}).catch(function(e){AGENT_PROFILE_STATE.error=e.problem||agentProfileProblem(e.status);render();});return;}
+    var addMember=ev.target.closest('[data-ap-add-member]');if(addMember){agentProfileCaptureDraft(root);var members=AGENT_PROFILE_STATE.detail.draft.runtimeProfile.members;if(members.length<32)members.push(agentProfileEmptyDraft().runtimeProfile.members[0]);AGENT_PROFILE_STATE.dirty=true;render();return;}
+    var removeMember=ev.target.closest('[data-ap-remove-member]');if(removeMember){agentProfileCaptureDraft(root);var removeIndex=Number(removeMember.getAttribute('data-ap-remove-member')),current=AGENT_PROFILE_STATE.detail.draft.runtimeProfile.members;if(current.length>1)current.splice(removeIndex,1);agentProfileResetSkillSearch();AGENT_PROFILE_STATE.dirty=true;render();return;}
+    var skillSearch=ev.target.closest('[data-ap-skill-search]');if(skillSearch){agentProfileSearchSkills(root,skillSearch.getAttribute('data-ap-skill-search'));return;}
+    var skill=ev.target.closest('[data-ap-skill]');if(skill){agentProfileSelectSkill(skill.getAttribute('data-ap-skill'),root,skill.getAttribute('data-ap-member'));return;}
+    var action=ev.target.closest('[data-ap-action]');if(action){agentProfileHandleAction(action.getAttribute('data-ap-action'),root);}
+  });
+  root.addEventListener('input',function(ev){
+    if(ev.target.matches('[data-ap-search]')){AGENT_PROFILE_STATE.search=ev.target.value;var pane=root.querySelector('.ap-list-pane');if(pane)pane.innerHTML=agentProfileListHtml();return;}
+    if(ev.target.matches('[data-ap-field]'))AGENT_PROFILE_STATE.dirty=true;
+  });
+  root.addEventListener('change',function(ev){if(ev.target.matches('[data-ap-status]')){AGENT_PROFILE_STATE.status=ev.target.value;var pane=root.querySelector('.ap-list-pane');if(pane)pane.innerHTML=agentProfileListHtml();}});
 }
 
 /* ---------------- cron 控件（Skills / Schedules 共用） ---------------- */
@@ -2944,239 +2905,6 @@ function viewStatus(){
     '<div class="view-scroll" id="status-root">'+statusBody()+'</div>', mount:bindStatus};
 }
 
-/* ================= ③ 运行观测台 Run Observatory ================= */
-var OBS_STATE={selectedId:null,tab:'timeline',filterOpen:false,statusFilter:[],scope:'__all__'};
-function obsSyntheticRun(id){
-  var d=OBS_DETAIL[id]&&OBS_DETAIL[id].detail;
-  return d?{id:d.id||id,name:d.name||id,status:d.status||'stuck',origin:d.origin||'direct',scope:d.scope||'—',definition:d.definition||'—',rawStatus:d.rawStatus||'unknown',stateVersion:d.stateVersion}
-    :{id:id,name:'Run '+obsShortRunId(id),status:'stuck',origin:'direct',scope:'—',definition:'—',rawStatus:'unknown'};
-}
-function obsSelected(){
-  if(OBS_STATE.selectedId){
-    return OBS_RUNS.filter(function(r){return r.id===OBS_STATE.selectedId;})[0]||obsSyntheticRun(OBS_STATE.selectedId);
-  }
-  return OBS_RUNS[0]||null;
-}
-function obsShortRunId(id){ id=String(id||''); return id.length>30?'…'+id.slice(-30):id; }
-function obsUpsertRunFromDetail(runId,d){
-  d=d||obsSyntheticRun(runId); var found=false;
-  OBS_RUNS=OBS_RUNS.map(function(r){ if(r.id!==runId) return r; found=true;
-    return Object.assign({},r,{name:d.name||r.name,status:d.status||r.status,origin:d.origin||r.origin,scope:d.scope||r.scope,definition:d.definition||r.definition,rawStatus:d.rawStatus||r.rawStatus,stateVersion:d.stateVersion!=null?d.stateVersion:r.stateVersion}); });
-  if(!found) OBS_RUNS.unshift({id:runId,name:d.name||('Run '+obsShortRunId(runId)),status:d.status||'stuck',origin:d.origin||'direct',scope:d.scope||'—',definition:d.definition||'—',rawStatus:d.rawStatus||'unknown',stateVersion:d.stateVersion});
-}
-function originPill(o){ var lbl={schedule:'排班',manual:'手动',api:'API',channel:'通道'}[o]||o; return '<span class="origin-pill">'+esc(lbl)+'</span>'; }
-function obsRunsFiltered(){
-  if(!OBS_STATE.statusFilter.length) return OBS_RUNS;
-  return OBS_RUNS.filter(function(r){return OBS_STATE.statusFilter.indexOf(r.status)>=0;});
-}
-function obsList(){
-  if(OBS_RUNS_LOADING&&!OBS_RUNS_LOADED) return '<div class="obs-loading">正在加载运行记录…</div>';
-  if(OBS_RUNS_ERR) return '<div class="alert"><span class="grow">'+esc(OBS_RUNS_ERR)+'</span><button class="btn" data-act="obsReload">重试</button></div>';
-  var rows=obsRunsFiltered().map(function(r){
-    var sd={running:'var(--running)',success:'var(--success)',failed:'var(--failed)',stuck:'var(--waiting)'}[r.status]||'var(--idle)';
-    return '<button class="obs-row'+(r.id===OBS_STATE.selectedId?' on':'')+'" data-obsrun="'+esc(r.id)+'">'+
-      '<span class="obs-dot" style="background:'+sd+'"></span>'+
-      '<span class="obs-row-main"><span class="obs-row-name">'+esc(r.name)+'</span><span class="obs-row-id tnum">'+esc(obsShortRunId(r.id))+'</span></span>'+
-      statusTag(r.status)+originPill(r.origin)+'</button>';
-  }).join('');
-  return rows||emptyBlock('run');
-}
-function obsTabs(d){
-  var tabs=[['timeline','Timeline',''],['steps','Steps',d.steps&&d.steps.length],['diagnostics','Diagnostics',d.diagnostics&&d.diagnostics.length],['logs','Logs',''],['artifacts','Artifacts',''],['graph','Graph','']];
-  return tabs.map(function(x){ var t=x[0],lbl=x[1],n=x[2];
-    return '<button class="obs-tab'+(t===OBS_STATE.tab?' on':'')+'" data-obstab="'+t+'">'+lbl+(n?'<span class="filter-badge num" style="margin-left:6px">'+n+'</span>':'')+'</button>';
-  }).join('');
-}
-function obsTimelineView(r){
-  return r.timeline.length?'<div class="timeline">'+r.timeline.map(function(s){
-    var errTxt=s.err||(s.st==='failed'&&r.diagnostics.length?r.diagnostics[0].message:'');
-    return '<div class="tl-item tl-'+s.st+'"><span class="tl-time tnum">'+esc(s.t)+'</span><span class="tl-dot"></span>'+
-      '<span class="tl-body"><span class="tl-step">'+esc(s.step)+'</span>'+statusTag(s.st)+(s.dur?'<span class="tl-dur tnum">'+esc(s.dur)+'</span>':'')+
-      (s.msg&&!errTxt?'<span class="tl-msg">'+esc(s.msg)+'</span>':'')+
-      (errTxt?'<span class="tl-err">'+esc(errTxt)+'</span>':'')+'</span></div>';
-  }).join('')+'</div>':emptyBlock('run').replace('暂无 Run','暂无事件').replace('该员工还没有执行记录。','本次 Run 尚无 timeline 事件。');
-}
-function obsStepsView(r){
-  if(!r.steps.length) return emptyBlock('run').replace('暂无 Run','暂无步骤').replace('该员工还没有执行记录。','本次 Run 尚无步骤 trace。');
-  return '<div class="step-list">'+r.steps.map(function(s){
-    var params=Object.keys(s.params||{}).sort().map(function(k){return '<span class="param-pill">'+esc(k)+'='+esc(s.params[k])+'</span>';}).join('');
-    return '<div class="step-card '+(s.status==='failed'?'failed':'')+'">'+
-      '<div class="step-head"><span class="step-title">'+esc(s.stepId||('step '+s.idx))+'</span>'+statusTag(s.status)+
-      '<span class="step-meta">'+esc(s.stepType||'unknown')+(s.targetRole?' · @'+esc(s.targetRole):'')+'</span></div>'+
-      '<div class="step-grid">'+
-        '<div class="step-kv"><b>requested</b><span>'+esc(s.requestedAtUtc||'—')+'</span></div>'+
-        '<div class="step-kv"><b>completed</b><span>'+esc(s.completedAtUtc||'—')+'</span></div>'+
-        '<div class="step-kv"><b>duration</b><span>'+esc(s.duration)+'</span></div>'+
-        '<div class="step-kv"><b>route</b><span>'+esc((s.branchKey||'default')+(s.nextStepId?' -> '+s.nextStepId:''))+'</span></div>'+
-      '</div>'+
-      (params?'<div class="param-pills">'+params+'</div>':'')+
-      (s.error?'<div class="tl-err" style="margin-top:8px">'+esc(s.error)+'</div>':'')+
-      (s.outputPreview?'<div class="tl-msg" style="margin-top:8px">'+esc(s.outputPreview)+'</div>':'')+
-    '</div>';
-  }).join('')+'</div>';
-}
-function obsDiagnosticsView(r){
-  var top='<div class="issue-box"><div class="issue-actions"><button class="ibtn" data-act="obsCopyIssue" style="height:26px">复制 issue payload</button></div></div>';
-  if(!r.diagnostics.length) return top+emptyBlock('run').replace('暂无 Run','暂无诊断信息').replace('该员工还没有执行记录。','后端暂未返回本次 Run 的失败诊断。');
-  return top+'<div class="diag-list">'+r.diagnostics.map(function(t){
-    return '<div class="diag-card '+esc(t.severity)+'">'+
-      '<div class="diag-head"><span class="diag-title">'+esc((t.severity||'info').toUpperCase())+' · '+esc(t.code||'diagnostic')+'</span>'+
-      '<span class="diag-meta">'+esc(t.t||'—')+' · '+esc(t.source||'—')+(t.stepId?' · step '+esc(t.stepId):'')+'</span></div>'+
-      '<div class="diag-msg">'+esc(t.message||'—')+'</div>'+
-      (t.stepType||t.targetRole?'<div class="diag-hint">挂点：'+esc([t.stepType,t.targetRole].filter(Boolean).join(' · '))+'</div>':'')+
-      (t.hint?'<div class="diag-hint">'+esc(t.hint)+'</div>':'')+
-    '</div>';
-  }).join('')+'</div>';
-}
-function obsIssueView(r){
-  return '<div class="issue-box"><div class="issue-actions"><button class="ibtn" data-act="obsCopyIssue" style="height:26px">复制 issue payload</button></div>'+
-    '<pre class="issue-pre">'+esc(r.issue||'{}')+'</pre></div>';
-}
-function obsDetail(r){
-  if(!r) return emptyBlock('run');
-  /* summary 行只有 id/name/status；usage/timeline/logs/graph/artifacts 来自懒加载缓存 */
-  var cache=OBS_DETAIL[r.id]; var d=(cache&&cache.detail)||null;
-  var chips='<span class="run-chip c-scope">scope '+esc(r.scope)+'</span><span class="run-chip c-def">def '+esc(r.definition)+'</span><span class="run-chip c-run">'+esc(r.id)+'</span><button class="ibtn" data-act="obsCopy" data-copy="'+esc(r.id)+'" style="height:24px">复制</button>';
-  var head='<div class="obs-detail-head"><div class="odh-top"><span class="sub-title" style="font-size:16px">'+esc(r.name)+'</span>'+statusTag(r.status)+'</div>'+
-    '<div class="run-chips">'+chips+'</div></div>';
-  if(cache&&cache.loading) return head+'<div class="obs-loading">正在加载运行详情…</div>';
-  if(cache&&cache.err) return head+'<div class="alert"><span class="grow">'+esc(cache.err)+'</span><button class="btn" data-act="obsReloadDetail" data-run="'+esc(r.id)+'">重试</button></div>';
-  if(!d) return head+'<div class="obs-loading">准备加载运行详情…</div>';
-  r=d; /* 渲染映射后的详情，沿用既有结构 */
-  var usage='<div class="usage-strip">'+
-    usageCell('tokens',r.usage.tokens)+usageCell('steps',r.usage.steps)+usageCell('time',r.usage.time)+usageCell('cost',r.usage.cost)+'</div>';
-  var tabs=obsTabs(r);
-  var content;
-  if(OBS_STATE.tab==='timeline'){
-    content=obsTimelineView(r);
-  } else if(OBS_STATE.tab==='steps'){
-    content=obsStepsView(r);
-  } else if(OBS_STATE.tab==='diagnostics'){
-    content=obsDiagnosticsView(r)+obsIssueView(r);
-  } else if(OBS_STATE.tab==='logs'){
-    content=r.logs.length?'<pre class="logs">'+r.logs.map(esc).join('\n')+'</pre>':emptyBlock('run').replace('暂无 Run','暂无日志').replace('该员工还没有执行记录。','本次 Run 尚无日志输出。');
-  } else if(OBS_STATE.tab==='artifacts'){
-    content=r.artifacts.length?'<div class="artifacts">'+r.artifacts.map(function(a){
-      return '<div class="artifact-item"><span class="art-name tnum">'+esc(a.name)+'</span><span class="art-size tnum">'+esc(a.size)+'</span><button class="ibtn" style="height:26px" data-act="artDl" data-name="'+esc(a.name)+'">下载</button></div>';
-    }).join('')+'</div>':emptyBlock('run').replace('暂无 Run','暂无产出').replace('该员工还没有执行记录。','本次 Run 尚未生成最终产出。');
-  } else {
-    content='<div class="dag">'+r.graph.map(function(n){
-      var sd={running:'var(--running)',success:'var(--success)',failed:'var(--failed)',waiting:'var(--idle)'}[n.st]||'var(--idle)';
-      return '<div class="dag-node"><span class="dag-dot" style="background:'+sd+'"></span><span class="dag-name">'+esc(n.name)+'</span>'+statusTag(n.st)+'<span class="dag-io tnum">'+esc(n.io)+'</span></div>';
-    }).join('<div class="dag-link"></div>')+'</div>';
-  }
-  return head+usage+
-    '<div class="obs-tabs">'+tabs+'</div><div class="obs-tab-body">'+content+'</div>';
-}
-function usageCell(k,v){
-  var lbl={tokens:'Tokens',steps:'Steps',time:'耗时',cost:'成本'}[k];
-  return '<div class="usage-cell"><span class="uc-l">'+lbl+'</span><span class="uc-v num">'+esc(v)+'</span></div>';
-}
-function obsFilterBar(){
-  var statuses=['running','success','failed','stuck'];
-  var active=OBS_STATE.statusFilter.length;
-  var chips=statuses.map(function(s){
-    return '<button class="chip'+(OBS_STATE.statusFilter.indexOf(s)>=0?' on':'')+'" data-obsfilter="'+s+'">'+RUN_CN[s]+'</button>';
-  }).join('');
-  return '<div class="obs-filterbar'+(OBS_STATE.filterOpen?' open':'')+'">'+
-    '<button class="filter-toggle" data-act="obsFilterToggle"><span>过滤</span>'+(active?'<span class="filter-badge num">'+active+'</span>':'')+'<span class="ft-caret">'+(OBS_STATE.filterOpen?'▾':'▸')+'</span></button>'+
-    '<div class="filter-body">'+
-      '<div class="filter-row"><span class="fr-l">状态</span><div class="chip-row" data-act="obsStatusFilter">'+chips+'</div></div>'+
-      '<div class="filter-row"><span class="fr-l">origin</span><input class="ab-input" placeholder="schedule,manual,api,channel"></div>'+
-      '<div class="filter-row"><span class="fr-l">definition</span><input class="ab-input" placeholder="CSV"></div>'+
-      '<div class="filter-row"><span class="fr-l">时间</span><input class="ab-input" type="text" placeholder="from"> <input class="ab-input" type="text" placeholder="to"></div>'+
-      '<div class="filter-row"><button class="btn" data-act="obsFilterReset">重置</button></div>'+
-    '</div></div>';
-}
-function viewObservatory(){
-  var adminBar=(ACCOUNT&&ACCOUNT.admin)?('<div class="obs-adminbar"><span class="auth-badge admin">ADMIN</span><span class="ab-label">跨 scope 观测</span>'+
-    '<input class="ab-input" id="obs-scope-in" placeholder="email 或 scope id"><button class="btn" data-act="obsResolve">前往</button>'+
-    '<input class="ab-input" id="obs-run-in" placeholder="完整 run id"><button class="btn" data-act="obsOpenRun">打开运行</button>'+
-    '<span class="ab-hint" id="obs-resolve-hint">'+(OBS_STATE.scope&&OBS_STATE.scope!=='__all__'?'当前观测 scope：'+esc(OBS_STATE.scope)+'　<button class="ibtn" data-act="obsScopeAll" style="height:22px">全部</button>':'当前观测全部 scope（__all__）')+'</span></div>'):'';
-  return {html:moduleSubHeader('observatory','<span class="inline-refresh"><i class="live-dot" style="background:var(--success)"></i> 轮询 ~3s '+srcBadge('ready')+'</span>')+
-    '<div class="obs-region">'+adminBar+obsFilterBar()+
-      '<div class="obs-split"><div class="obs-list" id="obs-list">'+obsList()+'</div>'+
-      '<div class="obs-detail" id="obs-detail">'+obsDetail(obsSelected())+'</div></div></div>',
-    mount:bindObservatory};
-}
-function bindObservatory(root){
-  /* root = 本次渲染的 .view（每次渲染都是新元素），事件委托不会跨访问累积 */
-  function reList(){ var l=root.querySelector('#obs-list'); if(l) l.innerHTML=obsList(); }
-  function reDetail(){ var d=root.querySelector('#obs-detail'); if(d) d.innerHTML=obsDetail(obsSelected()); }
-  function reBar(){ var b=root.querySelector('.obs-filterbar'); if(b) b.outerHTML=obsFilterBar(); }
-  function reAdminBar(){ var b=root.querySelector('.obs-adminbar'); if(b){ var v=viewObservatory(); /* 仅用其 adminBar 片段刷新提示 */ } }
-  function selectRun(id){ OBS_STATE.selectedId=id; reList(); reDetail(); loadObsDetail(id,reDetail); }
-  /* 首屏拉取真实运行列表，到达后选中首行并预取其详情 */
-  loadObsRuns(function(){ reList(); reDetail(); var sel=obsSelected(); if(sel) loadObsDetail(sel.id,reDetail); });
-  if(OBS_POLL_TIMER) clearInterval(OBS_POLL_TIMER);
-  OBS_POLL_TIMER=setInterval(function(){
-    var routeParts=curParts();
-    if(document.hidden||(routeParts[0]||defaultModule())!=='observatory') return;
-    loadObsRuns().then(function(){
-      reList(); var selected=obsSelected();
-      if(!selected){ reDetail(); return; }
-      delete OBS_DETAIL[selected.id];
-      loadObsDetail(selected.id,reDetail);
-    });
-  },3000);
-  root.addEventListener('click',function(ev){
-    var row=ev.target.closest('[data-obsrun]'); if(row){ selectRun(row.getAttribute('data-obsrun')); return; }
-    var tab=ev.target.closest('[data-obstab]'); if(tab){ OBS_STATE.tab=tab.getAttribute('data-obstab'); reDetail(); return; }
-    var fl=ev.target.closest('[data-obsfilter]'); if(fl){ var s=fl.getAttribute('data-obsfilter'),i=OBS_STATE.statusFilter.indexOf(s);
-      if(i>=0)OBS_STATE.statusFilter.splice(i,1); else OBS_STATE.statusFilter.push(s); reBar(); reList(); return; }
-    var act=ev.target.closest('[data-act]'); if(!act) return;
-    var a=act.getAttribute('data-act');
-    if(a==='obsFilterToggle'){ OBS_STATE.filterOpen=!OBS_STATE.filterOpen; reBar(); }
-    else if(a==='obsFilterReset'){ OBS_STATE.statusFilter=[]; reBar(); reList(); }
-    else if(a==='obsReload'){ loadObsRuns(function(){ reList(); reDetail(); }); }
-    else if(a==='obsReloadDetail'){ var rid=act.getAttribute('data-run'); if(rid){ delete OBS_DETAIL[rid]; loadObsDetail(rid,reDetail); } }
-    else if(a==='obsCopy'){ var cv=act.getAttribute('data-copy');
-      copyWithToast(cv, '已复制 run id：'+cv, '复制失败，请手动选择：'+cv); }
-    else if(a==='obsCopyIssue'){ var si=obsSelected(), cd=si&&OBS_DETAIL[si.id], iv=(cd&&cd.detail&&cd.detail.issue)||'{}';
-      copyWithToast(iv, '已复制 issue payload', '复制失败，请手动选择 issue payload'); }
-    else if(a==='artDl'){ var sel=obsSelected(), cache=sel&&OBS_DETAIL[sel.id], d=cache&&cache.detail;
-      var art=d&&(d.artifacts||[]).filter(function(x){return x.name===act.getAttribute('data-name');})[0];
-      if(art&&art.content!=null){ try{ var blob=new Blob([art.content],{type:'text/plain'}); var u=URL.createObjectURL(blob);
-          var a2=document.createElement('a'); a2.href=u; a2.download=art.name||'output.txt'; document.body.appendChild(a2); a2.click(); document.body.removeChild(a2); setTimeout(function(){ URL.revokeObjectURL(u); },0); toast('已下载 '+art.name); }
-        catch(e){ toast('下载失败'); } }
-      else { toast('本次 Run 无产出可下载'); } }
-    else if(a==='obsScopeAll'){ OBS_STATE.scope='__all__'; OBS_DETAIL={}; OBS_STATE.selectedId=null; reBar();
-      var nb=root.querySelector('.obs-adminbar'); if(nb){ nb.outerHTML=viewObsAdminBar(); }
-      loadObsRuns(function(){ reList(); reDetail(); var s=obsSelected(); if(s) loadObsDetail(s.id,reDetail); }); }
-    else if(a==='obsResolve'){
-      var v=(root.querySelector('#obs-scope-in')||{}).value||'', hint=root.querySelector('#obs-resolve-hint');
-      v=v.trim();
-      if(!v){ hint.textContent='请输入 email 或 scope id'; hint.style.color='var(--waiting)'; return; }
-      if(v.indexOf('@')<0){ /* 直接当作 scope id 切换 */ OBS_STATE.scope=v; OBS_DETAIL={}; OBS_STATE.selectedId=null;
-        hint.innerHTML='已切换观测 scope：<b class="tnum">'+esc(v)+'</b>'; hint.style.color='var(--success)';
-        loadObsRuns(function(){ reList(); reDetail(); var s=obsSelected(); if(s) loadObsDetail(s.id,reDetail); }); return; }
-      hint.textContent='正在解析…'; hint.style.color='var(--idle)';
-      loadObsResolveScope(v).then(function(j){
-        if(j&&j.forbidden){ hint.innerHTML='⚠ 需要平台管理员权限（403），不展示数据'; hint.style.color='var(--failed)'; return; }
-        var cands=(j&&j.candidates)||[];
-        if(!cands.length){ hint.innerHTML='未找到该 email 对应的 scope'; hint.style.color='var(--waiting)'; return; }
-        var c=cands[0]; OBS_STATE.scope=c.scopeId; OBS_DETAIL={}; OBS_STATE.selectedId=null;
-        hint.innerHTML='✓ 已解析到 <b class="tnum">'+esc(c.scopeId)+'</b>'+(c.role?'（'+esc(c.role)+'）':'')+'，已切换观测范围';
-        hint.style.color='var(--success)';
-        loadObsRuns(function(){ reList(); reDetail(); var s=obsSelected(); if(s) loadObsDetail(s.id,reDetail); });
-      }).catch(function(e){ hint.innerHTML='解析失败：'+esc((e&&(e.body||e.message))||'未知错误'); hint.style.color='var(--failed)'; });
-    } else if(a==='obsOpenRun'){
-      var runId=(root.querySelector('#obs-run-in')||{}).value||'', runHint=root.querySelector('#obs-resolve-hint');
-      runId=runId.trim();
-      if(!runId){ runHint.textContent='请输入完整 run id'; runHint.style.color='var(--waiting)'; return; }
-      runHint.innerHTML='正在打开 run：<b class="tnum">'+esc(obsShortRunId(runId))+'</b>'; runHint.style.color='var(--idle)';
-      obsOpenDirectRun(runId,reList,reDetail);
-    }
-  });
-}
-/* 复用 viewObservatory 的 adminBar 片段（用于 scope 切换后局部刷新） */
-function viewObsAdminBar(){
-  return (ACCOUNT&&ACCOUNT.admin)?('<div class="obs-adminbar"><span class="auth-badge admin">ADMIN</span><span class="ab-label">跨 scope 观测</span>'+
-    '<input class="ab-input" id="obs-scope-in" placeholder="email 或 scope id"><button class="btn" data-act="obsResolve">前往</button>'+
-    '<input class="ab-input" id="obs-run-in" placeholder="完整 run id"><button class="btn" data-act="obsOpenRun">打开运行</button>'+
-    '<span class="ab-hint" id="obs-resolve-hint">'+(OBS_STATE.scope&&OBS_STATE.scope!=='__all__'?'当前观测 scope：'+esc(OBS_STATE.scope)+'　<button class="ibtn" data-act="obsScopeAll" style="height:22px">全部</button>':'当前观测全部 scope（__all__）')+'</span></div>'):'';
-}
-
 /* ================= ④ 投影管道 CQRS ================= */
 var CQRS_STATE={sort:'lag',page:0,rmPage:{}};
 function cqrsPipeline(){
@@ -3308,7 +3036,7 @@ function bindStudio(root){
   }
   root.addEventListener('click',function(ev){
     if(ev.target.closest('[data-act="studioSend"]')) send();
-    var or=ev.target.closest('[data-act="studioOpenRun"]'); if(or){ navigate(['observatory'],{}); }
+    var or=ev.target.closest('[data-act="studioOpenRun"]'); if(or){ obsNavigate({run:or.getAttribute('data-run'),scope:'mine'}); }
   });
   ta&&ta.addEventListener('keydown',function(e){ if(e.key==='Enter'&&(e.metaKey||e.ctrlKey)){ e.preventDefault(); send(); } });
 }
@@ -3324,11 +3052,46 @@ var SKILL_STATE={ selected:null, search:'', loaded:false, loading:false,
   sched:{displayName:'',cron:'0 9 * * *',tz:'Asia/Shanghai',enableNow:true,result:null,authErr:false},
   mobileDetail:false };
 var SKILL_CONFIRM=null;
+var SKILL_TEAM_STATE={loaded:false,loading:false,err:null,scope:'',items:[]};
 function skillSelected(){ return SKILLS_DATA.filter(function(s){return s.guid===SKILL_STATE.selected;})[0]||SKILLS_DATA[0]||null; }
+function skillTeamScope(){ return String((ACCOUNT&&ACCOUNT.scope)||'').trim(); }
+function skillTeamItems(){ return SKILL_TEAM_STATE.scope===skillTeamScope()?(SKILL_TEAM_STATE.items||[]):[]; }
+function skillSelectedTeamId(){
+  var teamId=String((SKILL_STATE.sched&&SKILL_STATE.sched.teamId)||'').trim();
+  if(teamId)return teamId;
+  var teams=skillTeamItems();
+  return teams.length?teams[0].teamId:'';
+}
+function loadSkillTeams(done){
+  var scope=skillTeamScope();
+  if(!scope||SKILL_TEAM_STATE.loading){ if(done)done(); return; }
+  if(SKILL_TEAM_STATE.scope!==scope){
+    SKILL_TEAM_STATE.loaded=false; SKILL_TEAM_STATE.err=null; SKILL_TEAM_STATE.items=[]; SKILL_TEAM_STATE.scope=scope;
+  }
+  if(SKILL_TEAM_STATE.loaded){ if(done)done(); return; }
+  SKILL_TEAM_STATE.loading=true; SKILL_TEAM_STATE.err=null;
+  adminJson('/api/scopes/'+encodeURIComponent(scope)+'/teams?pageSize=100')
+    .then(function(j){
+      SKILL_TEAM_STATE.loading=false;
+      if(j&&j.forbidden){ SKILL_TEAM_STATE.err='forbidden'; SKILL_TEAM_STATE.items=[]; if(done)done(); return; }
+      SKILL_TEAM_STATE.loaded=true;
+      SKILL_TEAM_STATE.items=(j&&Array.isArray(j.teams))?j.teams:[];
+      if(!SKILL_STATE.sched.teamId&&SKILL_TEAM_STATE.items.length)SKILL_STATE.sched.teamId=SKILL_TEAM_STATE.items[0].teamId;
+      if(done)done();
+    })
+    .catch(function(err){
+      SKILL_TEAM_STATE.loading=false;
+      if(err&&err.unauthorized){ if(done)done(); return; }
+      SKILL_TEAM_STATE.err=(err&&(err.body||err.message))||'Team load failed';
+      SKILL_TEAM_STATE.items=[];
+      if(done)done();
+    });
+}
 
 function skillListSkeleton(){ var r='<div class="skill-row skel"><span class="sk-line w70"></span><span class="sk-line w90"></span><span class="sk-line w40"></span></div>'; return r+r+r+r+r; }
 function skillList(){
   if(SKILL_STATE.loading||!SKILLS_LOADED) return skillListSkeleton();
+  if(SKILLS_AUTH_REQUIRED) return '<div class="empty" style="padding:30px"><div class="et">当前登录未授权技能服务</div><div class="es">请重新授权 NyxID 的 Ornn 访问后加载技能。</div><button class="btn btn-primary" data-act="skAuthorize" style="margin-top:10px">重新授权</button></div>';
   if(SKILLS_FORBIDDEN) return '<div class="empty" style="padding:30px"><div class="et">需要授权</div><div class="es">当前账号无权列出技能（403），已按诚实态屏蔽。</div></div>';
   if(SKILLS_ERR) return '<div class="empty" style="padding:30px"><div class="et">技能加载失败</div><div class="es">'+esc(SKILLS_ERR)+'</div><button class="btn" data-act="skReload" style="margin-top:10px">重试</button></div>';
   var q=(SKILL_STATE.search||'').toLowerCase();
@@ -3386,15 +3149,22 @@ function skillSchedulePanel(s){
   var tzs=['Asia/Shanghai','UTC','America/Los_Angeles','浏览器默认'];
   var auth=sc.authErr?'<div class="auth-banner">⚠ 需要重新登录 / NyxID owner 未绑定（401 / 403）<button class="btn" data-act="skSchedRetry" style="height:28px;margin-left:auto">重试</button></div>':'';
   var ok=sc.result?'<div class="invoke-result ok" style="margin-top:10px">✓ 已创建排班 · scheduleId <b class="tnum">'+esc(sc.result)+'</b></div>':'';
+  var teams=skillTeamItems(), selectedTeam=skillSelectedTeamId();
+  var teamField;
+  if(SKILL_TEAM_STATE.loading) teamField='<div class="wz-field"><label>Team owner <span class="req">*</span></label><span class="field-help" data-team-owner-select>Loading Teams for this scope...</span></div>';
+  else if(SKILL_TEAM_STATE.err) teamField='<div class="wz-field"><label>Team owner <span class="req">*</span></label><span class="field-err" data-team-owner-select>Could not load Teams for this scope.</span></div>';
+  else if(!teams.length) teamField='<div class="wz-field"><label>Team owner <span class="req">*</span></label><span class="field-help" data-team-owner-select>No Teams are available in this scope. Create a Team before scheduling this skill.</span></div>';
+  else teamField='<div class="wz-field"><label>Team owner <span class="req">*</span></label><select id="sk-team-owner" data-team-owner-select>'+teams.map(function(t){return '<option value="'+esc(t.teamId)+'"'+(t.teamId===selectedTeam?' selected':'')+'>'+esc(t.displayName||t.teamId)+'</option>';}).join('')+'</select><span class="field-help">The scheduled workflow member will be created under this Team.</span></div>';
   return '<div class="panel" style="margin-top:14px"><div class="panel-title">配排班 Schedule <span class="src src-ready">202 异步</span></div>'+
     '<div class="wz-field"><label>displayName</label><input id="sk-dispname" value="'+esc(sc.displayName||s.name)+'"></div>'+
+    teamField+
     '<div class="cron-editor sk-cron"><div class="cron-fields">'+cronInputs+'</div>'+
       '<div class="cron-presets">'+presetBtns+'</div>'+
       '<div class="cron-meta"><span>表达式 <code class="cron-expr-show">'+esc(sc.cron)+'</code> <span class="cron-err">非法 cron（5 段）</span></span>'+
         '<span>时区 <select class="cron-tz" id="sk-tz">'+tzs.map(function(t){return '<option'+(sc.tz===t?' selected':'')+'>'+t+'</option>';}).join('')+'</select></span></div>'+
       '<div class="cron-preview"><div class="cron-preview-h">未来 5 次触发 · <b>'+esc(sc.tz)+'</b></div><ol class="cron-preview-list"></ol></div></div>'+
     '<label class="auto-toggle" style="margin-top:12px"><input type="checkbox" id="sk-enablenow"'+(sc.enableNow?' checked':'')+'> 创建后立即启用</label>'+
-    '<div class="reg-actions" style="margin-top:10px"><button class="btn btn-primary" id="sk-sched-create" data-act="skSchedCreate">创建排班</button>'+
+    '<div class="reg-actions" style="margin-top:10px"><button class="btn btn-primary" id="sk-sched-create" data-act="skSchedCreate"'+(selectedTeam?'':' disabled')+'>创建排班</button>'+
       '<button class="link-btn" data-act="skSchedAuth">模拟 owner 未绑定(403)</button></div>'+auth+ok+
     skillMySchedules(s)+'</div>';
 }
@@ -3453,13 +3223,14 @@ function bindSchedEditor(root){
     var show=ed.querySelector('.cron-expr-show'); if(show) show.textContent=expr;
     var errEl=ed.querySelector('.cron-err'), prev=ed.querySelector('.cron-preview'), list=ed.querySelector('.cron-preview-list'),
         createBtn=root.querySelector('#sk-sched-create');
-    if(!allValid){ if(errEl)errEl.style.display='inline'; if(prev)prev.style.display='none'; if(createBtn)createBtn.setAttribute('disabled','disabled'); return; }
+    if(!allValid||!skillSelectedTeamId()){ if(errEl)errEl.style.display=allValid?'none':'inline'; if(prev)prev.style.display=allValid?'':'none'; if(createBtn)createBtn.setAttribute('disabled','disabled'); return; }
     if(errEl)errEl.style.display='none'; if(prev)prev.style.display=''; if(createBtn)createBtn.removeAttribute('disabled');
     var times=cronPreview(expr,5);
     if(list) list.innerHTML=(times&&times.length)?times.map(function(d){return '<li>'+fmtDateTime(d)+' · <span class="rel">'+relTime(d)+'</span></li>';}).join(''):'<li class="cron-bad">未来一年内无触发</li>';
   }
   Array.prototype.forEach.call(ed.querySelectorAll('[data-sc]'),function(i){ i.addEventListener('input',recompute); });
   var tz=root.querySelector('#sk-tz'); if(tz) tz.addEventListener('change',function(){ SKILL_STATE.sched.tz=tz.value; var h=ed.querySelector('.cron-preview-h b'); if(h)h.textContent=tz.value; });
+  var team=root.querySelector('#sk-team-owner'); if(team) team.addEventListener('change',function(){ SKILL_STATE.sched.teamId=team.value; recompute(); });
   recompute();
 }
 function bindSkills(root){
@@ -3471,6 +3242,7 @@ function bindSkills(root){
     Array.prototype.forEach.call(root.querySelectorAll('[data-si]'),function(i){ SKILL_STATE.invoke.inputs[i.getAttribute('data-si')]=i.value; });
     var ex=root.querySelector('#sk-extra'); if(ex) SKILL_STATE.invoke.extra=ex.value;
     var dn=root.querySelector('#sk-dispname'); if(dn) SKILL_STATE.sched.displayName=dn.value;
+    var team=root.querySelector('#sk-team-owner'); if(team) SKILL_STATE.sched.teamId=team.value;
     var tz=root.querySelector('#sk-tz'); if(tz) SKILL_STATE.sched.tz=tz.value;
     var en=root.querySelector('#sk-enablenow'); if(en) SKILL_STATE.sched.enableNow=en.checked;
     var sg=root.querySelectorAll('[data-sc]'); if(sg.length===5) SKILL_STATE.sched.cron=Array.prototype.map.call(sg,function(i){return i.value.trim()||'*';}).join(' ');
@@ -3479,7 +3251,7 @@ function bindSkills(root){
     var s=SKILLS_DATA.filter(function(x){return x.guid===guid;})[0]||SKILLS_DATA[0]||null;
     SKILL_STATE.selected=guid; SKILL_STATE.mobileDetail=true; SKILL_CONFIRM=null;
     SKILL_STATE.invoke={state:'idle',prompt:'',inputs:{},extra:'',result:null,promptErr:false};
-    SKILL_STATE.sched={displayName:(s?s.name:''),cron:'0 9 * * *',tz:'Asia/Shanghai',enableNow:true,result:null,authErr:false};
+    SKILL_STATE.sched={displayName:(s?s.name:''),cron:'0 9 * * *',tz:'Asia/Shanghai',enableNow:true,result:null,authErr:false,teamId:skillSelectedTeamId()};
   }
   function runInvoke(){
     var iv=SKILL_STATE.invoke, s=skillSelected(); if(!s) return;
@@ -3497,7 +3269,8 @@ function bindSkills(root){
     var sc=SKILL_STATE.sched, segs=String(sc.cron).split(/\s+/);
     if(!(segs.length===5 && segs.every(cronSegValid))) return;
     var s=skillSelected(); if(!s) return; sc.authErr=false; sc.result=null;
-    var body={ prompt:String(SKILL_STATE.invoke.prompt||'').trim()||undefined, cronExpression:sc.cron, timezone:sc.tz, displayName:(sc.displayName||s.name) };
+    var teamId=skillSelectedTeamId(); if(!teamId) return;
+    var body={ prompt:String(SKILL_STATE.invoke.prompt||'').trim()||undefined, cronExpression:sc.cron, timezone:sc.tz, displayName:(sc.displayName||s.name), teamId:teamId };
     adminApi('/api/workflow/skills/'+encodeURIComponent(s.guid)+'/schedule',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
       .then(function(res){
         if(res&&res.forbidden){ sc.authErr=true; reDetail(); return; }
@@ -3510,15 +3283,19 @@ function bindSkills(root){
       if(SKILL_STATE.selected){ SKILL_STATE.sched.displayName=SKILL_STATE.sched.displayName||((skillSelected()||{}).name||''); loadSkillDetail(SKILL_STATE.selected, reDetail); }
       loadMySchedules(reDetail); });
   }
+  var currentTeamScope=skillTeamScope();
+  if(currentTeamScope&&SKILL_TEAM_STATE.scope!==currentTeamScope&&!SKILL_TEAM_STATE.loading) loadSkillTeams(reDetail);
+  else if(!SKILL_TEAM_STATE.loaded&&!SKILL_TEAM_STATE.loading&&!SKILL_TEAM_STATE.err) loadSkillTeams(reDetail);
   bindSchedEditor(root);
   var se=root.querySelector('#skill-search'); se&&se.addEventListener('input',function(){ SKILL_STATE.search=se.value; reList(); });
   root.addEventListener('click',function(ev){
     var sr=ev.target.closest('[data-skill]'); if(sr){ capture(); selectSkill(sr.getAttribute('data-skill')); reList(); reDetail(); loadSkillDetail(SKILL_STATE.selected, reDetail); return; }
     var act=ev.target.closest('[data-act]'); if(!act||act.hasAttribute('disabled')) return; var a=act.getAttribute('data-act');
     if(a==='skBack'){ SKILL_STATE.mobileDetail=false; reDetail(); }
+    else if(a==='skAuthorize'){ beginLogin(); }
     else if(a==='skInvoke'){ capture(); runInvoke(); }
     else if(a==='skCopy'){ copyWithToast(act.getAttribute('data-copy')); }
-    else if(a==='skOpenRun'){ var u=act.getAttribute('data-url'); if(u){ location.assign(u); } else { navigate(['observatory'],{}); } }
+    else if(a==='skOpenRun'){ obsNavigate({run:act.getAttribute('data-run'),scope:'mine'}); }
     else if(a==='skReload'){ SKILL_STATE.loaded=false; SKILLS_LOADED=false; SKILL_STATE.loading=true; reList(); loadSkills(function(){ SKILL_STATE.loaded=true; SKILL_STATE.loading=false; reList(); }); }
     else if(a==='skPreset'){ capture(); SKILL_STATE.sched.cron=act.getAttribute('data-cron'); reDetail(); }
     else if(a==='skSchedCreate'){ capture(); createSched(); }
@@ -3526,7 +3303,7 @@ function bindSkills(root){
     else if(a==='skSchedRetry'){ SKILL_STATE.sched.authErr=false; reDetail(); }
     else if(a==='skSchedToggle'){ var tid=act.getAttribute('data-id'); var tx=SKILL_SCHED.filter(function(s){return s.id===tid;})[0]; var op=(tx&&tx.enabled)?':disable':':enable'; adminApi('/api/schedules/'+encodeURIComponent(tid)+op,{method:'POST'}).then(function(res){ if(res&&res.forbidden){ toast('无权操作该排班（403）'); return; } if(res.ok) loadMySchedules(reDetail); else toast('操作失败 HTTP '+res.status); }).catch(function(){ toast('操作失败'); }); }
     else if(a==='skSchedRun'){ var rid=act.getAttribute('data-id'); adminApi('/api/schedules/'+encodeURIComponent(rid)+':run-now',{method:'POST'}).then(function(res){ if(res&&res.forbidden){ toast('无权运行该排班（403）'); return; } toast(res.ok?'已触发立即运行 · '+rid:'触发失败 HTTP '+res.status); }).catch(function(){ toast('触发失败'); }); }
-    else if(a==='skSchedObs'){ navigate(['observatory'],{schedule:act.getAttribute('data-id')}); }
+    else if(a==='skSchedObs'){ obsNavigate({schedule:act.getAttribute('data-id'),run:null}); }
     else if(a==='skSchedRetry'){ SKILL_STATE.sched.authErr=false; SKILL_STATE.sched.result=null; reDetail(); }
     else if(a==='skSchedDel'){ SKILL_CONFIRM=act.getAttribute('data-id'); reDetail(); }
     else if(a==='skDelCancel'){ SKILL_CONFIRM=null; reDetail(); }
@@ -3594,336 +3371,10 @@ function viewSchedules(){
         if(a==='schRefresh'){ SCHED_LOADED=false; re(); loadSchedules(re); }
         else if(a==='schFilter'){ schedSetFilter(act.getAttribute('data-f'), re); }
         else if(a==='schToggleDetail'){ var did=act.getAttribute('data-id'); if(did){ SCHED_OPEN[did]=!SCHED_OPEN[did]; re(); } }
-        else if(a==='schObs'){ var oid=act.getAttribute('data-id'); if(oid) navigate(['observatory'],{schedule:_schObs(oid)}); }
+        else if(a==='schObs'){ var oid=act.getAttribute('data-id'); if(oid) obsNavigate({schedule:_schObs(oid),run:null}); }
         else if(a==='schAction'){ var id=act.getAttribute('data-id'), op=act.getAttribute('data-op'); if(id&&op) schedAction(id, op, re); }
       });
     }};
-}
-
-/* ================= ⑧ 通道管理 Channels ================= */
-function relayTag(r){ var m={healthy:['tag-success','正常'],degraded:['tag-waiting','降级'],down:['tag-failed','中断']}[r]||['tag-idle','未知'];
-  return '<span class="tag '+m[0]+'"><i class="tdot"></i>'+m[1]+'</span>'; }
-/* ============ Channels 接入向导（完整可走流程，无 toast 蒙混） ============ */
-var CHAN_CATALOG=[
-  {id:'lark',     name:'飞书 / Lark', short:'飞', color:'#1d6fd6', bg:'#e7f3ff', desc:'企业群机器人，经 NyxID relay 收发', enabled:true},
-  {id:'telegram', name:'Telegram',    short:'TG', color:'#2a8fc4', bg:'#e6f4fb', desc:'Bot API，经 NyxID relay 自动接入', enabled:true},
-  {id:'slack',    name:'Slack',       short:'SL', color:'#611f69', bg:'#f4ecfb', desc:'Block Kit 应用', enabled:false},
-  {id:'discord',  name:'Discord',     short:'DC', color:'#5865f2', bg:'#eceefb', desc:'Bot / Interactions', enabled:false},
-  {id:'webhook',  name:'自定义 Webhook', short:'WH', color:'#6b7280', bg:'#f1f2f4', desc:'通用出/入站', enabled:false}
-];
-var CHAN_FIELDS={
-  lark:[
-    {k:'app_id', l:'App ID', req:true, ph:'cli_xxx', mono:true, help:'飞书开放平台 → 凭证与基础信息 → App ID'},
-    {k:'app_secret', l:'App Secret', req:true, pw:true, help:'凭证与基础信息 → App Secret'},
-    {k:'verification_token', l:'Verification Token', req:true, pw:true, help:'事件订阅 → Verification Token'},
-    {k:'label', l:'备注名', req:false, ph:'对账告警群', help:'仅用于在列表中识别该通道'}],
-  telegram:[
-    {k:'bot_token', l:'Bot Token', req:true, pw:true, mono:true, ph:'123456789:AAE…', help:'Telegram @BotFather → /newbot 获取'},
-    {k:'label', l:'备注名', req:false, ph:'运营通知', help:'仅用于在列表中识别该通道'}]
-};
-var CHAN_DEVURL={lark:'https://open.feishu.cn/app', telegram:'https://t.me/BotFather'};
-var CHAN_DEVTXT={lark:'前往飞书开放平台拿凭据 ↗', telegram:'前往 @BotFather 拿 Bot Token ↗'};
-var CHAN_STEPS=[{k:'渠道'},{k:'凭据',sub:'1/5'},{k:'注册',sub:'2/5'},{k:'平台配置',sub:'3/5'},{k:'回复模型',sub:'4/5'},{k:'验证',sub:'5/5'}];
-
-var CHAN_VIEW={mode:'list'};      /* list | wizard | manage */
-var CHAN_ACCT='mine';             /* mine | all（admin） */
-var CHAN_MANAGE={idx:null};
-var CHAN_CONFIRM=null;            /* 解绑确认 idx */
-function newWZ(provider){ return { provider:provider||null, step:provider?1:0, maxReached:provider?1:0, data:{}, errors:{},
-  reg:{state:'idle', ticks:[false,false,false,false], botId:null, webhookUrl:null, apiKeyId:null, fail:null},
-  perm:{imported:false, open:false}, pub:{state:'idle'},
-  model:{route:null, model:null, state:'idle', llm:null, llmLoading:false},
-  verify:{inbound:'pending', active:'pending', started:false} }; }
-var WZ=newWZ();
-function chanMeta(id){ return CHAN_CATALOG.filter(function(c){return c.id===id;})[0]; }
-function chanName(id){ var m=chanMeta(id); return m?m.name:id; }
-
-/* ---- 列表 ---- */
-function chanListGate(){
-  if(CHAN_FORBIDDEN) return auth403('跨账户通道列表需要平台管理员权限。');
-  if(CHAN_ERR) return '<div class="view-scroll"><div class="alert"><span class="grow">通道列表加载失败：'+esc(CHAN_ERR)+'</span><button class="btn" data-act="chanReload">重试</button></div></div>';
-  if(!CHAN_LOADED||CHAN_LOADING) return '<div class="view-scroll"><div class="empty"><span class="spinner"></span><div class="et" style="margin-top:10px">正在加载通道注册…</div></div></div>';
-  return null;
-}
-function chanList(){
-  var gate=chanListGate(); if(gate) return gate;
-  var acct = (ACCOUNT&&ACCOUNT.admin) ? '<div class="seg-toggle" data-act="chanAcct"><button class="'+(CHAN_ACCT==='mine'?'on':'')+'" data-acct="mine">我的账户</button><button class="'+(CHAN_ACCT==='all'?'on':'')+'" data-acct="all">所有账户</button></div>' : '';
-  var list = CHANNELS_DATA;   /* server already scoped the list (own account vs ?scope=all) */
-  var rows = list.map(function(c){ var i=CHANNELS_DATA.indexOf(c);
-    return '<tr><td><b style="color:var(--heading);font-weight:550">'+esc(c.name)+'</b></td>'+
-      '<td><span class="chan-type chan-'+c.type+'">'+(CHANNEL_TYPE_LABEL[c.type]||c.type)+'</span></td>'+
-      '<td class="tnum">'+esc(c.botId)+'</td><td>'+relayTag(c.relay)+'</td>'+
-      '<td class="tnum" style="color:var(--faint)">'+esc(c.bound)+'</td><td class="tnum" style="color:var(--faint)">'+esc(c.lastEvent)+'</td>'+
-      '<td><button class="ibtn" data-act="chanView" data-channel="'+i+'" style="height:24px">详情</button> '+
-        '<button class="ibtn" data-act="chanRebind" data-channel="'+i+'" style="height:24px">重绑</button> '+
-        '<button class="ibtn" data-act="chanUnbind" data-channel="'+i+'" style="height:24px">解绑</button></td></tr>';
-  }).join('') || '<tr><td colspan="7" style="text-align:center;color:var(--faint);padding:28px">该账户下暂无已接入通道</td></tr>';
-  return '<div class="view-scroll">'+
-    '<div class="toolbar">'+acct+'<div class="grow"></div><button class="btn btn-primary" data-act="chanNew">+ 注册新通道</button></div>'+
-    '<div class="protable-wrap"><table class="protable"><thead><tr><th>通道</th><th>类型</th><th>bot_id</th><th>relay 状态</th><th>绑定时间</th><th>最近事件</th><th>操作</th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
-    '<p class="chan-note">单一 NyxID 登录（OIDC Auth-Code + PKCE）覆盖全部通道；relay 中断时入站事件不可达，需重绑 bot token。</p>'+
-  '</div>';
-}
-
-/* ---- 管理（详情）视图 ---- */
-function chanManageView(){
-  var c=CHANNELS_DATA[CHAN_MANAGE.idx]; if(!c){ CHAN_VIEW.mode='list'; return chanList(); }
-  return '<div class="view-scroll"><div class="toolbar"><button class="btn" data-act="chanBackList">‹ 返回列表</button><div class="grow"></div>'+
-    '<button class="btn" data-act="chanRebind" data-channel="'+CHAN_MANAGE.idx+'">重绑</button> <button class="btn btn-danger" data-act="chanUnbind" data-channel="'+CHAN_MANAGE.idx+'">解绑</button></div>'+
-    '<div class="panel" style="max-width:620px"><div class="panel-title">通道状态 · '+esc(c.name)+' '+relayTag(c.relay)+'</div>'+
-      '<div class="kv">'+
-        '<div class="kv-row"><span class="kk">渠道</span><span class="vv sans">'+(CHANNEL_TYPE_LABEL[c.type]||c.type)+'</span></div>'+
-        '<div class="kv-row"><span class="kk">bot_id</span><span class="vv">'+esc(c.botId)+'</span></div>'+
-        '<div class="kv-row"><span class="kk">scope</span><span class="vv">'+esc(c.scope)+'</span></div>'+
-        '<div class="kv-row"><span class="kk">provider</span><span class="vv sans">'+c.type+'</span></div>'+
-        '<div class="kv-row"><span class="kk">api_key_id</span><span class="vv">'+esc(c.apiKeyId||('ak_'+String(c.botId||'').slice(-6)))+'</span></div>'+
-        '<div class="kv-row"><span class="kk">最近事件</span><span class="vv sans" id="mg-last">'+esc(c.lastEvent)+'</span></div></div>'+
-      '<div style="margin-top:14px"><button class="btn" data-act="chanRefresh" data-channel="'+CHAN_MANAGE.idx+'">↻ 刷新状态</button></div></div></div>';
-}
-
-/* ---- 向导 ---- */
-function chanStepper(){
-  return '<div class="vstepper">'+CHAN_STEPS.map(function(s,i){
-    var cls=i<WZ.step?'done':(i===WZ.step?'cur':'todo'), clickable=i<=WZ.maxReached;
-    return '<button class="vstep '+cls+'"'+(clickable?' data-act="wzGoto" data-i="'+i+'"':' disabled')+'>'+
-      '<span class="vstep-num">'+(i<WZ.step?'✓':'')+'</span>'+
-      '<span class="vstep-body"><span class="vstep-k">'+s.k+'</span>'+(s.sub?'<span class="vstep-sub">'+s.sub+'</span>':'')+'</span></button>';
-  }).join('')+'</div>';
-}
-function wzFoot(o){
-  return '<div class="wz2-foot">'+(o.back?'<button class="btn" data-act="wzBack">上一步</button>':'')+'<div class="grow"></div>'+
-    (o.next?'<button class="btn btn-primary" data-act="'+o.next.act+'"'+(o.next.disabled?' disabled':'')+'>'+o.next.label+'</button>':'')+'</div>';
-}
-function copyRow(label,val){
-  return '<div class="copy-field"><span class="cf-l">'+esc(label)+'</span><code class="cf-v">'+esc(val)+'</code>'+
-    '<button class="ibtn" data-act="wzCopy" data-copy="'+esc(val)+'" style="height:26px;flex:0 0 auto">复制</button></div>';
-}
-function chanStep0(){
-  var cards=CHAN_CATALOG.map(function(c){
-    var ico='<span class="chan-card-ico" style="background:'+c.bg+';color:'+c.color+'">'+c.short+'</span>';
-    if(!c.enabled) return '<div class="chan-card disabled">'+ico+'<div class="chan-card-main"><div class="chan-card-name">'+esc(c.name)+'</div><div class="chan-card-desc">'+esc(c.desc)+'</div></div><span class="src src-preview">即将上线</span></div>';
-    return '<button class="chan-card'+(WZ.provider===c.id?' on':'')+'" data-act="wzPick" data-prov="'+c.id+'">'+ico+
-      '<div class="chan-card-main"><div class="chan-card-name">'+esc(c.name)+' <span class="chan-ok">可接入</span></div><div class="chan-card-desc">'+esc(c.desc)+'</div></div><span class="chan-card-cta">开始接入 →</span></button>';
-  }).join('');
-  return '<div class="wz-h">选择要接入的渠道</div><div class="wz-sub">可接入渠道现在就能走完整接入流程；灰色为即将上线。</div><div class="chan-cards">'+cards+'</div>';
-}
-function chanStep1(){
-  var fields=CHAN_FIELDS[WZ.provider]||[];
-  var form=fields.map(function(f){ var err=WZ.errors[f.k];
-    return '<div class="wz-field'+(err?' has-err':'')+'"><label>'+esc(f.l)+(f.req?' <span class="req">*</span>':' <span class="opt">可选</span>')+'</label>'+
-      '<input data-cw="'+f.k+'" type="'+(f.pw?'password':'text')+'"'+(f.mono?' class="mono-in"':'')+' placeholder="'+esc(f.ph||'')+'" value="'+esc(WZ.data[f.k]||'')+'">'+
-      (err?'<span class="field-err">'+esc(err)+'</span>':'<span class="field-help">'+esc(f.help)+'</span>')+'</div>';
-  }).join('');
-  return '<div class="wz-h">填写 '+esc(chanName(WZ.provider))+' 凭据</div>'+
-    '<div class="wz-form">'+form+'</div>'+
-    '<a class="dev-link" href="'+CHAN_DEVURL[WZ.provider]+'" target="_blank" rel="noopener">'+CHAN_DEVTXT[WZ.provider]+'</a>'+
-    wzFoot({back:true, next:{label:'下一步：注册', act:'wzCredNext'}});
-}
-function regResult(p,r){
-  return '<div class="reg-result"><div class="rr-title">✓ 注册成功 · channel-bot 已就绪</div><div class="kv">'+
-    '<div class="kv-row"><span class="kk">bot_id</span><span class="vv">'+r.botId+' <button class="ibtn" data-act="wzCopy" data-copy="'+r.botId+'" style="height:22px">复制</button></span></div>'+
-    (p==='lark'?'<div class="kv-row"><span class="kk">webhook_url</span><span class="vv" style="word-break:break-all">'+r.webhookUrl+' <button class="ibtn" data-act="wzCopy" data-copy="'+r.webhookUrl+'" style="height:22px">复制</button></span></div>'
-              :'<div class="kv-row"><span class="kk">接入方式</span><span class="vv sans">已自动接入（NyxID 已 setWebhook）</span></div>')+
-    '<div class="kv-row"><span class="kk">api_key_id</span><span class="vv">'+r.apiKeyId+'</span></div>'+
-    '<div class="kv-row"><span class="kk">scope</span><span class="vv">'+ACCOUNT.scope+'</span></div></div></div>';
-}
-function chanStep2(){
-  var r=WZ.reg, p=WZ.provider, names=['创建 NyxID channel-bot','创建 relay api-key','写入 mirror（api_key_id → scope）','建立入站路由'];
-  var body;
-  if(r.state==='idle'){
-    body='<div class="reg-intro">点「一键注册」将依次调用 NyxID relay 完成 4 步：<ol class="reg-plan">'+names.map(function(s){return '<li>'+esc(s)+'</li>';}).join('')+'</ol></div>'+
-      '<div class="reg-actions"><button class="btn btn-primary" data-act="wzRegister">一键注册</button></div>';
-  } else {
-    var firstPending=r.ticks.indexOf(false);
-    body='<div class="reg-steps">'+names.map(function(s,i){
-      var failHere=r.fail&&r.fail.at===i, done=r.ticks[i];
-      var ico=failHere?'<span class="rs-ico fail">✕</span>':done?'<span class="rs-ico ok">✓</span>':(r.state==='running'&&i===firstPending?'<span class="spinner"></span>':'<span class="rs-ico todo"></span>');
-      return '<div class="rs-row '+(failHere?'fail':done?'done':'')+'">'+ico+'<span>'+esc(s)+'</span></div>';
-    }).join('')+'</div>';
-    if(r.state==='done'&&!r.fail) body+=regResult(p,r);
-    if(r.fail){
-      body+= r.fail.code==='409'
-        ? '<div class="reg-fail"><div class="rf-title">⚠ 该 bot 已被接入（409 Conflict）</div><div class="rf-msg">'+esc(r.fail.msg)+'</div><div class="reg-actions"><button class="btn btn-primary" data-act="wzRegister">删旧重建</button> <button class="btn" data-act="wzCancel">取消</button></div></div>'
-        : '<div class="reg-fail"><div class="rf-title">✕ 凭据校验失败</div><div class="rf-msg">'+esc(r.fail.msg)+'</div><div class="reg-actions"><button class="btn" data-act="wzGoto" data-i="1">返回改凭据</button></div></div>';
-    }
-  }
-  return '<div class="wz-h">向 NyxID relay 注册</div><div class="wz-sub">幂等：同一 bot 重复注册会命中 409。</div>'+body+
-    wzFoot({back:r.state==='idle', next:(r.state==='done'&&!r.fail)?{label:'下一步：平台配置',act:'wzRegNext'}:null});
-}
-function chanStep3(){
-  var p=WZ.provider, r=WZ.reg;
-  if(p==='telegram'){
-    return '<div class="wz-h">平台配置 · Telegram</div>'+
-      '<div class="cfg-card auto"><div class="cfg-title">✓ 已自动完成</div><p class="cfg-p">NyxID 已为该 bot 调用 <code>setWebhook</code> 指向 relay 入站地址，Telegram 端无需手动配置。</p>'+
-      '<div class="warn-box">⚠ 请勿自行调用 <code>setWebhook</code> —— 会覆盖 NyxID 的入站路由，导致消息不再进入 relay。</div></div>'+
-      '<div class="cfg-card"><div class="cfg-title">结果</div><div class="kv"><div class="kv-row"><span class="kk">bot_id</span><span class="vv">'+(r.botId||'—')+'</span></div><div class="kv-row"><span class="kk">scope</span><span class="vv">'+ACCOUNT.scope+'</span></div></div></div>'+
-      wzFoot({back:true, next:{label:'下一步：回复模型', act:'wzCfgNext'}});
-  }
-  var webhook=r.webhookUrl||'';
-  var t1=['im:message','im:message.group_at_msg','im:chat:readonly','contact:user.base','contact:contact.base'];
-  var t2=['im:resource','im:message:send_as_bot','contact:department.base'];
-  var perm=WZ.perm;
-  var permBlock = perm.imported
-    ? '<div class="perm-badges"><span class="pb pb-t1">Tier-1 · '+t1.length+'</span><span class="pb pb-t2">Tier-2 · '+t2.length+'</span> <button class="link-btn" data-act="wzPermToggle">'+(perm.open?'收起':'查看')+' scope 列表</button></div>'+(perm.open?'<div class="perm-list">'+t1.concat(t2).map(function(s){return '<code>'+s+'</code>';}).join('')+'</div>':'')
-    : '<button class="btn" data-act="wzPermImport">批量导入权限 JSON</button>';
-  var pubBlock = WZ.pub.state==='done' ? '<div class="invoke-result ok">✓ 版本已发布，应用已上线</div>'
-    : WZ.pub.state==='publishing' ? '<div class="cfg-pub"><span class="spinner"></span> 发布中…</div>'
-    : '<button class="btn btn-primary" data-act="wzPublish"'+(perm.imported?'':' disabled')+'>创建并发布版本</button>'+(perm.imported?'':' <span class="field-help" style="display:inline">请先导入权限</span>');
-  return '<div class="wz-h">平台配置 · 飞书 / Lark</div>'+
-    '<div class="cfg-card"><div class="cfg-title">① 事件订阅（填入飞书开放平台）</div>'+
-      copyRow('请求网址 URL', webhook)+copyRow('Verification Token', WZ.data.verification_token?'••••（已填）':'(Step 1 已填)')+copyRow('Encrypt Key', WZ.data.encrypt_key||'(可留空)')+
-      '<div class="warn-box">⚠ 这里填的是上方 relay <b>webhook_url</b>，<u>不要</u>填内部 relay_callback_url（内部地址不对外）。</div></div>'+
-    '<div class="cfg-card"><div class="cfg-title">② 权限（scopes）</div>'+permBlock+
-      '<div class="warn-box">⚠ 权限不足是「装了不回」的头号原因 —— 务必导入完整 Tier-1 + Tier-2 后再发布。</div></div>'+
-    '<div class="cfg-card"><div class="cfg-title">③ 订阅事件</div>'+copyRow('事件', 'im.message.receive_v1')+'</div>'+
-    '<div class="cfg-card"><div class="cfg-title">④ 创建并发布版本</div>'+pubBlock+'</div>'+
-    wzFoot({back:true, next:{label:'下一步：回复模型', act:'wzCfgNext', disabled:WZ.pub.state!=='done'}});
-}
-function chanStep4(){
-  var m=WZ.model;
-  if(m.llmLoading && !m.llm){
-    return '<div class="wz-h">配置回复模型</div><div class="wz-sub">不配置则使用平台默认模型回复入站消息。</div>'+
-      '<div class="cfg-pub" style="margin-top:14px"><span class="spinner"></span> 正在读取你的回复模型配置…</div>'+
-      wzFoot({back:true, next:{label:'下一步：验证', act:'wzModelNext'}});
-  }
-  var llm=m.llm;
-  /* Honest options: real routes/models from the owner LLM catalog. No fabricated vendor menu. */
-  var routeOpts=(llm&&llm.routeOptions)||[];
-  if(m.route==null) m.route=(llm&&(llm.savedRoute||llm.effectiveRoute))||(routeOpts[0]&&routeOpts[0].routeValue)||'';
-  var curRoute=m.route;
-  var liveModels=(((llm&&llm.modelGroupsByRoute)||[]).filter(function(g){return g.routeValue===curRoute;})
-    .reduce(function(acc,g){return acc.concat(g.models||[]);},[]));
-  if(!liveModels.length && llm && llm.defaultModel) liveModels=[llm.defaultModel];
-  if(m.model==null) m.model='';
-  /* route select: when the catalog is unavailable, the only honest route is the gateway default (empty value). */
-  var routeChoices = routeOpts.length
-    ? routeOpts.map(function(o){ return {value:o.routeValue, label:o.label||o.routeValue}; })
-    : [{value:'', label:'平台默认路由'}];
-  var routeSel='<select class="std-select" id="m-route">'+routeChoices.map(function(o){
-    return '<option value="'+esc(o.value)+'"'+(curRoute===o.value?' selected':'')+'>'+esc(o.label)+'</option>'; }).join('')+'</select>';
-  /* model select: always offer the genuine "（平台默认）" sentinel (empty -> server resolves), then real models. */
-  var modelChoices=[{value:'',label:'（平台默认）'}].concat(liveModels.map(function(x){return {value:x,label:x};}));
-  var modelSel='<select class="std-select" id="m-model">'+modelChoices.map(function(o){
-    return '<option value="'+esc(o.value)+'"'+(m.model===o.value?' selected':'')+'>'+esc(o.label)+'</option>'; }).join('')+'</select>';
-  var catalogNote = (llm && llm.catalogStatus && llm.catalogStatus!=='ready')
-    ? '<div class="warn-box">⚠ 模型目录暂不可用（'+esc(llm.catalogStatus)+'）—— 现在只能选平台默认。可保存后稍后回来调整。</div>' : '';
-  var saveBlk = m.state==='saved' ? '<span class="invoke-result ok" style="display:inline-flex">✓ 已保存回复模型</span>'
-    : m.state==='saving' ? '<span class="cfg-pub"><span class="spinner"></span> 保存中…</span>'
-    : '<button class="btn" data-act="wzSaveModel">保存回复模型</button>';
-  var errBlk = m.err ? '<div class="warn-box">'+esc(m.err)+'</div>' : '';
-  return '<div class="wz-h">配置回复模型</div><div class="wz-sub">不配置则使用平台默认模型回复入站消息。下面只列你账户实际可用的路由与模型。</div>'+
-    '<div class="wz-form" style="max-width:380px">'+
-      '<div class="wz-field"><label>LLM 路由</label>'+routeSel+'</div>'+
-      '<div class="wz-field"><label>模型</label>'+modelSel+'</div></div>'+
-    catalogNote+errBlk+
-    '<div class="reg-actions">'+saveBlk+'</div>'+
-    wzFoot({back:true, next:{label:'下一步：验证', act:'wzModelNext'}});
-}
-function chanStep5(){
-  var v=WZ.verify, ch=chanName(WZ.provider);
-  function lamp(state,label){
-    var ico=state==='ok'?'<span class="lamp-dot ok"></span>':'<span class="spinner"></span>';
-    return '<div class="vlamp '+(state==='ok'?'ok':'')+'">'+ico+'<div class="vlamp-body"><div class="vlamp-l">'+label+'</div><div class="vlamp-s">'+(state==='ok'?'已收到':'等待中…')+'</div></div>'+
-      (state==='ok'?'<span class="live-badge" style="height:18px"><i class="live-dot"></i>live</span>':'<span class="poll-tag">每 3.5s 轮询</span>')+'</div>';
-  }
-  var done = v.inbound==='ok' && v.active==='ok';
-  return '<div class="wz-h">验证接入</div>'+
-    '<div class="verify-tip">现在去 <b>'+esc(ch)+'</b> 给你的 bot 发一条消息（群里可 @它），下面会实时检测：</div>'+
-    '<div class="vlamps">'+lamp(v.inbound,'① 收到首条入站消息')+lamp(v.active,'② bot 已激活（pending_webhook → active）')+'</div>'+
-    (done?'<div class="verify-done"><div class="vd-emoji">🎉</div><div class="vd-title">接入完成，bot 已激活</div></div>':'')+
-    wzFoot({back:!done, next:done?{label:'完成 · 去管理',act:'wzFinish'}:null});
-}
-function chanStep(step){ return [chanStep0,chanStep1,chanStep2,chanStep3,chanStep4,chanStep5][step]()||''; }
-function chanWizard(){
-  return '<div class="wz2"><div class="wz2-top"><div class="wz2-title">接入新通道'+(WZ.provider?' · '+esc(chanName(WZ.provider)):'')+'</div>'+
-    '<button class="btn" data-act="wzCancel">取消</button></div>'+
-    '<div class="wz2-body"><aside class="wz2-rail">'+chanStepper()+'</aside><div class="wz2-main" id="wz-main">'+chanStep(WZ.step)+'</div></div></div>';
-}
-function chanConfirmModal(){
-  if(CHAN_CONFIRM==null) return ''; var c=CHANNELS_DATA[CHAN_CONFIRM]; if(!c) return '';
-  return '<div class="modal-back" data-act="chanUnbindCancel"></div><div class="modal"><div class="modal-title">解绑通道？</div>'+
-    '<div class="modal-body">将删除「'+esc(c.name)+'」（bot_id '+esc(c.botId)+'）的 relay 路由与 api-key，此操作不可恢复。</div>'+
-    '<div class="modal-foot"><button class="btn" data-act="chanUnbindCancel">取消</button><button class="btn btn-danger" data-act="chanUnbindConfirm">确认解绑</button></div></div>';
-}
-function chanRoot(){
-  var main = CHAN_VIEW.mode==='wizard' ? chanWizard() : CHAN_VIEW.mode==='manage' ? chanManageView() : chanList();
-  return main + chanConfirmModal();
-}
-function viewChannels(){
-  return {html:moduleSubHeader('channels','<span class="inline-refresh">bot 接入向导 · Lark / Telegram · NyxID relay '+srcBadge('ready')+'</span>')+
-    '<div class="chan-root" id="chan-root">'+chanRoot()+'</div>', mount:bindChannels};
-}
-function bindChannels(root){
-  function re(){ var b=root.querySelector('#chan-root'); if(b) b.innerHTML=chanRoot(); maybeVerify(); }
-  CHAN_RERENDER=re;
-  if(!CHAN_LOADED || !CHAN_LOADING){ loadChannels(); }
-  function capture(){
-    Array.prototype.forEach.call(root.querySelectorAll('[data-cw]'),function(i){ WZ.data[i.getAttribute('data-cw')]=i.value; });
-    var mr=root.querySelector('#m-route'), mm=root.querySelector('#m-model');
-    if(mr) WZ.model.route=mr.value; if(mm) WZ.model.model=mm.value;
-  }
-  var VERIFY_TIMER=null;
-  function stopVerify(){ if(VERIFY_TIMER){ clearInterval(VERIFY_TIMER); VERIFY_TIMER=null; } }
-  function maybeVerify(){
-    if(CHAN_VIEW.mode==='wizard' && WZ.step===5 && !WZ.verify.started){
-      WZ.verify.started=true;
-      var regId=WZ.reg&&WZ.reg.registrationId;
-      if(!regId){ WZ.verify.inbound='unknown'; WZ.verify.active='unknown'; return; }
-      stopVerify();
-      VERIFY_TIMER=setInterval(function(){
-        adminJson('/api/channels/registrations/'+encodeURIComponent(regId)+'/status').then(function(s){
-          if(!s||s.forbidden) return; var st=(s.status||'').toLowerCase();
-          if(s.last_event_at) WZ.verify.inbound='ok';
-          if(st==='active'){ WZ.verify.inbound='ok'; WZ.verify.active='ok'; stopVerify(); }
-          re();
-        }).catch(function(){});
-      }, 3500);
-    }
-    if(CHAN_VIEW.mode!=='wizard' || WZ.step!==5) stopVerify();
-  }
-  function runReg(){ doRegister(); }   /* real POST /api/channels/registrations — no timers, no simulated branches */
-  root.addEventListener('click',function(ev){
-    var act=ev.target.closest('[data-act]'); if(!act||act.hasAttribute('disabled')) return; var a=act.getAttribute('data-act');
-    /* 列表 / 管理 */
-    if(a==='chanReload'){ loadChannels(); }
-    else if(a==='chanNew'){ CHAN_VIEW.mode='wizard'; WZ=newWZ(); re(); }
-    else if(a==='chanAcct'){ var ab=ev.target.closest('[data-acct]'); if(ab){ var nv=ab.getAttribute('data-acct'); if(nv!==CHAN_ACCT){ CHAN_ACCT=nv; loadChannels(); } } }
-    else if(a==='chanView'){ CHAN_MANAGE.idx=+act.getAttribute('data-channel'); CHAN_VIEW.mode='manage'; re(); }
-    else if(a==='chanBackList'){ CHAN_VIEW.mode='list'; re(); }
-    else if(a==='chanRebind'){ var c=CHANNELS_DATA[+act.getAttribute('data-channel')]; CHAN_VIEW.mode='wizard'; WZ=newWZ(c&&c.type==='telegram'?'telegram':'lark'); re(); }
-    else if(a==='chanUnbind'){ CHAN_CONFIRM=+act.getAttribute('data-channel'); re(); }
-    else if(a==='chanUnbindCancel'){ CHAN_CONFIRM=null; re(); }
-    else if(a==='chanUnbindConfirm'){ CHANNELS_DATA.splice(CHAN_CONFIRM,1); CHAN_CONFIRM=null; CHAN_VIEW.mode='list'; re(); }
-    else if(a==='chanRefresh'){ var ri=+act.getAttribute('data-channel'); act.innerHTML='<span class="spinner"></span> 刷新中'; var rc=CHANNELS_DATA[ri]; if(rc) loadChannelStatus(rc); else re(); }
-    /* 向导 */
-    else if(a==='wzCancel'){ CHAN_VIEW.mode='list'; CHAN_CONFIRM=null; re(); }
-    else if(a==='wzPick'){ WZ.provider=act.getAttribute('data-prov'); WZ.step=1; WZ.maxReached=Math.max(WZ.maxReached,1); re(); }
-    else if(a==='wzGoto'){ capture(); var gi=+act.getAttribute('data-i'); if(gi<=WZ.maxReached){ WZ.step=gi; re(); if(gi===4 && !WZ.model.llm) loadWzLlm(); } }
-    else if(a==='wzBack'){ capture(); WZ.step=Math.max(0,WZ.step-1); re(); }
-    else if(a==='wzCredNext'){ capture(); var fs=CHAN_FIELDS[WZ.provider]||[], errs={};
-      fs.forEach(function(f){ if(f.req && !(WZ.data[f.k]||'').trim()) errs[f.k]='必填'; });
-      WZ.errors=errs; if(Object.keys(errs).length){ re(); return; } WZ.step=2; WZ.maxReached=Math.max(WZ.maxReached,2); re(); }
-    else if(a==='wzRegister'){ runReg(); }
-    else if(a==='wzRegNext'){ WZ.step=3; WZ.maxReached=Math.max(WZ.maxReached,3); re(); }
-    else if(a==='wzPermImport'){ WZ.perm.imported=true; re(); }
-    else if(a==='wzPermToggle'){ WZ.perm.open=!WZ.perm.open; re(); }
-    else if(a==='wzPublish'){ WZ.pub.state='done'; re(); }   /* manual Lark-console publish; no aevatar backend — acknowledge, don't fake a server round-trip */
-    else if(a==='wzCfgNext'){ WZ.step=4; WZ.maxReached=Math.max(WZ.maxReached,4); re(); if(!WZ.model.llm) loadWzLlm(); }
-    else if(a==='wzSaveModel'){ capture(); WZ.model.state='saving'; re();
-      adminApi('/api/user-config/llm', { method:'PUT', headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({ routeValue:WZ.model.route||'', model:WZ.model.model||null }) })
-        .then(function(r){ WZ.model.state=(r&&!r.forbidden&&r.ok)?'saved':'idle'; if(r&&!r.ok&&!r.forbidden) WZ.model.err='保存失败'; re(); })
-        .catch(function(e){ if(e&&e.unauthorized) return; WZ.model.state='idle'; WZ.model.err=(e&&(e.body||e.message))||'保存失败'; re(); }); }
-    else if(a==='wzModelNext'){ capture(); WZ.step=5; WZ.maxReached=Math.max(WZ.maxReached,5); re(); }
-    else if(a==='wzFinish'){
-      stopVerify(); CHAN_VIEW.mode='list'; WZ=newWZ(); re(); loadChannels(); }
-    else if(a==='wzCopy'){ copyWithToast(act.getAttribute('data-copy')); }
-  });
-  /* Switching the LLM route must refresh the per-route model list — models are route-scoped. */
-  root.addEventListener('change',function(ev){
-    if(ev.target&&ev.target.id==='m-route'){ WZ.model.route=ev.target.value; WZ.model.model=null; WZ.model.state='idle'; WZ.model.err=null; re(); }
-    else if(ev.target&&ev.target.id==='m-model'){ WZ.model.model=ev.target.value; WZ.model.state='idle'; }
-  });
 }
 
 /* ================= ⑨ 语音台 Voice ================= */
@@ -3962,16 +3413,33 @@ function viewVoice(){
 /* 内嵌真页(同源共享 token);onload 注入 CSS 隐藏真页自带 .topbar(brand+suite-nav),消除与 /admin 左栏的双层导航。 */
 function embedTrim(f){ try{ var d=f.contentDocument; if(d&&d.head){ var s=d.createElement('style'); s.textContent='.topbar{display:none!important}'; d.head.appendChild(s); } }catch(e){} }
 function suiteFrame(src,title){ return '<iframe class="suite-embed" src="'+src+'" title="'+title+'" data-console-frame="1" onload="embedTrim(this)"></iframe>'; }
-/* CQRS/Studio/Voice 使用同源真页 iframe；运行观测台在 /admin 内保留本地实现，承载 admin run-id 直查与失败诊断。 */
-function viewObservatoryFrame(){ return {html:suiteFrame('/workflow/observatory','运行观测台')}; }
-function viewCqrs(){ if(!(ACCOUNT&&ACCOUNT.admin)) return {html:moduleSubHeader('cqrs','')+'<div class="view-scroll">'+auth403('CQRS 投影管道仅平台管理员可见。')+'</div>'}; return {html:suiteFrame('/cqrs','投影管道 CQRS')}; }
+function observatoryFrameSource(){
+  var q=parseHash().q||{},p=new URLSearchParams();
+  ['scope','status','origin','definition','schedule','from','to','run','tab'].forEach(function(key){if(q[key])p.set(key,q[key]);});
+  return '/workflow/observatory'+(p.toString()?'?'+p.toString():'');
+}
+function viewObservatoryFrame(){ return {html:suiteFrame(observatoryFrameSource(),'运行观测台')}; }
+function observatoryHash(query){
+  var p=new URLSearchParams(); ['scope','status','origin','definition','schedule','from','to','run','tab'].forEach(function(key){var value=query&&query[key];if(value&&!(key==='scope'&&value==='mine')&&!(key==='tab'&&value==='timeline'))p.set(key,value);});
+  return '#/observatory'+(p.toString()?'?'+p.toString():'');
+}
+function syncObservatoryHash(query){ history.replaceState(null,'',location.pathname+location.search+observatoryHash(query)); }
+function viewCqrs(){
+  if(!(ACCOUNT&&ACCOUNT.admin)) return {html:moduleSubHeader('cqrs','')+'<div class="view-scroll">'+auth403('CQRS 投影管道仅平台管理员可见。')+'</div>'};
+  var q=parseHash().q||{},p=new URLSearchParams();
+  if(q.owner) p.set('owner',q.owner);
+  if(q.family||q.fam) p.set('family',q.family||q.fam);
+  var src='/cqrs'+(p.toString()?'?'+p.toString():'');
+  return {html:suiteFrame(src,'投影管道 CQRS')};
+}
 function viewStudio(){ return {html:suiteFrame('/workflow/studio','编排工作台')}; }
+function viewChannels(){ return {html:suiteFrame('/channels','通道接入')}; }
 function viewVoice(){ return {html:suiteFrame('/voice','语音台')}; }
 
 /* ================= ⑩ 审计日志 Audit Trail —— /api/audit/trail =================
    真实接口（最新优先的 cursor 分页，无 totalCount）：scope 三态 —— mine（调用者自身 scope，默认）、
    all（平台管理员跨组织通配，后端 __all__ 分支）、custom（指定具体 scope id，跨 scope 需 admin）。
-   分类/结果筛选在前端对当前页做客户端过滤（接口未暴露 category query）。 */
+   分类/状态结果筛选在前端对当前页做客户端过滤（接口未暴露 category query）。 */
 var AUDIT_DATA=[];                  /* 已加载的记录行（累积，支持“加载更多”） */
 var AUDIT_LOADED=false, AUDIT_LOADING=false, AUDIT_ERR=null, AUDIT_FORBIDDEN=false;
 var AUDIT_CURSOR=null,              /* 下一页游标，null 表示无更多 */
@@ -3982,25 +3450,34 @@ var AUDIT_STATE={                   /* 筛选/分类 UI 态 */
   customScope:'',                   /* scope==='custom' 时填的具体 scope id */
   actor:'',                         /* auditActorId 精确过滤（服务端） */
   from:'', to:'',                   /* ISO 时间范围（服务端） */
-  cat:'all',                        /* 客户端分类：按 action 前缀/资源类型 */
-  outcome:'all',                    /* 客户端结果过滤：Success/Denied/Error/... */
-  text:''                           /* 客户端关键词（action/resource/id/correlation） */
+  cat:'all',                        /* 客户端分类：按 operation kind/name */
+  result:'all',                     /* 客户端状态/结果过滤：accepted/succeeded/failed/... */
+  text:''                           /* 客户端关键词（operation/target/correlation） */
 };
-/* outcome -> 渲染 tag 配色。后端返回 PascalCase 名字（Success/Denied/Error/Accepted/Cancelled）。 */
-function auditOutcomeTag(o){
+/* lifecycle / terminal outcome -> 渲染 tag 配色。后端返回稳定的小写 wire name。 */
+function auditResultTag(o){
   var map={
-    Success:['tag-success','成功'],
-    Accepted:['tag-running','已接受'],
-    Denied:['tag-failed','拒绝'],
-    Error:['tag-failed','错误'],
-    Cancelled:['tag-idle','取消']
+    succeeded:['tag-success','成功'],
+    accepted:['tag-running','已接受'],
+    running:['tag-running','进行中'],
+    waiting_approval:['tag-waiting','等待审批'],
+    failed:['tag-failed','失败'],
+    cancelled:['tag-idle','取消'],
+    timed_out:['tag-failed','超时'],
+    unspecified:['tag-idle','未指定']
   };
-  var m=map[o]||['tag-idle',o||'未知'];
+  var m=map[o]||['tag-idle',o||'未指定'];
   return '<span class="tag '+m[0]+'"><span class="tdot"></span>'+esc(m[1])+'</span>';
 }
-/* action 多为 `<name>.attempted` / `<name>` 形式；取前缀做分类桶。 */
-function auditActionCategory(action){
-  var a=(action||'').toLowerCase();
+function auditResult(r){ return (r&&r.terminalOutcome)||(r&&r.lifecyclePhase)||'unspecified'; }
+/* operationName 多为 `<name>.attempted` / `<name>` 形式；结合 typed operationKind 做分类桶。 */
+function auditActionCategory(operationName,operationKind){
+  var kind=(operationKind||'').toLowerCase();
+  if(kind==='authorization') return 'auth';
+  if(kind==='workflow') return 'workflow';
+  if(kind==='tool') return 'tool';
+  if(kind==='schedule') return 'schedule';
+  var a=(operationName||'').toLowerCase();
   if(a.indexOf('login')>=0||a.indexOf('auth')>=0||a.indexOf('token')>=0) return 'auth';
   if(a.indexOf('workflow')>=0||a.indexOf('run')>=0) return 'workflow';
   if(a.indexOf('skill')>=0||a.indexOf('invoke')>=0||a.indexOf('tool')>=0) return 'tool';
@@ -4021,13 +3498,16 @@ var AUDIT_CATEGORIES=[
   {k:'config',label:'配置变更'},
   {k:'other',label:'其他'}
 ];
-var AUDIT_OUTCOMES=[
-  {k:'all',label:'全部结果'},
-  {k:'Success',label:'成功'},
-  {k:'Accepted',label:'已接受'},
-  {k:'Denied',label:'拒绝'},
-  {k:'Error',label:'错误'},
-  {k:'Cancelled',label:'取消'}
+var AUDIT_RESULTS=[
+  {k:'all',label:'全部状态 / 结果'},
+  {k:'succeeded',label:'成功'},
+  {k:'accepted',label:'已接受'},
+  {k:'running',label:'进行中'},
+  {k:'waiting_approval',label:'等待审批'},
+  {k:'failed',label:'失败'},
+  {k:'cancelled',label:'取消'},
+  {k:'timed_out',label:'超时'},
+  {k:'unspecified',label:'未指定'}
 ];
 function auditRerender(){ if(typeof AUDIT_RERENDER==='function') AUDIT_RERENDER(); }
 function auditAgo(iso){
@@ -4071,16 +3551,23 @@ function auditBuildQuery(opts){
   q.push('take='+(opts.take||50));
   return q.length?('?'+q.join('&')):'';
 }
+function auditApplyPage(j,append){
+  var records=(j&&j.records)||[], coverage=(j&&j.coverage)||{};
+  if(append) Array.prototype.push.apply(AUDIT_DATA,records);
+  else AUDIT_DATA=records;
+  AUDIT_CURSOR=coverage.continuationCursor||null;
+  AUDIT_HAS_MORE=!!AUDIT_CURSOR;
+  AUDIT_WATERMARK=coverage.ingestionWatermark||AUDIT_WATERMARK;
+}
 /* 重置列表并重新加载（筛选条件变化、手动刷新时调用） */
 async function loadAuditTrail(){
   AUDIT_LOADING=true; AUDIT_ERR=null; AUDIT_FORBIDDEN=false;
-  AUDIT_DATA=[]; AUDIT_CURSOR=null; AUDIT_HAS_MORE=false;
+  AUDIT_DATA=[]; AUDIT_CURSOR=null; AUDIT_HAS_MORE=false; AUDIT_WATERMARK=null;
   auditRerender();
   try{
     var j=await adminJson('/api/audit/trail'+auditBuildQuery({take:50}));
     if(j&&j.forbidden){ AUDIT_FORBIDDEN=true; AUDIT_DATA=[]; }
-    else { AUDIT_DATA=(j&&j.records)||[]; AUDIT_CURSOR=(j&&j.nextCursor)||null;
-      AUDIT_HAS_MORE=!!AUDIT_CURSOR; AUDIT_WATERMARK=(j&&j.queryWatermark)||null; }
+    else auditApplyPage(j,false);
   }catch(e){
     if(e&&e.unauthorized){ AUDIT_LOADING=false; return; }
     AUDIT_ERR=(e&&(e.body||e.message))||'审计日志加载失败';
@@ -4088,29 +3575,26 @@ async function loadAuditTrail(){
   }
   AUDIT_LOADED=true; AUDIT_LOADING=false; auditRerender();
 }
-/* “加载更多”：用上一页返回的 nextCursor 继续取下一页，追加到 AUDIT_DATA */
+/* “加载更多”：用上一页 coverage.continuationCursor 继续取下一页，追加到 AUDIT_DATA */
 async function loadAuditMore(){
   if(!AUDIT_CURSOR||AUDIT_LOADING) return;
   AUDIT_LOADING=true; auditRerender();
   try{
     var j=await adminJson('/api/audit/trail'+auditBuildQuery({take:50,cursor:AUDIT_CURSOR}));
     if(j&&j.forbidden){ AUDIT_FORBIDDEN=true; }
-    else {
-      var more=(j&&j.records)||[];
-      Array.prototype.push.apply(AUDIT_DATA,more);
-      AUDIT_CURSOR=(j&&j.nextCursor)||null; AUDIT_HAS_MORE=!!AUDIT_CURSOR;
-    }
+    else auditApplyPage(j,true);
   }catch(e){ if(!(e&&e.unauthorized)){ AUDIT_ERR=(e&&(e.body||e.message))||'加载更多失败'; } }
   AUDIT_LOADING=false; auditRerender();
 }
-/* 客户端分类/结果/关键词过滤当前已加载记录 */
+/* 客户端分类/状态结果/关键词过滤当前已加载记录 */
 function auditFilteredRows(){
-  var cat=AUDIT_STATE.cat, out=AUDIT_STATE.outcome, text=(AUDIT_STATE.text||'').trim().toLowerCase();
+  var cat=AUDIT_STATE.cat, result=AUDIT_STATE.result, text=(AUDIT_STATE.text||'').trim().toLowerCase();
   return AUDIT_DATA.filter(function(r){
-    if(cat!=='all' && auditActionCategory(r.action)!==cat) return false;
-    if(out!=='all' && r.outcome!==out) return false;
+    var target=r.target||{}, correlation=r.correlation||{};
+    if(cat!=='all' && auditActionCategory(r.operationName,r.operationKind)!==cat) return false;
+    if(result!=='all' && auditResult(r)!==result) return false;
     if(text){
-      var hay=[r.action,r.resourceType,r.resourceId,r.correlationId,r.auditActorId,r.id].join(' ').toLowerCase();
+      var hay=[r.operationName,target.kind,target.id,correlation.correlationId,r.auditActorId,r.id].join(' ').toLowerCase();
       if(hay.indexOf(text)<0) return false;
     }
     return true;
@@ -4145,8 +3629,8 @@ function auditFilters(){
   var catButtons=AUDIT_CATEGORIES.map(function(c){
     return '<button class="chip'+(AUDIT_STATE.cat===c.k?' on':'')+'" data-act="auditCat" data-cat="'+c.k+'">'+esc(c.label)+'</button>';
   }).join('');
-  var outcomeButtons=AUDIT_OUTCOMES.map(function(o){
-    return '<button class="chip'+(AUDIT_STATE.outcome===o.k?' on':'')+'" data-act="auditOutcome" data-outcome="'+o.k+'">'+esc(o.label)+'</button>';
+  var resultButtons=AUDIT_RESULTS.map(function(o){
+    return '<button class="chip'+(AUDIT_STATE.result===o.k?' on':'')+'" data-act="auditResult" data-result="'+o.k+'">'+esc(o.label)+'</button>';
   }).join('');
   return '<div class="audit-filters">'+
     scopeToggle+scopeInput+
@@ -4157,8 +3641,8 @@ function auditFilters(){
     '<button class="btn" data-act="auditReset">重置</button>'+
     '</div>'+
     '<div class="audit-chips"><div class="chip-group"><span class="chip-label">分类</span>'+catButtons+'</div></div>'+
-    '<div class="audit-chips"><div class="chip-group"><span class="chip-label">结果</span>'+outcomeButtons+'<div class="grow"></div>'+
-      '<input class="audit-search" type="search" data-act="auditText" placeholder="筛选当前页（action/资源/correlation）…" value="'+esc(AUDIT_STATE.text)+'"></div></div>';
+    '<div class="audit-chips"><div class="chip-group"><span class="chip-label">状态 / 结果</span>'+resultButtons+'<div class="grow"></div>'+
+      '<input class="audit-search" type="search" data-act="auditText" placeholder="筛选当前页（操作/目标/correlation）…" value="'+esc(AUDIT_STATE.text)+'"></div></div>';
 }
 function auditWatermarkNote(){
   if(!AUDIT_WATERMARK) return '';
@@ -4171,23 +3655,24 @@ function auditTable(){
     return '<div class="empty">'+ICON.empty+'<div class="et">暂无审计记录</div>'+(msg?'<div class="es">'+esc(msg)+'</div>':'')+'</div>';
   }
   var body=rows.map(function(r){
-    var cat=auditActionCategory(r.action);
+    var target=r.target||{}, correlation=r.correlation||{};
+    var cat=auditActionCategory(r.operationName,r.operationKind);
     var catLabel=(AUDIT_CATEGORIES.filter(function(c){return c.k===cat;})[0]||{label:cat}).label;
-    var targetTitle=[r.resourceType,r.resourceId].filter(Boolean).join(' / ');
-    var res=(r.resourceType||r.resourceId)
-      ? '<span class="audit-target" title="'+esc(targetTitle)+'"><span class="audit-res-kind">'+esc(r.resourceType||'—')+'</span><span class="audit-res-id">'+esc(r.resourceId||'')+'</span></span>'
+    var targetTitle=[target.kind,target.id].filter(Boolean).join(' / ');
+    var res=(target.kind||target.id)
+      ? '<span class="audit-target" title="'+esc(targetTitle)+'"><span class="audit-res-kind">'+esc(target.kind||'—')+'</span><span class="audit-res-id">'+esc(target.id||'')+'</span></span>'
       : '<span class="faint">—</span>';
     return '<tr data-act="auditRow" data-id="'+esc(r.id)+'">'+
       '<td><div class="audit-time"><b class="num">'+esc(auditFmtTime(r.occurredAtUtc))+'</b><span class="audit-ago faint">'+esc(auditAgo(r.occurredAtUtc))+'</span></div></td>'+
-      '<td>'+auditOutcomeTag(r.outcome)+'</td>'+
-      '<td><div class="audit-action"><b>'+esc(r.action||'—')+'</b><span class="audit-cat chip">'+esc(catLabel)+'</span></div></td>'+
+      '<td>'+auditResultTag(auditResult(r))+'</td>'+
+      '<td><div class="audit-action"><b>'+esc(r.operationName||'—')+'</b><span class="audit-cat chip">'+esc(catLabel)+'</span></div></td>'+
       '<td>'+res+'</td>'+
       '<td><span class="audit-actor mono" title="'+esc(r.auditActorId||'')+'">'+esc(r.auditActorId||'—')+'</span><div class="audit-actor-sub faint" title="'+esc(r.identityKeyId||'')+'">'+esc(r.identityKeyId||'')+'</div></td>'+
-      '<td><span class="audit-corr mono" title="'+esc(r.correlationId||'')+'">'+esc(r.correlationId||'—')+'</span></td>'+
+      '<td><span class="audit-corr mono" title="'+esc(correlation.correlationId||'')+'">'+esc(correlation.correlationId||'—')+'</span></td>'+
     '</tr>';
   }).join('');
   return '<div class="protable-wrap audit-table-wrap"><table class="protable audit-table"><thead><tr>'+
-    '<th class="col-time">时间</th><th class="col-result">结果</th><th class="col-action">操作</th><th class="col-target">目标资源</th><th class="col-actor">操作者</th><th class="col-corr">关联 ID</th>'+
+    '<th class="col-time">时间</th><th class="col-result">状态 / 结果</th><th class="col-action">操作</th><th class="col-target">目标资源</th><th class="col-actor">操作者</th><th class="col-corr">Correlation ID</th>'+
     '</tr></thead><tbody>'+body+'</tbody></table></div>';
 }
 function auditPager(){
@@ -4208,10 +3693,11 @@ function auditRoot(){
     auditFilters()+
     auditTable()+
     auditPager()+
-    '<p class="chan-note">游标分页：无总数；按操作时间倒序。“加载更多”沿 nextCursor 追加。分类/结果/关键词为当前已加载数据的客户端筛选。</p>'+
+    '<p class="chan-note">游标分页：无总数；按操作时间倒序。“加载更多”沿 continuationCursor 追加。分类/状态结果/关键词为当前已加载数据的客户端筛选。</p>'+
   '</div>';
 }
 function viewAudit(){
+  var run=(parseHash().q||{}).run; if(run) AUDIT_STATE.text=run;
   return {html:moduleSubHeader('audit','<span class="inline-refresh">审计日志 · '+srcBadge('ready')+' · /api/audit/trail '+auditWatermarkNote()+'</span>')+
     '<div class="audit-root" id="audit-root">'+auditRoot()+'</div>', mount:bindAudit};
 }
@@ -4223,20 +3709,26 @@ function bindAudit(root){
   function detailFor(id){
     var r=AUDIT_DATA.filter(function(x){return x.id===id;})[0];
     if(!r) return null;
-    var cat=auditActionCategory(r.action);
+    var target=r.target||{}, correlation=r.correlation||{}, provenance=r.provenance||{};
+    var cat=auditActionCategory(r.operationName,r.operationKind);
     var catLabel=(AUDIT_CATEGORIES.filter(function(c){return c.k===cat;})[0]||{label:cat}).label;
+    var runCandidate=provenance.runId||correlation.workflowRunId||'';
+    var runBtn=runCandidate
+      ? '<div class="kv-row"><span class="kk">关联运行</span><span class="vv"><button class="ibtn" style="height:26px" data-act="auditOpenRun" data-run="'+esc(runCandidate)+'">打开 run</button></span></div>'
+      : '';
     return '<div class="kv">'+
       '<div class="kv-row"><span class="kk">记录 ID</span><span class="vv">'+esc(r.id)+'</span></div>'+
       '<div class="kv-row"><span class="kk">发生时间</span><span class="vv sans">'+esc(auditFmtTime(r.occurredAtUtc))+' <span class="faint">('+esc(auditAgo(r.occurredAtUtc))+')</span></span></div>'+
-      '<div class="kv-row"><span class="kk">操作</span><span class="vv sans">'+esc(r.action||'—')+'</span></div>'+
+      '<div class="kv-row"><span class="kk">操作</span><span class="vv sans">'+esc(r.operationName||'—')+'</span></div>'+
       '<div class="kv-row"><span class="kk">分类（前端推导）</span><span class="vv sans">'+esc(catLabel)+'</span></div>'+
-      '<div class="kv-row"><span class="kk">结果</span><span class="vv sans">'+auditOutcomeTag(r.outcome)+'</span></div>'+
+      '<div class="kv-row"><span class="kk">状态 / 结果</span><span class="vv sans">'+auditResultTag(auditResult(r))+'</span></div>'+
       '<div class="kv-row"><span class="kk">组织 scope</span><span class="vv">'+esc(r.scopeId||'—')+'</span></div>'+
       '<div class="kv-row"><span class="kk">操作者</span><span class="vv">'+esc(r.auditActorId||'—')+'</span></div>'+
       '<div class="kv-row"><span class="kk">身份 key</span><span class="vv">'+esc(r.identityKeyId||'—')+'</span></div>'+
-      '<div class="kv-row"><span class="kk">资源类型</span><span class="vv sans">'+esc(r.resourceType||'—')+'</span></div>'+
-      '<div class="kv-row"><span class="kk">资源 ID</span><span class="vv">'+esc(r.resourceId||'—')+'</span></div>'+
-      '<div class="kv-row"><span class="kk">关联 ID</span><span class="vv">'+esc(r.correlationId||'—')+'</span></div>'+
+      '<div class="kv-row"><span class="kk">资源类型</span><span class="vv sans">'+esc(target.kind||'—')+'</span></div>'+
+      '<div class="kv-row"><span class="kk">资源 ID</span><span class="vv">'+esc(target.id||'—')+'</span></div>'+
+      '<div class="kv-row"><span class="kk">Correlation ID</span><span class="vv">'+esc(correlation.correlationId||'—')+'</span></div>'+
+      runBtn+
       '<div class="kv-row"><span class="kk" style="align-self:center">操作者 ID</span><span class="vv"><button class="ibtn" data-act="auditCopy" data-copy="'+esc(r.auditActorId||'')+'" style="height:24px">复制 auditActorId</button></span></div>'+
     '</div>';
   }
@@ -4245,7 +3737,7 @@ function bindAudit(root){
     if(a==='auditReload'){
       AUDIT_LOADED=false; loadAuditTrail();
     } else if(a==='auditReset'){
-      AUDIT_STATE={scope:'mine',customScope:'',actor:'',from:'',to:'',cat:'all',outcome:'all',text:''};
+      AUDIT_STATE={scope:'mine',customScope:'',actor:'',from:'',to:'',cat:'all',result:'all',text:''};
       AUDIT_LOADED=false; loadAuditTrail();
     } else if(a==='auditMore'){
       loadAuditMore();
@@ -4258,13 +3750,18 @@ function bindAudit(root){
       else { AUDIT_LOADED=false; loadAuditTrail(); }
     } else if(a==='auditCat'){
       AUDIT_STATE.cat=act.getAttribute('data-cat'); re();
-    } else if(a==='auditOutcome'){
-      AUDIT_STATE.outcome=act.getAttribute('data-outcome'); re();
+    } else if(a==='auditResult'){
+      AUDIT_STATE.result=act.getAttribute('data-result'); re();
     } else if(a==='auditRow'){
       var id=act.getAttribute('data-id');
       openInspector(detailFor(id),{title:'审计记录详情',sub:id,drawerKind:'audit'});
     } else if(a==='auditCopy'){
       copyWithToast(act.getAttribute('data-copy'),'已复制 auditActorId');
+    } else if(a==='auditOpenRun'){
+      var runId=(act.getAttribute('data-run')||'').trim();
+      if(!runId) return;
+      closeDrawer();
+      obsNavigate({run:runId});
     }
   });
   /* 输入类用 change/input：scope/actor/from/to 改变不立即请求（按“查询”触发），text 即时筛选 */
@@ -4289,12 +3786,19 @@ function bindAudit(root){
   });
 }
 
+function obsNavigate(patch){
+  var q=(parseHash().parts[0]==='observatory')?parseHash().q:{},next={};
+  ['scope','status','origin','definition','schedule','from','to','run','tab'].forEach(function(key){if(q[key])next[key]=q[key];});
+  Object.keys(patch||{}).forEach(function(key){if(patch[key]==null||patch[key]==='')delete next[key];else next[key]=patch[key];});
+  navigate(['observatory'],next);
+}
 function opsView(module){
   switch(module){
     case 'status': return viewStatus();
-    case 'observatory': return viewObservatory();
+    case 'observatory': return viewObservatoryFrame();
     case 'cqrs': return viewCqrs();
     case 'studio': return viewStudio();
+    case 'agent-profiles': return viewAgentProfiles();
     case 'skills': return viewSkills();
     case 'schedules': return viewSchedules();
     case 'channels': return viewChannels();
@@ -4491,6 +3995,8 @@ function bindEvents(){
     if(!msg || msg.source!=='aevatar-backend-console-suite') return;
     if(msg.type==='auth-required'){ showLoginGate(msg.reason||'登录已过期，请重新使用 NyxID 登录。'); return; }
     if(msg.type==='login-request'){ beginLogin(msg.resources,msg.tokenPurpose); }
+    if(msg.type==='observatory-route'){ syncObservatoryHash(msg.query||{}); }
+    if(msg.type==='navigate'&&['cqrs','audit'].indexOf(msg.module)>=0){ navigate([msg.module],msg.query||{}); }
   });
   document.addEventListener('click',function(ev){
     var t=ev.target;
@@ -4550,14 +4056,10 @@ function bindEvents(){
     if(stchip && stchip.closest('[data-act="l1status"]')){ /* handled above */ }
 
     /* navigation: run > emp > company（顺序很重要） */
-    var runEl=t.closest&&t.closest('[data-run]');
-    if(runEl){ var rid=runEl.getAttribute('data-run');
-      /* 深链进观测台并选中该 run：rid 即权威 run id（Fleet 与 observatory 同口径 mapXxxRuns 的 r.runId）。
-         不再依赖 OBS_RUNS 是否已含该 run（看板数据在 FLEET_RUNS_BY_SCOPE，与 OBS_RUNS 是两套加载）。
-         Fleet 为跨 scope __all__，强制 observatory 同口径，确保 loadObsRuns 后该 run 在列表内被选中、
-         详情按其自身 scope 拉取，而非因 selectedId 未命中回落到首行。 */
-      if(rid){ OBS_STATE.selectedId=rid; OBS_STATE.scope='__all__'; obsUpsertRunFromDetail(rid,null); }
-      navigate(['observatory'],{}); return; }
+    var runEl=t.closest&&t.closest('[data-run][data-scope]');
+    if(runEl){ var rid=runEl.getAttribute('data-run'); var runScope=runEl.getAttribute('data-scope');
+      if(rid) obsNavigate({run:rid,scope:runScope||'mine'});
+      return; }
     var empEl=t.closest&&t.closest('[data-emp][data-co]');
     if(empEl){ navigate(['fleet','c',empEl.getAttribute('data-co'),'e',empEl.getAttribute('data-emp')],{}); return; }
     var coEl=t.closest&&t.closest('[data-co]');
@@ -4570,8 +4072,12 @@ function bindEvents(){
     if(t.getAttribute&&t.getAttribute('data-act')==='l1search'){ STATE.search=t.value; _focusSearch=true; render(); }
   });
 
-  /* Esc closes drawer / popover */
-  document.addEventListener('keydown',function(ev){ if(ev.key==='Escape'){ if(_drawerCtx) closeDrawer(); if(_srcPopEl) closeSrcPop(); } });
+  /* Esc closes the active overlay. */
+  document.addEventListener('keydown',function(ev){
+    if(ev.key!=='Escape') return;
+    if(_drawerCtx){ closeDrawer(); return; }
+    if(_srcPopEl){ closeSrcPop(); return; }
+  });
 
   window.addEventListener('hashchange',function(){ if(_drawerCtx) closeDrawer(); if(_srcPopEl) closeSrcPop(); render(); });
 }

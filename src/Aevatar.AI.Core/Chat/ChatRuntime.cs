@@ -375,15 +375,20 @@ public sealed class ChatRuntime
         var authorizedTools = ToolCallLoop.CreateRequestToolManager(baseRequest.Tools);
         var skillRecovery = CreateSkillRecoveryOrchestrator(baseRequest, () => authorizedTools);
         var executedToolOutcomes = new List<ToolOutcomeReplyFact>();
+        var authorizationBlocked = false;
 
         if (skillRecovery.RequiresInitialSearch)
         {
-            await skillRecovery.ApplyInitialDirectivesAsync(
-                AgentToolExecutionContextMapper.FromRequest(baseRequest),
-                messages,
-                pendingHistoryMessages,
-                ToolCallLoop.ComposeRoundCallId(baseRequest.RequestId, 0),
-                runToken);
+            await foreach (var progress in skillRecovery.ApplyInitialDirectivesAsync(
+                               AgentToolExecutionContextMapper.FromRequest(baseRequest),
+                               messages,
+                               pendingHistoryMessages,
+                               ToolCallLoop.ComposeRoundCallId(baseRequest.RequestId, 0),
+                               runToken))
+            {
+                wroteOutput = true;
+                yield return BuildSkillRecoveryChunk(progress, authorizedTools);
+            }
         }
 
         for (var round = 0; round < effectiveMaxToolRounds; round++)
@@ -398,7 +403,8 @@ public sealed class ChatRuntime
             var authorizedToolContext = AgentToolExecutionContextMapper.FromRequest(baseRequest);
             var streamingExecutor = new StreamingToolExecutor(
                 authorizedTools, _hooks, _toolLoop.ToolMiddlewares,
-                toolContext: authorizedToolContext);
+                toolContext: authorizedToolContext,
+                logger: _logger);
             using var streamingToolState = streamingExecutor.CreateExecutionState();
 
             void BindAuthorizedRequest(LLMRequest authorizedRequest)
@@ -407,7 +413,8 @@ public sealed class ChatRuntime
                 authorizedTools = ToolCallLoop.CreateRequestToolManager(authorizedRequest.Tools);
                 streamingExecutor = new StreamingToolExecutor(
                     authorizedTools, _hooks, _toolLoop.ToolMiddlewares,
-                    toolContext: authorizedToolContext);
+                    toolContext: authorizedToolContext,
+                    logger: _logger);
             }
 
             List<ToolCall>? deferredToolCalls = _hooks != null ? [] : null;
@@ -449,6 +456,17 @@ public sealed class ChatRuntime
                                    },
                                    BindAuthorizedRequest))
                 {
+                    if (chunk.ToolCallStarted != null)
+                    {
+                        if (deferredToolCalls == null)
+                        {
+                            wroteOutput = true;
+                            yield return chunk;
+                        }
+
+                        continue;
+                    }
+
                     roundChunks.Add(chunk);
                 }
 
@@ -460,16 +478,24 @@ public sealed class ChatRuntime
                                       (roundResult.ToolCalls is { Count: > 0 } ||
                                        parsedTextToolCall?.ToolCalls.Count > 0);
 
-                if (!roundCallsTools &&
-                    await skillRecovery.TryRecoverFinalAnswerAsync(
-                        authorizedToolContext,
-                        messages,
+                var recoveryCallId = ToolCallLoop.ComposeRoundCallId(baseRequest.RequestId, round);
+                if (!roundCallsTools && skillRecovery.ShouldRecoverFinalAnswer(
                         pendingHistoryMessages,
                         roundResult.Content,
-                        ToolCallLoop.ComposeRoundCallId(baseRequest.RequestId, round),
-                        runToken))
+                        recoveryCallId))
                 {
                     streamingExecutor.Discard(streamingToolState);
+                    await foreach (var progress in skillRecovery.RecoverFinalAnswerAsync(
+                                       roundRequest.ToolContext,
+                                       messages,
+                                       pendingHistoryMessages,
+                                       roundResult.Content,
+                                       recoveryCallId,
+                                       runToken))
+                    {
+                        wroteOutput = true;
+                        yield return BuildSkillRecoveryChunk(progress, authorizedTools);
+                    }
                     hasStreamedTextContent = false;
                     continue;
                 }
@@ -503,6 +529,9 @@ public sealed class ChatRuntime
                                    },
                                    BindAuthorizedRequest))
                 {
+                    if (chunk.ToolCallStarted != null && deferredToolCalls != null)
+                        continue;
+
                     wroteOutput = true;
                     yield return chunk;
                 }
@@ -553,28 +582,48 @@ public sealed class ChatRuntime
                             break;
                         }
 
-                        AppendAssistantMessage(
+                        var parsedAssistantToolCallMessage = AppendAssistantMessage(
                             messages,
                             pendingHistoryMessages,
                             parsed.CleanedContent,
                             roundResult.ReasoningContent,
-                            parsed.ToolCalls);
+                            parsed.ToolCalls)!;
 
                         var textToolExecutor = new StreamingToolExecutor(
                             authorizedTools, _hooks, _toolLoop.ToolMiddlewares,
-                            toolContext: authorizedToolContext);
+                            toolContext: authorizedToolContext,
+                            logger: _logger);
                         using var textToolState = textToolExecutor.CreateExecutionState();
                         foreach (var tc in parsed.ToolCalls)
+                        {
+                            yield return BuildToolCallStartedChunk(tc, authorizedTools);
                             textToolExecutor.AddTool(textToolState, tc);
+                        }
                         await foreach (var result in textToolExecutor.GetRemainingResultsAsync(textToolState, runToken))
                         {
-                            executedToolOutcomes.Add(BuildToolOutcomeReplyFact(authorizedTools, result, parsed.ToolCalls));
-                            if (result.Receipt is not null)
-                                yield return new LLMStreamChunk { ToolReceipt = result.Receipt.Clone() };
-                            var toolMsg = ToolCallLoop.BuildToolResultMessage(result.CallId, result.ToolName, result.Result);
+                            executedToolOutcomes.Add(BuildToolOutcomeReplyFact(
+                                authorizedTools,
+                                result,
+                                parsed.ToolCalls));
+                            parsedAssistantToolCallMessage = FailedToolCallArgumentRedactor.Redact(
+                                messages,
+                                pendingHistoryMessages,
+                                parsedAssistantToolCallMessage,
+                                result);
+                            yield return BuildToolCallCompletedChunk(result);
+                            var toolMsg = ToolCallLoop.BuildToolResultMessage(
+                                result.CallId,
+                                result.ToolName,
+                                ToolExecutionResultHistory.ResolveSafeContent(result),
+                                result.Receipt);
                             messages.Add(toolMsg);
                             pendingHistoryMessages.Add(toolMsg);
+                            if (IsAuthorizationRequired(result))
+                                authorizationBlocked = true;
                         }
+
+                        if (authorizationBlocked)
+                            break;
 
                         continue;
                     }
@@ -591,14 +640,23 @@ public sealed class ChatRuntime
                     continue;
                 }
 
-                if (await skillRecovery.TryRecoverFinalAnswerAsync(
-                        authorizedToolContext,
-                        messages,
+                var recoveryCallId = ToolCallLoop.ComposeRoundCallId(baseRequest.RequestId, round);
+                if (skillRecovery.ShouldRecoverFinalAnswer(
                         pendingHistoryMessages,
                         roundResult.Content,
-                        ToolCallLoop.ComposeRoundCallId(baseRequest.RequestId, round),
-                        runToken))
+                        recoveryCallId))
                 {
+                    await foreach (var progress in skillRecovery.RecoverFinalAnswerAsync(
+                                       roundRequest.ToolContext,
+                                       messages,
+                                       pendingHistoryMessages,
+                                       roundResult.Content,
+                                       recoveryCallId,
+                                       runToken))
+                    {
+                        wroteOutput = true;
+                        yield return BuildSkillRecoveryChunk(progress, authorizedTools);
+                    }
                     hasStreamedTextContent = false;
                     continue;
                 }
@@ -632,32 +690,48 @@ public sealed class ChatRuntime
                 if (deferredToolCalls != null)
                 {
                     foreach (var tc in deferredToolCalls)
+                    {
+                        yield return BuildToolCallStartedChunk(tc, authorizedTools);
                         streamingExecutor.AddTool(streamingToolState, tc);
+                    }
                 }
             }
 
-            var assistantToolCallMessage = new ChatMessage
-            {
-                Role = "assistant",
-                Content = roundResult.Content,
-                ReasoningContent = roundResult.ReasoningContent,
-                ToolCalls = roundResult.ToolCalls,
-            };
-            messages.Add(assistantToolCallMessage);
-            pendingHistoryMessages.Add(assistantToolCallMessage);
+            var assistantToolCallMessage = AppendAssistantMessage(
+                messages,
+                pendingHistoryMessages,
+                roundResult.Content,
+                roundResult.ReasoningContent,
+                roundResult.ToolCalls)!;
 
             await foreach (var result in streamingExecutor.GetRemainingResultsAsync(streamingToolState, runToken))
             {
-                executedToolOutcomes.Add(BuildToolOutcomeReplyFact(authorizedTools, result, roundResult.ToolCalls));
-                if (result.Receipt is not null)
-                    yield return new LLMStreamChunk { ToolReceipt = result.Receipt.Clone() };
-                var toolMsg = ToolCallLoop.BuildToolResultMessage(result.CallId, result.ToolName, result.Result);
+                executedToolOutcomes.Add(BuildToolOutcomeReplyFact(
+                    authorizedTools,
+                    result,
+                    roundResult.ToolCalls));
+                assistantToolCallMessage = FailedToolCallArgumentRedactor.Redact(
+                    messages,
+                    pendingHistoryMessages,
+                    assistantToolCallMessage,
+                    result);
+                yield return BuildToolCallCompletedChunk(result);
+                var toolMsg = ToolCallLoop.BuildToolResultMessage(
+                    result.CallId,
+                    result.ToolName,
+                    ToolExecutionResultHistory.ResolveSafeContent(result),
+                    result.Receipt);
                 messages.Add(toolMsg);
                 pendingHistoryMessages.Add(toolMsg);
+                if (IsAuthorizationRequired(result))
+                    authorizationBlocked = true;
             }
+
+            if (authorizationBlocked)
+                break;
         }
 
-        if (finalContent == null)
+        if (finalContent == null && !authorizationBlocked)
         {
             if (hasStreamedTextContent)
             {
@@ -702,54 +776,74 @@ public sealed class ChatRuntime
                 : null;
             if (finalParsed?.ToolCalls.Count > 0)
             {
-                AppendAssistantMessage(
+                var assistantToolCallMessage = AppendAssistantMessage(
                     messages,
                     pendingHistoryMessages,
                     finalParsed.CleanedContent,
                     finalRound.ReasoningContent,
-                    finalParsed.ToolCalls);
+                    finalParsed.ToolCalls)!;
 
                 var finalToolExecutor = new StreamingToolExecutor(
                     authorizedTools, _hooks, _toolLoop.ToolMiddlewares,
-                    toolContext: finalRequest.ToolContext);
+                    toolContext: finalRequest.ToolContext,
+                    logger: _logger);
                 using var finalToolState = finalToolExecutor.CreateExecutionState();
                 foreach (var tc in finalParsed.ToolCalls)
+                {
+                    yield return BuildToolCallStartedChunk(tc, authorizedTools);
                     finalToolExecutor.AddTool(finalToolState, tc);
+                }
                 await foreach (var result in finalToolExecutor.GetRemainingResultsAsync(finalToolState, runToken))
                 {
-                    executedToolOutcomes.Add(BuildToolOutcomeReplyFact(authorizedTools, result, finalParsed.ToolCalls));
-                    if (result.Receipt is not null)
-                        yield return new LLMStreamChunk { ToolReceipt = result.Receipt.Clone() };
-                    var toolMsg = ToolCallLoop.BuildToolResultMessage(result.CallId, result.ToolName, result.Result);
+                    executedToolOutcomes.Add(BuildToolOutcomeReplyFact(
+                        authorizedTools,
+                        result,
+                        finalParsed.ToolCalls));
+                    assistantToolCallMessage = FailedToolCallArgumentRedactor.Redact(
+                        messages,
+                        pendingHistoryMessages,
+                        assistantToolCallMessage,
+                        result);
+                    yield return BuildToolCallCompletedChunk(result);
+                    var toolMsg = ToolCallLoop.BuildToolResultMessage(
+                        result.CallId,
+                        result.ToolName,
+                        ToolExecutionResultHistory.ResolveSafeContent(result),
+                        result.Receipt);
                     messages.Add(toolMsg);
                     pendingHistoryMessages.Add(toolMsg);
+                    if (IsAuthorizationRequired(result))
+                        authorizationBlocked = true;
                 }
 
-                var summaryRequest = new LLMRequest
+                if (!authorizationBlocked)
                 {
-                    Messages = BuildFinalNoToolsMessages(messages, executedToolOutcomes, toolReceipts: null),
-                    RequestId = finalRequest.RequestId,
-                    Metadata = finalRequest.Metadata,
-                    CallerContext = finalRequest.CallerContext,
-                    ToolContext = finalRequest.ToolContext,
-                    RoutingContext = finalRequest.RoutingContext,
-                    LlmControl = finalRequest.LlmControl,
-                    Tools = null,
-                    Model = finalRequest.Model,
-                    Temperature = finalRequest.Temperature,
-                    MaxTokens = finalRequest.MaxTokens,
-                    ResponseFormat = finalRequest.ResponseFormat,
-                };
-                var summaryScope = new StreamingRoundScope();
-                await foreach (var chunk in StreamLlmRoundAsync(provider, summaryRequest, summaryScope, runToken))
-                {
-                    wroteOutput = true;
-                    yield return chunk;
-                }
+                    var summaryRequest = new LLMRequest
+                    {
+                        Messages = BuildFinalNoToolsMessages(messages, executedToolOutcomes, toolReceipts: null),
+                        RequestId = finalRequest.RequestId,
+                        Metadata = finalRequest.Metadata,
+                        CallerContext = finalRequest.CallerContext,
+                        ToolContext = finalRequest.ToolContext,
+                        RoutingContext = finalRequest.RoutingContext,
+                        LlmControl = finalRequest.LlmControl,
+                        Tools = null,
+                        Model = finalRequest.Model,
+                        Temperature = finalRequest.Temperature,
+                        MaxTokens = finalRequest.MaxTokens,
+                        ResponseFormat = finalRequest.ResponseFormat,
+                    };
+                    var summaryScope = new StreamingRoundScope();
+                    await foreach (var chunk in StreamLlmRoundAsync(provider, summaryRequest, summaryScope, runToken))
+                    {
+                        wroteOutput = true;
+                        yield return chunk;
+                    }
 
-                var summaryRound = summaryScope.RequireResult();
-                AppendAssistantMessage(messages, pendingHistoryMessages, summaryRound.Content, summaryRound.ReasoningContent, toolCalls: null);
-                finalContent = summaryRound.Content;
+                    var summaryRound = summaryScope.RequireResult();
+                    AppendAssistantMessage(messages, pendingHistoryMessages, summaryRound.Content, summaryRound.ReasoningContent, toolCalls: null);
+                    finalContent = summaryRound.Content;
+                }
             }
             else
             {
@@ -777,7 +871,8 @@ public sealed class ChatRuntime
                 _hooks,
                 _toolLoop.ToolMiddlewares,
                 requestMetadata: baseRequest.Metadata,
-                toolContext: toolContext ?? AgentToolExecutionContextMapper.FromRequest(baseRequest)));
+                toolContext: toolContext ?? AgentToolExecutionContextMapper.FromRequest(baseRequest),
+                logger: _logger));
 
     private List<ChatMessage> BuildFinalNoToolsMessages(
         IReadOnlyList<ChatMessage> messages,
@@ -807,6 +902,56 @@ public sealed class ChatRuntime
             Succeeded: !result.IsError,
             result.Receipt?.Clone());
     }
+
+    private static LLMStreamChunk BuildToolCallStartedChunk(ToolCall toolCall, ToolManager tools) =>
+        new()
+        {
+            ToolCallStarted = new ToolCallStartedChunk
+            {
+                ToolCall = CloneProgressToolCall(toolCall),
+                Presentation = ToolPresentationDescriptors.Snapshot(
+                    tools.Get(toolCall.Name),
+                    toolCall.Name,
+                    toolCall.ArgumentsJson),
+            },
+        };
+
+    private static ToolCall CloneProgressToolCall(ToolCall toolCall) => new()
+    {
+        Id = toolCall.Id,
+        Name = toolCall.Name,
+        ArgumentsJson = toolCall.ArgumentsJson,
+    };
+
+    private static LLMStreamChunk BuildSkillRecoveryChunk(
+        SkillRecoveryToolProgress progress,
+        ToolManager tools)
+    {
+        if (progress.StartedToolCall != null)
+            return BuildToolCallStartedChunk(progress.StartedToolCall, tools);
+        if (progress.CompletedResult != null)
+            return BuildToolCallCompletedChunk(progress.CompletedResult.Value);
+
+        throw new InvalidOperationException("Skill recovery progress requires a typed tool lifecycle payload.");
+    }
+
+    private static LLMStreamChunk BuildToolCallCompletedChunk(ToolExecutionResult result) =>
+        new()
+        {
+            ToolReceipt = result.Receipt?.Clone(),
+            ToolCallCompleted = new ToolCallCompletedChunk
+            {
+                CallId = result.CallId,
+                ToolName = result.ToolName,
+                ResultJson = ToolExecutionResultHistory.ResolveSafeContent(result),
+                Success = !result.IsError,
+                Error = result.Receipt?.ErrorMessage ?? string.Empty,
+                Receipt = result.Receipt?.Clone(),
+            },
+        };
+
+    private static bool IsAuthorizationRequired(ToolExecutionResult result) =>
+        result.Receipt?.Status == AgentToolReceiptStatus.AuthorizationRequired;
 
     private async Task RunStopHookAsync(
         string? finalContent,
@@ -882,6 +1027,7 @@ public sealed class ChatRuntime
         IReadOnlyList<ToolCall>? streamedToolCalls = null;
         string? streamedFinishReason = null;
         IReadOnlyList<IAgentTool> authorizedTools = [];
+        var authorizedToolManager = ToolCallLoop.CreateRequestToolManager(authorizedTools);
         var authorizedToolContext = AgentToolExecutionContext.Empty;
 
         var llmBridge = new LLMCallMiddlewareBridge();
@@ -899,14 +1045,16 @@ public sealed class ChatRuntime
         {
             llmCallContext.Request = authorizationFence.Apply(llmCallContext.Request);
             authorizedTools = llmCallContext.Request.Tools?.ToArray() ?? [];
+            authorizedToolManager = ToolCallLoop.CreateRequestToolManager(authorizedTools);
             authorizedToolContext = AgentToolExecutionContextMapper.FromRequest(llmCallContext.Request);
             onRequestAuthorized?.Invoke(llmCallContext.Request);
             var full = new StringBuilder();
             var fullReasoning = new StringBuilder();
             TokenUsage? usage = null;
             string? finishReason = null;
+            var completedToolCalls = new Queue<ToolCall>();
             var toolCalls = onToolCallCompleted != null
-                ? new StreamingToolCallAccumulator(onToolCallCompleted)
+                ? new StreamingToolCallAccumulator(toolCall => completedToolCalls.Enqueue(toolCall))
                 : new StreamingToolCallAccumulator();
 
             await using var providerEnumerator = provider.ChatStreamAsync(llmCallContext.Request, ct)
@@ -938,17 +1086,27 @@ public sealed class ChatRuntime
                     throw;
                 }
 
-                if (normalizedChunk == null)
-                    continue;
+                while (completedToolCalls.TryDequeue(out var completedToolCall))
+                {
+                    yield return BuildToolCallStartedChunk(completedToolCall, authorizedToolManager);
+                    onToolCallCompleted?.Invoke(completedToolCall);
+                }
 
-                yield return normalizedChunk;
+                if (normalizedChunk != null)
+                    yield return normalizedChunk;
+            }
+
+            var finalizedToolCalls = toolCalls.BuildToolCalls();
+            while (completedToolCalls.TryDequeue(out var completedToolCall))
+            {
+                yield return BuildToolCallStartedChunk(completedToolCall, authorizedToolManager);
+                onToolCallCompleted?.Invoke(completedToolCall);
             }
 
             streamedContent = full.Length > 0 ? full.ToString() : null;
             streamedReasoningContent = fullReasoning.Length > 0 ? fullReasoning.ToString() : null;
             streamedUsage = usage;
             streamedFinishReason = finishReason;
-            var finalizedToolCalls = toolCalls.BuildToolCalls();
             streamedToolCalls = finalizedToolCalls.Count > 0 ? finalizedToolCalls : null;
             llmCallContext.Response = new LLMResponse
             {
@@ -1029,7 +1187,8 @@ public sealed class ChatRuntime
             ToolCallLoop.CreateRequestToolManager(tools),
             _hooks,
             _toolLoop.ToolMiddlewares,
-            toolContext: toolContext);
+            toolContext: toolContext,
+            logger: _logger);
         using var toolState = executor.CreateExecutionState();
         foreach (var toolCall in toolCalls)
             executor.AddTool(toolState, toolCall);
@@ -1041,7 +1200,7 @@ public sealed class ChatRuntime
         return results;
     }
 
-    private static void AppendAssistantMessage(
+    private static ChatMessage? AppendAssistantMessage(
         List<ChatMessage> messages,
         List<ChatMessage> pendingHistoryMessages,
         string? content,
@@ -1049,18 +1208,26 @@ public sealed class ChatRuntime
         IReadOnlyList<ToolCall>? toolCalls)
     {
         if (string.IsNullOrEmpty(content) && string.IsNullOrEmpty(reasoningContent) && toolCalls is not { Count: > 0 })
-            return;
+            return null;
 
         var assistantMessage = new ChatMessage
         {
             Role = "assistant",
             Content = content,
             ReasoningContent = reasoningContent,
-            ToolCalls = toolCalls,
+            ToolCalls = toolCalls?.Select(CloneToolCall).ToArray(),
         };
         messages.Add(assistantMessage);
         pendingHistoryMessages.Add(assistantMessage);
+        return assistantMessage;
     }
+
+    private static ToolCall CloneToolCall(ToolCall toolCall) => new()
+    {
+        Id = toolCall.Id,
+        Name = toolCall.Name,
+        ArgumentsJson = toolCall.ArgumentsJson,
+    };
 
     /// <summary>
     /// Build the LLM messages list from the current history snapshot plus a pending user message,

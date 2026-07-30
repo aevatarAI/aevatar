@@ -62,8 +62,24 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         var commandId = ResolveCommandId(request);
         var correlationId = ResolveCorrelationId(request, commandId);
         var runId = ResolveRunId(request, commandId);
-        await RegisterRunAsync(target, request, runId, commandId, correlationId, target.Service.PrimaryActorId, ServiceImplementationKind.Static, ct);
-        var envelope = CreateEnvelope(target.Service.PrimaryActorId, request.Payload, commandId, correlationId);
+        EnsureStaticRunContextIsDispatcherOwned(request);
+        var registration = await RegisterRunAsync(
+            target,
+            request,
+            runId,
+            commandId,
+            correlationId,
+            target.Service.PrimaryActorId,
+            ServiceImplementationKind.Static,
+            ct);
+        var payload = AttachStaticRunContext(
+            request.Payload,
+            registration.RunActorId,
+            runId,
+            commandId,
+            correlationId,
+            request.ServiceRunCompletionNotificationTarget?.ExpiresAtUnixMs ?? 0);
+        var envelope = CreateEnvelope(target.Service.PrimaryActorId, payload, commandId, correlationId);
         await _dispatchPort.DispatchAsync(target.Service.PrimaryActorId, envelope, ct);
         return CreateReceipt(target, target.Service.PrimaryActorId, commandId, correlationId, runId);
     }
@@ -83,15 +99,28 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         var commandId = ResolveCommandId(request);
         var correlationId = ResolveCorrelationId(request, commandId);
         var runId = ResolveRunId(request, commandId);
-        await RegisterRunAsync(target, request, runId, commandId, correlationId, target.Service.PrimaryActorId, ServiceImplementationKind.Scripting, ct);
+        var registration = await RegisterRunAsync(
+            target,
+            request,
+            runId,
+            commandId,
+            correlationId,
+            target.Service.PrimaryActorId,
+            ServiceImplementationKind.Scripting,
+            ct);
         await scriptRuntimeCommandPort.RunRuntimeAsync(
             target.Service.PrimaryActorId,
-            runId: commandId,
+            runId,
+            commandId,
+            correlationId,
             request.Payload?.Clone(),
             plan.Revision,
             plan.DefinitionActorId,
             request.Payload?.TypeUrl ?? string.Empty,
             request.Identity?.TenantId,
+            registration.RunActorId,
+            $"service-run-source:{runId}:{commandId}",
+            request.ServiceRunCompletionNotificationTarget?.ExpiresAtUnixMs ?? 0,
             ct);
         return CreateReceipt(target, target.Service.PrimaryActorId, commandId, correlationId, runId);
     }
@@ -106,26 +135,154 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         var callerCredential = BuildWorkflowCallerCredential(chatRequest, request);
         var plan = target.Artifact.DeploymentPlan.WorkflowPlan;
         var definitionActorId = ResolveWorkflowServiceDefinitionActorId(target, plan);
-        var run = await _workflowRunProvisioningPort.CreateRunAsync(
-            new WorkflowDefinitionBinding(
-                definitionActorId,
-                plan.WorkflowName,
-                plan.WorkflowYaml,
-                plan.InlineWorkflowYamls,
-                ResolveAuthoritativeScopeId(request, chatRequest),
-                string.IsNullOrWhiteSpace(request.RunOrigin)
-                    ? WorkflowRunOrigins.ServiceInvoke
-                    : request.RunOrigin.Trim(),
-                request.ScheduleId?.Trim() ?? string.Empty),
-            ct);
         var commandId = ResolveCommandId(request);
         var correlationId = ResolveCorrelationId(request, commandId);
+        var definition = new WorkflowDefinitionBinding(
+            definitionActorId,
+            plan.WorkflowName,
+            plan.WorkflowYaml,
+            plan.InlineWorkflowYamls,
+            ResolveAuthoritativeScopeId(request, chatRequest),
+            string.IsNullOrWhiteSpace(request.RunOrigin)
+                ? WorkflowRunOrigins.ServiceInvoke
+                : request.RunOrigin.Trim(),
+            request.ScheduleId?.Trim() ?? string.Empty,
+            "service_revision",
+            plan.CapabilityAdmissionPlan?.Clone());
+        var requestedRunId = request.RequestedRunId?.Trim() ?? string.Empty;
+        if (!string.IsNullOrWhiteSpace(requestedRunId))
+        {
+            return await DispatchExactWorkflowRunAsync(
+                target,
+                request,
+                definition,
+                chatRequest,
+                callerCredential,
+                requestedRunId,
+                commandId,
+                correlationId,
+                ct);
+        }
+
+        var run = await _workflowRunProvisioningPort.CreateRunAsync(definition, ct);
         var serviceRunId = run.ActorId;
-        await RegisterRunAsync(target, request, serviceRunId, commandId, correlationId, run.ActorId, ServiceImplementationKind.Workflow, ct);
+        var serviceRunRegistration = await RegisterRunAsync(
+            target,
+            request,
+            serviceRunId,
+            commandId,
+            correlationId,
+            run.ActorId,
+            ServiceImplementationKind.Workflow,
+            ct);
         var workflowChatRequest = ToWorkflowChatRequest(chatRequest, request, target, run.ActorId, callerCredential);
         var envelope = CreateEnvelope(run.ActorId, Any.Pack(workflowChatRequest), commandId, correlationId);
-        await _dispatchPort.DispatchAsync(run.ActorId, envelope, ct);
+        var admission = await _dispatchPort.DispatchAsync(run.ActorId, envelope, ct);
+        if (!admission.Accepted)
+        {
+            await MarkRejectedWorkflowRunFailedAsync(serviceRunRegistration).ConfigureAwait(false);
+            if (string.IsNullOrWhiteSpace(request.RequestedRunId))
+                await DestroyRejectedWorkflowRunAsync(run.ActorId).ConfigureAwait(false);
+            throw new InvalidOperationException(
+                $"Workflow service dispatch was not accepted for actor '{run.ActorId}'.");
+        }
+
         return CreateReceipt(target, run.ActorId, commandId, correlationId, serviceRunId);
+    }
+
+    private async Task<ServiceInvocationAcceptedReceipt> DispatchExactWorkflowRunAsync(
+        ServiceInvocationResolvedTarget target,
+        ServiceInvocationRequest request,
+        WorkflowDefinitionBinding definition,
+        ChatRequestEvent chatRequest,
+        Aevatar.Workflow.Abstractions.WorkflowCallerCredential callerCredential,
+        string requestedRunId,
+        string commandId,
+        string correlationId,
+        CancellationToken ct)
+    {
+        if (_workflowRunProvisioningPort is not IWorkflowRunIdentityExecutionPort identityExecutionPort)
+        {
+            throw new InvalidOperationException(
+                "Requested Run identity requires IWorkflowRunIdentityExecutionPort support.");
+        }
+
+        var registration = await RegisterRunAsync(
+            target,
+            request,
+            requestedRunId,
+            commandId,
+            correlationId,
+            requestedRunId,
+            ServiceImplementationKind.Workflow,
+            ct);
+        try
+        {
+            var workflowChatRequest = ToWorkflowChatRequest(
+                chatRequest,
+                request,
+                target,
+                requestedRunId,
+                callerCredential);
+            var run = await identityExecutionPort.EnsureRunAndDispatchAsync(
+                definition,
+                requestedRunId,
+                workflowChatRequest,
+                commandId,
+                correlationId,
+                ct);
+            if (!string.Equals(run.ActorId, requestedRunId, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Exact workflow Run provisioning returned actor '{run.ActorId}', not '{requestedRunId}'.");
+            }
+
+            return CreateReceipt(target, run.ActorId, commandId, correlationId, requestedRunId);
+        }
+        catch
+        {
+            await MarkRejectedWorkflowRunFailedAsync(registration).ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    private async Task MarkRejectedWorkflowRunFailedAsync(ServiceRunRegistrationResult registration)
+    {
+        try
+        {
+            await _serviceRunRegistrationPort
+                .UpdateStatusAsync(
+                    registration.RunActorId,
+                    registration.RunId,
+                    ServiceRunStatus.Failed,
+                    CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Rejected workflow service run status update failed: serviceRunActorId={ServiceRunActorId} serviceRunId={ServiceRunId}",
+                registration.RunActorId,
+                registration.RunId);
+        }
+    }
+
+    private async Task DestroyRejectedWorkflowRunAsync(string workflowRunActorId)
+    {
+        try
+        {
+            await _workflowRunProvisioningPort
+                .DestroyAsync(workflowRunActorId, CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Rejected workflow service dispatch cleanup failed: workflowRunActorId={WorkflowRunActorId}",
+                workflowRunActorId);
+        }
     }
 
     private static string ResolveWorkflowServiceDefinitionActorId(
@@ -168,21 +325,16 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         };
         foreach (var part in source.InputParts)
         {
+            var fileRef = ToWorkflowFileRef(part.FileRef);
             request.InputParts.Add(new WorkflowChatInputPartPayload
             {
-                Kind = part.Kind switch
-                {
-                    ChatContentPartKind.Text => Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Text,
-                    ChatContentPartKind.Image => Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Image,
-                    ChatContentPartKind.Audio => Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Audio,
-                    ChatContentPartKind.Video => Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Video,
-                    _ => Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Unspecified,
-                },
+                Kind = ResolveWorkflowInputPartKind(part, fileRef),
                 Text = part.Text ?? string.Empty,
                 DataBase64 = part.DataBase64 ?? string.Empty,
                 MediaType = part.MediaType ?? string.Empty,
                 Uri = part.Uri ?? string.Empty,
                 Name = part.Name ?? string.Empty,
+                FileRef = fileRef,
             });
         }
         foreach (var (key, value) in source.Headers)
@@ -198,7 +350,87 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         };
         if (source.LlmControl?.HasMaxToolRoundsOverride == true)
             request.LlmControl.MaxToolRoundsOverride = source.LlmControl.MaxToolRoundsOverride;
+        ApplyWorkflowCompletionNotificationTarget(
+            request,
+            invocationRequest.WorkflowCompletionNotificationTarget);
         return request;
+    }
+
+    private static Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind ResolveWorkflowInputPartKind(
+        ChatContentPart part,
+        Aevatar.Workflow.Abstractions.WorkflowFileRef? fileRef)
+    {
+        if (fileRef != null)
+        {
+            var mediaType = string.IsNullOrWhiteSpace(part.MediaType)
+                ? fileRef.MediaType
+                : part.MediaType;
+            if (IsMediaType(mediaType, "image/"))
+                return Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Image;
+            if (IsMediaType(mediaType, "audio/"))
+                return Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Audio;
+            if (IsMediaType(mediaType, "video/"))
+                return Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Video;
+            if (part.Kind == ChatContentPartKind.Text)
+                return Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.File;
+        }
+
+        var kindValue = (int)part.Kind;
+        return System.Enum.IsDefined(typeof(Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind), kindValue)
+            ? (Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind)kindValue
+            : Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Unspecified;
+    }
+
+    private static bool IsMediaType(string? mediaType, string prefix) =>
+        !string.IsNullOrWhiteSpace(mediaType) &&
+        mediaType.Trim().StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+
+    private static Aevatar.Workflow.Abstractions.WorkflowFileRef? ToWorkflowFileRef(ChatFileRef? fileRef) =>
+        fileRef is null || !HasFileRefIdentity(fileRef)
+            ? null
+            : new Aevatar.Workflow.Abstractions.WorkflowFileRef
+            {
+                FileId = fileRef.FileId ?? string.Empty,
+                ArtifactId = fileRef.ArtifactId ?? string.Empty,
+                SourceKind = ToWorkflowFileSourceKind(fileRef.SourceKind),
+                SourceMessageId = fileRef.SourceMessageId ?? string.Empty,
+                SourceResourceKey = fileRef.SourceResourceKey ?? string.Empty,
+                FileName = fileRef.FileName ?? string.Empty,
+                MediaType = fileRef.MediaType ?? string.Empty,
+                SizeBytes = fileRef.SizeBytes,
+                Sha256 = fileRef.Sha256 ?? string.Empty,
+                CreatedAtUnixMs = fileRef.CreatedAtUnixMs,
+                ExpiresAtUnixMs = fileRef.ExpiresAtUnixMs,
+                OwnerRunId = fileRef.OwnerRunId ?? string.Empty,
+                OwnerScopeId = fileRef.OwnerScopeId ?? string.Empty,
+            };
+
+    private static Aevatar.Workflow.Abstractions.WorkflowFileSourceKind ToWorkflowFileSourceKind(
+        ChatFileSourceKind sourceKind)
+    {
+        var sourceKindValue = (int)sourceKind;
+        return System.Enum.IsDefined(typeof(Aevatar.Workflow.Abstractions.WorkflowFileSourceKind), sourceKindValue)
+            ? (Aevatar.Workflow.Abstractions.WorkflowFileSourceKind)sourceKindValue
+            : Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.Unspecified;
+    }
+
+    private static bool HasFileRefIdentity(ChatFileRef fileRef) =>
+        !string.IsNullOrWhiteSpace(fileRef.FileId) ||
+        !string.IsNullOrWhiteSpace(fileRef.ArtifactId);
+
+    private static void ApplyWorkflowCompletionNotificationTarget(
+        WorkflowChatRequestEvent workflowRequest,
+        WorkflowServiceCompletionNotificationTarget? target)
+    {
+        if (target is null)
+            return;
+
+        workflowRequest.CompletionNotificationTarget = new Aevatar.Workflow.Abstractions.WorkflowCompletionNotificationTarget
+        {
+            ActorId = target.ActorId,
+            DeliveryId = target.DeliveryId,
+            ExpiresAtUnixMs = target.ExpiresAtUnixMs,
+        };
     }
 
     private static Aevatar.Workflow.Abstractions.WorkflowCallerCredential BuildWorkflowCallerCredential(
@@ -298,6 +530,7 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
             Tenant = source.Tenant?.Trim() ?? string.Empty,
             ExternalUserId = externalUserId,
             Scope = scope,
+            BindingId = source.BindingId?.Trim() ?? string.Empty,
         };
     }
 
@@ -309,7 +542,7 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
                 ? "bearer_token"
                 : string.Empty;
 
-    private async Task RegisterRunAsync(
+    private async Task<ServiceRunRegistrationResult> RegisterRunAsync(
         ServiceInvocationResolvedTarget target,
         ServiceInvocationRequest request,
         string runId,
@@ -336,7 +569,9 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
             ScheduleId = request.ScheduleId ?? string.Empty,
             Identity = request.Identity?.Clone(),
         };
-        await _serviceRunRegistrationPort.RegisterAsync(record, ct);
+        if (request.ServiceRunCompletionNotificationTarget != null)
+            record.CompletionNotificationTarget = request.ServiceRunCompletionNotificationTarget.Clone();
+        return await _serviceRunRegistrationPort.RegisterAsync(record, ct);
     }
 
     private static void EnsureEndpointPayloadMatch(ServiceEndpointDescriptor endpoint, ServiceInvocationRequest request)
@@ -349,6 +584,53 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
             throw new InvalidOperationException(
                 $"Endpoint '{endpoint.EndpointId}' expects payload '{endpoint.RequestTypeUrl}', but got '{request.Payload.TypeUrl}'.");
         }
+    }
+
+    private static void EnsureStaticRunContextIsDispatcherOwned(ServiceInvocationRequest request)
+    {
+        if (request.Payload?.Is(ChatRequestEvent.Descriptor) == true)
+        {
+            var chatRequest = request.Payload.Unpack<ChatRequestEvent>();
+            if (chatRequest.RunContext != null)
+            {
+                throw new InvalidOperationException(
+                    "Static service invocation run_context is assigned by the dispatcher.");
+            }
+
+            return;
+        }
+
+        if (request.ServiceRunCompletionNotificationTarget != null)
+        {
+            throw new InvalidOperationException(
+                "Static service terminal notification requires a ChatRequestEvent payload.");
+        }
+    }
+
+    private static Any AttachStaticRunContext(
+        Any payload,
+        string serviceRunActorId,
+        string runId,
+        string commandId,
+        string correlationId,
+        long completionNotificationExpiresAtUnixMs)
+    {
+        if (!payload.Is(ChatRequestEvent.Descriptor))
+            return payload.Clone();
+
+        var chatRequest = payload.Unpack<ChatRequestEvent>();
+        if (string.IsNullOrWhiteSpace(chatRequest.SessionId))
+            chatRequest.SessionId = runId;
+        chatRequest.RunContext = new RoleChatRunContext
+        {
+            RunId = runId,
+            CommandId = commandId,
+            CorrelationId = correlationId,
+            CompletionNotificationActorId = serviceRunActorId,
+            CompletionNotificationDeliveryId = $"service-run-source:{runId}:{commandId}",
+            CompletionNotificationExpiresAtUnixMs = completionNotificationExpiresAtUnixMs,
+        };
+        return Any.Pack(chatRequest);
     }
 
     private static EventEnvelope CreateEnvelope(
@@ -401,9 +683,9 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
             : request.CorrelationId;
 
     private static string ResolveRunId(ServiceInvocationRequest request, string commandId) =>
-        string.IsNullOrWhiteSpace(request.CommandId)
+        string.IsNullOrWhiteSpace(request.RequestedRunId)
             ? commandId
-            : request.CommandId;
+            : request.RequestedRunId.Trim();
 
     private static string ResolveAuthoritativeScopeId(ServiceInvocationRequest request, ChatRequestEvent chatRequest)
     {

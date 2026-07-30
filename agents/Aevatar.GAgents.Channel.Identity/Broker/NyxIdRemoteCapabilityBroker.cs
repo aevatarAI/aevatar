@@ -1,4 +1,7 @@
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aevatar.Foundation.Abstractions.Helpers;
@@ -13,10 +16,8 @@ namespace Aevatar.GAgents.Channel.Identity.Broker;
 /// <summary>
 /// Production <see cref="INyxIdCapabilityBroker"/> implementation that talks
 /// to NyxID's broker endpoints (ChronoAIProject/NyxID#549). Reads the
-/// cluster-shared OAuth <c>client_id</c> + HMAC key from
-/// <see cref="IAevatarOAuthClientProvider"/> (cluster singleton actor) so
-/// production deploys need zero broker-specific appsettings — the bootstrap
-/// service self-registers the client at NyxID DCR on first startup.
+/// deployment-owned OAuth <c>client_id</c> and actor-owned HMAC/runtime facts
+/// through <see cref="IAevatarOAuthClientProvider"/>.
 /// </summary>
 /// <remarks>
 /// Resolves <see cref="HttpClient"/> per-request via
@@ -26,11 +27,17 @@ namespace Aevatar.GAgents.Channel.Identity.Broker;
 /// 2-min handler rotation: stale DNS, expired sockets, and TLS-cert refreshes
 /// would never be picked up on long-running silos.
 /// </remarks>
-public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxIdBrokerCallbackClient
+public sealed class NyxIdRemoteCapabilityBroker :
+    INyxIdCapabilityBroker,
+    INyxIdConnectedServiceInventoryCapabilityIssuer,
+    INyxIdSkillCapabilityIssuer,
+    INyxIdBrokerCallbackClient,
+    INyxIdBindingRetirementPort
 {
     public const string AuthorizeEndpoint = "/oauth/authorize";
     public const string TokenEndpoint = "/oauth/token";
     public const string BindingsEndpoint = "/oauth/bindings";
+    public const string UserServicesEndpoint = "/api/v1/user-services";
     public const string TokenExchangeGrantType = "urn:ietf:params:oauth:grant-type:token-exchange";
     public const string BindingIdSubjectTokenType = "urn:nyxid:params:oauth:token-type:binding-id";
 
@@ -76,11 +83,11 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
 
     private string ResolveRedirectUri() => NyxIdRedirectUriResolver.Resolve(_logger);
 
-    private static string RequiredServiceResourceUri(AevatarOAuthClientSnapshot snapshot) =>
-        AevatarOAuthClientResources.RequiredServiceResourceUri(snapshot.NyxIdAuthority);
-
-    private static string[] RequiredResourceUris(AevatarOAuthClientSnapshot snapshot) =>
-        AevatarOAuthClientResources.RequiredResourceUris(snapshot.NyxIdAuthority);
+    private string[] RequiredResourceUris() =>
+        AevatarOAuthClientResources.RequiredResourceUris(
+            _options.ResourceServerBaseUrl,
+            _options.RequiredLlmServiceSlug,
+            _options.AdditionalRequiredServiceSlugs);
 
     public async Task<BindingChallenge> StartExternalBindingAsync(
         ExternalSubjectRef externalSubject,
@@ -94,16 +101,26 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
 
         var pkce = PkceHelper.GeneratePair();
         var correlationId = Guid.NewGuid().ToString("N");
+        var existingBinding = await _queryPort.ResolveAsync(externalSubject, ct).ConfigureAwait(false);
+        var expectedBindingHash = existingBinding is null
+            ? null
+            : HashBindingId(existingBinding.Value);
         var stateToken = await _stateTokenCodec
-            .EncodeAsync(correlationId, externalSubject, pkce.CodeVerifier, ct)
+            .EncodeAsync(correlationId, externalSubject, pkce.CodeVerifier, expectedBindingHash, ct)
             .ConfigureAwait(false);
 
-        var url = BuildAuthorizeUrl(snapshot, redirectUri, stateToken, pkce.CodeChallenge);
+        var url = BuildAuthorizeUrl(
+            snapshot,
+            redirectUri,
+            stateToken,
+            pkce.CodeChallenge,
+            externalSubject);
         var expiresAt = _timeProvider.GetUtcNow().Add(_options.StateTokenLifetime).ToUnixTimeSeconds();
         return new BindingChallenge
         {
             AuthorizeUrl = url,
             ExpiresAtUnix = expiresAt,
+            RenewsExistingBinding = existingBinding is not null,
         };
     }
 
@@ -158,6 +175,9 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
         response.EnsureSuccessStatusCode();
     }
 
+    public Task RetireAsync(string bindingId, CancellationToken ct = default) =>
+        RevokeBindingByIdAsync(bindingId, ct);
+
     public async Task<CapabilityHandle> IssueShortLivedAsync(
         ExternalSubjectRef externalSubject,
         CapabilityScope scope,
@@ -184,7 +204,82 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
         ArgumentNullException.ThrowIfNull(scope);
 
         var snapshot = await _clientProvider.GetAsync(ct).ConfigureAwait(false);
+        var requiredResources = RequiredResourceUris();
+        var payload = await ExchangeBindingTokenAsync(
+                snapshot,
+                externalSubject,
+                bindingId,
+                scope,
+                ct)
+            .ConfigureAwait(false);
+        var accessToken = payload.AccessToken;
+        if (string.IsNullOrWhiteSpace(accessToken))
+            throw new InvalidOperationException("NyxID returned a token-exchange response without an access token.");
 
+        var missingResources = await FindMissingRequiredResourcesAsync(accessToken, requiredResources, ct)
+            .ConfigureAwait(false);
+        if (missingResources.Length > 0)
+        {
+            throw new BindingServiceAccessMismatchException(
+                externalSubject,
+                missingResources,
+                "NyxID binding grant does not include every required service resource.");
+        }
+
+        return ToCapabilityHandle(payload, scope);
+    }
+
+    async Task<CapabilityHandle> INyxIdConnectedServiceInventoryCapabilityIssuer.IssueByBindingIdAsync(
+        ExternalSubjectRef externalSubject,
+        string bindingId,
+        CancellationToken ct) =>
+        await IssueProxyCapabilityByBindingIdAsync(externalSubject, bindingId, ct).ConfigureAwait(false);
+
+    async Task<CapabilityHandle> INyxIdSkillCapabilityIssuer.IssueByBindingIdAsync(
+        ExternalSubjectRef externalSubject,
+        string bindingId,
+        CancellationToken ct) =>
+        await IssueProxyCapabilityByBindingIdAsync(externalSubject, bindingId, ct).ConfigureAwait(false);
+
+    private async Task<CapabilityHandle> IssueProxyCapabilityByBindingIdAsync(
+        ExternalSubjectRef externalSubject,
+        string bindingId,
+        CancellationToken ct)
+    {
+        ExternalSubjectRefExtensions.EnsureValid(externalSubject);
+        ArgumentException.ThrowIfNullOrWhiteSpace(bindingId);
+
+        var scope = new CapabilityScope { Value = AevatarOAuthClientScopes.Proxy };
+        var snapshot = await _clientProvider.GetAsync(ct).ConfigureAwait(false);
+        var payload = await ExchangeBindingTokenAsync(
+                snapshot,
+                externalSubject,
+                bindingId,
+                scope,
+                ct)
+            .ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(payload.AccessToken))
+            throw new InvalidOperationException("NyxID returned a token-exchange response without an access token.");
+
+        return ToCapabilityHandle(payload, scope);
+    }
+
+    private CapabilityHandle ToCapabilityHandle(TokenResponse payload, CapabilityScope requestedScope) => new()
+    {
+        AccessToken = payload.AccessToken,
+        ExpiresAtUnix = payload.ExpiresIn.HasValue
+            ? _timeProvider.GetUtcNow().AddSeconds(payload.ExpiresIn.Value).ToUnixTimeSeconds()
+            : 0,
+        Scope = payload.Scope ?? requestedScope.Value,
+    };
+
+    private async Task<TokenResponse> ExchangeBindingTokenAsync(
+        AevatarOAuthClientSnapshot snapshot,
+        ExternalSubjectRef externalSubject,
+        string bindingId,
+        CapabilityScope scope,
+        CancellationToken ct)
+    {
         var form = new List<KeyValuePair<string, string>>
         {
             new("grant_type", TokenExchangeGrantType),
@@ -194,8 +289,8 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
         };
         if (!string.IsNullOrWhiteSpace(scope.Value))
             form.Add(new KeyValuePair<string, string>("scope", scope.Value));
-        foreach (var resource in RequiredResourceUris(snapshot))
-            form.Add(new KeyValuePair<string, string>("resource", resource));
+        // Inherit the complete Consent grant. Supplying resource here would
+        // narrow away optional services selected by the user.
 
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
@@ -217,8 +312,8 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
             {
                 throw new BindingServiceAccessMismatchException(
                     externalSubject,
-                    RequiredServiceResourceUri(snapshot),
-                    "NyxID returned invalid_target for aevatar's required service on token-exchange.");
+                    RequiredResourceUris(),
+                    "NyxID returned invalid_target for the required services on token-exchange.");
             }
             _logger.LogError(
                 "NyxID token-exchange failed: status={StatusCode}, body={Body}",
@@ -227,28 +322,10 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
             response.EnsureSuccessStatusCode();
         }
 
-        var payload = await response.Content
+        return await response.Content
             .ReadFromJsonAsync<TokenResponse>(JsonOptions, ct)
             .ConfigureAwait(false)
             ?? throw new InvalidOperationException("NyxID returned an empty token-exchange response.");
-
-        if (!string.IsNullOrWhiteSpace(payload.AccessToken)
-            && !AccessTokenContainsRequiredResource(payload.AccessToken, snapshot.NyxIdAuthority))
-        {
-            throw new BindingServiceAccessMismatchException(
-                externalSubject,
-                RequiredServiceResourceUri(snapshot),
-                "NyxID binding token does not grant aevatar's required service resource.");
-        }
-
-        return new CapabilityHandle
-        {
-            AccessToken = payload.AccessToken ?? string.Empty,
-            ExpiresAtUnix = payload.ExpiresIn.HasValue
-                ? _timeProvider.GetUtcNow().AddSeconds(payload.ExpiresIn.Value).ToUnixTimeSeconds()
-                : 0,
-            Scope = payload.Scope ?? scope.Value,
-        };
     }
 
     // ─── INyxIdBrokerCallbackClient ───
@@ -261,7 +338,8 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
         return CallbackStateDecode.Ok(
             result.Payload.CorrelationId,
             result.Payload.ExternalSubject?.Clone(),
-            result.Payload.PkceVerifier);
+            result.Payload.PkceVerifier,
+            result.Payload.ExpectedBindingHash);
     }
 
     public Task<BrokerAuthorizationCodeResult> ExchangeAuthorizationCodeAsync(
@@ -298,6 +376,50 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
             ct);
     }
 
+    public async Task<OwnerScopeId?> ResolveBindingOwnerScopeAsync(
+        string bindingId,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(bindingId);
+
+        var normalizedBindingId = bindingId.Trim();
+        var snapshot = await _clientProvider.GetAsync(ct).ConfigureAwait(false);
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"{snapshot.NyxIdAuthority.TrimEnd('/')}{BindingsEndpoint}/{Uri.EscapeDataString(normalizedBindingId)}?client_id={Uri.EscapeDataString(snapshot.ClientId)}");
+        var http = CreateHttpClient();
+        using var response = await http.SendAsync(request, ct).ConfigureAwait(false);
+
+        if ((int)response.StatusCode is 404 or 410)
+            return null;
+        if (!response.IsSuccessStatusCode)
+        {
+            var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            _logger.LogError(
+                "NyxID binding owner introspection failed: status={StatusCode}, body={Body}",
+                (int)response.StatusCode,
+                Truncate(SecretScrubber.Scrub(body), 256));
+            response.EnsureSuccessStatusCode();
+        }
+
+        var binding = await response.Content
+            .ReadFromJsonAsync<BindingIntrospectionResponse>(JsonOptions, ct)
+            .ConfigureAwait(false)
+            ?? throw new InvalidOperationException("NyxID returned an empty binding introspection response.");
+        if (binding.Revoked)
+            return null;
+        if (!string.Equals(binding.BindingId, normalizedBindingId, StringComparison.Ordinal)
+            || !string.Equals(binding.ClientId, snapshot.ClientId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("NyxID returned binding metadata for an unexpected binding or OAuth client.");
+        }
+
+        var ownerScopeId = binding.NyxSubject?.Trim();
+        return string.IsNullOrWhiteSpace(ownerScopeId)
+            ? null
+            : new OwnerScopeId { Value = ownerScopeId };
+    }
+
     private async Task<BrokerAuthorizationCodeResult> ExchangeAuthorizationCodeCoreAsync(
         string authorizationCode,
         string codeVerifier,
@@ -309,6 +431,8 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
         if (requireProvisionedRedirectUri)
             EnsureClientCurrent(snapshot, redirectUri);
 
+        // The authorization code already carries the user's finalized Consent selection.
+        // Repeating resource here would narrow that grant to Aevatar's minimum runtime set.
         var form = new List<KeyValuePair<string, string>>
         {
             new("grant_type", "authorization_code"),
@@ -317,8 +441,6 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
             new("redirect_uri", redirectUri),
             new("client_id", snapshot.ClientId),
         };
-        foreach (var resource in RequiredResourceUris(snapshot))
-            form.Add(new KeyValuePair<string, string>("resource", resource));
 
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
@@ -332,11 +454,6 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
         if (!response.IsSuccessStatusCode)
         {
             var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-            if ((int)response.StatusCode == 400 && IsInvalidTarget(body))
-            {
-                throw new NyxIdRequiredServiceAccessException(
-                    RequiredServiceResourceUri(snapshot));
-            }
             _logger.LogError(
                 "NyxID authorization-code exchange failed: status={StatusCode}, body={Body}",
                 (int)response.StatusCode,
@@ -359,6 +476,7 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
             TokenType = payload.TokenType,
             ExpiresIn = payload.ExpiresIn,
             Scope = payload.Scope,
+            BindingUpdated = payload.BindingUpdated == true,
         };
     }
 
@@ -366,7 +484,8 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
         AevatarOAuthClientSnapshot snapshot,
         string redirectUri,
         string stateToken,
-        string codeChallenge)
+        string codeChallenge,
+        ExternalSubjectRef externalSubject)
     {
         var queryParts = new List<string>
         {
@@ -374,11 +493,23 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
             $"client_id={Uri.EscapeDataString(snapshot.ClientId)}",
             $"redirect_uri={Uri.EscapeDataString(redirectUri)}",
             $"scope={Uri.EscapeDataString(AevatarOAuthClientScopes.AuthorizationScope)}",
-            $"resource={Uri.EscapeDataString(RequiredServiceResourceUri(snapshot))}",
+            "prompt=consent",
+            $"external_subject_platform={Uri.EscapeDataString(externalSubject.Platform)}",
+            $"external_subject_external_user_id={Uri.EscapeDataString(externalSubject.ExternalUserId)}",
+        };
+        if (!string.IsNullOrWhiteSpace(externalSubject.Tenant))
+        {
+            queryParts.Add(
+                $"external_subject_tenant={Uri.EscapeDataString(externalSubject.Tenant)}");
+        }
+        queryParts.AddRange(RequiredResourceUris()
+            .Select(static resource => $"resource={Uri.EscapeDataString(resource)}"));
+        queryParts.AddRange(
+        [
             $"state={Uri.EscapeDataString(stateToken)}",
             $"code_challenge={Uri.EscapeDataString(codeChallenge)}",
             "code_challenge_method=S256",
-        };
+        ]);
         return $"{snapshot.NyxIdAuthority.TrimEnd('/')}{AuthorizeEndpoint}?{string.Join("&", queryParts)}";
     }
 
@@ -386,13 +517,13 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
     {
         if (!string.IsNullOrEmpty(snapshot.RedirectUri)
             && string.Equals(snapshot.RedirectUri, resolvedRedirectUri, StringComparison.Ordinal)
-            && AevatarOAuthClientScopes.ContainsRequiredScopes(snapshot.OauthScope))
+            && AevatarOAuthClientScopes.ContainsRequiredAuthorizationScopes(snapshot.OauthScope))
         {
             return;
         }
 
         throw new AevatarOAuthClientNotProvisionedException(
-            "Aevatar OAuth client redirect_uri or oauth_scope is not current. Bootstrap must re-run DCR before issuing NyxID authorize URLs.");
+            "Aevatar OAuth client redirect_uri or oauth_scope is not current. Bootstrap must reconcile configured client facts before issuing NyxID authorize URLs.");
     }
 
     private static bool IsInvalidGrant(string body) => IsOAuthError(body, "invalid_grant");
@@ -417,11 +548,68 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
         }
     }
 
-    private static bool AccessTokenContainsRequiredResource(string accessToken, string nyxIdAuthority)
+    private async Task<string[]> FindMissingRequiredResourcesAsync(
+        string accessToken,
+        IReadOnlyCollection<string> requiredResources,
+        CancellationToken ct)
+    {
+        var grant = ParseTokenServiceGrant(accessToken);
+        if (!grant.Valid)
+            return requiredResources.ToArray();
+
+        var missingResources = AevatarOAuthClientResources.MissingRequiredResources(
+            grant.ResourceUris,
+            requiredResources);
+        if (missingResources.Length == 0)
+            return [];
+
+        var catalogResources = await ResolveGrantedCatalogResourcesAsync(accessToken, grant, ct)
+            .ConfigureAwait(false);
+        return AevatarOAuthClientResources.MissingRequiredResources(
+            grant.ResourceUris.Concat(catalogResources),
+            requiredResources);
+    }
+
+    private async Task<string[]> ResolveGrantedCatalogResourcesAsync(
+        string accessToken,
+        TokenServiceGrant grant,
+        CancellationToken ct)
+    {
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"{_options.ResourceServerBaseUrl.Trim().TrimEnd('/')}{UserServicesEndpoint}");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+
+        var http = CreateHttpClient();
+        using var response = await http.SendAsync(request, ct).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+        {
+            var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            _logger.LogError(
+                "NyxID user-service catalog lookup failed: status={StatusCode}, body={Body}",
+                (int)response.StatusCode,
+                Truncate(SecretScrubber.Scrub(body), 256));
+            response.EnsureSuccessStatusCode();
+        }
+
+        var catalog = await response.Content
+            .ReadFromJsonAsync<UserServiceCatalogResponse>(JsonOptions, ct)
+            .ConfigureAwait(false)
+            ?? throw new InvalidOperationException("NyxID returned an empty user-service catalog response.");
+        var allowedServiceIds = grant.AllowedServiceIds.ToHashSet(StringComparer.Ordinal);
+        return catalog.Services
+            .Where(service => grant.AllowsEveryService || allowedServiceIds.Contains(service.Id))
+            .Select(static service => service.ResourceUri)
+            .Where(static resource => !string.IsNullOrWhiteSpace(resource))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static TokenServiceGrant ParseTokenServiceGrant(string accessToken)
     {
         var parts = accessToken.Split('.');
         if (parts.Length != 3)
-            return false;
+            return TokenServiceGrant.Invalid;
 
         try
         {
@@ -430,30 +618,55 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
                 .Replace('_', '/');
             payload = payload.PadRight(payload.Length + ((4 - payload.Length % 4) % 4), '=');
             using var document = JsonDocument.Parse(Convert.FromBase64String(payload));
-            if (!document.RootElement.TryGetProperty("resources", out var resources)
-                || resources.ValueKind != JsonValueKind.Array)
-            {
-                return false;
-            }
-
-            return AevatarOAuthClientResources.ContainsRequiredResource(
-                resources.EnumerateArray()
-                    .Where(static item => item.ValueKind == JsonValueKind.String)
-                    .Select(static item => item.GetString()!),
-                nyxIdAuthority);
+            var root = document.RootElement;
+            var resourceUris = ReadStringArray(root, "resources", out var hasResourceRestriction);
+            var allowedServiceIds = ReadStringArray(
+                root,
+                "allowed_service_ids",
+                out var hasServiceIdRestriction);
+            var allowAllServices = root.TryGetProperty("allow_all_services", out var allowAll)
+                                   && allowAll.ValueKind is JsonValueKind.True or JsonValueKind.False
+                ? allowAll.GetBoolean()
+                : (bool?)null;
+            var allowsEveryService = allowAllServices == true
+                                     || allowAllServices is null
+                                     && !hasResourceRestriction
+                                     && !hasServiceIdRestriction;
+            return new TokenServiceGrant(
+                true,
+                allowsEveryService,
+                resourceUris,
+                allowedServiceIds);
         }
         catch (FormatException)
         {
-            return false;
+            return TokenServiceGrant.Invalid;
         }
         catch (JsonException)
         {
-            return false;
+            return TokenServiceGrant.Invalid;
         }
+    }
+
+    private static string[] ReadStringArray(JsonElement owner, string propertyName, out bool present)
+    {
+        present = owner.TryGetProperty(propertyName, out var values)
+                  && values.ValueKind == JsonValueKind.Array;
+        return present
+            ? values.EnumerateArray()
+                .Where(static item => item.ValueKind == JsonValueKind.String)
+                .Select(static item => item.GetString()!)
+                .Where(static value => !string.IsNullOrWhiteSpace(value))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray()
+            : [];
     }
 
     private static string Truncate(string value, int max) =>
         string.IsNullOrEmpty(value) ? string.Empty : value.Length <= max ? value : value[..max];
+
+    internal static string HashBindingId(string bindingId) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(bindingId))).ToLowerInvariant();
 
     private sealed record TokenResponse
     {
@@ -461,20 +674,59 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
         public string? RefreshToken { get; init; }
         public string? IdToken { get; init; }
         public string? BindingId { get; init; }
+        public bool? BindingUpdated { get; init; }
         public string? Scope { get; init; }
         public string? TokenType { get; init; }
         public int? ExpiresIn { get; init; }
+    }
+
+    private sealed record TokenServiceGrant(
+        bool Valid,
+        bool AllowsEveryService,
+        string[] ResourceUris,
+        string[] AllowedServiceIds)
+    {
+        public static TokenServiceGrant Invalid { get; } = new(false, false, [], []);
+    }
+
+    private sealed record UserServiceCatalogResponse
+    {
+        public UserServiceCatalogItem[] Services { get; init; } = [];
+    }
+
+    private sealed record UserServiceCatalogItem
+    {
+        public string Id { get; init; } = string.Empty;
+        public string ResourceUri { get; init; } = string.Empty;
+    }
+
+    private sealed record BindingIntrospectionResponse
+    {
+        public string BindingId { get; init; } = string.Empty;
+        public string ClientId { get; init; } = string.Empty;
+        public string NyxSubject { get; init; } = string.Empty;
+        public bool Revoked { get; init; }
     }
 }
 
 /// <summary>
 /// Result of a state-token decode call on the callback side.
 /// </summary>
-public sealed record CallbackStateDecode(bool Succeeded, string? CorrelationId, ExternalSubjectRef? ExternalSubject, string? PkceVerifier, string? ErrorCode)
+public sealed record CallbackStateDecode(
+    bool Succeeded,
+    string? CorrelationId,
+    ExternalSubjectRef? ExternalSubject,
+    string? PkceVerifier,
+    string? ExpectedBindingHash,
+    string? ErrorCode)
 {
-    public static CallbackStateDecode Ok(string correlationId, ExternalSubjectRef? subject, string verifier) =>
-        new(true, correlationId, subject, verifier, null);
+    public static CallbackStateDecode Ok(
+        string correlationId,
+        ExternalSubjectRef? subject,
+        string verifier,
+        string? expectedBindingHash = null) =>
+        new(true, correlationId, subject, verifier, expectedBindingHash, null);
 
     public static CallbackStateDecode Failed(string errorCode) =>
-        new(false, null, null, null, errorCode);
+        new(false, null, null, null, null, errorCode);
 }

@@ -60,10 +60,50 @@ public sealed class ChannelsEndpointsTests
         // wired to the live facade (relative), not a mock host
         html.Should().Contain("/api/channels/registrations");
         html.Should().Contain("/api/user-config/llm");
+        html.Should().Contain("workflow-result-delivery/repair");
+        html.Should().Contain("Repair workflow replies");
+        html.Should().Contain("workflow_result_delivery_status");
+        html.Should().Contain("无需修改 Lark 后台配置");
+        html.Should().NotContain("workflow_result_delivery_credential");
+        html.Should().NotContain("secret_reference");
         // honest status (no perpetual "查询中" for un-queryable bots) + admin all-accounts view
         html.Should().Contain("非本账户");
         html.Should().Contain("/api/channels/me");
         html.Should().Contain("所有账户");
+    }
+
+    [Fact]
+    public void EmbeddedPage_RequiresCompleteLarkCredentials_AndForwardsOptionalEncryptKey()
+    {
+        var html = ReadEmbeddedHtml();
+
+        html.Should().Contain(
+            "requiredOk:(c)=> !!(c.app_id.trim() && c.app_secret.trim() && c.verification_token.trim())");
+        html.Should().Contain("{ name:\"encrypt_key\"");
+        html.Should().Contain("encrypt_key:c.encrypt_key.trim()");
+    }
+
+    [Fact]
+    public void EmbeddedPage_ShowsDurableLarkRecoveryInstructions()
+    {
+        var html = ReadEmbeddedHtml();
+
+        html.Should().Contain("r.webhook_url");
+        html.Should().Contain("https://open.larksuite.com/app");
+        html.Should().Contain("Event Subscriptions");
+        html.Should().Contain("im.message.receive_v1");
+        html.Should().Contain("只有收到验证通过的入站消息并变为 active 才算完成");
+    }
+
+    [Fact]
+    public void EmbeddedPage_ReplacesRegistrationOnlyAfterAuthoritativeDelete()
+    {
+        var html = ReadEmbeddedHtml();
+
+        html.Should().Contain("async function replaceRegistration(registration)");
+        html.Should().Contain("if(!await doDelete(registration.id)) return;");
+        html.Should().Contain("enterWizard((registration.platform||\"lark\").toLowerCase())");
+        html.Should().NotContain("btn(\"重新接入\"");
     }
 
     private static string ReadEmbeddedHtml()
@@ -110,7 +150,7 @@ public sealed class ChannelsEndpointsTests
         html.Should().Contain("https://id.example.test");
         html.Should().Contain("client-example");
         html.Should().Contain("console:test");
-        html.Should().Contain("\"resources\":[\"https://api.example.test/api/v1/proxy/s/aevatar\"]");
+        html.Should().Contain("https://api.example.test/api/v1/proxy/s/aevatar");
         html.Should().Contain("searchParams.append(\"resource\"");
         html.Should().Contain("form.append(\"resource\"");
         html.Should().NotContain("__BACKEND_CONSOLE_CONFIG__");

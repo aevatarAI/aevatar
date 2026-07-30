@@ -131,6 +131,44 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
     }
 
     [Fact]
+    public async Task ChatRequest_WithFileIdOnlyInputFileRef_ShouldBindArtifactOwnerBeforeStartingWorkflow()
+    {
+        var runId = "run-1917-" + Guid.NewGuid().ToString("N");
+        var ownershipPort = new RecordingWorkflowFileArtifactOwnershipPort();
+        var harness = await CreateRunAsync(runId, WorkflowYaml(onFailure: false), ownershipPort);
+
+        await harness.Agent.HandleEventAsync(EnvelopeFrom("api", new WorkflowChatRequestEvent
+        {
+            Prompt = "hello",
+            ScopeId = "scope-1",
+            InputParts =
+            {
+                new WorkflowChatInputPartPayload
+                {
+                    Kind = WorkflowChatInputPartKind.File,
+                    FileRef = new WorkflowFileRef
+                    {
+                        FileId = "wf-file-only-123",
+                        SourceKind = WorkflowFileSourceKind.ChatInput,
+                        FileName = "invoice.txt",
+                        MediaType = "text/plain",
+                    },
+                },
+            },
+        }));
+
+        ownershipPort.Bindings.Should().ContainSingle().Which.Should().BeEquivalentTo(new FileOwnerBinding(
+            "wf-file-only-123",
+            string.Empty,
+            runId,
+            "scope-1"));
+        harness.Publisher.Published
+            .Where(x => x.Event is StepRequestEvent)
+            .Should()
+            .ContainSingle();
+    }
+
+    [Fact]
     public async Task ChatRequest_WhenInputFileOwnerBindingFails_ShouldNotStartWorkflow()
     {
         var runId = "run-1917-" + Guid.NewGuid().ToString("N");
@@ -257,6 +295,29 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
         fallback.Error.Should().StartWith("start_dispatch_failed: failed during start_dispatch: ");
         fallback.Error.Should().NotContain("super-secret-token");
         fallback.Error.Should().NotContain("Bearer");
+    }
+
+    [Fact]
+    public async Task ChatRequest_ReplayedWithSameCommandId_ShouldStartRunOnlyOnce()
+    {
+        var runId = "work-order-run-" + Guid.NewGuid().ToString("N");
+        var harness = await CreateRunAsync(runId, WorkflowYaml(onFailure: false));
+        var envelope = EnvelopeFrom("work-order", new WorkflowChatRequestEvent
+        {
+            Prompt = "hello",
+            ScopeId = "scope-1",
+        });
+        envelope.Id = "work-order-dispatch-command-1";
+        envelope.Propagation.CorrelationId = "work-order-dispatch-command-1";
+
+        await harness.Agent.HandleEventAsync(envelope);
+        await harness.Agent.HandleEventAsync(envelope.Clone());
+
+        CommittedEvents<WorkflowRunExecutionStartedEvent>(harness.CommittedPublisher)
+            .Should().ContainSingle();
+        harness.Publisher.Published.Count(item => item.Event is StartWorkflowEvent)
+            .Should().Be(1);
+        harness.Agent.State.LastCommandId.Should().Be("work-order-dispatch-command-1");
     }
 
     private static async Task<RunHarness> CreateStartedRunAsync(string workflowYaml, int attempt)

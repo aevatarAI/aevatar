@@ -85,7 +85,7 @@ public sealed class StudioMemberCreateRequestValidatorTests
         var act = () => StudioMemberCreateRequestValidator.Validate(
             new CreateStudioMemberRequest(
                 DisplayName: "Alpha",
-                ImplementationKind: MemberImplementationKindNames.Workflow));
+                ImplementationKind: MemberImplementationKindNames.Script));
         act.Should().NotThrow();
     }
 
@@ -95,8 +95,20 @@ public sealed class StudioMemberCreateRequestValidatorTests
         var act = () => StudioMemberCreateRequestValidator.Validate(
             new CreateStudioMemberRequest(
                 DisplayName: "Alpha",
-                ImplementationKind: MemberImplementationKindNames.Workflow,
+                ImplementationKind: MemberImplementationKindNames.Script,
                 MemberId: "m-good_1"));
         act.Should().NotThrow();
+    }
+
+    [Fact]
+    public void Validate_ShouldRejectWorkflowWithoutTeamIdAfterKindCanonicalization()
+    {
+        var act = () => StudioMemberCreateRequestValidator.Validate(
+            new CreateStudioMemberRequest(
+                DisplayName: "Alpha",
+                ImplementationKind: " Workflow "));
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("teamId is required for workflow members.");
     }
 }

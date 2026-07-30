@@ -13,6 +13,7 @@ public static class AgentToolExecutionContextMapper
         LLMRequestMetadataKeys.CallId,
         LLMRequestMetadataKeys.ScopeId,
         "scope_id",
+        LLMRequestMetadataKeys.OwnerScopeId,
         LLMRequestMetadataKeys.OwnerSubject,
         LLMRequestMetadataKeys.ResponseId,
         LLMRequestMetadataKeys.NyxIdAccessToken,
@@ -87,7 +88,8 @@ public static class AgentToolExecutionContextMapper
                 : new AgentToolCallerContext(
                     AgentToolExecutionContext.Normalize(caller.ScopeId) ?? mapped.Caller.ScopeId,
                     AgentToolExecutionContext.Normalize(caller.OwnerSubject) ?? mapped.Caller.OwnerSubject,
-                    AgentToolExecutionContext.Normalize(caller.ResponseId) ?? mapped.Caller.ResponseId),
+                    AgentToolExecutionContext.Normalize(caller.ResponseId) ?? mapped.Caller.ResponseId,
+                    mapped.Caller.OwnerScopeId),
             Credentials = caller?.Credentials == null
                 ? mapped.Credentials
                 : mapped.Credentials with
@@ -141,32 +143,30 @@ public static class AgentToolExecutionContextMapper
             new AgentToolCallerContext(
                 AgentToolExecutionContext.Normalize(payload.Caller?.ScopeId),
                 AgentToolExecutionContext.Normalize(payload.Caller?.OwnerSubject),
-                AgentToolExecutionContext.Normalize(payload.Caller?.ResponseId)),
-            new AgentToolChannelContext(
-                AgentToolExecutionContext.Normalize(payload.Channel?.Platform),
-                AgentToolExecutionContext.Normalize(payload.Channel?.SenderId),
-                AgentToolExecutionContext.Normalize(payload.Channel?.RegistrationScopeId),
-                AgentToolExecutionContext.Normalize(payload.Channel?.MessageId),
-                AgentToolExecutionContext.Normalize(payload.Channel?.PlatformMessageId),
-                AgentToolExecutionContext.Normalize(payload.Channel?.DeliveryTargetId),
-                FromWorkflowResultDeliveryCredentialPayload(payload.Channel?.WorkflowResultDeliveryCredential),
-                AgentToolExecutionContext.Normalize(payload.Channel?.BotRegistrationId)),
+                AgentToolExecutionContext.Normalize(payload.Caller?.ResponseId),
+                AgentToolExecutionContext.Normalize(payload.Caller?.OwnerScopeId)),
+            FromChannelPayload(payload.Channel),
             new AgentToolSenderBindingContext(
                 AgentToolExecutionContext.Normalize(payload.SenderBinding?.BindingId),
                 AgentToolExecutionContext.Normalize(payload.SenderBinding?.NyxUserId),
                 AgentToolExecutionContext.Normalize(payload.SenderBinding?.SenderTenant)),
-            new LLMRequestRoutingContext(
-                AgentToolExecutionContext.Normalize(payload.Routing?.ModelOverride),
-                AgentToolExecutionContext.Normalize(payload.Routing?.NyxIdRoutePreference),
-                payload.Routing?.HasMaxToolRoundsOverride == true ? payload.Routing.MaxToolRoundsOverride : null,
-                AgentToolExecutionContext.Normalize(payload.Routing?.UserMemoryPrompt)),
+            FromRoutingPayload(payload.Routing),
             new AgentToolConnectedServicesContext(AgentToolExecutionContext.Normalize(payload.ConnectedServices?.ContextJson)),
             FromWorkflowRuntimePayload(payload.WorkflowRuntime),
             new AgentToolScheduleContext(AgentToolExecutionContext.Normalize(payload.Schedule?.ScheduleId)),
             FromCredentialSourcePayload(payload.CredentialSource),
             FromSkillRecoveryPayload(payload.SkillRecovery),
             StripOwnedControlKeys(payload.ExternalMetadata));
-        return context with { ToolVisibility = FromToolVisibilityPayload(payload.ToolVisibility) };
+        return context with
+        {
+            ToolVisibility = FromToolVisibilityPayload(payload.ToolVisibility),
+            NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                AgentToolExecutionContext.Normalize(payload.NyxIdAuthority?.Platform),
+                AgentToolExecutionContext.Normalize(payload.NyxIdAuthority?.Tenant),
+                AgentToolExecutionContext.Normalize(payload.NyxIdAuthority?.ExternalUserId),
+                AgentToolExecutionContext.Normalize(payload.NyxIdAuthority?.Scope)),
+            InvocationSurface = FromInvocationSurfacePayload(payload.InvocationSurface),
+        };
     }
 
     public static AgentToolExecutionContextPayload ToPayload(this AgentToolExecutionContext context)
@@ -192,18 +192,9 @@ public static class AgentToolExecutionContextMapper
                 ScopeId = context.Caller.ScopeId ?? string.Empty,
                 OwnerSubject = context.Caller.OwnerSubject ?? string.Empty,
                 ResponseId = context.Caller.ResponseId ?? string.Empty,
+                OwnerScopeId = context.Caller.OwnerScopeId ?? string.Empty,
             },
-            Channel = new AgentToolChannelContextPayload
-            {
-                Platform = context.Channel.Platform ?? string.Empty,
-                SenderId = context.Channel.SenderId ?? string.Empty,
-                RegistrationScopeId = context.Channel.RegistrationScopeId ?? string.Empty,
-                MessageId = context.Channel.MessageId ?? string.Empty,
-                PlatformMessageId = context.Channel.PlatformMessageId ?? string.Empty,
-                DeliveryTargetId = context.Channel.DeliveryTargetId ?? string.Empty,
-                WorkflowResultDeliveryCredential = context.Channel.WorkflowResultDeliveryCredential?.Clone(),
-                BotRegistrationId = context.Channel.BotRegistrationId ?? string.Empty,
-            },
+            Channel = ToChannelPayload(context.Channel),
             SenderBinding = new AgentToolSenderBindingContextPayload
             {
                 BindingId = context.SenderBinding.BindingId ?? string.Empty,
@@ -222,23 +213,12 @@ public static class AgentToolExecutionContextMapper
             },
             WorkflowRuntime = ToWorkflowRuntimePayload(context.WorkflowRuntime),
             CredentialSource = ToCredentialSourcePayload(context.CredentialSource),
+            InvocationSurface = ToInvocationSurfacePayload(context.InvocationSurface),
             SkillRecovery = ToSkillRecoveryPayload(context.SkillRecovery),
         };
 
-        if (context.Routing.MaxToolRoundsOverride.HasValue)
-            payload.Routing.MaxToolRoundsOverride = context.Routing.MaxToolRoundsOverride.Value;
-
-        if (!string.IsNullOrWhiteSpace(context.Schedule.ScheduleId))
-            payload.Schedule = new AgentToolScheduleContextPayload
-            {
-                ScheduleId = context.Schedule.ScheduleId.Trim(),
-            };
-
-        if (context.ToolVisibility.IsRestricted)
-            payload.ToolVisibility = ToToolVisibilityPayload(context.ToolVisibility);
-
-        foreach (var pair in StripOwnedControlKeys(context.ExternalMetadata))
-            payload.ExternalMetadata[pair.Key] = pair.Value;
+        ApplyOptionalPayloads(context, payload);
+        CopyExternalMetadata(context.ExternalMetadata, payload);
 
         return payload;
     }
@@ -254,9 +234,128 @@ public static class AgentToolExecutionContextMapper
         };
     }
 
+    private static AgentToolChannelContext FromChannelPayload(AgentToolChannelContextPayload? payload) =>
+        new(
+            AgentToolExecutionContext.Normalize(payload?.Platform),
+            AgentToolExecutionContext.Normalize(payload?.SenderId),
+            AgentToolExecutionContext.Normalize(payload?.RegistrationScopeId),
+            AgentToolExecutionContext.Normalize(payload?.MessageId),
+            AgentToolExecutionContext.Normalize(payload?.PlatformMessageId),
+            AgentToolExecutionContext.Normalize(payload?.DeliveryTargetId),
+            FromWorkflowResultDeliveryCredentialPayload(payload?.WorkflowResultDeliveryCredential),
+            AgentToolExecutionContext.Normalize(payload?.BotRegistrationId),
+            FromIdentityHintPayloads(payload?.IdentityHints));
+
+    private static LLMRequestRoutingContext FromRoutingPayload(LLMRequestRoutingContextPayload? payload) =>
+        new(
+            AgentToolExecutionContext.Normalize(payload?.ModelOverride),
+            AgentToolExecutionContext.Normalize(payload?.NyxIdRoutePreference),
+            payload?.HasMaxToolRoundsOverride == true ? payload.MaxToolRoundsOverride : null,
+            AgentToolExecutionContext.Normalize(payload?.UserMemoryPrompt));
+
+    private static AgentToolChannelContextPayload ToChannelPayload(AgentToolChannelContext context)
+    {
+        var payload = new AgentToolChannelContextPayload
+        {
+            Platform = context.Platform ?? string.Empty,
+            SenderId = context.SenderId ?? string.Empty,
+            RegistrationScopeId = context.RegistrationScopeId ?? string.Empty,
+            MessageId = context.MessageId ?? string.Empty,
+            PlatformMessageId = context.PlatformMessageId ?? string.Empty,
+            DeliveryTargetId = context.DeliveryTargetId ?? string.Empty,
+            WorkflowResultDeliveryCredential = context.WorkflowResultDeliveryCredential?.Clone(),
+            BotRegistrationId = context.BotRegistrationId ?? string.Empty,
+        };
+        AddIdentityHintPayloads(context.IdentityHints, payload);
+        return payload;
+    }
+
+    private static void AddIdentityHintPayloads(
+        IReadOnlyList<AgentToolChannelIdentityHint>? hints,
+        AgentToolChannelContextPayload payload)
+    {
+        if (hints is null)
+            return;
+
+        foreach (var hint in hints)
+        {
+            var subject = AgentToolExecutionContext.Normalize(hint.Subject);
+            var kind = AgentToolExecutionContext.Normalize(hint.Kind);
+            var value = AgentToolExecutionContext.Normalize(hint.Value);
+            if (subject is null || kind is null || value is null)
+                continue;
+
+            payload.IdentityHints.Add(new AgentToolChannelIdentityHintPayload
+            {
+                Subject = subject,
+                Kind = kind,
+                Value = value,
+            });
+        }
+    }
+
+    private static void ApplyOptionalPayloads(
+        AgentToolExecutionContext context,
+        AgentToolExecutionContextPayload payload)
+    {
+        if (context.NyxIdAuthority.IsComplete)
+            payload.NyxIdAuthority = ToNyxIdAuthorityPayload(context.NyxIdAuthority);
+
+        if (context.Routing.MaxToolRoundsOverride.HasValue)
+            payload.Routing.MaxToolRoundsOverride = context.Routing.MaxToolRoundsOverride.Value;
+
+        if (!string.IsNullOrWhiteSpace(context.Schedule.ScheduleId))
+            payload.Schedule = new AgentToolScheduleContextPayload
+            {
+                ScheduleId = context.Schedule.ScheduleId.Trim(),
+            };
+
+        if (context.ToolVisibility.IsRestricted)
+            payload.ToolVisibility = ToToolVisibilityPayload(context.ToolVisibility);
+    }
+
+    private static AgentToolNyxIdAuthorityContextPayload ToNyxIdAuthorityPayload(
+        AgentToolNyxIdAuthorityContext context) =>
+        new()
+        {
+            Platform = context.Platform ?? string.Empty,
+            Tenant = context.Tenant ?? string.Empty,
+            ExternalUserId = context.ExternalUserId ?? string.Empty,
+            Scope = context.Scope ?? string.Empty,
+        };
+
+    private static void CopyExternalMetadata(
+        IReadOnlyDictionary<string, string> metadata,
+        AgentToolExecutionContextPayload payload)
+    {
+        foreach (var pair in StripOwnedControlKeys(metadata))
+            payload.ExternalMetadata[pair.Key] = pair.Value;
+    }
+
     private static ChannelWorkflowResultDeliveryCredential? FromWorkflowResultDeliveryCredentialPayload(
         ChannelWorkflowResultDeliveryCredential? payload) =>
         string.IsNullOrWhiteSpace(payload?.SecretReference?.Ref) ? null : payload.Clone();
+
+    private static IReadOnlyList<AgentToolChannelIdentityHint> FromIdentityHintPayloads(
+        IEnumerable<AgentToolChannelIdentityHintPayload>? payloads)
+    {
+        if (payloads is null)
+            return [];
+
+        var hints = new List<AgentToolChannelIdentityHint>();
+        foreach (var payload in payloads)
+        {
+            var subject = AgentToolExecutionContext.Normalize(payload.Subject);
+            var kind = AgentToolExecutionContext.Normalize(payload.Kind);
+            var value = AgentToolExecutionContext.Normalize(payload.Value);
+            if (subject is null || kind is null || value is null)
+                continue;
+
+            hints.Add(new AgentToolChannelIdentityHint(subject, kind, value));
+        }
+
+        return hints;
+    }
 
     private static AgentSkillRecoveryContext FromSkillRecoveryPayload(AgentSkillRecoveryContextPayload? payload)
     {
@@ -296,6 +395,26 @@ public static class AgentToolExecutionContextMapper
             AgentToolCredentialSource.System => AgentToolCredentialSourcePayload.System,
             AgentToolCredentialSource.ServiceAccount => AgentToolCredentialSourcePayload.ServiceAccount,
             _ => AgentToolCredentialSourcePayload.Unspecified,
+        };
+
+    private static AgentToolInvocationSurface FromInvocationSurfacePayload(
+        AgentToolInvocationSurfacePayload surface) =>
+        surface switch
+        {
+            AgentToolInvocationSurfacePayload.HumanSession => AgentToolInvocationSurface.HumanSession,
+            AgentToolInvocationSurfacePayload.WorkflowToolCall => AgentToolInvocationSurface.WorkflowToolCall,
+            AgentToolInvocationSurfacePayload.WorkflowLlmToolLoop => AgentToolInvocationSurface.WorkflowLlmToolLoop,
+            _ => AgentToolInvocationSurface.Unspecified,
+        };
+
+    private static AgentToolInvocationSurfacePayload ToInvocationSurfacePayload(
+        AgentToolInvocationSurface surface) =>
+        surface switch
+        {
+            AgentToolInvocationSurface.HumanSession => AgentToolInvocationSurfacePayload.HumanSession,
+            AgentToolInvocationSurface.WorkflowToolCall => AgentToolInvocationSurfacePayload.WorkflowToolCall,
+            AgentToolInvocationSurface.WorkflowLlmToolLoop => AgentToolInvocationSurfacePayload.WorkflowLlmToolLoop,
+            _ => AgentToolInvocationSurfacePayload.Unspecified,
         };
 
     private static AgentWorkflowRuntimeContext FromWorkflowRuntimePayload(AgentWorkflowRuntimeContextPayload? payload)

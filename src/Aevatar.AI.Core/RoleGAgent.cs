@@ -7,6 +7,7 @@
 // 3. Logs stable ids, lengths, status, and redaction markers for observability
 // ─────────────────────────────────────────────────────────────
 
+using System.Globalization;
 using System.Text;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.Agents;
@@ -19,11 +20,14 @@ using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.TypeSystem;
+using Aevatar.Foundation.Abstractions.Tools;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 namespace Aevatar.AI.Core;
@@ -36,9 +40,13 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
 {
     private const string LlmFailureContentPrefix = "[[AEVATAR_LLM_ERROR]]";
     private const int MaxTrackedSessions = 128;
+    private const string CompletionNotificationRetryCallbackPrefix = "role-chat-completion-retry";
+    private const int CompletionNotificationRetryInitialDelayMs = 250;
+    private const int CompletionNotificationRetryMaxDelayMs = 30_000;
     private string _appliedEventModules = string.Empty;
     private string _appliedEventRoutes = string.Empty;
     private IServiceProvider? _appliedModuleServices;
+    private readonly TimeProvider _timeProvider;
     // Per-turn NyxID token, stashed before ChatStreamAsync so chartered direct-chat subclasses can
     // hand it to per-turn context consumers (DecorateSystemPrompt has no context param). The base
     // role agent itself never resolves capability overlays — see CurrentTurnNyxIdAccessToken.
@@ -62,7 +70,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         IEnumerable<IAgentToolSource>? toolSources = null,
         IToolApprovalHandler? approvalHandler = null,
         IRemoteToolApprovalPort? remoteToolApprovalPort = null,
-        IRemoteToolApprovalNotificationPort? remoteToolApprovalNotificationPort = null)
+        IRemoteToolApprovalNotificationPort? remoteToolApprovalNotificationPort = null,
+        TimeProvider? timeProvider = null)
         : base(
             llmProviderFactory,
             additionalHooks,
@@ -78,6 +87,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
     {
         RemoteToolApprovalPort = remoteToolApprovalPort;
         RemoteToolApprovalNotificationPort = remoteToolApprovalNotificationPort;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     /// <summary>Role name.</summary>
@@ -91,6 +101,13 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
     protected IRemoteToolApprovalPort? RemoteToolApprovalPort { get; }
 
     protected IRemoteToolApprovalNotificationPort? RemoteToolApprovalNotificationPort { get; }
+
+    protected override async Task OnActivateAsync(CancellationToken ct)
+    {
+        await base.OnActivateAsync(ct);
+        RestoreHistoryFromCommittedSessions();
+        await DeliverPendingCompletionNotificationsAsync(ct);
+    }
 
     // Refactor (iter35/cluster-036-voice-presence-rolegagent-state):
     //   Old pattern: VoicePresenceModule 在 module 内持有 process-local background state(unbounded channels / TaskCompletionSource waiters / 静态字段持 lifecycle),还保留 disabled remote voice fallback shell.
@@ -179,9 +196,13 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
     public async Task HandleToolApprovalDecision(ToolApprovalDecisionEvent evt)
     {
         // ─── Multi-turn continuation ───
+        var continuationTurnId = ResolveApprovalContinuationTurnId(evt.ContinuationTurnId);
         var pending = State.PendingApproval;
         if (pending == null || pending.RequestId != evt.RequestId)
+        {
+            await PersistApprovalRequestNotPendingAsync(continuationTurnId);
             return;
+        }
 
         // Cancel the escalation timeout
         await CancelApprovalTimeoutAsync(pending);
@@ -204,13 +225,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 using (AgentToolContextScope.Push(pendingToolContext))
                 {
                     // Execute the yielded tool call
-                    var toolResult = await Tools.ExecuteToolCallAsync(
-                        new ToolCall
-                        {
-                            Id = pending.ToolCallId,
-                            Name = pending.ToolName,
-                            ArgumentsJson = pending.ArgumentsJson,
-                        },
+                    var toolResult = await ExecuteApprovedToolAsync(
+                        pending,
+                        pendingToolContext,
                         CancellationToken.None);
 
                     Logger.LogInformation(
@@ -231,10 +248,15 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                     var continuationRequest = new ChatRequestEvent
                     {
                         Prompt = continuation,
-                        SessionId = Guid.NewGuid().ToString("N"),
-                        ScopeId = pending.SessionId,
+                        SessionId = continuationTurnId,
+                        ScopeId = pending.ScopeId,
                         ToolContext = pendingToolContext.ToPayload(),
                     };
+                    if (pending.WorkflowLlmContinuation != null)
+                    {
+                        continuationRequest.WorkflowLlmToolApprovalContinuation =
+                            pending.WorkflowLlmContinuation.Clone();
+                    }
                     await SendToAsync(Id, continuationRequest);
 
                     Logger.LogInformation(
@@ -251,7 +273,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 await TryPersistApprovalTerminalFailureThenClearPendingAsync(
                     pending,
                     "approval_continuation_failed",
-                    ex.Message);
+                    "The approval continuation failed. Please try again.",
+                    continuationTurnId);
 
                 throw; // Re-throw so the SSE endpoint sees the error
             }
@@ -263,7 +286,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 "approval_denied",
                 string.IsNullOrWhiteSpace(evt.Reason)
                     ? "Tool approval denied."
-                    : evt.Reason);
+                    : evt.Reason,
+                continuationTurnId);
         }
     }
 
@@ -339,7 +363,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             await PersistApprovalTerminalFailureThenClearPendingAsync(
                 pending,
                 "approval_timeout",
-                $"Remote approval submit failed: {ex.Message}");
+                "Remote approval submission failed. Please try again.");
         }
     }
 
@@ -422,7 +446,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 RoleName, evt.RequestId);
             snapshot = new RemoteToolApprovalStatusSnapshot(
                 RemoteToolApprovalStatus.Unknown,
-                $"Remote approval status check failed: {ex.Message}");
+                "Remote approval status check failed. Please try again.");
         }
 
         switch (snapshot.Status)
@@ -431,7 +455,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 await HandleToolApprovalDecision(new ToolApprovalDecisionEvent
                 {
                     RequestId = pending.RequestId,
-                    SessionId = pending.SessionId,
+                    ContinuationTurnId = ResolveApprovalContinuationTurnId(null),
                     Approved = true,
                     Reason = snapshot.Reason ?? "Approved via NyxID remote.",
                 });
@@ -439,9 +463,15 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
 
             case RemoteToolApprovalStatus.Rejected:
             case RemoteToolApprovalStatus.Expired:
+            case RemoteToolApprovalStatus.Cancelled:
                 await PersistApprovalTerminalFailureThenClearPendingAsync(
                     pending,
-                    snapshot.Status == RemoteToolApprovalStatus.Expired ? "approval_timeout" : "approval_denied",
+                    snapshot.Status switch
+                    {
+                        RemoteToolApprovalStatus.Expired => "approval_timeout",
+                        RemoteToolApprovalStatus.Cancelled => "approval_cancelled",
+                        _ => "approval_denied",
+                    },
                     string.IsNullOrWhiteSpace(snapshot.Reason)
                         ? "Tool approval timed out or was denied remotely."
                         : snapshot.Reason);
@@ -499,11 +529,12 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
 
     // ─── Approval helpers ───
 
-    private PendingToolApprovalState? DetectPendingApproval(
-        SessionReplayRecord replayRecord,
+    protected PendingToolApprovalState? DetectPendingApproval(
+        IReadOnlyList<AgentToolReceipt> toolReceipts,
+        IReadOnlyList<ToolCall> toolCalls,
         ChatRequestEvent request)
     {
-        var receipt = replayRecord.ToolReceipts
+        var receipt = toolReceipts
             .LastOrDefault(static candidate =>
                 candidate.Status == AgentToolReceiptStatus.ApprovalRequired &&
                 !string.IsNullOrWhiteSpace(candidate.ApprovalRequestId));
@@ -516,14 +547,52 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             SessionId = request.SessionId ?? string.Empty,
             ToolName = receipt.ToolName ?? string.Empty,
             ToolCallId = receipt.CallId ?? string.Empty,
-            ArgumentsJson = ResolveToolArguments(replayRecord.ToolCalls, receipt.CallId),
+            ArgumentsJson = ResolveToolArguments(toolCalls, receipt.CallId),
             IsDestructive = receipt.IsDestructive,
             ToolContext = ResolveToolContext(
                 request,
                 receipt.ApprovalRequestId,
                 receipt.CallId ?? string.Empty).ToPayload(),
+            ScopeId = request.ScopeId ?? string.Empty,
         };
     }
+
+    protected async Task SuspendForToolApprovalAsync(PendingToolApprovalState pending)
+    {
+        ArgumentNullException.ThrowIfNull(pending);
+        await PersistDomainEventAsync(new PendingToolApprovalPersistedEvent { Pending = pending });
+        await PublishAsync(new ToolApprovalRequestEvent
+        {
+            RequestId = pending.RequestId,
+            SessionId = pending.SessionId,
+            ToolName = pending.ToolName,
+            ToolCallId = pending.ToolCallId,
+            ArgumentsJson = pending.ArgumentsJson,
+            IsDestructive = pending.IsDestructive,
+            ApprovalMode = "yield",
+            TimeoutSeconds = ApprovalLocalTimeoutSeconds,
+        }, TopologyAudience.Parent);
+        await ScheduleApprovalTimeoutAsync(pending);
+    }
+
+    protected virtual Task<ChatMessage> ExecuteApprovedToolAsync(
+        PendingToolApprovalState pending,
+        AgentToolExecutionContext toolContext,
+        CancellationToken ct) =>
+        Tools.ExecuteToolCallAsync(
+            new ToolCall
+            {
+                Id = pending.ToolCallId,
+                Name = pending.ToolName,
+                ArgumentsJson = pending.ArgumentsJson,
+            },
+            ct);
+
+    protected virtual Task OnApprovalTerminalFailureAsync(
+        PendingToolApprovalState pending,
+        string reasonCode,
+        string reasonMessage) =>
+        Task.CompletedTask;
 
     private static string ResolveToolArguments(IReadOnlyList<ToolCall> toolCalls, string? callId)
     {
@@ -772,8 +841,12 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             .On<InitializeRoleAgentEvent>(ApplyInitializeRoleAgent)
             .On<SystemSkillOverlayMaterializedEvent>(ApplySystemSkillOverlayMaterialized)
             .On<RoleChatSessionStartedEvent>(ApplyChatSessionStarted)
+            .On<RoleChatSessionProgressedEvent>(ApplyChatSessionProgressed)
             .On<AgentProfileTurnAuthorityCommittedEvent>(ApplyAgentProfileTurnAuthorityCommitted)
             .On<RoleChatSessionCompletedEvent>(ApplyChatSessionCompleted)
+            .On<RoleChatCompletionNotificationRetryScheduledEvent>(ApplyCompletionNotificationRetryScheduled)
+            .On<RoleChatCompletionNotificationDispatchedEvent>(ApplyCompletionNotificationDispatched)
+            .On<RoleChatCompletionNotificationExpiredEvent>(ApplyCompletionNotificationExpired)
             .On<PendingToolApprovalPersistedEvent>(ApplyPendingApproval)
             .On<RemoteToolApprovalSubmittedEvent>(ApplyRemoteApprovalSubmitted)
             .On<ClearPendingApprovalEvent>(ApplyClearPendingApproval)
@@ -832,13 +905,126 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
     [EventHandler(AllowSelfHandling = true)]
     public virtual async Task HandleChatRequest(ChatRequestEvent request)
     {
-        var trackedSession = ResolveTrackedSession(request);
+        try
+        {
+            await HandleChatRequestCoreAsync(request);
+        }
+        catch (AgentProfileTurnAuthorityException)
+        {
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(
+                ex,
+                "[{Role}] Chat handler failed outside the provider stream. session={SessionId}",
+                RoleName,
+                request.SessionId);
+
+            if (State.Sessions.TryGetValue(request.SessionId, out var completed) && completed.Completed)
+                throw;
+
+            if (string.IsNullOrWhiteSpace(request.SessionId))
+                return;
+
+            await PersistRoleChatSessionCompletionAsync(
+                request,
+                content: string.Empty,
+                reasoningContent: string.Empty,
+                toolCalls: [],
+                contentParts: [],
+                contentEmitted: false,
+                outcome: RoleChatSessionOutcome.Failed,
+                failureCode: "CHAT_HANDLER_FAILURE",
+                safeMessage: "The chat request failed. Please try again.");
+        }
+    }
+
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    public async Task HandleCompletionNotificationRetryFiredAsync(
+        RoleChatCompletionNotificationRetryFiredEvent retry)
+    {
+        ArgumentNullException.ThrowIfNull(retry);
+        if (string.IsNullOrWhiteSpace(retry.SessionId) ||
+            !State.Sessions.TryGetValue(retry.SessionId, out var session) ||
+            !string.Equals(
+                ResolveCompletionNotificationDeliveryId(retry.SessionId, session.RunContext),
+                retry.DeliveryId,
+                StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var matchesScheduledAttempt =
+            session.CompletionNotificationDeliveryStatus ==
+            RoleChatCompletionNotificationDeliveryStatus.RetryScheduled &&
+            retry.Attempt == session.CompletionNotificationAttempt;
+        var matchesScheduledNextAttemptRecovery =
+            session.CompletionNotificationDeliveryStatus ==
+            RoleChatCompletionNotificationDeliveryStatus.RetryScheduled &&
+            retry.Attempt == session.CompletionNotificationAttempt + 1;
+        var matchesScheduleBeforeCommitRecovery =
+            session.CompletionNotificationDeliveryStatus ==
+            RoleChatCompletionNotificationDeliveryStatus.Prepared &&
+            retry.Attempt == session.CompletionNotificationAttempt + 1;
+
+        if (!matchesScheduledAttempt &&
+            !matchesScheduledNextAttemptRecovery &&
+            !matchesScheduleBeforeCommitRecovery)
+        {
+            return;
+        }
+
+        if (matchesScheduledNextAttemptRecovery || matchesScheduleBeforeCommitRecovery)
+        {
+            await PersistDomainEventAsync(new RoleChatCompletionNotificationRetryScheduledEvent
+            {
+                SessionId = retry.SessionId,
+                DeliveryId = retry.DeliveryId,
+                Attempt = retry.Attempt,
+                CallbackId = BuildCompletionNotificationRetryCallbackId(retry.SessionId, retry.DeliveryId),
+                RetryAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
+            });
+            session = State.Sessions[retry.SessionId];
+        }
+
+        await DeliverCompletionNotificationAsync(
+            retry.SessionId,
+            session.Clone(),
+            CancellationToken.None,
+            retry.Attempt);
+    }
+
+    private async Task HandleChatRequestCoreAsync(ChatRequestEvent request)
+    {
+        RoleChatSessionState? trackedSession;
+        try
+        {
+            trackedSession = ResolveTrackedSession(request);
+        }
+        catch (RoleChatCommandAttemptRejectionException conflict)
+        {
+            const string safeMessage = "This client request id was already used for different input.";
+            await PersistDomainEventAsync(new RoleChatCommandAttemptRejectedEvent
+            {
+                RequestedSessionId = request.SessionId,
+                CommandAttemptId = ResolveCommandAttemptId(request),
+                Reason = conflict.Reason,
+                SafeMessage = safeMessage,
+            });
+            return;
+        }
         if (trackedSession is { Completed: true })
         {
             Logger.LogInformation(
                 "[{Role}] Replaying cached LLM completion for session={SessionId}",
                 RoleName,
                 request.SessionId);
+            await DeliverCompletionNotificationAsync(request.SessionId, trackedSession, CancellationToken.None);
             await ReplayCompletedSessionAsync(request.SessionId, trackedSession);
             return;
         }
@@ -877,6 +1063,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             requestSummary.InputPartCount);
 
         // ─── AG-UI: TEXT_MESSAGE_START ───
+        await PersistSessionProgressAsync(request.SessionId, progress =>
+            progress.TextStarted = new RoleChatTextStartedProgress { AgentId = Id });
         await PublishAsync(new TextMessageStartEvent
         {
             SessionId = request.SessionId,
@@ -907,8 +1095,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 RoleName,
                 timeoutMs,
                 request.SessionId);
-            replayRecord = SessionReplayRecord.FromFailure(
-                BuildLlmFailureContent($"LLM request timed out after {timeoutMs}ms"));
+            var error = $"LLM request timed out after {timeoutMs}ms";
+            replayRecord = SessionReplayRecord.FromFailure(BuildLlmFailureContent(error));
         }
         catch (Exception ex)
         {
@@ -922,10 +1110,11 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             var toolNames = Tools.HasTools
                 ? string.Join(",", Tools.GetAll().Select(t => t.Name ?? "<null>"))
                 : "none";
+            var error = SanitizeFailureMessage(ex.Message);
             replayRecord = SessionReplayRecord.FromFailure(
                 useWorkflowFailureMarker
-                    ? BuildLlmFailureContent(ex.Message)
-                    : $"LLM request failed [tools={toolNames}]: {SanitizeFailureMessage(ex.Message)}");
+                    ? BuildLlmFailureContent(error)
+                    : $"LLM request failed [tools={toolNames}]: {error}");
         }
         finally
         {
@@ -935,28 +1124,17 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         }
 
         // ─── Detect approval-pending tool result and set up continuation ───
-        var pendingApproval = DetectPendingApproval(replayRecord, request);
+        var pendingApproval = DetectPendingApproval(replayRecord.ToolReceipts, replayRecord.ToolCalls, request);
         OnPlanOrHandoffObserved(pendingApproval is not null);
         if (pendingApproval != null)
         {
-            await PersistDomainEventAsync(new PendingToolApprovalPersistedEvent
-            {
-                Pending = pendingApproval,
-            });
-
-            await PublishAsync(new ToolApprovalRequestEvent
-            {
-                RequestId = pendingApproval.RequestId,
-                SessionId = pendingApproval.SessionId,
-                ToolName = pendingApproval.ToolName,
-                ToolCallId = pendingApproval.ToolCallId,
-                ArgumentsJson = pendingApproval.ArgumentsJson,
-                IsDestructive = pendingApproval.IsDestructive,
-                ApprovalMode = "yield",
-                TimeoutSeconds = ApprovalLocalTimeoutSeconds,
-            }, TopologyAudience.Parent);
-
-            await ScheduleApprovalTimeoutAsync(pendingApproval);
+            var approvalProgress = CreateSessionProgress(request.SessionId, progress =>
+                progress.ToolApprovalRequired = new RoleChatToolApprovalRequiredProgress
+                {
+                    Pending = pendingApproval.Clone(),
+                });
+            await PersistDomainEventAsync(approvalProgress);
+            await SuspendForToolApprovalAsync(pendingApproval);
         }
 
         // Refactor (iter164/cluster-001-role-completion):
@@ -999,6 +1177,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 SessionId = request.SessionId,
                 Prompt = request.Prompt,
                 InputParts = { request.InputParts },
+                RunContext = request.RunContext?.Clone(),
             };
             var preparation = await PrepareAgentProfileTurnAuthorityAsync(request, toolContext, ct);
             if (preparation is null)
@@ -1015,9 +1194,19 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             };
             var predictedStartedState = ApplyChatSessionStarted(State, started);
             if (!TryApplyAgentProfileTurnAuthorityCommitted(predictedStartedState, initial, out _))
-                throw new InvalidOperationException("Prepared turn authority is not valid for the new session.");
+            {
+                throw new AgentProfileTurnAuthorityException(
+                    "Prepared turn authority is not valid for the new session.");
+            }
 
-            await PersistDomainEventsAsync([started, initial], CancellationToken.None);
+            try
+            {
+                await PersistDomainEventsAsync([started, initial], CancellationToken.None);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                throw new AgentProfileTurnAuthorityException(ex.Message, ex);
+            }
             return ResolveCommittedTurnAuthority(request.SessionId);
         }
 
@@ -1036,7 +1225,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 CommitKind = AgentProfileTurnAuthorityCommitKind.Initial,
                 Authority = CreateLegacyRestrictedEmptyAuthority(request.SessionId),
             };
-            await PersistValidatedTurnAuthorityAsync(legacy);
+            await PersistRequiredTurnAuthorityAsync(legacy);
             return ResolveCommittedTurnAuthority(request.SessionId);
         }
 
@@ -1050,7 +1239,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             CommitKind = AgentProfileTurnAuthorityCommitKind.RetryStarted,
             Authority = retryAuthority,
         };
-        await PersistValidatedTurnAuthorityAsync(retry);
+        await PersistRequiredTurnAuthorityAsync(retry);
         return ResolveCommittedTurnAuthority(request.SessionId);
     }
 
@@ -1092,13 +1281,27 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         await PersistDomainEventAsync(authorityEvent, CancellationToken.None);
     }
 
+    private async Task PersistRequiredTurnAuthorityAsync(
+        AgentProfileTurnAuthorityCommittedEvent authorityEvent)
+    {
+        try
+        {
+            await PersistValidatedTurnAuthorityAsync(authorityEvent);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new AgentProfileTurnAuthorityException(ex.Message, ex);
+        }
+    }
+
     private AgentProfileTurnAuthorityState ResolveCommittedTurnAuthority(string sessionId)
     {
         var active = State.AgentProfileTurnAuthority;
         if (active?.ReconciliationKey is null ||
             !string.Equals(active.ReconciliationKey.SessionId, sessionId, StringComparison.Ordinal))
         {
-            throw new InvalidOperationException("The committed turn authority does not match the active session.");
+            throw new AgentProfileTurnAuthorityException(
+                "The committed turn authority does not match the active session.");
         }
 
         return active.Clone();
@@ -1152,6 +1355,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         var toolCalls = new StreamingToolCallAccumulator();
         var contentParts = new List<ContentPart>();
         var toolReceipts = new List<AgentToolReceipt>();
+        var toolResults = new List<ToolResultEvent>();
+        var toolCallSnapshots = new List<ToolCallEvent>();
         TokenUsage? usage = null;
         var firstStreamedOutputObserved = false;
         // Refactor (iter56/cluster-917-workflow-llm-control-metadata): old=Headers/Metadata bag for control fields, new=typed ChatRequestEvent.Telegram
@@ -1189,6 +1394,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             if (!string.IsNullOrEmpty(chunk.DeltaContent))
             {
                 fullContent.Append(chunk.DeltaContent);
+                await PersistSessionProgressAsync(request.SessionId, progress =>
+                    progress.TextDelta = new RoleChatTextDeltaProgress { Delta = chunk.DeltaContent });
                 await PublishAsync(new TextMessageContentEvent
                 {
                     Delta = chunk.DeltaContent,
@@ -1199,17 +1406,29 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             if (chunk.DeltaContentPart != null)
             {
                 contentParts.Add(chunk.DeltaContentPart);
+                var part = ContentPartProtoMapper.ToProto(chunk.DeltaContentPart);
+                await PersistSessionProgressAsync(request.SessionId, progress =>
+                    progress.Media = new RoleChatMediaProgress
+                    {
+                        AgentId = Id,
+                        Part = part.Clone(),
+                    });
                 await PublishAsync(new MediaContentEvent
                 {
                     SessionId = request.SessionId,
                     AgentId = Id,
-                    Part = ContentPartProtoMapper.ToProto(chunk.DeltaContentPart),
+                    Part = part,
                 }, TopologyAudience.Parent);
             }
 
             if (!string.IsNullOrEmpty(chunk.DeltaReasoningContent))
             {
                 fullReasoning.Append(chunk.DeltaReasoningContent);
+                await PersistSessionProgressAsync(request.SessionId, progress =>
+                    progress.ReasoningDelta = new RoleChatReasoningDeltaProgress
+                    {
+                        Delta = chunk.DeltaReasoningContent,
+                    });
                 await PublishAsync(new TextMessageReasoningEvent
                 {
                     Delta = chunk.DeltaReasoningContent,
@@ -1220,21 +1439,63 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             if (chunk.DeltaToolCall != null)
                 toolCalls.TrackDelta(chunk.DeltaToolCall);
 
-            if (chunk.ToolReceipt != null)
-                toolReceipts.Add(chunk.ToolReceipt.Clone());
+            if (chunk.ToolCallStarted != null)
+            {
+                var started = chunk.ToolCallStarted;
+                CaptureToolCallSnapshot(toolCallSnapshots, started);
+                await PersistSessionProgressAsync(request.SessionId, progress =>
+                    progress.ToolStarted = new RoleChatToolStartedProgress
+                    {
+                        CallId = started.ToolCall.Id,
+                        ToolName = started.ToolCall.Name,
+                        Presentation = ToolPresentationDescriptors.Snapshot(
+                            started.Presentation,
+                            started.ToolCall.Name),
+                    });
+            }
+
+            if (chunk.ToolCallCompleted != null)
+            {
+                var completed = chunk.ToolCallCompleted;
+                var toolResult = new ToolResultEvent
+                {
+                    CallId = completed.CallId,
+                    ResultJson = completed.ResultJson,
+                    Success = completed.Success,
+                    Error = completed.Error,
+                };
+                if (completed.Receipt != null)
+                    toolResult.Receipt = completed.Receipt.Clone();
+                toolResults.Add(toolResult.Clone());
+                await PersistSessionProgressAsync(request.SessionId, progress =>
+                    progress.ToolCompleted = new RoleChatToolCompletedProgress
+                    {
+                        Result = toolResult.Clone(),
+                        ToolName = completed.ToolName,
+                    });
+            }
+
+            var receipt = chunk.ToolCallCompleted?.Receipt ?? chunk.ToolReceipt;
+            if (receipt != null)
+                toolReceipts.Add(receipt.Clone());
         }
 
         var appendedHistoryMessages = History.Messages
             .Skip(Math.Min(initialHistoryCount, History.Count))
             .ToArray();
 
-        foreach (var toolCall in toolCalls.BuildToolCalls())
+        var completedToolCalls = MergeCompletedToolCalls(toolCalls.BuildToolCalls(), toolCallSnapshots);
+        foreach (var toolCall in completedToolCalls)
         {
+            var snapshot = FindToolCallSnapshot(toolCallSnapshots, toolCall.Id);
             await PublishAsync(new ToolCallEvent
             {
                 CallId = toolCall.Id,
                 ToolName = toolCall.Name,
-                ArgumentsJson = toolCall.ArgumentsJson,
+                ArgumentsJson = ShouldRedactToolCallArguments(toolCall.Id, toolReceipts)
+                    ? string.Empty
+                    : toolCall.ArgumentsJson,
+                Presentation = ResolveToolCallPresentation(toolCall.Name, snapshot),
             }, TopologyAudience.Parent);
         }
 
@@ -1261,6 +1522,12 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             await PublishAsync(toolResultEvent, TopologyAudience.Parent);
         }
 
+        var authorizationRequired = toolReceipts
+            .LastOrDefault(receipt =>
+                receipt.Status == AgentToolReceiptStatus.AuthorizationRequired &&
+                receipt.AuthorizationRequired != null)
+            ?.AuthorizationRequired
+            .Clone();
         var response = fullContent.ToString();
         // Refactor (iter85/cluster-085-workflow-raw-content-information-logs):
         //   Old pattern: Information log included raw value/prompt/input preview
@@ -1283,12 +1550,20 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         return new SessionReplayRecord(
             response,
             fullReasoning.ToString(),
-            toolCalls.BuildToolCalls(),
+            completedToolCalls,
             contentParts,
             toolReceipts,
+            toolResults,
             Usage: usage,
             Model: EffectiveConfig.Model ?? string.Empty,
-            ContentEmitted: fullContent.Length > 0);
+            ContentEmitted: fullContent.Length > 0,
+            Outcome: authorizationRequired == null
+                ? RoleChatSessionOutcome.Completed
+                : RoleChatSessionOutcome.Blocked,
+            AuthorizationRequired: authorizationRequired)
+        {
+            ToolCallSnapshots = toolCallSnapshots.Select(static snapshot => snapshot.Clone()).ToArray(),
+        };
     }
 
     private Task PersistSessionCompletionAsync(ChatRequestEvent request, SessionReplayRecord replayRecord) =>
@@ -1301,9 +1576,15 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             replayRecord.ContentEmitted,
             replayRecord.Usage,
             replayRecord.Model,
-            replayRecord.ToolReceipts);
+            replayRecord.ToolReceipts,
+            replayRecord.ToolResults,
+            replayRecord.ToolCallSnapshots,
+            replayRecord.Outcome,
+            replayRecord.FailureCode,
+            replayRecord.SafeMessage,
+            replayRecord.AuthorizationRequired);
 
-    protected Task PersistRoleChatSessionCompletionAsync(
+    protected async Task PersistRoleChatSessionCompletionAsync(
         ChatRequestEvent request,
         string content,
         string reasoningContent,
@@ -1312,12 +1593,18 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         bool contentEmitted,
         TokenUsage? usage = null,
         string? model = null,
-        IReadOnlyList<AgentToolReceipt>? toolReceipts = null)
+        IReadOnlyList<AgentToolReceipt>? toolReceipts = null,
+        IReadOnlyList<ToolResultEvent>? toolResults = null,
+        IReadOnlyList<ToolCallEvent>? toolCallSnapshots = null,
+        RoleChatSessionOutcome outcome = RoleChatSessionOutcome.Completed,
+        string? failureCode = null,
+        string? safeMessage = null,
+        NyxIdAuthorizationRequiredEvent? authorizationRequired = null)
     {
         if (string.IsNullOrWhiteSpace(request.SessionId))
-            return Task.CompletedTask;
+            return;
 
-        return PersistDomainEventAsync(new RoleChatSessionCompletedEvent
+        var completion = new RoleChatSessionCompletedEvent
         {
             // Refactor (iter15/cluster-028):
             //   Old pattern: consumers inferred workflow role id from PublisherActorId string prefixes.
@@ -1328,31 +1615,153 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             ReasoningContent = reasoningContent,
             Prompt = request.Prompt,
             ContentEmitted = contentEmitted,
-            ToolCalls = { ToToolCallEvents(toolCalls) },
+            ToolCalls = { ToToolCallEvents(toolCalls, toolReceipts ?? [], toolCallSnapshots ?? []) },
             OutputParts = { ContentPartProtoMapper.ToProtoList(contentParts) },
             ToolReceipts = { (toolReceipts ?? []).Select(receipt => receipt.Clone()) },
+            ToolResults = { (toolResults ?? []).Select(result => result.Clone()) },
             Usage = ToTokenUsagePayload(usage),
             Model = model ?? string.Empty,
-        });
+            Outcome = outcome,
+            FailureCode = failureCode ?? string.Empty,
+            SafeMessage = safeMessage ?? string.Empty,
+            AuthorizationRequired = authorizationRequired?.Clone(),
+            TerminalTime = CreateTerminalTimestamp(),
+            RunContext = request.RunContext?.Clone(),
+            ActorId = Id,
+        };
+        await PersistCompletionWithTerminalProgressAsync(completion);
+        await DeliverCompletionNotificationAsync(request.SessionId, State.Sessions[request.SessionId], CancellationToken.None);
+    }
+
+    private Task PersistCompletionWithTerminalProgressAsync(RoleChatSessionCompletedEvent completion)
+    {
+        completion.TerminalProgress.Clear();
+        completion.TerminalProgress.Add(BuildTerminalProgressEvents(completion));
+        return PersistDomainEventAsync(completion);
+    }
+
+    private IReadOnlyList<RoleChatSessionProgressedEvent> BuildTerminalProgressEvents(
+        RoleChatSessionCompletedEvent completion)
+    {
+        var events = new List<RoleChatSessionProgressedEvent>();
+        var sequence = ResolveLastProgressSequence(completion.SessionId);
+
+        void Add(Action<RoleChatSessionProgressedEvent> configure)
+        {
+            var progress = CreateSessionProgress(completion.SessionId, ref sequence, configure);
+            events.Add(progress);
+        }
+
+        if (!completion.ContentEmitted && IsDisplayableCompletionContent(completion.Content))
+        {
+            Add(progress =>
+                progress.TextDelta = new RoleChatTextDeltaProgress { Delta = completion.Content });
+        }
+
+        if (completion.Usage != null)
+        {
+            Add(progress =>
+                progress.Usage = new RoleChatUsageProgress
+                {
+                    Usage = completion.Usage.Clone(),
+                    Model = completion.Model ?? string.Empty,
+                });
+        }
+
+        Add(progress =>
+            progress.TextEnded = new RoleChatTextEndedProgress { MessageId = completion.SessionId });
+
+        if (completion.AuthorizationRequired != null)
+        {
+            Add(progress =>
+                progress.AuthorizationRequired = new RoleChatAuthorizationRequiredProgress
+                {
+                    AuthorizationRequired = completion.AuthorizationRequired.Clone(),
+                });
+        }
+
+        Add(progress =>
+            progress.Terminal = new RoleChatTerminalProgress
+            {
+                Outcome = completion.Outcome,
+                FailureCode = completion.FailureCode ?? string.Empty,
+                SafeMessage = completion.SafeMessage ?? string.Empty,
+                FinalContent = completion.Content ?? string.Empty,
+            });
+
+        return events;
+    }
+
+    private async Task PersistSessionProgressAsync(
+        string? sessionId,
+        Action<RoleChatSessionProgressedEvent> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        if (string.IsNullOrWhiteSpace(sessionId))
+            return;
+
+        await PersistDomainEventAsync(CreateSessionProgress(sessionId, configure));
+    }
+
+    private RoleChatSessionProgressedEvent CreateSessionProgress(
+        string? sessionId,
+        Action<RoleChatSessionProgressedEvent> configure)
+    {
+        var sequence = ResolveLastProgressSequence(sessionId);
+        return CreateSessionProgress(sessionId, ref sequence, configure);
+    }
+
+    private static RoleChatSessionProgressedEvent CreateSessionProgress(
+        string? sessionId,
+        ref long sequence,
+        Action<RoleChatSessionProgressedEvent> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        var normalizedSessionId = sessionId?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(normalizedSessionId))
+            throw new ArgumentException("Session id is required for role chat progress.", nameof(sessionId));
+
+        var progress = new RoleChatSessionProgressedEvent
+        {
+            SessionId = normalizedSessionId,
+            Sequence = sequence = checked(sequence + 1),
+        };
+        configure(progress);
+        if (progress.PayloadCase == RoleChatSessionProgressedEvent.PayloadOneofCase.None)
+            throw new InvalidOperationException("Role chat session progress requires a typed payload.");
+
+        return progress;
+    }
+
+    private long ResolveLastProgressSequence(string? sessionId)
+    {
+        var normalizedSessionId = sessionId?.Trim() ?? string.Empty;
+        return State.Sessions.TryGetValue(normalizedSessionId, out var session)
+            ? session.LastProgressSequence
+            : 0;
     }
 
     private async Task PersistApprovalTerminalFailureThenClearPendingAsync(
         PendingToolApprovalState pending,
         string reasonCode,
-        string reasonMessage)
+        string reasonMessage,
+        string? terminalTurnId = null)
     {
-        await PersistApprovalTerminalFailureAsync(pending, reasonCode, reasonMessage);
+        await OnApprovalTerminalFailureAsync(pending, reasonCode, reasonMessage);
+        await PersistApprovalTerminalFailureAsync(pending, reasonCode, reasonMessage, terminalTurnId);
         await PersistDomainEventAsync(new ClearPendingApprovalEvent { RequestId = pending.RequestId });
     }
 
     private async Task TryPersistApprovalTerminalFailureThenClearPendingAsync(
         PendingToolApprovalState pending,
         string reasonCode,
-        string reasonMessage)
+        string reasonMessage,
+        string? terminalTurnId = null)
     {
         try
         {
-            await PersistApprovalTerminalFailureAsync(pending, reasonCode, reasonMessage);
+            await OnApprovalTerminalFailureAsync(pending, reasonCode, reasonMessage);
+            await PersistApprovalTerminalFailureAsync(pending, reasonCode, reasonMessage, terminalTurnId);
         }
         catch (Exception ex)
         {
@@ -1382,32 +1791,117 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         }
     }
 
-    private Task PersistApprovalTerminalFailureAsync(
+    private async Task PersistApprovalTerminalFailureAsync(
         PendingToolApprovalState pending,
         string reasonCode,
-        string reasonMessage)
+        string reasonMessage,
+        string? terminalTurnId = null)
     {
-        if (string.IsNullOrWhiteSpace(pending.SessionId))
-            return Task.CompletedTask;
+        var hasCallerSelectedTurnId = !string.IsNullOrWhiteSpace(terminalTurnId);
+        var resolvedTurnId = !hasCallerSelectedTurnId
+            ? pending.SessionId
+            : terminalTurnId!.Trim();
+        if (string.IsNullOrWhiteSpace(resolvedTurnId))
+            return;
+
+        if (State.Sessions.TryGetValue(resolvedTurnId, out var existingSession) &&
+            (hasCallerSelectedTurnId || existingSession.Completed))
+        {
+            Logger.LogWarning(
+                "[{Role}] Approval terminal turn collides with an existing session; skipping conflicting completion. session={SessionId} reasonCode={ReasonCode}",
+                RoleName,
+                resolvedTurnId,
+                reasonCode);
+            return;
+        }
 
         var safeReason = string.IsNullOrWhiteSpace(reasonMessage)
             ? "Tool approval failed."
             : reasonMessage.Trim();
-        return PersistDomainEventAsync(new RoleChatSessionCompletedEvent
+        var runContext = State.Sessions.TryGetValue(pending.SessionId, out var session)
+            ? session.RunContext?.Clone()
+            : null;
+        var completion = new RoleChatSessionCompletedEvent
         {
             // Refactor (iter15/cluster-028):
             //   Old pattern: terminal failure facts omitted role identity and forced downstream actor-id parsing.
             //   New principle: every role completion fact carries the typed RoleId.
             RoleId = RoleId,
-            SessionId = pending.SessionId,
+            SessionId = resolvedTurnId,
             Content = BuildLlmFailureContent($"{reasonCode}: {safeReason}"),
             Prompt = BuildContinuationPrompt(pending, safeReason),
             ContentEmitted = false,
-        });
+            Outcome = RoleChatSessionOutcome.Failed,
+            FailureCode = reasonCode.ToUpperInvariant(),
+            SafeMessage = safeReason,
+            TerminalTime = CreateTerminalTimestamp(),
+            RunContext = runContext,
+            ActorId = Id,
+        };
+        await PersistCompletionWithTerminalProgressAsync(completion);
+        await DeliverCompletionNotificationAsync(
+            resolvedTurnId,
+            State.Sessions[resolvedTurnId],
+            CancellationToken.None);
+    }
+
+    private static string ResolveApprovalContinuationTurnId(string? continuationTurnId) =>
+        string.IsNullOrWhiteSpace(continuationTurnId)
+            ? $"turn-{Guid.NewGuid():N}"
+            : continuationTurnId.Trim();
+
+    private async Task PersistApprovalRequestNotPendingAsync(string continuationTurnId)
+    {
+        if (State.Sessions.ContainsKey(continuationTurnId))
+        {
+            Logger.LogWarning(
+                "[{Role}] Approval continuation turn collides with an existing session; skipping request-not-pending completion. session={SessionId}",
+                RoleName,
+                continuationTurnId);
+            return;
+        }
+
+        var completion = new RoleChatSessionCompletedEvent
+        {
+            RoleId = RoleId,
+            SessionId = continuationTurnId,
+            Content = BuildLlmFailureContent("This approval request is no longer pending."),
+            ContentEmitted = false,
+            Outcome = RoleChatSessionOutcome.Failed,
+            FailureCode = "APPROVAL_REQUEST_NOT_PENDING",
+            SafeMessage = "This approval request is no longer pending.",
+            TerminalTime = CreateTerminalTimestamp(),
+        };
+        await PersistCompletionWithTerminalProgressAsync(completion);
     }
 
     private async Task ReplayCompletedSessionAsync(string sessionId, RoleChatSessionState trackedSession)
     {
+        var snapshot = new RoleChatSessionCompletedEvent
+        {
+            RoleId = RoleId,
+            SessionId = sessionId,
+            Content = trackedSession.FinalContent ?? string.Empty,
+            ReasoningContent = trackedSession.FinalReasoningContent ?? string.Empty,
+            ToolCalls = { trackedSession.ToolCalls.Select(toolCall => toolCall.Clone()) },
+            Prompt = trackedSession.Prompt ?? string.Empty,
+            ContentEmitted = trackedSession.ContentEmitted,
+            OutputParts = { trackedSession.OutputParts.Select(part => part.Clone()) },
+            Usage = trackedSession.Usage?.Clone(),
+            Model = trackedSession.Model ?? string.Empty,
+            ToolReceipts = { trackedSession.ToolReceipts.Select(receipt => receipt.Clone()) },
+            ToolResults = { trackedSession.ToolResults.Select(result => result.Clone()) },
+            Outcome = trackedSession.Outcome,
+            FailureCode = trackedSession.FailureCode ?? string.Empty,
+            SafeMessage = trackedSession.SafeMessage ?? string.Empty,
+            AuthorizationRequired = trackedSession.AuthorizationRequired?.Clone(),
+            TerminalTime = trackedSession.TerminalTime?.Clone(),
+            RunContext = trackedSession.RunContext?.Clone(),
+            ActorId = Id,
+        };
+        await PersistSessionProgressAsync(sessionId, progress =>
+            progress.Replay = new RoleChatReplayProgress { Snapshot = snapshot });
+
         await PublishAsync(new TextMessageStartEvent
         {
             SessionId = sessionId,
@@ -1439,6 +1933,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 CallId = toolCall.CallId,
                 ToolName = toolCall.ToolName,
                 ArgumentsJson = toolCall.ArgumentsJson,
+                Presentation = ToolPresentationDescriptors.Snapshot(
+                    toolCall.Presentation,
+                    toolCall.ToolName),
             }, TopologyAudience.Parent);
         }
 
@@ -1466,7 +1963,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         }
 
         await PublishUsageAsync(sessionId, trackedSession.Usage, trackedSession.Model);
-        await PublishCompletionAsync(sessionId, trackedSession.FinalContent);
+        await PublishCompletionAsync(sessionId, trackedSession.FinalContent ?? string.Empty);
     }
 
     private async Task<SessionReplayRecord> PublishMissingDisplayContentAsync(
@@ -1512,6 +2009,252 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             TopologyAudience.Parent);
     }
 
+    private async Task DeliverPendingCompletionNotificationsAsync(CancellationToken ct)
+    {
+        var pending = State.Sessions
+            .Where(static entry =>
+                entry.Value.Completed &&
+                entry.Value.CompletionNotificationDeliveryStatus is not
+                    RoleChatCompletionNotificationDeliveryStatus.Dispatched and not
+                    RoleChatCompletionNotificationDeliveryStatus.Expired &&
+                !string.IsNullOrWhiteSpace(entry.Value.RunContext?.CompletionNotificationActorId))
+            .OrderBy(static entry => entry.Value.Sequence)
+            .Select(static entry => (entry.Key, State: entry.Value.Clone()))
+            .ToList();
+
+        foreach (var (sessionId, session) in pending)
+            await DeliverCompletionNotificationAsync(sessionId, session, ct);
+    }
+
+    private async Task DeliverCompletionNotificationAsync(
+        string sessionId,
+        RoleChatSessionState session,
+        CancellationToken ct,
+        int? deliveryAttempt = null)
+    {
+        var runContext = session.RunContext?.Clone();
+        if (!session.Completed ||
+            session.CompletionNotificationDeliveryStatus is
+                RoleChatCompletionNotificationDeliveryStatus.Dispatched or
+                RoleChatCompletionNotificationDeliveryStatus.Expired ||
+            string.IsNullOrWhiteSpace(runContext?.CompletionNotificationActorId))
+        {
+            return;
+        }
+
+        var deliveryId = ResolveCompletionNotificationDeliveryId(sessionId, runContext);
+        var attempt = Math.Max(session.CompletionNotificationAttempt, deliveryAttempt ?? 0);
+        var now = _timeProvider.GetUtcNow();
+        if (HasElapsedCompletionNotificationDeadline(runContext, now))
+        {
+            await PersistDomainEventAsync(new RoleChatCompletionNotificationExpiredEvent
+            {
+                SessionId = sessionId,
+                DeliveryId = deliveryId,
+                Attempt = attempt,
+                ExpiredAtUnixTimeMs = now.ToUnixTimeMilliseconds(),
+            }, ct);
+            return;
+        }
+
+        var completion = new RoleChatSessionCompletedEvent
+        {
+            RoleId = State.RoleId ?? string.Empty,
+            ActorId = Id,
+            SessionId = sessionId,
+            Content = session.FinalContent ?? string.Empty,
+            ReasoningContent = session.FinalReasoningContent ?? string.Empty,
+            Prompt = session.Prompt ?? string.Empty,
+            ContentEmitted = session.ContentEmitted,
+            ToolCalls = { session.ToolCalls.Select(static toolCall => toolCall.Clone()) },
+            OutputParts = { session.OutputParts.Select(static part => part.Clone()) },
+            ToolReceipts = { session.ToolReceipts.Select(static receipt => receipt.Clone()) },
+            Usage = session.Usage?.Clone(),
+            Model = session.Model ?? string.Empty,
+            Outcome = session.Outcome,
+            FailureCode = session.FailureCode ?? string.Empty,
+            SafeMessage = session.SafeMessage ?? string.Empty,
+            AuthorizationRequired = session.AuthorizationRequired?.Clone(),
+            TerminalTime = session.TerminalTime?.Clone(),
+            RunContext = runContext,
+        };
+        try
+        {
+            await SendToAsync(
+                runContext.CompletionNotificationActorId.Trim(),
+                completion,
+                ct,
+                new EventEnvelopePublishOptions
+                {
+                    Delivery = new EventEnvelopeDeliveryOptions
+                    {
+                        DeduplicationOperationId = $"role-chat-terminal:{deliveryId}",
+                    },
+                });
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            await ScheduleCompletionNotificationRetryAsync(
+                sessionId,
+                runContext,
+                deliveryId,
+                attempt,
+                ct);
+            return;
+        }
+
+        try
+        {
+            await PersistDomainEventAsync(new RoleChatCompletionNotificationDispatchedEvent
+            {
+                SessionId = sessionId,
+                RunContext = runContext,
+                DeliveryId = deliveryId,
+                Attempt = attempt,
+                DispatchedAtUnixTimeMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+            }, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            await ScheduleCompletionNotificationRetryAsync(
+                sessionId,
+                runContext,
+                deliveryId,
+                attempt,
+                ct);
+            throw;
+        }
+    }
+
+    private async Task ScheduleCompletionNotificationRetryAsync(
+        string sessionId,
+        RoleChatRunContext runContext,
+        string deliveryId,
+        int failedAttempt,
+        CancellationToken ct)
+    {
+        var now = _timeProvider.GetUtcNow();
+        if (HasElapsedCompletionNotificationDeadline(runContext, now))
+        {
+            await PersistDomainEventAsync(new RoleChatCompletionNotificationExpiredEvent
+            {
+                SessionId = sessionId,
+                DeliveryId = deliveryId,
+                Attempt = failedAttempt,
+                ExpiredAtUnixTimeMs = now.ToUnixTimeMilliseconds(),
+            }, ct);
+            return;
+        }
+
+        var currentAttempt = State.Sessions.TryGetValue(sessionId, out var current)
+            ? current.CompletionNotificationAttempt
+            : 0;
+        var attempt = Math.Max(currentAttempt, failedAttempt) + 1;
+        var retryDelayMs = CalculateCompletionNotificationRetryDelayMs(attempt);
+        var dueTime = TimeSpan.FromMilliseconds(
+            runContext.CompletionNotificationExpiresAtUnixMs > 0
+                ? Math.Min(
+                    retryDelayMs,
+                    runContext.CompletionNotificationExpiresAtUnixMs - now.ToUnixTimeMilliseconds())
+                : retryDelayMs);
+        var retryAt = now.Add(dueTime);
+        var callbackId = BuildCompletionNotificationRetryCallbackId(sessionId, deliveryId);
+        var retryFired = new RoleChatCompletionNotificationRetryFiredEvent
+        {
+            SessionId = sessionId,
+            DeliveryId = deliveryId,
+            Attempt = attempt,
+        };
+        var retryOptions = BuildCompletionNotificationRetryOptions(callbackId, attempt);
+        try
+        {
+            await ScheduleSelfDurableTimeoutAsync(
+                callbackId,
+                dueTime,
+                retryFired,
+                retryOptions,
+                ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            var canPublishImmediateRecovery =
+                current is
+                {
+                    CompletionNotificationDeliveryStatus:
+                        RoleChatCompletionNotificationDeliveryStatus.Prepared,
+                    CompletionNotificationAttempt: 0,
+                } &&
+                attempt == 1;
+            Logger.LogWarning(
+                ex,
+                canPublishImmediateRecovery
+                    ? "Role chat completion durable retry scheduling failed; publishing one immediate recovery continuation. actor={ActorId} session={SessionId} delivery={DeliveryId} attempt={Attempt}"
+                    : "Role chat completion durable retry scheduling failed; preserving the outbox for activation recovery. actor={ActorId} session={SessionId} delivery={DeliveryId} attempt={Attempt}",
+                Id,
+                sessionId,
+                deliveryId,
+                attempt);
+            if (canPublishImmediateRecovery)
+                await PublishAsync(retryFired, TopologyAudience.Self, ct, options: retryOptions);
+            throw;
+        }
+        await PersistDomainEventAsync(new RoleChatCompletionNotificationRetryScheduledEvent
+        {
+            SessionId = sessionId,
+            DeliveryId = deliveryId,
+            Attempt = attempt,
+            CallbackId = callbackId,
+            RetryAt = Timestamp.FromDateTimeOffset(retryAt),
+        }, ct);
+    }
+
+    private static string BuildCompletionNotificationRetryCallbackId(string sessionId, string deliveryId) =>
+        RuntimeCallbackKeyComposer.BuildCallbackId(
+            CompletionNotificationRetryCallbackPrefix,
+            sessionId,
+            deliveryId);
+
+    private static EventEnvelopePublishOptions BuildCompletionNotificationRetryOptions(
+        string callbackId,
+        int attempt) =>
+        new()
+        {
+            Delivery = new EventEnvelopeDeliveryOptions
+            {
+                DeduplicationOperationId = RuntimeCallbackKeyComposer.BuildCallbackId(
+                    callbackId,
+                    attempt.ToString(CultureInfo.InvariantCulture)),
+            },
+        };
+
+    private static long CalculateCompletionNotificationRetryDelayMs(int attempt)
+    {
+        var exponent = Math.Clamp(attempt - 1, 0, 7);
+        var delayMs = CompletionNotificationRetryInitialDelayMs * (1L << exponent);
+        return Math.Min(delayMs, CompletionNotificationRetryMaxDelayMs);
+    }
+
+    private static bool HasElapsedCompletionNotificationDeadline(
+        RoleChatRunContext runContext,
+        DateTimeOffset now) =>
+        runContext.CompletionNotificationExpiresAtUnixMs > 0 &&
+        runContext.CompletionNotificationExpiresAtUnixMs <= now.ToUnixTimeMilliseconds();
+
+    private static string ResolveCompletionNotificationDeliveryId(
+        string sessionId,
+        RoleChatRunContext? runContext)
+    {
+        if (!string.IsNullOrWhiteSpace(runContext?.CompletionNotificationDeliveryId))
+            return runContext.CompletionNotificationDeliveryId.Trim();
+        if (!string.IsNullOrWhiteSpace(runContext?.RunId) ||
+            !string.IsNullOrWhiteSpace(runContext?.CommandId))
+        {
+            return $"{runContext?.RunId}:{runContext?.CommandId}";
+        }
+
+        return sessionId;
+    }
+
     private static bool IsDisplayableCompletionContent(string? content) =>
         !string.IsNullOrWhiteSpace(content) &&
         !content.StartsWith(LlmFailureContentPrefix, StringComparison.Ordinal) &&
@@ -1527,18 +2270,42 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
 
         if (!string.Equals(trackedSession.Prompt, request.Prompt, StringComparison.Ordinal))
         {
-            throw new InvalidOperationException(
+            throw new RoleChatCommandAttemptRejectionException(
+                RoleChatCommandAttemptRejectionReason.PromptMismatch,
                 $"Session '{request.SessionId}' already exists with a different prompt.");
         }
 
         if (!HaveMatchingInputParts(trackedSession.InputParts, request.InputParts))
         {
-            throw new InvalidOperationException(
+            throw new RoleChatCommandAttemptRejectionException(
+                RoleChatCommandAttemptRejectionReason.InputPartsMismatch,
                 $"Session '{request.SessionId}' already exists with different multimodal input.");
+        }
+
+        if (!RoleChatRunContextsEqual(trackedSession.RunContext, request.RunContext))
+        {
+            throw new InvalidOperationException(
+                $"Session '{request.SessionId}' already exists with a different Run context.");
         }
 
         return trackedSession;
     }
+
+    private sealed class RoleChatCommandAttemptRejectionException(
+        RoleChatCommandAttemptRejectionReason reason,
+        string message) : InvalidOperationException(message)
+    {
+        public RoleChatCommandAttemptRejectionReason Reason { get; } = reason;
+    }
+
+    private static string ResolveCommandAttemptId(ChatRequestEvent request) =>
+        string.IsNullOrWhiteSpace(request.CommandAttemptId)
+            ? $"role-chat-attempt-{Guid.NewGuid():N}"
+            : request.CommandAttemptId.Trim();
+
+    private static bool RoleChatRunContextsEqual(RoleChatRunContext? left, RoleChatRunContext? right) =>
+        left == null && right == null ||
+        left != null && right != null && left.Equals(right);
 
     private static RoleGAgentState ApplyInitializeRoleAgent(
         RoleGAgentState current,
@@ -1629,6 +2396,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         session.Prompt = evt.Prompt ?? string.Empty;
         session.InputParts.Clear();
         session.InputParts.Add(evt.InputParts);
+        session.RunContext = evt.RunContext?.Clone();
         sessions[evt.SessionId] = session;
         TrimTrackedSessions(next);
         return next;
@@ -1825,6 +2593,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         if (string.IsNullOrWhiteSpace(evt.SessionId))
             return current;
 
+        if (HasPendingCompletionNotification(current, evt.SessionId))
+            return current;
+
         var next = current.Clone();
         if (!next.Sessions.TryGetValue(evt.SessionId, out var session))
         {
@@ -1838,6 +2609,10 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             session.Sequence = next.MessageCount;
         }
 
+        var runContextMatches = RoleChatRunContextsEqual(session.RunContext, evt.RunContext);
+        var completionNotificationDeliveryStatus = runContextMatches
+            ? session.CompletionNotificationDeliveryStatus
+            : RoleChatCompletionNotificationDeliveryStatus.Unspecified;
         session.Completed = true;
         session.Prompt = evt.Prompt ?? session.Prompt ?? string.Empty;
         session.FinalContent = evt.Content ?? string.Empty;
@@ -1849,24 +2624,320 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         session.OutputParts.Add(evt.OutputParts);
         session.ToolReceipts.Clear();
         session.ToolReceipts.Add(evt.ToolReceipts.Select(receipt => receipt.Clone()));
+        session.ToolResults.Clear();
+        session.ToolResults.Add(evt.ToolResults.Select(result => result.Clone()));
         session.Usage = evt.Usage?.Clone();
         session.Model = evt.Model ?? string.Empty;
+        session.Outcome = evt.Outcome;
+        session.AuthorizationRequired = evt.AuthorizationRequired?.Clone();
+        session.FailureCode = evt.FailureCode ?? string.Empty;
+        session.SafeMessage = evt.SafeMessage ?? string.Empty;
+        session.TerminalTime = evt.TerminalTime?.Clone();
+        session.RunContext = evt.RunContext?.Clone();
+        session.CompletionNotificationDeliveryStatus =
+            !string.IsNullOrWhiteSpace(session.RunContext?.CompletionNotificationActorId)
+                ? completionNotificationDeliveryStatus ==
+                  RoleChatCompletionNotificationDeliveryStatus.Unspecified
+                    ? RoleChatCompletionNotificationDeliveryStatus.Prepared
+                    : completionNotificationDeliveryStatus
+                : RoleChatCompletionNotificationDeliveryStatus.Unspecified;
+        if (!runContextMatches)
+        {
+            session.CompletionNotificationAttempt = 0;
+            session.CompletionNotificationRetryCallbackId = string.Empty;
+            session.CompletionNotificationRetryAt = null;
+        }
+        foreach (var progress in evt.TerminalProgress)
+        {
+            if (string.Equals(progress.SessionId, evt.SessionId, StringComparison.Ordinal) &&
+                progress.Sequence > session.LastProgressSequence)
+            {
+                session.LastProgressSequence = progress.Sequence;
+            }
+        }
         next.Sessions[evt.SessionId] = session;
         TrimTrackedSessions(next);
         return next;
     }
 
-    private static IEnumerable<ToolCallEvent> ToToolCallEvents(IEnumerable<ToolCall> toolCalls)
+    private static RoleGAgentState ApplyChatSessionProgressed(
+        RoleGAgentState current,
+        RoleChatSessionProgressedEvent evt)
+    {
+        if (string.IsNullOrWhiteSpace(evt.SessionId) || evt.Sequence <= 0)
+            return current;
+
+        var next = current.Clone();
+        if (!next.Sessions.TryGetValue(evt.SessionId, out var session))
+        {
+            session = new RoleChatSessionState();
+            next.Sessions[evt.SessionId] = session;
+        }
+
+        if (evt.Sequence <= session.LastProgressSequence)
+            return current;
+
+        session.LastProgressSequence = evt.Sequence;
+        TrimTrackedSessions(next);
+        return next;
+    }
+
+    private static RoleGAgentState ApplyCompletionNotificationDispatched(
+        RoleGAgentState current,
+        RoleChatCompletionNotificationDispatchedEvent evt)
+    {
+        if (string.IsNullOrWhiteSpace(evt.SessionId) ||
+            !current.Sessions.TryGetValue(evt.SessionId, out var session))
+        {
+            return current;
+        }
+
+        var deliveryMatches = !string.IsNullOrWhiteSpace(evt.DeliveryId)
+            ? string.Equals(
+                ResolveCompletionNotificationDeliveryId(evt.SessionId, session.RunContext),
+                evt.DeliveryId,
+                StringComparison.Ordinal)
+            : RoleChatRunContextsEqual(session.RunContext, evt.RunContext);
+        if (!deliveryMatches)
+            return current;
+
+        if (!IsEligibleCompletionNotificationTerminalTransition(session, evt.Attempt))
+            return current;
+
+        var next = current.Clone();
+        var nextSession = next.Sessions[evt.SessionId];
+        nextSession.CompletionNotificationDeliveryStatus =
+            RoleChatCompletionNotificationDeliveryStatus.Dispatched;
+        nextSession.CompletionNotificationAttempt = Math.Max(
+            nextSession.CompletionNotificationAttempt,
+            evt.Attempt);
+        nextSession.CompletionNotificationRetryCallbackId = string.Empty;
+        nextSession.CompletionNotificationRetryAt = null;
+        TrimTrackedSessions(next);
+        return next;
+    }
+
+    private static RoleGAgentState ApplyCompletionNotificationRetryScheduled(
+        RoleGAgentState current,
+        RoleChatCompletionNotificationRetryScheduledEvent evt)
+    {
+        if (!TryResolveCompletionNotificationSession(current, evt.SessionId, evt.DeliveryId, out var session) ||
+            session == null ||
+            !IsCompletionNotificationDeliveryPending(session) ||
+            evt.Attempt != session.CompletionNotificationAttempt + 1)
+        {
+            return current;
+        }
+
+        var next = current.Clone();
+        var nextSession = next.Sessions[evt.SessionId];
+        nextSession.CompletionNotificationDeliveryStatus =
+            RoleChatCompletionNotificationDeliveryStatus.RetryScheduled;
+        nextSession.CompletionNotificationAttempt = evt.Attempt;
+        nextSession.CompletionNotificationRetryCallbackId = evt.CallbackId ?? string.Empty;
+        nextSession.CompletionNotificationRetryAt = evt.RetryAt?.Clone();
+        return next;
+    }
+
+    private static RoleGAgentState ApplyCompletionNotificationExpired(
+        RoleGAgentState current,
+        RoleChatCompletionNotificationExpiredEvent evt)
+    {
+        if (!TryResolveCompletionNotificationSession(current, evt.SessionId, evt.DeliveryId, out var session) ||
+            session == null ||
+            !IsEligibleCompletionNotificationTerminalTransition(session, evt.Attempt))
+        {
+            return current;
+        }
+
+        var next = current.Clone();
+        var nextSession = next.Sessions[evt.SessionId];
+        nextSession.CompletionNotificationDeliveryStatus =
+            RoleChatCompletionNotificationDeliveryStatus.Expired;
+        nextSession.CompletionNotificationAttempt = Math.Max(
+            nextSession.CompletionNotificationAttempt,
+            evt.Attempt);
+        nextSession.CompletionNotificationRetryCallbackId = string.Empty;
+        nextSession.CompletionNotificationRetryAt = null;
+        TrimTrackedSessions(next);
+        return next;
+    }
+
+    private static bool TryResolveCompletionNotificationSession(
+        RoleGAgentState state,
+        string sessionId,
+        string deliveryId,
+        out RoleChatSessionState? session)
+    {
+        if (!string.IsNullOrWhiteSpace(sessionId) &&
+            state.Sessions.TryGetValue(sessionId, out session) &&
+            string.Equals(
+                ResolveCompletionNotificationDeliveryId(sessionId, session.RunContext),
+                deliveryId,
+                StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        session = null;
+        return false;
+    }
+
+    private static bool IsCompletionNotificationDeliveryPending(RoleChatSessionState session) =>
+        session.CompletionNotificationDeliveryStatus is
+            RoleChatCompletionNotificationDeliveryStatus.Prepared or
+            RoleChatCompletionNotificationDeliveryStatus.RetryScheduled;
+
+    private static bool HasPendingCompletionNotification(RoleGAgentState state, string sessionId) =>
+        state.Sessions.TryGetValue(sessionId, out var session) &&
+        session.Completed &&
+        IsCompletionNotificationDeliveryPending(session);
+
+    private static bool IsEligibleCompletionNotificationTerminalTransition(
+        RoleChatSessionState session,
+        int attempt) =>
+        IsCompletionNotificationDeliveryPending(session) &&
+        (attempt == session.CompletionNotificationAttempt ||
+         attempt == session.CompletionNotificationAttempt + 1);
+
+    private IEnumerable<ToolCallEvent> ToToolCallEvents(
+        IEnumerable<ToolCall> toolCalls,
+        IReadOnlyList<AgentToolReceipt> toolReceipts,
+        IReadOnlyList<ToolCallEvent> toolCallSnapshots)
     {
         foreach (var toolCall in toolCalls)
         {
+            var snapshot = FindToolCallSnapshot(toolCallSnapshots, toolCall.Id);
             yield return new ToolCallEvent
             {
                 CallId = toolCall.Id,
                 ToolName = toolCall.Name,
-                ArgumentsJson = toolCall.ArgumentsJson,
+                ArgumentsJson = ShouldRedactToolCallArguments(toolCall.Id, toolReceipts)
+                    ? string.Empty
+                    : toolCall.ArgumentsJson,
+                Presentation = ResolveToolCallPresentation(toolCall.Name, snapshot),
             };
         }
+    }
+
+    private ToolPresentationDescriptor ResolveToolCallPresentation(
+        string toolName,
+        ToolCallEvent? snapshot) =>
+        snapshot == null
+            ? ToolPresentationDescriptors.Snapshot(Tools.Get(toolName), toolName)
+            : ToolPresentationDescriptors.Snapshot(snapshot.Presentation, toolName);
+
+    private static void CaptureToolCallSnapshot(
+        List<ToolCallEvent> snapshots,
+        ToolCallStartedChunk started)
+    {
+        var snapshot = new ToolCallEvent
+        {
+            CallId = started.ToolCall.Id,
+            ToolName = started.ToolCall.Name,
+            ArgumentsJson = started.ToolCall.ArgumentsJson,
+            Presentation = ToolPresentationDescriptors.Snapshot(
+                started.Presentation,
+                started.ToolCall.Name),
+        };
+        var existingIndex = string.IsNullOrWhiteSpace(snapshot.CallId)
+            ? -1
+            : snapshots.FindIndex(candidate =>
+                string.Equals(candidate.CallId, snapshot.CallId, StringComparison.Ordinal));
+        if (existingIndex >= 0)
+            snapshots[existingIndex] = snapshot;
+        else
+            snapshots.Add(snapshot);
+    }
+
+    private static ToolCallEvent? FindToolCallSnapshot(
+        IReadOnlyList<ToolCallEvent> snapshots,
+        string? callId) =>
+        string.IsNullOrWhiteSpace(callId)
+            ? null
+            : snapshots.FirstOrDefault(candidate =>
+                string.Equals(candidate.CallId, callId, StringComparison.Ordinal));
+
+    private static IReadOnlyList<ToolCall> MergeCompletedToolCalls(
+        IReadOnlyList<ToolCall> accumulated,
+        IReadOnlyList<ToolCallEvent> snapshots)
+    {
+        var merged = accumulated.Select(CloneToolCall).ToList();
+        foreach (var snapshot in snapshots)
+        {
+            if (!string.IsNullOrWhiteSpace(snapshot.CallId) &&
+                merged.Any(candidate => string.Equals(candidate.Id, snapshot.CallId, StringComparison.Ordinal)))
+            {
+                continue;
+            }
+
+            merged.Add(new ToolCall
+            {
+                Id = snapshot.CallId,
+                Name = snapshot.ToolName,
+                ArgumentsJson = snapshot.ArgumentsJson,
+            });
+        }
+
+        return merged;
+    }
+
+    private static ToolCall CloneToolCall(ToolCall toolCall) => new()
+    {
+        Id = toolCall.Id,
+        Name = toolCall.Name,
+        ArgumentsJson = toolCall.ArgumentsJson,
+    };
+
+    private static bool ShouldRedactToolCallArguments(
+        string? callId,
+        IReadOnlyList<AgentToolReceipt> toolReceipts) =>
+        toolReceipts.Any(receipt =>
+            string.Equals(receipt.CallId, callId, StringComparison.Ordinal) &&
+            receipt.Status is AgentToolReceiptStatus.Error or
+                AgentToolReceiptStatus.Denied or
+                AgentToolReceiptStatus.AuthorizationRequired);
+
+    private Timestamp CreateTerminalTimestamp() =>
+        Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow());
+
+    private void RestoreHistoryFromCommittedSessions()
+    {
+        var messages = State.Sessions.Values
+            .Where(static session => session.Completed && !string.IsNullOrWhiteSpace(session.Prompt))
+            .OrderBy(static session => session.Sequence)
+            .SelectMany(BuildCommittedSessionHistory)
+            .TakeLast(History.MaxMessages)
+            .ToArray();
+        History.Import(messages);
+    }
+
+    private static IEnumerable<SerializableMessage> BuildCommittedSessionHistory(RoleChatSessionState session)
+    {
+        yield return new SerializableMessage
+        {
+            Role = "user",
+            Content = session.Prompt ?? string.Empty,
+            ContentParts = session.InputParts.Count == 0
+                ? null
+                : ContentPartProtoMapper.FromProtoList(session.InputParts),
+        };
+
+        var assistantContent = session.Outcome switch
+        {
+            RoleChatSessionOutcome.Blocked => session.AuthorizationRequired?.SafeMessage,
+            RoleChatSessionOutcome.Failed => session.SafeMessage,
+            _ => session.FinalContent,
+        };
+        yield return new SerializableMessage
+        {
+            Role = "assistant",
+            Content = assistantContent ?? string.Empty,
+            ReasoningContent = session.FinalReasoningContent,
+            ContentParts = session.OutputParts.Count == 0
+                ? null
+                : ContentPartProtoMapper.FromProtoList(session.OutputParts),
+        };
     }
 
     private static void TrimTrackedSessions(RoleGAgentState state)
@@ -1881,6 +2952,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
 
             foreach (var session in state.Sessions)
             {
+                if (!CanTrimTrackedSession(session.Value))
+                    continue;
+
                 var sequence = session.Value.Sequence <= 0 ? long.MinValue : session.Value.Sequence;
                 if (sequence < oldestSequence)
                 {
@@ -1895,6 +2969,12 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             state.Sessions.Remove(oldestSessionId);
         }
     }
+
+    private static bool CanTrimTrackedSession(RoleChatSessionState session) =>
+        string.IsNullOrWhiteSpace(session.RunContext?.CompletionNotificationActorId) ||
+        session.CompletionNotificationDeliveryStatus is
+            RoleChatCompletionNotificationDeliveryStatus.Dispatched or
+            RoleChatCompletionNotificationDeliveryStatus.Expired;
 
     private static AIAgentConfigOverrides EnsureConfigOverrides(RoleGAgentState state)
     {
@@ -1990,6 +3070,19 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
 
     private readonly record struct LLMRequestLogSummary(int PromptLength, int InputPartCount);
 
+    private sealed class AgentProfileTurnAuthorityException : InvalidOperationException
+    {
+        public AgentProfileTurnAuthorityException(string message)
+            : base(message)
+        {
+        }
+
+        public AgentProfileTurnAuthorityException(string message, Exception innerException)
+            : base(message, innerException)
+        {
+        }
+    }
+
     private static bool HaveMatchingInputParts(
         Google.Protobuf.Collections.RepeatedField<ChatContentPart> existing,
         Google.Protobuf.Collections.RepeatedField<ChatContentPart> incoming)
@@ -2012,12 +3105,32 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         IReadOnlyList<ToolCall> ToolCalls,
         IReadOnlyList<ContentPart> ContentParts,
         IReadOnlyList<AgentToolReceipt> ToolReceipts,
+        IReadOnlyList<ToolResultEvent> ToolResults,
         TokenUsage? Usage,
         string? Model,
-        bool ContentEmitted)
+        bool ContentEmitted,
+        RoleChatSessionOutcome Outcome = RoleChatSessionOutcome.Completed,
+        string FailureCode = "",
+        string SafeMessage = "",
+        NyxIdAuthorizationRequiredEvent? AuthorizationRequired = null)
     {
+        public IReadOnlyList<ToolCallEvent> ToolCallSnapshots { get; init; } = [];
+
         public static SessionReplayRecord FromFailure(string content) =>
-            new(content, string.Empty, [], [], [], Usage: null, Model: null, ContentEmitted: false);
+            new(
+                content,
+                string.Empty,
+                [],
+                [],
+                [],
+                [],
+                Usage: null,
+                Model: null,
+                ContentEmitted: false,
+                Outcome: RoleChatSessionOutcome.Failed,
+                FailureCode: "LLM_REQUEST_FAILED",
+                SafeMessage: "The chat request failed. Please try again.",
+                AuthorizationRequired: null);
     }
 
     private static TokenUsagePayload? ToTokenUsagePayload(TokenUsage? usage) =>

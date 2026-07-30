@@ -4,6 +4,8 @@ namespace Aevatar.CQRS.Projection.Core.Orchestration;
 
 internal static class ProjectionScopeStateApplier
 {
+    private const int RecentObservedEnvelopeLimit = 50;
+
     public static ProjectionScopeState ApplyStarted(ProjectionScopeState current, ProjectionScopeStartedEvent evt)
     {
         var next = current.Clone();
@@ -43,6 +45,19 @@ internal static class ProjectionScopeStateApplier
         var next = current.Clone();
         next.LastObservedVersion = Math.Max(current.LastObservedVersion, evt.LastObservedVersion);
         next.LastSuccessfulVersion = Math.Max(current.LastSuccessfulVersion, evt.LastSuccessfulVersion);
+        if (!string.IsNullOrWhiteSpace(evt.SourceActorId) && evt.LastSuccessfulVersion > 0)
+        {
+            var previous = next.LastSuccessfulVersionsByActor.TryGetValue(evt.SourceActorId, out var version)
+                ? version
+                : 0;
+            next.LastSuccessfulVersionsByActor[evt.SourceActorId] = Math.Max(previous, evt.LastSuccessfulVersion);
+        }
+        if (evt.ObservedEnvelope != null)
+        {
+            next.RecentObservedEnvelopes.Add(evt.ObservedEnvelope.Clone());
+            while (next.RecentObservedEnvelopes.Count > RecentObservedEnvelopeLimit)
+                next.RecentObservedEnvelopes.RemoveAt(0);
+        }
         next.UpdatedAtUtc = evt.OccurredAtUtc?.Clone();
         return next;
     }

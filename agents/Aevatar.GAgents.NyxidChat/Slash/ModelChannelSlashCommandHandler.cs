@@ -106,21 +106,17 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
         }
         catch (BindingScopeMismatchException)
         {
-            return await SelfHealRevokedBindingAsync(
-                context,
-                reason: "auto_self_heal_scope_mismatch",
-                submittedMessage: "当前 NyxID 绑定缺少 LLM route 权限,本地清理已提交。请稍后发送 /init 完成新绑定。",
-                degradedMessage: "当前 NyxID 绑定缺少 LLM route 权限,本地清理提交失败。请稍后重试 /models,或发送 /unbind 后再发送 /init 重新绑定。",
-                ct).ConfigureAwait(false);
+            return new MessageContent
+            {
+                Text = "当前 NyxID 绑定缺少 LLM route 权限。请发送 /init 更新现有绑定的服务授权。",
+            };
         }
         catch (BindingServiceAccessMismatchException)
         {
-            return await SelfHealRevokedBindingAsync(
-                context,
-                reason: "auto_self_heal_service_access_mismatch",
-                submittedMessage: "当前 NyxID 绑定未授权 Aevatar service,本地清理已提交。请稍后发送 /init,并在授权页保留 Aevatar service。",
-                degradedMessage: "当前 NyxID 绑定未授权 Aevatar service,本地清理提交失败。请发送 /unbind 后再发送 /init 重新绑定。",
-                ct).ConfigureAwait(false);
+            return new MessageContent
+            {
+                Text = "当前 NyxID 绑定缺少 Aevatar、默认 LLM、Ornn service 或 Sandbox service 授权。请发送 /init 更新现有绑定的服务授权。",
+            };
         }
         catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or HttpRequestException or NotSupportedException)
         {
@@ -254,7 +250,11 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
     {
         try
         {
-            await _selectionService!.SetByServiceAsync(context, option.ServiceId, modelOverride, ct).ConfigureAwait(false);
+            var userServiceId = InventoryUserServiceId(option) ??
+                                throw new InvalidOperationException(
+                                    "The selected LLM option does not have an inventory identity.");
+            await _selectionService!.SetByServiceAsync(context, userServiceId, modelOverride, ct)
+                .ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
         {
@@ -434,7 +434,7 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
     {
         var matches = available
             .Where(option =>
-                string.Equals(option.ServiceId, requested, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(InventoryUserServiceId(option), requested, StringComparison.Ordinal) ||
                 string.Equals(option.ServiceSlug, requested, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(option.DisplayName, requested, StringComparison.OrdinalIgnoreCase))
             .ToArray();
@@ -495,13 +495,21 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
 
     private static IEnumerable<string> ServiceTokens(UserLlmOption option)
     {
-        if (!string.IsNullOrWhiteSpace(option.ServiceId))
-            yield return option.ServiceId.Trim();
+        if (InventoryUserServiceId(option) is { } userServiceId)
+            yield return userServiceId;
         if (!string.IsNullOrWhiteSpace(option.ServiceSlug))
             yield return option.ServiceSlug.Trim();
         if (!string.IsNullOrWhiteSpace(option.DisplayName))
             yield return option.DisplayName.Trim();
     }
+
+    private static string? InventoryUserServiceId(UserLlmOption option) =>
+        option.Identity is
+        {
+            Authority: UserLlmIdentityAuthority.NyxIdUserServicesInventory,
+        } identity
+            ? UserLlmPreferenceWriteCore.NormalizeOptional(identity.NyxIdUserServiceId)
+            : null;
 
     private static string BuildUserFacingFailureMessage(Exception ex) => ex switch
     {

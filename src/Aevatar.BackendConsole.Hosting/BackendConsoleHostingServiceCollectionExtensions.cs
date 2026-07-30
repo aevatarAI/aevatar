@@ -28,7 +28,7 @@ public static class BackendConsoleHostingServiceCollectionExtensions
         var options = new BackendConsoleOptions
         {
             OidcAuthority = section[nameof(BackendConsoleOptions.OidcAuthority)] ?? string.Empty,
-            OidcClientId = section[nameof(BackendConsoleOptions.OidcClientId)] ?? string.Empty,
+            OidcClientId = BackendConsoleOidcClientIdResolver.Resolve(configuration),
             OidcScope = section[nameof(BackendConsoleOptions.OidcScope)] ?? string.Empty,
             OidcResources = section
                 .GetSection(nameof(BackendConsoleOptions.OidcResources))
@@ -43,7 +43,7 @@ public static class BackendConsoleHostingServiceCollectionExtensions
         };
         ApplyFallbacks(configuration, options);
         ApplyHostEnvironmentOverrides(options);
-        NormalizeOidcResources(options);
+        NormalizeOidcResources(configuration, options);
         return options;
     }
 
@@ -68,14 +68,15 @@ public static class BackendConsoleHostingServiceCollectionExtensions
     private static void ApplyHostEnvironmentOverrides(BackendConsoleOptions options)
     {
         options.OidcAuthority = EnvironmentOverride("HOST_BACKEND_CONSOLE_OIDC_AUTHORITY", options.OidcAuthority);
-        options.OidcClientId = EnvironmentOverride("HOST_BACKEND_CONSOLE_OIDC_CLIENT_ID", options.OidcClientId);
         options.OidcScope = EnvironmentOverride("HOST_BACKEND_CONSOLE_OIDC_SCOPE", options.OidcScope);
         options.NyxApiBaseUrl = EnvironmentOverride("HOST_BACKEND_CONSOLE_NYX_API_BASE_URL", options.NyxApiBaseUrl);
         options.StorageKey = EnvironmentOverride("HOST_BACKEND_CONSOLE_STORAGE_KEY", options.StorageKey);
         options.DefaultReturnPath = EnvironmentOverride("HOST_BACKEND_CONSOLE_DEFAULT_RETURN_PATH", options.DefaultReturnPath);
     }
 
-    private static void NormalizeOidcResources(BackendConsoleOptions options)
+    private static void NormalizeOidcResources(
+        IConfiguration configuration,
+        BackendConsoleOptions options)
     {
         options.NyxApiBaseUrl = options.NyxApiBaseUrl.Trim().TrimEnd('/');
         var resources = options.OidcResources
@@ -91,7 +92,13 @@ public static class BackendConsoleHostingServiceCollectionExtensions
         }
 
         var requiredResource =
-            $"{options.NyxApiBaseUrl.Trim().TrimEnd('/')}/api/v1/proxy/s/aevatar";
+            $"{options.NyxApiBaseUrl}/api/v1/proxy/s/aevatar";
+        var configuredOrnnServiceSlug = configuration["Aevatar:Ornn:NyxIdSlug"]?.Trim();
+        var ornnServiceSlug = string.IsNullOrEmpty(configuredOrnnServiceSlug)
+            ? "ornn-api"
+            : configuredOrnnServiceSlug;
+        var ornnResource =
+            $"{options.NyxApiBaseUrl}/api/v1/proxy/s/{Uri.EscapeDataString(ornnServiceSlug)}";
         var legacyAuthorityResource = string.IsNullOrWhiteSpace(options.OidcAuthority)
             ? null
             : $"{options.OidcAuthority.Trim().TrimEnd('/')}/api/v1/proxy/s/aevatar";
@@ -102,9 +109,10 @@ public static class BackendConsoleHostingServiceCollectionExtensions
                 .ToArray();
         }
 
-        options.OidcResources = resources.Contains(requiredResource, StringComparer.Ordinal)
-            ? resources
-            : [requiredResource, .. resources];
+        options.OidcResources = new[] { requiredResource, ornnResource }
+            .Concat(resources)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
     }
 
     private static string EnvironmentOverride(string key, string configuredValue)

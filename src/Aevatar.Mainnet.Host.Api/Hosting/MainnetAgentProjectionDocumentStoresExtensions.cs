@@ -25,6 +25,7 @@ using Aevatar.GAgents.Device;
 using Aevatar.GAgents.Scheduled;
 using Aevatar.GAgents.StatusDashboard;
 using Aevatar.GAgents.StreamingProxy;
+using Aevatar.Mainnet.Host.Api.Status;
 using Aevatar.Workflow.Projection.ReadModels;
 using Google.Protobuf;
 using Microsoft.Extensions.Configuration;
@@ -57,18 +58,15 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         if (documentProvider.ElasticsearchEnabled)
         {
             AddElasticsearchStores(services, configuration);
-            services.Configure<AevatarOAuthClientEsAclOptions>(options =>
-            {
-                options.EnforcementMode = AevatarOAuthClientEsAclEnforcementMode.Strict;
-            });
-            // Replace the identity module's default Unavailable probe with a real
-            // HTTP-backed probe that inspects the Elasticsearch security API using
-            // the SAME endpoint/credentials the projection store uses, so the ACL
-            // startup guard verifies the cluster instead of self-attesting a flag.
-            services.Replace(ServiceDescriptor.Singleton<IOAuthClientEsAclProbe>(
-                sp => new HttpOAuthClientEsAclProbe(
-                    ProjectionDocumentProviderConfiguration.BindRequiredElasticsearchOptions(configuration),
-                    sp.GetService<ILogger<HttpOAuthClientEsAclProbe>>())));
+            // Keep the operator-bound enforcement mode. The conservative built-in
+            // HTTP probe cannot prove that every other Elasticsearch identity is
+            // denied, so forcing Strict here would make the stock Mainnet
+            // composition impossible to start. Warn remains the deployable default;
+            // Strict is an explicit deployment policy paired with a stronger probe.
+            // Replace only the identity module's Unavailable fallback. A deployment may
+            // pre-register a stronger verifier that can positively prove the effective
+            // grant; Mainnet must not overwrite it with the conservative built-in probe.
+            RegisterDefaultOAuthClientEsAclProbe(services, configuration);
             services.TryAddEnumerable(
                 ServiceDescriptor.Singleton<IHostedService, AevatarOAuthClientEsAclStartupGuard>());
             // Self-heal projection-index schema drift at startup (reindex + atomic alias swap)
@@ -90,21 +88,50 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         return services;
     }
 
+    private static void RegisterDefaultOAuthClientEsAclProbe(
+        IServiceCollection services,
+        IConfiguration configuration)
+    {
+        var registrations = services
+            .Where(static descriptor => descriptor.ServiceType == typeof(IOAuthClientEsAclProbe))
+            .ToArray();
+        var customRegistrations = registrations
+            .Where(static descriptor =>
+                descriptor.ImplementationType != typeof(UnavailableOAuthClientEsAclProbe))
+            .ToArray();
+        if (customRegistrations.Length > 1)
+        {
+            throw new InvalidOperationException(
+                "Mainnet requires exactly one custom IOAuthClientEsAclProbe registration.");
+        }
+
+        foreach (var fallback in registrations.Except(customRegistrations))
+            services.Remove(fallback);
+
+        if (customRegistrations.Length == 1)
+            return;
+
+        services.AddSingleton<IOAuthClientEsAclProbe>(sp =>
+            new HttpOAuthClientEsAclProbe(
+                ProjectionDocumentProviderConfiguration.BindRequiredElasticsearchOptions(configuration),
+                sp.GetService<ILogger<HttpOAuthClientEsAclProbe>>()));
+    }
+
     private static void AddElasticsearchStores(IServiceCollection services, IConfiguration configuration)
     {
         RegisterElasticsearchAuditTrailArtifactStore(services, configuration);
+        RegisterElasticsearchHealthProbeOperationalSnapshotStore(services, configuration);
         TryAddElasticsearchStore<ChannelBotRegistrationDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<ConversationDeliveryCurrentStateDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<ProjectionScopeStatusDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<ExternalIdentityBindingDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<AevatarOAuthClientDocument>(services, configuration, static document => document.Id);
+        TryAddElasticsearchStore<ManagedCodexCredentialDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<ChatRoutePolicyCurrentStateDocument>(services, configuration, static document => document.ActorId);
         TryAddElasticsearchStore<DeviceRegistrationDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<UserAgentCatalogDocument>(services, configuration, static document => document.Id);
-        TryAddElasticsearchStore<SkillRunnerExecutionDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<UserAgentCatalogNyxCredentialDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<UserAgentApiKeyRevocationDocument>(services, configuration, static document => document.Id);
-        TryAddElasticsearchStore<HealthProbeTargetDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<WorkflowExternalApprovalContinuationDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<StreamingProxyChatSessionTerminalSnapshot>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<StreamingProxyRoomParticipantsSnapshot>(services, configuration, static document => document.Id);
@@ -113,18 +140,20 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
     private static void AddInMemoryStores(IServiceCollection services)
     {
         RegisterInMemoryAuditTrailArtifactStore(services);
+        services.Replace(ServiceDescriptor.Singleton<
+            IHealthProbeOperationalSnapshotStore,
+            InMemoryHealthProbeOperationalSnapshotStore>());
         TryAddInMemoryStore<ChannelBotRegistrationDocument>(services, static document => document.Id);
         TryAddInMemoryStore<ConversationDeliveryCurrentStateDocument>(services, static document => document.Id);
         TryAddInMemoryStore<ProjectionScopeStatusDocument>(services, static document => document.Id);
         TryAddInMemoryStore<ExternalIdentityBindingDocument>(services, static document => document.Id);
         TryAddInMemoryStore<AevatarOAuthClientDocument>(services, static document => document.Id);
+        TryAddInMemoryStore<ManagedCodexCredentialDocument>(services, static document => document.Id);
         TryAddInMemoryStore<ChatRoutePolicyCurrentStateDocument>(services, static document => document.ActorId);
         TryAddInMemoryStore<DeviceRegistrationDocument>(services, static document => document.Id);
         TryAddInMemoryStore<UserAgentCatalogDocument>(services, static document => document.Id);
-        TryAddInMemoryStore<SkillRunnerExecutionDocument>(services, static document => document.Id);
         TryAddInMemoryStore<UserAgentCatalogNyxCredentialDocument>(services, static document => document.Id);
         TryAddInMemoryStore<UserAgentApiKeyRevocationDocument>(services, static document => document.Id);
-        TryAddInMemoryStore<HealthProbeTargetDocument>(services, static document => document.Id);
         TryAddInMemoryStore<WorkflowExternalApprovalContinuationDocument>(services, static document => document.Id);
         TryAddInMemoryStore(
             services,
@@ -151,13 +180,12 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         TryAddReadModelDescriptor<ProjectionScopeStatusDocument>(services, "projection-scope-status", "ProjectionMaterializationScopeGAgent", engineLabel, shape);
         TryAddReadModelDescriptor<ExternalIdentityBindingDocument>(services, "external-identity-binding", "ExternalIdentityBindingGAgent", engineLabel, shape);
         TryAddReadModelDescriptor<AevatarOAuthClientDocument>(services, "aevatar-oauth-client", "AevatarOAuthClientGAgent", engineLabel, shape);
+        TryAddReadModelDescriptor<ManagedCodexCredentialDocument>(services, "managed-codex-credential", "ManagedCodexCredentialGAgent", engineLabel, shape);
         TryAddReadModelDescriptor<ChatRoutePolicyCurrentStateDocument>(services, "chat-route-policy-current-state", "ChatRoutePolicyGAgent", engineLabel, shape);
         TryAddReadModelDescriptor<DeviceRegistrationDocument>(services, "device-registration", "DeviceGAgent", engineLabel, shape);
         TryAddReadModelDescriptor<UserAgentCatalogDocument>(services, "user-agent-catalog", "UserAgentCatalogGAgent", engineLabel, shape);
-        TryAddReadModelDescriptor<SkillRunnerExecutionDocument>(services, "skill-runner-execution", "SkillRunnerGAgent", engineLabel, shape);
         TryAddReadModelDescriptor<UserAgentCatalogNyxCredentialDocument>(services, "user-agent-catalog-nyx-credential", "UserAgentCatalogGAgent", engineLabel, shape);
         TryAddReadModelDescriptor<UserAgentApiKeyRevocationDocument>(services, "user-agent-api-key-revocation", "UserAgentCatalogGAgent", engineLabel, shape);
-        TryAddReadModelDescriptor<HealthProbeTargetDocument>(services, "health-probe-target", "HealthProbeGAgent", engineLabel, shape);
         // WorkflowExternalApprovalContinuationDocument is inventoried at the workflow store-registration
         // site (it owns that read-model); registering it here too would double-count it in the inventory.
         TryAddReadModelDescriptor<StreamingProxyChatSessionTerminalSnapshot>(services, "streaming-proxy-chat-session", "StreamingProxyChatSessionGAgent", engineLabel, shape);
@@ -172,10 +200,13 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         services.TryAddSingleton<ElasticsearchAuditTrailArtifactStore>(sp =>
             new ElasticsearchAuditTrailArtifactStore(
                 ProjectionDocumentProviderConfiguration.BindRequiredElasticsearchOptions(configuration),
-                sp.GetRequiredService<AuditTrailDocumentMetadataProvider>().Metadata));
+                sp.GetRequiredService<AuditTrailDocumentMetadataProvider>().Metadata,
+                logger: sp.GetRequiredService<ILogger<ElasticsearchAuditTrailArtifactStore>>()));
         services.TryAddSingleton<IAuditTrailArtifactStore>(static sp =>
             sp.GetRequiredService<ElasticsearchAuditTrailArtifactStore>());
         services.TryAddSingleton<IAuditTrailQueryPort>(static sp =>
+            sp.GetRequiredService<ElasticsearchAuditTrailArtifactStore>());
+        services.AddSingleton<IProjectionIndexReconcileTarget>(static sp =>
             sp.GetRequiredService<ElasticsearchAuditTrailArtifactStore>());
     }
 
@@ -184,6 +215,27 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         services.TryAddSingleton<InMemoryAuditTrailStore>();
         services.TryAddSingleton<IAuditTrailArtifactStore>(static sp => sp.GetRequiredService<InMemoryAuditTrailStore>());
         services.TryAddSingleton<IAuditTrailQueryPort>(static sp => sp.GetRequiredService<InMemoryAuditTrailStore>());
+    }
+
+    private static void RegisterElasticsearchHealthProbeOperationalSnapshotStore(
+        IServiceCollection services,
+        IConfiguration configuration)
+    {
+        services.TryAddSingleton<ElasticsearchHealthProbeOperationalSnapshotStore>(sp =>
+        {
+            var options = ProjectionDocumentProviderConfiguration.BindRequiredElasticsearchOptions(configuration);
+            return new ElasticsearchHealthProbeOperationalSnapshotStore(
+                options.Endpoints,
+                options.IndexPrefix,
+                options.RequestTimeoutMs,
+                options.Username,
+                options.Password,
+                logger: sp.GetRequiredService<ILogger<ElasticsearchHealthProbeOperationalSnapshotStore>>());
+        });
+        services.Replace(ServiceDescriptor.Singleton<IHealthProbeOperationalSnapshotStore>(static sp =>
+            sp.GetRequiredService<ElasticsearchHealthProbeOperationalSnapshotStore>()));
+        services.AddSingleton<IProjectionIndexReconcileTarget>(static sp =>
+            sp.GetRequiredService<ElasticsearchHealthProbeOperationalSnapshotStore>());
     }
 
     // Registers a single inventory descriptor that delegates to the read-model's already-registered
@@ -282,7 +334,11 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         };
     }
 
-    internal sealed class ElasticsearchAuditTrailArtifactStore : IAuditTrailArtifactStore, IAuditTrailQueryPort, IDisposable
+    internal sealed class ElasticsearchAuditTrailArtifactStore :
+        IAuditTrailArtifactStore,
+        IAuditTrailQueryPort,
+        IProjectionIndexReconcileTarget,
+        IDisposable
     {
         private const int DefaultAuditQueryTake = 100;
         private const int MaxAuditQueryTake = 500;
@@ -295,21 +351,25 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         private readonly HttpClient _httpClient;
         private readonly ElasticsearchProjectionDocumentStoreOptions _options;
         private readonly DocumentIndexMetadata _metadata;
-        private readonly SemaphoreSlim _indexGate = new(1, 1);
+        private readonly ElasticsearchIndexLifecycleManager _indexManager;
+        private readonly ILogger<ElasticsearchAuditTrailArtifactStore> _logger;
+        private readonly string _legacyIndexName;
         private readonly string _indexName;
-        private bool _indexEnsured;
 
         public ElasticsearchAuditTrailArtifactStore(
             ElasticsearchProjectionDocumentStoreOptions options,
             DocumentIndexMetadata metadata,
-            HttpMessageHandler? httpMessageHandler = null)
+            HttpMessageHandler? httpMessageHandler = null,
+            ILogger<ElasticsearchAuditTrailArtifactStore>? logger = null)
         {
             ArgumentNullException.ThrowIfNull(options);
             ArgumentNullException.ThrowIfNull(metadata);
 
             _options = options;
-            _metadata = metadata;
-            _indexName = BuildIndexName(options.IndexPrefix, metadata.IndexName);
+            _legacyIndexName = BuildIndexName(options.IndexPrefix, metadata.IndexName);
+            _indexName = $"{_legacyIndexName}-current";
+            _metadata = metadata with { IndexName = _indexName };
+            _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<ElasticsearchAuditTrailArtifactStore>.Instance;
             _httpClient = httpMessageHandler == null
                 ? new HttpClient()
                 : new HttpClient(httpMessageHandler, disposeHandler: true);
@@ -322,7 +382,20 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
                 var token = Convert.ToBase64String(Encoding.UTF8.GetBytes(raw));
                 _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", token);
             }
+
+            // Startup reconciliation is an explicit, governed provisioning operation. It remains
+            // enabled when request-path AutoCreateIndex is false.
+            _indexManager = new ElasticsearchIndexLifecycleManager(_httpClient, autoCreate: true, _logger);
         }
+
+        public string IndexAlias => _indexName;
+
+        public Task ReconcileIndexAsync(CancellationToken ct = default) =>
+            _indexManager.ReconcileArtifactWithReindexAsync(
+                _indexName,
+                _legacyIndexName,
+                _metadata,
+                ct);
 
         public async Task<Audit.AuditTrailDocument?> GetAsync(string auditId, CancellationToken ct = default)
         {
@@ -359,21 +432,39 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
                         $"Elasticsearch audit artifact index '{_indexName}' was not found.");
                 }
 
-                return new AuditTrailPage([], null, DateTimeOffset.UtcNow, null);
+                return new AuditTrailPage(
+                    [],
+                    null,
+                    DateTimeOffset.UtcNow,
+                    AuditQueryCoverage.Create(
+                        query,
+                        truncated: false,
+                        ingestionWatermark: null,
+                        completeThrough: null,
+                        schemaCompatibility: AuditSchemaCompatibility.Current));
             }
 
             await EnsureSuccessAsync(response, "audit artifact query", cancellationToken);
             var payload = await response.Content.ReadAsStringAsync(cancellationToken);
             using var jsonDocument = JsonDocument.Parse(payload);
-            var watermark = ParseAuditQueryWatermark(jsonDocument.RootElement);
+            var ingestionWatermark = ParseAuditIngestionWatermark(jsonDocument.RootElement);
+            var schemaCompatibility = ParseAuditSchemaCompatibility(jsonDocument.RootElement);
             if (!jsonDocument.RootElement.TryGetProperty("hits", out var hitsNode) ||
                 !hitsNode.TryGetProperty("hits", out var hitItems))
             {
-                return new AuditTrailPage([], null, DateTimeOffset.UtcNow, watermark);
+                return new AuditTrailPage(
+                    [],
+                    null,
+                    DateTimeOffset.UtcNow,
+                    AuditQueryCoverage.Create(
+                        query,
+                        truncated: false,
+                        ingestionWatermark: ingestionWatermark,
+                        completeThrough: null,
+                        schemaCompatibility: schemaCompatibility));
             }
 
-            var records = new List<AuditRecord>();
-            string? nextCursor = null;
+            var recordsWithCursors = new List<(AuditRecord Record, string? Cursor)>();
             foreach (var hit in hitItems.EnumerateArray())
             {
                 if (!hit.TryGetProperty("_source", out var sourceNode))
@@ -383,15 +474,24 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
                 if (storageDocument.Artifact?.Record is not { } record)
                     continue;
 
-                records.Add(record.Clone());
-                nextCursor = BuildSearchAfterCursor(hit);
+                recordsWithCursors.Add((record.Clone(), BuildSearchAfterCursor(hit)));
             }
+
+            var truncated = recordsWithCursors.Count > boundedTake;
+            var pageItems = recordsWithCursors.Take(boundedTake).ToArray();
+            var records = pageItems.Select(static item => item.Record).ToArray();
+            var nextCursor = truncated ? pageItems.LastOrDefault().Cursor : null;
 
             return new AuditTrailPage(
                 records,
-                records.Count == boundedTake ? nextCursor : null,
+                nextCursor,
                 DateTimeOffset.UtcNow,
-                watermark);
+                AuditQueryCoverage.Create(
+                    query,
+                    truncated,
+                    ingestionWatermark,
+                    completeThrough: null,
+                    schemaCompatibility: schemaCompatibility));
         }
 
         public async Task<AuditTrailArtifactWriteResult> UpsertAsync(
@@ -472,53 +572,10 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
 
         private async Task EnsureIndexAsync(CancellationToken ct)
         {
-            if (!_options.AutoCreateIndex || _indexEnsured)
+            if (!_options.AutoCreateIndex)
                 return;
 
-            await _indexGate.WaitAsync(ct);
-            try
-            {
-                if (_indexEnsured)
-                    return;
-
-                using var response = await _httpClient.PutAsync(
-                    _indexName,
-                    new StringContent(
-                        BuildIndexPayload(),
-                        Encoding.UTF8,
-                        "application/json"),
-                    ct);
-                if (!response.IsSuccessStatusCode)
-                {
-                    var payload = await response.Content.ReadAsStringAsync(ct);
-                    if (response.StatusCode != HttpStatusCode.BadRequest ||
-                        !payload.Contains("resource_already_exists_exception", StringComparison.OrdinalIgnoreCase))
-                    {
-                        throw new InvalidOperationException(
-                            $"Elasticsearch audit artifact index create failed: {(int)response.StatusCode} {response.ReasonPhrase}. body={payload}");
-                    }
-                }
-
-                _indexEnsured = true;
-            }
-            finally
-            {
-                _indexGate.Release();
-            }
-        }
-
-        private string BuildIndexPayload()
-        {
-            var payload = new Dictionary<string, object?>(StringComparer.Ordinal)
-            {
-                ["mappings"] = _metadata.Mappings,
-            };
-            if (_metadata.Settings.Count > 0)
-                payload["settings"] = _metadata.Settings;
-            if (_metadata.Aliases.Count > 0)
-                payload["aliases"] = _metadata.Aliases;
-
-            return JsonSerializer.Serialize(payload);
+            await ReconcileIndexAsync(ct);
         }
 
         private static string BuildAuditQueryPayload(AuditTrailQuery query, int boundedTake)
@@ -526,7 +583,7 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
             var filters = BuildAuditQueryFilters(query);
             var root = new Dictionary<string, object?>(StringComparer.Ordinal)
             {
-                ["size"] = boundedTake,
+                ["size"] = boundedTake + 1,
                 ["sort"] = new object[]
                 {
                     new Dictionary<string, object?>
@@ -548,11 +605,55 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
                 },
                 ["aggs"] = new Dictionary<string, object?>
                 {
-                    ["query_watermark"] = new Dictionary<string, object?>
+                    ["ingestion"] = new Dictionary<string, object?>
                     {
-                        ["max"] = new Dictionary<string, object?>
+                        ["global"] = new Dictionary<string, object?>(),
+                        ["aggs"] = new Dictionary<string, object?>
                         {
-                            ["field"] = "artifact.occurred_at",
+                            ["watermark"] = new Dictionary<string, object?>
+                            {
+                                ["max"] = new Dictionary<string, object?>
+                                {
+                                    ["field"] = "artifact.recorded_at",
+                                },
+                            },
+                        },
+                    },
+                    ["incompatible_schema_records"] = new Dictionary<string, object?>
+                    {
+                        ["filter"] = new Dictionary<string, object?>
+                        {
+                            ["bool"] = new Dictionary<string, object?>
+                            {
+                                ["filter"] = new object[]
+                                {
+                                    new Dictionary<string, object?>
+                                    {
+                                        ["exists"] = new Dictionary<string, object?>
+                                        {
+                                            ["field"] = "artifact.schema_version",
+                                        },
+                                    },
+                                },
+                                ["must_not"] = new object[]
+                                {
+                                    new Dictionary<string, object?>
+                                    {
+                                        ["term"] = new Dictionary<string, object?>
+                                        {
+                                            ["artifact.schema_version"] =
+                                                AuditContractSemantics.CurrentSchemaVersion,
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                    ["legacy_schema_records"] = new Dictionary<string, object?>
+                    {
+                        ["missing"] = new Dictionary<string, object?>
+                        {
+                            ["field"] = "artifact.schema_version",
                         },
                     },
                 },
@@ -588,7 +689,9 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
             AddTerm(filters, "artifact.operation_name.keyword", query.OperationName);
             AddTerm(filters, "artifact.target_kind.keyword", query.TargetKind);
             AddTerm(filters, "artifact.target_id.keyword", query.TargetId);
-            AddTerm(filters, "artifact.correlation_id.keyword", query.TraceId);
+            AddTerm(filters, "artifact.trace_id.keyword", query.TraceId);
+            AddTerm(filters, "artifact.correlation_id.keyword", query.CorrelationId);
+            AddTerm(filters, "artifact.record.correlation.causation_id.keyword", query.CausationId);
             AddTerm(filters, "artifact.request_id.keyword", query.RequestId);
             AddTerm(filters, "artifact.command_id.keyword", query.CommandId);
             AddTerm(filters, "artifact.record.correlation.call_id.keyword", query.CallId);
@@ -602,6 +705,8 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
             AddEnumTerm(filters, "artifact.record.actor_kind.keyword", query.ActorKind);
             AddEnumTerm(filters, "artifact.record.operation_kind.keyword", query.OperationKind);
             AddEnumTerm(filters, "artifact.outcome.keyword", query.Outcome);
+            AddEnumTerm(filters, "artifact.lifecycle_phase.keyword", query.LifecyclePhase);
+            AddEnumTerm(filters, "artifact.terminal_outcome.keyword", query.TerminalOutcome);
             AddEnumTerm(filters, "artifact.sensitivity_level.keyword", query.SensitivityLevel);
             AddEnumTerm(filters, "artifact.record.capture_plane.keyword", query.CapturePlane);
             if (query.CommittedStateVersion.HasValue)
@@ -728,10 +833,11 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
             return Convert.ToBase64String(Encoding.UTF8.GetBytes(sortNode.GetRawText()));
         }
 
-        private static DateTimeOffset? ParseAuditQueryWatermark(JsonElement root)
+        private static DateTimeOffset? ParseAuditIngestionWatermark(JsonElement root)
         {
             if (!root.TryGetProperty("aggregations", out var aggregations) ||
-                !aggregations.TryGetProperty("query_watermark", out var watermark) ||
+                !aggregations.TryGetProperty("ingestion", out var ingestion) ||
+                !ingestion.TryGetProperty("watermark", out var watermark) ||
                 !watermark.TryGetProperty("value_as_string", out var value) ||
                 value.ValueKind != JsonValueKind.String)
             {
@@ -745,6 +851,36 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
                 out var parsed)
                 ? parsed
                 : null;
+        }
+
+        private static AuditSchemaCompatibility ParseAuditSchemaCompatibility(JsonElement root)
+        {
+            if (!root.TryGetProperty("aggregations", out var aggregations))
+                return AuditSchemaCompatibility.Incompatible;
+
+            if (!aggregations.TryGetProperty("incompatible_schema_records", out var incompatible) ||
+                !incompatible.TryGetProperty("doc_count", out var incompatibleCountNode) ||
+                !incompatibleCountNode.TryGetInt64(out var incompatibleCount))
+            {
+                return AuditSchemaCompatibility.Incompatible;
+            }
+
+            if (incompatibleCount > 0)
+                return AuditSchemaCompatibility.Incompatible;
+
+            if (!aggregations.TryGetProperty("legacy_schema_records", out var legacy) ||
+                !legacy.TryGetProperty("doc_count", out var count) ||
+                !count.TryGetInt64(out var legacyCount))
+            {
+                return AuditSchemaCompatibility.Incompatible;
+            }
+
+            if (legacyCount > 0)
+            {
+                return AuditSchemaCompatibility.ContainsLegacyRecords;
+            }
+
+            return AuditSchemaCompatibility.Current;
         }
 
         private static AuditTrailArtifactWriteResult EvaluateExisting(
@@ -799,7 +935,7 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
             return new string(chars).Trim('-');
         }
 
-        private static async Task EnsureSuccessAsync(
+        private async Task EnsureSuccessAsync(
             HttpResponseMessage response,
             string operation,
             CancellationToken ct)
@@ -807,9 +943,14 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
             if (response.IsSuccessStatusCode)
                 return;
 
-            var payload = await response.Content.ReadAsStringAsync(ct);
+            _ = await response.Content.ReadAsStringAsync(ct);
+            _logger.LogError(
+                "Elasticsearch audit artifact operation failed. operation={Operation} statusCode={StatusCode} errorType={ErrorType}",
+                operation,
+                (int)response.StatusCode,
+                "backend_rejected");
             throw new InvalidOperationException(
-                $"Elasticsearch {operation} failed: {(int)response.StatusCode} {response.ReasonPhrase}. body={payload}");
+                $"Elasticsearch {operation} failed: {(int)response.StatusCode} {response.ReasonPhrase}. errorType=backend_rejected");
         }
 
         private static bool IsIndexNotFoundPayload(string payload) =>
@@ -817,8 +958,8 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
 
         public void Dispose()
         {
+            _indexManager.Dispose();
             _httpClient.Dispose();
-            _indexGate.Dispose();
         }
     }
 }

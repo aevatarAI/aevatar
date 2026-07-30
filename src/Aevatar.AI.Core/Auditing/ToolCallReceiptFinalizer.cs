@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.CodexExecution;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Tools;
@@ -29,7 +30,7 @@ public static class ToolCallReceiptFinalizer
                     context,
                     callSafety,
                     AgentToolReceiptStatus.Error,
-                    errorCode: "tool_execution_exception",
+                    errorCode: ResolveExceptionErrorCode(exception),
                     errorMessage: ResolveSafeExceptionClass(exception)),
                 IsSynthetic: true);
         }
@@ -44,7 +45,8 @@ public static class ToolCallReceiptFinalizer
             context.ToolCallId,
             context.ToolName,
             callSafety,
-            context.Result ?? string.Empty);
+            context.Result ?? string.Empty,
+            context.ArgumentsJson);
 
         return new FinalizedToolCallReceipt(
             successReceipt == null
@@ -138,6 +140,7 @@ public static class ToolCallReceiptFinalizer
     private static string ResolveSafeExceptionClass(Exception exception) =>
         exception switch
         {
+            CodexExecutionException => nameof(CodexExecutionException),
             OperationCanceledException => nameof(OperationCanceledException),
             TimeoutException => nameof(TimeoutException),
             HttpRequestException => nameof(HttpRequestException),
@@ -146,6 +149,11 @@ public static class ToolCallReceiptFinalizer
             NotSupportedException => nameof(NotSupportedException),
             _ => nameof(Exception),
         };
+
+    private static string ResolveExceptionErrorCode(Exception exception) =>
+        exception is CodexExecutionException codexException
+            ? CodexExecutionAuditFailureSemantics.From(codexException.Failure.Kind)
+            : "tool_execution_exception";
 
     private static string NormalizeSideEffectKind(string? sideEffectKind) =>
         string.IsNullOrWhiteSpace(sideEffectKind) ? string.Empty : sideEffectKind.Trim().ToLowerInvariant();
@@ -175,4 +183,40 @@ public static class ToolCallReceiptFinalizer
             return null;
         }
     }
+}
+
+internal static class CodexExecutionAuditFailureSemantics
+{
+    public static string From(CodexExecutionFailureKind kind) =>
+        kind switch
+        {
+            CodexExecutionFailureKind.TargetNotConfigured => "codex_execution_target_not_configured",
+            CodexExecutionFailureKind.AdmissionDenied => "codex_execution_admission_denied",
+            CodexExecutionFailureKind.LlmProviderNotConnected => "codex_execution_llm_provider_not_connected",
+            CodexExecutionFailureKind.CapacityUnavailable => "codex_execution_capacity_unavailable",
+            CodexExecutionFailureKind.ProvisioningFailed => "codex_execution_provisioning_failed",
+            CodexExecutionFailureKind.ReadinessFailed => "codex_execution_readiness_failed",
+            CodexExecutionFailureKind.IsolationUnavailable => "codex_execution_isolation_unavailable",
+            CodexExecutionFailureKind.MalformedOutput => "codex_execution_malformed_output",
+            CodexExecutionFailureKind.TerminalFailure => "codex_execution_terminal_failure",
+            CodexExecutionFailureKind.TimedOut => "codex_execution_timed_out",
+            CodexExecutionFailureKind.Cancelled => "codex_execution_cancelled",
+            CodexExecutionFailureKind.CleanupFailed => "codex_execution_cleanup_failed",
+            _ => "tool_execution_exception",
+        };
+
+    public static bool IsOwned(string? code) =>
+        code is
+            "codex_execution_target_not_configured" or
+            "codex_execution_admission_denied" or
+            "codex_execution_llm_provider_not_connected" or
+            "codex_execution_capacity_unavailable" or
+            "codex_execution_provisioning_failed" or
+            "codex_execution_readiness_failed" or
+            "codex_execution_isolation_unavailable" or
+            "codex_execution_malformed_output" or
+            "codex_execution_terminal_failure" or
+            "codex_execution_timed_out" or
+            "codex_execution_cancelled" or
+            "codex_execution_cleanup_failed";
 }

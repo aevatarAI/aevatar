@@ -1,10 +1,12 @@
-using System.Security.Claims;
 using Aevatar.BackendConsole.Hosting;
 using Aevatar.Capabilities;
+using Aevatar.GAgents.Channel.Identity.Abstractions;
+using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Mainnet.Host.Api.Skills;
 
@@ -43,6 +45,11 @@ internal static class WorkflowSkillsEndpoints
         data.MapGet("/{guid}", GetSkill)
             .WithName("GetWorkflowSkill")
             .WithSummary("Skill detail (authoritative runKind + whenToUse) resolved on selection.")
+            .RequireAuthorization();
+
+        data.MapGet("/{guid}/exact", GetExactSkill)
+            .WithName("GetWorkflowExactSkill")
+            .WithSummary("Exact Ornn authority fields for an Agent Profile skill reference.")
             .RequireAuthorization();
 
         data.MapPost("/{guid}/invoke", InvokeSkill)
@@ -106,6 +113,66 @@ internal static class WorkflowSkillsEndpoints
         return detail is null ? Results.NotFound() : Results.Json(detail);
     }
 
+    internal static async Task<IResult> GetExactSkill(
+        HttpContext http,
+        string guid,
+        [FromServices] IUserSkillCatalogQueryService catalog,
+        string? literalVersion = null,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(http);
+        ArgumentNullException.ThrowIfNull(catalog);
+
+        if (!TryGetBearerToken(http, out var token))
+            return Results.Unauthorized();
+        if (!Guid.TryParseExact(guid, "D", out var parsedGuid) ||
+            !string.Equals(parsedGuid.ToString("D"), guid, StringComparison.Ordinal))
+        {
+            return Results.BadRequest(new AgentProfileExactSkillError(
+                "invalid_guid",
+                "guid must be a canonical lowercase UUID."));
+        }
+        if (literalVersion is not null && !IsLiteralVersion(literalVersion))
+        {
+            return Results.BadRequest(new AgentProfileExactSkillError(
+                "invalid_literal_version",
+                "literalVersion must use canonical major.minor form."));
+        }
+
+        var read = await catalog.GetExactSkillAsync(token, guid, literalVersion, ct);
+        if (read.Detail is not null)
+            return Results.Json(read.Detail);
+        if (read.UpstreamStatus == StatusCodes.Status403Forbidden)
+            return Results.Forbid();
+        if (string.Equals(read.Error, "exact_skill_not_found", StringComparison.Ordinal))
+        {
+            return Results.NotFound(new AgentProfileExactSkillError(
+                "exact_skill_not_found",
+                "The requested exact skill was not found."));
+        }
+
+        return Results.Json(
+            new AgentProfileExactSkillError(
+                read.Error ?? "exact_skill_upstream_failure",
+                "The exact skill authority could not be resolved."),
+            statusCode: StatusCodes.Status502BadGateway);
+    }
+
+    internal static bool IsLiteralVersion(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value) ||
+            value.Split('.', StringSplitOptions.None) is not [var major, var minor] ||
+            !int.TryParse(major, out var majorValue) ||
+            !int.TryParse(minor, out var minorValue) ||
+            majorValue < 0 || minorValue < 0)
+        {
+            return false;
+        }
+
+        return string.Equals(majorValue.ToString(), major, StringComparison.Ordinal) &&
+               string.Equals(minorValue.ToString(), minor, StringComparison.Ordinal);
+    }
+
     internal static async Task<IResult> InvokeSkill(
         HttpContext http,
         string guid,
@@ -115,11 +182,22 @@ internal static class WorkflowSkillsEndpoints
         ArgumentNullException.ThrowIfNull(http);
         ArgumentNullException.ThrowIfNull(runService);
 
-        if (!TryGetBearerToken(http, out var token))
-            return Results.Unauthorized();
         // The run is attributed to the caller's scope so it surfaces in their observatory.
         if (!AevatarScopeAccessGuard.TryGetCallerScopeId(http, out var scopeId))
             return Results.Unauthorized();
+
+        var loggerFactory = http.RequestServices.GetService<ILoggerFactory>();
+        var callerCredential = await WorkflowCallerCredentialExtractor.ExtractAsync(
+            http,
+            http.RequestServices.GetService<IExternalIdentityBindingQueryPort>(),
+            loggerFactory?.CreateLogger("Aevatar.Mainnet.Host.Api.WorkflowSkills"),
+            ct);
+        if (!callerCredential.Succeeded ||
+            callerCredential.Credential == null ||
+            string.IsNullOrWhiteSpace(callerCredential.Credential.BearerToken))
+        {
+            return Results.Unauthorized();
+        }
 
         SkillInvokeRequest body;
         try
@@ -131,7 +209,12 @@ internal static class WorkflowSkillsEndpoints
             return Results.BadRequest(new { error = "invalid_json" });
         }
 
-        var outcome = await runService.InvokeOnceAsync(guid, token, scopeId, body.Prompt ?? string.Empty, ct);
+        var outcome = await runService.InvokeOnceAsync(
+            guid,
+            callerCredential.Credential,
+            scopeId,
+            body.Prompt ?? string.Empty,
+            ct);
         if (outcome.Succeeded)
             return Results.Json(outcome.Receipt);
 
@@ -150,10 +233,21 @@ internal static class WorkflowSkillsEndpoints
         ArgumentNullException.ThrowIfNull(http);
         ArgumentNullException.ThrowIfNull(runService);
 
-        if (!TryGetBearerToken(http, out var token))
-            return Results.Unauthorized();
         if (!AevatarScopeAccessGuard.TryGetCallerScopeId(http, out var scopeId))
             return Results.Unauthorized();
+
+        var loggerFactory = http.RequestServices.GetService<ILoggerFactory>();
+        var callerCredential = await WorkflowCallerCredentialExtractor.ExtractAsync(
+            http,
+            http.RequestServices.GetService<IExternalIdentityBindingQueryPort>(),
+            loggerFactory?.CreateLogger("Aevatar.Mainnet.Host.Api.WorkflowSkills"),
+            ct);
+        if (!callerCredential.Succeeded ||
+            callerCredential.Credential == null ||
+            string.IsNullOrWhiteSpace(callerCredential.Credential.BearerToken))
+        {
+            return Results.Unauthorized();
+        }
 
         SkillScheduleHttpRequest body;
         try
@@ -167,16 +261,18 @@ internal static class WorkflowSkillsEndpoints
 
         if (string.IsNullOrWhiteSpace(body.CronExpression))
             return Results.BadRequest(new { code = "cron_required", message = "cronExpression is required." });
+        if (string.IsNullOrWhiteSpace(body.TeamId))
+            return Results.BadRequest(new { code = "team_id_required", message = "teamId is required." });
 
         var outcome = await runService.ScheduleAsync(
             guid,
-            token,
+            callerCredential.Credential,
             scopeId,
-            ResolveOwnerSubject(http),
             body.Prompt ?? string.Empty,
             body.CronExpression!,
             body.Timezone ?? string.Empty,
             body.DisplayName ?? string.Empty,
+            body.TeamId!,
             ct);
         if (outcome.Succeeded)
             return Results.Json(outcome.Receipt);
@@ -185,20 +281,6 @@ internal static class WorkflowSkillsEndpoints
             ? StatusCodes.Status404NotFound
             : StatusCodes.Status502BadGateway;
         return Results.Json(new { code = outcome.ErrorCode, message = outcome.ErrorMessage }, statusCode: scheduleStatus);
-    }
-
-    // The caller's NyxID subject (uid/sub claim) is the schedule's owner subject; the provisioning adapter
-    // substitutes the scope id when this is absent.
-    private static string? ResolveOwnerSubject(HttpContext http)
-    {
-        foreach (var claimType in new[] { "uid", "sub", ClaimTypes.NameIdentifier, "user_id" })
-        {
-            var value = http.User.FindFirst(claimType)?.Value?.Trim();
-            if (!string.IsNullOrWhiteSpace(value))
-                return value;
-        }
-
-        return null;
     }
 
     private static bool TryGetBearerToken(HttpContext http, out string token)

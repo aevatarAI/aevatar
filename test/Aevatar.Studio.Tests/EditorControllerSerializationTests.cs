@@ -231,6 +231,57 @@ public sealed class EditorControllerSerializationTests
         body.Should().NotContain("\"arguments\":{}");
     }
 
+    [Fact]
+    public async Task ParseAndSerializeYaml_ShouldPreserveAllowedToolsInDocumentJson()
+    {
+        using var host = await StartHostAsync();
+        var client = host.GetTestClient();
+
+        using var parseResponse = await client.PostAsJsonAsync("/api/editor/parse-yaml", new
+        {
+            yaml = """
+                   name: tool_scope
+                   roles:
+                     - id: planner
+                       allowed_tools: [search, calendar]
+                     - id: isolated
+                       allowed_tools: []
+                   steps:
+                     - id: scoped
+                       type: llm_call
+                       target_role: planner
+                       allowed_tools: [calendar]
+                     - id: no_tools
+                       type: llm_call
+                       target_role: isolated
+                       allowed_tools: []
+                   """,
+            availableStepTypes = new[] { "llm_call" },
+        });
+
+        var parseBody = await parseResponse.Content.ReadAsStringAsync();
+        parseResponse.StatusCode.Should().Be(HttpStatusCode.OK, parseBody);
+        parseBody.Should().NotContain("\"code\":\"unknown_field\"");
+        parseBody.Should().Contain("\"allowedTools\":[\"search\",\"calendar\"]");
+        parseBody.Should().Contain("\"allowedTools\":[\"calendar\"]");
+        parseBody.Should().Contain("\"allowedTools\":[]");
+
+        using var parsedJson = JsonDocument.Parse(parseBody);
+        var document = parsedJson.RootElement.GetProperty("document").Clone();
+        using var serializeResponse = await client.PostAsJsonAsync("/api/editor/serialize-yaml", new
+        {
+            document,
+            availableStepTypes = new[] { "llm_call" },
+        });
+
+        var serializeBody = await serializeResponse.Content.ReadAsStringAsync();
+        serializeResponse.StatusCode.Should().Be(HttpStatusCode.OK, serializeBody);
+        serializeBody.Should().Contain("allowed_tools:");
+        serializeBody.Should().Contain("- search");
+        serializeBody.Should().Contain("- calendar");
+        serializeBody.Should().Contain("allowed_tools: []");
+    }
+
     private static object BuildPlainParameterRequest() => new
     {
         document = new

@@ -7,15 +7,18 @@ namespace Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 
 internal static class NyxIdServiceTools
 {
+    public static IAgentTool CreateInventory(
+        IReadOnlyList<NyxIdServiceInstanceBinding> bindings) =>
+        new InventoryTool(bindings);
+
     public static IReadOnlyList<IAgentTool> Create(
         NyxIdServiceInstanceClient client,
         IReadOnlyList<NyxIdServiceInstanceBinding> bindings) =>
     [
-        new InventoryTool(bindings),
+        CreateInventory(bindings),
         new UpdateTool(client, bindings),
         new RouteTool(client, bindings),
         new DeleteTool(client, bindings),
-        new RequestTool(client, bindings),
     ];
 
     private abstract class ServiceToolBase(IReadOnlyList<NyxIdServiceInstanceBinding> bindings) : IAgentTool
@@ -121,9 +124,21 @@ internal static class NyxIdServiceTools
     private sealed class InventoryTool(IReadOnlyList<NyxIdServiceInstanceBinding> bindings)
         : ServiceToolBase(bindings)
     {
+        private static readonly JsonFormatter ResultFormatter = new(
+            JsonFormatter.Settings.Default.WithFormatDefaultValues(true));
+        private static readonly string EmptyInventoryParametersSchema = new JsonObject
+        {
+            ["type"] = "object",
+            ["properties"] = new JsonObject(),
+            ["required"] = new JsonArray(),
+            ["additionalProperties"] = false,
+        }.ToJsonString();
+
         public override string Name => "nyxid_service_inventory";
         public override string Description => "List or inspect the caller's exact NyxID connected-service instances.";
-        public override string ParametersSchema => InstanceChoiceSchema(requireInstance: false);
+        public override string ParametersSchema => Bindings.Count == 0
+            ? EmptyInventoryParametersSchema
+            : InstanceChoiceSchema(requireInstance: false);
         public override bool IsReadOnly => true;
 
         public override Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
@@ -146,7 +161,7 @@ internal static class NyxIdServiceTools
                 {
                     return Task.FromResult(NyxIdServiceInstanceClient.Error("identity_not_authorized"));
                 }
-                return Task.FromResult(Format(result));
+                return Task.FromResult(ResultFormatter.Format(result));
             }
         }
     }
@@ -162,6 +177,11 @@ internal static class NyxIdServiceTools
             requireInstance: true,
             ("label", new JsonObject { ["type"] = "string" }, false),
             ("endpoint_url", new JsonObject { ["type"] = "string" }, false),
+            ("openapi_spec_url", new JsonObject
+            {
+                ["type"] = "string",
+                ["description"] = "NyxID-owned OpenAPI override URL. Use an empty string to clear the override.",
+            }, false),
             ("is_active", new JsonObject { ["type"] = "boolean" }, false));
 
         public override async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
@@ -179,6 +199,9 @@ internal static class NyxIdServiceTools
                 var endpointUrl = ReadString(document.RootElement, "endpoint_url");
                 if (endpointUrl is not null)
                     request.EndpointUrl = endpointUrl;
+                var openApiSpecUrl = ReadString(document.RootElement, "openapi_spec_url");
+                if (openApiSpecUrl is not null)
+                    request.OpenapiSpecUrl = openApiSpecUrl;
                 var active = ReadBool(document.RootElement, "is_active");
                 if (active.HasValue)
                     request.IsActive = active.Value;
@@ -243,139 +266,4 @@ internal static class NyxIdServiceTools
         }
     }
 
-    private sealed class RequestTool(
-        NyxIdServiceInstanceClient client,
-        IReadOnlyList<NyxIdServiceInstanceBinding> bindings) : ServiceToolBase(bindings)
-    {
-        private static readonly string[] Methods = ["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"];
-
-        public override string Name => "nyxid_service_request";
-        public override string Description => "Call a JSON endpoint through one exact NyxID connected-service instance.";
-        public override ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
-        public override string ParametersSchema => InstanceChoiceSchema(
-            requireInstance: true,
-            ("method", new JsonObject
-            {
-                ["type"] = "string",
-                ["enum"] = new JsonArray(Methods.Select(static method => JsonValue.Create(method)).ToArray()),
-            }, true),
-            ("relative_path", new JsonObject { ["type"] = "string" }, true),
-            ("query", EntryArraySchema(), false),
-            ("accept", new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("application/json") }, false),
-            ("if_match", new JsonObject { ["type"] = "string" }, false),
-            ("if_none_match", new JsonObject { ["type"] = "string" }, false),
-            ("json_body", new JsonObject(), false));
-
-        public override bool? RequiresApproval(string argumentsJson) =>
-            GetCallSafety(argumentsJson).RequiresApproval;
-
-        public override AgentToolCallSafety GetCallSafety(string argumentsJson)
-        {
-            if (!TryParse(argumentsJson, out var document, out _))
-                return new AgentToolCallSafety(true, false, false);
-            using (document)
-            {
-                var method = ParseMethod(ReadString(document.RootElement, "method"));
-                var isReadOnly = method is NyxIdServiceHttpMethod.Get or
-                    NyxIdServiceHttpMethod.Head or NyxIdServiceHttpMethod.Options;
-                return new AgentToolCallSafety(
-                    RequiresApproval: !isReadOnly,
-                    IsReadOnly: isReadOnly,
-                    IsDestructive: method == NyxIdServiceHttpMethod.Delete);
-            }
-        }
-
-        public override async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
-        {
-            if (!TryParse(argumentsJson, out var document, out var error))
-                return error!;
-            using (document)
-            {
-                var root = document.RootElement;
-                if (!TryGetBinding(root, out var binding, out error))
-                    return error!;
-                var method = ParseMethod(ReadString(root, "method"));
-                var path = ReadString(root, "relative_path");
-                if (method == NyxIdServiceHttpMethod.Unspecified || string.IsNullOrWhiteSpace(path))
-                    return NyxIdServiceInstanceClient.Error("invalid_request");
-                var request = new NyxIdServiceRequest
-                {
-                    UserServiceId = binding.Instance.UserServiceId,
-                    Method = method,
-                    RelativePath = path,
-                };
-                request.Query.Add(ParseEntries(root, "query").Select(static entry =>
-                    new NyxIdServiceQueryEntry { Name = entry.Key, Value = entry.Value }));
-                request.Headers.Add(ParseHeaders(root));
-                var jsonBody = ReadRaw(root, "json_body");
-                if (jsonBody is not null)
-                    request.JsonBody = jsonBody;
-                return Format(await client.RequestAsync(binding, request, ct));
-            }
-        }
-
-        internal static NyxIdServiceHttpMethod ParseMethod(string? value) => value?.ToUpperInvariant() switch
-        {
-            "GET" => NyxIdServiceHttpMethod.Get,
-            "HEAD" => NyxIdServiceHttpMethod.Head,
-            "OPTIONS" => NyxIdServiceHttpMethod.Options,
-            "POST" => NyxIdServiceHttpMethod.Post,
-            "PUT" => NyxIdServiceHttpMethod.Put,
-            "PATCH" => NyxIdServiceHttpMethod.Patch,
-            "DELETE" => NyxIdServiceHttpMethod.Delete,
-            _ => NyxIdServiceHttpMethod.Unspecified,
-        };
-
-        internal static IReadOnlyList<KeyValuePair<string, string>> ParseEntries(JsonElement root, string property)
-        {
-            if (!root.TryGetProperty(property, out var entries) || entries.ValueKind != JsonValueKind.Array)
-                return [];
-            var result = new List<KeyValuePair<string, string>>();
-            foreach (var entry in entries.EnumerateArray())
-            {
-                var name = ReadString(entry, "name");
-                var value = ReadString(entry, "value");
-                if (!string.IsNullOrWhiteSpace(name) && value is not null)
-                    result.Add(new KeyValuePair<string, string>(name, value));
-            }
-            return result;
-        }
-
-        internal static IReadOnlyList<NyxIdServiceHeader> ParseHeaders(JsonElement root)
-        {
-            var headers = new List<NyxIdServiceHeader>();
-            AddHeader(NyxIdServiceHeaderName.Accept, "accept");
-            AddHeader(NyxIdServiceHeaderName.IfMatch, "if_match");
-            AddHeader(NyxIdServiceHeaderName.IfNoneMatch, "if_none_match");
-            return headers;
-
-            void AddHeader(NyxIdServiceHeaderName headerName, string propertyName)
-            {
-                var value = ReadString(root, propertyName);
-                if (value is not null)
-                    headers.Add(new NyxIdServiceHeader { Name = headerName, Value = value });
-            }
-        }
-
-        internal static string? ReadRaw(JsonElement root, string property) =>
-            root.TryGetProperty(property, out var value) && value.ValueKind is not JsonValueKind.Null
-                ? value.GetRawText()
-                : null;
-
-        private static JsonObject EntryArraySchema() => new()
-        {
-            ["type"] = "array",
-            ["items"] = new JsonObject
-            {
-                ["type"] = "object",
-                ["properties"] = new JsonObject
-                {
-                    ["name"] = new JsonObject { ["type"] = "string" },
-                    ["value"] = new JsonObject { ["type"] = "string" },
-                },
-                ["required"] = new JsonArray("name", "value"),
-                ["additionalProperties"] = false,
-            },
-        };
-    }
 }

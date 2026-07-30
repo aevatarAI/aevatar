@@ -1,12 +1,12 @@
 ---
-title: "Workflow Chat API 能力说明（框架层）"
+title: "Chat API 能力说明（Mainnet 与 Workflow）"
 status: active
 owner: eanzhao
 ---
 
-# Workflow Chat API 能力说明（框架层）
+# Chat API 能力说明（Mainnet 与 Workflow）
 
-> 单一事实源（Single Source of Truth）：`/api/chat`、`/api/ws/chat` 相关能力说明以本文为准。  
+> 单一事实源（Single Source of Truth）：Mainnet `/api/chat` 的组合与 Workflow Chat 能力说明以本文为准；NyxID Assistant 的 actor/task 细节见 `docs/canon/nyxid-chat-api.md`。
 > Host 侧入口文档：`src/workflow/Aevatar.Workflow.Host.Api/README.md`、`src/workflow/Aevatar.Workflow.Host.Api/CHAT_API_CAPABILITIES.md`。
 
 本文档面向框架使用者，说明当前 `POST /api/chat` 与 `GET /api/ws/chat` 可以做什么，尤其是：
@@ -16,17 +16,43 @@ owner: eanzhao
 - 支持多轮“反馈 -> 重新生成 -> 再审批”
 - 审批通过后自动执行（`auto`）或只定稿不执行（`auto_review`）
 
+## Mainnet 统一 `/api/chat` facade
+
+Mainnet 只映射一个 `POST /api/chat`。该 Host-owned facade 在 HTTP 边界做确定性协议分流；它不从 prompt、模型输出、tool 名或错误文本推断产品 surface。
+
+| Request | Mainnet owner | Result |
+|---|---|---|
+| `multipart/form-data` | Workflow Chat | 继续使用既有 multipart parser、artifact ingress 与 Workflow command 主链。 |
+| JSON object without `type` | Workflow Chat | 保持既有 `HttpChatInput` 行为。 |
+| JSON with `type=text` | NyxID Assistant | 创建或复用现有 NyxIdChat conversation actor，并返回 AGUI SSE。 |
+| JSON with one of the other six recognized Assistant types | NyxID Assistant | 复用现有 action、approval 或 task-control application port。 |
+| JSON with malformed or unknown explicit `type` | none | `400 INVALID_CHAT_INPUT`; never falls through to Workflow. |
+| Other content type or malformed/non-object JSON | none | `400 INVALID_CHAT_INPUT`. |
+
+The seven closed Assistant discriminators are `text`, `action.continue`, `approval.resolve`, `task.stop`, `task.steer`, `step.retry`, and `step.skip`. Assistant JSON is strict: unknown fields are rejected, `scopeId` is not a request field, and scope is derived only from one unambiguous authenticated `scope_id` or `workflow.scope_id` claim.
+
+Mainnet also exposes the authenticated Assistant resource family:
+
+| Endpoint | Meaning |
+|---|---|
+| `GET /api/chat/conversations?pageSize={n}&cursor={cursor}` | List the caller's NyxIdChat transcript index; the response carries `nextCursor`. |
+| `GET /api/chat/conversations/{conversationId}` | Read the durable transcript and transcript `stateVersion`. |
+| `GET /api/chat/conversations/{conversationId}/state?afterStateVersion={v}&turnId={turnId}` | Read the conditional actor current-state replica. |
+| `DELETE /api/chat/conversations/{conversationId}` | Submit the existing authoritative retirement/deletion workflow. |
+
+Standalone Workflow Host behavior is unchanged: its own `POST /api/chat` remains Workflow JSON/multipart, and `GET /api/ws/chat` remains the Workflow WebSocket surface. Mainnet's WebSocket route is likewise not selected by the Assistant JSON discriminators. New NyxID clients use only the HTTP facade and `/api/chat/conversations/**`; scoped NyxIdChat routes are compatibility adapters, not a second evolving contract.
+
 ## 1. 端点与职责
 
 | Endpoint | 协议 | 作用 |
 |---|---|---|
-| `POST /api/chat` | HTTP + SSE | 发起一次 run，并持续接收运行时 envelope 投影流 |
+| `POST /api/chat` | HTTP + SSE | Mainnet 先按上表分流；Workflow Host 直接发起 Workflow run |
 | `GET /api/ws/chat` | WebSocket | 与 `/api/chat` 同能力，使用 WS 封装 |
 | `POST /api/workflow-webhooks/{routeKey}` | HTTP JSON | 认证外部 webhook，并按 Host binding 启动新 run |
 | `POST /api/workflows/resume` | HTTP JSON | 恢复 `human_input/human_approval` 挂起步骤 |
 | `POST /api/workflows/signal` | HTTP JSON | 向等待信号的步骤发送 signal |
 
-说明：`/api/chat` 与 `/api/ws/chat` 走同一套执行链路，差别只有传输协议。
+说明：对于 Workflow 请求，`/api/chat` 与 `/api/ws/chat` 走同一套执行链路，差别只有传输协议。NyxID Assistant discriminator 只属于 Mainnet HTTP facade。
 
 口径补充：
 
@@ -69,20 +95,21 @@ owner: eanzhao
 
 ### HTTP 请求 producer
 
-`POST /api/chat` 支持两种 Host/API 边界 producer；两者最终都会被规范化为同一个 `WorkflowChatRunRequest`，并进入同一条 CQRS command skeleton。Host 不直接编排 workflow run，也不因为表单上传创建第二套执行链路。
+Workflow 所拥有的 `POST /api/chat` 请求支持两种 Host/API 边界 producer；两者最终都会被规范化为同一个 `WorkflowChatRunRequest`，并进入同一条 CQRS command skeleton。Host 不直接编排 workflow run，也不因为表单上传创建第二套执行链路。Mainnet 在此之前只执行上面的确定性 surface 分类。
 
 #### JSON Chat Input
 
-`application/json` body 是 `ChatInput`：
+`application/json` body is `HttpChatInput`:
 
 ```json
 {
   "prompt": "describe the release plan",
   "workflow": "direct",
-  "sessionId": "session-1",
-  "scopeId": "scope-1"
+  "sessionId": "session-1"
 }
 ```
+
+`scopeId` is resolved from the authenticated principal and must not be provided in the request body.
 
 常用 source 字段：
 
@@ -107,11 +134,10 @@ owner: eanzhao
 
 | Field | Meaning |
 |---|---|
-| `payload` | 可选 `ChatInput` JSON；不得包含 `inputParts[].inlineFile`、`inputParts[].fileRef` 或 `inputParts[].dataBase64`。 |
+| `payload` | Optional `HttpChatInput` JSON; must not contain `inputParts[].inlineFile`, `inputParts[].fileRef`, or `inputParts[].dataBase64`. |
 | `prompt` | 覆盖或补充 payload 中的 prompt。 |
 | `workflow` | 覆盖或补充 payload 中的 workflow name。 |
 | `sessionId` | 覆盖或补充 payload 中的 session id。 |
-| `scopeId` | 覆盖或补充 payload 中的 workflow scope id，同时传给 file ingress owner scope。 |
 | `workflowYaml` | legacy single inline YAML field。 |
 | `workflowYamls` | inline YAML bundle；同名 form field 可重复。 |
 

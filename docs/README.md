@@ -9,6 +9,7 @@ Authoritative architecture and developer guides. Each covers one topic.
 - [Actor Evolution Canon Matrix](canon/actor-evolution.md)
 - [Aevatar Admin Authorization](canon/admin-authorization.md)
 - [[RFC] Aevatar Chat — Multi-Channel Adapter Architecture](canon/aevatar-channel-architecture.md)
+- [Agent Profile Rollout](canon/agent-profile-rollout.md)
 - [Approval Quota Ledger](canon/approval-quota-ledger.md)
 - [Architecture Vocabulary](canon/architecture-vocabulary.md)
 - [Aevatar Foundation](canon/architecture.md)
@@ -23,7 +24,9 @@ Authoritative architecture and developer guides. Each covers one topic.
 - [GAgent Registry Ownership](canon/gagent-registry-ownership.md)
 - [Lark Reply Chain Completion Semantics](canon/lark-reply-completion-semantics.md)
 - [Workflow LLM 流式链路详细架构文档（2026-02-25）](canon/llm-streaming.md)
+- [Managed Codex Execution](canon/managed-codex-execution.md)
 - [Module Placement Map](canon/module-placement-map.md)
+- [NyxID Assistant Chat v1 Contract](canon/nyxid-chat-api.md)
 - [NyxID Chat Agent Profile Binding](canon/nyxid-chat-agent-profile-binding.md)
 - [NyxID Connected-Service LLM Tools](canon/nyxid-connected-service-tools.md)
 - [NyxID LLM Provider 集成指南](canon/nyxid-llm-integration.md)
@@ -31,13 +34,15 @@ Authoritative architecture and developer guides. Each covers one topic.
 - [Aevatar Observability — OTel Semantic Conventions](canon/observability.md)
 - [Aevatar 项目架构（Maker 插件化基线）](canon/overview.md)
 - [Role 与工作流、Connector 配置指南](canon/role-model.md)
-- [Scheduled Skill Runners](canon/scheduled-skill-runners.md)
+- [Scheduled Workflow Dispatch](canon/scheduled-skill-runners.md)
 - [Aevatar.Scripting 架构文档](canon/scripting.md)
 - [.NET Workflow SDK Quick Start](canon/sdk-dotnet.md)
 - [Secret Vault](canon/secret-vault.md)
 - [Aevatar /status 状态面板架构](canon/status-dashboard.md)
 - [System Skill Overlay Authoring Contract](canon/system-skill-overlay-authoring-contract.md)
 - [Voice Presence Integration — aevatar as the /ws/voice Brain](canon/voice-presence-integration.md)
+- [Work Orders](canon/work-orders.md)
+- [Workflow 可见性模型：公共模板目录 vs scope 私有资源](canon/workflow-catalog-visibility.md)
 - [Workflow Primitives 参考手册](canon/workflow-primitives.md)
 - [工作流引擎设计与实践](canon/workflow-runtime.md)
 
@@ -86,6 +91,7 @@ Immutable records of architectural choices and their rationale.
 - [定时任务 Agent Key 凭证引用补充决策](adr/0041-scheduled-invocation-agent-key-credential-reference.md)
 - [Scheduled Invocation Durable Credential Uses SecretReference](adr/0042-scheduled-invocation-durable-secret-reference.md)
 - [Scheduled Credential Lifecycle Compensation](adr/0043-scheduled-credential-lifecycle-compensation.md)
+- [Managed Codex gVisor Direct-Token Isolation Model](adr/0044-managed-codex-gvisor-direct-token.md)
 - [Agent Kind Primary-Only Identity](adr/2026-06-04-agent-kind-primary-only-identity.md)
 
 ## History
@@ -127,4 +133,3 @@ Point-in-time design snapshots. Not authoritative — for context only.
 ## Templates
 
 - [architecture.md](templates/architecture.md)
-

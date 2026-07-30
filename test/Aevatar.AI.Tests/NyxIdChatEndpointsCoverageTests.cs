@@ -58,7 +58,7 @@ namespace Aevatar.AI.Tests;
 
 using RelayOptions = Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions;
 
-public class NyxIdChatEndpointsCoverageTests
+public partial class NyxIdChatEndpointsCoverageTests
 {
     private static readonly System.Type EndpointsType = typeof(NyxIdChatEndpoints);
     private const string NyxRefreshTokenMetadataKey = "nyxid.refresh_token";
@@ -83,7 +83,14 @@ public class NyxIdChatEndpointsCoverageTests
 
         routes.Should().Contain("/api/scopes/{scopeId}/nyxid-chat/conversations");
         routes.Should().Contain("/api/scopes/{scopeId}/nyxid-chat/conversations/{actorId}:stream");
+        routes.Should().Contain("/api/scopes/{scopeId}/nyxid-chat/conversations/{actorId}/state");
         routes.Should().Contain("/api/scopes/{scopeId}/nyxid-chat/conversations/{actorId}:approve");
+        routes.Should().Contain("/api/scopes/{scopeId}/nyxid-chat/conversations/{actorId}:stop");
+        routes.Should().Contain("/api/scopes/{scopeId}/nyxid-chat/conversations/{actorId}:steer");
+        routes.Should().Contain(
+            "/api/scopes/{scopeId}/nyxid-chat/conversations/{actorId}/turns/{turnId}/steps/{stepId}:retry");
+        routes.Should().Contain(
+            "/api/scopes/{scopeId}/nyxid-chat/conversations/{actorId}/turns/{turnId}/steps/{stepId}:skip");
         routes.Should().Contain("/api/webhooks/nyxid-relay");
         routes.Should().Contain("/api/webhooks/nyxid-relay/diag");
     }
@@ -224,7 +231,7 @@ public class NyxIdChatEndpointsCoverageTests
             entry.AgentKind == NyxIdChatServiceDefaults.GAgentKind &&
             entry.ActorId == createdActorId);
         runtime.CreateCalls.Should().ContainSingle(call =>
-            call.Type == typeof(NyxIdChatGAgent) &&
+            call.Type == typeof(NyxIdChatConversationGAgent) &&
             call.Id == createdActorId);
         await AssertSingleCreationAcceptedEventAsync(runtime, createdActorId!);
     }
@@ -264,7 +271,7 @@ public class NyxIdChatEndpointsCoverageTests
             entry.AgentKind == NyxIdChatServiceDefaults.GAgentKind &&
             entry.ActorId == createdActorId);
         runtime.CreateCalls.Should().ContainSingle(call =>
-            call.Type == typeof(NyxIdChatGAgent) &&
+            call.Type == typeof(NyxIdChatConversationGAgent) &&
             call.Id == createdActorId);
         await AssertSingleCreationAcceptedEventAsync(runtime, createdActorId!);
     }
@@ -302,7 +309,7 @@ public class NyxIdChatEndpointsCoverageTests
             entry.AgentKind == NyxIdChatServiceDefaults.GAgentKind &&
             entry.ActorId == actorId);
         runtime.CreateCalls.Should().ContainSingle(call =>
-            call.Type == typeof(NyxIdChatGAgent) &&
+            call.Type == typeof(NyxIdChatConversationGAgent) &&
             call.Id == actorId);
         await AssertSingleCreationAcceptedEventAsync(runtime, actorId!);
     }
@@ -515,7 +522,7 @@ public class NyxIdChatEndpointsCoverageTests
             entry.ActorId == actorId);
         runtime.DestroyCalls.Should().ContainSingle().Which.Should().Be(actorId);
         runtime.CreateCalls.Should().ContainSingle(call =>
-            call.Type == typeof(NyxIdChatGAgent) &&
+            call.Type == typeof(NyxIdChatConversationGAgent) &&
             call.Id == actorId);
     }
 
@@ -552,7 +559,7 @@ public class NyxIdChatEndpointsCoverageTests
             entry.ActorId == actorId);
         runtime.DestroyCalls.Should().ContainSingle().Which.Should().Be(actorId);
         runtime.CreateCalls.Should().ContainSingle(call =>
-            call.Type == typeof(NyxIdChatGAgent) &&
+            call.Type == typeof(NyxIdChatConversationGAgent) &&
             call.Id == actorId);
     }
 
@@ -831,7 +838,7 @@ public class NyxIdChatEndpointsCoverageTests
             context,
             "scope-a",
             "actor-1",
-            new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello"),
+            new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello", Type: "text"),
             runtime,
             new StubGAgentActorStore(),
             interactionService,
@@ -842,10 +849,32 @@ public class NyxIdChatEndpointsCoverageTests
     }
 
     [Fact]
-    public async Task HandleStreamMessageAsync_ShouldRejectWhenNoPromptAndNoInputParts()
+    public async Task HandleStreamMessageAsync_ShouldRejectWithoutAuthenticatedSubject()
     {
         var context = new DefaultHttpContext();
         context.Request.Headers.Authorization = "Bearer valid-token";
+        var interactionService = new StubNyxIdChatInteractionService<NyxIdChatCommand>();
+
+        await InvokeTaskAsync(
+            "HandleStreamMessageAsync",
+            context,
+            "scope-a",
+            "actor-1",
+            new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello", Type: "text"),
+            new StubActorRuntime(),
+            new StubGAgentActorStore(),
+            interactionService,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
+        interactionService.Commands.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleStreamMessageAsync_ShouldRejectWhenNoPromptAndNoInputParts()
+    {
+        var context = CreateAuthorizedStreamContext();
         var runtime = new StubActorRuntime();
 
         await InvokeTaskAsync(
@@ -853,7 +882,7 @@ public class NyxIdChatEndpointsCoverageTests
             context,
             "scope-a",
             "actor-1",
-            new NyxIdChatEndpoints.NyxIdChatStreamRequest(null),
+            new NyxIdChatEndpoints.NyxIdChatStreamRequest(null, Type: "text"),
             runtime,
             new StubGAgentActorStore(),
             new StubNyxIdChatInteractionService<NyxIdChatCommand>(),
@@ -875,7 +904,7 @@ public class NyxIdChatEndpointsCoverageTests
             context,
             "scope-a",
             "actor-1",
-            new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello"),
+            new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello", Type: "text"),
             new StubActorRuntime(),
             actorStore,
             new StubNyxIdChatInteractionService<NyxIdChatCommand>(),
@@ -889,8 +918,7 @@ public class NyxIdChatEndpointsCoverageTests
     [Fact]
     public async Task HandleStreamMessageAsync_ShouldReturnNotFound_WhenConversationIsUnregistered()
     {
-        var context = new DefaultHttpContext();
-        context.Request.Headers.Authorization = "Bearer valid-token";
+        var context = CreateAuthorizedStreamContext();
         var actorStore = new StubGAgentActorStore
         {
             AdmissionResult = ScopeResourceAdmissionResult.NotFound(),
@@ -901,7 +929,7 @@ public class NyxIdChatEndpointsCoverageTests
             context,
             "scope-a",
             "actor-missing",
-            new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello"),
+            new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello", Type: "text"),
             new StubActorRuntime(),
             actorStore,
             new StubNyxIdChatInteractionService<NyxIdChatCommand>(),
@@ -1019,17 +1047,15 @@ public class NyxIdChatEndpointsCoverageTests
     [Fact]
     public async Task HandleStreamMessageAsync_ShouldDispatchChatRequest_AndWriteRunFinished()
     {
-        var context = new DefaultHttpContext
-        {
-            RequestServices = new ServiceCollection()
-                .AddLogging()
-                .AddSingleton<INyxIdUserLlmPreferencesStore>(new StubPreferencesStore("relay-model", "/relay-route", 7))
-                .AddSingleton<IUserMemoryStore>(new StubUserMemoryStore("remember this"))
-                .BuildServiceProvider(),
-        };
-        context.Request.Headers.Authorization = "Bearer valid-token";
+        var context = CreateAuthorizedStreamContext();
+        context.RequestServices = new ServiceCollection()
+            .AddLogging()
+            .AddSingleton<INyxIdUserLlmPreferencesStore>(new StubPreferencesStore("relay-model", "/relay-route", 7))
+            .AddSingleton<IUserMemoryStore>(new StubUserMemoryStore("remember this"))
+            .BuildServiceProvider();
+        context.Request.Headers["X-NyxID-Delegation-Token"] = "delegation-token";
+        context.Request.Headers.Authorization = "Bearer forwarded-access-token";
         context.Request.Headers["X-Nyx-Refresh-Token"] = "refresh-token";
-        context.Response.Body = new MemoryStream();
 
         var runtime = new StubActorRuntime();
         runtime.Actors["actor-1"] = new StubActor("actor-1");
@@ -1049,7 +1075,7 @@ public class NyxIdChatEndpointsCoverageTests
             context,
             "scope-a",
             "actor-1",
-            new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello there"),
+            new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello there", Type: "text"),
             runtime,
             new StubGAgentActorStore(),
             interactionService,
@@ -1063,7 +1089,7 @@ public class NyxIdChatEndpointsCoverageTests
         command.ActorId.Should().Be("actor-1");
         command.Prompt.Should().Be("hello there");
         command.ScopeId.Should().Be("scope-a");
-        command.AccessToken.Should().Be("valid-token");
+        command.AccessToken.Should().Be("forwarded-access-token");
         command.Metadata.Should().NotBeNull();
         command.Metadata!.Should().NotContainKey(NyxRefreshTokenMetadataKey);
         command.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
@@ -1071,14 +1097,13 @@ public class NyxIdChatEndpointsCoverageTests
         command.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.MaxToolRoundsOverride);
         command.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.UserMemoryPrompt);
         command.LlmControl.Should().Be(new LLMControlContext(
-            NyxIdAccessToken: "valid-token",
+            NyxIdAccessToken: "forwarded-access-token",
             NyxIdOrgToken: null,
             SenderNyxIdAccessToken: null,
             ModelOverride: "relay-model",
             NyxIdRoutePreference: "/relay-route",
             MaxToolRoundsOverride: 7,
             UserMemoryPrompt: "remember this"));
-
         context.Response.Body.Position = 0;
         var body = await new StreamReader(context.Response.Body).ReadToEndAsync();
         body.Should().Contain("RUN_STARTED");
@@ -1097,8 +1122,7 @@ public class NyxIdChatEndpointsCoverageTests
         try
         {
             NyxIdChatEndpoints.StreamKeepAliveInterval = TimeSpan.FromMilliseconds(10);
-            var context = new DefaultHttpContext();
-            context.Request.Headers.Authorization = "Bearer valid-token";
+            var context = CreateAuthorizedStreamContext();
             context.Response.Body = bodyStream;
 
             var runtime = new StubActorRuntime();
@@ -1117,7 +1141,10 @@ public class NyxIdChatEndpointsCoverageTests
                 context,
                 "scope-a",
                 "actor-1",
-                new NyxIdChatEndpoints.NyxIdChatStreamRequest("long turn", SessionId: "session-keepalive"),
+                new NyxIdChatEndpoints.NyxIdChatStreamRequest(
+                    "long turn",
+                    SessionId: "session-keepalive",
+                    Type: "text"),
                 runtime,
                 new StubGAgentActorStore(),
                 interactionService,
@@ -1128,6 +1155,8 @@ public class NyxIdChatEndpointsCoverageTests
             var body = bodyStream.GetText();
             body.Should().Contain("RUN_STARTED");
             body.Should().Contain("aevatar.nyxid_chat.keepalive");
+            body.Should().Contain("\"turnId\":");
+            body.Should().NotContain("\"sessionId\":");
             body.Should().Contain("RUN_FINISHED");
             body.IndexOf("RUN_STARTED", StringComparison.Ordinal)
                 .Should().BeLessThan(body.IndexOf("aevatar.nyxid_chat.keepalive", StringComparison.Ordinal));
@@ -1143,9 +1172,7 @@ public class NyxIdChatEndpointsCoverageTests
     [Fact]
     public async Task HandleStreamMessageAsync_ShouldWriteNotFoundRunError_WhenResolverReportsMissingActor()
     {
-        var context = new DefaultHttpContext();
-        context.Request.Headers.Authorization = "Bearer valid-token";
-        context.Response.Body = new MemoryStream();
+        var context = CreateAuthorizedStreamContext();
         var interactionService = new StubNyxIdChatInteractionService<NyxIdChatCommand>
         {
             Failure = NyxIdChatStartError.ActorNotFound,
@@ -1156,7 +1183,7 @@ public class NyxIdChatEndpointsCoverageTests
             context,
             "scope-a",
             "actor-1",
-            new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello"),
+            new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello", Type: "text"),
             new StubGAgentActorStore(),
             interactionService,
             NullLoggerFactory.Instance,
@@ -1168,39 +1195,6 @@ public class NyxIdChatEndpointsCoverageTests
         body.Should().Contain("RUN_STARTED");
         body.Should().Contain("RUN_ERROR");
         body.Should().Contain("NyxID chat conversation was not found.");
-    }
-
-    [Fact]
-    public async Task HandleStreamMessageAsync_ShouldWriteRunError_WhenFailureOccursAfterWriterStarts()
-    {
-        var context = new DefaultHttpContext();
-        context.Request.Headers.Authorization = "Bearer valid-token";
-        context.Response.Body = new MemoryStream();
-
-        var runtime = new StubActorRuntime();
-        runtime.Actors["actor-1"] = new StubActor("actor-1");
-
-        await InvokeTaskAsync(
-            "HandleStreamMessageAsync",
-            context,
-            "scope-a",
-            "actor-1",
-            new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello"),
-            runtime,
-            new StubGAgentActorStore(),
-            new StubNyxIdChatInteractionService<NyxIdChatCommand>
-            {
-                Exception = new InvalidOperationException("subscription failed"),
-            },
-            NullLoggerFactory.Instance,
-            CancellationToken.None);
-
-        context.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
-        context.Response.Body.Position = 0;
-        var body = await new StreamReader(context.Response.Body).ReadToEndAsync();
-        body.Should().Contain("RUN_STARTED");
-        body.Should().Contain("RUN_ERROR");
-        body.Should().Contain("The chat request failed. Please try again.");
     }
 
     [Fact]
@@ -1242,7 +1236,7 @@ public class NyxIdChatEndpointsCoverageTests
         command.RequestId.Should().Be("req-1");
         command.Approved.Should().BeFalse();
         command.Reason.Should().Be("deny");
-        command.SessionId.Should().Be("session-1");
+        command.TurnId.Should().StartWith("turn-").And.NotBe("session-1");
 
         context.Response.Body.Position = 0;
         var body = await new StreamReader(context.Response.Body).ReadToEndAsync();
@@ -1362,7 +1356,7 @@ public class NyxIdChatEndpointsCoverageTests
         result.Receipt.CommandId.Should().NotBeNullOrWhiteSpace();
         result.Receipt.CommandId.Should().NotBe("session-1");
         result.Receipt.CorrelationId.Should().Be(result.Receipt.CommandId);
-        result.Receipt.SessionId.Should().Be("session-1");
+        result.Receipt.TurnId.Should().Be("session-1");
         result.FinalizeResult.Should().NotBeNull();
         result.FinalizeResult!.Completed.Should().BeTrue();
         result.FinalizeResult.Completion.Should().Be(NyxIdChatCompletionStatus.Completed);
@@ -1370,16 +1364,18 @@ public class NyxIdChatEndpointsCoverageTests
         projectionPort.AttachCount.Should().Be(1);
         projectionPort.DetachCount.Should().Be(1);
         projectionPort.ReleaseCount.Should().Be(1);
-        var envelope = RequireDispatchedPayload<ChatRequestEvent>(dispatchPort);
+        var envelope = RequireDispatchedPayload<NyxIdChatStartTurnCommand>(dispatchPort);
         envelope.Route?.Direct?.TargetActorId.Should().Be(actor.Id);
         envelope.Propagation?.CorrelationId.Should().Be(result.Receipt.CorrelationId);
-        var request = envelope.Payload.Unpack<ChatRequestEvent>();
+        var request = envelope.Payload.Unpack<NyxIdChatStartTurnCommand>();
         request.Prompt.Should().Be("hello");
-        request.SessionId.Should().Be("session-1");
+        request.TurnId.Should().Be("session-1");
+        request.CommandId.Should().Be(result.Receipt.CommandId);
+        request.CorrelationId.Should().Be(result.Receipt.CorrelationId);
         request.ScopeId.Should().Be("scope-a");
-        request.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
-        request.Metadata.Should().NotContainKey("scope_id");
-        request.Metadata["custom"].Should().Be("value");
+        request.ToolContext.ExternalMetadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
+        request.ToolContext.ExternalMetadata.Should().NotContainKey("scope_id");
+        request.ToolContext.ExternalMetadata["custom"].Should().Be("value");
         LLMControlContextMapper.FromPayload(request.LlmControl)
             .NyxIdAccessToken.Should().Be("access-token");
         emitted.Select(x => x.EventCase).Should().ContainInOrder(
@@ -1423,7 +1419,8 @@ public class NyxIdChatEndpointsCoverageTests
             (_, _) => ValueTask.CompletedTask);
 
         result.Succeeded.Should().BeTrue();
-        var request = RequireDispatchedPayload<ChatRequestEvent>(dispatchPort).Payload.Unpack<ChatRequestEvent>();
+        var request = RequireDispatchedPayload<NyxIdChatStartTurnCommand>(dispatchPort)
+            .Payload.Unpack<NyxIdChatStartTurnCommand>();
         request.Prompt.Should().Be("::Goal ship today");
         var recovery = AgentToolExecutionContextMapper.FromPayload(request.ToolContext).SkillRecovery;
         recovery.RequireInitialOrnnSearch.Should().BeTrue();
@@ -1471,7 +1468,8 @@ public class NyxIdChatEndpointsCoverageTests
             (_, _) => ValueTask.CompletedTask);
 
         result.Succeeded.Should().BeTrue();
-        var request = RequireDispatchedPayload<ChatRequestEvent>(dispatchPort).Payload.Unpack<ChatRequestEvent>();
+        var request = RequireDispatchedPayload<NyxIdChatStartTurnCommand>(dispatchPort)
+            .Payload.Unpack<NyxIdChatStartTurnCommand>();
         request.Prompt.Should().Be("::");
         var recovery = AgentToolExecutionContextMapper.FromPayload(request.ToolContext).SkillRecovery;
         recovery.RequireInitialOrnnSearch.Should().BeTrue();
@@ -1529,10 +1527,12 @@ public class NyxIdChatEndpointsCoverageTests
         projectionPort.AttachExistingCalls.Should().ContainSingle(x =>
             x.ActorId == actor.Id &&
             x.SessionId == "session-1");
-        var envelope = RequireDispatchedPayload<ChatRequestEvent>(dispatchPort);
+        var envelope = RequireDispatchedPayload<NyxIdChatStartTurnCommand>(dispatchPort);
         envelope.Propagation?.CorrelationId.Should().Be("correlation-explicit");
-        var request = envelope.Payload.Unpack<ChatRequestEvent>();
-        request.SessionId.Should().Be("session-1");
+        var request = envelope.Payload.Unpack<NyxIdChatStartTurnCommand>();
+        request.TurnId.Should().Be("session-1");
+        request.CommandId.Should().Be("command-explicit");
+        request.CorrelationId.Should().Be("correlation-explicit");
     }
 
     [Fact]
@@ -1605,7 +1605,7 @@ public class NyxIdChatEndpointsCoverageTests
         envelope.Propagation?.CorrelationId.Should().Be("correlation-1");
         var decision = envelope.Payload.Unpack<ToolApprovalDecisionEvent>();
         decision.RequestId.Should().Be("request-1");
-        decision.SessionId.Should().Be("session-1");
+        decision.ContinuationTurnId.Should().Be("session-1");
         decision.Approved.Should().BeFalse();
         decision.Reason.Should().Be("deny");
     }
@@ -1658,7 +1658,7 @@ public class NyxIdChatEndpointsCoverageTests
         envelope.Propagation?.CorrelationId.Should().Be("approval-correlation-explicit");
         var decision = envelope.Payload.Unpack<ToolApprovalDecisionEvent>();
         decision.RequestId.Should().Be("request-1");
-        decision.SessionId.Should().Be("session-1");
+        decision.ContinuationTurnId.Should().Be("session-1");
     }
 
     [Fact]
@@ -1717,6 +1717,8 @@ public class NyxIdChatEndpointsCoverageTests
             .Should().BeOfType<NyxIdChatObservationLifecycle<NyxIdChatCommand>>();
         services.GetRequiredService<INyxIdRelayIngressPort>()
             .Should().BeOfType<NyxIdRelayIngressPort>();
+        services.GetRequiredService<INyxIdChatControlCommandPort>()
+            .Should().BeOfType<NyxIdChatControlCommandPort>();
     }
 
     [Fact]
@@ -2563,10 +2565,10 @@ public class NyxIdChatEndpointsCoverageTests
     }
 
     [Fact]
-    public void ExtractBearerToken_ShouldParseBearerHeaderAndIgnoreOthers()
+    public void ExtractNyxIdAccessToken_ShouldPreferDelegationHeaderAndFallbackToBearer()
     {
         var context = new DefaultHttpContext();
-        var method = EndpointsType.GetMethod("ExtractBearerToken", BindingFlags.NonPublic | BindingFlags.Static)!;
+        var method = EndpointsType.GetMethod("ExtractNyxIdAccessToken", BindingFlags.NonPublic | BindingFlags.Static)!;
 
         context.Request.Headers.Authorization = "Basic abc";
         method.Invoke(null, [context]).Should().BeNull();
@@ -2652,66 +2654,6 @@ public class NyxIdChatEndpointsCoverageTests
         diag.Should().Contain("Token: present");
         diag.Should().Contain("timeout");
     }
-
-    [Fact]
-    public async Task NyxIdChatSessionEventProjector_ShouldPublishTypedAguiFrames_FromEventEnvelopeInput()
-    {
-        var sessionHub = new RecordingNyxIdChatSessionEventHub();
-        var projector = new NyxIdChatSessionEventProjector(sessionHub);
-        var context = new NyxIdChatSessionProjectionContext
-        {
-            RootActorId = "actor-1",
-            SessionId = "session-1",
-            ProjectionKind = NyxIdChatProjectionKinds.ChatSession,
-        };
-
-        await projector.ProjectAsync(
-            context,
-            CommittedNyxIdCompletionEnvelope(
-                context.RootActorId,
-                new RoleChatSessionCompletedEvent
-                {
-                    SessionId = "session-1",
-                    Content = "done",
-                    ContentEmitted = false,
-                    Usage = new TokenUsagePayload
-                    {
-                        PromptTokens = 2,
-                        CompletionTokens = 4,
-                        TotalTokens = 6,
-                    },
-                    Model = "nyxid-model",
-                }),
-            CancellationToken.None);
-
-        sessionHub.Published.Should().HaveCount(5);
-        sessionHub.Published[0].Event.EventCase.Should().Be(AGUIEvent.EventOneofCase.TextMessageStart);
-        sessionHub.Published[1].Event.TextMessageContent.Delta.Should().Be("done");
-        sessionHub.Published[2].Event.EventCase.Should().Be(AGUIEvent.EventOneofCase.Usage);
-        sessionHub.Published[2].Event.Usage.Available.Should().BeTrue();
-        sessionHub.Published[2].Event.Usage.TotalTokens.Should().Be(6);
-        sessionHub.Published[3].Event.EventCase.Should().Be(AGUIEvent.EventOneofCase.TextMessageEnd);
-        sessionHub.Published[4].Event.EventCase.Should().Be(AGUIEvent.EventOneofCase.RunFinished);
-        sessionHub.Published.Should().OnlyContain(x => x.RootActorId == "actor-1" && x.SessionId == "session-1");
-    }
-
-    private static EventEnvelope CommittedNyxIdCompletionEnvelope(string actorId, RoleChatSessionCompletedEvent evt) => new()
-    {
-        Id = Guid.NewGuid().ToString("N"),
-        Payload = Any.Pack(new CommittedStateEventPublished
-        {
-            StateEvent = new StateEvent
-            {
-                EventId = Guid.NewGuid().ToString("N"),
-                Version = 1,
-                EventData = Any.Pack(evt),
-                Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            },
-            StateRoot = Any.Pack(new RoleGAgentState()),
-        }),
-        Route = EnvelopeRouteSemantics.CreateObserverPublication(actorId),
-        Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-    };
 
     private static async Task<IResult> InvokeResultAsync(string methodName, params object[] args)
     {
@@ -2802,6 +2744,33 @@ public class NyxIdChatEndpointsCoverageTests
             }
         }
 
+        if (parameters.Any(parameter =>
+                parameter.ParameterType == typeof(ICommandInteractionService<
+                    NyxIdActionContinuationCommand,
+                    NyxIdChatAcceptedReceipt,
+                    NyxIdChatStartError,
+                    AGUIEvent,
+                    NyxIdChatCompletionStatus>)) &&
+            normalized.All(arg => arg is not ICommandInteractionService<
+                NyxIdActionContinuationCommand,
+                NyxIdChatAcceptedReceipt,
+                NyxIdChatStartError,
+                AGUIEvent,
+                NyxIdChatCompletionStatus>))
+        {
+            var index = Array.FindIndex(
+                parameters,
+                parameter => parameter.ParameterType == typeof(ICommandInteractionService<
+                    NyxIdActionContinuationCommand,
+                    NyxIdChatAcceptedReceipt,
+                    NyxIdChatStartError,
+                    AGUIEvent,
+                    NyxIdChatCompletionStatus>));
+            normalized.Insert(
+                index,
+                new StubNyxIdChatInteractionService<NyxIdActionContinuationCommand>());
+        }
+
         if (parameters.Any(parameter => parameter.ParameterType == typeof(IChatRoutePolicyQueryPort)) &&
             normalized.All(arg => arg is not IChatRoutePolicyQueryPort))
         {
@@ -2857,7 +2826,7 @@ public class NyxIdChatEndpointsCoverageTests
         var facade = new NyxIdChatLifecycleFacade(
             new DefaultCommandDispatchService<NyxIdChatConversationCreateCommand, NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandReceipt, NyxIdChatLifecycleCommandStartError>(
                 new DefaultCommandDispatchPipeline<NyxIdChatConversationCreateCommand, NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandReceipt, NyxIdChatLifecycleCommandStartError>(
-                    new NyxIdChatConversationCreateCommandTargetResolver(runtime, routeQueryPort, resolver, new DisabledNyxIdChatAgentProfileSnapshotSource()),
+                    new NyxIdChatConversationCreateCommandTargetResolver(runtime, routeQueryPort, resolver, new DisabledNyxIdChatAgentProfileResolver()),
                     new DefaultCommandContextPolicy(),
                     new NyxIdChatLifecycleCommandEnvelopeFactory(),
                     new ActorCommandTargetDispatcher<NyxIdChatConversationCreateCommandTarget>(dispatchPort),
@@ -2999,6 +2968,32 @@ public class NyxIdChatEndpointsCoverageTests
                 CreateScopeGuardServices(authenticationEnabled: false));
         }
     }
+
+    private static DefaultHttpContext CreateAuthorizedStreamContext()
+    {
+        var context = new DefaultHttpContext
+        {
+            User = new ClaimsPrincipal(new ClaimsIdentity(
+                [new Claim("sub", "owner-alpha")],
+                authenticationType: "test")),
+        };
+        context.Request.Headers.Authorization = "Bearer valid-token";
+        context.Response.Body = new MemoryStream();
+        return context;
+    }
+
+    private static async Task<string> ReadResponseBodyAsync(DefaultHttpContext context)
+    {
+        context.Response.Body.Position = 0;
+        return await new StreamReader(context.Response.Body).ReadToEndAsync();
+    }
+
+    private static IReadOnlyList<JsonElement> ParseSseFrames(string body) =>
+        body.Split("\n\n", StringSplitOptions.RemoveEmptyEntries)
+            .Select(static frame => frame.Trim())
+            .Where(static frame => frame.StartsWith("data: ", StringComparison.Ordinal))
+            .Select(static frame => JsonDocument.Parse(frame["data: ".Length..]).RootElement.Clone())
+            .ToArray();
 
     private static DefaultHttpContext CreateScopeGuardedContext(string claimedScopeId)
     {
@@ -3363,7 +3358,7 @@ public class NyxIdChatEndpointsCoverageTests
             foreach (var (actorId, actor) in Actors.ToArray())
             {
                 if (actor is StubActor)
-                    Actors[actorId] = new NyxIdChatTestActor(actorId, _nyxIdChatServices);
+                    Actors[actorId] = new NyxIdChatConversationTestActor(actorId, _nyxIdChatServices);
             }
         }
 
@@ -3375,8 +3370,8 @@ public class NyxIdChatEndpointsCoverageTests
         public Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default)
         {
             var actorId = id ?? Guid.NewGuid().ToString("N");
-            IActor actor = agentType == typeof(NyxIdChatGAgent) && _nyxIdChatServices is not null
-                ? new NyxIdChatTestActor(actorId, _nyxIdChatServices)
+            IActor actor = agentType == typeof(NyxIdChatConversationGAgent) && _nyxIdChatServices is not null
+                ? new NyxIdChatConversationTestActor(actorId, _nyxIdChatServices)
                 : new StubActor(actorId);
             Actors[actorId] = actor;
             CreateCalls.Add((agentType, id));
@@ -3406,19 +3401,23 @@ public class NyxIdChatEndpointsCoverageTests
         public Task UnlinkAsync(string childId, CancellationToken ct = default) => Task.CompletedTask;
     }
 
-    private sealed class NyxIdChatTestActor : IActor
+    private sealed class NyxIdChatConversationTestActor : IActor
     {
-        private readonly NyxIdChatGAgent _agent;
+        private readonly NyxIdChatConversationGAgent _agent;
         private readonly StubActorRuntime _runtime;
 
-        public NyxIdChatTestActor(string id, IServiceProvider services)
+        public NyxIdChatConversationTestActor(string id, IServiceProvider services)
         {
             Id = id;
             _runtime = (StubActorRuntime)services.GetRequiredService<IActorRuntime>();
-            _agent = new NyxIdChatGAgent(new SystemSkillOverlayPromptInjectionTests.StubBuiltInPromptFloorProvider())
+            _agent = new NyxIdChatConversationGAgent(
+                _runtime,
+                new StubActorDispatchPort(_runtime),
+                TimeProvider.System)
             {
                 Services = services,
-                EventSourcingBehaviorFactory = services.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),
+                EventSourcingBehaviorFactory = services.GetRequiredService<
+                    IEventSourcingBehaviorFactory<NyxIdChatConversationGAgentState>>(),
             };
 
             var setId = typeof(Aevatar.Foundation.Core.GAgentBase)
@@ -3504,7 +3503,7 @@ public class NyxIdChatEndpointsCoverageTests
         {
             ct.ThrowIfCancellationRequested();
             Dispatches.Add((actorId, envelope));
-            if (envelope.Payload?.Is(ChatRequestEvent.Descriptor) == true ||
+            if (envelope.Payload?.Is(NyxIdChatStartTurnCommand.Descriptor) == true ||
                 envelope.Payload?.Is(ToolApprovalDecisionEvent.Descriptor) == true)
             {
                 return Task.FromException<DispatchAdmission>(exception);
@@ -3555,6 +3554,8 @@ public class NyxIdChatEndpointsCoverageTests
         public List<TCommand> Commands { get; } = [];
         public List<AGUIEvent> Frames { get; } = [];
         public Exception? Exception { get; init; }
+        public Exception? AfterBeforeEmitException { get; init; }
+        public Exception? AfterEmitException { get; init; }
         public NyxIdChatStartError? Failure { get; init; }
         public Func<CancellationToken, Task>? BeforeEmitAsync { get; init; }
 
@@ -3584,8 +3585,14 @@ public class NyxIdChatEndpointsCoverageTests
             if (BeforeEmitAsync != null)
                 await BeforeEmitAsync(ct);
 
+            if (AfterBeforeEmitException != null)
+                throw AfterBeforeEmitException;
+
             foreach (var frame in Frames)
                 await emitAsync(frame, ct);
+
+            if (AfterEmitException != null)
+                throw AfterEmitException;
 
             return CommandInteractionResult<NyxIdChatAcceptedReceipt, NyxIdChatStartError, NyxIdChatCompletionStatus>
                 .Success(
@@ -3605,11 +3612,11 @@ public class NyxIdChatEndpointsCoverageTests
             return await ExecuteAsync(inbound, emitAsync, onAcceptedAsync, ct);
         }
 
-        private static (string ActorId, string SessionId) ResolveReceiptParts(TCommand command) =>
+        private static (string ActorId, string TurnId) ResolveReceiptParts(TCommand command) =>
             command switch
             {
-                NyxIdChatCommand chat => (chat.ActorId, chat.SessionId),
-                NyxIdApprovalCommand approval => (approval.ActorId, approval.SessionId),
+                NyxIdChatCommand chat => (chat.ActorId, chat.TurnId),
+                NyxIdApprovalCommand approval => (approval.ActorId, approval.TurnId),
                 _ => ("actor", "session"),
             };
     }
@@ -3741,35 +3748,6 @@ public class NyxIdChatEndpointsCoverageTests
     private sealed record StubNyxIdChatSessionProjectionLease(string ActorId, string SessionId)
         : INyxIdChatSessionProjectionLease;
 
-    private sealed class RecordingNyxIdChatSessionEventHub : IProjectionSessionEventHub<AGUIEvent>
-    {
-        public List<(string RootActorId, string SessionId, AGUIEvent Event)> Published { get; } = [];
-
-        public Task PublishAsync(
-            string rootActorId,
-            string sessionId,
-            AGUIEvent evt,
-            CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            Published.Add((rootActorId, sessionId, evt));
-            return Task.CompletedTask;
-        }
-
-        public Task<IAsyncDisposable> SubscribeAsync(
-            string rootActorId,
-            string sessionId,
-            Func<AGUIEvent, ValueTask> handler,
-            CancellationToken ct = default)
-        {
-            _ = rootActorId;
-            _ = sessionId;
-            _ = handler;
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult<IAsyncDisposable>(new NoopDisposable());
-        }
-    }
-
     private sealed class ThrowingNyxIdChatSessionProjectionPort(Exception exception) : INyxIdChatSessionProjectionPort
     {
         public bool ProjectionEnabled => true;
@@ -3889,6 +3867,18 @@ public class NyxIdChatEndpointsCoverageTests
         public List<(string ScopeId, string ConversationId)> DeletedConversations { get; } = [];
         public Exception? DeleteConversationException { get; init; }
 
+        public Task InitializeConversationAsync(
+            ChatHistoryConversationInitialization request,
+            CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task ReserveTurnDeliveryAsync(
+            ChatHistoryTurnDeliveryReservation request,
+            CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task NotifyTurnTerminalAsync(
+            ChatHistoryTurnTerminalNotification notification,
+            CancellationToken ct = default) => Task.CompletedTask;
+
         public Task SaveMessagesAsync(
             string scopeId,
             string conversationId,
@@ -3903,12 +3893,12 @@ public class NyxIdChatEndpointsCoverageTests
             return Task.CompletedTask;
         }
 
-        public Task DeleteConversationAsync(string scopeId, string conversationId, CancellationToken ct = default)
+        public Task<ChatHistoryDeleteResult> DeleteConversationAsync(string scopeId, string conversationId, CancellationToken ct = default)
         {
             if (DeleteConversationException is not null)
                 throw DeleteConversationException;
             DeletedConversations.Add((scopeId, conversationId));
-            return Task.CompletedTask;
+            return Task.FromResult(ChatHistoryDeleteResult.Accepted());
         }
     }
 
@@ -3937,8 +3927,4 @@ public class NyxIdChatEndpointsCoverageTests
             Task.FromResult(promptSection);
     }
 
-    private sealed class NoopDisposable : IAsyncDisposable
-    {
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-    }
 }

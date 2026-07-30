@@ -72,7 +72,7 @@ public sealed class ChannelRegistrationTool : IAgentTool
             "credentials": {
               "type": "object",
               "additionalProperties": { "type": "string" },
-              "description": "Platform credential map for register_channel_via_nyx. Lark accepts app_id, app_secret, and optional verification_token. Telegram accepts bot_token."
+              "description": "Platform credential map for register_channel_via_nyx. Lark requires app_id, app_secret, and verification_token, and accepts optional encrypt_key. Telegram accepts bot_token."
             },
             "lark": {
               "type": "object",
@@ -80,7 +80,8 @@ public sealed class ChannelRegistrationTool : IAgentTool
               "properties": {
                 "app_id": { "type": "string" },
                 "app_secret": { "type": "string" },
-                "verification_token": { "type": "string" }
+                "verification_token": { "type": "string" },
+                "encrypt_key": { "type": "string" }
               }
             },
             "telegram": {
@@ -263,7 +264,8 @@ public sealed class ChannelRegistrationTool : IAgentTool
                 Lark: new NyxChannelLarkCredentials(
                     AppId: ResolveCredential(args, credentials, platform, "app_id"),
                     AppSecret: ResolveCredential(args, credentials, platform, "app_secret"),
-                    VerificationToken: ResolveCredential(args, credentials, platform, "verification_token")),
+                    VerificationToken: ResolveCredential(args, credentials, platform, "verification_token"),
+                    EncryptKey: ResolveCredential(args, credentials, platform, "encrypt_key")),
                 Credentials: credentials,
                 DefaultSkillName: GetStr(args, "default_skill_name")?.Trim() ?? string.Empty),
             ct);
@@ -322,6 +324,7 @@ public sealed class ChannelRegistrationTool : IAgentTool
             AddTopLevelCredentialIfMissing(args, credentials, "app_id");
             AddTopLevelCredentialIfMissing(args, credentials, "app_secret");
             AddTopLevelCredentialIfMissing(args, credentials, "verification_token");
+            AddTopLevelCredentialIfMissing(args, credentials, "encrypt_key");
         }
         else if (string.Equals(platform, "telegram", StringComparison.Ordinal))
         {

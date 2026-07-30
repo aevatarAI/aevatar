@@ -23,14 +23,18 @@ namespace Aevatar.GAgents.NyxidChat;
 
 public static partial class NyxIdChatEndpoints
 {
+    private const string NyxIdDelegationTokenHeader = "X-NyxID-Delegation-Token";
+
     public static IEndpointRouteBuilder MapNyxIdChatEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/api/scopes").WithTags("NyxIdChat");
         group.MapPost("/{scopeId}/nyxid-chat/conversations", HandleCreateConversationAsync);
         group.MapGet("/{scopeId}/nyxid-chat/conversations", HandleListConversationsAsync);
         group.MapPost("/{scopeId}/nyxid-chat/conversations/{actorId}:stream", HandleStreamMessageAsync);
+        group.MapGet("/{scopeId}/nyxid-chat/conversations/{actorId}/state", HandleGetStateAsync);
         group.MapDelete("/{scopeId}/nyxid-chat/conversations/{actorId}", HandleDeleteConversationAsync);
         group.MapPost("/{scopeId}/nyxid-chat/conversations/{actorId}:approve", HandleApproveAsync);
+        MapControlEndpoints(group);
 
         // NyxID Channel Bot Relay webhook — receives forwarded platform messages. NyxID drives
         // this callback and authenticates it with the dedicated X-NyxID-Callback-Token JWT, so
@@ -324,14 +328,36 @@ public static partial class NyxIdChatEndpoints
         return control;
     }
 
-    private static string? ExtractBearerToken(HttpContext http)
+    private static string? ExtractNyxIdAccessToken(HttpContext http)
     {
-        var authHeader = http.Request.Headers.Authorization.FirstOrDefault();
-        if (string.IsNullOrWhiteSpace(authHeader))
-            return null;
+        if (http.Request.Headers.TryGetValue("Authorization", out var authorizationValues))
+        {
+            if (authorizationValues.Count != 1)
+                return null;
 
-        if (authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
-            return authHeader["Bearer ".Length..].Trim();
+            var authorization = authorizationValues[0]?.Trim();
+            if (string.IsNullOrWhiteSpace(authorization) ||
+                !authorization.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+
+            var bearerToken = authorization["Bearer ".Length..].Trim();
+            return string.IsNullOrWhiteSpace(bearerToken) || bearerToken.Any(char.IsWhiteSpace)
+                ? null
+                : bearerToken;
+        }
+
+        if (http.Request.Headers.TryGetValue(NyxIdDelegationTokenHeader, out var delegationValues))
+        {
+            if (delegationValues.Count != 1)
+                return null;
+
+            var delegationToken = delegationValues[0]?.Trim();
+            return string.IsNullOrWhiteSpace(delegationToken) || delegationToken.Any(char.IsWhiteSpace)
+                ? null
+                : delegationToken;
+        }
 
         return null;
     }

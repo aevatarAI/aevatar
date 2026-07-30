@@ -5,7 +5,7 @@ namespace Aevatar.AI.Core.LLMProviders;
 
 /// <summary>
 /// Single source of truth for applying the bot owner's UserConfig to outbound LLM control.
-/// Scheduled agents (SkillRunnerGAgent, WorkflowAgentGAgent) and channel-bot turn runners
+/// Scheduled workflow agents and channel-bot turn runners
 /// (NyxidChat) all delegate here so scope-id guard and swallow-and-log policy can never drift.
 /// </summary>
 public static class OwnerLlmConfigApplier

@@ -5,8 +5,10 @@ using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Audit;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Core.Streaming;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Configuration.BackendConsole;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Core.TypeSystem;
@@ -19,6 +21,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.GAgents.Channel.Identity.DependencyInjection;
 
@@ -48,8 +51,8 @@ public static class IdentityServiceCollectionExtensions
         // Guard against accidental double-registration. Most calls below use
         // TryAdd*, but AddHttpClient / AddHostedService / AddOptions /
         // AddProjection* helpers are NOT idempotent — calling this method
-        // twice would register the bootstrap hosted service twice (two DCR
-        // attempts on startup) and replace named-client config silently. The
+        // twice would register the bootstrap hosted service twice (duplicate
+        // provisioning dispatches) and replace named-client config silently. The
         // sentinel keys off the bootstrap service since it is unique to this
         // module.
         if (services.Any(static d => d.ImplementationType == typeof(AevatarOAuthClientBootstrapService)))
@@ -86,7 +89,59 @@ public static class IdentityServiceCollectionExtensions
         services.TryAddSingleton<
             IProjectionDocumentMetadataProvider<ExternalIdentityBindingDocument>,
             ExternalIdentityBindingDocumentMetadataProvider>();
-        services.TryAddSingleton<IExternalIdentityBindingQueryPort, ExternalIdentityBindingProjectionQueryPort>();
+        services.TryAddSingleton<ExternalIdentityBindingProjectionQueryPort>();
+        services.TryAddSingleton<IExternalIdentityBindingQueryPort>(sp =>
+            sp.GetRequiredService<ExternalIdentityBindingProjectionQueryPort>());
+        services.TryAddSingleton<IOwnerScopeResolver>(sp =>
+            sp.GetRequiredService<ExternalIdentityBindingProjectionQueryPort>());
+
+        // ─── Per-NyxID-user managed Codex credential projection ───
+        services.AddProjectionMaterializationRuntimeCore<
+            ManagedCodexCredentialMaterializationContext,
+            ManagedCodexCredentialMaterializationRuntimeLease,
+            ProjectionMaterializationScopeGAgent<ManagedCodexCredentialMaterializationContext>>(
+            static scopeKey => new ManagedCodexCredentialMaterializationContext
+            {
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+            },
+            static context => new ManagedCodexCredentialMaterializationRuntimeLease(context));
+        services.AddCurrentStateProjectionMaterializer<
+            ManagedCodexCredentialMaterializationContext,
+            ManagedCodexCredentialProjector>();
+        services.TryAddSingleton<
+            IProjectionDocumentMetadataProvider<ManagedCodexCredentialDocument>,
+            ManagedCodexCredentialDocumentMetadataProvider>();
+        services.TryAddSingleton<
+            IManagedCodexCredentialQueryPort,
+            ManagedCodexCredentialProjectionQueryPort>();
+        services.TryAddSingleton<
+            IManagedCodexCredentialCommandPort,
+            ManagedCodexCredentialCommandPort>();
+        services.AddEventSinkProjectionRuntimeCore<
+            ManagedCodexCredentialReadinessProjectionContext,
+            ManagedCodexCredentialReadinessRuntimeLease,
+            ManagedCodexCredentialSnapshot,
+            ProjectionSessionScopeGAgent<ManagedCodexCredentialReadinessProjectionContext>>(
+            static scopeKey => new ManagedCodexCredentialReadinessProjectionContext
+            {
+                SessionId = scopeKey.SessionId,
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+            },
+            static context => new ManagedCodexCredentialReadinessRuntimeLease(context));
+        services.TryAddSingleton<
+            IProjectionSessionEventCodec<ManagedCodexCredentialSnapshot>,
+            ManagedCodexCredentialSnapshotCodec>();
+        services.TryAddSingleton<
+            IProjectionSessionEventHub<ManagedCodexCredentialSnapshot>,
+            ProjectionSessionEventHub<ManagedCodexCredentialSnapshot>>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IProjectionProjector<ManagedCodexCredentialReadinessProjectionContext>,
+            ManagedCodexCredentialReadinessProjector>());
+        services.TryAddSingleton<
+            IManagedCodexCredentialReadinessObservationPort,
+            ManagedCodexCredentialReadinessObservationPort>();
 
         // ─── Committed-fact audit for external-identity bindings ───
         // Subject-bearing: the actor id embeds the raw external subject, so the
@@ -96,15 +151,19 @@ public static class IdentityServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IAuditCommittedEventTranslator, ExternalIdentityBoundAuditTranslator>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IAuditCommittedEventTranslator, ExternalIdentityBindingReplacedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IAuditCommittedEventTranslator, ExternalIdentityBindingRevokedAuditTranslator>());
         services.AddAuditCommittedFactMaterializer<ExternalIdentityBindingMaterializationContext>();
 
         // ─── Cluster-singleton OAuth client projection ───
         // Refactor (iter97/cluster-526): Old pattern: AevatarOAuthClientDocument
         // carries state-token HMAC bytes but ES startup did not require an
-        // explicit ACL assertion. New principle: when ChannelIdentity uses ES,
-        // AevatarOAuthClientEsAclStartupGuard fails closed unless the host
-        // declares the aevatar-oauth-clients index grant matches grain/event-store
+        // explicit ACL check. New principle: when ChannelIdentity uses ES,
+        // AevatarOAuthClientEsAclStartupGuard always inspects the configured
+        // enforcement policy. Warn reports an unconfirmed grant without blocking
+        // startup; Strict fails closed unless a live probe confirms the restricted
+        // grant and the operator separately attests that it matches grain/event-store
         // internal read access.
         services.AddProjectionMaterializationRuntimeCore<
             AevatarOAuthClientMaterializationContext,
@@ -141,11 +200,10 @@ public static class IdentityServiceCollectionExtensions
         var aclOptions = services.AddOptions<AevatarOAuthClientEsAclOptions>();
         if (configuration is not null)
             aclOptions.Bind(configuration.GetSection(AevatarOAuthClientEsAclOptions.SectionName));
-        // Default ES ACL probe: reports Unavailable (no cluster to inspect) so the
-        // startup guard resolves and never blocks on the InMemory projection
-        // provider (dev/tests). A host that runs the Elasticsearch projection store
-        // replaces this with a real HTTP-backed probe that inspects the cluster
-        // security API using the same endpoint/credentials as the projection store.
+        // Default ES ACL probe: reports Unavailable when there is no cluster to
+        // inspect. Warn mode logs it; Strict mode fails closed. A host that runs
+        // the Elasticsearch projection store replaces this with a real HTTP-backed
+        // probe using the same endpoint/credentials as the projection store.
         services.TryAddSingleton<IOAuthClientEsAclProbe, UnavailableOAuthClientEsAclProbe>();
 
         // Endpoint filter for the operator /rebuild path — rejects unauthenticated
@@ -160,10 +218,10 @@ public static class IdentityServiceCollectionExtensions
             static command => new ChannelIdentityOAuthCommandTarget(
                 command.ExternalSubject.ToActorId(),
                 "channel-identity.broker-revocation"));
-        services.AddIdentityOAuthCommandDispatch<RefreshBindingCommand, ExternalIdentityBindingGAgent>(
+        services.AddIdentityOAuthCommandDispatch<ReplaceBindingCommand, ExternalIdentityBindingGAgent>(
             static command => new ChannelIdentityOAuthCommandTarget(
                 command.ExternalSubject.ToActorId(),
-                "channel-identity.oauth-refresh"));
+                "channel-identity.oauth-replace"));
         services.AddIdentityOAuthCommandDispatch<RebuildBindingProjectionCommand, ExternalIdentityBindingGAgent>(
             static command => new ChannelIdentityOAuthCommandTarget(
                 command.ExternalSubject.ToActorId(),
@@ -180,8 +238,16 @@ public static class IdentityServiceCollectionExtensions
             static _ => new ChannelIdentityOAuthCommandTarget(
                 AevatarOAuthClientGAgent.WellKnownId,
                 "channel-identity.oauth-rebuild"));
+        services.AddIdentityOAuthCommandDispatch<RebuildAevatarOAuthClientProjectionCommand, AevatarOAuthClientGAgent>(
+            static _ => new ChannelIdentityOAuthCommandTarget(
+                AevatarOAuthClientGAgent.WellKnownId,
+                "channel-identity.oauth-projection-rebuild"));
+        services.AddIdentityOAuthCommandDispatch<RotateAevatarOAuthClientHmacKeyCommand, AevatarOAuthClientGAgent>(
+            static _ => new ChannelIdentityOAuthCommandTarget(
+                AevatarOAuthClientGAgent.WellKnownId,
+                "channel-identity.oauth-hmac-rotate"));
 
-        // ─── Broker (OAuth client self-bootstrapping) ───
+        // ─── Broker ───
         // Register broker as a *singleton* and inject IHttpClientFactory so
         // each call resolves a fresh HttpClient backed by the factory's
         // rotating handler pool. The earlier shape — AddHttpClient<T>()
@@ -189,12 +255,29 @@ public static class IdentityServiceCollectionExtensions
         // resolved HttpClient + HttpMessageHandler inside the singleton and
         // silently defeated the 2-min handler rotation, so long-running
         // silos would never pick up DNS / TLS-cert changes.
-        services.AddOptions<NyxIdBrokerOptions>();
+        services.AddOptions<NyxIdBrokerOptions>().ValidateOnStart();
+        if (configuration is not null)
+        {
+            services.Configure<NyxIdBrokerOptions>(options =>
+            {
+                options.ResourceServerBaseUrl =
+                    (configuration[NyxIdBrokerOptions.ResourceServerBaseUrlConfigurationKey] ?? string.Empty)
+                    .Trim()
+                    .TrimEnd('/');
+            });
+        }
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IValidateOptions<NyxIdBrokerOptions>, NyxIdBrokerOptionsValidator>());
         services.TryAddSingleton<StateTokenCodec>();
         services.AddHttpClient(NyxIdRemoteCapabilityBroker.HttpClientName);
         services.TryAddSingleton<NyxIdRemoteCapabilityBroker>();
         services.TryAddSingleton<INyxIdCapabilityBroker>(sp => sp.GetRequiredService<NyxIdRemoteCapabilityBroker>());
+        services.TryAddSingleton<INyxIdConnectedServiceInventoryCapabilityIssuer>(sp =>
+            sp.GetRequiredService<NyxIdRemoteCapabilityBroker>());
+        services.TryAddSingleton<INyxIdSkillCapabilityIssuer>(sp =>
+            sp.GetRequiredService<NyxIdRemoteCapabilityBroker>());
         services.TryAddSingleton<INyxIdBrokerCallbackClient>(sp => sp.GetRequiredService<NyxIdRemoteCapabilityBroker>());
+        services.TryAddSingleton<INyxIdBindingRetirementPort>(sp => sp.GetRequiredService<NyxIdRemoteCapabilityBroker>());
 
         // ─── Binding revocation reconciler (observed-invalid_grant self-heal) ───
         // Event-sources a local revoke when a turn observes BindingRevokedException
@@ -202,15 +285,19 @@ public static class IdentityServiceCollectionExtensions
         // stay in the identity layer; NyxidChat depends only on the abstraction.
         services.TryAddSingleton<IBindingRevocationReconciler, BindingRevocationReconciler>();
 
-        // ─── OAuth client bootstrap (self-registration via NyxID DCR) ───
-        // DCR registrar stays as AddHttpClient<T>() (transient): the
-        // AevatarOAuthClientGAgent resolves it per command via Services.GetService<>()
-        // so the typed-client pattern's per-resolution handler rotation works
-        // as designed.
+        // ─── OAuth client bootstrap ───
+        // The configured browser PKCE client id is the deployment authority.
+        // The actor materializes that desired configuration into cluster state
+        // so every broker consumer observes one coherent client snapshot.
         services.AddHttpClient<NyxIdDynamicClientRegistrationClient>();
+        var oauthClientOptions = services.AddOptions<AevatarOAuthClientOptions>();
         var bootstrapOptions = services.AddOptions<AevatarOAuthClientBootstrapOptions>();
         if (configuration is not null)
+        {
             bootstrapOptions.Bind(configuration.GetSection(AevatarOAuthClientBootstrapOptions.SectionName));
+            oauthClientOptions.Configure(options =>
+                options.ClientId = BackendConsoleOidcClientIdResolver.Resolve(configuration));
+        }
         services.AddHostedService<AevatarOAuthClientBootstrapService>();
 
         // ─── Webhook validators ───

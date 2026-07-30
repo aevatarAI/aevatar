@@ -4,6 +4,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
@@ -12,21 +13,59 @@ using Aevatar.GAgents.NyxidChat.AgentProfiles;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 
 namespace Aevatar.AI.Tests;
 
 public sealed class NyxIdChatServiceCollectionExtensionsTests
 {
     [Fact]
-    public void AddNyxIdChat_ShouldRegisterDefaultDisabledAgentProfileSource()
+    public void AddNyxIdChat_Default_ShouldDisableAssistantActionsWithoutStartupFetch()
+    {
+        var services = new ServiceCollection();
+
+        services.AddNyxIdChat(new ConfigurationBuilder().Build());
+        using var provider = services.BuildServiceProvider();
+
+        provider.GetServices<IHostedService>()
+            .Should().NotContain(service =>
+                service is NyxIdAssistantActionRegistryStartupService);
+        var registry = provider.GetRequiredService<NyxIdAssistantActionRegistry>();
+        registry.TryGetDefinition("service.connect", out _).Should().BeFalse();
+        Action resolve = () => registry.ResolveCatalogServiceConnect("api-github");
+        resolve.Should().Throw<NyxIdAssistantActionRegistryException>()
+            .Which.Code.Should().Be("NYXID_ACTION_UNSUPPORTED");
+    }
+
+    [Fact]
+    public void AddNyxIdChat_WhenAssistantActionsEnabled_ShouldRegisterStrictStartupFetcher()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Aevatar:NyxId:AssistantActions:Enabled"] = "true",
+            })
+            .Build();
+        var services = new ServiceCollection();
+
+        services.AddNyxIdChat(configuration);
+
+        services.Should().ContainSingle(descriptor =>
+            descriptor.ServiceType == typeof(IHostedService) &&
+            descriptor.ImplementationType ==
+            typeof(NyxIdAssistantActionRegistryStartupService));
+    }
+
+    [Fact]
+    public void AddNyxIdChat_ShouldRegisterDefaultDisabledAgentProfileResolver()
     {
         var services = new ServiceCollection();
 
         services.AddNyxIdChat(new ConfigurationBuilder().Build());
 
         services.Should().ContainSingle(descriptor =>
-            descriptor.ServiceType == typeof(INyxIdChatAgentProfileSnapshotSource) &&
-            descriptor.ImplementationType == typeof(DisabledNyxIdChatAgentProfileSnapshotSource));
+            descriptor.ServiceType == typeof(INyxIdChatAgentProfileResolver) &&
+            descriptor.ImplementationType == typeof(DisabledNyxIdChatAgentProfileResolver));
     }
 
     [Fact]
@@ -111,6 +150,64 @@ public sealed class NyxIdChatServiceCollectionExtensionsTests
         reply.Text.Should().NotContain("An approval request has been sent.");
         reply.Text.Should().NotContain("\"approval_required\":true");
         tool.ExecuteCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task AddNyxIdChat_WithoutCatalogQuery_ShouldFailPostconditionClosed()
+    {
+        var services = new ServiceCollection();
+        services.AddNyxIdChat(new ConfigurationBuilder().Build());
+        using var provider = services.BuildServiceProvider();
+
+        var result = await provider
+            .GetRequiredService<INyxIdActionPostconditionPort>()
+            .VerifyAsync(PostconditionInput());
+
+        result.Verified.Should().BeFalse();
+        result.FailureCode.Should().Be(NyxIdActionPostconditionPort.UnavailableCode);
+        provider.GetServices<IHostedService>()
+            .Should().NotContain(service =>
+                service is NyxIdAssistantActionRegistryStartupService);
+    }
+
+    [Fact]
+    public void AddNyxIdChat_WithCatalogQuery_ShouldComposeTypedPostconditionReader()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<INyxIdAuthorizationCatalogQueryPort>(
+            new MissingCatalogQueryPort());
+        services.AddNyxIdChat(new ConfigurationBuilder().Build());
+        using var provider = services.BuildServiceProvider();
+
+        provider.GetRequiredService<INyxIdActionPostconditionPort>()
+            .Should().BeOfType<NyxIdActionPostconditionPort>();
+        services.Should().ContainSingle(descriptor =>
+            descriptor.ServiceType == typeof(INyxIdChatTurnOperationExecutor) &&
+            descriptor.ImplementationType == typeof(NyxIdChatTurnOperationExecutor));
+    }
+
+    private static NyxIdChatActionPostconditionInput PostconditionInput() => new()
+    {
+        ScopeId = "scope-alpha",
+        OwnerSubject = "owner-alpha",
+        OriginTurnId = "turn-origin-alpha",
+        ActionRequestId = "action-alpha",
+        Action = NyxIdAssistantActionKind.ServiceConnect,
+        ReportedDisposition = NyxIdChatActionDisposition.Completed,
+        Params = new NyxIdAssistantActionParams
+        {
+            CatalogServiceConnect = new NyxIdCatalogServiceConnectParams
+            {
+                ServiceSlug = "api-github",
+            },
+        },
+    };
+
+    private sealed class MissingCatalogQueryPort : INyxIdAuthorizationCatalogQueryPort
+    {
+        public Task<NyxIdAuthorizationCatalogSnapshot?> GetAsync(
+            AuthorizationOwnerIdentity owner,
+            CancellationToken ct = default) => Task.FromResult<NyxIdAuthorizationCatalogSnapshot?>(null);
     }
 
     private sealed class SingleToolSource(IAgentTool tool) : IAgentToolSource

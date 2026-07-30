@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Middleware;
@@ -37,6 +38,7 @@ public sealed class AgentWorkflowToolSourceAdapterTests
         agentTool.ObservedAccessToken.Should().Be("token-123");
         agentTool.ObservedOrgToken.Should().Be("token-123");
         agentTool.ObservedScopeId.Should().Be("scope-1");
+        agentTool.ObservedOwnerScopeId.Should().Be("scope-1");
         agentTool.ObservedCallId.Should().Be("call-1");
         agentTool.ObservedIdempotencyKey.Should().Be("idem-agent-tool-1");
         agentTool.ObservedScheduleId.Should().Be("schedule-1");
@@ -131,6 +133,50 @@ public sealed class AgentWorkflowToolSourceAdapterTests
         result.PendingApproval.ArgumentsJson.Should().Be("""{"danger":true}""");
         result.ResultJson.Should().BeEmpty();
         AgentToolRequestContext.Current.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task WorkflowTool_ShouldYieldProofBoundWriteUntilMatchingApprovalGrant()
+    {
+        var agentTool = new ProofPolicyAgentTool();
+        var approvalHandler = new ScriptedApprovalHandler(ToolApprovalResult.Yielded("approval-write"));
+        var adapter = new AgentWorkflowToolSourceAdapter(
+            [new SingleAgentToolSource(agentTool)],
+            approvalHandler: approvalHandler);
+        var tool = (await adapter.GetToolsAsync(CancellationToken.None)).Single();
+        var admission = WriteInvocationAdmission();
+        var request = new WorkflowToolExecutionRequest(
+            ArgumentsJson: "{}",
+            RunId: "run-alpha",
+            StepId: "write-alpha",
+            ExecutionId: "exec-alpha",
+            CallId: "call-alpha",
+            ScopeId: "scope-alpha",
+            CallerCredential: new WorkflowCallerCredential(),
+            RuntimeContext: new WorkflowToolRuntimeContext(
+                "workflow-run-actor-alpha",
+                "run-alpha",
+                "write-alpha",
+                "run-alpha",
+                1),
+            InvocationAdmission: admission);
+
+        var pending = await tool.ExecuteAsync(request, CancellationToken.None);
+
+        pending.PendingApproval.Should().NotBeNull();
+        agentTool.ExecuteCount.Should().Be(0);
+        approvalHandler.Requests.Should().ContainSingle().Which.IsDestructive.Should().BeFalse();
+
+        var resumed = await tool.ExecuteAsync(request with
+        {
+            ApprovalGrant = new Aevatar.Workflow.Core.Modules.ToolApprovalGrant(
+                pending.PendingApproval!.ApprovalRequestId,
+                agentTool.Name,
+                "call-alpha"),
+        }, CancellationToken.None);
+
+        resumed.ResultJson.Should().Be("""{"executed":true}""");
+        agentTool.ExecuteCount.Should().Be(1);
     }
 
     [Fact]
@@ -292,6 +338,63 @@ public sealed class AgentWorkflowToolSourceAdapterTests
         AgentToolRequestContext.Current.Should().BeNull();
     }
 
+    [Fact]
+    public async Task WorkflowTool_WhenProviderReceiptIsError_ShouldReturnTypedFailure()
+    {
+        const string rawResult = """{"error":true,"status":503}""";
+        const string safeResult = """{"error":"PROVIDER_HTTP_503","message":"The service request failed."}""";
+        var agentTool = new ResultReceiptAgentTool(
+            rawResult,
+            new AgentToolReceipt
+            {
+                Status = AgentToolReceiptStatus.Error,
+                ErrorCode = "PROVIDER_HTTP_503",
+                ErrorMessage = "The service request failed.",
+                ResultJson = safeResult,
+            });
+        var adapter = new AgentWorkflowToolSourceAdapter([new SingleAgentToolSource(agentTool)]);
+        var workflowTool = (await adapter.GetToolsAsync(CancellationToken.None)).Single();
+
+        var result = await workflowTool.ExecuteAsync(
+            new WorkflowToolExecutionRequest(
+                ArgumentsJson: "{}",
+                RunId: "run-1",
+                StepId: "step-1",
+                ExecutionId: "exec-1",
+                CallId: "call-1",
+                ScopeId: "scope-1",
+                CallerCredential: new WorkflowCallerCredential()),
+            CancellationToken.None);
+
+        result.ResultJson.Should().Be(safeResult);
+        result.Failure.Should().NotBeNull();
+        result.Failure!.ErrorCode.Should().Be("PROVIDER_HTTP_503");
+        result.Failure.ErrorMessage.Should().Be("The service request failed.");
+    }
+
+    [Fact]
+    public async Task WorkflowTool_WhenUnclassifiedResultContainsErrorField_ShouldRemainSuccessful()
+    {
+        const string resultJson = """{"error":true,"status":503,"historical":true}""";
+        var agentTool = new ResultReceiptAgentTool(resultJson, receipt: null);
+        var adapter = new AgentWorkflowToolSourceAdapter([new SingleAgentToolSource(agentTool)]);
+        var workflowTool = (await adapter.GetToolsAsync(CancellationToken.None)).Single();
+
+        var result = await workflowTool.ExecuteAsync(
+            new WorkflowToolExecutionRequest(
+                ArgumentsJson: "{}",
+                RunId: "run-1",
+                StepId: "step-1",
+                ExecutionId: "exec-1",
+                CallId: "call-1",
+                ScopeId: "scope-1",
+                CallerCredential: new WorkflowCallerCredential()),
+            CancellationToken.None);
+
+        result.ResultJson.Should().Be(resultJson);
+        result.Failure.Should().BeNull();
+    }
+
     private sealed class CapturingAgentTool(ToolApprovalMode approvalMode = ToolApprovalMode.NeverRequire) : IAgentTool
     {
         public string Name => "capture_context";
@@ -311,6 +414,8 @@ public sealed class AgentWorkflowToolSourceAdapterTests
         public string? ObservedOrgToken { get; private set; }
 
         public string? ObservedScopeId { get; private set; }
+
+        public string? ObservedOwnerScopeId { get; private set; }
 
         public string? ObservedCallId { get; private set; }
 
@@ -346,6 +451,7 @@ public sealed class AgentWorkflowToolSourceAdapterTests
             ObservedAccessToken = AgentToolRequestContext.NyxIdAccessToken;
             ObservedOrgToken = AgentToolRequestContext.NyxIdOrgToken;
             ObservedScopeId = AgentToolRequestContext.ScopeId;
+            ObservedOwnerScopeId = AgentToolRequestContext.OwnerScopeId;
             ObservedCallId = AgentToolRequestContext.CallId;
             ObservedIdempotencyKey = AgentToolRequestContext.IdempotencyKey;
             ObservedScheduleId = AgentToolRequestContext.Current?.Schedule.ScheduleId;
@@ -353,6 +459,79 @@ public sealed class AgentWorkflowToolSourceAdapterTests
                 ?? new Dictionary<string, string>(StringComparer.Ordinal);
             ObservedWorkflowRuntime = AgentToolRequestContext.Current?.WorkflowRuntime
                 ?? AgentWorkflowRuntimeContext.Empty;
+        }
+    }
+
+    private sealed class ProofPolicyAgentTool : IAgentTool
+    {
+        public string Name => "nyxid_proxy";
+
+        public string Description => "Proof policy fixture";
+
+        public string ParametersSchema => "{}";
+
+        public ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
+
+        public int ExecuteCount { get; private set; }
+
+        public AgentToolCallSafety GetCallSafety(string argumentsJson)
+        {
+            var policy = AgentToolRequestContext.Current?.OperationAdmission?.ExecutionPolicy;
+            return new AgentToolCallSafety(
+                policy?.Approval == AgentToolOperationApproval.Required,
+                policy?.Risk == AgentToolOperationRisk.ReadOnly,
+                policy?.Risk == AgentToolOperationRisk.Destructive);
+        }
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        {
+            ExecuteCount++;
+            return Task.FromResult("""{"executed":true}""");
+        }
+    }
+
+    private static ExternalWorkflowCapabilityRef WriteInvocationAdmission() =>
+        new()
+        {
+            NyxIdUserService = new NyxIdUserServiceCapabilityRef
+            {
+                UserServiceId = "us-write-alpha",
+                ServiceSlugSnapshot = "calendar-alpha",
+                EndpointId = "create-event",
+                HttpMethod = "POST",
+                PathTemplate = "/events",
+                ContractDigest = "digest-write-alpha",
+                ExecutionPolicy = new NyxIdOperationExecutionPolicy
+                {
+                    Risk = NyxIdOperationRisk.Write,
+                    Approval = NyxIdOperationApproval.Required,
+                    EnforcementOwner = NyxIdOperationEnforcementOwner.Aevatar,
+                    AllowedExecutionModes = { ExternalCapabilityExecutionMode.Interactive },
+                },
+            },
+        };
+
+    private sealed class ResultReceiptAgentTool(
+        string resultJson,
+        AgentToolReceipt? receipt) : IAgentTool
+    {
+        public string Name => "result_receipt";
+
+        public string Description => "Return a provider-classified result";
+
+        public string ParametersSchema => "{}";
+
+        public AgentToolReceipt? CreateResultReceipt(
+            string callId,
+            string toolName,
+            string argumentsJson,
+            string resultJson) =>
+            receipt?.Clone();
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(resultJson);
         }
     }
 

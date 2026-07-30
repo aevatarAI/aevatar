@@ -41,6 +41,17 @@ internal sealed class TestEventHandlerContext :
     public IServiceProvider Services { get; }
     public ILogger Logger { get; }
     public string RunId => Agent is IWorkflowExecutionStateHost host ? host.RunId : Agent.Id;
+    public string ScopeId => StateHost.ScopeId;
+    public WorkflowCallerNyxIdAuthority? CallerNyxIdAuthority
+    {
+        get
+        {
+            var source = StateHost.ExecutionContextSnapshot.CallerCredential?.NyxIdAuthority;
+            return WorkflowRunExecutionContextStateAccess.TryNormalizeCallerNyxIdAuthority(source, out var authority)
+                ? authority
+                : null;
+        }
+    }
     public WorkflowExecutionRuntimeContext RuntimeContext => Agent is IWorkflowExecutionStateHost host
         ? host.RuntimeContext
         : _fallbackRuntimeContext;
@@ -273,17 +284,23 @@ internal sealed record CanceledCallback(
     public long ExpectedGeneration => Lease.Generation;
 }
 
-internal sealed class TestAgent(string id, string? runId = null) :
+internal sealed class TestAgent(
+    string id,
+    string? runId = null,
+    string? scopeId = null,
+    IRuntimeSecretStore? runtimeSecretStore = null) :
     IAgent,
     IWorkflowExecutionStateHost,
     IRuntimeSecretStoreAccessor
 {
     private readonly Dictionary<string, Any> _executionStates = new(StringComparer.Ordinal);
-    private readonly IRuntimeSecretStore _runtimeSecretStore = new InMemoryRuntimeSecretStore();
+    private readonly IRuntimeSecretStore _runtimeSecretStore = runtimeSecretStore ?? new InMemoryRuntimeSecretStore();
 
     public string Id { get; } = id;
 
     public string RunId { get; } = string.IsNullOrWhiteSpace(runId) ? id : runId;
+
+    public string ScopeId { get; } = string.IsNullOrWhiteSpace(scopeId) ? string.Empty : scopeId.Trim();
 
     public WorkflowExecutionRuntimeContext RuntimeContext { get; } = new();
 

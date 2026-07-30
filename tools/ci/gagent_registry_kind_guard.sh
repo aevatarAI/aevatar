@@ -75,7 +75,7 @@ bind_identity_paths=(
   "src/platform/Aevatar.GAgentService.Hosting/Endpoints/ScopeServiceEndpoints.cs"
   "src/platform/Aevatar.GAgentService.Abstractions/ScopeBindings/ScopeBindingModels.cs"
   "src/platform/Aevatar.GAgentService.Application/Bindings/ScopeBindingCommandApplicationService.cs"
-  "src/Aevatar.Studio.Application/Studio/Contracts/MemberContracts.cs"
+  "src/Aevatar.Studio.Application.Abstractions/Studio/Contracts/MemberContracts.cs"
   "src/Aevatar.Studio.Application/Studio/Services/StudioMemberService.cs"
   "src/Aevatar.Studio.Projection/CommandServices/ActorDispatchStudioMemberCommandService.cs"
   "src/Aevatar.Studio.Projection/CommandServices/ScopeBindingStudioMemberPlatformBindingCommandService.cs"

@@ -98,6 +98,9 @@ message AevatarOAuthClientState {
   // rotation grace window. Set only when a rotation demoted an existing
   // ref-backed key; empty on initial seed and for legacy state.
   aevatar.credentials.SecretReference previous_hmac_key_ref = 27;
+  // Last successfully applied operator rotation request. Business idempotency
+  // is actor-owned because transport envelope ids change when a lost 202 is retried.
+  string last_hmac_rotation_idempotency_key = 30;
 }
 
 // Issued by the bootstrap startup service from every silo on cluster cold-
@@ -110,7 +113,7 @@ message EnsureAevatarOAuthClientProvisionedCommand {
   reserved "default_service_slugs";
   string nyxid_authority = 1;
   string redirect_uri = 2;
-  // Optional override for the DCR <c>client_name</c>; bootstrap leaves blank.
+  // Optional override for the legacy explicit DCR command path.
   string client_name = 3;
   // Full redirect URI allowlist to register at NyxID. Empty means legacy caller;
   // the actor falls back to [redirect_uri].
@@ -139,10 +142,9 @@ message AevatarOAuthClientProvisioningRetryFiredEvent {
   bool force_reprovision = 10;
 }
 
-// Issued by tests / manual operator scripts that already hold a client_id
-// (e.g. seeded fixture, post-rotation retag, post-incident rebuild). Bootstrap
-// NEVER uses this — it always sends EnsureAevatarOAuthClientProvisionedCommand
-// instead so the actor mediates the DCR call.
+// Issued by configured host bootstrap, operator reconciliation, and tests that
+// already hold a client_id. The actor materializes the supplied deployment
+// fact without calling DCR.
 message ProvisionAevatarOAuthClientCommand {
   reserved 7;
   reserved "default_service_slugs";
@@ -151,15 +153,12 @@ message ProvisionAevatarOAuthClientCommand {
   string nyxid_authority = 3;
   // Optional diagnostic scope for manually provisioned clients. Bootstrap
   // never uses this command path; an empty value means unknown. The
-  // operator-rebuild path must set this to AevatarOAuthClientScopes
-  // .AuthorizationScope so the next bootstrap does not detect drift and
-  // re-DCR the freshly-pinned client.
+  // Configured bootstrap and operator reconciliation set this to
+  // AevatarOAuthClientScopes.AuthorizationScope.
   string oauth_scope = 4;
   // Optional redirect URI. The operator-rebuild path (POST /api/oauth/
-  // aevatar-client/rebuild) must set this to the resolver output so the next
-  // bootstrap does not detect redirect drift and re-DCR the freshly-pinned
-  // client. Tests / fixture seeds may leave it empty when they don't care
-  // about drift detection on a subsequent bootstrap pass.
+  // aevatar-client/rebuild) sets this to the resolver output. Tests / fixture
+  // seeds may leave it empty when they do not exercise callback validation.
   string redirect_uri = 5;
   // Full redirect URI allowlist pinned for the supplied client_id. Empty means
   // preserve existing list or fall back to [redirect_uri] for legacy callers.
@@ -169,7 +168,15 @@ message ProvisionAevatarOAuthClientCommand {
 // Issued by ops to force a fresh HMAC key rotation. Old tokens signed with
 // the previous key fail decode after the next provision; production rolls
 // out via grace window.
-message RotateAevatarOAuthClientHmacKeyCommand {}
+message RotateAevatarOAuthClientHmacKeyCommand {
+  string idempotency_key = 1;
+  string expected_current_kid = 2;
+}
+
+// Issued by the operator rebuild endpoint: re-materialize the wiped/reset
+// current-state readmodel from the surviving actor state. Appends no event
+// and changes no OAuth client fact — disaster recovery only.
+message RebuildAevatarOAuthClientProjectionCommand {}
 
 // Issued by the OAuth callback handler when it observes binding_id in the
 // token response — confirmation that NyxID admin has enabled
@@ -268,6 +275,7 @@ message AevatarOAuthClientHmacKeyRotatedEvent {
   // Secret-vault reference for the demoted previous key on rotation. Empty on
   // initial seed and when the demoted key was legacy plaintext-only.
   aevatar.credentials.SecretReference previous_hmac_key_ref = 9;
+  string idempotency_key = 10;
 }
 
 // Persisted when the OAuth callback observes the broker capability for

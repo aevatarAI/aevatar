@@ -1,72 +1,127 @@
 using System.Text;
 using System.Text.Json;
+using Aevatar.AI.Abstractions.CodexExecution;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 
 /// <summary>
-/// Runs the Codex CLI installed on the SSH host behind a NyxID-bound service.
-/// NyxID owns routing to the node; the target host owns Codex authentication and configuration.
+/// Routes a strongly typed Codex request to either a user-owned private SSH host or the
+/// operator-managed chrono-sandbox service. Target-specific infrastructure stays behind
+/// <see cref="ICodexExecutionPort"/>.
 /// </summary>
-public sealed class NyxIdCodexExecTool : IAgentTool
+public sealed class NyxIdCodexExecTool : INyxIdBuiltInTool
 {
     private const int MaxPromptUtf8Bytes = 6_000;
+    private const int DefaultPrivateSshTimeoutSeconds = 30;
+    private const int MaxPrivateSshTimeoutSeconds = 300;
+    private const int DefaultManagedTimeoutSeconds = 180;
+    private const int MaxManagedTimeoutSeconds = 180;
 
-    private readonly INyxIdSshCommandExecutor _executor;
+    private static readonly JsonSerializerOptions ResultJsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+    };
+
+    private readonly IReadOnlyList<ICodexExecutionPort> _ports;
     private readonly NyxIdToolOptions _options;
 
     public NyxIdCodexExecTool(
         NyxIdApiClient client,
         NyxIdToolOptions? options = null,
         ILogger? logger = null)
-        : this(new NyxIdSshCommandExecutor(client, logger), options ?? new NyxIdToolOptions())
+        : this(
+            [new PrivateSshCodexExecutionAdapter(new NyxIdSshCommandExecutor(client, logger))],
+            options ?? new NyxIdToolOptions())
     {
     }
 
     internal NyxIdCodexExecTool(
         INyxIdSshCommandExecutor executor,
         NyxIdToolOptions options)
+        : this([new PrivateSshCodexExecutionAdapter(executor)], options)
     {
-        _executor = executor ?? throw new ArgumentNullException(nameof(executor));
+    }
+
+    internal NyxIdCodexExecTool(
+        IEnumerable<ICodexExecutionPort> ports,
+        NyxIdToolOptions options)
+    {
+        _ports = ports?.ToArray() ?? throw new ArgumentNullException(nameof(ports));
         _options = options ?? throw new ArgumentNullException(nameof(options));
+        if (_ports.Count == 0)
+            throw new ArgumentException("At least one Codex execution port is required.", nameof(ports));
+        if (_ports.GroupBy(static port => port.TargetKind).Any(static group => group.Count() != 1))
+            throw new ArgumentException("Only one Codex execution port may be registered per target kind.", nameof(ports));
     }
 
     public string Name => "codex_exec";
 
     public string Description =>
-        "Run one non-interactive Codex CLI task on the host behind a NyxID-bound SSH service. " +
-        "The service must route through a NyxID node to the machine where Codex is already " +
-        "installed and authenticated. The command uses 'codex exec -' and leaves model, auth, " +
-        "sandbox, and other Codex behavior to the target host's local configuration.";
+        "Run one non-interactive Codex CLI task using either a private NyxID-backed SSH host " +
+        "or the operator-managed isolated sandbox. Private SSH uses the host's local Codex " +
+        "configuration. Managed sandbox accepts only an empty Git workspace and fixed runtime policy.";
 
     public ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
 
-    public bool? RequiresApproval(string argumentsJson) => !_options.BypassSshExecApproval;
+    public bool? RequiresApproval(string argumentsJson)
+    {
+        var args = ToolArgs.Parse(argumentsJson);
+        var target = args.Element("target");
+        if (!TryReadString(target, "kind", out var kind))
+            return true;
+
+        return kind switch
+        {
+            "managed_sandbox" => false,
+            "private_ssh" => !_options.BypassSshExecApproval,
+            _ => true,
+        };
+    }
 
     public string ParametersSchema => """
         {
           "type": "object",
-          "required": ["service", "principal", "prompt"],
+          "required": ["target", "prompt"],
+          "additionalProperties": false,
           "properties": {
-            "service": {
-              "type": "string",
-              "description": "NyxID SSH service slug or UUID bound to the node/host where Codex is installed."
+            "target": {
+              "type": "object",
+              "required": ["kind"],
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": ["private_ssh", "managed_sandbox"]
+                },
+                "private_ssh": {
+                  "type": "object",
+                  "required": ["service", "principal"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "service": { "type": "string" },
+                    "principal": { "type": "string" }
+                  }
+                }
+              }
             },
-            "principal": {
-              "type": "string",
-              "description": "Unix username whose home and local Codex configuration will be used."
+            "workspace": {
+              "type": "object",
+              "required": ["kind"],
+              "additionalProperties": false,
+              "properties": {
+                "kind": { "type": "string", "enum": ["empty_git"] }
+              }
             },
             "prompt": {
               "type": "string",
-              "maxLength": 6000,
-              "description": "Task prompt for codex exec. Maximum 6000 UTF-8 bytes."
+              "maxLength": 6000
             },
             "timeout_secs": {
               "type": "integer",
               "minimum": 1,
-              "maximum": 300,
-              "description": "NyxID SSH execution timeout. Defaults to 30 seconds and is capped at 300."
+              "maximum": 300
             }
           }
         }
@@ -74,44 +129,259 @@ public sealed class NyxIdCodexExecTool : IAgentTool
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
-        var args = ToolArgs.Parse(argumentsJson);
-        if (args.HasParseError)
-            return $"{{\"error\":\"Failed to parse tool arguments\",\"detail\":{JsonSerializer.Serialize(args.ParseError)}}}";
+        var parsed = ParseRequest(argumentsJson);
+        if (parsed.ErrorJson != null)
+            return parsed.ErrorJson;
 
-        var service = args.Str("service")?.Trim();
-        var principal = args.Str("principal")?.Trim();
-        var prompt = args.Str("prompt");
-        if (string.IsNullOrWhiteSpace(service) ||
-            string.IsNullOrWhiteSpace(principal) ||
-            string.IsNullOrWhiteSpace(prompt))
+        var request = parsed.Request!;
+        var port = _ports.SingleOrDefault(candidate => candidate.TargetKind == request.Target.TargetCase);
+        if (port == null)
         {
-            return "{\"error\":\"'service', 'principal', and 'prompt' are required.\"}";
+            return ErrorJson(
+                "target_not_configured",
+                $"The '{TargetName(request.Target.TargetCase)}' codex_exec target is not enabled on this host.");
         }
 
-        var promptBytes = Encoding.UTF8.GetBytes(prompt);
-        if (promptBytes.Length > MaxPromptUtf8Bytes)
+        CodexExecutionResult? result = null;
+        CodexExecutionFailure? failure = null;
+        var terminalSeen = false;
+        await foreach (var executionEvent in port.ExecuteAsync(request, ct).WithCancellation(ct))
         {
-            return JsonSerializer.Serialize(new
+            if (terminalSeen)
+                throw new InvalidOperationException("Codex execution port emitted an event after its terminal event.");
+
+            switch (executionEvent.Kind)
+            {
+                case CodexExecutionEventKind.Started:
+                case CodexExecutionEventKind.Output:
+                    break;
+                case CodexExecutionEventKind.Completed when executionEvent.Result != null:
+                    result = executionEvent.Result;
+                    terminalSeen = true;
+                    break;
+                case CodexExecutionEventKind.Failed when executionEvent.Failure != null:
+                    failure = executionEvent.Failure;
+                    terminalSeen = true;
+                    break;
+                default:
+                    throw new InvalidOperationException("Codex execution port emitted an invalid event.");
+            }
+        }
+
+        if (failure != null)
+            throw new CodexExecutionException(failure);
+        if (result == null)
+            throw new InvalidOperationException("Codex execution port completed without a terminal result.");
+
+        if (request.Target.TargetCase == CodexExecutionTarget.TargetOneofCase.PrivateSsh)
+            return result.Output;
+
+        return JsonSerializer.Serialize(new
+        {
+            status = "succeeded",
+            target = "managed_sandbox",
+            output = result.Output,
+            exit_code = result.ExitCode,
+            diagnostic_id = result.DiagnosticId,
+            elapsed_ms = result.ElapsedMilliseconds,
+        }, ResultJsonOptions);
+    }
+
+    private static ParsedCodexRequest ParseRequest(string argumentsJson)
+    {
+        var args = ToolArgs.Parse(argumentsJson);
+        if (args.HasParseError)
+        {
+            return ParsedCodexRequest.Failure(
+                ErrorJson("invalid_arguments", args.ParseError ?? "Failed to parse tool arguments."));
+        }
+
+        var prompt = args.Str("prompt");
+        if (string.IsNullOrWhiteSpace(prompt))
+            return ParsedCodexRequest.Failure(ErrorJson("invalid_arguments", "'prompt' is required."));
+
+        var promptBytes = Encoding.UTF8.GetByteCount(prompt);
+        if (promptBytes > MaxPromptUtf8Bytes)
+        {
+            return ParsedCodexRequest.Failure(JsonSerializer.Serialize(new
             {
                 error = "prompt_too_large",
                 detail = $"Prompt must not exceed {MaxPromptUtf8Bytes} UTF-8 bytes.",
                 max_prompt_bytes = MaxPromptUtf8Bytes,
-                actual_prompt_bytes = promptBytes.Length,
-            });
+                actual_prompt_bytes = promptBytes,
+            }));
         }
 
-        return await _executor.ExecuteAsync(
-            new NyxIdSshCommandRequest(
-                service,
-                principal,
-                BuildCommand(promptBytes),
-                args.Int("timeout_secs")),
-            ct).ConfigureAwait(false);
+        var targetElement = args.Element("target");
+        if (!TryReadString(targetElement, "kind", out var kind))
+            return ParsedCodexRequest.Failure(ErrorJson("invalid_target", "'target.kind' is required."));
+
+        var timeout = args.Int("timeout_secs");
+        if (args.Has("timeout_secs") && timeout == null)
+            return ParsedCodexRequest.Failure(ErrorJson("invalid_timeout", "'timeout_secs' must be an integer."));
+
+        return kind switch
+        {
+            "private_ssh" => ParsePrivateSshRequest(args, targetElement, prompt, timeout),
+            "managed_sandbox" => ParseManagedSandboxRequest(args, targetElement, prompt, timeout),
+            _ => ParsedCodexRequest.Failure(ErrorJson(
+                "invalid_target",
+                "'target.kind' must be 'private_ssh' or 'managed_sandbox'.")),
+        };
     }
 
-    private static string BuildCommand(ReadOnlySpan<byte> promptBytes)
+    private static ParsedCodexRequest ParsePrivateSshRequest(
+        ToolArgs args,
+        JsonElement? targetElement,
+        string prompt,
+        int? timeout)
     {
-        var encodedPrompt = Convert.ToBase64String(promptBytes);
-        return $"p='{encodedPrompt}'; {{ printf '%s' \"$p\" | base64 --decode 2>/dev/null || printf '%s' \"$p\" | base64 -D; }} | codex exec -";
+        if (args.Has("service") || args.Has("principal") || args.Has("workspace"))
+        {
+            return ParsedCodexRequest.Failure(ErrorJson(
+                "mixed_target",
+                "private_ssh fields must appear only under 'target.private_ssh', and workspace is managed-only."));
+        }
+
+        if (!TryReadObject(targetElement, "private_ssh", out var privateSsh) ||
+            !TryReadString(privateSsh, "service", out var service) ||
+            !TryReadString(privateSsh, "principal", out var principal))
+        {
+            return ParsedCodexRequest.Failure(ErrorJson(
+                "invalid_target",
+                "'target.private_ssh.service' and 'target.private_ssh.principal' are required."));
+        }
+
+        var timeoutSeconds = timeout ?? DefaultPrivateSshTimeoutSeconds;
+        if (timeoutSeconds is < 1 or > MaxPrivateSshTimeoutSeconds)
+        {
+            return ParsedCodexRequest.Failure(ErrorJson(
+                "invalid_timeout",
+                "Private SSH timeout must be between 1 and 300 seconds."));
+        }
+
+        return Success(
+            new CodexExecutionTarget
+            {
+                PrivateSsh = new CodexPrivateSshTarget
+                {
+                    Service = service,
+                    Principal = principal,
+                },
+            },
+            null,
+            prompt,
+            timeoutSeconds);
+    }
+
+    private static ParsedCodexRequest ParseManagedSandboxRequest(
+        ToolArgs args,
+        JsonElement? targetElement,
+        string prompt,
+        int? timeout)
+    {
+        if (TryGetProperty(targetElement, "private_ssh", out _))
+            return ParsedCodexRequest.Failure(ErrorJson("mixed_target", "managed_sandbox cannot include private_ssh fields."));
+
+        var workspaceElement = args.Element("workspace");
+        if (!TryReadString(workspaceElement, "kind", out var workspaceKind) ||
+            !string.Equals(workspaceKind, "empty_git", StringComparison.Ordinal))
+        {
+            return ParsedCodexRequest.Failure(ErrorJson(
+                "invalid_workspace",
+                "managed_sandbox requires workspace.kind='empty_git'."));
+        }
+
+        var timeoutSeconds = timeout ?? DefaultManagedTimeoutSeconds;
+        if (timeoutSeconds is < 1 or > MaxManagedTimeoutSeconds)
+        {
+            return ParsedCodexRequest.Failure(ErrorJson(
+                "invalid_timeout",
+                "Managed sandbox timeout must be between 1 and 180 seconds."));
+        }
+
+        return Success(
+            new CodexExecutionTarget { ManagedSandbox = new CodexManagedSandboxTarget() },
+            new CodexExecutionWorkspace { EmptyGit = new CodexEmptyGitWorkspace() },
+            prompt,
+            timeoutSeconds);
+    }
+
+    private static ParsedCodexRequest Success(
+        CodexExecutionTarget target,
+        CodexExecutionWorkspace? workspace,
+        string prompt,
+        int timeoutSeconds)
+    {
+        var context = AgentToolRequestContext.Current;
+        return ParsedCodexRequest.Success(new CodexExecutionRequest(
+            target,
+            workspace,
+            prompt,
+            timeoutSeconds,
+            new CodexExecutionCallerContext(
+                context?.Credentials.NyxIdAccessToken,
+                context?.NyxIdAuthority.IsComplete == true
+                    ? new CodexExecutionNyxIdAuthority(
+                        context.NyxIdAuthority.Platform!,
+                        context.NyxIdAuthority.Tenant ?? string.Empty,
+                        context.NyxIdAuthority.ExternalUserId!)
+                    : null,
+                context?.Caller.ScopeId,
+                context?.WorkflowRuntime.RootRunId,
+                context?.WorkflowRuntime.ParentStepId,
+                context?.Request.CallId)));
+    }
+
+    private static bool TryReadObject(JsonElement? parent, string name, out JsonElement value)
+    {
+        if (TryGetProperty(parent, name, out value) && value.ValueKind == JsonValueKind.Object)
+            return true;
+        value = default;
+        return false;
+    }
+
+    private static bool TryReadString(JsonElement? parent, string name, out string value)
+    {
+        value = string.Empty;
+        if (!TryGetProperty(parent, name, out var element) || element.ValueKind != JsonValueKind.String)
+            return false;
+        value = element.GetString()?.Trim() ?? string.Empty;
+        return value.Length > 0;
+    }
+
+    private static bool TryGetProperty(JsonElement? parent, string name, out JsonElement value)
+    {
+        if (parent is { ValueKind: JsonValueKind.Object })
+        {
+            foreach (var property in parent.Value.EnumerateObject())
+            {
+                if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
+                {
+                    value = property.Value;
+                    return true;
+                }
+            }
+        }
+
+        value = default;
+        return false;
+    }
+
+    private static string ErrorJson(string code, string detail) =>
+        JsonSerializer.Serialize(new { error = code, detail });
+
+    private static string TargetName(CodexExecutionTarget.TargetOneofCase target) =>
+        target switch
+        {
+            CodexExecutionTarget.TargetOneofCase.PrivateSsh => "private_ssh",
+            CodexExecutionTarget.TargetOneofCase.ManagedSandbox => "managed_sandbox",
+            _ => "unspecified",
+        };
+
+    private sealed record ParsedCodexRequest(CodexExecutionRequest? Request, string? ErrorJson)
+    {
+        public static ParsedCodexRequest Success(CodexExecutionRequest request) => new(request, null);
+        public static ParsedCodexRequest Failure(string errorJson) => new(null, errorJson);
     }
 }

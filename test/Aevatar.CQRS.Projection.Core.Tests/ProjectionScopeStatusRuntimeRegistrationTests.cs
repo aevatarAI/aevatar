@@ -19,6 +19,9 @@ public sealed class ProjectionScopeStatusRuntimeRegistrationTests
             descriptor.ServiceType == typeof(IProjectionScopeWatermarkQueryPort) &&
             descriptor.ImplementationType == typeof(ProjectionScopeStatusQueryPort));
         services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IProjectionScopeIntrospectionQueryPort) &&
+            descriptor.ImplementationType == typeof(ProjectionScopeIntrospectionQueryPort));
+        services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IProjectionDocumentMetadataProvider<ProjectionScopeStatusDocument>) &&
             descriptor.ImplementationType == typeof(ProjectionScopeStatusDocumentMetadataProvider));
         services.Should().Contain(descriptor =>

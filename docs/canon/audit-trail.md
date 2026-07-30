@@ -33,20 +33,31 @@ Required artifact shape:
 
 | Field family | Meaning |
 |---|---|
-| `audit_id` | Stable audit artifact id. |
-| `captured_at` | Capture timestamp from the writing plane. |
+| `audit_id`, `event_kind`, `subject`, `source` | Stable event identity and producer-owned subject. |
+| `occurred_at`, `recorded_at` | Time the fact occurred and time the capture plane recorded it. |
+| `schema_version` | Version of the durable audit payload contract. |
 | `capture_plane` | One of `boundary_endpoint`, `tool_execution`, or `projection_artifact`. |
-| `action` | Allowlisted action name such as request accepted, tool started, tool completed, or committed artifact observed. |
+| `lifecycle_phase` | When the event kind owns lifecycle semantics: `accepted`, `running`, `waiting_approval`, or `terminal` for the immutable fact's subject. |
+| `terminal_outcome` | Exactly one of `succeeded`, `failed`, `cancelled`, or `timed_out` on terminal records; absent otherwise. |
+| `failure` | Stable code, category, retryability, failed phase, and sanitized message for failed or timed-out terminal records. |
 | `resource` | Typed resource summary, such as scope, service, workflow, run, connector, or channel resource. |
 | `actor_identity` | Sanitized identity key and `identity_key_id`, never a raw subject or credential. |
-| `correlation` | Request, command, run, trace, or projection correlation ids that are already safe to expose. |
+| `correlation` | W3C `traceparent`/`tracestate`, OpenTelemetry `trace_id`/`span_id`, and safe request, command, run, correlation, or causation ids. |
+| `provenance` | Applicable scope, team, member, workflow, published-service, run, causation, correlation, and committed actor sequence identities. |
 | `committed_fact_ref` | Optional reference to the committed feed item and state version when the artifact is about a committed fact. |
-| `outcome` | Allowlisted result summary, error class, or status. |
+| `redaction` | Policy, omitted field names, and whether retained values were sanitized. |
 | `safe_summary` | Short redacted summary suitable for governance review. |
 
 Artifact payloads must be schema-governed and allowlisted. Free-form bags may be
 used only at an external extension boundary; internal platform semantics must
 use typed fields.
+
+Lifecycle is scoped to the subject of each immutable record, not to a global
+product workflow. A boundary `2xx` receipt is `accepted` and nonterminal. It is
+never upgraded to execution success by the HTTP capture plane. Terminal command
+or run outcomes are emitted only by the committed producer that owns that fact.
+Event kinds without producer-owned lifecycle or execution-provenance semantics
+leave those fields unspecified rather than inventing identities or outcomes.
 
 ## 3. Capture Planes
 
@@ -101,8 +112,10 @@ The middleware is host glue only:
 
 1. Read endpoint audit metadata from the selected endpoint.
 2. Resolve the authenticated caller through `IAuditActorIdentityHasher`.
-3. Append `operation_name.attempted` plus exactly one terminal
-   `operation_name` record through `IAuditTrailAppender`.
+3. Append `operation_name.attempted` plus exactly one boundary-result
+   `operation_name` record through `IAuditTrailAppender`. A `2xx` result remains
+   nonterminal `accepted`; a boundary rejection, error, cancellation, or timeout
+   is terminal only for the HTTP request subject.
 4. Fail open for business responses if audit append fails, while logging the
    operational failure.
 
@@ -120,6 +133,18 @@ identity. Token-shaped or secret-key-shaped values are redacted before append.
 Tool-execution middleware records tool-plane facts around tool invocation. It
 captures the tool identity, execution phase, safe caller and scope identity,
 safe resource target, timing, result class, and redacted diagnostic summary.
+
+Provider receipts must use the same stable resource target for successful and
+failed calls. Invocation ids are correlation identifiers only and must not
+stand in for the downstream resource. NyxID proxy receipts identify an admitted
+exact UserService as `nyxid.user-service/<user_service_id>`; they do not derive
+identity from service slugs, request paths, call ids, or response content.
+
+NyxID proxy failure classification is limited to exact
+`NYXID_PROXY_UNAUTHORIZED`, exact `NYXID_PROXY_FORBIDDEN`, and the full-value
+form `NYXID_PROXY_HTTP_[1-5][0-9][0-9]`. Other provider strings remain the
+generic `tool_error` classification. Raw messages, arguments, results, paths,
+headers, and credentials remain excluded from audit artifacts.
 
 It must not store full prompts, full tool arguments, full tool results, raw
 model responses, bearer tokens, OAuth codes, API keys, cookies, headers, or
@@ -210,6 +235,10 @@ other's authority.
 Observability data may be sampled or aggregated. Audit artifacts are append-only
 and retention-governed.
 
+W3C Trace Context and OpenTelemetry identifiers are optional correlation data.
+Their absence never invalidates a durable audit fact, and sampled telemetry is
+never used to reconstruct the audit trail.
+
 ## 6. Forbidden Patterns
 
 Do not implement platform audit trail as:
@@ -247,6 +276,7 @@ readers, actor state, or event stores directly. Audit artifacts are queried thro
 | Route | Method | Authorization | Semantics |
 |---|---|---|---|
 | `/api/audit/trail` | `GET` | Authenticated caller; platform admin only when `scope` targets another scope | Query materialized audit artifacts. Missing `scope` means caller scope. |
+| `/api/audit/trail/cloudevents` | `GET` | Same as `/api/audit/trail` | Export the selected page as a CloudEvents 1.0 JSON batch. |
 | `/api/audit/actor-resolutions` | `POST` | Platform admin | Resolve an external actor identity to `auditActorId`. |
 
 The resolver accepts raw external identity only in the JSON request body. It must never
@@ -265,20 +295,92 @@ state reads, query-time replay, or event-store reconstruction. If platform-admin
 authorization is unavailable for an admin-only path, the endpoint returns
 `503 AUDIT_ADMIN_AUTH_UNAVAILABLE`.
 
-Audit query responses expose `readTimestampUtc`, `queryWatermark`, and `nextCursor`.
-Each record also exposes `occurredAtUtc` and `identityKeyId`. These fields describe
-artifact-store query freshness and must not imply strong consistency with writes that
-may still be in flight.
+If the configured query store rejects or cannot execute the query, the endpoint returns
+`503 AUDIT_QUERY_UNAVAILABLE` with a stable generic message. The response and server log may
+identify only the operation, status class, and exception type; they must not include an
+Elasticsearch URL, username, password, bearer, request payload, or raw backend exception body.
+
+Audit query responses expose requested and effective windows, continuation cursor,
+truncation, ingestion watermark, optional complete-through checkpoint, window
+completeness, schema compatibility, and read timestamp. Each record exposes all safe
+typed fields, including `occurredAtUtc`, `recordedAtUtc`, lifecycle, failure,
+provenance, correlation, redaction, and committed-fact reference.
 
 Audit queries return the newest matching artifacts first, ordered by
 `occurredAtUtc DESC` with `auditId ASC` as the deterministic tie-breaker. A
-`nextCursor` continues toward older artifacts. `queryWatermark` is the greatest
-`occurredAtUtc` across the full filtered result set, independent of the current cursor
-page; it is null when the filtered result set is empty.
+`continuationCursor` continues toward older artifacts. `truncated` is true only when
+another record exists. `ingestionWatermark` is the greatest durable `recorded_at`
+known to the artifact store across its ingestion stream; it is not derived from the
+maximum business occurrence time. `completeThrough` may be set only from a real source
+checkpoint that proves ingestion completeness. Without that checkpoint, a bounded
+window is honestly `unknown` or `behind_ingestion_watermark`, never guessed complete.
+`recorded_at` is the first successful capture time and is excluded from the semantic
+content hash, so redelivery with a later capture clock remains idempotent and preserves
+the first durable value.
 
 Admin-only resolver reads and cross-scope audit trail reads carry endpoint metadata with
 `AccessLevel = ADMIN`. That metadata is for the host self-audit pipeline; it does not
 replace the runtime admin gate.
+
+### 7.2 CloudEvents 1.0 Export
+
+CloudEvents is an HTTP/export representation, not an internal envelope. The export
+uses `application/cloudevents-batch+json` and maps durable fields as follows:
+
+| CloudEvents attribute | Audit source |
+|---|---|
+| `specversion` | Literal `1.0`. |
+| `id` | Stable `audit_id`; retries and repeated exports do not mint a new id. |
+| `source` | Stored producer `source` URI. |
+| `type` | Stored `event_kind`. |
+| `subject` | Stored audit `subject`. |
+| `time` | `occurred_at`. |
+| `dataschema` | URI for the stored `schema_version`. |
+| `data` | The same sanitized typed record returned by the normal query API. |
+
+Optional extension attributes are `traceparent`, `tracestate`, `correlationid`, and
+`causationid`. Export coverage is returned in `Aevatar-Audit-*` response headers.
+CloudEvents does not replace `EventEnvelope`, create a projection rail, or make audit
+artifacts authoritative business state.
+
+### 7.3 Stored-Record Compatibility
+
+Records written before explicit schema versioning remain readable. The query adapter
+marks them `legacy_mapped`, reports `schemaVersion = legacy-v0`, derives only the
+unambiguous lifecycle mapping (`Accepted` remains nonterminal; the old terminal status
+maps to one terminal outcome), and never writes that projection back to storage. A
+page containing such records reports `contains_legacy_records`. Unknown nonempty
+schema versions report `incompatible`; they are not silently claimed current.
+
+### 7.4 Elasticsearch Index Lifecycle and Readiness
+
+The Elasticsearch audit artifact store is not a CQRS current-state read model. It is registered
+as `IAuditTrailArtifactStore`, `IAuditTrailQueryPort`, and an index lifecycle reconcile target,
+but never as `IProjectionReadModelDescriptor`; `/api/cqrs/readmodels` must not inventory it.
+
+Query-critical fields have explicit mappings. `artifact.occurred_at` and
+`artifact.recorded_at` are dates; stable string filters and enum values expose explicit
+`.keyword` subfields; `id.keyword` is the deterministic cursor tie-breaker.
+`artifact.schema_version` is a root keyword because compatibility aggregations operate on that
+field directly. Dynamic mapping remains available only for non-query extension fields and cannot
+define the types used by the stable query contract.
+
+The governed target is the stable `<prefix>-audit-trail-current` alias backed by a physical
+`<alias>-v<schema-fingerprint>` index. Startup reconcile always provisions this target, including
+when request-path `AutoCreateIndex=false` and `MissingIndexBehavior=Throw`. This is an explicit
+startup lifecycle operation, not Elasticsearch dynamic auto-create and not query-time priming.
+
+For the pre-alias `<prefix>-audit-trail` index, startup reconcile creates the fingerprinted
+physical index, reindexes with `op_type=create`, validates completion, and only then attaches the
+new alias. The legacy index is retained unchanged. Later schema drift follows the same copy-forward
+rule and atomically repoints the alias while retaining the old physical. Reconcile never issues
+`DELETE`, `_delete_by_query`, or `remove_index`; retention remains the only deletion authority.
+
+Readiness is active rather than registration-only. `/health/ready` runs a bounded future-window
+query through `IAuditTrailQueryPort`. The status dashboard also declares an
+`audit-query-index` target whose `audit_query_index` executor records the same availability as
+actor-owned health state for `/api/status`. Neither health read endpoint repairs or primes the
+index in its query call stack.
 
 ## 8. Retention and Operations
 
@@ -294,6 +396,9 @@ Operational requirements:
 3. Backfill is a maintenance action over safe committed feeds or existing safe
    artifacts. It is not part of query handling.
 4. Export jobs must keep the same redaction rules as online queries.
+5. Index lifecycle migration copies forward and retains legacy/previous physical indices;
+   operators may remove them only through an approved retention action after independent backup
+   and count verification.
 
 ## 9. Validation
 

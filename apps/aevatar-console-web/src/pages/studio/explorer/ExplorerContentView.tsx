@@ -346,6 +346,69 @@ function renderMarkdownContent(text: string): React.ReactNode {
 
 function renderBlock(block: MarkdownBlock, key: number): React.ReactElement {
   switch (block.kind) {
+    case "table":
+      return (
+        <div
+          key={key}
+          style={{
+            border: "1px solid var(--ant-color-border-secondary)",
+            borderRadius: 8,
+            marginBottom: 12,
+            maxWidth: "100%",
+            overflowX: "auto",
+          }}
+        >
+          <table
+            style={{
+              borderCollapse: "collapse",
+              minWidth: "100%",
+              width: "max-content",
+            }}
+          >
+            <thead>
+              <tr>
+                {block.headers.map((header, cellIndex) => (
+                  <th
+                    key={`${key}-header-${cellIndex}`}
+                    scope="col"
+                    style={{
+                      background: "var(--ant-color-fill-quaternary)",
+                      borderBottom:
+                        "1px solid var(--ant-color-border-secondary)",
+                      padding: "8px 10px",
+                      textAlign: block.alignments[cellIndex] ?? "left",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {renderInlineContent(header)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {block.rows.map((row, rowIndex) => (
+                <tr key={`${key}-row-${rowIndex}`}>
+                  {block.headers.map((_, cellIndex) => (
+                    <td
+                      key={`${key}-row-${rowIndex}-${cellIndex}`}
+                      style={{
+                        borderTop:
+                          "1px solid var(--ant-color-border-secondary)",
+                        overflowWrap: "anywhere",
+                        padding: "8px 10px",
+                        textAlign: block.alignments[cellIndex] ?? "left",
+                        verticalAlign: "top",
+                      }}
+                    >
+                      {renderInlineContent(row[cellIndex] ?? "")}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
     case "code":
       return (
         <pre
@@ -416,7 +479,6 @@ function renderBlock(block: MarkdownBlock, key: number): React.ReactElement {
         />
       );
     case "paragraph":
-    default:
       return (
         <div key={key} style={{ lineHeight: 1.7, marginBottom: 12 }}>
           {block.lines.map((line, index) => (

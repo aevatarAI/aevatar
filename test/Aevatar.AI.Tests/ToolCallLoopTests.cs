@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Reflection;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
@@ -114,7 +115,7 @@ public class ToolCallLoopTests
             CancellationToken.None);
 
         messages.Should().Contain(message =>
-            message.Role == "tool" && message.Content!.Contains("not found", StringComparison.OrdinalIgnoreCase));
+            IsSafeRejectedToolFailure(message, "echo"));
         messages.Should().NotContain(message => message.Role == "tool" && message.Content == "actor");
     }
 
@@ -154,7 +155,7 @@ public class ToolCallLoopTests
         provider.Requests[0].Tools.Should().BeNull();
         executions.Should().Be(0);
         messages.Should().Contain(message =>
-            message.Role == "tool" && message.Content!.Contains("not found", StringComparison.OrdinalIgnoreCase));
+            IsSafeRejectedToolFailure(message, "echo"));
     }
 
     [Fact]
@@ -194,7 +195,7 @@ public class ToolCallLoopTests
         provider.Requests[0].Tools.Should().ContainSingle().Which.Should().BeSameAs(exactTool);
         addedExecutions.Should().Be(0);
         messages.Should().Contain(message =>
-            message.Role == "tool" && message.Content!.Contains("not found", StringComparison.OrdinalIgnoreCase));
+            IsSafeRejectedToolFailure(message, "added"));
     }
 
     [Fact]
@@ -240,7 +241,7 @@ public class ToolCallLoopTests
         exactExecutions.Should().Be(0);
         replacementExecutions.Should().Be(0);
         messages.Should().Contain(message =>
-            message.Role == "tool" && message.Content!.Contains("not found", StringComparison.OrdinalIgnoreCase));
+            IsSafeRejectedToolFailure(message, "echo"));
     }
 
     [Fact]
@@ -1213,8 +1214,7 @@ public class ToolCallLoopTests
         executions.Should().Be(1);
         messages.Where(message => message.Role == "tool").Should().SatisfyRespectively(
             initialResult => initialResult.Content.Should().Be("ok"),
-            rejectedFinalResult => rejectedFinalResult.Content.Should()
-                .Contain("not found"));
+            rejectedFinalResult => IsSafeRejectedToolFailure(rejectedFinalResult, "echo").Should().BeTrue());
         provider.Requests.Should().HaveCount(3);
         provider.Requests[1].Tools.Should().BeNull();
         provider.Requests[2].Tools.Should().BeNull();
@@ -1308,6 +1308,20 @@ public class ToolCallLoopTests
             await Task.CompletedTask;
         }
     }
+
+    private static bool IsSafeRejectedToolFailure(ChatMessage message, string toolName) =>
+        message.Role == "tool" &&
+        message.Content == "{\"error\":\"The tool request failed.\"}" &&
+        message.ToolResultView is
+        {
+            ToolName: var actualToolName,
+            Failure:
+            {
+                Status: AgentToolReceiptStatus.Error,
+                ErrorCode: "tool_execution_exception",
+            },
+        } &&
+        string.Equals(actualToolName, toolName, StringComparison.Ordinal);
 
     private static LLMRequest CopyRequestWithTools(
         LLMRequest request,

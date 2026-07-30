@@ -93,7 +93,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 replyRequest.PriorHistory.ToArray(),
                 BuildAttachmentInputContext(replyRequest, generationContext.LlmControl),
                 forceDisableTools: false,
-                metadataCts.Token)
+                metadataCts.Token,
+                request.TurnCatalog)
                 .ConfigureAwait(false);
             var ownerFallbackControl = ResolveInitialOwnerFallbackControl(
                 generationContext.OwnerFallbackLlmControl,
@@ -168,7 +169,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 priorHistory: null,
                 attachmentContext: null,
                 forceDisableTools: workItem.StepState.FinalNoToolsStep,
-                ct: ct)
+                ct: ct,
+                turnCatalog: workItem.TurnCatalog)
             .ConfigureAwait(false);
         var messages = workItem.StepState.Messages.Select(AgentRunReplyStepMappers.FromProto).ToList();
         var llmRequest = plan.StepExecutor.BuildLlmStepRequest(
@@ -211,11 +213,15 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                     llmRequest,
                     async (chunk, token) =>
                     {
-                        if (string.IsNullOrEmpty(chunk.DeltaContent))
-                            return;
-                        output.Append(chunk.DeltaContent);
-                        if (streamingState is not null)
-                            await streamingState.OnDeltaAsync(output.ToString(), token).ConfigureAwait(false);
+                        if (!string.IsNullOrEmpty(chunk.DeltaContent))
+                        {
+                            output.Append(chunk.DeltaContent);
+                            if (streamingState is not null)
+                                await streamingState.OnDeltaAsync(output.ToString(), token).ConfigureAwait(false);
+                        }
+
+                        if (workItem.ReportChunkAsync is not null)
+                            await workItem.ReportChunkAsync(chunk, token).ConfigureAwait(false);
                     },
                     ct)
                 .ConfigureAwait(false);
@@ -268,11 +274,15 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         };
 
         AgentRunAuthorizedToolStep? authorizedToolStep = null;
+        IReadOnlyList<AgentRunAuthorizedToolCallSafety> authorizedToolCallSafeties = [];
         if (effectiveToolCalls is { Count: > 0 })
         {
             var capturedToolCalls = effectiveToolCalls.ToArray();
             var capturedTools = llmResult.AuthorizedTools.ToArray();
             var capturedToolContext = llmResult.AuthorizedToolContext;
+            authorizedToolCallSafeties = BuildAuthorizedToolCallSafeties(
+                capturedToolCalls,
+                capturedTools);
             authorizedToolStep = new AgentRunAuthorizedToolStep(
                 workItem.RunId,
                 request.CorrelationId,
@@ -295,7 +305,33 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 });
         }
 
-        return new AgentRunLlmStepExecution(continuation, authorizedToolStep);
+        return new AgentRunLlmStepExecution(
+            continuation,
+            authorizedToolStep,
+            authorizedToolCallSafeties);
+    }
+
+    private static IReadOnlyList<AgentRunAuthorizedToolCallSafety> BuildAuthorizedToolCallSafeties(
+        IReadOnlyList<ToolCall> toolCalls,
+        IReadOnlyList<IAgentTool> authorizedTools)
+    {
+        var snapshots = new List<AgentRunAuthorizedToolCallSafety>(toolCalls.Count);
+        foreach (var call in toolCalls)
+        {
+            var tool = authorizedTools.FirstOrDefault(candidate =>
+                string.Equals(candidate.Name, call.Name, StringComparison.OrdinalIgnoreCase));
+            if (tool is null)
+                continue;
+
+            snapshots.Add(new AgentRunAuthorizedToolCallSafety(
+                call.Id ?? string.Empty,
+                call.Name ?? string.Empty,
+                call.ArgumentsJson ?? string.Empty,
+                tool.GetCallSafety(call.ArgumentsJson ?? string.Empty),
+                tool.SideEffectKind ?? string.Empty));
+        }
+
+        return snapshots;
     }
 
     private async Task<LLMRequest> MaterializeFileRefMessagesAsync(LLMRequest request, CancellationToken ct)
@@ -512,8 +548,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         // Re-mint the sender's short-lived NyxID token here, in the deferred reply
         // run. The synchronous inbound path mints a sender token but ConversationGAgent
         // strips transient credentials before persisting NeedsLlmReplyEvent, so by the
-        // time this deferred run executes the token is gone. The binding-id + tenant
-        // survive as identity facts on the tool context, so we re-mint by binding id
+        // time this deferred run executes the token is gone. The binding-id + exact
+        // typed NyxID authority survive as identity facts, so we re-mint by binding id
         // and overlay the fresh token onto LlmControl; ToToolContext then projects it
         // into ToolContext.Credentials so sender-credentialed mutation tools (use_skill)
         // run under the sender's own NyxID instead of being denied. Owner fallback is
@@ -551,7 +587,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         if (!TryRebuildSenderSubject(toolContext, out var subject))
         {
             _logger.LogDebug(
-                "Sender token re-mint skipped: tool context lacks platform/sender-id to rebuild the external subject. correlation={CorrelationId}",
+                "Sender token re-mint skipped: tool context lacks complete typed NyxID authority. correlation={CorrelationId}",
                 request.CorrelationId);
             return control;
         }
@@ -596,6 +632,17 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 subject.Tenant,
                 subject.ExternalUserId);
             TriggerBindingReconcile(subject);
+            return control;
+        }
+        catch (BindingServiceAccessMismatchException ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Sender NyxID binding lacks a required service during deferred re-mint; preserving it until /init service authorization renewal succeeds and keeping owner fallback. correlation={CorrelationId} subject={Platform}:{Tenant}:{User}",
+                request.CorrelationId,
+                subject.Platform,
+                subject.Tenant,
+                subject.ExternalUserId);
             return control;
         }
         catch (Exception ex)
@@ -661,26 +708,30 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         out ExternalSubjectRef subject)
     {
         subject = new ExternalSubjectRef();
-        var platform = NormalizeOptional(toolContext.Channel.Platform);
-        var senderId = NormalizeOptional(toolContext.Channel.SenderId);
+        var authority = toolContext.NyxIdAuthority;
+        if (!authority.IsComplete)
+            return false;
+
+        var platform = NormalizeOptional(authority.Platform);
+        var senderId = NormalizeOptional(authority.ExternalUserId);
         if (platform is null || senderId is null)
             return false;
 
-        // Mirror TryResolveExternalSubject's normalization so the rebuilt subject
-        // matches the one the synchronous path resolved (and the actor id derived
-        // from it): platform lowercased, fields trimmed. Tenant is carried as an
-        // identity fact (SenderBinding.SenderTenant); a null tenant is valid for
-        // platforms without a tenant scope.
+        // NyxID authority is independent from channel routing identity. Normalize
+        // the exact typed authority resolved during inbound binding lookup; never
+        // infer it from Channel or SenderBinding convenience fields.
         subject = new ExternalSubjectRef
         {
             Platform = platform.ToLowerInvariant(),
-            Tenant = NormalizeOptional(toolContext.SenderBinding.SenderTenant) ?? string.Empty,
+            Tenant = NormalizeOptional(authority.Tenant) ?? string.Empty,
             ExternalUserId = senderId,
         };
         return true;
     }
 
-    private void TriggerBindingReconcile(ExternalSubjectRef subject)
+    private void TriggerBindingReconcile(
+        ExternalSubjectRef subject,
+        string reason = InvalidGrantRevokeReason)
     {
         var reconciler = _bindingRevocationReconciler;
         if (reconciler is null)
@@ -692,7 +743,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             try
             {
                 await reconciler
-                    .ReconcileRevokedAsync(subjectSnapshot, InvalidGrantRevokeReason, CancellationToken.None)
+                    .ReconcileRevokedAsync(subjectSnapshot, reason, CancellationToken.None)
                     .ConfigureAwait(false);
             }
             catch (Exception ex)
@@ -761,7 +812,9 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
 
         try
         {
-            var config = await _userConfigQueryPort.GetAsync(scopeId, ct).ConfigureAwait(false);
+            var config = await _userConfigQueryPort
+                .GetAsync(UserConfigResourceKey.ForOwnerScope(scopeId), ct)
+                .ConfigureAwait(false);
             control = control with
             {
                 ModelOverride = string.IsNullOrWhiteSpace(config.DefaultModel)

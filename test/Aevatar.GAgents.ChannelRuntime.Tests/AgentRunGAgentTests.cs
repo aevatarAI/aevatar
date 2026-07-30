@@ -56,6 +56,15 @@ public sealed class AgentRunGAgentTests
                 },
                 new Aevatar.AI.Abstractions.ChatContentPart
                 {
+                    Kind = Aevatar.AI.Abstractions.ChatContentPartKind.Text,
+                    Text = "large extracted document text",
+                    FileRef = new Aevatar.AI.Abstractions.ChatFileRef
+                    {
+                        ArtifactId = "workflow-file://wf-file-document",
+                    },
+                },
+                new Aevatar.AI.Abstractions.ChatContentPart
+                {
                     Kind = Aevatar.AI.Abstractions.ChatContentPartKind.Image,
                     DataBase64 = "large-image-base64",
                     FileRef = new Aevatar.AI.Abstractions.ChatFileRef
@@ -86,10 +95,13 @@ public sealed class AgentRunGAgentTests
         var sanitized = AgentRunGAgent.StripInlineMediaPayloads(stepState);
 
         sanitized.Messages.Single().ContentParts[0].Text.Should().Be("describe");
-        sanitized.Messages.Single().ContentParts[1].DataBase64.Should().BeEmpty();
-        sanitized.Messages.Single().ContentParts[1].FileRef.ArtifactId.Should().Be("workflow-file://wf-file-1");
+        sanitized.Messages.Single().ContentParts[1].Text.Should().BeEmpty();
+        sanitized.Messages.Single().ContentParts[1].FileRef.ArtifactId.Should().Be("workflow-file://wf-file-document");
+        sanitized.Messages.Single().ContentParts[2].DataBase64.Should().BeEmpty();
+        sanitized.Messages.Single().ContentParts[2].FileRef.ArtifactId.Should().Be("workflow-file://wf-file-1");
         sanitized.AppendedHistory.Single().ContentParts.Should().OnlyContain(part => part.DataBase64.Length == 0);
-        stepState.Messages.Single().ContentParts[1].DataBase64.Should().Be("large-image-base64");
+        stepState.Messages.Single().ContentParts[1].Text.Should().Be("large extracted document text");
+        stepState.Messages.Single().ContentParts[2].DataBase64.Should().Be("large-image-base64");
     }
 
     [Fact]
@@ -1472,7 +1484,9 @@ public sealed class AgentRunGAgentTests
         scopeResolver.ResolveScopeIdByApiKeyAsync("api-key-bot", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<string?>("scope-bot-owner"));
         var userConfigQueryPort = Substitute.For<IUserConfigQueryPort>();
-        userConfigQueryPort.GetAsync("scope-bot-owner", Arg.Any<CancellationToken>())
+        userConfigQueryPort.GetAsync(
+                UserConfigResourceKey.ForOwnerScope("scope-bot-owner"),
+                Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new Aevatar.Studio.Application.Studio.Abstractions.UserConfig(
                 DefaultModel: "gpt-4o-bot-owner",
                 PreferredLlmRoute: "/api/v1/proxy/s/anthropic-via-bot-owner",
@@ -1719,7 +1733,7 @@ public sealed class AgentRunGAgentTests
         providerFactory.Requests.Should().ContainSingle();
         providerFactory.Requests[0].Messages.Single(message => message.Role == "system").Content.Should()
             .Contain("Attachment visibility warning")
-            .And.Contain("one or more attachments could not be converted to LLM image input");
+            .And.Contain("one or more attachments could not be converted to LLM input");
     }
 
     [Fact]
@@ -1874,7 +1888,9 @@ public sealed class AgentRunGAgentTests
         scopeResolver.ResolveScopeIdByApiKeyAsync("api-key-bot", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<string?>("scope-bot-owner"));
         var userConfigQueryPort = Substitute.For<IUserConfigQueryPort>();
-        userConfigQueryPort.GetAsync("scope-bot-owner", Arg.Any<CancellationToken>())
+        userConfigQueryPort.GetAsync(
+                UserConfigResourceKey.ForOwnerScope("scope-bot-owner"),
+                Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new Aevatar.Studio.Application.Studio.Abstractions.UserConfig(
                 DefaultModel: "owner-model",
                 PreferredLlmRoute: "/api/v1/proxy/s/owner",
@@ -3450,7 +3466,9 @@ public sealed class AgentRunGAgentTests
             .Returns(Task.FromResult<string?>("scope-bot-owner"));
 
         var userConfigQueryPort = Substitute.For<IUserConfigQueryPort>();
-        userConfigQueryPort.GetAsync("scope-bot-owner", Arg.Any<CancellationToken>())
+        userConfigQueryPort.GetAsync(
+                UserConfigResourceKey.ForOwnerScope("scope-bot-owner"),
+                Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new Aevatar.Studio.Application.Studio.Abstractions.UserConfig(
                 DefaultModel: "gpt-4o-bot-owner",
                 PreferredLlmRoute: "/api/v1/proxy/s/anthropic-via-bot-owner",
@@ -4297,7 +4315,9 @@ public sealed class AgentRunGAgentTests
                     var scopeId = await _scopeResolver.ResolveScopeIdByApiKeyAsync(apiKeyId, ct);
                     if (!string.IsNullOrWhiteSpace(scopeId))
                     {
-                        var config = await _userConfigQueryPort.GetAsync(scopeId, ct);
+                        var config = await _userConfigQueryPort.GetAsync(
+                            UserConfigResourceKey.ForOwnerScope(scopeId),
+                            ct);
                         control = control with
                         {
                             ModelOverride = string.IsNullOrWhiteSpace(config.DefaultModel)

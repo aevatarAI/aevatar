@@ -86,7 +86,8 @@ public interface IScheduledDispatchCredentialRequirementPolicy
 
 public static class ScheduledDispatchCredentialRequirementRequests
 {
-    public const string LegacyConnectorHttpAuthorizationHeader = "connector.http.authorization";
+    public const string LegacyConnectorHttpAuthorizationHeader =
+        ScheduledServiceInvocationPayloadPolicy.ConnectorHttpAuthorizationKey;
 
     public static ScheduledDispatchCredentialRequirementRequest FromConfiguration(
         ScheduledDispatchConfiguration configuration,
@@ -198,7 +199,7 @@ public static class ScheduledDispatchCredentialRequirementRequests
 
         foreach (var (key, value) in headers)
         {
-            if (string.Equals(key?.Trim(), LegacyConnectorHttpAuthorizationHeader, StringComparison.Ordinal) &&
+            if (ScheduledServiceInvocationPayloadPolicy.IsConnectorHttpAuthorizationKey(key) &&
                 !string.IsNullOrWhiteSpace(value))
             {
                 return new ScheduledDispatchPayloadCredentialSignal(

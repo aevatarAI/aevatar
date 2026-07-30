@@ -101,20 +101,18 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
                 command.TargetPlatform,
                 command.NyxProviderSlug,
                 command.ConversationId,
-#pragma warning disable CS0612 // deprecated command fields are read only as a channel_address compatibility bridge
+#pragma warning disable CS0612 // deprecated fields are read only as a channel_address compatibility bridge
                 command.LarkReceiveId,
                 command.LarkReceiveIdType,
                 command.LarkReceiveIdFallback,
                 command.LarkReceiveIdTypeFallback,
-#pragma warning restore CS0612
-#pragma warning disable CS0612 // deprecated state fields are read only as a channel_address compatibility bridge
                 existing?.LarkReceiveId,
                 existing?.LarkReceiveIdType,
                 existing?.LarkReceiveIdFallback,
                 existing?.LarkReceiveIdTypeFallback),
 #pragma warning restore CS0612
-            OutputFormat = command.OutputFormat == SkillRunnerOutputFormat.Auto
-                ? existing?.OutputFormat ?? SkillRunnerOutputFormat.Auto
+            OutputFormat = command.OutputFormat == ScheduledAgentOutputFormat.Auto
+                ? existing?.OutputFormat ?? ScheduledAgentOutputFormat.Auto
                 : command.OutputFormat,
         };
 

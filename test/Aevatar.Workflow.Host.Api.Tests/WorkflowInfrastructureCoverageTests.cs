@@ -7,6 +7,7 @@ using Aevatar.Capabilities;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
+using Aevatar.Foundation.Runtime.Streaming;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Hosting.DependencyInjection;
@@ -110,6 +111,33 @@ public sealed class WorkflowInfrastructureCoverageTests
     }
 
     [Fact]
+    public async Task AddWorkflowInfrastructure_ShouldResolveDefinitionParserWithoutRuntimeOrReadModelDependencies()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddAevatarWorkflow();
+        services.AddWorkflowInfrastructure();
+        using var provider = services.BuildServiceProvider();
+
+        var parser = provider.GetRequiredService<IWorkflowDefinitionParser>();
+        var result = await parser.ParseWorkflowYamlAsync(
+            """
+            name: deterministic
+            steps:
+              - id: complete
+                type: assign
+                parameters:
+                  target: result
+                  value: done
+            """,
+            CancellationToken.None);
+
+        parser.Should().NotBeOfType<WorkflowRunActorPort>();
+        result.Succeeded.Should().BeTrue();
+        result.WorkflowName.Should().Be("deterministic");
+    }
+
+    [Fact]
     public void AddWorkflowDefinitionFileSource_ShouldRegisterLoaderAndHostedService()
     {
         var services = new ServiceCollection();
@@ -206,6 +234,7 @@ public sealed class WorkflowInfrastructureCoverageTests
         services.AddLogging();
         services.AddSingleton<IActorRuntime, RecordingActorRuntime>();
         services.AddSingleton<IActorDispatchPort, RecordingActorDispatchPort>();
+        services.AddSingleton<Aevatar.Foundation.Abstractions.IStreamProvider, InMemoryStreamProvider>();
         services.AddSingleton<IScriptRuntimeCommandPort, RecordingScriptRuntimeCommandPort>();
         services.AddSingleton<IWorkflowRunProvisioningPort, RecordingWorkflowRunProvisioningPort>();
 
@@ -219,33 +248,6 @@ public sealed class WorkflowInfrastructureCoverageTests
         services.Should().NotContain(x => x.ServiceType == typeof(IHostedService) &&
             x.ImplementationType != null &&
             x.ImplementationType.Name.Contains("GAgentServiceDemo", StringComparison.Ordinal));
-    }
-
-    [Fact]
-    public async Task FileBackedWorkflowCatalogPort_ShouldMaterializeStartupDefinitions()
-    {
-        var runtime = new RecordingActorRuntime();
-        var dispatch = new RecordingActorDispatchPort();
-        var port = new FileBackedWorkflowCatalogPort(
-            runtime,
-            dispatch,
-            NullLogger<FileBackedWorkflowCatalogPort>.Instance);
-
-        await port.MaterializeAsync(
-        [
-            new WorkflowDefinitionRegistration(
-                "repo_install",
-                "name: repo_install",
-                "workflow-definition:repo_install",
-                "repo"),
-        ]);
-
-        runtime.Created.Should().ContainSingle(x => x.ActorId == "workflow-definition:repo_install" && x.AgentType == typeof(Aevatar.Workflow.Core.WorkflowGAgent));
-        dispatch.Envelopes.Should().ContainSingle();
-        var request = dispatch.Envelopes[0].Envelope.Payload!.Unpack<Aevatar.Workflow.Abstractions.BindWorkflowDefinitionEvent>();
-        request.WorkflowName.Should().Be("repo_install");
-        request.WorkflowYaml.Should().Be("name: repo_install");
-        request.SourceKind.Should().Be("repo");
     }
 
     [Fact]
@@ -1017,6 +1019,7 @@ public sealed class WorkflowInfrastructureCoverageTests
 
         registry.GetYaml("direct").Should().NotBeNull();
         registry.GetYaml("demo_template").Should().BeNull();
+        registry.GetYaml("host-callback-budget-branch").Should().BeNull();
     }
 
     [Fact]
@@ -1082,47 +1085,6 @@ public sealed class WorkflowInfrastructureCoverageTests
         {
             TryDeleteDirectory(disabledDir);
             TryDeleteDirectory(enabledDir);
-        }
-    }
-
-    [Fact]
-    public async Task WorkflowDefinitionBootstrapHostedService_ShouldLoadConfiguredDirectories_AndHonorCancellation()
-    {
-        var tempDir = Path.Combine(Path.GetTempPath(), "wf-bootstrap-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(tempDir);
-
-        try
-        {
-            File.WriteAllText(Path.Combine(tempDir, "review.yaml"), "name: review");
-            var registry = new WorkflowDefinitionCatalog();
-            var options = new WorkflowDefinitionFileSourceOptions
-            {
-                DuplicatePolicy = WorkflowDefinitionDuplicatePolicy.Override,
-            };
-            options.WorkflowDirectories.Add(tempDir);
-            var service = new WorkflowDefinitionBootstrapHostedService(
-                registry,
-                new WorkflowDefinitionFileLoader(),
-                new FileBackedWorkflowCatalogPort(
-                    new RecordingActorRuntime(),
-                    new RecordingActorDispatchPort(),
-                    NullLogger<FileBackedWorkflowCatalogPort>.Instance),
-                Options.Create(options),
-                NullLogger<WorkflowDefinitionBootstrapHostedService>.Instance);
-
-            await service.StartAsync(CancellationToken.None);
-
-            registry.GetYaml("review").Should().Contain("name: review");
-            await service.StopAsync(CancellationToken.None);
-
-            using var cts = new CancellationTokenSource();
-            cts.Cancel();
-            var act = async () => await service.StartAsync(cts.Token);
-            await act.Should().ThrowAsync<OperationCanceledException>();
-        }
-        finally
-        {
-            TryDeleteDirectory(tempDir);
         }
     }
 
@@ -1449,15 +1411,27 @@ public sealed class WorkflowInfrastructureCoverageTests
 
     private sealed class RecordingScriptRuntimeCommandPort : IScriptRuntimeCommandPort
     {
+        public string? CompletionNotificationDeliveryId { get; private set; }
+
+        public long CompletionNotificationExpiresAtUnixMs { get; private set; }
+
         public Task RunRuntimeAsync(
             string runtimeActorId,
             string runId,
+            string commandId,
+            string correlationId,
             Google.Protobuf.WellKnownTypes.Any? inputPayload,
             string scriptRevision,
             string definitionActorId,
             string requestedEventType,
+            string? scopeId,
+            string? completionNotificationActorId,
+            string? completionNotificationDeliveryId,
+            long completionNotificationExpiresAtUnixMs,
             CancellationToken ct)
         {
+            CompletionNotificationDeliveryId = completionNotificationDeliveryId;
+            CompletionNotificationExpiresAtUnixMs = completionNotificationExpiresAtUnixMs;
             ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }

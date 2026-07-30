@@ -259,7 +259,10 @@ public sealed class TextUserLlmOptionsRenderer : IUserLlmOptionsRenderer<Message
 
     private static bool IsCurrent(UserLlmOption option, UserLlmOption? current) =>
         current is not null &&
-        string.Equals(option.ServiceId, current.ServiceId, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(
+            InventoryUserServiceId(option),
+            InventoryUserServiceId(current),
+            StringComparison.Ordinal) &&
         string.Equals(option.RouteValue, current.RouteValue, StringComparison.OrdinalIgnoreCase);
 
     private static PageWindow ResolvePagination(int totalCount, int requestedPage)
@@ -285,20 +288,35 @@ public sealed class TextUserLlmOptionsRenderer : IUserLlmOptionsRenderer<Message
             ActionId = ServiceIdArgument,
             Label = "选择本页 route",
             Placeholder = "选择一个 route",
-            Value = options.FirstOrDefault(option => IsCurrent(option, current))?.ServiceId ?? string.Empty,
+            Value = options
+                .Where(option => IsCurrent(option, current))
+                .Select(InventoryUserServiceId)
+                .FirstOrDefault() ?? string.Empty,
         };
 
         foreach (var option in options)
         {
+            var userServiceId = InventoryUserServiceId(option);
+            if (userServiceId is null)
+                continue;
+
             action.Options.Add(new ActionOption
             {
                 Label = $"{option.DisplayName}{RenderCurrentMarker(option, current)}",
-                Value = option.ServiceId,
+                Value = userServiceId,
             });
         }
 
         return action;
     }
+
+    private static string? InventoryUserServiceId(UserLlmOption option) =>
+        option.Identity is
+        {
+            Authority: UserLlmIdentityAuthority.NyxIdUserServicesInventory,
+        } identity
+            ? UserLlmPreferenceWriteCore.NormalizeOptional(identity.NyxIdUserServiceId)
+            : null;
 
     private static ActionElement BuildSubmitSelectedServiceAction() => new()
     {

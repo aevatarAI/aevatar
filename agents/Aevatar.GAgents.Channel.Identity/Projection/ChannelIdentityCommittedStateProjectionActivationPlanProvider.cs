@@ -12,6 +12,7 @@ public sealed class ChannelIdentityCommittedStateProjectionActivationPlanProvide
 {
     internal const string ExternalIdentityBindingProjectionKind = "external-identity-binding";
     internal const string AevatarOAuthClientProjectionKind = "aevatar-oauth-client";
+    internal const string ManagedCodexCredentialProjectionKind = "managed-codex-credential";
 
     // Refactor (iter71/cluster-071-identity-projection-rebuild-events):
     //   Old pattern: emit no-op ProjectionRebuildRequested event in command handler to trigger projection materialization
@@ -44,18 +45,37 @@ public sealed class ChannelIdentityCommittedStateProjectionActivationPlanProvide
                     context.ActorId,
                     AevatarOAuthClientProjectionKind),
             ],
+            var type when type == typeof(ManagedCodexCredentialGAgent) &&
+                          IsManagedCodexCredentialEvent(payload) =>
+            [
+                DurablePlan<ManagedCodexCredentialMaterializationRuntimeLease>(
+                    context.ActorId,
+                    ManagedCodexCredentialProjectionKind),
+            ],
             _ => [],
         };
     }
 
     private static bool IsExternalIdentityBindingEvent(Any payload) =>
         payload.Is(ExternalIdentityBoundEvent.Descriptor) ||
+        payload.Is(ExternalIdentityBindingReplacedEvent.Descriptor) ||
+        payload.Is(ExternalIdentityBindingRetirementQueuedEvent.Descriptor) ||
+        payload.Is(ExternalIdentityBindingRetiredEvent.Descriptor) ||
         payload.Is(ExternalIdentityBindingRevokedEvent.Descriptor);
 
     private static bool IsAevatarOAuthClientEvent(Any payload) =>
         payload.Is(AevatarOAuthClientProvisionedEvent.Descriptor) ||
         payload.Is(AevatarOAuthClientHmacKeyRotatedEvent.Descriptor) ||
         payload.Is(AevatarOAuthClientBrokerCapabilityObservedEvent.Descriptor);
+
+    private static bool IsManagedCodexCredentialEvent(Any payload) =>
+        payload.Is(ManagedCodexCredentialProvisionedEvent.Descriptor) ||
+        payload.Is(ManagedCodexCredentialRotatedEvent.Descriptor) ||
+        payload.Is(ManagedCodexCredentialPolicyReconciledEvent.Descriptor) ||
+        payload.Is(ManagedCodexCredentialReadinessConfirmedEvent.Descriptor) ||
+        payload.Is(ManagedCodexCredentialRevokedEvent.Descriptor) ||
+        payload.Is(ManagedCodexCredentialCleanupQueuedEvent.Descriptor) ||
+        payload.Is(ManagedCodexCredentialCleanupTrackCompletedEvent.Descriptor);
 
     private static ProjectionActivationPlan DurablePlan<TLease>(
         string actorId,

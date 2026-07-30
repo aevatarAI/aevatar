@@ -1,34 +1,6 @@
-import { readResponseError } from "./error";
+import { readResponseError, readResponseErrorDetails } from "./error";
 
 describe("readResponseError", () => {
-  it("prefers actionable detail over a machine error code", async () => {
-    await expect(
-      readResponseError({
-        status: 409,
-        statusText: "Conflict",
-        text: async () =>
-          JSON.stringify({
-            error: "required_service_access_missing",
-            detail:
-              "Return to login and allow access to the Aevatar service in NyxID.",
-          }),
-      }),
-    ).resolves.toBe(
-      "Return to login and allow access to the Aevatar service in NyxID.",
-    );
-  });
-
-  it("uses the error field when no user-facing detail is available", async () => {
-    await expect(
-      readResponseError({
-        status: 409,
-        statusText: "Conflict",
-        text: async () =>
-          JSON.stringify({ error: "required_service_access_missing" }),
-      }),
-    ).resolves.toBe("required_service_access_missing");
-  });
-
   it("includes ASP.NET validation problem details", async () => {
     await expect(
       readResponseError({
@@ -48,5 +20,23 @@ describe("readResponseError", () => {
     ).resolves.toBe(
       "One or more validation errors occurred.: $.serviceInvocation.payload.value: The JSON value could not be converted to Google.Protobuf.ByteString.",
     );
+  });
+
+  it("reads machine error codes from the backend error field", async () => {
+    await expect(
+      readResponseErrorDetails({
+        status: 502,
+        statusText: "Bad Gateway",
+        text: async () =>
+          JSON.stringify({
+            error: "issued_binding_invalid",
+            detail: "The issued binding could not be adopted.",
+          }),
+      }),
+    ).resolves.toEqual({
+      code: "issued_binding_invalid",
+      message: "issued_binding_invalid",
+      status: 502,
+    });
   });
 });

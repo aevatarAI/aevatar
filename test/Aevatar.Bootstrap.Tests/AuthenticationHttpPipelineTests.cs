@@ -21,6 +21,7 @@ namespace Aevatar.Bootstrap.Tests;
 public sealed class AuthenticationHttpPipelineTests
 {
     private const string Authority = "https://nyxid.example.com";
+    private const string DiscoveredIssuer = "https://nyx-api.example.com";
     private const string Audience = "aevatar-api";
     private const string ResourceUri = "https://api.example.com/resource";
 
@@ -122,7 +123,7 @@ public sealed class AuthenticationHttpPipelineTests
         var now = DateTimeOffset.UtcNow;
         var payload = new JwtPayload
         {
-            [JwtRegisteredClaimNames.Iss] = Authority,
+            [JwtRegisteredClaimNames.Iss] = DiscoveredIssuer,
             [JwtRegisteredClaimNames.Aud] = Audience,
             [JwtRegisteredClaimNames.Sub] = "user-alpha",
             [JwtRegisteredClaimNames.Iat] = now.ToUnixTimeSeconds(),
@@ -187,7 +188,7 @@ public sealed class AuthenticationHttpPipelineTests
             {
                 MetadataRequests++;
                 return Task.FromResult(JsonResponse(
-                    $"{{\"issuer\":\"{Authority}\",\"jwks_uri\":\"{Authority}/.well-known/jwks.json\"}}"));
+                    $"{{\"issuer\":\"{DiscoveredIssuer}\",\"jwks_uri\":\"{DiscoveredIssuer}/.well-known/jwks.json\"}}"));
             }
 
             if (path == "/.well-known/jwks.json")

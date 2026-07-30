@@ -1,4 +1,5 @@
 using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.Identity.Abstractions;
 
 namespace Aevatar.GAgents.Channel.Identity.Broker;
 
@@ -44,6 +45,15 @@ public interface INyxIdBrokerCallbackClient
         CancellationToken ct = default);
 
     /// <summary>
+    /// Resolves the NyxID owner of an existing binding through the owning
+    /// client's binding-introspection endpoint. Used only to migrate legacy
+    /// Aevatar binding documents that predate <c>owner_scope_id</c>.
+    /// </summary>
+    Task<OwnerScopeId?> ResolveBindingOwnerScopeAsync(
+        string bindingId,
+        CancellationToken ct = default);
+
+    /// <summary>
     /// Revoke a specific NyxID-issued <paramref name="bindingId"/> by id.
     /// Used by the callback handler to clean up an orphan binding when the
     /// sender is already bound (race / replay) — without the subject lookup
@@ -60,6 +70,8 @@ public interface INyxIdBrokerCallbackClient
 /// </summary>
 public sealed record BrokerAuthorizationCodeResult(string? BindingId, string? IdToken, string? AccessToken)
 {
+    public bool BindingUpdated { get; init; }
+
     public string? RefreshToken { get; init; }
 
     public string? TokenType { get; init; }

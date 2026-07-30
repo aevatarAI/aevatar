@@ -20,6 +20,8 @@ public sealed class AevatarPlatformCompositionOptions
 
     public bool EnableWorkflowCapability { get; set; } = true;
 
+    public bool MapWorkflowChatPost { get; set; } = true;
+
     // Security lockdown (2026-07): scripting executes tenant-supplied C# in-process via Roslyn.
     // The capability is disabled by default; a host must opt in explicitly to compose it.
     public bool EnableScriptingCapability { get; set; }
@@ -116,7 +118,7 @@ public static class AevatarPlatformHostBuilderExtensions
                     return AevatarHealthContributorResult.Healthy("Workflow graph read model is reachable.");
                 },
             });
-            builder.AddWorkflowCapabilityBundle();
+            builder.AddWorkflowCapabilityBundle(options.MapWorkflowChatPost);
             builder.AddAevatarCapability(
                 "scheduled-dispatch",
                 static (services, configuration) => services.AddScheduledDispatchCapability(configuration),

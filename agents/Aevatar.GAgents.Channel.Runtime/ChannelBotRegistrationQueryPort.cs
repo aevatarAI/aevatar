@@ -126,5 +126,6 @@ public sealed class ChannelBotRegistrationQueryPort : IChannelBotRegistrationQue
             WorkflowResultDeliveryCredential = document.WorkflowResultDeliveryCredential?.Clone(),
             LastInboundAtUtc = document.LastInboundAtUtc,
             DefaultSkillName = document.DefaultSkillName ?? string.Empty,
+            WorkflowResultDeliveryRepair = document.WorkflowResultDeliveryRepair?.Clone(),
         };
 }

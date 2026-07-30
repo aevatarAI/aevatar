@@ -45,22 +45,44 @@ const enUSMessages = {
     'Describe the workflow you want, or ask about the current setup...',
   'pages.chat.index.confirmAndCreate': 'Confirm and create',
   'pages.chat.index.confirmPrompt': 'Confirm. Please create it now.',
-  'pages.chat.index.conversationTitle': 'Conversation title',
+  'pages.chat.index.continuationContextMissing':
+    'The continuation may have been accepted, but its turn identity was not received. Reload this page before continuing.',
+  'pages.chat.index.cancel': 'Cancel',
+  'pages.chat.index.delete': 'Delete',
   'pages.chat.index.deleteChat': 'Delete {title}',
+  'pages.chat.index.deleteChatDescription':
+    'Delete "{title}" permanently? This conversation cannot be recovered.',
+  'pages.chat.index.deleteChatFailed': 'Conversation could not be deleted',
+  'pages.chat.index.deleteChatTitle': 'Delete conversation?',
   'pages.chat.index.emptyDescription':
     'Describe the Team, Member, or Workflow you want to create.',
-  'pages.chat.index.historyStoredLocally': 'History is stored in this browser.',
+  'pages.chat.index.failedToLoadConversation': 'Conversation could not be loaded',
+  'pages.chat.index.failedToLoadHistory': 'Chat history could not be loaded',
+  'pages.chat.index.historyStoredInWorkspace':
+    'History is saved to this workspace.',
+  'pages.chat.index.chatRequiresAuthentication':
+    'Starting or continuing a chat requires a trusted authenticated scope. Existing chat history remains available to manage.',
+  'pages.chat.index.historyTitle': 'Chat history',
+  'pages.chat.index.loadingConversation': 'Loading conversation',
+  'pages.chat.index.loadingHistory': 'Loading chat history',
+  'pages.chat.index.historySynchronizing':
+    'Conversation history is still synchronizing. Try again shortly.',
+  'pages.chat.index.missingChatHistoryContext':
+    'Chat completed without a conversation context.',
   'pages.chat.index.newChat': 'New chat',
   'pages.chat.index.newChatAction': 'New Chat',
   'pages.chat.index.noChatHistory': 'No chat history',
   'pages.chat.index.noScope':
     'No usable scope was resolved for this account. Refresh and try again.',
   'pages.chat.index.openTeam': 'Open Team',
+  'pages.chat.index.openHistory': 'Open chat history',
   'pages.chat.index.openWorkflowStudio': 'Open Workflow Studio',
-  'pages.chat.index.renameChat': 'Rename {title}',
-  'pages.chat.index.renameChatTitle': 'Rename chat',
   'pages.chat.index.resolvingScope': 'Resolving scope',
+  'pages.chat.index.retry': 'Retry',
+  'pages.chat.index.retryHistory': 'Retry chat history',
   'pages.chat.index.reviewPlan': 'Review the plan before creating resources.',
+  'pages.chat.index.scopeMismatch':
+    'Requested scope {requestedScopeId} does not match authenticated scope {authenticatedScopeId}. Open Chat from the active workspace or sign in again.',
   'pages.chat.index.scopeValue': 'Scope {scopeId}',
   'pages.chat.index.status.completed': 'Completed',
   'pages.chat.index.status.creating': 'Creating',
@@ -76,6 +98,8 @@ const enUSMessages = {
   'pages.chat.index.title': 'Chat',
   'pages.chat.index.tokenSplit': '{input} in / {output} out',
   'pages.chat.index.totalTokens': '{count} tokens',
+  'pages.chat.index.unknownRole': 'Message',
+  'pages.chat.index.turnCount': '{count} turns',
   'pages.gagents.index.teamMembersBreadcrumb': 'Team members',
   'pages.missioncontrol.index.missionControlBreadcrumb': 'Mission Control',
   'pages.missioncontrol.index.platformBreadcrumb': 'Platform',
@@ -201,10 +225,6 @@ const enUSMessages = {
   'teams.home.actions.createTeam': 'Create team',
   'teams.home.actions.createMember': 'Create member',
   'teams.home.actions.createWorkflowMember': 'Create workflow member',
-  'teams.home.actions.debugEntryWorkflow': 'Debug entry workflow',
-  'teams.home.actions.debugWorkflow': 'Debug workflow',
-  'teams.home.actions.editEntryMember': 'Edit entry member',
-  'teams.home.actions.editMember': 'Edit member',
   'teams.home.actions.manageMembers': 'Manage members',
   'teams.home.actions.viewMembers': 'View members',
   'teams.home.actions.viewTeam': 'View team',
@@ -761,8 +781,45 @@ const enUSMessages = {
   'teams.automations.actions.delete': 'Delete',
   'teams.automations.actions.edit': 'Edit',
   'teams.automations.actions.pause': 'Pause',
+  'teams.automations.actions.reauthorize': 'Review and reauthorize',
+  'teams.automations.actions.refresh': 'Refresh',
+  'teams.automations.actions.retryRevocation': 'Retry revocation',
   'teams.automations.actions.resume': 'Resume',
   'teams.automations.actions.runNow': 'Run now',
+  'teams.automations.actions.runHistory': 'View member run history',
+  'teams.automations.actions.tryAgain': 'Try again',
+  'teams.automations.authorization.back': 'Back',
+  'teams.automations.authorization.confirm': 'Authorize and continue',
+  'teams.automations.authorization.description':
+    "Aevatar keeps this schedule's restricted key in its Vault. The browser never receives the key. Pausing preserves it; deleting revokes it.",
+  'teams.automations.authorization.diagnostics': 'Authorization diagnostics',
+  'teams.automations.authorization.disclosure.aevatar_secret_custody':
+    'Aevatar holds the secret',
+  'teams.automations.authorization.disclosure.browser_never_receives_secret':
+    'The browser never receives the secret',
+  'teams.automations.authorization.disclosure.dedicated_credential':
+    'Dedicated credential for this schedule',
+  'teams.automations.authorization.disclosure.delete_revokes_credential':
+    'Deleting revokes the credential',
+  'teams.automations.authorization.disclosure.node_ids_are_permission_set':
+    'Node IDs define the permission set',
+  'teams.automations.authorization.disclosure.pause_resume_preserves_credential':
+    'Pausing and resuming preserve the credential',
+  'teams.automations.authorization.error': 'Authorization could not continue',
+  'teams.automations.authorization.exactAccess': 'Exact access',
+  'teams.automations.authorization.expiry': 'Credential expiry',
+  'teams.automations.authorization.preparing': 'Preparing authorization review',
+  'teams.automations.authorization.review': 'Review authorization',
+  'teams.automations.authorization.reviewAgain': 'Review again',
+  'teams.automations.authorization.serviceModel': 'Service and model',
+  'teams.automations.authorization.title': 'Dedicated Agent Key',
+  'teams.automations.authorizationStatus.active': 'Credential active',
+  'teams.automations.authorizationStatus.deleting': 'Deleting',
+  'teams.automations.authorizationStatus.failed': 'Authorization failed',
+  'teams.automations.authorizationStatus.needs_authorization': 'Authorization required',
+  'teams.automations.authorizationStatus.provisioning_pending': 'Preparing authorization',
+  'teams.automations.authorizationStatus.replacement_pending': 'Replacing authorization',
+  'teams.automations.authorizationStatus.revocation_pending': 'Revocation pending',
   'teams.automations.columns.actions': 'Actions',
   'teams.automations.columns.automation': 'Automation',
   'teams.automations.columns.member': 'Member',
@@ -788,22 +845,16 @@ const enUSMessages = {
   'teams.automations.empty.publishHint':
     'Publish a workflow member before scheduling recurring work.',
   'teams.automations.empty.title': 'No recurring work yet',
+  'teams.automations.empty.member': 'No automations for this member',
   'teams.automations.error.description':
     'Refresh the page or try again after the schedule service is available.',
   'teams.automations.error.title': 'Automations could not load',
+  'teams.automations.error.stateLoad': 'Automation state could not be loaded',
+  'teams.automations.expiry.soon': 'Credential expires within 14 days',
+  'teams.automations.firing.enabled': 'Firing enabled',
+  'teams.automations.firing.paused': 'Firing paused',
   'teams.automations.form.cadence': 'Cadence',
   'teams.automations.form.cadenceAria': 'Automation cadence',
-  'teams.automations.form.agentKeyConsent':
-    'I consent to Aevatar creating an automation-dedicated Agent Key for this schedule.',
-  'teams.automations.form.agentKeyExpiry': 'Expires {time}',
-  'teams.automations.form.agentKeyManaged': 'Aevatar managed',
-  'teams.automations.form.agentKeyMode': 'Credential mode · {mode}',
-  'teams.automations.form.agentKeyNoRawKey':
-    'Browser never receives the raw Agent Key',
-  'teams.automations.form.agentKeyPlan':
-    'Automation dedicated Agent Key',
-  'teams.automations.form.backendRequired': 'Creation unavailable',
-  'teams.automations.form.close': 'Close',
   'teams.automations.form.create': 'Create automation',
   'teams.automations.form.cron': 'Cron expression',
   'teams.automations.form.cronAria': 'Cron expression',
@@ -817,25 +868,22 @@ const enUSMessages = {
     'Optional: leave it blank to save without a recurring prompt.',
   'teams.automations.form.editTitle': 'Edit automation',
   'teams.automations.form.enabled': 'Enabled',
+  'teams.automations.form.enableAfterAuthorization':
+    'Enable firing after authorization',
+  'teams.automations.form.firingEnabled': 'Firing enabled',
+  'teams.automations.form.description':
+    'Configure recurring work for {memberName}. Authorization is reviewed separately before creation or replacement.',
   'teams.automations.form.identityMissing':
     "Waiting for this member's published service identity.",
   'teams.automations.form.identityReady':
     "Targets the member's published service.",
   'teams.automations.form.member': 'Member',
   'teams.automations.form.memberAria': 'Automation member',
-  'teams.automations.form.nodeGrants': 'Node grants',
-  'teams.automations.form.permissionDigest':
-    'Permission digest · {permissionDigest}',
-  'teams.automations.form.planChanged':
-    'The authorization plan changed. Refresh the review before creating.',
-  'teams.automations.form.policyVersion':
-    'Policy version · {policyVersion}',
   'teams.automations.form.preset.custom': 'Custom cron',
   'teams.automations.form.preset.dailyMorning': 'Daily · 09:00',
   'teams.automations.form.preset.hourly': 'Hourly',
   'teams.automations.form.preset.weekdaysMorning': 'Weekdays · 09:00',
   'teams.automations.form.preset.weeklyMonday': 'Monday · 09:00',
-  'teams.automations.form.preparingReview': 'Preparing review',
   'teams.automations.form.preview': 'Preview next runs',
   'teams.automations.form.previewEmpty':
     'Preview the cadence to confirm the next scheduled runs.',
@@ -847,22 +895,8 @@ const enUSMessages = {
     'Optional. Up to {maxLength} characters.',
   'teams.automations.form.promptPlaceholder':
     'Summarize escalations, blocked accounts, and follow-up owners.',
-  'teams.automations.form.refreshReview': 'Refresh review',
-  'teams.automations.form.reviewErrorBody':
-    'The mock contract could not prepare the review. Keep the draft and try again.',
-  'teams.automations.form.reviewErrorTitle':
-    'Permission review needs attention',
-  'teams.automations.form.reviewPermissions': 'Review permissions',
-  'teams.automations.form.reviewPlaceholder':
-    'Review is prepared after the draft cadence and target are ready.',
-  'teams.automations.form.previewOnlyNotice':
-    'Preview only. No automation or Agent Key is created until the scoped backend is connected.',
   'teams.automations.form.save': 'Save changes',
   'teams.automations.form.scheduleReadsAs': 'Schedule reads as',
-  'teams.automations.form.section.permissionReview':
-    '4. Review Agent Key consent',
-  'teams.automations.form.section.permissionReviewHint':
-    'Browser login authorization only confirms this consent. Automation uses a dedicated Agent Key managed by Aevatar.',
   'teams.automations.form.section.schedule': '3. Schedule',
   'teams.automations.form.section.scheduleHint':
     'Choose a common cadence or switch to custom cron for advanced schedules.',
@@ -872,20 +906,34 @@ const enUSMessages = {
   'teams.automations.form.section.work': '2. Work to run',
   'teams.automations.form.section.workHint':
     'Name the automation and optionally add a prompt for each run.',
-  'teams.automations.form.serviceGrants': 'Service grants',
   'teams.automations.form.timezone': 'Timezone',
   'teams.automations.form.timezoneAria': 'Timezone',
   'teams.automations.form.title': 'New member automation',
+  'teams.automations.loading': 'Loading automations',
   'teams.automations.member.publishFirst':
     'Publish this member before adding recurring work.',
   'teams.automations.member.publishedServiceReady':
     'Published service ready',
   'teams.automations.member.unknown': 'Unknown member',
+  'teams.automations.memberDescription':
+    'Dedicated Agent Keys are authorized per schedule and held by Aevatar.',
+  'teams.automations.memberSelector.description':
+    'Automations are owned by one published member. Choose the member to open its canonical resource.',
+  'teams.automations.memberSelector.title': 'Choose a team member',
+  'teams.automations.memberTitle': '{memberName} automations',
+  'teams.automations.memberUnavailable.description':
+    'This member is not part of the current Team. Choose another member.',
+  'teams.automations.memberUnavailable.title': 'Member unavailable for automation',
   'teams.automations.member.workflowOnly':
     'Only workflow members can have recurring work.',
+  'teams.automations.schedule.next': 'Next {time}',
+  'teams.automations.schedule.notScheduled': 'not scheduled',
   'teams.automations.messages.createFailed':
     'Automation was not created: {message}',
   'teams.automations.messages.createSuccess': 'Automation created.',
+  'teams.automations.messages.authorizationAccepted':
+    'Authorization request accepted',
+  'teams.automations.messages.deleteAccepted': 'Delete request accepted',
   'teams.automations.messages.cronRequired': 'Enter a cron expression first.',
   'teams.automations.messages.deleteSuccess': 'Automation deleted.',
   'teams.automations.messages.disableSuccess': 'Automation paused.',
@@ -895,18 +943,34 @@ const enUSMessages = {
     'Recurring prompt must be {maxLength} characters or fewer.',
   'teams.automations.messages.runNowFailed': 'Run request failed: {message}',
   'teams.automations.messages.runNowSuccess': 'Run requested.',
+  'teams.automations.messages.pauseAccepted': 'Pause request accepted',
+  'teams.automations.messages.resumeAccepted': 'Resume request accepted',
+  'teams.automations.messages.revocationRetryAccepted':
+    'Revocation retry accepted',
+  'teams.automations.messages.runAccepted': 'Run request accepted',
+  'teams.automations.messages.updateAccepted': 'Update request accepted',
   'teams.automations.messages.serviceIdentityLoading':
     'Service identity is still loading.',
   'teams.automations.messages.serviceIdentityMissing':
     'The selected member does not have a service identity yet.',
-  'teams.automations.messages.reviewFailed':
-    'Permission review could not be prepared: {message}',
   'teams.automations.messages.updateFailed':
     'Automation was not updated: {message}',
   'teams.automations.messages.updateSuccess': 'Automation updated.',
   'teams.automations.noPublishedMember.description':
     'Automations need a member with a published service identity before they can run.',
   'teams.automations.noPublishedMember.title': 'Publish a member first',
+  'teams.automations.pending.description':
+    'Automatic refresh stopped. Use Refresh to check authoritative state.',
+  'teams.automations.pending.title': 'Still pending',
+  'teams.automations.planChanged.description':
+    'The previous digest and operation identity were discarded. Run preflight and consent again.',
+  'teams.automations.planChanged.title': 'Authorization plan changed',
+  'teams.automations.delete.description':
+    'The row remains visible until NyxID and Vault revocation are complete.',
+  'teams.automations.delete.title': 'Delete automation?',
+  'teams.automations.revocation.nyxId': 'NyxID: {status}',
+  'teams.automations.revocation.vault': 'Vault: {status}',
+  'teams.automations.row.noPrompt': 'No recurring prompt',
   'teams.automations.preview.daily.cadence': 'Every weekday · 09:00',
   'teams.automations.preview.daily.member': 'Support Analyst',
   'teams.automations.preview.daily.nextRun': 'Next run today',
@@ -1059,9 +1123,15 @@ const enUSMessages = {
   'pages.runs.memberPublishedRuns.selectPublishedRun': 'Select a published run',
   'pages.runs.memberPublishedRuns.timeline': 'Timeline',
   'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.description':
-    'You can build or paste the workflow here. Saving creates a reusable workflow draft until the member link is materialized.',
+    'You can build or edit the workflow YAML here. Saving creates a reusable workflow draft until the member link is materialized.',
+  'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.publishedDescription':
+    'This published member has no materialized draft workflow link. Refresh after the member read model exposes its draft workflow id.',
   'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.title':
     'No workflow draft is linked to this member yet.',
+  'teamMemberWorkflowStudio.alerts.linkedWorkflowLoadFailed.description':
+    'Studio resolved draft workflow {workflowId}, but loading it failed: {reason}',
+  'teamMemberWorkflowStudio.alerts.linkedWorkflowLoadFailed.title':
+    'Workflow draft could not be loaded.',
   'teamMemberWorkflowStudio.common.close': 'Close',
   'teamMemberWorkflowStudio.executionPanel.consoleAria': 'Draft run console',
   'teamMemberWorkflowStudio.executionPanel.duration': 'Duration',
@@ -1110,6 +1180,7 @@ const enUSMessages = {
     'Select a log entry to inspect its input, output, and raw event data.',
   'teamMemberWorkflowStudio.executionPanel.steps': 'Steps',
   'teamMemberWorkflowStudio.executionPanel.status.error': 'Error',
+  'teamMemberWorkflowStudio.executionPanel.status.pending': 'Pending',
   'teamMemberWorkflowStudio.executionPanel.status.recorded': 'Recorded',
   'teamMemberWorkflowStudio.executionPanel.status.running': 'Running',
   'teamMemberWorkflowStudio.executionPanel.status.success': 'Success',
@@ -1129,6 +1200,9 @@ const enUSMessages = {
     'Service ready',
   'teamMemberWorkflowStudio.executionsPanel.title': 'Executions',
   'teamMemberWorkflowStudio.executionsPanel.unknownStatus': 'unknown',
+  'teamMemberWorkflowStudio.graph.branchCount.one': '1 branch',
+  'teamMemberWorkflowStudio.graph.branchCount.other': '{count} branches',
+  'teamMemberWorkflowStudio.graph.role': 'Role',
   'teamMemberWorkflowStudio.header.activateAria': 'Activate workflow member',
   'teamMemberWorkflowStudio.header.activation.active': 'Active',
   'teamMemberWorkflowStudio.header.activation.error': 'Error',
@@ -1167,7 +1241,10 @@ const enUSMessages = {
     'Workflow draft and node actions',
   'teamMemberWorkflowStudio.header.openAutomations':
     'Open recurring work for this member',
-  'teamMemberWorkflowStudio.header.pasteYaml': 'Paste YAML',
+  'teamMemberWorkflowStudio.header.editYaml': 'Edit YAML',
+  'teamMemberWorkflowStudio.header.editYamlTitle': 'Edit workflow YAML',
+  'teamMemberWorkflowStudio.header.editYamlUnavailable':
+    'Load the workflow draft before editing YAML.',
   'teamMemberWorkflowStudio.header.primaryActionsAria':
     'Workflow primary actions',
   'teamMemberWorkflowStudio.header.prepareDraftRun': 'Prepare draft run',
@@ -1201,15 +1278,9 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.header.publishMemberShort': 'Publish member',
   'teamMemberWorkflowStudio.header.teamBreadcrumb': 'Team',
   'teamMemberWorkflowStudio.header.unsavedChanges': 'Unsaved changes',
-  'teamMemberWorkflowStudio.header.viewYaml': 'View YAML',
-  'teamMemberWorkflowStudio.header.viewYamlUnavailable':
-    'Load the workflow draft before viewing YAML.',
   'teamMemberWorkflowStudio.header.viewsAria': 'Workflow views',
   'teamMemberWorkflowStudio.header.workflowTitleAria': 'Workflow title',
   'teamMemberWorkflowStudio.header.yaml': 'YAML',
-  'teamMemberWorkflowStudio.header.yamlActions': 'YAML',
-  'teamMemberWorkflowStudio.header.yamlActionsTitle':
-    'View or import workflow YAML',
   'teamMemberWorkflowStudio.nodeDetail.advancedRawConfiguration':
     'Advanced raw configuration',
   'teamMemberWorkflowStudio.nodeDetail.advancedRawConfigurationDescription':
@@ -1288,29 +1359,27 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.runsPanel.sectionAria': 'Member runs',
   'teamMemberWorkflowStudio.runsPanel.title': 'Member runs',
   'teamMemberWorkflowStudio.runsPanel.unknownStatus': 'unknown',
-  'teamMemberWorkflowStudio.yamlImportPanel.cancel': 'Cancel',
-  'teamMemberWorkflowStudio.yamlImportPanel.closeAria':
-    'Close paste YAML panel',
-  'teamMemberWorkflowStudio.yamlImportPanel.import': 'Import',
-  'teamMemberWorkflowStudio.yamlImportPanel.placeholder':
-    'name: Untitled workflow\nsteps:\n  - id: triage\n    type: llm_call',
-  'teamMemberWorkflowStudio.yamlImportPanel.sectionAria':
-    'Paste workflow YAML panel',
-  'teamMemberWorkflowStudio.yamlImportPanel.subtitle':
-    'Import into the current draft',
-  'teamMemberWorkflowStudio.yamlImportPanel.textareaAria': 'Workflow YAML',
-  'teamMemberWorkflowStudio.yamlImportPanel.title': 'Paste YAML',
-  'teamMemberWorkflowStudio.yamlPanel.closeAria': 'Close YAML panel',
+  'teamMemberWorkflowStudio.yamlPanel.apply': 'Apply to draft',
+  'teamMemberWorkflowStudio.yamlPanel.cancel': 'Cancel',
+  'teamMemberWorkflowStudio.yamlPanel.closeAria': 'Close YAML editor',
+  'teamMemberWorkflowStudio.yamlPanel.conflictTitle':
+    'Reopen Edit YAML from the current canvas before applying.',
   'teamMemberWorkflowStudio.yamlPanel.copy': 'Copy',
   'teamMemberWorkflowStudio.yamlPanel.copyFailed': 'Failed to copy YAML.',
   'teamMemberWorkflowStudio.yamlPanel.copySuccess': 'YAML copied.',
-  'teamMemberWorkflowStudio.yamlPanel.empty':
-    'No YAML is available for this draft.',
-  'teamMemberWorkflowStudio.yamlPanel.retry': 'Retry',
+  'teamMemberWorkflowStudio.yamlPanel.diagnosticsAria': 'YAML diagnostics',
+  'teamMemberWorkflowStudio.yamlPanel.emptyYaml': 'Workflow YAML is empty.',
+  'teamMemberWorkflowStudio.yamlPanel.editorAria': 'Workflow YAML editor',
+  'teamMemberWorkflowStudio.yamlPanel.error': 'Error',
+  'teamMemberWorkflowStudio.yamlPanel.fixErrors':
+    'Resolve error-level diagnostics before applying.',
+  'teamMemberWorkflowStudio.yamlPanel.info': 'Info',
+  'teamMemberWorkflowStudio.yamlPanel.line': 'Line {line}',
   'teamMemberWorkflowStudio.yamlPanel.sectionAria': 'Workflow YAML panel',
-  'teamMemberWorkflowStudio.yamlPanel.subtitle': 'Current draft source',
-  'teamMemberWorkflowStudio.yamlPanel.textareaAria': 'Current workflow YAML',
-  'teamMemberWorkflowStudio.yamlPanel.title': 'Workflow YAML',
+  'teamMemberWorkflowStudio.yamlPanel.subtitle': 'Draft source buffer',
+  'teamMemberWorkflowStudio.yamlPanel.title': 'Edit YAML',
+  'teamMemberWorkflowStudio.yamlPanel.unapplied': 'Unapplied',
+  'teamMemberWorkflowStudio.yamlPanel.warning': 'Warning',
   'pages.studio.studiomembercurrentrunpanel.details': 'Details',
   'pages.studio.studiomemberinvokeinspector.copy':
     'Endpoint, payload, run events, and recent history are available here without taking over the task page.',
@@ -1487,10 +1556,34 @@ const enUSMessages = {
   'pages.studio.studiobuildpanels.script.promotion.version.summary':
     'Script promotion version summary',
   'pages.studio.studiobuildpanels.version.ready': 'version ready',
+  'pages.studio.studiofilesdetailpane.chat.author.assistant': 'Assistant',
+  'pages.studio.studiofilesdetailpane.chat.author.unknown': 'Unknown author',
+  'pages.studio.studiofilesdetailpane.chat.author.user': 'User',
+  'pages.studio.studiofilesdetailpane.chat.message.error': 'Error',
+  'pages.studio.studiofilesdetailpane.chat.message.thinking': 'Thinking',
+  'pages.studio.studiofilesdetailpane.chat.status.complete': 'Complete',
+  'pages.studio.studiofilesdetailpane.chat.status.error': 'Error',
+  'pages.studio.studiofilesdetailpane.chat.status.unknown': 'Unknown',
+  'pages.studio.studiofilesdetailpane.conversation.turn.count.many':
+    '{count} turns',
+  'pages.studio.studiofilesdetailpane.conversation.turn.count.one': '1 turn',
+  'pages.studio.studiofilesdetailpane.conversation.turn.meta':
+    '{turnCount} · {serviceKind} · {updatedAt}',
+  'pages.studio.studiofilesdetailpane.delete.conversation.confirmation.description':
+    '{title} will be removed from chat history and cannot be recovered from this view.',
+  'pages.studio.studiofilesdetailpane.delete.conversation.confirmation.title':
+    'Delete this conversation?',
+  'pages.studio.studiofilesdetailpane.delete.conversation.now': 'Delete now',
   'pages.studio.studiofilesdetailpane.draft': 'Draft',
+  'pages.studio.studiofilesdetailpane.keep.conversation': 'Keep conversation',
   'pages.studio.studiofilesdetailpane.version.ready': 'Version ready',
   'pages.studio.studiofilespage.chat.history': 'Chat history',
+  'pages.studio.studiofilespage.chat.history.turn.count.many': '{count} turns',
+  'pages.studio.studiofilespage.chat.history.turn.count.one': '1 turn',
   'pages.studio.studiofilespage.draft': 'Draft',
+  'pages.studio.studiofilespage.failed.to.load.conversations':
+    'Failed to load conversations',
+  'pages.studio.studiofilespage.retry.conversations': 'Retry conversations',
   'pages.studio.studiofilespage.version.ready': 'Version ready',
   'pages.studio.studioinvokediagnosticsdrawer.endpoint.ready': 'Endpoint ready',
   'pages.studio.studiomemberinvokeinspector.service.ready': 'Service ready',

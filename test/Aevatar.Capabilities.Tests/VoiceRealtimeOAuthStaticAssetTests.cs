@@ -50,6 +50,10 @@ public sealed class VoiceRealtimeOAuthStaticAssetTests
         html.Should().Contain("CFG.resources.find(resource=>",
             "Voice must reuse the canonical prefix of the already-injected Aevatar resource");
         html.Should().Contain("baseline.slice(0,-\"aevatar\".length)");
+        html.Should().Contain(
+            "\"resources\":[\"https://api.example.test/api/v1/proxy/s/aevatar\",\"https://api.example.test/api/v1/proxy/s/ornn-api\"]");
+        html.Should().Contain("\"nyxidApi\":\"https://api.example.test\"");
+        html.Should().NotContain("const base=String(CFG.authority||\"\")");
         html.Should().NotContain("__VOICE_REALTIME_SERVICE_SLUG__");
     }
 
@@ -63,8 +67,7 @@ public sealed class VoiceRealtimeOAuthStaticAssetTests
         builder.Configuration["Aevatar:BackendConsole:OidcAuthority"] = "https://id.example.test";
         builder.Configuration["Aevatar:BackendConsole:OidcClientId"] = "client-example";
         builder.Configuration["Aevatar:BackendConsole:OidcScope"] = "openid profile";
-        builder.Configuration["Aevatar:BackendConsole:OidcResources:0"] =
-            "https://id.example.test/api/v1/proxy/s/aevatar";
+        builder.Configuration["Aevatar:BackendConsole:NyxApiBaseUrl"] = "https://api.example.test";
         builder.Configuration["Aevatar:BackendConsole:StorageKey"] = "console:test";
         builder.Configuration["Aevatar:BackendConsole:DefaultReturnPath"] = "/admin";
         if (!string.IsNullOrWhiteSpace(realtimeServiceSlug))

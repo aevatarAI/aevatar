@@ -536,7 +536,7 @@ internal static partial class ResponsesApiEndpoints
             {
                 Request = new AgentToolRequestIdentity(responseId, null),
                 Credentials = new AgentToolCredentials(bearerToken, null, null),
-                Caller = new AgentToolCallerContext(callerScope.ScopeId, callerScope.OwnerSubject, responseId),
+                Caller = new AgentToolCallerContext(callerScope.ScopeId, callerScope.OwnerSubject, responseId, callerScope.OwnerSubject),
                 Channel = new AgentToolChannelContext(
                     callerScope.OriginKind.ToString(),
                     null,

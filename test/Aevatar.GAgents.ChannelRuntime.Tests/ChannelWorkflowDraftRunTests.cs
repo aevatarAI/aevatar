@@ -254,8 +254,12 @@ public sealed class ChannelWorkflowDraftRunTests
         workflowRequest.InputParts[0].FileRef!.SourceMessageId.Should().Be("om_123");
         workflowRequest.InputParts[0].FileRef!.SourceResourceKey.Should().Be("img_v3_1");
         workflowRequest.InputParts[0].FileRef!.MediaType.Should().Be("image/png");
-        workflowRequest.InputParts[1].Kind.Should().Be(WorkflowChatInputPartKind.Text);
+        workflowRequest.InputParts[1].Kind.Should().Be(WorkflowChatInputPartKind.File);
         workflowRequest.InputParts[1].DataBase64.Should().BeNull();
+        workflowRequest.InputParts[1].Uri.Should().NotBeNullOrWhiteSpace();
+        workflowRequest.InputParts[1].FileRef.Should().NotBeNull();
+        workflowRequest.InputParts[1].FileRef!.SourceKind.Should().Be(FileArtifactSourceKind.ConnectedServiceResource);
+        workflowRequest.InputParts[1].FileRef!.SourceMessageId.Should().Be("om_123");
         workflowRequest.InputParts[1].FileRef!.SourceResourceKey.Should().Be("file_v3_1");
         workflowRequest.InputParts[1].FileRef!.MediaType.Should().Be("application/pdf");
 
@@ -271,6 +275,53 @@ public sealed class ChannelWorkflowDraftRunTests
                 x.ResourceKey == "img_v3_1" &&
                 x.Kind == LarkMessageResourceKind.Image),
             Arg.Any<CancellationToken>());
+        await lark.Received(1).DownloadMessageResourceAsync(
+            "user-token-1",
+            Arg.Is<LarkMessageResourceDownloadRequest>(x =>
+                x.MessageId == "om_123" &&
+                x.ResourceKey == "file_v3_1" &&
+                x.Kind == LarkMessageResourceKind.File),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task InteractionPort_ShouldNormalizeLarkResourceUrlAttachmentIds()
+    {
+        var lark = Substitute.For<ILarkNyxClient>();
+        lark.DownloadMessageResourceAsync(
+                "user-token-1",
+                Arg.Any<LarkMessageResourceDownloadRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new LarkMessageResourceDownloadResult(
+                true,
+                [4, 5, 6, 7],
+                "application/pdf",
+                "invoice.pdf")));
+        var ingress = new RecordingWorkflowFileIngressPort();
+        var workflow = new RecordingWorkflowChatRunInteractionPort();
+        var dispatch = new RecordingActorDispatchPort();
+        var port = CreateInteractionPort(dispatch, workflow, lark, ingress);
+        var request = BuildWorkflowRequestWithLarkAttachments();
+        request.Activity.Content.Attachments.Clear();
+        request.Activity.Content.Attachments.Add(new AttachmentRef
+        {
+            AttachmentId = "https://open.larksuite.com/open-apis/im/v1/messages/om_123/resources/file_v3_1?type=file",
+            ExternalUrl = "https://open.larksuite.com/open-apis/im/v1/messages/om_123/resources/file_v3_1?type=file",
+            Kind = AttachmentKind.File,
+            Name = "invoice.pdf",
+            ContentType = "file",
+        });
+
+        await port.StartWorkflowInteractionAsync(
+            "channel-workflow-draft-run:workflow-draft-run-1",
+            request,
+            CancellationToken.None);
+
+        var workflowRequest = await workflow.WaitForRequestAsync();
+        workflowRequest.InputParts.Should().ContainSingle();
+        workflowRequest.InputParts![0].FileRef.Should().NotBeNull();
+        workflowRequest.InputParts[0].FileRef!.SourceResourceKey.Should().Be("file_v3_1");
+        ingress.Requests.Should().ContainSingle().Which.SourceResourceKey.Should().Be("file_v3_1");
         await lark.Received(1).DownloadMessageResourceAsync(
             "user-token-1",
             Arg.Is<LarkMessageResourceDownloadRequest>(x =>
@@ -499,7 +550,7 @@ public sealed class ChannelWorkflowDraftRunTests
     {
         var workflow = new RecordingWorkflowChatRunInteractionPort
         {
-            Result = CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+            Result = WorkflowChatRunInteractionResult
                 .Failure(WorkflowChatRunStartError.WorkflowNotFound),
         };
         var dispatch = new RecordingActorDispatchPort();
@@ -532,7 +583,7 @@ public sealed class ChannelWorkflowDraftRunTests
         var workflow = new RecordingWorkflowChatRunInteractionPort
         {
             Result = missingFinalizeResult
-                ? new CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                ? new WorkflowChatRunInteractionResult
                 {
                     Succeeded = true,
                     Error = WorkflowChatRunStartError.None,
@@ -541,7 +592,7 @@ public sealed class ChannelWorkflowDraftRunTests
                     Completed = false,
                     FinalizeResult = null,
                 }
-                : CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                : WorkflowChatRunInteractionResult
                     .Success(
                         receipt,
                         new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(
@@ -1076,17 +1127,17 @@ public sealed class ChannelWorkflowDraftRunTests
 
         public Exception? Exception { get; init; }
 
-        public CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>? Result { get; init; }
+        public WorkflowChatRunInteractionResult? Result { get; init; }
 
         public bool HasRequest => _request.Task.IsCompletedSuccessfully;
 
         public async Task<WorkflowChatRunRequest> WaitForRequestAsync() =>
             await _request.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-        public async Task<CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>> ExecuteAsync(
+        public async Task<WorkflowChatRunInteractionResult> ExecuteAsync(
             WorkflowChatRunRequest request,
             Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask> emitAsync,
-            Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,
+            Func<WorkflowChatInteractionAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
@@ -1107,7 +1158,7 @@ public sealed class ChannelWorkflowDraftRunTests
                 request.Source.WorkflowName ?? "daily-greeting",
                 request.CommandIdSeed ?? "workflow-draft-run-1",
                 request.CorrelationIdSeed ?? "msg-1");
-            return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+            return WorkflowChatRunInteractionResult
                 .Success(
                     receipt,
                     new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(

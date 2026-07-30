@@ -20,6 +20,12 @@ import {
 
 export type ScheduledDispatchTargetKind = "envelope" | "service_invocation";
 export type ScheduledDispatchScheduleKind = "generic" | "workflow";
+export type ScheduledDispatchOwner = {
+  readonly kind: "studio_member_automation";
+  readonly scopeId: string;
+  readonly teamId: string;
+  readonly memberId: string;
+};
 export const scheduledWorkflowPromptMaxLength = 4_000;
 
 export type ScheduledWorkflowChatTargetInput = {
@@ -36,6 +42,7 @@ export type ScheduledDispatchConfigurationInput = {
   readonly timezone?: string;
   readonly enabled?: boolean;
   readonly headers?: Readonly<Record<string, string>>;
+  readonly owner?: ScheduledDispatchOwner;
   readonly workflowChatTarget: ScheduledWorkflowChatTargetInput;
 };
 
@@ -121,6 +128,7 @@ export type ScheduledDispatchListResult = {
 export type ScheduledDispatchListQuery = {
   readonly cursor?: string;
   readonly includeTotalCount?: boolean;
+  readonly owner?: ScheduledDispatchOwner;
   readonly take?: number;
 };
 
@@ -219,6 +227,52 @@ function normalizeScheduleKind(value: string | number): ScheduledDispatchSchedul
     default:
       return "generic";
   }
+}
+
+function encodeOwner(
+  owner: ScheduledDispatchOwner | undefined,
+): ScheduledDispatchOwner | undefined {
+  if (!owner) {
+    return undefined;
+  }
+
+  if (owner.kind !== "studio_member_automation") {
+    throw new Error(`Unsupported scheduled dispatch owner kind '${owner.kind}'.`);
+  }
+
+  const scopeId = owner.scopeId.trim();
+  const teamId = owner.teamId.trim();
+  const memberId = owner.memberId.trim();
+  if (!scopeId) {
+    throw new Error("Schedule owner scopeId is required.");
+  }
+  if (!teamId) {
+    throw new Error("Schedule owner teamId is required.");
+  }
+  if (!memberId) {
+    throw new Error("Schedule owner memberId is required.");
+  }
+
+  return {
+    kind: "studio_member_automation",
+    scopeId,
+    teamId,
+    memberId,
+  };
+}
+
+export function encodeScheduledDispatchOwnerQuery(
+  owner: ScheduledDispatchOwner | undefined,
+) {
+  const normalizedOwner = encodeOwner(owner);
+  return normalizedOwner
+    ? {
+        ownerKind: normalizedOwner.kind,
+        ownerScopeId: normalizedOwner.scopeId,
+        ownerTeamId: normalizedOwner.teamId,
+        ownerMemberId: normalizedOwner.memberId,
+      }
+    : {};
 }
 
 function readTargetKind(
@@ -398,6 +452,7 @@ function encodeConfiguration(input: ScheduledDispatchConfigurationInput) {
     );
   }
   const revisionId = trimOptional(input.workflowChatTarget.revisionId);
+  const owner = encodeOwner(input.owner);
   const chatRequest = {
     prompt,
     sessionId: trimOptional(input.workflowChatTarget.sessionId),
@@ -411,6 +466,7 @@ function encodeConfiguration(input: ScheduledDispatchConfigurationInput) {
     timezone: trimOptional(input.timezone),
     enabled: input.enabled ?? true,
     headers: input.headers ?? {},
+    ...(owner ? { owner } : {}),
     scheduleKind: "workflow",
     serviceInvocation: {
       identity,
@@ -505,6 +561,7 @@ function listScheduledDispatches(
 ): Promise<ScheduledDispatchListResult> {
   return requestJson(
     withQuery("/api/schedules", {
+      ...encodeScheduledDispatchOwnerQuery(query?.owner),
       cursor: query?.cursor,
       includeTotalCount: query?.includeTotalCount,
       take: query?.take,
@@ -556,9 +613,14 @@ export const scheduledDispatchApi = {
 
   listAll: listAllScheduledDispatches,
 
-  get(scheduleId: string): Promise<ScheduledDispatchDetail> {
+  get(
+    scheduleId: string,
+    owner?: ScheduledDispatchOwner,
+  ): Promise<ScheduledDispatchDetail> {
     return requestJson(
-      `/api/schedules/${encodeURIComponent(scheduleId.trim())}`,
+      withQuery(`/api/schedules/${encodeURIComponent(scheduleId.trim())}`, {
+        ...encodeScheduledDispatchOwnerQuery(owner),
+      }),
       decodeScheduledDispatchDetail,
     );
   },
@@ -596,30 +658,51 @@ export const scheduledDispatchApi = {
     );
   },
 
-  enable(scheduleId: string, reason = ""): Promise<ScheduledDispatchMutationReceipt> {
+  enable(
+    scheduleId: string,
+    reason = "",
+    owner?: ScheduledDispatchOwner,
+  ): Promise<ScheduledDispatchMutationReceipt> {
+    const normalizedOwner = encodeOwner(owner);
     return requestJson(
       `/api/schedules/${encodeURIComponent(scheduleId.trim())}:enable`,
       decodeScheduledDispatchMutationReceipt,
       {
         method: "POST",
-        ...jsonBody({ reason }),
+        ...jsonBody({
+          ...(normalizedOwner ? { owner: normalizedOwner } : {}),
+          reason,
+        }),
       },
     );
   },
 
-  disable(scheduleId: string, reason = ""): Promise<ScheduledDispatchMutationReceipt> {
+  disable(
+    scheduleId: string,
+    reason = "",
+    owner?: ScheduledDispatchOwner,
+  ): Promise<ScheduledDispatchMutationReceipt> {
+    const normalizedOwner = encodeOwner(owner);
     return requestJson(
       `/api/schedules/${encodeURIComponent(scheduleId.trim())}:disable`,
       decodeScheduledDispatchMutationReceipt,
       {
         method: "POST",
-        ...jsonBody({ reason }),
+        ...jsonBody({
+          ...(normalizedOwner ? { owner: normalizedOwner } : {}),
+          reason,
+        }),
       },
     );
   },
 
-  delete(scheduleId: string, reason = ""): Promise<ScheduledDispatchMutationReceipt> {
+  delete(
+    scheduleId: string,
+    reason = "",
+    owner?: ScheduledDispatchOwner,
+  ): Promise<ScheduledDispatchMutationReceipt> {
     const normalizedReason = reason.trim();
+    const normalizedOwner = encodeOwner(owner);
     return requestJson(
       withQuery(`/api/schedules/${encodeURIComponent(scheduleId.trim())}`, {
         reason: normalizedReason,
@@ -627,7 +710,10 @@ export const scheduledDispatchApi = {
       decodeScheduledDispatchMutationReceipt,
       {
         method: "DELETE",
-        ...jsonBody({ reason: normalizedReason }),
+        ...jsonBody({
+          ...(normalizedOwner ? { owner: normalizedOwner } : {}),
+          reason: normalizedReason,
+        }),
       },
     );
   },
@@ -639,14 +725,24 @@ export const scheduledDispatchApi = {
     });
   },
 
-  runNow(scheduleId: string): Promise<ScheduledDispatchRunNowReceipt> {
+  runNow(
+    scheduleId: string,
+    owner?: ScheduledDispatchOwner,
+  ): Promise<ScheduledDispatchRunNowReceipt> {
+    const normalizedOwner = encodeOwner(owner);
     return requestJson(
       `/api/schedules/${encodeURIComponent(scheduleId.trim())}:run-now`,
       decodeScheduledDispatchRunNowReceipt,
       {
         method: "POST",
-        ...jsonBody({}),
+        ...jsonBody(normalizedOwner ? { owner: normalizedOwner } : {}),
       },
     );
   },
 };
+
+export function previewScheduledDispatch(
+  input: ScheduledDispatchPreviewInput,
+): Promise<ScheduledDispatchPreview> {
+  return scheduledDispatchApi.preview(input);
+}

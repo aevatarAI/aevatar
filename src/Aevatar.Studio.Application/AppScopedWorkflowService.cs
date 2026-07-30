@@ -27,7 +27,8 @@ public sealed class AppScopedWorkflowService
         ILogger<AppScopedWorkflowService>? logger = null)
     {
         _yamlDocumentService = yamlDocumentService ?? throw new ArgumentNullException(nameof(yamlDocumentService));
-        _workflowDefinitionParser = workflowDefinitionParser ?? throw new ArgumentNullException(nameof(workflowDefinitionParser));
+        _workflowDefinitionParser = workflowDefinitionParser
+            ?? throw new ArgumentNullException(nameof(workflowDefinitionParser));
         _workspaceQueryPort = workspaceQueryPort;
         _workspaceCommandPort = workspaceCommandPort;
         _logger = logger;
@@ -67,7 +68,27 @@ public sealed class AppScopedWorkflowService
         SaveWorkflowDraftRequest request,
         CancellationToken ct = default)
     {
-        var (draft, receipt) = await SaveDraftCommandAsync(scopeId, workflowId: null, request, ct);
+        var (draft, receipt) = await SaveDraftCommandAsync(
+            scopeId,
+            workflowId: null,
+            request,
+            requireExisting: false,
+            ct);
+        return ToDraftCreateAcceptedResponse(draft.WorkflowId, receipt);
+    }
+
+    public async Task<WorkflowDraftCreateAcceptedResponse> SaveDraftAsync(
+        string scopeId,
+        string workflowId,
+        SaveWorkflowDraftRequest request,
+        CancellationToken ct = default)
+    {
+        var (draft, receipt) = await SaveDraftCommandAsync(
+            scopeId,
+            NormalizeRequired(workflowId, nameof(workflowId)),
+            request,
+            requireExisting: false,
+            ct);
         return ToDraftCreateAcceptedResponse(draft.WorkflowId, receipt);
     }
 
@@ -82,6 +103,7 @@ public sealed class AppScopedWorkflowService
             normalizedScopeId,
             NormalizeRequired(workflowId, nameof(workflowId)),
             request,
+            requireExisting: true,
             ct);
         return ToDraftWorkflowResponse(normalizedScopeId, draft);
     }
@@ -90,30 +112,18 @@ public sealed class AppScopedWorkflowService
         string scopeId,
         string? workflowId,
         SaveWorkflowDraftRequest request,
+        bool requireExisting,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(request);
 
         var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
-        var requestedWorkflowName = string.IsNullOrWhiteSpace(request.WorkflowName)
-            ? string.Empty
-            : request.WorkflowName.Trim();
         var normalizedYaml = NormalizeRequired(request.Yaml, nameof(request.Yaml));
-        if (!string.IsNullOrWhiteSpace(requestedWorkflowName))
-        {
-            normalizedYaml = AlignWorkflowYamlName(normalizedYaml, requestedWorkflowName);
-        }
+        var parsed = await _workflowDefinitionParser.ParseWorkflowYamlAsync(normalizedYaml, ct);
+        if (!parsed.Succeeded)
+            throw new InvalidOperationException(parsed.Error);
 
-        var validation = await _workflowDefinitionParser.ParseWorkflowYamlAsync(normalizedYaml, ct);
-        if (!validation.Succeeded)
-            throw new InvalidOperationException(validation.Error);
-
-        var parsed = _yamlDocumentService.Parse(normalizedYaml);
-        var workflowName = !string.IsNullOrWhiteSpace(requestedWorkflowName)
-            ? requestedWorkflowName
-            : !string.IsNullOrWhiteSpace(parsed.Document?.Name)
-            ? parsed.Document.Name.Trim()
-            : NormalizeRequired(request.WorkflowName, nameof(request.WorkflowName));
+        var workflowName = NormalizeRequired(parsed.WorkflowName, nameof(request.WorkflowName));
         var workspaceQueryPort = _workspaceQueryPort
             ?? throw new InvalidOperationException("Scoped workflow workspace query port is not configured.");
         var workspaceCommandPort = _workspaceCommandPort
@@ -126,7 +136,7 @@ public sealed class AppScopedWorkflowService
 
         var existingDraft = workspace.Drafts.FirstOrDefault(draft =>
             string.Equals(draft.WorkflowId, normalizedWorkflowId, StringComparison.Ordinal));
-        if (!string.IsNullOrWhiteSpace(workflowId))
+        if (requireExisting)
         {
             if (existingDraft == null)
             {
@@ -197,25 +207,7 @@ public sealed class AppScopedWorkflowService
 
     // Refactor (iter56/cluster-929-studio-workflow-obsolete-shims):
     //   old=Obsolete wrapper, new=removed (use draft methods)
-    //   ListAsync/GetAsync/SaveDraftAsync legacy shims were deleted; callers use draft methods directly.
-
-    private string AlignWorkflowYamlName(string yaml, string workflowName)
-    {
-        if (string.IsNullOrWhiteSpace(yaml) || string.IsNullOrWhiteSpace(workflowName))
-            return yaml;
-
-        var parsed = _yamlDocumentService.Parse(yaml);
-        if (parsed.Document == null)
-            return yaml;
-
-        if (string.Equals(parsed.Document.Name?.Trim(), workflowName, StringComparison.Ordinal))
-            return yaml;
-
-        return _yamlDocumentService.Serialize(parsed.Document with
-        {
-            Name = workflowName,
-        });
-    }
+    //   ListAsync/GetAsync legacy shims were deleted; callers use explicit draft methods.
 
     public static WorkflowDirectorySummary CreateScopeDirectory(string scopeId) =>
         new(

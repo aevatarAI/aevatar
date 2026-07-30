@@ -14,10 +14,18 @@ internal static class SkillRecoveryPlanner
     private const string OrnnSearchSkillsToolName = "ornn_search_skills";
     private const string UseSkillToolName = "use_skill";
 
+    private enum SkillDiscoveryBlockerDisposition
+    {
+        None = 0,
+        Recoverable = 1,
+        ConfigurationRequired = 2,
+    }
+
     public readonly record struct RecoveryDirective(
         ToolCall? ToolCall,
         bool ConsumesOrnnSearchAttempt,
-        string? Nudge);
+        string? Nudge,
+        bool AttemptsPrimarySkill = false);
 
     private static readonly string[] BlockerPhrases =
     [
@@ -94,6 +102,23 @@ internal static class SkillRecoveryPlanner
         string? finalContent,
         int recoveryAttempts,
         string? callIdPrefix,
+        out RecoveryDirective directive) =>
+        TryPlanNextDirective(
+            recovery,
+            messages,
+            finalContent,
+            recoveryAttempts,
+            callIdPrefix,
+            primarySkillAttempted: false,
+            out directive);
+
+    public static bool TryPlanNextDirective(
+        AgentSkillRecoveryContext recovery,
+        IReadOnlyList<ChatMessage> messages,
+        string? finalContent,
+        int recoveryAttempts,
+        string? callIdPrefix,
+        bool primarySkillAttempted,
         out RecoveryDirective directive)
     {
         directive = default;
@@ -104,7 +129,8 @@ internal static class SkillRecoveryPlanner
             ? recovery.MaxOrnnSearchAttempts
             : 1;
 
-        if (!string.IsNullOrWhiteSpace(recovery.PrimarySkillName) &&
+        if (!primarySkillAttempted &&
+            !string.IsNullOrWhiteSpace(recovery.PrimarySkillName) &&
             !HasUseSkillFor(messages, recovery.PrimarySkillName))
         {
             directive = new RecoveryDirective(
@@ -113,7 +139,8 @@ internal static class SkillRecoveryPlanner
                     recovery.PrimarySkillName,
                     ExtractCommandArguments(recovery)),
                 ConsumesOrnnSearchAttempt: false,
-                Nudge: null);
+                Nudge: null,
+                AttemptsPrimarySkill: true);
             return true;
         }
 
@@ -407,13 +434,18 @@ internal static class SkillRecoveryPlanner
             }
         }
 
-        for (var i = start; i < messages.Count; i++)
+        for (var i = messages.Count - 1; i >= start; i--)
         {
             var message = messages[i];
-            if (string.Equals(message.Role, "tool", StringComparison.OrdinalIgnoreCase) &&
-                IsToolBlocker(message))
+            if (!string.Equals(message.Role, "tool", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            switch (ClassifyToolBlocker(message))
             {
-                return true;
+                case SkillDiscoveryBlockerDisposition.ConfigurationRequired:
+                    return false;
+                case SkillDiscoveryBlockerDisposition.Recoverable:
+                    return true;
             }
         }
 
@@ -434,20 +466,34 @@ internal static class SkillRecoveryPlanner
         return false;
     }
 
-    private static bool IsToolBlocker(ChatMessage message)
+    private static SkillDiscoveryBlockerDisposition ClassifyToolBlocker(ChatMessage message)
     {
+        if (string.Equals(
+                message.ToolResultView?.Failure?.ErrorCode,
+                AgentToolFailureCodes.ChannelWorkflowResultDeliveryUnavailable,
+                StringComparison.Ordinal))
+        {
+            return SkillDiscoveryBlockerDisposition.ConfigurationRequired;
+        }
+
         var view = message.ToolResultView;
         if (view?.SkillSearch is { } searchResult)
         {
-            return searchResult.Status == ToolResultViewStatus.Error;
+            return searchResult.Status == ToolResultViewStatus.Error
+                ? SkillDiscoveryBlockerDisposition.Recoverable
+                : SkillDiscoveryBlockerDisposition.None;
         }
 
         if (view?.SkillLoad is { } loadResult)
         {
-            return loadResult.Status is ToolResultViewStatus.Error or ToolResultViewStatus.NotFound;
+            return loadResult.Status is ToolResultViewStatus.Error or ToolResultViewStatus.NotFound
+                ? SkillDiscoveryBlockerDisposition.Recoverable
+                : SkillDiscoveryBlockerDisposition.None;
         }
 
-        return ContainsAny(message.Content, BlockerPhrases);
+        return ContainsAny(message.Content, BlockerPhrases)
+            ? SkillDiscoveryBlockerDisposition.Recoverable
+            : SkillDiscoveryBlockerDisposition.None;
     }
 
     private static string BuildUseDiscoveredSkillNudge(AgentSkillRecoveryContext recovery, string searchResult)
@@ -489,7 +535,7 @@ internal static class SkillRecoveryPlanner
         {
             var message = messages[i];
             if (string.Equals(message.Role, "tool", StringComparison.OrdinalIgnoreCase) &&
-                IsToolBlocker(message))
+                ClassifyToolBlocker(message) == SkillDiscoveryBlockerDisposition.Recoverable)
             {
                 if (message.ToolResultView?.SkillSearch is { Error: { } searchError })
                     return TrimForPrompt(searchError);

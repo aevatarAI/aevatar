@@ -10,6 +10,7 @@ public sealed class StatusDashboardManifest
     private const string HttpStatusProbe = "http_status";
     private const string ReadmodelFreshnessProbe = "readmodel_freshness";
     private const string AevatarCoreLoopProbe = "aevatar_core_loop";
+    private const string AuditQueryIndexProbe = "audit_query_index";
     private const string NyxIdAuthorityPlaceholder = "${configuration:Aevatar:NyxId:Authority}";
 
     public StatusDashboardManifest(IReadOnlyList<HealthProbeTargetDescriptor> descriptors)
@@ -155,6 +156,15 @@ public sealed class StatusDashboardManifest
                     ["Source"] = "channel-bot-registrations",
                     ["MinCount"] = "0",
                 },
+            },
+            new()
+            {
+                Slug = "audit-query-index",
+                Name = "Audit Trail Query / Index",
+                Category = "feature",
+                Severity = "standard",
+                Probe = AuditQueryIndexProbe,
+                IntervalSeconds = 60,
             },
 
             // ── upstream ──

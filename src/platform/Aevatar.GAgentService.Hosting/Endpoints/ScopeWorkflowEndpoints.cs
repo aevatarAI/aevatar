@@ -123,7 +123,10 @@ public static class ScopeWorkflowEndpoints
                 request.WorkflowName,
                 request.DisplayName,
                 request.InlineWorkflowYamls,
-                request.RevisionId), ct);
+                request.RevisionId)
+            {
+                CapabilityAdmission = WorkflowCapabilityAdmissionHttpContext.Create(http),
+            }, ct);
             return Results.Accepted(result.ReadModelUrl, result);
         }
         catch (InvalidOperationException ex)
@@ -158,7 +161,10 @@ public static class ScopeWorkflowEndpoints
                     request.InlineWorkflowYamls,
                     request.AppId,
                     request.ServiceId,
-                    request.ExposureDesired),
+                    request.ExposureDesired)
+                {
+                    CapabilityAdmission = WorkflowCapabilityAdmissionHttpContext.Create(http),
+                },
                 ct);
             return Results.Accepted(result.Workflow.ReadModelUrl, result);
         }
@@ -445,16 +451,26 @@ public static class ScopeWorkflowEndpoints
                 },
                 async (receipt, token) =>
                 {
-                    if (!string.IsNullOrWhiteSpace(receipt.CorrelationId))
-                        http.Response.Headers["X-Correlation-Id"] = receipt.CorrelationId;
+                    if (!string.IsNullOrWhiteSpace(receipt.Run.CorrelationId))
+                        http.Response.Headers["X-Correlation-Id"] = receipt.Run.CorrelationId;
 
                     await StartAsync(token);
-                    await writer.WriteAsync(ScopeWorkflowAguiEventMapper.BuildRunContextEvent(receipt), token);
+                    await writer.WriteAsync(ScopeWorkflowAguiEventMapper.BuildRunContextEvent(receipt.Run), token);
                 },
                 ct);
 
             if (!result.Succeeded && !started)
             {
+                if (result.FailureDetail?.Error == WorkflowChatRunStartError.InvalidWorkflowYaml)
+                {
+                    await WriteJsonErrorResponseAsync(
+                        http,
+                        ChatRunStartErrorMapper.ToHttpStatusCode(result.Error),
+                        ChatRunStartErrorMapper.ToErrorBody(result.FailureDetail),
+                        ct);
+                    return;
+                }
+
                 var (statusCode, code, message) = MapRunStartError(result.Error);
                 await WriteJsonErrorResponseAsync(http, statusCode, code, message, ct);
             }
@@ -705,12 +721,7 @@ public static class ScopeWorkflowEndpoints
                 var model = string.IsNullOrWhiteSpace(userConfig.DefaultModel)
                     ? control.ModelOverride
                     : userConfig.DefaultModel.Trim();
-                var route = string.IsNullOrWhiteSpace(userConfig.PreferredLlmRoute)
-                    ? control.NyxIdRoutePreference
-                    : userConfig.PreferredLlmRoute.Trim();
-                (model, route) = await UserLlmRouteModelResolver
-                    .ResolveAsync(http, model, route, cancellationToken)
-                    .ConfigureAwait(false);
+                var route = UserLlmSelectionRoute.Resolve(userConfig.LlmSelection);
 
                 control = control with
                 {
@@ -761,6 +772,17 @@ public static class ScopeWorkflowEndpoints
         http.Response.StatusCode = statusCode;
         http.Response.ContentType = "application/json";
         await http.Response.WriteAsJsonAsync(new { code, message }, cancellationToken: ct);
+    }
+
+    private static async Task WriteJsonErrorResponseAsync(
+        HttpContext http,
+        int statusCode,
+        object body,
+        CancellationToken ct)
+    {
+        http.Response.StatusCode = statusCode;
+        http.Response.ContentType = "application/json";
+        await http.Response.WriteAsJsonAsync(body, cancellationToken: ct);
     }
 
     private static string NormalizeRequired(string? value, string paramName)

@@ -31,7 +31,7 @@ public sealed class UserAgentDeliveryTargetReaderTests
                 ConversationId = "oc_chat_1",
                 NyxProviderSlug = "api-lark-bot",
                 ApiKeyId = "key-1",
-                OutputFormat = SkillRunnerOutputFormat.Text,
+                OutputFormat = ScheduledAgentOutputFormat.Text,
             });
         credentialReader.GetAsync("agent-1", Arg.Any<CancellationToken>())
             .Returns(new UserAgentCatalogNyxCredentialDocument
@@ -48,7 +48,7 @@ public sealed class UserAgentDeliveryTargetReaderTests
         target.Should().NotBeNull();
         target!.NyxApiKey.Should().Be("live-key");
         target.ConversationId.Should().Be("oc_chat_1");
-        target.OutputFormat.Should().Be(SkillRunnerOutputFormat.Text);
+        target.OutputFormat.Should().Be(ScheduledAgentOutputFormat.Text);
     }
 
     [Fact]
@@ -64,7 +64,6 @@ public sealed class UserAgentDeliveryTargetReaderTests
             "live-key",
             "test"));
 
-#pragma warning disable CS0612 // legacy fields simulate a document materialized before channel_address existed
         documentReader.GetAsync("agent-legacy-address", Arg.Any<CancellationToken>())
             .Returns(new UserAgentCatalogDocument
             {
@@ -73,12 +72,13 @@ public sealed class UserAgentDeliveryTargetReaderTests
                 ConversationId = "oc_chat_legacy",
                 NyxProviderSlug = "api-lark-bot",
                 ApiKeyId = "key-legacy",
+#pragma warning disable CS0612 // legacy fields simulate a document materialized before channel_address existed
                 LarkReceiveId = "oc_dm_chat_1",
                 LarkReceiveIdType = "chat_id",
                 LarkReceiveIdFallback = "on_user_1",
                 LarkReceiveIdTypeFallback = "union_id",
-            });
 #pragma warning restore CS0612
+            });
         credentialReader.GetAsync("agent-legacy-address", Arg.Any<CancellationToken>())
             .Returns(new UserAgentCatalogNyxCredentialDocument
             {
@@ -122,7 +122,7 @@ public sealed class UserAgentDeliveryTargetReaderTests
                 ConversationId = "oc_chat_1",
                 NyxProviderSlug = "api-lark-bot",
                 ApiKeyId = "key-scheduled-agent",
-                OutputFormat = SkillRunnerOutputFormat.Text,
+                OutputFormat = ScheduledAgentOutputFormat.Text,
             });
         credentialReader.GetAsync("agent-1", Arg.Any<CancellationToken>())
             .Returns(new UserAgentCatalogNyxCredentialDocument

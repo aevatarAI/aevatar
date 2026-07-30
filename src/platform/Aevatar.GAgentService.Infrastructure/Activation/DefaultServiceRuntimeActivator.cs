@@ -47,7 +47,11 @@ public sealed class DefaultServiceRuntimeActivator : IServiceRuntimeActivator
                     request.Identity?.TenantId,
                     ct),
             ServiceDeploymentPlan.PlanSpecOneofCase.WorkflowPlan =>
-                await ActivateWorkflowAsync(request.Artifact.DeploymentPlan.WorkflowPlan, deploymentId, ct),
+                await ActivateWorkflowAsync(
+                    request.Artifact.DeploymentPlan.WorkflowPlan,
+                    deploymentId,
+                    request.Identity?.TenantId,
+                    ct),
             _ => throw new InvalidOperationException("Unsupported deployment plan."),
         };
     }
@@ -119,6 +123,7 @@ public sealed class DefaultServiceRuntimeActivator : IServiceRuntimeActivator
     private async Task<ServiceRuntimeActivationResult> ActivateWorkflowAsync(
         WorkflowServiceDeploymentPlan plan,
         string deploymentId,
+        string? scopeId,
         CancellationToken ct)
     {
         var preferredActorId = string.IsNullOrWhiteSpace(plan.DefinitionActorId)
@@ -129,7 +134,10 @@ public sealed class DefaultServiceRuntimeActivator : IServiceRuntimeActivator
                 preferredActorId,
                 plan.WorkflowName,
                 plan.WorkflowYaml,
-                plan.InlineWorkflowYamls),
+                plan.InlineWorkflowYamls,
+                ScopeId: scopeId?.Trim() ?? string.Empty,
+                SourceKind: "service_revision",
+                CapabilityAdmissionPlan: plan.CapabilityAdmissionPlan?.Clone()),
             preferredActorId,
             ct);
 

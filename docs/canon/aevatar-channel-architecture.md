@@ -28,6 +28,8 @@ target_repo: aevatarAI/aevatar
 
 **当前受支持生产契约**：post-ADR-0012 / issue `#308` 的 ChannelRuntime 已收敛到 Nyx-backed Lark relay。Lark inbound 的唯一活跃入口是 `Aevatar.GAgents.NyxidChat` 映射的 `/api/webhooks/nyxid-relay`，并由 `ConversationGAgent` 承接权威会话事实；`Aevatar.GAgents.Platform.Lark` 只保留 HTTP client、message composer、native message producer、payload redactor 等 outbound/rendering 能力，不拥有 inbound runtime state。`TelegramPlatformAdapter` 与 `ChannelUserGAgent` 已从当前代码路径移除；本 RFC 下面若提到它们，均应理解为**历史基线/legacy 实现**，不是当前生产契约。
 
+**Scheduled runner retirement note**：Any later reference in this RFC to `SkillRunnerGAgent`, `SkillRunner`, `SkillRunnerState`, `SkillRunnerScheduleCalculator`, or `skill_runner_id` is also historical. Scheduled workflow/team automation now uses `ScheduledDispatchGAgent` plus workflow/team service invocation. Generic skill loading remains on the normal AI/tool-provider path and NyxidChat slash-skill recovery.
+
 直接在这个大包里继续加 channel 会让边界进一步模糊。需要引入 **channel-agnostic 抽象层**，把业务逻辑和 channel 细节隔离，并把 ChannelRuntime 的多职责按概念拆成独立包。
 
 ## 2. 目标
@@ -127,7 +129,7 @@ sequenceDiagram
 
 - Discord 3s interaction 窗口 → ①.5 pre-ack journal（§9.5.2.1）
 - Group / thread 共享会话热点 → ⑤ runner 拆分（§5.6.1）
-- 主动 proactive send（SkillRunner / workflow / admin broadcast）→ 从 ⑦ 之后反向走 actor-to-actor command 骨架（§5.4.2）
+- 主动 proactive send（scheduled workflow/team service / workflow / admin broadcast）→ 从 ⑦ 之后反向走 actor-to-actor command 骨架（§5.4.2）
 - Auth / credential 生命周期 → 贯穿 ①⑥（§9.6 / §17.3）
 - v1→v2 cutover in-flight drain → ①②⑦（§11.1.1）
 
@@ -199,10 +201,10 @@ sequenceDiagram
 `ConversationContinueRequestedEvent` / `ConversationContinueRejectedEvent` / `ConversationContinueFailedEvent` 是 actor-to-actor proactive command 的 envelope payload (§5.4.2)，必须显式 proto field 契约（防止 proto/C# 漂移）：
 
 ```proto
-// 入站 command：caller（SkillRunner / workflow / admin）发给 ConversationGAgent
+// 入站 command：caller（scheduled workflow/team service / workflow / admin）发给 ConversationGAgent
 message ConversationContinueRequestedEvent {
   string command_id        = 1;  // stable UUID（caller 生成，用于 dedup；同一逻辑操作重试 = 相同 id）
-  string correlation_id    = 2;  // 追踪链路（SkillRunner schedule tick / workflow step / admin request id）
+  string correlation_id    = 2;  // 追踪链路（scheduled dispatch tick / workflow step / admin request id）
   string causation_id      = 3;  // 上一个 command id（可空）
   PrincipalKind kind       = 4;  // Bot | OnBehalfOfUser
   string principal_ref     = 5;  // 仅 kind=OnBehalfOfUser 非空；**opaque credential_ref，绝非 raw token**
@@ -258,7 +260,7 @@ enum FailureKind {
 }
 ```
 
-**Rejected vs Failed 的区别**：`Rejected` = 没走到 outbound（grain 内 pre-check 拒绝）；`Failed` = 走到了 outbound 但失败（adapter 返回错误 / 平台拒）。两者都是 committed domain event，通过统一 `EventEnvelope<CommittedStateEventPublished>` 进入 Projection Pipeline，SkillRunner / workflow caller 订阅相应 readmodel 观察 outcome。
+**Rejected vs Failed 的区别**：`Rejected` = 没走到 outbound（grain 内 pre-check 拒绝）；`Failed` = 走到了 outbound 但失败（adapter 返回错误 / 平台拒）。两者都是 committed domain event，通过统一 `EventEnvelope<CommittedStateEventPublished>` 进入 Projection Pipeline，scheduled workflow/team service, workflow, or admin callers subscribe to the corresponding readmodel to observe outcome.
 
 Adapter 特定的 native outbound payload（`LarkCardPayload` / `SlackBlockKitPayload` / `DiscordEmbedPayload`）**不需要** proto——它们只在 adapter 进程内作为 `IMessageComposer.Compose` 的返回对象存在，不跨节点、不持久化。
 
@@ -467,7 +469,7 @@ legacy `ChannelUserGAgent` 同时持有**用户绑定态**（`nyxid_user_id` / `
 **outbound 两条路径，auth 来源不同**：
 
 - **Reply path（`ITurnContext.SendAsync` / `ReplyAsync`）** — 有 inbound turn，adapter 从 `ctx.Activity.From` sender canonical id 隐式 resolve 到 `ChannelUserBindingGAgent` 拿 user token（如果业务需要 user-bound send）；否则用 bot token（来自 adapter `InitializeAsync` 注入的 `ChannelTransportBinding.credential_ref` 解析结果）。业务层无感，不需要显式传 principal。
-- **Proactive path（`IChannelOutboundPort.ContinueConversationAsync`）** — 没有 turn，没有 sender 可推，**caller 必须显式传 `AuthContext`**（见 §5.1b）决定用 bot 身份还是某个具体 user 身份发。`AuthContext` 中 `UserCredentialRef` **只是 opaque ref**（例如 `"lark-user:{open_id}"` 或 vault key），真实 token 在 adapter 临发送时通过 `ICredentialProvider.ResolveAsync(ref)` 解析。常见调用者：`SkillRunnerGAgent`（定时推送给 conversation owner → `AuthContext(OnBehalfOfUser, UserCredentialRef=owner credential ref, OnBehalfOfUserId=owner open_id)`）/ admin broadcast（→ `AuthContext(Bot, null, null)`）/ workflow trigger（→ `AuthContext(OnBehalfOfUser, initiator ref, initiator id)`）。**重要**：这些 actor-to-actor 的 proactive command 必须走命令骨架 `Normalize → Resolve → Build Envelope → Dispatch` 到 `ConversationGAgent` 而不是直接调 `IChannelOutboundPort`——见 §5.4.2。
+- **Proactive path（`IChannelOutboundPort.ContinueConversationAsync`）** — 没有 turn，没有 sender 可推，**caller 必须显式传 `AuthContext`**（见 §5.1b）决定用 bot 身份还是某个具体 user 身份发。`AuthContext` 中 `UserCredentialRef` **只是 opaque ref**（例如 `"lark-user:{open_id}"` 或 vault key），真实 token 在 adapter 临发送时通过 `ICredentialProvider.ResolveAsync(ref)` 解析。Current callers are scheduled workflow/team service invocation via `ScheduledDispatchGAgent` (conversation-owner delivery uses `AuthContext(OnBehalfOfUser, UserCredentialRef=owner credential ref, OnBehalfOfUserId=owner open_id)`), admin broadcast (uses `AuthContext(Bot, null, null)`), and workflow trigger (uses `AuthContext(OnBehalfOfUser, initiator ref, initiator id)`). **重要**：这些 actor-to-actor 的 proactive command 必须走命令骨架 `Normalize → Resolve → Build Envelope → Dispatch` 到 `ConversationGAgent` 而不是直接调 `IChannelOutboundPort`——见 §5.4.2。
 
 无论哪条路径，**token 不复制进 conversation grain**——始终走 `ChannelUserBindingGAgent` 中心化管理。conversation grain 自己不持 token。
 
@@ -506,7 +508,7 @@ The default workflow notification delivery path is `IChannelInteractionNotificat
 
 ### 5.4 `IChannelTransport` + `IChannelOutboundPort` + `IMessageComposer`
 
-**为什么不是一个 `IChannelAdapter`**：Codex v3 + 交叉对齐 `AGENTS.md` 的 `Runtime 与 Dispatch 必须分责` 强制原则——一个接口同时持有 lifecycle（Runtime） + inbound stream（Runtime 观察） + outbound send/update/delete（Dispatch） + capabilities 是典型"全能接口 anti-pattern"。拆分后上层 `IBot` / `SkillRunnerGAgent` 等依赖**投递契约** `IChannelOutboundPort`，不感知 transport 实现；pipeline 消费 inbound 依赖 `IChannelTransport`，不触达 outbound 路径——投递载体可替换（webhook / gateway / future MQ-based），不污染应用语义。
+**为什么不是一个 `IChannelAdapter`**：Codex v3 + 交叉对齐 `AGENTS.md` 的 `Runtime 与 Dispatch 必须分责` 强制原则——一个接口同时持有 lifecycle（Runtime） + inbound stream（Runtime 观察） + outbound send/update/delete（Dispatch） + capabilities 是典型"全能接口 anti-pattern"。拆分后上层 `IBot` / scheduled workflow/team callers 等依赖**投递契约** `IChannelOutboundPort`，不感知 transport 实现；pipeline 消费 inbound 依赖 `IChannelTransport`，不触达 outbound 路径——投递载体可替换（webhook / gateway / future MQ-based），不污染应用语义。
 
 **Runtime 侧**（lifecycle only，不持 inbound stream 契约 — Codex v11 HIGH 收窄）：
 
@@ -548,14 +550,14 @@ public interface IChannelOutboundPort {
     Task<EmitResult> UpdateAsync(ConversationReference to, string activityId, MessageContent content, CancellationToken ct);
     Task DeleteAsync(ConversationReference to, string activityId, CancellationToken ct);
 
-    // 从**没有 turn context** 的地方主动发起会话（scheduled runner / workflow
+    // 从**没有 turn context** 的地方主动发起会话（scheduled workflow/team service / workflow
     // trigger / admin broadcast）。adapter 内部可能走不同 API path
     // （Slack 主动发 DM 需要 bot_token scope；Discord 需要已有 DM channel 或 guild 权限）。
     //
     // auth MUST be explicit: proactive send 无 turn context 可推 principal，
     // caller 必须显式决策用 bot identity 还是某个 user identity 发。见 §5.1b AuthContext。
     //
-    // 注意：作为 actor-to-actor proactive command（SkillRunnerGAgent → ConversationGAgent
+    // 注意：作为 actor-to-actor proactive command（ScheduledDispatchGAgent + workflow/team service → ConversationGAgent
     // → IChannelOutboundPort），调用链必须遵循 AGENTS.md 命令骨架；见 §5.4.2。
     Task<EmitResult> ContinueConversationAsync(
         ConversationReference @ref,
@@ -619,16 +621,16 @@ public interface IMessageComposer {
 `AGENTS.md` 强制约束：`标准命令生命周期应收敛为 Normalize -> Resolve Target -> Build Context -> Build Envelope -> Dispatch -> Receipt -> Observe`。
 
 - **`ITurnContext.SendAsync` / `ReplyAsync` / `UpdateAsync` / `DeleteAsync`** 是 bot turn 内对**外部平台**的直接 side-effect（actor → external SDK），不是 actor-to-actor command；**不走** aevatar 命令骨架
-- **`IChannelOutboundPort.ContinueConversationAsync`** 本身是 adapter 公开的投递方法，但**调用方**（如 `SkillRunnerGAgent`、workflow trigger、admin broadcast endpoint）向 `ConversationGAgent` 发起 "please continue / please relay 这条消息" 是 **actor-to-actor proactive command**——这部分**必须**走命令骨架：
+- **`IChannelOutboundPort.ContinueConversationAsync`** 本身是 adapter 公开的投递方法，但**调用方**（如 `ScheduledDispatchGAgent` plus workflow/team service invocation、workflow trigger、admin broadcast endpoint）向 `ConversationGAgent` 发起 "please continue / please relay 这条消息" 是 **actor-to-actor proactive command**——这部分**必须**走命令骨架：
 
   ```
-  SkillRunnerGAgent turn:
+  Scheduled workflow/team proactive turn:
     Normalize        : 输入归一化 (target canonical_key + message intent + auth_context with credential_ref)
     Resolve Target   : actorId = ConversationGAgent.BuildActorId(ConversationReference.CanonicalKey)
     Build Context    : 拿 ScheduleState / UserAgentCatalogEntry 等 actor-owned fact
     Build Envelope   : EventEnvelope<ConversationContinueRequestedEvent> 带必选字段:
                          - command_id       (stable UUID，caller 生成用于 dedup)
-                         - correlation_id   (追踪 SkillRunner schedule tick / workflow step / admin request)
+                         - correlation_id   (追踪 scheduled dispatch tick / workflow step / admin request)
                          - causation_id     (上一个 command id，如果有)
                          - principal_ref    (AuthContext.UserCredentialRef 或 null 表示 bot)
                          - on_behalf_of     (AuthContext.OnBehalfOfUserId 如果适用)
@@ -638,7 +640,7 @@ public interface IMessageComposer {
                        （aevatar 现有 API：src/Aevatar.Foundation.Abstractions/IActorDispatchPort.cs）
     Receipt          : accepted + command_id（ACK 诚实：仅承诺 accepted for dispatch，不承诺 committed）
     Observe          : committed state 走 projection 主链（ConversationTurnCompletedEvent 带 causation_id=command_id
-                       见 §9.5.2）。SkillRunner 如需观察 outcome 订阅 projection 读取
+                       见 §9.5.2）。Scheduled workflow/team callers observe outcome through projection reads.
   ```
 
   `ConversationGAgent` 消费这个 envelope：
@@ -647,17 +649,17 @@ public interface IMessageComposer {
   3. **Dispatch outbound**：调 `IChannelOutboundPort.ContinueConversationAsync(ref, content, auth, ct)` 把**可序列化的 `AuthContext`**（带 credential_ref，不带 raw token）透传到 adapter；adapter 内部调 `ICredentialProvider.ResolveAsync(auth, ct)` 解析为 `ResolvedAuthContext`（含 raw token、进程内 runtime-only 句柄，**不跨进程 / 不跨网络 / 不落盘 / 不入结构化 log**，保证细节见 §5.1b 4 层约束）；`ResolvedAuthContext` **不回传 grain / 不落 envelope / 不走 event store**
   4. **Outbound 结果分发**（Codex v6 MED 要求）：
      - 成功 → RaiseEvent `ConversationTurnCompletedEvent { StateDelta, CausationCommandId = command_id, ... }` + 把 command_id 写入 `processed_command_ids`
-     - `ICredentialProvider.ResolveAsync` 抛 `CredentialResolutionException`（dispatch 到 grain turn 之间凭据已撤销/过期）→ RaiseEvent `ConversationContinueFailedEvent(kind=CREDENTIAL_RESOLUTION_FAILED, retry_policy=not_retryable{})` + command_id 写入 `processed_command_ids`（不重试——凭据失效是 permanent state，需要 SkillRunner / workflow 观察该事件、re-auth 或 fail schedule）
+     - `ICredentialProvider.ResolveAsync` 抛 `CredentialResolutionException`（dispatch 到 grain turn 之间凭据已撤销/过期）→ RaiseEvent `ConversationContinueFailedEvent(kind=CREDENTIAL_RESOLUTION_FAILED, retry_policy=not_retryable{})` + command_id 写入 `processed_command_ids`（不重试——凭据失效是 permanent state，需要 scheduled workflow/team or workflow caller 观察该事件、re-auth 或 fail schedule）
      - adapter 返回 `EmitResult.Success=false` with `RetryAfter > 0`（transient，如 rate limit）→ RaiseEvent `ConversationContinueFailedEvent(kind=TRANSIENT_ADAPTER_ERROR, retry_policy=retry_after_ms:<N>)` + 不 mark command_id processed（允许 caller 重新 dispatch 同一 command_id 等待 retry 窗口）
      - adapter 返回 `EmitResult.Success=false` with permanent error（content invalid / target deleted）→ RaiseEvent `ConversationContinueFailedEvent(kind=PERMANENT_ADAPTER_ERROR, retry_policy=not_retryable{})` + mark command_id processed
      - **硬契约**：所有 permanent failure path（credential revocation / adapter permanent error / 其他 not-retryable 情形）MUST 显式设置 `retry_policy=not_retryable{}`；禁止发出 `RetryPolicyCase=None` 的 `ConversationContinueFailedEvent`——下游 caller 按 oneof 判断重试策略时，`None` 会让 "permanent 失败" 和 "emitter 漏填/bug" 无法区分，变成 silent retry bug。Conformance §8.3 `ProactiveCommand_PermanentFailure_SetsNotRetryable` 验证
-  5. 所有 Raised events 都通过 `EventEnvelope<CommittedStateEventPublished>` 进入 Projection 主链（§9.5.2）；SkillRunner / workflow / admin broadcast 订阅相应 readmodel 观察 outcome（无通用 request-reply，§5.7 middleware 规则）
+  5. 所有 Raised events 都通过 `EventEnvelope<CommittedStateEventPublished>` 进入 Projection 主链（§9.5.2）；scheduled workflow/team service / workflow / admin broadcast 订阅相应 readmodel 观察 outcome（无通用 request-reply，§5.7 middleware 规则）
 
   调用方不直接调 `IChannelOutboundPort`，也不直接调 `ConversationGAgent` 的内部方法——全程经 envelope dispatch。
-- **禁止**：`SkillRunnerGAgent` 直接调 `IChannelOutboundPort.ContinueConversationAsync`（跳过 `ConversationGAgent`），否则 `processed_message_ids` / `processed_command_ids` dedup + `ChatHistory` 集成 + observability 全部漏过
+- **禁止**：scheduled workflow/team callers 直接调 `IChannelOutboundPort.ContinueConversationAsync`（跳过 `ConversationGAgent`），否则 `processed_message_ids` / `processed_command_ids` dedup + `ChatHistory` 集成 + observability 全部漏过
 - **Dedup / retry 规则**：
   - **command_id 必须 stable**（caller 同一逻辑操作的重试必须用相同 command_id），否则 dedup 穿透
-  - **SkillRunnerGAgent schedule tick** 生成 command_id = `hash(skill_runner_id, scheduled_run_at)`——同一次 tick 的多次 dispatch 尝试（进程重启 / 网络重试）dedup 正确
+  - **Scheduled workflow/team tick** 生成 command_id = `hash(schedule_id, scheduled_run_at)`——同一次 tick 的多次 dispatch 尝试（进程重启 / 网络重试）dedup 正确
   - **Workflow trigger** 生成 command_id = `hash(workflow_run_id, step_id, branch)`
   - **Admin broadcast** 生成 command_id = admin request id
   - Conformance test `§8.3 ActorToActorCommand_DedupByStableCommandId()` 验证
@@ -1135,7 +1137,7 @@ adapter 在构造 `ChatActivity` 时**必须**：
 **已合入的 PR 代码资产**：
 - PR #174 / #177 的 webhook 安全 + durable dedup —— 迁进 Lark adapter transport 内部
 - 历史上的 Lark stream patch / direct webhook 代码已在统一 inbound backbone 落地后退役，不再作为当前实现目标
-- PR #193 的 Day One private-chat agent builder —— 迁进 `Aevatar.GAgents.Authoring` 后保留
+- PR #193 的 Day One private-chat agent builder now follows the §9.4 split: generic tools under `Aevatar.GAgents.Scheduled/Authoring`, Lark UI mapping under `Aevatar.GAgents.Platform.Lark/Authoring`
 - `RuntimeCallbackLease` —— scheduler 底层原语，不重造
 
 （总纲已前置到 §5 开头。）
@@ -1249,7 +1251,7 @@ public enum ProjectionVerdict { Project, Skip, Tombstone }
 
 ### 7.2 `ISchedulable` + `ScheduleState`（组合，不继承）
 
-`SkillRunnerGAgent`（469 行）和 `WorkflowAgentGAgent`（421 行）各自持有相似的调度字段（`Cron` / `Timezone` / `NextRunAt` / `LastRunAt` / `ErrorCount`）和相似的调度逻辑（`ScheduleNextRunAsync` / `_nextRunLease` / enable/disable 事件处理），重复约 80-120 行。两边还都**硬编码 `Platform = "lark"`** 的 registry upsert（见 `SkillRunnerGAgent.cs:321` / `WorkflowAgentGAgent.cs:263`），这也是抽取时要一并解决的 legacy。
+Historical rationale: the retired `SkillRunnerGAgent` and `WorkflowAgentGAgent` paths each carried similar schedule fields (`Cron` / `Timezone` / `NextRunAt` / `LastRunAt` / `ErrorCount`) and similar next-fire logic (`ScheduleNextRunAsync` / `_nextRunLease` / enable/disable event handling). The current owner is `ScheduledDispatchGAgent` for schedule facts plus workflow/team service invocation for execution facts.
 
 抽 state + interface 而不是 base class：
 
@@ -1271,9 +1273,9 @@ public interface ISchedulable {
     ScheduleState Schedule { get; }
 }
 
-public class SkillRunnerState : ISchedulable {
+public class ScheduledWorkflowState : ISchedulable {
     public ScheduleState Schedule { get; set; } = new();
-    public string TargetSkillId { get; set; } = "";
+    public string TargetWorkflowId { get; set; } = "";
 }
 
 // 伪代码（正式实现里会带具体 state / event 泛型参数和约束）：
@@ -1283,7 +1285,7 @@ public static class GAgentSchedulingExtensions {
         IProjectionMaterializationContext ctx)
         where TAgent : ISchedulable
     {
-        // 共享逻辑：读取 agent.Schedule，调用 SkillRunnerScheduleCalculator.TryGetNextOccurrence，
+        // 共享逻辑：读取 agent.Schedule，调用 schedule calculator TryGetNextOccurrence，
         // 更新 NextRunAt，通过 RuntimeCallbackLease 挂钩下次 tick
         // 实际约束需要根据最终 GAgentBase 继承形态确定
         throw new NotImplementedException();
@@ -1295,17 +1297,17 @@ public static class GAgentSchedulingExtensions {
 
 **为什么不继承**：Orleans `GAgentBase<TState, TEvent>` 的继承链已经够深。再加一层中间基类会让诊断/反射/序列化复杂化。composition over inheritance：`ISchedulable` 做 capability 标记，extension method 提供共享逻辑，`ScheduleState` 做数据容器。
 
-### 7.2.1 Scheduled SkillRunner remote skill contract
+### 7.2.1 Scheduled workflow/team remote skill contract
 
-Scheduled SkillRunner stores the executable remote identity as typed `skill_ref` instead of encoding an Ornn lookup hint inside `skill_content`. `skill_ref.name` and legacy inline `skill_content` are mutually exclusive by default; inline fallback is a compatibility path only when `allow_inline_fallback=true`.
+Scheduled workflow/team invocation stores the executable remote identity as typed `skill_ref` instead of encoding an Ornn lookup hint inside `skill_content`. `skill_ref.name` and legacy inline `skill_content` are mutually exclusive by default; inline fallback is a compatibility path only when `allow_inline_fallback=true`.
 
-For `skill_ref.source=ORNN` with empty `version`, every trigger fetches the current `SkillDefinition` through `IRemoteSkillFetcher` using the owner Nyx token from the runner outbound configuration. The runner does not keep a service cache, registry, or versioned package download layer. Non-empty `skill_ref.version` fails before fetch; this avoids silently treating a versioned request as latest.
+For `skill_ref.source=ORNN` with empty `version`, every trigger fetches the current `SkillDefinition` through `IRemoteSkillFetcher` using the owner Nyx token from the scheduled invocation configuration. The scheduling path does not keep a service cache, registry, or versioned package download layer. Non-empty `skill_ref.version` fails before fetch; this avoids silently treating a versioned request as latest.
 
-Prompt-only skills continue through `ChatStreamAsync`, with the fetched instructions used only as the current run's system prompt override. Workflow-bearing skills do not ask the LLM to decide workflow startup; `SkillRunnerGAgent` maps the selected descriptor to `WorkflowChatSource.InlineYamlBundle` and dispatches `WorkflowChatRunRequest` through the existing workflow command dispatch service. The returned workflow receipt is accepted-only: it means the workflow run command was accepted for dispatch, not that the workflow completed or its read model is visible.
+Prompt-only skills continue through the normal AI/tool-provider path and `ChatStreamAsync`, with the fetched instructions used only as the current run's system prompt override. Workflow-bearing skills do not ask the LLM to decide workflow startup; scheduled workflow/team invocation maps the selected descriptor to `WorkflowChatSource.InlineYamlBundle` and dispatches `WorkflowChatRunRequest` through the existing workflow command dispatch service. The returned workflow receipt is accepted-only: it means the workflow run command was accepted for dispatch, not that the workflow completed or its read model is visible.
 
 ### 7.3 `AgentRegistry → UserAgentCatalog` 改名
 
-ChannelRuntime 里的 `AgentRegistryGAgent` 和平台级 `Aevatar.GAgents.Registry.GAgentRegistryGAgent` 命名冲突——前者是"用户所有 SkillRunner/WorkflowAgent 的执行状态目录"，后者是"平台 actor 类型注册表"。两者职责本来就不同，原命名是历史遗留。
+ChannelRuntime 里的 `AgentRegistryGAgent` 和平台级 `Aevatar.GAgents.Registry.GAgentRegistryGAgent` 命名冲突——前者是 historical user-owned agent execution catalog，后者是"平台 actor 类型注册表"。两者职责本来就不同，原命名是历史遗留。
 
 这次重构不是“把所有持久化契约一起改名”，而是**把源码层语义改成 `UserAgentCatalog`，同时保留 durable storage contract 不变**。否则会直接切断旧事件、旧 snapshot 和旧 read model。
 
@@ -1541,10 +1543,8 @@ agents/                                ← production code
 │   ├── Aevatar.GAgents.Platform.Slack/
 │   └── Aevatar.GAgents.Platform.Discord/
 │     (Aevatar.GAgents.Platform.WeChat 由独立 RFC 引入，同结构)
-├── Aevatar.GAgents.Authoring/          ← 从 ChannelRuntime 拎出：AgentBuilderCardFlow +
-│                                        Templates + Tool。职责 = 通过对话/模板创作 agent
-├── Aevatar.GAgents.Scheduled/          ← 从 ChannelRuntime 拎出：SkillRunner + WorkflowAgent
-│                                        + UserAgentCatalog
+├── Aevatar.GAgents.Scheduled/          ← Scheduled workflow dispatch
+│                                        + UserAgentCatalog + generic agent-builder tools
 ├── Aevatar.GAgents.Device/             ← 从 ChannelRuntime 拎出：DeviceRegistration
 │
 │   ┌── 以下为现有模块，本 RFC 不动 ──┐
@@ -1566,7 +1566,6 @@ test/
 ├── Aevatar.GAgents.Platform.Telegram.Tests/
 ├── Aevatar.GAgents.Platform.Slack.Tests/
 ├── Aevatar.GAgents.Platform.Discord.Tests/
-├── Aevatar.GAgents.Authoring.Tests/
 ├── Aevatar.GAgents.Scheduled.Tests/
 ├── Aevatar.GAgents.Device.Tests/
 │
@@ -1614,18 +1613,11 @@ aevatar 仓库按 slnf 分片构建（`aevatar.foundation.slnf` / `aevatar.ai.sl
 - `ConversationGAgent` 用户长期记忆**调用 `Aevatar.GAgents.UserMemory`**（新集成）
 - `ChatbotClassifier` 按需挂 `IChannelMiddleware`
 
-### 9.4 `Aevatar.GAgents.Authoring` 的 Lark-specific 现状（必须处理）
+### 9.4 Authoring ownership split
 
-RFC 把 `AgentBuilderCardFlow` / `AgentBuilderTool` / `FeishuCardHumanInteractionPort` 迁进独立的 `Aevatar.GAgents.Authoring` 包，职责是"通过对话/模板创作 agent"。
+`Aevatar.GAgents.Authoring.Lark` is retired. Generic lifecycle and scheduled-agent tools (`AgentBuilderTool`, `ScheduledAgentCreatorTool`, `AgentBuilderToolSource`) live under `Aevatar.GAgents.Scheduled/Authoring`, because they operate on the catalog, scheduled dispatch, caller scope, and workflow schedule ports. Lark slash/card/action mapping (`AgentBuilderCardFlow`, `AgentBuilderCardContent`) lives under `Aevatar.GAgents.Platform.Lark/Authoring`, because it translates Lark `p2p` / `card_action` UI facts into generic tool commands.
 
-**但现状**：`AgentBuilderCardFlow.cs` 硬编码 `p2p` / `card_action` / Lark 卡片 action 名字；`FeishuCardHumanInteractionPort.cs` 只支持 Lark 卡片交互。这**不是 channel-agnostic**，直接"搬包"会把 Lark-specific 的交互模型埋进一个看似通用的包名里。
-
-三个选项：
-- (a) **Authoring 仅 Lark**：承认事实，包名改为 `Aevatar.GAgents.Authoring.Lark` 或 `Aevatar.GAgents.LarkAuthoring`，未来 Slack / Discord 的 authoring 各做各的
-- (b) **抽通用 + 拎 Lark 实现**：`Aevatar.GAgents.Authoring.Abstractions`（`IAgentBuilderFlow` / `IHumanInteractionPort`）+ `Aevatar.GAgents.Authoring.Lark`（当前实现迁入）；后续 channel 实现各自 port
-- (c) **本 RFC 暂不拎 Authoring**：Authoring 留在 ChannelRuntime 或迁到一个不误导的名字，等有第二个 channel 的 Day One 需求再拆
-
-**本 RFC 推荐 (b)**：抽象 + 实现分包，成本适中，未来扩展不会撕裂。但要显式承认"Authoring 的 channel-agnostic 化是额外工作"，不是物理拎包就完事。
+The boundary is: generic authoring must not reference `Aevatar.GAgents.Platform.Lark`; Lark adapter code may call generic scheduled tools but must not own schedule lifecycle, catalog semantics, auth semantics, or workflow execution semantics.
 
 ## 9.5 Durable ingress cut point（inbound 持久化契约）
 
@@ -1931,6 +1923,44 @@ ADR-0012 / issue `#308` 之后，`ChannelBotRegistrationEntry` / registration qu
 
 这些约束由 Conformance Suite §8.3 `RawPayload_DoesNotLeakCredentials` + `EmitResult_ErrorMessage_DoesNotContainVendorRawBody` 验证。契约违反立即在 CI 报错。
 
+### 9.6.2 Existing Lark registration workflow-result delivery repair
+
+Workflow terminal delivery 是现有 channel registration 的 capability，不是一个新 Lark bot，也不是已加载 Ornn skill 的属性。`ChannelBotRegistrationGAgent` 是 active NyxID agent key id、typed workflow-delivery `SecretReference` 与 repair progress 的唯一权威拥有者；NyxID 持有外部 key/route，`ISecretVault` 持有 raw key，registration read model 与 `/channels` 只复制 actor 已提交的能力状态。
+
+Owner 通过 `POST /api/channels/registrations/{registrationId}/workflow-result-delivery/repair` 启动原地修复。Host 只做认证、owner-scope 约束、审计和 HTTP 映射；application service 通过标准 command skeleton、committed-outcome Projection session、NyxID port 与 vault port 编排。修复必须保留 registration id、Lark app 配置、NyxID channel bot id、conversation route id、webhook URL、scope、provider slug 与 `default_skill_name`；完成事件只提升 rotated agent key id 和 typed vault handle。
+
+```mermaid
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
+sequenceDiagram
+    actor Owner as "Channel owner"
+    participant API as "Channel Host"
+    participant App as "Repair application service"
+    participant Reg as "ChannelBotRegistrationGAgent"
+    participant Proj as "Projection outcome session"
+    participant Nyx as "NyxID"
+    participant Vault as "ISecretVault"
+    Owner->>API: POST repair
+    API->>App: registration + owner scope + bearer
+    App->>Proj: bind request id
+    App->>Reg: repair request command
+    Reg-->>Proj: committed requested outcome
+    App->>Nyx: rotate existing agent key
+    Nyx-->>App: new key id + one-time full_key
+    App->>Vault: store full_key
+    Vault-->>App: SecretReference
+    App->>Reg: prepare command
+    Reg-->>Proj: committed prepared outcome
+    App->>Nyx: update existing route to new key id
+    App->>Reg: complete command
+    Reg-->>Proj: committed completed outcome
+    App-->>API: repaired + non-secret ids
+    API-->>Owner: no Lark-side change required
+```
+
+Rotation is forward-only because NyxID immediately deactivates the old key. The actor-owned `REQUESTED`, `CREDENTIAL_PREPARED`, and `FAILED` states therefore define retry behavior: a prepared repair repeats only the idempotent existing-route update and completion; a vault-storage failure may rotate the recorded active replacement again. Requested-state recovery may retry the original key only when NyxID explicitly reports it active; otherwise it requires exactly one active replacement matching the deterministic repair key name and request time. An inactive original with no replacement, or multiple replacements, fails with a typed ambiguity reason and never guesses. The one-time `full_key` moves directly from the NyxID response parser to `ISecretVault.PutAsync`; it must not enter Protobuf state/events, read models, logs, audit summaries, repair results, or browser responses.
+
+`channel_workflow_delivery_unavailable` is an exact configuration-required tool failure. It fails closed before workflow dispatch and instructs the owner to use `/channels` -> `Repair workflow replies`; `SkillRecoveryPlanner` must not call `ornn_search_skills` for this code. This decision is keyed by the typed error code, not by matching Chinese or English display text.
+
 ## 10. 每个 Channel 的 Adapter 细节
 
 ### 10.1 Lark（`agents/platforms/Aevatar.GAgents.Platform.Lark`）
@@ -1945,6 +1975,14 @@ ADR-0012 / issue `#308` 之后，`ChannelBotRegistrationEntry` / registration qu
 Lark webhook / long-connection / gateway 这类 ingress concern 属于 `Channel.*` 轴，不再属于 `Platform.Lark`。在当前实现里，唯一生产 transport 是 `Channel.NyxIdRelay`；未来若引入新的 Lark ingress 方式，也必须作为新的 channel transport adapter 进入统一 `ChatActivity -> ConversationGAgent` 主干，而不是把 transport 事实重新塞回 `Platform.Lark`。
 
 本 RFC **不把这块做进 Phase 1**。Lark 主 transport 是 webhook；long connection 作为未来按需扩展的预留口，记在这里避免未来又被当作"新想法"从零讨论。
+
+#### 10.1.2 Canonical onboarding / recovery surface
+
+`/channels` 是 channel 注册、恢复和状态确认的唯一产品入口；`/admin#/channels` 只通过同源 iframe 嵌入该页面，不维护第二套注册状态机或模拟 Lark 后台操作。Lark 注册要求 App ID、App Secret 和 Verification Token，Encrypt Key 可选；这些 secret 只沿本次 NyxID provisioning 请求流转，不进入 actor state、Protobuf、read model、响应或日志。
+
+注册请求被接受只表示 NyxID/Aevatar provisioning 已完成到可配置阶段，不表示外部 Lark 应用已可用。registration actor 已提交的 `WebhookUrl` 通过查询响应的 `webhook_url` 原样呈现，作为 Lark Event Subscriptions 的 Request URL；`callback_url` 保持独立语义，不能作为其替代或由 bot id 推导。`pending_webhook` 页面必须明确要求用户在 Lark Developer Console 手工完成 Request URL、token/key 对齐、权限导入、`im.message.receive_v1` 订阅、版本发布与审批，并发送测试消息。Aevatar 不声称自动修改了这些外部设置。
+
+只有收到验证通过的入站消息且 registration read model 变为 `active`，产品才可宣称接入完成。替换接入必须先确认并成功删除现有 registration，再创建新 registration；这个操作会改变 `nyx_channel_bot_id` 和 `webhook_url`，因此用户必须把新的 Request URL 重新写入 Lark Developer Console。删除或重新注册失败时，UI 保留当前管理页和错误，不做乐观本地变更。
 
 ### 10.2 Telegram（`agents/platforms/Aevatar.GAgents.Platform.Telegram`）
 
@@ -2250,7 +2288,7 @@ v1 cutover step 2 细化为：
 | 抽象层把已有 `IPlatformAdapter` / `IProjectionMaterializationContext` / `ICurrentStateProjectionMaterializer` 重做一遍 | 中 | 高 | 本 RFC §5 总纲 + §6 明确复用现有接口，review 重点检查 "为什么不 compose existing"，而不是"要不要造新的" |
 | 团队多人并行但抽象未稳定，各 adapter 实现漂移 | 中 | 高 | Conformance Suite + Composer unit tests 双硬 gate。抽象未稳定前不开新 channel adapter |
 | 跨包 caller 更新（物理拆包阶段）遗漏 | 中 | 中 | csproj 层循环依赖检查 + Architecture.Tests 守住边界 + 渐进 rename with type-forward |
-| Authoring 包迁移时 Lark-specific 交互模型埋进通用包名 | 中 | 中 | 见 §9.4，按 (b) 方案拆 `Authoring.Abstractions` + `Authoring.Lark`；不做"搬包就完"的假迁移 |
+| Authoring 包迁移时 Lark-specific 交互模型埋进通用包名 | 中 | 中 | 见 §9.4，generic tools stay in `Aevatar.GAgents.Scheduled/Authoring`, and Lark UI/action mapping stays in `Aevatar.GAgents.Platform.Lark/Authoring`; no standalone `Authoring.Lark` package |
 | Credentials 按现有 proto 路径同步进 query store | 中 | 高 | §9.6 强制 `credential_ref` + secret manager；Slack/Discord 凭据绝不入 proto；Lark `encrypt_key` 顺手迁出 |
 | Inbound raw payload / error message 旁路泄露 short-lived tokens 或 PII | 中 | 高 | §9.6.1 强制 adapter ingress 前 redact short-lived credentials；`RawPayloadBlobRef` blob 加密 + TTL + 审计；`EmitResult.ErrorMessage` 禁止 vendor raw body；Conformance §8.3 fault test 验证 |
 | **Hot conversation 串行瓶颈**（活跃 Slack channel / Discord guild 所有消息挤一个 `ConversationGAgent`） | 中 | 中 | 10x 规模前可接受（Orleans grain turn-based concurrency 对普通 chat 足够）。监控 grain p99 turn latency + message arrival rate；超阈值时拆子 grain（thread / session / work-item 粒度）或把 ingress/dedup 和 bot turn execution 分离，ingress 水平扩 / bot turn 按 conversation 串行 |
@@ -2281,8 +2319,8 @@ v1 cutover step 2 细化为：
 |---|---|
 | `ConversationReference.CanonicalKey` 生成函数必须纯函数（禁止读 `DateTime.Now` / `Guid.NewGuid` / `Random`） | Roslyn analyzer：识别被 `[CanonicalKeyGenerator]` attribute 标记的方法，AST walk 禁止 `SystemTimeProvider` / `DateTime.Now` / `Guid.NewGuid` 调用 |
 | `ChatActivity.Id` 必须来自 platform delivery key，禁止 `Guid.NewGuid` / `DateTime.UtcNow.Ticks` | 同上，`[ActivityIdGenerator]` attribute + analyzer |
-| 业务层（非 adapter internal）调 `IChannelOutboundPort.SendAsync` 默认走 bot credential（非 user token） | `Architecture.Tests`：找所有调 `IChannelOutboundPort.SendAsync` 的 class，其 namespace 必须属于 `agents/platforms/**`（adapter 内部）或经 `ITurnContext`；不允许业务 agent 类（`SkillRunnerGAgent` 等）直接调 |
-| proactive caller 不得直接调 `IChannelOutboundPort.ContinueConversationAsync`（必须 dispatch envelope） | `Architecture.Tests`：`SkillRunnerGAgent` / `WorkflowAgentGAgent` / admin endpoint controllers 的 call graph 不得包含 `IChannelOutboundPort.ContinueConversationAsync` 直接调用 |
+| 业务层（非 adapter internal）调 `IChannelOutboundPort.SendAsync` 默认走 bot credential（非 user token） | `Architecture.Tests`：找所有调 `IChannelOutboundPort.SendAsync` 的 class，其 namespace 必须属于 `agents/platforms/**`（adapter 内部）或经 `ITurnContext`；不允许 business agent classes 直接调 |
+| proactive caller 不得直接调 `IChannelOutboundPort.ContinueConversationAsync`（必须 dispatch envelope） | `Architecture.Tests`：scheduled workflow/team callers / workflow callers / admin endpoint controllers 的 call graph 不得包含 `IChannelOutboundPort.ContinueConversationAsync` 直接调用 |
 | workflow/AI human-interaction delivery 不得依赖 Lark-only sender APIs | Source regression test：扫描 `src/workflow/**` 与 `src/Aevatar.Foundation.Abstractions/HumanInteraction/**`，禁止出现 `FeishuCardNotificationPort` / `FeishuCardOutboundMessageSender` / `LarkSendNewMessageRequest` / `open-apis/im/v1/messages` 等平台 sender token；workflow 只能依赖 `IChannelInteractionNotificationPort` 与 typed interaction requests |
 | default human-interaction notification port must be generic relay-backed delivery | Composition test：mainnet host composition resolves `IChannelInteractionNotificationPort` to the NyxID relay channel notification adapter |
 | remote tool approval notification delivery must be relay/channel-owned | Composition test：mainnet host composition resolves `IRemoteToolApprovalNotificationPort` to the NyxID relay remote approval notification adapter; source regression test forbids Scheduled from owning Lark notification ports/extensions |
@@ -2358,13 +2396,13 @@ v1 cutover step 2 细化为：
 
 **现状（已 framework）**：`IActorRuntimeCallbackScheduler.cs:7-24` 已定义 schedule/cancel；`RuntimeCallbackLease.cs:3-7` 已有 lease；`GAgentBase.cs:299-355` 在 actor base 暴露调度；`IEventHandlerContext.cs:21-41` 挂进 handler context。实现侧 `OrleansActorRuntimeDurableCallbackScheduler.cs:18-87` + `RuntimeCallbackSchedulerGrain.cs:32-214` 是 persistent scheduler——**不是 stub**。跨 domain 已在用：`DelayModule.cs:94-105,156-162` / `WaitSignalModule.cs:105-110` / `RoleGAgent.cs:302-336`。
 
-**缺口**：recurring schedule 的**状态形状 + 重挂 callback 逻辑**在业务层重复。`SkillRunnerGAgent.cs:263-296,321-349` + `WorkflowAgentGAgent.cs:195-228,263-291` 各自实现"定时运行 agent"语义，而且两边都把 `Platform = "lark"` 硬编码进 registry upsert——domain pollution 说明抽象不到位。
+**缺口**：recurring schedule 的**状态形状 + 重挂 callback 逻辑**曾在业务层重复。Historical `SkillRunnerGAgent.cs:263-296,321-349` and `WorkflowAgentGAgent.cs:195-228,263-291` each implemented "定时运行 agent" semantics, and both hard-coded `Platform = "lark"` into registry upsert. The current path keeps scheduled workflow/team facts on `ScheduledDispatchGAgent` and leaves platform-specific delivery at the channel boundary.
 
 **Refined 形状**（Codex v6 MED）：
 
 1. 极薄 `ScheduleState` 契约（`Enabled / Cron / Timezone / NextRunAt / LastRunAt / ErrorCount`）——**无任何 platform-specific 字段**
 2. Foundation 或 `IEventHandlerContext` 相邻层提供 "根据 cron 计算 next-fire + 重挂 callback" 的 helper extension method（组合已有 `IActorRuntimeCallbackScheduler`，不新起 scheduler primitive）
-3. **不升**：`Platform = "lark"` 之类 platform-specific registry upsert 留在业务层。抽取时顺手把 channel runtime 的 `SkillRunner` / `WorkflowAgent` 里的 platform pollution 剥到 chat 层，不进框架契约
+3. **不升**：`Platform = "lark"` 之类 platform-specific registry upsert 留在业务层。Historical scheduled-runner platform pollution must stay out of framework contracts and remain at the channel boundary.
 
 **明确不做**：新 scheduler primitive——现有 `IActorRuntimeCallbackScheduler` 已满足底层需求；再造一个会让两套调度并行存在。
 

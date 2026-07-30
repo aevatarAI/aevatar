@@ -26,6 +26,7 @@ public sealed class StatusDashboardManifestTests
             "studio-health",
             "app-context",
             "aevatar-core-loop-tools",
+            "audit-query-index",
             "channel-bot-runtime",
             "nyxid-http-health",
             "nyxid-oidc-discovery",
@@ -67,6 +68,11 @@ public sealed class StatusDashboardManifestTests
         coreLoop.ProbeKind.Should().Be("aevatar_core_loop");
         coreLoop.Parameters["ToolSet"].Should().Be("workspace.default");
         coreLoop.Parameters["RequireWorkspaceSources"].Should().Be("true");
+        var audit = manifest.Descriptors.Single(d => d.Slug == "audit-query-index");
+        audit.DisplayName.Should().Be("Audit Trail Query / Index");
+        audit.Category.Should().Be("feature");
+        audit.Severity.Should().Be("standard");
+        audit.ProbeKind.Should().Be("audit_query_index");
         manifest.Descriptors.Should().OnlyContain(d => d.IntervalSeconds == 60);
     }
 

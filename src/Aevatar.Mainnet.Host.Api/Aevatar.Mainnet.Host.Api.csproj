@@ -39,7 +39,6 @@
     <ProjectReference Include="..\..\agents\channels\Aevatar.GAgents.Channel.NyxIdRelay\Aevatar.GAgents.Channel.NyxIdRelay.csproj" />
     <ProjectReference Include="..\..\agents\platforms\Aevatar.GAgents.Platform.Lark\Aevatar.GAgents.Platform.Lark.csproj" />
     <ProjectReference Include="..\..\agents\platforms\Aevatar.GAgents.Platform.Telegram\Aevatar.GAgents.Platform.Telegram.csproj" />
-    <ProjectReference Include="..\..\agents\Aevatar.GAgents.Authoring.Lark\Aevatar.GAgents.Authoring.Lark.csproj" />
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.Scheduled\Aevatar.GAgents.Scheduled.csproj" />
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.ChatRouting\Aevatar.GAgents.ChatRouting.csproj" />
     <ProjectReference Include="..\Aevatar.ChatRouting.Core\Aevatar.ChatRouting.Core.csproj" />
@@ -56,9 +55,11 @@
     <ProjectReference Include="..\Aevatar.AI.ToolProviders.StudioProvisioning\Aevatar.AI.ToolProviders.StudioProvisioning.csproj" />
     <ProjectReference Include="..\Aevatar.AI.ToolProviders.ToolSetRegistry\Aevatar.AI.ToolProviders.ToolSetRegistry.csproj" />
     <ProjectReference Include="..\Aevatar.AI.ToolProviders.Web\Aevatar.AI.ToolProviders.Web.csproj" />
+    <ProjectReference Include="..\Aevatar.AI.ToolProviders.Workflow\Aevatar.AI.ToolProviders.Workflow.csproj" />
+    <ProjectReference Include="..\Aevatar.AI.Application.CodexExecution\Aevatar.AI.Application.CodexExecution.csproj" />
+    <ProjectReference Include="..\Aevatar.AI.Infrastructure.ChronoSandbox\Aevatar.AI.Infrastructure.ChronoSandbox.csproj" />
   </ItemGroup>
   <ItemGroup>
-    <Content Include="Profiles\nyxid-chat\*.profile.pb.json" CopyToOutputDirectory="PreserveNewest" />
     <EmbeddedResource Include="BackendConsole\admin.html" />
     <EmbeddedResource Include="BackendConsole\auto-callback.html" />
     <EmbeddedResource Include="Status\status.html" />

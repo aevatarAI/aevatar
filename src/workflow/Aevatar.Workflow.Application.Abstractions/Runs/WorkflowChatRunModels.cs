@@ -62,7 +62,8 @@ public sealed record WorkflowCallerNyxIdAuthority(
     string Platform,
     string Tenant,
     string ExternalUserId,
-    string Scope);
+    string Scope,
+    string? BindingId = null);
 
 public sealed record WorkflowCallerCredential(
     string? BearerToken = null,
@@ -77,6 +78,60 @@ public sealed record WorkflowExternalIngressContext(
     string? PayloadFingerprint = null,
     string? AuthScheme = null,
     string? PrincipalSubject = null);
+
+public enum WorkflowConversationExecutionRole
+{
+    Unspecified = 0,
+    User = 1,
+    Assistant = 2,
+    Tool = 3,
+}
+
+public sealed record WorkflowConversationExecutionMessage(
+    int Sequence,
+    string TurnId,
+    WorkflowConversationExecutionRole Role,
+    string Content);
+
+public sealed record WorkflowConversationExecutionContext(
+    string ScopeId,
+    string ConversationId,
+    long StateVersion,
+    IReadOnlyList<WorkflowConversationExecutionMessage> Messages,
+    bool Truncated,
+    int MaxMessageCount);
+
+public enum WorkflowChatConversationIntentKind
+{
+    None = 0,
+    Create = 1,
+    Continue = 2,
+}
+
+public sealed record WorkflowChatConversationIntent(
+    WorkflowChatConversationIntentKind Intent,
+    string? ConversationId = null,
+    long? MinimumStateVersion = null)
+{
+    public static WorkflowChatConversationIntent None() =>
+        new(WorkflowChatConversationIntentKind.None);
+
+    public static WorkflowChatConversationIntent Create() =>
+        new(WorkflowChatConversationIntentKind.Create);
+
+    public static WorkflowChatConversationIntent Continue(
+        string conversationId,
+        long? minimumStateVersion = null) =>
+        new(
+            WorkflowChatConversationIntentKind.Continue,
+            conversationId,
+            minimumStateVersion is > 0 ? minimumStateVersion : null);
+}
+
+public sealed record WorkflowCompletionNotificationTarget(
+    string ActorId,
+    string DeliveryId,
+    long ExpiresAtUnixMs);
 
 public sealed record WorkflowChatRunForkSeed(
     string SourceRunId,
@@ -196,7 +251,10 @@ public sealed record WorkflowChatRunRequest(
     string? CorrelationIdSeed = null,
     WorkflowChatRunForkSeed? ForkSeed = null,
     WorkflowExternalIngressContext? ExternalIngress = null,
-    [property: JsonIgnore] WorkflowRunTargetSeed? TargetSeed = null) : ICommandContextSeed
+    WorkflowChatConversationIntent? ChatConversation = null,
+    WorkflowConversationExecutionContext? ConversationContext = null,
+    [property: JsonIgnore] WorkflowRunTargetSeed? TargetSeed = null,
+    [property: JsonIgnore] WorkflowCompletionNotificationTarget? CompletionNotificationTarget = null) : ICommandContextSeed
 {
     string? ICommandContextSeed.CommandId => CommandIdSeed;
 
@@ -226,6 +284,11 @@ public enum WorkflowChatRunStartError
     ProjectionUnavailable = 10,
     InvalidCallerCredential = 11,
     InvalidFileInput = 12,
+    InvalidConversationInput = 14,
+    InvalidConversationId = 15,
+    ConversationNotFound = 16,
+    ChatHistoryReservationUnavailable = 17,
+    IdempotencyConflict = 18,
 }
 
 public enum WorkflowProjectionCompletionStatus
@@ -244,3 +307,18 @@ public sealed record WorkflowChatRunAcceptedReceipt(
     string WorkflowName,
     string CommandId,
     string CorrelationId);
+
+public sealed record WorkflowChatContext(
+    string ScopeId,
+    string ConversationId,
+    string TurnId,
+    long StateVersion = 0);
+
+public sealed record WorkflowChatInteractionAcceptedReceipt(
+    WorkflowChatRunAcceptedReceipt Run,
+    WorkflowChatContext? ChatContext)
+{
+    public static implicit operator WorkflowChatInteractionAcceptedReceipt(
+        WorkflowChatRunAcceptedReceipt run) =>
+        new(run, null);
+}

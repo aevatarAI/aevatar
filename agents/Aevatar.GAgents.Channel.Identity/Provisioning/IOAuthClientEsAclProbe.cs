@@ -10,7 +10,10 @@ namespace Aevatar.GAgents.Channel.Identity;
 /// Implementations reuse the same Elasticsearch endpoint + credentials the
 /// projection document store uses. When Elasticsearch is not configured (dev /
 /// InMemory projection provider) the default implementation returns
-/// <see cref="EsAclProbeStatus.Unavailable"/> so startup and tests do not break.
+/// <see cref="EsAclProbeStatus.Unavailable"/>; enforcement mode determines whether
+/// that result is logged or rejected. Elasticsearch-backed Mainnet composition
+/// preserves exactly one deployment-provided implementation registered before
+/// the host is composed; multiple custom verifiers fail composition.
 /// </remarks>
 public interface IOAuthClientEsAclProbe
 {
@@ -31,7 +34,7 @@ public enum EsAclProbeStatus
 {
     /// <summary>
     /// Elasticsearch is not configured for this host (dev / InMemory provider),
-    /// so there is no cluster to probe. Never a hard failure.
+    /// so there is no cluster to probe. Strict enforcement rejects this status.
     /// </summary>
     Unavailable = 0,
 
@@ -50,8 +53,7 @@ public enum EsAclProbeStatus
 
     /// <summary>
     /// The security API is reachable and definitively reports the index read
-    /// grant is NOT restricted (broadly readable). This is the only status that
-    /// fails closed in <see cref="AevatarOAuthClientEsAclEnforcementMode.Strict"/>.
+    /// grant is NOT restricted (broadly readable).
     /// </summary>
     Unrestricted = 3,
 }
@@ -79,8 +81,8 @@ public sealed record EsAclProbeResult(EsAclProbeStatus Status, string ObservedSt
 /// <summary>
 /// Default probe used when no Elasticsearch-backed probe is registered — i.e. the
 /// projection store runs on the InMemory provider (dev/tests). Reports
-/// <see cref="EsAclProbeStatus.Unavailable"/> so the guard neither blocks startup
-/// nor claims a restriction it cannot verify.
+/// <see cref="EsAclProbeStatus.Unavailable"/> without claiming a restriction it
+/// cannot verify. Warn mode logs the result; Strict mode rejects it.
 /// </summary>
 public sealed class UnavailableOAuthClientEsAclProbe : IOAuthClientEsAclProbe
 {

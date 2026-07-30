@@ -3,6 +3,7 @@ using System.Security.Claims;
 using Aevatar.Audit;
 using Aevatar.Audit.Hosting.EndpointAudit;
 using Aevatar.Audit.Abstractions.Identity;
+using Aevatar.Audit.Abstractions.Models;
 using Aevatar.Audit.Abstractions.Ports;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http;
@@ -107,12 +108,25 @@ public sealed class EndpointAuditCaptureMiddleware
         var auditIdentity = identityHasher.Hash(ResolveCanonicalActorKey(context.User));
         var target = ResolveTarget(context, metadata);
         var isAttemptedRecord = operationName.EndsWith(AttemptedSuffix, StringComparison.Ordinal);
+        var recordedAt = _timeProvider.GetUtcNow();
+        var scopeId = SanitizeRecordText(ResolveScopeId(context.User, context));
+        var correlation = BuildCorrelation(context);
+        var lifecyclePhase = isAttemptedRecord || outcome == AuditOutcome.Accepted
+            ? AuditLifecyclePhase.Accepted
+            : AuditLifecyclePhase.Terminal;
+        var terminalOutcome = ResolveTerminalOutcome(context, lifecyclePhase, outcome);
+        var failure = BuildFailure(context, terminalOutcome);
 
-        return new AuditRecord
+        var record = new AuditRecord
         {
             AuditId = BuildAuditId(context, operationName, outcome),
-            OccurredAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
-            ScopeId = SanitizeRecordText(ResolveScopeId(context.User, context)),
+            OccurredAt = Timestamp.FromDateTimeOffset(recordedAt),
+            RecordedAt = Timestamp.FromDateTimeOffset(recordedAt),
+            EventKind = operationName,
+            Subject = BuildSubject(target),
+            SchemaVersion = AuditContractSemantics.CurrentSchemaVersion,
+            Source = "urn:aevatar:audit:boundary-endpoint",
+            ScopeId = scopeId,
             AuditActorId = auditIdentity.AuditActorId,
             IdentityKeyId = auditIdentity.IdentityKeyId,
             ActorKind = ResolveActorKind(context.User),
@@ -121,19 +135,46 @@ public sealed class EndpointAuditCaptureMiddleware
             OperationName = operationName,
             SensitivityLevel = metadata.SensitivityLevel,
             Outcome = outcome,
+            LifecyclePhase = lifecyclePhase,
+            TerminalOutcome = terminalOutcome,
             Target = new AuditTarget
             {
                 Kind = SanitizeRecordText(target.Kind),
                 Id = SanitizeRecordText(target.Id),
                 DisplayName = SanitizeRecordText(target.DisplayName),
             },
-            Correlation = BuildCorrelation(context),
+            Correlation = correlation,
             RequestSummary = SanitizeRecordText(ResolveRequestSummary(context)),
             ResultSummary = isAttemptedRecord ? string.Empty : SanitizeRecordText(ResolveResultSummary(context, outcome)),
-            ErrorCode = isAttemptedRecord ? string.Empty : ResolveErrorCode(context, outcome),
-            ErrorSummary = isAttemptedRecord ? string.Empty : SanitizeRecordText(ResolveErrorSummary(context, outcome)),
+            ErrorCode = isAttemptedRecord
+                ? string.Empty
+                : failure?.Code ?? ResolveErrorCode(context, outcome),
+            ErrorSummary = isAttemptedRecord
+                ? string.Empty
+                : failure?.SanitizedMessage ?? SanitizeRecordText(ResolveErrorSummary(context, outcome)),
             CapturePlane = AuditCapturePlane.BoundaryEndpoint,
+            Provenance = new AuditExecutionProvenance
+            {
+                ScopeId = scopeId,
+                TeamId = SanitizeRecordText(ReadRouteValue(context, "teamId") ?? string.Empty),
+                MemberId = SanitizeRecordText(ReadRouteValue(context, "memberId") ?? string.Empty),
+                WorkflowId = SanitizeRecordText(ReadRouteValue(context, "workflowId") ?? string.Empty),
+                PublishedServiceId = SanitizeRecordText(ReadRouteValue(context, "publishedServiceId") ?? string.Empty),
+                RunId = correlation.WorkflowRunId,
+                CausationId = correlation.CausationId,
+                CorrelationId = correlation.CorrelationId,
+            },
+            Redaction = new AuditRedaction
+            {
+                Policy = "aevatar.audit.endpoint-safe-fields.v1",
+                ValuesSanitized = true,
+            },
         };
+        record.Redaction.OmittedFields.Add(["request.headers", "request.body", "response.body"]);
+        if (failure is not null)
+            record.Failure = failure;
+
+        return record;
     }
 
     private async Task AppendBestEffortAsync(
@@ -256,10 +297,16 @@ public sealed class EndpointAuditCaptureMiddleware
 
     private static AuditCorrelation BuildCorrelation(HttpContext context)
     {
+        var activity = Activity.Current;
+        var hasW3CContext = activity?.IdFormat == ActivityIdFormat.W3C;
         return new AuditCorrelation
         {
-            TraceId = Activity.Current?.TraceId.ToString() ?? string.Empty,
+            TraceId = activity?.TraceId.ToString() ?? string.Empty,
+            SpanId = activity?.SpanId.ToString() ?? string.Empty,
+            Traceparent = hasW3CContext ? activity?.Id ?? string.Empty : string.Empty,
+            Tracestate = hasW3CContext ? activity?.TraceStateString ?? string.Empty : string.Empty,
             RequestId = context.TraceIdentifier ?? string.Empty,
+            CorrelationId = context.TraceIdentifier ?? string.Empty,
             CommandId = SanitizeRecordText(ReadRouteValue(context, "commandId") ?? string.Empty),
             CallId = SanitizeRecordText(ReadRouteValue(context, "callId") ?? string.Empty),
             SessionId = SanitizeRecordText(ReadRouteValue(context, "sessionId") ?? string.Empty),
@@ -267,6 +314,60 @@ public sealed class EndpointAuditCaptureMiddleware
             ApprovalId = SanitizeRecordText(ReadRouteValue(context, "approvalId") ?? string.Empty),
         };
     }
+
+    private static AuditTerminalOutcome ResolveTerminalOutcome(
+        HttpContext context,
+        AuditLifecyclePhase lifecyclePhase,
+        AuditOutcome outcome)
+    {
+        if (lifecyclePhase != AuditLifecyclePhase.Terminal)
+            return AuditTerminalOutcome.Unspecified;
+
+        if (context.Response.StatusCode is StatusCodes.Status408RequestTimeout or StatusCodes.Status504GatewayTimeout)
+            return AuditTerminalOutcome.TimedOut;
+
+        return outcome switch
+        {
+            AuditOutcome.Success => AuditTerminalOutcome.Succeeded,
+            AuditOutcome.Cancelled => AuditTerminalOutcome.Cancelled,
+            _ => AuditTerminalOutcome.Failed,
+        };
+    }
+
+    private static AuditFailure? BuildFailure(HttpContext context, AuditTerminalOutcome terminalOutcome)
+    {
+        if (terminalOutcome is not (AuditTerminalOutcome.Failed or AuditTerminalOutcome.TimedOut))
+            return null;
+
+        var statusCode = context.Response.StatusCode;
+        var category = terminalOutcome == AuditTerminalOutcome.TimedOut
+            ? AuditFailureCategory.Timeout
+            : statusCode switch
+            {
+                StatusCodes.Status401Unauthorized or StatusCodes.Status403Forbidden => AuditFailureCategory.Authorization,
+                StatusCodes.Status409Conflict => AuditFailureCategory.Conflict,
+                >= 400 and < 500 => AuditFailureCategory.Validation,
+                _ => AuditFailureCategory.Internal,
+            };
+        return new AuditFailure
+        {
+            Code = terminalOutcome == AuditTerminalOutcome.TimedOut
+                ? "endpoint_timeout"
+                : ResolveErrorCode(context, EndpointAuditOutcomeClassifier.Classify(context)),
+            Category = category,
+            Retryability = statusCode >= 500
+                ? AuditRetryability.Retryable
+                : AuditRetryability.NotRetryable,
+            FailedPhase = category is AuditFailureCategory.Authorization or AuditFailureCategory.Validation
+                ? AuditLifecyclePhase.Accepted
+                : AuditLifecyclePhase.Running,
+            SanitizedMessage = SanitizeRecordText(
+                ResolveErrorSummary(context, EndpointAuditOutcomeClassifier.Classify(context))),
+        };
+    }
+
+    private static string BuildSubject(EndpointAuditTarget target) =>
+        $"{SanitizeRecordText(target.Kind)}/{SanitizeRecordText(target.Id)}";
 
     private static string ResolveScopeId(ClaimsPrincipal user, HttpContext context)
     {

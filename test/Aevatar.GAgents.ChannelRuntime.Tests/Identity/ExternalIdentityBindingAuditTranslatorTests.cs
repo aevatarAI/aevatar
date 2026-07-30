@@ -72,6 +72,33 @@ public sealed class ExternalIdentityBindingAuditTranslatorTests
     }
 
     [Fact]
+    public void ReplacedTranslator_RecordsReason_AndNeverLeaksEitherBindingId()
+    {
+        var hasher = CreateHasher();
+        var evt = new ExternalIdentityBindingReplacedEvent
+        {
+            ExternalSubject = new ExternalSubjectRef { Platform = "lark", Tenant = "tenant-1", ExternalUserId = RawUser },
+            PreviousBindingId = SecretBindingId,
+            BindingId = "nyx-binding-SECRET-next",
+            Reason = "studio_service_access_review",
+        };
+
+        var record = new ExternalIdentityBindingReplacedAuditTranslator(hasher)
+            .Translate(Context(), Any.Pack(evt))
+            .Should()
+            .ContainSingle()
+            .Subject;
+
+        record.OperationName.Should().Be("identity.external-binding.replaced");
+        record.SensitivityLevel.Should().Be(AuditSensitivityLevel.Restricted);
+        record.Annotations.Should().Contain("reason", "studio_service_access_review");
+        var serialized = System.Text.Encoding.UTF8.GetString(record.ToByteArray()) + record;
+        serialized.Should().NotContain(RawUser);
+        serialized.Should().NotContain(SecretBindingId);
+        serialized.Should().NotContain("nyx-binding-SECRET-next");
+    }
+
+    [Fact]
     public void BoundTranslator_WhenNoHasher_SkipsInsteadOfLeaking()
     {
         var evt = new ExternalIdentityBoundEvent

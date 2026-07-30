@@ -10,6 +10,8 @@ Use this skill when creating, editing, reviewing, or debugging `workflow yaml` f
 ## Canonical Schema
 
 All keys use snake_case (`UnderscoredNamingConvention`).
+The only supported top-level fields are {{workflow_authorable_root_fields}}.
+Do not emit top-level fields from other workflow dialects, including {{workflow_unsupported_dialect_root_fields}}.
 
 ```yaml
 name: my_workflow               # required
@@ -30,7 +32,6 @@ roles:                          # optional - formal RoleGAgent config
     max_tokens: 512             # optional
     max_tool_rounds: 4          # optional
     max_history_messages: 50    # optional
-    stream_buffer_capacity: 128 # optional
     event_modules: "mod1,mod2"  # optional, comma-separated
     event_routes: |             # optional, DSL or YAML list
       event.type == ChatRequestEvent -> mod1
@@ -46,8 +47,6 @@ steps:                          # required in practice
     target_role: analyst        # optional, alias: role
     parameters:                 # optional, Dict<string,string>
       prompt_prefix: "Analyze:"
-      agent_type: RoleGAgent    # optional: direct GAgent type dispatch (llm/evaluate/reflect)
-      agent_id: role:analyst    # optional: explicit target actor id
     next: step2                 # optional
     children: []                # optional, recursive
     branches:                   # optional, Dict<string,string>
@@ -81,10 +80,7 @@ steps:                          # required in practice
    - `http_get/http_post/http_put/http_delete/mcp_call/cli_call` -> `connector_call`
    - `foreach_llm` -> `foreach`
    - `map_reduce_llm` -> `map_reduce`
-12. `parameters.agent_type` is supported for `llm_call` / `evaluate` / `reflect` and can directly target a GAgent type.
-13. When `parameters.agent_type` is present, `target_role` can be omitted and is not required for target resolution.
-14. `parameters.agent_id` is optional; if omitted, runtime generates a stable actor id from workflow actor + step + agent type.
-15. In agent-type dispatch mode, step `parameters` are forwarded as chat metadata except `agent_type` and `agent_id`.
+12. Do not use direct GAgent dispatch hints such as `parameters.agent_type` or `parameters.agent_id` in Studio-authored workflow YAML. Model executable identity through roles and `target_role`.
 
 ## Validation Constraints
 
@@ -165,7 +161,6 @@ roles:
     max_tokens: 512
     max_tool_rounds: 4
     max_history_messages: 50
-    stream_buffer_capacity: 128
     event_modules: "llm_handler,tool_handler"
     event_routes: |
       event.type == ChatRequestEvent -> llm_handler
@@ -213,22 +208,6 @@ steps:
     type: llm_call
     role: advisor
 ```
-
-### Direct GAgent Type Dispatch (No YAML role)
-
-Use when a step should call a concrete GAgent directly:
-
-```yaml
-steps:
-  - id: call_specialist_agent
-    type: llm_call
-    parameters:
-      agent_type: RoleGAgent
-      agent_id: role:repo-analyst
-      prompt_prefix: "Summarize the repository architecture."
-```
-
-The same `agent_type` pattern also works for `evaluate` and `reflect`.
 
 ### External Messaging via NyxID Relay
 

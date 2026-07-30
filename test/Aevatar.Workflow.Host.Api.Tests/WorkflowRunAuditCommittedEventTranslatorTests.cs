@@ -1,9 +1,11 @@
 using Aevatar.Audit;
 using Aevatar.Audit.Abstractions.CommittedFacts;
 using Aevatar.Audit.Core.CommittedFacts;
+using Aevatar.Audit.Core.Sanitization;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Projection;
 using Aevatar.Workflow.Projection.Audit;
 using Aevatar.Workflow.Projection.DependencyInjection;
@@ -71,6 +73,8 @@ public sealed class WorkflowRunAuditCommittedEventTranslatorTests
         record.Target.Kind.Should().Be("workflow_run");
         record.Target.Id.Should().Be("run-1");
         record.ScopeId.Should().Be("scope-1");
+        record.LifecyclePhase.Should().Be(AuditLifecyclePhase.Running);
+        record.TerminalOutcome.Should().Be(AuditTerminalOutcome.Unspecified);
         record.Annotations.Should().Contain("workflow_name", "daily-report");
         record.Annotations.Should().Contain("definition_actor_id", "def-actor-1");
         record.Annotations.Should().Contain("attempt", "2");
@@ -96,11 +100,21 @@ public sealed class WorkflowRunAuditCommittedEventTranslatorTests
         record.OperationName.Should().Be("workflow.run.completed");
         record.SensitivityLevel.Should().Be(AuditSensitivityLevel.Confidential);
         record.Target.Id.Should().Be("run-2");
+        record.ScopeId.Should().Be("scope-context");
+        record.LifecyclePhase.Should().Be(AuditLifecyclePhase.Terminal);
+        record.TerminalOutcome.Should().Be(success
+            ? AuditTerminalOutcome.Succeeded
+            : AuditTerminalOutcome.Failed);
+        if (success)
+            record.Failure.Should().BeNull();
+        else
+            record.Failure.Code.Should().Be("workflow_failed");
         record.Annotations.Should().Contain("outcome", expectedOutcome);
         record.Annotations.Should().Contain("error_present", expectedErrorPresent);
         record.Annotations.Should().NotContainKey("output");
         record.Annotations.Should().NotContainKey("error");
         record.ToString().Should().NotContain("SENSITIVE");
+        new AuditRecordSanitizer().Sanitize(record).Should().NotBeNull();
     }
 
     [Fact]
@@ -117,6 +131,9 @@ public sealed class WorkflowRunAuditCommittedEventTranslatorTests
 
         record.OperationName.Should().Be("workflow.run.stopped");
         record.Target.Id.Should().Be("run-3");
+        record.ScopeId.Should().Be("scope-context");
+        record.LifecyclePhase.Should().Be(AuditLifecyclePhase.Terminal);
+        record.TerminalOutcome.Should().Be(AuditTerminalOutcome.Cancelled);
         record.Annotations.Should().Contain("reason", "cancelled-by-user");
         record.Annotations.Should().NotContainKey("is_destructive");
     }
@@ -134,6 +151,7 @@ public sealed class WorkflowRunAuditCommittedEventTranslatorTests
 
         record.OperationName.Should().Be("workflow.run.stopped-run");
         record.Target.Id.Should().Be("run-4");
+        record.ScopeId.Should().Be("scope-context");
         record.Annotations.Should().Contain("reason", "superseded");
     }
 
@@ -152,6 +170,8 @@ public sealed class WorkflowRunAuditCommittedEventTranslatorTests
 
         record.OperationName.Should().Be("workflow.run.fork-requested");
         record.Target.Id.Should().Be("run-5");
+        record.LifecyclePhase.Should().Be(AuditLifecyclePhase.Accepted);
+        record.TerminalOutcome.Should().Be(AuditTerminalOutcome.Unspecified);
         record.ScopeId.Should().Be("scope-5");
         record.Annotations.Should().Contain("start_at_step_id", "step-9");
         record.Annotations.Should().Contain("attempt", "3");
@@ -230,7 +250,13 @@ public sealed class WorkflowRunAuditCommittedEventTranslatorTests
                     CorrelationId = "corr-1",
                 },
             },
-            new CommittedStateEventPublished(),
+            new CommittedStateEventPublished
+            {
+                StateRoot = Any.Pack(new WorkflowRunState
+                {
+                    ScopeId = "scope-context",
+                }),
+            },
             new StateEvent
             {
                 AgentId = "workflow-run-actor-1",

@@ -46,12 +46,13 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
         AssertProviderStore<ProjectionScopeStatusDocument, InMemoryProjectionDocumentStore<ProjectionScopeStatusDocument, string>>(provider);
         AssertProviderStore<ExternalIdentityBindingDocument, InMemoryProjectionDocumentStore<ExternalIdentityBindingDocument, string>>(provider);
         AssertProviderStore<AevatarOAuthClientDocument, InMemoryProjectionDocumentStore<AevatarOAuthClientDocument, string>>(provider);
+        AssertProviderStore<ManagedCodexCredentialDocument, InMemoryProjectionDocumentStore<ManagedCodexCredentialDocument, string>>(provider);
         AssertProviderStore<ChatRoutePolicyCurrentStateDocument, InMemoryProjectionDocumentStore<ChatRoutePolicyCurrentStateDocument, string>>(provider);
         AssertProviderStore<DeviceRegistrationDocument, InMemoryProjectionDocumentStore<DeviceRegistrationDocument, string>>(provider);
         AssertProviderStore<UserAgentCatalogDocument, InMemoryProjectionDocumentStore<UserAgentCatalogDocument, string>>(provider);
-        AssertProviderStore<SkillRunnerExecutionDocument, InMemoryProjectionDocumentStore<SkillRunnerExecutionDocument, string>>(provider);
         AssertProviderStore<UserAgentCatalogNyxCredentialDocument, InMemoryProjectionDocumentStore<UserAgentCatalogNyxCredentialDocument, string>>(provider);
-        AssertProviderStore<HealthProbeTargetDocument, InMemoryProjectionDocumentStore<HealthProbeTargetDocument, string>>(provider);
+        Assert.IsType<InMemoryHealthProbeOperationalSnapshotStore>(
+            provider.GetRequiredService<IHealthProbeOperationalSnapshotStore>());
         AssertProviderStore<StreamingProxyChatSessionTerminalSnapshot, InMemoryProjectionDocumentStore<StreamingProxyChatSessionTerminalSnapshot, string>>(provider);
         AssertProviderStore<StreamingProxyRoomParticipantsSnapshot, InMemoryProjectionDocumentStore<StreamingProxyRoomParticipantsSnapshot, string>>(provider);
         Assert.DoesNotContain(services, descriptor =>
@@ -60,7 +61,7 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
     }
 
     [Fact]
-    public void AddMainnetAgentProjectionDocumentStores_WithElasticsearchProvider_RegistersStoresAndAclGuard()
+    public void AddMainnetAgentProjectionDocumentStores_WithElasticsearchProvider_RegistersStoresAndWarnAclGuardByDefault()
     {
         var services = BuildAgentServices();
 
@@ -77,22 +78,90 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
         AssertProviderStore<ProjectionScopeStatusDocument, ElasticsearchProjectionDocumentStore<ProjectionScopeStatusDocument, string>>(provider);
         AssertProviderStore<ExternalIdentityBindingDocument, ElasticsearchProjectionDocumentStore<ExternalIdentityBindingDocument, string>>(provider);
         AssertProviderStore<AevatarOAuthClientDocument, ElasticsearchProjectionDocumentStore<AevatarOAuthClientDocument, string>>(provider);
+        AssertProviderStore<ManagedCodexCredentialDocument, ElasticsearchProjectionDocumentStore<ManagedCodexCredentialDocument, string>>(provider);
         AssertProviderStore<ChatRoutePolicyCurrentStateDocument, ElasticsearchProjectionDocumentStore<ChatRoutePolicyCurrentStateDocument, string>>(provider);
         AssertProviderStore<DeviceRegistrationDocument, ElasticsearchProjectionDocumentStore<DeviceRegistrationDocument, string>>(provider);
         AssertProviderStore<UserAgentCatalogDocument, ElasticsearchProjectionDocumentStore<UserAgentCatalogDocument, string>>(provider);
-        AssertProviderStore<SkillRunnerExecutionDocument, ElasticsearchProjectionDocumentStore<SkillRunnerExecutionDocument, string>>(provider);
         AssertProviderStore<UserAgentCatalogNyxCredentialDocument, ElasticsearchProjectionDocumentStore<UserAgentCatalogNyxCredentialDocument, string>>(provider);
-        AssertProviderStore<HealthProbeTargetDocument, ElasticsearchProjectionDocumentStore<HealthProbeTargetDocument, string>>(provider);
+        Assert.Equal(
+            "ElasticsearchHealthProbeOperationalSnapshotStore",
+            provider.GetRequiredService<IHealthProbeOperationalSnapshotStore>().GetType().Name);
+        Assert.DoesNotContain(
+            provider.GetServices<IProjectionReadModelDescriptor>(),
+            static descriptor => descriptor.Name.Contains("health-probe", StringComparison.OrdinalIgnoreCase));
         AssertProviderStore<StreamingProxyChatSessionTerminalSnapshot, ElasticsearchProjectionDocumentStore<StreamingProxyChatSessionTerminalSnapshot, string>>(provider);
         AssertProviderStore<StreamingProxyRoomParticipantsSnapshot, ElasticsearchProjectionDocumentStore<StreamingProxyRoomParticipantsSnapshot, string>>(provider);
         Assert.IsType<ElasticsearchProjectionDocumentStore<AevatarOAuthClientDocument, string>>(
             provider.GetRequiredService<IProjectionIndexConsistencyProbe<AevatarOAuthClientDocument>>());
         Assert.Equal(
-            AevatarOAuthClientEsAclEnforcementMode.Strict,
+            AevatarOAuthClientEsAclEnforcementMode.Warn,
             provider.GetRequiredService<IOptions<AevatarOAuthClientEsAclOptions>>().Value.EnforcementMode);
+        Assert.IsType<HttpOAuthClientEsAclProbe>(provider.GetRequiredService<IOAuthClientEsAclProbe>());
         Assert.Single(services, descriptor =>
             descriptor.ServiceType == typeof(IHostedService) &&
             descriptor.ImplementationType == typeof(AevatarOAuthClientEsAclStartupGuard));
+    }
+
+    [Fact]
+    public void AddMainnetAgentProjectionDocumentStores_WithExplicitStrictAclMode_PreservesOperatorPolicy()
+    {
+        var configuration = BuildElasticsearchConfiguration(AevatarOAuthClientEsAclEnforcementMode.Strict);
+        var services = BuildAgentServices(configuration);
+
+        services.AddMainnetAgentProjectionDocumentStores(configuration);
+
+        using var provider = services.BuildServiceProvider();
+        Assert.Equal(
+            AevatarOAuthClientEsAclEnforcementMode.Strict,
+            provider.GetRequiredService<IOptions<AevatarOAuthClientEsAclOptions>>().Value.EnforcementMode);
+    }
+
+    [Fact]
+    public async Task AddMainnetAgentProjectionDocumentStores_WithUnverifiableAclProbe_DoesNotBlockDefaultStartup()
+    {
+        var services = BuildAgentServices();
+        services.AddMainnetAgentProjectionDocumentStores(BuildElasticsearchConfiguration());
+        services.Replace(ServiceDescriptor.Singleton<IOAuthClientEsAclProbe>(
+            new FakeOAuthClientEsAclProbe(EsAclProbeResult.Unverifiable(
+                "The configured identity can read the index, but other grants cannot be disproved."))));
+
+        await using var provider = services.BuildServiceProvider();
+        var guard = ActivatorUtilities.CreateInstance<AevatarOAuthClientEsAclStartupGuard>(provider);
+
+        await guard.StartAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public void AddMainnetAgentProjectionDocumentStores_WithCustomAclVerifier_PreservesVerifier()
+    {
+        var services = BuildAgentServices();
+        var verifier = new FakeOAuthClientEsAclProbe(
+            EsAclProbeResult.Restricted("Deployment verifier proved the effective grant."));
+        services.AddSingleton<IOAuthClientEsAclProbe>(verifier);
+
+        services.AddMainnetAgentProjectionDocumentStores(BuildElasticsearchConfiguration());
+
+        using var provider = services.BuildServiceProvider();
+        Assert.Same(verifier, provider.GetRequiredService<IOAuthClientEsAclProbe>());
+        Assert.DoesNotContain(
+            services,
+            descriptor => descriptor.ImplementationType == typeof(UnavailableOAuthClientEsAclProbe));
+    }
+
+    [Fact]
+    public void AddMainnetAgentProjectionDocumentStores_WithMultipleCustomAclVerifiers_FailsComposition()
+    {
+        var services = BuildAgentServices();
+        services.AddSingleton<IOAuthClientEsAclProbe>(
+            new FakeOAuthClientEsAclProbe(EsAclProbeResult.Restricted("first verifier")));
+        services.AddSingleton<IOAuthClientEsAclProbe>(
+            new FakeOAuthClientEsAclProbe(EsAclProbeResult.Restricted("second verifier")));
+
+        var act = () => services.AddMainnetAgentProjectionDocumentStores(
+            BuildElasticsearchConfiguration());
+
+        var exception = Assert.Throws<InvalidOperationException>(act);
+        Assert.Contains("exactly one custom IOAuthClientEsAclProbe", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -156,6 +225,7 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
         var services = BuildAgentServices();
         services.Configure<AevatarOAuthClientEsAclOptions>(options =>
         {
+            options.EnforcementMode = AevatarOAuthClientEsAclEnforcementMode.Strict;
             options.GrantMatchesGrainEventStoreInternal = true;
             options.GrantDescription = "Test grant matches grain/event-store internal services.";
         });
@@ -173,9 +243,9 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
         await act();
     }
 
-    private static ServiceCollection BuildAgentServices()
+    private static ServiceCollection BuildAgentServices(IConfiguration? configuration = null)
     {
-        var configuration = new ConfigurationBuilder().Build();
+        configuration ??= new ConfigurationBuilder().Build();
         var services = new ServiceCollection();
 
         services.AddSingleton<ISecretVault, InMemorySecretVault>();
@@ -199,16 +269,26 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
             })
             .Build();
 
-    private static IConfiguration BuildElasticsearchConfiguration() =>
-        new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Projection:Document:Providers:Elasticsearch:Enabled"] = "true",
-                ["Projection:Document:Providers:Elasticsearch:Endpoints:0"] = "http://127.0.0.1:9200",
-                ["Projection:Document:Providers:Elasticsearch:IndexPrefix"] = "mainnet-agent-tests",
-                ["Projection:Document:Providers:InMemory:Enabled"] = "false",
-            })
+    private static IConfiguration BuildElasticsearchConfiguration(
+        AevatarOAuthClientEsAclEnforcementMode? enforcementMode = null)
+    {
+        var values = new Dictionary<string, string?>
+        {
+            ["Projection:Document:Providers:Elasticsearch:Enabled"] = "true",
+            ["Projection:Document:Providers:Elasticsearch:Endpoints:0"] = "http://127.0.0.1:9200",
+            ["Projection:Document:Providers:Elasticsearch:IndexPrefix"] = "mainnet-agent-tests",
+            ["Projection:Document:Providers:InMemory:Enabled"] = "false",
+        };
+        if (enforcementMode.HasValue)
+        {
+            values[$"{AevatarOAuthClientEsAclOptions.SectionName}:EnforcementMode"] =
+                enforcementMode.Value.ToString();
+        }
+
+        return new ConfigurationBuilder()
+            .AddInMemoryCollection(values)
             .Build();
+    }
 
     private static void AssertProviderStore<TDocument, TStore>(IServiceProvider provider)
         where TDocument : class, IProjectionReadModel<TDocument>, new()

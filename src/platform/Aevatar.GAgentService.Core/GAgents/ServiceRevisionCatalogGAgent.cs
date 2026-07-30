@@ -110,6 +110,23 @@ public sealed class ServiceRevisionCatalogGAgent : GAgentBase<ServiceRevisionCat
             throw new InvalidOperationException($"Revision '{command.RevisionId}' must be prepared before publish.");
         }
 
+        var spec = record.Spec?.Clone()
+            ?? throw new InvalidOperationException($"Revision '{command.RevisionId}' has no authoring spec.");
+        var adapter = GetRequiredAdapter(spec.ImplementationKind);
+        var revalidated = await adapter.PrepareRevisionAsync(
+            new PrepareServiceRevisionRequest
+            {
+                ServiceKey = ServiceKeys.Build(command.Identity),
+                Spec = spec,
+            },
+            CancellationToken.None);
+        var revalidatedArtifact = _artifactAssembler.Assemble(revalidated);
+        if (!string.Equals(record.ArtifactHash, revalidatedArtifact.ArtifactHash, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Revision '{command.RevisionId}' revalidated to a different prepared artifact.");
+        }
+
         await PersistDomainEventAsync(new ServiceRevisionPublishedEvent
         {
             Identity = command.Identity.Clone(),
