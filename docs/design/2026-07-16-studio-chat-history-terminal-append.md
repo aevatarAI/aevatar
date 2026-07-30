@@ -136,6 +136,11 @@ It returns `404` when no matching scope-bound recovery document exists. Otherwis
 - `append_committed`
 - `append_rejected`
 
+The recovery response `stateVersion` is the committed source version of the
+`ChatTurnHistoryDeliveryGAgent` recovery resource. It reports recovery-status
+freshness only. It is not a `ChatConversationGAgent` version and must never be
+used as a Conversation continuation or reconciliation watermark.
+
 ## Console Boundary
 
 Console no longer sends remote full-transcript saves to `/api/scopes/{scopeId}/chat-history/conversations/{conversationId}`. That public `PUT` surface was removed. Durable Chat History is owned by the backend `ChatConversationGAgent` and its current-state read models.
@@ -173,6 +178,11 @@ To continue an existing Conversation under the authenticated scope, the client s
 
 Chat History integration owns the canonical `conversationId` for create and owns every persistent `turnId`. A blank `conversation.conversationId` is invalid. A nonblank `conversation.conversationId` that is absent, deleted, or outside the trusted scope returns `CONVERSATION_NOT_FOUND`; it must not fall back to create.
 
-When a persisted `/api/chat` request is accepted, the SSE stream first emits `aevatar.chat.context` with `WorkflowChatContextPayload(scope_id, conversation_id, turn_id)`, then emits the existing `aevatar.run.context` frame. `aevatar.chat.context` means the identities were allocated and the terminal delivery reservation was established; it does not mean the Conversation read model is already visible or that the terminal turn has committed.
+When a persisted `/api/chat` request is accepted, the SSE stream first emits `aevatar.chat.context` with `WorkflowChatContextPayload(scope_id, conversation_id, turn_id, state_version)`, then emits the existing `aevatar.run.context` frame. `aevatar.chat.context` means the identities were allocated and the terminal delivery reservation was established; it does not mean the Conversation read model is already visible or that the terminal turn has committed.
+
+`WorkflowChatContextPayload.state_version` is exclusively a Conversation
+watermark. Normal continuation uses the admitted Conversation version. New and
+recovered creates use 0 until the Conversation detail read model exposes the
+exact turn and its own positive `stateVersion`.
 
 `prompt` remains the workflow execution prompt and is the archived user text for backend terminal append. `sessionId` remains runtime correlation only and is never used as Conversation identity.
