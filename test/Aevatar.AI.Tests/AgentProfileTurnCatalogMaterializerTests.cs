@@ -1537,9 +1537,9 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
 
         public IReadOnlyList<string> GetRegisteredNames() => _sources.Keys.ToArray();
 
-        public ToolSetResolveResult Resolve(ChatRouteToolSetRef? toolSetRef)
+        public ToolSetResolveResult Resolve(string? name)
         {
-            var name = toolSetRef?.Name ?? string.Empty;
+            name ??= string.Empty;
             ResolveCalls.Add(name);
             return _sources.TryGetValue(name, out var sources)
                 ? ToolSetResolveResult.Success(name, sources)
@@ -1555,7 +1555,7 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
     {
         public IReadOnlyList<string> GetRegisteredNames() => [];
 
-        public ToolSetResolveResult Resolve(ChatRouteToolSetRef? toolSetRef) =>
+        public ToolSetResolveResult Resolve(string? name) =>
             throw new InvalidOperationException("resolve failed");
     }
 

@@ -2846,10 +2846,10 @@ public class NyxIdChatGAgentTests
 
         public IReadOnlyList<string> GetRegisteredNames() => [];
 
-        public ToolSetResolveResult Resolve(ChatRouteToolSetRef? toolSetRef)
+        public ToolSetResolveResult Resolve(string? name)
         {
             ResolveCount++;
-            var name = toolSetRef?.Name ?? string.Empty;
+            name ??= string.Empty;
             return ToolSetResolveResult.Failure(new ToolSetResolveError(
                 ToolSetResolveError.UnknownNameCode,
                 name,
@@ -2866,14 +2866,14 @@ public class NyxIdChatGAgentTests
 
         public IReadOnlyList<string> GetRegisteredNames() => [name];
 
-        public ToolSetResolveResult Resolve(ChatRouteToolSetRef? toolSetRef)
+        public ToolSetResolveResult Resolve(string? requestedName)
         {
             ResolveCount++;
-            return string.Equals(toolSetRef?.Name, name, StringComparison.Ordinal)
+            return string.Equals(requestedName, name, StringComparison.Ordinal)
                 ? ToolSetResolveResult.Success(name, [new StaticToolSource(tools)])
                 : ToolSetResolveResult.Failure(new ToolSetResolveError(
                     ToolSetResolveError.UnknownNameCode,
-                    toolSetRef?.Name ?? string.Empty,
+                    requestedName ?? string.Empty,
                     "missing",
                     GetRegisteredNames()));
         }
@@ -2885,12 +2885,12 @@ public class NyxIdChatGAgentTests
     {
         public IReadOnlyList<string> GetRegisteredNames() => [name];
 
-        public ToolSetResolveResult Resolve(ChatRouteToolSetRef? toolSetRef) =>
-            string.Equals(toolSetRef?.Name, name, StringComparison.Ordinal)
+        public ToolSetResolveResult Resolve(string? requestedName) =>
+            string.Equals(requestedName, name, StringComparison.Ordinal)
                 ? ToolSetResolveResult.Success(name, [source])
                 : ToolSetResolveResult.Failure(new ToolSetResolveError(
                     ToolSetResolveError.UnknownNameCode,
-                    toolSetRef?.Name ?? string.Empty,
+                    requestedName ?? string.Empty,
                     "missing",
                     GetRegisteredNames()));
     }
@@ -2927,9 +2927,9 @@ public class NyxIdChatGAgentTests
     {
         public IReadOnlyList<string> GetRegisteredNames() => ["profile.route"];
 
-        public ToolSetResolveResult Resolve(ChatRouteToolSetRef? toolSetRef) =>
+        public ToolSetResolveResult Resolve(string? name) =>
             ToolSetResolveResult.Success(
-                toolSetRef?.Name ?? string.Empty,
+                name ?? string.Empty,
                 [new StaticToolSource([new ThrowingNameTool()])]);
     }
 

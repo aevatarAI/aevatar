@@ -1034,12 +1034,12 @@ public sealed class NyxIdChatProfileRolloutEvaluationTests
 
         public IReadOnlyList<string> GetRegisteredNames() => [_name];
 
-        public ToolSetResolveResult Resolve(ChatRouteToolSetRef? toolSetRef) =>
-            string.Equals(toolSetRef?.Name, _name, StringComparison.Ordinal)
+        public ToolSetResolveResult Resolve(string? name) =>
+            string.Equals(name, _name, StringComparison.Ordinal)
                 ? ToolSetResolveResult.Success(_name, _sources)
                 : ToolSetResolveResult.Failure(new ToolSetResolveError(
                     ToolSetResolveError.UnknownNameCode,
-                    toolSetRef?.Name ?? string.Empty,
+                    name ?? string.Empty,
                     "missing",
                     GetRegisteredNames()));
     }
