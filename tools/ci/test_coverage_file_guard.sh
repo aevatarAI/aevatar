@@ -50,7 +50,6 @@ ROOT = Path(os.environ.get("AEVATAR_TEST_COVERAGE_FILE_ROOT", "test"))
 BASE_ALLOWLIST_PATH = os.environ.get("AEVATAR_TEST_COVERAGE_FILE_BASE_ALLOWLIST")
 BASE_ROOT_PATH = os.environ.get("AEVATAR_TEST_COVERAGE_FILE_BASE_ROOT")
 BASE_REF = os.environ.get("AEVATAR_TEST_COVERAGE_FILE_BASE_REF")
-MAX_PREPROCESSOR_VARIANTS = 256
 
 
 @dataclass(frozen=True)
@@ -182,6 +181,13 @@ def blank_range(characters: list[str], start: int, end: int) -> None:
 def quote_run_length(text: str, start: int) -> int:
     end = start
     while end < len(text) and text[end] == '"':
+        end += 1
+    return end - start
+
+
+def character_run_length(text: str, start: int, character: str) -> int:
+    end = start
+    while end < len(text) and text[end] == character:
         end += 1
     return end - start
 
@@ -372,13 +378,18 @@ def scan_literal(text: str, start: int) -> int | None:
     return None
 
 
-def sanitize_csharp(text: str) -> str:
+def sanitize_csharp(
+    text: str,
+    *,
+    preserve_preprocessor_directives: bool = False,
+) -> str:
     characters = list(text)
     index = 0
     while index < len(text):
         if text[index] == "#" and is_preprocessor_directive_start(text, index):
             end = scan_line_comment(text, index)
-            blank_range(characters, index, end)
+            if not preserve_preprocessor_directives:
+                blank_range(characters, index, end)
             index = end
             continue
         if text.startswith("//", index):
@@ -415,6 +426,9 @@ def parse_conditional_nodes(
     lines: list[str],
     start: int = 0,
     stop_at: frozenset[str] = frozenset(),
+    *,
+    sanitize_nonconditional_directives: bool = True,
+    allow_unterminated_as_text: bool = False,
 ) -> tuple[list[object], int, str | None]:
     nodes: list[object] = []
     index = start
@@ -423,15 +437,24 @@ def parse_conditional_nodes(
         if kind in stop_at:
             return nodes, index, kind
         if kind != "if":
-            nodes.append(lines[index])
+            line = lines[index]
+            nodes.append(
+                sanitize_csharp(line)
+                if sanitize_nonconditional_directives
+                and line.lstrip().startswith("#")
+                else line
+            )
             index += 1
             continue
 
+        conditional_start = index
         branches: list[list[object]] = []
         branch, index, terminator = parse_conditional_nodes(
             lines,
             index + 1,
             frozenset({"elif", "else", "endif"}),
+            sanitize_nonconditional_directives=sanitize_nonconditional_directives,
+            allow_unterminated_as_text=allow_unterminated_as_text,
         )
         branches.append(branch)
         while terminator == "elif":
@@ -439,6 +462,8 @@ def parse_conditional_nodes(
                 lines,
                 index + 1,
                 frozenset({"elif", "else", "endif"}),
+                sanitize_nonconditional_directives=sanitize_nonconditional_directives,
+                allow_unterminated_as_text=allow_unterminated_as_text,
             )
             branches.append(branch)
 
@@ -448,11 +473,16 @@ def parse_conditional_nodes(
                 lines,
                 index + 1,
                 frozenset({"endif"}),
+                sanitize_nonconditional_directives=sanitize_nonconditional_directives,
+                allow_unterminated_as_text=allow_unterminated_as_text,
             )
             branches.append(branch)
         else:
             branches.append([])
         if terminator != "endif":
+            if allow_unterminated_as_text:
+                nodes.extend(lines[conditional_start:])
+                return nodes, len(lines), None
             raise SourceScanError("unterminated conditional compilation block")
 
         nodes.append(ConditionalSource(branches))
@@ -460,40 +490,20 @@ def parse_conditional_nodes(
     return nodes, index, None
 
 
-def expand_conditional_nodes(nodes: list[object]) -> list[str]:
-    variants = [""]
-    for node in nodes:
-        if isinstance(node, str):
-            variants = [variant + node for variant in variants]
-            continue
-        if not isinstance(node, ConditionalSource):
-            raise SourceScanError("unexpected conditional compilation node")
-
-        branch_variants: list[str] = []
-        for branch in node.branches:
-            branch_variants.extend(expand_conditional_nodes(branch))
-        if len(variants) * len(branch_variants) > MAX_PREPROCESSOR_VARIANTS:
-            raise SourceScanError(
-                f"conditional compilation expands beyond {MAX_PREPROCESSOR_VARIANTS} variants"
-            )
-        variants = [
-            prefix + branch
-            for prefix in variants
-            for branch in branch_variants
-        ]
-    return variants
-
-
-def preprocessor_variants(text: str) -> list[str]:
-    try:
-        nodes, _, terminator = parse_conditional_nodes(text.splitlines(keepends=True))
-    except SourceScanError as error:
-        if "unterminated conditional compilation block" in str(error):
-            return [text]
-        raise
+def parse_preprocessor_nodes(
+    text: str,
+    *,
+    sanitize_nonconditional_directives: bool = True,
+    allow_unterminated_as_text: bool = False,
+) -> list[object]:
+    nodes, _, terminator = parse_conditional_nodes(
+        text.splitlines(keepends=True),
+        sanitize_nonconditional_directives=sanitize_nonconditional_directives,
+        allow_unterminated_as_text=allow_unterminated_as_text,
+    )
     if terminator is not None:
         raise SourceScanError(f"unexpected #{terminator} directive")
-    return expand_conditional_nodes(nodes)
+    return nodes
 
 
 def identifier_escape(text: str, start: int) -> tuple[str, int] | None:
@@ -590,11 +600,366 @@ def consecutive_identifiers(
         _, index, _ = token
 
 
-def has_coverage_class_declaration(text: str) -> bool:
-    return any(
-        has_coverage_class_declaration_in_variant(variant)
-        for variant in preprocessor_variants(text)
+DECLARATION_SCAN_NORMAL = 0
+DECLARATION_SCAN_AFTER_CLASS = 1
+DECLARATION_SCAN_AFTER_RECORD = 2
+DECLARATION_SCAN_NAMES = 3
+
+
+@dataclass(frozen=True)
+class LexicalFrame:
+    kind: str
+    delimiter_width: int = 0
+    interpolation_width: int = 0
+    brace_depth: int = 0
+
+
+@dataclass(frozen=True)
+class BranchScanState:
+    declaration: int = DECLARATION_SCAN_NORMAL
+    lexical_frames: tuple[LexicalFrame, ...] = ()
+
+
+def scan_declaration_text(text: str, state: int) -> tuple[int, bool]:
+    index = 0
+    while index < len(text):
+        if text[index].isspace():
+            index += 1
+            continue
+        token = read_identifier(text, index)
+        if token is None:
+            state = DECLARATION_SCAN_NORMAL
+            index += 1
+            continue
+
+        value, index, verbatim = token
+        if state == DECLARATION_SCAN_NORMAL:
+            if not verbatim and value == "class":
+                state = DECLARATION_SCAN_AFTER_CLASS
+            elif not verbatim and value == "record":
+                state = DECLARATION_SCAN_AFTER_RECORD
+            continue
+
+        if state == DECLARATION_SCAN_AFTER_RECORD and not verbatim and value in {
+            "class",
+            "struct",
+        }:
+            state = DECLARATION_SCAN_AFTER_CLASS
+            continue
+
+        if value.endswith("CoverageTests"):
+            return state, True
+        state = DECLARATION_SCAN_NAMES
+    return state, False
+
+
+def literal_frame(text: str, start: int) -> tuple[LexicalFrame, int] | None:
+    if text[start] == "'":
+        return LexicalFrame("character"), start + 1
+
+    if text[start] == "$":
+        prefix_end = start
+        while prefix_end < len(text) and text[prefix_end] == "$":
+            prefix_end += 1
+        if prefix_end < len(text) and text[prefix_end] == '"':
+            delimiter_width = quote_run_length(text, prefix_end)
+            if delimiter_width >= 3:
+                return (
+                    LexicalFrame(
+                        "raw",
+                        delimiter_width=delimiter_width,
+                        interpolation_width=prefix_end - start,
+                    ),
+                    prefix_end + delimiter_width,
+                )
+            if prefix_end == start + 1:
+                return LexicalFrame("regular", interpolation_width=1), prefix_end + 1
+        if text.startswith('@"', prefix_end) and prefix_end == start + 1:
+            return LexicalFrame("verbatim", interpolation_width=1), prefix_end + 2
+
+    if text.startswith('@$"', start):
+        return LexicalFrame("verbatim", interpolation_width=1), start + 3
+    if text.startswith('@"', start):
+        return LexicalFrame("verbatim"), start + 2
+    if text[start] == '"':
+        delimiter_width = quote_run_length(text, start)
+        if delimiter_width >= 3:
+            return (
+                LexicalFrame("raw", delimiter_width=delimiter_width),
+                start + delimiter_width,
+            )
+        return LexicalFrame("regular"), start + 1
+    return None
+
+
+def with_expression_depth(frame: LexicalFrame, depth: int) -> LexicalFrame:
+    return LexicalFrame(
+        frame.kind,
+        delimiter_width=frame.delimiter_width,
+        interpolation_width=frame.interpolation_width,
+        brace_depth=depth,
     )
+
+
+def sanitize_csharp_fragment(
+    text: str,
+    frames: tuple[LexicalFrame, ...],
+) -> tuple[str, tuple[LexicalFrame, ...]]:
+    characters = [character if character in {"\r", "\n"} else " " for character in text]
+    index = 0
+    while index < len(text):
+        if not frames:
+            if text[index] == "#" and is_preprocessor_directive_start(text, index):
+                index = scan_line_comment(text, index)
+                continue
+            if text.startswith("//", index):
+                index = scan_line_comment(text, index)
+                continue
+            if text.startswith("/*", index):
+                frames += (LexicalFrame("block_comment"),)
+                index += 2
+                continue
+            literal = literal_frame(text, index)
+            if literal is not None:
+                frame, index = literal
+                frames += (frame,)
+                continue
+            characters[index] = text[index]
+            index += 1
+            continue
+
+        frame = frames[-1]
+        if frame.kind == "block_comment":
+            if text.startswith("*/", index):
+                frames = frames[:-1]
+                index += 2
+            else:
+                index += 1
+            continue
+
+        if frame.kind in {"character", "regular"}:
+            if text[index] in {"\r", "\n"}:
+                frames = frames[:-1]
+                continue
+            if text[index] == "\\":
+                index += min(2, len(text) - index)
+                continue
+            if text[index] == ("'" if frame.kind == "character" else '"'):
+                frames = frames[:-1]
+                index += 1
+                continue
+            if frame.interpolation_width:
+                if text.startswith("{{", index) or text.startswith("}}", index):
+                    index += 2
+                    continue
+                if text[index] == "{":
+                    frames += (
+                        LexicalFrame(
+                            "expression",
+                            interpolation_width=1,
+                            brace_depth=1,
+                        ),
+                    )
+                    index += 1
+                    continue
+            index += 1
+            continue
+
+        if frame.kind == "verbatim":
+            if text.startswith('""', index):
+                index += 2
+                continue
+            if text[index] == '"':
+                frames = frames[:-1]
+                index += 1
+                continue
+            if frame.interpolation_width:
+                if text.startswith("{{", index) or text.startswith("}}", index):
+                    index += 2
+                    continue
+                if text[index] == "{":
+                    frames += (
+                        LexicalFrame(
+                            "expression",
+                            interpolation_width=1,
+                            brace_depth=1,
+                        ),
+                    )
+                    index += 1
+                    continue
+            index += 1
+            continue
+
+        if frame.kind == "raw":
+            if text[index] == '"':
+                delimiter_width = quote_run_length(text, index)
+                if delimiter_width >= frame.delimiter_width:
+                    frames = frames[:-1]
+                    index += frame.delimiter_width
+                    continue
+            if frame.interpolation_width and text[index] == "{":
+                brace_width = character_run_length(text, index, "{")
+                if brace_width >= frame.interpolation_width:
+                    frames += (
+                        LexicalFrame(
+                            "expression",
+                            interpolation_width=frame.interpolation_width,
+                            brace_depth=1,
+                        ),
+                    )
+                    index += frame.interpolation_width
+                    continue
+            index += 1
+            continue
+
+        if frame.kind != "expression":
+            raise SourceScanError(f"unexpected lexical frame: {frame.kind}")
+
+        if text.startswith("//", index):
+            index = scan_line_comment(text, index)
+            continue
+        if text.startswith("/*", index):
+            frames += (LexicalFrame("block_comment"),)
+            index += 2
+            continue
+        literal = literal_frame(text, index)
+        if literal is not None:
+            nested_frame, index = literal
+            frames += (nested_frame,)
+            continue
+        if text[index] == "{":
+            frames = frames[:-1] + (
+                with_expression_depth(frame, frame.brace_depth + 1),
+            )
+            index += 1
+            continue
+        if text[index] == "}":
+            closing_width = character_run_length(text, index, "}")
+            if frame.brace_depth == 1 and closing_width >= frame.interpolation_width:
+                frames = frames[:-1]
+                index += frame.interpolation_width
+            else:
+                frames = frames[:-1] + (
+                    with_expression_depth(frame, max(frame.brace_depth - 1, 1)),
+                )
+                index += 1
+            continue
+        index += 1
+    return "".join(characters), frames
+
+
+def scan_conditional_declarations(
+    nodes: list[object],
+    states: set[int],
+) -> tuple[set[int], bool]:
+    for node in nodes:
+        if isinstance(node, str):
+            next_states: set[int] = set()
+            for state in states:
+                next_state, found = scan_declaration_text(node, state)
+                if found:
+                    return states, True
+                next_states.add(next_state)
+            states = next_states
+            continue
+        if not isinstance(node, ConditionalSource):
+            raise SourceScanError("unexpected conditional compilation node")
+
+        branch_states: set[int] = set()
+        for branch in node.branches:
+            next_states, found = scan_conditional_declarations(
+                branch,
+                states,
+            )
+            if found:
+                return states, True
+            branch_states.update(next_states)
+        states = branch_states
+    return states, False
+
+
+def scan_fallback_conditional_declarations(
+    nodes: list[object],
+    states: set[BranchScanState],
+) -> tuple[set[BranchScanState], bool]:
+    for node in nodes:
+        if isinstance(node, str):
+            next_states: set[BranchScanState] = set()
+            for state in states:
+                source, lexical_frames = sanitize_csharp_fragment(
+                    node,
+                    state.lexical_frames,
+                )
+                declaration, found = scan_declaration_text(
+                    source,
+                    state.declaration,
+                )
+                if found:
+                    return states, True
+                next_states.add(BranchScanState(declaration, lexical_frames))
+            states = next_states
+            continue
+        if not isinstance(node, ConditionalSource):
+            raise SourceScanError("unexpected conditional compilation node")
+
+        branch_states: set[BranchScanState] = set()
+        for state in states:
+            for branch in node.branches:
+                next_states, found = scan_fallback_conditional_declarations(
+                    branch,
+                    {state},
+                )
+                if found:
+                    return states, True
+                for next_state in next_states:
+                    frames = next_state.lexical_frames
+                    initial_frames = state.lexical_frames
+                    if (
+                        len(frames) > len(initial_frames)
+                        and frames[: len(initial_frames)] == initial_frames
+                    ):
+                        # An inactive branch may contain an incomplete token. It
+                        # cannot extend past its own conditional boundary.
+                        next_state = state
+                    branch_states.add(next_state)
+        states = branch_states
+    return states, False
+
+
+def has_coverage_class_declaration(text: str) -> bool:
+    directive_source = sanitize_csharp(
+        text,
+        preserve_preprocessor_directives=True,
+    )
+    try:
+        nodes = parse_preprocessor_nodes(directive_source)
+        _, found = scan_conditional_declarations(
+            nodes,
+            {DECLARATION_SCAN_NORMAL},
+        )
+        if found:
+            return True
+    except SourceScanError:
+        pass
+
+    # Inactive branches may contain incomplete tokens that confuse a whole-file
+    # lexical pass without making its reconstructed directive tree unbalanced.
+    # Confirm every apparent miss while carrying lexical state per branch.
+    try:
+        nodes = parse_preprocessor_nodes(
+            text,
+            sanitize_nonconditional_directives=False,
+            allow_unterminated_as_text=True,
+        )
+    except SourceScanError as error:
+        if "unterminated conditional compilation block" in str(error):
+            return has_coverage_class_declaration_in_variant(text)
+        raise
+    _, found = scan_fallback_conditional_declarations(
+        nodes,
+        {BranchScanState()},
+    )
+    return found
 
 
 def has_coverage_class_declaration_in_variant(text: str) -> bool:

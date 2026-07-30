@@ -226,6 +226,124 @@ write_allowlist_header base
 assert_fails_with 'new coverage-named test files or classes are not allowed'
 
 new_fixture
+printf '%s\n' \
+  '#if false' \
+  '"""' \
+  '#endif' \
+  'var source = """' \
+  'public class FakeCoverageTests {}' \
+  '""";' \
+  'public class BehaviorTests {}' \
+  > "${fixture}/current/test/Sample/BehaviorTests.cs"
+write_allowlist_header current
+write_allowlist_header base
+assert_passes
+
+new_fixture
+printf '%s\n' \
+  '#if false' \
+  '"""' \
+  '#endif' \
+  'var source = """' \
+  '#endif' \
+  '""";' \
+  'public class HiddenCoverageTests {}' \
+  > "${fixture}/current/test/Sample/BehaviorTests.cs"
+write_allowlist_header current
+write_allowlist_header base
+assert_fails_with 'new coverage-named test files or classes are not allowed'
+
+new_fixture
+printf '%s\n' \
+  '#if false' \
+  '"""' \
+  '#endif' \
+  'var source = """' \
+  '#if SAMPLE' \
+  'public class FakeCoverageTests {}' \
+  '""";' \
+  'public class BehaviorTests {}' \
+  > "${fixture}/current/test/Sample/BehaviorTests.cs"
+write_allowlist_header current
+write_allowlist_header base
+assert_passes
+
+new_fixture
+printf '%s\n' \
+  '#if false' \
+  '"""' \
+  '#endif' \
+  'var source = $"""prefix {"""public class FakeCoverageTests {}"""} suffix""";' \
+  'public class BehaviorTests {}' \
+  > "${fixture}/current/test/Sample/BehaviorTests.cs"
+write_allowlist_header current
+write_allowlist_header base
+assert_passes
+
+new_fixture
+printf '%s\n' \
+  '#if false' \
+  '"""' \
+  '#endif' \
+  'public class /* split' \
+  'comment */ HiddenCoverageTests {}' \
+  > "${fixture}/current/test/Sample/BehaviorTests.cs"
+write_allowlist_header current
+write_allowlist_header base
+assert_fails_with 'new coverage-named test files or classes are not allowed'
+
+new_fixture
+printf '%s\n' \
+  '#if false' \
+  'class """' \
+  '#endif' \
+  'FakeCoverageTests? Reference;' \
+  'public class BehaviorTests {}' \
+  > "${fixture}/current/test/Sample/BehaviorTests.cs"
+write_allowlist_header current
+write_allowlist_header base
+assert_passes
+
+new_fixture
+printf '%s\n' \
+  '#if false' \
+  '"""' \
+  '#endif' \
+  'var source = @"text' \
+  '#region";' \
+  'public class HiddenCoverageTests {}' \
+  > "${fixture}/current/test/Sample/BehaviorTests.cs"
+write_allowlist_header current
+write_allowlist_header base
+assert_fails_with 'new coverage-named test files or classes are not allowed'
+
+new_fixture
+printf '%s\n' \
+  '#if false' \
+  '"""' \
+  '#endif' \
+  'var source = """text' \
+  '#region""";' \
+  'public class HiddenCoverageTests {}' \
+  > "${fixture}/current/test/Sample/BehaviorTests.cs"
+write_allowlist_header current
+write_allowlist_header base
+assert_fails_with 'new coverage-named test files or classes are not allowed'
+
+new_fixture
+printf '%s\n' \
+  '#if false' \
+  '"""' \
+  '#endif' \
+  '/* text' \
+  '#region */' \
+  'public class HiddenCoverageTests {}' \
+  > "${fixture}/current/test/Sample/BehaviorTests.cs"
+write_allowlist_header current
+write_allowlist_header base
+assert_fails_with 'new coverage-named test files or classes are not allowed'
+
+new_fixture
 printf '\xEF\xBB\xBF#if false\n"""\n#endif\npublic class HiddenCoverageTests {}\n' \
   > "${fixture}/current/test/Sample/BehaviorTests.cs"
 write_allowlist_header current
@@ -256,6 +374,51 @@ printf '%s\n' \
   '#if false' \
   'public class FakeCoverageTests {}' \
   '#endif' \
+  '""";' \
+  'public class BehaviorTests {}' \
+  > "${fixture}/current/test/Sample/BehaviorTests.cs"
+write_allowlist_header current
+write_allowlist_header base
+assert_passes
+
+new_fixture
+printf '%s\n' \
+  'public class BehaviorTests' \
+  '{' \
+  '    private const string Mention = "FakeCoverageTests";' \
+  '    // FakeCoverageTests is only a documentation example.' \
+  '    private FakeCoverageTests? Reference { get; set; }' \
+  '#if SAMPLE_1' '    private int One => 1;' '#else' '    private int One => -1;' '#endif' \
+  '#if SAMPLE_2' '    private int Two => 2;' '#else' '    private int Two => -2;' '#endif' \
+  '#if SAMPLE_3' '    private int Three => 3;' '#else' '    private int Three => -3;' '#endif' \
+  '#if SAMPLE_4' '    private int Four => 4;' '#else' '    private int Four => -4;' '#endif' \
+  '#if SAMPLE_5' '    private int Five => 5;' '#else' '    private int Five => -5;' '#endif' \
+  '#if SAMPLE_6' '    private int Six => 6;' '#else' '    private int Six => -6;' '#endif' \
+  '#if SAMPLE_7' '    private int Seven => 7;' '#else' '    private int Seven => -7;' '#endif' \
+  '#if SAMPLE_8' '    private int Eight => 8;' '#else' '    private int Eight => -8;' '#endif' \
+  '#if SAMPLE_9' '    private int Nine => 9;' '#else' '    private int Nine => -9;' '#endif' \
+  '}' \
+  > "${fixture}/current/test/Sample/BehaviorTests.cs"
+write_allowlist_header current
+write_allowlist_header base
+assert_passes
+
+new_fixture
+printf '%s\n' \
+  '#if false' \
+  '"""' \
+  '#endif' \
+  'var source = """' \
+  'public class FakeCoverageTests {}' \
+  '#if SAMPLE_1' 'one' '#endif' \
+  '#if SAMPLE_2' 'two' '#endif' \
+  '#if SAMPLE_3' 'three' '#endif' \
+  '#if SAMPLE_4' 'four' '#endif' \
+  '#if SAMPLE_5' 'five' '#endif' \
+  '#if SAMPLE_6' 'six' '#endif' \
+  '#if SAMPLE_7' 'seven' '#endif' \
+  '#if SAMPLE_8' 'eight' '#endif' \
+  '#if SAMPLE_9' 'nine' '#endif' \
   '""";' \
   'public class BehaviorTests {}' \
   > "${fixture}/current/test/Sample/BehaviorTests.cs"
@@ -305,6 +468,20 @@ printf '%s\n' \
 write_allowlist_header current
 write_allowlist_header base
 assert_fails_with 'new coverage-named test files or classes are not allowed'
+
+new_fixture
+printf '%s\n' \
+  'public' \
+  '#if USE_BEHAVIOR_CLASS' \
+  'class BehaviorTests' \
+  '#else' \
+  'interface HiddenCoverageTests' \
+  '#endif' \
+  '{}' \
+  > "${fixture}/current/test/Sample/BehaviorTests.cs"
+write_allowlist_header current
+write_allowlist_header base
+assert_passes
 
 new_fixture
 printf 'namespace Sample; [Collection("sample")] public class HiddenCoverageTests {}\n' \
