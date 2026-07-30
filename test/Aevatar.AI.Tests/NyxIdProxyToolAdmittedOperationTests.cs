@@ -691,7 +691,8 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
         new(
             "us-lark-alpha",
             "api-lark-bot-2",
-            "lark_get_message_resource",
+            new AgentToolOperationIdentity.PublishedEndpoint("lark_get_message_resource"),
+            AgentToolOperationAuthorizationBasis.PublishedContract,
             "GET",
             "/open-apis/im/v1/messages/{message_id}/resources/{file_key}",
             "sha256:message-resource",
@@ -708,7 +709,8 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
         var admission = new AgentToolOperationAdmission(
             "us-lark-alpha",
             "api-lark-bot-2",
-            "lark_list_messages",
+            new AgentToolOperationIdentity.PublishedEndpoint("lark_list_messages"),
+            AgentToolOperationAuthorizationBasis.PublishedContract,
             "GET",
             "/open-apis/im/v1/messages",
             "sha256:list-messages",
@@ -749,8 +751,8 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
                     {
                         new
                         {
-                            endpoint_id = admission.OperationId,
-                            name = admission.OperationId,
+                            endpoint_id = PublishedEndpointId(admission),
+                            name = PublishedEndpointId(admission),
                             method = admission.HttpMethod,
                             path = admission.PathTemplate,
                             parameters = admission.Parameters.Select(static parameter => new
@@ -825,7 +827,8 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
         new(
             "us-lark-alpha",
             "api-lark-bot-2",
-            "lark_create_approval_instance",
+            new AgentToolOperationIdentity.PublishedEndpoint("lark_create_approval_instance"),
+            AgentToolOperationAuthorizationBasis.PublishedContract,
             "POST",
             "/open-apis/approval/v4/instances",
             "sha256:create-approval",
@@ -850,7 +853,8 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
         new(
             "us-lark-alpha",
             "api-lark-bot-2",
-            "lark_get_approval_instance",
+            new AgentToolOperationIdentity.PublishedEndpoint("lark_get_approval_instance"),
+            AgentToolOperationAuthorizationBasis.PublishedContract,
             "GET",
             "/open-apis/approval/v4/instances/{instance_code}",
             "sha256:get-approval-instance",
@@ -863,7 +867,8 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
         new(
             "us-items-alpha",
             "items-alpha",
-            "get_item",
+            new AgentToolOperationIdentity.PublishedEndpoint("get_item"),
+            AgentToolOperationAuthorizationBasis.PublishedContract,
             "GET",
             "/items/{item_id}",
             "sha256:get-item",
@@ -892,6 +897,11 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
             null,
             AgentToolOperationResponsePolicy.TextOnly,
             ReadOnlyPolicy());
+
+    private static string PublishedEndpointId(AgentToolOperationAdmission admission) =>
+        admission.Identity is AgentToolOperationIdentity.PublishedEndpoint published
+            ? published.EndpointId
+            : throw new InvalidOperationException("Published endpoint admission expected.");
 
     private static AgentToolOperationValueSchema ValueSchema(
         AgentToolOperationValueKind kind,

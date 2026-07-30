@@ -120,7 +120,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
     /// Resolves the committed proof for this call site from actor-owned Run state. A step that the
     /// compiler classified as an external invocation must not dispatch without exactly one proof.
     /// </summary>
-    private static ExternalWorkflowCapabilityRef? ResolveInvocationAdmission(
+    private static WorkflowCapabilityInvocationAdmission? ResolveInvocationAdmission(
         IWorkflowExecutionContext ctx,
         StepRequestEvent request,
         string toolName,
@@ -153,7 +153,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             return null;
         }
 
-        return lookup.Proof;
+        return lookup.Admission;
     }
 
     private async Task<WorkflowToolExecutionResult> ExecuteToolAsync(
@@ -164,7 +164,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         IWorkflowExecutionContext ctx,
         CancellationToken ct,
         ToolApprovalGrant? approvalGrant = null,
-        ExternalWorkflowCapabilityRef? admission = null)
+        WorkflowCapabilityInvocationAdmission? admission = null)
     {
         var credential = await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(ctx, ct);
         var callerCredential = credential.Found

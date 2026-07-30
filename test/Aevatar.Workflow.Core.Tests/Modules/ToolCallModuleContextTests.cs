@@ -45,9 +45,9 @@ public sealed class ToolCallModuleContextTests
 
         var admission = tool.Requests.Should().ContainSingle().Subject.InvocationAdmission;
         admission.Should().NotBeNull();
-        admission!.NyxIdUserService.EndpointId.Should().Be("get_item");
-        admission.NyxIdUserService.PathTemplate.Should().Be("/items/{item_id}");
-        admission.NyxIdUserService.ContractDigest.Should().Be("server-derived-digest");
+        admission!.Capability.NyxIdUserService.EndpointId.Should().Be("get_item");
+        admission.Capability.NyxIdUserService.PathTemplate.Should().Be("/items/{item_id}");
+        admission.Capability.NyxIdUserService.ContractDigest.Should().Be("server-derived-digest");
     }
 
     [Theory]

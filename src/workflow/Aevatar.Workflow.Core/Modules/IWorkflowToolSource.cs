@@ -108,7 +108,7 @@ public sealed record WorkflowToolExecutionRequest
         IReadOnlyList<WorkflowFileRef>? InputFileRefs = null,
         string IdempotencyKey = "",
         string ScheduleId = "",
-        ExternalWorkflowCapabilityRef? InvocationAdmission = null)
+        WorkflowCapabilityInvocationAdmission? InvocationAdmission = null)
     {
         this.ArgumentsJson = ArgumentsJson;
         this.RunId = RunId;
@@ -153,7 +153,7 @@ public sealed record WorkflowToolExecutionRequest
     /// Server-generated proof for exactly this call site, resolved from actor-owned Run state.
     /// Null when the compiled step is not an admitted external tool invocation.
     /// </summary>
-    public ExternalWorkflowCapabilityRef? InvocationAdmission { get; init; }
+    public WorkflowCapabilityInvocationAdmission? InvocationAdmission { get; init; }
 
     private static IReadOnlyList<WorkflowFileRef> CopyInputFileRefs(
         IReadOnlyList<WorkflowFileRef>? inputFileRefs) =>

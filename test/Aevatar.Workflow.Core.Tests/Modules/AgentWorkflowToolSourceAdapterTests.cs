@@ -12,6 +12,145 @@ namespace Aevatar.Workflow.Core.Tests.Modules;
 public sealed class AgentWorkflowToolSourceAdapterTests
 {
     [Fact]
+    public void OperationAdmissionMapper_ShouldPreservePublishedEndpointIdentity()
+    {
+        var mapped = WorkflowOperationAdmissionToolContextMapper.Map(
+            WriteInvocationAdmission());
+
+        mapped.Should().NotBeNull();
+        mapped!.Identity.Should().Be(
+            new AgentToolOperationIdentity.PublishedEndpoint("create-event"));
+        mapped.AuthorizationBasis.Should().Be(
+            AgentToolOperationAuthorizationBasis.PublishedContract);
+    }
+
+    [Fact]
+    public void OperationAdmissionMapper_ShouldRejectPublishedAdmissionWithoutEndpointIdentity()
+    {
+        var admission = WriteInvocationAdmission();
+        admission.Capability.NyxIdUserService.EndpointId = string.Empty;
+
+        FluentActions.Invoking(() => WorkflowOperationAdmissionToolContextMapper.Map(admission))
+            .Should()
+            .Throw<InvalidOperationException>()
+            .WithMessage("*endpoint identity*");
+    }
+
+    [Fact]
+    public async Task WorkflowTool_ShouldMapExplicitRequestAdmissionToProviderNeutralToolContext()
+    {
+        var agentTool = new CapturingAgentTool();
+        var adapter = new AgentWorkflowToolSourceAdapter([new SingleAgentToolSource(agentTool)]);
+        var tool = (await adapter.GetToolsAsync(CancellationToken.None)).Single();
+        var invocationAdmission = ExplicitRequestInvocationAdmission();
+        var requestContractDigest = invocationAdmission.NyxIdExplicitRequestGrant.RequestContractDigest;
+
+        await tool.ExecuteAsync(
+            new WorkflowToolExecutionRequest(
+                ArgumentsJson: "{}",
+                RunId: "run-explicit-alpha",
+                StepId: "request-alpha",
+                ExecutionId: "exec-explicit-alpha",
+                CallId: "call-explicit-alpha",
+                ScopeId: "scope-explicit-alpha",
+                CallerCredential: new WorkflowCallerCredential(),
+                RuntimeContext: WorkflowToolRuntimeContext.Empty,
+                InvocationAdmission: invocationAdmission),
+            CancellationToken.None);
+
+        agentTool.ObservedOperationAdmission.Should().NotBeNull();
+        var mapped = agentTool.ObservedOperationAdmission!;
+        mapped.Identity.Should().Be(
+            new AgentToolOperationIdentity.AuthoredRequest(requestContractDigest));
+        mapped.AuthorizationBasis.Should().Be(AgentToolOperationAuthorizationBasis.ExplicitRequest);
+        mapped.ServiceInstanceId.Should().Be("usvc-explicit-alpha");
+        mapped.ServiceSlug.Should().Be("service-explicit-alpha");
+        mapped.HttpMethod.Should().Be("POST");
+        mapped.PathTemplate.Should().Be("/api/resources/{resource_id}");
+        mapped.PathParameters.Should().ContainSingle().Which.Should().Be(
+            new AgentToolOperationParameter(
+                "resource_id",
+                AgentToolOperationParameterLocation.Path,
+                true,
+                AgentToolOperationValueSchema.Text));
+        mapped.QueryParameters.Should().ContainSingle().Which.Should().Be(
+            new AgentToolOperationParameter(
+                "page_size",
+                AgentToolOperationParameterLocation.Query,
+                false,
+                AgentToolOperationValueSchema.Text));
+        mapped.HeaderParameters.Should().ContainSingle().Which.Should().Be(
+            new AgentToolOperationParameter(
+                "If-Match",
+                AgentToolOperationParameterLocation.Header,
+                false,
+                AgentToolOperationValueSchema.Text));
+        mapped.RequestBody.Should().NotBeNull();
+        mapped.RequestBody!.Required.Should().BeTrue();
+        mapped.RequestBody.MediaType.Should().Be("application/json");
+        mapped.RequestBody.Schema.Kind.Should().Be(AgentToolOperationValueKind.Object);
+        mapped.RequestBody.Schema.AdditionalPropertiesAllowed.Should().BeTrue();
+        mapped.ResponsePolicy.Should().Be(AgentToolOperationResponsePolicy.TextOnly);
+    }
+
+    [Fact]
+    public async Task WorkflowTool_ShouldRejectExplicitRequestAdmissionWhenGrantPolicyDoesNotMatch()
+    {
+        var agentTool = new CapturingAgentTool();
+        var adapter = new AgentWorkflowToolSourceAdapter([new SingleAgentToolSource(agentTool)]);
+        var tool = (await adapter.GetToolsAsync(CancellationToken.None)).Single();
+        var invocationAdmission = ExplicitRequestInvocationAdmission();
+        invocationAdmission.Capability.NyxIdUserRequest.ExecutionPolicy.Risk =
+            NyxIdOperationRisk.Destructive;
+
+        await FluentActions.Awaiting(() => tool.ExecuteAsync(
+                new WorkflowToolExecutionRequest(
+                    ArgumentsJson: "{}",
+                    RunId: "run-explicit-alpha",
+                    StepId: "request-alpha",
+                    ExecutionId: "exec-explicit-alpha",
+                    CallId: "call-explicit-alpha",
+                    ScopeId: "scope-explicit-alpha",
+                    CallerCredential: new WorkflowCallerCredential(),
+                    RuntimeContext: WorkflowToolRuntimeContext.Empty,
+                    InvocationAdmission: invocationAdmission),
+                CancellationToken.None))
+            .Should()
+            .ThrowAsync<InvalidOperationException>()
+            .WithMessage("*does not match its grant*");
+
+        agentTool.ExecuteCount.Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData("missing_selector")]
+    [InlineData("missing_grant")]
+    [InlineData("grant_request_digest")]
+    public void OperationAdmissionMapper_ShouldRejectInvalidExplicitRequestCorrespondence(
+        string mutation)
+    {
+        var admission = ExplicitRequestInvocationAdmission();
+        switch (mutation)
+        {
+            case "missing_selector":
+                admission.Capability.NyxIdUserRequest.Request = null;
+                break;
+            case "missing_grant":
+                admission.NyxIdExplicitRequestGrant = null;
+                break;
+            case "grant_request_digest":
+                admission.NyxIdExplicitRequestGrant.RequestContractDigest = "sha256:wrong-request";
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(mutation), mutation, null);
+        }
+
+        FluentActions.Invoking(() => WorkflowOperationAdmissionToolContextMapper.Map(admission))
+            .Should()
+            .Throw<InvalidOperationException>();
+    }
+
+    [Fact]
     public async Task WorkflowTool_ShouldMapWorkflowRequestToAgentToolExecutionContext()
     {
         var agentTool = new CapturingAgentTool();
@@ -445,6 +584,8 @@ public sealed class AgentWorkflowToolSourceAdapterTests
         public AgentWorkflowRuntimeContext ObservedWorkflowRuntime { get; private set; } =
             AgentWorkflowRuntimeContext.Empty;
 
+        public AgentToolOperationAdmission? ObservedOperationAdmission { get; private set; }
+
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
@@ -475,6 +616,7 @@ public sealed class AgentWorkflowToolSourceAdapterTests
                 ?? new Dictionary<string, string>(StringComparer.Ordinal);
             ObservedWorkflowRuntime = AgentToolRequestContext.Current?.WorkflowRuntime
                 ?? AgentWorkflowRuntimeContext.Empty;
+            ObservedOperationAdmission = AgentToolRequestContext.Current?.OperationAdmission;
         }
     }
 
@@ -519,26 +661,83 @@ public sealed class AgentWorkflowToolSourceAdapterTests
         }
     }
 
-    private static ExternalWorkflowCapabilityRef WriteInvocationAdmission() =>
+    private static WorkflowCapabilityInvocationAdmission WriteInvocationAdmission() =>
         new()
         {
-            NyxIdUserService = new NyxIdUserServiceCapabilityRef
+            CallSiteId = "workflow-alpha/write-alpha",
+            Capability = new ExternalWorkflowCapabilityRef
             {
-                UserServiceId = "us-write-alpha",
-                ServiceSlugSnapshot = "calendar-alpha",
-                EndpointId = "create-event",
-                HttpMethod = "POST",
-                PathTemplate = "/events",
-                ContractDigest = "digest-write-alpha",
-                ExecutionPolicy = new NyxIdOperationExecutionPolicy
+                NyxIdUserService = new NyxIdUserServiceCapabilityRef
                 {
-                    Risk = NyxIdOperationRisk.Write,
-                    Approval = NyxIdOperationApproval.Required,
-                    EnforcementOwner = NyxIdOperationEnforcementOwner.Aevatar,
-                    AllowedExecutionModes = { ExternalCapabilityExecutionMode.Interactive },
+                    UserServiceId = "us-write-alpha",
+                    ServiceSlugSnapshot = "calendar-alpha",
+                    EndpointId = "create-event",
+                    HttpMethod = "POST",
+                    PathTemplate = "/events",
+                    ContractDigest = "digest-write-alpha",
+                    ExecutionPolicy = new NyxIdOperationExecutionPolicy
+                    {
+                        Risk = NyxIdOperationRisk.Write,
+                        Approval = NyxIdOperationApproval.Required,
+                        EnforcementOwner = NyxIdOperationEnforcementOwner.Aevatar,
+                        AllowedExecutionModes = { ExternalCapabilityExecutionMode.Interactive },
+                    },
                 },
             },
         };
+
+    private static WorkflowCapabilityInvocationAdmission ExplicitRequestInvocationAdmission()
+    {
+        const string callSiteId = "workflow-explicit-alpha/request-alpha";
+        const string serviceSlug = "service-explicit-alpha";
+        var request = new NyxIdRequestSelector
+        {
+            UserServiceId = "usvc-explicit-alpha",
+            Method = NyxIdRequestMethod.Post,
+            PathTemplate = "/api/resources/{resource_id}",
+            BodyMode = NyxIdRequestBodyMode.Json,
+            BodyRequired = true,
+            ResponseMode = NyxIdRequestResponseMode.Text,
+        };
+        request.QueryParameters.Add("page_size");
+        request.HeaderParameters.Add("If-Match");
+        var requestContractDigest = WorkflowCapabilityAdmissionPlanIntegrity
+            .ComputeNyxIdRequestContractDigest(request);
+        var grant = new NyxIdExplicitRequestGrant
+        {
+            CallSiteId = callSiteId,
+            RequestContractDigest = requestContractDigest,
+            GrantorAuthority = NyxIdExplicitRequestGrantorAuthority.AevatarWorkflowBinder,
+            GrantorOwnerKind = ExternalCapabilityAuthorizationOwnerKind.Personal,
+            GrantorOwnerSubject = "binder-alpha",
+            Risk = NyxIdOperationRisk.Write,
+            AllowedExecutionModes = { ExternalCapabilityExecutionMode.Interactive },
+        };
+        return new WorkflowCapabilityInvocationAdmission
+        {
+            CallSiteId = callSiteId,
+            Capability = new ExternalWorkflowCapabilityRef
+            {
+                NyxIdUserRequest = new NyxIdUserRequestCapabilityRef
+                {
+                    Request = request,
+                    ServiceSlugSnapshot = serviceSlug,
+                    ContractDigest = WorkflowCapabilityAdmissionPlanIntegrity
+                        .ComputeNyxIdExplicitRequestProofDigest(requestContractDigest, serviceSlug),
+                    ExplicitRequestGrantDigest = WorkflowCapabilityAdmissionPlanIntegrity
+                        .ComputeNyxIdExplicitRequestGrantDigest(grant),
+                    ExecutionPolicy = new NyxIdOperationExecutionPolicy
+                    {
+                        Risk = NyxIdOperationRisk.Write,
+                        Approval = NyxIdOperationApproval.Required,
+                        EnforcementOwner = NyxIdOperationEnforcementOwner.Aevatar,
+                        AllowedExecutionModes = { ExternalCapabilityExecutionMode.Interactive },
+                    },
+                },
+            },
+            NyxIdExplicitRequestGrant = grant,
+        };
+    }
 
     private sealed class ResultReceiptAgentTool(
         string resultJson,

@@ -348,8 +348,8 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
         {
             var failure = build.Failure!;
             _logger.LogWarning(
-                "[nyxid_proxy] Admitted operation request rejected. operationId={OperationId} code={Code}",
-                admission.OperationId,
+                "[nyxid_proxy] Admitted request rejected. identity={Identity} code={Code}",
+                FormatAdmissionIdentity(admission.Identity),
                 failure.Code);
             return JsonSerializer.Serialize(new
             {
@@ -373,10 +373,10 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
             return revalidationFailure;
 
         _logger.LogInformation(
-            "[nyxid_proxy] admitted {Method} slug={Slug} operationId={OperationId}",
+            "[nyxid_proxy] admitted {Method} slug={Slug} identity={Identity}",
             request.Method,
             request.Slug,
-            admission.OperationId);
+            FormatAdmissionIdentity(admission.Identity));
 
         if (request.FileArtifact)
         {
@@ -402,6 +402,13 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
         string token,
         CancellationToken ct)
     {
+        if (admission.Identity is not AgentToolOperationIdentity.PublishedEndpoint publishedEndpoint)
+        {
+            return AdmissionDriftError(
+                "NYXID_OPERATION_IDENTITY_NOT_SUPPORTED",
+                "The admitted request identity is not supported by published endpoint revalidation.");
+        }
+
         var catalog = NyxIdMcpOperationCatalog.Parse(
             await _client.GetMcpConfigAsync(token, ct),
             "runtime",
@@ -418,7 +425,10 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
         }
 
         var endpoint = service.Endpoints.SingleOrDefault(candidate =>
-            string.Equals(candidate.EndpointId, admission.OperationId, StringComparison.Ordinal));
+            string.Equals(
+                candidate.EndpointId,
+                publishedEndpoint.EndpointId,
+                StringComparison.Ordinal));
         if (endpoint is null ||
             !string.Equals(endpoint.ContractDigest, admission.ContractDigest, StringComparison.Ordinal))
         {
@@ -429,6 +439,16 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
 
         return null;
     }
+
+    private static string FormatAdmissionIdentity(AgentToolOperationIdentity identity) =>
+        identity switch
+        {
+            AgentToolOperationIdentity.PublishedEndpoint published =>
+                $"published:{published.EndpointId}",
+            AgentToolOperationIdentity.AuthoredRequest authored =>
+                $"authored:{authored.RequestContractDigest}",
+            _ => "unknown",
+        };
 
     private static string AdmissionDriftError(string code, string message) =>
         JsonSerializer.Serialize(new { error = true, error_code = code, message });
