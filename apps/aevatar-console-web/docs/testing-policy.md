@@ -7,6 +7,110 @@ This document defines how to design, select, run, and report tests for
 tests change. The default is focused, risk-based verification, not a complete
 frontend test run.
 
+## What Is Worth Testing
+
+Tests exist to protect observable product behavior and important invariants
+from plausible regressions. A code change alone does not create an obligation
+to add a test. Add or change tests when they protect at least one distinct risk,
+such as:
+
+- new or changed rendered behavior, user interaction, navigation, auth
+  transition, API mapping, query state, recovery path, or other observable
+  contract;
+- a high-risk business rule involving identity, authorization, destructive
+  action, data loss, stale responses, concurrency, caching, or error recovery;
+- a reproduced regression whose failure mode can be expressed deterministically;
+- a boundary where independently evolving modules, transport contracts,
+  browser APIs, or runtime configuration can realistically disagree.
+
+If a change introduces no new observable behavior, changes no high-risk
+business rule, and existing tests already cover the relevant regression risk,
+it is valid to add no test. State that decision and its evidence in the task or
+pull-request report. Never manufacture a test merely to make the change look
+complete.
+
+Before adding each test case, answer all four questions:
+
+1. What concrete business behavior or invariant does this test protect?
+2. What plausible production-code defect would make it fail?
+3. Would it still pass after an internal refactor that preserves product
+   behavior?
+4. Is the same risk already protected by another test?
+
+Do not add the case when the first two answers are unclear, when the answer to
+the third question is no, or when the fourth answer is yes without a distinct
+coverage gap. These answers do not need boilerplate source comments, but the
+test name, setup, actions, and assertions must make the protected behavior and
+failure mode reviewable.
+
+## Choosing the Test Layer
+
+Use the highest-value test layer for the risk: the layer that gives the best
+combination of behavioral fidelity, defect detection, determinism, maintenance
+cost, and diagnostic clarity. This is neither an instruction to choose the
+smallest code unit nor an instruction to choose the broadest possible test.
+
+| Test layer | Use it when | Do not use it as a substitute for |
+| --- | --- | --- |
+| Pure unit test | A deterministic algorithm, validator, formatter, mapper, or state transition has meaningful behavior that can be exercised through its public contract with few or no mocks | Behavior that emerges only through React rendering, routing, Query state, storage, or collaboration between modules |
+| Module or adapter integration test | Request construction, response mapping, auth, caching, navigation, or coordination across internal modules is the risk; run the real internal collaborators and control only the external boundary | A mock graph that merely verifies which internal function called another internal function |
+| Component or route integration test in jsdom | The user-visible behavior depends on components, hooks, router state, Query state, and interactions working together; render the realistic owning surface and act through accessible UI | Direct callback invocation, mocked hooks, mocked child components, or isolated implementation details that bypass the real workflow |
+| Browser end-to-end or smoke test | A critical cross-system journey, OAuth redirect, browser/runtime behavior, deployment wiring, or real routing contract cannot be proven below the browser boundary | Routine branches already covered deterministically at a lower layer |
+
+For frontend workflows, a component or route integration test is often more
+valuable than many mock-heavy unit tests. Do not decompose an integration risk
+into numerous isolated unit tests merely to keep each test small. Mock external
+boundaries, not the internal behavior whose collaboration is under test.
+
+The layer decision is separate from permission to run broad suites. If the
+remaining risk genuinely requires browser end-to-end or smoke verification but
+the current task does not authorize it, report the exact gap. Do not disguise
+that gap with weak unit tests.
+
+## Test Set Size and File Boundaries
+
+- An ordinary feature change should normally add 2 to 6 high-value test cases.
+  This is a calibration range, not a quota; a justified no-test decision or a
+  smaller set is valid.
+- Adding more than 8 test cases requires a test-by-test explanation in the task
+  or pull-request report of the distinct risk protected by each case. Count
+  materially distinct parameterized rows as separate cases.
+- A test may contain multiple assertions when they jointly describe one
+  independent business behavior. Do not split one behavior into many tests
+  solely to force one assertion per test.
+- When a test file grows beyond approximately 300 lines, inspect it for
+  repeated setup, duplicate scenarios, oversized fixtures, and combinatorial
+  explosion. Extract reusable setup or reduce equivalent cases where that
+  improves clarity; do not split mechanically by line count.
+- Split test files by independent business behavior or behavior domain, not by
+  production-function count, assertion count, or arbitrary file length.
+
+## Explicitly Prohibited Weak Tests
+
+- Do not create mock-heavy unit tests for behavior whose real risk is the
+  integration between components, hooks, router state, Query state, adapters,
+  or browser APIs.
+- Do not mock every internal collaborator and then assert only call counts,
+  call order, or argument forwarding. A boundary request shape may be asserted
+  when that shape is itself the observable contract.
+- Do not duplicate production logic in the fixture or expected-value
+  calculation; such tests can reproduce the same defect on both sides.
+- Do not test framework behavior, trivial getters, constants, type-system
+  guarantees, generated code, or markup details without a concrete product
+  regression they protect.
+- Do not add snapshots, render-only assertions, or `toBeDefined()` checks as a
+  substitute for meaningful behavior and state-transition assertions.
+- Do not add duplicate happy paths, superficial input permutations, or full
+  Cartesian combinations when they protect the same risk. Use equivalence
+  classes and add a case only when its failure mode is distinct.
+- Do not couple tests to private callbacks, hook call order, incidental DOM
+  structure, CSS classes, or internal function boundaries when the product
+  behavior is unchanged.
+- Do not add a test only to raise coverage, increase test count, or satisfy a
+  perceived requirement that every changed function have a unit test.
+- Reject a test that would still pass if the relevant production behavior were
+  deleted, replaced with a constant, or disconnected from the user workflow.
+
 ## Test Stack and Projects
 
 - Jest is the test runner. Testing Library and `@testing-library/jest-dom` are
@@ -21,12 +125,14 @@ frontend test run.
   `nodeTestFiles` in `jest.config.ts`. Do not move a test to `node` merely to
   avoid configuring realistic browser behavior.
 
-## Incremental Test Policy
+## Incremental Test Execution Policy
 
-- Run only tests directly affected by the production files and behavior changed
-  in the current task.
-- Prefer, in order: a named test case, one test file, a small explicit set of
-  test files, then `--findRelatedTests` for a genuinely shared dependency.
+- After deciding what is worth testing and selecting the appropriate test
+  layer, run only tests directly affected by the production files and behavior
+  changed in the current task.
+- Choose execution scope independently from test layer. Prefer, in order: a
+  named test case, one test file, a small explicit set of test files, then
+  `--findRelatedTests` for a genuinely shared dependency.
 - Run a whole Jest project only when a narrower selection would not provide
   meaningful verification. Do not silently expand to every frontend test when
   the affected set is uncertain.
@@ -40,18 +146,23 @@ frontend test run.
   relevant TypeScript, Biome, and build checks required by the frontend
   `AGENTS.md`.
 
-## Selecting Affected Tests
+## Selecting Tests to Run
 
-1. Identify the changed observable contract: rendered output, user action,
-   navigation, API mapping, auth transition, query state, or pure function.
-2. Run the colocated test for the changed module or its nearest owning route.
-3. Trace direct consumers when changing a shared API adapter, route builder,
+1. Identify the changed observable contract and concrete regression risk:
+   rendered output, user action, navigation, API mapping, auth transition,
+   query state, integration boundary, or pure logic.
+2. Inspect existing coverage before proposing a new case. Apply the four
+   questions above and choose the test layer that most directly covers any
+   remaining risk.
+3. Run the colocated test for the changed module or its nearest owning route
+   when that test protects the affected behavior.
+4. Trace direct consumers when changing a shared API adapter, route builder,
    query key, auth helper, locale catalog, or reusable component. Add their
    focused tests only when their behavior can change.
-4. Use `--findRelatedTests` when an import fan-out is broad and the dependency
+5. Use `--findRelatedTests` when an import fan-out is broad and the dependency
    graph is more reliable than manual selection. Review the selected files;
    do not treat an unexpectedly broad result as permission to run everything.
-5. If no meaningful affected test can be identified, report that exact gap.
+6. If no meaningful affected test can be identified, report that exact gap.
    Do not substitute the complete suite as an unexamined fallback.
 
 ## Commands
@@ -122,8 +233,9 @@ pnpm --dir apps/aevatar-console-web exec jest --runInBand
 - Test API adapters at their request and response boundary. Test components
   against typed adapter behavior rather than duplicating transport parsing in
   component fixtures.
-- Keep each test file focused on one behavior domain and one coherent fixture
-  lifecycle. Split files that become unrelated coverage buckets.
+- Keep each test file focused on one independent behavior domain and one
+  coherent fixture lifecycle. Apply the file-boundary rules above instead of
+  splitting by function or line count.
 - Use snapshots only for stable, reviewable structure where a snapshot makes a
   semantic regression easier to detect. Prefer explicit assertions for product
   behavior, navigation, copy, and state transitions.
@@ -162,21 +274,22 @@ pnpm --dir apps/aevatar-console-web exec jest --runInBand
 - Restore real timers within the test that enabled fake timers, even when the
   assertion fails.
 
-## Change-to-Verification Guide
+## Risk-to-Test-Layer Guide
 
-| Changed surface | Minimum meaningful verification |
+| Changed risk | Preferred highest-value evidence |
 | --- | --- |
-| Pure function or mapper | Its focused `*.test.ts` file and `tsc` |
-| Component or hook | Focused colocated `*.test.ts` or `*.test.tsx`, `tsc`, and lint for affected files |
-| Shared API/auth/navigation module | Module test plus directly affected consumer tests and `tsc` |
-| Route or Umi configuration | Focused route/config tests, `tsc`, and `build` |
-| Locale catalog or user-facing copy | Locale/catalog tests and affected rendered test |
-| Build-time environment or proxy logic | Focused config tests, `tsc`, and `build` |
+| Pure business rule, state transition, validator, or mapper | Focused unit test through the public contract, plus `tsc` |
+| Component, hook, or user interaction | Component integration test through rendered behavior, plus `tsc` and affected-file lint |
+| Shared API, auth, caching, or navigation coordination | Module or adapter integration test; add a consumer test only for a separate consumer-visible risk |
+| Route or Umi configuration | Focused route/config integration test, `tsc`, and `build` |
+| Locale catalog or user-facing copy | Existing locale/catalog validation and a rendered test only when the changed copy or selection behavior carries regression risk |
+| Build-time environment or proxy logic | Focused config or boundary integration test, `tsc`, and `build` |
 | Jest configuration, shared setup, or shared test helper | A representative focused test from every affected Jest project plus direct helper consumers; report residual coverage gaps |
 | Frontend documentation only | `git diff --check` plus validation that referenced relative paths exist; no unit test required |
 
-This table is a floor, not a request to run unrelated tests. Increase coverage
-only when the dependency fan-out or user-facing risk justifies it.
+This table guides layer choice; it is not a quota and does not override the
+no-new-test exception. Increase coverage only when dependency fan-out or a
+distinct user-facing risk justifies it.
 
 ## Coverage and Reporting
 
