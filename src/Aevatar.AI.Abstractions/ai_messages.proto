@@ -149,6 +149,7 @@ message AgentToolExecutionContextPayload {
   AgentToolScheduleContextPayload schedule = 13;
   AgentToolNyxIdAuthorityContextPayload nyx_id_authority = 14;
   AgentToolInvocationSurfacePayload invocation_surface = 15;
+  repeated ChatFileRef input_file_refs = 16;
 }
 
 enum AgentToolInvocationSurfacePayload {

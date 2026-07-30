@@ -624,7 +624,7 @@ public sealed class AevatarInvocationDispatcher
                 : workflowRuntimeContext.RootRunId.Trim(),
             RequestedDepth = Math.Max(0, workflowRuntimeContext.Depth) + 1,
         };
-        managedStart.InputFileRefs.Add(request.Inputs.InputParts
+        managedStart.InputFileRefs.Add(EnumerateInputPartsWithAmbientRefs(request.Inputs)
             .Select(static part => ToWorkflowEventFileRef(part.FileRef))
             .Where(static fileRef => fileRef != null)
             .Select(static fileRef => fileRef!.Clone()));
@@ -1415,7 +1415,7 @@ public sealed class AevatarInvocationDispatcher
                 AppId = ScopeServiceIdentityDefaults.ServiceAppId,
                 ServiceKey = string.Empty,
             },
-            ToolContext: AgentToolRequestContext.Current ?? AgentToolExecutionContext.Empty,
+            ToolContext: ToInvocationToolContext(payload),
             LlmControl: ToLlmControlContext(AgentToolRequestContext.Current));
         return new StaticGAgentStreamInvocationRequest(identity, endpointId.Trim(), input);
     }
@@ -1437,8 +1437,7 @@ public sealed class AevatarInvocationDispatcher
             Prompt = payload.Prompt,
             SessionId = ResolveSessionId(),
             ScopeId = resolution.ScopeId,
-            ToolContext = AgentToolExecutionContextMapper.ToPayload(
-                AgentToolRequestContext.Current ?? AgentToolExecutionContext.Empty),
+            ToolContext = AgentToolExecutionContextMapper.ToPayload(ToInvocationToolContext(payload)),
             LlmControl = ToLlmControlPayload(AgentToolRequestContext.Current),
         };
         chatRequest.InputParts.AddRange(ToChatInputParts(payload));
@@ -1736,8 +1735,7 @@ public sealed class AevatarInvocationDispatcher
             Prompt = payload.Prompt,
             SessionId = commandId,
             ScopeId = scope.ScopeId,
-            ToolContext = AgentToolExecutionContextMapper.ToPayload(
-                AgentToolRequestContext.Current ?? AgentToolExecutionContext.Empty),
+            ToolContext = AgentToolExecutionContextMapper.ToPayload(ToInvocationToolContext(payload)),
             LlmControl = ToLlmControlPayload(AgentToolRequestContext.Current),
         };
         AppendMetadata(request.Headers, headers);
@@ -1884,6 +1882,19 @@ public sealed class AevatarInvocationDispatcher
                string.Equals(platform, "feishu", StringComparison.OrdinalIgnoreCase);
     }
 
+    private static AgentToolExecutionContext ToInvocationToolContext(InvocationPayload payload)
+    {
+        var context = AgentToolRequestContext.Current ?? AgentToolExecutionContext.Empty;
+        var inputFileRefs = EnumerateInputPartsWithAmbientRefs(payload)
+            .Select(static part => part.FileRef)
+            .Where(static fileRef => fileRef is not null && HasFileRefIdentity(fileRef))
+            .Select(static fileRef => fileRef!.Clone())
+            .ToArray();
+        return inputFileRefs.Length == 0
+            ? context
+            : context with { InputFileRefs = inputFileRefs };
+    }
+
     private CallerScopeResolution ResolveTeamInvocationScope()
     {
         var baseScope = ResolveCallerScope();
@@ -1903,8 +1914,63 @@ public sealed class AevatarInvocationDispatcher
         });
     }
 
+    private static IEnumerable<InvocationContentPart> EnumerateInputPartsWithAmbientRefs(InvocationPayload payload)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var part in payload.InputParts)
+        {
+            AddSeenFileRef(seen, part.FileRef);
+            yield return part;
+        }
+
+        foreach (var fileRef in AgentToolRequestContext.InputFileRefs)
+        {
+            if (!HasFileRefIdentity(fileRef))
+                continue;
+
+            var key = FileRefIdentityKey(fileRef);
+            if (key is null || !seen.Add(key))
+                continue;
+
+            yield return new InvocationContentPart
+            {
+                Kind = InvocationContentPartKind.File,
+                MediaType = fileRef.MediaType,
+                Name = fileRef.FileName,
+                FileRef = fileRef.Clone(),
+            };
+        }
+    }
+
+    private static void AddSeenFileRef(HashSet<string> seen, Aevatar.AI.Abstractions.ChatFileRef? fileRef)
+    {
+        if (fileRef is null || !HasFileRefIdentity(fileRef))
+            return;
+
+        var key = FileRefIdentityKey(fileRef);
+        if (key is not null)
+            seen.Add(key);
+    }
+
+    private static string? FileRefIdentityKey(Aevatar.AI.Abstractions.ChatFileRef fileRef)
+    {
+        if (!string.IsNullOrWhiteSpace(fileRef.ArtifactId))
+            return $"artifact:{fileRef.ArtifactId.Trim()}";
+
+        if (!string.IsNullOrWhiteSpace(fileRef.FileId))
+            return $"file:{fileRef.FileId.Trim()}";
+
+        if (!string.IsNullOrWhiteSpace(fileRef.SourceMessageId) &&
+            !string.IsNullOrWhiteSpace(fileRef.SourceResourceKey))
+        {
+            return $"source:{(int)fileRef.SourceKind}:{fileRef.SourceMessageId.Trim()}:{fileRef.SourceResourceKey.Trim()}";
+        }
+
+        return null;
+    }
+
     private static IReadOnlyList<ChatContentPart> ToChatInputParts(InvocationPayload payload) =>
-        payload.InputParts.Select(static part => new ChatContentPart
+        EnumerateInputPartsWithAmbientRefs(payload).Select(static part => new ChatContentPart
         {
             Kind = part.Kind switch
             {
@@ -1925,10 +1991,11 @@ public sealed class AevatarInvocationDispatcher
 
     private static IReadOnlyList<GAgentDraftRunInputPart>? ToGAgentInputParts(InvocationPayload payload)
     {
-        if (payload.InputParts.Count == 0)
+        var parts = EnumerateInputPartsWithAmbientRefs(payload).ToArray();
+        if (parts.Length == 0)
             return null;
 
-        return payload.InputParts.Select(static part => new GAgentDraftRunInputPart
+        return parts.Select(static part => new GAgentDraftRunInputPart
         {
             Kind = part.Kind switch
             {
@@ -1950,10 +2017,11 @@ public sealed class AevatarInvocationDispatcher
 
     private static IReadOnlyList<WorkflowChatInputPart>? ToWorkflowInputParts(InvocationPayload payload)
     {
-        if (payload.InputParts.Count == 0)
+        var parts = EnumerateInputPartsWithAmbientRefs(payload).ToArray();
+        if (parts.Length == 0)
             return null;
 
-        return payload.InputParts.Select(static part => new WorkflowChatInputPart
+        return parts.Select(static part => new WorkflowChatInputPart
         {
             Kind = part.Kind switch
             {

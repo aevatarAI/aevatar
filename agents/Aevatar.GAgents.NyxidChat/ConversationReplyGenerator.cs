@@ -345,6 +345,9 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 attachmentContext,
                 ct)
             .ConfigureAwait(false);
+        var inputFileRefs = CollectInputFileRefs(input.Parts);
+        effectiveToolContext = WithInputFileRefs(effectiveToolContext, inputFileRefs);
+        var ownerFallbackToolContext = WithInputFileRefs(replyPlan.OwnerFallbackToolContext, inputFileRefs);
 
         var runtime = BuildRuntime(
             activity,
@@ -379,7 +382,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             ResolveMaxToolRounds(replyPlan.PrimaryControl),
             disableTools,
             replyPlan.OwnerFallbackControl,
-            replyPlan.OwnerFallbackToolContext);
+            ownerFallbackToolContext);
     }
 
     // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
@@ -455,6 +458,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 ct)
             .ConfigureAwait(false);
         input = await MaterializeUserInputPartsAsync(input, ct).ConfigureAwait(false);
+        toolContext = WithInputFileRefs(toolContext, CollectInputFileRefs(input.Parts));
 
         // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
         //   Old pattern: NyxID reply construction passed stream_buffer_capacity into ChatRuntime after the stream loop moved to Task.Run + Channel.
@@ -564,6 +568,99 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         string Text,
         IReadOnlyList<ContentPart> Parts,
         string? AttachmentVisibilityInstruction = null);
+
+    private static AgentToolExecutionContext? WithInputFileRefs(
+        AgentToolExecutionContext? context,
+        IReadOnlyList<Aevatar.AI.Abstractions.ChatFileRef> inputFileRefs)
+    {
+        if (context is null || inputFileRefs.Count == 0)
+            return context;
+
+        var merged = new List<Aevatar.AI.Abstractions.ChatFileRef>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var fileRef in context.InputFileRefs.Concat(inputFileRefs))
+        {
+            var key = FileRefIdentityKey(fileRef);
+            if (key is null || !seen.Add(key))
+                continue;
+
+            merged.Add(fileRef.Clone());
+        }
+
+        return context with { InputFileRefs = merged };
+    }
+
+    private static IReadOnlyList<Aevatar.AI.Abstractions.ChatFileRef> CollectInputFileRefs(
+        IReadOnlyList<ContentPart> parts)
+    {
+        var refs = new List<Aevatar.AI.Abstractions.ChatFileRef>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var part in parts)
+        {
+            if (part.FileRef is null || !HasFileRefIdentity(part.FileRef))
+                continue;
+
+            var key = FileRefIdentityKey(part.FileRef);
+            if (key is null || !seen.Add(key))
+                continue;
+
+            refs.Add(ToProtoChatFileRef(part.FileRef));
+        }
+
+        return refs;
+    }
+
+    private static Aevatar.AI.Abstractions.ChatFileRef ToProtoChatFileRef(LlmChatFileRef fileRef) =>
+        new()
+        {
+            FileId = fileRef.FileId ?? string.Empty,
+            ArtifactId = fileRef.ArtifactId ?? string.Empty,
+            SourceKind = fileRef.SourceKind switch
+            {
+                LlmChatFileSourceKind.ChatInput => Aevatar.AI.Abstractions.ChatFileSourceKind.ChatInput,
+                LlmChatFileSourceKind.FormUpload => Aevatar.AI.Abstractions.ChatFileSourceKind.FormUpload,
+                LlmChatFileSourceKind.ConnectedServiceResource => Aevatar.AI.Abstractions.ChatFileSourceKind.ConnectedServiceResource,
+                LlmChatFileSourceKind.ExternalResource => Aevatar.AI.Abstractions.ChatFileSourceKind.ExternalResource,
+                LlmChatFileSourceKind.Generated => Aevatar.AI.Abstractions.ChatFileSourceKind.Generated,
+                _ => Aevatar.AI.Abstractions.ChatFileSourceKind.Unspecified,
+            },
+            SourceMessageId = fileRef.SourceMessageId ?? string.Empty,
+            SourceResourceKey = fileRef.SourceResourceKey ?? string.Empty,
+            FileName = fileRef.FileName ?? string.Empty,
+            MediaType = fileRef.MediaType ?? string.Empty,
+            SizeBytes = fileRef.SizeBytes,
+            Sha256 = fileRef.Sha256 ?? string.Empty,
+            CreatedAtUnixMs = fileRef.CreatedAtUnixMs,
+            ExpiresAtUnixMs = fileRef.ExpiresAtUnixMs,
+            OwnerRunId = fileRef.OwnerRunId ?? string.Empty,
+            OwnerScopeId = fileRef.OwnerScopeId ?? string.Empty,
+        };
+
+    private static bool HasFileRefIdentity(LlmChatFileRef fileRef) =>
+        !string.IsNullOrWhiteSpace(fileRef.FileId) ||
+        !string.IsNullOrWhiteSpace(fileRef.ArtifactId);
+
+    private static string? FileRefIdentityKey(LlmChatFileRef fileRef)
+    {
+        if (!string.IsNullOrWhiteSpace(fileRef.ArtifactId))
+            return $"artifact:{fileRef.ArtifactId.Trim()}";
+
+        if (!string.IsNullOrWhiteSpace(fileRef.FileId))
+            return $"file:{fileRef.FileId.Trim()}";
+
+        return null;
+    }
+
+    private static string? FileRefIdentityKey(Aevatar.AI.Abstractions.ChatFileRef fileRef)
+    {
+        if (!string.IsNullOrWhiteSpace(fileRef.ArtifactId))
+            return $"artifact:{fileRef.ArtifactId.Trim()}";
+
+        if (!string.IsNullOrWhiteSpace(fileRef.FileId))
+            return $"file:{fileRef.FileId.Trim()}";
+
+        return null;
+    }
 
     private async Task<UserInputParts> BuildUserInputPartsAsync(
         ChatActivity activity,
