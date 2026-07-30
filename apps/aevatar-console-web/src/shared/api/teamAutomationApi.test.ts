@@ -101,7 +101,7 @@ function automationView(overrides?: Record<string, unknown>) {
     teamOwnerMemberId: "m-alpha",
     teamId: "team-alpha",
     credentialSourceKind: "ScheduledInvocationAgentKey",
-    teamAutomationLifecycleStatus: "Active",
+    teamAutomationLifecycleStatus: 2,
     credentialExpiresAt: "2026-10-14T00:00:00Z",
     teamAutomationOperationId: "op-alpha",
     lastAuthorizationErrorCode: "",
@@ -126,6 +126,75 @@ describe("teamAutomationApi", () => {
     global.fetch = originalFetch;
     jest.restoreAllMocks();
   });
+
+  it.each([
+    [1, "provisioning_pending"],
+    [2, "active"],
+    [3, "needs_authorization"],
+    [4, "replacement_pending"],
+    [5, "deleting"],
+    [6, "revocation_pending"],
+    [7, "failed"],
+  ] as const)(
+    "decodes canonical numeric Team automation lifecycle status %s as %s",
+    (wireStatus, authorizationStatus) => {
+      expect(
+        teamAutomationApiDecoders.view(
+          automationView({ teamAutomationLifecycleStatus: wireStatus }),
+        ),
+      ).toEqual(expect.objectContaining({ authorizationStatus }));
+    },
+  );
+
+  it.each([
+    ["NeedsAuthorization", "needs_authorization"],
+    [
+      "TEAM_AUTOMATION_STATUS_REPLACEMENT_PENDING",
+      "replacement_pending",
+    ],
+  ] as const)(
+    "decodes canonical textual Team automation lifecycle status %s as %s",
+    (wireStatus, authorizationStatus) => {
+      expect(
+        teamAutomationApiDecoders.view(
+          automationView({ teamAutomationLifecycleStatus: wireStatus }),
+        ),
+      ).toEqual(expect.objectContaining({ authorizationStatus }));
+    },
+  );
+
+  it.each([0, 8, "Future"])(
+    "rejects unknown Team automation lifecycle status %s",
+    (wireStatus) => {
+      expect(() =>
+        teamAutomationApiDecoders.view(
+          automationView({ teamAutomationLifecycleStatus: wireStatus }),
+        ),
+      ).toThrow(`Unknown Team automation status: ${String(wireStatus)}.`);
+    },
+  );
+
+  it.each([
+    "constructor",
+    [2],
+    ["NeedsAuthorization"],
+    {},
+    true,
+    null,
+    undefined,
+    "act-ive",
+    "n e e d s authorization",
+    "TEAM---AUTOMATION STATUS--ACTIVE",
+  ] as const)(
+    "rejects malformed Team automation lifecycle value %s",
+    (wireStatus) => {
+      expect(() =>
+        teamAutomationApiDecoders.view(
+          automationView({ teamAutomationLifecycleStatus: wireStatus }),
+        ),
+      ).toThrow(`Unknown Team automation status: ${String(wireStatus)}.`);
+    },
+  );
 
   it("decodes exact typed service and node authorization grants", () => {
     const review = teamAutomationApiDecoders.permissionReview(authorizationResult());
