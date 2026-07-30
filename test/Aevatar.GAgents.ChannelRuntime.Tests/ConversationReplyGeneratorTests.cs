@@ -886,6 +886,47 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
+    public async Task BuildStepPlanAsync_InNyxIdChatTurn_GatesLegacyHumanSessionTools()
+    {
+        var toolSource = new StubToolSource(
+            new HumanSessionStubTool("nyxid_services"),
+            new HumanSessionStubTool("nyxid_api_keys"),
+            new StubTool("nyxid_require_service"));
+        IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
+            new RecordingProviderFactory { Capabilities = MultimodalCapabilities },
+            BuiltInPromptFloorProvider,
+            toolSources: [toolSource]);
+        var toolContext = AgentToolExecutionContext.Empty with
+        {
+            Channel = new AgentToolChannelContext(
+                NyxIdChatServiceDefaults.ServiceId,
+                null,
+                "scope-alpha",
+                null,
+                null),
+        };
+
+        var plan = await generator.BuildStepPlanAsync(
+            new ChatActivity
+            {
+                Id = "turn-alpha",
+                Conversation = new ConversationReference { CanonicalKey = "nyxid-chat-alpha" },
+                Content = new MessageContent { Text = "我要查看 aws 账单" },
+            },
+            new Dictionary<string, string>(),
+            Control(token: "runtime-token"),
+            toolContext,
+            priorHistory: null,
+            attachmentContext: null,
+            forceDisableTools: false,
+            CancellationToken.None);
+
+        var toolNames = OfferedToolNames(plan);
+        toolNames.Should().Contain("nyxid_require_service");
+        toolNames.Should().NotContain(["nyxid_services", "nyxid_api_keys"]);
+    }
+
+    [Fact]
     public async Task BuildStepPlanAsync_ForBoundLarkRelayTurn_DiscoversRequestToolsWithSenderCredentialContext()
     {
         var requestScopedSource = new RequestScopedToolSource(

@@ -397,7 +397,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
 
         using (AgentToolContextScope.Push(discoveryContext))
         {
-            foreach (var tool in await DiscoverToolsAsync(isChannelTurn, ct))
+            foreach (var tool in await DiscoverToolsAsync(isChannelTurn, discoveryContext, ct))
                 tools.Register(tool);
         }
 
@@ -2046,7 +2046,10 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             !string.IsNullOrWhiteSpace(channel.MessageId);
     }
 
-    private async Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(bool isChannelTurn, CancellationToken ct)
+    private async Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(
+        bool isChannelTurn,
+        AgentToolExecutionContext? toolContext,
+        CancellationToken ct)
     {
         if (_toolSources.Count == 0)
             return [];
@@ -2072,12 +2075,12 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                     continue;
                 }
 
-                // Issue #2580 Item 2: in a channel-relay turn the effective credential is a
-                // bot-class relay/API-key token that the broker rejects on human-only surfaces, so a
-                // tool self-declaring RequiresHumanSession can only fail. Filter it out of channel
-                // turns — never offered to the model, never registered so it cannot be invoked.
-                // Console/studio human-session turns keep the full set. Name-agnostic, like above.
-                if (isChannelTurn && DeclaresCapability(tool, AgentToolCapabilities.RequiresHumanSession))
+                // Human-session management tools do not belong on channel relay or NyxID Assistant
+                // chat surfaces. The relay credential cannot call them, and NyxID Assistant owns
+                // service connection through nyxid_require_service + typed browser actions. Keep
+                // them available to other human-session consumers without exposing them here.
+                if ((isChannelTurn || IsNyxIdChatTurn(toolContext)) &&
+                    DeclaresCapability(tool, AgentToolCapabilities.RequiresHumanSession))
                 {
                     excludedHumanSessionToolNames.Add(tool.Name);
                     continue;
@@ -2116,6 +2119,12 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
     // the tool, keeping channel routing agnostic to individual tool/skill identities.
     private static bool IsExcludedFromDirectChannelChat(IAgentTool tool) =>
         DeclaresCapability(tool, AgentToolCapabilities.ExcludeFromDirectChannelChat);
+
+    private static bool IsNyxIdChatTurn(AgentToolExecutionContext? toolContext) =>
+        string.Equals(
+            toolContext?.Channel.Platform,
+            NyxIdChatServiceDefaults.ServiceId,
+            StringComparison.OrdinalIgnoreCase);
 
     private static bool DeclaresCapability(IAgentTool tool, string capability) =>
         tool is IAgentToolCapabilityDescriptor descriptor &&
