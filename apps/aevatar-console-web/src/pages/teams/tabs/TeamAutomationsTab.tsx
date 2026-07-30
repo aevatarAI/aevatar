@@ -65,11 +65,9 @@ import {
 } from "../teamAutomationAuthorizationDraftSession";
 
 export type TeamAutomationMemberRow = {
-  readonly automationsHref: string;
   readonly canAutomateMember: boolean;
   readonly disabledReason: string;
   readonly implementationKind: string;
-  readonly isSelectedMember?: boolean;
   readonly key: string;
   readonly lifecycleLabel: string;
   readonly lifecycleStyle: React.CSSProperties;
@@ -706,20 +704,10 @@ const TeamAutomationsTab: React.FC<Props> = ({
     () => ({ scopeId: trim(scopeId), teamId: trim(teamId), memberId: routeMemberId }),
     [routeMemberId, scopeId, teamId],
   );
-  const eligibleMembers = React.useMemo(
-    () => members.filter((member) => member.canAutomateMember),
-    [members],
-  );
   const routeMember = members.find((member) => trim(member.memberId) === routeMemberId);
-  const selectedTeamMembers = eligibleMembers.filter((member) => member.isSelectedMember);
-  const selectedTeamMember = selectedTeamMembers.length === 1
-    ? selectedTeamMembers[0]
-    : undefined;
-  const canonicalMember = routeMember?.canAutomateMember
+  const selectedMember = routeMember?.canAutomateMember
     ? routeMember
-    : !routeMemberId
-      ? selectedTeamMember ?? (eligibleMembers.length === 1 ? eligibleMembers[0] : undefined)
-      : undefined;
+    : members.find((member) => member.canAutomateMember);
   const canQuery = Boolean(route.scopeId && route.teamId && route.memberId && routeMember?.canAutomateMember);
   const queryKey = React.useMemo(
     () => ["team-automations", route.scopeId, route.teamId, route.memberId] as const,
@@ -739,13 +727,6 @@ const TeamAutomationsTab: React.FC<Props> = ({
   const [previewTimes, setPreviewTimes] = React.useState<readonly string[]>([]);
   const pollingStartedAtRef = React.useRef<number | null>(null);
   const recoveredRouteRef = React.useRef("");
-
-  React.useEffect(() => {
-    if (routeMemberId || !canonicalMember) {
-      return;
-    }
-    history.replace(canonicalMember.automationsHref);
-  }, [canonicalMember?.automationsHref, routeMemberId]);
 
   const automationsQuery = useQuery({
     enabled: canQuery,
@@ -889,7 +870,7 @@ const TeamAutomationsTab: React.FC<Props> = ({
   const openCreate = () => {
     setDraft({
       ...initialDraft,
-      memberId: canonicalMember?.memberId ?? "",
+      memberId: selectedMember?.memberId ?? "",
       timezone: defaultTimezone(),
     });
     setEditing(null);
@@ -900,7 +881,7 @@ const TeamAutomationsTab: React.FC<Props> = ({
   };
 
   const openSelectedMember = () => {
-    if (!canonicalMember) return;
+    if (!selectedMember) return;
     openCreate();
   };
 
@@ -1450,7 +1431,7 @@ const TeamAutomationsTab: React.FC<Props> = ({
           ) : null}
         </div>
         <div className="team-automation-row__member" style={{ display: "grid", gap: 5, minWidth: 0 }}>
-          <Typography.Text ellipsis strong>{routeMember?.name ?? canonicalMember?.name ?? "--"}</Typography.Text>
+          <Typography.Text ellipsis strong>{routeMember?.name ?? selectedMember?.name ?? "--"}</Typography.Text>
           <FactLine
             rows={2}
             secondary
@@ -1499,7 +1480,7 @@ const TeamAutomationsTab: React.FC<Props> = ({
         .slice(0, 3)
     : [];
   const activeFormMember =
-    members.find((member) => member.memberId === draft.memberId) ?? canonicalMember;
+    members.find((member) => member.memberId === draft.memberId) ?? selectedMember;
   const cronPresets = [
     { label: copy("teams.automations.form.preset.weekdaysMorning", "Weekdays · 09:00"), value: "weekdays-0900", cronExpression: "0 9 * * 1-5" },
     { label: copy("teams.automations.form.preset.dailyMorning", "Daily · 09:00"), value: "daily-0900", cronExpression: "0 9 * * *" },
@@ -1556,7 +1537,7 @@ const TeamAutomationsTab: React.FC<Props> = ({
             </div>
             <Button
               className="team-automations-create-button"
-              disabled={!canonicalMember}
+              disabled={!selectedMember}
               icon={<PlusOutlined />}
               onClick={openSelectedMember}
               style={primaryHeaderButtonStyle}
@@ -1567,25 +1548,7 @@ const TeamAutomationsTab: React.FC<Props> = ({
           </div>
 
           <div aria-live="polite" style={{ display: "grid", gap: 12, marginTop: 16 }}>
-            {!routeMember && !canonicalMember && eligibleMembers.length > 1 ? (
-              <Select
-                aria-label={copy("teams.automations.form.memberAria", "Automation member")}
-                onChange={(memberId) => {
-                  const member = eligibleMembers.find(
-                    (candidate) => candidate.memberId === memberId,
-                  );
-                  if (member) {
-                    history.push(member.automationsHref);
-                  }
-                }}
-                options={eligibleMembers.map((member) => ({
-                  label: member.name,
-                  value: member.memberId,
-                }))}
-                placeholder={copy("teams.automations.member.select", "Select a member")}
-                style={{ maxWidth: 360, width: "100%" }}
-              />
-            ) : !routeMember ? (
+            {!routeMember ? (
               <Empty
                 description={copy(
                   "teams.automations.empty.member",
@@ -1677,7 +1640,7 @@ const TeamAutomationsTab: React.FC<Props> = ({
                   )}
                 </Typography.Text>
               </div>
-              {canonicalMember ? (
+              {selectedMember ? (
                 <div
                   style={{
                     background: token.colorFillQuaternary,
@@ -1688,9 +1651,9 @@ const TeamAutomationsTab: React.FC<Props> = ({
                     padding: 14,
                   }}
                 >
-                  <Typography.Text ellipsis strong>{canonicalMember.name}</Typography.Text>
+                  <Typography.Text ellipsis strong>{selectedMember.name}</Typography.Text>
                   <FactLine secondary text={copy("teams.automations.member.publishedServiceReady", "Published service ready")} />
-                  <DetailPill compact style={canonicalMember.lifecycleStyle} text={canonicalMember.lifecycleLabel} />
+                  <DetailPill compact style={selectedMember.lifecycleStyle} text={selectedMember.lifecycleLabel} />
                 </div>
               ) : (
                 <AevatarInspectorEmpty
@@ -1704,7 +1667,7 @@ const TeamAutomationsTab: React.FC<Props> = ({
               )}
               <Button
                 block
-                disabled={!canonicalMember}
+                disabled={!selectedMember}
                 icon={<ClockCircleOutlined />}
                 onClick={openSelectedMember}
                 style={inspectorActionButtonStyle}
@@ -1749,7 +1712,7 @@ const TeamAutomationsTab: React.FC<Props> = ({
                           {
                             memberName:
                               routeMember?.name ??
-                              canonicalMember?.name ??
+                              selectedMember?.name ??
                               copy("teams.automations.columns.member", "Member"),
                           },
                         )}

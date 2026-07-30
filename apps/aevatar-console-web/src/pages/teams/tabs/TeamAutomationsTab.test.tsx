@@ -76,7 +76,6 @@ jest.mock("@/shared/auth/config", () => ({
 }));
 
 const member = {
-  automationsHref: "/scopes/scope-alpha/teams/team-alpha/members/m-alpha/automations",
   canAutomateMember: true,
   disabledReason: "",
   implementationKind: "Workflow",
@@ -214,40 +213,9 @@ describe("TeamAutomationsTab canonical member authority", () => {
     ).toBe(true);
   });
 
-  it("canonicalizes the sole eligible member from the Team shell", async () => {
-    renderTab();
-
-    expect(await screen.findByRole("heading", { name: "Automations" })).toBeInTheDocument();
-    await waitFor(() =>
-      expect(history.replace).toHaveBeenCalledWith(member.automationsHref),
-    );
-    expect(teamAutomationApi.listAll).not.toHaveBeenCalled();
-    expect(scheduledDispatchApi.listAll).not.toHaveBeenCalled();
-  });
-
-  it("canonicalizes the explicitly selected eligible member", async () => {
-    const selectedMember = {
-      ...member,
-      automationsHref: "/scopes/scope-alpha/teams/team-alpha/members/m-beta/automations",
-      isSelectedMember: true,
-      key: "m-beta",
-      memberId: "m-beta",
-      name: "Reviewer",
-      serviceId: "svc-beta",
-    };
-
-    renderTab("", [member, selectedMember]);
-
-    await waitFor(() =>
-      expect(history.replace).toHaveBeenCalledWith(selectedMember.automationsHref),
-    );
-    expect(teamAutomationApi.listAll).not.toHaveBeenCalled();
-  });
-
-  it("requires an explicit choice when multiple eligible members are unresolved", async () => {
+  it("keeps member selection inside the create form when multiple members are eligible", async () => {
     const otherMember = {
       ...member,
-      automationsHref: "/scopes/scope-alpha/teams/team-alpha/members/m-beta/automations",
       key: "m-beta",
       memberId: "m-beta",
       name: "Reviewer",
@@ -256,14 +224,16 @@ describe("TeamAutomationsTab canonical member authority", () => {
 
     renderTab("", [member, otherMember]);
 
-    expect(await screen.findByRole("combobox", { name: "Automation member" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Automations" })).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Automation member" })).not.toBeInTheDocument();
     expect(history.replace).not.toHaveBeenCalled();
     expect(teamAutomationApi.listAll).not.toHaveBeenCalled();
 
-    fireEvent.mouseDown(screen.getByRole("combobox", { name: "Automation member" }));
-    fireEvent.click(await screen.findByText("Reviewer"));
+    fireEvent.click(screen.getByRole("button", { name: "New automation" }));
 
-    expect(history.push).toHaveBeenCalledWith(otherMember.automationsHref);
+    const form = await screen.findByRole("dialog");
+    expect(within(form).getByRole("combobox", { name: "Automation member" })).toBeEnabled();
+    expect(history.push).not.toHaveBeenCalled();
   });
 
   it("opens the complete dev form directly from the Team shell", async () => {

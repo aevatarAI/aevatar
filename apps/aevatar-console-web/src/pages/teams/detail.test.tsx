@@ -1443,12 +1443,9 @@ describe("TeamDetailPage", () => {
     expect(await screen.findByRole("heading", { name: "自动化" })).toBeTruthy();
     expect(screen.getByText("这个成员还没有自动化")).toBeTruthy();
     expect(screen.getByText("Team Alpha Operator")).toBeTruthy();
-    await waitFor(() =>
-      expect(window.location.pathname).toBe(
-        "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/automations",
-      ),
-    );
-    expect(window.location.search).toBe("");
+    expect(window.location.pathname).toBe("/scopes/scope-1/teams/t-alpha");
+    expect(window.location.search).toBe("?tab=automations");
+    expect(teamAutomationApi.listAll).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
 
@@ -2521,7 +2518,7 @@ describe("TeamDetailPage", () => {
 
   });
 
-  it("canonicalizes the selected Team member and queries its automations", async () => {
+  it("does not promote Team query hints into member automation identity", async () => {
     window.history.replaceState(
       {},
       "",
@@ -2530,21 +2527,9 @@ describe("TeamDetailPage", () => {
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    await waitFor(() => {
-      expect(window.location.pathname).toBe(
-        "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/automations",
-      );
-      expect(teamAutomationApi.listAll).toHaveBeenCalledWith(
-        {
-          scopeId: "scope-1",
-          teamId: "t-alpha",
-          memberId: "member-team-alpha",
-        },
-        { take: 200 },
-      );
-    });
-    expect(window.location.search).toBe("");
-    expect(teamAutomationApi.listAll).toHaveBeenCalledTimes(1);
+    expect(await screen.findByRole("heading", { name: "自动化" })).toBeTruthy();
+    expect(window.location.pathname).toBe("/scopes/scope-1/teams/t-alpha");
+    expect(teamAutomationApi.listAll).not.toHaveBeenCalled();
     expect(scheduledDispatchApi.listAll).not.toHaveBeenCalled();
   });
 
