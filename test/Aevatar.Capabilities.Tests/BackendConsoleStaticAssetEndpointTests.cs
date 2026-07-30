@@ -300,11 +300,93 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         cqrs.Should().Contain("function renderPurposeBanner()");
         cqrs.Should().Contain("function healthOf(s)");
         cqrs.Should().Contain("版本滞后");
-        cqrs.Should().Contain("规划中能力");
+        cqrs.Should().Contain("Envelope Inspector");
+        cqrs.Should().Contain("function loadScopeIntrospection(scopeActorId)");
+        cqrs.Should().Contain("尚无最近 committed envelope 元数据");
         cqrs.Should().Contain("function openAdminObservatory(scopeId)");
         cqrs.Should().Contain("function readDeepLinkFilters()");
         cqrs.Should().Contain("本页回答：读侧投影是否健康");
         cqrs.Should().Contain("StateVersion 差，不是毫秒");
+    }
+
+    [Fact]
+    public async Task CqrsObservatory_SelectScope_ShouldLoadDetailAndRecentEnvelopeMetadata()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/cqrs");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name, nextName) {
+              const markers = ['function ' + name + '(', 'async function ' + name + '('];
+              const nextMarkers = ['\nfunction ' + nextName + '(', '\nasync function ' + nextName + '('];
+              const start = markers.map(marker => html.indexOf(marker)).filter(index => index >= 0).sort((a,b) => a-b)[0] ?? -1;
+              const end = nextMarkers.map(marker => html.indexOf(marker, start)).filter(index => index >= 0).sort((a,b) => a-b)[0] ?? -1;
+              assert.notEqual(start, -1, name + ' must exist in the served CQRS asset');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return html.slice(start, end);
+            }
+
+            const calls = [];
+            const context = {
+              encodeURIComponent,
+              state: { selectedScope:null, introspection:{ status:'idle', scopeActorId:null, detail:null, envelopes:[], error:null } },
+              render() {},
+              async authFetch(url) {
+                calls.push(url);
+                const empty = url.includes('scope-empty');
+                if(url.endsWith('/recent-envelopes?take=20')) {
+                  return { ok:true, status:200, async json() { return { envelopes: empty ? [] : [{
+                    eventId:'event-alpha',
+                    typeUrl:'type.googleapis.com/aevatar.WorkflowRunUpdated',
+                    stateVersion:41,
+                    timestampUtc:null
+                  }] }; } };
+                }
+                return { ok:true, status:200, async json() { return {
+                  scopeActorId: empty ? 'scope-empty' : 'scope/alpha',
+                  stateVersion:12,
+                  lastObservedVersion:11,
+                  lastSuccessfulVersion:10,
+                  updatedAt:'2026-07-30T08:00:00Z'
+                }; } };
+              }
+            };
+            vm.createContext(context);
+            vm.runInContext(`
+              ${functionSource('selectScope', 'loadScopeIntrospection')}
+              ${functionSource('loadScopeIntrospection', 'loadReadModels')}
+            `, context);
+
+            (async () => {
+              await vm.runInContext("selectScope('scope/alpha')", context);
+              assert.deepEqual(calls, [
+                '/api/cqrs/scopes/scope%2Falpha',
+                '/api/cqrs/scopes/scope%2Falpha/recent-envelopes?take=20'
+              ]);
+              assert.equal(context.state.selectedScope, 'scope/alpha');
+              assert.equal(context.state.introspection.status, 'ok');
+              assert.equal(context.state.introspection.detail.stateVersion, 12);
+              assert.equal(context.state.introspection.envelopes[0].eventId, 'event-alpha');
+              assert.equal(context.state.introspection.envelopes[0].stateVersion, 41);
+              assert.equal(context.state.introspection.envelopes[0].timestampUtc, null);
+
+              calls.length = 0;
+              await vm.runInContext("selectScope('scope-empty')", context);
+              assert.equal(context.state.introspection.status, 'empty');
+              assert.deepEqual(context.state.introspection.envelopes, []);
+            })().catch(error => { console.error(error); process.exitCode = 1; });
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error);
+        html.Should().Contain("尚无最近 committed envelope 元数据");
+        html.Should().Contain("只展示元数据，不返回 payload");
+        html.Should().NotContain("规划中能力（不阻塞主路径）");
     }
 
     [Fact]

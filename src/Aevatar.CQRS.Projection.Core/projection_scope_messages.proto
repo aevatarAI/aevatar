@@ -24,6 +24,14 @@ message ProjectionScopeState {
   repeated ProjectionScopeFailure failures = 10;
   google.protobuf.Timestamp updated_at_utc = 11;
   map<string, int64> last_successful_versions_by_actor = 12;
+  repeated ProjectionObservedEnvelopeMetadata recent_observed_envelopes = 13;
+}
+
+message ProjectionObservedEnvelopeMetadata {
+  string event_id = 1;
+  string type_url = 2;
+  int64 state_version = 3;
+  google.protobuf.Timestamp timestamp_utc = 4;
 }
 
 message ProjectionScopeFailure {
@@ -78,6 +86,7 @@ message ProjectionScopeWatermarkAdvancedEvent {
   int64 last_successful_version = 2;
   google.protobuf.Timestamp occurred_at_utc = 3;
   string source_actor_id = 4;
+  ProjectionObservedEnvelopeMetadata observed_envelope = 5;
 }
 
 message ProjectionScopeDispatchFailedEvent {

@@ -21,4 +21,5 @@ message ProjectionScopeStatusDocument {
   int64 last_observed_version = 13;
   int64 last_successful_version = 14;
   int32 failure_count = 15;
+  repeated ProjectionObservedEnvelopeMetadata recent_observed_envelopes = 16;
 }

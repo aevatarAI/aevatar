@@ -95,6 +95,23 @@ materialized run-report artifact. Diagnostics are query-time explanations for op
 entries or deletion tombstones and must not be presented as either. Admin controls accept a run id through an
 explicit run-id input. The browser must not infer run identity from actor-id prefixes or delimiters.
 
+The CQRS observatory exposes three platform-admin-only projection-scope reads: the existing scope list,
+`GET /api/cqrs/scopes/{scopeActorId}`, and
+`GET /api/cqrs/scopes/{scopeActorId}/recent-envelopes?take=20`. All three read the materialized
+`ProjectionScopeStatusDocument`; they do not activate a scope, read actor state, replay events, rebuild a view, or
+prime a projection. The detail `StateVersion` is the authoritative projection-scope actor version copied into that
+current-state read model. Each recent-envelope `stateVersion` is instead the version of its source committed state
+event. Both surfaces are eventually consistent and expose the read-model refresh timestamp so operators can judge
+freshness honestly.
+
+Projection-scope actor state retains at most the newest 50 committed-envelope metadata records, and the endpoint
+returns newest first with a default of 20 and a maximum of 50. Each record contains only `eventId`, `typeUrl`, source
+`stateVersion`, and an optional source timestamp. Missing timestamps remain absent/null; neither the actor nor the
+projector fabricates them from a processing clock. Payloads, outer-envelope data, projector-local counters, generic
+state dumps, `lastError`, and query-time failure aggregation are not part of this contract. The CQRS page loads detail
+and recent metadata only after an operator selects a scope, renders an explicit empty state when the materialized
+window is empty, and offers no mutation controls.
+
 ## 4. Governance
 
 `bash tools/ci/backend_console_static_asset_guard.sh` enforces:

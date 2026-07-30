@@ -69,6 +69,7 @@ public sealed class ProjectionScopeStatusProjector
             LastSuccessfulVersion = state.LastSuccessfulVersion,
             FailureCount = state.Failures.Count,
         };
+        document.RecentObservedEnvelopes.Add(state.RecentObservedEnvelopes);
 
         await _writeDispatcher.UpsertAsync(document, ct);
     }

@@ -200,8 +200,26 @@ public abstract class ProjectionScopeGAgentBase<TContext>
             SourceActorId = RuntimeMode == ProjectionRuntimeMode.SessionObservation
                 ? sourceActorId
                 : string.Empty,
+            ObservedEnvelope = BuildObservedEnvelopeMetadata(envelope),
         });
         return result;
+    }
+
+    private static ProjectionObservedEnvelopeMetadata? BuildObservedEnvelopeMetadata(EventEnvelope envelope)
+    {
+        if (!CommittedStateEventEnvelope.TryUnpack(envelope, out var published) ||
+            published?.StateEvent?.EventData == null)
+        {
+            return null;
+        }
+
+        return new ProjectionObservedEnvelopeMetadata
+        {
+            EventId = published.StateEvent.EventId ?? string.Empty,
+            TypeUrl = published.StateEvent.EventData.TypeUrl ?? string.Empty,
+            StateVersion = published.StateEvent.Version,
+            TimestampUtc = published.StateEvent.Timestamp?.Clone(),
+        };
     }
 
     private bool IsAlreadyProjected(string sourceActorId, EventEnvelope envelope)
