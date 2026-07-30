@@ -576,9 +576,16 @@ public sealed partial class WorkflowRunGAgent
 
     private string ResolveStartWorkflowCommandId(string commandId) =>
         !string.IsNullOrWhiteSpace(commandId) &&
-        ActiveInboundEnvelope?.Route.IsDirect() == true
+        IsTrustedStartWorkflowCommandEnvelope()
             ? commandId
             : string.Empty;
+
+    private bool IsTrustedStartWorkflowCommandEnvelope()
+    {
+        var envelope = ActiveInboundEnvelope;
+        return envelope?.Route.IsDirect() == true ||
+               envelope?.Payload?.Is(EnsureWorkflowRunDefinitionEvent.Descriptor) == true;
+    }
 
     [EventHandler]
     public async Task HandleReplaceWorkflowDefinitionAndExecute(ReplaceWorkflowDefinitionAndExecuteEvent request)
