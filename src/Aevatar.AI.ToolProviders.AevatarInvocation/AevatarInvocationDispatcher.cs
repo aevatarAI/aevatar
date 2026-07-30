@@ -488,8 +488,7 @@ public sealed class AevatarInvocationDispatcher
                     workflowCommandIdSeed,
                     backgroundDelivery.WorkflowResultDeliveryCredential!,
                     AgentToolRequestContext.Current,
-                    ct)
-                .ConfigureAwait(false);
+                    ct);
             if (reservation.Error != null)
             {
                 return ToChatRunRequest(
@@ -826,8 +825,7 @@ public sealed class AevatarInvocationDispatcher
                     commandId,
                     backgroundDelivery.WorkflowResultDeliveryCredential!,
                     AgentToolRequestContext.Current,
-                    ct)
-                .ConfigureAwait(false);
+                    ct);
             if (reservation.Error != null)
             {
                 return ToChatRunRequest(
