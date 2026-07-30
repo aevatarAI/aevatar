@@ -204,7 +204,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             "create-command-1",
             "create-command-1",
             WorkflowChatCreateRequestFingerprint.Compute(request),
-            2,
+            4,
             DateTimeOffset.Parse("2026-07-21T01:00:00Z"));
         var actorResolver = new RecordingActorResolver();
         var inner = new RecordingInteractionService();
@@ -223,7 +223,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
         result.Receipt!.Run.ActorId.Should().Be("run-stable");
         result.Receipt.Run.CommandId.Should().Be("create-command-1");
         result.Receipt.ChatContext.Should().BeEquivalentTo(
-            new WorkflowChatContext("scope-a", "conversation-stable", "turn-stable", 2));
+            new WorkflowChatContext("scope-a", "conversation-stable", "turn-stable", 0));
         actorResolver.Requests.Should().BeEmpty();
         inner.Requests.Should().BeEmpty();
         recovery.Requests.Should().ContainSingle().Which.Should().Be(("scope-a", "create-command-1"));

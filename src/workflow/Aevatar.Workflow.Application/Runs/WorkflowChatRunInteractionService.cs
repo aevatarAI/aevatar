@@ -313,8 +313,7 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
             new WorkflowChatContext(
                 normalizedScopeId,
                 recovery.ConversationId.Trim(),
-                recovery.TurnId.Trim(),
-                recovery.StateVersion));
+                recovery.TurnId.Trim()));
 
         return WorkflowChatRunInteractionResult.Success(
             receipt,
