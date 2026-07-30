@@ -201,6 +201,36 @@ describe("scheduledDispatchApi", () => {
     expect(requestUrl).not.toMatch(/[?&](scopeId|teamId|memberId)=/);
   });
 
+  it("serializes team-wide schedule list filters without ownerMemberId", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        items: [],
+        nextCursor: null,
+        totalCount: 0,
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await scheduledDispatchApi.list({
+      includeTotalCount: true,
+      owner: {
+        kind: "studio_member_automation",
+        scopeId: " scope/alpha ",
+        teamId: " team alpha ",
+      },
+      take: 25,
+    });
+
+    const requestUrl = String(fetchMock.mock.calls[0]?.[0]);
+    expect(requestUrl).toBe(
+      "/api/schedules?ownerKind=studio_member_automation&ownerScopeId=scope%2Falpha&ownerTeamId=team+alpha&includeTotalCount=true&take=25",
+    );
+    expect(requestUrl).not.toContain("ownerMemberId=");
+    expect(requestUrl).not.toMatch(/[?&](scopeId|teamId|memberId)=/);
+  });
+
   it("preserves scoped schedule filters across every requested page", async () => {
     const fetchMock = jest
       .fn()
@@ -261,6 +291,20 @@ describe("scheduledDispatchApi", () => {
     expect(fetchMock.mock.calls[0]?.[0]).toBe(
       "/api/schedules/sch%2Falpha?ownerKind=studio_member_automation&ownerScopeId=scope-alpha&ownerTeamId=team-alpha&ownerMemberId=member-alpha",
     );
+  });
+
+  it("rejects detail owner queries without memberId before request dispatch", async () => {
+    const fetchMock = jest.fn();
+    global.fetch = fetchMock as typeof global.fetch;
+
+    expect(() =>
+      scheduledDispatchApi.get("sch-alpha", {
+        kind: "studio_member_automation",
+        scopeId: "scope-alpha",
+        teamId: "team-alpha",
+      } as never),
+    ).toThrow("Schedule owner memberId is required.");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("keeps saved recurring prompts from schedule list responses", async () => {
