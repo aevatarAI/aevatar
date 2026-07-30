@@ -462,13 +462,12 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
     public async Task CreateDraftAsync_WhenWorkflowYamlInvalid_ShouldRejectBeforeWorkspaceSave()
     {
         using var environment = new ScopedWorkflowEnvironment();
-        var admission = new StudioWorkflowCapabilityAdmissionTestService(
-            new InvalidOperationException("invalid yaml"));
         var workspacePort = new RecordingStudioWorkspacePorts();
         var service = environment.CreateService(
             workspaceQueryPort: workspacePort,
             workspaceCommandPort: workspacePort,
-            capabilityAdmissionService: admission);
+            workflowDefinitionParser: new StubWorkflowDefinitionParser(
+                WorkflowYamlParseResult.Invalid("invalid yaml")));
 
         var act = () => service.CreateDraftAsync(
             "scope-1",
@@ -480,47 +479,45 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
 
         (await act.Should().ThrowAsync<InvalidOperationException>())
             .WithMessage("invalid yaml");
-        admission.Requests.Should().ContainSingle()
-            .Which.WorkflowYaml.Should().Be("name: workflow-1\nsteps: []");
         workspacePort.QueriedScopes.Should().BeEmpty();
         workspacePort.SavedDrafts.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task CreateDraftAsync_WhenCapabilityAdmissionFails_ShouldNotReadOrMutateWorkspace()
+    public async Task SaveDraftAsync_ShouldPreserveUnresolvedRuntimeYamlAndStableDraftIdentity()
     {
         using var environment = new ScopedWorkflowEnvironment();
         var workspacePort = new RecordingStudioWorkspacePorts();
-        var admission = new StudioWorkflowCapabilityAdmissionTestService(
-            new InvalidOperationException("external capability is not ready"));
         var service = environment.CreateService(
             workspaceQueryPort: workspacePort,
-            workspaceCommandPort: workspacePort,
-            capabilityAdmissionService: admission);
+            workspaceCommandPort: workspacePort);
+        var yaml = """
+            name: x_digest
+            steps:
+              - id: fetch
+                type: tool_call
+                parameters:
+                  tool: nyxid_proxy
+                  arguments: '{"query":{"request":"${input}"}}'
+            """;
 
-        var act = () => service.CreateDraftAsync(
-            "scope-1",
+        var accepted = await service.SaveDraftAsync(
+            "scope-alpha",
+            "wf-alpha",
             new SaveWorkflowDraftRequest(
-                "scope:scope-1",
-                "workflow-1",
+                "scope:scope-alpha",
+                "X Digest",
                 null,
-                "name: workflow-1\nsteps: []\n")
-            {
-                CapabilityAdmission = new WorkflowCapabilityAdmissionContext(
-                    "caller-alpha",
-                    "runtime-caller-credential"),
-            });
+                yaml));
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("external capability is not ready");
-        var request = admission.Requests.Should().ContainSingle().Which;
-        request.Access.ScopeId.Should().Be("scope-1");
-        request.Access.CallerId.Should().Be("caller-alpha");
-        request.Access.NyxIdCallerBearerToken.Should().Be("runtime-caller-credential");
-        request.SourceKind.Should().Be("studio_workflow_draft");
-        request.ExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Interactive);
-        workspacePort.QueriedScopes.Should().BeEmpty();
-        workspacePort.SavedDrafts.Should().BeEmpty();
+        var saved = workspacePort.SavedDrafts.Should().ContainSingle().Subject;
+        saved.ScopeId.Should().Be("scope-alpha");
+        saved.WorkflowId.Should().Be("wf-alpha");
+        saved.WorkflowName.Should().Be("x_digest");
+        saved.Yaml.Should().Be(yaml.Trim());
+        accepted.WorkflowId.Should().Be("wf-alpha");
+        accepted.Accepted.Should().BeTrue();
+        accepted.Readiness.Stage.Should().Be("projection_pending");
     }
 
     [Fact]
@@ -555,11 +552,11 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
         public AppScopedWorkflowService CreateService(
             IStudioWorkspaceQueryPort? workspaceQueryPort = null,
             IStudioWorkspaceCommandPort? workspaceCommandPort = null,
-            StudioWorkflowCapabilityAdmissionTestService? capabilityAdmissionService = null)
+            IWorkflowDefinitionParser? workflowDefinitionParser = null)
         {
             return new AppScopedWorkflowService(
                 new StubWorkflowYamlDocumentService(),
-                capabilityAdmissionService ?? new StudioWorkflowCapabilityAdmissionTestService(),
+                workflowDefinitionParser ?? new StubWorkflowDefinitionParser(),
                 workspaceQueryPort,
                 workspaceCommandPort);
         }
@@ -608,6 +605,27 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
 
             return null;
         }
+    }
+
+    private sealed class StubWorkflowDefinitionParser(
+        WorkflowYamlParseResult? result = null) : IWorkflowDefinitionParser
+    {
+        public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(
+            string workflowYaml,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            var workflowName = workflowYaml.Split('\n')
+                .Select(static line => line.Trim())
+                .First(static line => line.StartsWith("name:", StringComparison.Ordinal))[5..]
+                .Trim();
+            return Task.FromResult(result ?? WorkflowYamlParseResult.Success(workflowName));
+        }
+
+        public Task<WorkflowInlineYamlBundleParseResult> ParseInlineWorkflowBundleAsync(
+            IReadOnlyList<WorkflowChatInlineYamlDocument> inlineWorkflowDocuments,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
     }
 
     private sealed class ThrowingWorkspaceQueryPort : IStudioWorkspaceQueryPort

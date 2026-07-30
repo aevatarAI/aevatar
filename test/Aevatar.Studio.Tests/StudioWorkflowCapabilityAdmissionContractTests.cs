@@ -16,7 +16,6 @@ public sealed class StudioWorkflowCapabilityAdmissionContractTests
     [Theory]
     [InlineData(typeof(StudioWorkflowProvisioningService))]
     [InlineData(typeof(StudioMemberWorkflowBindingPort))]
-    [InlineData(typeof(AppScopedWorkflowService))]
     [InlineData(typeof(StudioMemberService))]
     public void WorkflowWriteService_ShouldRequireUnifiedCapabilityAdmission(Type serviceType)
     {
@@ -32,7 +31,6 @@ public sealed class StudioWorkflowCapabilityAdmissionContractTests
     [InlineData(typeof(WorkflowScheduleProvisioningRequest))]
     [InlineData(typeof(Aevatar.Studio.Application.Provisioning.StudioMemberWorkflowBindingRequest))]
     [InlineData(typeof(UpdateStudioMemberBindingRequest))]
-    [InlineData(typeof(SaveWorkflowDraftRequest))]
     public void WorkflowWriteRequest_ShouldCarryOnlyJsonIgnoredTransientAdmissionContext(Type requestType)
     {
         var property = requestType.GetProperty("CapabilityAdmission");
@@ -41,6 +39,12 @@ public sealed class StudioWorkflowCapabilityAdmissionContractTests
         property!.PropertyType.Should().Be(typeof(WorkflowCapabilityAdmissionContext));
         property.GetCustomAttributes(typeof(JsonIgnoreAttribute), inherit: true)
             .Should().ContainSingle();
+    }
+
+    [Fact]
+    public void WorkflowDraftRequest_ShouldNotCarryRuntimeAdmissionContext()
+    {
+        typeof(SaveWorkflowDraftRequest).GetProperty("CapabilityAdmission").Should().BeNull();
     }
 
     [Fact]

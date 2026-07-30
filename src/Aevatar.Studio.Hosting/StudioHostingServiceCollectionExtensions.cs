@@ -78,7 +78,7 @@ internal static class StudioHostingServiceCollectionExtensions
     {
         services.AddSingleton(sp => new AppScopedWorkflowService(
             sp.GetRequiredService<IWorkflowYamlDocumentService>(),
-            sp.GetRequiredService<Aevatar.Workflow.Application.Abstractions.ExternalCapabilities.IWorkflowExternalCapabilityAdmissionService>(),
+            sp.GetRequiredService<IWorkflowDefinitionParser>(),
             sp.GetService<IStudioWorkspaceQueryPort>(),
             sp.GetService<IStudioWorkspaceCommandPort>(),
             sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<AppScopedWorkflowService>>()));
