@@ -181,8 +181,61 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
                 "nyxid",
                 selector.NyxIdOperation.UserServiceId,
                 selector.NyxIdOperation.EndpointId),
+            ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdRequest => string.Join(
+                "\n",
+                "nyxid-request",
+                ComputeNyxIdRequestContractDigest(selector.NyxIdRequest)),
             _ => "none",
         };
+    }
+
+    public static string ComputeNyxIdRequestContractDigest(NyxIdRequestSelector selector)
+    {
+        ArgumentNullException.ThrowIfNull(selector);
+        if (!NyxIdRequestSelectorContract.TryNormalize(selector, out var normalized, out var error))
+            throw new InvalidOperationException($"Workflow NyxID {error}.");
+
+        return ComputeLengthPrefixedDigest([
+            "nyxid-explicit-request-contract.v1",
+            normalized.UserServiceId,
+            ((int)normalized.Method).ToString(System.Globalization.CultureInfo.InvariantCulture),
+            normalized.PathTemplate,
+            string.Join("\n", NyxIdRequestSelectorContract.PathParameters(normalized).Order(StringComparer.Ordinal)),
+            string.Join("\n", normalized.QueryParameters),
+            string.Join("\n", normalized.HeaderParameters
+                .Select(static value => value.ToLowerInvariant())
+                .Order(StringComparer.Ordinal)),
+            ((int)normalized.BodyMode).ToString(System.Globalization.CultureInfo.InvariantCulture),
+            normalized.BodyRequired.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ((int)normalized.ResponseMode).ToString(System.Globalization.CultureInfo.InvariantCulture),
+        ]);
+    }
+
+    public static string ComputeNyxIdExplicitRequestProofDigest(
+        string requestContractDigest,
+        string serviceSlugSnapshot) =>
+        ComputeLengthPrefixedDigest([
+            "nyxid-explicit-request-proof.v1",
+            requestContractDigest,
+            serviceSlugSnapshot,
+        ]);
+
+    public static string ComputeNyxIdExplicitRequestGrantDigest(NyxIdExplicitRequestGrant grant)
+    {
+        ArgumentNullException.ThrowIfNull(grant);
+        return ComputeLengthPrefixedDigest([
+            "nyxid-explicit-request-grant.v1",
+            grant.CallSiteId,
+            grant.RequestContractDigest,
+            ((int)grant.GrantorAuthority).ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ((int)grant.GrantorOwnerKind).ToString(System.Globalization.CultureInfo.InvariantCulture),
+            grant.GrantorOwnerSubject,
+            ((int)grant.Risk).ToString(System.Globalization.CultureInfo.InvariantCulture),
+            string.Join("\n", grant.AllowedExecutionModes
+                .Select(static mode => (int)mode)
+                .Order()
+                .Select(static mode => mode.ToString(System.Globalization.CultureInfo.InvariantCulture))),
+        ]);
     }
 
     public static bool SelectorMatchesCapability(
@@ -213,6 +266,13 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
                     selector.NyxIdOperation.EndpointId,
                     capability.NyxIdUserService.EndpointId,
                     StringComparison.Ordinal),
+            (ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdRequest,
+                ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest) =>
+                capability.NyxIdUserRequest.Request is not null &&
+                string.Equals(
+                    ComputeNyxIdRequestContractDigest(selector.NyxIdRequest),
+                    ComputeNyxIdRequestContractDigest(capability.NyxIdUserRequest.Request),
+                    StringComparison.Ordinal),
             _ => false,
         };
     }
@@ -237,6 +297,14 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
                 capability.NyxIdUserService.HttpMethod,
                 capability.NyxIdUserService.PathTemplate,
                 capability.NyxIdUserService.ContractDigest),
+            ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest => string.Join(
+                "\n",
+                "nyxid-request",
+                ComputeNyxIdRequestContractDigest(capability.NyxIdUserRequest.Request),
+                capability.NyxIdUserRequest.ServiceSlugSnapshot,
+                capability.NyxIdUserRequest.ContractDigest,
+                capability.NyxIdUserRequest.ExplicitRequestGrantDigest,
+                NyxIdExecutionPolicyKey(capability.NyxIdUserRequest.ExecutionPolicy)),
             _ => "none",
         };
     }
@@ -274,6 +342,11 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
             if (admission.Capability.CapabilityCase ==
                 ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService)
             {
+                if (admission.NyxIdExplicitRequestGrant is not null)
+                {
+                    throw new InvalidOperationException(
+                        "Workflow NyxID explicit request grant is not applicable to a published operation proof.");
+                }
                 var policy = admission.Capability.NyxIdUserService.ExecutionPolicy;
                 ValidateNyxIdExecutionPolicy(policy);
                 if (!policy.AllowedExecutionModes.Contains(executionMode))
@@ -282,8 +355,107 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
                         "Workflow capability admission execution mode is not allowed by the NyxID operation execution policy.");
                 }
             }
+            else if (admission.Capability.CapabilityCase ==
+                     ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest)
+            {
+                ValidateNyxIdExplicitRequestAdmission(admission, executionMode);
+            }
+            else if (admission.NyxIdExplicitRequestGrant is not null)
+            {
+                throw new InvalidOperationException(
+                    "Workflow NyxID explicit request grant is not applicable to this capability.");
+            }
         }
         EnsureUniqueCallSites(admissions.Select(static admission => admission.CallSiteId));
+    }
+
+    private static void ValidateNyxIdExplicitRequestAdmission(
+        WorkflowCapabilityInvocationAdmission admission,
+        ExternalCapabilityExecutionMode executionMode)
+    {
+        var proof = admission.Capability.NyxIdUserRequest;
+        var grant = admission.NyxIdExplicitRequestGrant;
+        if (grant is null)
+            throw new InvalidOperationException("Workflow NyxID explicit request grant is required.");
+        if (proof.Request is null)
+            throw new InvalidOperationException("Workflow NyxID explicit request proof request is required.");
+
+        ValidateCanonicalNyxIdRequest(proof.Request);
+        if (string.IsNullOrWhiteSpace(proof.ServiceSlugSnapshot) ||
+            !string.Equals(proof.ServiceSlugSnapshot, proof.ServiceSlugSnapshot.Trim(), StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Workflow NyxID explicit request service slug is invalid.");
+        }
+
+        var requestContractDigest = ComputeNyxIdRequestContractDigest(proof.Request);
+        if (!FixedTimeEquals(
+                proof.ContractDigest,
+                ComputeNyxIdExplicitRequestProofDigest(requestContractDigest, proof.ServiceSlugSnapshot)))
+        {
+            throw new InvalidOperationException("Workflow NyxID explicit request proof digest is invalid.");
+        }
+        if (!string.Equals(grant.CallSiteId, admission.CallSiteId, StringComparison.Ordinal) ||
+            !FixedTimeEquals(grant.RequestContractDigest, requestContractDigest))
+        {
+            throw new InvalidOperationException("Workflow NyxID explicit request grant scope is invalid.");
+        }
+        if (grant.GrantorAuthority != NyxIdExplicitRequestGrantorAuthority.AevatarWorkflowBinder ||
+            grant.GrantorOwnerKind == ExternalCapabilityAuthorizationOwnerKind.Unspecified ||
+            !System.Enum.IsDefined(grant.GrantorOwnerKind) ||
+            string.IsNullOrWhiteSpace(grant.GrantorOwnerSubject) ||
+            !string.Equals(grant.GrantorOwnerSubject, grant.GrantorOwnerSubject.Trim(), StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Workflow NyxID explicit request grantor is invalid.");
+        }
+        if (grant.Risk is not (NyxIdOperationRisk.ReadOnly or NyxIdOperationRisk.Write or
+                NyxIdOperationRisk.Destructive) ||
+            grant.AllowedExecutionModes.Count == 0 ||
+            !grant.AllowedExecutionModes.Contains(ExternalCapabilityExecutionMode.Interactive) ||
+            grant.AllowedExecutionModes.Any(static mode =>
+                mode is not (ExternalCapabilityExecutionMode.Interactive or
+                    ExternalCapabilityExecutionMode.Durable)) ||
+            grant.AllowedExecutionModes.Distinct().Count() != grant.AllowedExecutionModes.Count ||
+            !grant.AllowedExecutionModes.Contains(executionMode))
+        {
+            throw new InvalidOperationException("Workflow NyxID explicit request grant policy is invalid.");
+        }
+
+        ValidateExplicitRequestRisk(proof.Request.Method, grant.Risk);
+        if (grant.Risk is NyxIdOperationRisk.Write or NyxIdOperationRisk.Destructive &&
+            grant.AllowedExecutionModes.Contains(ExternalCapabilityExecutionMode.Durable))
+        {
+            throw new InvalidOperationException(
+                "Workflow NyxID explicit request durable admission is limited to read-only grants.");
+        }
+
+        ValidateNyxIdExecutionPolicy(proof.ExecutionPolicy);
+        if (proof.ExecutionPolicy.Risk != grant.Risk ||
+            !proof.ExecutionPolicy.AllowedExecutionModes.Order()
+                .SequenceEqual(grant.AllowedExecutionModes.Order()))
+        {
+            throw new InvalidOperationException(
+                "Workflow NyxID explicit request proof policy does not match its grant.");
+        }
+        if (!FixedTimeEquals(
+                proof.ExplicitRequestGrantDigest,
+                ComputeNyxIdExplicitRequestGrantDigest(grant)))
+        {
+            throw new InvalidOperationException("Workflow NyxID explicit request grant digest is invalid.");
+        }
+    }
+
+    private static void ValidateExplicitRequestRisk(NyxIdRequestMethod method, NyxIdOperationRisk risk)
+    {
+        var isValid = method switch
+        {
+            NyxIdRequestMethod.Get or NyxIdRequestMethod.Head or NyxIdRequestMethod.Options => true,
+            NyxIdRequestMethod.Post or NyxIdRequestMethod.Put or NyxIdRequestMethod.Patch =>
+                risk is NyxIdOperationRisk.Write or NyxIdOperationRisk.Destructive,
+            NyxIdRequestMethod.Delete => risk == NyxIdOperationRisk.Destructive,
+            _ => false,
+        };
+        if (!isValid)
+            throw new InvalidOperationException("Workflow NyxID explicit request grant risk is below the method floor.");
     }
 
     public static bool IsValidNyxIdExecutionPolicy(NyxIdOperationExecutionPolicy? policy)
@@ -351,6 +523,17 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
         {
             throw new InvalidOperationException("Workflow external invocation selector identity is invalid.");
         }
+
+        if (selector.SelectorCase == ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdRequest)
+            ValidateCanonicalNyxIdRequest(selector.NyxIdRequest);
+    }
+
+    private static void ValidateCanonicalNyxIdRequest(NyxIdRequestSelector selector)
+    {
+        if (!NyxIdRequestSelectorContract.TryNormalize(selector, out var normalized, out var error))
+            throw new InvalidOperationException($"Workflow NyxID {error}.");
+        if (!selector.Equals(normalized))
+            throw new InvalidOperationException("Workflow NyxID explicit request selector is not canonical.");
     }
 
     private static void ValidateCallSiteId(string? callSiteId)
@@ -385,7 +568,9 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
         IEnumerable<ExternalWorkflowCapabilityRef> capabilities) =>
         executionMode == ExternalCapabilityExecutionMode.Durable &&
         capabilities.Any(static capability =>
-            capability.CapabilityCase == ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService);
+            capability.CapabilityCase is
+                ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService or
+                ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest);
 
     public static bool HasDurableAuthorizationCatalogSource(
         IEnumerable<ExternalCapabilitySourceStamp> sourceStamps,
@@ -418,6 +603,10 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
                     break;
                 case ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService:
                     if (!HasSource(sources, ExternalCapabilitySourceKind.NyxIdMcpConfig))
+                        return false;
+                    break;
+                case ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest:
+                    if (!HasSource(sources, ExternalCapabilitySourceKind.NyxIdUserServices))
                         return false;
                     break;
                 default:
@@ -480,6 +669,19 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
             source.SourceId,
             source.SourceVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
             source.ContentDigest);
+
+    private static string NyxIdExecutionPolicyKey(NyxIdOperationExecutionPolicy? policy) =>
+        policy is null
+            ? "none"
+            : string.Join(
+                "\n",
+                ((int)policy.Risk).ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ((int)policy.Approval).ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ((int)policy.EnforcementOwner).ToString(System.Globalization.CultureInfo.InvariantCulture),
+                string.Join("\n", policy.AllowedExecutionModes
+                    .Select(static mode => (int)mode)
+                    .Order()
+                    .Select(static mode => mode.ToString(System.Globalization.CultureInfo.InvariantCulture))));
 
     private static string ComputeLengthPrefixedDigest(IEnumerable<string?> components)
     {

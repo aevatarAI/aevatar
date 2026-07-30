@@ -19,6 +19,7 @@ public static class NyxIdRequestSelectorContract
         normalized.Method = selector.Method;
         normalized.PathTemplate = selector.PathTemplate.Trim();
         normalized.BodyMode = selector.BodyMode;
+        normalized.BodyRequired = selector.BodyRequired;
         normalized.ResponseMode = selector.ResponseMode;
         normalized.QueryParameters.Add(selector.QueryParameters
             .Select(static value => value.Trim())
@@ -51,6 +52,13 @@ public static class NyxIdRequestSelectorContract
         }
         if (normalized.BodyMode == NyxIdRequestBodyMode.Unspecified || !System.Enum.IsDefined(normalized.BodyMode))
             return Fail("explicit request body_mode must be none or json", out error);
+        if (normalized.Method is NyxIdRequestMethod.Get or NyxIdRequestMethod.Head or NyxIdRequestMethod.Options &&
+            normalized.BodyMode != NyxIdRequestBodyMode.None)
+        {
+            return Fail("explicit safe request methods require body_mode none", out error);
+        }
+        if (normalized.BodyRequired && normalized.BodyMode != NyxIdRequestBodyMode.Json)
+            return Fail("explicit request body_required is valid only with body_mode json", out error);
         if (normalized.ResponseMode == NyxIdRequestResponseMode.Unspecified ||
             !System.Enum.IsDefined(normalized.ResponseMode))
         {
@@ -86,12 +94,7 @@ public static class NyxIdRequestSelectorContract
     private static bool IsSafePathTemplate(string path, out string error)
     {
         error = string.Empty;
-        if (path.Length == 0 || !path.StartsWith("/", StringComparison.Ordinal) ||
-            path.StartsWith("//", StringComparison.Ordinal) ||
-            path.EndsWith("/", StringComparison.Ordinal) || path.Contains("//", StringComparison.Ordinal) ||
-            Uri.TryCreate(path.TrimStart('/'), UriKind.Absolute, out _) ||
-            path.Contains('\\') || path.Contains('?') || path.Contains('#') || path.Contains('\0') ||
-            path.Any(char.IsWhiteSpace) || ContainsTemplate(path))
+        if (!HasValidPathShape(path))
         {
             return Fail("explicit request path_template must be one normalized static relative path", out error);
         }
@@ -117,6 +120,20 @@ public static class NyxIdRequestSelectorContract
 
         return true;
     }
+
+    private static bool HasValidPathShape(string path) =>
+        path.Length != 0 &&
+        path.StartsWith("/", StringComparison.Ordinal) &&
+        !path.StartsWith("//", StringComparison.Ordinal) &&
+        !path.EndsWith("/", StringComparison.Ordinal) &&
+        !path.Contains("//", StringComparison.Ordinal) &&
+        !Uri.TryCreate(path.TrimStart('/'), UriKind.Absolute, out _) &&
+        !path.Contains('\\') &&
+        !path.Contains('?') &&
+        !path.Contains('#') &&
+        !path.Contains('\0') &&
+        !path.Any(char.IsWhiteSpace) &&
+        !ContainsTemplate(path);
 
     private static bool ValidateNames(
         IEnumerable<string> names,

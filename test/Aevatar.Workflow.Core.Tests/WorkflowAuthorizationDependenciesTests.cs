@@ -77,6 +77,34 @@ public sealed class WorkflowAuthorizationDependenciesTests
     }
 
     [Fact]
+    public void WorkflowParser_ShouldMapNyxIdRequestBodyRequired()
+    {
+        const string yaml = """
+            name: selector-workflow
+            roles: []
+            steps:
+              - id: create-item
+                type: tool_call
+                capability:
+                  nyxid_request:
+                    user_service_id: usvc-alpha
+                    method: POST
+                    path_template: /api/resources
+                    body_mode: json
+                    body_required: true
+                    response_mode: text
+                parameters:
+                  tool: nyxid_proxy
+            """;
+
+        var dependencies = new WorkflowGAgent().EvaluateAuthorizationDependencies(yaml);
+
+        dependencies.Should().NotBeNull();
+        dependencies!.ExternalInvocations.Should().ContainSingle().Which
+            .Selector.NyxIdRequest.BodyRequired.Should().BeTrue();
+    }
+
+    [Fact]
     public void WorkflowParser_ShouldRejectMultipleNyxIdSelectors()
     {
         const string yaml = """
@@ -138,6 +166,39 @@ public sealed class WorkflowAuthorizationDependenciesTests
                     header_parameters: [{{headerYaml}}]
                     body_mode: {{bodyMode}}
                     response_mode: {{responseMode}}
+                parameters:
+                  tool: nyxid_proxy
+            """;
+
+        var act = () => new WorkflowGAgent().EvaluateAuthorizationDependencies(yaml);
+
+        act.Should().Throw<WorkflowExternalCapabilityValidationException>();
+    }
+
+    [Theory]
+    [InlineData("GET", "json", false)]
+    [InlineData("HEAD", "json", false)]
+    [InlineData("OPTIONS", "json", false)]
+    [InlineData("POST", "none", true)]
+    public void EvaluateAuthorizationDependencies_ShouldRejectInvalidExplicitRequestBodyPolicy(
+        string method,
+        string bodyMode,
+        bool bodyRequired)
+    {
+        var yaml = $$"""
+            name: selector-workflow
+            roles: []
+            steps:
+              - id: request
+                type: tool_call
+                capability:
+                  nyxid_request:
+                    user_service_id: usvc-alpha
+                    method: {{method}}
+                    path_template: /api/resources
+                    body_mode: {{bodyMode}}
+                    body_required: {{bodyRequired.ToString().ToLowerInvariant()}}
+                    response_mode: text
                 parameters:
                   tool: nyxid_proxy
             """;

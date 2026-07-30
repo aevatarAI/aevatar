@@ -57,6 +57,32 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
     }
 
     [Fact]
+    public void AdmissionPlanContract_ShouldCarryTypedExplicitRequestGrant()
+    {
+        var bodyRequired = NyxIdRequestSelector.Descriptor.FindFieldByName("body_required");
+        var grant = WorkflowCapabilityInvocationAdmission.Descriptor.FindFieldByName(
+            "nyx_id_explicit_request_grant");
+
+        bodyRequired.Should().NotBeNull();
+        bodyRequired!.FieldType.Should().Be(Google.Protobuf.Reflection.FieldType.Bool);
+        grant.Should().NotBeNull();
+        grant!.MessageType.Name.Should().Be("NyxIdExplicitRequestGrant");
+        grant.MessageType.FindFieldByName("call_site_id").Should().NotBeNull();
+        grant.MessageType.FindFieldByName("request_contract_digest").Should().NotBeNull();
+        grant.MessageType.FindFieldByName("grantor_authority")!.EnumType.Name.Should()
+            .Be("NyxIdExplicitRequestGrantorAuthority");
+        grant.MessageType.FindFieldByName("grantor_owner_kind")!.EnumType.Name.Should()
+            .Be("ExternalCapabilityAuthorizationOwnerKind");
+        grant.MessageType.FindFieldByName("grantor_owner_subject").Should().NotBeNull();
+        grant.MessageType.FindFieldByName("risk")!.EnumType.Name.Should()
+            .Be("NyxIdOperationRisk");
+        grant.MessageType.FindFieldByName("allowed_execution_modes")!.EnumType.Name.Should()
+            .Be("ExternalCapabilityExecutionMode");
+        NyxIdUserRequestCapabilityRef.Descriptor.FindFieldByName("explicit_request_grant_digest")
+            .Should().NotBeNull();
+    }
+
+    [Fact]
     public void NyxIdProofPolicy_ShouldParticipateInTheExistingAdmissionDigest()
     {
         const string yaml = "name: wf-alpha\nsteps: []\n";
@@ -271,6 +297,220 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
             }]);
 
         act.Should().NotThrow();
+    }
+
+    [Fact]
+    public void AdmissionPlanIntegrity_ShouldAcceptMatchingExplicitRequestProofAndGrant()
+    {
+        const string yaml = "name: explicit-workflow\nsteps: []\n";
+        var selector = ExplicitSelector();
+        var capability = ExplicitCapability(selector.NyxIdRequest);
+        var plan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            yaml,
+            new Dictionary<string, string>(),
+            ExternalCapabilityExecutionMode.Interactive,
+            [ExplicitAdmission(capability)],
+            [ExplicitSource()]);
+
+        var act = () => WorkflowCapabilityAdmissionPlanIntegrity.ValidateOrThrow(
+            plan,
+            yaml,
+            new Dictionary<string, string>(),
+            ExternalCapabilityExecutionMode.Interactive,
+            [ExplicitInvocation(selector)]);
+
+        act.Should().NotThrow();
+    }
+
+    [Theory]
+    [InlineData("request_user_service_id")]
+    [InlineData("request_method")]
+    [InlineData("request_path_template")]
+    [InlineData("request_query_parameters")]
+    [InlineData("request_header_parameters")]
+    [InlineData("request_body_mode")]
+    [InlineData("request_body_required")]
+    [InlineData("request_response_mode")]
+    [InlineData("service_slug_snapshot")]
+    [InlineData("admission_call_site_id")]
+    [InlineData("grant_missing")]
+    [InlineData("grant_call_site_id")]
+    [InlineData("grant_request_contract_digest")]
+    [InlineData("grant_authority")]
+    [InlineData("grant_owner_kind")]
+    [InlineData("grant_owner_subject")]
+    [InlineData("grant_risk")]
+    [InlineData("grant_modes")]
+    [InlineData("proof_request_missing")]
+    [InlineData("proof_contract_digest")]
+    [InlineData("proof_grant_digest")]
+    [InlineData("proof_policy_missing")]
+    [InlineData("proof_policy_risk")]
+    [InlineData("proof_policy_approval")]
+    [InlineData("proof_policy_owner")]
+    [InlineData("proof_policy_modes")]
+    public void AdmissionPlanIntegrity_ShouldRejectRehashedExplicitProofOrGrantMutation(string mutation)
+    {
+        const string yaml = "name: explicit-workflow\nsteps: []\n";
+        var selector = ExplicitSelector();
+        var plan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            yaml,
+            new Dictionary<string, string>(),
+            ExternalCapabilityExecutionMode.Interactive,
+            [ExplicitAdmission(ExplicitCapability(selector.NyxIdRequest))],
+            [ExplicitSource()]);
+        var originalDigest = plan.AdmissionDigest;
+
+        MutateExplicitAdmission(plan.InvocationAdmissions.Single(), mutation);
+        plan.AdmissionDigest = WorkflowCapabilityAdmissionPlanIntegrity.ComputeAdmissionDigest(plan);
+
+        plan.AdmissionDigest.Should().NotBe(originalDigest);
+        var act = () => WorkflowCapabilityAdmissionPlanIntegrity.ValidateOrThrow(
+            plan,
+            yaml,
+            new Dictionary<string, string>(),
+            ExternalCapabilityExecutionMode.Interactive,
+            [ExplicitInvocation(selector)]);
+        act.Should().Throw<InvalidOperationException>();
+    }
+
+    [Fact]
+    public void Create_ShouldRejectExplicitProofWithoutRouteGrant()
+    {
+        var capability = ExplicitCapability(ExplicitSelector().NyxIdRequest);
+
+        var act = () => WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            "name: explicit-workflow\nsteps: []\n",
+            new Dictionary<string, string>(),
+            ExternalCapabilityExecutionMode.Interactive,
+            [new WorkflowCapabilityInvocationAdmission
+            {
+                CallSiteId = ExplicitCallSiteId,
+                Capability = capability,
+            }],
+            [ExplicitSource()]);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*explicit request grant*");
+    }
+
+    [Theory]
+    [InlineData(NyxIdRequestMethod.Post, NyxIdOperationRisk.ReadOnly)]
+    [InlineData(NyxIdRequestMethod.Put, NyxIdOperationRisk.ReadOnly)]
+    [InlineData(NyxIdRequestMethod.Patch, NyxIdOperationRisk.ReadOnly)]
+    [InlineData(NyxIdRequestMethod.Delete, NyxIdOperationRisk.Write)]
+    public void Create_ShouldRejectExplicitGrantBelowMethodRiskFloor(
+        NyxIdRequestMethod method,
+        NyxIdOperationRisk grantedRisk)
+    {
+        var admission = ExplicitAdmissionFor(
+            method,
+            grantedRisk,
+            ExternalCapabilityExecutionMode.Interactive);
+
+        var act = () => WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            "name: explicit-workflow\nsteps: []\n",
+            new Dictionary<string, string>(),
+            ExternalCapabilityExecutionMode.Interactive,
+            [admission],
+            [ExplicitSource()]);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*risk*");
+    }
+
+    [Theory]
+    [InlineData(NyxIdRequestMethod.Post, NyxIdOperationRisk.Write)]
+    [InlineData(NyxIdRequestMethod.Put, NyxIdOperationRisk.Write)]
+    [InlineData(NyxIdRequestMethod.Patch, NyxIdOperationRisk.Write)]
+    [InlineData(NyxIdRequestMethod.Delete, NyxIdOperationRisk.Destructive)]
+    public void Create_ShouldRejectDurableExplicitWriteOrDestructiveGrant(
+        NyxIdRequestMethod method,
+        NyxIdOperationRisk grantedRisk)
+    {
+        var admission = ExplicitAdmissionFor(
+            method,
+            grantedRisk,
+            ExternalCapabilityExecutionMode.Interactive,
+            ExternalCapabilityExecutionMode.Durable);
+
+        var act = () => WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            "name: explicit-workflow\nsteps: []\n",
+            new Dictionary<string, string>(),
+            ExternalCapabilityExecutionMode.Durable,
+            [admission],
+            [ExplicitSource()]);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*durable*read-only*");
+    }
+
+    [Fact]
+    public void ValidateOrThrow_ShouldRequireCatalogAndOwnerForDurableExplicitReadGrant()
+    {
+        const string yaml = "name: explicit-workflow\nsteps: []\n";
+        var selector = ExplicitSelector();
+        var plan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            yaml,
+            new Dictionary<string, string>(),
+            ExternalCapabilityExecutionMode.Durable,
+            [ExplicitAdmission(ExplicitCapability(selector.NyxIdRequest))],
+            [ExplicitSource()]);
+
+        var act = () => WorkflowCapabilityAdmissionPlanIntegrity.ValidateOrThrow(
+            plan,
+            yaml,
+            new Dictionary<string, string>(),
+            ExternalCapabilityExecutionMode.Durable,
+            [ExplicitInvocation(selector)]);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*durable authorization catalog source*");
+    }
+
+    [Fact]
+    public void ValidateOrThrow_ShouldAcceptDurableExplicitReadGrantWithCatalogAndOwner()
+    {
+        const string yaml = "name: explicit-workflow\nsteps: []\n";
+        var selector = ExplicitSelector();
+        var plan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            yaml,
+            new Dictionary<string, string>(),
+            ExternalCapabilityExecutionMode.Durable,
+            [ExplicitAdmission(ExplicitCapability(selector.NyxIdRequest))],
+            [ExplicitSource(), DurableCatalogSource()],
+            DurableOwner());
+
+        var act = () => WorkflowCapabilityAdmissionPlanIntegrity.ValidateOrThrow(
+            plan,
+            yaml,
+            new Dictionary<string, string>(),
+            ExternalCapabilityExecutionMode.Durable,
+            [ExplicitInvocation(selector)]);
+
+        act.Should().NotThrow();
+    }
+
+    [Fact]
+    public void DistinctCapabilities_ShouldKeepExplicitCapabilitiesWithDifferentDerivedSlugs()
+    {
+        var first = ExplicitAdmission(ExplicitCapability(ExplicitSelector().NyxIdRequest));
+        var secondCapability = ExplicitCapability(ExplicitSelector().NyxIdRequest);
+        secondCapability.NyxIdUserRequest.ServiceSlugSnapshot = "svc-beta";
+        secondCapability.NyxIdUserRequest.ContractDigest = ExplicitProofDigest(
+            secondCapability.NyxIdUserRequest.Request,
+            secondCapability.NyxIdUserRequest.ServiceSlugSnapshot);
+        var second = ExplicitAdmission(secondCapability, "explicit-workflow/request-beta");
+        var plan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            "name: explicit-workflow\nsteps: []\n",
+            new Dictionary<string, string>(),
+            ExternalCapabilityExecutionMode.Interactive,
+            [first, second],
+            [ExplicitSource()]);
+
+        WorkflowCapabilityAdmissionPlanIntegrity.CapabilityKey(first.Capability).Should()
+            .NotBe(WorkflowCapabilityAdmissionPlanIntegrity.CapabilityKey(second.Capability));
+        WorkflowCapabilityAdmissionPlanIntegrity.DistinctCapabilities(plan).Should().HaveCount(2);
     }
 
     [Fact]
@@ -1054,6 +1294,257 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
                 },
             },
         };
+
+    private const string ExplicitCallSiteId = "explicit-workflow/request-alpha";
+
+    private static ExternalWorkflowCapabilitySelector ExplicitSelector()
+    {
+        var request = new NyxIdRequestSelector
+        {
+            UserServiceId = "usvc-alpha",
+            Method = NyxIdRequestMethod.Get,
+            PathTemplate = "/api/resources/{resource_id}",
+            BodyMode = NyxIdRequestBodyMode.None,
+            ResponseMode = NyxIdRequestResponseMode.Text,
+        };
+        request.QueryParameters.Add("page_size");
+        request.HeaderParameters.Add("If-Match");
+        return new ExternalWorkflowCapabilitySelector { NyxIdRequest = request };
+    }
+
+    private static ExternalWorkflowCapabilityRef ExplicitCapability(NyxIdRequestSelector request)
+    {
+        const string slug = "svc-alpha";
+        var requestDigest = ExplicitRequestContractDigest(request);
+        return new ExternalWorkflowCapabilityRef
+        {
+            NyxIdUserRequest = new NyxIdUserRequestCapabilityRef
+            {
+                Request = request.Clone(),
+                ServiceSlugSnapshot = slug,
+                ContractDigest = ExternalWorkflowCapabilityContractDigest.Compute(
+                    "nyxid-explicit-request-proof.v1",
+                    requestDigest,
+                    slug),
+                ExecutionPolicy = ExplicitPolicy(
+                    NyxIdOperationRisk.ReadOnly,
+                    ExternalCapabilityExecutionMode.Interactive,
+                    ExternalCapabilityExecutionMode.Durable),
+            },
+        };
+    }
+
+    private static WorkflowCapabilityInvocationAdmission ExplicitAdmission(
+        ExternalWorkflowCapabilityRef capability,
+        string callSiteId = ExplicitCallSiteId)
+    {
+        var policy = capability.NyxIdUserRequest.ExecutionPolicy;
+        var grant = new NyxIdExplicitRequestGrant
+        {
+            CallSiteId = callSiteId,
+            RequestContractDigest = ExplicitRequestContractDigest(
+                capability.NyxIdUserRequest.Request),
+            GrantorAuthority = NyxIdExplicitRequestGrantorAuthority.AevatarWorkflowBinder,
+            GrantorOwnerKind = ExternalCapabilityAuthorizationOwnerKind.Personal,
+            GrantorOwnerSubject = "binder-alpha",
+            Risk = policy.Risk,
+        };
+        grant.AllowedExecutionModes.Add(policy.AllowedExecutionModes);
+        capability.NyxIdUserRequest.ExplicitRequestGrantDigest = ExplicitGrantDigest(grant);
+        return new WorkflowCapabilityInvocationAdmission
+        {
+            CallSiteId = callSiteId,
+            Capability = capability,
+            NyxIdExplicitRequestGrant = grant,
+        };
+    }
+
+    private static WorkflowCapabilityInvocationAdmission ExplicitAdmissionFor(
+        NyxIdRequestMethod method,
+        NyxIdOperationRisk risk,
+        params ExternalCapabilityExecutionMode[] modes)
+    {
+        var request = ExplicitSelector().NyxIdRequest;
+        request.Method = method;
+        var capability = ExplicitCapability(request);
+        capability.NyxIdUserRequest.ExecutionPolicy = ExplicitPolicy(risk, modes);
+        return ExplicitAdmission(capability);
+    }
+
+    private static ExternalToolInvocationSpec ExplicitInvocation(
+        ExternalWorkflowCapabilitySelector selector) =>
+        new()
+        {
+            CallSiteId = ExplicitCallSiteId,
+            ToolName = "nyxid_proxy",
+            Selector = selector,
+        };
+
+    private static ExternalCapabilitySourceStamp ExplicitSource() =>
+        new()
+        {
+            SourceKind = ExternalCapabilitySourceKind.NyxIdUserServices,
+            SourceId = "nyxid-user-services:caller:binder-alpha",
+            ObservedAt = Timestamp.FromDateTimeOffset(FixedTimeProvider.Now),
+            FreshUntil = Timestamp.FromDateTimeOffset(FixedTimeProvider.Now.AddMinutes(5)),
+            ContentDigest = "user-services-digest",
+        };
+
+    private static ExternalCapabilitySourceStamp DurableCatalogSource() =>
+        new()
+        {
+            SourceKind = ExternalCapabilitySourceKind.DurableAuthorizationCatalog,
+            SourceId = CatalogSourceId("caller-alpha"),
+            SourceVersion = 17,
+            ObservedAt = Timestamp.FromDateTimeOffset(FixedTimeProvider.Now),
+            FreshUntil = Timestamp.FromDateTimeOffset(FixedTimeProvider.Now.AddMinutes(5)),
+            ContentDigest = "catalog-digest",
+        };
+
+    private static NyxIdOperationExecutionPolicy ExplicitPolicy(
+        NyxIdOperationRisk risk,
+        params ExternalCapabilityExecutionMode[] modes)
+    {
+        var policy = new NyxIdOperationExecutionPolicy
+        {
+            Risk = risk,
+            Approval = risk == NyxIdOperationRisk.ReadOnly
+                ? NyxIdOperationApproval.None
+                : NyxIdOperationApproval.Required,
+            EnforcementOwner = NyxIdOperationEnforcementOwner.Aevatar,
+        };
+        policy.AllowedExecutionModes.Add(modes);
+        return policy;
+    }
+
+    private static string ExplicitRequestContractDigest(NyxIdRequestSelector request) =>
+        ExternalWorkflowCapabilityContractDigest.Compute(
+            "nyxid-explicit-request-contract.v1",
+            request.UserServiceId,
+            ((int)request.Method).ToString(System.Globalization.CultureInfo.InvariantCulture),
+            request.PathTemplate,
+            string.Join("\n", NyxIdRequestSelectorContract.PathParameters(request).Order(StringComparer.Ordinal)),
+            string.Join("\n", request.QueryParameters.Order(StringComparer.Ordinal)),
+            string.Join("\n", request.HeaderParameters
+                .Select(static value => value.ToLowerInvariant())
+                .Order(StringComparer.Ordinal)),
+            ((int)request.BodyMode).ToString(System.Globalization.CultureInfo.InvariantCulture),
+            request.BodyRequired.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ((int)request.ResponseMode).ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+    private static string ExplicitProofDigest(NyxIdRequestSelector request, string slug) =>
+        ExternalWorkflowCapabilityContractDigest.Compute(
+            "nyxid-explicit-request-proof.v1",
+            ExplicitRequestContractDigest(request),
+            slug);
+
+    private static string ExplicitGrantDigest(NyxIdExplicitRequestGrant grant) =>
+        ExternalWorkflowCapabilityContractDigest.Compute(
+            "nyxid-explicit-request-grant.v1",
+            grant.CallSiteId,
+            grant.RequestContractDigest,
+            ((int)grant.GrantorAuthority).ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ((int)grant.GrantorOwnerKind).ToString(System.Globalization.CultureInfo.InvariantCulture),
+            grant.GrantorOwnerSubject,
+            ((int)grant.Risk).ToString(System.Globalization.CultureInfo.InvariantCulture),
+            string.Join("\n", grant.AllowedExecutionModes
+                .Select(static mode => (int)mode)
+                .Order()
+                .Select(static mode => mode.ToString(System.Globalization.CultureInfo.InvariantCulture))));
+
+    private static void MutateExplicitAdmission(
+        WorkflowCapabilityInvocationAdmission admission,
+        string mutation)
+    {
+        var proof = admission.Capability.NyxIdUserRequest;
+        var request = proof.Request;
+        var grant = admission.NyxIdExplicitRequestGrant;
+        switch (mutation)
+        {
+            case "request_user_service_id":
+                request.UserServiceId = "usvc-beta";
+                break;
+            case "request_method":
+                request.Method = NyxIdRequestMethod.Post;
+                break;
+            case "request_path_template":
+                request.PathTemplate = "/api/other/{resource_id}";
+                break;
+            case "request_query_parameters":
+                request.QueryParameters.Add("filter");
+                break;
+            case "request_header_parameters":
+                request.HeaderParameters.Add("If-None-Match");
+                break;
+            case "request_body_mode":
+                request.BodyMode = NyxIdRequestBodyMode.Json;
+                break;
+            case "request_body_required":
+                request.BodyRequired = true;
+                break;
+            case "request_response_mode":
+                request.ResponseMode = NyxIdRequestResponseMode.FileArtifact;
+                break;
+            case "service_slug_snapshot":
+                proof.ServiceSlugSnapshot = "svc-beta";
+                break;
+            case "admission_call_site_id":
+                admission.CallSiteId = "explicit-workflow/request-beta";
+                break;
+            case "grant_missing":
+                admission.NyxIdExplicitRequestGrant = null;
+                break;
+            case "grant_call_site_id":
+                grant.CallSiteId = "explicit-workflow/request-beta";
+                break;
+            case "grant_request_contract_digest":
+                grant.RequestContractDigest = "forged-request-digest";
+                break;
+            case "grant_authority":
+                grant.GrantorAuthority = NyxIdExplicitRequestGrantorAuthority.Unspecified;
+                break;
+            case "grant_owner_kind":
+                grant.GrantorOwnerKind = ExternalCapabilityAuthorizationOwnerKind.Organization;
+                break;
+            case "grant_owner_subject":
+                grant.GrantorOwnerSubject = "binder-beta";
+                break;
+            case "grant_risk":
+                grant.Risk = NyxIdOperationRisk.Write;
+                break;
+            case "grant_modes":
+                grant.AllowedExecutionModes.Clear();
+                grant.AllowedExecutionModes.Add(ExternalCapabilityExecutionMode.Interactive);
+                break;
+            case "proof_request_missing":
+                proof.Request = null;
+                break;
+            case "proof_contract_digest":
+                proof.ContractDigest = "forged-proof-digest";
+                break;
+            case "proof_grant_digest":
+                proof.ExplicitRequestGrantDigest = "forged-grant-digest";
+                break;
+            case "proof_policy_missing":
+                proof.ExecutionPolicy = null;
+                break;
+            case "proof_policy_risk":
+                proof.ExecutionPolicy.Risk = NyxIdOperationRisk.Write;
+                break;
+            case "proof_policy_approval":
+                proof.ExecutionPolicy.Approval = NyxIdOperationApproval.Required;
+                break;
+            case "proof_policy_owner":
+                proof.ExecutionPolicy.EnforcementOwner = NyxIdOperationEnforcementOwner.NyxId;
+                break;
+            case "proof_policy_modes":
+                proof.ExecutionPolicy.AllowedExecutionModes.Clear();
+                proof.ExecutionPolicy.AllowedExecutionModes.Add(ExternalCapabilityExecutionMode.Interactive);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(mutation));
+        }
+    }
 
     private sealed class StubParser(WorkflowYamlParseResult result) : IWorkflowDefinitionParser
     {

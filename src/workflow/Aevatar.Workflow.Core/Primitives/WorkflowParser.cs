@@ -239,6 +239,7 @@ public sealed class WorkflowParser
             Method = ParseNyxIdRequestMethod(request.Method),
             PathTemplate = NormalizeText(request.PathTemplate) ?? string.Empty,
             BodyMode = ParseNyxIdRequestBodyMode(request.BodyMode),
+            BodyRequired = request.BodyRequired,
             ResponseMode = ParseNyxIdRequestResponseMode(request.ResponseMode),
         };
         selector.QueryParameters.Add(NormalizeNames(request.QueryParameters, StringComparer.Ordinal));
@@ -1517,6 +1518,7 @@ public sealed class WorkflowParser
         public List<string>? QueryParameters { get; set; }
         public List<string>? HeaderParameters { get; set; }
         public string? BodyMode { get; set; }
+        public bool BodyRequired { get; set; }
         public string? ResponseMode { get; set; }
     }
     private sealed class RawStepPresentation
