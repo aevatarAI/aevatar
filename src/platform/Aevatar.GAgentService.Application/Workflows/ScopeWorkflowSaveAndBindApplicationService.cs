@@ -54,14 +54,16 @@ public sealed class ScopeWorkflowSaveAndBindApplicationService : IScopeWorkflowS
                 workflowYaml,
                 inlineWorkflowYamls,
                 "scope_workflow_save_and_bind",
-                executionMode),
+                executionMode,
+                admissionContext?.ExplicitRequestConfirmations),
                 ct);
         var trustedAdmissionContext = new WorkflowCapabilityAdmissionContext(
             admissionContext?.CallerId ?? string.Empty,
             admissionContext?.NyxIdCallerBearerToken,
             admissionContext?.NyxIdOrganizationBearerToken,
             executionMode,
-            capabilityAdmissionPlan);
+            capabilityAdmissionPlan,
+            admissionContext?.ExplicitRequestConfirmations);
 
         var workflowResult = await _workflowCommandPort.UpsertAsync(
             new ScopeWorkflowUpsertRequest(

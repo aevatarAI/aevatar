@@ -147,6 +147,87 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         governanceCommandPort.UpdateEndpointCatalogCommand.Should().BeNull();
     }
 
+    [Theory]
+    [InlineData("missing", "NYXID_EXPLICIT_REQUEST_GRANT_REQUIRED")]
+    [InlineData("stale_digest", "NYXID_EXPLICIT_REQUEST_CONFIRMATION_DIGEST_MISMATCH")]
+    [InlineData("stale_risk", "NYXID_EXPLICIT_REQUEST_CONFIRMATION_RISK_MISMATCH")]
+    public async Task UpsertAsync_WhenExplicitRequestConfirmationIsInvalid_ShouldDispatchNoMutation(
+        string scenario,
+        string expectedBlockerCode)
+    {
+        var commandPort = new RecordingServiceCommandPort();
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(getResult: null);
+        var governanceCommandPort = new RecordingServiceGovernanceCommandPort();
+        var service = CreateService(
+            commandPort,
+            lifecyclePort,
+            governanceCommandPort,
+            new FakeServiceGovernanceQueryPort(),
+            new FakeScopeScriptQueryPort(),
+            new FakeScriptDefinitionSnapshotPort(),
+            new FakeWorkflowRunActorPort(),
+            capabilityAdmissionService: ScopeExplicitRequestAdmissionTestFixture.CreateAdmissionService());
+        var request = new ScopeBindingUpsertRequest(
+            ScopeExplicitRequestAdmissionTestFixture.ScopeId,
+            ScopeBindingImplementationKind.Workflow,
+            Workflow: new ScopeBindingWorkflowSpec(
+                ScopeExplicitRequestAdmissionTestFixture.WorkflowId,
+                [ScopeExplicitRequestAdmissionTestFixture.WorkflowYaml]),
+            RevisionId: ScopeExplicitRequestAdmissionTestFixture.RevisionId,
+            ServiceId: ScopeExplicitRequestAdmissionTestFixture.ServiceId)
+        {
+            CapabilityAdmission = ScopeExplicitRequestAdmissionTestFixture.CreateContext(scenario),
+        };
+
+        Func<Task> act = async () => await service.UpsertAsync(request);
+
+        var exception = await act.Should().ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
+        exception.Which.Readiness.Blockers.Should().ContainSingle().Which.Code.Should()
+            .Be(expectedBlockerCode);
+        commandPort.Calls.Should().BeEmpty();
+        lifecyclePort.GetServiceCallCount.Should().Be(0);
+        governanceCommandPort.CreateEndpointCatalogCommand.Should().BeNull();
+        governanceCommandPort.UpdateEndpointCatalogCommand.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task UpsertAsync_WhenExplicitRequestConfirmationMatches_ShouldPersistCallerOwnedGrant()
+    {
+        var commandPort = new RecordingServiceCommandPort();
+        var service = CreateService(
+            commandPort,
+            new FakeServiceLifecycleQueryPort(getResult: null),
+            new RecordingServiceGovernanceCommandPort(),
+            new FakeServiceGovernanceQueryPort(),
+            new FakeScopeScriptQueryPort(),
+            new FakeScriptDefinitionSnapshotPort(),
+            new FakeWorkflowRunActorPort(),
+            capabilityAdmissionService: ScopeExplicitRequestAdmissionTestFixture.CreateAdmissionService());
+
+        var result = await service.UpsertAsync(new ScopeBindingUpsertRequest(
+            ScopeExplicitRequestAdmissionTestFixture.ScopeId,
+            ScopeBindingImplementationKind.Workflow,
+            Workflow: new ScopeBindingWorkflowSpec(
+                ScopeExplicitRequestAdmissionTestFixture.WorkflowId,
+                [ScopeExplicitRequestAdmissionTestFixture.WorkflowYaml]),
+            RevisionId: ScopeExplicitRequestAdmissionTestFixture.RevisionId,
+            ServiceId: ScopeExplicitRequestAdmissionTestFixture.ServiceId)
+        {
+            CapabilityAdmission = ScopeExplicitRequestAdmissionTestFixture.CreateContext("matching"),
+        });
+
+        result.ScopeId.Should().Be(ScopeExplicitRequestAdmissionTestFixture.ScopeId);
+        result.Workflow!.WorkflowId.Should().Be(ScopeExplicitRequestAdmissionTestFixture.WorkflowId);
+        result.ServiceId.Should().Be(ScopeExplicitRequestAdmissionTestFixture.ServiceId);
+        result.RevisionId.Should().Be(ScopeExplicitRequestAdmissionTestFixture.RevisionId);
+        var revision = commandPort.Calls
+            .Single(call => call.Method == "CreateRevisionAsync")
+            .Command.Should().BeOfType<CreateServiceRevisionCommand>().Subject;
+        ScopeExplicitRequestAdmissionTestFixture.AssertCallerOwnedGrant(
+            revision.Spec.WorkflowSpec.CapabilityAdmissionPlan);
+        revision.ToString().Should().NotContain(ScopeExplicitRequestAdmissionTestFixture.BearerToken);
+    }
+
     [Fact]
     public async Task UpsertAsync_ShouldKeepDefaultDefinitionPrefix_WhenWorkflowIdIsOmitted()
     {

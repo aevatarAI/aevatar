@@ -109,6 +109,70 @@ public sealed class ScopeWorkflowSaveAndBindApplicationServiceTests
         bindingPort.Request.Should().BeNull();
     }
 
+    [Theory]
+    [InlineData("missing", "NYXID_EXPLICIT_REQUEST_GRANT_REQUIRED")]
+    [InlineData("stale_digest", "NYXID_EXPLICIT_REQUEST_CONFIRMATION_DIGEST_MISMATCH")]
+    [InlineData("stale_risk", "NYXID_EXPLICIT_REQUEST_CONFIRMATION_RISK_MISMATCH")]
+    public async Task SaveAndBindAsync_WhenExplicitRequestConfirmationIsInvalid_ShouldDispatchNoMutation(
+        string scenario,
+        string expectedBlockerCode)
+    {
+        var workflowPort = new RecordingScopeWorkflowCommandPort();
+        var bindingPort = new RecordingScopeBindingCommandPort();
+        var service = new ScopeWorkflowSaveAndBindApplicationService(
+            workflowPort,
+            bindingPort,
+            ScopeExplicitRequestAdmissionTestFixture.CreateAdmissionService());
+        var request = new ScopeWorkflowSaveAndBindRequest(
+            ScopeExplicitRequestAdmissionTestFixture.ScopeId,
+            ScopeExplicitRequestAdmissionTestFixture.WorkflowId,
+            ScopeExplicitRequestAdmissionTestFixture.WorkflowYaml,
+            ServiceId: ScopeExplicitRequestAdmissionTestFixture.ServiceId)
+        {
+            CapabilityAdmission = ScopeExplicitRequestAdmissionTestFixture.CreateContext(scenario),
+        };
+
+        Func<Task> act = async () => await service.SaveAndBindAsync(request);
+
+        var exception = await act.Should().ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
+        exception.Which.Readiness.Blockers.Should().ContainSingle().Which.Code.Should()
+            .Be(expectedBlockerCode);
+        workflowPort.Request.Should().BeNull();
+        bindingPort.Request.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task SaveAndBindAsync_WhenExplicitRequestConfirmationMatches_ShouldForwardCallerOwnedPlan()
+    {
+        var workflowPort = new RecordingScopeWorkflowCommandPort();
+        var bindingPort = new RecordingScopeBindingCommandPort();
+        var service = new ScopeWorkflowSaveAndBindApplicationService(
+            workflowPort,
+            bindingPort,
+            ScopeExplicitRequestAdmissionTestFixture.CreateAdmissionService());
+
+        var result = await service.SaveAndBindAsync(new ScopeWorkflowSaveAndBindRequest(
+            ScopeExplicitRequestAdmissionTestFixture.ScopeId,
+            ScopeExplicitRequestAdmissionTestFixture.WorkflowId,
+            ScopeExplicitRequestAdmissionTestFixture.WorkflowYaml,
+            ServiceId: ScopeExplicitRequestAdmissionTestFixture.ServiceId)
+        {
+            CapabilityAdmission = ScopeExplicitRequestAdmissionTestFixture.CreateContext("matching"),
+        });
+
+        result.ScopeId.Should().Be(ScopeExplicitRequestAdmissionTestFixture.ScopeId);
+        result.WorkflowId.Should().Be(ScopeExplicitRequestAdmissionTestFixture.WorkflowId);
+        result.RevisionId.Should().NotBe(ScopeExplicitRequestAdmissionTestFixture.ScopeId);
+        result.RevisionId.Should().NotBe(ScopeExplicitRequestAdmissionTestFixture.WorkflowId);
+        result.RevisionId.Should().NotBe(ScopeExplicitRequestAdmissionTestFixture.ServiceId);
+        result.RevisionId.Should().NotBe(ScopeExplicitRequestAdmissionTestFixture.CallerId);
+        bindingPort.Request!.ServiceId.Should().Be(ScopeExplicitRequestAdmissionTestFixture.ServiceId);
+        ScopeExplicitRequestAdmissionTestFixture.AssertCallerOwnedGrant(
+            workflowPort.Request!.CapabilityAdmission!.ExistingPlan);
+        ScopeExplicitRequestAdmissionTestFixture.AssertCallerOwnedGrant(
+            bindingPort.Request.CapabilityAdmission!.ExistingPlan);
+    }
+
     private sealed class RecordingAdmissionService : IWorkflowExternalCapabilityAdmissionService
     {
         private readonly Exception? _exception;

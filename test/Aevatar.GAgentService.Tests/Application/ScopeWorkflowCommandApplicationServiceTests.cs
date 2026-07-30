@@ -8,7 +8,12 @@ using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Abstractions.Queries;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
+using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Application.ExternalCapabilities;
+using Aevatar.Workflow.Core;
+using Aevatar.Workflow.Core.Primitives;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Options;
 
 namespace Aevatar.GAgentService.Tests.Application;
@@ -159,6 +164,95 @@ public sealed class ScopeWorkflowCommandApplicationServiceTests
         await act.Should().ThrowAsync<InvalidOperationException>();
     }
 
+    [Fact]
+    public void WorkflowCapabilityAdmissionContext_ShouldCloneExplicitRequestConfirmations()
+    {
+        var confirmation = new NyxIdExplicitRequestConfirmation
+        {
+            CallSiteId = "wf-context/request-context",
+            RequestContractDigest = "digest-context",
+            AttestedRisk = NyxIdOperationRisk.ReadOnly,
+        };
+        var context = new WorkflowCapabilityAdmissionContext(
+            "caller-context",
+            null,
+            null,
+            ExternalCapabilityExecutionMode.Interactive,
+            null,
+            [confirmation]);
+        confirmation.RequestContractDigest = "mutated-after-context-construction";
+
+        context.ExplicitRequestConfirmations.Should().ContainSingle().Which.RequestContractDigest.Should()
+            .Be("digest-context");
+    }
+
+    [Theory]
+    [InlineData("missing", "NYXID_EXPLICIT_REQUEST_GRANT_REQUIRED")]
+    [InlineData("stale_digest", "NYXID_EXPLICIT_REQUEST_CONFIRMATION_DIGEST_MISMATCH")]
+    [InlineData("stale_risk", "NYXID_EXPLICIT_REQUEST_CONFIRMATION_RISK_MISMATCH")]
+    public async Task UpsertAsync_WhenExplicitRequestConfirmationIsInvalid_ShouldDispatchNoMutation(
+        string scenario,
+        string expectedBlockerCode)
+    {
+        var commandPort = new RecordingServiceCommandPort();
+        var governanceCommandPort = new RecordingServiceGovernanceCommandPort();
+        var service = CreateService(
+            commandPort,
+            new FakeServiceLifecycleQueryPort(getResult: null),
+            governanceCommandPort,
+            new FakeServiceGovernanceQueryPort(),
+            new ScopeWorkflowCapabilityOptions(),
+            ScopeExplicitRequestAdmissionTestFixture.CreateAdmissionService());
+        var request = new ScopeWorkflowUpsertRequest(
+            ScopeExplicitRequestAdmissionTestFixture.ScopeId,
+            ScopeExplicitRequestAdmissionTestFixture.WorkflowId,
+            ScopeExplicitRequestAdmissionTestFixture.WorkflowYaml,
+            RevisionId: ScopeExplicitRequestAdmissionTestFixture.RevisionId)
+        {
+            CapabilityAdmission = ScopeExplicitRequestAdmissionTestFixture.CreateContext(scenario),
+        };
+
+        Func<Task> act = async () => await service.UpsertAsync(request);
+
+        var exception = await act.Should().ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
+        exception.Which.Readiness.Blockers.Should().ContainSingle().Which.Code.Should()
+            .Be(expectedBlockerCode);
+        commandPort.Calls.Should().BeEmpty();
+        governanceCommandPort.CreateEndpointCatalogCommand.Should().BeNull();
+        governanceCommandPort.UpdateEndpointCatalogCommand.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task UpsertAsync_WhenExplicitRequestConfirmationMatches_ShouldPersistCallerOwnedGrant()
+    {
+        var commandPort = new RecordingServiceCommandPort();
+        var service = CreateService(
+            commandPort,
+            new FakeServiceLifecycleQueryPort(getResult: null),
+            new RecordingServiceGovernanceCommandPort(),
+            new FakeServiceGovernanceQueryPort(),
+            new ScopeWorkflowCapabilityOptions(),
+            ScopeExplicitRequestAdmissionTestFixture.CreateAdmissionService());
+
+        await service.UpsertAsync(new ScopeWorkflowUpsertRequest(
+            ScopeExplicitRequestAdmissionTestFixture.ScopeId,
+            ScopeExplicitRequestAdmissionTestFixture.WorkflowId,
+            ScopeExplicitRequestAdmissionTestFixture.WorkflowYaml,
+            RevisionId: ScopeExplicitRequestAdmissionTestFixture.RevisionId)
+        {
+            CapabilityAdmission = ScopeExplicitRequestAdmissionTestFixture.CreateContext("matching"),
+        });
+
+        var revision = commandPort.Calls
+            .Single(call => call.Method == "CreateRevisionAsync")
+            .Command.Should().BeOfType<CreateServiceRevisionCommand>().Subject;
+        revision.Spec.Identity.TenantId.Should().Be(ScopeExplicitRequestAdmissionTestFixture.ScopeId);
+        revision.Spec.RevisionId.Should().Be(ScopeExplicitRequestAdmissionTestFixture.RevisionId);
+        ScopeExplicitRequestAdmissionTestFixture.AssertCallerOwnedGrant(
+            revision.Spec.WorkflowSpec.CapabilityAdmissionPlan);
+        revision.ToString().Should().NotContain(ScopeExplicitRequestAdmissionTestFixture.BearerToken);
+    }
+
     private static ScopeWorkflowCommandApplicationService CreateService(
         RecordingServiceCommandPort commandPort,
         FakeServiceLifecycleQueryPort lifecyclePort) =>
@@ -185,14 +279,15 @@ public sealed class ScopeWorkflowCommandApplicationServiceTests
         FakeServiceLifecycleQueryPort lifecyclePort,
         RecordingServiceGovernanceCommandPort governanceCommandPort,
         FakeServiceGovernanceQueryPort governanceQueryPort,
-        ScopeWorkflowCapabilityOptions options) =>
+        ScopeWorkflowCapabilityOptions options,
+        IWorkflowExternalCapabilityAdmissionService? capabilityAdmissionService = null) =>
         new(
             commandPort,
             lifecyclePort,
             governanceCommandPort,
             governanceQueryPort,
             Options.Create(options),
-            new PassthroughWorkflowCapabilityAdmissionService());
+            capabilityAdmissionService ?? new PassthroughWorkflowCapabilityAdmissionService());
 
     private sealed class PassthroughWorkflowCapabilityAdmissionService : IWorkflowExternalCapabilityAdmissionService
     {
@@ -395,5 +490,213 @@ public sealed class ScopeWorkflowCommandApplicationServiceTests
 
         public Task<ServicePolicyCatalogSnapshot?> GetPoliciesAsync(ServiceIdentity identity, CancellationToken ct = default) =>
             Task.FromResult<ServicePolicyCatalogSnapshot?>(null);
+    }
+}
+
+internal static class ScopeExplicitRequestAdmissionTestFixture
+{
+    public const string ScopeId = "scope-c1-alpha";
+    public const string WorkflowId = "wf-route-c1-alpha";
+    public const string ServiceId = "svc-runtime-c1-alpha";
+    public const string RevisionId = "rev-c1-alpha";
+    public const string CallerId = "caller-c1-alpha";
+    public const string BearerToken = "bearer-c1-transient-secret";
+    public const string WorkflowYaml = """
+        name: wf-definition-c1-alpha
+        steps:
+          - id: request-c1-alpha
+            type: tool_call
+            capability:
+              nyxid_request:
+                user_service_id: usvc-c1-alpha
+                method: GET
+                path_template: /api/resources/{resource_id}
+                body_mode: none
+                response_mode: text
+            parameters:
+              tool: nyxid_proxy
+              arguments: '{}'
+        """;
+
+    private const string CallSiteId = "wf-definition-c1-alpha/request-c1-alpha";
+    private static readonly DateTimeOffset Now =
+        new(2026, 7, 30, 12, 0, 0, TimeSpan.Zero);
+
+    public static IWorkflowExternalCapabilityAdmissionService CreateAdmissionService()
+    {
+        var readiness = new ExternalWorkflowCapabilityReadinessService([new ExplicitRequestSource()]);
+        return new WorkflowExternalCapabilityAdmissionService(
+            new RealWorkflowDefinitionParser(),
+            readiness,
+            new FixedTimeProvider());
+    }
+
+    public static WorkflowCapabilityAdmissionContext CreateContext(string scenario)
+    {
+        IReadOnlyList<NyxIdExplicitRequestConfirmation> confirmations = scenario switch
+        {
+            "missing" => [],
+            "matching" => [MatchingConfirmation()],
+            "stale_digest" => [StaleDigestConfirmation()],
+            "stale_risk" => [StaleRiskConfirmation()],
+            _ => throw new ArgumentOutOfRangeException(nameof(scenario)),
+        };
+        return new WorkflowCapabilityAdmissionContext(
+            CallerId,
+            BearerToken,
+            executionMode: ExternalCapabilityExecutionMode.Interactive,
+            explicitRequestConfirmations: confirmations);
+    }
+
+    public static void AssertCallerOwnedGrant(WorkflowCapabilityAdmissionPlan? plan)
+    {
+        plan.Should().NotBeNull();
+        var grant = plan!.InvocationAdmissions
+            .Should().ContainSingle().Subject.NyxIdExplicitRequestGrant;
+        grant.Should().NotBeNull();
+        grant.GrantorOwnerSubject.Should().Be(CallerId);
+        grant.GrantorOwnerKind.Should().Be(ExternalCapabilityAuthorizationOwnerKind.Personal);
+        grant.GrantorAuthority.Should().Be(NyxIdExplicitRequestGrantorAuthority.AevatarWorkflowBinder);
+    }
+
+    private static NyxIdExplicitRequestConfirmation MatchingConfirmation() =>
+        new()
+        {
+            CallSiteId = CallSiteId,
+            RequestContractDigest = WorkflowCapabilityAdmissionPlanIntegrity
+                .ComputeNyxIdRequestContractDigest(Selector()),
+            AttestedRisk = NyxIdOperationRisk.ReadOnly,
+        };
+
+    private static NyxIdExplicitRequestConfirmation StaleDigestConfirmation()
+    {
+        var confirmation = MatchingConfirmation();
+        confirmation.RequestContractDigest = "stale-digest-c1";
+        return confirmation;
+    }
+
+    private static NyxIdExplicitRequestConfirmation StaleRiskConfirmation()
+    {
+        var confirmation = MatchingConfirmation();
+        confirmation.AttestedRisk = NyxIdOperationRisk.Write;
+        return confirmation;
+    }
+
+    private static NyxIdRequestSelector Selector() =>
+        new()
+        {
+            UserServiceId = "usvc-c1-alpha",
+            Method = NyxIdRequestMethod.Get,
+            PathTemplate = "/api/resources/{resource_id}",
+            BodyMode = NyxIdRequestBodyMode.None,
+            ResponseMode = NyxIdRequestResponseMode.Text,
+        };
+
+    private sealed class ExplicitRequestSource : IExternalWorkflowCapabilitySource
+    {
+        public ExternalWorkflowCapabilitySelector.SelectorOneofCase SelectorKind =>
+            ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdRequest;
+
+        public Task<ExternalWorkflowCapabilityDiscoveryResult> ListAsync(
+            ExternalWorkflowCapabilityAccessContext access,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(new ExternalWorkflowCapabilityDiscoveryResult());
+
+        public Task<ExternalCapabilityReadiness> InspectAsync(
+            ExternalWorkflowCapabilityAccessContext access,
+            ExternalWorkflowCapabilitySelector selector,
+            ExternalCapabilityExecutionMode executionMode,
+            CancellationToken cancellationToken = default)
+        {
+            var request = selector.NyxIdRequest.Clone();
+            var requestDigest = WorkflowCapabilityAdmissionPlanIntegrity
+                .ComputeNyxIdRequestContractDigest(request);
+            var readiness = new ExternalCapabilityReadiness
+            {
+                ExecutionMode = executionMode,
+                Status = ExternalCapabilityReadinessStatus.Ready,
+                SelectedSelector = selector.Clone(),
+                SelectedCapability = new ExternalWorkflowCapabilityRef
+                {
+                    NyxIdUserRequest = new NyxIdUserRequestCapabilityRef
+                    {
+                        Request = request,
+                        ServiceSlugSnapshot = "service-slug-c1-alpha",
+                        ContractDigest = WorkflowCapabilityAdmissionPlanIntegrity
+                            .ComputeNyxIdExplicitRequestProofDigest(
+                                requestDigest,
+                                "service-slug-c1-alpha"),
+                        ExecutionPolicy = new NyxIdOperationExecutionPolicy
+                        {
+                            Risk = NyxIdOperationRisk.ReadOnly,
+                            Approval = NyxIdOperationApproval.None,
+                            EnforcementOwner = NyxIdOperationEnforcementOwner.Aevatar,
+                            AllowedExecutionModes = { ExternalCapabilityExecutionMode.Interactive },
+                        },
+                    },
+                },
+            };
+            readiness.Sources.Add(new ExternalCapabilitySourceStamp
+            {
+                SourceKind = ExternalCapabilitySourceKind.NyxIdUserServices,
+                SourceId = $"nyxid-keys:caller:{access.CallerId}",
+                ObservedAt = Timestamp.FromDateTimeOffset(Now),
+                FreshUntil = Timestamp.FromDateTimeOffset(Now.AddMinutes(5)),
+                ContentDigest = "source-digest-c1-alpha",
+            });
+            return Task.FromResult(readiness);
+        }
+    }
+
+    private sealed class RealWorkflowDefinitionParser : IWorkflowDefinitionParser
+    {
+        private readonly WorkflowParser _parser = new();
+
+        public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(
+            string workflowYaml,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                var workflow = _parser.Parse(workflowYaml);
+                return Task.FromResult(WorkflowYamlParseResult.Success(
+                    workflow.Name,
+                    WorkflowAuthorizationDependencyEvaluator.Evaluate(workflow)));
+            }
+            catch (Exception exception)
+            {
+                return Task.FromResult(WorkflowYamlParseResult.Invalid(exception.Message));
+            }
+        }
+
+        public async Task<WorkflowInlineYamlBundleParseResult> ParseInlineWorkflowBundleAsync(
+            IReadOnlyList<WorkflowChatInlineYamlDocument> inlineWorkflowDocuments,
+            CancellationToken ct = default)
+        {
+            if (inlineWorkflowDocuments.Count == 0)
+                return WorkflowInlineYamlBundleParseResult.Invalid("workflowYamls is required.");
+
+            var yamls = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var document in inlineWorkflowDocuments)
+            {
+                var parse = await ParseWorkflowYamlAsync(document.Yaml, ct);
+                if (!parse.Succeeded)
+                    return WorkflowInlineYamlBundleParseResult.Invalid(parse.Error);
+                yamls.Add(parse.WorkflowName, document.Yaml);
+            }
+
+            var entry = inlineWorkflowDocuments[0];
+            var entryParse = await ParseWorkflowYamlAsync(entry.Yaml, ct);
+            return WorkflowInlineYamlBundleParseResult.Success(
+                entryParse.WorkflowName,
+                entry.Yaml,
+                yamls);
+        }
+    }
+
+    private sealed class FixedTimeProvider : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => Now;
     }
 }

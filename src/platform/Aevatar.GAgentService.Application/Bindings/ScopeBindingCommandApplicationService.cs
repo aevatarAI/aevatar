@@ -395,7 +395,8 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                 workflowBundle.EntryWorkflowYaml,
                 workflowBundle.SubWorkflowYamls,
                 "scope_binding_upsert",
-                executionMode),
+                executionMode,
+                admissionContext?.ExplicitRequestConfirmations),
                 ct);
         var suppliedWorkflowId = ScopeWorkflowCapabilityConventions.NormalizeOptional(request.Workflow?.WorkflowId);
         var workflowId = ResolveWorkflowBindingWorkflowId(suppliedWorkflowId, identity);

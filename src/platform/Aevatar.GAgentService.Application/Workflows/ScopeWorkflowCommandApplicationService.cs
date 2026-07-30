@@ -68,7 +68,8 @@ public sealed class ScopeWorkflowCommandApplicationService : IScopeWorkflowComma
                 workflowYaml,
                 inlineWorkflowYamls,
                 "scope_workflow_upsert",
-                executionMode),
+                executionMode,
+                admissionContext?.ExplicitRequestConfirmations),
                 ct);
         var identity = ScopeWorkflowCapabilityConventions.BuildIdentity(_options, normalizedScopeId, normalizedWorkflowId);
         var definitionActorIdPrefix = ScopeWorkflowCapabilityConventions.BuildDefinitionActorIdPrefix(

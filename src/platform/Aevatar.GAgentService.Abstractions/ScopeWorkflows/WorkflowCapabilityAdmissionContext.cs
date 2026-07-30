@@ -13,13 +13,15 @@ public sealed class WorkflowCapabilityAdmissionContext
         string? nyxIdCallerBearerToken = null,
         string? nyxIdOrganizationBearerToken = null,
         ExternalCapabilityExecutionMode executionMode = ExternalCapabilityExecutionMode.Interactive,
-        WorkflowCapabilityAdmissionPlan? existingPlan = null)
+        WorkflowCapabilityAdmissionPlan? existingPlan = null,
+        IEnumerable<NyxIdExplicitRequestConfirmation>? explicitRequestConfirmations = null)
     {
         CallerId = Normalize(callerId);
         NyxIdCallerBearerToken = NormalizeOptional(nyxIdCallerBearerToken);
         NyxIdOrganizationBearerToken = NormalizeOptional(nyxIdOrganizationBearerToken);
         ExecutionMode = executionMode;
         ExistingPlan = existingPlan?.Clone();
+        ExplicitRequestConfirmations = CloneConfirmations(explicitRequestConfirmations);
     }
 
     public string CallerId { get; }
@@ -32,6 +34,8 @@ public sealed class WorkflowCapabilityAdmissionContext
 
     public WorkflowCapabilityAdmissionPlan? ExistingPlan { get; }
 
+    public IReadOnlyList<NyxIdExplicitRequestConfirmation> ExplicitRequestConfirmations { get; }
+
     public override string ToString() =>
         $"{nameof(WorkflowCapabilityAdmissionContext)} {{ CallerId = {CallerId}, ExecutionMode = {ExecutionMode}, Credentials = [REDACTED] }}";
 
@@ -39,4 +43,12 @@ public sealed class WorkflowCapabilityAdmissionContext
 
     private static string? NormalizeOptional(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static IReadOnlyList<NyxIdExplicitRequestConfirmation> CloneConfirmations(
+        IEnumerable<NyxIdExplicitRequestConfirmation>? confirmations) =>
+        confirmations?.Select(static confirmation =>
+                confirmation?.Clone() ?? throw new ArgumentException(
+                    "Explicit request confirmations cannot contain null values.",
+                    nameof(confirmations)))
+            .ToArray() ?? [];
 }
