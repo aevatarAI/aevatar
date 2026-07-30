@@ -26,12 +26,6 @@ export type ScheduledDispatchOwner = {
   readonly teamId: string;
   readonly memberId: string;
 };
-export type ScheduledDispatchListOwner = Omit<
-  ScheduledDispatchOwner,
-  "memberId"
-> & {
-  readonly memberId?: string;
-};
 export const scheduledWorkflowPromptMaxLength = 4_000;
 
 export type ScheduledWorkflowChatTargetInput = {
@@ -134,7 +128,7 @@ export type ScheduledDispatchListResult = {
 export type ScheduledDispatchListQuery = {
   readonly cursor?: string;
   readonly includeTotalCount?: boolean;
-  readonly owner?: ScheduledDispatchListOwner;
+  readonly owner?: ScheduledDispatchOwner;
   readonly take?: number;
 };
 
@@ -248,7 +242,7 @@ function encodeOwner(
 
   const scopeId = owner.scopeId.trim();
   const teamId = owner.teamId.trim();
-  const memberId = trimOptional(owner.memberId);
+  const memberId = owner.memberId.trim();
   if (!scopeId) {
     throw new Error("Schedule owner scopeId is required.");
   }
@@ -267,49 +261,10 @@ function encodeOwner(
   };
 }
 
-function encodeOwnerQuery(owner: ScheduledDispatchOwner | undefined) {
+export function encodeScheduledDispatchOwnerQuery(
+  owner: ScheduledDispatchOwner | undefined,
+) {
   const normalizedOwner = encodeOwner(owner);
-  return normalizedOwner
-    ? {
-        ownerKind: normalizedOwner.kind,
-        ownerScopeId: normalizedOwner.scopeId,
-        ownerTeamId: normalizedOwner.teamId,
-        ownerMemberId: normalizedOwner.memberId,
-      }
-    : {};
-}
-
-function encodeListOwner(
-  owner: ScheduledDispatchListOwner | undefined,
-): ScheduledDispatchListOwner | undefined {
-  if (!owner) {
-    return undefined;
-  }
-
-  if (owner.kind !== "studio_member_automation") {
-    throw new Error(`Unsupported scheduled dispatch owner kind '${owner.kind}'.`);
-  }
-
-  const scopeId = owner.scopeId.trim();
-  const teamId = owner.teamId.trim();
-  const memberId = trimOptional(owner.memberId);
-  if (!scopeId) {
-    throw new Error("Schedule owner scopeId is required.");
-  }
-  if (!teamId) {
-    throw new Error("Schedule owner teamId is required.");
-  }
-
-  return {
-    kind: "studio_member_automation",
-    scopeId,
-    teamId,
-    ...(memberId ? { memberId } : {}),
-  };
-}
-
-function encodeListOwnerQuery(owner: ScheduledDispatchListOwner | undefined) {
-  const normalizedOwner = encodeListOwner(owner);
   return normalizedOwner
     ? {
         ownerKind: normalizedOwner.kind,
@@ -606,7 +561,7 @@ function listScheduledDispatches(
 ): Promise<ScheduledDispatchListResult> {
   return requestJson(
     withQuery("/api/schedules", {
-      ...encodeListOwnerQuery(query?.owner),
+      ...encodeScheduledDispatchOwnerQuery(query?.owner),
       cursor: query?.cursor,
       includeTotalCount: query?.includeTotalCount,
       take: query?.take,
@@ -664,7 +619,7 @@ export const scheduledDispatchApi = {
   ): Promise<ScheduledDispatchDetail> {
     return requestJson(
       withQuery(`/api/schedules/${encodeURIComponent(scheduleId.trim())}`, {
-        ...encodeOwnerQuery(owner),
+        ...encodeScheduledDispatchOwnerQuery(owner),
       }),
       decodeScheduledDispatchDetail,
     );

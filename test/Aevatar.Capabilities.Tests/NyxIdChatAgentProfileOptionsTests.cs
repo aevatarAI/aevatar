@@ -797,12 +797,12 @@ public sealed class NyxIdChatAgentProfileOptionsTests
     {
         public IReadOnlyList<string> GetRegisteredNames() => names;
 
-        public ToolSetResolveResult Resolve(ChatRouteToolSetRef? toolSetRef) =>
-            names.Contains(toolSetRef?.Name, StringComparer.Ordinal)
-                ? ToolSetResolveResult.Success(toolSetRef!.Name, [])
+        public ToolSetResolveResult Resolve(string? name) =>
+            names.Contains(name, StringComparer.Ordinal)
+                ? ToolSetResolveResult.Success(name!, [])
                 : ToolSetResolveResult.Failure(new ToolSetResolveError(
                     ToolSetResolveError.UnknownNameCode,
-                    toolSetRef?.Name ?? string.Empty,
+                    name ?? string.Empty,
                     "Unknown test tool set.",
                     names));
     }

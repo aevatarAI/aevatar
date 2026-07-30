@@ -3,7 +3,6 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
-using Aevatar.ChatRouting.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Integration.AI;
@@ -183,6 +182,19 @@ public sealed class WorkflowRoleGAgentMappingTests
         user.ContentParts[1].MediaType.Should().Be("image/png");
         user.ContentParts[1].Name.Should().Be("file-role.png");
         user.ContentParts[1].DataBase64.Should().BeNull();
+        var fileRef = user.ContentParts[1].FileRef;
+        fileRef.Should().NotBeNull();
+        fileRef!.FileId.Should().Be("file-role");
+        fileRef.ArtifactId.Should().Be("workflow-file://file-role");
+        fileRef.SourceKind.Should().Be(Aevatar.AI.Abstractions.LLMProviders.ChatFileSourceKind.ConnectedServiceResource);
+        fileRef.SourceMessageId.Should().Be("om_1");
+        fileRef.SourceResourceKey.Should().Be("image_key_1");
+        fileRef.FileName.Should().Be("file-role.png");
+        fileRef.MediaType.Should().Be("image/png");
+        fileRef.SizeBytes.Should().Be(3);
+        fileRef.Sha256.Should().Be("sha-file-role");
+        fileRef.CreatedAtUnixMs.Should().Be(1710000000000);
+        fileRef.ExpiresAtUnixMs.Should().Be(1710003600000);
     }
 
     [Fact]
@@ -398,9 +410,9 @@ public sealed class WorkflowRoleGAgentMappingTests
 
         public IReadOnlyList<string> GetRegisteredNames() => ["nyxid.connected_services"];
 
-        public ToolSetResolveResult Resolve(ChatRouteToolSetRef? toolSetRef)
+        public ToolSetResolveResult Resolve(string? name)
         {
-            var name = toolSetRef?.Name ?? string.Empty;
+            name ??= string.Empty;
             ResolvedNames.Add(name);
             return ToolSetResolveResult.Success(name, [source]);
         }

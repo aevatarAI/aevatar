@@ -535,7 +535,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
         ToolSetResolveResult resolved;
         try
         {
-            resolved = _toolSetRegistry.Resolve(new ChatRouteToolSetRef { Name = toolSetName ?? string.Empty });
+            resolved = _toolSetRegistry.Resolve(toolSetName);
         }
         catch (Exception)
         {

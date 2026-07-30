@@ -4,6 +4,7 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Hosting.DependencyInjection;
 using Aevatar.Studio.Application;
+using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.DependencyInjection;
 using Aevatar.Studio.Application.Studio.Services;
@@ -78,10 +79,13 @@ internal static class StudioHostingServiceCollectionExtensions
     {
         services.AddSingleton(sp => new AppScopedWorkflowService(
             sp.GetRequiredService<IWorkflowYamlDocumentService>(),
-            sp.GetRequiredService<Aevatar.Workflow.Application.Abstractions.ExternalCapabilities.IWorkflowExternalCapabilityAdmissionService>(),
+            sp.GetRequiredService<IWorkflowDefinitionParser>(),
             sp.GetService<IStudioWorkspaceQueryPort>(),
             sp.GetService<IStudioWorkspaceCommandPort>(),
             sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<AppScopedWorkflowService>>()));
+        services.TryAddSingleton<
+            IStudioMemberWorkflowDraftProvisioningPort,
+            StudioMemberWorkflowDraftProvisioningService>();
         services.AddSingleton(sp => new AppScopedScriptService(
             sp.GetRequiredService<IHttpClientFactory>(),
             sp.GetService<IScopeScriptQueryPort>(),

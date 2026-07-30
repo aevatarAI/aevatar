@@ -1167,11 +1167,11 @@ public sealed class ResponsesCommandFacadeTests
     {
         public IReadOnlyList<string> GetRegisteredNames() => [];
 
-        public ToolSetResolveResult Resolve(ChatRouteToolSetRef? toolSetRef) =>
+        public ToolSetResolveResult Resolve(string? name) =>
             ToolSetResolveResult.Failure(new ToolSetResolveError(
                 ToolSetResolveError.UnknownNameCode,
-                toolSetRef?.Name ?? string.Empty,
-                $"Tool set '{toolSetRef?.Name}' is not registered.",
+                name ?? string.Empty,
+                $"Tool set '{name}' is not registered.",
                 []));
     }
 
@@ -1179,9 +1179,9 @@ public sealed class ResponsesCommandFacadeTests
     {
         public IReadOnlyList<string> GetRegisteredNames() => ["workspace.default"];
 
-        public ToolSetResolveResult Resolve(ChatRouteToolSetRef? toolSetRef) =>
+        public ToolSetResolveResult Resolve(string? name) =>
             ToolSetResolveResult.Success(
-                toolSetRef?.Name ?? "workspace.default",
+                name ?? "workspace.default",
                 [new StaticAgentToolSource(tools)]);
     }
 

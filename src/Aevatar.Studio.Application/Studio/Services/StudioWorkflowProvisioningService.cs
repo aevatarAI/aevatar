@@ -446,7 +446,7 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         string OperationId,
         string IdempotencyKey);
 
-    private static string BuildStudioUrl(string scopeId, string teamId, string memberId) =>
+    internal static string BuildStudioUrl(string scopeId, string teamId, string memberId) =>
         $"/scopes/{Uri.EscapeDataString(scopeId)}/teams/{Uri.EscapeDataString(teamId)}/members/{Uri.EscapeDataString(memberId)}/workflow";
 
     private static AuthenticatedAuthorizationOwnerContext BuildLegacyUnauthenticatedOwner(
@@ -472,7 +472,7 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
     /// chars) satisfies the member-id slug pattern and length cap while retries
     /// with the same display name land on the same member/workflow/schedule.
     /// </summary>
-    private static string BuildProvisionKey(string scopeId, string teamId, string displayName)
+    internal static string BuildProvisionKey(string scopeId, string teamId, string displayName)
     {
         var identity = Encoding.UTF8.GetBytes($"{scopeId}\n{teamId}\n{displayName}");
         var hash = SHA256.HashData(identity);

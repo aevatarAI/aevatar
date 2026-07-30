@@ -216,6 +216,7 @@ public class WorkflowDefinitionCatalogTests
         role.SystemPrompt.Should().Contain("aevatar_create_team");
         role.SystemPrompt.Should().Contain("aevatar_list_teams");
         role.SystemPrompt.Should().Contain("aevatar_create_member");
+        role.SystemPrompt.Should().Contain("aevatar_create_member_workflow_draft");
         role.SystemPrompt.Should().Contain("aevatar_bind_member_workflow");
         role.SystemPrompt.Should().Contain("aevatar_schedule_member_workflow");
         role.SystemPrompt.Should().Contain("aevatar_provision_workflow_schedule");
@@ -256,6 +257,7 @@ public class WorkflowDefinitionCatalogTests
         allowed.Should().Contain("aevatar_create_team");
         allowed.Should().Contain("aevatar_get_team");
         allowed.Should().Contain("aevatar_create_member");
+        allowed.Should().Contain("aevatar_create_member_workflow_draft");
         allowed.Should().Contain("aevatar_list_members");
         allowed.Should().Contain("aevatar_get_member");
         allowed.Should().Contain("aevatar_list_schedules");
@@ -269,6 +271,8 @@ public class WorkflowDefinitionCatalogTests
         allowed.Should().Contain("aevatar_provision_workflow_schedule");
         allowed.Should().Contain("aevatar_observe_run");
         allowed.Should().Contain("aevatar_read_workflow_run_artifact");
+        allowed.Should().Contain("web_search");
+        allowed.Should().Contain("web_fetch");
         // The loose-definition path (file-only create + run-by-name) hangs 30s on an unprovisioned
         // definition actor — it must be absent from the studio surface.
         allowed.Should().NotContain("workflow_create_def");
@@ -347,6 +351,31 @@ public class WorkflowDefinitionCatalogTests
         allowed.Should().NotContain("ssh_exec");
         allowed.Should().NotContain("codex_exec");
         allowed.Should().NotContain("code_execute");
+    }
+
+    [Fact]
+    public void BuiltInStudioYaml_ShouldSaveUnresolvedNyxIdWorkflowAsNonRunnableDraft()
+    {
+        var workflow = new WorkflowParser().Parse(WorkflowDefinitionCatalog.BuiltInStudioYaml);
+        var prompt = workflow.Roles.Should().ContainSingle().Subject.SystemPrompt;
+
+        var discover = prompt.IndexOf("call `list_external_workflow_capabilities`", StringComparison.Ordinal);
+        var research = prompt.IndexOf("use `web_search`", StringComparison.Ordinal);
+        var saveDraft = prompt.IndexOf("call `aevatar_create_member_workflow_draft`", StringComparison.Ordinal);
+
+        discover.Should().BeGreaterThanOrEqualTo(0);
+        research.Should().BeGreaterThan(discover);
+        saveDraft.Should().BeGreaterThan(research);
+        prompt.Should().Contain("official documentation");
+        prompt.Should().Contain("infer the minimal authoring shape");
+        prompt.Should().Contain("omit step-level `capability` when no exact selector exists");
+        prompt.Should().Contain("`runnable=false`");
+        prompt.Should().Contain("NYXID_OPERATION_SELECTION_REQUIRED");
+        prompt.Should().Contain(
+            "Do not call `aevatar_bind_member_workflow`, `aevatar_schedule_member_workflow`, or `aevatar_provision_workflow_schedule`");
+        prompt.Should().Contain("Do not invent selector identities, operation proof, method, or path authority");
+        prompt.Should().NotContain(
+            "If no exact descriptor is available, report the typed readiness blocker instead of inventing");
     }
 
     [Fact]

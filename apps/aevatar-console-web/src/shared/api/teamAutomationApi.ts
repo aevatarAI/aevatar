@@ -10,6 +10,10 @@ import {
   readString,
 } from "./http/decoders";
 import { readResponseErrorDetails } from "./http/error";
+import {
+  encodeScheduledDispatchOwnerQuery,
+  type ScheduledDispatchOwner,
+} from "./scheduledDispatchApi";
 
 export type TeamAutomationRoute = {
   readonly scopeId: string;
@@ -98,6 +102,62 @@ export type TeamAutomationAuthorizationStatus =
   | "deleting"
   | "revocation_pending"
   | "failed";
+
+const teamAutomationStatusAliases = new Map<
+  string,
+  TeamAutomationAuthorizationStatus
+>([
+  ["1", "provisioning_pending"],
+  ["2", "active"],
+  ["3", "needs_authorization"],
+  ["4", "replacement_pending"],
+  ["5", "deleting"],
+  ["6", "revocation_pending"],
+  ["7", "failed"],
+  ["provisioning_pending", "provisioning_pending"],
+  ["active", "active"],
+  ["needs_authorization", "needs_authorization"],
+  ["replacement_pending", "replacement_pending"],
+  ["deleting", "deleting"],
+  ["revocation_pending", "revocation_pending"],
+  ["failed", "failed"],
+  ["provisioningpending", "provisioning_pending"],
+  ["needsauthorization", "needs_authorization"],
+  ["replacementpending", "replacement_pending"],
+  ["revocationpending", "revocation_pending"],
+  [
+    "studio_member_automation_status_provisioning_pending",
+    "provisioning_pending",
+  ],
+  ["studio_member_automation_status_active", "active"],
+  [
+    "studio_member_automation_status_needs_authorization",
+    "needs_authorization",
+  ],
+  [
+    "studio_member_automation_status_replacement_pending",
+    "replacement_pending",
+  ],
+  ["studio_member_automation_status_deleting", "deleting"],
+  [
+    "studio_member_automation_status_revocation_pending",
+    "revocation_pending",
+  ],
+  ["studio_member_automation_status_failed", "failed"],
+  ["team_automation_status_provisioning_pending", "provisioning_pending"],
+  ["team_automation_status_active", "active"],
+  [
+    "team_automation_status_needs_authorization",
+    "needs_authorization",
+  ],
+  [
+    "team_automation_status_replacement_pending",
+    "replacement_pending",
+  ],
+  ["team_automation_status_deleting", "deleting"],
+  ["team_automation_status_revocation_pending", "revocation_pending"],
+  ["team_automation_status_failed", "failed"],
+]);
 
 export type TeamAutomationRevocationTrack =
   | "NotRequired"
@@ -264,22 +324,17 @@ function decodeNullableTimestamp(value: unknown, label: string): string | null {
 }
 
 function normalizeStatus(value: unknown): TeamAutomationAuthorizationStatus {
-  const normalized = String(value ?? "").trim().toLowerCase();
-  const status = normalized
-    .replace(/^studio_member_automation_status_/, "")
-    .replace(/^team_automation_status_/, "");
-  switch (status) {
-    case "provisioning_pending":
-    case "active":
-    case "needs_authorization":
-    case "replacement_pending":
-    case "deleting":
-    case "revocation_pending":
-    case "failed":
-      return status;
-    default:
-      throw new Error(`Unknown Team automation status: ${String(value)}.`);
+  if (typeof value !== "string" && typeof value !== "number") {
+    throw new Error(`Unknown Team automation status: ${String(value)}.`);
   }
+
+  const normalized =
+    typeof value === "string" ? value.trim().toLowerCase() : value.toString();
+  const status = teamAutomationStatusAliases.get(normalized);
+  if (status === undefined) {
+    throw new Error(`Unknown Team automation status: ${String(value)}.`);
+  }
+  return status;
 }
 
 function normalizeScope(value: unknown): string {
@@ -630,17 +685,34 @@ function decodePermissionReview(
   };
 }
 
-function decodeView(value: unknown, label = "StudioMemberAutomationView"): TeamAutomationView {
+function decodeView(value: unknown, label = "ScheduledDispatchSummary"): TeamAutomationView {
   const record = expectRecord(value, label);
+  const teamOwned = readBoolean(
+    record,
+    ["teamOwned", "TeamOwned"],
+    `${label}.teamOwned`,
+  );
+  if (!teamOwned) {
+    throw new Error(`${label} is not a Team-owned automation schedule.`);
+  }
+
   return {
-    scopeId: requiredString(record, ["scopeId", "ScopeId"], `${label}.scopeId`),
+    scopeId: requiredString(
+      record,
+      ["teamOwnerScopeId", "TeamOwnerScopeId"],
+      `${label}.teamOwnerScopeId`,
+    ),
     teamId: requiredString(record, ["teamId", "TeamId"], `${label}.teamId`),
-    memberId: requiredString(record, ["memberId", "MemberId"], `${label}.memberId`),
+    memberId: requiredString(
+      record,
+      ["teamOwnerMemberId", "TeamOwnerMemberId"],
+      `${label}.teamOwnerMemberId`,
+    ),
     scheduleId: requiredString(record, ["scheduleId", "ScheduleId"], `${label}.scheduleId`),
     publishedServiceId: requiredString(
       record,
-      ["publishedServiceId", "PublishedServiceId"],
-      `${label}.publishedServiceId`,
+      ["serviceId", "ServiceId"],
+      `${label}.serviceId`,
     ),
     credentialSourceKind: normalizeCredentialSourceKind(
       field(record, "credentialSourceKind", "CredentialSourceKind"),
@@ -649,28 +721,32 @@ function decodeView(value: unknown, label = "StudioMemberAutomationView"): TeamA
     prompt: readString(record, ["prompt", "Prompt"], `${label}.prompt`),
     cronExpression: requiredString(
       record,
-      ["scheduleCron", "ScheduleCron", "cronExpression", "CronExpression"],
-      `${label}.scheduleCron`,
+      ["cronExpression", "CronExpression"],
+      `${label}.cronExpression`,
     ),
     timezone: requiredString(
       record,
-      ["scheduleTimezone", "ScheduleTimezone", "timezone", "Timezone"],
-      `${label}.scheduleTimezone`,
+      ["timezone", "Timezone"],
+      `${label}.timezone`,
     ),
     enabled: readBoolean(record, ["enabled", "Enabled"], `${label}.enabled`),
     authorizationStatus: normalizeStatus(
-      field(record, "authorizationStatus", "AuthorizationStatus", "status", "Status"),
+      field(record, "teamAutomationLifecycleStatus", "TeamAutomationLifecycleStatus"),
     ),
     credentialExpiresAtUtc: decodeNullableTimestamp(
-      field(record, "credentialExpiresAtUtc", "CredentialExpiresAtUtc"),
-      `${label}.credentialExpiresAtUtc`,
+      field(record, "credentialExpiresAt", "CredentialExpiresAt"),
+      `${label}.credentialExpiresAt`,
     ),
     lastAuthorizationErrorCode: readString(
       record,
       ["lastAuthorizationErrorCode", "LastAuthorizationErrorCode"],
       `${label}.lastAuthorizationErrorCode`,
     ),
-    operationId: requiredString(record, ["operationId", "OperationId"], `${label}.operationId`),
+    operationId: requiredString(
+      record,
+      ["teamAutomationOperationId", "TeamAutomationOperationId"],
+      `${label}.teamAutomationOperationId`,
+    ),
     credentialGeneration: requiredNonNegativeInteger(
       record,
       ["credentialGeneration", "CredentialGeneration"],
@@ -729,7 +805,7 @@ function decodeView(value: unknown, label = "StudioMemberAutomationView"): TeamA
   };
 }
 
-function decodeList(value: unknown, label = "StudioMemberAutomationListResponse"): TeamAutomationListResult {
+function decodeList(value: unknown, label = "ScheduledDispatchListResult"): TeamAutomationListResult {
   const record = expectRecord(value, label);
   const totalCountValue = field(record, "totalCount", "TotalCount");
   return {
@@ -786,6 +862,39 @@ function normalizeRoute(route: TeamAutomationRoute): TeamAutomationRoute {
   return normalized;
 }
 
+function scheduleOwner(route: TeamAutomationRoute): ScheduledDispatchOwner {
+  const normalized = normalizeRoute(route);
+  return {
+    kind: "studio_member_automation",
+    scopeId: normalized.scopeId,
+    teamId: normalized.teamId,
+    memberId: normalized.memberId,
+  };
+}
+
+function scheduleCollectionPath(
+  route: TeamAutomationRoute,
+  query?: { readonly cursor?: string; readonly take?: number },
+): string {
+  return withQuery("/api/schedules", {
+    ...encodeScheduledDispatchOwnerQuery(scheduleOwner(route)),
+    cursor: query?.cursor,
+    includeTotalCount: true,
+    take: query?.take,
+  });
+}
+
+function scheduleDetailPath(route: TeamAutomationRoute, scheduleId: string): string {
+  const normalizedScheduleId = scheduleId.trim();
+  if (!normalizedScheduleId) {
+    throw new Error("Team automation scheduleId is required.");
+  }
+
+  return withQuery(`/api/schedules/${encodeURIComponent(normalizedScheduleId)}`, {
+    ...encodeScheduledDispatchOwnerQuery(scheduleOwner(route)),
+  });
+}
+
 function basePath(route: TeamAutomationRoute): string {
   const normalized = normalizeRoute(route);
   return `/api/scopes/${encodeURIComponent(normalized.scopeId)}/teams/${encodeURIComponent(normalized.teamId)}/members/${encodeURIComponent(normalized.memberId)}/automations`;
@@ -836,7 +945,7 @@ function decodeViewForRoute(
   label?: string,
 ): TeamAutomationView {
   const view = decodeView(value, label);
-  assertRouteMatches(view, normalizeRoute(expectedRoute), label ?? "StudioMemberAutomationView");
+  assertRouteMatches(view, normalizeRoute(expectedRoute), label ?? "ScheduledDispatchSummary");
   return view;
 }
 
@@ -850,10 +959,23 @@ function decodeListForRoute(
     assertRouteMatches(
       item,
       normalizeRoute(expectedRoute),
-      `${label ?? "StudioMemberAutomationListResponse"}.items[${index}]`,
+      `${label ?? "ScheduledDispatchListResult"}.items[${index}]`,
     ),
   );
   return result;
+}
+
+function decodeDetailForRoute(
+  value: unknown,
+  expectedRoute: TeamAutomationRoute,
+  label = "ScheduledDispatchDetail",
+): TeamAutomationView {
+  const record = expectRecord(value, label);
+  return decodeViewForRoute(
+    field(record, "schedule", "Schedule"),
+    expectedRoute,
+    `${label}.schedule`,
+  );
 }
 
 async function requestTeamAutomation<T>(
@@ -874,7 +996,7 @@ function listTeamAutomations(
   query?: { readonly cursor?: string; readonly take?: number },
 ): Promise<TeamAutomationListResult> {
   return requestTeamAutomation(
-    withQuery(basePath(route), { cursor: query?.cursor, take: query?.take }),
+    scheduleCollectionPath(route, query),
     (value, label) => decodeListForRoute(value, route, label),
   );
 }
@@ -923,8 +1045,8 @@ export const teamAutomationApi = {
 
   get(route: TeamAutomationRoute, scheduleId: string): Promise<TeamAutomationView> {
     return requestTeamAutomation(
-      schedulePath(route, scheduleId),
-      (value, label) => decodeViewForRoute(value, route, label),
+      scheduleDetailPath(route, scheduleId),
+      (value, label) => decodeDetailForRoute(value, route, label),
     );
   },
 

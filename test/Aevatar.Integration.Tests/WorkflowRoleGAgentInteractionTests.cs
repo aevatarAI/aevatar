@@ -955,12 +955,12 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
         {
             public IReadOnlyList<string> GetRegisteredNames() => [name];
 
-            public ToolSetResolveResult Resolve(Aevatar.ChatRouting.Abstractions.ChatRouteToolSetRef? toolSetRef) =>
-                string.Equals(toolSetRef?.Name, name, StringComparison.Ordinal)
+            public ToolSetResolveResult Resolve(string? requestedName) =>
+                string.Equals(requestedName, name, StringComparison.Ordinal)
                     ? ToolSetResolveResult.Success(name, [source])
                     : ToolSetResolveResult.Failure(new ToolSetResolveError(
                         ToolSetResolveError.UnknownNameCode,
-                        toolSetRef?.Name ?? string.Empty,
+                        requestedName ?? string.Empty,
                         "unknown",
                         [name]));
         }
