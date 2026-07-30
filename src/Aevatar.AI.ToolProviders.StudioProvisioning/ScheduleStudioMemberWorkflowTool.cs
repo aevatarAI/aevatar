@@ -5,6 +5,7 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.Studio.Application.Provisioning;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.AI.ToolProviders.StudioProvisioning;
 
@@ -20,10 +21,14 @@ internal sealed class ScheduleStudioMemberWorkflowTool : IAgentTool
     };
 
     private readonly IStudioMemberWorkflowSchedulePort _schedulePort;
+    private readonly ILogger<ScheduleStudioMemberWorkflowTool>? _logger;
 
-    public ScheduleStudioMemberWorkflowTool(IStudioMemberWorkflowSchedulePort schedulePort)
+    public ScheduleStudioMemberWorkflowTool(
+        IStudioMemberWorkflowSchedulePort schedulePort,
+        ILogger<ScheduleStudioMemberWorkflowTool>? logger = null)
     {
         _schedulePort = schedulePort ?? throw new ArgumentNullException(nameof(schedulePort));
+        _logger = logger;
     }
 
     public string Name => "aevatar_schedule_member_workflow";
@@ -84,6 +89,7 @@ internal sealed class ScheduleStudioMemberWorkflowTool : IAgentTool
         var authorizationContext = StudioMemberWorkflowScheduleAuthorizationResolver.Resolve();
         if (authorizationContext.Error is { } authorizationError)
         {
+            LogAuthorizationResolutionFailure(authorizationError.Code);
             return ErrorJson(
                 authorizationError.Code,
                 authorizationError.Message);
@@ -231,6 +237,25 @@ internal sealed class ScheduleStudioMemberWorkflowTool : IAgentTool
         _ => "The schedule request conflicts with the current authorization state.",
     };
 
+    private void LogAuthorizationResolutionFailure(string code)
+    {
+        if (_logger is null)
+            return;
+
+        var typedAuthority = AgentToolRequestContext.NyxIdAuthority;
+        _logger.LogWarning(
+            "Studio member workflow schedule authorization resolution failed: code={Code} has_typed_authority={HasTypedAuthority} has_binding_id={HasBindingId} has_sender_nyx_user_id={HasSenderNyxUserId} has_sender_tenant={HasSenderTenant} has_channel_platform={HasChannelPlatform} has_channel_sender_id={HasChannelSenderId} has_owner_subject={HasOwnerSubject} has_owner_scope_id={HasOwnerScopeId}",
+            code,
+            typedAuthority.IsComplete,
+            Normalize(AgentToolRequestContext.SenderBindingId) is not null,
+            Normalize(AgentToolRequestContext.SenderNyxUserId) is not null,
+            Normalize(AgentToolRequestContext.Current?.SenderBinding.SenderTenant) is not null,
+            Normalize(AgentToolRequestContext.ChannelPlatform) is not null,
+            Normalize(AgentToolRequestContext.ChannelSenderId) is not null,
+            Normalize(AgentToolRequestContext.OwnerSubject) is not null,
+            Normalize(AgentToolRequestContext.OwnerScopeId) is not null);
+    }
+
     private static string ErrorJson(
         string code,
         string message,
@@ -329,16 +354,6 @@ internal static class StudioMemberWorkflowScheduleAuthorizationResolver
     public static StudioMemberWorkflowScheduleAuthorizationResolution Resolve()
     {
         var typedAuthority = AgentToolRequestContext.NyxIdAuthority;
-        var ownerSubject = typedAuthority.IsComplete
-            ? Normalize(typedAuthority.ExternalUserId)
-            : Normalize(AgentToolRequestContext.OwnerSubject);
-        if (ownerSubject is null)
-        {
-            return StudioMemberWorkflowScheduleAuthorizationResolution.Failure(
-                "caller_subject_unavailable",
-                "owner subject is required in AgentToolRequestContext so the schedule can re-mint caller NyxID credentials when it fires.");
-        }
-
         var bindingId = Normalize(AgentToolRequestContext.SenderBindingId);
         if (bindingId is null)
         {
@@ -347,6 +362,11 @@ internal static class StudioMemberWorkflowScheduleAuthorizationResolver
                 "A verified NyxID binding is required to authorize a Team schedule.");
         }
 
+        var resolvedSubject = ResolveSubject(typedAuthority);
+        if (resolvedSubject.Error is { } error)
+            return error;
+
+        var subject = resolvedSubject.Subject!;
         var provisioningBearerToken = Normalize(AgentToolRequestContext.NyxIdAccessToken);
         if (provisioningBearerToken is null && !typedAuthority.IsComplete)
         {
@@ -355,40 +375,97 @@ internal static class StudioMemberWorkflowScheduleAuthorizationResolver
                 "A current NyxID credential is required to create the schedule credential.");
         }
 
-        var nyxUserId = typedAuthority.IsComplete
-            ? ownerSubject
-            : Normalize(AgentToolRequestContext.SenderNyxUserId) ?? ownerSubject;
-        var subjectPlatform = typedAuthority.IsComplete
-            ? Normalize(typedAuthority.Platform) ?? NyxIdAuthorizationAuthorities.NyxId
-            : Normalize(AgentToolRequestContext.ChannelPlatform) ?? NyxIdAuthorizationAuthorities.NyxId;
-        var subjectTenant = typedAuthority.IsComplete
-            ? Normalize(typedAuthority.Tenant) ?? string.Empty
-            : Normalize(AgentToolRequestContext.Current?.SenderBinding.SenderTenant) ??
-              Normalize(AgentToolRequestContext.ChannelRegistrationScopeId) ??
-              string.Empty;
-        var subjectExternalUserId = typedAuthority.IsComplete
-            ? ownerSubject
-            : Normalize(AgentToolRequestContext.ChannelSenderId) ?? ownerSubject;
-
         return StudioMemberWorkflowScheduleAuthorizationResolution.Success(
             new StudioMemberWorkflowScheduleAuthorizationContext(
-                OwnerSubject: nyxUserId,
+                OwnerSubject: subject.NyxUserId,
                 AuthenticatedOwner: new AuthenticatedAuthorizationOwnerContext(
                     new AuthorizationOwnerIdentity
                     {
                         Authority = NyxIdAuthorizationAuthorities.NyxId,
                         OwnerKind = AuthorizationOwnerKind.Personal,
-                        OwnerSubject = nyxUserId,
+                        OwnerSubject = subject.NyxUserId,
                     },
-                    subjectPlatform,
-                    subjectTenant,
-                    subjectExternalUserId,
+                    subject.Platform,
+                    subject.Tenant,
+                    subject.ExternalUserId,
                     bindingId),
                 ProvisioningBearerToken: provisioningBearerToken));
     }
 
+    private static StudioMemberWorkflowScheduleSubjectResolution ResolveSubject(
+        AgentToolNyxIdAuthorityContext typedAuthority)
+    {
+        if (typedAuthority.IsComplete)
+        {
+            var nyxUserId = Normalize(typedAuthority.ExternalUserId)!;
+            return StudioMemberWorkflowScheduleSubjectResolution.Success(
+                new StudioMemberWorkflowScheduleSubject(
+                    nyxUserId,
+                    Normalize(typedAuthority.Platform) ?? NyxIdAuthorizationAuthorities.NyxId,
+                    Normalize(typedAuthority.Tenant) ?? string.Empty,
+                    nyxUserId));
+        }
+
+        var senderNyxUserId = Normalize(AgentToolRequestContext.SenderNyxUserId);
+        if (senderNyxUserId is null)
+        {
+            return StudioMemberWorkflowScheduleSubjectResolution.Failure(
+                "caller_subject_unavailable",
+                "A caller NyxID user id is required in AgentToolRequestContext so the schedule can re-mint caller NyxID credentials when it fires.");
+        }
+
+        var channelPlatform = Normalize(AgentToolRequestContext.ChannelPlatform);
+        if (channelPlatform is null)
+        {
+            return StudioMemberWorkflowScheduleSubjectResolution.Failure(
+                "caller_subject_unavailable",
+                "A channel platform is required in AgentToolRequestContext so the schedule can re-mint caller NyxID credentials when it fires.");
+        }
+
+        var senderTenant = Normalize(AgentToolRequestContext.Current?.SenderBinding.SenderTenant);
+        if (senderTenant is null)
+        {
+            return StudioMemberWorkflowScheduleSubjectResolution.Failure(
+                "caller_subject_unavailable",
+                "A sender tenant is required in AgentToolRequestContext so the schedule can re-mint caller NyxID credentials when it fires.");
+        }
+
+        var channelSenderId = Normalize(AgentToolRequestContext.ChannelSenderId);
+        if (channelSenderId is null)
+        {
+            return StudioMemberWorkflowScheduleSubjectResolution.Failure(
+                "caller_subject_unavailable",
+                "A channel sender identity is required in AgentToolRequestContext so the schedule can re-mint caller NyxID credentials when it fires.");
+        }
+
+        return StudioMemberWorkflowScheduleSubjectResolution.Success(
+            new StudioMemberWorkflowScheduleSubject(
+                senderNyxUserId,
+                channelPlatform,
+                senderTenant,
+                channelSenderId));
+    }
+
     private static string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+}
+
+internal sealed record StudioMemberWorkflowScheduleSubject(
+    string NyxUserId,
+    string Platform,
+    string Tenant,
+    string ExternalUserId);
+
+internal sealed record StudioMemberWorkflowScheduleSubjectResolution(
+    StudioMemberWorkflowScheduleSubject? Subject,
+    StudioMemberWorkflowScheduleAuthorizationResolution? Error)
+{
+    public static StudioMemberWorkflowScheduleSubjectResolution Success(
+        StudioMemberWorkflowScheduleSubject subject) =>
+        new(subject, null);
+
+    public static StudioMemberWorkflowScheduleSubjectResolution Failure(string code, string message) =>
+        new(null, StudioMemberWorkflowScheduleAuthorizationResolution.Failure(code, message));
 }
 
 internal sealed record StudioMemberWorkflowScheduleAuthorizationResolution(
