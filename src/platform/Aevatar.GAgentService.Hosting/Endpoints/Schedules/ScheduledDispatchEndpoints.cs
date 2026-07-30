@@ -342,19 +342,17 @@ public static class ScheduledDispatchEndpoints
         ScheduledDispatchListQuery query;
         try
         {
-            var owner = ResolveOwnerFromQuery(ownerKind, ownerScopeId, ownerTeamId, ownerMemberId);
-            if (TryCreateOwnerScopeAccessDeniedResult(http, owner, out var denied))
+            query = ResolveListQueryFromOwnerQuery(
+                ownerKind,
+                ownerScopeId,
+                ownerTeamId,
+                ownerMemberId,
+                take,
+                cursor,
+                includeTotalCount);
+            var queryScopeId = query.TeamAutomationOwner?.ScopeId ?? query.TeamAutomationScopeId;
+            if (TryCreateOwnerScopeAccessDeniedResult(http, queryScopeId, out var denied))
                 return denied;
-            query = owner == null
-                ? new ScheduledDispatchListQuery(
-                    Take: take,
-                    Cursor: cursor,
-                    IncludeTotalCount: includeTotalCount)
-                : new ScheduledDispatchListQuery(
-                    Take: take,
-                    Cursor: cursor,
-                    IncludeTotalCount: includeTotalCount,
-                    TeamAutomationOwner: owner);
         }
         catch (ArgumentException ex)
         {
@@ -453,6 +451,20 @@ public static class ScheduledDispatchEndpoints
         return AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, owner.ScopeId, out denied);
     }
 
+    private static bool TryCreateOwnerScopeAccessDeniedResult(
+        HttpContext http,
+        string? scopeId,
+        out IResult denied)
+    {
+        if (string.IsNullOrWhiteSpace(scopeId))
+        {
+            denied = Results.Empty;
+            return false;
+        }
+
+        return AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId.Trim(), out denied);
+    }
+
     private static string BuildScheduleLocation(string scheduleId, TeamMemberAutomationOwner? owner)
     {
         var encodedScheduleId = Uri.EscapeDataString(scheduleId);
@@ -515,6 +527,60 @@ public static class ScheduledDispatchEndpoints
         !string.IsNullOrWhiteSpace(scopeId) ||
         !string.IsNullOrWhiteSpace(teamId) ||
         !string.IsNullOrWhiteSpace(memberId);
+
+    private static ScheduledDispatchListQuery ResolveListQueryFromOwnerQuery(
+        string? ownerKind,
+        string? ownerScopeId,
+        string? ownerTeamId,
+        string? ownerMemberId,
+        int take,
+        string? cursor,
+        bool includeTotalCount)
+    {
+        if (string.IsNullOrWhiteSpace(ownerKind) &&
+            string.IsNullOrWhiteSpace(ownerScopeId) &&
+            string.IsNullOrWhiteSpace(ownerTeamId) &&
+            string.IsNullOrWhiteSpace(ownerMemberId))
+        {
+            return new ScheduledDispatchListQuery(
+                Take: take,
+                Cursor: cursor,
+                IncludeTotalCount: includeTotalCount);
+        }
+
+        if (!string.Equals(ownerKind, ScheduledDispatchOwnerKinds.StudioMemberAutomation, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                $"Unsupported scheduled dispatch owner kind '{ownerKind ?? string.Empty}'.",
+                nameof(ownerKind));
+        }
+
+        var normalizedScopeId = NormalizeOptional(ownerScopeId)
+            ?? throw new ArgumentException("Owner scopeId is required.", nameof(ownerScopeId));
+        var normalizedTeamId = NormalizeOptional(ownerTeamId)
+            ?? throw new ArgumentException("Owner teamId is required.", nameof(ownerTeamId));
+        var normalizedMemberId = NormalizeOptional(ownerMemberId);
+        if (normalizedMemberId is not null)
+        {
+            return new ScheduledDispatchListQuery(
+                Take: take,
+                Cursor: cursor,
+                IncludeTotalCount: includeTotalCount,
+                TeamAutomationOwner: new TeamMemberAutomationOwner(
+                    normalizedScopeId,
+                    normalizedMemberId,
+                    normalizedTeamId));
+        }
+
+        return new ScheduledDispatchListQuery(
+            Take: take,
+            Cursor: cursor,
+            IncludeTotalCount: includeTotalCount,
+            TeamAutomationScopeId: normalizedScopeId,
+            TeamAutomationTeamId: normalizedTeamId,
+            TeamAutomationMemberId: null,
+            ExcludeCompletedTeamAutomationDeletions: true);
+    }
 
     private static TeamMemberAutomationOwner? ResolveOwnerFromQuery(
         string? ownerKind,

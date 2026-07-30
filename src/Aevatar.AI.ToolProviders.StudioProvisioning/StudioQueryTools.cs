@@ -401,8 +401,8 @@ internal sealed class ListStudioSchedulesTool : IAgentTool
     public string Name => "aevatar_list_schedules";
 
     public string Description =>
-        "List workflow schedules owned by one Studio member in the caller's current Aevatar scope. " +
-        "Supply team_id and member_id plus optional page_size, page_token, and include_total_count; do not provide scope_id because scope is taken from the session context.";
+        "List workflow schedules owned by a Studio team or one Studio member in the caller's current Aevatar scope. " +
+        "Supply team_id plus optional member_id, page_size, page_token, and include_total_count; do not provide scope_id because scope is taken from the session context.";
 
     public string ParametersSchema => """
         {
@@ -415,7 +415,7 @@ internal sealed class ListStudioSchedulesTool : IAgentTool
             },
             "member_id": {
               "type": "string",
-              "description": "Studio member id whose schedules should be read. Required."
+              "description": "Optional Studio member id whose schedules should be read. Omit to list schedules for the whole team."
             },
             "page_size": {
               "type": "integer",
@@ -430,7 +430,7 @@ internal sealed class ListStudioSchedulesTool : IAgentTool
               "description": "Optional flag requesting a total_count when the read model can provide it."
             }
           },
-          "required": ["team_id", "member_id"]
+          "required": ["team_id"]
         }
         """;
 
@@ -468,8 +468,6 @@ internal sealed class ListStudioSchedulesTool : IAgentTool
             return StudioQueryToolJson.ErrorJson("invalid_arguments", "team_id is required.");
 
         var memberId = StudioQueryToolJson.Normalize(args?.MemberId);
-        if (memberId is null)
-            return StudioQueryToolJson.ErrorJson("invalid_arguments", "member_id is required.");
 
         try
         {
@@ -519,7 +517,7 @@ internal sealed class ListStudioSchedulesTool : IAgentTool
     private sealed record ListStudioSchedulesResultJson(
         string ScopeId,
         string TeamId,
-        string MemberId,
+        string? MemberId,
         IReadOnlyList<StudioScheduleResultJson> Schedules,
         string? NextPageToken,
         long? TotalCount);

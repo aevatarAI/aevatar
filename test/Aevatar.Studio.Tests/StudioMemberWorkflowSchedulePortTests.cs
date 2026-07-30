@@ -193,6 +193,91 @@ public sealed class StudioMemberWorkflowSchedulePortTests
     }
 
     [Fact]
+    public async Task ListAsync_WithMemberId_ShouldResolveMemberAndUseExactTeamAutomationOwner()
+    {
+        var scheduleService = new RecordingScheduleService
+        {
+            TeamAutomationList = new ScheduledDispatchListResult(
+                [CreateTeamAutomationDetail(
+                    RecordingAuthorizationPlanner.Digest,
+                    RecordingAuthorizationPlanner.PolicyVersion).Schedule],
+                "next-member",
+                1),
+        };
+        var memberService = new RecordingMemberService
+        {
+            Detail = CreateWorkflowMemberDetail(teamId: "team-1"),
+        };
+        var port = NewPort(scheduleService, memberService);
+
+        var result = await port.ListAsync(
+            "scope-1",
+            "team-1",
+            "member-1",
+            take: 25,
+            cursor: "cursor-1",
+            includeTotalCount: true);
+
+        memberService.GetMemberId.Should().Be("member-1");
+        scheduleService.LastTeamAutomationListOwner.Should()
+            .Be(new TeamMemberAutomationOwner("scope-1", "member-1", "team-1"));
+        scheduleService.LastTeamAutomationListTake.Should().Be(25);
+        scheduleService.LastTeamAutomationListCursor.Should().Be("cursor-1");
+        scheduleService.LastTeamAutomationListIncludeTotalCount.Should().BeTrue();
+        scheduleService.LastListQuery.Should().BeNull();
+        result.Items.Should().ContainSingle().Which.MemberId.Should().Be("member-1");
+    }
+
+    [Fact]
+    public async Task ListAsync_WithoutMemberId_ShouldUseTeamWideScheduleReadModelQuery()
+    {
+        var summary = CreateTeamAutomationDetail(
+            RecordingAuthorizationPlanner.Digest,
+            RecordingAuthorizationPlanner.PolicyVersion).Schedule with
+        {
+            TeamOwnerScopeId = "scope-1",
+            TeamId = "team-1",
+            TeamOwnerMemberId = "member-2",
+            ServiceId = "published-member-2",
+        };
+        var scheduleService = new RecordingScheduleService
+        {
+            ListResult = new ScheduledDispatchListResult([summary], "next-team", 1),
+        };
+        var memberService = new RecordingMemberService
+        {
+            Detail = CreateWorkflowMemberDetail(teamId: "team-1"),
+        };
+        var port = NewPort(scheduleService, memberService);
+
+        var result = await port.ListAsync(
+            " scope-1 ",
+            " team-1 ",
+            memberId: null,
+            take: 25,
+            cursor: "cursor-1",
+            includeTotalCount: true);
+
+        memberService.GetMemberId.Should().BeNull();
+        scheduleService.LastListQuery.Should().Be(new ScheduledDispatchListQuery(
+            Take: 25,
+            Cursor: "cursor-1",
+            IncludeTotalCount: true,
+            TeamAutomationScopeId: "scope-1",
+            TeamAutomationTeamId: "team-1",
+            TeamAutomationMemberId: null,
+            ExcludeCompletedTeamAutomationDeletions: true));
+        scheduleService.LastTeamAutomationListOwner.Should().BeNull();
+        var item = result.Items.Should().ContainSingle().Subject;
+        item.ScopeId.Should().Be("scope-1");
+        item.TeamId.Should().Be("team-1");
+        item.MemberId.Should().Be("member-2");
+        item.PublishedServiceId.Should().Be("published-member-2");
+        result.NextCursor.Should().Be("next-team");
+        result.TotalCount.Should().Be(1);
+    }
+
+    [Fact]
     public async Task GetAsync_ShouldPreserveDistinctRevocationTrackStatusesFromScheduleReadModel()
     {
         var detail = CreateTeamAutomationDetail(
@@ -2497,6 +2582,13 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         public ScheduledDispatchConfiguration? Configuration { get; private set; }
         public List<ScheduledDispatchConfiguration> Configurations { get; } = [];
         public ScheduledDispatchDetail? TeamAutomationDetail { get; init; }
+        public ScheduledDispatchListQuery? LastListQuery { get; private set; }
+        public ScheduledDispatchListResult ListResult { get; init; } = new([], null, null);
+        public TeamMemberAutomationOwner? LastTeamAutomationListOwner { get; private set; }
+        public int? LastTeamAutomationListTake { get; private set; }
+        public string? LastTeamAutomationListCursor { get; private set; }
+        public bool? LastTeamAutomationListIncludeTotalCount { get; private set; }
+        public ScheduledDispatchListResult TeamAutomationList { get; init; } = new([], null, null);
         public int UpdateCallCount { get; private set; }
         public int RetryRevocationCallCount { get; private set; }
         public int CompleteRevocationCallCount { get; private set; }
@@ -2757,8 +2849,25 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             throw new NotSupportedException();
 
         public Task<ScheduledDispatchListResult> ListAsync(
-            ScheduledDispatchListQuery query, CancellationToken ct = default) =>
-            throw new NotSupportedException();
+            ScheduledDispatchListQuery query, CancellationToken ct = default)
+        {
+            LastListQuery = query;
+            return Task.FromResult(ListResult);
+        }
+
+        public Task<ScheduledDispatchListResult> ListTeamAutomationsAsync(
+            TeamMemberAutomationOwner owner,
+            int take = 50,
+            string? cursor = null,
+            bool includeTotalCount = false,
+            CancellationToken ct = default)
+        {
+            LastTeamAutomationListOwner = owner;
+            LastTeamAutomationListTake = take;
+            LastTeamAutomationListCursor = cursor;
+            LastTeamAutomationListIncludeTotalCount = includeTotalCount;
+            return Task.FromResult(TeamAutomationList);
+        }
 
         public Task<ScheduledDispatchPreview> PreviewAsync(
             string cronExpression, string? timezone, int count, DateTimeOffset? fromUtc = null, CancellationToken ct = default) =>

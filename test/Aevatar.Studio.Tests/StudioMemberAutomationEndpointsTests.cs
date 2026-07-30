@@ -824,7 +824,7 @@ public sealed class StudioMemberAutomationEndpointsTests
         public string? LastActionName { get; private set; }
         public StudioMemberAutomationActionCommand? LastDelete { get; private set; }
         public StudioMemberAutomationRetryRevocationCommand? LastRetryRevocation { get; private set; }
-        public (string ScopeId, string TeamId, string MemberId, int Take, string? Cursor)? LastList { get; private set; }
+        public (string ScopeId, string TeamId, string? MemberId, int Take, string? Cursor)? LastList { get; private set; }
         public (string ScopeId, string TeamId, string MemberId, string ScheduleId)? LastGet { get; private set; }
 
         public Task<StudioMemberWorkflowAuthorizationResult> PreflightAsync(
@@ -884,7 +884,7 @@ public sealed class StudioMemberAutomationEndpointsTests
         public Task<StudioMemberAutomationListResponse> ListAsync(
             string scopeId,
             string teamId,
-            string memberId,
+            string? memberId,
             int take = 50,
             string? cursor = null,
             bool includeTotalCount = false,

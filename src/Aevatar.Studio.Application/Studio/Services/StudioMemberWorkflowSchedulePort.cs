@@ -244,13 +244,33 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
     public async Task<StudioMemberAutomationListResponse> ListAsync(
         string scopeId,
         string teamId,
-        string memberId,
+        string? memberId,
         int take = 50,
         string? cursor = null,
         bool includeTotalCount = false,
         CancellationToken ct = default)
     {
-        var resolved = await ResolveTeamMemberAsync(scopeId, teamId, memberId, ct);
+        if (NormalizeOptional(memberId) is not { } normalizedMemberId)
+        {
+            var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
+            var normalizedTeamId = NormalizeRequired(teamId, nameof(teamId));
+            var teamResult = await _scheduleService.ListAsync(
+                new ScheduledDispatchListQuery(
+                    Take: take,
+                    Cursor: cursor,
+                    IncludeTotalCount: includeTotalCount,
+                    TeamAutomationScopeId: normalizedScopeId,
+                    TeamAutomationTeamId: normalizedTeamId,
+                    TeamAutomationMemberId: null,
+                    ExcludeCompletedTeamAutomationDeletions: true),
+                ct);
+            return new StudioMemberAutomationListResponse(
+                teamResult.Items.Select(MapView).ToArray(),
+                teamResult.NextCursor,
+                teamResult.TotalCount);
+        }
+
+        var resolved = await ResolveTeamMemberAsync(scopeId, teamId, normalizedMemberId, ct);
         var owner = new TeamMemberAutomationOwner(resolved.ScopeId, resolved.MemberId, resolved.TeamId);
         var result = await _scheduleService.ListTeamAutomationsAsync(
             owner,
@@ -1174,6 +1194,39 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             member.ScopeId,
             member.TeamId,
             member.MemberId,
+            schedule.ScheduleId,
+            schedule.ServiceId,
+            schedule.DisplayName,
+            schedule.Prompt ?? string.Empty,
+            schedule.CronExpression,
+            schedule.Timezone,
+            schedule.Enabled,
+            ToStatusName(schedule.TeamAutomationLifecycleStatus),
+            schedule.CredentialExpiresAt,
+            schedule.LastAuthorizationErrorCode,
+            schedule.TeamAutomationOperationId,
+            schedule.CredentialGeneration,
+            schedule.RevocationPending,
+            schedule.NextFireAt,
+            schedule.LastFireAt,
+            schedule.StateVersion)
+        {
+            CredentialSourceKind = "scheduled_invocation_agent_key",
+            UpdatedAt = schedule.UpdatedAt,
+            OwnerLLMRouteKind = schedule.OwnerLLMRouteKind,
+            OwnerLLMRoute = schedule.OwnerLLMRoute,
+            OwnerLLMUserServiceId = schedule.OwnerLLMUserServiceId,
+            OwnerLLMServiceSlug = schedule.OwnerLLMServiceSlug,
+            OwnerLLMModel = schedule.OwnerLLMModel,
+            NyxIdRevocationStatus = schedule.NyxIdRevocationStatus,
+            VaultRevocationStatus = schedule.VaultRevocationStatus,
+        };
+
+    private static StudioMemberAutomationView MapView(ScheduledDispatchSummary schedule) =>
+        new StudioMemberAutomationView(
+            NormalizeRequired(schedule.TeamOwnerScopeId, nameof(schedule.TeamOwnerScopeId)),
+            NormalizeRequired(schedule.TeamId, nameof(schedule.TeamId)),
+            NormalizeRequired(schedule.TeamOwnerMemberId, nameof(schedule.TeamOwnerMemberId)),
             schedule.ScheduleId,
             schedule.ServiceId,
             schedule.DisplayName,

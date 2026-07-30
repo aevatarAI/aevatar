@@ -694,6 +694,20 @@ public sealed class ProvisionWorkflowScheduleToolTests
     }
 
     [Fact]
+    public async Task GetSchedule_WhenMemberIdMissing_ShouldReturnInvalidArgumentsAndNotCallPort()
+    {
+        var port = new RecordingMemberAutomationQueryPort();
+        var tool = await DiscoverGetScheduleToolAsync(port);
+
+        using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
+        var output = await tool.ExecuteAsync("""{"team_id":"team-alpha","schedule_id":"sched-alpha"}""");
+
+        ErrorCode(output).Should().Be("invalid_arguments");
+        ErrorMessage(output).Should().Be("member_id is required.");
+        port.GetCallCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task ListSchedules_WhenTeamIdMissing_ShouldReturnInvalidArgumentsAndNotCallPort()
     {
         var port = new RecordingMemberAutomationQueryPort();
@@ -708,7 +722,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
     }
 
     [Fact]
-    public async Task ListSchedules_WhenMemberIdMissing_ShouldReturnInvalidArgumentsAndNotCallPort()
+    public async Task ListSchedules_WhenMemberIdMissing_ShouldListTeamWideSchedules()
     {
         var port = new RecordingMemberAutomationQueryPort();
         var tool = await DiscoverListSchedulesToolAsync(port);
@@ -716,9 +730,15 @@ public sealed class ProvisionWorkflowScheduleToolTests
         using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
         var output = await tool.ExecuteAsync("""{"team_id":"team-alpha"}""");
 
-        ErrorCode(output).Should().Be("invalid_arguments");
-        ErrorMessage(output).Should().Be("member_id is required.");
-        port.ListCallCount.Should().Be(0);
+        port.LastScopeId.Should().Be("scope-current");
+        port.LastTeamId.Should().Be("team-alpha");
+        port.LastMemberId.Should().BeNull();
+
+        using var document = JsonDocument.Parse(output);
+        var root = document.RootElement;
+        root.TryGetProperty("member_id", out var memberIdProperty).Should().BeFalse();
+        var schedule = root.GetProperty("schedules")[0];
+        schedule.GetProperty("member_id").GetString().Should().Be("m-alpha");
     }
 
     [Fact]
@@ -2455,7 +2475,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         public Task<StudioMemberAutomationListResponse> ListAsync(
             string scopeId,
             string teamId,
-            string memberId,
+            string? memberId,
             int take = 50,
             string? cursor = null,
             bool includeTotalCount = false,
@@ -2472,7 +2492,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
                 throw Failure;
 
             return Task.FromResult(new StudioMemberAutomationListResponse(
-                [DefaultView() with { ScopeId = scopeId, TeamId = teamId, MemberId = memberId }],
+                [DefaultView() with { ScopeId = scopeId, TeamId = teamId, MemberId = memberId ?? "m-alpha" }],
                 "next-schedules",
                 1));
         }
@@ -2616,7 +2636,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         public Task<StudioMemberAutomationListResponse> ListAsync(
             string scopeId,
             string teamId,
-            string memberId,
+            string? memberId,
             int take = 50,
             string? cursor = null,
             bool includeTotalCount = false,

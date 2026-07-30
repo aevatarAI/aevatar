@@ -1459,6 +1459,56 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
+    public async Task RunNow_WithIncompleteBodyOwnerTuple_ShouldRejectBeforeDispatch()
+    {
+        var service = new RecordingScheduledDispatchApplicationService();
+
+        var result = await ScheduledDispatchEndpoints.RunNow(
+            CreateHttpContext(),
+            "sch-alpha",
+            new ScheduledDispatchRunNowHttpRequest
+            {
+                Owner = StudioMemberAutomationOwnerRequest() with
+                {
+                    MemberId = null!,
+                },
+            },
+            service);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        service.TeamRunNow.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Enable_WithIncompleteBodyOwnerTuple_ShouldRejectBeforeDispatch()
+    {
+        var service = new RecordingScheduledDispatchApplicationService();
+
+        var result = await ScheduledDispatchEndpoints.Enable(
+            CreateHttpContext(),
+            "sch-alpha",
+            new ScheduledDispatchStateChangeHttpRequest
+            {
+                Reason = "resume",
+                Owner = StudioMemberAutomationOwnerRequest() with
+                {
+                    MemberId = null!,
+                },
+            },
+            service);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        service.TeamEnabled.Should().BeEmpty();
+        service.Enabled.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task List_ShouldForwardTypedOwnerAndPageQueryParameters()
     {
         var service = new RecordingScheduledDispatchApplicationService();
@@ -1483,6 +1533,61 @@ public sealed class ScheduledDispatchEndpointsTests
             Cursor: "cursor-1",
             IncludeTotalCount: true,
             TeamAutomationOwner: new TeamMemberAutomationOwner("scope-alpha", "m-alpha", "team-alpha")));
+    }
+
+    [Fact]
+    public async Task List_WhenOwnerMemberIdMissing_ShouldForwardTeamWideOwnerQuery()
+    {
+        var service = new RecordingScheduledDispatchApplicationService();
+
+        var result = await ScheduledDispatchEndpoints.List(
+            CreateHttpContext(scopeId: "scope-alpha", authenticationEnabled: true),
+            service,
+            ownerKind: ScheduledDispatchOwnerKinds.StudioMemberAutomation,
+            ownerScopeId: " scope-alpha ",
+            ownerTeamId: " team-alpha ",
+            take: 25,
+            cursor: "cursor-1",
+            includeTotalCount: true);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        service.LastListQuery.Should().Be(new ScheduledDispatchListQuery(
+            Take: 25,
+            Cursor: "cursor-1",
+            IncludeTotalCount: true,
+            TeamAutomationScopeId: "scope-alpha",
+            TeamAutomationTeamId: "team-alpha",
+            TeamAutomationMemberId: null,
+            ExcludeCompletedTeamAutomationDeletions: true));
+    }
+
+    [Theory]
+    [InlineData(null, "scope-alpha", "team-alpha")]
+    [InlineData(ScheduledDispatchOwnerKinds.StudioMemberAutomation, null, "team-alpha")]
+    [InlineData(ScheduledDispatchOwnerKinds.StudioMemberAutomation, "scope-alpha", null)]
+    [InlineData("unsupported_owner", "scope-alpha", "team-alpha")]
+    public async Task List_WhenOwnerQueryIsPartialOrUnsupported_ShouldReject(
+        string? ownerKind,
+        string? ownerScopeId,
+        string? ownerTeamId)
+    {
+        var service = new RecordingScheduledDispatchApplicationService();
+
+        var result = await ScheduledDispatchEndpoints.List(
+            CreateHttpContext(),
+            service,
+            ownerKind: ownerKind,
+            ownerScopeId: ownerScopeId,
+            ownerTeamId: ownerTeamId);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        service.LastListQuery.Should().BeNull();
     }
 
     [Fact]
@@ -1578,6 +1683,27 @@ public sealed class ScheduledDispatchEndpointsTests
         notFoundService.LastTeamAutomationGet.Should().Be((
             "missing",
             new TeamMemberAutomationOwner("scope-alpha", "m-alpha", "team-alpha")));
+    }
+
+    [Fact]
+    public async Task Get_WhenOwnerMemberIdMissing_ShouldRejectTypedOwnerQuery()
+    {
+        var service = new RecordingScheduledDispatchApplicationService();
+
+        var result = await ScheduledDispatchEndpoints.Get(
+            CreateHttpContext(),
+            "schedule-1",
+            service,
+            ownerKind: ScheduledDispatchOwnerKinds.StudioMemberAutomation,
+            ownerScopeId: "scope-alpha",
+            ownerTeamId: "team-alpha");
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        service.LastScheduleGet.Should().BeNull();
+        service.LastTeamAutomationGet.Should().BeNull();
     }
 
     [Fact]
@@ -3286,7 +3412,7 @@ public sealed class ScheduledDispatchEndpointsTests
         public Task<StudioMemberAutomationListResponse> ListAsync(
             string scopeId,
             string teamId,
-            string memberId,
+            string? memberId,
             int take = 50,
             string? cursor = null,
             bool includeTotalCount = false,

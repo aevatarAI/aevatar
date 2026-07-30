@@ -5,7 +5,7 @@ public interface IStudioMemberAutomationQueryPort
     Task<StudioMemberAutomationListResponse> ListAsync(
         string scopeId,
         string teamId,
-        string memberId,
+        string? memberId,
         int take = 50,
         string? cursor = null,
         bool includeTotalCount = false,
