@@ -261,7 +261,9 @@ function encodeOwner(
   };
 }
 
-function encodeOwnerQuery(owner: ScheduledDispatchOwner | undefined) {
+export function encodeScheduledDispatchOwnerQuery(
+  owner: ScheduledDispatchOwner | undefined,
+) {
   const normalizedOwner = encodeOwner(owner);
   return normalizedOwner
     ? {
@@ -559,7 +561,7 @@ function listScheduledDispatches(
 ): Promise<ScheduledDispatchListResult> {
   return requestJson(
     withQuery("/api/schedules", {
-      ...encodeOwnerQuery(query?.owner),
+      ...encodeScheduledDispatchOwnerQuery(query?.owner),
       cursor: query?.cursor,
       includeTotalCount: query?.includeTotalCount,
       take: query?.take,
@@ -617,7 +619,7 @@ export const scheduledDispatchApi = {
   ): Promise<ScheduledDispatchDetail> {
     return requestJson(
       withQuery(`/api/schedules/${encodeURIComponent(scheduleId.trim())}`, {
-        ...encodeOwnerQuery(owner),
+        ...encodeScheduledDispatchOwnerQuery(owner),
       }),
       decodeScheduledDispatchDetail,
     );
