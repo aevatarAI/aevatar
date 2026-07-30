@@ -118,20 +118,26 @@ flowchart LR
     A["Chat intent"] --> B["Typed capability listing"]
     B --> C{"Authority owner"}
     C -->|"Host-owned"| D["Connector catalog"]
-    C -->|"User or org-owned"| E["NyxID /api/v1/mcp/config"]
+    C -->|"User or org-owned"| E{"NyxID selector"}
     D --> F["Typed readiness"]
-    E --> F
     F --> G{"READY"}
     G -->|"No"| H["Typed blocker and remediation; no write"]
-    G -->|"Yes"| I["Unified server-side admission"]
-    I --> J["Commit definition + v4 call-site proof"]
-    J --> K{"Runtime capability owner"}
-    K -->|"Host Connector"| L["Host connector credential edge"]
-    K -->|"NyxID"| M{"Execution mode"}
-    M -->|"Interactive"| N["Transient caller bearer"]
-    M -->|"Durable"| O["Exact scoped key"]
-    N --> P["Proxy route _nyxid_via=user_service_id"]
-    O --> P
+    G -->|"Yes"| I["Host admission"]
+    E -->|"PublishedEndpoint(endpoint_id)"| J["MCP descriptor"]
+    E -->|"AuthoredRequest(request_contract_digest)"| K["Exact inventory at bind"]
+    K --> L["Authenticated binder confirmation + NyxIdExplicitRequestGrant"]
+    J --> M["Actor-owned admission + v4 call-site proof"]
+    L --> M
+    I --> N["Commit definition"]
+    M --> N
+    N --> O{"Runtime capability owner"}
+    O -->|"Host Connector"| P["Host connector credential edge"]
+    O -->|"NyxID"| Q{"Committed selector"}
+    Q -->|"PublishedEndpoint"| R["Runtime MCP endpoint-digest revalidation"]
+    Q -->|"AuthoredRequest"| S["Validate proof + grant; no MCP/OpenAPI/inventory re-read"]
+    R --> T["NyxIdAdmittedRequestBuilder"]
+    S --> T
+    T --> U["Exact proxy route _nyxid_via=user_service_id"]
 ```
 
 所有普通 write entry（Scope upsert、Studio draft/provision/bind、skill mount、prepare、publish、startup file materialization）统一调用 `IWorkflowExternalCapabilityAdmissionService`，但契约明确区分两条路径。首次 live admission 在 mutation 前重新 parse YAML，以 authenticated caller 的 transient authority/credential 读取 live sources，并生成 `external-capability-admission.v4` plan。Actor 已持有 v4 plan 的后续 prepare、publish 或 Studio handoff 只调用 credential-free persisted revalidation；每个调用点必须按当前业务契约独立提供 expected execution mode，并与 plan 精确匹配，禁止从待验证 plan 自身回读 mode。该路径不伪造 caller、不使用 `appId`/`serviceId` 替代 owner，也不重复外部 readiness read。

@@ -98,5 +98,5 @@ Repository tests use sanitized, distinct identities (`memberId=m-alpha`, `workfl
 - no generic raw-HTTP workflow primitive;
 - no hidden compatibility path for legacy `{slug, service_id, method, path}` arguments;
 - no second workflow runtime, proxy client, or projection pipeline;
-- no runtime MCP/OpenAPI or inventory read in the execution path;
+- `AuthoredRequest` runtime performs no MCP/OpenAPI or inventory read; `PublishedEndpoint` retains runtime MCP endpoint-digest revalidation;
 - no credentials or tenant-specific workflow data in GitHub issues or repository fixtures.

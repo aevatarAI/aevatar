@@ -92,16 +92,23 @@ unresolved draft 不调用 bind、schedule、provision、publish、run 或 `nyxi
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart LR
-    A["NyxID /api/v1/mcp/config"] --> B["Typed Aevatar boundary"]
-    B --> C["Step selector: service_id + endpoint_id"]
-    C --> D["WorkflowGAgent v4 invocation_admissions"]
-    D --> E["BindWorkflowRunDefinitionEvent.capability_admission_plan"]
-    E --> F["WorkflowRunState.capability_admission_plan"]
-    F --> G["StepRequestEvent.external_invocation"]
-    G --> H["WorkflowToolExecutionRequest.InvocationAdmission"]
-    H --> I["AgentToolExecutionContext.OperationAdmission"]
-    I --> J["NyxIdAdmittedRequestBuilder"]
-    J --> K["NyxID Proxy HTTP request"]
+    A{"Step selector"}
+    A -->|"PublishedEndpoint(endpoint_id)"| B["MCP descriptor"]
+    A -->|"AuthoredRequest(request_contract_digest)"| C["Exact inventory at bind"]
+    C --> D["Authenticated binder confirmation + NyxIdExplicitRequestGrant"]
+    B --> E["Actor-owned WorkflowGAgent v4 invocation_admissions"]
+    D --> E
+    E --> F["BindWorkflowRunDefinitionEvent.capability_admission_plan"]
+    F --> G["WorkflowRunState.capability_admission_plan"]
+    G --> H["StepRequestEvent.external_invocation"]
+    H --> I["WorkflowToolExecutionRequest.InvocationAdmission"]
+    I --> J["AgentToolExecutionContext.OperationAdmission"]
+    J --> K{"Committed selector"}
+    K -->|"PublishedEndpoint"| L["Runtime MCP endpoint-digest revalidation"]
+    K -->|"AuthoredRequest"| M["Validate proof + grant; no MCP/OpenAPI/inventory re-read"]
+    L --> N["NyxIdAdmittedRequestBuilder"]
+    M --> N
+    N --> O["Exact NyxID Proxy HTTP request"]
 ```
 
 `WorkflowRunActorPort` 从权威 definition binding 复制 plan 到 `BindWorkflowRunDefinitionEvent`，`WorkflowRunGAgent` 把它提交到本 run 的 state。`WorkflowExecutionKernel` 与 admission 共用 compiler，为 ordinary、nested、`foreach`/`for_each`/`foreach_llm` 和 `while`/`loop` 派生同一稳定 call-site；`ToolCallModule` 只从 run actor state 解析该 call-site 的唯一 proof。missing plan、missing/duplicate call-site、selector mismatch 或 tool mismatch 都在 dispatch 前 fail closed。foreach backpressure、while state 与 tool approval suspend/resume 都复制同一个 typed invocation，不按动态 item id 猜 proof。

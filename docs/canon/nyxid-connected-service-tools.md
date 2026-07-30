@@ -63,11 +63,19 @@ current-turn discovery 仍 request-locally 读取并解析 MCP catalog，以验�
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart LR
-    A["NyxID GET /api/v1/mcp/config"] --> B["Shared typed adapter"]
-    B --> C["Exact service_id + endpoint_id selector"]
-    C --> D["Server-owned v4 definition proof"]
-    D --> E["Workflow run actor"]
-    E --> F["Proof-bound NyxID Proxy request"]
+    A{"Workflow step selector"}
+    A -->|"PublishedEndpoint(endpoint_id)"| B["MCP descriptor"]
+    A -->|"AuthoredRequest(request_contract_digest)"| C["Exact inventory at bind"]
+    C --> D["Authenticated binder confirmation + NyxIdExplicitRequestGrant"]
+    B --> E["Actor-owned server v4 definition proof"]
+    D --> E
+    E --> F["Workflow run actor"]
+    F --> G{"Committed selector"}
+    G -->|"PublishedEndpoint"| H["Runtime MCP endpoint-digest revalidation"]
+    G -->|"AuthoredRequest"| I["Validate proof + grant; no MCP/OpenAPI/inventory re-read"]
+    H --> J["NyxIdAdmittedRequestBuilder"]
+    I --> J
+    J --> K["Exact proof-bound NyxID Proxy route"]
 ```
 
 Workflow live discovery uses the caller token to read MCP only for `nyxid_operation`, which is `PublishedEndpoint(endpoint_id)`. Its definition actor commits a call-site-scoped proof with server-derived slug, endpoint identity, request schema, response policy, execution policy, source stamp, and contract digest. `nyxid_request` is instead `AuthoredRequest(request_contract_digest)`: bind-time admission reads one active, caller-visible, credential-allowed exact `user_service_id` from inventory, derives the slug constraint server-side, and does zero MCP/OpenAPI read. The definition actor persists the request proof only after an authenticated binder explicitly confirms its current request-contract digest and derived risk as `NyxIdExplicitRequestGrant`; apply/save cannot grant it.
