@@ -131,7 +131,18 @@ public static class ChatRunStartErrorMapper
                     return new
                     {
                         userServiceId = readiness.SelectedSelector.NyxIdOperation.UserServiceId,
+                        requestContractDigest = (string?)null,
                         endpointId = (string?)readiness.SelectedSelector.NyxIdOperation.EndpointId,
+                        operationId = (string?)null,
+                        connectorCapabilityRef = (string?)null,
+                    };
+                case ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdRequest:
+                    return new
+                    {
+                        userServiceId = readiness.SelectedSelector.NyxIdRequest.UserServiceId,
+                        requestContractDigest = WorkflowCapabilityAdmissionPlanIntegrity
+                            .ComputeNyxIdRequestContractDigest(readiness.SelectedSelector.NyxIdRequest),
+                        endpointId = (string?)null,
                         operationId = (string?)null,
                         connectorCapabilityRef = (string?)null,
                     };
@@ -139,6 +150,7 @@ public static class ChatRunStartErrorMapper
                     return new
                     {
                         userServiceId = (string?)null,
+                        requestContractDigest = (string?)null,
                         endpointId = (string?)null,
                         operationId = (string?)readiness.SelectedSelector.HostConnector.OperationId,
                         connectorCapabilityRef = readiness.SelectedSelector.HostConnector.ConnectorCapabilityRef,
@@ -151,13 +163,24 @@ public static class ChatRunStartErrorMapper
             ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService => new
             {
                 userServiceId = (string?)readiness.SelectedCapability.NyxIdUserService.UserServiceId,
+                requestContractDigest = (string?)null,
                 endpointId = (string?)readiness.SelectedCapability.NyxIdUserService.EndpointId,
+                operationId = (string?)null,
+                connectorCapabilityRef = (string?)null,
+            },
+            ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest => new
+            {
+                userServiceId = (string?)readiness.SelectedCapability.NyxIdUserRequest.Request.UserServiceId,
+                requestContractDigest = (string?)WorkflowCapabilityAdmissionPlanIntegrity
+                    .ComputeNyxIdRequestContractDigest(readiness.SelectedCapability.NyxIdUserRequest.Request),
+                endpointId = (string?)null,
                 operationId = (string?)null,
                 connectorCapabilityRef = (string?)null,
             },
             ExternalWorkflowCapabilityRef.CapabilityOneofCase.HostConnector => new
             {
                 userServiceId = (string?)null,
+                requestContractDigest = (string?)null,
                 endpointId = (string?)null,
                 operationId = (string?)readiness.SelectedCapability.HostConnector.OperationId,
                 connectorCapabilityRef = (string?)readiness.SelectedCapability.HostConnector.ConnectorCapabilityRef,

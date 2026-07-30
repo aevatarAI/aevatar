@@ -374,7 +374,9 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
             ExternalCapabilities: admittedCapabilities,
             OwnerLLMRouteRequired: authorizationDependencies.OwnerLlmRouteRequired,
             ServiceGrantRequirement: admittedCapabilities.Any(static capability =>
-                capability.CapabilityCase == ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService)
+                capability.CapabilityCase is
+                    ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService or
+                    ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest)
                     ? AuthorizationGrantRequirement.Required
                     : AuthorizationGrantRequirement.NotRequired);
     }

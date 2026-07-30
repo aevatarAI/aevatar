@@ -192,4 +192,83 @@ public class ChatRunStartErrorMapperTests
         selected.GetProperty("operationId").ValueKind.Should().Be(JsonValueKind.Null);
         selected.GetProperty("connectorCapabilityRef").ValueKind.Should().Be(JsonValueKind.Null);
     }
+
+    [Fact]
+    public void ToErrorBody_ShouldMapExplicitRequestSelectorToSafeExactIdentity()
+    {
+        var request = ExplicitRequest("usvc-explicit-alpha");
+        request.HeaderParameters.Add("X-Private-Header-Name");
+        var readiness = new ExternalCapabilityReadiness
+        {
+            Status = ExternalCapabilityReadinessStatus.ContractDrift,
+            SelectedSelector = new ExternalWorkflowCapabilitySelector
+            {
+                NyxIdRequest = request,
+            },
+        };
+        var detail = WorkflowChatRunStartFailureDetail.Create(
+            WorkflowChatRunStartError.InvalidWorkflowYaml,
+            "External workflow capability admission failed.",
+            readiness);
+
+        var serialized = JsonSerializer.Serialize(ChatRunStartErrorMapper.ToErrorBody(detail));
+        using var json = JsonDocument.Parse(serialized);
+        var selected = json.RootElement.GetProperty("externalCapabilityReadiness")
+            .GetProperty("selectedCapability");
+
+        selected.GetProperty("userServiceId").GetString().Should().Be("usvc-explicit-alpha");
+        selected.GetProperty("requestContractDigest").GetString().Should().Be(
+            WorkflowCapabilityAdmissionPlanIntegrity.ComputeNyxIdRequestContractDigest(request));
+        selected.GetProperty("endpointId").ValueKind.Should().Be(JsonValueKind.Null);
+        selected.GetProperty("operationId").ValueKind.Should().Be(JsonValueKind.Null);
+        selected.GetProperty("connectorCapabilityRef").ValueKind.Should().Be(JsonValueKind.Null);
+        serialized.Should().NotContain("/api/private/{resource_id}");
+        serialized.Should().NotContain("X-Private-Header-Name");
+    }
+
+    [Fact]
+    public void ToErrorBody_ShouldMapExplicitRequestCapabilityToAuthoredRequestIdentity()
+    {
+        var request = ExplicitRequest("usvc-capability-alpha");
+        var readiness = new ExternalCapabilityReadiness
+        {
+            Status = ExternalCapabilityReadinessStatus.ContractDrift,
+            SelectedCapability = new ExternalWorkflowCapabilityRef
+            {
+                NyxIdUserRequest = new NyxIdUserRequestCapabilityRef
+                {
+                    Request = request,
+                    ServiceSlugSnapshot = "server-slug-must-not-be-identity",
+                    ContractDigest = "server-proof-digest-must-not-be-operation-id",
+                },
+            },
+        };
+        var detail = WorkflowChatRunStartFailureDetail.Create(
+            WorkflowChatRunStartError.InvalidWorkflowYaml,
+            "External workflow capability admission failed.",
+            readiness);
+
+        var serialized = JsonSerializer.Serialize(ChatRunStartErrorMapper.ToErrorBody(detail));
+        using var json = JsonDocument.Parse(serialized);
+        var selected = json.RootElement.GetProperty("externalCapabilityReadiness")
+            .GetProperty("selectedCapability");
+
+        selected.GetProperty("userServiceId").GetString().Should().Be("usvc-capability-alpha");
+        selected.GetProperty("requestContractDigest").GetString().Should().Be(
+            WorkflowCapabilityAdmissionPlanIntegrity.ComputeNyxIdRequestContractDigest(request));
+        selected.GetProperty("endpointId").ValueKind.Should().Be(JsonValueKind.Null);
+        selected.GetProperty("operationId").ValueKind.Should().Be(JsonValueKind.Null);
+        serialized.Should().NotContain("server-slug-must-not-be-identity");
+        serialized.Should().NotContain("server-proof-digest-must-not-be-operation-id");
+    }
+
+    private static NyxIdRequestSelector ExplicitRequest(string userServiceId) =>
+        new()
+        {
+            UserServiceId = userServiceId,
+            Method = NyxIdRequestMethod.Get,
+            PathTemplate = "/api/private/{resource_id}",
+            BodyMode = NyxIdRequestBodyMode.None,
+            ResponseMode = NyxIdRequestResponseMode.Text,
+        };
 }

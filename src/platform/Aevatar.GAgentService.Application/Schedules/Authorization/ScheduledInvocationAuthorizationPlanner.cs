@@ -780,6 +780,12 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
                 case ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService:
                     services.Add(capability.NyxIdUserService.Clone());
                     break;
+                case ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest:
+                    services.Add(new NyxIdUserServiceCapabilityRef
+                    {
+                        UserServiceId = capability.NyxIdUserRequest.Request?.UserServiceId ?? string.Empty,
+                    });
+                    break;
                 default:
                     return WorkflowCapabilityResolution.Failed(Failed(
                         ScheduledInvocationAuthorizationFailureCode.DurableAuthorizationUnavailable,

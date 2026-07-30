@@ -237,6 +237,30 @@ public sealed class WorkflowAuthorizationDependenciesTests
         dependencies.ServiceGrantPolicy.Should().Be(WorkflowServiceGrantPolicy.Required);
     }
 
+    [Fact]
+    public async Task BindWorkflowDefinition_ShouldRequireServiceGrantForExplicitRequestSelector()
+    {
+        var yaml = ExactNyxIdRequestWorkflowYaml();
+        var agent = NewAgent();
+        var dependencies = agent.EvaluateAuthorizationDependencies(yaml)!;
+        var plan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            yaml,
+            new Dictionary<string, string>(),
+            ExternalCapabilityExecutionMode.Interactive,
+            ReadyAdmissions(dependencies),
+            ReadyExplicitRequestSourceStamps());
+
+        await agent.BindWorkflowDefinitionAsync(
+            yaml,
+            "wf-explicit-alpha",
+            capabilityAdmissionPlan: plan);
+
+        agent.State.AuthorizationDependencies.ServiceGrantPolicy.Should()
+            .Be(WorkflowServiceGrantPolicy.Required);
+        agent.State.AuthorizationDependencies.ExternalInvocations.Should().ContainSingle()
+            .Which.Selector.NyxIdRequest.UserServiceId.Should().Be("usvc-explicit-alpha");
+    }
+
     [Theory]
     [InlineData("foreach", "sub_step_type")]
     [InlineData("for_each", "sub_step_type")]
@@ -718,6 +742,25 @@ public sealed class WorkflowAuthorizationDependenciesTests
               arguments: '{"path_params":{"entity_id":"${input}"}}'
         """;
 
+    private static string ExactNyxIdRequestWorkflowYaml() =>
+        """
+        name: wf-explicit-alpha
+        roles: []
+        steps:
+          - id: request-alpha
+            type: tool_call
+            capability:
+              nyxid_request:
+                user_service_id: usvc-explicit-alpha
+                method: GET
+                path_template: /api/resources/{resource_id}
+                body_mode: none
+                response_mode: text
+            parameters:
+              tool: nyxid_proxy
+              arguments: '{}'
+        """;
+
     private static WorkflowCapabilityInvocationAdmission[] ReadyAdmissions(
         WorkflowAuthorizationDependencies dependencies) =>
         dependencies.ExternalInvocations.Select(static invocation => new WorkflowCapabilityInvocationAdmission
@@ -754,9 +797,75 @@ public sealed class WorkflowAuthorizationDependenciesTests
                             },
                         },
                     },
+                ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdRequest =>
+                    BuildExplicitRequestAdmissionCapability(invocation),
                 _ => throw new InvalidOperationException("A selected capability is required."),
             },
+            NyxIdExplicitRequestGrant = invocation.Selector.SelectorCase ==
+                                        ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdRequest
+                ? BuildExplicitRequestGrant(invocation)
+                : null,
         }).ToArray();
+
+    private static ExternalWorkflowCapabilityRef BuildExplicitRequestAdmissionCapability(
+        ExternalToolInvocationSpec invocation)
+    {
+        var request = invocation.Selector.NyxIdRequest.Clone();
+        var requestDigest = WorkflowCapabilityAdmissionPlanIntegrity
+            .ComputeNyxIdRequestContractDigest(request);
+        var grant = BuildExplicitRequestGrant(invocation);
+        return new ExternalWorkflowCapabilityRef
+        {
+            NyxIdUserRequest = new NyxIdUserRequestCapabilityRef
+            {
+                Request = request,
+                ServiceSlugSnapshot = "explicit-service-alpha",
+                ContractDigest = WorkflowCapabilityAdmissionPlanIntegrity
+                    .ComputeNyxIdExplicitRequestProofDigest(requestDigest, "explicit-service-alpha"),
+                ExplicitRequestGrantDigest = WorkflowCapabilityAdmissionPlanIntegrity
+                    .ComputeNyxIdExplicitRequestGrantDigest(grant),
+                ExecutionPolicy = new NyxIdOperationExecutionPolicy
+                {
+                    Risk = NyxIdOperationRisk.ReadOnly,
+                    Approval = NyxIdOperationApproval.None,
+                    EnforcementOwner = NyxIdOperationEnforcementOwner.Aevatar,
+                    AllowedExecutionModes = { ExternalCapabilityExecutionMode.Interactive },
+                },
+            },
+        };
+    }
+
+    private static NyxIdExplicitRequestGrant BuildExplicitRequestGrant(
+        ExternalToolInvocationSpec invocation)
+    {
+        var grant = new NyxIdExplicitRequestGrant
+        {
+            CallSiteId = invocation.CallSiteId,
+            RequestContractDigest = WorkflowCapabilityAdmissionPlanIntegrity
+                .ComputeNyxIdRequestContractDigest(invocation.Selector.NyxIdRequest),
+            GrantorAuthority = NyxIdExplicitRequestGrantorAuthority.AevatarWorkflowBinder,
+            GrantorOwnerKind = ExternalCapabilityAuthorizationOwnerKind.Personal,
+            GrantorOwnerSubject = "nyx-user-explicit-alpha",
+            Risk = NyxIdOperationRisk.ReadOnly,
+        };
+        grant.AllowedExecutionModes.Add(ExternalCapabilityExecutionMode.Interactive);
+        return grant;
+    }
+
+    private static ExternalCapabilitySourceStamp[] ReadyExplicitRequestSourceStamps() =>
+        [
+            new()
+            {
+                SourceKind = ExternalCapabilitySourceKind.NyxIdUserServices,
+                SourceId = "nyxid-user-services:nyx-user-explicit-alpha",
+                SourceVersion = 17,
+                ObservedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
+                    new DateTimeOffset(2026, 7, 30, 9, 0, 0, TimeSpan.Zero)),
+                FreshUntil = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
+                    new DateTimeOffset(2026, 7, 30, 9, 5, 0, TimeSpan.Zero)),
+                ContentDigest = "explicit-user-services-digest-alpha",
+            },
+        ];
 
     private static ExternalCapabilitySourceStamp[] ReadySourceStamps(
         string userServiceId = "us-home-alpha") =>

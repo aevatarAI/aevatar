@@ -165,9 +165,8 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
         var result = new WorkflowAuthorizationDependencies
         {
             OwnerLlmRouteRequired = all.Any(static dependencies => dependencies.OwnerLlmRouteRequired),
-            ServiceGrantPolicy = invocations.Any(static invocation =>
-                invocation.Selector?.SelectorCase ==
-                ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdOperation)
+            ServiceGrantPolicy = all.Any(static dependencies =>
+                dependencies.ServiceGrantPolicy == WorkflowServiceGrantPolicy.Required)
                 ? WorkflowServiceGrantPolicy.Required
                 : WorkflowServiceGrantPolicy.NotRequiredNoExternalService,
         };

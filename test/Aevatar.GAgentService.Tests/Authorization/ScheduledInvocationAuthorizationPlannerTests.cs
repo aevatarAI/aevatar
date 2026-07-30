@@ -805,6 +805,106 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
     }
 
     [Fact]
+    public async Task PlanAsync_ForStudioTarget_ShouldGrantExactServiceFromExplicitRequest()
+    {
+        var evidence = StudioWorkflowEvidence(
+            ExplicitRequestCapability("usvc-explicit-alpha", "untrusted-slug-alpha"));
+        var planner = new ScheduledInvocationAuthorizationPlanner(
+            new MutableCatalogQueryPort(Snapshot(
+                Service("usvc-explicit-alpha", "catalog-slug-alpha", AuthorizationGrantRequirement.NotRequired))),
+            evidence,
+            evidence,
+            evidence,
+            evidence);
+
+        var result = await planner.PlanAsync(StudioRequest());
+
+        result.Success.Should().BeTrue();
+        result.Plan!.NyxIdServiceGrants.Should().ContainSingle()
+            .Which.UserServiceId.Should().Be("usvc-explicit-alpha");
+        result.Plan.NyxIdServiceGrants[0].ServiceSlug.Should().Be("catalog-slug-alpha");
+    }
+
+    [Fact]
+    public async Task PlanAsync_ForMixedCapabilities_ShouldDeduplicateOnlyExactServiceId()
+    {
+        var evidence = StudioWorkflowEvidence(
+            NyxIdCapability("usvc-shared-alpha", "catalog-slug-alpha"),
+            ExplicitRequestCapability("usvc-shared-alpha", "different-proof-slug"));
+        var planner = new ScheduledInvocationAuthorizationPlanner(
+            new MutableCatalogQueryPort(Snapshot(
+                Service("usvc-shared-alpha", "catalog-slug-alpha", AuthorizationGrantRequirement.NotRequired))),
+            evidence,
+            evidence,
+            evidence,
+            evidence);
+
+        var result = await planner.PlanAsync(StudioRequest());
+
+        result.Success.Should().BeTrue();
+        result.Plan!.NyxIdServiceGrants.Should().ContainSingle()
+            .Which.UserServiceId.Should().Be("usvc-shared-alpha");
+    }
+
+    [Fact]
+    public async Task PlanAsync_ForMixedCapabilities_ShouldPreserveDifferentServiceIds()
+    {
+        var evidence = StudioWorkflowEvidence(
+            NyxIdCapability("usvc-published-alpha", "published-slug-alpha"),
+            ExplicitRequestCapability("usvc-explicit-beta", "proof-slug-beta"));
+        var planner = new ScheduledInvocationAuthorizationPlanner(
+            new MutableCatalogQueryPort(Snapshot(
+                Service("usvc-published-alpha", "published-slug-alpha", AuthorizationGrantRequirement.NotRequired),
+                Service("usvc-explicit-beta", "catalog-slug-beta", AuthorizationGrantRequirement.NotRequired))),
+            evidence,
+            evidence,
+            evidence,
+            evidence);
+
+        var result = await planner.PlanAsync(StudioRequest());
+
+        result.Success.Should().BeTrue();
+        result.Plan!.NyxIdServiceGrants.Select(static grant => grant.UserServiceId)
+            .Should().Equal("usvc-explicit-beta", "usvc-published-alpha");
+    }
+
+    [Fact]
+    public async Task PlanAsync_ForExplicitRequestWithoutExactServiceId_ShouldFailClosed()
+    {
+        var evidence = StudioWorkflowEvidence(ExplicitRequestCapability(string.Empty, "proof-slug-alpha"));
+        var planner = new ScheduledInvocationAuthorizationPlanner(
+            new MutableCatalogQueryPort(Snapshot()),
+            evidence,
+            evidence,
+            evidence,
+            evidence);
+
+        var result = await planner.PlanAsync(StudioRequest());
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(
+            ScheduledInvocationAuthorizationFailureCode.DurableAuthorizationUnavailable);
+        result.Detail.Should().Be("nyxid_exact_service_identity_unavailable");
+    }
+
+    [Fact]
+    public async Task PlanAsync_ForUnknownWorkflowCapabilityVariant_ShouldFailClosed()
+    {
+        var evidence = StudioWorkflowEvidence(new ExternalWorkflowCapabilityRef());
+        var planner = new ScheduledInvocationAuthorizationPlanner(
+            new MutableCatalogQueryPort(Snapshot()),
+            evidence,
+            evidence,
+            evidence,
+            evidence);
+
+        var result = await planner.PlanAsync(StudioRequest());
+
+        result.Success.Should().BeFalse();
+        result.Detail.Should().Be("workflow_external_capability_identity_unavailable");
+    }
+
+    [Fact]
     public async Task PlanAsync_ForStudioTarget_ShouldNotRequireIrrelevantConnectorOrLlmDocuments()
     {
         var evidence = new StudioEvidencePorts
@@ -930,6 +1030,45 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
     {
         NyxIdUserService = NyxIdService(serviceId, slug),
     };
+
+    private static ExternalWorkflowCapabilityRef ExplicitRequestCapability(
+        string userServiceId,
+        string proofSlug) =>
+        new()
+        {
+            NyxIdUserRequest = new NyxIdUserRequestCapabilityRef
+            {
+                Request = new NyxIdRequestSelector
+                {
+                    UserServiceId = userServiceId,
+                    Method = NyxIdRequestMethod.Get,
+                    PathTemplate = "/api/resources/{resource_id}",
+                    BodyMode = NyxIdRequestBodyMode.None,
+                    ResponseMode = NyxIdRequestResponseMode.Text,
+                },
+                ServiceSlugSnapshot = proofSlug,
+                ContractDigest = "request-proof-digest-alpha",
+                ExplicitRequestGrantDigest = "request-grant-digest-alpha",
+            },
+        };
+
+    private static StudioEvidencePorts StudioWorkflowEvidence(
+        params ExternalWorkflowCapabilityRef[] capabilities) =>
+        new()
+        {
+            Member = new ScheduledInvocationMemberEvidence(
+                3,
+                "wf-alpha",
+                "rev-alpha",
+                "svc-alpha"),
+            Workflow = new ScheduledInvocationWorkflowEvidence(
+                5,
+                capabilities,
+                false,
+                capabilities.Length == 0
+                    ? AuthorizationGrantRequirement.NotRequired
+                    : AuthorizationGrantRequirement.Required),
+        };
 
     private static ExternalWorkflowCapabilityRef ConnectorCapability(string connectorRef) => new()
     {

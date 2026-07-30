@@ -95,6 +95,11 @@ public sealed class StudioWorkflowProvisioningServiceTests
         member.BindRequest.CapabilityAdmission.ExplicitRequestConfirmations.Should().BeEmpty();
         plan.ToString().Should().NotContain(StudioExplicitRequestAdmissionTestKit.CallerBearer);
         plan.ToString().Should().NotContain(StudioExplicitRequestAdmissionTestKit.OrganizationBearer);
+        var workflowEvidence = schedule.LastCreateRequest!.AcceptedBinding!.WorkflowEvidence;
+        workflowEvidence.Should().NotBeNull();
+        workflowEvidence!.ServiceGrantRequirement.Should().Be(AuthorizationGrantRequirement.Required);
+        workflowEvidence.ExternalCapabilities.Should().ContainSingle()
+            .Which.NyxIdUserRequest.Request.UserServiceId.Should().Be("usvc-alpha");
     }
 
     [Theory]
@@ -361,6 +366,10 @@ public sealed class StudioWorkflowProvisioningServiceTests
         acceptedBinding!.PublishedServiceId.Should().Be("svc-alpha");
         acceptedBinding.WorkflowId.Should().Be("wf-alpha");
         acceptedBinding.WorkflowRevisionId.Should().Be("rev-alpha");
+        acceptedBinding.WorkflowEvidence.Should().NotBeNull();
+        acceptedBinding.WorkflowEvidence!.ServiceGrantRequirement.Should()
+            .Be(AuthorizationGrantRequirement.NotRequired);
+        acceptedBinding.WorkflowEvidence.ExternalCapabilities.Should().BeEmpty();
         var preflightRequest = schedule.PreflightRequests.Should().ContainSingle().Which;
         preflightRequest.Should().BeSameAs(schedulePort.LastPreflightRequest);
         preflightRequest.MemberId.Should().Be("m-alpha");
