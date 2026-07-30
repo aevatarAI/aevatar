@@ -1905,6 +1905,7 @@ public sealed class AevatarInvocationDispatcher
             Kind = part.Kind switch
             {
                 InvocationContentPartKind.Text => ChatContentPartKind.Text,
+                InvocationContentPartKind.File => ChatContentPartKind.Text,
                 InvocationContentPartKind.Image => ChatContentPartKind.Image,
                 InvocationContentPartKind.Audio => ChatContentPartKind.Audio,
                 InvocationContentPartKind.Video => ChatContentPartKind.Video,
@@ -1915,6 +1916,7 @@ public sealed class AevatarInvocationDispatcher
             MediaType = part.MediaType,
             Uri = part.Uri,
             Name = part.Name,
+            FileRef = part.FileRef?.Clone(),
         }).ToArray();
 
     private static IReadOnlyList<GAgentDraftRunInputPart>? ToGAgentInputParts(InvocationPayload payload)
@@ -1927,6 +1929,7 @@ public sealed class AevatarInvocationDispatcher
             Kind = part.Kind switch
             {
                 InvocationContentPartKind.Text => GAgentDraftRunInputPartKind.Text,
+                InvocationContentPartKind.File => GAgentDraftRunInputPartKind.Text,
                 InvocationContentPartKind.Image => GAgentDraftRunInputPartKind.Image,
                 InvocationContentPartKind.Audio => GAgentDraftRunInputPartKind.Audio,
                 InvocationContentPartKind.Video => GAgentDraftRunInputPartKind.Video,
@@ -1950,6 +1953,7 @@ public sealed class AevatarInvocationDispatcher
             Kind = part.Kind switch
             {
                 InvocationContentPartKind.Text => Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind.Text,
+                InvocationContentPartKind.File => Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind.File,
                 InvocationContentPartKind.Image => Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind.Image,
                 InvocationContentPartKind.Audio => Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind.Audio,
                 InvocationContentPartKind.Video => Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind.Video,
@@ -1960,8 +1964,41 @@ public sealed class AevatarInvocationDispatcher
             MediaType = EmptyToNull(part.MediaType),
             Uri = EmptyToNull(part.Uri),
             Name = EmptyToNull(part.Name),
+            FileRef = ToWorkflowFileRef(part.FileRef),
         }).ToArray();
     }
+
+    private static FileArtifactRef? ToWorkflowFileRef(Aevatar.AI.Abstractions.ChatFileRef? fileRef) =>
+        fileRef is null || !HasFileRefIdentity(fileRef)
+            ? null
+            : new FileArtifactRef
+            {
+                FileId = EmptyToNull(fileRef.FileId),
+                ArtifactId = EmptyToNull(fileRef.ArtifactId),
+                SourceKind = fileRef.SourceKind switch
+                {
+                    Aevatar.AI.Abstractions.ChatFileSourceKind.ChatInput => FileArtifactSourceKind.ChatInput,
+                    Aevatar.AI.Abstractions.ChatFileSourceKind.FormUpload => FileArtifactSourceKind.FormUpload,
+                    Aevatar.AI.Abstractions.ChatFileSourceKind.ConnectedServiceResource => FileArtifactSourceKind.ConnectedServiceResource,
+                    Aevatar.AI.Abstractions.ChatFileSourceKind.ExternalResource => FileArtifactSourceKind.ExternalResource,
+                    Aevatar.AI.Abstractions.ChatFileSourceKind.Generated => FileArtifactSourceKind.Generated,
+                    _ => FileArtifactSourceKind.Unspecified,
+                },
+                SourceMessageId = EmptyToNull(fileRef.SourceMessageId),
+                SourceResourceKey = EmptyToNull(fileRef.SourceResourceKey),
+                FileName = EmptyToNull(fileRef.FileName),
+                MediaType = EmptyToNull(fileRef.MediaType),
+                SizeBytes = fileRef.SizeBytes,
+                Sha256 = EmptyToNull(fileRef.Sha256),
+                CreatedAtUnixMs = fileRef.CreatedAtUnixMs,
+                ExpiresAtUnixMs = fileRef.ExpiresAtUnixMs,
+                OwnerRunId = EmptyToNull(fileRef.OwnerRunId),
+                OwnerScopeId = EmptyToNull(fileRef.OwnerScopeId),
+            };
+
+    private static bool HasFileRefIdentity(Aevatar.AI.Abstractions.ChatFileRef fileRef) =>
+        !string.IsNullOrWhiteSpace(fileRef.FileId) ||
+        !string.IsNullOrWhiteSpace(fileRef.ArtifactId);
 
     private static InvocationWaitMode ResolveWait(InvocationWaitMode wait) =>
         wait == InvocationWaitMode.Unspecified

@@ -74,35 +74,28 @@ public sealed class OrleansActorRuntimeForwardingTests
     }
 
     [Fact]
-    public async Task LinkAsync_WithBoundCurrentParent_ShouldPersistChildWithoutCallingParentGrain()
+    public async Task LinkAsync_WithBoundCurrentParent_ShouldUseParentGrainWithoutTouchingBoundState()
     {
         var stateBindingAccessor = new AsyncLocalRuntimeActorStateBindingAccessor();
-        var runtime = CreateRuntime(
-            out _,
-            out var grains,
-            out _,
-            stateBindingAccessor: stateBindingAccessor);
+        var runtime = CreateRuntime(out _, out var grains, out _);
         var boundState = CreatePersistentState("parent");
         var stateProxy = (RuntimeActorPersistentStateProxy)(object)boundState;
 
         using (stateBindingAccessor.Bind(boundState))
             await runtime.LinkAsync("parent", "child");
 
-        stateProxy.State.Children.Should().ContainSingle("child");
-        stateProxy.WriteCount.Should().Be(1);
-        grains["parent"].AddChildCallCount.Should().Be(0);
+        stateProxy.State.Children.Should().BeEmpty();
+        stateProxy.WriteCount.Should().Be(0);
+        grains["parent"].AddChildCallCount.Should().Be(1);
+        grains["parent"].Children.Should().ContainSingle("child");
         grains["child"].ParentId.Should().Be("parent");
     }
 
     [Fact]
-    public async Task LinkAsync_WithBoundCurrentParent_WhenRepeated_ShouldRemainIdempotent()
+    public async Task LinkAsync_WithBoundCurrentParent_WhenRepeated_ShouldLeaveTopologyIdempotent()
     {
         var stateBindingAccessor = new AsyncLocalRuntimeActorStateBindingAccessor();
-        var runtime = CreateRuntime(
-            out _,
-            out var grains,
-            out _,
-            stateBindingAccessor: stateBindingAccessor);
+        var runtime = CreateRuntime(out _, out var grains, out _);
         var boundState = CreatePersistentState("parent");
         var stateProxy = (RuntimeActorPersistentStateProxy)(object)boundState;
 
@@ -112,9 +105,10 @@ public sealed class OrleansActorRuntimeForwardingTests
             await runtime.LinkAsync("parent", "child");
         }
 
-        stateProxy.State.Children.Should().ContainSingle("child");
-        stateProxy.WriteCount.Should().Be(1);
-        grains["parent"].AddChildCallCount.Should().Be(0);
+        stateProxy.State.Children.Should().BeEmpty();
+        stateProxy.WriteCount.Should().Be(0);
+        grains["parent"].Children.Should().ContainSingle("child");
+        grains["parent"].AddChildCallCount.Should().Be(2);
         grains["child"].ParentId.Should().Be("parent");
     }
 
@@ -305,8 +299,7 @@ public sealed class OrleansActorRuntimeForwardingTests
         out InMemoryStreamForwardingRegistry registry,
         out Dictionary<string, RecordingRuntimeActorGrain> grains,
         out Dictionary<string, RecordingCallbackSchedulerGrain> callbackSchedulerGrains,
-        IStreamLifecycleManager? streamLifecycleManager = null,
-        IRuntimeActorStateBindingAccessor? stateBindingAccessor = null)
+        IStreamLifecycleManager? streamLifecycleManager = null)
     {
         var grainMap = new Dictionary<string, RecordingRuntimeActorGrain>(StringComparer.Ordinal);
         var callbackSchedulerGrainMap = new Dictionary<string, RecordingCallbackSchedulerGrain>(StringComparer.Ordinal);
@@ -344,7 +337,6 @@ public sealed class OrleansActorRuntimeForwardingTests
             streams,
             new OrleansActorRuntimeDurableCallbackScheduler(grainFactory),
             new AgentKindRegistry([]),
-            stateBindingAccessor ?? new AsyncLocalRuntimeActorStateBindingAccessor(),
             streamLifecycleManager: streamLifecycleManager);
     }
 

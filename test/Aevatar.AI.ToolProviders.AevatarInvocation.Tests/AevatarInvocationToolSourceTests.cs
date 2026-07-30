@@ -770,6 +770,21 @@ public sealed class AevatarInvocationToolSourceTests
               "member_id": "m-alpha",
               "payload": {
                 "prompt": "run member workflow",
+                "input_parts": [
+                  {
+                    "kind": "file",
+                    "file_ref": {
+                      "file_id": "file-lark-1",
+                      "artifact_id": "workflow-file://file-lark-1",
+                      "source_kind": 3,
+                      "source_message_id": "om_lark_1",
+                      "source_resource_key": "file_key_1",
+                      "file_name": "invoice.pdf",
+                      "media_type": "application/pdf",
+                      "size_bytes": 1234
+                    }
+                  }
+                ],
                 "headers": { "x-workflow": "yes" }
               },
               "wait": "stream"
@@ -798,7 +813,22 @@ public sealed class AevatarInvocationToolSourceTests
         dispatch.Request.Identity!.TenantId.Should().Be("scope-1");
         dispatch.Request.Identity.ServiceId.Should().Be("svc-alpha");
         dispatch.Request.EndpointId.Should().Be("chat");
-        dispatch.Request.Payload!.Unpack<ChatRequestEvent>().Prompt.Should().Be("run member workflow");
+        var chatPayload = dispatch.Request.Payload!.Unpack<ChatRequestEvent>();
+        chatPayload.Prompt.Should().Be("run member workflow");
+        chatPayload.InputParts.Should().ContainSingle();
+        var inputPart = chatPayload.InputParts.Single();
+        inputPart.Kind.Should().Be(ChatContentPartKind.Text);
+        inputPart.DataBase64.Should().BeEmpty();
+        inputPart.FileRef.Should().NotBeNull();
+        var fileRef = inputPart.FileRef!;
+        fileRef.FileId.Should().Be("file-lark-1");
+        fileRef.ArtifactId.Should().Be("workflow-file://file-lark-1");
+        fileRef.SourceKind.Should().Be(Aevatar.AI.Abstractions.ChatFileSourceKind.ConnectedServiceResource);
+        fileRef.SourceMessageId.Should().Be("om_lark_1");
+        fileRef.SourceResourceKey.Should().Be("file_key_1");
+        fileRef.FileName.Should().Be("invoice.pdf");
+        fileRef.MediaType.Should().Be("application/pdf");
+        fileRef.SizeBytes.Should().Be(1234);
         harness.AdmissionAuthorizer.Calls.Should().ContainSingle();
     }
 
@@ -1396,6 +1426,21 @@ public sealed class AevatarInvocationToolSourceTests
               "workflow_id": "wf-main",
               "inputs": {
                 "prompt": "run workflow",
+                "input_parts": [
+                  {
+                    "kind": "file",
+                    "file_ref": {
+                      "file_id": "file-lark-1",
+                      "artifact_id": "workflow-file://file-lark-1",
+                      "source_kind": 3,
+                      "source_message_id": "om_lark_1",
+                      "source_resource_key": "file_key_1",
+                      "file_name": "invoice.pdf",
+                      "media_type": "application/pdf",
+                      "size_bytes": 1234
+                    }
+                  }
+                ],
                 "headers": { "x-workflow": "yes" }
               },
               "wait": "stream"
@@ -1408,6 +1453,20 @@ public sealed class AevatarInvocationToolSourceTests
         harness.WorkflowDispatch.Command.Prompt.Should().Be("run workflow");
         harness.WorkflowDispatch.Command.ScopeId.Should().Be("scope-1");
         harness.WorkflowDispatch.Command.CallerCredential!.BearerToken.Should().Be("access-token");
+        harness.WorkflowDispatch.Command.InputParts.Should().ContainSingle();
+        var inputPart = harness.WorkflowDispatch.Command.InputParts!.Single();
+        inputPart.Kind.Should().Be(Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind.File);
+        inputPart.DataBase64.Should().BeNull();
+        inputPart.FileRef.Should().NotBeNull();
+        var fileRef = inputPart.FileRef!;
+        fileRef.FileId.Should().Be("file-lark-1");
+        fileRef.ArtifactId.Should().Be("workflow-file://file-lark-1");
+        fileRef.SourceKind.Should().Be(FileArtifactSourceKind.ConnectedServiceResource);
+        fileRef.SourceMessageId.Should().Be("om_lark_1");
+        fileRef.SourceResourceKey.Should().Be("file_key_1");
+        fileRef.FileName.Should().Be("invoice.pdf");
+        fileRef.MediaType.Should().Be("application/pdf");
+        fileRef.SizeBytes.Should().Be(1234);
         harness.WorkflowDispatch.Command.Metadata.Should().Contain("x-workflow", "yes");
         ShouldNotCarryTrustedCallerValues(harness.WorkflowDispatch.Command.Metadata);
         ShouldCarryWorkflowLlmControlValues(harness.WorkflowDispatch.Command.LlmControl);
