@@ -2013,20 +2013,7 @@ public sealed class AevatarInvocationDispatcher
             {
                 FileId = fileRef.FileId ?? string.Empty,
                 ArtifactId = fileRef.ArtifactId ?? string.Empty,
-                SourceKind = fileRef.SourceKind switch
-                {
-                    Aevatar.AI.Abstractions.ChatFileSourceKind.ChatInput =>
-                        Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.ChatInput,
-                    Aevatar.AI.Abstractions.ChatFileSourceKind.FormUpload =>
-                        Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.FormUpload,
-                    Aevatar.AI.Abstractions.ChatFileSourceKind.ConnectedServiceResource =>
-                        Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.ConnectedServiceResource,
-                    Aevatar.AI.Abstractions.ChatFileSourceKind.ExternalResource =>
-                        Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.ExternalResource,
-                    Aevatar.AI.Abstractions.ChatFileSourceKind.Generated =>
-                        Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.Generated,
-                    _ => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.Unspecified,
-                },
+                SourceKind = ToWorkflowFileSourceKind(fileRef.SourceKind),
                 SourceMessageId = fileRef.SourceMessageId ?? string.Empty,
                 SourceResourceKey = fileRef.SourceResourceKey ?? string.Empty,
                 FileName = fileRef.FileName ?? string.Empty,
@@ -2038,6 +2025,15 @@ public sealed class AevatarInvocationDispatcher
                 OwnerRunId = fileRef.OwnerRunId ?? string.Empty,
                 OwnerScopeId = fileRef.OwnerScopeId ?? string.Empty,
             };
+
+    private static Aevatar.Workflow.Abstractions.WorkflowFileSourceKind ToWorkflowFileSourceKind(
+        Aevatar.AI.Abstractions.ChatFileSourceKind sourceKind)
+    {
+        var sourceKindValue = (int)sourceKind;
+        return System.Enum.IsDefined(typeof(Aevatar.Workflow.Abstractions.WorkflowFileSourceKind), sourceKindValue)
+            ? (Aevatar.Workflow.Abstractions.WorkflowFileSourceKind)sourceKindValue
+            : Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.Unspecified;
+    }
 
     private static InvocationWaitMode ResolveWait(InvocationWaitMode wait) =>
         wait == InvocationWaitMode.Unspecified

@@ -375,14 +375,10 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
                 return Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.File;
         }
 
-        return part.Kind switch
-        {
-            ChatContentPartKind.Text => Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Text,
-            ChatContentPartKind.Image => Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Image,
-            ChatContentPartKind.Audio => Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Audio,
-            ChatContentPartKind.Video => Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Video,
-            _ => Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Unspecified,
-        };
+        var kindValue = (int)part.Kind;
+        return System.Enum.IsDefined(typeof(Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind), kindValue)
+            ? (Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind)kindValue
+            : Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Unspecified;
     }
 
     private static bool IsMediaType(string? mediaType, string prefix) =>
@@ -396,15 +392,7 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
             {
                 FileId = fileRef.FileId ?? string.Empty,
                 ArtifactId = fileRef.ArtifactId ?? string.Empty,
-                SourceKind = fileRef.SourceKind switch
-                {
-                    ChatFileSourceKind.ChatInput => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.ChatInput,
-                    ChatFileSourceKind.FormUpload => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.FormUpload,
-                    ChatFileSourceKind.ConnectedServiceResource => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.ConnectedServiceResource,
-                    ChatFileSourceKind.ExternalResource => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.ExternalResource,
-                    ChatFileSourceKind.Generated => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.Generated,
-                    _ => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.Unspecified,
-                },
+                SourceKind = ToWorkflowFileSourceKind(fileRef.SourceKind),
                 SourceMessageId = fileRef.SourceMessageId ?? string.Empty,
                 SourceResourceKey = fileRef.SourceResourceKey ?? string.Empty,
                 FileName = fileRef.FileName ?? string.Empty,
@@ -416,6 +404,15 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
                 OwnerRunId = fileRef.OwnerRunId ?? string.Empty,
                 OwnerScopeId = fileRef.OwnerScopeId ?? string.Empty,
             };
+
+    private static Aevatar.Workflow.Abstractions.WorkflowFileSourceKind ToWorkflowFileSourceKind(
+        ChatFileSourceKind sourceKind)
+    {
+        var sourceKindValue = (int)sourceKind;
+        return System.Enum.IsDefined(typeof(Aevatar.Workflow.Abstractions.WorkflowFileSourceKind), sourceKindValue)
+            ? (Aevatar.Workflow.Abstractions.WorkflowFileSourceKind)sourceKindValue
+            : Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.Unspecified;
+    }
 
     private static bool HasFileRefIdentity(ChatFileRef fileRef) =>
         !string.IsNullOrWhiteSpace(fileRef.FileId) ||

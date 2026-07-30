@@ -581,6 +581,64 @@ public sealed class DefaultServiceInvocationDispatcherTests
         inputPart.FileRef.OwnerScopeId.Should().Be("scope-1");
     }
 
+    [Theory]
+    [InlineData("image/png", Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Image)]
+    [InlineData("audio/mpeg", Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Audio)]
+    [InlineData("video/mp4", Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Video)]
+    public async Task DispatchAsync_ShouldResolveWorkflowFileInputKindFromMediaType(
+        string mediaType,
+        Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind expectedKind)
+    {
+        var workflowPort = new RecordingWorkflowRunActorPort();
+        var dispatchPort = new RecordingDispatchPort();
+        var dispatcher = new DefaultServiceInvocationDispatcher(
+            dispatchPort,
+            new RecordingScriptRuntimeCommandPort(),
+            workflowPort,
+            new RecordingServiceRunRegistrationPort());
+        var target = CreateTarget(
+            ServiceImplementationKind.Workflow,
+            endpointId: "chat",
+            requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
+        target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
+        {
+            WorkflowName = "wf",
+            WorkflowYaml = "name: wf",
+        };
+
+        await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
+        {
+            Identity = GAgentServiceTestKit.CreateIdentity(),
+            EndpointId = "chat",
+            CommandId = $"cmd-{expectedKind}",
+            Payload = Any.Pack(new ChatRequestEvent
+            {
+                Prompt = "hello",
+                InputParts =
+                {
+                    new ChatContentPart
+                    {
+                        Kind = ChatContentPartKind.Text,
+                        MediaType = mediaType,
+                        FileRef = new ChatFileRef
+                        {
+                            FileId = $"file-{expectedKind}",
+                            SourceKind = ChatFileSourceKind.FormUpload,
+                            MediaType = mediaType,
+                        },
+                    },
+                },
+            }),
+        });
+
+        var inputPart = dispatchPort.Calls.Should().ContainSingle().Which
+            .envelope.Payload.Unpack<WorkflowChatRequestEvent>()
+            .InputParts.Should().ContainSingle().Which;
+        inputPart.Kind.Should().Be(expectedKind);
+        inputPart.FileRef.Should().NotBeNull();
+        inputPart.FileRef.SourceKind.Should().Be(WorkflowFileSourceKind.FormUpload);
+    }
+
     [Fact]
     public async Task DispatchAsync_ShouldMapConnectorAuthorizationToWorkflowCallerCredential()
     {
