@@ -19,7 +19,7 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
     private readonly NyxIdApiClient _client;
     private readonly NyxIdToolOptions _options;
     private readonly TimeProvider _timeProvider;
-    private readonly INyxIdAuthorizationCatalogQueryPort? _catalogQueryPort;
+    private readonly NyxIdDurableAuthorizationCatalogInspector _durableAuthorizationCatalog;
     private readonly ILogger<NyxIdExternalWorkflowCapabilitySource> _logger;
 
     public NyxIdExternalWorkflowCapabilitySource(
@@ -32,7 +32,9 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
         _client = client;
         _options = options;
         _timeProvider = timeProvider ?? TimeProvider.System;
-        _catalogQueryPort = catalogQueryPort;
+        _durableAuthorizationCatalog = new NyxIdDurableAuthorizationCatalogInspector(
+            catalogQueryPort,
+            _timeProvider);
         _logger = logger ?? NullLogger<NyxIdExternalWorkflowCapabilitySource>.Instance;
     }
 
@@ -174,13 +176,14 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
                     capability);
             }
 
-            durableReadiness = await InspectDurableAuthorizationAsync(
+            var durableAuthorizationSource = await _durableAuthorizationCatalog.InspectAsync(
                 access,
-                selector,
-                capability,
+                capability.NyxIdUserService.UserServiceId,
+                capability.NyxIdUserService.ServiceSlugSnapshot,
                 cancellationToken);
-            if (durableReadiness.Status != ExternalCapabilityReadinessStatus.Ready)
+            if (durableAuthorizationSource is null)
             {
+                durableReadiness = DurableAuthorizationUnavailable(selector, capability);
                 _logger.LogInformation(
                     "NyxID workflow capability durable authorization inspection blocked. status={Status}, blockerCodes={BlockerCodes}, selectedUserServiceId={SelectedUserServiceId}, selectedEndpointId={SelectedEndpointId}",
                     durableReadiness.Status,
@@ -190,6 +193,15 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
                 durableReadiness.Sources.Add(service.Source);
                 return durableReadiness;
             }
+
+            durableReadiness = new ExternalCapabilityReadiness
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+                Status = ExternalCapabilityReadinessStatus.Ready,
+                SelectedSelector = selector.Clone(),
+                SelectedCapability = capability.Clone(),
+            };
+            durableReadiness.Sources.Add(durableAuthorizationSource);
         }
 
         var ready = new ExternalCapabilityReadiness
@@ -210,146 +222,6 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
             ready.Status);
         return ready;
     }
-
-    private async Task<ExternalCapabilityReadiness> InspectDurableAuthorizationAsync(
-        ExternalWorkflowCapabilityAccessContext access,
-        ExternalWorkflowCapabilitySelector selector,
-        ExternalWorkflowCapabilityRef capability,
-        CancellationToken cancellationToken)
-    {
-        if (_catalogQueryPort is null || string.IsNullOrWhiteSpace(access.CallerId))
-            return DurableAuthorizationUnavailable(selector, capability);
-
-        var owner = new AuthorizationOwnerIdentity
-        {
-            Authority = NyxIdAuthorizationAuthorities.NyxId,
-            OwnerKind = AuthorizationOwnerKind.Personal,
-            OwnerSubject = access.CallerId,
-        };
-        NyxIdAuthorizationCatalogSnapshot? snapshot;
-        try
-        {
-            snapshot = await _catalogQueryPort.GetAsync(owner, cancellationToken);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch
-        {
-            return DurableAuthorizationUnavailable(selector, capability);
-        }
-
-        if (!IsUsableDurableCatalog(snapshot, owner))
-            return DurableAuthorizationUnavailable(selector, capability);
-
-        var serviceId = capability.NyxIdUserService.UserServiceId;
-        var matches = snapshot!.Services
-            .Where(service => string.Equals(service.UserServiceId, serviceId, StringComparison.Ordinal))
-            .Take(2)
-            .ToArray();
-        if (matches.Length != 1 ||
-            !IsUsableDurableGrant(matches[0], capability.NyxIdUserService))
-        {
-            return DurableAuthorizationUnavailable(selector, capability);
-        }
-
-        var ready = new ExternalCapabilityReadiness
-        {
-            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
-            Status = ExternalCapabilityReadinessStatus.Ready,
-            SelectedSelector = selector.Clone(),
-            SelectedCapability = capability.Clone(),
-        };
-        ready.Sources.Add(new ExternalCapabilitySourceStamp
-        {
-            SourceKind = ExternalCapabilitySourceKind.DurableAuthorizationCatalog,
-            SourceId = NyxIdAuthorizationCatalogActorIds.Build(owner),
-            SourceVersion = snapshot.StateVersion,
-            ObservedAt = Timestamp.FromDateTimeOffset(snapshot.ObservedAtUtc),
-            FreshUntil = Timestamp.FromDateTimeOffset(snapshot.FreshUntilUtc),
-            ContentDigest = snapshot.ContentDigest,
-        });
-        return ready;
-    }
-
-    private bool IsUsableDurableCatalog(
-        NyxIdAuthorizationCatalogSnapshot? snapshot,
-        AuthorizationOwnerIdentity expectedOwner)
-    {
-        if (snapshot is null ||
-            snapshot.StateVersion <= 0 ||
-            !snapshot.Activated ||
-            snapshot.Invalidated ||
-            snapshot.Cleaned ||
-            !OwnerEquals(snapshot.Owner, expectedOwner) ||
-            snapshot.ObservedAtUtc == default ||
-            string.IsNullOrWhiteSpace(snapshot.ContractVersion) ||
-            string.IsNullOrWhiteSpace(snapshot.PolicyVersion) ||
-            snapshot.EvaluatedAtUtc == default ||
-            string.IsNullOrWhiteSpace(snapshot.ContentDigest) ||
-            !string.Equals(
-                snapshot.ContentDigest,
-                NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(snapshot.Owner, snapshot.Services),
-                StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        var now = _timeProvider.GetUtcNow();
-        return snapshot.ObservedAtUtc <= now && snapshot.FreshUntilUtc > now;
-    }
-
-    private static bool IsUsableDurableGrant(
-        NyxIdAuthorizationServiceEvidence service,
-        NyxIdUserServiceCapabilityRef selected)
-    {
-        if (string.IsNullOrWhiteSpace(service.UserServiceId) ||
-            !string.Equals(service.UserServiceId, service.UserServiceId.Trim(), StringComparison.Ordinal) ||
-            !string.Equals(service.UserServiceId, selected.UserServiceId, StringComparison.Ordinal) ||
-            string.IsNullOrWhiteSpace(service.ServiceSlug) ||
-            !string.Equals(service.ServiceSlug, service.ServiceSlug.Trim(), StringComparison.Ordinal) ||
-            !string.Equals(service.ServiceSlug, selected.ServiceSlugSnapshot, StringComparison.Ordinal) ||
-            service.Access != NyxIdAuthorizationAccess.Permitted ||
-            service.NodeGrantRequirement is not (
-                AuthorizationGrantRequirement.Required or AuthorizationGrantRequirement.NotRequired) ||
-            !IsNormalizedOwner(service.ResourceOwner))
-        {
-            return false;
-        }
-
-        string? previousNodeId = null;
-        foreach (var nodeId in service.NodeIds)
-        {
-            if (string.IsNullOrWhiteSpace(nodeId) ||
-                !string.Equals(nodeId, nodeId.Trim(), StringComparison.Ordinal) ||
-                previousNodeId is not null && string.CompareOrdinal(previousNodeId, nodeId) >= 0)
-            {
-                return false;
-            }
-            previousNodeId = nodeId;
-        }
-
-        return service.NodeGrantRequirement == AuthorizationGrantRequirement.Required
-            ? service.NodeIds.Count > 0
-            : service.NodeIds.Count == 0;
-    }
-
-    private static bool IsNormalizedOwner(AuthorizationOwnerIdentity? owner) =>
-        owner is not null &&
-        string.Equals(owner.Authority, NyxIdAuthorizationAuthorities.NyxId, StringComparison.Ordinal) &&
-        owner.OwnerKind != AuthorizationOwnerKind.Unspecified &&
-        System.Enum.IsDefined(owner.OwnerKind) &&
-        !string.IsNullOrWhiteSpace(owner.OwnerSubject) &&
-        string.Equals(owner.OwnerSubject, owner.OwnerSubject.Trim(), StringComparison.Ordinal);
-
-    private static bool OwnerEquals(
-        AuthorizationOwnerIdentity? left,
-        AuthorizationOwnerIdentity right) =>
-        left is not null &&
-        string.Equals(left.Authority, right.Authority, StringComparison.Ordinal) &&
-        left.OwnerKind == right.OwnerKind &&
-        string.Equals(left.OwnerSubject, right.OwnerSubject, StringComparison.Ordinal);
 
     private ExternalCapabilityReadiness DurableAuthorizationUnavailable(
         ExternalWorkflowCapabilitySelector selector,

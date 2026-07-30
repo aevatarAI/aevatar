@@ -1,4 +1,5 @@
 using System.Globalization;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Google.Protobuf.WellKnownTypes;
@@ -8,10 +9,13 @@ namespace Aevatar.AI.ToolProviders.NyxId;
 public sealed class NyxIdExplicitWorkflowCapabilitySource(
     NyxIdApiClient client,
     NyxIdToolOptions options,
-    TimeProvider? timeProvider = null) : IExternalWorkflowCapabilitySource
+    TimeProvider? timeProvider = null,
+    INyxIdAuthorizationCatalogQueryPort? catalogQueryPort = null) : IExternalWorkflowCapabilitySource
 {
     private static readonly TimeSpan FreshnessWindow = TimeSpan.FromMinutes(5);
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
+    private readonly NyxIdDurableAuthorizationCatalogInspector _durableAuthorizationCatalog =
+        new(catalogQueryPort, timeProvider ?? TimeProvider.System);
 
     public ExternalWorkflowCapabilitySelector.SelectorOneofCase SelectorKind =>
         ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdRequest;
@@ -107,19 +111,36 @@ public sealed class NyxIdExplicitWorkflowCapabilitySource(
         var capability = BuildCapability(request, service.Slug);
         if (executionMode == ExternalCapabilityExecutionMode.Durable)
         {
-            return Failure(
-                selector, executionMode, ExternalCapabilityReadinessStatus.DurableAuthorizationUnavailable,
-                "DURABLE_AUTHORIZATION_UNAVAILABLE",
-                "The current authorization catalog does not prove this durable UserService grant.", source, capability);
+            if (capability.NyxIdUserRequest.ExecutionPolicy.Risk != NyxIdOperationRisk.ReadOnly ||
+                !capability.NyxIdUserRequest.ExecutionPolicy.AllowedExecutionModes.Contains(
+                    ExternalCapabilityExecutionMode.Durable))
+            {
+                return Failure(
+                    selector, executionMode, ExternalCapabilityReadinessStatus.DurableAuthorizationUnavailable,
+                    "NYXID_EXPLICIT_REQUEST_INTERACTIVE_REQUIRED",
+                    "This explicit request can only be admitted for interactive execution.", source, capability);
+            }
+
+            var durableAuthorizationSource = await _durableAuthorizationCatalog.InspectAsync(
+                access,
+                request.UserServiceId,
+                service.Slug,
+                cancellationToken);
+            if (durableAuthorizationSource is null)
+            {
+                return Failure(
+                    selector, executionMode, ExternalCapabilityReadinessStatus.DurableAuthorizationUnavailable,
+                    "DURABLE_AUTHORIZATION_UNAVAILABLE",
+                    "The current authorization catalog does not prove this durable UserService grant.", source, capability);
+            }
+
+            var durableReady = Ready(selector, executionMode, capability);
+            durableReady.Sources.Add(source);
+            durableReady.Sources.Add(durableAuthorizationSource);
+            return durableReady;
         }
 
-        var ready = new ExternalCapabilityReadiness
-        {
-            ExecutionMode = executionMode,
-            Status = ExternalCapabilityReadinessStatus.Ready,
-            SelectedSelector = new ExternalWorkflowCapabilitySelector { NyxIdRequest = request },
-            SelectedCapability = capability,
-        };
+        var ready = Ready(selector, executionMode, capability);
         ready.Sources.Add(source);
         return ready;
     }
@@ -151,30 +172,29 @@ public sealed class NyxIdExplicitWorkflowCapabilitySource(
         NyxIdRequestSelector request,
         string serviceSlug)
     {
+        var risk = request.Method switch
+        {
+            NyxIdRequestMethod.Get or NyxIdRequestMethod.Head or NyxIdRequestMethod.Options =>
+                NyxIdOperationRisk.ReadOnly,
+            NyxIdRequestMethod.Delete => NyxIdOperationRisk.Destructive,
+            _ => NyxIdOperationRisk.Write,
+        };
         var policy = new NyxIdOperationExecutionPolicy
         {
-            Risk = request.Method switch
-            {
-                NyxIdRequestMethod.Get or NyxIdRequestMethod.Head or NyxIdRequestMethod.Options =>
-                    NyxIdOperationRisk.ReadOnly,
-                NyxIdRequestMethod.Delete => NyxIdOperationRisk.Destructive,
-                _ => NyxIdOperationRisk.Write,
-            },
-            Approval = request.Method == NyxIdRequestMethod.Delete
-                ? NyxIdOperationApproval.Required
-                : NyxIdOperationApproval.None,
+            Risk = risk,
+            Approval = risk == NyxIdOperationRisk.ReadOnly
+                ? NyxIdOperationApproval.None
+                : NyxIdOperationApproval.Required,
             EnforcementOwner = NyxIdOperationEnforcementOwner.Aevatar,
         };
         policy.AllowedExecutionModes.Add(ExternalCapabilityExecutionMode.Interactive);
-        if (request.Method != NyxIdRequestMethod.Delete)
+        if (risk == NyxIdOperationRisk.ReadOnly)
             policy.AllowedExecutionModes.Add(ExternalCapabilityExecutionMode.Durable);
 
-        var digest = ExternalWorkflowCapabilityContractDigest.Compute(
-            "nyxid-explicit-request/v1", request.UserServiceId, serviceSlug,
-            NyxIdRequestSelectorContract.MethodName(request.Method), request.PathTemplate,
-            string.Join("\n", request.QueryParameters), string.Join("\n", request.HeaderParameters),
-            ((int)request.BodyMode).ToString(CultureInfo.InvariantCulture),
-            ((int)request.ResponseMode).ToString(CultureInfo.InvariantCulture));
+        var requestDigest = WorkflowCapabilityAdmissionPlanIntegrity
+            .ComputeNyxIdRequestContractDigest(request);
+        var digest = WorkflowCapabilityAdmissionPlanIntegrity
+            .ComputeNyxIdExplicitRequestProofDigest(requestDigest, serviceSlug);
         return new ExternalWorkflowCapabilityRef
         {
             NyxIdUserRequest = new NyxIdUserRequestCapabilityRef
@@ -186,6 +206,18 @@ public sealed class NyxIdExplicitWorkflowCapabilitySource(
             },
         };
     }
+
+    private static ExternalCapabilityReadiness Ready(
+        ExternalWorkflowCapabilitySelector selector,
+        ExternalCapabilityExecutionMode executionMode,
+        ExternalWorkflowCapabilityRef capability) =>
+        new()
+        {
+            ExecutionMode = executionMode,
+            Status = ExternalCapabilityReadinessStatus.Ready,
+            SelectedSelector = selector.Clone(),
+            SelectedCapability = capability,
+        };
 
     private static ExternalCapabilityReadiness Failure(
         ExternalWorkflowCapabilitySelector selector,

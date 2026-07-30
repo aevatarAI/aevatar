@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using FluentAssertions;
@@ -54,6 +55,131 @@ public sealed class NyxIdExplicitWorkflowCapabilitySourceTests
     }
 
     [Theory]
+    [InlineData(NyxIdRequestMethod.Get)]
+    [InlineData(NyxIdRequestMethod.Head)]
+    [InlineData(NyxIdRequestMethod.Options)]
+    public async Task InspectAsync_ShouldAdmitDurableSafeRequestFromExactCatalogGrant(
+        NyxIdRequestMethod method)
+    {
+        var handler = new InventoryHandler(UserServices(Service()));
+        var catalog = new RecordingCatalogQueryPort(ReadyCatalogSnapshot());
+        var source = CreateSource(handler, catalog);
+
+        var result = await source.InspectAsync(
+            Access(),
+            Selector(method),
+            ExternalCapabilityExecutionMode.Durable,
+            CancellationToken.None);
+
+        result.Status.Should().Be(ExternalCapabilityReadinessStatus.Ready);
+        result.SelectedCapability.NyxIdUserRequest.Request.UserServiceId.Should().Be("usvc-alpha");
+        result.Sources.Select(static source => source.SourceKind).Should().BeEquivalentTo(new[]
+        {
+            ExternalCapabilitySourceKind.NyxIdUserServices,
+            ExternalCapabilitySourceKind.DurableAuthorizationCatalog,
+        });
+        var expectedOwner = Owner();
+        catalog.Owners.Should().ContainSingle().Which.Should().BeEquivalentTo(expectedOwner);
+        result.Sources.Single(static source =>
+                source.SourceKind == ExternalCapabilitySourceKind.DurableAuthorizationCatalog)
+            .SourceId.Should().Be(NyxIdAuthorizationCatalogActorIds.Build(expectedOwner));
+        handler.Requests.Should().Equal(new RequestRecord("/api/v1/keys", "caller-credential"));
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("owner_mismatch")]
+    [InlineData("exact_id_missing")]
+    [InlineData("slug_only")]
+    [InlineData("same_slug_different_id")]
+    public async Task InspectAsync_ShouldFailClosedWhenDurableCatalogDoesNotProveExactService(
+        string scenario)
+    {
+        var snapshot = scenario switch
+        {
+            "missing" => null,
+            "owner_mismatch" => ReadyCatalogSnapshot(ownerSubject: "nyx-user-beta"),
+            "exact_id_missing" => ReadyCatalogSnapshot("usvc-beta", "different-slug"),
+            "slug_only" => ReadyCatalogSnapshot(string.Empty),
+            "same_slug_different_id" => ReadyCatalogSnapshot("usvc-beta"),
+            _ => throw new ArgumentOutOfRangeException(nameof(scenario)),
+        };
+        var source = CreateSource(
+            new InventoryHandler(UserServices(Service())),
+            new RecordingCatalogQueryPort(snapshot));
+
+        var result = await source.InspectAsync(
+            Access(), Selector(), ExternalCapabilityExecutionMode.Durable, CancellationToken.None);
+
+        result.Status.Should().Be(ExternalCapabilityReadinessStatus.DurableAuthorizationUnavailable);
+        result.Blockers.Should().ContainSingle().Which.Code.Should()
+            .Be("DURABLE_AUTHORIZATION_UNAVAILABLE");
+    }
+
+    [Theory]
+    [InlineData("inactive", ExternalCapabilityReadinessStatus.CredentialConnectionRequired, "USER_SERVICE_INACTIVE")]
+    [InlineData("inaccessible", ExternalCapabilityReadinessStatus.ServiceAccessDenied, "USER_SERVICE_ACCESS_DENIED")]
+    public async Task InspectAsync_ShouldRejectUnusableServiceBeforeDurableCatalogRead(
+        string scenario,
+        ExternalCapabilityReadinessStatus expectedStatus,
+        string expectedCode)
+    {
+        var service = scenario == "inactive"
+            ? Service(active: false)
+            : Service(credentialSource: "org", allowed: false);
+        var catalog = new RecordingCatalogQueryPort(ReadyCatalogSnapshot());
+        var source = CreateSource(new InventoryHandler(UserServices(service)), catalog);
+
+        var result = await source.InspectAsync(
+            Access(), Selector(), ExternalCapabilityExecutionMode.Durable, CancellationToken.None);
+
+        result.Status.Should().Be(expectedStatus);
+        result.Blockers.Should().ContainSingle().Which.Code.Should().Be(expectedCode);
+        catalog.ReadCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task InspectAsync_ShouldNotReadDurableCatalogForInteractiveRequest()
+    {
+        var catalog = new RecordingCatalogQueryPort(ReadyCatalogSnapshot());
+        var source = CreateSource(new InventoryHandler(UserServices(Service())), catalog);
+
+        var result = await source.InspectAsync(
+            Access(), Selector(), ExternalCapabilityExecutionMode.Interactive, CancellationToken.None);
+
+        result.Status.Should().Be(ExternalCapabilityReadinessStatus.Ready);
+        catalog.ReadCount.Should().Be(0);
+        result.Sources.Should().ContainSingle().Which.SourceKind.Should()
+            .Be(ExternalCapabilitySourceKind.NyxIdUserServices);
+    }
+
+    [Theory]
+    [InlineData(NyxIdRequestMethod.Post, NyxIdOperationRisk.Write)]
+    [InlineData(NyxIdRequestMethod.Put, NyxIdOperationRisk.Write)]
+    [InlineData(NyxIdRequestMethod.Patch, NyxIdOperationRisk.Write)]
+    [InlineData(NyxIdRequestMethod.Delete, NyxIdOperationRisk.Destructive)]
+    public async Task InspectAsync_ShouldKeepMutatingDurableRequestsInteractiveOnly(
+        NyxIdRequestMethod method,
+        NyxIdOperationRisk expectedRisk)
+    {
+        var catalog = new RecordingCatalogQueryPort(ReadyCatalogSnapshot());
+        var source = CreateSource(new InventoryHandler(UserServices(Service())), catalog);
+
+        var result = await source.InspectAsync(
+            Access(), Selector(method), ExternalCapabilityExecutionMode.Durable, CancellationToken.None);
+
+        result.Status.Should().Be(ExternalCapabilityReadinessStatus.DurableAuthorizationUnavailable);
+        result.Blockers.Should().ContainSingle().Which.Code.Should()
+            .Be("NYXID_EXPLICIT_REQUEST_INTERACTIVE_REQUIRED");
+        result.SelectedCapability.NyxIdUserRequest.ExecutionPolicy.Risk.Should().Be(expectedRisk);
+        result.SelectedCapability.NyxIdUserRequest.ExecutionPolicy.Approval.Should()
+            .Be(NyxIdOperationApproval.Required);
+        result.SelectedCapability.NyxIdUserRequest.ExecutionPolicy.AllowedExecutionModes.Should()
+            .Equal(ExternalCapabilityExecutionMode.Interactive);
+        catalog.ReadCount.Should().Be(0);
+    }
+
+    [Theory]
     [InlineData("missing", ExternalCapabilityReadinessStatus.ServiceRegistrationRequired)]
     [InlineData("inactive", ExternalCapabilityReadinessStatus.CredentialConnectionRequired)]
     [InlineData("inaccessible", ExternalCapabilityReadinessStatus.ServiceAccessDenied)]
@@ -83,26 +209,36 @@ public sealed class NyxIdExplicitWorkflowCapabilitySourceTests
         result.Blockers.Should().ContainSingle().Which.Code.Should().NotBeNullOrWhiteSpace();
     }
 
-    private static NyxIdExplicitWorkflowCapabilitySource CreateSource(InventoryHandler handler)
+    private static NyxIdExplicitWorkflowCapabilitySource CreateSource(
+        InventoryHandler handler,
+        INyxIdAuthorizationCatalogQueryPort? catalog = null)
     {
         var options = new NyxIdToolOptions { BaseUrl = "https://nyxid.invalid" };
-        return new NyxIdExplicitWorkflowCapabilitySource(
-            new NyxIdApiClient(options, new HttpClient(handler)),
-            options,
-            new FixedTimeProvider());
+        var services = new ServiceCollection()
+            .AddSingleton(options)
+            .AddSingleton(new NyxIdApiClient(options, new HttpClient(handler)))
+            .AddSingleton<TimeProvider>(new FixedTimeProvider());
+        if (catalog is not null)
+            services.AddSingleton(catalog);
+        using var provider = services.BuildServiceProvider();
+        return ActivatorUtilities.CreateInstance<NyxIdExplicitWorkflowCapabilitySource>(provider);
     }
 
     private static ExternalWorkflowCapabilityAccessContext Access() =>
         new("scope-alpha", "nyx-user-alpha", "caller-credential");
 
-    private static ExternalWorkflowCapabilitySelector Selector()
+    private static ExternalWorkflowCapabilitySelector Selector(
+        NyxIdRequestMethod method = NyxIdRequestMethod.Get)
     {
         var request = new NyxIdRequestSelector
         {
             UserServiceId = "usvc-alpha",
-            Method = NyxIdRequestMethod.Get,
+            Method = method,
             PathTemplate = "/api/resources/{resource_id}",
-            BodyMode = NyxIdRequestBodyMode.None,
+            BodyMode = method is NyxIdRequestMethod.Post or NyxIdRequestMethod.Put or NyxIdRequestMethod.Patch
+                ? NyxIdRequestBodyMode.Json
+                : NyxIdRequestBodyMode.None,
+            BodyRequired = method is NyxIdRequestMethod.Post or NyxIdRequestMethod.Put or NyxIdRequestMethod.Patch,
             ResponseMode = NyxIdRequestResponseMode.Text,
         };
         request.QueryParameters.Add("page_size");
@@ -124,6 +260,43 @@ public sealed class NyxIdExplicitWorkflowCapabilitySourceTests
             ? "{\"type\":\"personal\"}"
             : $"{{\"type\":\"org\",\"org_id\":\"org-alpha\",\"org_name\":\"Org Alpha\",\"role\":\"member\",\"allowed\":{allowed.ToString().ToLowerInvariant()}}}";
         return $"{{\"id\":\"{id}\",\"slug\":\"{slug}\",\"label\":\"Example service\",\"catalog_service_name\":null,\"is_active\":{active.ToString().ToLowerInvariant()},\"credential_source\":{source}}}";
+    }
+
+    private static AuthorizationOwnerIdentity Owner(string subject = "nyx-user-alpha") =>
+        new()
+        {
+            Authority = NyxIdAuthorizationAuthorities.NyxId,
+            OwnerKind = AuthorizationOwnerKind.Personal,
+            OwnerSubject = subject,
+        };
+
+    private static NyxIdAuthorizationCatalogSnapshot ReadyCatalogSnapshot(
+        string userServiceId = "usvc-alpha",
+        string serviceSlug = "shared-slug",
+        string ownerSubject = "nyx-user-alpha")
+    {
+        var owner = Owner(ownerSubject);
+        var service = new NyxIdAuthorizationServiceEvidence
+        {
+            UserServiceId = userServiceId,
+            ServiceSlug = serviceSlug,
+            DisplayName = "Example service",
+            Access = NyxIdAuthorizationAccess.Permitted,
+            NodeGrantRequirement = AuthorizationGrantRequirement.NotRequired,
+            ResourceOwner = Owner(ownerSubject),
+        };
+        NyxIdAuthorizationServiceEvidence[] services = [service];
+        return new NyxIdAuthorizationCatalogSnapshot(
+            owner,
+            17,
+            new DateTimeOffset(2026, 7, 30, 7, 59, 0, TimeSpan.Zero),
+            new DateTimeOffset(2026, 7, 30, 8, 5, 0, TimeSpan.Zero),
+            "scope-plan-contract/v1",
+            "scope-plan-policy/v1",
+            new DateTimeOffset(2026, 7, 30, 7, 59, 0, TimeSpan.Zero),
+            NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(owner, services),
+            services,
+            Activated: true);
     }
 
     private sealed class InventoryHandler(string response) : HttpMessageHandler
@@ -151,6 +324,22 @@ public sealed class NyxIdExplicitWorkflowCapabilitySourceTests
     {
         public override DateTimeOffset GetUtcNow() =>
             new(2026, 7, 30, 8, 0, 0, TimeSpan.Zero);
+    }
+
+    private sealed class RecordingCatalogQueryPort(NyxIdAuthorizationCatalogSnapshot? snapshot)
+        : INyxIdAuthorizationCatalogQueryPort
+    {
+        public int ReadCount => Owners.Count;
+
+        public List<AuthorizationOwnerIdentity> Owners { get; } = [];
+
+        public Task<NyxIdAuthorizationCatalogSnapshot?> GetAsync(
+            AuthorizationOwnerIdentity owner,
+            CancellationToken ct = default)
+        {
+            Owners.Add(owner.Clone());
+            return Task.FromResult(snapshot);
+        }
     }
 
     private sealed record RequestRecord(string Path, string BearerToken);

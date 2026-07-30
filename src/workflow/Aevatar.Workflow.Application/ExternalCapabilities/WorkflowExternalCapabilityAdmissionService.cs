@@ -200,7 +200,9 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
             GrantorOwnerSubject = request.Access.CallerId,
             Risk = confirmation.AttestedRisk,
         };
-        grant.AllowedExecutionModes.Add(request.ExecutionMode);
+        grant.AllowedExecutionModes.Add(ExternalCapabilityExecutionMode.Interactive);
+        if (request.ExecutionMode == ExternalCapabilityExecutionMode.Durable)
+            grant.AllowedExecutionModes.Add(ExternalCapabilityExecutionMode.Durable);
 
         var admittedCapability = capability.Clone();
         admittedCapability.NyxIdUserRequest.ExecutionPolicy = new NyxIdOperationExecutionPolicy
@@ -212,7 +214,7 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
             EnforcementOwner = NyxIdOperationEnforcementOwner.Aevatar,
         };
         admittedCapability.NyxIdUserRequest.ExecutionPolicy.AllowedExecutionModes.Add(
-            request.ExecutionMode);
+            grant.AllowedExecutionModes);
         admittedCapability.NyxIdUserRequest.ExplicitRequestGrantDigest =
             WorkflowCapabilityAdmissionPlanIntegrity.ComputeNyxIdExplicitRequestGrantDigest(grant);
         return new WorkflowCapabilityInvocationAdmission

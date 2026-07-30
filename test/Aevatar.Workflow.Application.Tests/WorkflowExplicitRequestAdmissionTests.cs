@@ -1,5 +1,8 @@
+using System.Net;
 using System.Security.Cryptography;
 using System.Text;
+using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -9,6 +12,7 @@ using Aevatar.Workflow.Core.Primitives;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Workflow.Application.Tests;
 
@@ -255,6 +259,68 @@ public sealed class WorkflowExplicitRequestAdmissionTests
     }
 
     [Theory]
+    [InlineData("GET")]
+    [InlineData("HEAD")]
+    [InlineData("OPTIONS")]
+    public async Task AdmitAsync_WithRealExplicitSourceAndExactCatalogGrant_ShouldAdmitDurableRequest(
+        string method)
+    {
+        var handler = new UserServicesHandler();
+        var source = CreateRealSource(handler, ReadyCatalogSnapshot());
+        var service = CreateService(source);
+
+        var plan = await service.AdmitAsync(Request(
+            SafeWorkflowYaml(method),
+            ExternalCapabilityExecutionMode.Durable,
+            [SafeConfirmation(method, NyxIdOperationRisk.ReadOnly)]));
+
+        plan.DurableAuthorizationOwner.Should().BeEquivalentTo(new ExternalCapabilityAuthorizationOwner
+        {
+            Authority = WorkflowCapabilityAdmissionPlanIntegrity.NyxIdAuthority,
+            OwnerKind = ExternalCapabilityAuthorizationOwnerKind.Personal,
+            OwnerSubject = "binder-alpha",
+        });
+        plan.SourceStamps.Select(static source => source.SourceKind).Should().BeEquivalentTo(new[]
+        {
+            ExternalCapabilitySourceKind.NyxIdUserServices,
+            ExternalCapabilitySourceKind.DurableAuthorizationCatalog,
+        });
+        plan.InvocationAdmissions.Should().ContainSingle().Which.NyxIdExplicitRequestGrant
+            .AllowedExecutionModes.Should().Equal(
+                ExternalCapabilityExecutionMode.Interactive,
+                ExternalCapabilityExecutionMode.Durable);
+        handler.Paths.Should().Equal("/api/v1/keys");
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("owner_mismatch")]
+    [InlineData("exact_id_missing")]
+    public async Task AdmitAsync_WithRealExplicitSourceAndUnprovenCatalog_ShouldFailClosed(
+        string scenario)
+    {
+        var snapshot = scenario switch
+        {
+            "missing" => null,
+            "owner_mismatch" => ReadyCatalogSnapshot(ownerSubject: "binder-beta"),
+            "exact_id_missing" => ReadyCatalogSnapshot(userServiceId: "usvc-beta"),
+            _ => throw new ArgumentOutOfRangeException(nameof(scenario)),
+        };
+        var service = CreateService(CreateRealSource(new UserServicesHandler(), snapshot));
+
+        Func<Task> act = async () => await service.AdmitAsync(Request(
+            SafeWorkflowYaml("GET"),
+            ExternalCapabilityExecutionMode.Durable,
+            [SafeConfirmation("GET", NyxIdOperationRisk.ReadOnly)]));
+
+        var exception = await act.Should().ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
+        exception.Which.Readiness.Status.Should()
+            .Be(ExternalCapabilityReadinessStatus.DurableAuthorizationUnavailable);
+        exception.Which.Readiness.Blockers.Should().ContainSingle().Which.Code.Should()
+            .Be("DURABLE_AUTHORIZATION_UNAVAILABLE");
+    }
+
+    [Theory]
     [InlineData("GET", NyxIdOperationRisk.Write)]
     [InlineData("GET", NyxIdOperationRisk.Destructive)]
     [InlineData("HEAD", NyxIdOperationRisk.Write)]
@@ -328,6 +394,20 @@ public sealed class WorkflowExplicitRequestAdmissionTests
             new FixedTimeProvider());
     }
 
+    private static NyxIdExplicitWorkflowCapabilitySource CreateRealSource(
+        UserServicesHandler handler,
+        NyxIdAuthorizationCatalogSnapshot? snapshot)
+    {
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyxid.invalid" };
+        var services = new ServiceCollection()
+            .AddSingleton(options)
+            .AddSingleton(new NyxIdApiClient(options, new HttpClient(handler)))
+            .AddSingleton<TimeProvider>(new FixedTimeProvider())
+            .AddSingleton<INyxIdAuthorizationCatalogQueryPort>(new FixedCatalogQueryPort(snapshot));
+        using var provider = services.BuildServiceProvider();
+        return ActivatorUtilities.CreateInstance<NyxIdExplicitWorkflowCapabilitySource>(provider);
+    }
+
     private static WorkflowExternalCapabilityAdmissionRequest Request(
         IReadOnlyList<NyxIdExplicitRequestConfirmation>? confirmations = null) =>
         Request(WorkflowYaml, ExternalCapabilityExecutionMode.Interactive, confirmations);
@@ -355,6 +435,39 @@ public sealed class WorkflowExplicitRequestAdmissionTests
                 .ComputeNyxIdRequestContractDigest(Selector()),
             AttestedRisk = NyxIdOperationRisk.ReadOnly,
         };
+
+    private static NyxIdAuthorizationCatalogSnapshot ReadyCatalogSnapshot(
+        string userServiceId = "usvc-alpha",
+        string ownerSubject = "binder-alpha")
+    {
+        var owner = new AuthorizationOwnerIdentity
+        {
+            Authority = NyxIdAuthorizationAuthorities.NyxId,
+            OwnerKind = AuthorizationOwnerKind.Personal,
+            OwnerSubject = ownerSubject,
+        };
+        var service = new NyxIdAuthorizationServiceEvidence
+        {
+            UserServiceId = userServiceId,
+            ServiceSlug = "shared-slug",
+            DisplayName = "Example service",
+            Access = NyxIdAuthorizationAccess.Permitted,
+            NodeGrantRequirement = AuthorizationGrantRequirement.NotRequired,
+            ResourceOwner = owner.Clone(),
+        };
+        NyxIdAuthorizationServiceEvidence[] services = [service];
+        return new NyxIdAuthorizationCatalogSnapshot(
+            owner,
+            23,
+            FixedTimeProvider.Now.AddMinutes(-1),
+            FixedTimeProvider.Now.AddMinutes(5),
+            "scope-plan-contract/v1",
+            "scope-plan-policy/v1",
+            FixedTimeProvider.Now.AddMinutes(-1),
+            NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(owner, services),
+            services,
+            Activated: true);
+    }
 
     private static NyxIdRequestSelector Selector()
     {
@@ -607,5 +720,33 @@ public sealed class WorkflowExplicitRequestAdmissionTests
             new(2026, 7, 30, 8, 0, 0, TimeSpan.Zero);
 
         public override DateTimeOffset GetUtcNow() => Now;
+    }
+
+    private sealed class FixedCatalogQueryPort(NyxIdAuthorizationCatalogSnapshot? snapshot)
+        : INyxIdAuthorizationCatalogQueryPort
+    {
+        public Task<NyxIdAuthorizationCatalogSnapshot?> GetAsync(
+            AuthorizationOwnerIdentity owner,
+            CancellationToken ct = default) => Task.FromResult(snapshot);
+    }
+
+    private sealed class UserServicesHandler : HttpMessageHandler
+    {
+        public List<string> Paths { get; } = [];
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            var path = request.RequestUri?.AbsolutePath ?? string.Empty;
+            Paths.Add(path);
+            if (path != "/api/v1/keys")
+                throw new InvalidOperationException($"Unexpected explicit admission request: {path}");
+            const string body = "{\"services\":[{\"id\":\"usvc-alpha\",\"slug\":\"shared-slug\",\"label\":\"Example service\",\"catalog_service_name\":null,\"is_active\":true,\"credential_source\":{\"type\":\"personal\"}}]}";
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json"),
+            });
+        }
     }
 }
