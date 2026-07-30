@@ -1348,6 +1348,9 @@ const ChatPage: React.FC = () => {
             if (!acceptedChatHistoryContext) {
               acceptedChatHistoryContext = chatHistoryContext;
               receivedChatHistoryContext = true;
+              const acceptedConversationStateVersion = conversation.conversationId
+                ? chatHistoryContext.stateVersion
+                : 0;
               streamingConversation = {
                 ...streamingConversation,
                 conversationId: chatHistoryContext.conversationId,
@@ -1356,7 +1359,7 @@ const ChatPage: React.FC = () => {
                 stateVersion: Math.max(
                   streamingConversation.stateVersion ?? 0,
                   latestRefreshedDetail?.stateVersion ?? 0,
-                  chatHistoryContext.stateVersion
+                  acceptedConversationStateVersion
                 ),
               };
               activeConversationRef.current = streamingConversation;
