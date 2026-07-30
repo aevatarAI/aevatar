@@ -601,6 +601,7 @@ message SubWorkflowInvokeRequestedEvent
   string requested_by_actor_id = 7;
   string root_run_id = 8;
   int32 requested_depth = 9;
+  repeated WorkflowFileRef input_file_refs = 10;
 }
 message WorkflowDefinitionSnapshot
 {
@@ -659,6 +660,7 @@ message SubWorkflowDefinitionResolutionRegisteredEvent
   int32 timeout_callback_slot_epoch = 13;
   string root_run_id = 14;
   int32 requested_depth = 15;
+  repeated WorkflowFileRef input_file_refs = 16;
 }
 message SubWorkflowDefinitionResolutionClearedEvent
 {
@@ -690,6 +692,7 @@ message SubWorkflowInvocationRegisteredEvent
   map<string, string> inline_workflow_yamls = 14;
   string root_run_id = 15;
   int32 depth = 16;
+  repeated WorkflowFileRef input_file_refs = 17;
 }
 message SubWorkflowInvocationHandoffAdvancedEvent
 {

@@ -1099,7 +1099,24 @@ public sealed class AevatarInvocationToolSourceTests
             {
               "team_id": "team-1",
               "endpoint_id": "entry",
-              "payload": { "prompt": "go" },
+              "payload": {
+                "prompt": "go",
+                "input_parts": [
+                  {
+                    "kind": "file",
+                    "file_ref": {
+                      "file_id": "file-static-1",
+                      "artifact_id": "workflow-file://file-static-1",
+                      "source_kind": 3,
+                      "source_message_id": "om_static_1",
+                      "source_resource_key": "file_key_static_1",
+                      "file_name": "invoice.pdf",
+                      "media_type": "application/pdf",
+                      "size_bytes": 1234
+                    }
+                  }
+                ]
+              },
               "wait": "stream"
             }
             """);
@@ -1111,6 +1128,17 @@ public sealed class AevatarInvocationToolSourceTests
         result.ServiceId.Should().Be("service-1");
         result.StreamTopic.Should().Be("aevatar://scopes/scope-1/services/service-1/runs/team-command");
         harness.TeamInvocation.Request.Should().NotBeNull();
+        var inputPart = harness.TeamInvocation.Request!.Input.InputParts.Should().ContainSingle().Which;
+        inputPart.Kind.Should().Be(GAgentDraftRunInputPartKind.Text);
+        inputPart.FileRef.Should().NotBeNull();
+        inputPart.FileRef!.FileId.Should().Be("file-static-1");
+        inputPart.FileRef.ArtifactId.Should().Be("workflow-file://file-static-1");
+        inputPart.FileRef.SourceKind.Should().Be(Aevatar.AI.Abstractions.ChatFileSourceKind.ConnectedServiceResource);
+        inputPart.FileRef.SourceMessageId.Should().Be("om_static_1");
+        inputPart.FileRef.SourceResourceKey.Should().Be("file_key_static_1");
+        inputPart.FileRef.FileName.Should().Be("invoice.pdf");
+        inputPart.FileRef.MediaType.Should().Be("application/pdf");
+        inputPart.FileRef.SizeBytes.Should().Be(1234);
         harness.WorkflowDispatch.Command.Should().BeNull();
         harness.ServiceRunRegistration.Records.Should().BeEmpty();
         harness.AdmissionAuthorizer.Calls.Should().ContainSingle();
@@ -2256,7 +2284,24 @@ public sealed class AevatarInvocationToolSourceTests
         var output = await tool.ExecuteAsync("""
             {
               "workflow_id": "child-flow",
-              "inputs": { "prompt": "run child" },
+              "inputs": {
+                "prompt": "run child",
+                "input_parts": [
+                  {
+                    "kind": "file",
+                    "file_ref": {
+                      "file_id": "file-child-1",
+                      "artifact_id": "workflow-file://file-child-1",
+                      "source_kind": 3,
+                      "source_message_id": "om_child_1",
+                      "source_resource_key": "file_key_child_1",
+                      "file_name": "child.pdf",
+                      "media_type": "application/pdf",
+                      "size_bytes": 456
+                    }
+                  }
+                ]
+              },
               "wait": "stream"
             }
             """);
@@ -2486,7 +2531,24 @@ public sealed class AevatarInvocationToolSourceTests
         var output = await tool.ExecuteAsync("""
             {
               "workflow_id": "child-flow",
-              "inputs": { "prompt": "run child" },
+              "inputs": {
+                "prompt": "run child",
+                "input_parts": [
+                  {
+                    "kind": "file",
+                    "file_ref": {
+                      "file_id": "file-child-1",
+                      "artifact_id": "workflow-file://file-child-1",
+                      "source_kind": 3,
+                      "source_message_id": "om_child_1",
+                      "source_resource_key": "file_key_child_1",
+                      "file_name": "child.pdf",
+                      "media_type": "application/pdf",
+                      "size_bytes": 456
+                    }
+                  }
+                ]
+              },
               "wait": "stream"
             }
             """);
@@ -2509,6 +2571,15 @@ public sealed class AevatarInvocationToolSourceTests
         requested.RequestedByActorId.Should().Be("parent-actor");
         requested.RootRunId.Should().Be("root-run");
         requested.RequestedDepth.Should().Be(3);
+        requested.InputFileRefs.Should().ContainSingle();
+        requested.InputFileRefs[0].FileId.Should().Be("file-child-1");
+        requested.InputFileRefs[0].ArtifactId.Should().Be("workflow-file://file-child-1");
+        requested.InputFileRefs[0].SourceKind.Should().Be(WorkflowFileSourceKind.ConnectedServiceResource);
+        requested.InputFileRefs[0].SourceMessageId.Should().Be("om_child_1");
+        requested.InputFileRefs[0].SourceResourceKey.Should().Be("file_key_child_1");
+        requested.InputFileRefs[0].FileName.Should().Be("child.pdf");
+        requested.InputFileRefs[0].MediaType.Should().Be("application/pdf");
+        requested.InputFileRefs[0].SizeBytes.Should().Be(456);
 
         var result = Read(output);
         result.GetProperty("run_id").GetString().Should().Be(requested.InvocationId);

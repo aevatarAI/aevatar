@@ -506,6 +506,82 @@ public sealed class DefaultServiceInvocationDispatcherTests
     }
 
     [Fact]
+    public async Task DispatchAsync_ShouldMapChatInputFileRefToWorkflowChatRequest()
+    {
+        var workflowPort = new RecordingWorkflowRunActorPort();
+        var dispatchPort = new RecordingDispatchPort();
+        var dispatcher = new DefaultServiceInvocationDispatcher(
+            dispatchPort,
+            new RecordingScriptRuntimeCommandPort(),
+            workflowPort,
+            new RecordingServiceRunRegistrationPort());
+        var target = CreateTarget(
+            ServiceImplementationKind.Workflow,
+            endpointId: "chat",
+            requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
+        target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
+        {
+            WorkflowName = "wf",
+            WorkflowYaml = "name: wf",
+        };
+
+        await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
+        {
+            Identity = GAgentServiceTestKit.CreateIdentity(),
+            EndpointId = "chat",
+            CommandId = "cmd-file-ref",
+            Payload = Any.Pack(new ChatRequestEvent
+            {
+                Prompt = "hello",
+                InputParts =
+                {
+                    new ChatContentPart
+                    {
+                        Kind = ChatContentPartKind.Text,
+                        Text = "see attachment",
+                        MediaType = "application/pdf",
+                        FileRef = new ChatFileRef
+                        {
+                            FileId = "file-1",
+                            ArtifactId = "artifact-1",
+                            SourceKind = ChatFileSourceKind.ConnectedServiceResource,
+                            SourceMessageId = "om_1",
+                            SourceResourceKey = "file_key_1",
+                            FileName = "invoice.pdf",
+                            MediaType = "application/pdf",
+                            SizeBytes = 1234,
+                            Sha256 = "abc",
+                            CreatedAtUnixMs = 1710000000000,
+                            ExpiresAtUnixMs = 1710003600000,
+                            OwnerRunId = "run-1",
+                            OwnerScopeId = "scope-1",
+                        },
+                    },
+                },
+            }),
+        });
+
+        var inputPart = dispatchPort.Calls.Should().ContainSingle().Which
+            .envelope.Payload.Unpack<WorkflowChatRequestEvent>()
+            .InputParts.Should().ContainSingle().Which;
+        inputPart.Kind.Should().Be(Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.File);
+        inputPart.FileRef.Should().NotBeNull();
+        inputPart.FileRef.FileId.Should().Be("file-1");
+        inputPart.FileRef.ArtifactId.Should().Be("artifact-1");
+        inputPart.FileRef.SourceKind.Should().Be(WorkflowFileSourceKind.ConnectedServiceResource);
+        inputPart.FileRef.SourceMessageId.Should().Be("om_1");
+        inputPart.FileRef.SourceResourceKey.Should().Be("file_key_1");
+        inputPart.FileRef.FileName.Should().Be("invoice.pdf");
+        inputPart.FileRef.MediaType.Should().Be("application/pdf");
+        inputPart.FileRef.SizeBytes.Should().Be(1234);
+        inputPart.FileRef.Sha256.Should().Be("abc");
+        inputPart.FileRef.CreatedAtUnixMs.Should().Be(1710000000000);
+        inputPart.FileRef.ExpiresAtUnixMs.Should().Be(1710003600000);
+        inputPart.FileRef.OwnerRunId.Should().Be("run-1");
+        inputPart.FileRef.OwnerScopeId.Should().Be("scope-1");
+    }
+
+    [Fact]
     public async Task DispatchAsync_ShouldMapConnectorAuthorizationToWorkflowCallerCredential()
     {
         var workflowPort = new RecordingWorkflowRunActorPort();

@@ -624,6 +624,10 @@ public sealed class AevatarInvocationDispatcher
                 : workflowRuntimeContext.RootRunId.Trim(),
             RequestedDepth = Math.Max(0, workflowRuntimeContext.Depth) + 1,
         };
+        managedStart.InputFileRefs.Add(request.Inputs.InputParts
+            .Select(static part => ToWorkflowEventFileRef(part.FileRef))
+            .Where(static fileRef => fileRef != null)
+            .Select(static fileRef => fileRef!.Clone()));
 
         if (workflowYamls is { Count: > 0 })
         {
@@ -1940,6 +1944,7 @@ public sealed class AevatarInvocationDispatcher
             MediaType = EmptyToNull(part.MediaType),
             Uri = EmptyToNull(part.Uri),
             Name = EmptyToNull(part.Name),
+            FileRef = part.FileRef?.Clone(),
         }).ToArray();
     }
 
@@ -1999,6 +2004,40 @@ public sealed class AevatarInvocationDispatcher
     private static bool HasFileRefIdentity(Aevatar.AI.Abstractions.ChatFileRef fileRef) =>
         !string.IsNullOrWhiteSpace(fileRef.FileId) ||
         !string.IsNullOrWhiteSpace(fileRef.ArtifactId);
+
+    private static Aevatar.Workflow.Abstractions.WorkflowFileRef? ToWorkflowEventFileRef(
+        Aevatar.AI.Abstractions.ChatFileRef? fileRef) =>
+        fileRef is null || !HasFileRefIdentity(fileRef)
+            ? null
+            : new Aevatar.Workflow.Abstractions.WorkflowFileRef
+            {
+                FileId = fileRef.FileId ?? string.Empty,
+                ArtifactId = fileRef.ArtifactId ?? string.Empty,
+                SourceKind = fileRef.SourceKind switch
+                {
+                    Aevatar.AI.Abstractions.ChatFileSourceKind.ChatInput =>
+                        Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.ChatInput,
+                    Aevatar.AI.Abstractions.ChatFileSourceKind.FormUpload =>
+                        Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.FormUpload,
+                    Aevatar.AI.Abstractions.ChatFileSourceKind.ConnectedServiceResource =>
+                        Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.ConnectedServiceResource,
+                    Aevatar.AI.Abstractions.ChatFileSourceKind.ExternalResource =>
+                        Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.ExternalResource,
+                    Aevatar.AI.Abstractions.ChatFileSourceKind.Generated =>
+                        Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.Generated,
+                    _ => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.Unspecified,
+                },
+                SourceMessageId = fileRef.SourceMessageId ?? string.Empty,
+                SourceResourceKey = fileRef.SourceResourceKey ?? string.Empty,
+                FileName = fileRef.FileName ?? string.Empty,
+                MediaType = fileRef.MediaType ?? string.Empty,
+                SizeBytes = fileRef.SizeBytes,
+                Sha256 = fileRef.Sha256 ?? string.Empty,
+                CreatedAtUnixMs = fileRef.CreatedAtUnixMs,
+                ExpiresAtUnixMs = fileRef.ExpiresAtUnixMs,
+                OwnerRunId = fileRef.OwnerRunId ?? string.Empty,
+                OwnerScopeId = fileRef.OwnerScopeId ?? string.Empty,
+            };
 
     private static InvocationWaitMode ResolveWait(InvocationWaitMode wait) =>
         wait == InvocationWaitMode.Unspecified

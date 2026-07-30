@@ -325,21 +325,16 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         };
         foreach (var part in source.InputParts)
         {
+            var fileRef = ToWorkflowFileRef(part.FileRef);
             request.InputParts.Add(new WorkflowChatInputPartPayload
             {
-                Kind = part.Kind switch
-                {
-                    ChatContentPartKind.Text => Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Text,
-                    ChatContentPartKind.Image => Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Image,
-                    ChatContentPartKind.Audio => Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Audio,
-                    ChatContentPartKind.Video => Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Video,
-                    _ => Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Unspecified,
-                },
+                Kind = ResolveWorkflowInputPartKind(part, fileRef),
                 Text = part.Text ?? string.Empty,
                 DataBase64 = part.DataBase64 ?? string.Empty,
                 MediaType = part.MediaType ?? string.Empty,
                 Uri = part.Uri ?? string.Empty,
                 Name = part.Name ?? string.Empty,
+                FileRef = fileRef,
             });
         }
         foreach (var (key, value) in source.Headers)
@@ -360,6 +355,71 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
             invocationRequest.WorkflowCompletionNotificationTarget);
         return request;
     }
+
+    private static Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind ResolveWorkflowInputPartKind(
+        ChatContentPart part,
+        Aevatar.Workflow.Abstractions.WorkflowFileRef? fileRef)
+    {
+        if (fileRef != null)
+        {
+            var mediaType = string.IsNullOrWhiteSpace(part.MediaType)
+                ? fileRef.MediaType
+                : part.MediaType;
+            if (IsMediaType(mediaType, "image/"))
+                return Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Image;
+            if (IsMediaType(mediaType, "audio/"))
+                return Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Audio;
+            if (IsMediaType(mediaType, "video/"))
+                return Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Video;
+            if (part.Kind == ChatContentPartKind.Text)
+                return Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.File;
+        }
+
+        return part.Kind switch
+        {
+            ChatContentPartKind.Text => Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Text,
+            ChatContentPartKind.Image => Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Image,
+            ChatContentPartKind.Audio => Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Audio,
+            ChatContentPartKind.Video => Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Video,
+            _ => Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Unspecified,
+        };
+    }
+
+    private static bool IsMediaType(string? mediaType, string prefix) =>
+        !string.IsNullOrWhiteSpace(mediaType) &&
+        mediaType.Trim().StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+
+    private static Aevatar.Workflow.Abstractions.WorkflowFileRef? ToWorkflowFileRef(ChatFileRef? fileRef) =>
+        fileRef is null || !HasFileRefIdentity(fileRef)
+            ? null
+            : new Aevatar.Workflow.Abstractions.WorkflowFileRef
+            {
+                FileId = fileRef.FileId ?? string.Empty,
+                ArtifactId = fileRef.ArtifactId ?? string.Empty,
+                SourceKind = fileRef.SourceKind switch
+                {
+                    ChatFileSourceKind.ChatInput => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.ChatInput,
+                    ChatFileSourceKind.FormUpload => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.FormUpload,
+                    ChatFileSourceKind.ConnectedServiceResource => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.ConnectedServiceResource,
+                    ChatFileSourceKind.ExternalResource => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.ExternalResource,
+                    ChatFileSourceKind.Generated => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.Generated,
+                    _ => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.Unspecified,
+                },
+                SourceMessageId = fileRef.SourceMessageId ?? string.Empty,
+                SourceResourceKey = fileRef.SourceResourceKey ?? string.Empty,
+                FileName = fileRef.FileName ?? string.Empty,
+                MediaType = fileRef.MediaType ?? string.Empty,
+                SizeBytes = fileRef.SizeBytes,
+                Sha256 = fileRef.Sha256 ?? string.Empty,
+                CreatedAtUnixMs = fileRef.CreatedAtUnixMs,
+                ExpiresAtUnixMs = fileRef.ExpiresAtUnixMs,
+                OwnerRunId = fileRef.OwnerRunId ?? string.Empty,
+                OwnerScopeId = fileRef.OwnerScopeId ?? string.Empty,
+            };
+
+    private static bool HasFileRefIdentity(ChatFileRef fileRef) =>
+        !string.IsNullOrWhiteSpace(fileRef.FileId) ||
+        !string.IsNullOrWhiteSpace(fileRef.ArtifactId);
 
     private static void ApplyWorkflowCompletionNotificationTarget(
         WorkflowChatRequestEvent workflowRequest,
