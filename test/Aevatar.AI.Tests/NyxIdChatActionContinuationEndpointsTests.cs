@@ -17,6 +17,149 @@ namespace Aevatar.AI.Tests;
 public partial class NyxIdChatEndpointsCoverageTests
 {
     [Fact]
+    public async Task HandleStreamMessageAsync_TextExactRetry_ShouldUsePayloadBoundCommandIdentity()
+    {
+        var interaction = new StubNyxIdChatInteractionService<NyxIdChatCommand>
+        {
+            Frames =
+            {
+                new AGUIEvent { RunFinished = new RunFinishedEvent() },
+            },
+        };
+        var request = new NyxIdChatEndpoints.NyxIdChatStreamRequest(
+            Prompt: "hello",
+            ClientRequestId: "client-chat-alpha",
+            Type: "text",
+            OriginTurnId: null,
+            Actions: []);
+
+        await InvokeTextAsync(request, interaction);
+        await InvokeTextAsync(request, interaction);
+        await InvokeTextAsync(request with { Prompt = "different input" }, interaction);
+
+        interaction.Commands.Should().HaveCount(3);
+        interaction.Commands[0].CommandId.Should().NotBeNullOrWhiteSpace();
+        interaction.Commands[1].CommandId.Should().Be(interaction.Commands[0].CommandId);
+        interaction.Commands[2].CommandId.Should().NotBe(interaction.Commands[0].CommandId);
+    }
+
+    [Fact]
+    public async Task NyxIdChatInteraction_ExactRetry_ShouldReplayDurableTerminal()
+    {
+        const string actorId = "conversation-alpha";
+        const string scopeId = "scope-alpha";
+        const string turnId = "turn-chat-alpha";
+        const string commandId = "chat-command-alpha";
+        var actor = new StubActor(actorId);
+        var runtime = new StubActorRuntime();
+        runtime.Actors[actor.Id] = actor;
+        var projectionPort = new StubNyxIdChatSessionProjectionPort
+        {
+            Messages =
+            {
+                ExpectedTerminal(
+                    turnId,
+                    "RUN_FINISHED",
+                    RunCompletionStatus.Blocked,
+                    null),
+            },
+        };
+        var stateQuery = new FixedNyxIdChatStateQueryPort(
+            NyxIdChatConversationStateQueryResult.NotFound());
+        var dispatchPort = new StubActorDispatchPort(runtime);
+        using var services = new ServiceCollection()
+            .AddLogging()
+            .AddSingleton<IActorRuntime>(runtime)
+            .AddSingleton<IActorDispatchPort>(dispatchPort)
+            .AddSingleton<INyxIdChatSessionProjectionPort>(projectionPort)
+            .AddSingleton<INyxIdChatConversationStateQueryPort>(stateQuery)
+            .AddNyxIdChat()
+            .BuildServiceProvider();
+        var interaction = services.GetRequiredService<
+            ICommandInteractionService<NyxIdChatCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>();
+        var command = new NyxIdChatCommand(
+            actorId,
+            scopeId,
+            "hello",
+            turnId,
+            "access-token",
+            null,
+            null,
+            CommandId: commandId,
+            CorrelationId: commandId,
+            ClientRequestId: "client-chat-alpha");
+        var liveFrames = new List<AGUIEvent>();
+
+        var live = await interaction.ExecuteAsync(
+            command,
+            (frame, _) =>
+            {
+                liveFrames.Add(frame);
+                return ValueTask.CompletedTask;
+            });
+        dispatchPort.Dispatches.Should().ContainSingle(dispatch =>
+            dispatch.ActorId == actorId &&
+            dispatch.Envelope.Payload.Is(NyxIdChatStartTurnCommand.Descriptor));
+
+        projectionPort.Messages.Clear();
+        stateQuery.Result = OrdinaryTerminalState(
+            actorId,
+            scopeId,
+            turnId,
+            "blocked");
+        var replayFrames = new List<AGUIEvent>();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+        var replay = await interaction.ExecuteAsync(
+            command,
+            (frame, _) =>
+            {
+                replayFrames.Add(frame);
+                return ValueTask.CompletedTask;
+            },
+            ct: timeout.Token);
+
+        dispatchPort.Dispatches.Should().ContainSingle(dispatch =>
+            dispatch.ActorId == actorId &&
+            dispatch.Envelope.Payload.Is(NyxIdChatStartTurnCommand.Descriptor),
+            "durable exact retry must not enter the actor inbox again");
+        replay.Receipt.Should().Be(live.Receipt);
+        replay.Receipt!.ScopeId.Should().Be(scopeId);
+        replay.Completion.Should().Be(NyxIdChatCompletionStatus.Completed);
+        stateQuery.Queries.Should().HaveCount(2).And.OnlyContain(query =>
+            query.ScopeId == scopeId &&
+            query.ActorId == actorId &&
+            query.TurnId == turnId);
+        liveFrames.Should().ContainSingle()
+            .Which.RunFinished.Status.Should().Be(RunCompletionStatus.Blocked);
+        replayFrames.Should().ContainSingle()
+            .Which.RunFinished.Status.Should().Be(RunCompletionStatus.Blocked);
+    }
+
+    [Theory]
+    [InlineData("different-command")]
+    [InlineData("")]
+    public async Task NyxIdChatDurableCompletionResolver_WithoutMatchingCommandIdentity_ShouldFailClosed(
+        string durableCommandId)
+    {
+        var stateQuery = new FixedNyxIdChatStateQueryPort(OrdinaryTerminalState(
+            "conversation-alpha",
+            "scope-alpha",
+            "turn-chat-alpha",
+            "blocked",
+            durableCommandId));
+        var resolver = new NyxIdChatDurableCompletionResolver(stateQuery);
+
+        var result = await resolver.ResolveAsync(new NyxIdChatAcceptedReceipt(
+            "conversation-alpha",
+            "chat-command-alpha",
+            "chat-command-alpha",
+            "turn-chat-alpha",
+            "scope-alpha"));
+
+        result.HasTerminalCompletion.Should().BeFalse();
+    }
+
+    [Fact]
     public async Task HandleStreamMessageAsync_ActionContinueExactRetry_ShouldUsePayloadBoundCommandIdentity()
     {
         var actionInteraction = new StubNyxIdChatInteractionService<NyxIdActionContinuationCommand>
@@ -61,6 +204,7 @@ public partial class NyxIdChatEndpointsCoverageTests
     [Theory]
     [InlineData("succeeded", "RUN_FINISHED", RunCompletionStatus.Completed, null)]
     [InlineData("blocked", "RUN_FINISHED", RunCompletionStatus.Blocked, null)]
+    [InlineData("stopped", "RUN_FINISHED", RunCompletionStatus.Blocked, null)]
     [InlineData("failed", "RUN_ERROR", RunCompletionStatus.Unspecified, "NYXID_ACTION_CANCELLED")]
     public async Task NyxIdActionContinuationInteraction_ExactRetry_ShouldReplayDurableTerminal(
         string turnStatus,
@@ -257,6 +401,81 @@ public partial class NyxIdChatEndpointsCoverageTests
             NullLoggerFactory.Instance,
             CancellationToken.None);
     }
+
+    private static async Task InvokeTextAsync(
+        NyxIdChatEndpoints.NyxIdChatStreamRequest request,
+        StubNyxIdChatInteractionService<NyxIdChatCommand> interaction)
+    {
+        var context = new DefaultHttpContext
+        {
+            User = new ClaimsPrincipal(new ClaimsIdentity(
+                [new Claim("sub", "owner-alpha")],
+                authenticationType: "test")),
+        };
+        context.Request.Headers.Authorization = "Bearer valid-token";
+        context.Response.Body = new MemoryStream();
+
+        await InvokeTaskAsync(
+            "HandleStreamMessageAsync",
+            context,
+            "scope-alpha",
+            "conversation-alpha",
+            request,
+            new StubGAgentActorStore(),
+            interaction,
+            new StubNyxIdChatInteractionService<NyxIdActionContinuationCommand>(),
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+    }
+
+    private static NyxIdChatConversationStateQueryResult OrdinaryTerminalState(
+        string actorId,
+        string scopeId,
+        string turnId,
+        string turnStatus,
+        string commandId = "chat-command-alpha") =>
+        NyxIdChatConversationStateQueryResult.Current(
+            new NyxIdChatConversationStateSnapshot(
+                actorId,
+                scopeId,
+                12,
+                5,
+                new DateTimeOffset(2026, 7, 31, 1, 0, 0, TimeSpan.Zero),
+                new NyxIdChatConversationTurnSnapshot(
+                    turnId,
+                    "task-alpha",
+                    turnStatus,
+                    null,
+                    null,
+                    null,
+                    new DateTimeOffset(2026, 7, 31, 1, 0, 0, TimeSpan.Zero),
+                    commandId),
+                new NyxIdChatConversationTurnSnapshot(
+                    turnId,
+                    "task-alpha",
+                    turnStatus,
+                    null,
+                    null,
+                    null,
+                    new DateTimeOffset(2026, 7, 31, 1, 0, 0, TimeSpan.Zero),
+                    commandId),
+                [],
+                new NyxIdChatConversationTaskSnapshot(
+                    "task-alpha",
+                    turnId,
+                    turnStatus,
+                    null,
+                    null,
+                    null,
+                    null,
+                    new DateTimeOffset(2026, 7, 31, 1, 0, 0, TimeSpan.Zero),
+                    new DateTimeOffset(2026, 7, 31, 1, 0, 0, TimeSpan.Zero),
+                    []),
+                null,
+                [],
+                null,
+                null,
+                null));
 
     private static NyxIdChatConversationStateQueryResult TerminalState(
         string actorId,

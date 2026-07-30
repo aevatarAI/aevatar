@@ -42,6 +42,7 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
         result.Snapshot!.ActorId.Should().Be("conversation-alpha");
         result.Snapshot.ScopeId.Should().Be("scope-alpha");
         result.Snapshot.ProgressSequence.Should().Be(34);
+        result.Snapshot.ActiveTurn!.CommandId.Should().Be("command-alpha");
         result.Snapshot.ActiveTask!.Steps.Should().ContainSingle().Which.Operation!
             .OperationId.Should().Be("operation-alpha");
         result.Snapshot.PendingActions.Should().ContainSingle().Which.Reports
@@ -143,12 +144,14 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
         {
             TurnId = "turn-alpha",
             TaskId = "task-alpha",
+            CommandId = "command-alpha",
             Status = "active",
         },
         LatestTurn = new NyxIdChatConversationTurnDocument
         {
             TurnId = "turn-alpha",
             TaskId = "task-alpha",
+            CommandId = "command-alpha",
             Status = "active",
         },
         ActiveTask = new NyxIdChatConversationTaskDocument

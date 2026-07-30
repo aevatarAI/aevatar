@@ -1233,6 +1233,7 @@ public sealed class NyxIdChatConversationGAgent
             TurnId = command.TurnId.Trim(),
             TaskId = command.TaskId.Trim(),
             ClientRequestId = command.ClientRequestId.Trim(),
+            CommandId = command.CommandId.Trim(),
             Status = NyxIdChatTurnStatus.Active,
             Prompt = command.Prompt,
             CreatedAt = now.Clone(),
@@ -2394,6 +2395,7 @@ public sealed class NyxIdChatConversationGAgent
         string.Equals(state.ActiveTurn?.TurnId, command.TurnId.Trim(), StringComparison.Ordinal) &&
         string.Equals(state.ActiveTurn?.TaskId, command.TaskId.Trim(), StringComparison.Ordinal) &&
         string.Equals(state.ActiveTurn?.ClientRequestId, command.ClientRequestId.Trim(), StringComparison.Ordinal) &&
+        string.Equals(state.ActiveTurn?.CommandId, command.CommandId.Trim(), StringComparison.Ordinal) &&
         string.Equals(state.ActiveTurn?.Prompt, command.Prompt, StringComparison.Ordinal) &&
         string.Equals(
             state.HistoryDeliveryReservation?.RequestFingerprint,
