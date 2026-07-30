@@ -123,8 +123,10 @@ pnpm --dir apps/aevatar-console-web build
   is not the Team collection URL.
 - Canonical member workflow editors are
   `/scopes/:scopeId/teams/:teamId/members/:memberId/workflow` and
-  `/scopes/:scopeId/teams/:teamId/members/new/workflow`. A `workflowId` query
-  value is only a draft hint and cannot replace the path's member identity.
+  `/scopes/:scopeId/teams/:teamId/members/new/workflow`. The `workflow` path
+  segment names the member implementation editor surface, not a workflow
+  resource identity. A `workflowId` query value is only a draft hint and cannot
+  replace the path's member identity.
 - Do not add or preserve hidden `/teams/:scopeId...` compatibility routes.
   Parse paths by resource name, not by fragile segment indexes.
 
@@ -136,6 +138,8 @@ pnpm --dir apps/aevatar-console-web build
 - Choose one explicit visual direction for a change and keep it consistent
   with the existing console. Do not fall back to generic AI-dashboard styling,
   purple-white gradients, repetitive card grids, or undifferentiated panels.
+- Do not treat `Inter`, `Arial`, `Roboto`, or `system-ui` as a default preferred
+  font stack; follow the established product typography and design baseline.
 - Reuse or extend design tokens, CSS variables, and theme tokens for color,
   typography, spacing, radius, shadow, and motion. Avoid large sets of isolated
   magic values.
