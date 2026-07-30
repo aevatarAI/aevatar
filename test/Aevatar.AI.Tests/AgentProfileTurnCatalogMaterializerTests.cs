@@ -165,6 +165,41 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
     }
 
     [Fact]
+    public async Task PrepareAndMaterializeCommittedAsync_ShouldScopeRequestContextDuringToolDiscovery()
+    {
+        var tools = NewTools("recovery", "task");
+        var source = new TokenBoundToolSource("turn-token", tools);
+        var registry = new RecordingToolSetRegistry();
+        registry.Add("profile.route", source);
+        var profile = SealProfile(BuildProfile(withAlias: true));
+        var materializer = NewMaterializer(
+            registry,
+            new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+            new RecordingFetcher(SuccessfulFetch()));
+        var toolContext = ToolContext("turn-token");
+
+        var preparation = await materializer.PrepareAsync(
+            profile,
+            "session-context",
+            "/alpha run",
+            registeredTools: [],
+            toolContext,
+            CancellationToken.None);
+        var materialization = await materializer.MaterializeCommittedAsync(
+            profile,
+            preparation.Authority,
+            "turn-token",
+            registeredTools: [],
+            toolContext,
+            CancellationToken.None);
+
+        source.ObservedTokens.Should().Equal("turn-token", "turn-token");
+        preparation.Authority.AuthorityCeilingToolNames.Should().Equal("recovery", "task");
+        materialization.Catalog.RouteOwnedTools["recovery"].Should().BeSameAs(tools[0]);
+        materialization.Catalog.RouteOwnedTools["task"].Should().BeSameAs(tools[1]);
+    }
+
+    [Fact]
     public async Task MaterializeCommittedAsync_WhenFrozenExactRefDoesNotMatchProfile_ShouldRestrictEmptyWithoutFetch()
     {
         var tools = NewTools("recovery", "task", "extra");
@@ -1597,6 +1632,22 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
     {
         public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
             Task.FromResult(tools);
+    }
+
+    private sealed class TokenBoundToolSource(
+        string requiredToken,
+        IReadOnlyList<IAgentTool> tools) : IAgentToolSource
+    {
+        public List<string?> ObservedTokens { get; } = [];
+
+        public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
+        {
+            ObservedTokens.Add(AgentToolRequestContext.NyxIdAccessToken);
+            return Task.FromResult<IReadOnlyList<IAgentTool>>(
+                string.Equals(AgentToolRequestContext.NyxIdAccessToken, requiredToken, StringComparison.Ordinal)
+                    ? tools
+                    : []);
+        }
     }
 
     private sealed class ThrowingToolSource : IAgentToolSource

@@ -562,6 +562,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
         }
 
         var discovered = new List<IAgentTool>();
+        using var toolContextScope = AgentToolContextScope.Push(toolContext);
         foreach (var source in resolved.Sources)
         {
             try

@@ -5,6 +5,7 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Prompting;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Skills;
@@ -924,6 +925,59 @@ public sealed class ConversationReplyGeneratorTests
         var toolNames = OfferedToolNames(plan);
         toolNames.Should().Contain("nyxid_require_service");
         toolNames.Should().NotContain(["nyxid_services", "nyxid_api_keys"]);
+    }
+
+    [Fact]
+    public async Task BuildStepPlanAsync_WithTurnCatalog_ShouldApplyProfileToolsAndPrompt()
+    {
+        var allowed = new StubTool("nyxid_require_service");
+        var denied = new StubTool("nyxid_catalog");
+        var generator = (IAgentRunStepConversationReplyGenerator)new NyxIdConversationReplyGenerator(
+            new RecordingProviderFactory { Capabilities = MultimodalCapabilities },
+            BuiltInPromptFloorProvider,
+            toolSources: [new StubToolSource(allowed, denied)]);
+        var catalog = new AgentProfileTurnCatalog(
+            [allowed.Name],
+            new ProfileRoutingPromptLayer(
+                "profile-route-sentinel",
+                new ProfileRoutingPromptProvenance("profile-alpha"),
+                new PromptLayerBounds(1024, 256)),
+            new SelectedSkillPromptLayer(
+                "selected-skill-sentinel",
+                new SelectedSkillPromptProvenance("skill-alpha"),
+                new PromptLayerBounds(1024, 256)),
+            selectedIntentId: "service_connect",
+            candidateIntentId: "service_connect",
+            routeOwnedTools: [allowed]);
+
+        var plan = await generator.BuildStepPlanAsync(
+            new ChatActivity
+            {
+                Id = "turn-alpha",
+                Conversation = new ConversationReference { CanonicalKey = "nyxid-chat-alpha" },
+                Content = new MessageContent { Text = "我要连一下 github" },
+            },
+            new Dictionary<string, string>(),
+            Control(token: "runtime-token"),
+            AgentToolExecutionContext.Empty,
+            priorHistory: null,
+            attachmentContext: null,
+            forceDisableTools: false,
+            ct: CancellationToken.None,
+            turnCatalog: catalog);
+
+        var request = plan.StepExecutor.BuildLlmStepRequest(
+            plan.InitialMessages,
+            "turn-alpha",
+            plan.Metadata,
+            plan.ToolContext,
+            plan.LlmControl,
+            round: 0,
+            finalNoTools: false);
+        request.Tools.Should().ContainSingle().Which.Should().BeSameAs(allowed);
+        request.Messages.Single(message => message.Role == "system").Content.Should()
+            .Contain("profile-route-sentinel")
+            .And.Contain("selected-skill-sentinel");
     }
 
     [Fact]

@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Tools;
 using Aevatar.Foundation.Abstractions;
@@ -411,7 +412,8 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
             IReadOnlyList<ConversationHistoryEntry>? priorHistory,
             ChatAttachmentInputContext? attachmentContext,
             bool forceDisableTools,
-            CancellationToken ct)
+            CancellationToken ct,
+            AgentProfileTurnCatalog? turnCatalog = null)
         {
             CapturedLlmControl = llmControl;
             CapturedToolContext = toolContext;

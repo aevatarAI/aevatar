@@ -1,20 +1,29 @@
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.AgentProfiles;
+using Aevatar.AI.ToolProviders.ToolSetRegistry;
+using Aevatar.AGUI.Contracts;
 using Aevatar.CQRS.Core.Abstractions.Commands;
-using Aevatar.Foundation.Abstractions.Attributes;
-using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgents.NyxidChat;
+using Aevatar.GAgents.NyxidChat.AgentProfiles;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using Type = System.Type;
 
 namespace Aevatar.AI.Tests;
@@ -230,6 +239,262 @@ public sealed class NyxIdChatConversationGAgentTests
         agent.State.HistoryDeliveryReservation.Dispatched.Should().BeTrue();
         agent.State.ActiveTask.Steps.Single().Operation.Phase.Should()
             .Be(NyxIdChatOperationPhase.Dispatched);
+    }
+
+    [Fact]
+    public async Task StartTurn_WithBoundProfile_ShouldCommitAndDispatchTurnAuthority()
+    {
+        const string conversationActorId = "conversation-alpha";
+        var operations = new List<string>();
+        var eventStore = new InMemoryEventStoreForTests();
+        var dispatch = new RecordingActorDispatchPort(
+            operations,
+            static (_, _) => Task.CompletedTask);
+        using var services = BuildEventSourcingServices(
+            eventStore,
+            registryCommandPort: new RecordingGAgentActorRegistryCommandPort());
+        var agent = CreateController(services, conversationActorId, dispatch);
+        await agent.ActivateAsync();
+        var profile = AgentProfileSnapshotCodec.Seal(new AgentProfileSnapshot
+        {
+            ProfileId = "profile-alpha",
+            ProfileVersion = "profile-v1",
+            AgentKind = NyxIdChatServiceDefaults.GAgentKind,
+            PolicyRevision = "policy-v1",
+            RouteToolSetRef = "profile.route",
+            MaximumToolPolicy = new AgentProfileToolPolicy
+            {
+                ToolNames = { "nyxid_require_service" },
+            },
+            RecoveryToolPolicy = new AgentProfileToolPolicy(),
+            ActivationMode = AgentProfileActivationMode.Enforced,
+        });
+        await agent.HandleEventAsync(CreateEnvelope(
+            conversationActorId,
+            new NyxIdChatConversationCreateCommand
+            {
+                ScopeId = "scope-alpha",
+                CreatedLocally = true,
+                RequestedActorId = conversationActorId,
+                AgentProfile = profile,
+                FirstTurn = CreateStartTurnCommand(),
+            }));
+
+        agent.State.ActiveTurn.AgentProfileTurnAuthority.Should().NotBeNull();
+        agent.State.ActiveTurn.AgentProfileTurnAuthority.ReconciliationKey.SessionId
+            .Should().Be("turn-alpha");
+        var command = dispatch.OperationCalls.Should().ContainSingle().Which.Envelope.Payload
+            .Unpack<NyxIdChatOperationDispatchCommand>();
+        command.Llm.AgentProfile.Should().BeEquivalentTo(profile);
+        command.Llm.AgentProfileTurnAuthority.Should().BeEquivalentTo(
+            agent.State.ActiveTurn.AgentProfileTurnAuthority);
+    }
+
+    [Fact]
+    public async Task StartTurn_WithShadowProfile_ShouldDispatchLegacyUnprofiledPair()
+    {
+        const string conversationActorId = "conversation-shadow";
+        var eventStore = new InMemoryEventStoreForTests();
+        var dispatch = new RecordingActorDispatchPort([], static (_, _) => Task.CompletedTask);
+        using var services = BuildEventSourcingServices(eventStore);
+        var agent = CreateController(services, conversationActorId, dispatch);
+        await agent.ActivateAsync();
+        var profile = AgentProfileSnapshotCodec.Seal(new AgentProfileSnapshot
+        {
+            ProfileId = "profile-shadow",
+            ProfileVersion = "profile-v1",
+            AgentKind = NyxIdChatServiceDefaults.GAgentKind,
+            PolicyRevision = "policy-v1",
+            RouteToolSetRef = "profile.route",
+            MaximumToolPolicy = new AgentProfileToolPolicy
+            {
+                ToolNames = { "nyxid_require_service" },
+            },
+            RecoveryToolPolicy = new AgentProfileToolPolicy(),
+            ActivationMode = AgentProfileActivationMode.Shadow,
+        });
+        var start = CreateStartTurnCommand();
+        start.ConversationActorId = conversationActorId;
+
+        await agent.HandleEventAsync(CreateEnvelope(
+            conversationActorId,
+            new NyxIdChatConversationCreateCommand
+            {
+                ScopeId = "scope-alpha",
+                CreatedLocally = true,
+                RequestedActorId = conversationActorId,
+                AgentProfile = profile,
+                FirstTurn = start,
+            }));
+
+        agent.State.AgentProfile.Should().BeEquivalentTo(profile);
+        agent.State.ActiveTurn.AgentProfileTurnAuthority.Should().BeNull();
+        var command = dispatch.OperationCalls.Should().ContainSingle().Which.Envelope.Payload
+            .Unpack<NyxIdChatOperationDispatchCommand>();
+        command.Llm.AgentProfile.Should().BeNull();
+        command.Llm.AgentProfileTurnAuthority.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task CanonicalProfiledServiceConnect_ShouldCommitOneRichCardAndBlockedTerminal()
+    {
+        const string conversationActorId = "conversation-profiled-connect";
+        const string selectedSkillPrompt =
+            "Call nyxid_require_service for the requested catalog service.";
+        var skillHash = ByteString.CopyFrom(
+            Enumerable.Range(0, 32).Select(static value => (byte)value).ToArray());
+        var requireService = new VerifiedServiceConnectTool();
+        IAgentTool[] routeTools =
+        [
+            new CanonicalProfileTool("nyxid_service_inventory"),
+            new CanonicalProfileTool("nyxid_catalog"),
+            requireService,
+        ];
+        var classifier = new FixedProfileClassifier("service_connect");
+        var materializer = new AgentProfileTurnCatalogMaterializer(
+            new FixedToolSetRegistry("profile.route", new FixedToolSource(routeTools)),
+            classifier,
+            new FixedSkillFetcher(
+                "skill-service-connect",
+                "1.0",
+                "service-connect",
+                "reviewed-publisher",
+                skillHash,
+                $"---\nname: service-connect\n---\n{selectedSkillPrompt}"));
+        var profile = new AgentProfileSnapshot
+        {
+            ProfileId = "profile-nyxid-chat",
+            ProfileVersion = "profile-v2",
+            AgentKind = NyxIdChatServiceDefaults.GAgentKind,
+            PolicyRevision = "policy-v2",
+            RouteToolSetRef = "profile.route",
+            MaximumToolPolicy = new AgentProfileToolPolicy(),
+            RecoveryToolPolicy = new AgentProfileToolPolicy(),
+            ClassifierTimeoutMs = 1_000,
+            ExactSkillFetchTimeoutMs = 1_000,
+            MaxSelectedSkillBytes = 1_024,
+            ActivationMode = AgentProfileActivationMode.Enforced,
+        };
+        profile.MaximumToolPolicy.ToolNames.Add(routeTools.Select(static tool => tool.Name));
+        profile.RecoveryToolPolicy.ToolNames.Add(["nyxid_service_inventory", "nyxid_catalog"]);
+        profile.Members.Add(new AgentProfileSkillMember
+        {
+            IntentId = "service_connect",
+            RoutingDescription = "Connect a requested NyxID catalog service.",
+            SkillRef = new ExactRemoteSkillRef
+            {
+                Guid = "skill-service-connect",
+                LiteralVersion = "1.0",
+            },
+            TaskToolPolicy = new AgentProfileToolPolicy
+            {
+                ToolNames = { "nyxid_require_service" },
+            },
+            SideEffectClass = AgentProfileSideEffectClass.ExternalHandoff,
+            ExpectedSkillName = "service-connect",
+            ReviewedPublisherId = "reviewed-publisher",
+            SealedSkillSha256 = skillHash,
+        });
+        profile = AgentProfileSnapshotCodec.Seal(profile);
+
+        var eventStore = new InMemoryEventStoreForTests();
+        var dispatch = new RecordingActorDispatchPort([], static (_, _) => Task.CompletedTask);
+        using var services = BuildEventSourcingServices(
+            eventStore,
+            registryCommandPort: new RecordingGAgentActorRegistryCommandPort());
+        var agent = CreateController(
+            services,
+            conversationActorId,
+            dispatch,
+            materializer);
+        await agent.ActivateAsync();
+        var start = CreateStartTurnCommand();
+        start.ConversationActorId = conversationActorId;
+        start.Prompt = "我要连一下 github";
+        await agent.HandleEventAsync(CreateEnvelope(
+            conversationActorId,
+            new NyxIdChatConversationCreateCommand
+            {
+                ScopeId = start.ScopeId,
+                CreatedLocally = true,
+                RequestedActorId = conversationActorId,
+                AgentProfile = profile,
+                FirstTurn = start,
+            }));
+
+        var provider = new ServiceConnectToolCallProvider();
+        var generationExecutor = new AgentRunReplyGenerationExecutor(
+            new RecordingActorDispatchPort([], static (_, _) => Task.CompletedTask),
+            new NyxIdConversationReplyGenerator(provider, new BuiltInPromptFloorProvider()),
+            interactiveReplyCollector: null,
+            relayOptions: null,
+            logger: NullLogger<AgentRunReplyGenerationExecutor>.Instance);
+        var turnExecutor = new NyxIdChatTurnOperationExecutor(
+            generationExecutor,
+            new UnavailableNyxIdActionPostconditionPort(),
+            materializer);
+        var session = new NyxIdChatTransientExecutionSession();
+        var firstCommand = dispatch.OperationCalls.Should().ContainSingle().Which.Envelope.Payload
+            .Unpack<NyxIdChatOperationDispatchCommand>();
+        var llmExecution = await turnExecutor.ExecuteAsync(
+            firstCommand,
+            session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+        await agent.HandleEventAsync(CreateEnvelope(conversationActorId, llmExecution.Result));
+        dispatch.OperationCalls.Should().HaveCount(2);
+        var toolCommand = dispatch.OperationCalls[1].Envelope.Payload
+            .Unpack<NyxIdChatOperationDispatchCommand>();
+        var toolExecution = await turnExecutor.ExecuteAsync(
+            toolCommand,
+            session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+        await agent.HandleEventAsync(CreateEnvelope(conversationActorId, toolExecution.Result));
+
+        classifier.Requests.Should().ContainSingle().Which.UserMessage
+            .Should().Be("我要连一下 github");
+        var llmRequest = provider.Requests.Should().ContainSingle().Which;
+        llmRequest.Tools.Should().HaveCount(routeTools.Length);
+        foreach (var tool in routeTools)
+            llmRequest.Tools.Should().Contain(candidate => ReferenceEquals(candidate, tool));
+        llmRequest.Messages.Single(static message => message.Role == "system").Content.Should()
+            .Contain("Selected intent: service_connect")
+            .And.Contain(selectedSkillPrompt);
+        requireService.ExecutionCount.Should().Be(1);
+
+        var committed = await eventStore.GetEventsAsync(conversationActorId);
+        var action = committed
+            .Where(static stateEvent =>
+                stateEvent.EventData.Is(NyxIdChatActionRequestedEvent.Descriptor))
+            .Should().ContainSingle().Which.EventData.Unpack<NyxIdChatActionRequestedEvent>();
+        action.Request.SchemaVersion.Should().Be(4);
+        action.Request.Action.Should().Be(NyxIdAssistantActionKind.ServiceConnect);
+        action.Request.Params.CatalogServiceConnect.ServiceSlug.Should().Be("api-github");
+        action.OriginTurn.Status.Should().Be(NyxIdChatTurnStatus.Blocked);
+        action.OriginTurn.FailureCode.Should().Be(NyxIdChatBrowserActions.ActionRequested);
+        action.Task.Status.Should().Be(NyxIdChatTaskStatus.Blocked);
+        action.Task.FailureCode.Should().Be(NyxIdChatBrowserActions.ActionRequested);
+        action.State.PendingActions.Should().ContainSingle().Which
+            .Should().BeEquivalentTo(action.Request);
+        agent.State.Should().BeEquivalentTo(action.State);
+
+        var frames = NyxIdChatConversationAguiFrameBuilder.BuildActionRequested(
+            conversationActorId,
+            start.TurnId,
+            action,
+            action.State.ProgressSequence);
+        var customFrames = frames.Where(static frame => frame.Custom is not null).ToArray();
+        var richCard = customFrames.Should().ContainSingle(frame =>
+            frame.Custom.Name == NyxIdChatConversationAguiFrameBuilder.ActionRequestEventName).Which;
+        var wirePayload = richCard.Custom.Payload
+            .Unpack<NyxIdAssistantActionRequestWirePayload>();
+        wirePayload.SchemaVersion.Should().Be(4);
+        wirePayload.Action.Should().Be("service.connect");
+        wirePayload.Params.CatalogService.ServiceSlug.Should().Be("api-github");
+        var finishedFrames = frames.Where(static frame => frame.RunFinished is not null).ToArray();
+        finishedFrames.Should().ContainSingle().Which.RunFinished.Status
+            .Should().Be(RunCompletionStatus.Blocked);
     }
 
     [Fact]
@@ -3090,14 +3355,16 @@ public sealed class NyxIdChatConversationGAgentTests
     private static NyxIdChatConversationGAgent CreateController(
         ServiceProvider services,
         string actorId,
-        IActorDispatchPort? actorDispatchPort = null)
+        IActorDispatchPort? actorDispatchPort = null,
+        AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer = null)
     {
         var operations = new List<string>();
         var agent = new NyxIdChatConversationGAgent(
             new RecordingActorRuntime(operations),
             actorDispatchPort ??
             new RecordingActorDispatchPort(operations, static (_, _) => Task.CompletedTask),
-            new FixedTimeProvider(new DateTimeOffset(2026, 7, 24, 8, 0, 0, TimeSpan.Zero)))
+            new FixedTimeProvider(new DateTimeOffset(2026, 7, 24, 8, 0, 0, TimeSpan.Zero)),
+            turnCatalogMaterializer)
         {
             Services = services,
             EventSourcingBehaviorFactory = services.GetRequiredService<
@@ -3111,11 +3378,14 @@ public sealed class NyxIdChatConversationGAgentTests
         IEventStore eventStore,
         IChatHistoryCommandPort? historyCommandPort = null,
         IActorRuntimeCallbackScheduler? callbackScheduler = null,
-        NyxIdAssistantActionRegistry? actionRegistry = null)
+        NyxIdAssistantActionRegistry? actionRegistry = null,
+        IGAgentActorRegistryCommandPort? registryCommandPort = null)
     {
         var services = new ServiceCollection()
             .AddSingleton(eventStore)
             .AddSingleton(actionRegistry ?? CreateActionRegistry())
+            .AddSingleton(
+                registryCommandPort ?? new RecordingGAgentActorRegistryCommandPort())
             .AddSingleton<EventSourcingRuntimeOptions>()
             .AddSingleton<IActorRuntimeCallbackScheduler>(
                 callbackScheduler ?? new NoopRuntimeCallbackScheduler())
@@ -3125,6 +3395,168 @@ public sealed class NyxIdChatConversationGAgentTests
         else
             services.AddSingleton<IChatHistoryCommandPort>(new RecordingChatHistoryCommandPort([]));
         return services.BuildServiceProvider();
+    }
+
+    private sealed class RecordingGAgentActorRegistryCommandPort : IGAgentActorRegistryCommandPort
+    {
+        public Task<GAgentActorRegistryCommandReceipt> RegisterActorAsync(
+            GAgentActorRegistration registration,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(new GAgentActorRegistryCommandReceipt(
+                registration,
+                GAgentActorRegistryCommandStage.AdmissionVisible));
+
+        public Task<GAgentActorRegistryCommandReceipt> UnregisterActorAsync(
+            GAgentActorRegistration registration,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(new GAgentActorRegistryCommandReceipt(
+                registration,
+                GAgentActorRegistryCommandStage.AdmissionRemoved));
+    }
+
+    private sealed class FixedProfileClassifier(string intentId) : IAgentProfileTurnClassifier
+    {
+        public List<AgentProfileTurnClassificationRequest> Requests { get; } = [];
+
+        public Task<AgentProfileTurnClassificationResult> ClassifyAsync(
+            AgentProfileTurnClassificationRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Requests.Add(request);
+            return Task.FromResult(AgentProfileTurnClassificationResult.Matched(intentId));
+        }
+    }
+
+    private sealed class FixedSkillFetcher(
+        string guid,
+        string version,
+        string name,
+        string publisherId,
+        ByteString skillHash,
+        string markdown) : IExactRemoteSkillFetcher
+    {
+        public Task<ExactRemoteSkillFetchResult> FetchAsync(
+            string accessToken,
+            ExactRemoteSkillRef skillRef,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(ExactRemoteSkillFetchResult.Success(
+                guid,
+                version,
+                name,
+                publisherId,
+                skillHash,
+                markdown));
+        }
+    }
+
+    private sealed class FixedToolSetRegistry(
+        string name,
+        IAgentToolSource source) : IToolSetRegistry
+    {
+        public IReadOnlyList<string> GetRegisteredNames() => [name];
+
+        public ToolSetResolveResult Resolve(string? requestedName) =>
+            string.Equals(requestedName, name, StringComparison.Ordinal)
+                ? ToolSetResolveResult.Success(name, [source])
+                : ToolSetResolveResult.Failure(new ToolSetResolveError(
+                    ToolSetResolveError.UnknownNameCode,
+                    requestedName ?? string.Empty,
+                    "Unknown test tool set.",
+                    [name]));
+    }
+
+    private sealed class FixedToolSource(IReadOnlyList<IAgentTool> tools) : IAgentToolSource
+    {
+        public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(tools);
+        }
+    }
+
+    private sealed class CanonicalProfileTool(string name) : IAgentTool
+    {
+        public string Name => name;
+        public string Description => $"{name} test boundary";
+        public string ParametersSchema => "{\"type\":\"object\"}";
+        public bool IsReadOnly => true;
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult("{}");
+    }
+
+    private sealed class VerifiedServiceConnectTool : IAgentTool
+    {
+        public string Name => "nyxid_require_service";
+        public string Description => "Require a caller-visible NyxID service.";
+        public string ParametersSchema =>
+            "{\"type\":\"object\",\"properties\":{\"service_slug\":{\"type\":\"string\"}}}";
+        public bool IsReadOnly => true;
+        public int ExecutionCount { get; private set; }
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            ExecutionCount++;
+            return Task.FromResult(
+                "{\"blocked\":true,\"service_slug\":\"api-github\",\"reason_code\":\"NYXID_SERVICE_REGISTRATION_REQUIRED\"}");
+        }
+
+        public AgentToolReceipt? CreateResultReceipt(
+            string callId,
+            string toolName,
+            string argumentsJson,
+            string resultJson) =>
+            new()
+            {
+                CallId = callId,
+                ToolName = toolName,
+                Status = AgentToolReceiptStatus.AuthorizationRequired,
+                ErrorCode = "NYXID_SERVICE_REGISTRATION_REQUIRED",
+                ErrorMessage = "Connect GitHub to continue.",
+                AuthorizationRequired = new NyxIdAuthorizationRequiredEvent
+                {
+                    ServiceSlug = "api-github",
+                    ReasonCode = "NYXID_SERVICE_REGISTRATION_REQUIRED",
+                    SafeMessage = "Connect GitHub to continue.",
+                },
+            };
+    }
+
+    private sealed class ServiceConnectToolCallProvider : ILLMProviderFactory, ILLMProvider
+    {
+        public string Name => "canonical-profile-test";
+        public List<LLMRequest> Requests { get; } = [];
+
+        public ILLMProvider GetProvider(string name) => this;
+        public ILLMProvider GetDefault() => this;
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Requests.Add(request);
+            yield return new LLMStreamChunk
+            {
+                DeltaToolCall = new ToolCall
+                {
+                    Id = "call-require-github",
+                    Name = "nyxid_require_service",
+                    ArgumentsJson = "{\"service_slug\":\"api-github\"}",
+                },
+            };
+            await Task.CompletedTask;
+            yield return new LLMStreamChunk
+            {
+                FinishReason = "tool_calls",
+                IsLast = true,
+            };
+        }
     }
 
     private static NyxIdAssistantActionRegistry CreateActionRegistry() =>
