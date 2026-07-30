@@ -15,9 +15,16 @@ import {
   type ScheduledDispatchOwner,
 } from "./scheduledDispatchApi";
 
-export type TeamAutomationRoute = {
+type TeamAutomationTeamRoute = {
   readonly scopeId: string;
   readonly teamId: string;
+};
+
+export type TeamAutomationListRoute = TeamAutomationTeamRoute & {
+  readonly memberId?: string;
+};
+
+export type TeamAutomationRoute = TeamAutomationTeamRoute & {
   readonly memberId: string;
 };
 
@@ -461,6 +468,24 @@ function assertRouteMatches(
   }
 }
 
+function assertListRouteMatches(
+  actual: TeamAutomationRoute,
+  expected: TeamAutomationListRoute,
+  label: string,
+): void {
+  if (
+    actual.scopeId !== expected.scopeId ||
+    actual.teamId !== expected.teamId ||
+    (expected.memberId !== undefined && actual.memberId !== expected.memberId)
+  ) {
+    throw new Error(
+      expected.memberId
+        ? `${label} does not belong to the requested Team member route.`
+        : `${label} does not belong to the requested Team automation collection.`,
+    );
+  }
+}
+
 function decodePermissionReview(
   value: unknown,
   label = "StudioMemberWorkflowAuthorizationResult",
@@ -862,6 +887,20 @@ function normalizeRoute(route: TeamAutomationRoute): TeamAutomationRoute {
   return normalized;
 }
 
+function normalizeListRoute(route: TeamAutomationListRoute): TeamAutomationListRoute {
+  const scopeId = route.scopeId.trim();
+  const teamId = route.teamId.trim();
+  const memberId = route.memberId?.trim();
+  if (!scopeId || !teamId) {
+    throw new Error("Team automation list route requires scopeId and teamId.");
+  }
+  return {
+    scopeId,
+    teamId,
+    ...(memberId ? { memberId } : {}),
+  };
+}
+
 function scheduleOwner(route: TeamAutomationRoute): ScheduledDispatchOwner {
   const normalized = normalizeRoute(route);
   return {
@@ -873,11 +912,15 @@ function scheduleOwner(route: TeamAutomationRoute): ScheduledDispatchOwner {
 }
 
 function scheduleCollectionPath(
-  route: TeamAutomationRoute,
+  route: TeamAutomationListRoute,
   query?: { readonly cursor?: string; readonly take?: number },
 ): string {
+  const normalized = normalizeListRoute(route);
   return withQuery("/api/schedules", {
-    ...encodeScheduledDispatchOwnerQuery(scheduleOwner(route)),
+    ownerKind: "studio_member_automation",
+    ownerScopeId: normalized.scopeId,
+    ownerTeamId: normalized.teamId,
+    ownerMemberId: normalized.memberId,
     cursor: query?.cursor,
     includeTotalCount: true,
     take: query?.take,
@@ -951,17 +994,18 @@ function decodeViewForRoute(
 
 function decodeListForRoute(
   value: unknown,
-  expectedRoute: TeamAutomationRoute,
+  expectedRoute: TeamAutomationListRoute,
   label?: string,
 ): TeamAutomationListResult {
   const result = decodeList(value, label);
-  result.items.forEach((item, index) =>
-    assertRouteMatches(
+  const normalizedRoute = normalizeListRoute(expectedRoute);
+  result.items.forEach((item, index) => {
+    assertListRouteMatches(
       item,
-      normalizeRoute(expectedRoute),
+      normalizedRoute,
       `${label ?? "ScheduledDispatchListResult"}.items[${index}]`,
-    ),
-  );
+    );
+  });
   return result;
 }
 
@@ -992,7 +1036,7 @@ async function requestTeamAutomation<T>(
 }
 
 function listTeamAutomations(
-  route: TeamAutomationRoute,
+  route: TeamAutomationListRoute,
   query?: { readonly cursor?: string; readonly take?: number },
 ): Promise<TeamAutomationListResult> {
   return requestTeamAutomation(
@@ -1002,7 +1046,7 @@ function listTeamAutomations(
 }
 
 async function listAllTeamAutomations(
-  route: TeamAutomationRoute,
+  route: TeamAutomationListRoute,
   query?: { readonly cursor?: string; readonly take?: number },
 ): Promise<TeamAutomationListResult> {
   const items: TeamAutomationView[] = [];

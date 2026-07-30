@@ -1441,11 +1441,14 @@ describe("TeamDetailPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "自动化" }));
 
     expect(await screen.findByRole("heading", { name: "自动化" })).toBeTruthy();
-    expect(screen.getByText("这个成员还没有自动化")).toBeTruthy();
-    expect(screen.getByText("Team Alpha Operator")).toBeTruthy();
+    expect(await screen.findByText("还没有周期任务")).toBeTruthy();
+    expect(screen.queryByText("Team Alpha Operator")).toBeNull();
     expect(window.location.pathname).toBe("/scopes/scope-1/teams/t-alpha");
     expect(window.location.search).toBe("?tab=automations");
-    expect(teamAutomationApi.listAll).not.toHaveBeenCalled();
+    expect(teamAutomationApi.listAll).toHaveBeenCalledWith(
+      { scopeId: "scope-1", teamId: "t-alpha" },
+      { take: 200 },
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
 
@@ -2529,7 +2532,13 @@ describe("TeamDetailPage", () => {
 
     expect(await screen.findByRole("heading", { name: "自动化" })).toBeTruthy();
     expect(window.location.pathname).toBe("/scopes/scope-1/teams/t-alpha");
-    expect(teamAutomationApi.listAll).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(teamAutomationApi.listAll).toHaveBeenCalledWith(
+        { scopeId: "scope-1", teamId: "t-alpha" },
+        { take: 200 },
+      ),
+    );
+    expect(teamAutomationApi.listAll).toHaveBeenCalledTimes(1);
     expect(scheduledDispatchApi.listAll).not.toHaveBeenCalled();
   });
 

@@ -614,6 +614,36 @@ describe("teamAutomationApi", () => {
     ).toThrow("Unknown Team automation revocation track");
   });
 
+  it("lists every member automation in a Team without ownerMemberId", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        items: [
+          automationView({ scheduleId: "sch-alpha" }),
+          automationView({
+            scheduleId: "sch-beta",
+            serviceId: "svc-beta",
+            teamOwnerMemberId: "m-beta",
+          }),
+        ],
+        nextCursor: null,
+        totalCount: 2,
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    const result = await teamAutomationApi.listAll(
+      { scopeId: "scope-alpha", teamId: "team-alpha" },
+      { take: 200 },
+    );
+
+    expect(result.items.map((item) => item.memberId)).toEqual(["m-alpha", "m-beta"]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/schedules?ownerKind=studio_member_automation&ownerScopeId=scope-alpha&ownerTeamId=team-alpha&includeTotalCount=true&take=200",
+    );
+  });
+
   it("keeps the canonical owner tuple on every list page", async () => {
     const fetchMock = jest
       .fn()
