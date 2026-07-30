@@ -194,6 +194,13 @@ public static partial class NyxIdChatEndpoints
             CommandInteractionResult<NyxIdChatAcceptedReceipt, NyxIdChatStartError, NyxIdChatCompletionStatus> result;
             if (string.Equals(streamType, "action.continue", StringComparison.Ordinal))
             {
+                var commandId = NyxIdChatPublicIdentity.CreateActionContinuationCommandId(
+                    actorId,
+                    scopeId,
+                    ownerSubject,
+                    clientRequestId!,
+                    request.OriginTurnId?.Trim() ?? string.Empty,
+                    actionReports);
                 interactionTask = actionContinuationInteractionService.ExecuteAsync(
                     new NyxIdActionContinuationCommand(
                         actorId,
@@ -202,7 +209,9 @@ public static partial class NyxIdChatEndpoints
                         turnId,
                         ownerSubject,
                         clientRequestId!,
-                        actionReports),
+                        actionReports,
+                        CommandId: commandId,
+                        CorrelationId: commandId),
                     EmitAsync,
                     null,
                     interactionCancellation.Token);
