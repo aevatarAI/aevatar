@@ -255,6 +255,7 @@ public sealed class MainnetSettingsEndpointSecurityTests
             ["Projection:Graph:Providers:InMemory:Enabled"] = "true",
             ["Projection:Graph:Providers:Neo4j:Enabled"] = "false",
             ["Aevatar:NyxId:Authority"] = "https://nyxid.example.test",
+            ["Aevatar:NyxId:AssistantActions:Enabled"] = "false",
             [$"LLMProviders:Providers:{ProviderName}:ApiKey"] = RawHostSecret,
         });
         return builder;
