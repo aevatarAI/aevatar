@@ -4,6 +4,7 @@ using System.Text.Json;
 using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgents.StudioMember;
+using Aevatar.GAgentService.Abstractions;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Hosting.Endpoints;
@@ -491,6 +492,51 @@ public sealed class StudioMemberEndpointsTests
 
         result.Should().BeOfType<Accepted<StudioMemberBindingAcceptedResponse>>()
             .Which.Value.Should().BeSameAs(binding);
+    }
+
+    [Fact]
+    public async Task HandleBindAsync_ShouldMapAndScrubExplicitRequestConfirmations()
+    {
+        var service = new RecordingMemberService
+        {
+            BindResponse = new StudioMemberBindingAcceptedResponse(
+                StudioMemberBindingRunStatusNames.Accepted,
+                "bind-alpha",
+                ScopeId,
+                "m-alpha"),
+        };
+        var http = CreateAuthenticatedContext(ScopeId);
+        ((ClaimsIdentity)http.User.Identity!).AddClaim(new Claim("sub", "caller-alpha"));
+
+        await InvokeHandle<IResult>(
+            "HandleBindAsync",
+            http,
+            ScopeId,
+            "m-alpha",
+            new UpdateStudioMemberBindingRequest(
+                RevisionId: "rev-alpha",
+                Workflow: new StudioMemberWorkflowBindingSpec("wf-alpha", ["name: wf-alpha"]))
+            {
+                ExplicitRequestConfirmations =
+                [
+                    new NyxIdExplicitRequestConfirmationInput(
+                        "wf-alpha/request-alpha",
+                        "digest-alpha",
+                        "read_only"),
+                ],
+            },
+            service,
+            CancellationToken.None);
+
+        service.BindRequest.Should().NotBeNull();
+        service.BindRequest!.RevisionId.Should().Be("rev-alpha");
+        service.BindRequest.Workflow!.WorkflowId.Should().Be("wf-alpha");
+        service.BindRequest.ExplicitRequestConfirmations.Should().BeNull();
+        var admission = service.BindRequest.CapabilityAdmission;
+        admission.Should().NotBeNull();
+        admission!.CallerId.Should().Be("caller-alpha");
+        admission.ExplicitRequestConfirmations.Should().ContainSingle().Which.AttestedRisk.Should()
+            .Be(NyxIdOperationRisk.ReadOnly);
     }
 
     [Fact]
@@ -1149,6 +1195,7 @@ public sealed class StudioMemberEndpointsTests
         public Exception? GetException { get; set; }
         public StudioMemberBindingAcceptedResponse? BindResponse { get; set; }
         public Exception? BindException { get; set; }
+        public UpdateStudioMemberBindingRequest? BindRequest { get; private set; }
         public StudioMemberBindingContractResponse? GetBindingResponse { get; set; }
         public StudioMemberBindingRunStatusResponse? GetBindingRunResponse { get; set; }
         public Exception? GetBindingRunException { get; set; }
@@ -1185,6 +1232,7 @@ public sealed class StudioMemberEndpointsTests
         public Task<StudioMemberBindingAcceptedResponse> BindAsync(
             string scopeId, string memberId, UpdateStudioMemberBindingRequest request, CancellationToken ct = default)
         {
+            BindRequest = request;
             if (BindException != null) throw BindException;
             return Task.FromResult(BindResponse!);
         }

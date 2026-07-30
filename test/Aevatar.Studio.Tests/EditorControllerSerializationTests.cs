@@ -2,6 +2,7 @@ using System.Net;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using System.Net.Http.Json;
 using Aevatar.Studio.Application.Studio.Abstractions;
@@ -312,6 +313,7 @@ public sealed class EditorControllerSerializationTests
                                path_template: /api/resources/{resource_id}
                                query_parameters: [page_size]
                                body_mode: none
+                               body_required: true
                                response_mode: file_artifact
                            parameters:
                              tool: nyxid_proxy
@@ -324,12 +326,26 @@ public sealed class EditorControllerSerializationTests
         parseBody.Should().NotContain("\"code\":\"unknown_field\"");
         parseBody.Should().Contain("\"nyxIdOperation\":{\"userServiceId\":\"usvc-alpha\",\"endpointId\":\"endpoint-alpha\"}");
         parseBody.Should().Contain("\"nyxIdRequest\":{\"userServiceId\":\"usvc-beta\",\"method\":\"GET\",\"pathTemplate\":\"/api/resources/{resource_id}\"");
+        parseBody.Should().Contain("\"bodyRequired\":true");
 
-        using var parsedJson = JsonDocument.Parse(parseBody);
-        var document = parsedJson.RootElement.GetProperty("document").Clone();
-        using var serializeResponse = await client.PostAsJsonAsync("/api/editor/serialize-yaml", new
+        var document = JsonNode.Parse(parseBody)!["document"]!.DeepClone();
+        document["description"] = "unrelated edit";
+        using var normalizeResponse = await client.PostAsJsonAsync("/api/editor/normalize", new
         {
             document,
+            availableStepTypes = new[] { "tool_call", "parallel" },
+        });
+
+        var normalizeBody = await normalizeResponse.Content.ReadAsStringAsync();
+        normalizeResponse.StatusCode.Should().Be(HttpStatusCode.OK, normalizeBody);
+        normalizeBody.Should().Contain("\"description\":\"unrelated edit\"");
+        normalizeBody.Should().Contain("\"bodyRequired\":true");
+        normalizeBody.Should().Contain("body_required: true");
+
+        var normalizedDocument = JsonNode.Parse(normalizeBody)!["document"]!.DeepClone();
+        using var serializeResponse = await client.PostAsJsonAsync("/api/editor/serialize-yaml", new
+        {
+            document = normalizedDocument,
             availableStepTypes = new[] { "tool_call", "parallel" },
         });
 
@@ -339,6 +355,7 @@ public sealed class EditorControllerSerializationTests
         serializeBody.Should().Contain("endpoint_id: endpoint-alpha");
         serializeBody.Should().Contain("nyxid_request:");
         serializeBody.Should().Contain("path_template: /api/resources/{resource_id}");
+        serializeBody.Should().Contain("body_required: true");
         serializeBody.Should().Contain("response_mode: file_artifact");
     }
 

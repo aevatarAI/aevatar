@@ -162,20 +162,42 @@ public static partial class ServiceEndpoints
 
                 var admissionContext = WorkflowCapabilityAdmissionHttpContext.Create(
                     http,
-                    ExternalCapabilityExecutionMode.Durable);
+                    ExternalCapabilityExecutionMode.Durable,
+                    explicitRequestConfirmations: request.ExplicitRequestConfirmations);
                 spec.WorkflowSpec.ExpectedExecutionMode = admissionContext.ExecutionMode;
-                spec.WorkflowSpec.CapabilityAdmissionPlan = await capabilityAdmissionService.AdmitAsync(
-                    new WorkflowExternalCapabilityAdmissionRequest(
-                        new ExternalWorkflowCapabilityAccessContext(
-                            identity.TenantId,
-                            admissionContext.CallerId,
-                            admissionContext.NyxIdCallerBearerToken,
-                            admissionContext.NyxIdOrganizationBearerToken),
-                        spec.WorkflowSpec.WorkflowYaml,
-                        spec.WorkflowSpec.InlineWorkflowYamls,
-                        "service_revision",
-                        admissionContext.ExecutionMode),
-                    ct);
+                try
+                {
+                    spec.WorkflowSpec.CapabilityAdmissionPlan = await capabilityAdmissionService.AdmitAsync(
+                        new WorkflowExternalCapabilityAdmissionRequest(
+                            new ExternalWorkflowCapabilityAccessContext(
+                                identity.TenantId,
+                                admissionContext.CallerId,
+                                admissionContext.NyxIdCallerBearerToken,
+                                admissionContext.NyxIdOrganizationBearerToken),
+                            spec.WorkflowSpec.WorkflowYaml,
+                            spec.WorkflowSpec.InlineWorkflowYamls,
+                            "service_revision",
+                            admissionContext.ExecutionMode,
+                            admissionContext.ExplicitRequestConfirmations),
+                        ct);
+                }
+                catch (WorkflowExternalCapabilityAdmissionException ex)
+                {
+                    return Results.BadRequest(new
+                    {
+                        code = "WORKFLOW_EXTERNAL_CAPABILITY_NOT_READY",
+                        message = "External workflow capability admission failed.",
+                        readiness = new
+                        {
+                            status = ex.Readiness.Status.ToString(),
+                            blockers = ex.Readiness.Blockers.Select(static blocker => new
+                            {
+                                code = blocker.Code,
+                                safeMessage = blocker.SafeMessage,
+                            }),
+                        },
+                    });
+                }
 
                 break;
             default:
@@ -787,7 +809,8 @@ public static partial class ServiceEndpoints
         string ImplementationKind,
         StaticRevisionHttpRequest? Static,
         ScriptingRevisionHttpRequest? Scripting,
-        WorkflowRevisionHttpRequest? Workflow);
+        WorkflowRevisionHttpRequest? Workflow,
+        IReadOnlyList<NyxIdExplicitRequestConfirmationInput>? ExplicitRequestConfirmations = null);
 
     public sealed record SetDefaultServingRevisionHttpRequest(
         string TenantId,

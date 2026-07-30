@@ -387,6 +387,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         endpoints.Should().Contain("/api/services/{serviceId}/policies");
         endpoints.Should().Contain("/api/scopes/{scopeId}/binding");
         endpoints.Should().Contain("/api/scopes/{scopeId}/workflows:save-and-bind");
+        endpoints.Should().Contain("/api/scopes/{scopeId}/workflows:explicit-request-preview");
         endpoints.Should().Contain("/api/scopes/{scopeId}/binding/revisions/{revisionId}:activate");
         endpoints.Should().Contain("/api/scopes/{scopeId}/revisions");
         endpoints.Should().Contain("/api/scopes/{scopeId}/revisions/{revisionId}");

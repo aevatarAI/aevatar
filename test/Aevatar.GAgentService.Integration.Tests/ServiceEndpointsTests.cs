@@ -271,6 +271,48 @@ public sealed class ServiceEndpointsTests
     }
 
     [Fact]
+    public async Task CreateRevisionAsync_WhenExplicitRequestAdmissionFails_ShouldReturnBadRequestWithoutDispatch()
+    {
+        var readiness = new ExternalCapabilityReadiness
+        {
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            Status = ExternalCapabilityReadinessStatus.AdmissionRebindRequired,
+        };
+        readiness.Blockers.Add(new ExternalCapabilityBlocker
+        {
+            Status = ExternalCapabilityReadinessStatus.AdmissionRebindRequired,
+            Code = "NYXID_EXPLICIT_REQUEST_CONFIRMATION_STALE",
+            SafeMessage = "Explicit request confirmation no longer matches the current contract.",
+        });
+        await using var host = await EndpointTestHost.StartAsync(
+            new WorkflowExternalCapabilityAdmissionException(readiness));
+
+        var response = await host.Client.PostAsJsonAsync(
+            "/api/services/svc-alpha/revisions",
+            new ServiceEndpoints.CreateRevisionHttpRequest(
+                "tenant-alpha",
+                "app-alpha",
+                "ns-alpha",
+                "rev-alpha",
+                "workflow",
+                null,
+                null,
+                new ServiceEndpoints.WorkflowRevisionHttpRequest(
+                    "wf-alpha",
+                    "name: wf-alpha",
+                    "workflow-definition-alpha",
+                    null),
+                [new NyxIdExplicitRequestConfirmationInput(
+                    "wf-alpha/request-alpha",
+                    "stale-digest",
+                    "read_only")]));
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        host.CapabilityAdmission.Requests.Should().ContainSingle();
+        host.CommandPort.CreateRevisionCommand.Should().BeNull();
+    }
+
+    [Fact]
     public async Task CreateRevisionAsync_ForWorkflow_ShouldAdmitExactBundleWithTransientHttpAuthority()
     {
         await using var host = await EndpointTestHost.StartAsync();
@@ -318,6 +360,54 @@ public sealed class ServiceEndpointsTests
             .Be(ExternalCapabilityExecutionMode.Durable);
         host.CommandPort.CreateRevisionCommand.Spec.WorkflowSpec.ExpectedExecutionMode.Should()
             .Be(ExternalCapabilityExecutionMode.Durable);
+    }
+
+    [Fact]
+    public async Task CreateRevisionAsync_ForWorkflow_ShouldMapExplicitRequestConfirmationWithoutCallerSuppliedGrantor()
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/services/svc-alpha/revisions")
+        {
+            Content = JsonContent.Create(new ServiceEndpoints.CreateRevisionHttpRequest(
+                "spoof-tenant",
+                "spoof-app",
+                "spoof-ns",
+                "rev-alpha",
+                "workflow",
+                null,
+                null,
+                new ServiceEndpoints.WorkflowRevisionHttpRequest(
+                    "wf-alpha",
+                    "name: wf-alpha",
+                    "workflow-definition-alpha",
+                    null),
+                [
+                    new NyxIdExplicitRequestConfirmationInput(
+                        "wf-alpha/request-alpha",
+                        "digest-alpha",
+                        "read_only"),
+                ])),
+        };
+        request.Headers.Add("X-Test-Authenticated", "true");
+        request.Headers.Add("X-Test-Tenant-Id", "tenant-claim");
+        request.Headers.Add("X-Test-App-Id", "app-claim");
+        request.Headers.Add("X-Test-Namespace", "ns-claim");
+        request.Headers.Add("X-Test-Caller-Id", "authenticated-owner-alpha");
+
+        var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        var admission = host.CapabilityAdmission.Requests.Should().ContainSingle().Which;
+        admission.Access.CallerId.Should().Be("authenticated-owner-alpha");
+        admission.ExplicitRequestConfirmations.Should().ContainSingle().Which.Should()
+            .BeEquivalentTo(new NyxIdExplicitRequestConfirmation
+            {
+                CallSiteId = "wf-alpha/request-alpha",
+                RequestContractDigest = "digest-alpha",
+                AttestedRisk = NyxIdOperationRisk.ReadOnly,
+            });
+        host.CommandPort.CreateRevisionCommand.Should().NotBeNull();
+        host.CommandPort.CreateRevisionCommand!.ToString().Should().NotContain("attested_risk");
     }
 
     [Fact]

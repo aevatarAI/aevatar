@@ -167,9 +167,11 @@ internal static class StudioMemberEndpoints
         {
             var admittedRequest = request with
             {
+                ExplicitRequestConfirmations = null,
                 CapabilityAdmission = StudioWorkflowCapabilityAdmissionHttpContext.Create(
                     http,
-                    ExternalCapabilityExecutionMode.Interactive),
+                    ExternalCapabilityExecutionMode.Interactive,
+                    request.ExplicitRequestConfirmations),
             };
             var receipt = await memberService.BindAsync(scopeId, memberId, admittedRequest, ct);
             return Results.Accepted(

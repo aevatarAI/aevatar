@@ -29,6 +29,98 @@ namespace Aevatar.GAgentService.Integration.Tests;
 public sealed class ScopeWorkflowEndpointsTests
 {
     [Fact]
+    public async Task HandleExplicitRequestPreviewAsync_ShouldReturnSanitizedCanonicalPreview()
+    {
+        const string bearer = "transient-preview-bearer";
+        const string rawRequestSecret = "raw-request-secret";
+        var http = CreateHttpContext();
+        http.Request.Headers.Authorization = $"Bearer {bearer}";
+        var previewService = new RecordingWorkflowExplicitRequestPreviewService
+        {
+            Result = new WorkflowExplicitRequestPreviewResult(
+            [
+                new WorkflowExplicitRequestPreviewItem(
+                    "wf-alpha/request-alpha",
+                    "digest-alpha",
+                    "usvc-alpha",
+                    NyxIdRequestMethod.Post,
+                    "/records/{id}",
+                    NyxIdRequestBodyMode.Json,
+                    true,
+                    NyxIdRequestResponseMode.Text,
+                    NyxIdOperationRisk.Write,
+                    true,
+                    [ExternalCapabilityExecutionMode.Interactive]),
+            ]),
+        };
+
+        var result = await ScopeWorkflowEndpoints.HandleExplicitRequestPreviewAsync(
+            http,
+            "user-1",
+            new ScopeWorkflowEndpoints.ExplicitRequestPreviewHttpRequest(
+                $"name: wf-alpha\nsecret: {rawRequestSecret}\n",
+                "interactive",
+                new Dictionary<string, string>
+                {
+                    ["child"] = $"name: child\nsecret: {rawRequestSecret}\n",
+                },
+                WorkflowId: "wf-alpha",
+                RevisionId: "rev-alpha"),
+            previewService,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        previewService.Request.Should().NotBeNull();
+        previewService.Request!.Access.ScopeId.Should().Be("user-1");
+        previewService.Request.Access.CallerId.Should().Be("caller-alpha");
+        previewService.Request.Access.NyxIdCallerBearerToken.Should().Be(bearer);
+        previewService.Request.ExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Interactive);
+        previewService.Request.WorkflowId.Should().Be("wf-alpha");
+        previewService.Request.RevisionId.Should().Be("rev-alpha");
+        body.Should().Contain("\"callSiteId\":\"wf-alpha/request-alpha\"");
+        body.Should().Contain("\"requestContractDigest\":\"digest-alpha\"");
+        body.Should().Contain("\"userServiceId\":\"usvc-alpha\"");
+        body.Should().Contain("\"method\":\"post\"");
+        body.Should().Contain("\"bodyMode\":\"json\"");
+        body.Should().Contain("\"responseMode\":\"text\"");
+        body.Should().Contain("\"effectiveRisk\":\"write\"");
+        body.Should().Contain("\"allowedExecutionModes\":[\"interactive\"]");
+        body.Should().NotContain(bearer);
+        body.Should().NotContain(rawRequestSecret);
+        body.ToLowerInvariant().Should().NotContain("endpointid");
+        body.ToLowerInvariant().Should().NotContain("grant");
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("background")]
+    public async Task HandleExplicitRequestPreviewAsync_ShouldRejectInvalidExecutionModeBeforePreview(
+        string executionMode)
+    {
+        var http = CreateHttpContext();
+        var previewService = new RecordingWorkflowExplicitRequestPreviewService();
+
+        var result = await ScopeWorkflowEndpoints.HandleExplicitRequestPreviewAsync(
+            http,
+            "user-1",
+            new ScopeWorkflowEndpoints.ExplicitRequestPreviewHttpRequest(
+                "name: wf-alpha\nsteps: []\n",
+                executionMode),
+            previewService,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain("INVALID_USER_WORKFLOW_REQUEST");
+        previewService.Request.Should().BeNull();
+    }
+
+    [Fact]
     public async Task HandleUpsertWorkflowAsync_ShouldReturnBadRequest_WhenServiceRejectsRequest()
     {
         var http = CreateHttpContext();
@@ -68,7 +160,14 @@ public sealed class ScopeWorkflowEndpointsTests
                 },
                 AppId: "studio",
                 ServiceId: "svc-alpha",
-                ExposureDesired: true),
+                ExposureDesired: true,
+                ExplicitRequestConfirmations:
+                [
+                    new NyxIdExplicitRequestConfirmationInput(
+                        "wf-alpha/request-alpha",
+                        "digest-alpha",
+                        "write"),
+                ]),
             port,
             CancellationToken.None);
 
@@ -86,9 +185,54 @@ public sealed class ScopeWorkflowEndpointsTests
         port.Request.CapabilityAdmission.Should().NotBeNull();
         port.Request.CapabilityAdmission!.CallerId.Should().Be("caller-alpha");
         port.Request.CapabilityAdmission.NyxIdCallerBearerToken.Should().Be("transient-caller-token");
+        var confirmation = port.Request.CapabilityAdmission.ExplicitRequestConfirmations
+            .Should().ContainSingle().Which;
+        confirmation.CallSiteId.Should().Be("wf-alpha/request-alpha");
+        confirmation.RequestContractDigest.Should().Be("digest-alpha");
+        confirmation.AttestedRisk.Should().Be(NyxIdOperationRisk.Write);
         body.Should().Contain("\"revisionId\":\"rev-generated\"");
         body.Should().Contain("\"acceptanceStage\":\"accepted\"");
         body.Should().Contain("\"propagationStage\":\"readmodel_propagating\"");
+    }
+
+    [Fact]
+    public async Task HandleUpsertWorkflowAsync_ShouldMapExplicitRequestConfirmationFromHttpInput()
+    {
+        var http = CreateHttpContext();
+        http.Request.Headers.Authorization = "Bearer transient-upsert-token";
+        var port = new RecordingScopeWorkflowCommandPort();
+
+        var result = await ScopeWorkflowEndpoints.HandleUpsertWorkflowAsync(
+            http,
+            "user-1",
+            "wf-alpha",
+            new ScopeWorkflowEndpoints.UpsertScopeWorkflowHttpRequest(
+                "name: wf-alpha\nsteps: []\n",
+                RevisionId: "rev-alpha",
+                ExplicitRequestConfirmations:
+                [
+                    new NyxIdExplicitRequestConfirmationInput(
+                        "wf-alpha/request-alpha",
+                        "digest-alpha",
+                        "destructive"),
+                ]),
+            port,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        port.Request.Should().NotBeNull();
+        port.Request!.WorkflowId.Should().Be("wf-alpha");
+        port.Request.RevisionId.Should().Be("rev-alpha");
+        port.Request.CapabilityAdmission.Should().NotBeNull();
+        port.Request.CapabilityAdmission!.CallerId.Should().Be("caller-alpha");
+        port.Request.CapabilityAdmission.NyxIdCallerBearerToken.Should().Be("transient-upsert-token");
+        var confirmation = port.Request.CapabilityAdmission.ExplicitRequestConfirmations
+            .Should().ContainSingle().Which;
+        confirmation.CallSiteId.Should().Be("wf-alpha/request-alpha");
+        confirmation.RequestContractDigest.Should().Be("digest-alpha");
+        confirmation.AttestedRisk.Should().Be(NyxIdOperationRisk.Destructive);
     }
 
     [Fact]
@@ -1326,6 +1470,46 @@ public sealed class ScopeWorkflowEndpointsTests
                 "rev-generated",
                 workflowResult,
                 bindingResult));
+        }
+    }
+
+    private sealed class RecordingScopeWorkflowCommandPort : IScopeWorkflowCommandPort
+    {
+        public ScopeWorkflowUpsertRequest? Request { get; private set; }
+
+        public Task<ScopeWorkflowUpsertResult> UpsertAsync(
+            ScopeWorkflowUpsertRequest request,
+            CancellationToken ct = default)
+        {
+            Request = request;
+            return Task.FromResult(new ScopeWorkflowUpsertResult(
+                request.ScopeId,
+                request.WorkflowId,
+                "scope-service-key",
+                request.RevisionId ?? "rev-generated",
+                "definition-prefix",
+                "workflow-actor",
+                "deployment-id",
+                DateTimeOffset.UtcNow,
+                [],
+                $"/api/scopes/{request.ScopeId}/workflows/{request.WorkflowId}"));
+        }
+    }
+
+    private sealed class RecordingWorkflowExplicitRequestPreviewService :
+        IWorkflowExplicitRequestPreviewService
+    {
+        public WorkflowExplicitRequestPreviewRequest? Request { get; private set; }
+
+        public WorkflowExplicitRequestPreviewResult Result { get; init; } =
+            new WorkflowExplicitRequestPreviewResult([]);
+
+        public Task<WorkflowExplicitRequestPreviewResult> PreviewAsync(
+            WorkflowExplicitRequestPreviewRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            Request = request;
+            return Task.FromResult(Result);
         }
     }
 

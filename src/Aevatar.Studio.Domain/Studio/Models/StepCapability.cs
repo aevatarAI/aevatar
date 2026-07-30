@@ -26,6 +26,8 @@ public sealed record NyxIdRequestCapability
 
     public List<string> HeaderParameters { get; init; } = [];
 
+    public bool BodyRequired { get; init; }
+
     public string BodyMode { get; init; } = string.Empty;
 
     public string ResponseMode { get; init; } = string.Empty;

@@ -30,6 +30,7 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
         "path_template",
         "query_parameters",
         "header_parameters",
+        "body_required",
         "body_mode",
         "response_mode",
     };
@@ -332,6 +333,11 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
             PathTemplate = ReadScalar(node, "path_template") ?? string.Empty,
             QueryParameters = ReadStringList(node, "query_parameters", path, findings),
             HeaderParameters = ReadStringList(node, "header_parameters", path, findings),
+            BodyRequired = ReadBoolean(
+                node,
+                "body_required",
+                findings,
+                $"{path}/capability/nyxid_request") ?? false,
             BodyMode = ReadScalar(node, "body_mode") ?? string.Empty,
             ResponseMode = ReadScalar(node, "response_mode") ?? string.Empty,
         };
@@ -704,6 +710,7 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
                 ["user_service_id"] = capability.NyxIdRequest.UserServiceId,
                 ["method"] = capability.NyxIdRequest.Method,
                 ["path_template"] = capability.NyxIdRequest.PathTemplate,
+                ["body_required"] = capability.NyxIdRequest.BodyRequired,
                 ["body_mode"] = capability.NyxIdRequest.BodyMode,
                 ["response_mode"] = capability.NyxIdRequest.ResponseMode,
             };

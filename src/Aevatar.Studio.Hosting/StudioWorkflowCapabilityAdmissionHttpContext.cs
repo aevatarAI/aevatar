@@ -16,13 +16,16 @@ internal static class StudioWorkflowCapabilityAdmissionHttpContext
 
     public static WorkflowCapabilityAdmissionContext Create(
         HttpContext http,
-        ExternalCapabilityExecutionMode executionMode)
+        ExternalCapabilityExecutionMode executionMode,
+        IEnumerable<NyxIdExplicitRequestConfirmationInput>? explicitRequestConfirmations = null)
     {
         ArgumentNullException.ThrowIfNull(http);
         return new WorkflowCapabilityAdmissionContext(
             ResolveCallerId(http.User),
             WorkflowCallerCredentialExtractor.Extract(http).Credential?.BearerToken,
-            executionMode: executionMode);
+            executionMode: executionMode,
+            explicitRequestConfirmations: explicitRequestConfirmations?.Select(static input =>
+                input.ToConfirmation()));
     }
 
     private static string ResolveCallerId(ClaimsPrincipal? user)

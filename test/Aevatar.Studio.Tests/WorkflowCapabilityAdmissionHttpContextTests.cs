@@ -10,6 +10,46 @@ namespace Aevatar.Studio.Tests;
 
 public sealed class WorkflowCapabilityAdmissionHttpContextTests
 {
+    [Fact]
+    public void Create_ShouldMapOnlyTypedExplicitRequestConfirmationFields()
+    {
+        var http = new DefaultHttpContext
+        {
+            User = new System.Security.Claims.ClaimsPrincipal(
+                new System.Security.Claims.ClaimsIdentity(
+                    [new System.Security.Claims.Claim("sub", "authenticated-owner-alpha")],
+                    "test")),
+        };
+        var inputs = new[]
+        {
+            new NyxIdExplicitRequestConfirmationInput(
+                "wf-alpha/request-alpha",
+                "digest-alpha",
+                "read_only"),
+        };
+
+        var serviceAdmission = WorkflowCapabilityAdmissionHttpContext.Create(
+            http,
+            ExternalCapabilityExecutionMode.Durable,
+            explicitRequestConfirmations: inputs);
+        var studioAdmission = StudioWorkflowCapabilityAdmissionHttpContext.Create(
+            http,
+            ExternalCapabilityExecutionMode.Interactive,
+            inputs);
+
+        foreach (var admission in new[] { serviceAdmission, studioAdmission })
+        {
+            admission.CallerId.Should().Be("authenticated-owner-alpha");
+            admission.ExplicitRequestConfirmations.Should().ContainSingle().Which.Should()
+                .BeEquivalentTo(new NyxIdExplicitRequestConfirmation
+                {
+                    CallSiteId = "wf-alpha/request-alpha",
+                    RequestContractDigest = "digest-alpha",
+                    AttestedRisk = NyxIdOperationRisk.ReadOnly,
+                });
+        }
+    }
+
     [Theory]
     [InlineData("bearer_only", "bearer-token")]
     [InlineData("delegation_only", "delegation-token")]

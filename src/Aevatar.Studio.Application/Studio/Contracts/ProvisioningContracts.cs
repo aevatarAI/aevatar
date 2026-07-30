@@ -79,6 +79,8 @@ public sealed record ProvisionWorkflowRequest(
     string? Timezone = null,
     ProvisionWorkflowCallerCredential? Caller = null)
 {
+    public IReadOnlyList<NyxIdExplicitRequestConfirmationInput>? ExplicitRequestConfirmations { get; init; }
+
     [JsonIgnore]
     public WorkflowCapabilityAdmissionContext? CapabilityAdmission { get; init; }
 

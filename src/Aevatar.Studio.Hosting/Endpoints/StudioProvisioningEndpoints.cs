@@ -97,9 +97,11 @@ internal static class StudioProvisioningEndpoints
                 : null;
             var admittedRequest = request with
             {
+                ExplicitRequestConfirmations = null,
                 CapabilityAdmission = StudioWorkflowCapabilityAdmissionHttpContext.Create(
                     http,
-                    executionMode),
+                    executionMode,
+                    request.ExplicitRequestConfirmations),
                 AuthenticatedOwner = scheduleAuthority?.AuthenticatedOwner,
                 ProvisioningBearerToken = scheduleAuthority?.ProvisioningBearerToken,
             };

@@ -17,14 +17,17 @@ internal static class WorkflowCapabilityAdmissionHttpContext
     public static WorkflowCapabilityAdmissionContext Create(
         HttpContext http,
         ExternalCapabilityExecutionMode executionMode = ExternalCapabilityExecutionMode.Interactive,
-        WorkflowCapabilityAdmissionPlan? existingPlan = null)
+        WorkflowCapabilityAdmissionPlan? existingPlan = null,
+        IEnumerable<NyxIdExplicitRequestConfirmationInput>? explicitRequestConfirmations = null)
     {
         ArgumentNullException.ThrowIfNull(http);
         return new WorkflowCapabilityAdmissionContext(
             ResolveCallerId(http.User),
             WorkflowCallerCredentialExtractor.Extract(http).Credential?.BearerToken,
             executionMode: executionMode,
-            existingPlan: existingPlan);
+            existingPlan: existingPlan,
+            explicitRequestConfirmations: explicitRequestConfirmations?.Select(static input =>
+                input.ToConfirmation()));
     }
 
     private static string ResolveCallerId(ClaimsPrincipal? user)

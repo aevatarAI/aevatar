@@ -5,9 +5,13 @@ using Aevatar.Studio.Application.Studio;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Application.Studio.Services;
+using Aevatar.Studio.Domain.Studio.Compatibility;
 using Aevatar.Studio.Domain.Studio.Models;
+using Aevatar.Studio.Domain.Studio.Services;
+using Aevatar.Studio.Infrastructure.Serialization;
 using Aevatar.Studio.Tests.Shared;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 
@@ -518,6 +522,77 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
         accepted.WorkflowId.Should().Be("wf-alpha");
         accepted.Accepted.Should().BeTrue();
         accepted.Readiness.Stage.Should().Be("projection_pending");
+    }
+
+    [Fact]
+    public async Task SaveDraftAsync_WithEditedExplicitRequest_ShouldPreserveBodyRequirementOnReopen()
+    {
+        using var environment = new ScopedWorkflowEnvironment();
+        var workspacePort = new RecordingStudioWorkspacePorts();
+        var yamlService = new YamlWorkflowDocumentService(WorkflowCompatibilityProfile.AevatarV1);
+        var service = new AppScopedWorkflowService(
+            yamlService,
+            new StubWorkflowDefinitionParser(),
+            workspacePort,
+            workspacePort);
+        var parsed = yamlService.Parse("""
+            name: wf-alpha
+            steps:
+              - id: request-alpha
+                type: tool_call
+                capability:
+                  nyxid_request:
+                    user_service_id: usvc-alpha
+                    method: POST
+                    path_template: /api/resources
+                    body_required: true
+                    body_mode: json
+                    response_mode: text
+                parameters:
+                  tool: nyxid_proxy
+            """);
+        parsed.Findings.Should().NotContain(static finding => finding.Code == "unknown_field");
+        var edited = new WorkflowDocumentNormalizer().NormalizeForExport(
+            parsed.Document! with { Description = "unrelated edit" });
+        var editedYaml = yamlService.Serialize(edited);
+
+        await service.SaveDraftAsync(
+            "scope-alpha",
+            "wf-alpha",
+            new SaveWorkflowDraftRequest(
+                "scope:scope-alpha",
+                "wf-alpha",
+                null,
+                editedYaml));
+        var reopened = await service.GetDraftAsync("scope-alpha", "wf-alpha");
+
+        reopened.Should().NotBeNull();
+        reopened!.WorkflowId.Should().Be("wf-alpha");
+        reopened.Yaml.Should().Contain("description: unrelated edit");
+        reopened.Yaml.Should().Contain("body_required: true");
+        var reopenedDocument = yamlService.Parse(reopened.Yaml).Document;
+        reopenedDocument!.Steps.Should().ContainSingle().Which.Capability!.NyxIdRequest!
+            .BodyRequired.Should().BeTrue();
+    }
+
+    [Fact]
+    public void AuthoringApplyAndDraftSave_ShouldNotDependOnCapabilityAdmission()
+    {
+        var serviceTypes = new[]
+        {
+            typeof(WorkflowEditorService),
+            typeof(AppScopedWorkflowService),
+        };
+
+        foreach (var serviceType in serviceTypes)
+        {
+            serviceType.GetConstructors()
+                .SelectMany(static constructor => constructor.GetParameters())
+                .Select(static parameter => parameter.ParameterType)
+                .Should().NotContain(
+                    typeof(IWorkflowExternalCapabilityAdmissionService),
+                    $"{serviceType.Name} only authors drafts and must never create an explicit request grant");
+        }
     }
 
     [Fact]

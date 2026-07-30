@@ -122,6 +122,35 @@ public sealed class StudioProvisioningEndpointsTests
     }
 
     [Fact]
+    public async Task HandleProvisionWorkflowAsync_ShouldMapAndScrubExplicitRequestConfirmations()
+    {
+        var service = new RecordingProvisioningService { Response = NewResponse() };
+
+        await InvokeHandle<IResult>(
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            new ProvisionWorkflowRequest("Monitor", "name: wf-alpha", Caller: Caller)
+            {
+                TeamId = TeamId,
+                ExplicitRequestConfirmations =
+                [
+                    new NyxIdExplicitRequestConfirmationInput(
+                        "wf-alpha/request-alpha",
+                        "digest-alpha",
+                        "read_only"),
+                ],
+            },
+            service,
+            CancellationToken.None);
+
+        service.ProvisionRequest.Should().NotBeNull();
+        service.ProvisionRequest!.ExplicitRequestConfirmations.Should().BeNull();
+        service.ProvisionRequest.CapabilityAdmission!.CallerId.Should().Be("caller-alpha");
+        service.ProvisionRequest.CapabilityAdmission.ExplicitRequestConfirmations
+            .Should().ContainSingle().Which.RequestContractDigest.Should().Be("digest-alpha");
+    }
+
+    [Fact]
     public async Task HandleProvisionWorkflowAsync_ShouldReturnConflict_WhenScheduleOwnerBindingMissing()
     {
         var service = new RecordingProvisioningService { Response = NewResponse() };
