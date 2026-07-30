@@ -1,8 +1,10 @@
 using System.Text.Json;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
+using Aevatar.Workflow.Infrastructure.Runs;
 using FluentAssertions;
 using Google.Protobuf;
+using Microsoft.Extensions.Options;
 using ApplicationWorkflowChatInputPartKind = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind;
 using ApplicationFileArtifactRef = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactRef;
 using ApplicationFileArtifactSourceKind = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactSourceKind;
@@ -99,5 +101,62 @@ public sealed class WorkflowChatFileInputPartContractTests
                     Sha256 = "abc",
                 },
             });
+    }
+
+    [Fact]
+    public async Task ChatRunRequestNormalizer_ShouldIngressInlineFileAsTypedFileRef()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "aevatar-workflow-chat-inline-file-contract-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var input = JsonSerializer.Deserialize<ChatInput>(
+                """
+                {
+                  "inputParts": [
+                    {
+                      "type": "file",
+                      "inlineFile": {
+                        "dataBase64": "aW52b2ljZSB0b3RhbCA0Mg==",
+                        "mediaType": "application/pdf",
+                        "name": "invoice.pdf",
+                        "sizeBytes": 16,
+                        "ownerScopeId": "scope-1"
+                      }
+                    }
+                  ]
+                }
+                """,
+                ChatWebSocketProtocol.JsonOptions)!;
+            var filePort = new FileSystemFileArtifactPort(Options.Create(new FileSystemFileArtifactOptions
+            {
+                RootDirectory = root,
+                TimeToLive = TimeSpan.FromMinutes(30),
+            }));
+
+            var result = await ChatRunRequestNormalizer.NormalizeAsync(input, filePort);
+
+            result.Succeeded.Should().BeTrue();
+            result.Request!.Prompt.Should().Be("[file]");
+            var part = result.Request.InputParts.Should().ContainSingle().Subject;
+            part.Kind.Should().Be(ApplicationWorkflowChatInputPartKind.File);
+            part.DataBase64.Should().BeNull();
+            part.Uri.Should().StartWith("workflow-file://");
+            part.MediaType.Should().Be("application/pdf");
+            part.Name.Should().Be("invoice.pdf");
+            part.FileRef.Should().NotBeNull();
+            part.FileRef!.FileId.Should().NotBeNullOrWhiteSpace();
+            part.FileRef.ArtifactId.Should().Be(part.Uri);
+            part.FileRef.SourceKind.Should().Be(ApplicationFileArtifactSourceKind.ChatInput);
+            part.FileRef.FileName.Should().Be("invoice.pdf");
+            part.FileRef.MediaType.Should().Be("application/pdf");
+            part.FileRef.SizeBytes.Should().Be(16);
+            part.FileRef.Sha256.Should().NotBeNullOrWhiteSpace();
+            part.FileRef.OwnerScopeId.Should().Be("scope-1");
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
     }
 }

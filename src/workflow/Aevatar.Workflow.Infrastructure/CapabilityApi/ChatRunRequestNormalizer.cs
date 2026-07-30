@@ -489,16 +489,7 @@ internal static class ChatRunRequestNormalizer
             if (!TryParseContentPartKind(part.Type, out var kind))
                 continue;
 
-            ingested.Add(new WorkflowChatInputPart
-            {
-                Kind = kind,
-                Text = string.IsNullOrWhiteSpace(part.Text) ? null : part.Text,
-                DataBase64 = fileInputResult.DataBase64 ?? NormalizeContentPartValue(part.DataBase64),
-                MediaType = fileInputResult.MediaType ?? NormalizeContentPartValue(part.MediaType),
-                Uri = fileInputResult.Uri ?? NormalizeContentPartValue(part.Uri),
-                Name = fileInputResult.Name ?? NormalizeContentPartValue(part.Name),
-                FileRef = fileInputResult.FileRef,
-            });
+            ingested.Add(BuildWorkflowInputPart(part, kind, fileInputResult));
         }
 
         return new InputPartsNormalizationResult(
@@ -527,16 +518,7 @@ internal static class ChatRunRequestNormalizer
             if (!TryParseContentPartKind(part.Type, out var kind))
                 continue;
 
-            normalized.Add(new WorkflowChatInputPart
-            {
-                Kind = kind,
-                Text = string.IsNullOrWhiteSpace(part.Text) ? null : part.Text,
-                DataBase64 = fileInputResult.DataBase64 ?? NormalizeContentPartValue(part.DataBase64),
-                MediaType = fileInputResult.MediaType ?? NormalizeContentPartValue(part.MediaType),
-                Uri = fileInputResult.Uri ?? NormalizeContentPartValue(part.Uri),
-                Name = fileInputResult.Name ?? NormalizeContentPartValue(part.Name),
-                FileRef = fileInputResult.FileRef,
-            });
+            normalized.Add(BuildWorkflowInputPart(part, kind, fileInputResult));
         }
 
         return new InputPartsNormalizationResult(
@@ -551,6 +533,34 @@ internal static class ChatRunRequestNormalizer
         string? Name,
         FileArtifactRef? FileRef,
         WorkflowChatRunStartError Error);
+
+    private static WorkflowChatInputPart BuildWorkflowInputPart(
+        ChatInputContentPart part,
+        WorkflowChatInputPartKind kind,
+        FileInputNormalizationResult fileInputResult)
+    {
+        if (fileInputResult.FileRef is not null)
+        {
+            var filePart = WorkflowChatInputParts.FromFileRef(fileInputResult.FileRef, kind);
+            return filePart with
+            {
+                Text = string.IsNullOrWhiteSpace(part.Text) ? null : part.Text,
+                MediaType = filePart.MediaType ?? NormalizeContentPartValue(part.MediaType),
+                Uri = filePart.Uri ?? NormalizeContentPartValue(part.Uri),
+                Name = filePart.Name ?? NormalizeContentPartValue(part.Name),
+            };
+        }
+
+        return new WorkflowChatInputPart
+        {
+            Kind = kind,
+            Text = string.IsNullOrWhiteSpace(part.Text) ? null : part.Text,
+            DataBase64 = fileInputResult.DataBase64 ?? NormalizeContentPartValue(part.DataBase64),
+            MediaType = fileInputResult.MediaType ?? NormalizeContentPartValue(part.MediaType),
+            Uri = fileInputResult.Uri ?? NormalizeContentPartValue(part.Uri),
+            Name = fileInputResult.Name ?? NormalizeContentPartValue(part.Name),
+        };
+    }
 
     private static FileInputNormalizationResult NormalizeFileInput(ChatInputContentPart part)
     {

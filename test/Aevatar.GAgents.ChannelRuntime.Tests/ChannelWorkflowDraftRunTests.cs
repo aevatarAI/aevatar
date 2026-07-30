@@ -254,8 +254,12 @@ public sealed class ChannelWorkflowDraftRunTests
         workflowRequest.InputParts[0].FileRef!.SourceMessageId.Should().Be("om_123");
         workflowRequest.InputParts[0].FileRef!.SourceResourceKey.Should().Be("img_v3_1");
         workflowRequest.InputParts[0].FileRef!.MediaType.Should().Be("image/png");
-        workflowRequest.InputParts[1].Kind.Should().Be(WorkflowChatInputPartKind.Text);
+        workflowRequest.InputParts[1].Kind.Should().Be(WorkflowChatInputPartKind.File);
         workflowRequest.InputParts[1].DataBase64.Should().BeNull();
+        workflowRequest.InputParts[1].Uri.Should().NotBeNullOrWhiteSpace();
+        workflowRequest.InputParts[1].FileRef.Should().NotBeNull();
+        workflowRequest.InputParts[1].FileRef!.SourceKind.Should().Be(FileArtifactSourceKind.ConnectedServiceResource);
+        workflowRequest.InputParts[1].FileRef!.SourceMessageId.Should().Be("om_123");
         workflowRequest.InputParts[1].FileRef!.SourceResourceKey.Should().Be("file_v3_1");
         workflowRequest.InputParts[1].FileRef!.MediaType.Should().Be("application/pdf");
 
