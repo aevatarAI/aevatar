@@ -342,7 +342,9 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                 NormalizeRequired(command.ScheduleCron, nameof(command.ScheduleCron)),
                 NormalizeRequired(command.ScheduleTimezone, nameof(command.ScheduleTimezone)),
                 command.Enabled,
-                owner),
+                owner,
+                ScheduledDispatchScheduleMode.RecurringCron,
+                null),
             new ScheduledDispatchMutationContext(TeamAutomationOwner: owner),
             ct);
         return ToMutationReceipt(receipt, command.OperationId);
@@ -505,8 +507,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
 
         var scopeId = resolved.ScopeId;
         var memberId = resolved.MemberId;
-        var scheduleCron = NormalizeRequired(request.ScheduleCron, nameof(request.ScheduleCron));
-        var scheduleTimezone = NormalizeRequired(request.ScheduleTimezone, nameof(request.ScheduleTimezone));
+        var timing = ResolveScheduleTiming(request);
         var publishedServiceId = resolved.PublishedServiceId;
         var teamOwner = new TeamMemberAutomationOwner(scopeId, memberId, resolved.TeamId);
         var operationId = NormalizeRequired(request.OperationId, nameof(request.OperationId));
@@ -533,9 +534,11 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             chatPayload,
             callerAuthority,
             authorizationFact,
-            scheduleCron,
-            scheduleTimezone,
-            request.Enabled);
+            timing.CronExpression,
+            timing.Timezone,
+            request.Enabled,
+            timing.ScheduleMode,
+            timing.OneShotFireAt);
         var mutationDigest = BuildTeamAutomationMutationDigest(activationDecision);
         var ownerScope = BuildOwnerScope(request);
         var bearerToken = await ResolveProvisioningBearerTokenAsync(request, ct);
@@ -673,10 +676,12 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                 prompt,
                 BuildScheduleAuth(credential, callerAuthority),
                 CloneScheduleAuthorizationFact(activationDecision.AuthorizationFact),
-                scheduleCron,
-                scheduleTimezone,
+                timing.CronExpression,
+                timing.Timezone,
                 request.Enabled,
                 teamOwner,
+                timing.ScheduleMode,
+                timing.OneShotFireAt,
                 activationDecision.Payload.Clone());
 
             activationAttempted = true;
@@ -920,7 +925,12 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         }
         catch (StudioMemberNotFoundException)
         {
-            throw new StudioMemberAutomationNotFoundException();
+            return ResolveAcceptedBindingAuthorizationRequest(
+                request,
+                scopeId,
+                memberId,
+                credentialExpiresAtUtc)
+                ?? throw new StudioMemberAutomationNotFoundException();
         }
         if (!string.Equals(member.Summary.ImplementationKind, MemberImplementationKindNames.Workflow, StringComparison.Ordinal))
             throw new InvalidOperationException($"member_id '{memberId}' is not a workflow member and cannot be scheduled as a workflow.");
@@ -932,9 +942,74 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         {
             throw new StudioMemberAutomationNotFoundException();
         }
-        EnsureWorkflowBindingCanBeScheduled(member, memberId, publishedServiceId);
+
+        try
+        {
+            EnsureWorkflowBindingCanBeScheduled(member, memberId, publishedServiceId);
+        }
+        catch (InvalidOperationException) when (request.AcceptedBinding is not null)
+        {
+            return BuildResolvedAuthorizationRequest(
+                request,
+                scopeId,
+                teamId,
+                memberId,
+                publishedServiceId,
+                NormalizeRequired(request.AcceptedBinding.WorkflowId, nameof(request.AcceptedBinding.WorkflowId)),
+                NormalizeOptional(request.AcceptedBinding.WorkflowRevisionId) ?? string.Empty,
+                credentialExpiresAtUtc);
+        }
+
         var workflowRevision = member.LastBinding?.RevisionId ?? member.Summary.LastBoundRevisionId ?? string.Empty;
         var workflowId = NormalizeRequired(member.ImplementationRef?.WorkflowId, "workflowId");
+        return BuildResolvedAuthorizationRequest(
+            request,
+            scopeId,
+            teamId,
+            memberId,
+            publishedServiceId,
+            workflowId,
+            workflowRevision,
+            credentialExpiresAtUtc);
+    }
+
+    private ResolvedStudioAuthorizationRequest? ResolveAcceptedBindingAuthorizationRequest(
+        StudioMemberWorkflowScheduleRequest request,
+        string scopeId,
+        string memberId,
+        DateTimeOffset? credentialExpiresAtUtc)
+    {
+        if (request.AcceptedBinding is not { } acceptedBinding)
+            return null;
+
+        var acceptedTeamId = NormalizeRequired(acceptedBinding.TeamId, nameof(acceptedBinding.TeamId));
+        if (!string.IsNullOrWhiteSpace(request.TeamId) &&
+            !string.Equals(acceptedTeamId, request.TeamId.Trim(), StringComparison.Ordinal))
+        {
+            throw new StudioMemberAutomationNotFoundException();
+        }
+
+        return BuildResolvedAuthorizationRequest(
+            request,
+            scopeId,
+            acceptedTeamId,
+            memberId,
+            NormalizeRequired(acceptedBinding.PublishedServiceId, nameof(acceptedBinding.PublishedServiceId)),
+            NormalizeRequired(acceptedBinding.WorkflowId, nameof(acceptedBinding.WorkflowId)),
+            NormalizeOptional(acceptedBinding.WorkflowRevisionId) ?? string.Empty,
+            credentialExpiresAtUtc);
+    }
+
+    private ResolvedStudioAuthorizationRequest BuildResolvedAuthorizationRequest(
+        StudioMemberWorkflowScheduleRequest request,
+        string scopeId,
+        string teamId,
+        string memberId,
+        string publishedServiceId,
+        string workflowId,
+        string workflowRevision,
+        DateTimeOffset? credentialExpiresAtUtc)
+    {
         var target = new ScheduledInvocationTarget
         {
             StudioMember = new StudioMemberInvocationTarget
@@ -959,7 +1034,61 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                 [],
                 AuthorizationGrantRequirement.Required,
                 credentialExpiresAtUtc ?? _schedulePolicy.ResolveCredentialExpiresAtUtc(evaluatedAtUtc),
-                evaluatedAtUtc));
+                evaluatedAtUtc,
+                TrustedMemberEvidence: BuildTrustedMemberEvidence(
+                    request,
+                    publishedServiceId,
+                    workflowId,
+                    workflowRevision),
+                TrustedWorkflowEvidence: BuildTrustedWorkflowEvidence(
+                    request,
+                    publishedServiceId,
+                    workflowId,
+                    workflowRevision)));
+    }
+
+    private static ScheduledInvocationMemberEvidence? BuildTrustedMemberEvidence(
+        StudioMemberWorkflowScheduleRequest request,
+        string publishedServiceId,
+        string workflowId,
+        string workflowRevision)
+    {
+        if (request.AcceptedBinding is not { } acceptedBinding)
+            return null;
+
+        var acceptedPublishedServiceId = NormalizeRequired(
+            acceptedBinding.PublishedServiceId,
+            nameof(acceptedBinding.PublishedServiceId));
+        var acceptedWorkflowId = NormalizeRequired(
+            acceptedBinding.WorkflowId,
+            nameof(acceptedBinding.WorkflowId));
+        var acceptedWorkflowRevision = NormalizeRequired(
+            acceptedBinding.WorkflowRevisionId,
+            nameof(acceptedBinding.WorkflowRevisionId));
+        if (!string.Equals(acceptedPublishedServiceId, publishedServiceId, StringComparison.Ordinal) ||
+            !string.Equals(acceptedWorkflowId, workflowId, StringComparison.Ordinal) ||
+            !string.Equals(acceptedWorkflowRevision, workflowRevision, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        return new ScheduledInvocationMemberEvidence(
+            StateVersion: 0,
+            DraftWorkflowId: acceptedWorkflowId,
+            WorkflowRevisionId: acceptedWorkflowRevision,
+            PublishedServiceId: acceptedPublishedServiceId);
+    }
+
+    private static ScheduledInvocationWorkflowEvidence? BuildTrustedWorkflowEvidence(
+        StudioMemberWorkflowScheduleRequest request,
+        string publishedServiceId,
+        string workflowId,
+        string workflowRevision)
+    {
+        if (BuildTrustedMemberEvidence(request, publishedServiceId, workflowId, workflowRevision) is null)
+            return null;
+
+        return request.AcceptedBinding?.WorkflowEvidence;
     }
 
     private async Task<string> ResolveProvisioningBearerTokenAsync(
@@ -1123,7 +1252,9 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                 cronExpression,
                 timezone,
                 enabled,
-                mutationContext.TeamAutomationOwner!),
+                mutationContext.TeamAutomationOwner!,
+                ScheduledDispatchScheduleMode.RecurringCron,
+                null),
             mutationContext,
             ct);
 
@@ -1164,6 +1295,32 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         _ => false,
     };
 
+    private static StudioMemberWorkflowScheduleTiming ResolveScheduleTiming(
+        StudioMemberWorkflowScheduleRequest request)
+    {
+        return request.ScheduleMode switch
+        {
+            ScheduledDispatchScheduleMode.RecurringCron => new StudioMemberWorkflowScheduleTiming(
+                NormalizeRequired(request.ScheduleCron, nameof(request.ScheduleCron)),
+                NormalizeRequired(request.ScheduleTimezone, nameof(request.ScheduleTimezone)),
+                ScheduledDispatchScheduleMode.RecurringCron,
+                null),
+            ScheduledDispatchScheduleMode.OneShotAtUtc => new StudioMemberWorkflowScheduleTiming(
+                NormalizeOptional(request.ScheduleCron) ?? string.Empty,
+                NormalizeOptional(request.ScheduleTimezone) ?? ScheduledDispatchCalculator.DefaultTimezone,
+                ScheduledDispatchScheduleMode.OneShotAtUtc,
+                request.OneShotFireAt?.ToUniversalTime()
+                    ?? throw new InvalidOperationException("one_shot_fire_at_required")),
+            _ => throw new InvalidOperationException("schedule_mode_invalid"),
+        };
+    }
+
+    private readonly record struct StudioMemberWorkflowScheduleTiming(
+        string CronExpression,
+        string Timezone,
+        ScheduledDispatchScheduleMode ScheduleMode,
+        DateTimeOffset? OneShotFireAt);
+
     private static ScheduledDispatchConfiguration BuildScheduleConfiguration(
         string scheduleId,
         string? displayName,
@@ -1177,6 +1334,8 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         string timezone,
         bool enabled,
         TeamMemberAutomationOwner teamOwner,
+        ScheduledDispatchScheduleMode scheduleMode,
+        DateTimeOffset? oneShotFireAt,
         Any? payload = null) =>
         new(
             ScheduleId: scheduleId,
@@ -1199,7 +1358,9 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             Timezone: timezone,
             Enabled: enabled,
             Headers: new Dictionary<string, string>(StringComparer.Ordinal),
-            ScheduleKind: ScheduledDispatchScheduleKind.Workflow)
+            ScheduleKind: ScheduledDispatchScheduleKind.Workflow,
+            ScheduleMode: scheduleMode,
+            OneShotFireAt: oneShotFireAt)
         {
             TeamAutomationOwner = teamOwner,
             CredentialRequirementTargetKind = ScheduledDispatchCredentialRequirementTargetKind.WorkflowService,
@@ -1507,7 +1668,9 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         ScheduledInvocationAuthorizationFact authorizationFact,
         string cronExpression,
         string timezone,
-        bool enabled) =>
+        bool enabled,
+        ScheduledDispatchScheduleMode scheduleMode,
+        DateTimeOffset? oneShotFireAt) =>
         new(
             scheduleId,
             displayName,
@@ -1528,8 +1691,8 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             enabled,
             ScheduledDispatchScheduleKind.Workflow,
             new Dictionary<string, string>(StringComparer.Ordinal),
-            ScheduledDispatchScheduleMode.RecurringCron,
-            null,
+            scheduleMode,
+            oneShotFireAt,
             ScheduledDispatchCredentialRequirementTargetKind.WorkflowService,
             string.Empty,
             null);

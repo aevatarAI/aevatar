@@ -242,7 +242,8 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
         }
 
         var target = request.InvocationTarget.StudioMember;
-        var member = await _memberQueryPort.GetAsync(target.ScopeId, target.MemberId, ct);
+        var member = request.TrustedMemberEvidence ??
+            await _memberQueryPort.GetAsync(target.ScopeId, target.MemberId, ct);
         if (member == null)
             return TargetEvidenceResolution.Failed(Failed(
                 ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
@@ -256,11 +257,12 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
                 "studio_member_evidence_changed"));
         }
 
-        var workflow = await _workflowQueryPort.GetAsync(
-            target.ScopeId,
-            member.PublishedServiceId,
-            member.WorkflowRevisionId,
-            ct);
+        var workflow = request.TrustedWorkflowEvidence ??
+            await _workflowQueryPort.GetAsync(
+                target.ScopeId,
+                member.PublishedServiceId,
+                member.WorkflowRevisionId,
+                ct);
         if (workflow == null)
             return TargetEvidenceResolution.Failed(Failed(
                 ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,

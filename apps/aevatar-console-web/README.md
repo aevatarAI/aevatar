@@ -102,7 +102,7 @@ pnpm dev
 Current proxy split during local development:
 
 - `/api/chat`, `/api/workflows/*`, `/api/actors/*`, `/api/runs/*`, `/api/primitives`, `/api/capabilities`, most `/api/scopes/*` runtime routes -> `Mainnet Host API`
-- `/api/app/*`, `/api/auth/*`, `/api/workspace/*`, `/api/editor/*`, `/api/executions/*`, `/api/roles/*`, `/api/connectors/*`, `/api/settings/*`, `/api/scopes/{scopeId}/teams*` -> `Studio Hosting API target`
+- `/api/app/*`, `/api/auth/*`, `/api/workspace/*`, `/api/editor/*`, `/api/executions/*`, `/api/roles/*`, `/api/connectors/*`, `/api/scopes/{scopeId}/teams*` -> `Studio Hosting API target`
 
 ## Current scope
 

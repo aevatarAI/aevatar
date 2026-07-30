@@ -151,9 +151,8 @@ public sealed class WorkflowSkillsEndpointsTests
 
         public Task<SkillScheduleOutcome> ScheduleAsync(
             string skillGuid,
-            string accessToken,
+            WorkflowCallerCredential callerCredential,
             string scopeId,
-            string? ownerSubjectExternalUserId,
             string prompt,
             string cronExpression,
             string timezone,

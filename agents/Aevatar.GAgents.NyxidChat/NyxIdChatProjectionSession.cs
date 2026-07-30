@@ -322,7 +322,7 @@ public sealed class NyxIdChatSessionEventProjector
                 context,
                 NyxIdChatConversationAguiFrameBuilder.BuildLateOperationEvidence(
                     committed,
-                    stateVersion));
+                    committed.ProgressSequence));
         }
 
         if (payload.Is(NyxIdChatControlFenceCommittedEvent.Descriptor))
@@ -336,7 +336,7 @@ public sealed class NyxIdChatSessionEventProjector
                     context.RootActorId,
                     context.SessionId,
                     committed,
-                    stateVersion));
+                    committed.State?.ProgressSequence ?? 0));
         }
 
         if (payload.Is(NyxIdChatActionRequestedEvent.Descriptor))
@@ -353,14 +353,17 @@ public sealed class NyxIdChatSessionEventProjector
                     context.RootActorId,
                     context.SessionId,
                     committed,
-                    stateVersion));
+                    committed.State?.ProgressSequence ?? 0));
         }
 
         if (payload.Is(NyxIdChatContinuationAdmissionCommittedEvent.Descriptor))
         {
             var committed = payload.Unpack<NyxIdChatContinuationAdmissionCommittedEvent>();
+            var sessionTurnId = committed.Admission?.Kind == NyxIdChatContinuationKind.Action
+                ? committed.Admission.ContinuationTurnId
+                : committed.Admission?.OriginTurnId;
             if (!string.Equals(
-                    committed.Admission?.OriginTurnId,
+                    sessionTurnId,
                     context.SessionId,
                     StringComparison.Ordinal))
             {
@@ -369,8 +372,10 @@ public sealed class NyxIdChatSessionEventProjector
             return Entries(
                 context,
                 NyxIdChatConversationAguiFrameBuilder.BuildContinuationChanged(
+                    context.RootActorId,
+                    context.SessionId,
                     committed,
-                    stateVersion));
+                    committed.State?.ProgressSequence ?? 0));
         }
 
         if (payload.Is(NyxIdChatStepControlCommittedEvent.Descriptor))
@@ -392,7 +397,7 @@ public sealed class NyxIdChatSessionEventProjector
                 context,
                 NyxIdChatConversationAguiFrameBuilder.BuildStepControlChanged(
                     committed,
-                    stateVersion));
+                    committed.State?.ProgressSequence ?? 0));
         }
 
         if (payload.Is(NyxIdChatTurnAdmissionRejectedEvent.Descriptor))

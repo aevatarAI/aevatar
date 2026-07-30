@@ -132,7 +132,7 @@ public sealed class ToolProviderHttpClientRegistrationTests
         var handler = new StubUserServiceListHandler("""{ "keys": [{ "id": "us-other-alpha", "slug": "api-slack" }] }""");
         var tool = CreateRequireServiceTool(handler);
         const string arguments =
-            """{"service_slug":"api-github","service_label":"GitHub","resource_uri":"/repos/private?token=bearer-secret"}""";
+            """{"service_slug":"catalog-finops-alpha","service_label":"FinOps Alpha","resource_uri":"/billing/private?token=bearer-secret"}""";
 
         var previous = AgentToolRequestContext.Current;
         AgentToolRequestContext.Current = CapabilityContext();
@@ -144,9 +144,9 @@ public sealed class ToolProviderHttpClientRegistrationTests
             handler.Requests.Should().NotBeEmpty();
             receipt.Should().NotBeNull();
             receipt!.Status.Should().Be(AgentToolReceiptStatus.AuthorizationRequired);
-            receipt.AuthorizationRequired.ServiceSlug.Should().Be("api-github");
-            receipt.AuthorizationRequired.ServiceLabel.Should().Be("GitHub");
-            receipt.AuthorizationRequired.ResourceUri.Should().Be("/repos/private");
+            receipt.AuthorizationRequired.ServiceSlug.Should().Be("catalog-finops-alpha");
+            receipt.AuthorizationRequired.ServiceLabel.Should().Be("FinOps Alpha");
+            receipt.AuthorizationRequired.ResourceUri.Should().Be("/billing/private");
             receipt.AuthorizationRequired.ReasonCode.Should().Be("USER_SERVICE_NOT_VISIBLE");
             receipt.AuthorizationRequired.SafeMessage.Should().Be("No caller-visible NyxID UserService matches the requested service.");
             receipt.ToString().Should().NotContain("bearer-secret").And.NotContain("token=");
@@ -173,7 +173,10 @@ public sealed class ToolProviderHttpClientRegistrationTests
 
             handler.Requests.Should().NotBeEmpty();
             result.Should().Contain("NYXID_SOURCE_UNAVAILABLE");
-            receipt.Should().BeNull();
+            receipt.Should().NotBeNull();
+            receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+            receipt.ErrorCode.Should().Be("NYXID_SOURCE_UNAVAILABLE");
+            receipt.AuthorizationRequired.Should().BeNull();
         }
         finally
         {
@@ -216,15 +219,121 @@ public sealed class ToolProviderHttpClientRegistrationTests
 
         try
         {
-            var result = await tool.ExecuteAsync("""{"service_slug":"api-github"}""");
+            const string arguments = """{"service_slug":"api-github"}""";
+            var result = await tool.ExecuteAsync(arguments);
+            var receipt = tool.CreateResultReceipt("call-1", tool.Name, arguments, result);
 
             result.Should().Contain("verified caller identity not available");
             handler.Requests.Should().BeEmpty();
+            receipt.Should().NotBeNull();
+            receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+            receipt.ErrorCode.Should().Be("NYXID_REQUIRE_SERVICE_CONTEXT_UNAVAILABLE");
+            receipt.AuthorizationRequired.Should().BeNull();
         }
         finally
         {
             AgentToolRequestContext.Current = previous;
         }
+    }
+
+    [Fact]
+    public async Task NyxIdRequireServiceTool_ShouldReturnTypedFailure_WhenOwnerScopeIsMissing()
+    {
+        var handler = new StubUserServiceListHandler("""{ "keys": [] }""");
+        var tool = CreateRequireServiceTool(handler);
+        var previous = AgentToolRequestContext.Current;
+        AgentToolRequestContext.Current = CapabilityContext() with
+        {
+            Caller = CapabilityContext().Caller with { OwnerScopeId = null },
+        };
+
+        try
+        {
+            const string arguments = """{"service_slug":"catalog-finops-alpha"}""";
+            var result = await tool.ExecuteAsync(arguments);
+            var receipt = tool.CreateResultReceipt("call-1", tool.Name, arguments, result);
+
+            result.Should().Contain("owner_scope_id not available");
+            handler.Requests.Should().BeEmpty();
+            receipt.Should().NotBeNull();
+            receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+            receipt.ErrorCode.Should().Be("NYXID_REQUIRE_SERVICE_CONTEXT_UNAVAILABLE");
+            receipt.AuthorizationRequired.Should().BeNull();
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = previous;
+        }
+    }
+
+    [Fact]
+    public void NyxIdRequireServiceTool_ShouldReturnTypedFailure_WhenReadinessResultIsMalformed()
+    {
+        var tool = CreateRequireServiceTool(new StubUserServiceListHandler("""{ "keys": [] }"""));
+        const string arguments = """{"service_slug":"catalog-finops-alpha"}""";
+
+        var receipt = tool.CreateResultReceipt(
+            "call-1",
+            tool.Name,
+            arguments,
+            """{"blocked":true,"readiness_status":"ServiceRegistrationRequired"}""");
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ErrorCode.Should().Be("NYXID_REQUIRE_SERVICE_RESULT_INVALID");
+        receipt.AuthorizationRequired.Should().BeNull();
+    }
+
+    [Fact]
+    public void NyxIdRequireServiceTool_ShouldReturnTypedFailure_WhenReadinessFieldsHaveWrongTypes()
+    {
+        var tool = CreateRequireServiceTool(new StubUserServiceListHandler("""{ "keys": [] }"""));
+        const string arguments = """{"service_slug":"catalog-finops-alpha"}""";
+
+        var receipt = tool.CreateResultReceipt(
+            "call-1",
+            tool.Name,
+            arguments,
+            """{"blocked":true,"service_slug":42,"readiness_status":[],"reason_code":{},"safe_message":false}""");
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ErrorCode.Should().Be("NYXID_REQUIRE_SERVICE_RESULT_INVALID");
+        receipt.AuthorizationRequired.Should().BeNull();
+    }
+
+    [Fact]
+    public void NyxIdRequireServiceTool_ShouldReturnTypedFailure_WhenReadinessStatusIsNumericText()
+    {
+        var tool = CreateRequireServiceTool(new StubUserServiceListHandler("""{ "keys": [] }"""));
+        const string arguments = """{"service_slug":"catalog-finops-alpha"}""";
+
+        var receipt = tool.CreateResultReceipt(
+            "call-1",
+            tool.Name,
+            arguments,
+            """{"blocked":false,"service_slug":"catalog-finops-alpha","readiness_status":"13","reason_code":"","safe_message":""}""");
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ErrorCode.Should().Be("NYXID_REQUIRE_SERVICE_RESULT_INVALID");
+        receipt.AuthorizationRequired.Should().BeNull();
+    }
+
+    [Fact]
+    public void NyxIdRequireServiceTool_ShouldReturnTypedFailure_WhenResultSlugDoesNotMatchArguments()
+    {
+        var tool = CreateRequireServiceTool(new StubUserServiceListHandler("""{ "keys": [] }"""));
+        const string arguments = """{"service_slug":"catalog-finops-alpha"}""";
+        const string result =
+            """{"blocked":true,"service_slug":"catalog-finops-beta","readiness_status":"ServiceRegistrationRequired","reason_code":"USER_SERVICE_NOT_VISIBLE","safe_message":"No caller-visible NyxID UserService matches the requested service."}""";
+
+        var receipt = tool.CreateResultReceipt("call-1", tool.Name, arguments, result);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ErrorCode.Should().Be("NYXID_REQUIRE_SERVICE_RESULT_INVALID");
+        receipt.AuthorizationRequired.Should().BeNull();
     }
 
     private static IAgentTool CreateRequireServiceTool(StubUserServiceListHandler handler)

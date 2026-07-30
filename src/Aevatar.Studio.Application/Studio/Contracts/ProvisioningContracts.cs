@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 
 namespace Aevatar.Studio.Application.Studio.Contracts;
 
@@ -87,6 +88,18 @@ public sealed record ProvisionWorkflowRequest(
     /// before any member, binding, or schedule side effects are created.
     /// </summary>
     public string? TeamId { get; init; }
+
+    [JsonIgnore]
+    public AuthenticatedAuthorizationOwnerContext? AuthenticatedOwner { get; init; }
+
+    [JsonIgnore]
+    public string? ProvisioningBearerToken { get; init; }
+
+    [JsonIgnore]
+    public string? ScheduleOperationId { get; init; }
+
+    [JsonIgnore]
+    public string? ScheduleIdempotencyKey { get; init; }
 
     /// <summary>
     /// Delay ahead of "now" for the synthesized one-shot fire when no recurring

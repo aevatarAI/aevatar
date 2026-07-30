@@ -167,6 +167,13 @@ public static class MainnetHostBuilderExtensions
             builder.Configuration,
             builder.Environment.ContentRootPath);
         builder.Services.AddSingleton(agentProfileRolloutSelector);
+        if (builder.Configuration[$"{NyxIdAssistantActionsOptions.ConfigSection}:Enabled"] is null)
+        {
+            builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [$"{NyxIdAssistantActionsOptions.ConfigSection}:Enabled"] = bool.TrueString,
+            });
+        }
         builder.Services.AddNyxIdChat(builder.Configuration);
         AddNyxIdChatAgentProfile(builder);
         builder.Services.AddStreamingProxy(builder.Configuration);
@@ -471,6 +478,7 @@ public static class MainnetHostBuilderExtensions
         app.MapDeviceEventEndpoints();
         app.MapIdentityOAuthEndpoints();
         app.MapScheduledAgentCredentialRepairAdminEndpoints();
+        app.MapDevelopmentNyxIdApiKeyEndpoints();
         app.MapProjectionVersionRegressionRepairAdminEndpoints();
         app.MapManagedCodexCredentialEndpoints();
         app.MapWorkflowSkillsEndpoints();
@@ -548,6 +556,8 @@ public static class MainnetHostBuilderExtensions
 
     private static void ConfigureMainnetAIFeatures(AevatarAIFeatureOptions options)
     {
+        options.EnableBindingTools = true;
+
         if (!options.VoicePresence.Module.DirectExternalEventTypeUrls.Contains(
                 DeviceInboundDirectExternalEventTypeUrl,
                 StringComparer.Ordinal))

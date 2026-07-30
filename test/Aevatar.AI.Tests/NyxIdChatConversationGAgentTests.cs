@@ -1152,6 +1152,83 @@ public sealed class NyxIdChatConversationGAgentTests
         (await eventStore.GetEventsAsync(conversationActorId)).Should().HaveCount(all.Count);
     }
 
+    [Fact]
+    public async Task EmptyActionWakeWithoutPendingActions_ShouldCommitAndPrepareTerminal()
+    {
+        const string conversationActorId = "conversation-alpha";
+        var eventStore = new InMemoryEventStoreForTests();
+        var terminal = new NyxIdChatConversationGAgentState
+        {
+            ConversationActorId = conversationActorId,
+            ScopeId = "scope-alpha",
+            ActiveTurn = new NyxIdChatTurnState
+            {
+                TurnId = "turn-alpha",
+                TaskId = "task-alpha",
+                Status = NyxIdChatTurnStatus.Succeeded,
+            },
+            LatestTurn = new NyxIdChatTurnState
+            {
+                TurnId = "turn-alpha",
+                TaskId = "task-alpha",
+                Status = NyxIdChatTurnStatus.Succeeded,
+            },
+            ActiveTask = new NyxIdChatTaskState
+            {
+                TurnId = "turn-alpha",
+                TaskId = "task-alpha",
+                Status = NyxIdChatTaskStatus.Succeeded,
+            },
+            ProgressSequence = 3,
+        };
+        await PersistTestStateAsync(eventStore, conversationActorId, 1, terminal);
+        var operations = new List<string>();
+        var history = new RecordingChatHistoryCommandPort(operations);
+        var dispatch = new RecordingActorDispatchPort(
+            operations,
+            static (_, _) => Task.CompletedTask);
+        using var services = BuildEventSourcingServices(eventStore, history);
+        var agent = CreateController(services, conversationActorId, dispatch);
+        await agent.ActivateAsync();
+        var command = CreateActionContinueCommand("unused-action");
+        command.OriginTurnId = string.Empty;
+        command.Actions.Clear();
+
+        await agent.HandleEventAsync(CreateEnvelope(conversationActorId, command));
+
+        operations.Should().Equal("history.reserve");
+        agent.State.ActiveTurn.TurnId.Should().Be("turn-action-alpha");
+        agent.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Succeeded);
+        agent.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Succeeded);
+        agent.State.ActiveTask.Steps.Should().BeEmpty();
+        agent.State.PendingHistoryTerminal.Should().NotBeNull();
+        agent.State.PendingHistoryTerminal.TurnId.Should().Be("turn-action-alpha");
+        history.Reservations.Should().ContainSingle().Which.UserText.Should().Be(
+            "NyxID state changed; recheck pending actions.");
+        dispatch.OperationCalls.Should().BeEmpty();
+        dispatch.Calls.Should().ContainSingle(call =>
+            call.Envelope.Payload.Is(NyxIdChatHistoryTerminalDispatchRequested.Descriptor));
+        var committed = await eventStore.GetEventsAsync(conversationActorId);
+        committed.Should().Contain(stateEvent =>
+            stateEvent.EventData.Is(NyxIdChatContinuationAdmissionCommittedEvent.Descriptor) &&
+            stateEvent.EventData.Unpack<NyxIdChatContinuationAdmissionCommittedEvent>()
+                .State.ActiveTurn.Status == NyxIdChatTurnStatus.Succeeded);
+        var stateAfterFirst = agent.State.ToByteArray();
+        var operationsAfterFirst = operations.ToArray();
+        var eventCountAfterFirst = committed.Count;
+        var reservationCountAfterFirst = history.Reservations.Count;
+        var dispatchCountAfterFirst = dispatch.Calls.Count;
+
+        await agent.HandleEventAsync(CreateEnvelope(conversationActorId, command.Clone()));
+
+        (await eventStore.GetEventsAsync(conversationActorId)).Should()
+            .HaveCount(eventCountAfterFirst);
+        agent.State.ToByteArray().Should().Equal(stateAfterFirst);
+        operations.Should().Equal(operationsAfterFirst);
+        history.Reservations.Should().HaveCount(reservationCountAfterFirst);
+        dispatch.Calls.Should().HaveCount(dispatchCountAfterFirst);
+    }
+
     [Theory]
     [InlineData(
         "reserve",
@@ -1489,6 +1566,42 @@ public sealed class NyxIdChatConversationGAgentTests
         rejected.State.ActiveTurn.TurnId.Should().Be("turn-other-active");
         rejected.State.PendingActions.Should().ContainSingle();
         agent.State.Should().BeEquivalentTo(rejected.State);
+    }
+
+    [Fact]
+    public async Task ConflictingActionContinuationRetry_ShouldCommitTypedRejectionForCurrentTurn()
+    {
+        const string conversationActorId = "conversation-alpha";
+        var eventStore = new InMemoryEventStoreForTests();
+        var blocked = CreateBlockedActionState();
+        await PersistActionStateAsync(eventStore, conversationActorId, blocked);
+        using var services = BuildEventSourcingServices(eventStore);
+        var operations = new List<string>();
+        var dispatch = new RecordingActorDispatchPort(
+            operations,
+            static (_, _) => Task.CompletedTask);
+        var agent = CreateController(services, conversationActorId, dispatch);
+        await agent.ActivateAsync();
+        var first = CreateActionContinueCommand(blocked.PendingActions.Single().ActionRequestId);
+        await agent.HandleEventAsync(CreateEnvelope(conversationActorId, first));
+        var beforeConflict = await eventStore.GetEventsAsync(conversationActorId);
+        var conflicting = first.Clone();
+        conflicting.Actions.Single().Disposition = NyxIdChatActionDisposition.Declined;
+        conflicting.Actions.Single().Resource = null;
+
+        await agent.HandleEventAsync(CreateEnvelope(conversationActorId, conflicting));
+
+        var committed = await eventStore.GetEventsAsync(conversationActorId);
+        committed.Should().HaveCount(beforeConflict.Count + 1);
+        var rejected = committed[^1].EventData
+            .Unpack<NyxIdChatTurnAdmissionRejectedEvent>();
+        rejected.RequestedTurnId.Should().Be(first.ContinuationTurnId);
+        rejected.ActiveTurnId.Should().Be(first.ContinuationTurnId);
+        rejected.ReasonCode.Should().Be(
+            NyxIdChatBrowserActions.ActionContinuationConflict);
+        agent.State.ContinuationAdmission.Status.Should().Be(
+            NyxIdChatContinuationAdmissionStatus.Accepted);
+        dispatch.OperationCalls.Should().ContainSingle();
     }
 
     [Fact]

@@ -77,6 +77,12 @@ public static partial class NyxIdChatEndpoints
                 http.Response.StatusCode = StatusCodes.Status401Unauthorized;
                 return;
             }
+            ownerSubject = ResolveAuthenticatedOwnerSubject(http) ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(ownerSubject))
+            {
+                http.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                return;
+            }
 
             if (string.Equals(streamType, "text", StringComparison.Ordinal))
             {
@@ -91,7 +97,6 @@ public static partial class NyxIdChatEndpoints
             }
             else if (string.Equals(streamType, "action.continue", StringComparison.Ordinal))
             {
-                ownerSubject = ResolveAuthenticatedOwnerSubject(http) ?? string.Empty;
                 var originTurnId = request.OriginTurnId?.Trim() ?? string.Empty;
                 if (!TryValidateControlIdentity(clientRequestId, out clientRequestId) ||
                     string.IsNullOrWhiteSpace(ownerSubject) ||
@@ -189,6 +194,13 @@ public static partial class NyxIdChatEndpoints
             CommandInteractionResult<NyxIdChatAcceptedReceipt, NyxIdChatStartError, NyxIdChatCompletionStatus> result;
             if (string.Equals(streamType, "action.continue", StringComparison.Ordinal))
             {
+                var commandId = NyxIdChatPublicIdentity.CreateActionContinuationCommandId(
+                    actorId,
+                    scopeId,
+                    ownerSubject,
+                    clientRequestId!,
+                    request.OriginTurnId?.Trim() ?? string.Empty,
+                    actionReports);
                 interactionTask = actionContinuationInteractionService.ExecuteAsync(
                     new NyxIdActionContinuationCommand(
                         actorId,
@@ -197,7 +209,9 @@ public static partial class NyxIdChatEndpoints
                         turnId,
                         ownerSubject,
                         clientRequestId!,
-                        actionReports),
+                        actionReports,
+                        CommandId: commandId,
+                        CorrelationId: commandId),
                     EmitAsync,
                     null,
                     interactionCancellation.Token);
@@ -220,7 +234,8 @@ public static partial class NyxIdChatEndpoints
                         metadata,
                         llmControl,
                         ClientRequestId: clientRequestId,
-                        CreateIfMissing: createIfMissing),
+                        CreateIfMissing: createIfMissing,
+                        OwnerSubject: ownerSubject),
                     EmitAsync,
                     null,
                     interactionCancellation.Token);
@@ -574,7 +589,7 @@ public static partial class NyxIdChatEndpoints
 
     private static string? ResolveAuthenticatedOwnerSubject(HttpContext http)
     {
-        foreach (var claimType in new[] { "sub", ClaimTypes.NameIdentifier })
+        foreach (var claimType in new[] { "uid", "sub", ClaimTypes.NameIdentifier, "user_id" })
         {
             var value = http.User.FindFirst(claimType)?.Value?.Trim();
             if (!string.IsNullOrWhiteSpace(value))

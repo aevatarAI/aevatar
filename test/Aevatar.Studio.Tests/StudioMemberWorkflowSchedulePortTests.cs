@@ -725,6 +725,57 @@ public sealed class StudioMemberWorkflowSchedulePortTests
     }
 
     [Fact]
+    public async Task PreflightForWriteAsync_WhenMemberReadModelMissingButAcceptedBindingProvided_ShouldUseAcceptedBindingContext()
+    {
+        var memberService = new RecordingMemberService { Detail = null };
+        var planner = new RecordingAuthorizationPlanner();
+        var port = NewPort(
+            new RecordingScheduleService(),
+            memberService,
+            planner);
+        var request = Request("scope-1", "member-1") with
+        {
+            AcceptedBinding = new StudioMemberWorkflowAcceptedBindingContext(
+                "team-1",
+                "published-member-accepted",
+                "workflow-accepted",
+                "rev-accepted")
+            {
+                WorkflowEvidence = new ScheduledInvocationWorkflowEvidence(
+                    StateVersion: 0,
+                    ExternalCapabilities: [],
+                    OwnerLLMRouteRequired: false,
+                    ServiceGrantRequirement: AuthorizationGrantRequirement.NotRequired),
+            },
+        };
+
+        var result = await port.PreflightForWriteAsync(request);
+
+        result.Success.Should().BeTrue();
+        memberService.GetScopeId.Should().Be("scope-1");
+        memberService.GetMemberId.Should().Be("member-1");
+        planner.Requests.Should().ContainSingle();
+        var target = planner.Requests[0].InvocationTarget.StudioMember;
+        target.TeamId.Should().Be("team-1");
+        target.MemberId.Should().Be("member-1");
+        target.PublishedServiceId.Should().Be("published-member-accepted");
+        target.DraftWorkflowId.Should().Be("workflow-accepted");
+        target.WorkflowRevisionId.Should().Be("rev-accepted");
+        planner.Requests[0].TrustedMemberEvidence.Should().BeEquivalentTo(
+            new ScheduledInvocationMemberEvidence(
+                StateVersion: 0,
+                DraftWorkflowId: "workflow-accepted",
+                WorkflowRevisionId: "rev-accepted",
+                PublishedServiceId: "published-member-accepted"));
+        planner.Requests[0].TrustedWorkflowEvidence.Should().BeEquivalentTo(
+            new ScheduledInvocationWorkflowEvidence(
+                StateVersion: 0,
+                ExternalCapabilities: [],
+                OwnerLLMRouteRequired: false,
+                ServiceGrantRequirement: AuthorizationGrantRequirement.NotRequired));
+    }
+
+    [Fact]
     public void ToScheduleAuthorizationFact_ShouldMapMixedDirectAndNodeBackedServicesPerService()
     {
         var plan = new RecordingAuthorizationPlanner().Result.Plan!.Clone();

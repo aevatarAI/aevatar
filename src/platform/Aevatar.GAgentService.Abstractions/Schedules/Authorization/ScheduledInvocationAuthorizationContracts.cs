@@ -26,7 +26,9 @@ public sealed record ScheduledInvocationAuthorizationRequest(
     AuthorizationGrantRequirement ServiceGrantRequirement,
     DateTimeOffset ExpiresAtUtc,
     DateTimeOffset EvaluatedAtUtc,
-    IReadOnlyList<AuthorizationSourceStamp>? SourceStamps = null)
+    IReadOnlyList<AuthorizationSourceStamp>? SourceStamps = null,
+    ScheduledInvocationMemberEvidence? TrustedMemberEvidence = null,
+    ScheduledInvocationWorkflowEvidence? TrustedWorkflowEvidence = null)
 {
     public AuthorizationOwnerIdentity Owner => OwnerContext.Owner;
 }
@@ -173,6 +175,43 @@ public sealed record NyxIdAuthorizationCatalogSnapshot(
     bool Cleaned = false,
     DateTimeOffset? CleanedAtUtc = null,
     string CleanupReason = "");
+
+public enum ScheduledAuthorizationPlanMismatchReason
+{
+    Unspecified = 0,
+    ScopePlanAuthorityMismatch = 1,
+    ScopePlanVersionsMismatch = 2,
+    IntendedKeyOwnerMismatch = 3,
+    AuthenticatedActorMismatch = 4,
+    ScopePlanFreshnessMismatch = 5,
+    ScopePlanCompletenessMismatch = 6,
+    AllowedServiceIdsMismatch = 7,
+    AllowedNodeIdsMismatch = 8,
+    ServiceGrantCountMismatch = 9,
+    ServiceGrantIdentityMismatch = 10,
+    ServiceGrantResourceOwnerMismatch = 11,
+    ServiceGrantNodeMismatch = 12,
+}
+
+public static class ScheduledAuthorizationPlanMismatchReasons
+{
+    public static string? ToWireValue(ScheduledAuthorizationPlanMismatchReason reason) => reason switch
+    {
+        ScheduledAuthorizationPlanMismatchReason.ScopePlanAuthorityMismatch => "scope_plan_authority_mismatch",
+        ScheduledAuthorizationPlanMismatchReason.ScopePlanVersionsMismatch => "scope_plan_versions_mismatch",
+        ScheduledAuthorizationPlanMismatchReason.IntendedKeyOwnerMismatch => "intended_key_owner_mismatch",
+        ScheduledAuthorizationPlanMismatchReason.AuthenticatedActorMismatch => "authenticated_actor_mismatch",
+        ScheduledAuthorizationPlanMismatchReason.ScopePlanFreshnessMismatch => "scope_plan_freshness_mismatch",
+        ScheduledAuthorizationPlanMismatchReason.ScopePlanCompletenessMismatch => "scope_plan_completeness_mismatch",
+        ScheduledAuthorizationPlanMismatchReason.AllowedServiceIdsMismatch => "allowed_service_ids_mismatch",
+        ScheduledAuthorizationPlanMismatchReason.AllowedNodeIdsMismatch => "allowed_node_ids_mismatch",
+        ScheduledAuthorizationPlanMismatchReason.ServiceGrantCountMismatch => "service_grant_count_mismatch",
+        ScheduledAuthorizationPlanMismatchReason.ServiceGrantIdentityMismatch => "service_grant_identity_mismatch",
+        ScheduledAuthorizationPlanMismatchReason.ServiceGrantResourceOwnerMismatch => "service_grant_resource_owner_mismatch",
+        ScheduledAuthorizationPlanMismatchReason.ServiceGrantNodeMismatch => "service_grant_node_mismatch",
+        _ => null,
+    };
+}
 
 public enum NyxIdAuthorizationCatalogVisibilityStatus
 {

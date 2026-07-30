@@ -18,11 +18,8 @@ jest.mock('@/pages/chat/chatHistoryApi', () => ({
 jest.mock('@/shared/studio/api', () => ({
   studioApi: {
     getWorkflow: jest.fn(),
-    saveSettings: jest.fn(),
     saveRoleCatalog: jest.fn(),
     saveConnectorCatalog: jest.fn(),
-    addWorkflowDirectory: jest.fn(),
-    removeWorkflowDirectory: jest.fn(),
   },
 }));
 
@@ -40,18 +37,6 @@ jest.mock('@/shared/studio/scriptsApi', () => ({
     listScripts: jest.fn(),
   },
 }));
-
-const workspaceSettings = {
-  runtimeBaseUrl: 'https://runtime.example.test',
-  directories: [
-    {
-      directoryId: 'dir-1',
-      label: 'Workspace',
-      path: '/tmp/workflows',
-      isBuiltIn: false,
-    },
-  ],
-};
 
 const workflows = [
   {
@@ -106,13 +91,6 @@ const connectors = {
   ],
 };
 
-const settings = {
-  runtimeBaseUrl: 'https://runtime.example.test',
-  defaultProviderName: 'tornado',
-  providerTypes: [],
-  providers: [],
-};
-
 function createProps(overrides: Record<string, unknown> = {}) {
   return {
     workflows: {
@@ -120,12 +98,6 @@ function createProps(overrides: Record<string, unknown> = {}) {
       isError: false,
       error: null,
       data: workflows,
-    },
-    workspaceSettings: {
-      isLoading: false,
-      isError: false,
-      error: null,
-      data: workspaceSettings,
     },
     roles: {
       isLoading: false,
@@ -139,14 +111,7 @@ function createProps(overrides: Record<string, unknown> = {}) {
       error: null,
       data: connectors,
     },
-    settings: {
-      isLoading: false,
-      isError: false,
-      error: null,
-      data: settings,
-    },
     scopeId: 'scope-1',
-    workflowStorageMode: 'workspace',
     scriptsEnabled: true,
     onOpenWorkflowInStudio: jest.fn(),
     onOpenScriptInStudio: jest.fn(),
@@ -167,13 +132,6 @@ describe('StudioFilesPage', () => {
       findings: [],
       updatedAtUtc: '2026-03-18T00:00:00Z',
     });
-    (studioApi.saveSettings as jest.Mock).mockImplementation(async (input) => ({
-      ...settings,
-      runtimeBaseUrl: input.runtimeBaseUrl || settings.runtimeBaseUrl,
-      defaultProviderName:
-        input.defaultProviderName || settings.defaultProviderName,
-      providers: input.providers || settings.providers,
-    }));
     (studioApi.saveRoleCatalog as jest.Mock).mockImplementation(async (input) => ({
       ...roles,
       roles: input.roles,
@@ -259,9 +217,9 @@ describe('StudioFilesPage', () => {
       version: 1,
       files: [
         {
-          key: 'settings.json',
+          key: 'notes.txt',
           type: 'config',
-          name: 'settings.json',
+          name: 'notes.txt',
           updatedAt: '2026-03-18T00:00:00Z',
         },
         {
@@ -317,7 +275,7 @@ describe('StudioFilesPage', () => {
         ]);
       }
 
-      return '{\n  "runtimeBaseUrl": "https://runtime.example.test"\n}\n';
+      return 'draft content';
     });
   });
 
@@ -325,34 +283,26 @@ describe('StudioFilesPage', () => {
     jest.restoreAllMocks();
   });
 
-  it('shows settings by default and saves edited settings.json content', async () => {
+  it('does not expose host provider settings as an editable file', () => {
     const props = createProps();
 
     renderWithQueryClient(React.createElement(StudioFilesPage, props));
 
-    expect(screen.getByText('Configuration')).toBeInTheDocument();
-    const editor = screen.getByLabelText(
-      'Settings.json editor',
-    ) as HTMLTextAreaElement;
-    expect(editor.value).toContain('https://runtime.example.test');
+    expect(screen.queryByText('settings.json')).not.toBeInTheDocument();
+    expect(screen.queryByText('Configuration')).not.toBeInTheDocument();
+  });
 
-    fireEvent.change(editor, {
-      target: {
-        value: editor.value.replace(
-          'https://runtime.example.test',
-          'https://runtime.changed.test',
-        ),
-      },
+  it('falls back to the first visible catalog when search hides the selected panel', async () => {
+    const props = createProps();
+
+    renderWithQueryClient(React.createElement(StudioFilesPage, props));
+    fireEvent.click(screen.getByRole('button', { name: 'Connector Catalog' }));
+    fireEvent.change(screen.getByLabelText('Search files'), {
+      target: { value: 'Role Catalog' },
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    await waitFor(() => {
-      expect(studioApi.saveSettings).toHaveBeenCalledWith(
-        expect.objectContaining({
-          runtimeBaseUrl: 'https://runtime.changed.test',
-        }),
-      );
-    });
+    expect(await screen.findByRole('button', { name: 'Add Role' })).toBeInTheDocument();
+    expect(screen.getAllByText('Role Catalog').length).toBeGreaterThan(1);
   });
 
   it('lets roles and connectors follow the cli-style catalog workflow', async () => {
@@ -605,14 +555,11 @@ describe('StudioFilesPage', () => {
     const editor = (await screen.findByLabelText(
       'Explorer file editor',
     )) as HTMLTextAreaElement;
-    expect(editor.value).toContain('runtime.example.test');
+    expect(editor.value).toContain('draft content');
 
     fireEvent.change(editor, {
       target: {
-        value: editor.value.replace(
-          'https://runtime.example.test',
-          'https://runtime.changed.test',
-        ),
+        value: editor.value.replace('draft content', 'updated content'),
       },
     });
 
@@ -623,7 +570,7 @@ describe('StudioFilesPage', () => {
     expect(screen.queryByText('Read-only in Explorer')).not.toBeInTheDocument();
     expect(
       (screen.getByLabelText('Explorer file editor') as HTMLTextAreaElement).value,
-    ).toContain('runtime.changed.test');
+    ).toContain('updated content');
     expect(
       screen.getByText('You have unsaved Explorer changes'),
     ).toBeInTheDocument();
@@ -635,8 +582,8 @@ describe('StudioFilesPage', () => {
 
     await waitFor(() => {
       expect(explorerApi.putFile).toHaveBeenCalledWith(
-        'settings.json',
-        expect.stringContaining('https://runtime.changed.test'),
+        'notes.txt',
+        expect.stringContaining('updated content'),
       );
     });
   });

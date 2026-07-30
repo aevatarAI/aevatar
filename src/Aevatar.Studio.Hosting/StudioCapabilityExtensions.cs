@@ -7,9 +7,9 @@ namespace Aevatar.Studio.Hosting;
 public static class StudioCapabilityExtensions
 {
     /// <summary>
-    /// Registers the Studio capability: editor, connectors, roles, workspace, settings, executions.
+    /// Registers the Studio capability: editor, connectors, roles, workspace, executions.
     /// All endpoints are mapped under /api/editor, /api/connectors, /api/roles, /api/workspace,
-    /// /api/settings, /api/executions, /api/app.
+    /// /api/executions, /api/app.
     /// </summary>
     public static WebApplicationBuilder AddStudioCapability(this WebApplicationBuilder builder)
     {
@@ -33,7 +33,6 @@ public static class StudioCapabilityExtensions
                         "/api/editor/validate",
                         "/api/executions",
                         "/api/roles",
-                        "/api/settings",
                         "/api/workspace",
                     ],
                 });

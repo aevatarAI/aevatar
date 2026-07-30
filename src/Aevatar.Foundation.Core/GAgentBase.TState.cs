@@ -226,6 +226,7 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
             _state = eventSourcing.TransitionState(_state, evt);
 
         await OnStateChangedAsync(_state, ct);
+        await eventSourcing.PersistSnapshotAsync(_state, ct);
         await PublishCommittedDomainEventsAsync(commitResult, ct);
     }
 

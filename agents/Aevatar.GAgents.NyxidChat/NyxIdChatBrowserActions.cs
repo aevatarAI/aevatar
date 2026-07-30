@@ -206,9 +206,8 @@ public static class NyxIdChatBrowserActions
         var isStateChangeWake = command.Actions.Count == 0;
         if (!ValidContinuationIdentity(state, command, isStateChangeWake))
             return RejectContinuation(state, ActionContinuationInvalid);
-        if ((!isStateChangeWake &&
-                command.Actions.Any(report => !ValidReport(report, command.OriginTurnId))) ||
-            (isStateChangeWake && state.PendingActions.Count == 0))
+        if (!isStateChangeWake &&
+            command.Actions.Any(report => !ValidReport(report, command.OriginTurnId)))
         {
             return RejectContinuation(state, ActionContinuationInvalid);
         }

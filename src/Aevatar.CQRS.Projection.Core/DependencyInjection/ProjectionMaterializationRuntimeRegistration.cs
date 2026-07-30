@@ -16,7 +16,8 @@ public static class ProjectionMaterializationRuntimeRegistration
     public static IServiceCollection AddProjectionMaterializationRuntimeCore<TContext, TRuntimeLease, TScopeAgent>(
         this IServiceCollection services,
         Func<ProjectionRuntimeScopeKey, TContext> contextFactory,
-        Func<TContext, TRuntimeLease> leaseFactory)
+        Func<TContext, TRuntimeLease> leaseFactory,
+        bool materializeScopeStatus = true)
         where TContext : class, IProjectionMaterializationContext
         where TRuntimeLease : class, IProjectionRuntimeLease, IProjectionContextRuntimeLease<TContext>
         where TScopeAgent : IAgent
@@ -42,7 +43,8 @@ public static class ProjectionMaterializationRuntimeRegistration
                     request.SessionId)),
                 (_, context) => leaseFactory(context)));
         services.TryAddSingleton<IProjectionScopeActivationService<TRuntimeLease>>(sp =>
-            new ProjectionScopeStatusActivationService<TRuntimeLease>(
+        {
+            IProjectionScopeActivationService<TRuntimeLease> activationService =
                 new ProjectionScopeActivationService<
                     TRuntimeLease,
                     TContext,
@@ -59,8 +61,14 @@ public static class ProjectionMaterializationRuntimeRegistration
                 sp.GetRequiredService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentKindRegistry>(),
                 sp.GetService<IStreamPubSubMaintenance>(),
                 sp.GetService<ILoggerFactory>(),
-                sp.GetService<IStreamForwardingRegistry>()),
-                sp.GetService<IProjectionScopeActivationService<ProjectionScopeStatusRuntimeLease>>()));
+                sp.GetService<IStreamForwardingRegistry>());
+
+            return materializeScopeStatus
+                ? new ProjectionScopeStatusActivationService<TRuntimeLease>(
+                    activationService,
+                    sp.GetService<IProjectionScopeActivationService<ProjectionScopeStatusRuntimeLease>>())
+                : activationService;
+        });
         services.TryAddSingleton<IProjectionScopeReleaseService<TRuntimeLease>>(sp =>
             new ProjectionScopeReleaseService<
                 TRuntimeLease,
