@@ -2,6 +2,7 @@ using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Core;
 
 namespace Aevatar.Workflow.Application.ExternalCapabilities;
 
@@ -41,6 +42,14 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
         var sources = new List<ExternalCapabilitySourceStamp>();
         foreach (var invocation in definition.Invocations)
         {
+            if (WorkflowAuthorizationDependencyEvaluator.RequiresExternalCapabilityAdmission(invocation.ToolName) &&
+                invocation.Selector.SelectorCase ==
+                ExternalWorkflowCapabilitySelector.SelectorOneofCase.None)
+            {
+                throw new WorkflowExternalCapabilityAdmissionException(
+                    BuildNyxIdOperationSelectionRequiredReadiness(request.ExecutionMode));
+            }
+
             var readiness = await _readinessPort.InspectAsync(
                 new InspectExternalWorkflowCapabilityReadinessRequest(
                     request.Access,
@@ -115,6 +124,28 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
         EnsureDurableCatalogMatchesPlanOwner(request.Plan);
         EnsureSourcesAreFresh(request.Plan);
         return request.Plan.Clone();
+    }
+
+    private static ExternalCapabilityReadiness BuildNyxIdOperationSelectionRequiredReadiness(
+        ExternalCapabilityExecutionMode executionMode)
+    {
+        var readiness = new ExternalCapabilityReadiness
+        {
+            ExecutionMode = executionMode,
+            Status = ExternalCapabilityReadinessStatus.OperationSelectionRequired,
+        };
+        readiness.Blockers.Add(new ExternalCapabilityBlocker
+        {
+            Status = ExternalCapabilityReadinessStatus.OperationSelectionRequired,
+            Code = "NYXID_OPERATION_SELECTION_REQUIRED",
+            SafeMessage = "Select an exact connected service operation.",
+        });
+        readiness.Remediations.Add(new ExternalCapabilityRemediation
+        {
+            ActionKind = ExternalCapabilityRemediationActionKind.SelectOperation,
+            Label = "Select operation",
+        });
+        return readiness;
     }
 
     private static ExternalCapabilityReadiness BuildRebindRequiredReadiness(

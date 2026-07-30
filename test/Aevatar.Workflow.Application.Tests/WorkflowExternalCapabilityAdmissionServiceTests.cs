@@ -333,6 +333,40 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
     }
 
     [Fact]
+    public async Task AdmitAsync_ShouldClassifyUnresolvedNyxIdInvocationAsOperationSelectionRequired()
+    {
+        var dependencies = new WorkflowAuthorizationDependencies
+        {
+            ServiceGrantPolicy = WorkflowServiceGrantPolicy.Required,
+        };
+        dependencies.ExternalInvocations.Add(new ExternalToolInvocationSpec
+        {
+            CallSiteId = CallSiteId,
+            ToolName = "nyxid_proxy",
+            Selector = new ExternalWorkflowCapabilitySelector(),
+        });
+        var readiness = new StubReadinessPort();
+        var service = new WorkflowExternalCapabilityAdmissionService(
+            new StubParser(WorkflowYamlParseResult.Success("wf-alpha", dependencies)),
+            readiness,
+            new FixedTimeProvider());
+
+        Func<Task> act = async () =>
+            await service.AdmitAsync(Request("name: wf-alpha\nsteps: []\n"));
+
+        var exception = await act.Should().ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
+        exception.Which.Readiness.ExecutionMode.Should()
+            .Be(ExternalCapabilityExecutionMode.Interactive);
+        exception.Which.Readiness.Status.Should()
+            .Be(ExternalCapabilityReadinessStatus.OperationSelectionRequired);
+        exception.Which.Readiness.Blockers.Should().ContainSingle().Which.Code.Should()
+            .Be("NYXID_OPERATION_SELECTION_REQUIRED");
+        exception.Which.Readiness.Remediations.Should().ContainSingle().Which.ActionKind.Should()
+            .Be(ExternalCapabilityRemediationActionKind.SelectOperation);
+        readiness.Calls.Should().Be(0);
+    }
+
+    [Fact]
     public async Task AdmitAsync_ShouldPreserveTypedAuthoringFailureFromParser()
     {
         var parserReadiness = new ExternalCapabilityReadiness
