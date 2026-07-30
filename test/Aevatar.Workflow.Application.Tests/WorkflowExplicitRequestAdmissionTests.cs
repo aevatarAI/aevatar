@@ -254,6 +254,52 @@ public sealed class WorkflowExplicitRequestAdmissionTests
             .Be("DURABLE_AUTHORIZATION_SOURCE_REQUIRED");
     }
 
+    [Theory]
+    [InlineData("GET", NyxIdOperationRisk.Write)]
+    [InlineData("GET", NyxIdOperationRisk.Destructive)]
+    [InlineData("HEAD", NyxIdOperationRisk.Write)]
+    [InlineData("HEAD", NyxIdOperationRisk.Destructive)]
+    [InlineData("OPTIONS", NyxIdOperationRisk.Write)]
+    [InlineData("OPTIONS", NyxIdOperationRisk.Destructive)]
+    public async Task AdmitAsync_WithDurableElevatedRiskSafeRequest_ShouldRequireInteractive(
+        string method,
+        NyxIdOperationRisk currentRisk)
+    {
+        var service = CreateService(new ExplicitRequestSource(currentRisk));
+        var workflowYaml = SafeWorkflowYaml(method);
+
+        Func<Task> act = async () => await service.AdmitAsync(Request(
+            workflowYaml,
+            ExternalCapabilityExecutionMode.Durable,
+            [SafeConfirmation(method, currentRisk)]));
+
+        var exception = await act.Should().ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
+        exception.Which.Readiness.Status.Should().Be(ExternalCapabilityReadinessStatus.ContractDrift);
+        exception.Which.Readiness.Blockers.Should().ContainSingle().Which.Code.Should()
+            .Be("NYXID_EXPLICIT_REQUEST_INTERACTIVE_REQUIRED");
+    }
+
+    [Theory]
+    [InlineData("GET")]
+    [InlineData("HEAD")]
+    [InlineData("OPTIONS")]
+    public async Task AdmitAsync_WithStaleReadOnlyConfirmationForElevatedSafeRequest_ShouldReturnRiskMismatch(
+        string method)
+    {
+        var service = CreateService(new ExplicitRequestSource(NyxIdOperationRisk.Write));
+        var workflowYaml = SafeWorkflowYaml(method);
+
+        Func<Task> act = async () => await service.AdmitAsync(Request(
+            workflowYaml,
+            ExternalCapabilityExecutionMode.Durable,
+            [SafeConfirmation(method, NyxIdOperationRisk.ReadOnly)]));
+
+        var exception = await act.Should().ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
+        exception.Which.Readiness.Status.Should().Be(ExternalCapabilityReadinessStatus.ContractDrift);
+        exception.Which.Readiness.Blockers.Should().ContainSingle().Which.Code.Should()
+            .Be("NYXID_EXPLICIT_REQUEST_CONFIRMATION_RISK_MISMATCH");
+    }
+
     [Fact]
     public void FromWorkflowYamls_ShouldCloneExplicitRequestConfirmations()
     {
@@ -394,7 +440,19 @@ public sealed class WorkflowExplicitRequestAdmissionTests
             ResponseMode = NyxIdRequestResponseMode.Text,
         };
 
-    private sealed class ExplicitRequestSource : IExternalWorkflowCapabilitySource
+    private static NyxIdExplicitRequestConfirmation SafeConfirmation(
+        string method,
+        NyxIdOperationRisk risk) =>
+        new()
+        {
+            CallSiteId = "wf-safe/request-safe",
+            RequestContractDigest = WorkflowCapabilityAdmissionPlanIntegrity
+                .ComputeNyxIdRequestContractDigest(SafeSelector(method)),
+            AttestedRisk = risk,
+        };
+
+    private sealed class ExplicitRequestSource(
+        NyxIdOperationRisk currentRisk = NyxIdOperationRisk.ReadOnly) : IExternalWorkflowCapabilitySource
     {
         public ExternalWorkflowCapabilitySelector.SelectorOneofCase SelectorKind =>
             ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdRequest;
@@ -423,8 +481,10 @@ public sealed class WorkflowExplicitRequestAdmissionTests
                         .ComputeNyxIdExplicitRequestProofDigest(requestDigest, "svc-alpha"),
                     ExecutionPolicy = new NyxIdOperationExecutionPolicy
                     {
-                        Risk = NyxIdOperationRisk.ReadOnly,
-                        Approval = NyxIdOperationApproval.None,
+                        Risk = currentRisk,
+                        Approval = currentRisk == NyxIdOperationRisk.ReadOnly
+                            ? NyxIdOperationApproval.None
+                            : NyxIdOperationApproval.Required,
                         EnforcementOwner = NyxIdOperationEnforcementOwner.Aevatar,
                         AllowedExecutionModes =
                         {

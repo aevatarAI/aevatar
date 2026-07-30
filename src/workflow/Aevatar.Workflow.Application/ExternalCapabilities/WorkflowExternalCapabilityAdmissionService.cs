@@ -70,7 +70,15 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
                 cancellationToken);
             if (readiness.Status != ExternalCapabilityReadinessStatus.Ready)
                 throw new WorkflowExternalCapabilityAdmissionException(readiness);
-            var proofFailure = ValidateReadinessProof(
+            var proofFailure = ValidateReadinessIdentityProof(
+                invocation.Selector,
+                request.ExecutionMode,
+                readiness);
+            if (proofFailure is not null)
+                throw new WorkflowExternalCapabilityAdmissionException(proofFailure);
+
+            var admission = BuildInvocationAdmission(request, invocation, readiness.SelectedCapability);
+            proofFailure = ValidateReadinessSourceProof(
                 request.Access,
                 invocation.Selector,
                 request.ExecutionMode,
@@ -82,7 +90,7 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
                 request.ExecutionMode,
                 invocation.Selector,
                 readiness.SelectedCapability);
-            admissions.Add(BuildInvocationAdmission(request, invocation, readiness.SelectedCapability));
+            admissions.Add(admission);
             sources.AddRange(readiness.Sources.Select(static source => source.Clone()));
         }
 
@@ -161,6 +169,17 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
                 request.ExecutionMode,
                 "NYXID_EXPLICIT_REQUEST_CONFIRMATION_RISK_MISMATCH",
                 "The explicit request risk confirmation does not satisfy the request method policy.");
+        }
+        if (request.ExecutionMode == ExternalCapabilityExecutionMode.Durable &&
+            capability.NyxIdUserRequest.ExecutionPolicy?.Risk is
+                NyxIdOperationRisk.Write or NyxIdOperationRisk.Destructive)
+        {
+            throw ExplicitRequestConfirmationFailure(
+                invocation,
+                capability,
+                request.ExecutionMode,
+                "NYXID_EXPLICIT_REQUEST_INTERACTIVE_REQUIRED",
+                "This explicit request can only be admitted for interactive execution.");
         }
         if (string.IsNullOrWhiteSpace(request.Access.CallerId))
         {
@@ -345,8 +364,7 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
         return readiness;
     }
 
-    private static ExternalCapabilityReadiness? ValidateReadinessProof(
-        ExternalWorkflowCapabilityAccessContext access,
+    private static ExternalCapabilityReadiness? ValidateReadinessIdentityProof(
         ExternalWorkflowCapabilitySelector selector,
         ExternalCapabilityExecutionMode executionMode,
         ExternalCapabilityReadiness readiness)
@@ -380,6 +398,15 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
                 "External capability readiness proof does not match the selected operation.");
         }
 
+        return null;
+    }
+
+    private static ExternalCapabilityReadiness? ValidateReadinessSourceProof(
+        ExternalWorkflowCapabilityAccessContext access,
+        ExternalWorkflowCapabilitySelector selector,
+        ExternalCapabilityExecutionMode executionMode,
+        ExternalCapabilityReadiness readiness)
+    {
         var capability = readiness.SelectedCapability;
 
         if (WorkflowCapabilityAdmissionPlanIntegrity.RequiresDurableAuthorizationCatalog(
