@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Microsoft.Extensions.Logging;
@@ -11,15 +12,22 @@ namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 /// with a clean interface so the agent can run code without needing to
 /// discover services or guess API paths.
 /// </summary>
-public sealed class NyxIdCodeExecuteTool : IAgentTool
+public sealed class NyxIdCodeExecuteTool : INyxIdBuiltInTool
 {
     private readonly NyxIdApiClient _client;
     private readonly ILogger _logger;
+    private readonly string? _sandboxServiceSlug;
 
-    public NyxIdCodeExecuteTool(NyxIdApiClient client, ILogger? logger = null)
+    public NyxIdCodeExecuteTool(
+        NyxIdApiClient client,
+        ILogger? logger = null,
+        string? sandboxServiceSlug = NyxIdToolOptions.DefaultSandboxServiceSlug)
     {
         _client = client;
         _logger = logger ?? NullLogger.Instance;
+        _sandboxServiceSlug = string.IsNullOrWhiteSpace(sandboxServiceSlug)
+            ? null
+            : sandboxServiceSlug.Trim();
     }
 
     public string Name => "code_execute";
@@ -36,6 +44,68 @@ public sealed class NyxIdCodeExecuteTool : IAgentTool
     // boundary, so a host-side approval gate adds nothing here. Contrast
     // NyxIdSshExecTool, which targets a real host and so keeps ApprovalMode.Auto.
     public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
+
+    public AgentToolReceipt? CreateResultReceipt(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        string resultJson)
+    {
+        var proxyReceipt = NyxIdProxyReceiptFactory.TryCreate(
+            callId,
+            toolName,
+            _sandboxServiceSlug ?? NyxIdToolOptions.DefaultSandboxServiceSlug,
+            userServiceId: null,
+            serviceLabel: null,
+            resourceUri: "/execute",
+            resultJson);
+        if (proxyReceipt != null)
+            return proxyReceipt;
+
+        try
+        {
+            using var document = JsonDocument.Parse(resultJson);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                return null;
+
+            var hasError = root.TryGetProperty("error", out _);
+            var exitCodeValue = 0;
+            var hasExitCode = root.TryGetProperty("exit_code", out var exitCode) &&
+                              exitCode.TryGetInt32(out exitCodeValue);
+            var nonZeroExit = hasExitCode && exitCodeValue != 0;
+            if (hasError || nonZeroExit)
+            {
+                const string errorCode = "CODE_EXECUTE_FAILED";
+                const string errorMessage = "Code execution failed.";
+                return new AgentToolReceipt
+                {
+                    CallId = callId ?? string.Empty,
+                    ToolName = string.IsNullOrWhiteSpace(toolName) ? Name : toolName,
+                    Status = AgentToolReceiptStatus.Error,
+                    ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
+                    ErrorCode = errorCode,
+                    ErrorMessage = errorMessage,
+                    ResultJson = "{\"error\":\"CODE_EXECUTE_FAILED\",\"message\":\"Code execution failed.\"}",
+                };
+            }
+
+            if (!hasExitCode)
+                return null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+
+        return new AgentToolReceipt
+        {
+            CallId = callId ?? string.Empty,
+            ToolName = string.IsNullOrWhiteSpace(toolName) ? Name : toolName,
+            Status = AgentToolReceiptStatus.Success,
+            ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
+        };
+    }
 
     public string ParametersSchema => """
         {
@@ -68,13 +138,11 @@ public sealed class NyxIdCodeExecuteTool : IAgentTool
         if (string.IsNullOrWhiteSpace(language) || string.IsNullOrWhiteSpace(code))
             return """{"error":"Both 'language' and 'code' are required."}""";
 
-        // Resolve sandbox slug: context → API discovery → known slugs → give up
+        // A connected-service selection wins when present. Otherwise use the
+        // host-owned route that the OAuth binding requested as a resource.
         var slug = ResolveSandboxSlugFromContext()
+                   ?? _sandboxServiceSlug
                    ?? await DiscoverSandboxSlugAsync(token, ct);
-
-        // Last resort: try well-known sandbox slugs directly
-        if (string.IsNullOrWhiteSpace(slug))
-            slug = await ProbeKnownSandboxSlugsAsync(token, ct);
 
         if (string.IsNullOrWhiteSpace(slug))
         {
@@ -83,7 +151,7 @@ public sealed class NyxIdCodeExecuteTool : IAgentTool
 
         _logger.LogInformation("[code_execute] {Language} via slug={Slug}", language, slug);
 
-        // Current chrono-sandbox-service exposes /execute with body { language, script }.
+        // chrono-sandbox exposes /execute with body { language, script }.
         // Older sandbox builds expose /run with body { language, code }. We POST the modern
         // contract first; on a NyxID-proxy 404 (slug exists but upstream returned 404, which
         // indicates the path doesn't exist on that backend), retry the legacy contract so a
@@ -139,7 +207,7 @@ public sealed class NyxIdCodeExecuteTool : IAgentTool
             return null;
 
         // Parse the connected services context to find sandbox slug.
-        // The context contains lines like: "- **name** (slug: `chrono-sandbox-service`)"
+        // The context contains lines like: "- **name** (slug: `chrono-sandbox`)"
         foreach (var line in context.Split('\n'))
         {
             if (!line.Contains("sandbox", StringComparison.OrdinalIgnoreCase))
@@ -158,8 +226,8 @@ public sealed class NyxIdCodeExecuteTool : IAgentTool
     }
 
     /// <summary>
-    /// Fallback: call DiscoverProxyServices API to find a sandbox service.
-    /// Used when the connected services context is missing or doesn't contain a sandbox entry.
+    /// Fallback for hosts that explicitly leave the configured sandbox slug empty:
+    /// call DiscoverProxyServices API to find a sandbox service.
     /// </summary>
     private async Task<string?> DiscoverSandboxSlugAsync(string token, CancellationToken ct)
     {
@@ -193,53 +261,6 @@ public sealed class NyxIdCodeExecuteTool : IAgentTool
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "[code_execute] Fallback sandbox discovery failed");
-        }
-
-        return null;
-    }
-
-    /// <summary>
-    /// Last resort: try well-known sandbox slugs with a lightweight probe request.
-    /// If the proxy returns a non-error response, the slug is valid.
-    /// </summary>
-    private static readonly string[] KnownSandboxSlugs =
-        ["chrono-sandbox-service", "chrono-sandbox", "sandbox"];
-
-    private async Task<string?> ProbeKnownSandboxSlugsAsync(string token, CancellationToken ct)
-    {
-        foreach (var candidate in KnownSandboxSlugs)
-        {
-            try
-            {
-                // Probe with a minimal request — just check if the slug is routable.
-                // NyxID proxy returns {"error": true, "status": 404} when the slug doesn't exist.
-                // Any other response (even upstream 4xx/5xx) means the slug is valid.
-                var response = await _client.ProxyRequestAsync(
-                    token, candidate, "/health", "GET", null, null, ct);
-
-                // Check for NyxID-level "slug not found" error
-                if (response.Contains("\"error\"") &&
-                    (response.Contains("\"status\": 404") || response.Contains("\"status\":404")))
-                {
-                    continue; // This slug doesn't exist in NyxID
-                }
-
-                // Check for connection-level errors (the response from SendAsync catch block)
-                if (response.Contains("\"error\": true") && response.Contains("\"message\""))
-                {
-                    continue; // Network error, can't determine if slug exists
-                }
-
-                _logger.LogInformation("[code_execute] Probed known sandbox slug: {Slug}", candidate);
-                return candidate;
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                _logger.LogWarning(
-                    ex,
-                    "[code_execute] Failed to probe known sandbox slug: {Slug}",
-                    candidate);
-            }
         }
 
         return null;

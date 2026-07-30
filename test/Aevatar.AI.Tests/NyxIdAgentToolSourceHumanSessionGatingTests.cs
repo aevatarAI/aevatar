@@ -5,6 +5,8 @@ using System.Net.Http;
 using System.Threading.Tasks;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using FluentAssertions;
 using Xunit;
 
@@ -29,7 +31,8 @@ public class NyxIdAgentToolSourceHumanSessionGatingTests
 
     private static readonly HashSet<string> RelaySafeTools = new(StringComparer.Ordinal)
     {
-        "nyxid_proxy", "code_execute", "nyxid_llm_status", "nyxid_catalog", "nyxid_channel_events",
+        "nyxid_proxy", "nyxid_require_service", "code_execute", "nyxid_llm_status", "nyxid_catalog",
+        "nyxid_channel_events",
     };
 
     [Fact]

@@ -225,7 +225,7 @@ public sealed class UserAgentCatalogQueryPortTests
         new()
         {
             Id = agentId,
-            AgentType = SkillRunnerDefaults.AgentType,
+            AgentType = ScheduledWorkflowAgentDefaults.AgentType,
             TemplateName = "summary",
             OwnerScope = ownerScope.Clone(),
             StateVersion = 1,

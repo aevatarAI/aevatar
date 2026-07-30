@@ -608,6 +608,30 @@ public sealed class WorkflowScheduleApplicationServiceTests
     }
 
     [Fact]
+    public async Task DeleteAsync_ShouldNormalizeReasonAndDispatchToResolvedActor()
+    {
+        var actorPort = new FakeWorkflowScheduleActorPort();
+        var queryPort = new FakeWorkflowScheduleQueryPort();
+        queryPort.Details["schedule-1"] = CreateDetail("schedule-1");
+        var service = CreateService(actorPort, queryPort);
+
+        var receipt = await service.DeleteAsync(" schedule-1 ", " retire ");
+
+        receipt.Should().BeEquivalentTo(new
+        {
+            ScheduleId = "schedule-1",
+            ScheduleActorId = "actor:schedule-1",
+            Accepted = true,
+            AckStage = "accepted",
+        });
+        receipt.CommandId.Should().NotBeNullOrWhiteSpace();
+        receipt.CorrelationId.Should().NotBeNullOrWhiteSpace();
+        receipt.AckedAt.Should().NotBe(default);
+        actorPort.Deleted.Should().ContainSingle()
+            .Which.Should().Be(("actor:schedule-1", "retire"));
+    }
+
+    [Fact]
     public async Task UpdateAsync_ShouldUseRouteScheduleIdAndScrubOptionalAdapterHeaders()
     {
         var actorPort = new FakeWorkflowScheduleActorPort();
@@ -867,7 +891,8 @@ public sealed class WorkflowScheduleApplicationServiceTests
             25,
             "cursor",
             true,
-            ScheduleKind: ScheduledDispatchScheduleKind.Workflow));
+            ScheduleKind: ScheduledDispatchScheduleKind.Workflow,
+            ExcludeTeamOwned: true));
     }
 
     [Fact]
@@ -887,16 +912,19 @@ public sealed class WorkflowScheduleApplicationServiceTests
         var update = () => service.UpdateAsync("generic", CreateConfiguration("generic"));
         var enable = () => service.EnableAsync("generic", "resume");
         var disable = () => service.DisableAsync("generic", "pause");
+        var delete = () => service.DeleteAsync("generic", "retire");
         var runNow = () => service.RunNowAsync("generic");
 
         await update.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
         await enable.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
         await disable.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
+        await delete.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
         await runNow.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
 
         actorPort.Updated.Should().BeEmpty();
         actorPort.Enabled.Should().BeEmpty();
         actorPort.Disabled.Should().BeEmpty();
+        actorPort.Deleted.Should().BeEmpty();
         actorPort.RunNowRequests.Should().BeEmpty();
         actorPort.ResolveScheduleIds.Should().BeEmpty();
     }

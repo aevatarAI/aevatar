@@ -40,9 +40,13 @@ public sealed class EndpointAuditCaptureMiddlewareTests
         appender.Records.Should().HaveCount(2);
         appender.Records[0].OperationName.Should().Be("test.widget.create.attempted");
         appender.Records[0].Outcome.Should().Be(AuditOutcome.Accepted);
+        appender.Records[0].LifecyclePhase.Should().Be(AuditLifecyclePhase.Accepted);
+        appender.Records[0].TerminalOutcome.Should().Be(AuditTerminalOutcome.Unspecified);
         appender.Records[0].ResultSummary.Should().BeEmpty();
         appender.Records[1].OperationName.Should().Be("test.widget.create");
         appender.Records[1].Outcome.Should().Be(AuditOutcome.Accepted);
+        appender.Records[1].LifecyclePhase.Should().Be(AuditLifecyclePhase.Accepted);
+        appender.Records[1].TerminalOutcome.Should().Be(AuditTerminalOutcome.Unspecified);
         appender.Records[1].ResultSummary.Should().Be("status=202");
         appender.Records.Should().OnlyContain(record =>
             record.CapturePlane == AuditCapturePlane.BoundaryEndpoint &&
@@ -53,7 +57,7 @@ public sealed class EndpointAuditCaptureMiddlewareTests
     }
 
     [Fact]
-    public async Task AnnotatedEndpoint_WhenOk_ShouldAppendAcceptedTerminalRecord()
+    public async Task AnnotatedEndpoint_WhenOk_ShouldAppendAcceptedNonterminalRecord()
     {
         var appender = new RecordingAuditTrailAppender();
         await using var app = await CreateHostAsync(appender);
@@ -65,6 +69,8 @@ public sealed class EndpointAuditCaptureMiddlewareTests
         appender.Records.Should().HaveCount(2);
         appender.Records[1].OperationName.Should().Be("test.widget.read");
         appender.Records[1].Outcome.Should().Be(AuditOutcome.Accepted);
+        appender.Records[1].LifecyclePhase.Should().Be(AuditLifecyclePhase.Accepted);
+        appender.Records[1].TerminalOutcome.Should().Be(AuditTerminalOutcome.Unspecified);
     }
 
     [Fact]
@@ -81,6 +87,9 @@ public sealed class EndpointAuditCaptureMiddlewareTests
         appender.Records[0].OperationName.Should().Be("test.widget.admin.attempted");
         appender.Records[1].OperationName.Should().Be("test.widget.admin");
         appender.Records[1].Outcome.Should().Be(AuditOutcome.Denied);
+        appender.Records[1].LifecyclePhase.Should().Be(AuditLifecyclePhase.Terminal);
+        appender.Records[1].TerminalOutcome.Should().Be(AuditTerminalOutcome.Failed);
+        appender.Records[1].Failure.Category.Should().Be(AuditFailureCategory.Authorization);
         appender.Records[1].ErrorCode.Should().Be("authorization_denied");
     }
 
@@ -99,6 +108,9 @@ public sealed class EndpointAuditCaptureMiddlewareTests
         appender.Records[0].Outcome.Should().Be(AuditOutcome.Accepted);
         appender.Records[1].OperationName.Should().Be("test.widget.throw");
         appender.Records[1].Outcome.Should().Be(AuditOutcome.Error);
+        appender.Records[1].LifecyclePhase.Should().Be(AuditLifecyclePhase.Terminal);
+        appender.Records[1].TerminalOutcome.Should().Be(AuditTerminalOutcome.Failed);
+        appender.Records[1].Failure.Code.Should().Be("endpoint_error");
         appender.Records[1].ErrorCode.Should().Be("endpoint_error");
         appender.Records[1].ErrorSummary.Should().Be(nameof(InvalidOperationException));
     }
@@ -118,6 +130,25 @@ public sealed class EndpointAuditCaptureMiddlewareTests
         appender.Records[1].Outcome.Should().Be(AuditOutcome.Error);
         appender.Records[1].ErrorCode.Should().Be("endpoint_error");
         appender.Records[1].ErrorSummary.Should().Be("status=500");
+    }
+
+    [Fact]
+    public async Task AnnotatedEndpoint_WhenStatusCodeIs504_ShouldRecordConsistentTimeoutFailure()
+    {
+        var appender = new RecordingAuditTrailAppender();
+        await using var app = await CreateHostAsync(appender);
+
+        using var request = AuthenticatedRequest(HttpMethod.Post, "/audited/widgets/widget-1/timeout");
+        var response = await app.GetTestClient().SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.GatewayTimeout);
+        appender.Records.Should().HaveCount(2);
+        var record = appender.Records[1];
+        record.TerminalOutcome.Should().Be(AuditTerminalOutcome.TimedOut);
+        record.Failure.Code.Should().Be("endpoint_timeout");
+        record.Failure.Category.Should().Be(AuditFailureCategory.Timeout);
+        record.ErrorCode.Should().Be(record.Failure.Code);
+        record.ErrorSummary.Should().Be(record.Failure.SanitizedMessage);
     }
 
     [Fact]
@@ -299,6 +330,9 @@ public sealed class EndpointAuditCaptureMiddlewareTests
         appender.Records[0].OperationName.Should().Be("test.widget.cancel.attempted");
         appender.Records[1].OperationName.Should().Be("test.widget.cancel");
         appender.Records[1].Outcome.Should().Be(AuditOutcome.Cancelled);
+        appender.Records[1].LifecyclePhase.Should().Be(AuditLifecyclePhase.Terminal);
+        appender.Records[1].TerminalOutcome.Should().Be(AuditTerminalOutcome.Cancelled);
+        appender.Records[1].Failure.Should().BeNull();
         appender.CancellationStates.Should().Equal(false, false);
     }
 
@@ -454,6 +488,14 @@ public sealed class EndpointAuditCaptureMiddlewareTests
         app.MapPost("/audited/widgets/{widgetId}/fail", () => Results.StatusCode(StatusCodes.Status500InternalServerError))
             .WithEndpointAudit(
                 "test.widget.fail",
+                AuditSensitivityLevel.Confidential,
+                "widget",
+                EndpointAuditTargetResolvers.FromRouteValue("widget", "widgetId"),
+                EndpointAuditSanitizers.WithRouteValues("widgetId"))
+            .RequireAuthorization();
+        app.MapPost("/audited/widgets/{widgetId}/timeout", () => Results.StatusCode(StatusCodes.Status504GatewayTimeout))
+            .WithEndpointAudit(
+                "test.widget.timeout",
                 AuditSensitivityLevel.Confidential,
                 "widget",
                 EndpointAuditTargetResolvers.FromRouteValue("widget", "widgetId"),

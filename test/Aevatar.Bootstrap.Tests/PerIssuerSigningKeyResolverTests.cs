@@ -17,14 +17,15 @@ namespace Aevatar.Bootstrap.Tests;
 public sealed class PerIssuerSigningKeyResolverTests
 {
     private const string ScopeIssuer = "https://aevatar.example.com";
-    private const string OidcIssuer = "https://nyxid.example.com";
+    private const string LoginAuthority = "https://login.nyxid.example.com";
+    private const string DiscoveredIssuer = "https://nyx-api.example.com";
 
     [Fact]
     public void Resolve_WhenIssuerIsScopeIssuer_ShouldReturnOnlyScopeKeys()
     {
         var scopeKey = NamedSymmetricKey("scope-key");
         var oidcKey = NamedSymmetricKey("oidc-key");
-        var resolver = CreateResolver([OidcIssuer], [ScopeIssuer], [scopeKey]);
+        var resolver = CreateResolver([LoginAuthority], [ScopeIssuer], [scopeKey]);
 
         var resolved = InvokeResolve(resolver, ScopeIssuer, discoveryKeys: [oidcKey]).ToList();
 
@@ -33,13 +34,13 @@ public sealed class PerIssuerSigningKeyResolverTests
     }
 
     [Fact]
-    public void Resolve_WhenIssuerIsAuthority_ShouldReturnOnlyDiscoveryKeys()
+    public void Resolve_WhenIssuerIsDiscoveredIssuer_ShouldReturnOnlyDiscoveryKeys()
     {
         var scopeKey = NamedSymmetricKey("scope-key");
         var oidcKey = NamedSymmetricKey("oidc-key");
-        var resolver = CreateResolver([OidcIssuer], [ScopeIssuer], [scopeKey]);
+        var resolver = CreateResolver([LoginAuthority], [ScopeIssuer], [scopeKey]);
 
-        var resolved = InvokeResolve(resolver, OidcIssuer, discoveryKeys: [oidcKey]).ToList();
+        var resolved = InvokeResolve(resolver, DiscoveredIssuer, discoveryKeys: [oidcKey]).ToList();
 
         resolved.Should().ContainSingle().Which.KeyId.Should().Be("oidc-key");
         resolved.Should().NotContain(key => key.KeyId == "scope-key");
@@ -50,7 +51,7 @@ public sealed class PerIssuerSigningKeyResolverTests
     {
         var scopeKey = NamedSymmetricKey("scope-key");
         var oidcKey = NamedSymmetricKey("oidc-key");
-        var resolver = CreateResolver([OidcIssuer], [ScopeIssuer], [scopeKey]);
+        var resolver = CreateResolver([LoginAuthority], [ScopeIssuer], [scopeKey]);
 
         var resolved = InvokeResolve(
             resolver,
@@ -58,6 +59,62 @@ public sealed class PerIssuerSigningKeyResolverTests
             discoveryKeys: [oidcKey]).ToList();
 
         resolved.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Resolve_WhenIssuerIsLoginAuthorityButDiscoveryUsesDifferentIssuer_ShouldFailClosed()
+    {
+        var scopeKey = NamedSymmetricKey("scope-key");
+        var oidcKey = NamedSymmetricKey("oidc-key");
+        var resolver = CreateResolver([LoginAuthority], [ScopeIssuer], [scopeKey]);
+
+        var resolved = InvokeResolve(resolver, LoginAuthority, discoveryKeys: [oidcKey]).ToList();
+
+        resolved.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ValidateIssuer_WhenIssuerMatchesDiscovery_ShouldReturnDiscoveredIssuer()
+    {
+        var resolver = CreateResolver(
+            [LoginAuthority],
+            [ScopeIssuer],
+            [NamedSymmetricKey("scope-key")]);
+
+        var validated = InvokeValidateIssuer(resolver, DiscoveredIssuer);
+
+        validated.Should().Be(DiscoveredIssuer);
+    }
+
+    [Fact]
+    public void ValidateIssuer_WhenIssuerMatchesOnlyLoginAuthority_ShouldFailClosed()
+    {
+        var resolver = CreateResolver(
+            [LoginAuthority],
+            [ScopeIssuer],
+            [NamedSymmetricKey("scope-key")]);
+
+        var act = () => InvokeValidateIssuer(resolver, LoginAuthority);
+
+        act.Should().Throw<TargetInvocationException>()
+            .Which.InnerException.Should().BeOfType<SecurityTokenInvalidIssuerException>();
+    }
+
+    [Fact]
+    public void ResolveAndValidateIssuer_WhenScopeIssuerEqualsDiscoveredIssuer_ShouldFailClosed()
+    {
+        var scopeKey = NamedSymmetricKey("scope-key");
+        var resolver = CreateResolver([LoginAuthority], [DiscoveredIssuer], [scopeKey]);
+
+        var resolved = InvokeResolve(
+            resolver,
+            DiscoveredIssuer,
+            discoveryKeys: [NamedSymmetricKey("oidc-key")]).ToList();
+        var validate = () => InvokeValidateIssuer(resolver, DiscoveredIssuer);
+
+        resolved.Should().BeEmpty();
+        validate.Should().Throw<TargetInvocationException>()
+            .Which.InnerException.Should().BeOfType<SecurityTokenInvalidIssuerException>();
     }
 
     [Fact]
@@ -87,6 +144,9 @@ public sealed class PerIssuerSigningKeyResolverTests
 
         jwtOptions.TokenValidationParameters.IssuerSigningKeyResolver.Should().BeNull();
         jwtOptions.TokenValidationParameters.IssuerSigningKeyResolverUsingConfiguration.Should().NotBeNull();
+        jwtOptions.TokenValidationParameters.IssuerValidator.Should().BeNull();
+        jwtOptions.TokenValidationParameters.IssuerValidatorUsingConfiguration.Should().NotBeNull();
+        jwtOptions.TokenValidationParameters.ValidateIssuer.Should().BeTrue();
 
         // The installed resolver returns the scope key for a token issued by the scope issuer.
         var scopeKeyId = jwtOptions.TokenValidationParameters.IssuerSigningKeys.Single().KeyId;
@@ -128,7 +188,7 @@ public sealed class PerIssuerSigningKeyResolverTests
         var method = ResolverType.GetMethod("Resolve", BindingFlags.Public | BindingFlags.Instance)
             ?? throw new InvalidOperationException("Resolve not found.");
         var parameters = new TokenValidationParameters();
-        var configuration = new OpenIdConnectConfiguration { Issuer = OidcIssuer };
+        var configuration = new OpenIdConnectConfiguration { Issuer = DiscoveredIssuer };
         foreach (var key in discoveryKeys)
             configuration.SigningKeys.Add(key);
 
@@ -141,6 +201,18 @@ public sealed class PerIssuerSigningKeyResolverTests
         return (IEnumerable<SecurityKey>)method.Invoke(
             resolver,
             [string.Empty, securityToken!, "kid-hint", parameters, configuration])!;
+    }
+
+    private static string InvokeValidateIssuer(object resolver, string issuer)
+    {
+        var method = ResolverType.GetMethod("ValidateIssuer", BindingFlags.Public | BindingFlags.Instance)
+            ?? throw new InvalidOperationException("ValidateIssuer not found.");
+        var parameters = new TokenValidationParameters();
+        var configuration = new OpenIdConnectConfiguration { Issuer = DiscoveredIssuer };
+
+        return (string)method.Invoke(
+            resolver,
+            [issuer, TokenWithIssuer(issuer), parameters, configuration])!;
     }
 
     private static Type ResolverType =>

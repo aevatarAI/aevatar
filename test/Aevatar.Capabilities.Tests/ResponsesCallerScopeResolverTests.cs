@@ -143,6 +143,70 @@ public sealed class ResponsesCallerScopeResolverTests
     }
 
     [Fact]
+    public async Task ResolveAsync_WithAssertionPastRawExpiryButInsideSkew_ShouldRejectSecondUse()
+    {
+        using var fixture = new IdentityAssertionFixture(clockSkewSeconds: 60);
+        var currentUserResolver = new StubUserResolver(returnUserId: "fallback-user");
+        var validator = fixture.CreateValidator();
+        var resolver = new NyxIdResponsesCallerScopeResolver(currentUserResolver, validator);
+        var issuedAt = DateTime.UtcNow.AddSeconds(-60);
+        var token = fixture.CreateToken(
+            subject: "identity-user",
+            jti: "inside-skew-jti",
+            issuedAtUtc: issuedAt,
+            notBeforeUtc: issuedAt.AddSeconds(-5),
+            expiresAtUtc: DateTime.UtcNow.AddSeconds(-5));
+
+        var first = await resolver.ResolveAsync(CreateContext("bearer-token", identityToken: token));
+        var replay = () => resolver.ResolveAsync(CreateContext("bearer-token", identityToken: token));
+
+        first.ScopeId.Should().Be("identity-user");
+        await replay.Should().ThrowAsync<ResponsesCallerScopeUnavailableException>();
+        currentUserResolver.CallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ValidateAsync_ShouldRetainReplayEntryThroughAcceptedClockSkewBoundary()
+    {
+        const int clockSkewSeconds = 75;
+        using var fixture = new IdentityAssertionFixture(clockSkewSeconds);
+        var replayGuard = new RecordingIdentityAssertionReplayGuard();
+        var issuedAt = DateTime.UtcNow;
+        var token = fixture.CreateToken(
+            subject: "identity-user",
+            jti: "retention-boundary-jti",
+            issuedAtUtc: issuedAt,
+            expiresAtUtc: issuedAt.AddSeconds(60));
+        var rawExpiresUtc = new DateTimeOffset(
+            DateTime.SpecifyKind(new JwtSecurityTokenHandler().ReadJwtToken(token).ValidTo, DateTimeKind.Utc));
+
+        var result = await fixture.CreateValidator(replayGuard).ValidateAsync(token);
+
+        result.Succeeded.Should().BeTrue();
+        replayGuard.AcceptedUntilUtc.Should().Be(rawExpiresUtc.AddSeconds(clockSkewSeconds));
+    }
+
+    [Fact]
+    public async Task ValidateAsync_WithNegativeClockSkew_ShouldRetainOnlyThroughRawExpiry()
+    {
+        using var fixture = new IdentityAssertionFixture(clockSkewSeconds: -30);
+        var replayGuard = new RecordingIdentityAssertionReplayGuard();
+        var issuedAt = DateTime.UtcNow;
+        var token = fixture.CreateToken(
+            subject: "identity-user",
+            jti: "negative-skew-jti",
+            issuedAtUtc: issuedAt,
+            expiresAtUtc: issuedAt.AddSeconds(60));
+        var rawExpiresUtc = new DateTimeOffset(
+            DateTime.SpecifyKind(new JwtSecurityTokenHandler().ReadJwtToken(token).ValidTo, DateTimeKind.Utc));
+
+        var result = await fixture.CreateValidator(replayGuard).ValidateAsync(token);
+
+        result.Succeeded.Should().BeTrue();
+        replayGuard.AcceptedUntilUtc.Should().Be(rawExpiresUtc);
+    }
+
+    [Fact]
     public async Task ResolveAsync_WithFreshJtiAfterPriorUse_ShouldStillResolve()
     {
         // Positive control for the replay guard: a distinct jti (a re-minted assertion) still
@@ -191,6 +255,40 @@ public sealed class ResponsesCallerScopeResolverTests
                 subject: "identity-user",
                 notBeforeUtc: DateTime.UtcNow.AddMinutes(-10),
                 expiresAtUtc: DateTime.UtcNow.AddMinutes(-5))));
+
+        await act.Should().ThrowAsync<ResponsesCallerScopeUnavailableException>();
+        currentUserResolver.CallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ResolveAsync_WithAssertionLifetimeLongerThanMaximum_ShouldFailClosed()
+    {
+        using var fixture = new IdentityAssertionFixture(clockSkewSeconds: 0);
+        var currentUserResolver = new StubUserResolver(returnUserId: "fallback-user");
+        var resolver = new NyxIdResponsesCallerScopeResolver(currentUserResolver, fixture.CreateValidator());
+        var issuedAt = DateTime.UtcNow;
+
+        var act = () => resolver.ResolveAsync(CreateContext(
+            "bearer-token",
+            identityToken: fixture.CreateToken(
+                subject: "identity-user",
+                issuedAtUtc: issuedAt,
+                expiresAtUtc: issuedAt.AddSeconds(61))));
+
+        await act.Should().ThrowAsync<ResponsesCallerScopeUnavailableException>();
+        currentUserResolver.CallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ResolveAsync_WithMissingIssuedAt_ShouldFailClosed()
+    {
+        using var fixture = new IdentityAssertionFixture();
+        var currentUserResolver = new StubUserResolver(returnUserId: "fallback-user");
+        var resolver = new NyxIdResponsesCallerScopeResolver(currentUserResolver, fixture.CreateValidator());
+
+        var act = () => resolver.ResolveAsync(CreateContext(
+            "bearer-token",
+            identityToken: fixture.CreateToken(subject: "identity-user", includeIssuedAt: false)));
 
         await act.Should().ThrowAsync<ResponsesCallerScopeUnavailableException>();
         currentUserResolver.CallCount.Should().Be(0);
@@ -250,12 +348,11 @@ public sealed class ResponsesCallerScopeResolverTests
     }
 
     [Fact]
-    public async Task ResolveAsync_WithIssuerDerivedFromNyxIdAuthority_ShouldResolveScope_WhenAudienceUnconfigured()
+    public async Task ResolveAsync_WithIssuerDerivedFromNyxIdAuthority_ShouldResolveScope_WithConfiguredAudience()
     {
         // Production shape (regression guard for the IOptions<NyxIdToolOptions> bug that
-        // surfaced as "NyxID identity assertion issuer is not configured."): the Responses
-        // section carries no explicit Issuer/ExpectedAudience, so issuer is derived from the
-        // NyxID authority on NyxIdToolOptions and audience validation is skipped.
+        // surfaced as "NyxID identity assertion issuer is not configured."): issuer is derived
+        // from the NyxID authority on NyxIdToolOptions while audience validation remains required.
         using var fixture = new IdentityAssertionFixture();
         var currentUserResolver = new StubUserResolver(returnUserId: "fallback-user");
         var resolver = new NyxIdResponsesCallerScopeResolver(
@@ -408,7 +505,8 @@ public sealed class ResponsesCallerScopeResolverTests
 
         public string Audience { get; } = "aevatar/responses";
 
-        public NyxIdIdentityAssertionValidator CreateValidator()
+        public NyxIdIdentityAssertionValidator CreateValidator(
+            IIdentityAssertionReplayGuard? replayGuard = null)
         {
             var options = Options.Create(new ResponsesNyxIdIdentityAssertionOptions
             {
@@ -420,16 +518,18 @@ public sealed class ResponsesCallerScopeResolverTests
             });
             return new NyxIdIdentityAssertionValidator(
                 new StaticHttpClientFactory(_jwksJson),
-                options);
+                options,
+                replayGuard: replayGuard);
         }
 
         public NyxIdIdentityAssertionValidator CreateValidatorWithAuthorityFallback()
         {
             // Issuer explicitly cleared (overriding the in-code DefaultIssuer) so issuer falls
-            // back to the NyxID authority carried by NyxIdToolOptions; audience is skipped.
+            // back to the NyxID authority carried by NyxIdToolOptions.
             var options = Options.Create(new ResponsesNyxIdIdentityAssertionOptions
             {
                 Issuer = null,
+                ExpectedAudience = Audience,
                 JwksUri = "https://nyxid.example/jwks",
                 ClockSkewSeconds = _clockSkewSeconds,
             });
@@ -441,10 +541,10 @@ public sealed class ResponsesCallerScopeResolverTests
 
         public NyxIdIdentityAssertionValidator CreateValidatorWithDefaultIssuer()
         {
-            // Issuer omitted from config → falls back to the in-code DefaultIssuer; no
-            // NyxIdToolOptions and no ExpectedAudience (audience validation skipped).
+            // Issuer omitted from config -> falls back to the in-code DefaultIssuer.
             var options = Options.Create(new ResponsesNyxIdIdentityAssertionOptions
             {
+                ExpectedAudience = Audience,
                 JwksUri = "https://nyxid.example/jwks",
                 ClockSkewSeconds = _clockSkewSeconds,
             });
@@ -459,8 +559,10 @@ public sealed class ResponsesCallerScopeResolverTests
             string? audience = null,
             string? jti = "jti-1",
             string? serviceId = null,
+            DateTime? issuedAtUtc = null,
             DateTime? notBeforeUtc = null,
-            DateTime? expiresAtUtc = null)
+            DateTime? expiresAtUtc = null,
+            bool includeIssuedAt = true)
         {
             var claims = new List<Claim>();
             if (!string.IsNullOrWhiteSpace(subject))
@@ -470,20 +572,47 @@ public sealed class ResponsesCallerScopeResolverTests
             if (!string.IsNullOrWhiteSpace(serviceId))
                 claims.Add(new Claim("nyx_service_id", serviceId));
 
+            var issuedAt = issuedAtUtc ?? DateTime.UtcNow;
+            if (includeIssuedAt)
+            {
+                claims.Add(new Claim(
+                    JwtRegisteredClaimNames.Iat,
+                    new DateTimeOffset(issuedAt).ToUnixTimeSeconds().ToString(),
+                    ClaimValueTypes.Integer64));
+            }
+
             var descriptor = new SecurityTokenDescriptor
             {
                 Issuer = issuer ?? Issuer,
                 Audience = audience ?? Audience,
                 Subject = new ClaimsIdentity(claims),
-                NotBefore = notBeforeUtc ?? DateTime.UtcNow.AddMinutes(-1),
-                Expires = expiresAtUtc ?? DateTime.UtcNow.AddMinutes(5),
+                NotBefore = notBeforeUtc ?? issuedAt.AddSeconds(-5),
+                Expires = expiresAtUtc ?? issuedAt.AddSeconds(60),
                 SigningCredentials = new SigningCredentials(_signingKey, SecurityAlgorithms.RsaSha256),
             };
 
-            return new JwtSecurityTokenHandler().CreateEncodedJwt(descriptor);
+            return new JwtSecurityTokenHandler
+            {
+                SetDefaultTimesOnTokenCreation = false,
+            }.CreateEncodedJwt(descriptor);
         }
 
         public void Dispose() => _rsa.Dispose();
+    }
+
+    private sealed class RecordingIdentityAssertionReplayGuard : IIdentityAssertionReplayGuard
+    {
+        public DateTimeOffset? AcceptedUntilUtc { get; private set; }
+
+        public ValueTask<bool> TryConsumeAsync(
+            string jti,
+            DateTimeOffset acceptedUntilUtc,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            AcceptedUntilUtc = acceptedUntilUtc;
+            return ValueTask.FromResult(true);
+        }
     }
 
     private sealed class StaticHttpClientFactory : IHttpClientFactory

@@ -15,7 +15,8 @@ public sealed record NyxLarkProvisioningRequest(
     string ScopeId,
     string Label,
     string NyxProviderSlug,
-    string DefaultSkillName = "");
+    string DefaultSkillName = "",
+    string EncryptKey = "");
 
 public sealed record NyxLarkProvisioningResult(
     bool Succeeded,
@@ -33,7 +34,8 @@ public sealed record NyxLarkProvisioningResult(
 public sealed record NyxChannelLarkCredentials(
     string AppId,
     string AppSecret,
-    string VerificationToken);
+    string VerificationToken,
+    string EncryptKey = "");
 
 public sealed record NyxChannelBotProvisioningRequest(
     string Platform,
@@ -119,6 +121,8 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
             return Failure("missing_app_id");
         if (string.IsNullOrWhiteSpace(request.AppSecret))
             return Failure("missing_app_secret");
+        if (string.IsNullOrWhiteSpace(request.VerificationToken))
+            return Failure("missing_verification_token");
         if (string.IsNullOrWhiteSpace(request.WebhookBaseUrl))
             return Failure("missing_webhook_base_url");
         if (!NyxRelayCallbackUrl.IsSecureBaseUrl(request.WebhookBaseUrl))
@@ -173,6 +177,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
                     request.AppId,
                     request.AppSecret,
                     request.VerificationToken,
+                    request.EncryptKey,
                     label,
                     ct);
             }
@@ -187,6 +192,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
                     request.AppId,
                     request.AppSecret,
                     request.VerificationToken,
+                    request.EncryptKey,
                     label,
                     ct);
             }
@@ -361,7 +367,8 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
                 ScopeId: request.ScopeId,
                 Label: request.Label,
                 NyxProviderSlug: request.NyxProviderSlug,
-                DefaultSkillName: request.DefaultSkillName),
+                DefaultSkillName: request.DefaultSkillName,
+                EncryptKey: request.Lark?.EncryptKey ?? string.Empty),
             ct);
 
         return ToGenericResult(result);
@@ -460,6 +467,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
         string appId,
         string appSecret,
         string verificationToken,
+        string encryptKey,
         string label,
         CancellationToken ct)
     {
@@ -474,6 +482,8 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
 
         if (!string.IsNullOrWhiteSpace(verificationToken))
             payload["verification_token"] = verificationToken.Trim();
+        if (!string.IsNullOrWhiteSpace(encryptKey))
+            payload["encrypt_key"] = encryptKey.Trim();
 
         var response = await _nyxClient.RegisterChannelBotAsync(
             accessToken,

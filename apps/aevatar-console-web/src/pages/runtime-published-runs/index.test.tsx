@@ -265,6 +265,45 @@ describe("TeamMemberPublishedRunsPage", () => {
     expect(await screen.findByText("No published runs yet.")).toBeTruthy();
   });
 
+  it("renders a schedule-filtered member run history", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/team-1/members/m-alpha/runs?scheduleId=sch-alpha",
+    );
+    mockedScopeRuntimeApi.listMemberRuns.mockResolvedValueOnce({
+      displayName: "Alpha Workflow",
+      memberId: "m-alpha",
+      publishedServiceId: "svc-alpha",
+      publishedServiceKey: "scope-1:default:default:svc-alpha",
+      runs: [],
+      scopeId: "scope-1",
+    });
+
+    renderWithQueryClient(React.createElement(TeamMemberPublishedRunsPage));
+
+    expect(await screen.findByTestId("member-published-runs-replay")).toBeTruthy();
+    expect(screen.getByTestId("member-published-runs-schedule-filter")).toHaveTextContent(
+      "Schedule filter",
+    );
+    expect(screen.getByTestId("member-published-runs-schedule-filter")).toHaveTextContent(
+      "sch-alpha",
+    );
+    expect(
+      await screen.findByText(
+        "No runs for this schedule yet. Accepted manual runs may take a moment to appear.",
+      ),
+    ).toBeTruthy();
+    await waitFor(() => {
+      expect(mockedScopeRuntimeApi.listMemberRuns).toHaveBeenCalledWith(
+        "scope-1",
+        "m-alpha",
+        { scheduleId: "sch-alpha", take: 200 },
+      );
+    });
+    expect(mockedScopeRuntimeApi.getMemberRunAudit).not.toHaveBeenCalled();
+  });
+
   it("redirects to the console home when the routed member does not exist", async () => {
     const missingMemberError = Object.assign(
       new Error("member 'm-missing' not found in scope 'scope-1'."),
@@ -428,7 +467,7 @@ describe("TeamMemberPublishedRunsPage", () => {
     window.history.replaceState(
       {},
       "",
-      "/scopes/scope-1/teams/team-1/members/m-alpha/runs?runId=run-1&actorId=actor%3A%2F%2Fscope-1%2Frun-1",
+      "/scopes/scope-1/teams/team-1/members/m-alpha/runs?scheduleId=sch-alpha&runId=run-1&actorId=actor%3A%2F%2Fscope-1%2Frun-1",
     );
     mockedScopeRuntimeApi.listMemberRuns.mockResolvedValueOnce({
       displayName: "Alpha Workflow",
@@ -451,7 +490,7 @@ describe("TeamMemberPublishedRunsPage", () => {
     expect(mockedScopeRuntimeApi.listMemberRuns).toHaveBeenCalledWith(
       "scope-1",
       "m-alpha",
-      { take: 200 },
+      { scheduleId: "sch-alpha", take: 200 },
     );
     expect(mockedScopeRuntimeApi.getMemberRunAudit).toHaveBeenCalledWith(
       "scope-1",

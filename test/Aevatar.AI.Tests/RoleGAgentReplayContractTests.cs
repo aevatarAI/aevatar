@@ -8,6 +8,7 @@ using Aevatar.AI.Core.Routing;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using FluentAssertions;
@@ -746,7 +747,9 @@ public class RoleGAgentReplayContractTests
         var provider = new CountingLlmProviderFactory("cached answer");
         var services = BuildServices(store);
 
+        var terminalPublisher = new RecordingEventPublisher();
         var agent1 = CreateAgent(services, "role-session-replay", provider);
+        agent1.EventPublisher = terminalPublisher;
         await agent1.ActivateAsync();
         await agent1.HandleInitializeRoleAgent(new InitializeRoleAgentEvent
         {
@@ -776,9 +779,8 @@ public class RoleGAgentReplayContractTests
             .Should()
             .Be("role-assistant");
 
-        var replayPublisher = new RecordingEventPublisher();
         var agent2 = CreateAgent(services, "role-session-replay", provider);
-        agent2.EventPublisher = replayPublisher;
+        agent2.EventPublisher = terminalPublisher;
         await agent2.ActivateAsync();
 
         await agent2.HandleChatRequest(new ChatRequestEvent
@@ -788,18 +790,316 @@ public class RoleGAgentReplayContractTests
         });
 
         provider.StreamCallCount.Should().Be(1);
-        replayPublisher.Published
+        terminalPublisher.Published
             .OfType<TextMessageStartEvent>()
             .Should()
-            .ContainSingle(x => x.SessionId == "session-1");
-        replayPublisher.Published
+            .HaveCount(2)
+            .And.OnlyContain(x => x.SessionId == "session-1");
+        terminalPublisher.Published
             .OfType<TextMessageContentEvent>()
             .Should()
-            .ContainSingle(x => x.Delta == "cached answer" && x.SessionId == "session-1");
-        replayPublisher.Published
+            .HaveCount(2)
+            .And.OnlyContain(x => x.Delta == "cached answer" && x.SessionId == "session-1");
+        terminalPublisher.Published
             .OfType<TextMessageEndEvent>()
             .Should()
-            .ContainSingle(x => x.Content == "cached answer");
+            .HaveCount(2)
+            .And.OnlyContain(x => x.Content == "cached answer" && x.SessionId == "session-1");
+
+        var replayedEvents = await store.GetEventsAsync("role-session-replay");
+        var completions = replayedEvents
+            .Where(x => x.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
+            .Select(x => x.EventData.Unpack<RoleChatSessionCompletedEvent>())
+            .ToArray();
+        completions.Should()
+            .ContainSingle(x =>
+                x.SessionId == "session-1" &&
+                x.Prompt == "hello" &&
+                x.Content == "cached answer");
+        completions[0].TerminalTime.Should().NotBeNull();
+        var replay = replayedEvents
+            .Where(x => x.EventData.Is(RoleChatSessionProgressedEvent.Descriptor))
+            .Select(x => x.EventData.Unpack<RoleChatSessionProgressedEvent>())
+            .Should()
+            .ContainSingle(progress =>
+                progress.SessionId == "session-1" &&
+                progress.PayloadCase == RoleChatSessionProgressedEvent.PayloadOneofCase.Replay)
+            .Which;
+        replay.Replay.Snapshot.TerminalTime.Should().Be(completions[0].TerminalTime);
+        replay.Replay.Snapshot.Content.Should().Be("cached answer");
+        agent2.State.Sessions["session-1"].TerminalTime.Should().Be(completions[0].TerminalTime);
+    }
+
+    [Fact]
+    public async Task Completion_ShouldEmbedTerminalTailInOneCommittedFact()
+    {
+        var store = new RecordingTerminalBatchEventStore();
+        var services = BuildServices(store);
+        var provider = new CountingLlmProviderFactory("atomic answer");
+        var agent = CreateAgent(services, "role-atomic-terminal", provider);
+        await agent.ActivateAsync();
+
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            Prompt = "hello",
+            SessionId = "turn-atomic-terminal",
+        });
+
+        var terminalBatch = store.Appends.Should().ContainSingle(batch =>
+            batch.Any(evt => evt.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))).Which;
+        var completion = terminalBatch.Should().ContainSingle().Which.EventData
+            .Unpack<RoleChatSessionCompletedEvent>();
+        var progress = completion.TerminalProgress.ToArray();
+        progress.Select(evt => evt.PayloadCase).Should().Equal(
+            RoleChatSessionProgressedEvent.PayloadOneofCase.Usage,
+            RoleChatSessionProgressedEvent.PayloadOneofCase.TextEnded,
+            RoleChatSessionProgressedEvent.PayloadOneofCase.Terminal);
+        progress.Select(evt => evt.Sequence).Should().Equal(3, 4, 5);
+        agent.State.Sessions[completion.SessionId].LastProgressSequence.Should().Be(5);
+    }
+
+    [Fact]
+    public async Task CompletedConversationHistory_ShouldBeRestoredAfterActorReactivation()
+    {
+        var store = new InMemoryEventStoreForTests();
+        var provider = new CountingLlmProviderFactory("answer");
+        var services = BuildServices(store);
+
+        var agent1 = CreateAgent(services, "role-history-reactivation", provider);
+        await agent1.ActivateAsync();
+        await agent1.HandleInitializeRoleAgent(new InitializeRoleAgentEvent
+        {
+            RoleName = "assistant",
+            ProviderName = provider.Name,
+            SystemPrompt = "system",
+        });
+        await agent1.HandleChatRequest(new ChatRequestEvent
+        {
+            Prompt = "first prompt",
+            SessionId = "turn-first",
+        });
+        await agent1.DeactivateAsync();
+
+        var agent2 = CreateAgent(services, "role-history-reactivation", provider);
+        await agent2.ActivateAsync();
+        await agent2.HandleChatRequest(new ChatRequestEvent
+        {
+            Prompt = "second prompt",
+            SessionId = "turn-second",
+        });
+
+        provider.StreamRequests.Should().HaveCount(2);
+        provider.StreamRequests[1].Messages
+            .Where(static message => message.Role != "system")
+            .Select(static message => (message.Role, message.Content))
+            .Should()
+            .ContainInOrder(
+                ("user", "first prompt"),
+                ("assistant", "answer"),
+                ("user", "second prompt"));
+    }
+
+    [Fact]
+    public async Task CompletedSession_WithDifferentPrompt_ShouldCommitTypedConflictWithoutOverwritingReplay()
+    {
+        var store = new InMemoryEventStoreForTests();
+        var provider = new CountingLlmProviderFactory("first answer");
+        var services = BuildServices(store);
+        var agent = CreateAgent(services, "role-session-conflict", provider);
+        await agent.ActivateAsync();
+        await agent.HandleInitializeRoleAgent(new InitializeRoleAgentEvent
+        {
+            RoleName = "assistant",
+            ProviderName = provider.Name,
+            SystemPrompt = "system",
+        });
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            Prompt = "first prompt",
+            SessionId = "turn-client-request-1",
+            CommandAttemptId = "cmd-attempt-original",
+        });
+        var completedProgressSequence = agent.State.Sessions["turn-client-request-1"].LastProgressSequence;
+
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            Prompt = "different prompt",
+            SessionId = "turn-client-request-1",
+            CommandAttemptId = "cmd-attempt-rejected",
+        });
+
+        provider.StreamCallCount.Should().Be(1);
+        agent.State.Sessions["turn-client-request-1"].Prompt.Should().Be("first prompt");
+        agent.State.Sessions["turn-client-request-1"].FinalContent.Should().Be("first answer");
+        var persisted = await store.GetEventsAsync("role-session-conflict");
+        var conflict = persisted
+            .Single(x => x.EventType.Contains(nameof(RoleChatCommandAttemptRejectedEvent), StringComparison.Ordinal))
+            .EventData
+            .Unpack<RoleChatCommandAttemptRejectedEvent>();
+        conflict.RequestedSessionId.Should().Be("turn-client-request-1");
+        conflict.CommandAttemptId.Should().Be("cmd-attempt-rejected");
+        conflict.Reason.Should().Be(RoleChatCommandAttemptRejectionReason.PromptMismatch);
+        conflict.SafeMessage.Should().NotContain("first prompt").And.NotContain("different prompt");
+        persisted
+            .Where(x => x.EventData.Is(RoleChatSessionProgressedEvent.Descriptor))
+            .Select(x => x.EventData.Unpack<RoleChatSessionProgressedEvent>())
+            .Should()
+            .NotContain(progress =>
+                progress.PayloadCase == RoleChatSessionProgressedEvent.PayloadOneofCase.Terminal &&
+                progress.Terminal.FailureCode == "IDEMPOTENCY_CONFLICT");
+        agent.State.Sessions["turn-client-request-1"].LastProgressSequence
+            .Should().Be(completedProgressSequence);
+    }
+
+    [Fact]
+    public async Task HandleChatRequest_WhenHandlerFailsOutsideProviderStream_ShouldCommitSafeTypedFailure()
+    {
+        var store = new InMemoryEventStoreForTests();
+        var provider = new CountingLlmProviderFactory("unused answer");
+        var services = BuildServices(store);
+        var agent = CreateAgent(services, "role-handler-failure", provider);
+        agent.EventPublisher = new ThrowOnceEventPublisher(
+            static evt => evt is TextMessageStartEvent,
+            new InvalidOperationException("bearer-secret should never leave the actor"));
+        await agent.ActivateAsync();
+        await agent.HandleInitializeRoleAgent(new InitializeRoleAgentEvent
+        {
+            RoleName = "assistant",
+            ProviderName = provider.Name,
+            SystemPrompt = "system",
+        });
+
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            Prompt = "hello",
+            SessionId = "turn-handler-failure",
+        });
+
+        provider.StreamCallCount.Should().Be(0);
+        var persisted = await store.GetEventsAsync("role-handler-failure");
+        var completed = persisted
+            .Where(evt => evt.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
+            .Select(evt => evt.EventData.Unpack<RoleChatSessionCompletedEvent>())
+            .Should()
+            .ContainSingle()
+            .Which;
+        completed.SessionId.Should().Be("turn-handler-failure");
+        completed.Outcome.Should().Be(RoleChatSessionOutcome.Failed);
+        completed.FailureCode.Should().Be("CHAT_HANDLER_FAILURE");
+        completed.SafeMessage.Should().Be("The chat request failed. Please try again.");
+        completed.ToString().Should().NotContain("bearer-secret");
+    }
+
+    [Fact]
+    public async Task AuthorizationRequiredReceipt_ShouldBlockOnlyCurrentTurn_AndAdmitNextTurn()
+    {
+        var store = new InMemoryEventStoreForTests();
+        var provider = new AuthorizationThenSuccessLlmProviderFactory();
+        var services = BuildServices(store, collection =>
+            collection.AddSingleton<IAgentToolSource>(
+                new StaticToolSource([new AuthorizationRequiredTool()])));
+        var agent = CreateAgent(services, "role-authorization-blocker", provider);
+        await agent.ActivateAsync();
+        await agent.HandleInitializeRoleAgent(new InitializeRoleAgentEvent
+        {
+            RoleName = "assistant",
+            ProviderName = provider.Name,
+            SystemPrompt = "system",
+        });
+
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            Prompt = "read private resource",
+            SessionId = "turn-blocked",
+        });
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            Prompt = "ordinary follow-up",
+            SessionId = "turn-next",
+        });
+
+        provider.StreamCallCount.Should().Be(2);
+        agent.State.Sessions["turn-blocked"].Outcome.Should().Be(RoleChatSessionOutcome.Blocked);
+        agent.State.Sessions["turn-next"].Outcome.Should().Be(RoleChatSessionOutcome.Completed);
+        var completions = (await store.GetEventsAsync("role-authorization-blocker"))
+            .Where(evt => evt.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
+            .Select(evt => evt.EventData.Unpack<RoleChatSessionCompletedEvent>())
+            .ToArray();
+        var blocked = completions.Should().ContainSingle(evt => evt.SessionId == "turn-blocked").Which;
+        blocked.Outcome.Should().Be(RoleChatSessionOutcome.Blocked);
+        blocked.AuthorizationRequired.ServiceSlug.Should().Be("api-github");
+        blocked.AuthorizationRequired.ReasonCode.Should().Be("NYXID_UNAUTHORIZED");
+        blocked.AuthorizationRequired.SafeMessage.Should().Be("Connect or reauthorize api-github to continue.");
+        blocked.ToString().Should().NotContain("bearer-secret").And.NotContain("credential");
+        completions.Should().ContainSingle(evt =>
+            evt.SessionId == "turn-next" && evt.Outcome == RoleChatSessionOutcome.Completed);
+    }
+
+    [Fact]
+    public async Task CompletionNotification_ShouldReplayCommittedTerminalFactAfterRestart()
+    {
+        var store = new InMemoryEventStoreForTests();
+        var provider = new CountingLlmProviderFactory("completed output");
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var services = BuildServices(store, collection =>
+            collection.AddSingleton<IActorRuntimeCallbackScheduler>(scheduler));
+        var failingPublisher = new RecordingEventPublisher { FailSends = true };
+        var first = CreateAgent(services, "role-terminal-replay", provider);
+        first.EventPublisher = failingPublisher;
+        await first.ActivateAsync();
+        await first.HandleInitializeRoleAgent(new InitializeRoleAgentEvent
+        {
+            RoleId = "role-1",
+            RoleName = "assistant",
+            ProviderName = provider.Name,
+            SystemPrompt = "system",
+        });
+
+        var request = new ChatRequestEvent
+        {
+            Prompt = "complete work",
+            SessionId = "session-1",
+            RunContext = new RoleChatRunContext
+            {
+                RunId = "run-1",
+                CommandId = "cmd-1",
+                CorrelationId = "corr-1",
+                CompletionNotificationActorId = "service-run:tenant:svc:run-1",
+            },
+        };
+        await first.HandleChatRequest(request);
+        first.State.Sessions["session-1"].CompletionNotificationDeliveryStatus.Should()
+            .Be(RoleChatCompletionNotificationDeliveryStatus.RetryScheduled);
+        scheduler.TimeoutRequests.Should().ContainSingle();
+        var committed = (await store.GetEventsAsync("role-terminal-replay"))
+            .Single(x => x.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
+            .EventData
+            .Unpack<RoleChatSessionCompletedEvent>();
+        committed.ActorId.Should().Be("role-terminal-replay");
+        committed.RunContext.Should().BeEquivalentTo(request.RunContext);
+        committed.Outcome.Should().Be(RoleChatSessionOutcome.Completed);
+        committed.Content.Should().Be("completed output");
+        committed.TerminalTime.Should().NotBeNull();
+
+        var recoveredPublisher = new RecordingEventPublisher();
+        var recovered = CreateAgent(services, "role-terminal-replay", provider);
+        recovered.EventPublisher = recoveredPublisher;
+
+        await recovered.ActivateAsync();
+
+        provider.StreamCallCount.Should().Be(1);
+        var sent = recoveredPublisher.Sends.Should().ContainSingle().Subject;
+        sent.TargetActorId.Should().Be("service-run:tenant:svc:run-1");
+        sent.Options!.Delivery!.DeduplicationOperationId.Should()
+            .Be("role-chat-terminal:run-1:cmd-1");
+        var notification = sent.Event.Should().BeOfType<RoleChatSessionCompletedEvent>().Which;
+        var expectedNotification = committed.Clone();
+        expectedNotification.TerminalProgress.Clear();
+        notification.Should().BeEquivalentTo(expectedNotification);
+        notification.TerminalProgress.Should().BeEmpty(
+            "actor-to-actor completion notification carries final authority, not AGUI presentation tail");
+        recovered.State.Sessions["session-1"].CompletionNotificationDeliveryStatus.Should()
+            .Be(RoleChatCompletionNotificationDeliveryStatus.Dispatched);
     }
 
     [Fact]
@@ -1089,6 +1389,17 @@ public class RoleGAgentReplayContractTests
                                 ArgumentsJson = "{\"x\":1}",
                             },
                         },
+                        ToolReceipts =
+                        {
+                            new AgentToolReceipt
+                            {
+                                CallId = "call-approval",
+                                ToolName = "dangerous_tool",
+                                Status = AgentToolReceiptStatus.ApprovalRequired,
+                                ApprovalRequestId = "approval-1",
+                                ResultJson = "{\"status\":\"approval_required\"}",
+                            },
+                        },
                         OutputParts =
                         {
                             new ChatContentPart
@@ -1128,6 +1439,13 @@ public class RoleGAgentReplayContractTests
             .OfType<ToolCallEvent>()
             .Should()
             .ContainSingle(x => x.CallId == "call-1" && x.ToolName == "lookup");
+        replayPublisher.Published
+            .OfType<ToolResultEvent>()
+            .Should()
+            .ContainSingle(x =>
+                x.CallId == "call-approval" &&
+                !x.Success &&
+                x.Receipt.Status == AgentToolReceiptStatus.ApprovalRequired);
         replayPublisher.Published
             .OfType<MediaContentEvent>()
             .Should()
@@ -1384,9 +1702,20 @@ public class RoleGAgentReplayContractTests
                 x.Content == "final-only answer");
 
         var persisted = await store.GetEventsAsync("role-final-only-replay");
-        persisted.Should().ContainSingle(x =>
-            x.EventData.Is(RoleChatSessionCompletedEvent.Descriptor) &&
-            x.EventData.Unpack<RoleChatSessionCompletedEvent>().SessionId == "session-final-only");
+        persisted
+            .Where(x =>
+                x.EventData.Is(RoleChatSessionCompletedEvent.Descriptor) &&
+                x.EventData.Unpack<RoleChatSessionCompletedEvent>().SessionId == "session-final-only")
+            .Should()
+            .ContainSingle();
+        persisted
+            .Where(x => x.EventData.Is(RoleChatSessionProgressedEvent.Descriptor))
+            .Select(x => x.EventData.Unpack<RoleChatSessionProgressedEvent>())
+            .Should()
+            .ContainSingle(progress =>
+                progress.SessionId == "session-final-only" &&
+                progress.PayloadCase == RoleChatSessionProgressedEvent.PayloadOneofCase.Replay &&
+                progress.Replay.Snapshot.Content == "final-only answer");
     }
 
     private static IServiceProvider BuildServices(
@@ -1598,9 +1927,14 @@ public class RoleGAgentReplayContractTests
             Array.Empty<ToolCall>(),
             Array.Empty<ContentPart>(),
             Array.Empty<AgentToolReceipt>(),
+            Array.Empty<ToolResultEvent>(),
             null, // Usage (added by #1700)
             null, // Model (added by #1700)
-            contentEmitted)!;
+            contentEmitted,
+            RoleChatSessionOutcome.Completed,
+            string.Empty,
+            string.Empty,
+            null)!;
     }
 
     private static bool GetSessionReplayRecordContentEmitted(Task task)
@@ -1610,9 +1944,47 @@ public class RoleGAgentReplayContractTests
         return (bool)property.GetValue(result)!;
     }
 
+    private sealed class RecordingTerminalBatchEventStore : IEventStore
+    {
+        private readonly InMemoryEventStoreForTests _inner = new();
+
+        public List<IReadOnlyList<StateEvent>> Appends { get; } = [];
+
+        public async Task<EventStoreCommitResult> AppendAsync(
+            string agentId,
+            IEnumerable<StateEvent> events,
+            long expectedVersion,
+            CancellationToken ct = default)
+        {
+            var batch = events.Select(static evt => evt.Clone()).ToArray();
+            var result = await _inner.AppendAsync(agentId, batch, expectedVersion, ct);
+            Appends.Add(batch);
+            return result;
+        }
+
+        public Task<IReadOnlyList<StateEvent>> GetEventsAsync(
+            string agentId,
+            long? fromVersion = null,
+            CancellationToken ct = default) =>
+            _inner.GetEventsAsync(agentId, fromVersion, ct);
+
+        public Task<long> GetVersionAsync(string agentId, CancellationToken ct = default) =>
+            _inner.GetVersionAsync(agentId, ct);
+
+        public Task<long> DeleteEventsUpToAsync(
+            string agentId,
+            long toVersion,
+            CancellationToken ct = default) =>
+            _inner.DeleteEventsUpToAsync(agentId, toVersion, ct);
+    }
+
     private sealed class RecordingEventPublisher(List<string>? operationLog = null) : IEventPublisher
     {
+        public bool FailSends { get; init; }
+
         public List<IMessage> Published { get; } = [];
+
+        public List<(string TargetActorId, IMessage Event, EventEnvelopePublishOptions? Options)> Sends { get; } = [];
 
         public Task PublishAsync<TEvent>(
             TEvent evt,
@@ -1640,7 +2012,10 @@ public class RoleGAgentReplayContractTests
             EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage
         {
-            _ = targetActorId;
+            Sends.Add((targetActorId, evt, options));
+            if (FailSends)
+                throw new InvalidOperationException("simulated completion notification failure");
+
             return PublishAsync(evt, TopologyAudience.Self, ct, sourceEnvelope, options);
         }
 
@@ -1654,6 +2029,77 @@ public class RoleGAgentReplayContractTests
             _ = audience;
             return PublishAsync(evt, TopologyAudience.Self, ct, sourceEnvelope, options);
         }
+    }
+
+    private sealed class RecordingRuntimeCallbackScheduler : IActorRuntimeCallbackScheduler
+    {
+        public List<RuntimeCallbackTimeoutRequest> TimeoutRequests { get; } = [];
+
+        public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
+            RuntimeCallbackTimeoutRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            TimeoutRequests.Add(request);
+            return Task.FromResult(new RuntimeCallbackLease(
+                request.ActorId,
+                request.CallbackId,
+                TimeoutRequests.Count,
+                RuntimeCallbackBackend.InMemory));
+        }
+
+        public Task<RuntimeCallbackLease> ScheduleTimerAsync(
+            RuntimeCallbackTimerRequest request,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task CancelAsync(RuntimeCallbackLease lease, CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task PurgeActorAsync(string actorId, CancellationToken ct = default) =>
+            Task.CompletedTask;
+    }
+
+    private sealed class ThrowOnceEventPublisher(
+        Func<IMessage, bool> shouldThrow,
+        Exception exception) : IEventPublisher
+    {
+        private bool _thrown;
+
+        public Task PublishAsync<TEvent>(
+            TEvent evt,
+            TopologyAudience direction = TopologyAudience.Children,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+            where TEvent : IMessage
+        {
+            ct.ThrowIfCancellationRequested();
+            if (!_thrown && shouldThrow(evt))
+            {
+                _thrown = true;
+                throw exception;
+            }
+
+            return Task.CompletedTask;
+        }
+
+        public Task SendToAsync<TEvent>(
+            string targetActorId,
+            TEvent evt,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+            where TEvent : IMessage =>
+            PublishAsync(evt, TopologyAudience.Self, ct, sourceEnvelope, options);
+
+        public Task PublishCommittedStateEventAsync(
+            CommittedStateEventPublished evt,
+            ObserverAudience audience = ObserverAudience.CommittedFacts,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null) =>
+            PublishAsync(evt, TopologyAudience.Self, ct, sourceEnvelope, options);
     }
 
     private class RecordingCommittedPublisherProxy : DispatchProxy
@@ -1699,6 +2145,71 @@ public class RoleGAgentReplayContractTests
                 Usage = new TokenUsage(1, 1, 2),
             };
         }
+    }
+
+    private sealed class AuthorizationThenSuccessLlmProviderFactory : ILLMProviderFactory, ILLMProvider
+    {
+        public int StreamCallCount { get; private set; }
+        public string Name => "authorization-then-success";
+        public ILLMProvider GetProvider(string name) => this;
+        public ILLMProvider GetDefault() => this;
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            StreamCallCount++;
+            if (StreamCallCount == 1)
+            {
+                yield return new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "call-auth",
+                        Name = "authorization_required_test_tool",
+                        ArgumentsJson = "{}",
+                    },
+                };
+            }
+            else
+            {
+                yield return new LLMStreamChunk { DeltaContent = "follow-up answer" };
+            }
+
+            await Task.CompletedTask;
+            yield return new LLMStreamChunk { IsLast = true };
+        }
+    }
+
+    private sealed class AuthorizationRequiredTool : IAgentTool
+    {
+        public string Name => "authorization_required_test_tool";
+        public string Description => "Returns a typed authorization blocker.";
+        public string ParametersSchema => "{}";
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult("""{"error":true,"status":401}""");
+
+        public AgentToolReceipt? CreateResultReceipt(
+            string callId,
+            string toolName,
+            string argumentsJson,
+            string resultJson) =>
+            new()
+            {
+                CallId = callId,
+                ToolName = toolName,
+                Status = AgentToolReceiptStatus.AuthorizationRequired,
+                AuthorizationRequired = new NyxIdAuthorizationRequiredEvent
+                {
+                    ServiceSlug = "api-github",
+                    ResourceUri = "/repos/private",
+                    ReasonCode = "NYXID_UNAUTHORIZED",
+                    SafeMessage = "Connect or reauthorize api-github to continue.",
+                },
+            };
     }
 
     private sealed class ProfiledRoleGAgent(

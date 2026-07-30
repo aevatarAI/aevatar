@@ -42,7 +42,12 @@ public class StateTokenCodecTests
         var provider = new FakeOAuthClientProvider(Snapshot());
         var codec = new StateTokenCodec(provider, options: null, clock);
 
-        var token = await codec.EncodeAsync("corr-1", SampleSubject(), "verifier-abc");
+        var expectedBindingHash = new string('a', 64);
+        var token = await codec.EncodeAsync(
+            "corr-1",
+            SampleSubject(),
+            "verifier-abc",
+            expectedBindingHash);
         var result = await codec.TryDecodeAsync(token);
 
         result.Succeeded.Should().BeTrue();
@@ -51,6 +56,22 @@ public class StateTokenCodecTests
         result.Payload!.CorrelationId.Should().Be("corr-1");
         result.Payload.PkceVerifier.Should().Be("verifier-abc");
         result.Payload.ExternalSubject.ExternalUserId.Should().Be("ou_user_y");
+        result.Payload.ExpectedBindingHash.Should().Be(expectedBindingHash);
+    }
+
+    [Fact]
+    public async Task Encode_RejectsRawOrMalformedBindingReference()
+    {
+        var provider = new FakeOAuthClientProvider(Snapshot());
+        var codec = new StateTokenCodec(provider);
+
+        var act = () => codec.EncodeAsync(
+            "corr-1",
+            SampleSubject(),
+            "verifier-abc",
+            "bnd_raw-secret");
+
+        await act.Should().ThrowAsync<ArgumentException>();
     }
 
     [Fact]

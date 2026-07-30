@@ -1,5 +1,7 @@
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Abstractions.CodexExecution;
 using Aevatar.AI.ToolProviders.NyxId.Tools;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -15,16 +17,19 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
     private readonly NyxIdApiClient _client;
     private readonly ILogger _logger;
     private readonly INyxIdProxyFileArtifactIngress? _fileArtifactIngress;
+    private readonly IReadOnlyList<ICodexExecutionPort> _codexExecutionPorts;
 
     public NyxIdAgentToolSource(
         NyxIdToolOptions options,
         NyxIdApiClient client,
         INyxIdProxyFileArtifactIngress? fileArtifactIngress = null,
+        IEnumerable<ICodexExecutionPort>? codexExecutionPorts = null,
         ILogger<NyxIdAgentToolSource>? logger = null)
     {
         _options = options;
         _client = client;
         _fileArtifactIngress = fileArtifactIngress;
+        _codexExecutionPorts = codexExecutionPorts?.ToArray() ?? [];
         _logger = logger ?? NullLogger<NyxIdAgentToolSource>.Instance;
     }
 
@@ -48,8 +53,13 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
             new NyxIdSessionsTool(_client),
             new NyxIdCatalogTool(_client),
             new NyxIdServicesTool(_client),
-            new NyxIdProxyTool(_client, _logger, _fileArtifactIngress, _options.EffectiveProxyFileArtifactMaxBytes),
-            new NyxIdCodeExecuteTool(_client, _logger),
+            new NyxIdProxyTool(
+                _client,
+                _logger,
+                _fileArtifactIngress,
+                _options.EffectiveProxyFileArtifactMaxBytes,
+                _options.ManagedWorkflowAdmissionMode),
+            new NyxIdCodeExecuteTool(_client, _logger, _options.SandboxServiceSlug),
             new NyxIdApiKeysTool(_client),
             new NyxIdNodesTool(_client),
             new NyxIdApprovalsTool(_client),
@@ -62,19 +72,52 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
             new NyxIdOrgTool(_client),
             new NyxIdChannelEventsTool(_client),
             new NyxIdAdminTool(_client),
+            new NyxIdRequireServiceTool(_client),
         };
 
         if (_options.EnableSshExecTool)
         {
             var sshExecutor = new NyxIdSshCommandExecutor(_client, _logger);
             tools.Add(new NyxIdSshExecTool(sshExecutor, _options));
-            tools.Add(new NyxIdCodexExecTool(sshExecutor, _options));
         }
 
+        AddCodexExecTool(tools);
+
         _logger.LogInformation(
-            "NyxID tools registered ({Count} tools, base URL: {BaseUrl}, ssh_exec={SshEnabled})",
-            tools.Count, _options.BaseUrl, _options.EnableSshExecTool);
+            "NyxID tools registered ({Count} tools, base URL: {BaseUrl}, ssh_exec={SshEnabled}, managed_codex_exec={ManagedCodexEnabled})",
+            tools.Count,
+            _options.BaseUrl,
+            _options.EnableSshExecTool,
+            _options.EnableManagedCodexExecTool);
 
         return Task.FromResult<IReadOnlyList<IAgentTool>>(tools);
+    }
+
+    private void AddCodexExecTool(List<IAgentTool> tools)
+    {
+        var ports = new List<ICodexExecutionPort>();
+        if (_options.EnableSshExecTool)
+        {
+            ports.Add(new PrivateSshCodexExecutionAdapter(
+                new NyxIdSshCommandExecutor(_client, _logger)));
+        }
+
+        if (_options.EnableManagedCodexExecTool)
+        {
+            var managedPorts = _codexExecutionPorts
+                .Where(static port => port.TargetKind ==
+                    CodexExecutionTarget.TargetOneofCase.ManagedSandbox)
+                .ToArray();
+            if (managedPorts.Length != 1)
+            {
+                throw new InvalidOperationException(
+                    "Managed codex_exec requires exactly one managed-sandbox ICodexExecutionPort registration.");
+            }
+
+            ports.Add(managedPorts[0]);
+        }
+
+        if (ports.Count > 0)
+            tools.Add(new NyxIdCodexExecTool(ports, _options));
     }
 }

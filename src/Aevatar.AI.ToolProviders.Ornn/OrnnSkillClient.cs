@@ -145,23 +145,29 @@ public sealed class OrnnSkillClient
         string accessToken,
         string guid,
         string literalVersion,
-        CancellationToken ct = default) =>
-        GetExactAsync<OrnnExactSkillDetail>(
+        CancellationToken ct = default)
+    {
+        ValidateExactReference(guid, literalVersion, nameof(guid));
+        return GetExactAsync<OrnnExactSkillDetail>(
             accessToken,
             $"/api/v1/skills/{Uri.EscapeDataString(guid)}?version={Uri.EscapeDataString(literalVersion)}",
             guid,
             ct);
+    }
 
     public Task<OrnnExactSkillReadResult<OrnnSkillJson>> GetExactSkillJsonAsync(
         string accessToken,
         string guid,
         string literalVersion,
-        CancellationToken ct = default) =>
-        GetExactAsync<OrnnSkillJson>(
+        CancellationToken ct = default)
+    {
+        ValidateExactReference(guid, literalVersion, nameof(guid));
+        return GetExactAsync<OrnnSkillJson>(
             accessToken,
             $"/api/v1/skills/{Uri.EscapeDataString(guid)}/json?version={Uri.EscapeDataString(literalVersion)}",
             guid,
             ct);
+    }
 
     private async Task<OrnnExactSkillReadResult<T>> GetExactAsync<T>(
         string accessToken,
@@ -628,12 +634,16 @@ public sealed class OrnnSkillClient
 
     private static void ValidateExactReference(string guid, string literalVersion, string parameterName)
     {
-        if (!Guid.TryParseExact(guid, "D", out _))
+        if (!Guid.TryParseExact(guid, "D", out var parsedGuid) ||
+            !string.Equals(parsedGuid.ToString("D"), guid, StringComparison.Ordinal))
             throw new ArgumentException("Exact Ornn references require a canonical GUID.", parameterName);
         if (string.IsNullOrWhiteSpace(literalVersion) ||
             literalVersion.Split('.', StringSplitOptions.None) is not [var major, var minor] ||
-            !int.TryParse(major, out _) ||
-            !int.TryParse(minor, out _))
+            !int.TryParse(major, out var majorValue) ||
+            !int.TryParse(minor, out var minorValue) ||
+            majorValue < 0 || minorValue < 0 ||
+            !string.Equals(majorValue.ToString(), major, StringComparison.Ordinal) ||
+            !string.Equals(minorValue.ToString(), minor, StringComparison.Ordinal))
         {
             throw new ArgumentException("Exact Ornn references require a literal major.minor version.", nameof(literalVersion));
         }

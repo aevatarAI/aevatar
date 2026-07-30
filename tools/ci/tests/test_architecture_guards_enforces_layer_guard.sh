@@ -35,8 +35,13 @@ if printf '%s\n' "${call_block}" | rg -q -- '--mode[[:space:]]+report'; then
   exit 1
 fi
 
+<<<<<<< HEAD
 if rg -q 'tool_approval_wiring_guard\.sh' "${ARCHITECTURE_GUARDS}"; then
   echo "architecture_guards.sh must not invoke the removed tool approval wiring guard."
+=======
+if ! rg -q 'bash "\$\{SCRIPT_DIR\}/nyxid_chat_semantics_guard\.sh"' "${ARCHITECTURE_GUARDS}"; then
+  echo "Expected architecture_guards.sh to invoke nyxid_chat_semantics_guard.sh."
+>>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
   exit 1
 fi
 

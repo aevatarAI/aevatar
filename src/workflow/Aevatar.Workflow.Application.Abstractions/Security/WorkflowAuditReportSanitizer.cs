@@ -63,6 +63,7 @@ public static class WorkflowAuditReportSanitizer
             AssignedValue = WorkflowAuditTextSanitizer.SanitizeValue(step.AssignedVariable, step.AssignedValue),
             SuspensionType = WorkflowAuditTextSanitizer.Sanitize(step.SuspensionType),
             SuspensionPrompt = WorkflowAuditTextSanitizer.Sanitize(step.SuspensionPrompt),
+            SuspensionContent = WorkflowAuditTextSanitizer.Sanitize(step.SuspensionContent),
             SuspensionTimeoutSeconds = step.SuspensionTimeoutSeconds,
             RequestedVariableName = WorkflowAuditTextSanitizer.Sanitize(step.RequestedVariableName),
             Usage = SanitizeUsage(step.Usage),

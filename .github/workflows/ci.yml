@@ -240,7 +240,11 @@ jobs:
     if: needs.changes.outputs.docs_only == 'false' && needs.changes.outputs.console_web == 'true'
     needs: changes
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # The serial suite grew into this budget: recent runs took 19m02s, 19m35s,
+    # 19m57s, then 20m10s and 20m17s, the last two cancelled mid-test at the
+    # 20m cap. The ~18m of test work is real, so give it headroom rather than
+    # letting every run decide the build on runner jitter.
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
 

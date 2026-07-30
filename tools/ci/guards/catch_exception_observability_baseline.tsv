@@ -1,5 +1,4 @@
 path	line	message
-agents/Aevatar.GAgents.NyxidChat/NyxIdChatEndpoints.Streaming.cs	375	empty broad catch block
 src/Aevatar.AI.Core/Routing/EventRoute.cs	68	empty broad catch block
 src/Aevatar.AI.Core/Tools/TextToolCallParser.cs	169	empty broad catch block
 src/Aevatar.AI.ToolProviders.ChronoStorage/Tools/ChronoDiffTool.cs	64	empty broad catch block
@@ -17,7 +16,6 @@ src/Aevatar.AI.ToolProviders.ServiceInvoke/Tools/ListServicesTool.cs	157	empty b
 src/Aevatar.AI.ToolProviders.Skills/SkillScriptExtractor.cs	119	empty broad catch block
 src/Aevatar.CQRS.Core.Abstractions/Streaming/EventSinkProjectionLeaseOrchestrator.cs	47	empty broad catch block
 src/Aevatar.CQRS.Core.Abstractions/Streaming/EventSinkProjectionLeaseOrchestrator.cs	59	empty broad catch block
-src/Aevatar.CQRS.Projection.Providers.Elasticsearch/Stores/ElasticsearchOptimisticWriter.cs	170	broad catch returns null without visible failure signal
 src/Aevatar.Foundation.Abstractions/Observability/AevatarActivitySource.cs	248	empty broad catch block
 src/Aevatar.Foundation.Abstractions/Observability/AevatarActivitySource.cs	263	empty broad catch block
 src/Aevatar.Foundation.Abstractions/Observability/AevatarActivitySource.cs	275	broad catch returns null without visible failure signal
@@ -45,5 +43,4 @@ src/platform/Aevatar.GAgentService.Projection/Orchestration/GAgentDraftRunObserv
 src/platform/Aevatar.GAgentService.Projection/Orchestration/LlmSessionObservationScopeLeasePreparationPort.cs	47	broad catch returns null without visible failure signal
 src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunFinalizeEmitter.cs	65	broad catch returns null without visible failure signal
 src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunFinalizeEmitter.cs	81	broad catch returns null without visible failure signal
-src/workflow/Aevatar.Workflow.Infrastructure/Runs/WorkflowRunActorPort.cs	346	empty broad catch block
 src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowChatRunObservationScopeActivationPort.cs	46	broad catch returns null without visible failure signal

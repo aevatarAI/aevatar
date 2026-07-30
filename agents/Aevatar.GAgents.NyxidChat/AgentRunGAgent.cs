@@ -539,12 +539,18 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         {
             if (part.Kind == Aevatar.AI.Abstractions.ChatContentPartKind.Text)
             {
+                if (HasFileRefIdentity(part.FileRef))
+                    part.Text = string.Empty;
                 continue;
             }
 
             part.DataBase64 = string.Empty;
         }
     }
+
+    private static bool HasFileRefIdentity(Aevatar.AI.Abstractions.ChatFileRef? fileRef) =>
+        fileRef is not null &&
+        (!string.IsNullOrWhiteSpace(fileRef.FileId) || !string.IsNullOrWhiteSpace(fileRef.ArtifactId));
 
     private async Task DispatchLlmStepExecutorAsync(NeedsLlmReplyEvent request, AgentRunReplyStepState stepState)
     {
@@ -2393,7 +2399,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             DeliveryKind = kind,
             Target = BuildDeliveryTarget(activity, completion),
             Status = status,
-            LarkMessageId = NormalizeOptional(completion.CardMessageId) ?? string.Empty,
+            ProviderMessageId = NormalizeOptional(completion.CardMessageId) ?? string.Empty,
             CardId = NormalizeOptional(cardId) ?? string.Empty,
             RequestId = NormalizeOptional(completion.CommandId) ?? string.Empty,
             SourceEventId = NormalizeOptional(completion.CorrelationId) ?? string.Empty,
@@ -2412,16 +2418,16 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             Channel = conversation?.Channel?.Clone() ?? activity?.ChannelId?.Clone() ?? new ChannelId(),
             ConversationKey = conversation?.CanonicalKey ?? string.Empty,
             Platform = NormalizeOptional(extras?.NyxPlatform) ?? conversation?.Channel?.Value ?? activity?.ChannelId?.Value ?? string.Empty,
-            ReceiveId = NormalizeOptional(extras?.NyxLarkChatId) ??
+            AddressId = NormalizeOptional(extras?.NyxLarkChatId) ??
                         NormalizeOptional(extras?.NyxLarkUnionId) ??
                         string.Empty,
-            ReceiveIdType = ResolveReceiveIdType(extras),
+            AddressType = ResolveAddressType(extras),
             ConversationId = NormalizeOptional(extras?.NyxConversationId) ?? conversation?.CanonicalKey ?? string.Empty,
             ReplyMessageId = NormalizeOptional(completion.CardMessageId) ?? string.Empty,
         };
     }
 
-    private static string ResolveReceiveIdType(TransportExtras? extras)
+    private static string ResolveAddressType(TransportExtras? extras)
     {
         if (!string.IsNullOrWhiteSpace(extras?.NyxLarkChatId))
             return "chat_id";
@@ -2464,7 +2470,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             DeliveryKind = produced.DeliveryKind,
             Status = produced.Status,
             Target = produced.Target?.Clone() ?? new DeliveryTarget(),
-            LarkMessageId = produced.LarkMessageId ?? string.Empty,
+            ProviderMessageId = produced.ProviderMessageId ?? string.Empty,
             CardId = produced.CardId ?? string.Empty,
             RequestId = produced.RequestId ?? string.Empty,
             SourceEventId = produced.SourceEventId ?? string.Empty,

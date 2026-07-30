@@ -78,15 +78,16 @@ public sealed class AevatarOAuthClientEsAclStartupGuard : IHostedService
         switch (_options.EnforcementMode)
         {
             case AevatarOAuthClientEsAclEnforcementMode.Strict:
-                // Fail closed only on a definitive negative from either signal: the
-                // live probe reporting the grant is unrestricted, or the operator
-                // declaring the attestation false.
-                if (probeResult.Status == EsAclProbeStatus.Unrestricted)
+                // Strict requires both an affirmative live classification and the
+                // operator attestation. An unavailable or inconclusive probe cannot
+                // substitute an assertion for evidence about the effective grant.
+                if (probeResult.Status != EsAclProbeStatus.Restricted)
                 {
                     throw new InvalidOperationException(
                         BuildFailureMessage(
-                            $"the Elasticsearch security API reports the '{AevatarOAuthClientDocumentMetadataProvider.IndexName}' read grant is NOT restricted. " +
-                            $"observedState={probeResult.ObservedState}"));
+                            $"the Elasticsearch security API did NOT positively confirm that the " +
+                            $"'{AevatarOAuthClientDocumentMetadataProvider.IndexName}' read grant is restricted. " +
+                            $"probeStatus={probeResult.Status} observedState={probeResult.ObservedState}"));
                 }
 
                 if (!attestationDeclaredRestricted)
@@ -97,23 +98,11 @@ public sealed class AevatarOAuthClientEsAclStartupGuard : IHostedService
                             $"probeStatus={probeResult.Status} observedState={probeResult.ObservedState}"));
                 }
 
-                if (probeResult.Status is EsAclProbeStatus.Unavailable or EsAclProbeStatus.Unverifiable)
-                {
-                    _logger.LogWarning(
-                        "AevatarOAuthClient ES ACL guard (Strict) could not verify the '{IndexName}' read grant against Elasticsearch; " +
-                        "relying on operator attestation. probeStatus={ProbeStatus} observedState={ObservedState}",
-                        AevatarOAuthClientDocumentMetadataProvider.IndexName,
-                        probeResult.Status,
-                        probeResult.ObservedState);
-                }
-                else
-                {
-                    _logger.LogInformation(
-                        "AevatarOAuthClient ES ACL guard (Strict) passed. index={IndexName} probeStatus={ProbeStatus} observedState={ObservedState}",
-                        AevatarOAuthClientDocumentMetadataProvider.IndexName,
-                        probeResult.Status,
-                        probeResult.ObservedState);
-                }
+                _logger.LogInformation(
+                    "AevatarOAuthClient ES ACL guard (Strict) passed. index={IndexName} probeStatus={ProbeStatus} observedState={ObservedState}",
+                    AevatarOAuthClientDocumentMetadataProvider.IndexName,
+                    probeResult.Status,
+                    probeResult.ObservedState);
 
                 return;
 

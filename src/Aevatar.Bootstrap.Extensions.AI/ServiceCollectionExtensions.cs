@@ -1114,8 +1114,8 @@ public static class ServiceCollectionExtensions
     // source and cannot drift. Every nyxid registration path resolves its default through these
     // helpers, which apply per-deployment config overrides on top.
     private static string ResolveNyxIdDefaultRoute(IConfiguration configuration) =>
-        configuration["Aevatar:NyxId:DefaultRoute"] is { Length: > 0 } route
-            ? route
+        configuration["Aevatar:NyxId:DefaultRoute"] is { } route && !string.IsNullOrWhiteSpace(route)
+            ? route.Trim()
             : LlmDefaults.NyxIdRoute;
 
     private static string ResolveNyxIdDefaultModel(IConfiguration configuration, AevatarAIFeatureOptions options) =>
@@ -1194,7 +1194,7 @@ public static class ServiceCollectionExtensions
         services.AddOrnnSkills(o =>
         {
             if (!string.IsNullOrWhiteSpace(options.OrnnNyxIdSlug))
-                o.NyxIdSlug = options.OrnnNyxIdSlug;
+                o.NyxIdSlug = options.OrnnNyxIdSlug.Trim();
         });
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IOrnnSkillPublishAssetValidator, WorkflowOrnnSkillPublishAssetValidator>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IOrnnSkillPublishAssetValidator, ScriptOrnnSkillPublishAssetValidator>());
@@ -1210,7 +1210,7 @@ public static class ServiceCollectionExtensions
         services.AddOrnnSkillClient(o =>
         {
             if (!string.IsNullOrWhiteSpace(options.OrnnNyxIdSlug))
-                o.NyxIdSlug = options.OrnnNyxIdSlug;
+                o.NyxIdSlug = options.OrnnNyxIdSlug.Trim();
         });
 
         services.AddSystemSkillOverlay(o =>

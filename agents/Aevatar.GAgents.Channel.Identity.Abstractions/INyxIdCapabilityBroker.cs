@@ -42,7 +42,7 @@ public interface INyxIdCapabilityBroker
     /// <see cref="BindingScopeMismatchException"/> when NyxID reports
     /// <c>invalid_scope</c> for an existing binding; throws
     /// <see cref="BindingServiceAccessMismatchException"/> when the binding's
-    /// token does not grant aevatar's required service resource. Binding-required callers
+    /// token does not grant every required service resource. Binding-required callers
     /// can prompt the sender to re-run <c>/init</c>; normal LLM turns can
     /// continue with bot-owner fallback credentials.
     /// </summary>
@@ -58,7 +58,7 @@ public interface INyxIdCapabilityBroker
     /// <c>invalid_scope</c>).
     /// </exception>
     /// <exception cref="BindingServiceAccessMismatchException">
-    /// The binding does not grant aevatar's required NyxID service resource.
+    /// The binding does not grant every required NyxID service resource.
     /// </exception>
     Task<CapabilityHandle> IssueShortLivedAsync(
         ExternalSubjectRef externalSubject,

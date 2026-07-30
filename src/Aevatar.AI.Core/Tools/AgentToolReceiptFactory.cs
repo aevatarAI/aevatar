@@ -5,20 +5,40 @@ namespace Aevatar.AI.Core.Tools;
 
 internal static class AgentToolReceiptFactory
 {
+<<<<<<< HEAD
     public static AgentToolReceipt CreateSuccess(
+=======
+    public static bool IsReceiptWorthy(IAgentTool tool, AgentToolCallSafety callSafety)
+    {
+        ArgumentNullException.ThrowIfNull(tool);
+        ArgumentNullException.ThrowIfNull(callSafety);
+        return tool.ApprovalMode != ToolApprovalMode.NeverRequire ||
+               callSafety.IsDestructive ||
+               !string.IsNullOrWhiteSpace(tool.SideEffectKind);
+    }
+
+    public static AgentToolReceipt? CreateResult(
+>>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
         IAgentTool tool,
         string callId,
         string toolName,
         AgentToolCallSafety callSafety,
-        string resultJson)
+        string resultJson,
+        string argumentsJson = "")
     {
+<<<<<<< HEAD
         var providerReceipt = tool.CreateSuccessReceipt(callId, toolName, resultJson ?? string.Empty);
+=======
+        var providerReceipt = tool.CreateResultReceipt(
+            callId,
+            toolName,
+            argumentsJson ?? string.Empty,
+            resultJson ?? string.Empty);
+>>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
         if (providerReceipt is not null)
-            return NormalizeProviderSuccessReceipt(tool, callId, toolName, callSafety, resultJson, providerReceipt);
+            return NormalizeProviderResultReceipt(tool, callId, toolName, callSafety, resultJson, providerReceipt);
 
-        var receipt = CreateBase(tool, callId, toolName, callSafety, AgentToolReceiptStatus.Success);
-        receipt.ResultJson = resultJson ?? string.Empty;
-        return receipt;
+        return null;
     }
 
     public static AgentToolReceipt CreateError(
@@ -132,7 +152,7 @@ internal static class AgentToolReceiptFactory
     private static string NormalizeSideEffectKind(string? sideEffectKind) =>
         string.IsNullOrWhiteSpace(sideEffectKind) ? string.Empty : sideEffectKind.Trim().ToLowerInvariant();
 
-    private static AgentToolReceipt NormalizeProviderSuccessReceipt(
+    private static AgentToolReceipt NormalizeProviderResultReceipt(
         IAgentTool tool,
         string callId,
         string toolName,
@@ -145,15 +165,17 @@ internal static class AgentToolReceiptFactory
         normalized.ToolName = string.IsNullOrWhiteSpace(normalized.ToolName)
             ? string.IsNullOrWhiteSpace(toolName) ? tool.Name ?? string.Empty : toolName
             : normalized.ToolName;
-        normalized.Status = AgentToolReceiptStatus.Success;
         if (normalized.ApprovalMode == AgentToolReceiptApprovalMode.Unspecified)
             normalized.ApprovalMode = MapApprovalMode(tool.ApprovalMode);
         normalized.IsDestructive = normalized.IsDestructive || callSafety.IsDestructive;
         normalized.SideEffectKind = string.IsNullOrWhiteSpace(normalized.SideEffectKind)
             ? NormalizeSideEffectKind(tool.SideEffectKind)
             : NormalizeSideEffectKind(normalized.SideEffectKind);
-        if (string.IsNullOrWhiteSpace(normalized.ResultJson))
+        if (normalized.Status == AgentToolReceiptStatus.Success &&
+            string.IsNullOrWhiteSpace(normalized.ResultJson))
+        {
             normalized.ResultJson = resultJson ?? string.Empty;
+        }
         return normalized;
     }
 }

@@ -120,7 +120,7 @@ public sealed class ChannelRegistrationToolTests
 
         using var scope = PushNyxToken();
         var json = await tool.ExecuteAsync(
-            """{"action":"register_channel_via_nyx","platform":"lark","lark":{"app_id":"cli_123","app_secret":"secret","verification_token":"verify-123"},"webhook_base_url":"https://aevatar.example.com","default_skill_name":"whatsapp-reply-draft"}""");
+            """{"action":"register_channel_via_nyx","platform":"lark","lark":{"app_id":"cli_123","app_secret":"secret","verification_token":"verify-123","encrypt_key":" encrypt-alpha "},"webhook_base_url":"https://aevatar.example.com","default_skill_name":"whatsapp-reply-draft"}""");
         using var doc = JsonDocument.Parse(json);
 
         doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
@@ -135,6 +135,7 @@ public sealed class ChannelRegistrationToolTests
                 request.Lark.AppId == "cli_123" &&
                 request.Lark.AppSecret == "secret" &&
                 request.Lark.VerificationToken == "verify-123" &&
+                request.Lark.EncryptKey == "encrypt-alpha" &&
                 request.WebhookBaseUrl == "https://aevatar.example.com" &&
                 request.DefaultSkillName == "whatsapp-reply-draft"),
             Arg.Any<CancellationToken>());

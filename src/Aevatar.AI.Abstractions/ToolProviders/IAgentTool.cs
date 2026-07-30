@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.Foundation.Abstractions.Tools;
 
 namespace Aevatar.AI.Abstractions.ToolProviders;
 
@@ -19,6 +20,16 @@ public interface IAgentTool
     /// <summary>工具参数 JSON Schema，描述输入格式。</summary>
     string ParametersSchema { get; }
 
+    /// <summary>Provider-owned presentation identity snapshotted for historical tool cards.</summary>
+    ToolPresentationDescriptor Presentation => ToolPresentationDescriptors.Generic(Name, Description);
+
+    /// <summary>
+    /// Resolves provider-owned presentation identity for one invocation. Tools
+    /// whose card identity depends on structured arguments override this while
+    /// ordinary tools retain the static descriptor.
+    /// </summary>
+    ToolPresentationDescriptor ResolvePresentation(string argumentsJson) => Presentation;
+
     /// <summary>工具审批模式。默认 NeverRequire（立即执行）。</summary>
     ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
 
@@ -31,8 +42,15 @@ public interface IAgentTool
     /// <summary>Stable side-effect kind for receipt-worthy tool calls; empty means no declared side effect.</summary>
     string SideEffectKind => "";
 
-    /// <summary>Optional provider-owned typed success receipt; return null to use the generic receipt.</summary>
+    /// <summary>Legacy provider-owned typed success receipt; null leaves the outcome unverified.</summary>
     AgentToolReceipt? CreateSuccessReceipt(string callId, string toolName, string resultJson) => null;
+
+    /// <summary>Provider-owned typed result receipt; null leaves the outcome unverified.</summary>
+    AgentToolReceipt? CreateResultReceipt(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        string resultJson) => CreateSuccessReceipt(callId, toolName, resultJson);
 
     /// <summary>
     /// Runtime approval check: given the actual call arguments, does this specific

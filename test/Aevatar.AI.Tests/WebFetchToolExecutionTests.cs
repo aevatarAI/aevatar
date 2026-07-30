@@ -1,5 +1,7 @@
 using System.Net;
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.Web;
 using Aevatar.AI.ToolProviders.Web.Tools;
 using FluentAssertions;
@@ -46,8 +48,76 @@ public sealed class WebFetchToolExecutionTests
         root.GetProperty("content_type").GetString().Should().Be("text/plain");
         root.GetProperty("content").GetString().Should().Be(new string('x', maxToolContentChars));
         root.GetProperty("truncated").GetBoolean().Should().BeTrue();
+        var receipt = ((IAgentTool)tool).CreateResultReceipt("call-success", tool.Name, "{}", result);
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
 
         handler.RequestUrls.Should().ContainSingle("https://8.8.8.8/large");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_Http503_ShouldReturnTypedFailureReceiptWithoutRawBody()
+    {
+        var handler = new RecordingFetchHandler(_ => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+        {
+            Content = new StringContent("provider-secret"),
+        });
+        using var http = new HttpClient(handler);
+        var tool = CreateTool(http);
+
+        var result = await tool.ExecuteAsync("""{"url":"https://8.8.8.8/failure"}""");
+
+        AssertFailureReceipt(tool, result, "WEB_FETCH_HTTP_503");
+        result.Should().NotContain("provider-secret");
+    }
+
+    [Theory]
+    [InlineData(HttpRequestError.NameResolutionError, "WEB_FETCH_DNS_FAILURE")]
+    [InlineData(HttpRequestError.SecureConnectionError, "WEB_FETCH_TLS_FAILURE")]
+    public async Task ExecuteAsync_TransportFailure_ShouldReturnTypedFailureReceipt(
+        HttpRequestError requestError,
+        string expectedCode)
+    {
+        var handler = new ThrowingFetchHandler(new HttpRequestException(requestError, "provider-secret"));
+        using var http = new HttpClient(handler);
+        var tool = CreateTool(http);
+
+        var result = await tool.ExecuteAsync("""{"url":"https://8.8.8.8/failure"}""");
+
+        AssertFailureReceipt(tool, result, expectedCode);
+        result.Should().NotContain("provider-secret");
+    }
+
+    [Fact]
+    public void CreateResultReceipt_HostResolutionErrorJson_ShouldReturnDnsFailureReceipt()
+    {
+        using var http = new HttpClient(new RecordingFetchHandler(_ => Ok(string.Empty)));
+        var tool = CreateTool(http);
+        const string result =
+            """{"error":"host_resolution_failed","message":"host_resolution_failed"}""";
+
+        AssertFailureReceipt(tool, result, "WEB_FETCH_DNS_FAILURE");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_Timeout_ShouldReturnTypedFailureReceipt()
+    {
+        var handler = new ThrowingFetchHandler(new OperationCanceledException());
+        using var http = new HttpClient(handler);
+        var tool = CreateTool(http);
+
+        var result = await tool.ExecuteAsync("""{"url":"https://8.8.8.8/slow"}""");
+
+        AssertFailureReceipt(tool, result, "WEB_FETCH_TIMEOUT");
+    }
+
+    private static void AssertFailureReceipt(WebFetchTool tool, string result, string expectedCode)
+    {
+        var receipt = ((IAgentTool)tool).CreateResultReceipt("call-failure", tool.Name, "{}", result);
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ErrorCode.Should().Be(expectedCode);
+        receipt.ResultJson.Should().Be(result);
     }
 
     private static WebFetchTool CreateTool(HttpClient http) =>
@@ -82,5 +152,13 @@ public sealed class WebFetchToolExecutionTests
             RequestUrls.Add(request.RequestUri?.ToString() ?? string.Empty);
             return Task.FromResult(respond(request));
         }
+    }
+
+    private sealed class ThrowingFetchHandler(Exception exception) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            Task.FromException<HttpResponseMessage>(exception);
     }
 }

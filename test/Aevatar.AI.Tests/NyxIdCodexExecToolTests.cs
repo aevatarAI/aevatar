@@ -1,6 +1,8 @@
 using System.Net;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
+using Aevatar.AI.Abstractions.CodexExecution;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
@@ -14,28 +16,58 @@ public sealed class NyxIdCodexExecToolTests
     private const string CatalogId = "3e64c683-4289-427e-b599-f7eaf6c01fb1";
 
     [Fact]
-    public void Metadata_UsesNodeLocalCodexDefaultsAndSshApprovalPolicy()
+    public void Metadata_ExposesSeparatePrivateSshAndManagedTargets()
     {
         var tool = new NyxIdCodexExecTool(CreateDummyClient());
 
         tool.Name.Should().Be("codex_exec");
+<<<<<<< HEAD
         tool.ApprovalMode.Should().Be(ToolApprovalMode.AlwaysRequire);
         tool.IsDestructive.Should().BeTrue();
         tool.Description.Should().Contain("codex exec -");
         tool.Description.Should().Contain("local configuration");
         tool.ParametersSchema.Should().Contain("\"service\"");
         tool.ParametersSchema.Should().Contain("\"principal\"");
+=======
+        tool.ApprovalMode.Should().Be(ToolApprovalMode.Auto);
+        tool.RequiresApproval("{}").Should().BeTrue();
+        tool.Description.Should().Contain("private NyxID-backed SSH");
+        tool.Description.Should().Contain("managed isolated sandbox");
+        tool.ParametersSchema.Should().Contain("\"private_ssh\"");
+        tool.ParametersSchema.Should().Contain("\"managed_sandbox\"");
+        tool.ParametersSchema.Should().Contain("\"empty_git\"");
+>>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
         tool.ParametersSchema.Should().Contain("\"prompt\"");
         tool.ParametersSchema.Should().NotContain("\"model\"");
+        using var schema = JsonDocument.Parse(tool.ParametersSchema);
+        schema.RootElement.GetProperty("properties")
+            .EnumerateObject()
+            .Select(static property => property.Name)
+            .Should()
+            .Equal("target", "workspace", "prompt", "timeout_secs");
+        tool.ParametersSchema.Should()
+            .NotContain("\"credential\"")
+            .And.NotContain("\"provision\"");
     }
 
     [Fact]
+<<<<<<< HEAD
     public void ApprovalPolicy_AlwaysRequiresDurableGrant()
+=======
+    public void RequiresApproval_WhenSshBypassEnabled_AppliesOnlyToPrivateSsh()
+>>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     {
         var tool = new NyxIdCodexExecTool(CreateDummyClient());
 
+<<<<<<< HEAD
         tool.ApprovalMode.Should().Be(ToolApprovalMode.AlwaysRequire);
         tool.IsDestructive.Should().BeTrue();
+=======
+        tool.RequiresApproval("""{"target":{"kind":"private_ssh"}}""").Should().BeFalse();
+        tool.RequiresApproval("""{"target":{"kind":"managed_sandbox"}}""").Should().BeFalse();
+        tool.RequiresApproval("{}").Should().BeTrue();
+        tool.RequiresApproval("""{"target":{"kind":"unknown"}}""").Should().BeTrue();
+>>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     }
 
     [Fact]
@@ -47,8 +79,11 @@ public sealed class NyxIdCodexExecToolTests
 
         var result = await tool.ExecuteAsync(JsonSerializer.Serialize(new
         {
-            service = "codex-node",
-            principal = "runner",
+            target = new
+            {
+                kind = "private_ssh",
+                private_ssh = new { service = "codex-node", principal = "runner" },
+            },
             prompt,
             timeout_secs = 90,
         }));
@@ -76,8 +111,11 @@ public sealed class NyxIdCodexExecToolTests
         {
             var result = await tool.ExecuteAsync(JsonSerializer.Serialize(new
             {
-                service = "codex-node",
-                principal = "runner",
+                target = new
+                {
+                    kind = "private_ssh",
+                    private_ssh = new { service = "codex-node", principal = "runner" },
+                },
                 prompt,
                 timeout_secs = 120,
             }));
@@ -115,8 +153,11 @@ public sealed class NyxIdCodexExecToolTests
 
         var result = await tool.ExecuteAsync(JsonSerializer.Serialize(new
         {
-            service = "codex-node",
-            principal = "runner",
+            target = new
+            {
+                kind = "private_ssh",
+                private_ssh = new { service = "codex-node", principal = "runner" },
+            },
             prompt = new string('a', 6001),
         }));
 
@@ -125,16 +166,91 @@ public sealed class NyxIdCodexExecToolTests
     }
 
     [Theory]
-    [InlineData("""{"principal":"runner","prompt":"task"}""")]
-    [InlineData("""{"service":"codex-node","prompt":"task"}""")]
-    [InlineData("""{"service":"codex-node","principal":"runner"}""")]
-    public async Task ExecuteAsync_RequiresServicePrincipalAndPrompt(string arguments)
+    [InlineData("""{"prompt":"task"}""", "invalid_target")]
+    [InlineData("""{"target":{"kind":"private_ssh"},"prompt":"task"}""", "invalid_target")]
+    [InlineData("""{"target":{"kind":"managed_sandbox","private_ssh":{"service":"node","principal":"runner"}},"workspace":{"kind":"empty_git"},"prompt":"task"}""", "mixed_target")]
+    [InlineData("""{"target":{"kind":"managed_sandbox"},"prompt":"task"}""", "invalid_workspace")]
+    [InlineData("""{"target":{"kind":"private_ssh","private_ssh":{"service":"node","principal":"runner"}},"workspace":{"kind":"empty_git"},"prompt":"task"}""", "mixed_target")]
+    public async Task ExecuteAsync_RejectsMissingOrMixedTargetFields(string arguments, string error)
     {
         var tool = new NyxIdCodexExecTool(CreateDummyClient());
 
         var result = await tool.ExecuteAsync(arguments);
 
-        result.Should().Contain("'service', 'principal', and 'prompt' are required");
+        result.Should().Contain($"\"error\":\"{error}\"");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_RoutesManagedTargetWithTypedWorkspaceAndNoSshApproval()
+    {
+        var port = new RecordingManagedPort();
+        var tool = new NyxIdCodexExecTool([port], new NyxIdToolOptions());
+        SetToken("caller-token");
+        try
+        {
+            const string arguments = """
+                {
+                  "target": { "kind": "managed_sandbox" },
+                  "workspace": { "kind": "empty_git" },
+                  "prompt": "Reply with exactly CODEX_EXEC_READY",
+                  "timeout_secs": 180
+                }
+                """;
+
+            tool.RequiresApproval(arguments).Should().BeFalse();
+            var result = await tool.ExecuteAsync(arguments);
+
+            using var resultJson = JsonDocument.Parse(result);
+            resultJson.RootElement.GetProperty("status").GetString().Should().Be("succeeded");
+            resultJson.RootElement.GetProperty("output").GetString().Should().Be("CODEX_EXEC_READY");
+            port.Request.Should().NotBeNull();
+            port.Request!.Target.TargetCase.Should().Be(
+                CodexExecutionTarget.TargetOneofCase.ManagedSandbox);
+            port.Request.Workspace!.WorkspaceCase.Should().Be(
+                CodexExecutionWorkspace.WorkspaceOneofCase.EmptyGit);
+            port.Request.Caller.NyxIdAccessToken.Should().Be("caller-token");
+            port.Request.TimeoutSeconds.Should().Be(180);
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenTargetIsNotRegistered_FailsBeforeExecution()
+    {
+        var tool = new NyxIdCodexExecTool(CreateDummyClient());
+
+        var result = await tool.ExecuteAsync("""
+            {
+              "target": { "kind": "managed_sandbox" },
+              "workspace": { "kind": "empty_git" },
+              "prompt": "task"
+            }
+            """);
+
+        result.Should().Contain("\"error\":\"target_not_configured\"");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenManagedPortFails_ThrowsTypedFailureForWorkflowOutcome()
+    {
+        var tool = new NyxIdCodexExecTool(
+            [new FailingManagedPort()],
+            new NyxIdToolOptions());
+
+        var act = () => tool.ExecuteAsync("""
+            {
+              "target": { "kind": "managed_sandbox" },
+              "workspace": { "kind": "empty_git" },
+              "prompt": "task"
+            }
+            """);
+
+        var exception = await act.Should().ThrowAsync<CodexExecutionException>();
+        exception.Which.Failure.Kind.Should().Be(CodexExecutionFailureKind.ProvisioningFailed);
+        exception.Which.Failure.Code.Should().Be("sandbox_provisioning_failed");
     }
 
     private static string DecodePrompt(string command)
@@ -201,6 +317,47 @@ public sealed class NyxIdCodexExecToolTests
             {
                 Content = new StringContent(responseBody, Encoding.UTF8, "application/json"),
             };
+        }
+    }
+
+    private sealed class RecordingManagedPort : ICodexExecutionPort
+    {
+        public CodexExecutionRequest? Request { get; private set; }
+
+        public CodexExecutionTarget.TargetOneofCase TargetKind =>
+            CodexExecutionTarget.TargetOneofCase.ManagedSandbox;
+
+        public async IAsyncEnumerable<CodexExecutionEvent> ExecuteAsync(
+            CodexExecutionRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            Request = request;
+            yield return CodexExecutionEvent.Started();
+            await Task.Yield();
+            ct.ThrowIfCancellationRequested();
+            yield return CodexExecutionEvent.Completed(new CodexExecutionResult(
+                "CODEX_EXEC_READY",
+                ExitCode: 0,
+                DiagnosticId: "sandbox-diag",
+                ElapsedMilliseconds: 42));
+        }
+    }
+
+    private sealed class FailingManagedPort : ICodexExecutionPort
+    {
+        public CodexExecutionTarget.TargetOneofCase TargetKind =>
+            CodexExecutionTarget.TargetOneofCase.ManagedSandbox;
+
+        public async IAsyncEnumerable<CodexExecutionEvent> ExecuteAsync(
+            CodexExecutionRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            await Task.Yield();
+            ct.ThrowIfCancellationRequested();
+            yield return CodexExecutionEvent.Failed(new CodexExecutionFailure(
+                CodexExecutionFailureKind.ProvisioningFailed,
+                "sandbox_provisioning_failed",
+                "provisioning failed"));
         }
     }
 }

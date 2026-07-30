@@ -2,6 +2,7 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Google.Protobuf;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.GAgents.Channel.Identity;
 
@@ -11,24 +12,35 @@ namespace Aevatar.GAgents.Channel.Identity;
 /// is the only provider allowed to read the HMAC-bearing document, and ES
 /// deployments must pass <see cref="AevatarOAuthClientEsAclStartupGuard"/>.
 ///
-/// Reads the cluster-singleton OAuth client state from the projection
-/// document. Backs the read seam exposed by <see cref="IAevatarOAuthClientProvider"/>.
+/// Combines the deployment-owned client id with cluster-singleton OAuth client
+/// runtime facts from the projection document. Backs the read seam exposed by
+/// <see cref="IAevatarOAuthClientProvider"/>.
 /// </summary>
 public sealed class AevatarOAuthClientProjectionProvider : IAevatarOAuthClientProvider
 {
     private readonly IProjectionDocumentReader<AevatarOAuthClientDocument, string> _reader;
     private readonly ISecretVault _secretVault;
+    private readonly AevatarOAuthClientOptions _clientOptions;
 
     public AevatarOAuthClientProjectionProvider(
         IProjectionDocumentReader<AevatarOAuthClientDocument, string> reader,
-        ISecretVault secretVault)
+        ISecretVault secretVault,
+        IOptions<AevatarOAuthClientOptions> clientOptions)
     {
         _reader = reader ?? throw new ArgumentNullException(nameof(reader));
         _secretVault = secretVault ?? throw new ArgumentNullException(nameof(secretVault));
+        _clientOptions = clientOptions?.Value ?? throw new ArgumentNullException(nameof(clientOptions));
     }
 
     public async Task<AevatarOAuthClientSnapshot> GetAsync(CancellationToken ct = default)
     {
+        var configuredClientId = _clientOptions.ClientId.Trim();
+        if (configuredClientId.Length == 0)
+        {
+            throw new AevatarOAuthClientNotProvisionedException(
+                $"Aevatar OAuth client id is missing from '{AevatarOAuthClientOptions.ClientIdConfigurationKey}'.");
+        }
+
         var document = await _reader.GetAsync(AevatarOAuthClientGAgent.WellKnownId, ct).ConfigureAwait(false);
         // Provisioned when a current HMAC key exists in either shape: a vault
         // reference (new writes) or legacy plaintext bytes (pre-migration).
@@ -36,6 +48,11 @@ public sealed class AevatarOAuthClientProjectionProvider : IAevatarOAuthClientPr
             && (HasRef(document.HmacKeyRef) || !document.HmacKey.IsEmpty);
         if (document is null || !document.IsProvisioned || !hasCurrentKey)
             throw new AevatarOAuthClientNotProvisionedException();
+        if (!string.Equals(document.ClientId, configuredClientId, StringComparison.Ordinal))
+        {
+            throw new AevatarOAuthClientNotProvisionedException(
+                $"Configured OAuth client '{configuredClientId}' has not been materialized by the OAuth client actor yet.");
+        }
 
         // Current key: an unresolvable reference is a provisioning fault (fail closed).
         var hmacKey = await TryResolveKeyAsync(document.HmacKeyRef, document.HmacKey, ct).ConfigureAwait(false)
@@ -73,7 +90,7 @@ public sealed class AevatarOAuthClientProjectionProvider : IAevatarOAuthClientPr
             : string.IsNullOrEmpty(document.RedirectUri) ? [] : [document.RedirectUri];
 
         return new AevatarOAuthClientSnapshot(
-            ClientId: document.ClientId,
+            ClientId: configuredClientId,
             ClientIdIssuedAt: DateTimeOffset.FromUnixTimeSeconds(document.ClientIdIssuedAtUnix),
             HmacKid: string.IsNullOrEmpty(document.HmacKid) ? AevatarOAuthClientGAgent.InitialHmacKid : document.HmacKid,
             HmacKey: hmacKey,

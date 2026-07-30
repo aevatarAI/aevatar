@@ -42,25 +42,29 @@ console at the hosted backend, set both targets to the hosted API URL in
 `.env.local` and set `AEVATAR_PROXY_PRESERVE_AUTH_HOST=false` so `/api/auth/*`
 uses the hosted backend Host header.
 
-For NyxID login, the console reads the broker OAuth client from Studio Hosting
-via `/api/auth/nyxid/config` and finalizes callbacks through
-`/api/auth/nyxid/finalize`. Keep `/api/auth/*` proxied to the Studio backend.
-Only set a local fallback callback URI when the browser origin differs from the
-registered Studio callback:
+For NyxID login, the console reads the authority, public OAuth client id, scope,
+and callback URI from the frontend build environment. It finalizes callbacks
+through `/api/auth/nyxid/finalize`, so keep `/api/auth/*` proxied to the Studio
+backend. Configure all four browser OAuth values before building:
 
 ```bash
+NYXID_BASE_URL=https://nyx.chrono-ai.fun
+NYXID_CLIENT_ID=replace-with-public-client-id
+NYXID_SCOPE="openid profile email offline_access urn:nyxid:scope:broker_binding proxy"
 NYXID_REDIRECT_URI=http://127.0.0.1:5173/auth/callback
 ORNN_BASE_URL=https://ornn.chrono-ai.fun
 # Optional when deploying under a sub-path such as /console/
 AEVATAR_CONSOLE_PUBLIC_PATH=/
 ```
 
-The browser must not configure its own NyxID OAuth client id or service access.
-Authorization starts from the backend-provided `baseUrl`, `clientId`, `scope`,
-and RFC 8707 `resources`, so the client id and required Aevatar service match
-backend token finalization.
+`NYXID_BASE_URL`, `NYXID_CLIENT_ID`, and `NYXID_SCOPE` are injected into the
+browser bundle at build time and are the single configuration source for
+authorization, PKCE pending state, and token refresh. Keep them aligned with
+the OAuth client configured for backend token finalization.
 `NYXID_REDIRECT_URI` must exactly match the Studio login callback registered in
 NyxID when you override it locally.
+Default service preselection is owned by the NyxID OAuth Client
+`default_service_catalog_slugs`; the browser does not send OAuth `resource` parameters.
 `ORNN_BASE_URL` controls the Ornn skills endpoint used by Studio Settings. If you omit it, the frontend falls back to the public Ornn instance.
 If you change `.env.local`, restart `pnpm dev` so Umi reloads the injected env values.
 

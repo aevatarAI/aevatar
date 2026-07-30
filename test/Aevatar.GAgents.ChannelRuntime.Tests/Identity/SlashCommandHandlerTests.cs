@@ -1,5 +1,6 @@
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions.Slash;
+using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Slash;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -42,7 +43,7 @@ public sealed class SlashCommandHandlerTests
     public async Task Init_ReturnsBindingCard_ForUnboundSenderInPrivateChat()
     {
         var broker = new InMemoryCapabilityBroker();
-        var handler = new InitChannelSlashCommandHandler(broker, broker, NullLogger<InitChannelSlashCommandHandler>.Instance);
+        var handler = new InitChannelSlashCommandHandler(broker, NullLogger<InitChannelSlashCommandHandler>.Instance);
 
         var reply = await handler.HandleAsync(Context(), default);
 
@@ -60,7 +61,7 @@ public sealed class SlashCommandHandlerTests
     public async Task Init_RefusesGroupChat()
     {
         var broker = new InMemoryCapabilityBroker();
-        var handler = new InitChannelSlashCommandHandler(broker, broker, NullLogger<InitChannelSlashCommandHandler>.Instance);
+        var handler = new InitChannelSlashCommandHandler(broker, NullLogger<InitChannelSlashCommandHandler>.Instance);
 
         var reply = await handler.HandleAsync(Context(privateChat: false), default);
 
@@ -70,16 +71,21 @@ public sealed class SlashCommandHandlerTests
     }
 
     [Fact]
-    public async Task Init_TellsAlreadyBoundSender_ToUnbindFirst()
+    public async Task Init_OffersServiceAuthorizationRenewal_ForBoundSender()
     {
         var broker = new InMemoryCapabilityBroker();
-        var handler = new InitChannelSlashCommandHandler(broker, broker, NullLogger<InitChannelSlashCommandHandler>.Instance);
+        broker.SeedBinding(Subject(), new BindingId { Value = "bnd_existing" });
+        var handler = new InitChannelSlashCommandHandler(broker, NullLogger<InitChannelSlashCommandHandler>.Instance);
 
         var reply = await handler.HandleAsync(Context(bindingValue: "bnd_existing"), default);
 
         reply.Should().NotBeNull();
-        reply!.Actions.Should().BeEmpty();
-        reply.Text.Should().Contain("/unbind");
+        reply!.Actions.Should().ContainSingle(action =>
+            action.Kind == ActionElementKind.Link &&
+            action.Label == "更新服务授权");
+        reply.Text.Should().Contain("重新确认并更新");
+        reply.Text.Should().NotContain("查看当前已授权服务");
+        reply.Text.Should().NotContain("/unbind");
     }
 
     [Fact]
@@ -146,7 +152,7 @@ public sealed class SlashCommandHandlerTests
     public void InitHandler_DoesNotRequireBinding()
     {
         var broker = new InMemoryCapabilityBroker();
-        var handler = new InitChannelSlashCommandHandler(broker, broker, NullLogger<InitChannelSlashCommandHandler>.Instance);
+        var handler = new InitChannelSlashCommandHandler(broker, NullLogger<InitChannelSlashCommandHandler>.Instance);
         handler.RequiresBinding.Should().BeFalse();
     }
 }

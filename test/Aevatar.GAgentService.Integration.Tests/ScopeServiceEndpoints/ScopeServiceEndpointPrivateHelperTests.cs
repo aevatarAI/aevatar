@@ -2,7 +2,6 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Reflection;
 using System.Security.Claims;
-using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
@@ -104,7 +103,14 @@ public sealed class ScopeServiceEndpointPrivateHelperTests : ScopeServiceEndpoin
         {
             RequestServices = new ServiceCollection()
                 .AddSingleton<IUserConfigQueryPort>(new StubUserConfigStore(
-                    new UserConfig("user-model", "/preferred-route")))
+                    new UserConfig(
+                        DefaultModel: "user-model",
+                        PreferredLlmRoute: "/api/v1/proxy/s/legacy",
+                        LlmSelection: new UserLlmSelectionValue(
+                            UserLlmSelectionKind.NyxIdUserService,
+                            " /preferred-route ",
+                            "us-preferred",
+                            "preferred"))))
                 .BuildServiceProvider(),
         };
         successContext.Request.Headers.Authorization = "Bearer token-123";
@@ -148,6 +154,40 @@ public sealed class ScopeServiceEndpointPrivateHelperTests : ScopeServiceEndpoin
             failingContext,
             CancellationToken.None);
         failedControl.Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task BuildScopedLlmControlAsync_WithoutTypedSelection_ShouldIgnoreCompatibilityRoute(
+        bool useUnspecifiedSelection)
+    {
+        const string prefixedModel = "chrono-llm/gpt-5.5";
+        var selection = useUnspecifiedSelection
+            ? new UserLlmSelectionValue(
+                UserLlmSelectionKind.Unspecified,
+                "/api/v1/proxy/s/typed-but-ignored",
+                "us-ignored",
+                "ignored")
+            : null;
+        var context = new DefaultHttpContext
+        {
+            RequestServices = new ServiceCollection()
+                .AddSingleton<IUserConfigQueryPort>(new StubUserConfigStore(new UserConfig(
+                    DefaultModel: prefixedModel,
+                    PreferredLlmRoute: "/api/v1/proxy/s/legacy",
+                    LlmSelection: selection)))
+                .BuildServiceProvider(),
+        };
+
+        var control = await InvokePrivateStaticTask<LLMControlContext?>(
+            "BuildScopedLlmControlAsync",
+            context,
+            CancellationToken.None);
+
+        control.Should().NotBeNull();
+        control!.ModelOverride.Should().Be(prefixedModel);
+        control.NyxIdRoutePreference.Should().BeNull();
     }
 
     [Fact]

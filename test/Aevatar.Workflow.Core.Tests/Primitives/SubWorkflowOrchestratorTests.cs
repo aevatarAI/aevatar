@@ -235,27 +235,42 @@ public sealed class SubWorkflowOrchestratorTests
             DefinitionActorId = definitionActorId,
             DefinitionVersion = 7,
         });
+        var fileRef = BuildWorkflowFileRef("file-sub-1");
+
+        var invokeRequested = new SubWorkflowInvokeRequestedEvent
+        {
+            InvocationId = "invoke-1",
+            ParentRunId = "parent-run",
+            ParentStepId = "step-a",
+            WorkflowName = "sub_flow",
+            Input = "payload-a",
+            Lifecycle = WorkflowCallLifecycle.Singleton,
+            RootRunId = "root-run",
+            RequestedDepth = 2,
+        };
+        invokeRequested.InputFileRefs.Add(fileRef.Clone());
 
         await harness.Orchestrator.HandleInvokeRequestedAsync(
-            new SubWorkflowInvokeRequestedEvent
-            {
-                InvocationId = "invoke-1",
-                ParentRunId = "parent-run",
-                ParentStepId = "step-a",
-                WorkflowName = "sub_flow",
-                Input = "payload-a",
-                Lifecycle = WorkflowCallLifecycle.Singleton,
-                RootRunId = "root-run",
-                RequestedDepth = 2,
-            },
+            invokeRequested,
             state,
             CancellationToken.None);
 
-        harness.Persisted.Should().ContainSingle(x => x is SubWorkflowDefinitionResolutionRegisteredEvent);
+        var registeredResolution = harness.Persisted
+            .OfType<SubWorkflowDefinitionResolutionRegisteredEvent>()
+            .Should()
+            .ContainSingle()
+            .Subject;
+        registeredResolution.InputFileRefs.Should().ContainSingle().Which.FileId.Should().Be("file-sub-1");
         harness.Sent.Should().ContainSingle(x => x.TargetActorId == definitionActorId);
         var resolutionState = SubWorkflowOrchestrator.ApplySubWorkflowDefinitionResolutionRegistered(
             state,
-            harness.Persisted.OfType<SubWorkflowDefinitionResolutionRegisteredEvent>().Single());
+            registeredResolution);
+        resolutionState.PendingSubWorkflowDefinitionResolutions.Should()
+            .ContainSingle()
+            .Which.InputFileRefs.Should()
+            .ContainSingle()
+            .Which.FileId.Should()
+            .Be("file-sub-1");
 
         harness.Persisted.Clear();
         harness.Sent.Clear();
@@ -283,6 +298,7 @@ public sealed class SubWorkflowOrchestratorTests
         var registeredInvocation = harness.Persisted.OfType<SubWorkflowInvocationRegisteredEvent>().Should().ContainSingle(x => x.InvocationId == "invoke-1").Subject;
         registeredInvocation.RootRunId.Should().Be("root-run");
         registeredInvocation.Depth.Should().Be(2);
+        registeredInvocation.InputFileRefs.Should().ContainSingle().Which.FileId.Should().Be("file-sub-1");
         harness.Persisted.Should().NotContain(x => x is SubWorkflowBindingUpsertedEvent);
         harness.CancelledLeases.Should().ContainSingle(x => x.CallbackId == resolutionState.PendingSubWorkflowDefinitionResolutions[0].TimeoutCallbackId);
         harness.Sent.Should().ContainSingle(x => x.TargetActorId == childActorId);
@@ -295,6 +311,7 @@ public sealed class SubWorkflowOrchestratorTests
         start.WorkflowRuntime.ParentStepId.Should().Be("step-a");
         start.WorkflowRuntime.RootRunId.Should().Be("root-run");
         start.WorkflowRuntime.Depth.Should().Be(2);
+        start.InputFileRefs.Should().ContainSingle().Which.FileId.Should().Be("file-sub-1");
         start.Parameters.Keys.Should().NotContain(key => key.StartsWith("workflow_runtime.", StringComparison.Ordinal));
     }
 
@@ -1496,6 +1513,24 @@ public sealed class SubWorkflowOrchestratorTests
         failure.Success.Should().BeFalse();
         failure.Error.Should().Contain(expectedText);
     }
+
+    private static WorkflowFileRef BuildWorkflowFileRef(string fileId) =>
+        new()
+        {
+            FileId = fileId,
+            ArtifactId = $"workflow-file://{fileId}",
+            SourceKind = WorkflowFileSourceKind.ConnectedServiceResource,
+            SourceMessageId = "om_1",
+            SourceResourceKey = "file_key_1",
+            FileName = $"{fileId}.pdf",
+            MediaType = "application/pdf",
+            SizeBytes = 1234,
+            Sha256 = $"sha-{fileId}",
+            CreatedAtUnixMs = 1710000000000,
+            ExpiresAtUnixMs = 1710003600000,
+            OwnerRunId = "parent-run",
+            OwnerScopeId = "scope-1",
+        };
 
     private sealed record OrchestratorHarness(
         SubWorkflowOrchestrator Orchestrator,

@@ -203,7 +203,7 @@ public sealed class LlmRunCore(
 
         try
         {
-            var resolved = toolSetRegistry.Resolve(new ChatRouteToolSetRef { Name = toolSetName });
+            var resolved = toolSetRegistry.Resolve(toolSetName);
             if (resolved.IsSuccess)
                 return toolProviders.Append(new ToolSetResponsesToolProvider(resolved.Sources, logger));
 

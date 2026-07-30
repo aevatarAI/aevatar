@@ -54,6 +54,7 @@ public sealed class ResponsesCommandFacadeTests
         toolContext.Caller.ScopeId.Should().Be("scope-1");
         toolContext.Caller.OwnerSubject.Should().Be("owner-1");
         toolContext.Caller.ResponseId.Should().Be(command.ResponseId);
+        toolContext.Caller.OwnerScopeId.Should().Be("owner-1");
         toolContext.Credentials.NyxIdAccessToken.Should().Be("token");
         toolContext.Routing.NyxIdRoutePreference.Should().Be("route-value");
     }
@@ -1166,11 +1167,11 @@ public sealed class ResponsesCommandFacadeTests
     {
         public IReadOnlyList<string> GetRegisteredNames() => [];
 
-        public ToolSetResolveResult Resolve(ChatRouteToolSetRef? toolSetRef) =>
+        public ToolSetResolveResult Resolve(string? name) =>
             ToolSetResolveResult.Failure(new ToolSetResolveError(
                 ToolSetResolveError.UnknownNameCode,
-                toolSetRef?.Name ?? string.Empty,
-                $"Tool set '{toolSetRef?.Name}' is not registered.",
+                name ?? string.Empty,
+                $"Tool set '{name}' is not registered.",
                 []));
     }
 
@@ -1178,9 +1179,9 @@ public sealed class ResponsesCommandFacadeTests
     {
         public IReadOnlyList<string> GetRegisteredNames() => ["workspace.default"];
 
-        public ToolSetResolveResult Resolve(ChatRouteToolSetRef? toolSetRef) =>
+        public ToolSetResolveResult Resolve(string? name) =>
             ToolSetResolveResult.Success(
-                toolSetRef?.Name ?? "workspace.default",
+                name ?? "workspace.default",
                 [new StaticAgentToolSource(tools)]);
     }
 

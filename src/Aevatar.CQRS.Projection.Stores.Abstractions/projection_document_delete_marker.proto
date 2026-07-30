@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+option csharp_namespace = "Aevatar.CQRS.Projection.Stores.Abstractions";
+
+import "google/protobuf/timestamp.proto";
+
+message ProjectionDocumentDeleteMarkerRecord {
+  bool projection_tombstone = 1 [json_name = "__projection_tombstone"];
+  string id = 2 [json_name = "id"];
+  string actor_id = 3 [json_name = "actor_id"];
+  int64 state_version = 4 [json_name = "state_version"];
+  string last_event_id = 5 [json_name = "last_event_id"];
+  google.protobuf.Timestamp updated_at_utc_value = 6 [json_name = "updated_at_utc_value"];
+  google.protobuf.Timestamp deleted_at_utc_value = 7 [json_name = "__projection_deleted_at_utc"];
+  string projection_document_id = 8 [json_name = "ProjectionDocumentId"];
+}

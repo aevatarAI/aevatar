@@ -1,4 +1,5 @@
 using Aevatar.Configuration;
+using Aevatar.GAgentService.Abstractions;
 using Aevatar.Studio.Application;
 using Aevatar.Studio.Application.Studio;
 using Aevatar.Studio.Application.Studio.Abstractions;
@@ -6,6 +7,7 @@ using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Application.Studio.Services;
 using Aevatar.Studio.Domain.Studio.Models;
 using Aevatar.Studio.Tests.Shared;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 
@@ -460,15 +462,12 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
     public async Task CreateDraftAsync_WhenWorkflowYamlInvalid_ShouldRejectBeforeWorkspaceSave()
     {
         using var environment = new ScopedWorkflowEnvironment();
-        var workflowDefinitionParser = new RecordingWorkflowDefinitionParser
-        {
-            Result = WorkflowYamlParseResult.Invalid("invalid yaml"),
-        };
         var workspacePort = new RecordingStudioWorkspacePorts();
         var service = environment.CreateService(
-            workflowDefinitionParser: workflowDefinitionParser,
             workspaceQueryPort: workspacePort,
-            workspaceCommandPort: workspacePort);
+            workspaceCommandPort: workspacePort,
+            workflowDefinitionParser: new StubWorkflowDefinitionParser(
+                WorkflowYamlParseResult.Invalid("invalid yaml")));
 
         var act = () => service.CreateDraftAsync(
             "scope-1",
@@ -480,9 +479,45 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
 
         (await act.Should().ThrowAsync<InvalidOperationException>())
             .WithMessage("invalid yaml");
-        workflowDefinitionParser.ParseCalls.Should().ContainSingle("name: workflow-1\nsteps: []\n");
         workspacePort.QueriedScopes.Should().BeEmpty();
         workspacePort.SavedDrafts.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task SaveDraftAsync_ShouldPreserveUnresolvedRuntimeYamlAndStableDraftIdentity()
+    {
+        using var environment = new ScopedWorkflowEnvironment();
+        var workspacePort = new RecordingStudioWorkspacePorts();
+        var service = environment.CreateService(
+            workspaceQueryPort: workspacePort,
+            workspaceCommandPort: workspacePort);
+        var yaml = """
+            name: x_digest
+            steps:
+              - id: fetch
+                type: tool_call
+                parameters:
+                  tool: nyxid_proxy
+                  arguments: '{"query":{"request":"${input}"}}'
+            """;
+
+        var accepted = await service.SaveDraftAsync(
+            "scope-alpha",
+            "wf-alpha",
+            new SaveWorkflowDraftRequest(
+                "scope:scope-alpha",
+                "X Digest",
+                null,
+                yaml));
+
+        var saved = workspacePort.SavedDrafts.Should().ContainSingle().Subject;
+        saved.ScopeId.Should().Be("scope-alpha");
+        saved.WorkflowId.Should().Be("wf-alpha");
+        saved.WorkflowName.Should().Be("x_digest");
+        saved.Yaml.Should().Be(yaml.Trim());
+        accepted.WorkflowId.Should().Be("wf-alpha");
+        accepted.Accepted.Should().BeTrue();
+        accepted.Readiness.Stage.Should().Be("projection_pending");
     }
 
     [Fact]
@@ -515,13 +550,13 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
         public string HomeDirectory { get; }
 
         public AppScopedWorkflowService CreateService(
-            IWorkflowDefinitionParser? workflowDefinitionParser = null,
             IStudioWorkspaceQueryPort? workspaceQueryPort = null,
-            IStudioWorkspaceCommandPort? workspaceCommandPort = null)
+            IStudioWorkspaceCommandPort? workspaceCommandPort = null,
+            IWorkflowDefinitionParser? workflowDefinitionParser = null)
         {
             return new AppScopedWorkflowService(
                 new StubWorkflowYamlDocumentService(),
-                workflowDefinitionParser ?? new RecordingWorkflowDefinitionParser(),
+                workflowDefinitionParser ?? new StubWorkflowDefinitionParser(),
                 workspaceQueryPort,
                 workspaceCommandPort);
         }
@@ -572,19 +607,25 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
         }
     }
 
-    private sealed class RecordingWorkflowDefinitionParser : IWorkflowDefinitionParser
+    private sealed class StubWorkflowDefinitionParser(
+        WorkflowYamlParseResult? result = null) : IWorkflowDefinitionParser
     {
-        public WorkflowYamlParseResult Result { get; init; } = WorkflowYamlParseResult.Success("workflow");
-
-        public List<string> ParseCalls { get; } = [];
-
         public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(
             string workflowYaml,
             CancellationToken ct = default)
         {
-            ParseCalls.Add(workflowYaml);
-            return Task.FromResult(Result);
+            ct.ThrowIfCancellationRequested();
+            var workflowName = workflowYaml.Split('\n')
+                .Select(static line => line.Trim())
+                .First(static line => line.StartsWith("name:", StringComparison.Ordinal))[5..]
+                .Trim();
+            return Task.FromResult(result ?? WorkflowYamlParseResult.Success(workflowName));
         }
+
+        public Task<WorkflowInlineYamlBundleParseResult> ParseInlineWorkflowBundleAsync(
+            IReadOnlyList<WorkflowChatInlineYamlDocument> inlineWorkflowDocuments,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
     }
 
     private sealed class ThrowingWorkspaceQueryPort : IStudioWorkspaceQueryPort
@@ -693,4 +734,3 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
             1);
 
 }
-

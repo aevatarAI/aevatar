@@ -25,6 +25,46 @@ internal static class AevatarInvocationJson
             },
         }, Options);
 
+    public static bool TryReadError(
+        string? resultJson,
+        out InvocationToolError? error)
+    {
+        error = null;
+        if (string.IsNullOrWhiteSpace(resultJson))
+            return false;
+
+        try
+        {
+            using var document = JsonDocument.Parse(resultJson);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                !root.TryGetProperty("error", out var errorElement) ||
+                errorElement.ValueKind != JsonValueKind.Object ||
+                !errorElement.TryGetProperty("code", out var codeElement) ||
+                codeElement.ValueKind != JsonValueKind.String ||
+                !errorElement.TryGetProperty("message", out var messageElement) ||
+                messageElement.ValueKind != JsonValueKind.String)
+            {
+                return false;
+            }
+
+            var code = codeElement.GetString()?.Trim();
+            if (string.IsNullOrWhiteSpace(code))
+                return false;
+
+            error = new InvocationToolError
+            {
+                Code = code,
+                Message = messageElement.GetString()?.Trim() ?? string.Empty,
+            };
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
     public static string Serialize(InvocationToolResult result) =>
         JsonSerializer.Serialize(new
         {

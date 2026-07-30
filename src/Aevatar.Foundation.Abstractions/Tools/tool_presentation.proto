@@ -1,0 +1,62 @@
+syntax = "proto3";
+
+package aevatar.foundation.tools;
+
+option csharp_namespace = "Aevatar.Foundation.Abstractions.Tools";
+
+enum ToolPresentationKind {
+  TOOL_PRESENTATION_KIND_UNSPECIFIED = 0;
+  TOOL_PRESENTATION_KIND_GENERIC = 1;
+  TOOL_PRESENTATION_KIND_BUILT_IN = 2;
+  TOOL_PRESENTATION_KIND_NYX_ID_OPERATION = 3;
+  TOOL_PRESENTATION_KIND_MCP = 4;
+  TOOL_PRESENTATION_KIND_SKILL = 5;
+}
+
+enum ToolAvailability {
+  TOOL_AVAILABILITY_UNSPECIFIED = 0;
+  TOOL_AVAILABILITY_AVAILABLE = 1;
+  TOOL_AVAILABILITY_UNAVAILABLE = 2;
+}
+
+message ToolPresentationDescriptor {
+  string invocation_name = 1;
+  string display_name = 2;
+  string description = 3;
+  ToolPresentationKind kind = 4;
+  ToolAvailability availability = 5;
+  string unavailable_reason = 6;
+  string icon_url = 7;
+
+  oneof source_ref {
+    BuiltInToolRef built_in = 10;
+    NyxIdOperationRef nyx_id_operation = 11;
+    McpToolRef mcp = 12;
+    SkillRef skill = 13;
+  }
+}
+
+message BuiltInToolRef {
+  string tool_id = 1;
+}
+
+message NyxIdOperationRef {
+  string connected_service_id = 1;
+  string service_slug = 2;
+  string catalog_service_slug = 3;
+  string connection_label = 4;
+  string connector_display_name = 5;
+  string operation_id = 6;
+  string http_method = 7;
+  string path_template = 8;
+}
+
+message McpToolRef {
+  string server_name = 1;
+  string tool_name = 2;
+}
+
+message SkillRef {
+  string skill_name = 1;
+  string source = 2;
+}

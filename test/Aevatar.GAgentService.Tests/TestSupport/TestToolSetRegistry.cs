@@ -1,5 +1,4 @@
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
-using Aevatar.ChatRouting.Abstractions;
 
 namespace Aevatar.GAgentService.Tests.TestSupport;
 
@@ -16,6 +15,6 @@ internal sealed class TestToolSetRegistry(Func<string, ToolSetResolveResult> res
 
     public IReadOnlyList<string> GetRegisteredNames() => [];
 
-    public ToolSetResolveResult Resolve(ChatRouteToolSetRef? toolSetRef) =>
-        resolver(toolSetRef?.Name?.Trim() ?? string.Empty);
+    public ToolSetResolveResult Resolve(string? name) =>
+        resolver(name?.Trim() ?? string.Empty);
 }

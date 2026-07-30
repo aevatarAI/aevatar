@@ -3,6 +3,7 @@ using System.Text;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
@@ -18,6 +19,7 @@ using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.ChannelRuntime.Tests.Identity;
 using Aevatar.GAgents.Platform.Lark;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Application.Abstractions.Schedules;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http;
@@ -366,9 +368,8 @@ public sealed class ChannelConversationTurnRunnerTests
         toolContext.Caller.ResponseId.Should().Be("msg-sched-1");
         toolContext.Channel.RegistrationScopeId.Should().Be("scope-1");
         // The inbound bot's provider slug is also exposed as the default OUTBOUND delivery provider,
-        // so scheduled_agent_creator resolves one without manual config (was failing with
-        // lark_outbound_provider_slug_unavailable).
-        toolContext.ExternalMetadata.Should().ContainKey(ChannelMetadataKeys.LarkOutboundProxySlug)
+        // so scheduled_agent_creator resolves one without manual config.
+        toolContext.ExternalMetadata.Should().ContainKey(ChannelMetadataKeys.OutboundProviderSlug)
             .WhoseValue.Should().Be("api-lark-bot");
     }
 
@@ -469,8 +470,16 @@ public sealed class ChannelConversationTurnRunnerTests
         result.LlmReplyRequest.Metadata[ChannelMetadataKeys.LarkChatId].Should().Be("oc_chat_1");
         result.LlmReplyRequest.Metadata[ChannelMetadataKeys.LarkSubjectUserId].Should().Be("lark-user-1");
         result.LlmReplyRequest.Metadata[ChannelMetadataKeys.LarkSubjectEmployeeId].Should().Be("emp-1");
-
         var toolContext = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest.ToolContext);
+        toolContext.Channel.IdentityHints.Should().BeEquivalentTo(
+            new[]
+            {
+                new AgentToolChannelIdentityHint("sender", "global", "on_union_1"),
+                new AgentToolChannelIdentityHint("conversation", "platform", "oc_chat_1"),
+                new AgentToolChannelIdentityHint("subject", "account", "lark-user-1"),
+                new AgentToolChannelIdentityHint("subject", "directory", "emp-1"),
+            },
+            options => options.WithStrictOrdering());
         toolContext.ExternalMetadata[ChannelMetadataKeys.LarkSubjectUserId].Should().Be("lark-user-1");
         toolContext.ExternalMetadata[ChannelMetadataKeys.LarkSubjectEmployeeId].Should().Be("emp-1");
         nyxHandler.Requests.Should().ContainSingle();
@@ -541,6 +550,15 @@ public sealed class ChannelConversationTurnRunnerTests
         result.LlmReplyRequest.Metadata[ChannelMetadataKeys.LarkOperatorUserId].Should().NotBe("nyx-user-1");
         result.LlmReplyRequest.Metadata[ChannelMetadataKeys.LarkOperatorOpenId].Should().Be("ou_open_operator_1");
         result.LlmReplyRequest.Metadata[ChannelMetadataKeys.LarkOperatorUnionId].Should().Be("on_operator_1");
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest.ToolContext);
+        toolContext.Channel.IdentityHints.Should().BeEquivalentTo(
+            new[]
+            {
+                new AgentToolChannelIdentityHint("operator", "account", "lark-user-1"),
+                new AgentToolChannelIdentityHint("operator", "platform", "ou_open_operator_1"),
+                new AgentToolChannelIdentityHint("operator", "global", "on_operator_1"),
+            },
+            options => options.WithStrictOrdering());
         result.LlmReplyRequest.Metadata.Should().NotContainKey(ChannelMetadataKeys.LarkSubjectUserId);
         result.LlmReplyRequest.Metadata.Should().NotContainKey(ChannelMetadataKeys.LarkSubjectEmployeeId);
     }
@@ -1733,7 +1751,6 @@ public sealed class ChannelConversationTurnRunnerTests
         var broker = new InMemoryCapabilityBroker();
         broker.SeedBinding(subject, new BindingId { Value = "bnd-user-1" });
         var option = new UserLlmOption(
-            ServiceId: "svc-openai",
             ServiceSlug: "openai-work",
             DisplayName: "OpenAI Work",
             RouteValue: "/api/v1/proxy/s/openai-work",
@@ -1742,7 +1759,10 @@ public sealed class ChannelConversationTurnRunnerTests
             Status: "ready",
             Source: "user",
             Allowed: true,
-            Description: null);
+            Description: null,
+            Identity: new UserLlmServiceIdentity(
+                UserLlmIdentityAuthority.NyxIdUserServicesInventory,
+                "us-openai"));
         var optionsService = new StubUserLlmOptionsService(option);
         var selectionService = new RecordingUserLlmSelectionService();
         var services = new ServiceCollection()
@@ -1758,7 +1778,7 @@ public sealed class ChannelConversationTurnRunnerTests
         activity.Content.CardAction.LlmSelection = new LlmSelectionActionPayload
         {
             Action = TextUserLlmOptionsRenderer.SelectServiceAction,
-            ServiceId = "svc-openai",
+            ServiceId = "us-openai",
         };
 
         var result = await runner.RunInboundAsync(activity, CancellationToken.None);
@@ -1766,7 +1786,7 @@ public sealed class ChannelConversationTurnRunnerTests
         result.Success.Should().BeTrue();
         result.LlmReplyRequest.Should().BeNull();
         result.SentActivityId.Should().Be("direct-reply:evt-llm-select-1");
-        selectionService.SelectedServiceId.Should().Be("svc-openai");
+        selectionService.SelectedServiceId.Should().Be("us-openai");
         selectionService.Context?.BindingId.Value.Should().Be("bnd-user-1");
         adapter.Replies.Should().ContainSingle();
         adapter.Replies[0].ReplyText.Should().Contain("OpenAI Work");
@@ -1783,8 +1803,8 @@ public sealed class ChannelConversationTurnRunnerTests
         };
         var broker = new InMemoryCapabilityBroker();
         broker.SeedBinding(subject, new BindingId { Value = "bnd-user-1" });
+        const string userServiceId = "123e4567-e89b-12d3-a456-426614174000";
         var option = new UserLlmOption(
-            ServiceId: "123e4567-e89b-12d3-a456-426614174000",
             ServiceSlug: "openai-work",
             DisplayName: "OpenAI Work",
             RouteValue: "/api/v1/proxy/s/openai-work",
@@ -1793,7 +1813,10 @@ public sealed class ChannelConversationTurnRunnerTests
             Status: "ready",
             Source: "user",
             Allowed: true,
-            Description: null);
+            Description: null,
+            Identity: new UserLlmServiceIdentity(
+                UserLlmIdentityAuthority.NyxIdUserServicesInventory,
+                userServiceId));
         var optionsService = new StubUserLlmOptionsService(option);
         var selectionService = new RecordingUserLlmSelectionService();
         var services = new ServiceCollection()
@@ -1807,12 +1830,12 @@ public sealed class ChannelConversationTurnRunnerTests
         var runner = CreateRunner(registrationQueryPort, adapter, services);
         var activity = BuildCardActionActivity("evt-llm-select-compact-1");
         activity.Content.CardAction!.ActionId = TextUserLlmOptionsRenderer.SelectServiceActionId;
-        activity.Content.CardAction.SubmittedValue = option.ServiceId;
+        activity.Content.CardAction.SubmittedValue = userServiceId;
 
         var result = await runner.RunInboundAsync(activity, CancellationToken.None);
 
         result.Success.Should().BeTrue();
-        selectionService.SelectedServiceId.Should().Be(option.ServiceId);
+        selectionService.SelectedServiceId.Should().Be(userServiceId);
         adapter.Replies.Should().ContainSingle();
         adapter.Replies[0].ReplyText.Should().Contain("OpenAI Work");
     }
@@ -1828,8 +1851,8 @@ public sealed class ChannelConversationTurnRunnerTests
         };
         var broker = new InMemoryCapabilityBroker();
         broker.SeedBinding(subject, new BindingId { Value = "bnd-user-1" });
+        const string userServiceId = "us-form";
         var option = new UserLlmOption(
-            ServiceId: "svc-form",
             ServiceSlug: "form-route",
             DisplayName: "Form Route",
             RouteValue: "/api/v1/proxy/s/form-route",
@@ -1838,7 +1861,10 @@ public sealed class ChannelConversationTurnRunnerTests
             Status: "ready",
             Source: "user",
             Allowed: true,
-            Description: null);
+            Description: null,
+            Identity: new UserLlmServiceIdentity(
+                UserLlmIdentityAuthority.NyxIdUserServicesInventory,
+                userServiceId));
         var optionsService = new StubUserLlmOptionsService(option);
         var selectionService = new RecordingUserLlmSelectionService();
         var services = new ServiceCollection()
@@ -1850,7 +1876,7 @@ public sealed class ChannelConversationTurnRunnerTests
         var runner = CreateRunner(BuildRegistrationQueryPort(), new RecordingPlatformAdapter(), services);
         var activity = BuildCardActionActivity(
             "evt-llm-select-form-1",
-            (TextUserLlmOptionsRenderer.ServiceIdArgument, option.ServiceId));
+            (TextUserLlmOptionsRenderer.ServiceIdArgument, userServiceId));
         activity.Content.CardAction!.ActionKind = ActionElementKind.FormSubmit;
         activity.Content.CardAction.LlmSelection = new LlmSelectionActionPayload
         {
@@ -1860,7 +1886,7 @@ public sealed class ChannelConversationTurnRunnerTests
         var result = await runner.RunInboundAsync(activity, CancellationToken.None);
 
         result.Success.Should().BeTrue();
-        selectionService.SelectedServiceId.Should().Be(option.ServiceId);
+        selectionService.SelectedServiceId.Should().Be(userServiceId);
         selectionService.Context?.BindingId.Value.Should().Be("bnd-user-1");
     }
 
@@ -1877,7 +1903,6 @@ public sealed class ChannelConversationTurnRunnerTests
         broker.SeedBinding(subject, new BindingId { Value = "bnd-user-1" });
         var options = Enumerable.Range(1, 7)
             .Select(i => new UserLlmOption(
-                ServiceId: $"svc-{i}",
                 ServiceSlug: $"route-{i}",
                 DisplayName: $"Route {i}",
                 RouteValue: $"/api/v1/proxy/s/route-{i}",
@@ -1886,7 +1911,10 @@ public sealed class ChannelConversationTurnRunnerTests
                 Status: "ready",
                 Source: "user",
                 Allowed: true,
-                Description: null))
+                Description: null,
+                Identity: new UserLlmServiceIdentity(
+                    UserLlmIdentityAuthority.NyxIdUserServicesInventory,
+                    $"us-{i}")))
             .ToArray();
         var optionsService = new StubUserLlmOptionsService(options, current: options[0]);
         var selectionService = new RecordingUserLlmSelectionService();
@@ -1930,7 +1958,6 @@ public sealed class ChannelConversationTurnRunnerTests
         var broker = new InMemoryCapabilityBroker();
         broker.SeedBinding(subject, new BindingId { Value = "bnd-user-1" });
         var option = new UserLlmOption(
-            ServiceId: "svc-openai",
             ServiceSlug: "openai-work",
             DisplayName: "OpenAI Work",
             RouteValue: "/api/v1/proxy/s/openai-work",
@@ -1939,7 +1966,10 @@ public sealed class ChannelConversationTurnRunnerTests
             Status: "ready",
             Source: "user",
             Allowed: true,
-            Description: null);
+            Description: null,
+            Identity: new UserLlmServiceIdentity(
+                UserLlmIdentityAuthority.NyxIdUserServicesInventory,
+                "us-openai"));
         var optionsService = new StubUserLlmOptionsService(option);
         var selectionService = new RecordingUserLlmSelectionService();
         var services = new ServiceCollection()
@@ -2407,9 +2437,8 @@ public sealed class ChannelConversationTurnRunnerTests
         var callerScopeResolver = new CapturingCallerScopeResolver();
         var services = new ServiceCollection()
             .AddSingleton(Substitute.For<IUserAgentCatalogQueryPort>())
-            .AddSingleton(Substitute.For<ISkillRunnerExecutionQueryPort>())
-            .AddSingleton(Substitute.For<ISkillRunnerCommandPort>())
             .AddSingleton(Substitute.For<IScheduledDispatchApplicationService>())
+            .AddSingleton(Substitute.For<IWorkflowScheduleApplicationService>())
             .AddSingleton(Substitute.For<IUserAgentCatalogCommandPort>())
             .AddSingleton<ICallerScopeResolver>(callerScopeResolver)
             .AddSingleton(Substitute.For<IScheduledAgentApiKeyIssuer>())
@@ -2477,6 +2506,71 @@ public sealed class ChannelConversationTurnRunnerTests
         nyxHandler.Requests[0].Path.Should().Be(
             "/api/v1/proxy/s/api-lark-bot/open-apis/contact/v3/users/on_union_direct?user_id_type=union_id");
         nyxHandler.Requests[0].Authorization.Should().Be("Bearer runtime-user-token-1");
+        AgentToolRequestContext.Current.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldPropagateOwnerScopeId_ToDirectAgentBuilderToolContext()
+    {
+        var broker = new InMemoryCapabilityBroker();
+        broker.SeedBinding(
+            new ExternalSubjectRef
+            {
+                Platform = "lark",
+                Tenant = "scope-1",
+                ExternalUserId = "ou_user_1",
+            },
+            new BindingId { Value = "bnd-user-1" });
+        var callerScopeResolver = new CapturingCallerScopeResolver();
+        var services = new ServiceCollection()
+            .AddSingleton(Substitute.For<IUserAgentCatalogQueryPort>())
+            .AddSingleton(Substitute.For<IScheduledDispatchApplicationService>())
+            .AddSingleton(Substitute.For<IWorkflowScheduleApplicationService>())
+            .AddSingleton(Substitute.For<IUserAgentCatalogCommandPort>())
+            .AddSingleton<ICallerScopeResolver>(callerScopeResolver)
+            .AddSingleton(Substitute.For<IScheduledAgentApiKeyIssuer>())
+            .AddSingleton<ISecretVault>(new InMemorySecretVault())
+            .AddSingleton<ScheduledAgentCredentialLifecycle>()
+            .AddSingleton<IScheduledAgentCredentialLifecycle>(
+                sp => sp.GetRequiredService<ScheduledAgentCredentialLifecycle>())
+            .AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory())
+            .AddSingleton<IExternalIdentityBindingQueryPort>(broker)
+            .AddSingleton<INyxIdCapabilityBroker>(broker)
+            .AddSingleton<IOwnerScopeResolver>(new StubOwnerScopeResolver("owner-user-1"))
+            .BuildServiceProvider();
+        var runner = CreateRunner(
+            BuildRegistrationQueryPort(),
+            new RecordingPlatformAdapter(),
+            services,
+            relayHandler: new RecordingJsonHandler("""{"message_id":"reply-owner-scope-agent-builder"}"""));
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "/agents",
+                "msg-owner-scope-agent-builder-1",
+                ConversationScope.DirectMessage,
+                "oc_p2p_chat_1",
+                new OutboundDeliveryContext
+                {
+                    ReplyMessageId = "relay-msg-owner-scope-agent-builder-1",
+                    CorrelationId = "corr-owner-scope-agent-builder-1",
+                },
+                new TransportExtras
+                {
+                    NyxPlatform = "lark",
+                }),
+            RelayRuntimeContext(
+                "corr-owner-scope-agent-builder-1",
+                replyToken: "relay-token-owner-scope-agent-builder-1",
+                replyMessageId: "relay-msg-owner-scope-agent-builder-1",
+                nyxUserAccessToken: "runtime-user-token-owner-scope-1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.SentActivityId.Should().Be("direct-reply:msg-owner-scope-agent-builder-1");
+        callerScopeResolver.CapturedScopeId.Should().Be("scope-1");
+        callerScopeResolver.CapturedOwnerSubject.Should().Be("scope-1");
+        callerScopeResolver.CapturedOwnerScopeId.Should().Be("owner-user-1");
         AgentToolRequestContext.Current.Should().BeNull();
     }
 
@@ -2599,16 +2693,190 @@ public sealed class ChannelConversationTurnRunnerTests
         result.LlmReplyRequest.Metadata.Should().NotContainKey("scope_id");
         var toolContext = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest!.ToolContext);
         var llmControl = LLMControlContextMapper.FromPayload(result.LlmReplyRequest.LlmControl);
-        // Scope is threaded as a typed Caller field (not via metadata — see the scope_id assertion
-        // above), so scope-scoped tools (e.g. scheduled_agent_creator) work on the bound-sender path too.
+        // Caller scope stays the registration/caller context. Without an owner-scope resolver,
+        // the turn must not synthesize shared-data ownership from the sender token.
         toolContext.Caller.ScopeId.Should().Be("scope-1");
         toolContext.Caller.OwnerSubject.Should().Be("scope-1");
+        toolContext.Caller.OwnerScopeId.Should().BeNull();
         toolContext.Credentials.SenderNyxIdAccessToken.Should().BeNull();
         toolContext.SenderBinding.BindingId.Should().Be("bnd-user-1");
         toolContext.SenderBinding.NyxUserId.Should().Be("nyx-user-1");
         llmControl.SenderNyxIdAccessToken.Should().Be("test-access-token-for-bnd-user-1");
         userResolver.Tokens.Should().ContainSingle().Which.Should().Be("test-access-token-for-bnd-user-1");
         adapter.Replies.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_WhenBoundSenderAsksForNyxIdInventory_QueuesAgentRunWithExactAuthority()
+    {
+        var queryPort = Substitute.For<IExternalIdentityBindingQueryPort>();
+        queryPort.ResolveAsync(
+                Arg.Any<ExternalSubjectRef>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<BindingId?>(new BindingId { Value = "bnd-user-1" }));
+        var services = new ServiceCollection()
+            .AddSingleton(queryPort)
+            .BuildServiceProvider();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(BuildRegistrationQueryPort(), adapter, services);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "我在 nyxid 上有什么服务",
+                "msg-nyxid-inventory-1",
+                ConversationScope.DirectMessage,
+                "oc_p2p_chat_1",
+                transportExtras: new TransportExtras { NyxPlatform = "lark" }),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull(
+            "natural-language intent and answer composition belong to AgentRun and the loaded NyxID skill");
+        adapter.Replies.Should().BeEmpty("the turn runner must not render a fixed inventory reply");
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest!.ToolContext);
+        toolContext.SenderBinding.BindingId.Should().Be("bnd-user-1");
+        toolContext.NyxIdAuthority.Platform.Should().Be("lark");
+        toolContext.NyxIdAuthority.Tenant.Should().Be("scope-1");
+        toolContext.NyxIdAuthority.ExternalUserId.Should().Be("ou_user_1");
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldPropagateOwnerScopeId_ToDeferredLlmToolContext_WhenBoundSenderHasOwnerScope()
+    {
+        var broker = new InMemoryCapabilityBroker();
+        broker.SeedBinding(
+            new ExternalSubjectRef
+            {
+                Platform = "lark",
+                Tenant = "scope-1",
+                ExternalUserId = "ou_user_1",
+            },
+            new BindingId { Value = "bnd-user-1" });
+
+        var services = new ServiceCollection()
+            .AddSingleton<IExternalIdentityBindingQueryPort>(broker)
+            .AddSingleton<INyxIdCapabilityBroker>(broker)
+            .AddSingleton<INyxIdCurrentUserResolver>(new StubNyxIdCurrentUserResolver
+            {
+                ResolvedUserId = "nyx-user-1",
+            })
+            .AddSingleton<IOwnerScopeResolver>(new StubOwnerScopeResolver("owner-user-1"))
+            .BuildServiceProvider();
+        var runner = CreateRunner(BuildRegistrationQueryPort(), new RecordingPlatformAdapter(), services);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "hello",
+                "msg-owner-scope-bound-private-1",
+                ConversationScope.DirectMessage,
+                "oc_p2p_chat_1",
+                transportExtras: new TransportExtras
+                {
+                    NyxPlatform = "lark",
+                }),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest!.ToolContext);
+        toolContext.Caller.ScopeId.Should().Be("scope-1");
+        toolContext.Caller.OwnerSubject.Should().Be("scope-1");
+        toolContext.Caller.OwnerScopeId.Should().Be("owner-user-1");
+        toolContext.SenderBinding.BindingId.Should().Be("bnd-user-1");
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldPreserveOwnerScopeId_WhenSenderNyxUserIdLookupFails()
+    {
+        var broker = new InMemoryCapabilityBroker();
+        broker.SeedBinding(
+            new ExternalSubjectRef
+            {
+                Platform = "lark",
+                Tenant = "scope-1",
+                ExternalUserId = "ou_user_1",
+            },
+            new BindingId { Value = "bnd-user-1" });
+
+        var userResolver = new StubNyxIdCurrentUserResolver();
+        var services = new ServiceCollection()
+            .AddSingleton<IExternalIdentityBindingQueryPort>(broker)
+            .AddSingleton<INyxIdCapabilityBroker>(broker)
+            .AddSingleton<INyxIdCurrentUserResolver>(userResolver)
+            .AddSingleton<IOwnerScopeResolver>(new StubOwnerScopeResolver("owner-user-1"))
+            .BuildServiceProvider();
+        var runner = CreateRunner(BuildRegistrationQueryPort(), new RecordingPlatformAdapter(), services);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "hello",
+                "msg-owner-scope-bound-private-users-me-fails-1",
+                ConversationScope.DirectMessage,
+                "oc_p2p_chat_1",
+                transportExtras: new TransportExtras
+                {
+                    NyxPlatform = "lark",
+                }),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest!.ToolContext);
+        toolContext.Caller.ScopeId.Should().Be("scope-1");
+        toolContext.Caller.OwnerSubject.Should().Be("scope-1");
+        toolContext.Caller.OwnerScopeId.Should().Be("owner-user-1");
+        toolContext.SenderBinding.BindingId.Should().Be("bnd-user-1");
+        toolContext.SenderBinding.NyxUserId.Should().BeNull();
+        userResolver.Tokens.Should().ContainSingle().Which.Should().Be("test-access-token-for-bnd-user-1");
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldPreserveBinding_WhenGrantLacksRequiredService()
+    {
+        var subject = new ExternalSubjectRef
+        {
+            Platform = "lark",
+            Tenant = "scope-1",
+            ExternalUserId = "ou_user_1",
+        };
+        var queryPort = Substitute.For<IExternalIdentityBindingQueryPort>();
+        queryPort.ResolveAsync(Arg.Any<ExternalSubjectRef>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<BindingId?>(new BindingId { Value = "bnd-user-1" }));
+        var broker = Substitute.For<INyxIdCapabilityBroker>();
+        broker.IssueShortLivedAsync(
+                Arg.Any<ExternalSubjectRef>(),
+                Arg.Any<CapabilityScope>(),
+                Arg.Any<CancellationToken>())
+            .Returns<Task<CapabilityHandle>>(_ => throw new BindingServiceAccessMismatchException(
+                subject,
+                ["https://nyxid.test/api/v1/proxy/s/ornn-api"]));
+        var reconciler = Substitute.For<IBindingRevocationReconciler>();
+        var services = new ServiceCollection()
+            .AddSingleton(queryPort)
+            .AddSingleton(broker)
+            .BuildServiceProvider();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(
+            BuildRegistrationQueryPort(),
+            adapter,
+            services,
+            bindingRevocationReconciler: reconciler);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "hello",
+                "msg-bound-missing-service",
+                ConversationScope.DirectMessage,
+                "oc_p2p_chat_1",
+                transportExtras: new TransportExtras { NyxPlatform = "lark" }),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest!.ToolContext);
+        toolContext.SenderBinding.BindingId.Should().Be("bnd-user-1");
+        await reconciler.DidNotReceiveWithAnyArgs()
+            .ReconcileRevokedAsync(default!, default!, default);
     }
 
     [Fact]
@@ -4437,7 +4705,8 @@ public sealed class ChannelConversationTurnRunnerTests
         IInteractiveReplyDispatcher? interactiveReplyDispatcher = null,
         ILarkBotIdentityResolver? botIdentityResolver = null,
         IChannelRelayTailTextSender? relayTailTextSender = null,
-        IChannelRelayProxyResponseClassifier? relayProxyResponseClassifier = null)
+        IChannelRelayProxyResponseClassifier? relayProxyResponseClassifier = null,
+        IBindingRevocationReconciler? bindingRevocationReconciler = null)
     {
         services ??= BuildAgentBuilderToolServices();
         relayHandler ??= new RecordingJsonHandler("""{"message_id":"relay-reply"}""");
@@ -4481,6 +4750,7 @@ public sealed class ChannelConversationTurnRunnerTests
             identityBindingQueryPort: services.GetService<IExternalIdentityBindingQueryPort>(),
             slashCommandRegistry: services.GetService<ChannelSlashCommandRegistry>(),
             capabilityBroker: services.GetService<INyxIdCapabilityBroker>(),
+            bindingRevocationReconciler: bindingRevocationReconciler,
             userLlmSelectionService: services.GetService<IUserLlmSelectionService>(),
             userLlmOptionsService: services.GetService<IUserLlmOptionsService>(),
             userLlmOptionsRenderer: services.GetService<IUserLlmOptionsRenderer<MessageContent>>(),
@@ -4543,9 +4813,8 @@ public sealed class ChannelConversationTurnRunnerTests
 
         var services = new ServiceCollection()
             .AddSingleton(queryPort)
-            .AddSingleton(Substitute.For<ISkillRunnerExecutionQueryPort>())
-            .AddSingleton(Substitute.For<ISkillRunnerCommandPort>())
             .AddSingleton(Substitute.For<IScheduledDispatchApplicationService>())
+            .AddSingleton(Substitute.For<IWorkflowScheduleApplicationService>())
             .AddSingleton(Substitute.For<IUserAgentCatalogCommandPort>())
             .AddSingleton<ICallerScopeResolver>(callerScopeResolver)
             .AddSingleton(Substitute.For<IScheduledAgentApiKeyIssuer>())
@@ -4809,6 +5078,9 @@ public sealed class ChannelConversationTurnRunnerTests
     private sealed class CapturingCallerScopeResolver : ICallerScopeResolver
     {
         public IReadOnlyDictionary<string, string>? CapturedMetadata { get; private set; }
+        public string? CapturedScopeId { get; private set; }
+        public string? CapturedOwnerSubject { get; private set; }
+        public string? CapturedOwnerScopeId { get; private set; }
 
         public Task<OwnerScope?> TryResolveAsync(CancellationToken ct = default)
         {
@@ -4816,6 +5088,9 @@ public sealed class ChannelConversationTurnRunnerTests
             CapturedMetadata = current is null
                 ? null
                 : CaptureMetadata(current);
+            CapturedScopeId = current?.Caller.ScopeId;
+            CapturedOwnerSubject = current?.Caller.OwnerSubject;
+            CapturedOwnerScopeId = current?.Caller.OwnerScopeId;
             return Task.FromResult<OwnerScope?>(OwnerScope.ForChannel(
                 "nyx-user-1",
                 "lark",
@@ -4833,6 +5108,14 @@ public sealed class ChannelConversationTurnRunnerTests
             };
             return captured;
         }
+    }
+
+    private sealed class StubOwnerScopeResolver(string? ownerScopeId) : IOwnerScopeResolver
+    {
+        public Task<OwnerScopeId?> ResolveAsync(ExternalSubjectRef externalSubject, CancellationToken ct = default) =>
+            Task.FromResult(string.IsNullOrWhiteSpace(ownerScopeId)
+                ? null
+                : new OwnerScopeId { Value = ownerScopeId });
     }
 
     private sealed class TestNyxIdApiClientFactory : INyxIdApiClientFactory

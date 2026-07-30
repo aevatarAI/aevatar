@@ -38,6 +38,65 @@ internal sealed class UserSkillCatalogQueryService : IUserSkillCatalogQueryServi
             Inputs: []);
     }
 
+    public async Task<UserExactSkillReadResult> GetExactSkillAsync(
+        string accessToken,
+        string guid,
+        string? literalVersion,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            var resolvedVersion = literalVersion;
+            if (string.IsNullOrEmpty(resolvedVersion))
+            {
+                var current = await _ornnClient.GetSkillJsonAsync(accessToken, guid, ct);
+                if (current is null)
+                    return new UserExactSkillReadResult(null, "exact_skill_not_found");
+                resolvedVersion = current.Version;
+                if (!WorkflowSkillsEndpoints.IsLiteralVersion(resolvedVersion))
+                    return new UserExactSkillReadResult(null, "exact_skill_version_unavailable");
+            }
+            var exactVersion = resolvedVersion!;
+
+            var read = await _ornnClient.GetExactSkillDetailAsync(
+                accessToken,
+                guid,
+                exactVersion,
+                ct);
+            if (read.ProxyStatus is not null)
+                return new UserExactSkillReadResult(null, "exact_skill_upstream_failure", read.ProxyStatus);
+
+            var detail = read.Value;
+            if (detail is null)
+                return new UserExactSkillReadResult(null, "exact_skill_not_found");
+            if (!string.Equals(detail.Guid, guid, StringComparison.Ordinal) ||
+                string.IsNullOrWhiteSpace(detail.Name) ||
+                string.IsNullOrWhiteSpace(detail.CreatedBy) ||
+                string.IsNullOrWhiteSpace(detail.SkillHash))
+            {
+                return new UserExactSkillReadResult(null, "exact_skill_integrity_failure");
+            }
+            var exactGuid = detail.Guid!;
+
+            return new UserExactSkillReadResult(
+                new UserExactSkillDetail(
+                    exactGuid,
+                    detail.Name,
+                    exactVersion,
+                    detail.CreatedBy,
+                    detail.SkillHash),
+                null);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            return new UserExactSkillReadResult(null, "exact_skill_upstream_failure");
+        }
+    }
+
     public async Task<UserSkillListResult> ListVisibleSkillsAsync(
         string accessToken,
         string query,

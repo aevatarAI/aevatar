@@ -8,6 +8,7 @@ public static class LLMRequestMetadataKeys
     public const string RequestId = "aevatar.request_id";
     public const string CallId = "aevatar.call_id";
     public const string ScopeId = "aevatar.scope_id";
+    public const string OwnerScopeId = "aevatar.owner_scope_id";
     public const string OwnerSubject = "aevatar.owner_subject";
     public const string ResponseId = "aevatar.response_id";
     public const string NyxIdAccessToken = "nyxid.access_token";

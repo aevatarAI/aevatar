@@ -7,7 +7,7 @@ option csharp_namespace = "Aevatar.GAgents.Scheduled";
 import "google/protobuf/timestamp.proto";
 import "agent_messages.proto";
 import "Credentials/credential_secret_references.proto";
-import "skill_runner.proto";
+import "channel_delivery_address.proto";
 
 // Refactor (iter91/cluster-091-owner-scope-foundation):
 //   Old: this proto declared OwnerScope locally even though the tuple is foundational caller identity.
@@ -15,17 +15,16 @@ import "skill_runner.proto";
 
 // ─── User Agent Catalog (actor-backed delivery target store) ───
 
-message ChannelDeliveryAddressEndpoint {
-  string address_id = 1;
-  string address_type = 2;
+enum ScheduledAgentOutputFormat {
+  SCHEDULED_AGENT_OUTPUT_FORMAT_AUTO = 0;
+  SCHEDULED_AGENT_OUTPUT_FORMAT_TEXT = 1;
+  SCHEDULED_AGENT_OUTPUT_FORMAT_FEISHU_DOC = 2;
 }
 
-message ChannelDeliveryAddress {
-  string platform = 1;
-  string provider_slug = 2;
-  string conversation_id = 3;
-  ChannelDeliveryAddressEndpoint primary = 4;
-  ChannelDeliveryAddressEndpoint fallback = 5;
+enum ScheduledAgentScheduleMode {
+  SCHEDULED_AGENT_SCHEDULE_MODE_UNSPECIFIED = 0;
+  SCHEDULED_AGENT_SCHEDULE_MODE_CRON = 1;
+  SCHEDULED_AGENT_SCHEDULE_MODE_ONE_SHOT = 2;
 }
 
 message UserAgentCatalogEntry {
@@ -60,7 +59,7 @@ message UserAgentCatalogEntry {
   reserved "status", "last_run_at", "next_run_at", "error_count", "last_error";
   int64 tombstone_state_version = 21;
   // Deprecated compatibility bridge for state serialized before channel_address.
-  // New writes leave these empty and map reads into channel_address.
+  // New writes must leave these empty and map delivery through channel_address.
   string lark_receive_id = 22 [deprecated = true];
   string lark_receive_id_type = 23 [deprecated = true];
   string lark_receive_id_fallback = 24 [deprecated = true];
@@ -69,7 +68,7 @@ message UserAgentCatalogEntry {
   // the deprecated platform/owner_nyx_user_id fields are kept readable for
   // legacy state (issue #466 migration plan).
   aevatar.OwnerScope owner_scope = 26;
-  SkillRunnerOutputFormat output_format = 27;
+  ScheduledAgentOutputFormat output_format = 27;
   // Delivery target platform selected by the creator.
   // This is distinct from owner_scope.platform, which identifies the caller surface.
   string target_platform = 28;
@@ -183,7 +182,7 @@ message UserAgentCatalogUpsertCommand {
   string lark_receive_id_type_fallback = 17 [deprecated = true];
   // Caller scope captured at create time. Required for new writes.
   aevatar.OwnerScope owner_scope = 18;
-  SkillRunnerOutputFormat output_format = 19;
+  ScheduledAgentOutputFormat output_format = 19;
   // Delivery target platform selected by the creator.
   // This is distinct from owner_scope.platform, which identifies the caller surface.
   string target_platform = 20;
@@ -367,7 +366,7 @@ message UserAgentCatalogDocument {
   aevatar.OwnerScope owner_scope = 28;
   reserved 29, 30, 31, 32;
   reserved "catalog_source_version", "catalog_last_event_id", "runner_source_version", "runner_last_event_id";
-  SkillRunnerOutputFormat output_format = 33;
+  ScheduledAgentOutputFormat output_format = 33;
   // Delivery target platform selected by the creator.
   // This is distinct from owner_scope.platform, which identifies the caller surface.
   string target_platform = 34;

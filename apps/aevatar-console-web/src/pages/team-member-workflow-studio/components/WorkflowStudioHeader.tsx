@@ -4,9 +4,7 @@ import {
   CloudUploadOutlined,
   CodeOutlined,
   DeleteOutlined,
-  DownOutlined,
   EditOutlined,
-  FileTextOutlined,
   HistoryOutlined,
   MoreOutlined,
   PlayCircleOutlined,
@@ -46,7 +44,7 @@ type WorkflowStudioHeaderProps = {
   readonly showRefreshPublishStatus: boolean;
   readonly canOpenDraftRunPanel: boolean;
   readonly canSave: boolean;
-  readonly canViewYaml: boolean;
+  readonly canEditYaml: boolean;
   readonly dirty: boolean;
   readonly currentDraftRunPlaceholderReason?: string;
   readonly onPublishMember: () => void;
@@ -58,14 +56,12 @@ type WorkflowStudioHeaderProps = {
   readonly onDeleteConnection: () => void;
   readonly onDeleteNode: () => void;
   readonly onOpenDraftRunPanel: () => void;
-  readonly onOpenPasteYaml: () => void;
-  readonly onViewYaml: () => void;
+  readonly onEditYaml: () => void;
   readonly onNavigateBack: () => void;
   readonly onNavigateToTeam: () => void;
   readonly onNavigateToTeams: () => void;
   readonly onSave: () => void;
   readonly onTitleChange: (title: string) => void;
-  readonly pasteYamlPending: boolean;
   readonly savePending: boolean;
   readonly savePlaceholderReason?: string;
   readonly selectedEdgeId: string;
@@ -78,11 +74,11 @@ type WorkflowStudioHeaderProps = {
 
 const workflowStudioHeaderCss = `
 .workflow-studio-header {
-  background: #ffffff;
-  border-bottom: 1px solid #e5e7eb;
+  background: #fbfcfe;
+  border-bottom: 1px solid #d8e0ea;
   display: block;
   flex: 0 0 auto;
-  padding: 8px 16px;
+  padding: 10px 16px;
 }
 
 .workflow-studio-header__row {
@@ -256,7 +252,7 @@ const workflowStudioHeaderCss = `
   align-items: center;
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: 6px;
   justify-content: flex-end;
   max-width: 100%;
   min-width: 0;
@@ -265,15 +261,57 @@ const workflowStudioHeaderCss = `
 
 .workflow-studio-header__actions .ant-btn {
   border-color: #d8dce3;
+  border-radius: 7px;
   box-shadow: none;
   flex: 0 0 auto;
   font-weight: 500;
-  height: 30px;
+  height: 32px;
 }
 
 .workflow-studio-header__actions .ant-btn-primary {
   background: #2f6df6;
   border-color: #2f6df6;
+}
+
+.workflow-studio-header__action-group {
+  align-items: center;
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 4px;
+  min-width: 0;
+}
+
+.workflow-studio-header__action-group--primary,
+.workflow-studio-header__action-group--edit {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 2px;
+}
+
+.workflow-studio-header__action-group--commit {
+  gap: 6px;
+  padding-inline: 2px;
+}
+
+.workflow-studio-header__action-group--secondary {
+  border-left: 1px solid #e2e8f0;
+  margin-left: 2px;
+  padding-left: 8px;
+}
+
+.workflow-studio-header__action-group--primary .ant-btn,
+.workflow-studio-header__action-group--edit .ant-btn {
+  background: transparent;
+  border-color: transparent;
+}
+
+.workflow-studio-header__action-group--primary .ant-btn:hover,
+.workflow-studio-header__action-group--primary .ant-btn:focus-visible,
+.workflow-studio-header__action-group--edit .ant-btn:hover,
+.workflow-studio-header__action-group--edit .ant-btn:focus-visible {
+  background: #ffffff;
+  border-color: #d8e0ea;
 }
 
 .workflow-studio-header__primary-button {
@@ -297,7 +335,7 @@ const workflowStudioHeaderCss = `
   width: 30px;
 }
 
-@media (max-width: 1320px) {
+@media (max-width: 1500px) {
   .workflow-studio-header__breadcrumbs {
     display: none;
   }
@@ -318,6 +356,10 @@ const workflowStudioHeaderCss = `
     min-width: 34px;
     padding-inline: 8px;
   }
+
+  .workflow-studio-header__action-group--secondary {
+    padding-left: 6px;
+  }
 }
 
 @media (max-width: 980px) {
@@ -328,6 +370,12 @@ const workflowStudioHeaderCss = `
 
   .workflow-studio-header__actions {
     justify-content: flex-start;
+  }
+
+  .workflow-studio-header__action-group--secondary {
+    border-left: 0;
+    margin-left: 0;
+    padding-left: 0;
   }
 }
 
@@ -348,6 +396,10 @@ const workflowStudioHeaderCss = `
     justify-content: flex-start;
     min-width: 0;
     padding-bottom: 2px;
+  }
+
+  .workflow-studio-header__action-group {
+    gap: 3px;
   }
 
   .workflow-studio-header__action-label {
@@ -589,7 +641,7 @@ type HeaderActionsProps = {
   readonly canOpenInvoke: boolean;
   readonly canOpenPublishedRuns: boolean;
   readonly canSave: boolean;
-  readonly canViewYaml: boolean;
+  readonly canEditYaml: boolean;
   readonly invokeHref: string;
   readonly invokePlaceholderReason?: string;
   readonly onAddNode: () => void;
@@ -599,12 +651,10 @@ type HeaderActionsProps = {
   readonly onOpenDraftRunPanel: () => void;
   readonly onOpenInvoke: () => void;
   readonly onOpenPublishedRuns: () => void;
-  readonly onPasteYamlClick: () => void;
+  readonly onEditYaml: () => void;
   readonly onPublishMember: () => void;
   readonly onRefreshPublishStatus: () => void;
   readonly onSave: () => void;
-  readonly onViewYaml: () => void;
-  readonly pasteYamlPending: boolean;
   readonly publishDisabled: boolean;
   readonly publishPending: boolean;
   readonly publishPlaceholderReason?: string;
@@ -628,7 +678,7 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
   canOpenInvoke,
   canOpenPublishedRuns,
   canSave,
-  canViewYaml,
+  canEditYaml,
   invokeHref,
   invokePlaceholderReason,
   onAddNode,
@@ -636,14 +686,12 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
   onDeleteNode,
   onOpenAutomations,
   onOpenDraftRunPanel,
+  onEditYaml,
   onOpenInvoke,
   onOpenPublishedRuns,
-  onPasteYamlClick,
   onPublishMember,
   onRefreshPublishStatus,
   onSave,
-  onViewYaml,
-  pasteYamlPending,
   publishDisabled,
   publishPending,
   publishPlaceholderReason,
@@ -669,26 +717,6 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
         'teamMemberWorkflowStudio.header.deleteSelectedNode',
         'Delete selected node',
       );
-  const yamlMenuItems: WorkflowHeaderMenuItem[] = [
-    {
-      disabled: !canViewYaml,
-      icon: <CodeOutlined />,
-      key: 'view-yaml',
-      label: t('teamMemberWorkflowStudio.header.viewYaml', 'View YAML'),
-      title: canViewYaml
-        ? undefined
-        : t(
-            'teamMemberWorkflowStudio.header.viewYamlUnavailable',
-            'Load the workflow draft before viewing YAML.',
-          ),
-    },
-    {
-      disabled: pasteYamlPending,
-      icon: <FileTextOutlined />,
-      key: 'paste-yaml',
-      label: t('teamMemberWorkflowStudio.header.pasteYaml', 'Paste YAML'),
-    },
-  ];
   const moreMenuItems: WorkflowHeaderMenuItem[] = [
     hasSelectedConnection || hasSelectedNode
       ? {
@@ -711,253 +739,279 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
       data-responsive-actions="true"
       data-testid="workflow-header-primary-actions"
     >
-      <Button
-        aria-label={t('teamMemberWorkflowStudio.header.run', 'Run')}
-        className="workflow-studio-header__compact-button"
-        disabled={!canOpenDraftRunPanel}
-        icon={<PlayCircleOutlined />}
-        onClick={onOpenDraftRunPanel}
-        size="small"
-        title={
-          canOpenDraftRunPanel
-            ? t(
-                'teamMemberWorkflowStudio.header.prepareDraftRun',
-                'Prepare draft run',
-              )
-            : currentDraftRunPlaceholderReason
-        }
+      <div
+        className="workflow-studio-header__action-group workflow-studio-header__action-group--primary"
+        data-testid="workflow-header-run-actions"
       >
-        <span className="workflow-studio-header__action-label">
-          {t('teamMemberWorkflowStudio.header.run', 'Run')}
-        </span>
-      </Button>
-      <Button
-        aria-label={t('teamMemberWorkflowStudio.header.invoke', 'Invoke')}
-        className="workflow-studio-header__compact-button"
-        disabled={!canOpenInvoke}
-        href={canOpenInvoke ? invokeHref : undefined}
-        icon={<PlayCircleOutlined />}
-        onClick={(event) => {
-          event.preventDefault();
-          onOpenInvoke();
-        }}
-        size="small"
-        title={invokePlaceholderReason}
+        <Button
+          aria-label={t('teamMemberWorkflowStudio.header.run', 'Run')}
+          className="workflow-studio-header__compact-button"
+          disabled={!canOpenDraftRunPanel}
+          icon={<PlayCircleOutlined />}
+          onClick={onOpenDraftRunPanel}
+          size="small"
+          title={
+            canOpenDraftRunPanel
+              ? t(
+                  'teamMemberWorkflowStudio.header.prepareDraftRun',
+                  'Prepare draft run',
+                )
+              : currentDraftRunPlaceholderReason
+          }
+        >
+          <span className="workflow-studio-header__action-label">
+            {t('teamMemberWorkflowStudio.header.run', 'Run')}
+          </span>
+        </Button>
+        <Button
+          aria-label={t('teamMemberWorkflowStudio.header.invoke', 'Invoke')}
+          className="workflow-studio-header__compact-button"
+          disabled={!canOpenInvoke}
+          href={canOpenInvoke ? invokeHref : undefined}
+          icon={<PlayCircleOutlined />}
+          onClick={(event) => {
+            event.preventDefault();
+            onOpenInvoke();
+          }}
+          size="small"
+          title={
+            invokePlaceholderReason ??
+            (canOpenInvoke
+              ? t(
+                  'teamMemberWorkflowStudio.header.invoke.open',
+                  'Open the published member invoke workbench.',
+                )
+              : undefined)
+          }
+        >
+          <span className="workflow-studio-header__action-label workflow-studio-header__action-label--secondary">
+            {t('teamMemberWorkflowStudio.header.invoke', 'Invoke')}
+          </span>
+        </Button>
+      </div>
+      <div
+        className="workflow-studio-header__action-group workflow-studio-header__action-group--edit"
+        data-testid="workflow-header-edit-actions"
       >
-        <span className="workflow-studio-header__action-label workflow-studio-header__action-label--secondary">
-          {t('teamMemberWorkflowStudio.header.invoke', 'Invoke')}
-        </span>
-      </Button>
-      <Button
-        aria-label={t('teamMemberWorkflowStudio.header.addNode', 'Add node')}
-        className="workflow-studio-header__compact-button"
-        icon={<PlusOutlined />}
-        onClick={onAddNode}
-        size="small"
-      >
-        <span className="workflow-studio-header__action-label workflow-studio-header__action-label--secondary">
-          {t('teamMemberWorkflowStudio.header.addNode', 'Add node')}
-        </span>
-      </Button>
-      <Button
-        aria-label={t(
-          'teamMemberWorkflowStudio.header.publishedRuns',
-          'Published runs',
-        )}
-        className="workflow-studio-header__compact-button"
-        disabled={!canOpenPublishedRuns}
-        href={canOpenPublishedRuns ? publishedRunsHref : undefined}
-        icon={<HistoryOutlined />}
-        onClick={(event) => {
-          event.preventDefault();
-          onOpenPublishedRuns();
-        }}
-        size="small"
-        title={publishedRunsPlaceholderReason}
-      >
-        <span className="workflow-studio-header__action-label workflow-studio-header__action-label--secondary">
-          {t('teamMemberWorkflowStudio.header.publishedRuns', 'Published runs')}
-        </span>
-      </Button>
-      <Button
-        aria-label={t(
-          'teamMemberWorkflowStudio.header.recurringWork',
-          'Recurring work',
-        )}
-        className="workflow-studio-header__compact-button"
-        disabled={!canOpenAutomations}
-        href={canOpenAutomations ? automationsHref : undefined}
-        icon={<ClockCircleOutlined />}
-        onClick={(event) => {
-          event.preventDefault();
-          onOpenAutomations();
-        }}
-        size="small"
-        title={
-          canOpenAutomations
-            ? t(
-                'teamMemberWorkflowStudio.header.openAutomations',
-                'Open recurring work for this member',
-              )
-            : automationsPlaceholderReason
-        }
-      >
-        <span className="workflow-studio-header__action-label workflow-studio-header__action-label--secondary">
-          {t('teamMemberWorkflowStudio.header.recurringWork', 'Recurring work')}
-        </span>
-      </Button>
-      <Button
-        aria-label={t('teamMemberWorkflowStudio.header.save', 'Save')}
-        className="workflow-studio-header__primary-button"
-        disabled={!canSave}
-        icon={<SaveOutlined />}
-        loading={savePending}
-        onClick={onSave}
-        size="small"
-        title={
-          canSave
-            ? t('teamMemberWorkflowStudio.header.saveDraft', 'Save draft')
-            : savePlaceholderReason
-        }
-        type={canSave ? 'primary' : 'default'}
-      >
-        <span className="workflow-studio-header__action-label">
-          {t('teamMemberWorkflowStudio.header.save', 'Save')}
-        </span>
-      </Button>
-      {showStatusAction ? (
-        showPublishAction ? (
-          <Button
-            aria-label={t('teamMemberWorkflowStudio.header.publish', 'Publish')}
-            className="workflow-studio-header__status-button"
-            disabled={publishDisabled}
-            icon={<CloudUploadOutlined />}
-            loading={publishPending}
-            onClick={onPublishMember}
-            size="small"
-            title={
-              publishDisabled
-                ? publishPlaceholderReason
-                : t(
-                    'teamMemberWorkflowStudio.header.publishMember',
-                    'Publish member workflow',
-                  )
-            }
+        <Button
+          aria-label={t('teamMemberWorkflowStudio.header.addNode', 'Add node')}
+          className="workflow-studio-header__compact-button"
+          icon={<PlusOutlined />}
+          onClick={onAddNode}
+          size="small"
+          title={t('teamMemberWorkflowStudio.header.addNode', 'Add node')}
+        >
+          <span className="workflow-studio-header__action-label workflow-studio-header__action-label--secondary">
+            {t('teamMemberWorkflowStudio.header.addNode', 'Add node')}
+          </span>
+        </Button>
+        <Button
+          aria-label={t('teamMemberWorkflowStudio.header.editYaml', 'Edit YAML')}
+          className="workflow-studio-header__compact-button"
+          disabled={!canEditYaml}
+          icon={<CodeOutlined />}
+          onClick={onEditYaml}
+          size="small"
+          title={
+            canEditYaml
+              ? t(
+                  'teamMemberWorkflowStudio.header.editYamlTitle',
+                  'Edit workflow YAML',
+                )
+              : t(
+                  'teamMemberWorkflowStudio.header.editYamlUnavailable',
+                  'Load the workflow draft before editing YAML.',
+                )
+          }
+        >
+          <span className="workflow-studio-header__action-label">
+            {t('teamMemberWorkflowStudio.header.editYaml', 'Edit YAML')}
+          </span>
+        </Button>
+        {moreMenuHasActions ? (
+          <Dropdown
+            menu={{
+              items: moreMenuItems,
+              onClick: ({ key }) => {
+                if (key === 'delete-node') {
+                  const confirmed =
+                    typeof window === 'undefined' ||
+                    window.confirm(
+                      t(
+                        'teamMemberWorkflowStudio.header.confirmDeleteNode',
+                        'Delete the selected node? This cannot be undone.',
+                      ),
+                    );
+                  if (confirmed) {
+                    onDeleteNode();
+                  }
+                  return;
+                }
+
+                if (key === 'delete-connection') {
+                  const confirmed =
+                    typeof window === 'undefined' ||
+                    window.confirm(
+                      t(
+                        'teamMemberWorkflowStudio.header.confirmDeleteConnection',
+                        'Delete the selected connection? This cannot be undone.',
+                      ),
+                    );
+                  if (confirmed) {
+                    onDeleteConnection();
+                  }
+                }
+              },
+            }}
+            placement="bottomRight"
+            trigger={['click']}
           >
-            <span className="workflow-studio-header__action-label">
-              {t('teamMemberWorkflowStudio.header.publish', 'Publish')}
-            </span>
-          </Button>
-        ) : (
-          <Button
-            aria-label={t(
-              'teamMemberWorkflowStudio.header.refreshPublishStatus',
-              'Refresh status',
-            )}
-            className="workflow-studio-header__status-button"
-            disabled={refreshPublishStatusPending}
-            icon={<ReloadOutlined />}
-            loading={refreshPublishStatusPending}
-            onClick={onRefreshPublishStatus}
-            size="small"
-            title={t(
-              'teamMemberWorkflowStudio.header.refreshPublishStatus',
-              'Refresh status',
-            )}
-          >
-            <span className="workflow-studio-header__action-label">
-              {t(
+            <Button
+              aria-label={t(
+                'teamMemberWorkflowStudio.header.moreActions',
+                'More workflow actions',
+              )}
+              className="workflow-studio-header__icon-button"
+              icon={<MoreOutlined />}
+              size="small"
+              title={t('teamMemberWorkflowStudio.header.more', 'More')}
+            />
+          </Dropdown>
+        ) : null}
+      </div>
+      <div
+        className="workflow-studio-header__action-group workflow-studio-header__action-group--commit"
+        data-testid="workflow-header-commit-actions"
+      >
+        <Button
+          aria-label={t('teamMemberWorkflowStudio.header.save', 'Save')}
+          className="workflow-studio-header__primary-button"
+          disabled={!canSave}
+          icon={<SaveOutlined />}
+          loading={savePending}
+          onClick={onSave}
+          size="small"
+          title={
+            canSave
+              ? t('teamMemberWorkflowStudio.header.saveDraft', 'Save draft')
+              : savePlaceholderReason
+          }
+          type={canSave ? 'primary' : 'default'}
+        >
+          <span className="workflow-studio-header__action-label">
+            {t('teamMemberWorkflowStudio.header.save', 'Save')}
+          </span>
+        </Button>
+        {showStatusAction ? (
+          showPublishAction ? (
+            <Button
+              aria-label={t('teamMemberWorkflowStudio.header.publish', 'Publish')}
+              className="workflow-studio-header__status-button"
+              disabled={publishDisabled}
+              icon={<CloudUploadOutlined />}
+              loading={publishPending}
+              onClick={onPublishMember}
+              size="small"
+              title={
+                publishDisabled
+                  ? publishPlaceholderReason
+                  : t(
+                      'teamMemberWorkflowStudio.header.publishMember',
+                      'Publish member workflow',
+                    )
+              }
+            >
+              <span className="workflow-studio-header__action-label">
+                {t('teamMemberWorkflowStudio.header.publish', 'Publish')}
+              </span>
+            </Button>
+          ) : (
+            <Button
+              aria-label={t(
                 'teamMemberWorkflowStudio.header.refreshPublishStatus',
                 'Refresh status',
               )}
-            </span>
-          </Button>
-        )
-      ) : null}
-      <Dropdown
-        menu={{
-          items: yamlMenuItems,
-          onClick: ({ key }) => {
-            if (key === 'view-yaml' && canViewYaml) {
-              onViewYaml();
-              return;
-            }
-
-            if (key === 'paste-yaml' && !pasteYamlPending) {
-              onPasteYamlClick();
-            }
-          },
-        }}
-        placement="bottomRight"
-        trigger={['click']}
+              className="workflow-studio-header__status-button"
+              disabled={refreshPublishStatusPending}
+              icon={<ReloadOutlined />}
+              loading={refreshPublishStatusPending}
+              onClick={onRefreshPublishStatus}
+              size="small"
+              title={t(
+                'teamMemberWorkflowStudio.header.refreshPublishStatus',
+                'Refresh status',
+              )}
+            >
+              <span className="workflow-studio-header__action-label">
+                {t(
+                  'teamMemberWorkflowStudio.header.refreshPublishStatus',
+                  'Refresh status',
+                )}
+              </span>
+            </Button>
+          )
+        ) : null}
+      </div>
+      <div
+        className="workflow-studio-header__action-group workflow-studio-header__action-group--secondary"
+        data-testid="workflow-header-secondary-actions"
       >
         <Button
-          aria-label={t('teamMemberWorkflowStudio.header.yamlActions', 'YAML')}
-          className="workflow-studio-header__compact-button"
-          icon={<FileTextOutlined />}
-          loading={pasteYamlPending}
-          size="small"
-          title={t(
-            'teamMemberWorkflowStudio.header.yamlActionsTitle',
-            'View or import workflow YAML',
+          aria-label={t(
+            'teamMemberWorkflowStudio.header.publishedRuns',
+            'Published runs',
           )}
+          className="workflow-studio-header__compact-button"
+          disabled={!canOpenPublishedRuns}
+          href={canOpenPublishedRuns ? publishedRunsHref : undefined}
+          icon={<HistoryOutlined />}
+          onClick={(event) => {
+            event.preventDefault();
+            onOpenPublishedRuns();
+          }}
+          size="small"
+          title={
+            publishedRunsPlaceholderReason ??
+            (canOpenPublishedRuns
+              ? t(
+                  'teamMemberWorkflowStudio.header.publishedRuns.open',
+                  'View runs from the published member service.',
+                )
+              : undefined)
+          }
         >
           <span className="workflow-studio-header__action-label workflow-studio-header__action-label--secondary">
-            {t('teamMemberWorkflowStudio.header.yaml', 'YAML')}
+            {t('teamMemberWorkflowStudio.header.publishedRuns', 'Published runs')}
           </span>
-          <DownOutlined style={{ fontSize: 10 }} />
         </Button>
-      </Dropdown>
-      {moreMenuHasActions ? (
-        <Dropdown
-          menu={{
-            items: moreMenuItems,
-            onClick: ({ key }) => {
-              if (key === 'delete-node') {
-                const confirmed =
-                  typeof window === 'undefined' ||
-                  window.confirm(
-                    t(
-                      'teamMemberWorkflowStudio.header.confirmDeleteNode',
-                      'Delete the selected node? This cannot be undone.',
-                    ),
-                  );
-                if (confirmed) {
-                  onDeleteNode();
-                }
-                return;
-              }
-
-              if (key === 'delete-connection') {
-                const confirmed =
-                  typeof window === 'undefined' ||
-                  window.confirm(
-                    t(
-                      'teamMemberWorkflowStudio.header.confirmDeleteConnection',
-                      'Delete the selected connection? This cannot be undone.',
-                    ),
-                  );
-                if (confirmed) {
-                  onDeleteConnection();
-                }
-              }
-            },
+        <Button
+          aria-label={t(
+            'teamMemberWorkflowStudio.header.recurringWork',
+            'Recurring work',
+          )}
+          className="workflow-studio-header__compact-button"
+          disabled={!canOpenAutomations}
+          href={canOpenAutomations ? automationsHref : undefined}
+          icon={<ClockCircleOutlined />}
+          onClick={(event) => {
+            event.preventDefault();
+            onOpenAutomations();
           }}
-          placement="bottomRight"
-          trigger={['click']}
+          size="small"
+          title={
+            canOpenAutomations
+              ? t(
+                  'teamMemberWorkflowStudio.header.openAutomations',
+                  'Open recurring work for this member',
+                )
+              : automationsPlaceholderReason
+          }
         >
-          <Button
-            aria-label={t(
-              'teamMemberWorkflowStudio.header.moreActions',
-              'More workflow actions',
-            )}
-            className="workflow-studio-header__icon-button"
-            icon={<MoreOutlined />}
-            size="small"
-            title={t('teamMemberWorkflowStudio.header.more', 'More')}
-          />
-        </Dropdown>
-      ) : null}
+          <span className="workflow-studio-header__action-label workflow-studio-header__action-label--secondary">
+            {t('teamMemberWorkflowStudio.header.recurringWork', 'Recurring work')}
+          </span>
+        </Button>
+      </div>
     </section>
   );
 };
@@ -982,7 +1036,7 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
   showRefreshPublishStatus,
   canOpenDraftRunPanel,
   canSave,
-  canViewYaml,
+  canEditYaml,
   dirty,
   currentDraftRunPlaceholderReason,
   onPublishMember,
@@ -994,14 +1048,12 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
   onDeleteConnection,
   onDeleteNode,
   onOpenDraftRunPanel,
-  onOpenPasteYaml,
-  onViewYaml,
+  onEditYaml,
   onNavigateBack,
   onNavigateToTeam,
   onNavigateToTeams,
   onSave,
   onTitleChange,
-  pasteYamlPending,
   savePending,
   savePlaceholderReason,
   selectedEdgeId,
@@ -1062,7 +1114,7 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
           canOpenInvoke={canOpenInvoke}
           canOpenPublishedRuns={canOpenPublishedRuns}
           canSave={canSave}
-          canViewYaml={canViewYaml}
+          canEditYaml={canEditYaml}
           invokeHref={invokeHref}
           invokePlaceholderReason={invokePlaceholderReason}
           onAddNode={onAddNode}
@@ -1070,14 +1122,12 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
           onDeleteNode={onDeleteNode}
           onOpenAutomations={onOpenAutomations}
           onOpenDraftRunPanel={onOpenDraftRunPanel}
+          onEditYaml={onEditYaml}
           onOpenInvoke={onOpenInvoke}
           onOpenPublishedRuns={onOpenPublishedRuns}
-          onPasteYamlClick={onOpenPasteYaml}
           onPublishMember={onPublishMember}
           onRefreshPublishStatus={onRefreshPublishStatus}
           onSave={onSave}
-          onViewYaml={onViewYaml}
-          pasteYamlPending={pasteYamlPending}
           publishDisabled={publishDisabled}
           publishPending={publishPending}
           publishPlaceholderReason={publishPlaceholderReason}

@@ -67,7 +67,7 @@ public sealed partial class OrnnExactRemoteSkillFetcher : IExactRemoteSkillFetch
             }
             if (string.IsNullOrWhiteSpace(detail.Name) ||
                 string.IsNullOrWhiteSpace(detail.CreatedBy) ||
-                string.IsNullOrWhiteSpace(detail.SkillHash))
+                !OrnnSkillSha256Parser.TryParse(detail.SkillHash, out var skillSha256))
             {
                 return ExactRemoteSkillFetchResult.Failed(
                     ExactRemoteSkillFetchFailureCode.IntegrityEvidenceMissing);
@@ -88,7 +88,7 @@ public sealed partial class OrnnExactRemoteSkillFetcher : IExactRemoteSkillFetch
                 skillRef.LiteralVersion,
                 detail.Name,
                 detail.CreatedBy,
-                detail.SkillHash,
+                skillSha256,
                 skillMarkdownEntries[0].Value);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)

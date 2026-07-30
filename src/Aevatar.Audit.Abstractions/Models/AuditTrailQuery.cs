@@ -22,6 +22,10 @@ public sealed record AuditTrailQuery
 
     public AuditOutcome? Outcome { get; init; }
 
+    public AuditLifecyclePhase? LifecyclePhase { get; init; }
+
+    public AuditTerminalOutcome? TerminalOutcome { get; init; }
+
     public AuditSensitivityLevel? SensitivityLevel { get; init; }
 
     public AuditCapturePlane? CapturePlane { get; init; }
@@ -31,6 +35,10 @@ public sealed record AuditTrailQuery
     public string? TargetId { get; init; }
 
     public string? TraceId { get; init; }
+
+    public string? CorrelationId { get; init; }
+
+    public string? CausationId { get; init; }
 
     public string? RequestId { get; init; }
 

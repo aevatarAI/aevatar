@@ -1,6 +1,19 @@
+<<<<<<< HEAD
 using Aevatar.AI.Abstractions.ToolProviders;
+=======
+using Aevatar.GAgents.Scheduled;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
+using Aevatar.AI.Abstractions.Middleware;
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Abstractions.CodexExecution;
+using Aevatar.AI.Application.CodexExecution;
+using Aevatar.AI.Infrastructure.ChronoSandbox;
+using Aevatar.AI.Core.Middleware;
+>>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
 using Aevatar.AI.ToolProviders.AgentCatalog;
 using Aevatar.AI.ToolProviders.AevatarInvocation;
+using Aevatar.AI.ToolProviders.Binding;
 using Aevatar.AI.ToolProviders.Channel;
 using Aevatar.AI.ToolProviders.ChannelAdmin;
 using Aevatar.AI.ToolProviders.ChronoStorage;
@@ -12,10 +25,15 @@ using Aevatar.AI.ToolProviders.StudioProvisioning;
 using Aevatar.AI.ToolProviders.Telegram;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.AI.ToolProviders.Web;
+<<<<<<< HEAD
 using Aevatar.Audit.Abstractions.Identity;
 using Aevatar.Audit.Abstractions.Ports;
+=======
+using Aevatar.AI.ToolProviders.Workflow;
+>>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
 using Aevatar.Audit.Core.Identity;
 using Aevatar.Bootstrap.Extensions.AI;
+using Aevatar.Bootstrap.Hosting;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
 using Aevatar.Configuration;
@@ -29,28 +47,39 @@ using Aevatar.Foundation.VoicePresence.Modules;
 using Aevatar.Foundation.VoicePresence.Hosting;
 using Aevatar.Foundation.VoicePresence.Transport;
 using Aevatar.GAgentService.Abstractions.Ports;
-using Aevatar.GAgents.Authoring.Lark;
+using Aevatar.GAgentService.Abstractions.AgentProfiles;
+using Aevatar.GAgentService.Application.AgentProfiles;
+using Aevatar.GAgentService.Hosting.Endpoints;
+using Aevatar.GAgentService.Infrastructure.AgentProfiles;
 using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
+using Aevatar.GAgents.Channel.Identity.Broker;
 using Aevatar.GAgents.Channel.NyxIdRelay.Outbound;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Device;
-using Aevatar.GAgents.Scheduled;
+using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgents.NyxidChat.AgentProfiles;
+using Aevatar.GAgents.StatusDashboard;
 using Aevatar.GAgents.StatusDashboard.Executors;
 using Aevatar.Mainnet.Host.Api.AgentProfiles;
 using Aevatar.Mainnet.Host.Api.Hosting;
-using Aevatar.Mainnet.Host.Api.Profiles;
 using Aevatar.Mainnet.Host.Api.Responses;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Scripting.Projection.ReadModels;
+using Aevatar.Studio.Application.Provisioning;
+using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Hosting;
+using Aevatar.Studio.Projection.ReadModels;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Extensions.Hosting;
 using Aevatar.Workflow.Infrastructure.Runs;
 using Aevatar.Workflow.Integration.AI;
 using Aevatar.Workflow.Projection.ReadModels;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using System.Net;
 using System.Reflection;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -61,6 +90,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
+using NSubstitute;
 
 namespace Aevatar.Capabilities.Tests;
 
@@ -68,32 +98,17 @@ namespace Aevatar.Capabilities.Tests;
 public sealed class MainnetHostCompositionTests
 {
     [Fact]
-    public void AddAevatarMainnetHost_ShouldComposeDisabledProfileSourceWithEmptyReplaceableBaseline()
+    public void MainnetHost_ShouldExposeAnActorBackedNyxIdChatProfileResolver()
     {
-        using var home = new TemporaryAevatarHomeScope();
-        var builder = CreateBuilder();
+        var resolver = typeof(MainnetHostBuilderExtensions).Assembly.GetType(
+            "Aevatar.Mainnet.Host.Api.AgentProfiles.MainnetNyxIdChatAgentProfileResolver");
 
-        builder.AddAevatarMainnetHost(options =>
-        {
-            options.EnableConnectorBootstrap = false;
-            options.EnableCors = false;
-        });
-
-        using var app = builder.Build();
-        var profileOptions = app.Services.GetRequiredService<IOptions<NyxIdChatAgentProfileOptions>>().Value;
-        var baseline = app.Services.GetRequiredService<NyxIdChatAgentProfileValidationBaseline>();
-        var source = app.Services.GetRequiredService<INyxIdChatAgentProfileSnapshotSource>();
-
-        profileOptions.Enabled.Should().BeFalse();
-        profileOptions.ExternalReference.Should().Be(NyxIdChatAgentProfileOptions.StableExternalReference);
-        baseline.RequiredRecoveryToolNames.Should().BeEmpty();
-        baseline.DeniedLegacyToolNames.Should().BeEmpty();
-        source.Should().BeSameAs(app.Services.GetRequiredService<MainnetAgentProfileRolloutSelector>());
-        source.GetSnapshotForNewConversation("conversation-a").Should().BeNull();
+        resolver.Should().NotBeNull();
+        resolver!.GetInterfaces().Should().Contain(typeof(INyxIdChatAgentProfileResolver));
     }
 
     [Fact]
-    public void AddAevatarMainnetHost_ShouldAllowReviewedBaselineReplacementAtCompositionSeam()
+    public void AddAevatarMainnetHost_ShouldRegisterBindingAgentToolSource()
     {
         using var home = new TemporaryAevatarHomeScope();
         var builder = CreateBuilder();
@@ -102,16 +117,93 @@ public sealed class MainnetHostCompositionTests
             options.EnableConnectorBootstrap = false;
             options.EnableCors = false;
         });
-        var reviewed = new NyxIdChatAgentProfileValidationBaseline(
-            ["recover_tool"],
-            ["legacy_tool"]);
-        builder.Services.Replace(ServiceDescriptor.Singleton(reviewed));
+
+        builder.Services.Should().ContainSingle(descriptor =>
+            descriptor.ServiceType == typeof(IAgentToolSource) &&
+            descriptor.ImplementationType == typeof(BindingAgentToolSource));
+    }
+
+    [Fact]
+    public void GAgentServiceAndStudioCapabilities_ShouldOwnTheirCompositionDependencies()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var customTimeProvider = new FixedTimeProvider(DateTimeOffset.UnixEpoch.AddDays(20_000));
+        var builder = CreateBuilder();
+        builder.Services.AddSingleton<TimeProvider>(customTimeProvider);
+
+        builder.AddAevatarDefaultHost(options =>
+        {
+            options.ServiceName = "Aevatar.Mainnet.Host.Api";
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+        builder.AddMainnetDistributedOrleansHost();
+        builder.AddAevatarPlatform(options => options.EnableMakerExtensions = true);
+        builder.AddGAgentServiceCapabilityBundle();
+        builder.Services.AddMainnetAgentProjectionDocumentStores(builder.Configuration);
+        builder.Services.AddSingleton(Substitute.For<IScheduledAgentCredentialLifecycle>());
+        builder.Services.AddSingleton(Substitute.For<INyxIdApiClientFactory>());
+        builder.Services.AddScheduledAgents(builder.Configuration);
+        builder.AddStudioCapability();
+        builder.Services.AddSingleton(Substitute.For<ISecretVault>());
 
         using var app = builder.Build();
 
-        app.Services.GetRequiredService<NyxIdChatAgentProfileValidationBaseline>()
+        app.Services.GetRequiredService<IStudioMemberWorkflowSchedulePort>().Should().NotBeNull();
+        app.Services.GetRequiredService<IStudioScheduledCredentialMaterializer>()
             .Should()
-            .BeSameAs(reviewed);
+            .BeOfType<StudioScheduledCredentialMaterializer>();
+        app.Services.GetRequiredService<INyxIdAuthorizationCatalogRefreshPort>().Should().NotBeNull();
+        app.Services.GetRequiredService<INyxIdChatConversationStateQueryPort>().Should().NotBeNull();
+        app.Services.GetRequiredService<IProjectionDocumentReader<
+            NyxIdChatConversationCurrentStateDocument,
+            string>>().Should().NotBeNull();
+        app.Services.GetRequiredService<TimeProvider>().Should().BeSameAs(customTimeProvider);
+    }
+
+    [Fact]
+    public void AddAevatarMainnetHost_ShouldReplaceDefaultProfileResolverAndRegisterStaticRouteToolSet()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder();
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        app.Services.GetRequiredService<INyxIdChatAgentProfileResolver>()
+            .Should()
+            .BeOfType<MainnetNyxIdChatAgentProfileResolver>();
+        var registry = app.Services.GetRequiredService<IToolSetRegistry>();
+        registry.GetRegisteredNames().Should().Contain(AgentProfilePolicies.NyxIdChatRouteToolSet);
+    }
+
+    [Fact]
+    public void AddAevatarMainnetHost_ShouldComposeAgentProfilePublishingApplication()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder();
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        app.Services.GetRequiredService<IExactOrnnSkillResolver>()
+            .Should()
+            .BeOfType<OrnnExactAgentProfileSkillResolver>();
+        app.Services.GetRequiredService<IAgentProfileSkillSealer>()
+            .Should()
+            .BeOfType<AgentProfileSkillSealer>();
+        app.Services.GetRequiredService<IAgentProfileActorPort>()
+            .Should()
+            .BeOfType<AgentProfileActorPort>();
+        app.Services.GetRequiredService<AgentProfileApplicationService>().Should().NotBeNull();
     }
 
     [Fact]
@@ -142,15 +234,28 @@ public sealed class MainnetHostCompositionTests
             options.EnableConnectorBootstrap = false;
             options.EnableCors = false;
         });
+        builder.Services
+            .AddHttpClient("NyxIdAssistantActionRegistry")
+            .ConfigurePrimaryHttpMessageHandler(static () =>
+                new NyxIdAssistantActionRegistryHandler());
 
         await using var app = builder.Build();
         app.MapAevatarMainnetHost();
         await app.StartAsync();
 
+        app.Services.GetRequiredService<NyxIdAssistantActionRegistry>()
+            .TryGetDefinition("service.connect", out _).Should().BeTrue();
+        var brokerOptions = app.Services.GetRequiredService<IOptions<NyxIdBrokerOptions>>().Value;
+        brokerOptions.RequiredLlmServiceSlug.Should().Be(LlmDefaults.NyxIdRoute);
+        brokerOptions.AdditionalRequiredServiceSlugs.Should().Equal(
+            OrnnOptions.DefaultNyxIdSlug,
+            NyxIdToolOptions.DefaultSandboxServiceSlug);
+        app.Services.GetRequiredService<NyxIdToolOptions>()
+            .SandboxServiceSlug.Should().Be(NyxIdToolOptions.DefaultSandboxServiceSlug);
         app.Services.GetRequiredService<IServiceRolloutCommandObservationQueryReader>().Should().NotBeNull();
-        app.Services.GetRequiredService<MainnetAgentProfileRolloutSelector>()
-            .GetSnapshotForNewConversation("new-conversation")
-            .Should().BeNull();
+        app.Services.GetRequiredService<INyxIdChatAgentProfileResolver>()
+            .Should()
+            .BeOfType<MainnetNyxIdChatAgentProfileResolver>();
         app.Services.GetRequiredService<IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string>>()
             .Should()
             .NotBeNull();
@@ -164,15 +269,19 @@ public sealed class MainnetHostCompositionTests
         readModelDescriptors.Select(static descriptor => descriptor.Name)
             .Should()
             .OnlyHaveUniqueItems();
-        readModelDescriptors.Should().HaveCount(19);
+        readModelDescriptors.Should().HaveCount(18);
         readModelDescriptors.Should()
             .ContainSingle(static descriptor => descriptor.Name == "workflow-external-approval-continuation");
         readModelDescriptors.Should()
             .ContainSingle(static descriptor => descriptor.Name == "user-agent-api-key-revocation");
         readModelDescriptors.Should()
+            .ContainSingle(static descriptor => descriptor.Name == "managed-codex-credential");
+        readModelDescriptors.Should()
             .ContainSingle(static descriptor => descriptor.Name == "streaming-proxy-chat-session");
         readModelDescriptors.Should()
             .NotContain(static descriptor => descriptor.Name == "script-native-document");
+        readModelDescriptors.Should()
+            .NotContain(static descriptor => descriptor.Name.Contains("audit", StringComparison.OrdinalIgnoreCase));
         app.Services.GetService<IProjectionDocumentReader<ScriptNativeDocumentReadModel, string>>()
             .Should()
             .BeNull();
@@ -186,10 +295,20 @@ public sealed class MainnetHostCompositionTests
         app.Services.GetRequiredService<IProjectionDocumentReader<ExternalIdentityBindingDocument, string>>()
             .Should()
             .NotBeNull();
+        app.Services.GetRequiredService<IProjectionDocumentReader<ManagedCodexCredentialDocument, string>>()
+            .Should()
+            .NotBeNull();
+        app.Services.GetRequiredService<IManagedCodexCredentialLifecycle>().Should().NotBeNull();
+        var managedCodexPort = app.Services.GetServices<ICodexExecutionPort>()
+            .Should()
+            .ContainSingle(static port =>
+                port.TargetKind == CodexExecutionTarget.TargetOneofCase.ManagedSandbox)
+            .Which;
+        managedCodexPort.Should().BeOfType<ManagedCodexExecutionCoordinator>();
         app.Services.GetServices<IHealthProbeExecutor>()
             .Select(static executor => executor.Kind)
             .Should()
-            .Contain("aevatar_core_loop");
+            .Contain(["aevatar_core_loop", "audit_query_index"]);
 
         var routePatterns = ((IEndpointRouteBuilder)app).DataSources
             .SelectMany(x => x.Endpoints)
@@ -202,7 +321,7 @@ public sealed class MainnetHostCompositionTests
         routePatterns.Should().Contain("/api/channels/registrations");
         routePatterns.Should().Contain("/api/oauth/nyxid-callback");
         routePatterns.Should().Contain("/api/services/");
-        routePatterns.Should().Contain("/api/skill-runners/{agentId}/external-trigger-sources/{sourceId}/deliveries");
+        routePatterns.Should().NotContain("/api/skill-runners/{agentId}/external-trigger-sources/{sourceId}/deliveries");
         routePatterns.Should().Contain("/v1/responses");
         routePatterns.Should().Contain("/v1/chat/completions");
         routePatterns.Should().NotContain("/v1/chat/completion");
@@ -229,6 +348,121 @@ public sealed class MainnetHostCompositionTests
         app.Services.GetRequiredService<IAgentToolExecutionPort>().Should().NotBeNull();
 
         await app.StopAsync();
+    }
+
+    [Fact]
+    public void AddAevatarMainnetHost_WithAdditionalNyxIdServices_ShouldComposeConfiguredMinimumSet()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder(new Dictionary<string, string?>
+        {
+            ["Aevatar:NyxId:AdditionalRequiredServiceSlugs:0"] = "github-api",
+            ["Aevatar:NyxId:AdditionalRequiredServiceSlugs:1"] = "lark-api",
+        });
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        var brokerOptions = app.Services.GetRequiredService<IOptions<NyxIdBrokerOptions>>().Value;
+
+        brokerOptions.AdditionalRequiredServiceSlugs.Should().Equal(
+            "github-api",
+            "lark-api",
+            OrnnOptions.DefaultNyxIdSlug,
+            NyxIdToolOptions.DefaultSandboxServiceSlug);
+    }
+
+    [Fact]
+    public void AddAevatarMainnetHost_WithInvalidAdditionalNyxIdServiceSlug_ShouldFailStartupValidation()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder(new Dictionary<string, string?>
+        {
+            ["Aevatar:NyxId:AdditionalRequiredServiceSlugs:0"] = "Invalid/Service",
+        });
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        var act = () => app.Services.GetRequiredService<IStartupValidator>().Validate();
+
+        act.Should()
+            .Throw<OptionsValidationException>()
+            .WithMessage("*AdditionalRequiredServiceSlugs[0]*1-80 character NyxID service slug*");
+    }
+
+    [Fact]
+    public void AddAevatarMainnetHost_WithLlmResourcePolicyDrift_ShouldFailStartupValidation()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder(new Dictionary<string, string?>
+        {
+            ["Aevatar:NyxId:DefaultRoute"] = "llm-provider-route",
+        });
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+        builder.Services.PostConfigure<NyxIdBrokerOptions>(options =>
+            options.RequiredLlmServiceSlug = "drifted-authorization-route");
+
+        using var app = builder.Build();
+        var act = () => app.Services.GetRequiredService<IStartupValidator>().Validate();
+
+        act.Should()
+            .Throw<OptionsValidationException>()
+            .WithMessage("*RequiredLlmServiceSlug*llm-provider-route*Aevatar:NyxId:DefaultRoute*");
+    }
+
+    [Fact]
+    public void AddAevatarMainnetHost_WithoutOrnnProviderResource_ShouldFailStartupValidation()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder();
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+        builder.Services.PostConfigure<NyxIdBrokerOptions>(options =>
+            options.AdditionalRequiredServiceSlugs = [NyxIdToolOptions.DefaultSandboxServiceSlug]);
+
+        using var app = builder.Build();
+        var act = () => app.Services.GetRequiredService<IStartupValidator>().Validate();
+
+        act.Should()
+            .Throw<OptionsValidationException>()
+            .WithMessage($"*AdditionalRequiredServiceSlugs*{OrnnOptions.DefaultNyxIdSlug}*Aevatar:Ornn:NyxIdSlug*");
+    }
+
+    [Fact]
+    public void AddAevatarMainnetHost_WithoutSandboxProviderResource_ShouldFailStartupValidation()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder();
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+        builder.Services.PostConfigure<NyxIdBrokerOptions>(options =>
+            options.AdditionalRequiredServiceSlugs = [OrnnOptions.DefaultNyxIdSlug]);
+
+        using var app = builder.Build();
+        var act = () => app.Services.GetRequiredService<IStartupValidator>().Validate();
+
+        act.Should()
+            .Throw<OptionsValidationException>()
+            .WithMessage(
+                $"*AdditionalRequiredServiceSlugs*{NyxIdToolOptions.DefaultSandboxServiceSlug}*" +
+                "Aevatar:NyxId:SandboxServiceSlug*");
     }
 
     [Fact]
@@ -285,6 +519,66 @@ public sealed class MainnetHostCompositionTests
     }
 
     [Fact]
+    public void MapAevatarMainnetHost_ShouldOwnTheSingleChatPostRoute()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder();
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        app.MapAevatarMainnetHost();
+
+        var chatPosts = ((IEndpointRouteBuilder)app).DataSources
+            .SelectMany(static source => source.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Where(static endpoint =>
+                endpoint.RoutePattern.RawText == "/api/chat" &&
+                endpoint.Metadata
+                    .OfType<HttpMethodMetadata>()
+                    .Single()
+                    .HttpMethods
+                    .Contains(HttpMethods.Post, StringComparer.OrdinalIgnoreCase))
+            .ToList();
+
+        chatPosts.Should().ContainSingle();
+        chatPosts.Single().Metadata.GetMetadata<IEndpointNameMetadata>()
+            ?.EndpointName.Should().Be("StartMainnetChat");
+
+        var publicConversationRoutes = ((IEndpointRouteBuilder)app).DataSources
+            .SelectMany(static source => source.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Where(static endpoint =>
+                endpoint.RoutePattern.RawText?.StartsWith(
+                    "/api/chat/conversations",
+                    StringComparison.Ordinal) == true)
+            .Select(static endpoint => new
+            {
+                Route = endpoint.RoutePattern.RawText,
+                Methods = endpoint.Metadata.GetMetadata<HttpMethodMetadata>()!.HttpMethods,
+            })
+            .ToList();
+
+        publicConversationRoutes.Should().ContainSingle(route =>
+            route.Route == "/api/chat/conversations" &&
+            route.Methods.Contains(HttpMethods.Get));
+        publicConversationRoutes.Should().ContainSingle(route =>
+            route.Route == "/api/chat/conversations/{conversationId}" &&
+            route.Methods.Contains(HttpMethods.Get));
+        publicConversationRoutes.Should().ContainSingle(route =>
+            route.Route == "/api/chat/conversations/{conversationId}/state" &&
+            route.Methods.Contains(HttpMethods.Get));
+        publicConversationRoutes.Should().ContainSingle(route =>
+            route.Route == "/api/chat/conversations/{conversationId}" &&
+            route.Methods.Contains(HttpMethods.Delete));
+        publicConversationRoutes.Should().OnlyContain(route =>
+            !route.Route!.Contains("scopeId", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task AddAevatarMainnetHost_ShouldRegisterDefaultToolSets()
     {
         using var home = new TemporaryAevatarHomeScope();
@@ -318,20 +612,28 @@ public sealed class MainnetHostCompositionTests
             .Value.Defaults.DefaultForwardToModelToolSetName.Should().Be(ToolSetNames.WorkspaceDefault);
 
         registry.GetRegisteredNames().Should().Equal(
+            AgentProfilePolicies.NyxIdChatRouteToolSet,
             ToolSetNames.LarkSelfNotify,
             ToolSetNames.NyxIdConnectedServices,
             ToolSetNames.WorkspaceDefault);
 
-        var workspace = registry.Resolve(new ChatRouteToolSetRef { Name = ToolSetNames.WorkspaceDefault });
+        var workspace = registry.Resolve(ToolSetNames.WorkspaceDefault);
         workspace.IsSuccess.Should().BeTrue(workspace.Error?.Message);
         workspace.Sources.Should().Contain(source => source is InvokeGAgentToolSource);
         workspace.Sources.Should().Contain(source => source is InvokeTeamToolSource);
+        workspace.Sources.Should().Contain(source => source is InvokeMemberToolSource);
         workspace.Sources.Should().Contain(source => source is StartWorkflowToolSource);
         workspace.Sources.Should().Contain(source => source is ObserveRunToolSource);
         workspace.Sources.Should().Contain(source => source is ReadWorkflowRunArtifactToolSource);
         workspace.Sources.Should().Contain(source => source is ProvisionWorkflowScheduleToolSource);
         workspace.Sources.Should().Contain(source => source is CreateStudioTeamToolSource);
+        workspace.Sources.Should().Contain(source => source is StudioTeamQueryToolSource);
         workspace.Sources.Should().Contain(source => source is CreateStudioMemberToolSource);
+        workspace.Sources.Should().Contain(source => source is CreateStudioMemberWorkflowDraftToolSource);
+        workspace.Sources.Should().Contain(source => source is StudioMemberQueryToolSource);
+        workspace.Sources.Should().Contain(source => source is StudioScheduleQueryToolSource);
+        workspace.Sources.Should().Contain(source => source is StudioWorkflowQueryToolSource);
+        workspace.Sources.Should().Contain(source => source is WorkflowCatalogAgentToolSource);
         workspace.Sources.Should().Contain(source => source is BindStudioMemberWorkflowToolSource);
         workspace.Sources.Should().Contain(source => source is ScheduleStudioMemberWorkflowToolSource);
         workspace.Sources.Should().Contain(source => source.GetType().Name == "ResponsesAevatarToolProvider");
@@ -339,12 +641,39 @@ public sealed class MainnetHostCompositionTests
         workspace.Sources.Should().Contain(source => source is ChannelRegistrationToolSource);
         workspace.Sources.Should().Contain(source => source is AgentDeliveryTargetToolSource);
         workspace.Sources.Should().Contain(source => source is NyxIdAgentToolSource);
+        workspace.Sources.Should().NotContain(source => source is NyxIdConnectedServiceInventoryToolSource);
         workspace.Sources.Should().Contain(source => source is LarkAgentToolSource);
         workspace.Sources.Should().Contain(source => source is TelegramAgentToolSource);
         workspace.Sources.Should().Contain(source => source is ChronoStorageAgentToolSource);
         workspace.Sources.Should().Contain(source => source is WebAgentToolSource);
         workspace.Sources.Should().Contain(source => source is SkillsAgentToolSource);
         workspace.Sources.Should().Contain(source => source is OrnnAgentToolSource);
+        app.Services.GetServices<IAgentToolSource>()
+            .Select(static source => source.GetType())
+            .Should()
+            .NotContain(typeof(NyxIdConnectedServiceInventoryToolSource));
+        app.Services.GetRequiredService<NyxIdConnectedServiceInventoryToolSource>()
+            .Should()
+            .NotBeNull();
+        var channelInventorySource = app.Services
+            .GetRequiredService<ChannelNyxIdConnectedServiceInventoryToolSource>();
+        app.Services.GetRequiredService<ChannelNyxIdConnectedServiceInventoryToolSource>()
+            .Should()
+            .BeSameAs(channelInventorySource);
+        var replyGenerator = app.Services.GetRequiredService<IConversationReplyGenerator>();
+        var channelToolSources = replyGenerator.GetType()
+            .GetField("_toolSources", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(replyGenerator)
+            .Should()
+            .BeAssignableTo<IReadOnlyList<IAgentToolSource>>()
+            .Subject;
+        channelToolSources.Should().ContainSingle(source =>
+                source is ChannelNyxIdConnectedServiceInventoryToolSource)
+            .Which.Should()
+            .BeSameAs(channelInventorySource);
+        var scheduleQueries = app.Services.GetRequiredService<IStudioMemberAutomationQueryPort>();
+        var scheduleMutations = app.Services.GetRequiredService<IStudioMemberWorkflowSchedulePort>();
+        scheduleQueries.Should().BeSameAs(scheduleMutations);
         app.Services.GetRequiredService<LarkToolOptions>()
             .EnableWorkflowFileSubmit.Should().BeFalse();
         app.Services.GetServices<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowConnectedServiceResourceFetchAdapter>()
@@ -358,23 +687,23 @@ public sealed class MainnetHostCompositionTests
         }
         workflowToolNames.Should().ContainSingle(name => name == "workflow_connected_service_resource_fetch");
 
-        var larkSelfNotify = registry.Resolve(new ChatRouteToolSetRef { Name = ToolSetNames.LarkSelfNotify });
+        var larkSelfNotify = registry.Resolve(ToolSetNames.LarkSelfNotify);
         larkSelfNotify.IsSuccess.Should().BeTrue(larkSelfNotify.Error?.Message);
         larkSelfNotify.Sources.Select(static source => source.GetType()).Should()
             .Equal(workspace.Sources.Select(static source => source.GetType()));
         larkSelfNotify.Sources.Should().Contain(source => source is LarkAgentToolSource);
         larkSelfNotify.Sources.Should().Contain(source => source is NyxIdAgentToolSource);
 
-        var nyxIdConnectedServices = registry.Resolve(new ChatRouteToolSetRef { Name = ToolSetNames.NyxIdConnectedServices });
+        var nyxIdConnectedServices = registry.Resolve(ToolSetNames.NyxIdConnectedServices);
         nyxIdConnectedServices.IsSuccess.Should().BeTrue(nyxIdConnectedServices.Error?.Message);
         nyxIdConnectedServices.Sources.Should().ContainSingle(source => source is NyxIdConnectedServiceToolSource);
         workspace.Sources.Should().NotContain(source => source is NyxIdConnectedServiceToolSource);
 
-        var voice = registry.Resolve(new ChatRouteToolSetRef { Name = "voice.realtime" });
+        var voice = registry.Resolve("voice.realtime");
         voice.IsSuccess.Should().BeFalse();
         voice.Error!.Code.Should().Be(ToolSetResolveError.UnknownNameCode);
 
-        var unknown = registry.Resolve(new ChatRouteToolSetRef { Name = "missing.set" });
+        var unknown = registry.Resolve("missing.set");
         unknown.IsSuccess.Should().BeFalse();
         unknown.Error!.Code.Should().Be(ToolSetResolveError.UnknownNameCode);
     }
@@ -581,6 +910,66 @@ public sealed class MainnetHostCompositionTests
     }
 
     [Fact]
+    public void AddAevatarMainnetHost_ShouldBindNyxIdRequestDurationCeiling()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder(new Dictionary<string, string?>
+        {
+            ["Aevatar:NyxId:MaxRequestDurationSeconds"] = "420",
+        });
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        app.Services.GetRequiredService<NyxIdToolOptions>()
+            .MaxRequestDurationSeconds.Should().Be(420);
+    }
+
+    [Theory]
+    [InlineData(NyxIdManagedWorkflowAdmissionMode.Shadow)]
+    [InlineData(NyxIdManagedWorkflowAdmissionMode.Enforce)]
+    public void AddAevatarMainnetHost_ShouldBindNyxIdAdmissionMode(
+        NyxIdManagedWorkflowAdmissionMode mode)
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        using var admissionMode = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__NyxId__ManagedWorkflowAdmissionMode",
+            mode.ToString());
+        var builder = CreateBuilder();
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        app.Services.GetRequiredService<NyxIdToolOptions>()
+            .ManagedWorkflowAdmissionMode.Should().Be(mode);
+    }
+
+    [Fact]
+    public void AddAevatarMainnetHost_ShouldEnforceNyxIdAdmissionInDistributedImageConfiguration()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder(environmentName: "Distributed");
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        app.Services.GetRequiredService<NyxIdToolOptions>()
+            .ManagedWorkflowAdmissionMode.Should().Be(NyxIdManagedWorkflowAdmissionMode.Enforce);
+    }
+
+    [Fact]
     public void AddAevatarMainnetHost_ShouldNotBindMalformedLegacyWorkflowFileSubmitEndpointPolicy()
     {
         using var home = new TemporaryAevatarHomeScope();
@@ -772,13 +1161,37 @@ public sealed class MainnetHostCompositionTests
         revocationMigrationIndex.Should().BeGreaterThan(reconcileIndex);
         hostedServices.Should().ContainSingle(static descriptor =>
             descriptor.ImplementationType == typeof(ElasticsearchProjectionIndexReconcileHostedService));
+
+        using var app = builder.Build();
+        app.Services.GetServices<IProjectionIndexReconcileTarget>()
+            .Should()
+            .ContainSingle(static target => target.IndexAlias.EndsWith("-audit-trail-current", StringComparison.Ordinal));
+        app.Services.GetServices<IProjectionIndexReconcileTarget>()
+            .Should()
+            .ContainSingle(static target => target.IndexAlias.EndsWith(
+                "-health-probe-operational-snapshots",
+                StringComparison.Ordinal));
+        app.Services.GetRequiredService<IHealthProbeOperationalSnapshotStore>()
+            .GetType().Name.Should().Be("ElasticsearchHealthProbeOperationalSnapshotStore");
+        app.Services.GetServices<IProjectionReadModelDescriptor>()
+            .Should()
+            .NotContain(static descriptor => descriptor.Name.Contains("audit", StringComparison.OrdinalIgnoreCase));
     }
 
-    [Fact]
-    public void AddAevatarMainnetHost_ShouldAssertChannelIdentityElasticsearchAcl()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AddAevatarMainnetHost_ShouldUseOperatorChannelIdentityElasticsearchAclAttestation(
+        bool configuredAttestation)
     {
         using var home = new TemporaryAevatarHomeScope();
-        var builder = CreateBuilder();
+        var builder = CreateBuilder(new Dictionary<string, string?>
+        {
+            [$"{AevatarOAuthClientEsAclOptions.SectionName}:GrantMatchesGrainEventStoreInternal"] =
+                configuredAttestation.ToString(),
+            [$"{AevatarOAuthClientEsAclOptions.SectionName}:GrantDescription"] =
+                "operator supplied ACL attestation",
+        });
 
         builder.AddAevatarMainnetHost(options =>
         {
@@ -789,8 +1202,8 @@ public sealed class MainnetHostCompositionTests
         using var app = builder.Build();
         var aclOptions = app.Services.GetRequiredService<IOptions<AevatarOAuthClientEsAclOptions>>().Value;
 
-        aclOptions.GrantMatchesGrainEventStoreInternal.Should().BeTrue();
-        aclOptions.GrantDescription.Should().Contain("aevatar-oauth-clients");
+        aclOptions.GrantMatchesGrainEventStoreInternal.Should().Be(configuredAttestation);
+        aclOptions.GrantDescription.Should().Be("operator supplied ACL attestation");
     }
 
     [Fact]
@@ -1041,6 +1454,93 @@ public sealed class MainnetHostCompositionTests
     }
 
     private sealed class MissingMainnetDependency;
+
+    private sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => utcNow;
+    }
+
+    private sealed class NyxIdAssistantActionRegistryHandler : HttpMessageHandler
+    {
+        private const string RegistryJson = """
+            {
+              "schema_version": 4,
+              "revision": "nyxid-assistant-actions.v4",
+              "actions": [
+                {
+                  "action": "service.connect",
+                  "description": "Connect a service through the NyxID browser journey.",
+                  "params_schema": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["catalogService"],
+                        "properties": {
+                          "catalogService": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["serviceSlug"],
+                            "properties": {
+                              "serviceSlug": {"type": "string"},
+                              "requestedScopes": {
+                                "type": "array",
+                                "items": {"type": "string"}
+                              },
+                              "viaNodeId": {"type": "string"},
+                              "targetOrgId": {"type": "string"}
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["customService"],
+                        "properties": {
+                          "customService": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["name", "endpointUrl", "authMethod"],
+                            "properties": {
+                              "name": {"type": "string"},
+                              "endpointUrl": {"type": "string"},
+                              "authMethod": {"type": "string"},
+                              "authKeyName": {"type": "string"},
+                              "viaNodeId": {"type": "string"},
+                              "targetOrgId": {"type": "string"}
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  "risk": "grant",
+                  "tier": "v1",
+                  "remember_eligible": true
+                }
+              ]
+            }
+            """;
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (request.Method != HttpMethod.Get ||
+                request.RequestUri?.AbsolutePath != "/api/v1/assistant/actions" ||
+                request.Headers.Authorization is not null)
+            {
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.BadRequest));
+            }
+
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(RegistryJson),
+            });
+        }
+    }
 
     private sealed class TemporaryAevatarHomeScope : IDisposable
     {

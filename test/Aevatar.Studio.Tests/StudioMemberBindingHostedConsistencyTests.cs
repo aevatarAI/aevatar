@@ -9,6 +9,7 @@ using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Application.Studio.Services;
 using Aevatar.Studio.Hosting.Endpoints;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using FluentAssertions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -157,6 +158,8 @@ public sealed class StudioMemberBindingHostedConsistencyTests
             builder.Services.AddSingleton<IServiceLifecycleQueryPort>(new ThrowingServiceLifecycleQueryPort());
             builder.Services.AddSingleton<IScopeBindingReadinessQueryPort>(new ThrowingScopeBindingReadinessQueryPort());
             builder.Services.AddSingleton<IServiceCommandPort>(new ThrowingServiceCommandPort());
+            builder.Services.AddSingleton<IWorkflowExternalCapabilityAdmissionService>(
+                new StudioWorkflowCapabilityAdmissionTestService());
             builder.Services.AddSingleton<IStudioMemberService, StudioMemberService>();
             builder.Services.AddAuthorization();
 

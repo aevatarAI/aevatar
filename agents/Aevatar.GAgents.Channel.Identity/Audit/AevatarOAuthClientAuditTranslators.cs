@@ -27,7 +27,7 @@ public sealed class AevatarOAuthClientProvisionedAuditTranslator
         OAuthClientSeed(
             "identity.oauth-client.provisioned",
             context.OriginActorId,
-            "Aevatar OAuth client provisioned via NyxID dynamic client registration.",
+            "Aevatar OAuth client configuration materialized by the identity actor.",
             annotations: new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["client_id"] = evt.ClientId ?? string.Empty,

@@ -317,6 +317,10 @@ public sealed class WorkflowRunObservatoryQueryService
             RequestParameters = step.RequestParameters,
             NextStepId = step.NextStepId,
             BranchKey = step.BranchKey,
+            SuspensionType = step.SuspensionType,
+            SuspensionPrompt = step.SuspensionPrompt,
+            SuspensionContent = step.SuspensionContent,
+            SuspensionTimeoutSeconds = step.SuspensionTimeoutSeconds,
             Usage = new ObservatoryUsageTotals
             {
                 PromptTokens = step.Usage.PromptTokens,

@@ -12,11 +12,28 @@ public interface IWorkflowTool
 public sealed record WorkflowToolExecutionResult(
     string ResultJson,
     WorkflowManagedHandoffOutcome? ManagedHandoff = null,
-    WorkflowToolApprovalPendingOutcome? PendingApproval = null)
+    WorkflowToolApprovalPendingOutcome? PendingApproval = null,
+    WorkflowToolExecutionFailure? Failure = null)
 {
-    public static WorkflowToolExecutionResult Success(string resultJson) =>
-        new(resultJson ?? string.Empty);
+    public static WorkflowToolExecutionResult Success(
+        string resultJson,
+        WorkflowManagedHandoffOutcome? managedHandoff = null) =>
+        new(resultJson ?? string.Empty, managedHandoff);
+
+    public static WorkflowToolExecutionResult Failed(
+        string resultJson,
+        string errorCode,
+        string errorMessage) =>
+        new(
+            resultJson ?? string.Empty,
+            Failure: new WorkflowToolExecutionFailure(
+                errorCode ?? string.Empty,
+                errorMessage ?? string.Empty));
 }
+
+public sealed record WorkflowToolExecutionFailure(
+    string ErrorCode,
+    string ErrorMessage);
 
 public sealed record WorkflowToolApprovalPendingOutcome(
     string ApprovalRequestId,
@@ -90,7 +107,8 @@ public sealed record WorkflowToolExecutionRequest
         ToolApprovalGrant? ApprovalGrant = null,
         IReadOnlyList<WorkflowFileRef>? InputFileRefs = null,
         string IdempotencyKey = "",
-        string ScheduleId = "")
+        string ScheduleId = "",
+        ExternalWorkflowCapabilityRef? InvocationAdmission = null)
     {
         this.ArgumentsJson = ArgumentsJson;
         this.RunId = RunId;
@@ -104,6 +122,7 @@ public sealed record WorkflowToolExecutionRequest
         this.InputFileRefs = CopyInputFileRefs(InputFileRefs);
         this.IdempotencyKey = IdempotencyKey ?? string.Empty;
         this.ScheduleId = ScheduleId ?? string.Empty;
+        this.InvocationAdmission = InvocationAdmission?.Clone();
     }
 
     public string ArgumentsJson { get; init; }
@@ -129,6 +148,12 @@ public sealed record WorkflowToolExecutionRequest
     public string IdempotencyKey { get; init; }
 
     public string ScheduleId { get; init; }
+
+    /// <summary>
+    /// Server-generated proof for exactly this call site, resolved from actor-owned Run state.
+    /// Null when the compiled step is not an admitted external tool invocation.
+    /// </summary>
+    public ExternalWorkflowCapabilityRef? InvocationAdmission { get; init; }
 
     private static IReadOnlyList<WorkflowFileRef> CopyInputFileRefs(
         IReadOnlyList<WorkflowFileRef>? inputFileRefs) =>

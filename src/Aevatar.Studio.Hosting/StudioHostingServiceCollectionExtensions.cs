@@ -1,11 +1,19 @@
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.ContentArtifacts.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
+using Aevatar.GAgentService.Hosting.DependencyInjection;
 using Aevatar.Studio.Application;
+using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.DependencyInjection;
+using Aevatar.Studio.Application.Studio.Services;
 using Aevatar.Studio.Application.Studio.WorkflowBoards;
 using Aevatar.Studio.Hosting.Controllers;
+using Aevatar.Studio.Hosting.ContentArtifacts;
 using Aevatar.Studio.Hosting.Endpoints;
 using Aevatar.Studio.Hosting.WorkflowBoards;
+using Aevatar.Studio.Hosting.WorkOrders;
 using Aevatar.Studio.Hosting.NyxId;
 using Aevatar.Studio.Infrastructure.DependencyInjection;
 using Aevatar.Studio.Infrastructure.ScopeResolution; // DefaultAppScopeResolver
@@ -16,6 +24,7 @@ using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Aevatar.GAgents.Channel.Identity.Abstractions;
 
 namespace Aevatar.Studio.Hosting;
 
@@ -25,6 +34,7 @@ internal static class StudioHostingServiceCollectionExtensions
         this IServiceCollection services,
         IConfiguration configuration)
     {
+        services.TryAddSingleton(configuration);
         services.Configure<StudioHostingOptions>(configuration.GetSection(StudioHostingOptions.SectionName));
         services.Configure<UserLlmSettingsOptions>(configuration.GetSection("Aevatar:Studio:UserLlmSettings"));
         services.AddControllers()
@@ -36,8 +46,14 @@ internal static class StudioHostingServiceCollectionExtensions
                     System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull;
             });
         services.AddHttpContextAccessor();
+        services.AddHttpClient();
+        services.TryAddSingleton(TimeProvider.System);
+        services.TryAddSingleton<
+            IContentArtifactBackingContentPort,
+            WorkflowFileContentArtifactBackingContentPort>();
         services.AddSingleton<IAppScopeResolver, DefaultAppScopeResolver>();
         services.AddStudioApplication();
+        AddWorkOrderExecutionWorker(services, configuration);
         services.Configure<NyxIdLlmCatalogCacheOptions>(
             configuration.GetSection(NyxIdLlmCatalogCacheOptions.SectionName));
         services.TryAddSingleton<NyxIdLlmCatalogHttpClient>();
@@ -50,6 +66,11 @@ internal static class StudioHostingServiceCollectionExtensions
         services.AddStudioInfrastructure(configuration);
         services.AddStudioProjectionComponents(configuration);
         services.AddStudioProjectionReadModelProviders(configuration);
+        services.AddNyxIdAuthorizationCatalogHosting(configuration);
+        services.TryAddSingleton<INyxIdCatalogAccessLifecyclePort>(sp => new NyxIdCatalogAccessLifecyclePort(
+            sp.GetRequiredService<INyxIdAuthorizationCatalogCommandPort>(),
+            configuration,
+            sp.GetService<TimeProvider>() ?? TimeProvider.System));
         services.AddWorkflowBoardExecutionProjectionAdapter();
         return services;
     }
@@ -62,6 +83,9 @@ internal static class StudioHostingServiceCollectionExtensions
             sp.GetService<IStudioWorkspaceQueryPort>(),
             sp.GetService<IStudioWorkspaceCommandPort>(),
             sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<AppScopedWorkflowService>>()));
+        services.TryAddSingleton<
+            IStudioMemberWorkflowDraftProvisioningPort,
+            StudioMemberWorkflowDraftProvisioningService>();
         services.AddSingleton(sp => new AppScopedScriptService(
             sp.GetRequiredService<IHttpClientFactory>(),
             sp.GetService<IScopeScriptQueryPort>(),
@@ -98,4 +122,13 @@ internal static class StudioHostingServiceCollectionExtensions
     private static bool HasWorkflowBoardExecutionDocumentReader(IServiceCollection services) =>
         services.Any(static descriptor =>
             descriptor.ServiceType == typeof(IProjectionDocumentReader<WorkflowExecutionBoardDocument, string>));
+
+    private static void AddWorkOrderExecutionWorker(
+        IServiceCollection services,
+        IConfiguration configuration)
+    {
+        services.Configure<WorkOrderExecutionWorkerOptions>(
+            configuration.GetSection(WorkOrderExecutionWorkerOptions.SectionName));
+        services.AddHostedService<WorkOrderExecutionWorker>();
+    }
 }

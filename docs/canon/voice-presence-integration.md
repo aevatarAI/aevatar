@@ -209,7 +209,7 @@ feature token whose RFC 8707 resources are the union of the baseline Aevatar
 resource and
 `<same-NyxID-resource-base>/api/v1/proxy/s/<configured-realtime-service-slug>`.
 The browser derives that URI from the injected Aevatar resource, so it preserves
-the resource server's canonical base across deployments. The
+the resource server's canonical API base independently of the OIDC authority. The
 authorization-code exchange repeats that exact resource set, and refresh uses
 the resources stored with the feature token. The shared baseline token is not
 overwritten. Owning the NyxID service and authorizing a particular access token

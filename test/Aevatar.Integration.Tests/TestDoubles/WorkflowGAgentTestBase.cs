@@ -2,6 +2,7 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.Credentials.Testing;
@@ -15,6 +16,7 @@ using Aevatar.Foundation.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Foundation.Runtime.Streaming;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Abstractions.Credentials;
 using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Composition;
@@ -65,7 +67,10 @@ public abstract class WorkflowGAgentTestBase
         internal static async Task<(WorkflowRoleGAgent Agent, RecordingEventPublisher Publisher)> CreateActivatedWorkflowRoleAgentAsync(
             IEventStore eventStore,
             ILLMProviderFactory llmProviderFactory,
-            string agentId)
+            string agentId,
+            IEnumerable<IAgentTool>? tools = null,
+            IToolSetRegistry? toolSetRegistry = null,
+            IWorkflowCallerAccessTokenProvider? callerAccessTokenProvider = null)
         {
             var services = new ServiceCollection()
                 .AddSingleton<IEventStore>(eventStore)
@@ -74,12 +79,17 @@ public abstract class WorkflowGAgentTestBase
                 .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
                 .BuildServiceProvider();
             var publisher = new RecordingEventPublisher();
-            var agent = new WorkflowRoleGAgent(llmProviderFactory)
+            var agent = new TestWorkflowRoleGAgent(
+                llmProviderFactory,
+                toolSetRegistry,
+                callerAccessTokenProvider)
             {
                 Services = services,
                 EventPublisher = publisher,
                 EventSourcingBehaviorFactory = services.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),
             };
+            foreach (var tool in tools ?? [])
+                agent.RegisterToolForTest(tool);
             SetAgentId(agent, agentId);
             await agent.ActivateAsync();
             await agent.HandleWorkflowRoleInitialize(new WorkflowRoleInitializeEvent
@@ -90,6 +100,28 @@ public abstract class WorkflowGAgentTestBase
                 SystemPrompt = "workflow role",
             });
             return (agent, publisher);
+        }
+
+        internal sealed class SuccessfulWorkflowTool(string name) : IAgentTool
+        {
+            public string Name => name;
+            public string Description => "Workflow integration test tool";
+            public string ParametersSchema => "{}";
+
+            public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+                Task.FromResult("{}");
+        }
+
+        private sealed class TestWorkflowRoleGAgent(
+            ILLMProviderFactory llmProviderFactory,
+            IToolSetRegistry? toolSetRegistry,
+            IWorkflowCallerAccessTokenProvider? callerAccessTokenProvider)
+            : WorkflowRoleGAgent(
+                llmProviderFactory,
+                toolSetRegistry: toolSetRegistry,
+                callerAccessTokenProvider: callerAccessTokenProvider)
+        {
+            public void RegisterToolForTest(IAgentTool tool) => RegisterTool(tool);
         }
 
         internal static WorkflowRunGAgent CreateRunAgent(

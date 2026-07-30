@@ -9,9 +9,9 @@ namespace Aevatar.AI.Tests;
 
 public sealed class NyxIdChatEndpointsHelperCoverageTests
 {
-    private static readonly MethodInfo ExtractBearerTokenMethod = typeof(NyxIdChatEndpoints)
-        .GetMethod("ExtractBearerToken", BindingFlags.NonPublic | BindingFlags.Static)
-        ?? throw new InvalidOperationException("ExtractBearerToken not found.");
+    private static readonly MethodInfo ExtractNyxIdAccessTokenMethod = typeof(NyxIdChatEndpoints)
+        .GetMethod("ExtractNyxIdAccessToken", BindingFlags.NonPublic | BindingFlags.Static)
+        ?? throw new InvalidOperationException("ExtractNyxIdAccessToken not found.");
 
     private static readonly MethodInfo TryExtractJwtSubjectMethod = typeof(NyxIdChatEndpoints)
         .GetMethod("TryExtractJwtSubject", BindingFlags.NonPublic | BindingFlags.Static)
@@ -44,18 +44,18 @@ public sealed class NyxIdChatEndpointsHelperCoverageTests
     }
 
     [Fact]
-    public void ExtractBearerToken_ShouldHandleMissingBearerAndOtherSchemes()
+    public void ExtractNyxIdAccessToken_ShouldHandleMissingBearerAndOtherSchemes()
     {
         var missing = new DefaultHttpContext();
-        InvokePrivateStatic<string?>(ExtractBearerTokenMethod, missing).Should().BeNull();
+        InvokePrivateStatic<string?>(ExtractNyxIdAccessTokenMethod, missing).Should().BeNull();
 
         var basic = new DefaultHttpContext();
         basic.Request.Headers.Authorization = "Basic abc";
-        InvokePrivateStatic<string?>(ExtractBearerTokenMethod, basic).Should().BeNull();
+        InvokePrivateStatic<string?>(ExtractNyxIdAccessTokenMethod, basic).Should().BeNull();
 
         var bearer = new DefaultHttpContext();
         bearer.Request.Headers.Authorization = "Bearer token-123";
-        InvokePrivateStatic<string?>(ExtractBearerTokenMethod, bearer).Should().Be("token-123");
+        InvokePrivateStatic<string?>(ExtractNyxIdAccessTokenMethod, bearer).Should().Be("token-123");
     }
 
     [Fact]

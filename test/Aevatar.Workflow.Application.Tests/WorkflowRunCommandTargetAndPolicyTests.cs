@@ -717,6 +717,11 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
 
         public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(string workflowYaml, CancellationToken ct = default) =>
             throw new NotSupportedException();
+
+        public Task<WorkflowInlineYamlBundleParseResult> ParseInlineWorkflowBundleAsync(
+            IReadOnlyList<WorkflowChatInlineYamlDocument> inlineWorkflowDocuments,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
     }
 
     private sealed record UnknownDetachedSignal(WorkflowChatRunAcceptedReceipt Receipt)

@@ -1,6 +1,8 @@
+using Aevatar.Workflow.Application.Abstractions.Runs;
+
 namespace Aevatar.Mainnet.Host.Api.Skills;
 
-// Invoke request body (read manually via ReadFromJsonAsync, mirroring SkillRunnerExternalTriggerEndpoints).
+// Invoke request body read manually via ReadFromJsonAsync.
 internal sealed record SkillInvokeRequest(string? Prompt = null);
 
 // Returned to the page after a one-shot invoke. ObservatoryUrl deep-links to the created run's detail.
@@ -26,14 +28,17 @@ internal sealed record SkillScheduleHttpRequest(
     string? Prompt = null,
     string? CronExpression = null,
     string? Timezone = null,
-    string? DisplayName = null);
+    string? DisplayName = null,
+    string? TeamId = null);
 
 // Returned after a schedule is provisioned; ObservatoryUrl shows the schedule's recurring runs.
 public sealed record SkillScheduleReceipt(
     string ScheduleId,
     string MemberId,
+    string TeamId,
     string Status,
-    string ObservatoryUrl);
+    string ObservatoryUrl,
+    string StudioUrl);
 
 internal sealed record SkillScheduleOutcome(
     bool Succeeded,
@@ -47,25 +52,24 @@ internal sealed record SkillScheduleOutcome(
 }
 
 // Invokes a visible ornn skill once as an observable workflow run, or provisions a recurring schedule for it.
-// The access token + scope + owner subject are INPUTS (resolved from the caller at the endpoint), not read
-// from HttpContext here.
+// Caller credentials are INPUTS resolved from the caller at the endpoint, not read from HttpContext here.
 internal interface IUserSkillRunService
 {
     Task<SkillRunOutcome> InvokeOnceAsync(
         string skillGuid,
-        string accessToken,
+        WorkflowCallerCredential callerCredential,
         string scopeId,
         string prompt,
         CancellationToken ct = default);
 
     Task<SkillScheduleOutcome> ScheduleAsync(
         string skillGuid,
-        string accessToken,
+        WorkflowCallerCredential callerCredential,
         string scopeId,
-        string? ownerSubjectExternalUserId,
         string prompt,
         string cronExpression,
         string timezone,
         string displayName,
+        string teamId,
         CancellationToken ct = default);
 }

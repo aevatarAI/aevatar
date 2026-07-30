@@ -1,10 +1,15 @@
+using System.Net;
 using System.Runtime.CompilerServices;
+using System.Text;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Tools;
+using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.NyxId.Tools;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
@@ -117,6 +122,47 @@ public sealed class AgentRunReplyGenerationExecutorTests
     }
 
     [Fact]
+    public async Task BuildLlmStepContinuation_WhenHistoricalFileRefHasExpired_ShouldSendUnavailableMarker()
+    {
+        var provider = new RecordingProvider();
+        var artifactPort = Substitute.For<IFileArtifactReadPort>();
+        var executor = CreateExecutor(provider, fileArtifactReadPort: artifactPort);
+        var workItem = BuildFinalNoToolsWorkItem();
+        var expiredPart = new ContentPart
+        {
+            Kind = ContentPartKind.Text,
+            MediaType = "application/pdf",
+            Name = "expired.pdf",
+            FileRef = new LlmChatFileRef
+            {
+                FileId = "wf-file-expired",
+                ArtifactId = "workflow-file://wf-file-expired",
+                SourceKind = LlmChatFileSourceKind.ChatInput,
+                FileName = "expired.pdf",
+                MediaType = "application/pdf",
+                ExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(-1).ToUnixTimeMilliseconds(),
+            },
+        };
+        workItem.StepState.Messages.Clear();
+        workItem.StepState.Messages.Add(AgentRunReplyStepMappers.ToProto(ChatMessage.User([
+            ContentPart.TextPart("summarize the earlier attachment"),
+            expiredPart,
+        ])));
+
+        await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
+
+        var providerPart = provider.Requests.Should().ContainSingle().Subject
+            .Messages.Last(message => message.Role == "user")
+            .ContentParts.Should().NotBeNull().And.Subject
+            .Single(part => part.Text?.Contains("Attachment unavailable", StringComparison.Ordinal) == true);
+        providerPart.FileRef.Should().BeNull();
+        workItem.StepState.Messages.Single().ContentParts
+            .Single(part => part.FileRef is not null)
+            .FileRef.ArtifactId.Should().Be("workflow-file://wf-file-expired");
+        artifactPort.ReceivedCalls().Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task BuildLlmStepContinuation_WhenFileRefMaterializationExceedsLimit_ShouldThrowGenericInvalidOperation()
     {
         var provider = new RecordingProvider();
@@ -172,6 +218,127 @@ public sealed class AgentRunReplyGenerationExecutorTests
     }
 
     [Fact]
+    public async Task BuildLlmStepContinuation_ShouldSnapshotExactProviderOwnedCallSafety()
+    {
+        var tool = new EffectClassifiedTool("repository_update");
+        var provider = new ToolCallProvider(tool.Name);
+        var executor = CreateToolEnabledExecutor(tool, provider);
+        var workItem = BuildToolEnabledWorkItem();
+
+        var execution = await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
+
+        tool.ClassifiedArguments.Should().Be("{}");
+        var snapshot = execution.AuthorizedToolCallSafeties.Should().ContainSingle().Which;
+        snapshot.CallId.Should().Be("call-1");
+        snapshot.ToolName.Should().Be(tool.Name);
+        snapshot.ArgumentsJson.Should().Be("{}");
+        snapshot.CallSafety.RequiresApproval.Should().BeFalse();
+        snapshot.CallSafety.IsReadOnly.Should().BeFalse();
+        snapshot.CallSafety.IsDestructive.Should().BeTrue();
+        snapshot.SideEffectKind.Should().Be("repository.update");
+    }
+
+    [Fact]
+    public async Task NyxIdCatalogTool_ThroughNyxIdChatTurnExecutor_ShouldCompleteReadOnlyWithoutOutcomeReceipt()
+    {
+        var handler = new StaticResponseHandler("""{"services":[{"slug":"api-github"}]}""");
+        using var httpClient = new HttpClient(handler);
+        using var client = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+            httpClient);
+        var tool = new NyxIdCatalogTool(client);
+        var generationExecutor = CreateToolEnabledExecutor(
+            tool,
+            new ToolCallProvider(tool.Name),
+            toolContext: AgentToolExecutionContext.Empty with
+            {
+                Credentials = AgentToolCredentials.Empty with
+                {
+                    NyxIdAccessToken = "token-1",
+                },
+            });
+        var executor = new NyxIdChatTurnOperationExecutor(generationExecutor);
+        var session = new NyxIdChatTransientExecutionSession();
+        var llmExecution = await executor.ExecuteAsync(
+            new NyxIdChatOperationDispatchCommand
+            {
+                Key = BuildOperationKey("step-llm", "operation-llm"),
+                Llm = new NyxIdChatLLMOperationInput
+                {
+                    Request = new ChatRequestEvent
+                    {
+                        Prompt = "connect GitHub",
+                        SessionId = "turn-1",
+                    },
+                },
+            },
+            session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+        var call = llmExecution.Result.Llm.ToolCalls.Should().ContainSingle().Which;
+
+        var toolExecution = await executor.ExecuteAsync(
+            new NyxIdChatOperationDispatchCommand
+            {
+                Key = BuildOperationKey("step-tool", "operation-tool"),
+                Tool = new NyxIdChatToolOperationInput
+                {
+                    CallId = call.CallId,
+                    ToolName = call.ToolName,
+                    ArgumentsJson = call.ArgumentsJson,
+                    MayChangeExternalState = call.Safety.MayChangeExternalState,
+                },
+            },
+            session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        toolExecution.Result.ResultCase.Should().Be(
+            NyxIdChatOperationResultSignal.ResultOneofCase.Tool,
+            "catalog GET is read-only and must not require an outcome receipt");
+        call.Safety.IsReadOnly.Should().BeTrue();
+        call.Safety.MayChangeExternalState.Should().BeFalse();
+        toolExecution.Result.Tool.ResultJson.Should().Contain("api-github");
+        toolExecution.Result.Tool.Receipt.Status.Should().Be(AgentToolReceiptStatus.Success);
+        toolExecution.Result.Tool.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.NotApplied);
+        handler.Method.Should().Be(HttpMethod.Get);
+        handler.Path.Should().Be("/api/v1/catalog");
+    }
+
+    [Fact]
+    public void NyxIdCatalogTool_HttpErrorEnvelope_ShouldReturnTypedFailureReceipt()
+    {
+        using var client = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example" });
+        var tool = new NyxIdCatalogTool(client);
+
+        var receipt = ((IAgentTool)tool).CreateResultReceipt(
+            "call-1",
+            tool.Name,
+            "{}",
+            "{\"error\":true,\"status\":401,\"body\":\"secret upstream body\"}");
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ErrorCode.Should().Be("NYXID_CATALOG_HTTP_401");
+        receipt.ResultJson.Should().NotContain("secret upstream body");
+    }
+
+    [Fact]
+    public void NyxIdCatalogTool_UnrecognizedJson_ShouldLeaveOutcomeUnverified()
+    {
+        using var client = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example" });
+        var tool = new NyxIdCatalogTool(client);
+
+        var receipt = ((IAgentTool)tool).CreateResultReceipt(
+            "call-1",
+            tool.Name,
+            "{}",
+            "{}");
+
+        receipt.Should().BeNull();
+    }
+
+    [Fact]
     public async Task BuildLlmStepContinuation_WhenMiddlewareRemovesTools_ShouldRejectFabricatedToolCall()
     {
         var tool = new CountingTool("use_skill");
@@ -190,8 +357,11 @@ public sealed class AgentRunReplyGenerationExecutorTests
 
         provider.Requests.Should().ContainSingle().Which.Tools.Should().BeNull();
         continuation.ToolStepResult.Should().NotBeNull();
-        continuation.ToolStepResult.ResultMessages.Should().ContainSingle()
-            .Which.Content.Should().Contain("not found");
+        var rejected = continuation.ToolStepResult.ResultMessages.Should().ContainSingle().Which;
+        rejected.Content.Should().Be("{\"error\":\"The tool request failed.\"}");
+        var receipt = continuation.ToolStepResult.ToolReceipts.Should().ContainSingle().Which;
+        receipt.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ErrorCode.Should().Be("tool_execution_exception");
         tool.ExecuteCount.Should().Be(0);
     }
 
@@ -294,7 +464,8 @@ public sealed class AgentRunReplyGenerationExecutorTests
     private static AgentRunReplyGenerationExecutor CreateToolEnabledExecutor(
         IAgentTool tool,
         ILLMProvider provider,
-        IReadOnlyList<ILLMCallMiddleware>? llmMiddlewares = null)
+        IReadOnlyList<ILLMCallMiddleware>? llmMiddlewares = null,
+        AgentToolExecutionContext? toolContext = null)
     {
         var tools = new ToolManager();
         tools.Register(tool);
@@ -311,7 +482,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
             runtime.CreateStepExecutor(turnCatalog: null),
             new Dictionary<string, string>(),
             LLMControlContext.Empty,
-            AgentToolExecutionContext.Empty,
+            toolContext ?? AgentToolExecutionContext.Empty,
             InitialMessages: [],
             MaxToolRounds: 1);
         return new AgentRunReplyGenerationExecutor(
@@ -390,6 +561,17 @@ public sealed class AgentRunReplyGenerationExecutorTests
             request,
             stepState);
     }
+
+    private static NyxIdChatOperationKey BuildOperationKey(string stepId, string operationId) =>
+        new()
+        {
+            ConversationActorId = "conversation-1",
+            TurnId = "turn-1",
+            TaskId = "task-1",
+            StepId = stepId,
+            OperationId = operationId,
+            OperationGeneration = 1,
+        };
 
     private static AgentRunReplyStepExecutionRequest BuildToolStepWorkItem(
         AgentRunReplyStepExecutionRequest llmWorkItem,
@@ -531,6 +713,47 @@ public sealed class AgentRunReplyGenerationExecutorTests
         }
     }
 
+    private sealed class EffectClassifiedTool(string name) : IAgentTool
+    {
+        public string Name => name;
+        public string Description => name;
+        public string ParametersSchema => "{}";
+        public bool IsDestructive => true;
+        public string SideEffectKind => "repository.update";
+        public string? ClassifiedArguments { get; private set; }
+
+        public AgentToolCallSafety GetCallSafety(string argumentsJson)
+        {
+            ClassifiedArguments = argumentsJson;
+            return new AgentToolCallSafety(
+                RequiresApproval: false,
+                IsReadOnly: false,
+                IsDestructive: true);
+        }
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult("{}");
+    }
+
+    private sealed class StaticResponseHandler(string body) : HttpMessageHandler
+    {
+        public HttpMethod? Method { get; private set; }
+        public string? Path { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Method = request.Method;
+            Path = request.RequestUri?.AbsolutePath;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json"),
+            });
+        }
+    }
+
     public enum AuthorizedToolStepMutation
     {
         RunId,
@@ -553,7 +776,8 @@ public sealed class AgentRunReplyGenerationExecutorTests
             IReadOnlyList<ConversationHistoryEntry>? priorHistory,
             ChatAttachmentInputContext? attachmentContext,
             bool forceDisableTools,
-            CancellationToken ct) =>
+            CancellationToken ct,
+            AgentProfileTurnCatalog? turnCatalog = null) =>
             Task.FromResult(plan);
 
         public Task<ConversationReplyResult> GenerateReplyAsync(

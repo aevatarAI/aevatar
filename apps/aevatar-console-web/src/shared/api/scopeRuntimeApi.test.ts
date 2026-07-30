@@ -444,7 +444,13 @@ describe("scopeRuntimeApi", () => {
     global.fetch = fetchMock as typeof global.fetch;
 
     await expect(
-      scopeRuntimeApi.listMemberRuns("scope-a", "joker", { take: 5 }),
+      scopeRuntimeApi.listMemberRuns("scope-a", "joker", {
+        scheduleId: " schedule-member ",
+        status: " Completed ",
+        take: 5,
+        updatedFrom: " 2026-04-27T00:30:00Z ",
+        updatedTo: " 2026-04-27T01:30:00Z ",
+      }),
     ).resolves.toEqual(
       expect.objectContaining({
         memberId: "joker",
@@ -460,7 +466,9 @@ describe("scopeRuntimeApi", () => {
     );
 
     const [input] = fetchMock.mock.calls[0] as [string, RequestInit | undefined];
-    expect(input).toBe("/api/scopes/scope-a/members/joker/runs?take=5");
+    expect(input).toBe(
+      "/api/scopes/scope-a/members/joker/runs?scheduleId=schedule-member&status=Completed&take=5&updatedFrom=2026-04-27T00%3A30%3A00Z&updatedTo=2026-04-27T01%3A30%3A00Z",
+    );
   });
 
   it("loads run audit for a scope-scoped service run", async () => {

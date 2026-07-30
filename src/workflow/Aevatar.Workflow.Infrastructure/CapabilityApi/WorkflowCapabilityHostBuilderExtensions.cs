@@ -11,7 +11,9 @@ namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 
 public static class WorkflowCapabilityHostBuilderExtensions
 {
-    public static WebApplicationBuilder AddWorkflowCapabilityBundle(this WebApplicationBuilder builder)
+    public static WebApplicationBuilder AddWorkflowCapabilityBundle(
+        this WebApplicationBuilder builder,
+        bool mapChatPost = true)
     {
         ArgumentNullException.ThrowIfNull(builder);
 
@@ -53,6 +55,6 @@ public static class WorkflowCapabilityHostBuilderExtensions
         return builder.AddAevatarCapability(
             name: "workflow-bundle",
             configureServices: static (services, configuration) => services.AddWorkflowCapability(configuration),
-            mapEndpoints: static app => app.MapWorkflowCapabilityEndpoints());
+            mapEndpoints: app => app.MapWorkflowCapabilityEndpoints(mapChatPost));
     }
 }

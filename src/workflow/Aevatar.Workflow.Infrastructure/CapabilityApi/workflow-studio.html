@@ -602,7 +602,6 @@ function sessionTitleFrom(text){ const t=(text||"").trim().replace(/\s+/g," "); 
 async function streamChat(prompt, sessionId, onFrame, signal){
   const token = getToken(); if(!token) throw new Error("not-authenticated");
   const body = { prompt, sessionId, workflow: "studio" };
-  if(state.scopeId) body.scopeId = state.scopeId;
   const res = await fetch("/api/chat", {
     method:"POST",
     headers:{ Authorization:"Bearer " + token.access_token, "Content-Type":"application/json", "Accept":"text/event-stream" },
@@ -722,7 +721,7 @@ function mergeToolCalls(msg, calls){
 
 /* ---- Schedules (GET /api/schedules) ------------------------------------ */
 const TARGET_KIND_LABEL = { 0:"Envelope", 1:"ServiceInvocation" };
-const SCHEDULE_KIND_LABEL = { 0:"Generic", 1:"Workflow", 2:"SkillRunner" };
+const SCHEDULE_KIND_LABEL = { 0:"Generic", 1:"Workflow" };
 function targetKindLabel(k){ return TARGET_KIND_LABEL[k] != null ? TARGET_KIND_LABEL[k] : ("kind " + k); }
 function scheduleKindLabel(k){ return SCHEDULE_KIND_LABEL[k] != null ? SCHEDULE_KIND_LABEL[k] : ("kind " + k); }
 

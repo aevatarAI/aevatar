@@ -4,6 +4,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.Prompting;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.Core.Prompting;
@@ -12,9 +13,11 @@ using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using UglyToad.PdfPig;
 using LlmChatFileRef = Aevatar.AI.Abstractions.LLMProviders.ChatFileRef;
 using LlmChatFileSourceKind = Aevatar.AI.Abstractions.LLMProviders.ChatFileSourceKind;
 using FileArtifactRef = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactRef;
@@ -36,6 +39,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
     private const int MaxWorkingSetMessages = 200;
     private const int MaxAttachmentMaterializationBytes = 10 * 1024 * 1024;
     private const int MaxInlineImageBytes = 10 * 1024 * 1024;
+    private const int MaxInlineDocumentBytes = 10 * 1024 * 1024;
+    private const int MaxInlineDocumentTextChars = 20_000;
 
     // Appended to the system prompt when the unbound-sender gate detaches the tool
     // surface for a channel turn. The kernel prompt documents the deployment's tools
@@ -72,6 +77,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
     private readonly IAgentToolExecutionPort? _toolExecutionPort;
     private readonly LocalSkillCatalog? _localSkillCatalog;
     private readonly IRemoteSkillFetcher? _remoteSkillFetcher;
+    private readonly IRemoteSkillAccessTokenResolver? _remoteSkillAccessTokenResolver;
     private readonly global::Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? _relayOptions;
     private readonly INyxIdUserLlmPreferencesStore? _preferencesStore;
     private readonly IUserMemoryStore? _userMemoryStore;
@@ -123,7 +129,11 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         ILogger<NyxIdConversationReplyGenerator>? logger = null,
         ISystemSkillOverlayProvider? overlayProvider = null,
         ILarkOutboundClientFactory? larkOutboundClientFactory = null,
+<<<<<<< HEAD
         IAgentToolExecutionPort? toolExecutionPort = null)
+=======
+        IRemoteSkillAccessTokenResolver? remoteSkillAccessTokenResolver = null)
+>>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     {
         _llmProviderFactory = llmProviderFactory ?? throw new ArgumentNullException(nameof(llmProviderFactory));
         _toolSources = (toolSources ?? []).ToArray();
@@ -132,6 +142,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         _toolExecutionPort = toolExecutionPort;
         _localSkillCatalog = localSkillCatalog;
         _remoteSkillFetcher = remoteSkillFetcher;
+        _remoteSkillAccessTokenResolver = remoteSkillAccessTokenResolver;
         _relayOptions = relayOptions;
         _preferencesStore = preferencesStore;
         _userMemoryStore = userMemoryStore;
@@ -206,7 +217,15 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
 
         var replyPlan = await BuildEffectiveReplyPlanAsync(metadata, llmControl, toolContext, ct);
         var isChannelTurn = IsChannelRelayTurn(toolContext);
-        var primaryTools = await BuildTurnToolsAsync(replyPlan.DisableTools, isChannelTurn, ct);
+        var primaryDiscoveryContext = BuildEffectiveToolContext(
+            replyPlan.Primary,
+            replyPlan.PrimaryControl,
+            replyPlan.PrimaryToolContext);
+        var primaryTools = await BuildTurnToolsAsync(
+            replyPlan.DisableTools,
+            isChannelTurn,
+            primaryDiscoveryContext,
+            ct);
 
         try
         {
@@ -233,7 +252,11 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 "Sender LLM request failed; retrying with bot owner LLM config and no tools. activity={ActivityId}",
                 activity.Id);
 
-            var fallbackTools = await BuildTurnToolsAsync(disableTools: true, isChannelTurn, ct);
+            var fallbackTools = await BuildTurnToolsAsync(
+                disableTools: true,
+                isChannelTurn,
+                discoveryContext: null,
+                ct);
             return await GenerateWithMetadataAsync(
                     activity,
                     replyPlan.OwnerFallback,
@@ -267,6 +290,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 priorHistory,
                 attachmentContext: null,
                 forceDisableTools,
+                turnCatalog: null,
                 ct)
             .ConfigureAwait(false);
     }
@@ -279,7 +303,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         IReadOnlyList<ConversationHistoryEntry>? priorHistory,
         ChatAttachmentInputContext? attachmentContext,
         bool forceDisableTools,
-        CancellationToken ct) =>
+        CancellationToken ct,
+        AgentProfileTurnCatalog? turnCatalog) =>
         await BuildStepPlanCoreAsync(
                 activity,
                 metadata,
@@ -288,6 +313,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 priorHistory,
                 attachmentContext,
                 forceDisableTools,
+                turnCatalog,
                 ct)
             .ConfigureAwait(false);
 
@@ -299,6 +325,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         IReadOnlyList<ConversationHistoryEntry>? priorHistory,
         ChatAttachmentInputContext? attachmentContext,
         bool forceDisableTools,
+        AgentProfileTurnCatalog? turnCatalog,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(activity);
@@ -307,13 +334,18 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         var replyPlan = await BuildEffectiveReplyPlanAsync(metadata, llmControl, toolContext, ct);
         var provider = ResolveProvider();
         var disableTools = forceDisableTools || replyPlan.DisableTools;
-        var tools = await BuildTurnToolsAsync(disableTools, IsChannelRelayTurn(toolContext), ct);
         var externalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(replyPlan.Primary);
-        var effectiveToolContext = replyPlan.PrimaryControl.ToToolContext(
-            replyPlan.PrimaryToolContext ?? AgentToolExecutionContext.Empty with
-            {
-                ExternalMetadata = externalMetadata,
-            });
+        var effectiveToolContext = BuildEffectiveToolContext(
+            replyPlan.Primary,
+            replyPlan.PrimaryControl,
+            replyPlan.PrimaryToolContext);
+        var tools = turnCatalog is null
+            ? await BuildTurnToolsAsync(
+                disableTools,
+                IsChannelRelayTurn(toolContext),
+                effectiveToolContext,
+                ct)
+            : BuildProfileTools(disableTools, turnCatalog);
         var input = await BuildUserInputPartsAsync(
                 activity,
                 provider,
@@ -340,13 +372,14 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 externalMetadata,
                 effectiveToolContext,
                 input.AttachmentVisibilityInstruction,
-                replyPlan.DisableTools ? UnboundSenderToolsDisabledNotice : null)),
+                replyPlan.DisableTools ? UnboundSenderToolsDisabledNotice : null,
+                turnCatalog)),
         };
         initialMessages.AddRange((priorHistory ?? []).Where(IsReplayableHistoryEntry).TakeLast(MaxRecentPriorHistoryMessages).Select(ToChatMessage));
         initialMessages.Add(ChatMessage.User(input.Parts, input.Text));
 
         return new AgentRunReplyStepPlan(
-            runtime.CreateStepExecutor(turnCatalog: null),
+            runtime.CreateStepExecutor(turnCatalog),
             externalMetadata,
             replyPlan.PrimaryControl,
             effectiveToolContext,
@@ -357,18 +390,35 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             replyPlan.OwnerFallbackToolContext);
     }
 
+    private static ToolManager BuildProfileTools(
+        bool disableTools,
+        AgentProfileTurnCatalog turnCatalog)
+    {
+        var tools = new ToolManager();
+        if (!disableTools)
+            tools.Register(turnCatalog.RouteOwnedTools.Values);
+        return tools;
+    }
+
     // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
     // slash silently consumed.
     // New: unbound sender disables tool dispatch; unknown slash gates to /init bootstrap;
     // non-slash text path unchanged (owner-LLM chat fallback).
-    private async Task<ToolManager> BuildTurnToolsAsync(bool disableTools, bool isChannelTurn, CancellationToken ct)
+    private async Task<ToolManager> BuildTurnToolsAsync(
+        bool disableTools,
+        bool isChannelTurn,
+        AgentToolExecutionContext? discoveryContext,
+        CancellationToken ct)
     {
         var tools = new ToolManager();
         if (disableTools)
             return tools;
 
-        foreach (var tool in await DiscoverToolsAsync(isChannelTurn, ct))
-            tools.Register(tool);
+        using (AgentToolContextScope.Push(discoveryContext))
+        {
+            foreach (var tool in await DiscoverToolsAsync(isChannelTurn, discoveryContext, ct))
+                tools.Register(tool);
+        }
 
         // Refactor (iter27/cluster-027-skill-registry-remote-skill-process-state):
         //   Old pattern: SkillRegistry 暴露混合 local + remote skill 注册并用 5min TTL process-wide cache 缓存 remote skill,违反读写分离 + 多用户 token 共享 + 进程内事实状态
@@ -376,10 +426,26 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         if ((_localSkillCatalog is not null || _remoteSkillFetcher is not null) &&
             tools.Get("use_skill") is null)
         {
-            tools.Register(new UseSkillTool(_localSkillCatalog ?? new LocalSkillCatalog(), _remoteSkillFetcher));
+            tools.Register(new UseSkillTool(
+                _localSkillCatalog ?? new LocalSkillCatalog(),
+                _remoteSkillFetcher,
+                remoteAccessTokenResolver: _remoteSkillAccessTokenResolver));
         }
 
         return tools;
+    }
+
+    private static AgentToolExecutionContext BuildEffectiveToolContext(
+        IReadOnlyDictionary<string, string> metadata,
+        LLMControlContext control,
+        AgentToolExecutionContext? baseContext)
+    {
+        var externalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(metadata);
+        var context = baseContext ?? AgentToolExecutionContext.Empty with
+        {
+            ExternalMetadata = externalMetadata,
+        };
+        return control.ToToolContext(context);
     }
 
     private async Task<ConversationReplyResult> GenerateWithMetadataAsync(
@@ -529,16 +595,6 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         if (attachments.Length == 0)
             return new UserInputParts(text, parts);
 
-        if (!provider.Capabilities.SupportsInput(ContentPartKind.Image))
-        {
-            return new UserInputParts(
-                text,
-                parts,
-                BuildAttachmentVisibilityInstruction(
-                    CountAttachments(attachments),
-                    "the selected LLM route does not support image input"));
-        }
-
         if (_larkClient is null && _larkOutboundClientFactory is null)
         {
             return new UserInputParts(
@@ -546,7 +602,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 parts,
                 BuildAttachmentVisibilityInstruction(
                     CountAttachments(attachments),
-                    "Lark resource download is not available in this runtime"));
+                    "channel resource download is not available in this runtime"));
         }
 
         var token = NormalizeOptional(attachmentContext?.UserAccessToken)
@@ -558,10 +614,11 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 parts,
                 BuildAttachmentVisibilityInstruction(
                     CountAttachments(attachments),
-                    "the Lark user credential needed to download the attachment is unavailable"));
+                    "the channel user credential needed to download the attachment is unavailable"));
         }
 
         var unseenCount = 0;
+        var imageInputUnsupportedCount = 0;
         foreach (var source in attachments)
         {
             if (!IsLarkActivity(source.Activity))
@@ -590,25 +647,99 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
 
             foreach (var attachment in source.Attachments)
             {
-                if (attachment.Kind != AttachmentKind.Image)
+                if (IsLarkPdfInputAttachment(attachment))
                 {
+                    if (await TryAddLarkPdfTextPartAsync(
+                            parts,
+                            larkClient,
+                            token,
+                            providerSlug,
+                            messageId,
+                            attachment,
+                            ct).ConfigureAwait(false))
+                    {
+                        continue;
+                    }
+
                     unseenCount++;
+                    continue;
+                }
+
+                if (IsLarkTextInputAttachment(attachment))
+                {
+                    if (await TryAddLarkTextFilePartAsync(
+                            parts,
+                            larkClient,
+                            token,
+                            providerSlug,
+                            messageId,
+                            attachment,
+                            ct).ConfigureAwait(false))
+                    {
+                        continue;
+                    }
+
+                    unseenCount++;
+                    continue;
+                }
+
+                if (!IsLarkImageInputAttachment(attachment))
+                {
+                    _logger.LogDebug(
+                        "Skipping unsupported Lark attachment for chat LLM input: provider={ProviderSlug} messageId={MessageId} attachmentKind={AttachmentKind} contentType={ContentType} name={Name}",
+                        providerSlug,
+                        messageId,
+                        attachment.Kind,
+                        attachment.ContentType,
+                        attachment.Name);
+                    unseenCount++;
+                    continue;
+                }
+
+                if (!provider.Capabilities.SupportsInput(ContentPartKind.Image))
+                {
+                    _logger.LogDebug(
+                        "Skipping Lark image attachment because selected LLM route does not support image input: provider={ProviderSlug} messageId={MessageId} attachmentKind={AttachmentKind} contentType={ContentType} name={Name}",
+                        providerSlug,
+                        messageId,
+                        attachment.Kind,
+                        attachment.ContentType,
+                        attachment.Name);
+                    unseenCount++;
+                    imageInputUnsupportedCount++;
                     continue;
                 }
 
                 if (attachment.SizeBytes > MaxInlineImageBytes)
                 {
+                    _logger.LogWarning(
+                        "Skipping oversized Lark image attachment for chat LLM input: provider={ProviderSlug} messageId={MessageId} attachmentKind={AttachmentKind} contentType={ContentType} name={Name} sizeBytes={SizeBytes} maxBytes={MaxBytes}",
+                        providerSlug,
+                        messageId,
+                        attachment.Kind,
+                        attachment.ContentType,
+                        attachment.Name,
+                        attachment.SizeBytes,
+                        MaxInlineImageBytes);
                     unseenCount++;
                     continue;
                 }
 
-                var resourceKey = NormalizeOptional(attachment.AttachmentId);
+                var resourceKey = LarkAttachmentResourceKeys.Normalize(attachment.AttachmentId);
                 if (resourceKey is null)
                 {
+                    _logger.LogWarning(
+                        "Skipping Lark image attachment without resource key for chat LLM input: provider={ProviderSlug} messageId={MessageId} attachmentKind={AttachmentKind} contentType={ContentType} name={Name}",
+                        providerSlug,
+                        messageId,
+                        attachment.Kind,
+                        attachment.ContentType,
+                        attachment.Name);
                     unseenCount++;
                     continue;
                 }
 
+                var resourceKind = ToLarkMessageResourceKind(attachment);
                 LarkMessageResourceDownloadResult downloaded;
                 try
                 {
@@ -617,7 +748,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                             new LarkMessageResourceDownloadRequest(
                                 messageId,
                                 resourceKey,
-                                LarkMessageResourceKind.Image),
+                                resourceKind),
                             ct)
                         .ConfigureAwait(false);
                 }
@@ -629,37 +760,68 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 {
                     _logger.LogWarning(
                         ex,
-                        "Failed to download Lark image attachment for chat LLM input: provider={ProviderSlug} messageId={MessageId} resourceKey={ResourceKey}",
+                        "Failed to download Lark image attachment for chat LLM input: provider={ProviderSlug} messageId={MessageId} resourceKey={ResourceKey} resourceKind={ResourceKind} attachmentKind={AttachmentKind} contentType={ContentType} name={Name}",
                         providerSlug,
                         messageId,
-                        resourceKey);
+                        resourceKey,
+                        resourceKind,
+                        attachment.Kind,
+                        attachment.ContentType,
+                        attachment.Name);
                     unseenCount++;
                     continue;
                 }
 
-                 if (!downloaded.Succeeded ||
+                var mediaType = ResolveDownloadedImageMediaType(
+                    downloaded.ContentType,
+                    attachment.ContentType,
+                    downloaded.FileName,
+                    attachment.Name);
+                if (!downloaded.Succeeded ||
                     downloaded.Content.Length == 0 ||
                     downloaded.Content.Length > MaxInlineImageBytes ||
-                    !IsSupportedImageMediaType(downloaded.ContentType ?? attachment.ContentType))
+                    mediaType is null)
                 {
                     _logger.LogWarning(
-                        "Lark image attachment download was not usable for chat LLM input: provider={ProviderSlug} messageId={MessageId} resourceKey={ResourceKey} status={Status} detail={Detail}",
+                        "Lark image attachment download was not usable for chat LLM input: provider={ProviderSlug} messageId={MessageId} resourceKey={ResourceKey} resourceKind={ResourceKind} attachmentKind={AttachmentKind} contentType={ContentType} downloadedContentType={DownloadedContentType} name={Name} downloadedName={DownloadedName} status={Status} detail={Detail}",
                         providerSlug,
                         messageId,
                         resourceKey,
+                        resourceKind,
+                        attachment.Kind,
+                        attachment.ContentType,
+                        downloaded.ContentType,
+                        attachment.Name,
+                        downloaded.FileName,
                         downloaded.HttpStatus,
                         downloaded.Detail);
                     unseenCount++;
                     continue;
                 }
 
+                _logger.LogDebug(
+                    "Downloaded Lark image attachment for chat LLM input: provider={ProviderSlug} messageId={MessageId} resourceKey={ResourceKey} resourceKind={ResourceKind} attachmentKind={AttachmentKind} mediaType={MediaType} name={Name} sizeBytes={SizeBytes}",
+                    providerSlug,
+                    messageId,
+                    resourceKey,
+                    resourceKind,
+                    attachment.Kind,
+                    mediaType,
+                    NormalizeOptional(downloaded.FileName) ?? NormalizeOptional(attachment.Name),
+                    downloaded.Content.Length);
+
                 if (_fileIngressPort is null)
                 {
+                    _logger.LogWarning(
+                        "File ingress port is unavailable for Lark image attachment chat LLM input: provider={ProviderSlug} messageId={MessageId} resourceKey={ResourceKey} resourceKind={ResourceKind}",
+                        providerSlug,
+                        messageId,
+                        resourceKey,
+                        resourceKind);
                     unseenCount++;
                     continue;
                 }
 
-                var mediaType = NormalizeImageMediaType(downloaded.ContentType ?? attachment.ContentType);
                 var fileName = NormalizeOptional(downloaded.FileName) ?? NormalizeOptional(attachment.Name);
                 FileArtifactIngressResult ingressResult;
                 try
@@ -697,10 +859,11 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             }
         }
 
+        var unseenReason = unseenCount > 0 && unseenCount == imageInputUnsupportedCount
+            ? "selected LLM route does not support image input"
+            : "one or more attachments could not be converted to LLM input";
         var instruction = unseenCount > 0
-            ? BuildAttachmentVisibilityInstruction(
-                unseenCount,
-                "one or more attachments could not be converted to LLM image input")
+            ? BuildAttachmentVisibilityInstruction(unseenCount, unseenReason)
             : null;
 
         return new UserInputParts(text, parts, instruction);
@@ -714,6 +877,336 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         var materialized = await MaterializeFileRefPartsAsync(input.Parts, _fileArtifactReadPort, ct)
             .ConfigureAwait(false);
         return input with { Parts = materialized };
+    }
+
+    private async Task<bool> TryAddLarkPdfTextPartAsync(
+        List<ContentPart> parts,
+        ILarkNyxClient larkClient,
+        string token,
+        string? providerSlug,
+        string messageId,
+        AttachmentRef attachment,
+        CancellationToken ct)
+    {
+        if (attachment.SizeBytes > MaxInlineDocumentBytes)
+        {
+            _logger.LogWarning(
+                "Skipping oversized Lark PDF attachment for chat LLM input: provider={ProviderSlug} messageId={MessageId} contentType={ContentType} name={Name} sizeBytes={SizeBytes} maxBytes={MaxBytes}",
+                providerSlug,
+                messageId,
+                attachment.ContentType,
+                attachment.Name,
+                attachment.SizeBytes,
+                MaxInlineDocumentBytes);
+            return false;
+        }
+
+        var resourceKey = LarkAttachmentResourceKeys.Normalize(attachment.AttachmentId);
+        if (resourceKey is null)
+        {
+            _logger.LogWarning(
+                "Skipping Lark PDF attachment without resource key for chat LLM input: provider={ProviderSlug} messageId={MessageId} contentType={ContentType} name={Name}",
+                providerSlug,
+                messageId,
+                attachment.ContentType,
+                attachment.Name);
+            return false;
+        }
+
+        var fileRef = await TryIngestLarkFileAttachmentAsync(
+                larkClient,
+                token,
+                providerSlug,
+                messageId,
+                attachment,
+                resourceKey,
+                LarkMessageResourceKind.File,
+                ResolveDownloadedPdfMediaType,
+                MaxInlineDocumentBytes,
+                "PDF",
+                ct)
+            .ConfigureAwait(false);
+        if (fileRef is null)
+            return false;
+
+        var content = await TryReadLarkFileArtifactBytesAsync(
+                fileRef,
+                MaxInlineDocumentBytes,
+                "PDF",
+                ct)
+            .ConfigureAwait(false);
+        if (content is null)
+            return false;
+
+        string extractedText;
+        bool truncated;
+        try
+        {
+            (extractedText, truncated) = ExtractPdfText(content, MaxInlineDocumentTextChars);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to extract Lark PDF attachment text for chat LLM input: provider={ProviderSlug} messageId={MessageId} resourceKey={ResourceKey} name={Name}",
+                providerSlug,
+                messageId,
+                resourceKey,
+                NormalizeOptional(fileRef.FileName) ?? NormalizeOptional(attachment.Name));
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(extractedText))
+        {
+            _logger.LogWarning(
+                "Lark PDF attachment produced no extractable text for chat LLM input: provider={ProviderSlug} messageId={MessageId} resourceKey={ResourceKey} name={Name}",
+                providerSlug,
+                messageId,
+                resourceKey,
+                NormalizeOptional(fileRef.FileName) ?? NormalizeOptional(attachment.Name));
+            return false;
+        }
+
+        parts.Add(BuildDocumentFileRefPart(fileRef, attachment.Name));
+        return true;
+    }
+
+    private async Task<bool> TryAddLarkTextFilePartAsync(
+        List<ContentPart> parts,
+        ILarkNyxClient larkClient,
+        string token,
+        string? providerSlug,
+        string messageId,
+        AttachmentRef attachment,
+        CancellationToken ct)
+    {
+        if (attachment.SizeBytes > MaxInlineDocumentBytes)
+        {
+            _logger.LogWarning(
+                "Skipping oversized Lark text attachment for chat LLM input: provider={ProviderSlug} messageId={MessageId} contentType={ContentType} name={Name} sizeBytes={SizeBytes} maxBytes={MaxBytes}",
+                providerSlug,
+                messageId,
+                attachment.ContentType,
+                attachment.Name,
+                attachment.SizeBytes,
+                MaxInlineDocumentBytes);
+            return false;
+        }
+
+        var resourceKey = LarkAttachmentResourceKeys.Normalize(attachment.AttachmentId);
+        if (resourceKey is null)
+        {
+            _logger.LogWarning(
+                "Skipping Lark text attachment without resource key for chat LLM input: provider={ProviderSlug} messageId={MessageId} contentType={ContentType} name={Name}",
+                providerSlug,
+                messageId,
+                attachment.ContentType,
+                attachment.Name);
+            return false;
+        }
+
+        var fileRef = await TryIngestLarkFileAttachmentAsync(
+                larkClient,
+                token,
+                providerSlug,
+                messageId,
+                attachment,
+                resourceKey,
+                LarkMessageResourceKind.File,
+                ResolveDownloadedTextMediaType,
+                MaxInlineDocumentBytes,
+                "text",
+                ct)
+            .ConfigureAwait(false);
+        if (fileRef is null)
+            return false;
+
+        var content = await TryReadLarkFileArtifactBytesAsync(
+                fileRef,
+                MaxInlineDocumentBytes,
+                "text",
+                ct)
+            .ConfigureAwait(false);
+        if (content is null)
+            return false;
+
+        var (fileText, truncated) = ExtractUtf8Text(content, MaxInlineDocumentTextChars);
+        if (string.IsNullOrWhiteSpace(fileText))
+        {
+            _logger.LogWarning(
+                "Lark text attachment produced no usable text for chat LLM input: provider={ProviderSlug} messageId={MessageId} resourceKey={ResourceKey} name={Name}",
+                providerSlug,
+                messageId,
+                resourceKey,
+                NormalizeOptional(fileRef.FileName) ?? NormalizeOptional(attachment.Name));
+            return false;
+        }
+
+        parts.Add(BuildDocumentFileRefPart(fileRef, attachment.Name));
+        return true;
+    }
+
+    private async Task<FileArtifactRef?> TryIngestLarkFileAttachmentAsync(
+        ILarkNyxClient larkClient,
+        string token,
+        string? providerSlug,
+        string messageId,
+        AttachmentRef attachment,
+        string resourceKey,
+        LarkMessageResourceKind resourceKind,
+        Func<string?, string?, string?, string?, string?> resolveMediaType,
+        int maxBytes,
+        string attachmentLabel,
+        CancellationToken ct)
+    {
+        LarkMessageResourceDownloadResult downloaded;
+        try
+        {
+            downloaded = await larkClient.DownloadMessageResourceAsync(
+                    token,
+                    new LarkMessageResourceDownloadRequest(
+                        messageId,
+                        resourceKey,
+                        resourceKind),
+                    ct)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to download Lark {AttachmentLabel} attachment for chat LLM input: provider={ProviderSlug} messageId={MessageId} resourceKey={ResourceKey} contentType={ContentType} name={Name}",
+                attachmentLabel,
+                providerSlug,
+                messageId,
+                resourceKey,
+                attachment.ContentType,
+                attachment.Name);
+            return null;
+        }
+
+        var mediaType = resolveMediaType(
+            downloaded.ContentType,
+            attachment.ContentType,
+            downloaded.FileName,
+            attachment.Name);
+        if (!downloaded.Succeeded ||
+            downloaded.Content.Length == 0 ||
+            downloaded.Content.Length > maxBytes ||
+            mediaType is null)
+        {
+            _logger.LogWarning(
+                "Lark {AttachmentLabel} attachment download was not usable for chat LLM input: provider={ProviderSlug} messageId={MessageId} resourceKey={ResourceKey} contentType={ContentType} downloadedContentType={DownloadedContentType} name={Name} downloadedName={DownloadedName} status={Status} detail={Detail}",
+                attachmentLabel,
+                providerSlug,
+                messageId,
+                resourceKey,
+                attachment.ContentType,
+                downloaded.ContentType,
+                attachment.Name,
+                downloaded.FileName,
+                downloaded.HttpStatus,
+                downloaded.Detail);
+            return null;
+        }
+
+        if (_fileIngressPort is null)
+        {
+            _logger.LogWarning(
+                "File ingress port is unavailable for Lark {AttachmentLabel} attachment chat LLM input: provider={ProviderSlug} messageId={MessageId} resourceKey={ResourceKey} resourceKind={ResourceKind}",
+                attachmentLabel,
+                providerSlug,
+                messageId,
+                resourceKey,
+                resourceKind);
+            return null;
+        }
+
+        var fileName = NormalizeOptional(downloaded.FileName) ?? NormalizeOptional(attachment.Name);
+        try
+        {
+            var ingressResult = await _fileIngressPort.IngestAsync(
+                    new FileArtifactIngressRequest(
+                        downloaded.Content,
+                        FileArtifactSourceKind.ChatInput,
+                        SourceMessageId: messageId,
+                        SourceResourceKey: resourceKey,
+                        FileName: fileName,
+                        MediaType: mediaType),
+                    ct)
+                .ConfigureAwait(false);
+            return ingressResult.FileRef;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to ingest Lark {AttachmentLabel} attachment for chat LLM input: messageId={MessageId} resourceKey={ResourceKey}",
+                attachmentLabel,
+                messageId,
+                resourceKey);
+            return null;
+        }
+    }
+
+    private static ContentPart BuildDocumentFileRefPart(FileArtifactRef fileRef, string? fallbackFileName) =>
+        new()
+        {
+            Kind = ContentPartKind.Text,
+            FileRef = ToChatFileRef(fileRef),
+            MediaType = NormalizeOptional(fileRef.MediaType),
+            Name = NormalizeOptional(fileRef.FileName) ?? NormalizeOptional(fallbackFileName),
+        };
+
+    private async Task<byte[]?> TryReadLarkFileArtifactBytesAsync(
+        FileArtifactRef fileRef,
+        int maxBytes,
+        string attachmentLabel,
+        CancellationToken ct)
+    {
+        if (_fileArtifactReadPort is null)
+        {
+            _logger.LogWarning(
+                "File artifact read port is unavailable for Lark {AttachmentLabel} attachment chat LLM input: artifactId={ArtifactId} fileId={FileId}",
+                attachmentLabel,
+                fileRef.ArtifactId,
+                fileRef.FileId);
+            return null;
+        }
+
+        try
+        {
+            var artifact = await _fileArtifactReadPort.OpenReadAsync(fileRef, ct).ConfigureAwait(false);
+            await using var content = artifact.Content;
+            return await ReadBoundedAsync(
+                    content,
+                    maxBytes,
+                    NormalizeOptional(artifact.FileRef.FileName) ?? NormalizeOptional(fileRef.FileName),
+                    ct)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to read Lark {AttachmentLabel} attachment artifact for chat LLM input: artifactId={ArtifactId} fileId={FileId}",
+                attachmentLabel,
+                fileRef.ArtifactId,
+                fileRef.FileId);
+            return null;
+        }
     }
 
     internal static async Task<IReadOnlyList<ContentPart>> MaterializeFileRefPartsAsync(
@@ -735,9 +1228,29 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 materialized.Add(part);
                 continue;
             }
+            if (part.FileRef.ExpiresAtUnixMs > 0 &&
+                part.FileRef.ExpiresAtUnixMs <= DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
+            {
+                materialized.Add(BuildUnavailableAttachmentPart(part));
+                continue;
+            }
 
-            var artifact = await fileArtifactReadPort.OpenReadAsync(ToFileArtifactRef(part.FileRef), ct)
-                .ConfigureAwait(false);
+            FileArtifactContent artifact;
+            try
+            {
+                artifact = await fileArtifactReadPort.OpenReadAsync(ToFileArtifactRef(part.FileRef), ct)
+                    .ConfigureAwait(false);
+            }
+            catch (FileNotFoundException)
+            {
+                materialized.Add(BuildUnavailableAttachmentPart(part));
+                continue;
+            }
+            catch (DirectoryNotFoundException)
+            {
+                materialized.Add(BuildUnavailableAttachmentPart(part));
+                continue;
+            }
             await using var content = artifact.Content;
             var descriptor = artifact.FileRef;
             ValidateMaterializedPartDescriptor(part, descriptor);
@@ -749,6 +1262,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 .ConfigureAwait(false);
             materialized.Add(part.Kind switch
             {
+                ContentPartKind.Text => MaterializeDocumentTextPart(part, descriptor, bytes),
                 ContentPartKind.Image => ContentPart.ImagePart(
                     Convert.ToBase64String(bytes),
                     NormalizeImageMediaType(descriptor.MediaType ?? part.MediaType),
@@ -766,6 +1280,54 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         }
 
         return materialized;
+    }
+
+    private static ContentPart BuildUnavailableAttachmentPart(ContentPart part)
+    {
+        var name = NormalizeOptional(part.FileRef?.FileName) ?? NormalizeOptional(part.Name) ?? "attachment";
+        if (name.Length > 128)
+            name = name[..128];
+
+        return ContentPart.TextPart($"Attachment unavailable: '{name}' has expired or was removed.");
+    }
+
+    private static ContentPart MaterializeDocumentTextPart(
+        ContentPart part,
+        FileArtifactRef descriptor,
+        byte[] bytes)
+    {
+        var mediaType = NormalizeOptional(descriptor.MediaType) ?? NormalizeOptional(part.MediaType);
+        var fileName = NormalizeOptional(descriptor.FileName) ?? NormalizeOptional(part.Name);
+        string extractedText;
+        bool truncated;
+        string header;
+        if (ResolvePdfMediaType(mediaType, fileName: fileName) is not null)
+        {
+            (extractedText, truncated) = ExtractPdfText(bytes, MaxInlineDocumentTextChars);
+            header = truncated
+                ? $"PDF attachment '{fileName ?? "attachment.pdf"}' extracted text (truncated to first {MaxInlineDocumentTextChars} characters):"
+                : $"PDF attachment '{fileName ?? "attachment.pdf"}' extracted text:";
+        }
+        else if (ResolveTextMediaType(mediaType, fileName: fileName) is not null)
+        {
+            (extractedText, truncated) = ExtractUtf8Text(bytes, MaxInlineDocumentTextChars);
+            header = truncated
+                ? $"Text attachment '{fileName ?? "attachment.txt"}' content (truncated to first {MaxInlineDocumentTextChars} characters):"
+                : $"Text attachment '{fileName ?? "attachment.txt"}' content:";
+        }
+        else
+        {
+            return part;
+        }
+
+        return new ContentPart
+        {
+            Kind = ContentPartKind.Text,
+            Text = $"{header}\n{extractedText}",
+            FileRef = part.FileRef,
+            MediaType = mediaType,
+            Name = fileName,
+        };
     }
 
     private static async Task<byte[]> ReadBoundedAsync(
@@ -924,22 +1486,216 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                string.Equals(platform, "feishu", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool IsSupportedImageMediaType(string? mediaType)
+    private static bool IsLarkImageInputAttachment(AttachmentRef attachment) =>
+        attachment.Kind == AttachmentKind.Image ||
+        attachment.Kind == AttachmentKind.File && ResolveImageMediaType(attachment.ContentType, fileName: attachment.Name) is not null;
+
+    private static bool IsLarkPdfInputAttachment(AttachmentRef attachment) =>
+        attachment.Kind == AttachmentKind.File && ResolvePdfMediaType(attachment.ContentType, fileName: attachment.Name) is not null;
+
+    private static bool IsLarkTextInputAttachment(AttachmentRef attachment) =>
+        attachment.Kind == AttachmentKind.File && ResolveTextMediaType(attachment.ContentType, fileName: attachment.Name) is not null;
+
+    private static LarkMessageResourceKind ToLarkMessageResourceKind(AttachmentRef attachment) =>
+        attachment.Kind == AttachmentKind.Image
+            ? LarkMessageResourceKind.Image
+            : LarkMessageResourceKind.File;
+
+    private static bool IsSupportedImageMediaType(string? mediaType) =>
+        ResolveImageMediaType(mediaType) is not null;
+
+    private static string NormalizeImageMediaType(string? mediaType) =>
+        ResolveImageMediaType(mediaType) ?? "image/png";
+
+    private static string? ResolveDownloadedPdfMediaType(
+        string? mediaType,
+        string? fallbackMediaType,
+        string? fileName,
+        string? fallbackFileName)
     {
         var normalized = NormalizeOptional(mediaType)?.ToLowerInvariant();
-        return normalized is "image" or "image/png" or "image/jpeg" or "image/jpg" or "image/webp" or "image/gif";
+        if (normalized is not null && normalized is not "application/octet-stream" and not "binary/octet-stream")
+            return ResolvePdfMediaType(normalized);
+
+        return ResolvePdfMediaType(fallbackMediaType, fileName: fileName, fallbackFileName: fallbackFileName);
     }
 
-    private static string NormalizeImageMediaType(string? mediaType)
+    private static string? ResolveDownloadedImageMediaType(
+        string? mediaType,
+        string? fallbackMediaType,
+        string? fileName,
+        string? fallbackFileName)
     {
         var normalized = NormalizeOptional(mediaType)?.ToLowerInvariant();
-        return normalized switch
+        if (normalized is not null && normalized is not "application/octet-stream" and not "binary/octet-stream")
+            return ResolveImageMediaType(normalized);
+
+        return ResolveImageMediaType(fallbackMediaType, fileName: fileName, fallbackFileName: fallbackFileName);
+    }
+
+    private static string? ResolveDownloadedTextMediaType(
+        string? mediaType,
+        string? fallbackMediaType,
+        string? fileName,
+        string? fallbackFileName)
+    {
+        var normalized = NormalizeOptional(mediaType)?.ToLowerInvariant();
+        if (normalized is not null && normalized is not "application/octet-stream" and not "binary/octet-stream")
+            return ResolveTextMediaType(normalized);
+
+        return ResolveTextMediaType(fallbackMediaType, fileName: fileName, fallbackFileName: fallbackFileName);
+    }
+
+    private static string? ResolvePdfMediaType(
+        string? mediaType,
+        string? fallbackMediaType = null,
+        string? fileName = null,
+        string? fallbackFileName = null)
+    {
+        var normalized = NormalizeOptional(mediaType)?.ToLowerInvariant();
+        var resolved = normalized == "application/pdf" ? normalized : null;
+        if (resolved is not null)
+            return resolved;
+
+        if (fallbackMediaType is not null)
+            resolved = ResolvePdfMediaType(fallbackMediaType);
+        if (resolved is not null)
+            return resolved;
+
+        return HasFileExtension(fileName, ".pdf") || HasFileExtension(fallbackFileName, ".pdf")
+            ? "application/pdf"
+            : null;
+    }
+
+    private static string? ResolveTextMediaType(
+        string? mediaType,
+        string? fallbackMediaType = null,
+        string? fileName = null,
+        string? fallbackFileName = null)
+    {
+        var normalized = NormalizeOptional(mediaType)?.ToLowerInvariant();
+        var resolved = normalized switch
         {
+            not null when normalized.StartsWith("text/", StringComparison.Ordinal) => normalized,
+            "application/json" or "application/yaml" or "application/x-yaml" => normalized,
+            _ => null,
+        };
+        if (resolved is not null)
+            return resolved;
+
+        if (fallbackMediaType is not null)
+            resolved = ResolveTextMediaType(fallbackMediaType);
+        if (resolved is not null)
+            return resolved;
+
+        return ResolveTextMediaTypeFromFileName(fileName) ?? ResolveTextMediaTypeFromFileName(fallbackFileName);
+    }
+
+    private static string? ResolveImageMediaType(
+        string? mediaType,
+        string? fallbackMediaType = null,
+        string? fileName = null,
+        string? fallbackFileName = null)
+    {
+        var normalized = NormalizeOptional(mediaType)?.ToLowerInvariant();
+        var resolved = normalized switch
+        {
+            "image" => "image/png",
             "image/jpg" => "image/jpeg",
             "image/png" or "image/jpeg" or "image/webp" or "image/gif" => normalized,
-            _ => "image/png",
+            _ => null,
         };
+        if (resolved is not null)
+            return resolved;
+
+        if (fallbackMediaType is not null)
+            resolved = ResolveImageMediaType(fallbackMediaType);
+        if (resolved is not null)
+            return resolved;
+
+        return ResolveImageMediaTypeFromFileName(fileName) ?? ResolveImageMediaTypeFromFileName(fallbackFileName);
     }
+
+    private static string? ResolveTextMediaTypeFromFileName(string? fileName)
+    {
+        if (HasFileExtension(fileName, ".txt") ||
+            HasFileExtension(fileName, ".text") ||
+            HasFileExtension(fileName, ".md") ||
+            HasFileExtension(fileName, ".markdown") ||
+            HasFileExtension(fileName, ".log"))
+            return "text/plain";
+        if (HasFileExtension(fileName, ".json") ||
+            HasFileExtension(fileName, ".jsonl"))
+            return "application/json";
+        if (HasFileExtension(fileName, ".yaml") ||
+            HasFileExtension(fileName, ".yml"))
+            return "application/yaml";
+        if (HasFileExtension(fileName, ".csv"))
+            return "text/csv";
+
+        return null;
+    }
+
+    private static string? ResolveImageMediaTypeFromFileName(string? fileName)
+    {
+        if (HasFileExtension(fileName, ".jpg") ||
+            HasFileExtension(fileName, ".jpeg"))
+            return "image/jpeg";
+        if (HasFileExtension(fileName, ".png"))
+            return "image/png";
+        if (HasFileExtension(fileName, ".webp"))
+            return "image/webp";
+        if (HasFileExtension(fileName, ".gif"))
+            return "image/gif";
+
+        return null;
+    }
+
+    private static bool HasFileExtension(string? fileName, string extension)
+    {
+        var normalized = NormalizeOptional(fileName)?.ToLowerInvariant();
+        return normalized?.EndsWith(extension, StringComparison.Ordinal) == true;
+    }
+
+    private static (string Text, bool Truncated) ExtractUtf8Text(byte[] content, int maxChars)
+    {
+        var text = Encoding.UTF8.GetString(content);
+        var truncated = text.Length > maxChars;
+        return (truncated ? text[..maxChars].Trim() : text.Trim(), truncated);
+    }
+
+    private static (string Text, bool Truncated) ExtractPdfText(byte[] content, int maxChars)
+    {
+        using var document = PdfDocument.Open(content);
+        var builder = new StringBuilder(Math.Min(maxChars, 4096));
+        var truncated = false;
+        foreach (var page in document.GetPages())
+        {
+            truncated |= WouldExceedLimit(builder, page.Text, maxChars);
+            AppendCapped(builder, page.Text, maxChars);
+            if (builder.Length >= maxChars)
+            {
+                truncated = true;
+                break;
+            }
+
+            AppendCapped(builder, "\n", maxChars);
+        }
+
+        return (builder.ToString().Trim(), truncated);
+    }
+
+    private static void AppendCapped(StringBuilder builder, string? value, int maxChars)
+    {
+        if (string.IsNullOrEmpty(value) || builder.Length >= maxChars)
+            return;
+
+        var remaining = maxChars - builder.Length;
+        builder.Append(value.Length <= remaining ? value : value[..remaining]);
+    }
+
+    private static bool WouldExceedLimit(StringBuilder builder, string? value, int maxChars) =>
+        !string.IsNullOrEmpty(value) && value.Length > maxChars - builder.Length;
 
     private static string? NormalizeOptional(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
@@ -985,10 +1741,23 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             ReasoningContent = message.ReasoningContent ?? string.Empty,
             ToolCallId = message.ToolCallId ?? string.Empty,
         };
-        entry.ContentParts.AddRange((message.ContentParts ?? []).Select(ContentPartProtoMapper.ToProto));
+        entry.ContentParts.AddRange((message.ContentParts ?? []).Select(ToPersistedContentPart));
         entry.ToolCalls.AddRange((message.ToolCalls ?? []).Select(ToConversationToolCallEntry));
         return entry;
     }
+
+    private static Aevatar.AI.Abstractions.ChatContentPart ToPersistedContentPart(ContentPart part)
+    {
+        var persisted = ContentPartProtoMapper.ToProto(part);
+        if (persisted.Kind == Aevatar.AI.Abstractions.ChatContentPartKind.Text &&
+            HasFileRefIdentity(persisted.FileRef))
+            persisted.Text = string.Empty;
+        return persisted;
+    }
+
+    private static bool HasFileRefIdentity(Aevatar.AI.Abstractions.ChatFileRef? fileRef) =>
+        fileRef is not null &&
+        (!string.IsNullOrWhiteSpace(fileRef.FileId) || !string.IsNullOrWhiteSpace(fileRef.ArtifactId));
 
     private static ToolCall ToToolCall(ConversationToolCallEntry entry) =>
         new()
@@ -1284,7 +2053,10 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             !string.IsNullOrWhiteSpace(channel.MessageId);
     }
 
-    private async Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(bool isChannelTurn, CancellationToken ct)
+    private async Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(
+        bool isChannelTurn,
+        AgentToolExecutionContext? toolContext,
+        CancellationToken ct)
     {
         if (_toolSources.Count == 0)
             return [];
@@ -1293,6 +2065,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         foreach (var source in _toolSources)
         {
             var tools = await source.DiscoverToolsAsync(ct);
+            var excludedDirectChannelToolNames = new List<string>();
+            var excludedHumanSessionToolNames = new List<string>();
             foreach (var tool in tools)
             {
                 // Channel-side exclusion by GENERIC capability, not by tool name: a tool that
@@ -1303,21 +2077,47 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 // workflow allowlist path; the exclusion is channel-side only. No channel agent
                 // depended on these tools, so this changes no existing channel flow.
                 if (IsExcludedFromDirectChannelChat(tool))
+                {
+                    excludedDirectChannelToolNames.Add(tool.Name);
                     continue;
+                }
 
-                // Issue #2580 Item 2: in a channel-relay turn the effective credential is a
-                // bot-class relay/API-key token that the broker rejects on human-only surfaces, so a
-                // tool self-declaring RequiresHumanSession can only fail. Filter it out of channel
-                // turns — never offered to the model, never registered so it cannot be invoked.
-                // Console/studio human-session turns keep the full set. Name-agnostic, like above.
-                if (isChannelTurn && DeclaresCapability(tool, AgentToolCapabilities.RequiresHumanSession))
+                // Human-session management tools do not belong on channel relay or NyxID Assistant
+                // chat surfaces. The relay credential cannot call them, and NyxID Assistant owns
+                // service connection through nyxid_require_service + typed browser actions. Keep
+                // them available to other human-session consumers without exposing them here.
+                if ((isChannelTurn || IsNyxIdChatTurn(toolContext)) &&
+                    DeclaresCapability(tool, AgentToolCapabilities.RequiresHumanSession))
+                {
+                    excludedHumanSessionToolNames.Add(tool.Name);
                     continue;
+                }
 
                 discovered[tool.Name] = tool;
             }
+
+            if (isChannelTurn)
+            {
+                _logger.LogInformation(
+                    "Channel tool source discovery: source={SourceType}, discoveredTools={DiscoveredTools}, excludedDirectChannelTools={ExcludedDirectChannelTools}, excludedHumanSessionTools={ExcludedHumanSessionTools}",
+                    source.GetType().Name,
+                    FormatToolNames(tools.Select(static tool => tool.Name)),
+                    FormatToolNames(excludedDirectChannelToolNames),
+                    FormatToolNames(excludedHumanSessionToolNames));
+            }
         }
 
-        return discovered.Values.ToArray();
+        var effectiveTools = discovered.Values.ToArray();
+        if (isChannelTurn)
+        {
+            _logger.LogInformation(
+                "Channel effective tool discovery completed: sourceCount={SourceCount}, toolCount={ToolCount}, tools={Tools}",
+                _toolSources.Count,
+                effectiveTools.Length,
+                FormatToolNames(effectiveTools.Select(static tool => tool.Name)));
+        }
+
+        return effectiveTools;
     }
 
     // A tool is hidden from the direct channel/chat surface when it self-declares the
@@ -1327,10 +2127,26 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
     private static bool IsExcludedFromDirectChannelChat(IAgentTool tool) =>
         DeclaresCapability(tool, AgentToolCapabilities.ExcludeFromDirectChannelChat);
 
+    private static bool IsNyxIdChatTurn(AgentToolExecutionContext? toolContext) =>
+        string.Equals(
+            toolContext?.Channel.Platform,
+            NyxIdChatServiceDefaults.ServiceId,
+            StringComparison.OrdinalIgnoreCase);
+
     private static bool DeclaresCapability(IAgentTool tool, string capability) =>
         tool is IAgentToolCapabilityDescriptor descriptor &&
         descriptor.Capabilities.Any(declared =>
             string.Equals(declared, capability, StringComparison.OrdinalIgnoreCase));
+
+    private static string FormatToolNames(IEnumerable<string?> toolNames)
+    {
+        var names = toolNames
+            .Where(static name => !string.IsNullOrWhiteSpace(name))
+            .Select(static name => name!.Trim())
+            .OrderBy(static name => name, StringComparer.Ordinal)
+            .ToArray();
+        return names.Length == 0 ? "<none>" : string.Join(",", names);
+    }
 
     private ILLMProvider ResolveProvider()
     {
@@ -1356,13 +2172,16 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         IReadOnlyDictionary<string, string> metadata,
         AgentToolExecutionContext toolContext,
         string? attachmentVisibilityInstruction = null,
-        string? runtimeNotice = null)
+        string? runtimeNotice = null,
+        AgentProfileTurnCatalog? turnCatalog = null)
     {
         var runtimeFacts = new StringBuilder();
         AppendRuntimeFact(
             runtimeFacts,
             NyxIdRelayPromptConfiguration.BuildChannelRuntimeConfigurationSection(_relayOptions));
-        var channelContext = ChannelContextMiddleware.BuildChannelContextSection(metadata);
+        var channelContext = ChannelContextMiddleware.BuildChannelContextSection(
+            metadata,
+            toolContext.Channel.IdentityHints);
         AppendRuntimeFact(runtimeFacts, channelContext);
 
         if (_localSkillCatalog is not null && _localSkillCatalog.Count > 0)
@@ -1386,8 +2205,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             NyxIdChatSystemPrompt.Value,
             _builtInPromptFloorProvider.GetFloor(),
             global,
-            profile: null,
-            selectedSkill: null,
+            turnCatalog?.ProfilePromptLayer,
+            turnCatalog?.SelectedSkillPromptLayer,
             runtime,
             conversation: null).Prompt;
     }

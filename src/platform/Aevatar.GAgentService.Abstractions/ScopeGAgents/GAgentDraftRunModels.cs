@@ -21,6 +21,7 @@ public sealed record GAgentDraftRunInputPart
     public string? MediaType { get; init; }
     public string? Uri { get; init; }
     public string? Name { get; init; }
+    public Aevatar.AI.Abstractions.ChatFileRef? FileRef { get; init; }
 }
 
 // Refactor (iter1353/cluster-001): Old pattern: draft-run commands rebuilt trusted caller/control facts from headers and legacy scalars.

@@ -67,30 +67,11 @@ public sealed class RedisSecretStoreSweepTarget : ISecretStoreSweepTarget, IDisp
         return value.IsNull ? null : (byte[]?)value;
     }
 
-    public Task<SecretStoreCasResult> CompareExchangeAsync(
+    public async Task<SecretStoreCasResult> CompareExchangeAsync(
         string key,
         byte[] expectedValue,
         byte[] newValue,
-        CancellationToken ct = default) =>
-        CompareExchangeCoreAsync(key, expectedValue, newValue, beforeTransactionCommit: null, ct);
-
-    internal Task<SecretStoreCasResult> CompareExchangeWithBeforeCommitAsync(
-        string key,
-        byte[] expectedValue,
-        byte[] newValue,
-        Func<CancellationToken, Task> beforeTransactionCommit,
         CancellationToken ct = default)
-    {
-        ArgumentNullException.ThrowIfNull(beforeTransactionCommit);
-        return CompareExchangeCoreAsync(key, expectedValue, newValue, beforeTransactionCommit, ct);
-    }
-
-    private async Task<SecretStoreCasResult> CompareExchangeCoreAsync(
-        string key,
-        byte[] expectedValue,
-        byte[] newValue,
-        Func<CancellationToken, Task>? beforeTransactionCommit,
-        CancellationToken ct)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         ArgumentNullException.ThrowIfNull(expectedValue);
@@ -101,39 +82,45 @@ public sealed class RedisSecretStoreSweepTarget : ISecretStoreSweepTarget, IDisp
         ct.ThrowIfCancellationRequested();
         if (currentValue.IsNull)
             return SecretStoreCasResult.Missing();
-        if (currentValue != (RedisValue)expectedValue)
+        if (!ValueEquals(currentValue, expectedValue))
             return SecretStoreCasResult.Conflict();
 
-        var remainingTtl = await _database.KeyTimeToLiveAsync(key);
+        var ttl = await _database.KeyTimeToLiveAsync(key);
         ct.ThrowIfCancellationRequested();
-        if (beforeTransactionCommit != null)
-        {
-            await beforeTransactionCommit(ct);
-            ct.ThrowIfCancellationRequested();
-        }
 
         var transaction = _database.CreateTransaction();
-        transaction.AddCondition(Condition.StringEqual(key, expectedValue));
-        var writeTask = transaction.StringSetAsync(key, newValue, remainingTtl, When.Always);
-        var committed = await transaction.ExecuteAsync();
+        transaction.AddCondition(Condition.StringEqual((RedisKey)key, (RedisValue)expectedValue));
+        var setTask = transaction.StringSetAsync((RedisKey)key, (RedisValue)newValue, ToExpiration(ttl));
+        var executed = await transaction.ExecuteAsync();
         ct.ThrowIfCancellationRequested();
-        if (committed && await writeTask)
-        {
-            ct.ThrowIfCancellationRequested();
-            return SecretStoreCasResult.Updated(ToTtlMilliseconds(remainingTtl));
-        }
 
-        currentValue = await _database.StringGetAsync(key);
+        if (!executed || !await setTask)
+            return await ClassifyFailedCompareExchangeAsync(key, ct);
+
+        return SecretStoreCasResult.Updated(PreservedTtlMs(ttl));
+    }
+
+    public void Dispose() => _connection.Dispose();
+
+    private async Task<SecretStoreCasResult> ClassifyFailedCompareExchangeAsync(string key, CancellationToken ct)
+    {
+        var currentValue = await _database.StringGetAsync(key);
         ct.ThrowIfCancellationRequested();
         return currentValue.IsNull
             ? SecretStoreCasResult.Missing()
             : SecretStoreCasResult.Conflict();
     }
 
-    public void Dispose() => _connection.Dispose();
+    private static bool ValueEquals(RedisValue value, byte[] expectedValue) =>
+        ((byte[]?)value)?.SequenceEqual(expectedValue) == true;
 
-    private static long ToTtlMilliseconds(TimeSpan? ttl) =>
-        ttl.HasValue ? Math.Max(0, (long)Math.Ceiling(ttl.Value.TotalMilliseconds)) : -1;
+    private static long PreservedTtlMs(TimeSpan? ttl) =>
+        ttl.HasValue
+            ? Math.Max(0, (long)Math.Ceiling(ttl.Value.TotalMilliseconds))
+            : -1;
+
+    private static Expiration ToExpiration(TimeSpan? ttl) =>
+        ttl.HasValue ? ttl.Value : Expiration.Default;
 
     private static RedisResult[] ReadArray(RedisResult result, string label) =>
         (RedisResult[]?)result ?? throw new InvalidOperationException($"Redis {label} was not an array.");

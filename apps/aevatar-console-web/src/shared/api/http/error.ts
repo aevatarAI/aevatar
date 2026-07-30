@@ -60,6 +60,9 @@ export type ResponseErrorPayload = {
 export type ResponseErrorDetails = {
   readonly code?: string;
   readonly message: string;
+  readonly preflightLocator?: string;
+  readonly requiredStateVersion?: number;
+  readonly retryable?: boolean;
   readonly status: number;
 };
 
@@ -70,6 +73,11 @@ function readResponseErrorFromPayload(
   const message = readJsonErrorText(payload.message);
   if (message) {
     return message;
+  }
+
+  const error = readJsonErrorText(payload.error);
+  if (error) {
+    return error;
   }
 
   const detail = readJsonErrorText(payload.detail);
@@ -89,11 +97,6 @@ function readResponseErrorFromPayload(
 
   if (title) {
     return title;
-  }
-
-  const error = readJsonErrorText(payload.error);
-  if (error) {
-    return error;
   }
 
   const code = readJsonErrorText(payload.code);
@@ -153,8 +156,22 @@ export async function readResponseErrorDetails(
     const message =
       readResponseErrorFromPayload(payload, response) || normalizeWhitespace(text);
     return {
-      code: readJsonErrorText(payload.code) ?? undefined,
+      code:
+        readJsonErrorText(payload.code) ??
+        readJsonErrorText(payload.error) ??
+        undefined,
       message,
+      preflightLocator:
+        readJsonErrorText((payload as ResponseErrorPayload & { preflightLocator?: unknown }).preflightLocator) ??
+        undefined,
+      requiredStateVersion:
+        typeof (payload as ResponseErrorPayload & { requiredStateVersion?: unknown }).requiredStateVersion === "number"
+          ? (payload as ResponseErrorPayload & { requiredStateVersion: number }).requiredStateVersion
+          : undefined,
+      retryable:
+        typeof (payload as ResponseErrorPayload & { retryable?: unknown }).retryable === "boolean"
+          ? (payload as ResponseErrorPayload & { retryable: boolean }).retryable
+          : undefined,
       status: response.status,
     };
   } catch {

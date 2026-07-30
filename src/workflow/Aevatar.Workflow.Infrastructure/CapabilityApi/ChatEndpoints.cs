@@ -3,6 +3,7 @@ using System.Text.Json;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.RunForks;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Abstractions;
@@ -27,11 +28,16 @@ public static class WorkflowCapabilityEndpoints
         "UNSUPPORTED_MEDIA_TYPE",
         "Content-Type must be application/json or multipart/form-data.");
 
-    public static IEndpointRouteBuilder MapWorkflowCapabilityEndpoints(this IEndpointRouteBuilder app)
+    public static IEndpointRouteBuilder MapWorkflowCapabilityEndpoints(
+        this IEndpointRouteBuilder app,
+        bool mapChatPost = true)
     {
         var group = app.MapGroup("/api").WithTags("Chat");
-        group.MapPost("/chat", HandleChatPost)
-            .WithName("StartWorkflowChat");
+        if (mapChatPost)
+        {
+            group.MapPost("/chat", HandleChatPost)
+                .WithName("StartWorkflowChat");
+        }
         group.MapGet(
                 "/ws/chat",
                 async (
@@ -56,6 +62,13 @@ public static class WorkflowCapabilityEndpoints
         return app;
     }
 
+    public static Task HandleChatPostAsync(HttpContext http, CancellationToken ct = default) =>
+        HandleChatPost(
+            http,
+            http.RequestServices.GetRequiredService<IWorkflowChatRunInteractionPort>(),
+            http.RequestServices.GetRequiredService<WorkflowMultipartChatRequestParser>(),
+            ct);
+
     internal static async Task HandleChatPost(
         HttpContext http,
         [FromServices] IWorkflowChatRunInteractionPort chatRunService,
@@ -75,10 +88,24 @@ public static class WorkflowCapabilityEndpoints
             return;
         }
 
-        ChatInput input;
+        HttpChatInput input;
+        string trustedScopeId;
         if (IsMultipartForm(http.Request.ContentType))
         {
-            var parsed = await multipartParser.ParseAsync(http, ct);
+            var scopeResolution = ResolvePostTrustedScope(http);
+            if (!scopeResolution.Succeeded)
+            {
+                await WriteJsonErrorResponseAsync(
+                    http,
+                    scopeResolution.StatusCode,
+                    scopeResolution.Code,
+                    scopeResolution.Message,
+                    ct);
+                return;
+            }
+
+            trustedScopeId = scopeResolution.ScopeId!;
+            var parsed = await multipartParser.ParseAsync(http, trustedScopeId, ct);
             if (!parsed.Succeeded)
             {
                 await WriteJsonErrorResponseAsync(http, parsed.StatusCode, parsed.Code, parsed.Message, ct);
@@ -96,22 +123,50 @@ public static class WorkflowCapabilityEndpoints
                 return;
             }
 
-            var parsed = await ParseJsonChatInputAsync(http.Request, ct);
-            if (parsed == null)
+            var parsed = await ParseJsonHttpChatInputAsync(http.Request, ct);
+            if (!parsed.Succeeded)
+            {
+                if (parsed.Failure == JsonHttpChatInputParseFailure.InvalidConversationInput)
+                {
+                    var (code, message) = ChatRunStartErrorMapper.ToCommandError(
+                        WorkflowChatRunStartError.InvalidConversationInput);
+                    await WriteJsonErrorResponseAsync(
+                        http,
+                        StatusCodes.Status400BadRequest,
+                        code,
+                        message,
+                        ct);
+                }
+                else
+                {
+                    await WriteJsonErrorResponseAsync(
+                        http,
+                        StatusCodes.Status400BadRequest,
+                        "INVALID_CHAT_INPUT",
+                        "Chat request body is invalid.",
+                        ct);
+                }
+
+                return;
+            }
+
+            input = parsed.Input!;
+            var scopeResolution = ResolvePostTrustedScope(http);
+            if (!scopeResolution.Succeeded)
             {
                 await WriteJsonErrorResponseAsync(
                     http,
-                    StatusCodes.Status400BadRequest,
-                    "INVALID_CHAT_INPUT",
-                    "Chat request body is invalid.",
+                    scopeResolution.StatusCode,
+                    scopeResolution.Code,
+                    scopeResolution.Message,
                     ct);
                 return;
             }
 
-            input = parsed;
+            trustedScopeId = scopeResolution.ScopeId!;
         }
 
-        await HandleChat(http, input, chatRunService, ct);
+        await HandleHttpChat(http, input, trustedScopeId, chatRunService, ct);
     }
 
     public static IEndpointRouteBuilder MapWorkflowChatInteractionEndpoints(this IEndpointRouteBuilder app)
@@ -125,7 +180,8 @@ public static class WorkflowCapabilityEndpoints
         IWorkflowChatRunInteractionPort chatRunService,
         CancellationToken ct = default,
         Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedHook = null,
-        IFileArtifactIngressPort? fileIngressPort = null)
+        IFileArtifactIngressPort? fileIngressPort = null,
+        bool allowEmptyInputForResolvedMemberWorkflow = false)
     {
         using var scope = ApiRequestScope.BeginHttp();
         var serviceProvider = http.Features.Get<IServiceProvidersFeature>()?.RequestServices;
@@ -136,7 +192,11 @@ public static class WorkflowCapabilityEndpoints
         try
         {
             var defaultMetadata = TryResolveRuntimeDefaultMetadata(serviceProvider, logger);
-            var callerCredential = WorkflowCallerCredentialExtractor.Extract(http);
+            var callerCredential = await WorkflowCallerCredentialExtractor.ExtractAsync(
+                http,
+                serviceProvider?.GetService<IExternalIdentityBindingQueryPort>(),
+                logger,
+                ct);
             if (!callerCredential.Succeeded)
             {
                 var (code, message) = ChatRunStartErrorMapper.ToCommandError(callerCredential.Error);
@@ -154,6 +214,103 @@ public static class WorkflowCapabilityEndpoints
             var trustedScopeId = Aevatar.Capabilities.AevatarScopeAccessGuard.TryGetCallerScopeId(http, out var callerScopeId)
                 ? callerScopeId
                 : null;
+            var normalizedRequest = await ChatRunRequestNormalizer.NormalizeAsync(
+                input,
+                fileIngressPort,
+                defaultMetadata,
+                trustedCallerCredential: callerCredential.Credential,
+                cancellationToken: ct,
+                trustedScopeId: trustedScopeId,
+                allowEmptyInputForResolvedMemberWorkflow: allowEmptyInputForResolvedMemberWorkflow);
+            if (!normalizedRequest.Succeeded)
+            {
+                var (code, message) = ChatRunStartErrorMapper.ToCommandError(normalizedRequest.Error);
+                var statusCode = ChatRunStartErrorMapper.ToHttpStatusCode(normalizedRequest.Error);
+                scope.MarkResult(statusCode);
+                await WriteJsonErrorResponseAsync(http, statusCode, code, message, ct);
+                return;
+            }
+
+            var result = await chatRunService.ExecuteAsync(
+                normalizedRequest.Request!,
+                async (frame, token) =>
+                {
+                    await writer.WriteAsync(frame, token);
+                    scope.RecordFirstResponse();
+                },
+                onAcceptedAsync: async (receipt, token) =>
+                {
+                    CapabilityTraceContext.ApplyCorrelationHeader(http.Response, receipt.Run.CorrelationId);
+                    if (onAcceptedHook != null)
+                        await onAcceptedHook(receipt.Run, token);
+                    await writer.StartAsync(token);
+                    await writer.WriteAsync(BuildRunContextFrame(receipt.Run), token);
+                    scope.RecordFirstResponse();
+                },
+                ct);
+
+            if (!result.Succeeded && !writer.Started)
+            {
+                var statusCode = ChatRunStartErrorMapper.ToHttpStatusCode(result.Error);
+                scope.MarkResult(statusCode);
+                await WriteRunStartFailureResponseAsync(http, statusCode, result, ct);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            scope.MarkError();
+            logger?.LogError(ex, "Workflow chat execution failed.");
+            if (!writer.Started)
+            {
+                var (code, message) = WorkflowExecutionErrorMapper.ToError(ex);
+                await WriteJsonErrorResponseAsync(
+                    http,
+                    StatusCodes.Status500InternalServerError,
+                    code,
+                    message,
+                    CancellationToken.None);
+                return;
+            }
+
+            await WriteStreamErrorFrameAsync(writer, ex, logger, CancellationToken.None);
+        }
+    }
+
+    private static async Task HandleHttpChat(
+        HttpContext http,
+        HttpChatInput input,
+        string trustedScopeId,
+        IWorkflowChatRunInteractionPort chatRunService,
+        CancellationToken ct = default,
+        IFileArtifactIngressPort? fileIngressPort = null)
+    {
+        using var scope = ApiRequestScope.BeginHttp();
+        var serviceProvider = http.Features.Get<IServiceProvidersFeature>()?.RequestServices;
+        var loggerFactory = serviceProvider?.GetService(typeof(ILoggerFactory)) as ILoggerFactory;
+        var logger = loggerFactory?.CreateLogger("Aevatar.Workflow.Host.Api.Chat");
+        await using var writer = new ChatSseResponseWriter(http.Response, logger: logger);
+
+        try
+        {
+            var defaultMetadata = TryResolveRuntimeDefaultMetadata(serviceProvider, logger);
+            var callerCredential = await WorkflowCallerCredentialExtractor.ExtractAsync(
+                http,
+                serviceProvider?.GetService<IExternalIdentityBindingQueryPort>(),
+                logger,
+                ct);
+            if (!callerCredential.Succeeded)
+            {
+                var (code, message) = ChatRunStartErrorMapper.ToCommandError(callerCredential.Error);
+                var statusCode = ChatRunStartErrorMapper.ToHttpStatusCode(callerCredential.Error);
+                scope.MarkResult(statusCode);
+                await WriteJsonErrorResponseAsync(http, statusCode, code, message, ct);
+                return;
+            }
+
+            fileIngressPort ??= serviceProvider?.GetService<IFileArtifactIngressPort>();
             var normalizedRequest = await ChatRunRequestNormalizer.NormalizeAsync(
                 input,
                 fileIngressPort,
@@ -179,21 +336,30 @@ public static class WorkflowCapabilityEndpoints
                 },
                 onAcceptedAsync: async (receipt, token) =>
                 {
-                    CapabilityTraceContext.ApplyCorrelationHeader(http.Response, receipt.CorrelationId);
-                    if (onAcceptedHook != null)
-                        await onAcceptedHook(receipt, token);
+                    CapabilityTraceContext.ApplyCorrelationHeader(http.Response, receipt.Run.CorrelationId);
                     await writer.StartAsync(token);
-                    await writer.WriteAsync(BuildRunContextFrame(receipt), token);
+                    if (receipt.ChatContext != null)
+                        await writer.WriteAsync(BuildChatContextFrame(receipt.ChatContext), token);
+                    await writer.WriteAsync(BuildRunContextFrame(receipt.Run), token);
                     scope.RecordFirstResponse();
                 },
                 ct);
 
+            if (result is { Succeeded: true, Receipt: not null } && !writer.Started)
+            {
+                CapabilityTraceContext.ApplyCorrelationHeader(http.Response, result.Receipt.Run.CorrelationId);
+                await writer.StartAsync(ct);
+                if (result.Receipt.ChatContext != null)
+                    await writer.WriteAsync(BuildChatContextFrame(result.Receipt.ChatContext), ct);
+                await writer.WriteAsync(BuildRunContextFrame(result.Receipt.Run), ct);
+                scope.RecordFirstResponse();
+            }
+
             if (!result.Succeeded && !writer.Started)
             {
-                var (code, message) = ChatRunStartErrorMapper.ToCommandError(result.Error);
                 var statusCode = ChatRunStartErrorMapper.ToHttpStatusCode(result.Error);
                 scope.MarkResult(statusCode);
-                await WriteJsonErrorResponseAsync(http, statusCode, code, message, ct);
+                await WriteRunStartFailureResponseAsync(http, statusCode, result, ct);
             }
         }
         catch (OperationCanceledException)
@@ -627,6 +793,23 @@ public static class WorkflowCapabilityEndpoints
             },
         };
 
+    private static WorkflowRunEventEnvelope BuildChatContextFrame(WorkflowChatContext context) =>
+        new()
+        {
+            Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            Custom = new WorkflowCustomEventPayload
+            {
+                Name = "aevatar.chat.context",
+                Payload = Any.Pack(new WorkflowChatContextPayload
+                {
+                    ScopeId = context.ScopeId,
+                    ConversationId = context.ConversationId,
+                    TurnId = context.TurnId,
+                    StateVersion = Math.Max(0, context.StateVersion),
+                }),
+            },
+        };
+
     private static WorkflowToolApprovalResumeCommand? ToToolApprovalResumeCommand(
         WorkflowToolApprovalResumeInput? input)
     {
@@ -788,21 +971,110 @@ public static class WorkflowCapabilityEndpoints
             cancellationToken: ct);
     }
 
-    private static async ValueTask<ChatInput?> ParseJsonChatInputAsync(
+    private static async Task WriteRunStartFailureResponseAsync(
+        HttpContext http,
+        int statusCode,
+        WorkflowChatRunInteractionResult result,
+        CancellationToken ct)
+    {
+        http.Response.StatusCode = statusCode;
+        http.Response.ContentType = "application/json; charset=utf-8";
+        await http.Response.WriteAsJsonAsync(
+            result.FailureDetail == null
+                ? ChatRunStartErrorMapper.ToErrorBody(result.Error)
+                : ChatRunStartErrorMapper.ToErrorBody(result.FailureDetail),
+            cancellationToken: ct);
+    }
+
+    private static async ValueTask<JsonHttpChatInputParseResult> ParseJsonHttpChatInputAsync(
         HttpRequest request,
         CancellationToken cancellationToken)
     {
         try
         {
-            return await JsonSerializer.DeserializeAsync<ChatInput>(
-                request.Body,
-                ChatWebSocketProtocol.JsonOptions,
-                cancellationToken);
+            var input = await JsonSerializer.DeserializeAsync<HttpChatInput>(
+                    request.Body,
+                    ChatWebSocketProtocol.JsonOptions,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            return input == null
+                ? JsonHttpChatInputParseResult.Failed(JsonHttpChatInputParseFailure.InvalidChatInput)
+                : JsonHttpChatInputParseResult.Success(input);
         }
-        catch (JsonException)
+        catch (JsonException ex)
         {
-            return null;
+            return JsonHttpChatInputParseResult.Failed(
+                IsConversationInputJsonException(ex)
+                    ? JsonHttpChatInputParseFailure.InvalidConversationInput
+                    : JsonHttpChatInputParseFailure.InvalidChatInput);
         }
+    }
+
+    private static bool IsConversationInputJsonException(JsonException ex) =>
+        string.Equals(ex.Path, "$.conversation", StringComparison.OrdinalIgnoreCase) ||
+        ex.Path?.StartsWith("$.conversation.", StringComparison.OrdinalIgnoreCase) == true ||
+        ex.Path?.StartsWith("$.conversation[", StringComparison.OrdinalIgnoreCase) == true;
+
+    private enum JsonHttpChatInputParseFailure
+    {
+        None = 0,
+        InvalidChatInput = 1,
+        InvalidConversationInput = 2,
+    }
+
+    private readonly record struct JsonHttpChatInputParseResult(
+        HttpChatInput? Input,
+        JsonHttpChatInputParseFailure Failure)
+    {
+        public bool Succeeded => Failure == JsonHttpChatInputParseFailure.None && Input != null;
+
+        public static JsonHttpChatInputParseResult Success(HttpChatInput input) =>
+            new(input, JsonHttpChatInputParseFailure.None);
+
+        public static JsonHttpChatInputParseResult Failed(JsonHttpChatInputParseFailure failure) =>
+            new(null, failure);
+    }
+
+    private static PostTrustedScopeResolution ResolvePostTrustedScope(HttpContext http)
+    {
+        if (!Aevatar.Capabilities.AevatarScopeAccessGuard.IsAuthenticationEnabled(http.RequestServices))
+            return PostTrustedScopeResolution.ScopeDenied("Trusted scope context is required.");
+
+        if (http.User?.Identity?.IsAuthenticated != true)
+            return PostTrustedScopeResolution.AuthenticationRequired();
+
+        var claimedScopeIds = http.User.Claims
+            .Where(static claim =>
+                string.Equals(claim.Type, "workflow.scope_id", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(claim.Type, "scope_id", StringComparison.OrdinalIgnoreCase))
+            .Select(static claim => claim.Value?.Trim())
+            .Where(static value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        return claimedScopeIds.Count switch
+        {
+            1 => PostTrustedScopeResolution.Success(claimedScopeIds[0]!),
+            0 => PostTrustedScopeResolution.ScopeDenied("Authenticated scope is missing."),
+            _ => PostTrustedScopeResolution.ScopeDenied("Authenticated scope is ambiguous."),
+        };
+    }
+
+    private sealed record PostTrustedScopeResolution(
+        bool Succeeded,
+        string? ScopeId,
+        int StatusCode,
+        string Code,
+        string Message)
+    {
+        public static PostTrustedScopeResolution Success(string scopeId) =>
+            new(true, scopeId, StatusCodes.Status200OK, string.Empty, string.Empty);
+
+        public static PostTrustedScopeResolution AuthenticationRequired() =>
+            new(false, null, StatusCodes.Status401Unauthorized, "AUTHENTICATION_REQUIRED", "Authentication is required.");
+
+        public static PostTrustedScopeResolution ScopeDenied(string message) =>
+            new(false, null, StatusCodes.Status403Forbidden, "SCOPE_ACCESS_DENIED", message);
     }
 
     private static bool IsMultipartForm(string? contentType) =>

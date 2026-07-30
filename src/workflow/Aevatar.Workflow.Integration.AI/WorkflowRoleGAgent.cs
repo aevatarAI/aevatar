@@ -4,11 +4,14 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core;
+using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Hooks;
+using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Abstractions.Credentials;
 using Aevatar.Workflow.Core.Primitives;
 using Microsoft.Extensions.Logging;
 
@@ -21,7 +24,14 @@ public class WorkflowRoleGAgent(
     IEnumerable<IAgentRunMiddleware>? agentMiddlewares = null,
     IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
     IEnumerable<IAgentToolSource>? toolSources = null,
+<<<<<<< HEAD
     IRemoteToolApprovalPort? remoteToolApprovalPort = null)
+=======
+    IToolApprovalHandler? approvalHandler = null,
+    IRemoteToolApprovalPort? remoteToolApprovalPort = null,
+    IToolSetRegistry? toolSetRegistry = null,
+    IWorkflowCallerAccessTokenProvider? callerAccessTokenProvider = null)
+>>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     : RoleGAgent(
         llmProviderFactory,
         additionalHooks,
@@ -32,6 +42,8 @@ public class WorkflowRoleGAgent(
 {
     public const string WorkflowAssistantRoleAgentKind = "workflow.assistant-role";
     private const string LegacyConnectorHttpAuthorizationBlockedKey = "connector.http.authorization";
+    private readonly IToolSetRegistry? _toolSetRegistry = toolSetRegistry;
+    private readonly IWorkflowCallerAccessTokenProvider? _callerAccessTokenProvider = callerAccessTokenProvider;
 
     [EventHandler(AllowSelfHandling = true)]
     public Task HandleWorkflowRoleInitialize(WorkflowRoleInitializeEvent evt)
@@ -74,6 +86,17 @@ public class WorkflowRoleGAgent(
         try
         {
             var replayRecord = await ExecuteWorkflowIntentStreamingChatAsync(intent, chatRequest, streamCt);
+            var pendingApproval = DetectPendingApproval(
+                replayRecord.ToolReceipts,
+                replayRecord.ToolCalls,
+                chatRequest);
+            if (pendingApproval != null)
+            {
+                pendingApproval.WorkflowLlmContinuation = BuildApprovalContinuation(intent);
+                await SuspendForToolApprovalAsync(pendingApproval);
+                return;
+            }
+
             var completed = new WorkflowLlmInvocationCompletedEvent
             {
                 RunId = intent.RunId ?? string.Empty,
@@ -135,6 +158,231 @@ public class WorkflowRoleGAgent(
         }
     }
 
+    public override async Task HandleChatRequest(ChatRequestEvent request)
+    {
+        if (request.WorkflowLlmToolApprovalContinuation is null)
+        {
+            await base.HandleChatRequest(request);
+            return;
+        }
+
+        await HandleWorkflowApprovalContinuationAsync(request);
+    }
+
+    protected override async Task<ChatMessage> ExecuteApprovedToolAsync(
+        PendingToolApprovalState pending,
+        AgentToolExecutionContext toolContext,
+        CancellationToken ct)
+    {
+        var continuation = pending.WorkflowLlmContinuation;
+        if (continuation is null)
+            return await base.ExecuteApprovedToolAsync(pending, toolContext, ct);
+
+        var effectiveContext = await RefreshCallerTokenAsync(toolContext, ct);
+        var catalog = await BuildRequestToolCatalogAsync(ToToolScope(continuation), effectiveContext, ct);
+        var tool = catalog?.RouteOwnedTools.GetValueOrDefault(pending.ToolName)
+                   ?? throw new InvalidOperationException(
+                       $"Approved workflow tool '{pending.ToolName}' is no longer available.");
+        using var _ = AgentToolContextScope.Push(effectiveContext);
+        return ChatMessage.Tool(
+            pending.ToolCallId,
+            await tool.ExecuteAsync(pending.ArgumentsJson, ct));
+    }
+
+    protected override Task OnApprovalTerminalFailureAsync(
+        PendingToolApprovalState pending,
+        string reasonCode,
+        string reasonMessage)
+    {
+        var continuation = pending.WorkflowLlmContinuation;
+        return continuation is null
+            ? Task.CompletedTask
+            : PublishWorkflowCompletionAsync(
+                continuation,
+                success: false,
+                content: string.Empty,
+                reasoningContent: string.Empty,
+                usage: null,
+                error: $"{reasonCode}: {SanitizeWorkflowFailureMessage(reasonMessage)}");
+    }
+
+    private async Task HandleWorkflowApprovalContinuationAsync(ChatRequestEvent request)
+    {
+        var continuation = request.WorkflowLlmToolApprovalContinuation;
+        try
+        {
+            var toolContext = await RefreshCallerTokenAsync(
+                AgentToolExecutionContextMapper.FromPayload(request.ToolContext),
+                CancellationToken.None);
+            request.ToolContext = toolContext.ToPayload();
+            request.LlmControl = BuildContinuationLlmControl(continuation, toolContext);
+            var intent = BuildContinuationIntent(continuation);
+            using var timeoutCts = continuation.TimeoutMs > 0
+                ? new CancellationTokenSource(continuation.TimeoutMs)
+                : null;
+            var replay = await ExecuteWorkflowIntentStreamingChatAsync(
+                intent,
+                request,
+                timeoutCts?.Token ?? CancellationToken.None);
+            var pendingApproval = DetectPendingApproval(
+                replay.ToolReceipts,
+                replay.ToolCalls,
+                request);
+            if (pendingApproval != null)
+            {
+                pendingApproval.WorkflowLlmContinuation = continuation.Clone();
+                await SuspendForToolApprovalAsync(pendingApproval);
+                return;
+            }
+
+            await PublishWorkflowCompletionAsync(
+                continuation,
+                success: true,
+                replay.Content,
+                replay.ReasoningContent,
+                ToWorkflowUsageMetrics(replay.Usage, replay.Model),
+                error: string.Empty);
+            await PersistRoleChatSessionCompletionAsync(
+                request,
+                replay.Content,
+                replay.ReasoningContent,
+                replay.ToolCalls,
+                replay.ContentParts,
+                replay.ContentEmitted,
+                replay.Usage,
+                replay.Model,
+                replay.ToolReceipts);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(
+                ex,
+                "[{Role}] Workflow approval continuation failed. run={RunId} step={StepId} session={SessionId}",
+                RoleName,
+                continuation.RunId,
+                continuation.StepId,
+                continuation.SessionId);
+            await PublishWorkflowCompletionAsync(
+                continuation,
+                success: false,
+                content: string.Empty,
+                reasoningContent: string.Empty,
+                usage: null,
+                error: SanitizeWorkflowFailureMessage(ex.Message));
+        }
+    }
+
+    private async Task<AgentToolExecutionContext> RefreshCallerTokenAsync(
+        AgentToolExecutionContext context,
+        CancellationToken ct)
+    {
+        var authority = context.NyxIdAuthority;
+        if (!authority.IsComplete || string.IsNullOrWhiteSpace(authority.Scope))
+            return context;
+        if (_callerAccessTokenProvider is null)
+            throw new InvalidOperationException(
+                "Workflow caller NyxID access token provider is unavailable.");
+
+        var token = await _callerAccessTokenProvider.IssueAsync(new WorkflowCallerNyxIdAuthority
+        {
+            Platform = authority.Platform,
+            Tenant = authority.Tenant ?? string.Empty,
+            ExternalUserId = authority.ExternalUserId,
+            Scope = authority.Scope,
+            BindingId = context.SenderBinding.BindingId ?? string.Empty,
+        }, ct);
+        return context with
+        {
+            Credentials = new AgentToolCredentials(token, token, token),
+        };
+    }
+
+    private Task PublishWorkflowCompletionAsync(
+        WorkflowLlmToolApprovalContinuation continuation,
+        bool success,
+        string content,
+        string reasoningContent,
+        WorkflowUsageMetrics? usage,
+        string error) =>
+        PublishAsync(new WorkflowLlmInvocationCompletedEvent
+        {
+            RunId = continuation.RunId,
+            StepId = continuation.StepId,
+            SessionId = continuation.SessionId,
+            RoleActorId = Id,
+            Success = success,
+            Content = content,
+            ReasoningContent = reasoningContent,
+            Usage = usage,
+            Error = error,
+        }, TopologyAudience.Parent);
+
+    private static WorkflowLlmToolApprovalContinuation BuildApprovalContinuation(
+        WorkflowLlmExecutionIntent intent)
+    {
+        var continuation = new WorkflowLlmToolApprovalContinuation
+        {
+            RunId = intent.RunId ?? string.Empty,
+            StepId = intent.StepId ?? string.Empty,
+            SessionId = intent.SessionId ?? string.Empty,
+            Model = intent.Model ?? string.Empty,
+            UserMemoryPrompt = intent.UserMemoryPrompt ?? string.Empty,
+            RoutePreference = intent.RoutePreference ?? string.Empty,
+            TimeoutMs = intent.TimeoutMs,
+            RestrictToolSets = intent.AgentToolScope?.RestrictToolSets == true,
+            RestrictAllowedToolNames = intent.AgentToolScope?.RestrictAllowedToolNames == true,
+        };
+        if (intent.HasMaxToolRounds)
+            continuation.MaxToolRounds = intent.MaxToolRounds;
+        if (intent.AgentToolScope != null)
+        {
+            continuation.ToolSetRefs.Add(intent.AgentToolScope.ToolSetRefs);
+            continuation.AllowedToolNames.Add(intent.AgentToolScope.AllowedToolNames);
+        }
+        return continuation;
+    }
+
+    private static WorkflowAgentToolScope ToToolScope(
+        WorkflowLlmToolApprovalContinuation continuation)
+    {
+        var scope = new WorkflowAgentToolScope
+        {
+            RestrictToolSets = continuation.RestrictToolSets,
+            RestrictAllowedToolNames = continuation.RestrictAllowedToolNames,
+        };
+        scope.ToolSetRefs.Add(continuation.ToolSetRefs);
+        scope.AllowedToolNames.Add(continuation.AllowedToolNames);
+        return scope;
+    }
+
+    private static WorkflowLlmExecutionIntent BuildContinuationIntent(
+        WorkflowLlmToolApprovalContinuation continuation) =>
+        new()
+        {
+            RunId = continuation.RunId,
+            StepId = continuation.StepId,
+            SessionId = continuation.SessionId,
+            AgentToolScope = ToToolScope(continuation),
+        };
+
+    private static LLMControlContextPayload BuildContinuationLlmControl(
+        WorkflowLlmToolApprovalContinuation continuation,
+        AgentToolExecutionContext toolContext)
+    {
+        var control = new LLMControlContextPayload
+        {
+            NyxIdAccessToken = toolContext.Credentials.NyxIdAccessToken ?? string.Empty,
+            NyxIdOrgToken = toolContext.Credentials.NyxIdOrgToken ?? string.Empty,
+            SenderNyxIdAccessToken = toolContext.Credentials.SenderNyxIdAccessToken ?? string.Empty,
+            ModelOverride = continuation.Model,
+            NyxIdRoutePreference = continuation.RoutePreference,
+            UserMemoryPrompt = continuation.UserMemoryPrompt,
+        };
+        if (continuation.HasMaxToolRounds)
+            control.MaxToolRoundsOverride = continuation.MaxToolRounds;
+        return control;
+    }
+
     private static ChatRequestEvent BuildChatRequestFromWorkflowIntent(WorkflowLlmExecutionIntent intent)
     {
         var workflowRuntimeContext = new AgentWorkflowRuntimeContext(
@@ -157,8 +405,12 @@ public class WorkflowRoleGAgent(
             };
         }
         toolContext = ApplyToolVisibility(intent.AgentToolScope, toolContext);
-        toolContext = ApplyRunScopeToCaller(intent.ScopeId, toolContext);
+        toolContext = WorkflowRunScopeToolContextMapper.Apply(intent.ScopeId, toolContext);
         toolContext = ApplySchedule(intent.ScheduleId, toolContext);
+        toolContext = toolContext with
+        {
+            InvocationSurface = AgentToolInvocationSurface.WorkflowLlmToolLoop,
+        };
 
         var request = new ChatRequestEvent
         {
@@ -192,8 +444,40 @@ public class WorkflowRoleGAgent(
             Uri = ResolveFileRefUri(fileRef),
             MediaType = Normalize(fileRef.MediaType) ?? string.Empty,
             Name = Normalize(fileRef.FileName) ?? string.Empty,
+            FileRef = ToChatFileRef(fileRef),
         };
     }
+
+    private static Aevatar.AI.Abstractions.ChatFileRef ToChatFileRef(WorkflowFileRef fileRef) =>
+        new()
+        {
+            FileId = Normalize(fileRef.FileId) ?? string.Empty,
+            ArtifactId = Normalize(fileRef.ArtifactId) ?? string.Empty,
+            SourceKind = ToChatFileSourceKind(fileRef.SourceKind),
+            SourceMessageId = Normalize(fileRef.SourceMessageId) ?? string.Empty,
+            SourceResourceKey = Normalize(fileRef.SourceResourceKey) ?? string.Empty,
+            FileName = Normalize(fileRef.FileName) ?? string.Empty,
+            MediaType = Normalize(fileRef.MediaType) ?? string.Empty,
+            SizeBytes = fileRef.SizeBytes,
+            Sha256 = Normalize(fileRef.Sha256) ?? string.Empty,
+            CreatedAtUnixMs = fileRef.CreatedAtUnixMs,
+            ExpiresAtUnixMs = fileRef.ExpiresAtUnixMs,
+            OwnerRunId = Normalize(fileRef.OwnerRunId) ?? string.Empty,
+            OwnerScopeId = Normalize(fileRef.OwnerScopeId) ?? string.Empty,
+        };
+
+    private static Aevatar.AI.Abstractions.ChatFileSourceKind ToChatFileSourceKind(
+        WorkflowFileSourceKind sourceKind) =>
+        sourceKind switch
+        {
+            WorkflowFileSourceKind.ChatInput => Aevatar.AI.Abstractions.ChatFileSourceKind.ChatInput,
+            WorkflowFileSourceKind.FormUpload => Aevatar.AI.Abstractions.ChatFileSourceKind.FormUpload,
+            WorkflowFileSourceKind.ConnectedServiceResource =>
+                Aevatar.AI.Abstractions.ChatFileSourceKind.ConnectedServiceResource,
+            WorkflowFileSourceKind.ExternalResource => Aevatar.AI.Abstractions.ChatFileSourceKind.ExternalResource,
+            WorkflowFileSourceKind.Generated => Aevatar.AI.Abstractions.ChatFileSourceKind.Generated,
+            _ => Aevatar.AI.Abstractions.ChatFileSourceKind.Unspecified,
+        };
 
     private static ChatContentPartKind ResolveChatContentPartKind(string? mediaType)
     {
@@ -219,43 +503,12 @@ public class WorkflowRoleGAgent(
         WorkflowAgentToolScope? scope,
         AgentToolExecutionContext toolContext)
     {
-        if (scope == null)
+        if (scope == null || (!scope.RestrictAllowedToolNames && scope.AllowedToolNames.Count == 0))
             return toolContext;
 
         return toolContext with
         {
             ToolVisibility = AgentToolVisibilityScope.FromAllowedToolNames(scope.AllowedToolNames),
-        };
-    }
-
-    // Populate the tool caller scope from the owning run's scope on the channel-less
-    // Direct/studio path: WorkflowCallerCredentialToolContextMapper only sets credentials,
-    // leaving Caller empty, so scope-scoped tools (aevatar_*) would otherwise see no scope
-    // and fail. Scope-scoped tools require both ScopeId and OwnerSubject (see
-    // AevatarInvocationDispatcher.ResolveCallerScope), mirroring the channel inbound path
-    // that sets both from the registration scope. This is an "empty -> fill" guard: it is a
-    // no-op when the caller scope is already set (so any future inbound-stamped caller wins)
-    // and a no-op when the run carries no scope.
-    private static AgentToolExecutionContext ApplyRunScopeToCaller(
-        string? runScopeId,
-        AgentToolExecutionContext toolContext)
-    {
-        var scopeId = Normalize(runScopeId);
-        if (scopeId is null)
-            return toolContext;
-
-        if (!string.IsNullOrWhiteSpace(toolContext.Caller.ScopeId))
-            return toolContext;
-
-        return toolContext with
-        {
-            Caller = toolContext.Caller with
-            {
-                ScopeId = scopeId,
-                OwnerSubject = string.IsNullOrWhiteSpace(toolContext.Caller.OwnerSubject)
-                    ? scopeId
-                    : toolContext.Caller.OwnerSubject,
-            },
         };
     }
 
@@ -290,6 +543,9 @@ public class WorkflowRoleGAgent(
         var inputParts = ResolveWorkflowRequestInputParts(request);
         var llmControl = LLMControlContextMapper.FromPayload(request.LlmControl);
         var toolContext = llmControl.ToToolContext(AgentToolExecutionContextMapper.FromPayload(request.ToolContext));
+        var turnCatalog = await BuildRequestToolCatalogAsync(intent.AgentToolScope, toolContext, streamCt);
+        if (turnCatalog is not null)
+            toolContext = AddRequestToolsToVisibility(toolContext, turnCatalog.RouteOwnedTools.Keys);
         var metadata = request.Metadata.Count > 0
             ? AgentToolExecutionContextMapper.StripOwnedControlKeys(
                 new Dictionary<string, string>(request.Metadata, StringComparer.Ordinal))
@@ -307,7 +563,7 @@ public class WorkflowRoleGAgent(
                            request.SessionId,
                            llmControl,
                            toolContext,
-                           turnCatalog: null,
+                           turnCatalog,
                            metadata,
                            streamCt))
         {
@@ -359,6 +615,109 @@ public class WorkflowRoleGAgent(
             Usage: usage,
             Model: EffectiveConfig.Model ?? string.Empty,
             ContentEmitted: fullContent.Length > 0);
+    }
+
+    private async Task<AgentProfileTurnCatalog?> BuildRequestToolCatalogAsync(
+        WorkflowAgentToolScope? scope,
+        AgentToolExecutionContext toolContext,
+        CancellationToken ct)
+    {
+        if (_toolSetRegistry is null || scope?.ToolSetRefs.Count is not > 0)
+            return null;
+
+        var tools = new List<IAgentTool>();
+        var resolutionFailures = 0;
+        var discoveryFailures = 0;
+        var collisions = 0;
+        using var _ = AgentToolContextScope.Push(toolContext);
+        foreach (var toolSetRef in scope.ToolSetRefs
+                     .Where(static name => !string.IsNullOrWhiteSpace(name))
+                     .Select(static name => name.Trim())
+                     .Distinct(StringComparer.Ordinal))
+        {
+            ToolSetResolveResult resolved;
+            try
+            {
+                resolved = _toolSetRegistry.Resolve(toolSetRef);
+            }
+            catch (Exception)
+            {
+                resolutionFailures++;
+                continue;
+            }
+
+            if (!resolved.IsSuccess)
+            {
+                resolutionFailures++;
+                continue;
+            }
+
+            foreach (var source in resolved.Sources)
+            {
+                try
+                {
+                    tools.AddRange(await source.DiscoverToolsAsync(ct));
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception)
+                {
+                    discoveryFailures++;
+                }
+            }
+        }
+
+        var exactTools = new List<IAgentTool>();
+        foreach (var group in tools
+                     .Where(static tool => !string.IsNullOrWhiteSpace(tool.Name))
+                     .GroupBy(static tool => tool.Name.Trim(), StringComparer.OrdinalIgnoreCase))
+        {
+            var exact = group.First();
+            if (group.Any(tool => !ReferenceEquals(tool, exact)))
+            {
+                collisions++;
+                continue;
+            }
+
+            exactTools.Add(exact);
+        }
+        if (resolutionFailures + discoveryFailures + collisions > 0)
+        {
+            Logger.LogWarning(
+                "Workflow request tools degraded. resolution_failures={ResolutionFailures} discovery_failures={DiscoveryFailures} collisions={Collisions}",
+                resolutionFailures,
+                discoveryFailures,
+                collisions);
+        }
+
+        var allowedNames = (scope.RestrictAllowedToolNames || scope.AllowedToolNames.Count > 0
+                ? scope.AllowedToolNames
+                : Tools.GetAll().Select(static tool => tool.Name))
+            .Concat(exactTools.Select(static tool => tool.Name));
+        return new AgentProfileTurnCatalog(
+            allowedNames,
+            profilePromptLayer: null,
+            selectedSkillPromptLayer: null,
+            selectedIntentId: null,
+            candidateIntentId: null,
+            diagnostics: null,
+            exactTools);
+    }
+
+    private static AgentToolExecutionContext AddRequestToolsToVisibility(
+        AgentToolExecutionContext toolContext,
+        IEnumerable<string> toolNames)
+    {
+        if (!toolContext.ToolVisibility.IsRestricted)
+            return toolContext;
+
+        return toolContext with
+        {
+            ToolVisibility = AgentToolVisibilityScope.FromAllowedToolNames(
+                toolContext.ToolVisibility.AllowedToolNames!.Concat(toolNames)),
+        };
     }
 
     private static IReadOnlyList<ContentPart> ResolveWorkflowRequestInputParts(ChatRequestEvent request)

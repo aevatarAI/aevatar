@@ -13,6 +13,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<AevatarInvocationDispatcher>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAgentToolSource, InvokeGAgentToolSource>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAgentToolSource, InvokeTeamToolSource>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAgentToolSource, InvokeMemberToolSource>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAgentToolSource, StartWorkflowToolSource>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAgentToolSource, ObserveRunToolSource>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAgentToolSource, ReadWorkflowRunArtifactToolSource>());

@@ -1,5 +1,6 @@
 using System.Reflection;
 using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
@@ -112,6 +113,59 @@ public sealed class ProjectionScopeGAgentBaseTests
     }
 
     [Fact]
+    public async Task HandleObservedEnvelopeAsync_ShouldCapturePayloadFreeCommittedEnvelopeMetadata()
+    {
+        var agent = BuildActivatedAgent(
+            scopeId: "projection-scope-recent-envelope",
+            onProcess: _ => ProjectionScopeDispatchResult.Success(7, "event-type"),
+            eventSourcing: new TrackingEventSourcing());
+        var timestamp = Timestamp.FromDateTimeOffset(
+            new DateTimeOffset(2026, 7, 30, 1, 2, 3, TimeSpan.Zero));
+        var envelope = BuildForwardedCommittedObservationEnvelope(
+            "projection-scope-recent-envelope",
+            version: 7,
+            eventId: "evt-7",
+            timestamp: timestamp);
+
+        await agent.HandleObservedEnvelopeAsync(envelope);
+
+        var recent = agent.State.RecentObservedEnvelopes.Should().ContainSingle().Subject;
+        recent.EventId.Should().Be("evt-7");
+        recent.TypeUrl.Should().Be(Any.Pack(new StringValue { Value = "payload" }).TypeUrl);
+        recent.StateVersion.Should().Be(7);
+        recent.TimestampUtc.Should().Be(timestamp);
+        typeof(ProjectionObservedEnvelopeMetadata).GetProperty("Payload").Should().BeNull();
+        typeof(ProjectionObservedEnvelopeMetadata).GetProperty("Envelope").Should().BeNull();
+        typeof(ProjectionObservedEnvelopeMetadata).GetProperty("EventData").Should().BeNull();
+    }
+
+    [Fact]
+    public async Task HandleObservedEnvelopeAsync_ShouldRetainOnlyTheFiftyMostRecentCommittedEnvelopes()
+    {
+        var agent = BuildActivatedAgent(
+            scopeId: "projection-scope-bounded-recent",
+            onProcess: envelope =>
+            {
+                CommittedStateEventEnvelope.TryGetObservedPayload(envelope, out _, out _, out var version)
+                    .Should().BeTrue();
+                return ProjectionScopeDispatchResult.Success(version, "event-type");
+            },
+            eventSourcing: new TrackingEventSourcing());
+
+        for (var version = 1; version <= 51; version++)
+        {
+            await agent.HandleObservedEnvelopeAsync(BuildForwardedCommittedObservationEnvelope(
+                "projection-scope-bounded-recent",
+                version,
+                eventId: $"evt-{version}"));
+        }
+
+        agent.State.RecentObservedEnvelopes.Should().HaveCount(50);
+        agent.State.RecentObservedEnvelopes[0].EventId.Should().Be("evt-2");
+        agent.State.RecentObservedEnvelopes[^1].EventId.Should().Be("evt-51");
+    }
+
+    [Fact]
     public async Task HandleObservedEnvelopeAsync_ShouldProcessCommittedObservation_WhenScopeWatermarkAdvancedByOtherPublisher()
     {
         var processed = 0;
@@ -131,6 +185,80 @@ public sealed class ProjectionScopeGAgentBaseTests
     }
 
     [Fact]
+    public async Task HandleObservedEnvelopeAsync_ShouldIgnoreDuplicateAndStaleVersionsFromSamePublisher()
+    {
+        var processed = 0;
+        var agent = BuildActivatedAgent(
+            scopeId: "projection-scope-source-watermark",
+            onProcess: envelope =>
+            {
+                processed++;
+                CommittedStateEventEnvelope.TryGetObservedPayload(
+                    envelope,
+                    out _,
+                    out _,
+                    out var version).Should().BeTrue();
+                return ProjectionScopeDispatchResult.Success(version, "event-type");
+            },
+            eventSourcing: new TrackingEventSourcing(),
+            runtimeMode: ProjectionRuntimeMode.SessionObservation);
+        var versionTwo = BuildForwardedCommittedObservationEnvelope(
+            "projection-scope-source-watermark",
+            version: 2);
+        var versionOne = BuildForwardedCommittedObservationEnvelope(
+            "projection-scope-source-watermark",
+            version: 1);
+
+        await agent.HandleObservedEnvelopeAsync(versionTwo);
+        await agent.HandleObservedEnvelopeAsync(versionTwo.Clone());
+        await agent.HandleObservedEnvelopeAsync(versionOne);
+
+        processed.Should().Be(1);
+        agent.State.LastSuccessfulVersionsByActor["publisher-actor"].Should().Be(2);
+    }
+
+    [Fact]
+    public async Task HandleReplayAsync_ShouldReprocessRecordedFailure_WhenNewerVersionAlreadySucceeded()
+    {
+        var processed = 0;
+        var eventSourcing = new TrackingEventSourcing();
+        var agent = BuildActivatedAgent(
+            scopeId: "projection-scope-failure-gap",
+            onProcess: envelope =>
+            {
+                processed++;
+                CommittedStateEventEnvelope.TryGetObservedPayload(
+                    envelope,
+                    out _,
+                    out _,
+                    out var version).Should().BeTrue();
+                version.Should().Be(1);
+                return ProjectionScopeDispatchResult.Success(version, "event-type");
+            },
+            eventSourcing: eventSourcing,
+            runtimeMode: ProjectionRuntimeMode.SessionObservation);
+        agent.State.Active = false;
+        await agent.InitializeForTestAsync();
+        agent.State.Active = true;
+
+        var failedEnvelope = BuildForwardedCommittedObservationEnvelope(
+            "projection-scope-failure-gap",
+            version: 1);
+        agent.State.LastSuccessfulVersionsByActor["publisher-actor"] = 2;
+        agent.State.Failures.Add(new ProjectionScopeFailure
+        {
+            FailureId = "failure-version-1",
+            SourceVersion = 1,
+            Envelope = failedEnvelope,
+        });
+
+        await agent.HandleReplayAsync(new ReplayProjectionFailuresCommand { MaxItems = 1 });
+
+        processed.Should().Be(1);
+        agent.State.Failures.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task HandleObservedEnvelopeAsync_ShouldSwallow_DeterministicProjectionFailure()
     {
         var agent = BuildActivatedAgent(
@@ -147,9 +275,10 @@ public sealed class ProjectionScopeGAgentBaseTests
     private static TestScopeAgent BuildActivatedAgent(
         string scopeId,
         Func<EventEnvelope, ProjectionScopeDispatchResult> onProcess,
-        IEventSourcingBehavior<ProjectionScopeState>? eventSourcing = null)
+        IEventSourcingBehavior<ProjectionScopeState>? eventSourcing = null,
+        ProjectionRuntimeMode runtimeMode = ProjectionRuntimeMode.DurableMaterialization)
     {
-        var agent = new TestScopeAgent(onProcess);
+        var agent = new TestScopeAgent(onProcess, runtimeMode);
 
         typeof(GAgentBase)
             .GetProperty(nameof(GAgentBase.Id), BindingFlags.Instance | BindingFlags.Public)!
@@ -188,7 +317,11 @@ public sealed class ProjectionScopeGAgentBaseTests
             StreamForwardingMode.HandleThenForward);
     }
 
-    private static EventEnvelope BuildForwardedCommittedObservationEnvelope(string targetStreamId, long version)
+    private static EventEnvelope BuildForwardedCommittedObservationEnvelope(
+        string targetStreamId,
+        long version,
+        string eventId = "evt-duplicate",
+        Timestamp? timestamp = null)
     {
         var original = new EventEnvelope
         {
@@ -198,9 +331,11 @@ public sealed class ProjectionScopeGAgentBaseTests
             {
                 StateEvent = new StateEvent
                 {
-                    EventId = "evt-duplicate",
+                    EventId = eventId,
                     Version = version,
+                    Timestamp = timestamp,
                     EventData = Any.Pack(new StringValue { Value = "payload" }),
+                    AgentId = "publisher-actor",
                 },
                 StateRoot = Any.Pack(new StringValue { Value = "state" }),
             }),
@@ -216,14 +351,19 @@ public sealed class ProjectionScopeGAgentBaseTests
     private sealed class TestScopeAgent : ProjectionScopeGAgentBase<TestContext>
     {
         private readonly Func<EventEnvelope, ProjectionScopeDispatchResult> _onProcess;
+        private readonly ProjectionRuntimeMode _runtimeMode;
 
-        public TestScopeAgent(Func<EventEnvelope, ProjectionScopeDispatchResult> onProcess)
+        public TestScopeAgent(
+            Func<EventEnvelope, ProjectionScopeDispatchResult> onProcess,
+            ProjectionRuntimeMode runtimeMode = ProjectionRuntimeMode.DurableMaterialization)
         {
             _onProcess = onProcess;
+            _runtimeMode = runtimeMode;
         }
 
-        protected override ProjectionRuntimeMode RuntimeMode =>
-            ProjectionRuntimeMode.DurableMaterialization;
+        protected override ProjectionRuntimeMode RuntimeMode => _runtimeMode;
+
+        public Task InitializeForTestAsync() => OnActivateAsync(CancellationToken.None);
 
         protected override ValueTask<ProjectionScopeDispatchResult> ProcessObservationCoreAsync(
             TestContext context,
@@ -251,9 +391,14 @@ public sealed class ProjectionScopeGAgentBaseTests
             Task.FromResult<ProjectionScopeState?>(null);
         public void DiscardPendingEvents() => DiscardCallCount++;
         public ProjectionScopeState TransitionState(ProjectionScopeState current, IMessage evt) =>
-            evt is ProjectionScopeWatermarkAdvancedEvent watermark
-                ? ProjectionScopeStateApplier.ApplyWatermarkAdvanced(current, watermark)
-                : current;
+            evt switch
+            {
+                ProjectionScopeWatermarkAdvancedEvent watermark =>
+                    ProjectionScopeStateApplier.ApplyWatermarkAdvanced(current, watermark),
+                ProjectionScopeFailureReplayedEvent replayed =>
+                    ProjectionScopeStateApplier.ApplyFailureReplayed(current, replayed),
+                _ => current,
+            };
     }
 
 }

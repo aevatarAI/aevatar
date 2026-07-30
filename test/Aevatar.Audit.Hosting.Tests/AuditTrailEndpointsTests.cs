@@ -1,5 +1,6 @@
 using System.Net;
 using System.Security.Claims;
+using System.Text.Json;
 using Aevatar.Audit;
 using Aevatar.Audit.Abstractions.Identity;
 using Aevatar.Audit.Abstractions.Models;
@@ -18,6 +19,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -53,8 +55,29 @@ public sealed class AuditTrailEndpointsTests
         query.OccurredTo.Should().BeNull();
         query.Take.Should().Be(500);
         authorizer.Calls.Should().Be(0);
-        body.Should().Contain("queryWatermark").And.Contain("readTimestampUtc").And.Contain("identityKeyId");
-        body.Should().Contain("nextCursor");
+        body.Should().Contain("coverage").And.Contain("ingestionWatermark").And.Contain("identityKeyId");
+        body.Should().Contain("continuationCursor").And.Contain("lifecyclePhase").And.Contain("terminalOutcome");
+    }
+
+    [Fact]
+    public async Task QueryAuditTrail_WhenNoRecordsMatch_ReturnsOkWithEmptyRecords()
+    {
+        var queryPort = new EmptyAuditTrailQueryPort();
+        var http = BuildHttpContext(CallerScope, bearer: "token", queryPort);
+
+        var result = await AuditTrailEndpoints.QueryAuditTrail(
+            http,
+            BuildEndpointDependencies(queryPort),
+            NullLoggerFactory.Instance,
+            from: DateTimeOffset.Parse("2100-01-01T00:00:00Z"),
+            to: DateTimeOffset.Parse("2100-01-02T00:00:00Z"),
+            take: 1);
+        var (status, body) = await ExecuteWithBodyAsync(result, http);
+
+        status.Should().Be(StatusCodes.Status200OK);
+        using var json = JsonDocument.Parse(body);
+        json.RootElement.GetProperty("records").GetArrayLength().Should().Be(0);
+        queryPort.Queries.Should().ContainSingle().Which.ScopeId.Should().Be(CallerScope);
     }
 
     [Fact]
@@ -176,11 +199,13 @@ public sealed class AuditTrailEndpointsTests
         var queryPort = new RecordingAuditTrailQueryPort();
         var authorizer = new FakeAuthorizer(elevated: true);
         var http = BuildHttpContext(CallerScope, bearer: "token", queryPort, authorizer);
+        using var loggerProvider = new RecordingLoggerProvider();
+        using var loggerFactory = LoggerFactory.Create(builder => builder.AddProvider(loggerProvider));
 
         var result = await AuditTrailEndpoints.QueryAuditTrail(
             http,
             BuildEndpointDependencies(queryPort, authorizer: authorizer),
-            NullLoggerFactory.Instance,
+            loggerFactory,
             scope: OtherScope,
             take: 10);
         var status = await ExecuteAsync(result, http);
@@ -191,6 +216,10 @@ public sealed class AuditTrailEndpointsTests
         query.AuditActorId.Should().BeNull();
         query.Take.Should().Be(10);
         authorizer.Calls.Should().Be(1);
+        loggerProvider.Messages.Should().Contain(message => message.Contains("admin-1", StringComparison.Ordinal));
+        loggerProvider.Messages.Should().NotContain(message =>
+            message.Contains("admin@example.test", StringComparison.Ordinal) ||
+            message.Contains("adminEmail", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -253,7 +282,12 @@ public sealed class AuditTrailEndpointsTests
             cursor: " cursor-1 ",
             from: from,
             to: to,
-            take: 25);
+            take: 25,
+            commandId: " command-1 ",
+            workflowRunId: " run-1 ",
+            lifecyclePhase: AuditLifecyclePhase.Terminal,
+            terminalOutcome: AuditTerminalOutcome.Succeeded,
+            correlationId: " correlation-1 ");
         var status = await ExecuteAsync(result, http);
 
         status.Should().Be(StatusCodes.Status200OK);
@@ -264,7 +298,103 @@ public sealed class AuditTrailEndpointsTests
         query.Cursor.Should().Be("cursor-1");
         query.OccurredFrom.Should().Be(from);
         query.OccurredTo.Should().Be(to);
+        query.CommandId.Should().Be("command-1");
+        query.WorkflowRunId.Should().Be("run-1");
+        query.LifecyclePhase.Should().Be(AuditLifecyclePhase.Terminal);
+        query.TerminalOutcome.Should().Be(AuditTerminalOutcome.Succeeded);
+        query.CorrelationId.Should().Be("correlation-1");
         query.Take.Should().Be(25);
+    }
+
+    [Fact]
+    public async Task ExportAuditTrailCloudEvents_ShouldReturnCloudEvents10BatchWithStableAuditData()
+    {
+        var queryPort = new RecordingAuditTrailQueryPort();
+        var http = BuildHttpContext(CallerScope, bearer: "token", queryPort);
+
+        var result = await AuditTrailEndpoints.ExportAuditTrailCloudEvents(
+            http,
+            BuildEndpointDependencies(queryPort),
+            NullLoggerFactory.Instance,
+            commandId: "command-1",
+            lifecyclePhase: AuditLifecyclePhase.Terminal);
+        var (status, body) = await ExecuteWithBodyAsync(result, http);
+
+        status.Should().Be(StatusCodes.Status200OK);
+        http.Response.ContentType.Should().StartWith("application/cloudevents-batch+json");
+        http.Response.Headers["Aevatar-Audit-Truncated"].ToString().Should().Be("true");
+        http.Response.Headers["Aevatar-Audit-Window-Completeness"].ToString().Should().Be("unbounded");
+        http.Response.Headers["Aevatar-Audit-Schema-Compatibility"].ToString().Should().Be("current");
+
+        using var json = JsonDocument.Parse(body);
+        var cloudEvent = json.RootElement.EnumerateArray().Should().ContainSingle().Subject;
+        cloudEvent.GetProperty("specversion").GetString().Should().Be("1.0");
+        cloudEvent.GetProperty("id").GetString().Should().Be("audit-1");
+        cloudEvent.GetProperty("source").GetString().Should().Be("urn:aevatar:audit:projection-artifact");
+        cloudEvent.GetProperty("type").GetString().Should().Be("workflow.run.completed");
+        cloudEvent.GetProperty("subject").GetString().Should().Be("workflow_run/run-1");
+        cloudEvent.GetProperty("dataschema").GetString().Should().Be("https://schemas.aevatar.ai/audit/1.0");
+        cloudEvent.GetProperty("datacontenttype").GetString().Should().Be("application/json");
+        cloudEvent.GetProperty("traceparent").GetString()
+            .Should().Be("00-0123456789abcdef0123456789abcdef-0123456789abcdef-01");
+        cloudEvent.GetProperty("correlationid").GetString().Should().Be("correlation-1");
+        cloudEvent.GetProperty("data").GetProperty("lifecyclePhase").GetString().Should().Be("terminal");
+        cloudEvent.GetProperty("data").GetProperty("terminalOutcome").GetString().Should().Be("succeeded");
+        Uri.TryCreate(cloudEvent.GetProperty("source").GetString(), UriKind.Absolute, out _).Should().BeTrue();
+        Uri.TryCreate(cloudEvent.GetProperty("dataschema").GetString(), UriKind.Absolute, out _).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task QueryAuditTrail_WhenRecordUsesLegacyContract_ReportsExplicitCompatibilityProjection()
+    {
+        var queryPort = new RecordingAuditTrailQueryPort { ReturnLegacyRecord = true };
+        var http = BuildHttpContext(CallerScope, bearer: "token", queryPort);
+
+        var result = await AuditTrailEndpoints.QueryAuditTrail(
+            http,
+            BuildEndpointDependencies(queryPort),
+            NullLoggerFactory.Instance);
+        var (status, body) = await ExecuteWithBodyAsync(result, http);
+
+        status.Should().Be(StatusCodes.Status200OK);
+        using var json = JsonDocument.Parse(body);
+        var root = json.RootElement;
+        root.GetProperty("coverage").GetProperty("schemaCompatibility").GetString()
+            .Should().Be("contains_legacy_records");
+        var record = root.GetProperty("records").EnumerateArray().Should().ContainSingle().Subject;
+        record.GetProperty("schemaVersion").GetString().Should().Be("legacy-v0");
+        record.GetProperty("schemaCompatibility").GetString().Should().Be("legacy_mapped");
+        record.GetProperty("eventKind").GetString().Should().Be("READ");
+        record.GetProperty("source").GetString().Should().Be("urn:aevatar:audit:legacy");
+        record.GetProperty("lifecyclePhase").GetString().Should().Be("terminal");
+        record.GetProperty("terminalOutcome").GetString().Should().Be("succeeded");
+    }
+
+    [Fact]
+    public async Task QueryAuditTrail_WhenLegacyFailureContainsFreeText_DoesNotExposeUntrustedFields()
+    {
+        var queryPort = new RecordingAuditTrailQueryPort
+        {
+            ReturnLegacyRecord = true,
+            ReturnLegacyFailure = true,
+        };
+        var http = BuildHttpContext(CallerScope, bearer: "token", queryPort);
+
+        var result = await AuditTrailEndpoints.QueryAuditTrail(
+            http,
+            BuildEndpointDependencies(queryPort),
+            NullLoggerFactory.Instance);
+        var (status, body) = await ExecuteWithBodyAsync(result, http);
+
+        status.Should().Be(StatusCodes.Status200OK);
+        body.Should().NotContain("legacy-sensitive");
+        using var json = JsonDocument.Parse(body);
+        var record = json.RootElement.GetProperty("records").EnumerateArray().Should().ContainSingle().Subject;
+        record.TryGetProperty("annotations", out _).Should().BeFalse();
+        record.GetProperty("provenance").ValueKind.Should().Be(JsonValueKind.Null);
+        record.GetProperty("committedFact").ValueKind.Should().Be(JsonValueKind.Null);
+        record.GetProperty("failure").GetProperty("code").GetString().Should().Be("legacy_failure");
+        record.GetProperty("failure").GetProperty("sanitizedMessage").ValueKind.Should().Be(JsonValueKind.Null);
     }
 
     [Fact]
@@ -280,6 +410,33 @@ public sealed class AuditTrailEndpointsTests
 
         status.Should().Be(StatusCodes.Status503ServiceUnavailable);
         body.Should().Contain("AUDIT_QUERY_UNAVAILABLE");
+    }
+
+    [Fact]
+    public async Task QueryAuditTrail_WhenStoreThrows_ReturnsSanitizedServiceUnavailable()
+    {
+        var queryPort = new ThrowingAuditTrailQueryPort(
+            "https://elastic-secret.example:9200 Bearer secret-token raw-backend-detail");
+        var http = BuildHttpContext(CallerScope, bearer: "token", queryPort);
+        using var loggerProvider = new RecordingLoggerProvider();
+        using var loggerFactory = LoggerFactory.Create(builder => builder.AddProvider(loggerProvider));
+
+        var result = await AuditTrailEndpoints.QueryAuditTrail(
+            http,
+            BuildEndpointDependencies(queryPort),
+            loggerFactory);
+        var (status, body) = await ExecuteWithBodyAsync(result, http);
+
+        status.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        using var json = JsonDocument.Parse(body);
+        json.RootElement.GetProperty("code").GetString().Should().Be("AUDIT_QUERY_UNAVAILABLE");
+        body.Should().NotContain("elastic-secret").And.NotContain("secret-token").And.NotContain("raw-backend-detail");
+        loggerProvider.Messages.Should().ContainSingle(message =>
+            message.Contains(nameof(InvalidOperationException), StringComparison.Ordinal));
+        loggerProvider.Messages.Should().NotContain(message =>
+            message.Contains("elastic-secret", StringComparison.Ordinal) ||
+            message.Contains("secret-token", StringComparison.Ordinal) ||
+            message.Contains("raw-backend-detail", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -463,12 +620,17 @@ public sealed class AuditTrailEndpointsTests
             .ToArray();
         routeEndpoints.Select(static endpoint => endpoint.RoutePattern.RawText)
             .Should()
-            .Contain(["/api/audit/trail", "/api/audit/actor-resolutions"]);
+            .Contain(["/api/audit/trail", "/api/audit/trail/cloudevents", "/api/audit/actor-resolutions"]);
         routeEndpoints.Single(static endpoint => endpoint.RoutePattern.RawText == "/api/audit/trail")
             .Metadata
             .GetMetadata<AuditTrailEndpointAuditMetadata>()
             .Should()
             .BeEquivalentTo(new AuditTrailEndpointAuditMetadata("audit-trail", "query-cross-scope", "ADMIN"));
+        routeEndpoints.Single(static endpoint => endpoint.RoutePattern.RawText == "/api/audit/trail/cloudevents")
+            .Metadata
+            .GetMetadata<AuditTrailEndpointAuditMetadata>()
+            .Should()
+            .BeEquivalentTo(new AuditTrailEndpointAuditMetadata("audit-trail", "export-cross-scope", "ADMIN"));
         routeEndpoints.Single(static endpoint => endpoint.RoutePattern.RawText == "/api/audit/actor-resolutions")
             .Metadata
             .GetMetadata<AuditTrailEndpointAuditMetadata>()
@@ -494,6 +656,31 @@ public sealed class AuditTrailEndpointsTests
 
         result.Status.Should().Be(AevatarHealthStatuses.Degraded);
         result.Message.Should().Be("Audit trail query port is not configured.");
+    }
+
+    [Fact]
+    public async Task AddAuditTrailCapabilityBundle_WhenQueryFails_ReportsUnhealthyReadinessWithoutSensitiveDetail()
+    {
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            EnvironmentName = Environments.Development,
+        });
+        builder.WebHost.UseTestServer();
+        builder.Services.AddSingleton<IAuditTrailQueryPort>(
+            new ThrowingAuditTrailQueryPort("https://elastic-secret.example:9200 password=secret"));
+        builder.AddAuditTrailCapabilityBundle();
+
+        await using var app = builder.Build();
+
+        var contributor = app.Services.GetServices<AevatarHealthContributorRegistration>()
+            .Single(static registration => registration.Name == "audit-trail");
+        var result = await contributor.ProbeAsync!(app.Services, CancellationToken.None);
+
+        result.Status.Should().Be(AevatarHealthStatuses.Unhealthy);
+        result.Message.Should().Be("Audit trail query/index is unavailable.");
+        result.Details.Values.Should().NotContain(value =>
+            value.Contains("elastic-secret", StringComparison.Ordinal) ||
+            value.Contains("password=secret", StringComparison.Ordinal));
     }
 
     private static DefaultHttpContext BuildHttpContext(
@@ -567,29 +754,125 @@ public sealed class AuditTrailEndpointsTests
     {
         public List<AuditTrailQuery> Queries { get; } = [];
 
+        public bool ReturnLegacyRecord { get; init; }
+
+        public bool ReturnLegacyFailure { get; init; }
+
+        public Task<AuditTrailPage> QueryAsync(
+            AuditTrailQuery query,
+            CancellationToken cancellationToken = default)
+        {
+            Queries.Add(query);
+            var record = new AuditRecord
+            {
+                AuditId = "audit-1",
+                EventKind = "workflow.run.completed",
+                Subject = "workflow_run/run-1",
+                Source = "urn:aevatar:audit:projection-artifact",
+                SchemaVersion = "1.0",
+                ScopeId = query.ScopeId ?? "scope-from-store",
+                AuditActorId = query.AuditActorId ?? "audit_actor:default",
+                IdentityKeyId = "key-1",
+                OperationName = "READ",
+                Outcome = AuditOutcome.Success,
+                LifecyclePhase = AuditLifecyclePhase.Terminal,
+                TerminalOutcome = AuditTerminalOutcome.Succeeded,
+                OccurredAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-01-02T03:04:05Z")),
+                RecordedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-01-02T03:04:06Z")),
+                Target = new AuditTarget { Kind = "workflow", Id = "wf-1" },
+                Correlation = new AuditCorrelation
+                {
+                    TraceId = "0123456789abcdef0123456789abcdef",
+                    SpanId = "0123456789abcdef",
+                    Traceparent = "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+                    RequestId = "request-1",
+                    CommandId = "command-1",
+                    WorkflowRunId = "run-1",
+                    CorrelationId = "correlation-1",
+                    CausationId = "event-0",
+                },
+                Provenance = new AuditExecutionProvenance
+                {
+                    ScopeId = query.ScopeId ?? "scope-from-store",
+                    RunId = "run-1",
+                    CorrelationId = "correlation-1",
+                },
+                Redaction = new AuditRedaction
+                {
+                    Policy = "aevatar.audit.safe-fields.v1",
+                    ValuesSanitized = true,
+                },
+            };
+            if (ReturnLegacyRecord)
+            {
+                record.EventKind = string.Empty;
+                record.Subject = string.Empty;
+                record.Source = string.Empty;
+                record.SchemaVersion = string.Empty;
+                record.LifecyclePhase = AuditLifecyclePhase.Unspecified;
+                record.TerminalOutcome = AuditTerminalOutcome.Unspecified;
+                record.RecordedAt = null;
+                record.CapturePlane = AuditCapturePlane.Unspecified;
+                record.RequestSummary = "legacy-sensitive-request";
+                record.ResultSummary = "legacy-sensitive-result";
+                record.ErrorSummary = "Bearer legacy-sensitive-token";
+                record.Annotations["raw_body"] = "legacy-sensitive-body";
+                record.Provenance.ActorId = "legacy-sensitive-external-subject";
+                record.CommittedFactRef = new AuditCommittedFactReference
+                {
+                    CommittedEventId = "legacy-event-1",
+                    ActorId = "legacy-sensitive-external-subject",
+                    StateVersion = 1,
+                };
+                if (ReturnLegacyFailure)
+                {
+                    record.Outcome = AuditOutcome.Error;
+                    record.ErrorCode = "legacy-sensitive-error-code";
+                }
+            }
+
+            return Task.FromResult(new AuditTrailPage(
+                [record],
+                "cursor-2",
+                DateTimeOffset.Parse("2026-01-02T03:04:07Z"),
+                AuditQueryCoverage.Create(
+                    query,
+                    truncated: true,
+                    ingestionWatermark: DateTimeOffset.Parse("2026-01-02T03:04:06Z"),
+                    completeThrough: null,
+                    schemaCompatibility: ReturnLegacyRecord
+                        ? AuditSchemaCompatibility.ContainsLegacyRecords
+                        : AuditSchemaCompatibility.Current)));
+        }
+    }
+
+    private sealed class ThrowingAuditTrailQueryPort(string message) : IAuditTrailQueryPort
+    {
+        public Task<AuditTrailPage> QueryAsync(
+            AuditTrailQuery query,
+            CancellationToken cancellationToken = default) =>
+            Task.FromException<AuditTrailPage>(new InvalidOperationException(message));
+    }
+
+    private sealed class EmptyAuditTrailQueryPort : IAuditTrailQueryPort
+    {
+        public List<AuditTrailQuery> Queries { get; } = [];
+
         public Task<AuditTrailPage> QueryAsync(
             AuditTrailQuery query,
             CancellationToken cancellationToken = default)
         {
             Queries.Add(query);
             return Task.FromResult(new AuditTrailPage(
-                [
-                    new AuditRecord
-                    {
-                        AuditId = "audit-1",
-                        ScopeId = query.ScopeId ?? "scope-from-store",
-                        AuditActorId = query.AuditActorId ?? "audit_actor:default",
-                        IdentityKeyId = "key-1",
-                        OperationName = "READ",
-                        Outcome = AuditOutcome.Success,
-                        OccurredAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-01-02T03:04:05Z")),
-                        Target = new AuditTarget { Kind = "workflow", Id = "wf-1" },
-                        Correlation = new AuditCorrelation { RequestId = "corr-1" },
-                    }
-                ],
-                "cursor-2",
-                DateTimeOffset.Parse("2026-01-02T03:04:07Z"),
-                DateTimeOffset.Parse("2026-01-02T03:04:05Z")));
+                [],
+                null,
+                DateTimeOffset.UtcNow,
+                AuditQueryCoverage.Create(
+                    query,
+                    truncated: false,
+                    ingestionWatermark: null,
+                    completeThrough: null,
+                    schemaCompatibility: AuditSchemaCompatibility.Current)));
         }
     }
 
@@ -628,6 +911,32 @@ public sealed class AuditTrailEndpointsTests
             return Task.FromResult(_elevated
                 ? new PlatformCaller(true, "admin", "admin@example.test", "admin-1")
                 : PlatformCaller.NotElevated);
+        }
+    }
+
+    private sealed class RecordingLoggerProvider : ILoggerProvider
+    {
+        public List<string> Messages { get; } = [];
+
+        public ILogger CreateLogger(string categoryName) => new RecordingLogger(Messages);
+
+        public void Dispose()
+        {
+        }
+
+        private sealed class RecordingLogger(List<string> messages) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+            public bool IsEnabled(LogLevel logLevel) => true;
+
+            public void Log<TState>(
+                LogLevel logLevel,
+                EventId eventId,
+                TState state,
+                Exception? exception,
+                Func<TState, Exception?, string> formatter) =>
+                messages.Add(formatter(state, exception));
         }
     }
 

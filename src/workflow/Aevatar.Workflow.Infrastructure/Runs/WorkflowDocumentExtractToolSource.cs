@@ -802,10 +802,13 @@ public sealed class WorkflowDocumentExtractToolSource(
                 descriptor.OwnerRunId,
                 descriptor.OwnerScopeId);
 
-        private static WorkflowToolExecutionResult Error(string error, string detail) =>
-            WorkflowToolExecutionResult.Success(JsonSerializer.Serialize(
+        private static WorkflowToolExecutionResult Error(string error, string detail)
+        {
+            var resultJson = JsonSerializer.Serialize(
                 new DocumentExtractError(error, detail),
-                JsonOptions));
+                JsonOptions);
+            return WorkflowToolExecutionResult.Failed(resultJson, error, detail);
+        }
 
         private static WorkflowToolExecutionResult SchemaValidationError() =>
             Error("schema_bound_validation_failed", "Schema-bound extraction result failed validation.");

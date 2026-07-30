@@ -5,7 +5,10 @@
 
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
+using YamlDotNet.RepresentationModel;
 using Aevatar.Foundation.Abstractions.Interactions;
+using Aevatar.Workflow.Abstractions.Workflows;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Agreement;
 using System.Collections;
 using System.Globalization;
@@ -83,6 +86,7 @@ public sealed class WorkflowParser
     /// <exception cref="InvalidOperationException">YAML 为空或缺少必填字段时抛出。</exception>
     public WorkflowDefinition Parse(string yaml)
     {
+        ValidateRootSchema(yaml);
         var raw = D.Deserialize<Raw>(yaml) ?? throw new InvalidOperationException("YAML 为空");
         return new WorkflowDefinition
         {
@@ -97,6 +101,29 @@ public sealed class WorkflowParser
             },
             OnFailure = MapOnFailure(raw.OnFailure),
         };
+    }
+
+    private static void ValidateRootSchema(string yaml)
+    {
+        YamlStream stream = new();
+        using var reader = new StringReader(yaml);
+        stream.Load(reader);
+
+        if (stream.Documents.Count == 0)
+            return;
+
+        if (stream.Documents[0].RootNode is not YamlMappingNode root)
+            return;
+
+        foreach (var key in root.Children.Keys.OfType<YamlScalarNode>())
+        {
+            var rootField = key.Value;
+            if (WorkflowYamlRootSchema.IsAcceptedRootField(rootField))
+                continue;
+
+            throw new InvalidOperationException(
+                $"Unsupported workflow YAML root field '{rootField}'. Allowed root fields: {WorkflowYamlRootSchema.FormatAcceptedRootFields()}.");
+        }
     }
 
     private static RoleDefinition MapRole(RawRole role)
@@ -123,7 +150,7 @@ public sealed class WorkflowParser
             MaxHistoryMessages = role.MaxHistoryMessages,
             EventModules = eventModules,
             EventRoutes = eventRoutes,
-            AgentToolScope = MapAgentToolScope(role.AllowedTools),
+            AgentToolScope = MapAgentToolScope(role.AllowedTools, role.ToolSets),
             Connectors = role.Connectors?.Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x.Trim()).Distinct(StringComparer.Ordinal).ToList() ?? [],
         };
     }
@@ -149,7 +176,9 @@ public sealed class WorkflowParser
         var rawParameters = s.Parameters is null
             ? null
             : new Dictionary<string, object?>(s.Parameters, StringComparer.Ordinal);
-        var agentToolScope = MapAgentToolScope(ResolveStepAllowedTools(s, rawParameters));
+        var agentToolScope = MapAgentToolScope(
+            ResolveStepScopeSource(s.AllowedTools, rawParameters, "allowed_tools", "allowedTools"),
+            ResolveStepScopeSource(s.ToolSets, rawParameters, "tool_sets", "toolSets"));
         var presentation = MapPresentation(canonicalType, s, rawParameters);
         var parameters = NormalizeParameters(rawParameters);
 
@@ -163,11 +192,13 @@ public sealed class WorkflowParser
             Type = canonicalType,
             TargetRole = s.TargetRole ?? s.Role,
             Parameters = WorkflowPrimitiveCatalog.CanonicalizeStepTypeParameters(parameters),
+            Capability = MapCapability(s.Capability),
             TransformOperation = MapTransformOperation(canonicalType, parameters),
             Presentation = presentation,
             AgentToolScope = agentToolScope,
             HumanApprovalOptions = MapHumanApprovalOptions(canonicalType, parameters),
             ExternalApprovalOptions = MapExternalApprovalOptions(canonicalType, parameters),
+            ConnectorApprovalOptions = MapConnectorApprovalOptions(canonicalType, parameters),
             Next = s.Next,
             Compensation = NormalizeText(s.Compensation),
             Children = s.Children?.Select(MapStep).ToList(),
@@ -176,6 +207,21 @@ public sealed class WorkflowParser
             IdempotencyKey = NormalizeText(s.IdempotencyKey),
             OnError = MapOnError(s.OnError),
             TimeoutMs = s.TimeoutMs,
+        };
+    }
+
+    private static ExternalWorkflowCapabilitySelector? MapCapability(RawStepCapability? capability)
+    {
+        if (capability?.NyxIdOperation is null)
+            return null;
+
+        return new ExternalWorkflowCapabilitySelector
+        {
+            NyxIdOperation = new NyxIdOperationSelector
+            {
+                UserServiceId = NormalizeText(capability.NyxIdOperation.UserServiceId) ?? string.Empty,
+                EndpointId = NormalizeText(capability.NyxIdOperation.EndpointId) ?? string.Empty,
+            },
         };
     }
 
@@ -237,14 +283,15 @@ public sealed class WorkflowParser
         return null;
     }
 
-    private static object? ResolveStepAllowedTools(
-        RawStep step,
-        IDictionary<string, object?>? rawParameters)
+    private static object? ResolveStepScopeSource(
+        object? topLevelSource,
+        IDictionary<string, object?>? rawParameters,
+        params string[] keys)
     {
         object? parameterSource = null;
         if (rawParameters is not null)
         {
-            foreach (var key in new[] { "allowed_tools", "allowedTools" })
+            foreach (var key in keys)
             {
                 if (!rawParameters.TryGetValue(key, out var source))
                     continue;
@@ -254,20 +301,22 @@ public sealed class WorkflowParser
             }
         }
 
-        if (step.AllowedTools is not null)
-            return step.AllowedTools;
-
-        return parameterSource;
+        return topLevelSource ?? parameterSource;
     }
 
-    private static WorkflowAgentToolScopeDefinition? MapAgentToolScope(object? source)
+    private static WorkflowAgentToolScopeDefinition? MapAgentToolScope(
+        object? allowedToolsSource,
+        object? toolSetsSource)
     {
-        if (source is null)
+        if (allowedToolsSource is null && toolSetsSource is null)
             return null;
 
         return new WorkflowAgentToolScopeDefinition
         {
-            AllowedToolNames = NormalizeToolNames(source).ToList(),
+            RestrictAllowedToolNames = allowedToolsSource is not null,
+            RestrictToolSets = toolSetsSource is not null,
+            AllowedToolNames = NormalizeToolNames(allowedToolsSource).ToList(),
+            ToolSetRefs = NormalizeToolNames(toolSetsSource).ToList(),
         };
     }
 
@@ -1021,6 +1070,58 @@ public sealed class WorkflowParser
         };
     }
 
+    private static ConnectorApprovalOptionsDefinition? MapConnectorApprovalOptions(
+        string canonicalType,
+        IReadOnlyDictionary<string, string> parameters)
+    {
+        if (canonicalType is not ("connector_call" or "secure_connector_call"))
+            return null;
+
+        var policy = NormalizeEnumToken(GetParameter(
+            parameters,
+            "approval.policy",
+            "approval_policy",
+            "approval_required"));
+        if (policy is not ("required" or "always" or "true"))
+            return null;
+
+        var expirationSeconds = ParseNonNegativeInt(GetParameter(
+            parameters,
+            "approval.expiration_seconds",
+            "approval_expiration_seconds"));
+        var statusCheckIntervalSeconds = ParseNonNegativeInt(GetParameter(
+            parameters,
+            "approval.status_check_interval_seconds",
+            "approval_status_check_interval_seconds"));
+
+        return new ConnectorApprovalOptionsDefinition
+        {
+            ServiceRef = GetParameter(parameters, "approval.service_ref", "approval_service_ref").Trim(),
+            NodeId = GetParameter(parameters, "approval.node_id", "approval_node_id").Trim(),
+            HttpVerb = GetParameter(parameters, "approval.http_verb", "approval_http_verb").Trim(),
+            Resource = GetParameter(parameters, "approval.resource", "approval_resource").Trim(),
+            PermissionScope = GetParameter(parameters, "approval.permission_scope", "approval_permission_scope").Trim(),
+            ExpirationSeconds = expirationSeconds,
+            StatusCheckIntervalSeconds = statusCheckIntervalSeconds == 0
+                ? ConnectorApprovalOptionsDefinition.DefaultStatusCheckIntervalSeconds
+                : statusCheckIntervalSeconds,
+            Destructive = ParseBool(GetParameter(parameters, "approval.destructive", "approval_destructive")),
+            TeamId = GetParameter(parameters, "approval.team_id", "approval_team_id").Trim(),
+            MemberId = GetParameter(parameters, "approval.member_id", "approval_member_id").Trim(),
+            WorkflowId = GetParameter(parameters, "approval.workflow_id", "approval_workflow_id").Trim(),
+            PublishedServiceId = GetParameter(
+                parameters,
+                "approval.published_service_id",
+                "approval_published_service_id").Trim(),
+            PolicyReason = GetParameter(parameters, "approval.policy_reason", "approval_policy_reason").Trim(),
+        };
+    }
+
+    private static int ParseNonNegativeInt(string? value) =>
+        int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) && parsed > 0
+            ? parsed
+            : 0;
+
     private static TransformOperationKind ParseTransformOperationKind(string? value) =>
         NormalizeEnumToken(value) switch
         {
@@ -1252,6 +1353,7 @@ public sealed class WorkflowParser
         public string? EventModules { get; set; }
         public string? EventRoutes { get; set; }
         public object? AllowedTools { get; set; }
+        public object? ToolSets { get; set; }
         public RawRoleExtensions? Extensions { get; set; }
         public List<string>? Connectors { get; set; }
     }
@@ -1320,6 +1422,8 @@ public sealed class WorkflowParser
         public string? Field { get; set; }
         public string? Aggregate { get; set; }
         public object? AllowedTools { get; set; }
+        public object? ToolSets { get; set; }
+        public RawStepCapability? Capability { get; set; }
         public object? InteractionSpec { get; set; }
         public object? InteractionTemplateSpec { get; set; }
         public string? DeliveryTargetId { get; set; }
@@ -1333,6 +1437,18 @@ public sealed class WorkflowParser
         public string? IdempotencyKey { get; set; }
         public RawOnError? OnError { get; set; }
         public int? TimeoutMs { get; set; }
+    }
+
+    private sealed class RawStepCapability
+    {
+        [YamlMember(Alias = "nyxid_operation")]
+        public RawNyxIdOperationSelector? NyxIdOperation { get; set; }
+    }
+
+    private sealed class RawNyxIdOperationSelector
+    {
+        public string? UserServiceId { get; set; }
+        public string? EndpointId { get; set; }
     }
     private sealed class RawStepPresentation
     {

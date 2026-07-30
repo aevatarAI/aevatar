@@ -252,6 +252,10 @@ public static class ScopeServiceEndpoints
         }
     }
 
+
+    private static string? NullIfEmpty(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value;
+
     private static async ValueTask<ScopeDraftRunRequestInput> ParseScopeDraftRunRequestAsync(
         HttpContext http,
         WorkflowMultipartFileInputParser multipartFileInputParser,
@@ -374,7 +378,10 @@ public static class ScopeServiceEndpoints
                     request.RevisionId,
                     request.AppId,
                     request.ServiceId,
-                    request.ExposureDesired),
+                    request.ExposureDesired)
+                {
+                    CapabilityAdmission = WorkflowCapabilityAdmissionHttpContext.Create(http),
+                },
                 ct);
             return Results.Ok(result);
         }
@@ -754,13 +761,14 @@ public static class ScopeServiceEndpoints
         //   Old pattern: ScopeServiceEndpoints.HandleInvokeDefaultChatStreamAsync 在 unbound default service 情况下 launch Host-inline DefaultChatWorkflowYaml 作为 hidden fallback,把 Host 当成 business orchestrator。
         //   New principle: Host endpoint 仅做 routing + bound service stream;unbound case 返回 explicit error;stream registration / static orchestration 归 Application owner。
         var serviceId = ResolveDefaultScopeServiceId(options.Value);
-        await HandleInvokeStreamAsync(
+        await HandleInvokeStreamCoreAsync(
             http,
             scopeId,
             serviceId,
             "chat",
             multipartFileInputParser,
-            appId: null,
+            null,
+            false,
             resolutionService,
             readinessErrorMapper,
             admissionAuthorizer,
@@ -824,13 +832,14 @@ public static class ScopeServiceEndpoints
             var memberResolution = await memberPublishedServiceResolver.ResolveAsync(
                 new MemberPublishedServiceResolveRequest(scopeId, memberId),
                 ct);
-            await HandleInvokeStreamAsync(
+            await HandleInvokeStreamCoreAsync(
                 http,
                 memberResolution.ScopeId,
                 memberResolution.PublishedServiceId,
                 endpointId,
                 multipartFileInputParser,
                 null,
+                memberResolution.IsMemberAuthorityBacked,
                 resolutionService,
                 readinessErrorMapper,
                 admissionAuthorizer,
@@ -920,13 +929,14 @@ public static class ScopeServiceEndpoints
                 return;
 
             var teamResolution = await teamEntryMemberResolver.ResolveAsync(scopeId, teamId, endpointId, ct);
-            await HandleInvokeStreamAsync(
+            await HandleInvokeStreamCoreAsync(
                 http,
                 teamResolution.ScopeId,
                 teamResolution.PublishedServiceId,
                 endpointId,
                 multipartFileInputParser,
                 null,
+                false,
                 resolutionService,
                 readinessErrorMapper,
                 admissionAuthorizer,
@@ -1790,13 +1800,50 @@ public static class ScopeServiceEndpoints
         return await serviceRunQueryPort.GetByCommandIdAsync(scopeId, serviceId, normalized, ct);
     }
 
-    private static async Task HandleInvokeStreamAsync(
+    private static Task HandleInvokeStreamAsync(
         HttpContext http,
         string scopeId,
         string serviceId,
         string endpointId,
         WorkflowMultipartFileInputParser multipartFileInputParser,
         string? appId,
+        [FromServices] ServiceInvocationResolutionService resolutionService,
+        [FromServices] ServiceInvokeReadinessErrorMapper readinessErrorMapper,
+        [FromServices] IInvokeAdmissionAuthorizer admissionAuthorizer,
+        [FromServices] IServiceRunRegistrationPort serviceRunRegistrationPort,
+        [FromServices] IWorkflowChatRunInteractionPort chatRunService,
+        [FromServices] IFileArtifactIngressPort workflowFileIngressPort,
+        [FromServices] ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus>? scriptServiceRunService,
+        [FromServices] IStaticGAgentStreamInvocationPort<AGUIEvent> staticGAgentStreamInvocationPort,
+        [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
+        CancellationToken ct) =>
+        HandleInvokeStreamCoreAsync(
+            http,
+            scopeId,
+            serviceId,
+            endpointId,
+            multipartFileInputParser,
+            appId,
+            false,
+            resolutionService,
+            readinessErrorMapper,
+            admissionAuthorizer,
+            serviceRunRegistrationPort,
+            chatRunService,
+            workflowFileIngressPort,
+            scriptServiceRunService,
+            staticGAgentStreamInvocationPort,
+            options,
+            ct);
+
+    private static async Task HandleInvokeStreamCoreAsync(
+        HttpContext http,
+        string scopeId,
+        string serviceId,
+        string endpointId,
+        WorkflowMultipartFileInputParser multipartFileInputParser,
+        string? appId,
+        bool allowEmptyInputForResolvedMemberWorkflow,
         [FromServices] ServiceInvocationResolutionService resolutionService,
         [FromServices] ServiceInvokeReadinessErrorMapper readinessErrorMapper,
         [FromServices] IInvokeAdmissionAuthorizer admissionAuthorizer,
@@ -1903,7 +1950,8 @@ public static class ScopeServiceEndpoints
                             commandId: receipt.CommandId,
                             correlationId: receipt.CorrelationId,
                             targetActorId: receipt.ActorId,
-                            token));
+                            token),
+                        allowEmptyInputForResolvedMemberWorkflow: allowEmptyInputForResolvedMemberWorkflow);
                     break;
 
                 case ServiceImplementationKind.Static:
@@ -3705,12 +3753,7 @@ const response = await fetch("{{invokePath}}", {
                 var model = string.IsNullOrWhiteSpace(userConfig.DefaultModel)
                     ? control.ModelOverride
                     : userConfig.DefaultModel.Trim();
-                var route = string.IsNullOrWhiteSpace(userConfig.PreferredLlmRoute)
-                    ? control.NyxIdRoutePreference
-                    : userConfig.PreferredLlmRoute.Trim();
-                (model, route) = await UserLlmRouteModelResolver
-                    .ResolveAsync(http, model, route, cancellationToken)
-                    .ConfigureAwait(false);
+                var route = UserLlmSelectionRoute.Resolve(userConfig.LlmSelection);
 
                 control = control with
                 {

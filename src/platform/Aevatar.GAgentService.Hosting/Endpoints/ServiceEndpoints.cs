@@ -7,6 +7,8 @@ using Aevatar.GAgentService.Governance.Hosting.Endpoints;
 using Aevatar.GAgentService.Governance.Hosting.Identity;
 using Aevatar.GAgentService.Hosting.Endpoints.Schedules;
 using Aevatar.GAgentService.Hosting.Serialization;
+using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
@@ -101,6 +103,7 @@ public static partial class ServiceEndpoints
         CreateRevisionHttpRequest request,
         [FromServices] IServiceIdentityContextResolver identityResolver,
         [FromServices] IServiceCommandPort commandPort,
+        [FromServices] IWorkflowExternalCapabilityAdmissionService capabilityAdmissionService,
         CancellationToken ct)
     {
         if (!ServiceIdentityEndpointAccess.TryResolveIdentity(
@@ -142,19 +145,37 @@ public static partial class ServiceEndpoints
                 };
                 break;
             case ServiceImplementationKind.Workflow:
+                var workflowRequest = request.Workflow;
                 spec.WorkflowSpec = new WorkflowServiceRevisionSpec
                 {
-                    WorkflowName = request.Workflow?.WorkflowName ?? string.Empty,
-                    WorkflowYaml = request.Workflow?.WorkflowYaml ?? string.Empty,
-                    DefinitionActorId = request.Workflow?.DefinitionActorId ?? string.Empty,
+                    WorkflowName = workflowRequest?.WorkflowName ?? string.Empty,
+                    WorkflowYaml = workflowRequest?.WorkflowYaml ?? string.Empty,
+                    DefinitionActorId = workflowRequest?.DefinitionActorId ?? string.Empty,
                 };
-                if (request.Workflow?.InlineWorkflowYamls != null)
+                if (workflowRequest?.InlineWorkflowYamls != null)
                 {
-                    foreach (var entry in request.Workflow.InlineWorkflowYamls)
+                    foreach (var entry in workflowRequest.InlineWorkflowYamls)
                     {
                         spec.WorkflowSpec.InlineWorkflowYamls.Add(entry.Key, entry.Value);
                     }
                 }
+
+                var admissionContext = WorkflowCapabilityAdmissionHttpContext.Create(
+                    http,
+                    ExternalCapabilityExecutionMode.Durable);
+                spec.WorkflowSpec.ExpectedExecutionMode = admissionContext.ExecutionMode;
+                spec.WorkflowSpec.CapabilityAdmissionPlan = await capabilityAdmissionService.AdmitAsync(
+                    new WorkflowExternalCapabilityAdmissionRequest(
+                        new ExternalWorkflowCapabilityAccessContext(
+                            identity.TenantId,
+                            admissionContext.CallerId,
+                            admissionContext.NyxIdCallerBearerToken,
+                            admissionContext.NyxIdOrganizationBearerToken),
+                        spec.WorkflowSpec.WorkflowYaml,
+                        spec.WorkflowSpec.InlineWorkflowYamls,
+                        "service_revision",
+                        admissionContext.ExecutionMode),
+                    ct);
 
                 break;
             default:

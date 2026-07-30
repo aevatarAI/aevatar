@@ -6,6 +6,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Abstractions.Credentials;
 using Microsoft.Extensions.Logging;
@@ -72,6 +73,13 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         var argumentsJson = ResolveArgumentsJson(request);
         ctx.Logger.LogInformation("ToolCall: {StepId} → 工具 {Tool}", request.StepId, toolName);
 
+        var admission = ResolveInvocationAdmission(ctx, request, toolName, out var admissionError);
+        if (admissionError != null)
+        {
+            await PublishToolFailureAsync(ctx, request, toolName, admissionError, ct);
+            return;
+        }
+
         // 发布 Tool 调用开始事件（供观测/UI）
         await ctx.PublishAsync(new WorkflowToolCallStartedEvent
         {
@@ -92,43 +100,60 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
 
         try
         {
-            var result = await ExecuteToolAsync(tool, argumentsJson, request, callId, ctx, ct);
+            var result = await ExecuteToolAsync(tool, argumentsJson, request, callId, ctx, ct, admission: admission);
             if (result.PendingApproval != null)
             {
                 await SuspendForApprovalAsync(ctx, request, toolName, callId, result.PendingApproval, ct);
                 return;
             }
 
-            var completed = new WorkflowToolCallCompletedEvent
-            {
-                CallId = callId,
-                Success = true,
-                ResultJson = result.ResultJson,
-                RunId = request.RunId,
-                StepId = request.StepId,
-            };
-            if (result.ManagedHandoff != null)
-                completed.ManagedHandoff = result.ManagedHandoff.Clone();
-
-            await ctx.PublishAsync(completed, TopologyAudience.Self, ct);
-
-            if (result.ManagedHandoff != null)
-                return;
-
-            await ctx.PublishAsync(new StepCompletedEvent
-            {
-                StepId = request.StepId,
-                RunId = request.RunId,
-                ExecutionId = request.ExecutionId,
-                Success = true,
-                Output = result.ResultJson,
-            }, TopologyAudience.Self, ct);
+            await PublishToolOutcomeAsync(ctx, request, toolName, callId, result, ct);
         }
         catch (Exception ex)
         {
             await PublishToolFailureAsync(ctx, request, toolName, ex.Message, ct);
             ctx.Logger.LogWarning(ex, "ToolCall: step={StepId} tool={Tool} execution failed", request.StepId, toolName);
         }
+    }
+
+    /// <summary>
+    /// Resolves the committed proof for this call site from actor-owned Run state. A step that the
+    /// compiler classified as an external invocation must not dispatch without exactly one proof.
+    /// </summary>
+    private static ExternalWorkflowCapabilityRef? ResolveInvocationAdmission(
+        IWorkflowExecutionContext ctx,
+        StepRequestEvent request,
+        string toolName,
+        out string? error)
+    {
+        error = null;
+        var invocation = request.ExternalInvocation;
+        if (invocation is null)
+        {
+            if (WorkflowAuthorizationDependencyEvaluator.RequiresExternalCapabilityAdmission(toolName))
+            {
+                error = "EXTERNAL_CAPABILITY_CALL_SITE_NOT_ADMITTED: " +
+                        "this call site has no compiled external capability invocation";
+            }
+
+            return null;
+        }
+
+        if (!string.Equals(invocation.ToolName, toolName, StringComparison.OrdinalIgnoreCase))
+        {
+            error = "EXTERNAL_CAPABILITY_TOOL_MISMATCH: " +
+                    "the dispatched tool does not match the admitted call-site tool";
+            return null;
+        }
+
+        var lookup = WorkflowCapabilityAdmissionRuntimeAccess.Resolve(ctx, invocation);
+        if (!lookup.IsResolved)
+        {
+            error = $"{lookup.FailureCode}: {lookup.FailureMessage}";
+            return null;
+        }
+
+        return lookup.Proof;
     }
 
     private async Task<WorkflowToolExecutionResult> ExecuteToolAsync(
@@ -138,7 +163,8 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         string callId,
         IWorkflowExecutionContext ctx,
         CancellationToken ct,
-        ToolApprovalGrant? approvalGrant = null)
+        ToolApprovalGrant? approvalGrant = null,
+        ExternalWorkflowCapabilityRef? admission = null)
     {
         var credential = await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(ctx, ct);
         var callerCredential = credential.Found
@@ -165,7 +191,8 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
                 ApprovalGrant: approvalGrant,
                 InputFileRefs: request.InputFileRefs,
                 IdempotencyKey: request.IdempotencyKey ?? string.Empty,
-                ScheduleId: ctx.ScheduleId ?? string.Empty),
+                ScheduleId: ctx.ScheduleId ?? string.Empty,
+                InvocationAdmission: admission),
             ct);
     }
 
@@ -206,6 +233,16 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             return;
         }
 
+        var resumedRequest = ToStepRequest(pending);
+        var admission = ResolveInvocationAdmission(ctx, resumedRequest, pending.ToolName, out var admissionError);
+        if (admissionError != null)
+        {
+            state.PendingApprovals.Remove(pendingKey);
+            await SaveStateAsync(state, ctx, ct);
+            await PublishToolFailureAsync(ctx, pending, admissionError, ct);
+            return;
+        }
+
         try
         {
             state.PendingApprovals.Remove(pendingKey);
@@ -214,20 +251,21 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             var result = await ExecuteToolAsync(
                 tool,
                 pending.ArgumentsJson,
-                ToStepRequest(pending),
+                resumedRequest,
                 pending.ToolCallId,
                 ctx,
                 ct,
                 new ToolApprovalGrant(
                     pending.ApprovalRequestId,
                     pending.ToolName,
-                    pending.ToolCallId));
+                    pending.ToolCallId),
+                admission);
 
             if (result.PendingApproval != null)
             {
                 await SuspendForApprovalAsync(
                     ctx,
-                    ToStepRequest(pending),
+                    resumedRequest,
                     pending.ToolName,
                     pending.ToolCallId,
                     result.PendingApproval,
@@ -235,7 +273,13 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
                 return;
             }
 
-            await PublishToolSuccessAsync(ctx, pending, result, ct);
+            await PublishToolOutcomeAsync(
+                ctx,
+                resumedRequest,
+                pending.ToolName,
+                pending.ToolCallId,
+                result,
+                ct);
         }
         catch (Exception ex)
         {
@@ -301,6 +345,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             ApprovalRequestId = NormalizeRequired(pending.ApprovalRequestId),
             ArgumentsJson = pending.ArgumentsJson ?? string.Empty,
             IdempotencyKey = request.IdempotencyKey ?? string.Empty,
+            ExternalInvocation = request.ExternalInvocation?.Clone(),
         };
         pendingState.InputFileRefs.Add(request.InputFileRefs.Select(static fileRef => fileRef.Clone()));
         state.PendingApprovals[BuildPendingKey(pendingState)] = pendingState;
@@ -322,33 +367,39 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         }, TopologyAudience.ParentAndChildren, ct);
     }
 
-    private static Task PublishToolSuccessAsync(
+    private static async Task PublishToolOutcomeAsync(
         IWorkflowExecutionContext ctx,
-        PendingToolCallApprovalState pending,
+        StepRequestEvent request,
+        string toolName,
+        string callId,
         WorkflowToolExecutionResult result,
         CancellationToken ct)
     {
+        if (result.Failure != null)
+        {
+            await PublishToolFailureAsync(
+                ctx,
+                request,
+                toolName,
+                result.Failure.ErrorMessage,
+                result.Failure.ErrorCode,
+                result.ResultJson,
+                callId,
+                ct);
+            return;
+        }
+
         var completed = new WorkflowToolCallCompletedEvent
         {
-            CallId = pending.ToolCallId,
+            CallId = callId,
             Success = true,
             ResultJson = result.ResultJson,
-            RunId = pending.RunId,
-            StepId = pending.StepId,
+            RunId = request.RunId,
+            StepId = request.StepId,
         };
         if (result.ManagedHandoff != null)
             completed.ManagedHandoff = result.ManagedHandoff.Clone();
 
-        return PublishToolSuccessAsync(ctx, pending, completed, result, ct);
-    }
-
-    private static async Task PublishToolSuccessAsync(
-        IWorkflowExecutionContext ctx,
-        PendingToolCallApprovalState pending,
-        WorkflowToolCallCompletedEvent completed,
-        WorkflowToolExecutionResult result,
-        CancellationToken ct)
-    {
         await ctx.PublishAsync(completed, TopologyAudience.Self, ct);
 
         if (result.ManagedHandoff != null)
@@ -356,9 +407,9 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
 
         await ctx.PublishAsync(new StepCompletedEvent
         {
-            StepId = pending.StepId,
-            RunId = pending.RunId,
-            ExecutionId = pending.ExecutionId,
+            StepId = request.StepId,
+            RunId = request.RunId,
+            ExecutionId = request.ExecutionId,
             Success = true,
             Output = result.ResultJson,
         }, TopologyAudience.Self, ct);
@@ -387,6 +438,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             IdempotencyKey = pending.IdempotencyKey,
             Parameters = { ["tool"] = pending.ToolName },
             InputFileRefs = { pending.InputFileRefs.Select(static fileRef => fileRef.Clone()) },
+            ExternalInvocation = pending.ExternalInvocation?.Clone(),
         };
 
     private static string BuildRejectedApprovalError(WorkflowResumedEvent resumed)
@@ -531,19 +583,42 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         return index;
     }
 
+    private static Task PublishToolFailureAsync(
+        IWorkflowExecutionContext ctx,
+        StepRequestEvent request,
+        string toolName,
+        string error,
+        CancellationToken ct) =>
+        PublishToolFailureAsync(
+            ctx,
+            request,
+            toolName,
+            error,
+            string.Empty,
+            string.Empty,
+            ComposeWorkflowToolCallId(request),
+            ct);
+
     private static async Task PublishToolFailureAsync(
         IWorkflowExecutionContext ctx,
         StepRequestEvent request,
         string toolName,
         string error,
+        string errorCode,
+        string resultJson,
+        string callId,
         CancellationToken ct)
     {
-        var errorMessage = $"tool '{toolName}' execution failed: {error}";
+        var detail = string.IsNullOrWhiteSpace(errorCode)
+            ? error
+            : $"{errorCode}: {error}";
+        var errorMessage = $"tool '{toolName}' execution failed: {detail}";
 
         await ctx.PublishAsync(new WorkflowToolCallCompletedEvent
         {
-            CallId = ComposeWorkflowToolCallId(request),
+            CallId = callId,
             Success = false,
+            ResultJson = resultJson,
             Error = errorMessage,
             RunId = request.RunId,
             StepId = request.StepId,
@@ -555,6 +630,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             RunId = request.RunId,
             ExecutionId = request.ExecutionId,
             Success = false,
+            Output = resultJson,
             Error = errorMessage,
         }, TopologyAudience.Self, ct);
     }

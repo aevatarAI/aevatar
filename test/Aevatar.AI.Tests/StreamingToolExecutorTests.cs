@@ -239,10 +239,15 @@ public class StreamingToolExecutorTests
         results.Should().HaveCount(2);
         results[0].CallId.Should().Be("tc-fail");
         results[0].IsError.Should().BeTrue();
-        results[0].Result.Should().Contain("boom");
+        results[0].Result.Should().NotContain("boom");
+        results[0].Result.Should().Contain("The tool request failed.");
+        results[0].Receipt.Should().NotBeNull();
+        results[0].Receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
         results[1].CallId.Should().Be("tc-skip");
         results[1].IsError.Should().BeTrue();
         results[1].Result.Should().Contain("prior tool error");
+        results[1].Receipt.Should().NotBeNull();
+        results[1].Receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
     }
 
     [Fact]
@@ -576,7 +581,7 @@ public class StreamingToolExecutorTests
     }
 
     [Fact]
-    public async Task UnknownTool_ShouldReturnNotFoundResult()
+    public async Task UnknownTool_ShouldReturnSafeErrorResult()
     {
         var tools = new ToolManager();
         var executor = NewStreamingToolExecutor(tools);
@@ -590,7 +595,10 @@ public class StreamingToolExecutorTests
 
         results.Should().HaveCount(1);
         results[0].CallId.Should().Be("tc-1");
-        results[0].Result.Should().Contain("not found");
+        results[0].IsError.Should().BeTrue();
+        results[0].Result.Should().Contain("The tool request failed.");
+        results[0].Receipt.Should().NotBeNull();
+        results[0].Receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
     }
 
     [Fact]
@@ -653,7 +661,11 @@ public class StreamingToolExecutorTests
     }
 
     [Fact]
+<<<<<<< HEAD
     public async Task ExecutedOutcomes_ShouldAlwaysExposeReceiptSafetyAndSideEffectDetails()
+=======
+    public async Task ProviderSuccessReceipts_ShouldPreserveSafetyFacts()
+>>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     {
         var tools = new ToolManager();
         tools.Register(new ConcurrencyTrackingTool("plain-write", isReadOnly: false, _ => """{"ok":true}"""));
@@ -682,29 +694,44 @@ public class StreamingToolExecutorTests
             results.Add(result);
 
         results.Should().HaveCount(4);
+<<<<<<< HEAD
         var plainWriteReceipt = results[0].Receipt;
         plainWriteReceipt.Should().NotBeNull();
         plainWriteReceipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
         plainWriteReceipt.ApprovalMode.Should().Be(AgentToolReceiptApprovalMode.NeverRequire);
         plainWriteReceipt.IsDestructive.Should().BeFalse();
         plainWriteReceipt.SideEffectKind.Should().BeEmpty();
+=======
+        results[0].Receipt.Should().NotBeNull();
+        results[0].Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+>>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
         var approvalReceipt = results[1].Receipt;
         approvalReceipt.Should().NotBeNull();
         approvalReceipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
         approvalReceipt.ApprovalMode.Should().Be(AgentToolReceiptApprovalMode.AlwaysRequire);
         var destructiveReceipt = results[2].Receipt;
         destructiveReceipt.Should().NotBeNull();
+        destructiveReceipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
         destructiveReceipt!.IsDestructive.Should().BeTrue();
         var sideEffectReceipt = results[3].Receipt;
         sideEffectReceipt.Should().NotBeNull();
+        sideEffectReceipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
         sideEffectReceipt!.SideEffectKind.Should().Be("example.publish");
     }
 
     [Fact]
+<<<<<<< HEAD
     public async Task ReadOnlySearchTool_ShouldExposeSuccessfulReceipt()
+=======
+    public async Task ErrorJsonWithoutReceipt_ShouldEmitUnknownFailure()
+>>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     {
         var tools = new ToolManager();
-        tools.Register(new ConcurrencyTrackingTool("ornn_search_skills", isReadOnly: true, _ => """{"status":"success"}""")
+        tools.Register(new ConcurrencyTrackingTool(
+            "ornn_search_skills",
+            isReadOnly: true,
+            _ => """{"error":true,"status":503}""",
+            emitSuccessReceipt: false)
         {
             SideEffectKind = "",
         });
@@ -718,11 +745,20 @@ public class StreamingToolExecutorTests
             results.Add(result);
 
         results.Should().ContainSingle();
+<<<<<<< HEAD
         results[0].IsError.Should().BeFalse();
         results[0].Receipt.Should().NotBeNull();
         results[0].Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
         results[0].Receipt!.IsDestructive.Should().BeFalse();
         results[0].Receipt!.SideEffectKind.Should().BeEmpty();
+=======
+        results[0].IsError.Should().BeTrue();
+        results[0].Result.Should().Be(
+            """{"status":"unknown","message":"The tool outcome could not be verified."}""");
+        results[0].Receipt.Should().NotBeNull();
+        results[0].Receipt!.Status.Should().Be(AgentToolReceiptStatus.Unspecified);
+        results[0].Receipt!.ResultJson.Should().Be(results[0].Result);
+>>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     }
 
     [Fact]
@@ -779,7 +815,34 @@ public class StreamingToolExecutorTests
         receipt.Should().NotBeNull();
         receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
         receipt.ErrorCode.Should().Be("tool_execution_error");
-        receipt.ErrorMessage.Should().Contain("boom");
+        receipt.ErrorMessage.Should().Be("The tool request failed.");
+        receipt.ResultJson.Should().NotContain("boom");
+    }
+
+    [Fact]
+    public async Task ProviderFailureReceipt_ShouldReplaceRawToolResultWithSafeResult()
+    {
+        var tools = new ToolManager();
+        tools.Register(new SafeFailureReceiptTool());
+        var executor = new StreamingToolExecutor(tools);
+        using var executionState = executor.CreateExecutionState();
+        executor.AddTool(executionState, new ToolCall
+        {
+            Id = "tc-safe-failure",
+            Name = "safe_failure",
+            ArgumentsJson = "{}",
+        });
+
+        var results = new List<ToolExecutionResult>();
+        await foreach (var result in executor.GetRemainingResultsAsync(executionState, CancellationToken.None))
+            results.Add(result);
+
+        var failure = results.Should().ContainSingle().Which;
+        failure.IsError.Should().BeTrue();
+        failure.Result.Should().Be("""{"error":"SAFE_FAILURE","message":"The tool request failed."}""");
+        failure.ToString().Should().NotContain("bearer-secret").And.NotContain("credential");
+        failure.Receipt.Should().NotBeNull();
+        failure.Receipt!.ResultJson.Should().Be(failure.Result);
     }
 
     // ─── Test helpers ───
@@ -803,15 +866,24 @@ public class StreamingToolExecutorTests
     {
         private readonly Func<CancellationToken, Task<string>> _execute;
 
-        public ConcurrencyTrackingTool(string name, bool isReadOnly, Func<CancellationToken, Task<string>> execute)
+        public ConcurrencyTrackingTool(
+            string name,
+            bool isReadOnly,
+            Func<CancellationToken, Task<string>> execute,
+            bool emitSuccessReceipt = true)
         {
             Name = name;
             IsReadOnly = isReadOnly;
             _execute = execute;
+            EmitSuccessReceipt = emitSuccessReceipt;
         }
 
-        public ConcurrencyTrackingTool(string name, bool isReadOnly, Func<CancellationToken, string> execute)
-            : this(name, isReadOnly, ct => Task.FromResult(execute(ct)))
+        public ConcurrencyTrackingTool(
+            string name,
+            bool isReadOnly,
+            Func<CancellationToken, string> execute,
+            bool emitSuccessReceipt = true)
+            : this(name, isReadOnly, ct => Task.FromResult(execute(ct)), emitSuccessReceipt)
         {
         }
 
@@ -822,6 +894,22 @@ public class StreamingToolExecutorTests
         public ToolApprovalMode ApprovalMode { get; init; } = ToolApprovalMode.NeverRequire;
         public bool IsDestructive { get; init; }
         public string SideEffectKind { get; init; } = "";
+        private bool EmitSuccessReceipt { get; }
+
+        public AgentToolReceipt? CreateResultReceipt(
+            string callId,
+            string toolName,
+            string argumentsJson,
+            string resultJson) =>
+            EmitSuccessReceipt
+                ? new AgentToolReceipt
+                {
+                    CallId = callId,
+                    ToolName = toolName,
+                    Status = AgentToolReceiptStatus.Success,
+                    ResultJson = resultJson,
+                }
+                : null;
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) => _execute(ct);
     }
@@ -862,11 +950,54 @@ public class StreamingToolExecutorTests
         public string Name => name;
         public string Description => "delegate";
         public string ParametersSchema => "{}";
+        public AgentToolReceipt? CreateResultReceipt(
+            string callId,
+            string toolName,
+            string argumentsJson,
+            string resultJson) =>
+            new()
+            {
+                CallId = callId,
+                ToolName = toolName,
+                Status = AgentToolReceiptStatus.Success,
+                ResultJson = resultJson,
+            };
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
             Task.FromResult(execute(argumentsJson));
     }
 
+<<<<<<< HEAD
     private sealed class TestExecutionPort : IAgentToolExecutionPort
+=======
+    private sealed class SafeFailureReceiptTool : IAgentTool
+    {
+        public string Name => "safe_failure";
+        public string Description => "safe failure fixture";
+        public string ParametersSchema => "{}";
+        public ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult("""{"error":"forbidden","message":"credential bearer-secret rejected"}""");
+
+        public AgentToolReceipt? CreateResultReceipt(
+            string callId,
+            string toolName,
+            string argumentsJson,
+            string resultJson) =>
+            new()
+            {
+                CallId = callId,
+                ToolName = toolName,
+                Status = AgentToolReceiptStatus.Error,
+                ErrorCode = "SAFE_FAILURE",
+                ErrorMessage = "The tool request failed.",
+                ResultJson = """{"error":"SAFE_FAILURE","message":"The tool request failed."}""",
+            };
+    }
+
+    private sealed class DelegateToolCallMiddleware(
+        Func<ToolCallContext, Func<Task>, Task> handler) : IToolCallMiddleware
+>>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     {
         public async Task<AgentToolExecutionOutcome> ExecuteAsync(
             AgentToolExecutionRequest request,

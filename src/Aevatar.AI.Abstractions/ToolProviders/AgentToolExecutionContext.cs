@@ -74,6 +74,18 @@ public sealed record AgentToolExecutionContext(
 
     public AgentToolVisibilityScope ToolVisibility { get; init; } = AgentToolVisibilityScope.Unrestricted;
 
+    public AgentToolNyxIdAuthorityContext NyxIdAuthority { get; init; } =
+        AgentToolNyxIdAuthorityContext.Empty;
+
+    /// <summary>
+    /// Committed proof for the exact operation this call site was admitted to invoke. Null for
+    /// call sites that are not under external-capability admission (ordinary human sessions).
+    /// </summary>
+    public AgentToolOperationAdmission? OperationAdmission { get; init; }
+
+    public AgentToolInvocationSurface InvocationSurface { get; init; } =
+        AgentToolInvocationSurface.Unspecified;
+
     public static AgentToolExecutionContext Empty { get; } = new(
         AgentToolRequestIdentity.Empty,
         AgentToolCredentials.Empty,
@@ -93,6 +105,14 @@ public sealed record AgentToolExecutionContext(
 
     internal static string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+}
+
+public enum AgentToolInvocationSurface
+{
+    Unspecified = 0,
+    HumanSession = 1,
+    WorkflowToolCall = 2,
+    WorkflowLlmToolLoop = 3,
 }
 
 public sealed record AgentToolVisibilityScope(IReadOnlySet<string>? AllowedToolNames)
@@ -155,9 +175,22 @@ public enum AgentToolCredentialSource
     ServiceAccount = 6,
 }
 
-public sealed record AgentToolCallerContext(string? ScopeId, string? OwnerSubject, string? ResponseId)
+public sealed record AgentToolCallerContext(string? ScopeId, string? OwnerSubject, string? ResponseId, string? OwnerScopeId = null)
 {
     public static AgentToolCallerContext Empty { get; } = new(null, null, null);
+}
+
+public sealed record AgentToolNyxIdAuthorityContext(
+    string? Platform,
+    string? Tenant,
+    string? ExternalUserId,
+    string? Scope = null)
+{
+    public static AgentToolNyxIdAuthorityContext Empty { get; } = new(null, null, null);
+
+    public bool IsComplete =>
+        !string.IsNullOrWhiteSpace(Platform) &&
+        !string.IsNullOrWhiteSpace(ExternalUserId);
 }
 
 public sealed record AgentToolChannelContext(
@@ -168,10 +201,13 @@ public sealed record AgentToolChannelContext(
     string? PlatformMessageId,
     string? DeliveryTargetId = null,
     ChannelWorkflowResultDeliveryCredential? WorkflowResultDeliveryCredential = null,
-    string? BotRegistrationId = null)
+    string? BotRegistrationId = null,
+    IReadOnlyList<AgentToolChannelIdentityHint>? IdentityHints = null)
 {
-    public static AgentToolChannelContext Empty { get; } = new(null, null, null, null, null, null, null, null);
+    public static AgentToolChannelContext Empty { get; } = new(null, null, null, null, null, null, null, null, []);
 }
+
+public sealed record AgentToolChannelIdentityHint(string Subject, string Kind, string Value);
 
 public sealed record AgentToolSenderBindingContext(string? BindingId, string? NyxUserId = null, string? SenderTenant = null)
 {

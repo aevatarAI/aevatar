@@ -10,6 +10,7 @@ using Aevatar.Audit.Abstractions.Models;
 using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
 using FluentAssertions;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
@@ -82,6 +83,31 @@ public sealed class ChannelCallbackEndpointsTests
     }
 
     [Fact]
+    public void MapChannelCallbackEndpoints_ShouldRegisterAuditedWorkflowResultDeliveryRepairRoute()
+    {
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            EnvironmentName = "Development",
+        });
+
+        var app = builder.Build();
+        var routeBuilder = (IEndpointRouteBuilder)app;
+        app.MapChannelCallbackEndpoints();
+
+        var endpoint = routeBuilder.DataSources
+            .SelectMany(source => source.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Single(route => string.Equals(
+                route.RoutePattern.RawText,
+                "/api/channels/registrations/{registrationId}/workflow-result-delivery/repair",
+                StringComparison.Ordinal));
+
+        endpoint.Metadata.OfType<IAuthorizeData>().Should().NotBeEmpty();
+        endpoint.Metadata.OfType<HttpMethodMetadata>()
+            .Single().HttpMethods.Should().Contain("POST");
+    }
+
+    [Fact]
     public async Task ChannelRegistrationRoute_ShouldAppendEndpointAuditRecords()
     {
         var appender = new RecordingAuditTrailAppender();
@@ -124,6 +150,228 @@ public sealed class ChannelCallbackEndpointsTests
             value.Contains("alice@example.com", StringComparison.Ordinal) ||
             value.Contains("secret-value", StringComparison.Ordinal) ||
             value.Contains("verify-value", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task WorkflowResultDeliveryRepairRoute_ShouldAppendEndpointAuditRecords()
+    {
+        var appender = new RecordingAuditTrailAppender();
+        var repairService = Substitute.For<IChannelWorkflowResultDeliveryRepairService>();
+        repairService.RepairAsync(
+                "reg-alpha",
+                "scope-1",
+                "user-123",
+                RawToken,
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new ChannelWorkflowResultDeliveryRepairResult(
+                ChannelWorkflowResultDeliveryRepairResultStatus.Repaired,
+                "repair-alpha",
+                "reg-alpha",
+                "key-new-alpha")));
+        await using var app = await CreateRouteAuditAppAsync(
+            appender,
+            new ChannelRelayRegistrationFacade([new AcceptedProvisioningService()]),
+            repairService);
+        using var client = CreateClient(app);
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"/api/channels/registrations/reg-alpha/workflow-result-delivery/repair?access_token={RawToken}");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", RawToken);
+
+        var response = await client.SendAsync(request);
+
+        response.StatusCode.Should().Be(System.Net.HttpStatusCode.OK);
+        appender.Records.Should().HaveCount(2);
+        appender.Records[0].OperationName.Should().Be(
+            "channel.registration.workflow-result-delivery.repair.attempted");
+        appender.Records[1].OperationName.Should().Be(
+            "channel.registration.workflow-result-delivery.repair");
+        appender.Records.Should().OnlyContain(record =>
+            record.Target.Kind == "channel-registration" &&
+            record.Target.Id == "reg-alpha" &&
+            record.RequestSummary ==
+                "POST /api/channels/registrations/{registrationId}/workflow-result-delivery/repair registrationId=reg-alpha" &&
+            record.CapturePlane == AuditCapturePlane.BoundaryEndpoint);
+        appender.Records.SelectMany(RecordStrings).Should().NotContain(value =>
+            value.Contains(RawToken, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task HandleRepairWorkflowResultDeliveryAsync_ReturnsUnauthorized_WhenBearerMissing()
+    {
+        var repairService = Substitute.For<IChannelWorkflowResultDeliveryRepairService>();
+        var http = CreateAuthenticatedHttpContext(
+            "scope-alpha",
+            new Claim("sub", "user-alpha"));
+
+        var result = await InvokeAsync(
+            "HandleRepairWorkflowResultDeliveryAsync",
+            "reg-alpha",
+            http,
+            repairService,
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
+        await repairService.DidNotReceiveWithAnyArgs().RepairAsync(
+            default!, default!, default!, default!, default);
+    }
+
+    [Fact]
+    public async Task HandleRepairWorkflowResultDeliveryAsync_HidesRegistration_WhenScopeClaimMissing()
+    {
+        var repairService = Substitute.For<IChannelWorkflowResultDeliveryRepairService>();
+        var http = CreateAuthenticatedHttpContext(
+            scopeId: null,
+            new Claim("sub", "user-alpha"));
+        http.Request.Headers.Authorization = "Bearer test-token";
+
+        var result = await InvokeAsync(
+            "HandleRepairWorkflowResultDeliveryAsync",
+            "reg-alpha",
+            http,
+            repairService,
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
+        response.Body.Contains("scope", StringComparison.OrdinalIgnoreCase).Should().BeFalse();
+        await repairService.DidNotReceiveWithAnyArgs().RepairAsync(
+            default!, default!, default!, default!, default);
+    }
+
+    public static TheoryData<string, string> RepairSubjectClaimCases => new()
+    {
+        { "uid", "uid-alpha" },
+        { "sub", "sub-alpha" },
+        { ClaimTypes.NameIdentifier, "name-alpha" },
+        { "user_id", "user-alpha" },
+    };
+
+    [Theory]
+    [MemberData(nameof(RepairSubjectClaimCases))]
+    public async Task HandleRepairWorkflowResultDeliveryAsync_UsesFirstSupportedSubjectClaim(
+        string highestPriorityClaim,
+        string expectedSubjectId)
+    {
+        var claims = new List<Claim>();
+        if (highestPriorityClaim == "uid")
+            claims.Add(new Claim("uid", "uid-alpha"));
+        if (highestPriorityClaim is "uid" or "sub")
+            claims.Add(new Claim("sub", "sub-alpha"));
+        if (highestPriorityClaim is "uid" or "sub" ||
+            highestPriorityClaim == ClaimTypes.NameIdentifier)
+        {
+            claims.Add(new Claim(ClaimTypes.NameIdentifier, "name-alpha"));
+        }
+
+        claims.Add(new Claim("user_id", "user-alpha"));
+        var repairService = Substitute.For<IChannelWorkflowResultDeliveryRepairService>();
+        repairService.RepairAsync(
+                "reg-alpha",
+                "scope-alpha",
+                expectedSubjectId,
+                "test-token",
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new ChannelWorkflowResultDeliveryRepairResult(
+                ChannelWorkflowResultDeliveryRepairResultStatus.AlreadyEnabled,
+                string.Empty,
+                "reg-alpha",
+                "key-alpha")));
+        var http = CreateAuthenticatedHttpContext("scope-alpha", claims.ToArray());
+        http.Request.Headers.Authorization = "Bearer test-token";
+
+        var result = await InvokeAsync(
+            "HandleRepairWorkflowResultDeliveryAsync",
+            "reg-alpha",
+            http,
+            repairService,
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        await repairService.Received(1).RepairAsync(
+            "reg-alpha",
+            "scope-alpha",
+            expectedSubjectId,
+            "test-token",
+            Arg.Any<CancellationToken>());
+    }
+
+    [Theory]
+    [InlineData(ChannelWorkflowResultDeliveryRepairResultStatus.Repaired, 200, "repaired", "enabled")]
+    [InlineData(ChannelWorkflowResultDeliveryRepairResultStatus.AlreadyEnabled, 200, "already_enabled", "enabled")]
+    [InlineData(ChannelWorkflowResultDeliveryRepairResultStatus.Repairing, 202, "repairing", "repairing")]
+    [InlineData(ChannelWorkflowResultDeliveryRepairResultStatus.NotFound, 404, "not_found", "repair_required")]
+    [InlineData(ChannelWorkflowResultDeliveryRepairResultStatus.UnsupportedPlatform, 409, "unsupported_platform", "repair_required")]
+    [InlineData(ChannelWorkflowResultDeliveryRepairResultStatus.RepairFailed, 502, "repair_failed", "repair_failed")]
+    public async Task HandleRepairWorkflowResultDeliveryAsync_MapsSafeStableHttpContract(
+        ChannelWorkflowResultDeliveryRepairResultStatus repairStatus,
+        int expectedStatusCode,
+        string expectedStatus,
+        string expectedCapabilityStatus)
+    {
+        var repairService = Substitute.For<IChannelWorkflowResultDeliveryRepairService>();
+        repairService.RepairAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new ChannelWorkflowResultDeliveryRepairResult(
+                repairStatus,
+                "repair-alpha",
+                "reg-alpha",
+                "key-new-alpha",
+                ChannelWorkflowResultDeliveryRepairPhase.VaultStorage,
+                ChannelWorkflowResultDeliveryRepairFailureReason.AmbiguousRotatedKeyRecovery)));
+        var http = CreateAuthenticatedHttpContext(
+            "scope-alpha",
+            new Claim("sub", "user-alpha"));
+        http.Request.Headers.Authorization = "Bearer test-token";
+
+        var result = await InvokeAsync(
+            "HandleRepairWorkflowResultDeliveryAsync",
+            "reg-alpha",
+            http,
+            repairService,
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(expectedStatusCode);
+        using var document = JsonDocument.Parse(response.Body);
+        var root = document.RootElement;
+        root.GetProperty("status").GetString().Should().Be(expectedStatus);
+        root.GetProperty("workflow_result_delivery_status").GetString()
+            .Should().Be(expectedCapabilityStatus);
+        root.EnumerateObject().Select(property => property.Name).Should().BeSubsetOf(
+        [
+            "status",
+            "repair_request_id",
+            "registration_id",
+            "nyx_agent_api_key_id",
+            "workflow_result_delivery_status",
+            "failure_phase",
+            "failure_reason",
+            "note",
+        ]);
+
+        if (repairStatus == ChannelWorkflowResultDeliveryRepairResultStatus.RepairFailed)
+        {
+            root.GetProperty("failure_phase").GetString().Should().Be("vault_storage");
+            root.GetProperty("failure_reason").GetString().Should()
+                .Be("ambiguous_rotated_key_recovery");
+        }
+        else
+        {
+            root.TryGetProperty("failure_phase", out _).Should().BeFalse();
+            root.TryGetProperty("failure_reason", out _).Should().BeFalse();
+        }
+
+        response.Body.Contains("full_key", StringComparison.OrdinalIgnoreCase).Should().BeFalse();
+        response.Body.Contains("secret_reference", StringComparison.OrdinalIgnoreCase).Should().BeFalse();
+        response.Body.Contains("owner_scope_key", StringComparison.OrdinalIgnoreCase).Should().BeFalse();
+        response.Body.Should().NotContain("sec-repair-alpha");
     }
 
     [Fact]
@@ -176,6 +424,7 @@ public sealed class ChannelCallbackEndpointsTests
         response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
         response.Body.Should().Contain("\"registration_id\":\"reg-1\"");
         response.Body.Should().Contain("\"relay_callback_url\":\"https://aevatar.example.com/api/webhooks/nyxid-relay\"");
+        response.Body.Should().Contain("\"workflow_result_delivery_status\":\"repair_required\"");
         await provisioningService.Received(1).ProvisionAsync(
             Arg.Is<NyxChannelBotProvisioningRequest>(request =>
                 request.Platform == "lark" &&
@@ -187,6 +436,40 @@ public sealed class ChannelCallbackEndpointsTests
                 request.Lark.AppSecret == "secret" &&
                 request.Lark.VerificationToken == "verify-123"),
             Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task HandleRegisterAsync_MapsOptionalLarkEncryptKeyIntoTypedCredentials()
+    {
+        NyxChannelBotProvisioningRequest? captured = null;
+        var provisioningService = Substitute.For<INyxChannelBotProvisioningService>();
+        provisioningService.Platform.Returns("lark");
+        provisioningService.ProvisionAsync(
+                Arg.Do<NyxChannelBotProvisioningRequest>(request => captured = request),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new NyxChannelBotProvisioningResult(
+                Succeeded: true,
+                Status: "accepted",
+                Platform: "lark",
+                RegistrationId: "reg-1")));
+
+        var http = CreateJsonHttpContext(
+            """{"platform":"lark","app_id":"cli_123","app_secret":"secret-alpha","verification_token":"verify-alpha","encrypt_key":" encrypt-alpha ","webhook_base_url":"https://aevatar.example.com"}""",
+            "scope-1");
+        http.Request.Headers.Authorization = "Bearer test-token";
+
+        var result = await InvokeAsync(
+            "HandleRegisterAsync",
+            http,
+            CreateRegistrationFacade(provisioningService),
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        captured.Should().NotBeNull();
+        captured!.Lark!.EncryptKey.Should().Be("encrypt-alpha");
+        response.Body.Should().NotContain("encrypt-alpha");
     }
 
     [Fact]
@@ -340,6 +623,7 @@ public sealed class ChannelCallbackEndpointsTests
             NyxProviderSlug = "api-lark-bot",
             ScopeId = "scope-1",
             NyxChannelBotId = "bot-1",
+            WebhookUrl = "https://nyx.example/api/v1/webhooks/channel/lark/bot-alpha",
         });
         var http = CreateHttpContext("scope-1");
 
@@ -349,7 +633,72 @@ public sealed class ChannelCallbackEndpointsTests
         response.StatusCode.Should().Be(StatusCodes.Status200OK);
         response.Body.Should().Contain("\"registration_mode\":\"nyx_relay_webhook\"");
         response.Body.Should().Contain("\"callback_url\":\"\"");
+        response.Body.Should().Contain("\"webhook_url\":\"https://nyx.example/api/v1/webhooks/channel/lark/bot-alpha\"");
         response.Body.Should().Contain("\"owned\":true");
+        response.Body.Should().Contain("\"workflow_result_delivery_status\":\"repair_required\"");
+    }
+
+    [Fact]
+    public async Task HandleListRegistrationsAsync_ExposesTypedCapabilityWithoutSecretReferences()
+    {
+        var queryPort = QueryPortWith(
+            new ChannelBotRegistrationEntry
+            {
+                Id = "reg-enabled",
+                Platform = "lark",
+                ScopeId = "scope-1",
+                NyxAgentApiKeyId = "key-enabled",
+                WorkflowResultDeliveryCredential = new SecretReference
+                {
+                    Ref = "sec-hidden-alpha",
+                    Purpose = CredentialSecretPurposes.ChannelWorkflowResultDeliveryAgentKey,
+                    OwnerScopeKey = "scope-1",
+                    Version = 1,
+                },
+            },
+            new ChannelBotRegistrationEntry
+            {
+                Id = "reg-failed",
+                Platform = "lark",
+                ScopeId = "scope-1",
+                NyxAgentApiKeyId = "key-old-alpha",
+                WorkflowResultDeliveryRepair = new ChannelWorkflowResultDeliveryRepairState
+                {
+                    RequestId = "repair-alpha",
+                    Status = ChannelWorkflowResultDeliveryRepairStatus.Failed,
+                    FailurePhase = ChannelWorkflowResultDeliveryRepairPhase.RouteRebinding,
+                    FailureReason = ChannelWorkflowResultDeliveryRepairFailureReason.RouteUpdateFailed,
+                },
+            });
+        var http = CreateHttpContext("scope-1");
+
+        var result = await InvokeAsync(
+            "HandleListRegistrationsAsync",
+            http,
+            queryPort,
+            AdminAuthorizer(false),
+            (string?)null,
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        using var document = JsonDocument.Parse(response.Body);
+        var enabled = document.RootElement.EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == "reg-enabled");
+        enabled.GetProperty("workflow_result_delivery_status").GetString()
+            .Should().Be("enabled");
+        enabled.TryGetProperty("workflow_result_delivery_failure_phase", out _)
+            .Should().BeFalse();
+        var failed = document.RootElement.EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == "reg-failed");
+        failed.GetProperty("workflow_result_delivery_status").GetString()
+            .Should().Be("repair_failed");
+        failed.GetProperty("workflow_result_delivery_failure_phase").GetString()
+            .Should().Be("route_rebinding");
+        failed.GetProperty("workflow_result_delivery_failure_reason").GetString()
+            .Should().Be("route_update_failed");
+        response.Body.Should().NotContain("sec-hidden-alpha");
+        response.Body.Contains("secret_reference", StringComparison.OrdinalIgnoreCase).Should().BeFalse();
+        response.Body.Contains("owner_scope_key", StringComparison.OrdinalIgnoreCase).Should().BeFalse();
     }
 
     [Fact]
@@ -843,6 +1192,7 @@ public sealed class ChannelCallbackEndpointsTests
 
         response.StatusCode.Should().Be(StatusCodes.Status200OK);
         response.Body.Should().Contain("\"status\":\"unknown\"");
+        response.Body.Should().Contain("\"workflow_result_delivery_status\":\"repair_required\"");
     }
 
     [Fact]
@@ -900,9 +1250,22 @@ public sealed class ChannelCallbackEndpointsTests
         return context;
     }
 
+    private static HttpContext CreateAuthenticatedHttpContext(
+        string? scopeId,
+        params Claim[] subjectClaims)
+    {
+        var context = CreateHttpContext();
+        var claims = new List<Claim>(subjectClaims);
+        if (!string.IsNullOrWhiteSpace(scopeId))
+            claims.Add(new Claim("scope_id", scopeId));
+        context.User = new ClaimsPrincipal(new ClaimsIdentity(claims, "test"));
+        return context;
+    }
+
     private static async Task<WebApplication> CreateRouteAuditAppAsync(
         RecordingAuditTrailAppender appender,
-        ChannelRelayRegistrationFacade registrationFacade)
+        ChannelRelayRegistrationFacade registrationFacade,
+        IChannelWorkflowResultDeliveryRepairService? repairService = null)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -921,6 +1284,8 @@ public sealed class ChannelCallbackEndpointsTests
         builder.Services.AddSingleton(Substitute.For<IChannelBotRegistrationQueryPort>());
         builder.Services.AddSingleton(Substitute.For<IPlatformAdminAuthorizer>());
         builder.Services.AddSingleton(Substitute.For<INyxChannelBotDeprovisioningService>());
+        builder.Services.AddSingleton(
+            repairService ?? Substitute.For<IChannelWorkflowResultDeliveryRepairService>());
 
         var app = builder.Build();
         app.UseRouting();

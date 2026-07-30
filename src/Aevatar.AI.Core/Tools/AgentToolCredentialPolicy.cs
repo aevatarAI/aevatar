@@ -12,6 +12,11 @@ internal static class AgentToolCredentialPolicy
         ArgumentNullException.ThrowIfNull(tool);
         ArgumentNullException.ThrowIfNull(callSafety);
 
+<<<<<<< HEAD
+=======
+        var callSafety = tool.GetCallSafety(argumentsJson);
+
+>>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
         return !callSafety.IsReadOnly ||
                callSafety.IsDestructive ||
                !string.IsNullOrWhiteSpace(tool.SideEffectKind) ||

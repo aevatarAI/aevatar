@@ -9,6 +9,8 @@ using System.Text.Json;
 using ApplicationFileArtifactRef = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactRef;
 using ApplicationFileArtifactSourceKind = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactSourceKind;
 using ProtoWorkflowCallerCredential = Aevatar.Workflow.Abstractions.WorkflowCallerCredential;
+using ProtoWorkflowFileRef = Aevatar.Workflow.Abstractions.WorkflowFileRef;
+using ProtoWorkflowFileSourceKind = Aevatar.Workflow.Abstractions.WorkflowFileSourceKind;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
@@ -771,6 +773,78 @@ public sealed class WorkflowDocumentExtractToolTests
     }
 
     [Fact]
+    public async Task WorkflowDocumentExtractTool_ShouldUseSingleInputFileRefWhenArgumentsOmitFileRef()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "aevatar-workflow-document-extract-input-file-ref-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var port = CreateFileArtifactPort(root);
+            var result = await port.IngestAsync(new FileArtifactIngressRequest(
+                System.Text.Encoding.UTF8.GetBytes("invoice total 42"),
+                ApplicationFileArtifactSourceKind.ChatInput,
+                FileName: "invoice.txt",
+                MediaType: "text/plain"));
+            var tool = await GetDocumentExtractToolAsync(port);
+
+            var output = await tool.ExecuteAsync(new WorkflowToolExecutionRequest(
+                "{}",
+                "run-1",
+                "extract",
+                "exec-1",
+                "call-1",
+                "scope-1",
+                new ProtoWorkflowCallerCredential(),
+                [ToProtoInputFileRef(result.FileRef)]));
+
+            using var document = JsonDocument.Parse(output.ResultJson);
+            var rootElement = document.RootElement;
+            rootElement.GetProperty("extraction_kind").GetString().Should().Be("utf8_text");
+            rootElement.GetProperty("media_type").GetString().Should().Be("text/plain");
+            rootElement.GetProperty("file").GetProperty("file_id").GetString().Should().Be(result.FileRef.FileId);
+            rootElement.GetProperty("text").GetString().Should().Be("invoice total 42");
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task WorkflowDocumentExtractTool_ShouldNotTreatAttachmentRefAsFileIdentity()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "aevatar-workflow-document-extract-attachment-ref-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var port = CreateFileArtifactPort(root);
+            var tool = await GetDocumentExtractToolAsync(port);
+
+            var output = await tool.ExecuteAsync(new WorkflowToolExecutionRequest(
+                """
+                {
+                  "attachment_ref": "file_v3_1"
+                }
+                """,
+                "run-1",
+                "extract",
+                "exec-1",
+                "call-1",
+                "scope-1",
+                new ProtoWorkflowCallerCredential()));
+
+            using var document = JsonDocument.Parse(output.ResultJson);
+            document.RootElement.GetProperty("error").GetString().Should().Be("invalid_arguments");
+            document.RootElement.GetProperty("detail").GetString()
+                .Should().Contain("fileRef object or exactly one input file ref");
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task AddWorkflowInfrastructure_ShouldWireDocumentExtractImageProviderFromLlmFactory()
     {
         var root = Path.Combine(Path.GetTempPath(), "aevatar-workflow-document-extract-di-image-tests", Guid.NewGuid().ToString("N"));
@@ -975,6 +1049,9 @@ public sealed class WorkflowDocumentExtractToolTests
             using var document = JsonDocument.Parse(output.ResultJson);
             document.RootElement.GetProperty("error").GetString().Should().Be("unsupported_media_type");
             document.RootElement.GetProperty("detail").GetString().Should().Contain("spreadsheetml.sheet");
+            output.Failure.Should().NotBeNull();
+            output.Failure!.ErrorCode.Should().Be("unsupported_media_type");
+            output.Failure.ErrorMessage.Should().Contain("spreadsheetml.sheet");
             output.ResultJson.Contains("base64", StringComparison.OrdinalIgnoreCase).Should().BeFalse();
         }
         finally
@@ -1183,6 +1260,32 @@ public sealed class WorkflowDocumentExtractToolTests
         var tools = await source.GetToolsAsync();
         return tools.Should().ContainSingle(x => x.Name == "document_extract").Subject;
     }
+
+    private static ProtoWorkflowFileRef ToProtoInputFileRef(ApplicationFileArtifactRef fileRef) =>
+        new()
+        {
+            FileId = fileRef.FileId ?? string.Empty,
+            ArtifactId = fileRef.ArtifactId ?? string.Empty,
+            SourceKind = fileRef.SourceKind switch
+            {
+                ApplicationFileArtifactSourceKind.ChatInput => ProtoWorkflowFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.FormUpload => ProtoWorkflowFileSourceKind.FormUpload,
+                ApplicationFileArtifactSourceKind.ConnectedServiceResource => ProtoWorkflowFileSourceKind.ConnectedServiceResource,
+                ApplicationFileArtifactSourceKind.ExternalResource => ProtoWorkflowFileSourceKind.ExternalResource,
+                ApplicationFileArtifactSourceKind.Generated => ProtoWorkflowFileSourceKind.Generated,
+                _ => ProtoWorkflowFileSourceKind.Unspecified,
+            },
+            SourceMessageId = fileRef.SourceMessageId ?? string.Empty,
+            SourceResourceKey = fileRef.SourceResourceKey ?? string.Empty,
+            FileName = fileRef.FileName ?? string.Empty,
+            MediaType = fileRef.MediaType ?? string.Empty,
+            SizeBytes = fileRef.SizeBytes,
+            Sha256 = fileRef.Sha256 ?? string.Empty,
+            CreatedAtUnixMs = fileRef.CreatedAtUnixMs,
+            ExpiresAtUnixMs = fileRef.ExpiresAtUnixMs,
+            OwnerRunId = fileRef.OwnerRunId ?? string.Empty,
+            OwnerScopeId = fileRef.OwnerScopeId ?? string.Empty,
+        };
 
     private static string BuildDocumentExtractArguments(
         ApplicationFileArtifactRef fileRef,

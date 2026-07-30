@@ -5,7 +5,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 
 /// <summary>Tool to manage user's connected services in NyxID.</summary>
-public sealed class NyxIdServicesTool : IAgentTool, IAgentToolCapabilityDescriptor
+public sealed class NyxIdServicesTool : INyxIdBuiltInTool, IAgentToolCapabilityDescriptor
 {
     private static readonly NyxIdClosedActionParser<NyxIdServicesAction> ActionParser = new(
     [

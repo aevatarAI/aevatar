@@ -1,8 +1,6 @@
 using Aevatar.Capabilities;
-using Aevatar.Studio.Application.Studio.Services;
 using Aevatar.Studio.Hosting.Endpoints;
 using Microsoft.AspNetCore.Builder;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Studio.Hosting;
 
@@ -37,18 +35,6 @@ public static class StudioCapabilityExtensions
                         "/api/roles",
                         "/api/workspace",
                     ],
-                    ProbeAsync = static async (serviceProvider, cancellationToken) =>
-                    {
-                        var workspaceService = serviceProvider.GetRequiredService<WorkspaceService>();
-                        _ = await workspaceService.GetSettingsAsync(cancellationToken);
-
-                        return AevatarHealthContributorResult.Healthy(
-                            "Studio capability is ready.",
-                            new Dictionary<string, string>(StringComparer.Ordinal)
-                            {
-                                ["scopeBoundCatalogApis"] = "/api/connectors, /api/roles",
-                            });
-                    },
                 });
             },
             static app =>
@@ -57,8 +43,11 @@ public static class StudioCapabilityExtensions
                 StudioEndpoints.Map(app, embeddedWorkflowMode: true);
                 WorkflowBoardSnapshotEndpoints.Map(app);
                 StudioMemberEndpoints.Map(app);
+                StudioMemberAutomationEndpoints.Map(app);
                 StudioProvisioningEndpoints.Map(app);
                 StudioTeamEndpoints.Map(app);
+                ContentArtifactEndpoints.Map(app);
+                WorkOrderEndpoints.Map(app);
                 NyxIdLoginFinalizationEndpoints.Map(app);
                 Controllers.ChatHistoryEndpoints.MapChatHistoryEndpoints(app);
                 app.MapExplorerEndpoints();

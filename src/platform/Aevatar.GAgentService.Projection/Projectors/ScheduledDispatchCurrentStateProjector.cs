@@ -5,6 +5,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Abstractions.Schedules;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Core.Schedules;
 using Aevatar.GAgentService.Projection.Contexts;
 using Aevatar.GAgentService.Projection.ReadModels;
@@ -55,6 +56,8 @@ public sealed class ScheduledDispatchCurrentStateProjector
     {
         var target = state.Target ?? new ScheduledDispatchTargetState();
         var serviceIdentity = target.ServiceInvocation?.Identity;
+        var authorizationFact = state.ActiveTeamAuthorizationFact ?? target.ServiceInvocation?.AuthorizationFact;
+        var ownerLLMSelection = authorizationFact?.OwnerLlmSelection;
         var scheduleId = string.IsNullOrWhiteSpace(state.ScheduleId) ? context.RootActorId : state.ScheduleId;
         var document = new ScheduledDispatchDocument
         {
@@ -88,6 +91,42 @@ public sealed class ScheduledDispatchCurrentStateProjector
             TargetActorId = state.TargetActorId ?? string.Empty,
             Deleted = state.Deleted,
             Completed = state.Completed,
+            TeamOwned = state.TeamAutomationOwner != null,
+            TeamId = state.TeamAutomationOwner?.TeamId ?? string.Empty,
+            TeamAutomationOwner = state.TeamAutomationOwner == null
+                ? null
+                : new TeamMemberAutomationOwnerDocument
+                {
+                    ScopeId = state.TeamAutomationOwner.ScopeId ?? string.Empty,
+                    MemberId = state.TeamAutomationOwner.MemberId ?? string.Empty,
+                },
+            TeamAutomationLifecycleStatus = ToProjectionLifecycleStatus(
+                state.TeamAutomationLifecycleStatus),
+            TeamAutomationOperationId = state.TeamAutomationOperationId ?? string.Empty,
+            TeamAutomationIdempotencyKey = state.TeamAutomationIdempotencyKey ?? string.Empty,
+            ActiveCredentialOwner = state.ActiveTeamCredentialOwner == null
+                ? null
+                : new ScheduledInvocationAuthorizationOwnerDocument
+                {
+                    Authority = state.ActiveTeamCredentialOwner.Authority ?? string.Empty,
+                    OwnerKind = state.ActiveTeamCredentialOwner.OwnerKind ?? string.Empty,
+                    OwnerSubject = state.ActiveTeamCredentialOwner.OwnerSubject ?? string.Empty,
+                },
+            CredentialGeneration = state.TeamCredentialGeneration,
+            NyxidRevocationStatus = state.NyxidRevocationStatus.ToString(),
+            VaultRevocationStatus = state.VaultRevocationStatus.ToString(),
+            RevocationPending = state.PendingRevocationTeamCredential != null ||
+                state.NyxidRevocationStatus == TeamAutomationEffectTrackStatusState.Pending ||
+                state.VaultRevocationStatus == TeamAutomationEffectTrackStatusState.Pending,
+            LastAuthorizationErrorCode = state.LastAuthorizationErrorCode ?? string.Empty,
+            PermissionDigest = state.TeamAutomationPermissionDigest ?? string.Empty,
+            PolicyVersion = state.TeamAutomationPolicyVersion ?? string.Empty,
+            OwnerLlmRouteKind = ToOwnerLLMRouteKindName(ownerLLMSelection?.RouteKind ??
+                ScheduledInvocationOwnerLLMRouteKind.Unspecified),
+            OwnerLlmRoute = ownerLLMSelection?.RouteValue ?? string.Empty,
+            OwnerLlmUserServiceId = ownerLLMSelection?.NyxIdUserServiceId ?? string.Empty,
+            OwnerLlmServiceSlug = ownerLLMSelection?.ServiceSlugSnapshot ?? string.Empty,
+            OwnerLlmModel = ownerLLMSelection?.Model ?? string.Empty,
             StateVersion = stateEvent.Version,
             LastEventId = stateEvent.EventId ?? string.Empty,
         };
@@ -101,7 +140,10 @@ public sealed class ScheduledDispatchCurrentStateProjector
         document.DeletedAt = state.DeletedAt;
         document.OneShotFireAt = state.OneShotFireAt;
         document.CompletedAt = state.CompletedAt;
+        document.CredentialExpiresAt = state.TeamCredentialExpiresAt?.ToDateTimeOffset();
         document.Headers = state.Headers
+            .Where(static item =>
+                !ScheduledServiceInvocationPayloadPolicy.IsConnectorHttpAuthorizationKey(item.Key))
             .ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal);
         document.FireRecords.Add(CreateFireRecords(state));
         return document;
@@ -170,11 +212,18 @@ public sealed class ScheduledDispatchCurrentStateProjector
             _ => ScheduledDispatchTargetKind.Envelope,
         };
 
+    private static string ToOwnerLLMRouteKindName(ScheduledInvocationOwnerLLMRouteKind routeKind) => routeKind switch
+    {
+        ScheduledInvocationOwnerLLMRouteKind.Unspecified => "unspecified",
+        ScheduledInvocationOwnerLLMRouteKind.Gateway => "gateway",
+        ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService => "nyx_id_user_service",
+        _ => throw new InvalidOperationException($"Unknown owner LLM route kind value '{(int)routeKind}'."),
+    };
+
     private static ScheduledDispatchScheduleKind ToApplicationScheduleKind(ScheduledDispatchScheduleKindState stateKind) =>
         stateKind switch
         {
             ScheduledDispatchScheduleKindState.Workflow => ScheduledDispatchScheduleKind.Workflow,
-            ScheduledDispatchScheduleKindState.SkillRunner => ScheduledDispatchScheduleKind.SkillRunner,
             _ => ScheduledDispatchScheduleKind.Generic,
         };
 
@@ -271,6 +320,24 @@ public sealed class ScheduledDispatchCurrentStateProjector
         stateMode == ScheduledDispatchScheduleModeState.OneShotAtUtc
             ? ScheduledDispatchScheduleMode.OneShotAtUtc
             : ScheduledDispatchScheduleMode.RecurringCron;
+
+    private static TeamAutomationLifecycleStatusDocument ToProjectionLifecycleStatus(
+        TeamAutomationLifecycleStatusState status) =>
+        status switch
+        {
+            TeamAutomationLifecycleStatusState.ProvisioningPending =>
+                TeamAutomationLifecycleStatusDocument.ProvisioningPending,
+            TeamAutomationLifecycleStatusState.Active => TeamAutomationLifecycleStatusDocument.Active,
+            TeamAutomationLifecycleStatusState.NeedsAuthorization =>
+                TeamAutomationLifecycleStatusDocument.NeedsAuthorization,
+            TeamAutomationLifecycleStatusState.ReplacementPending =>
+                TeamAutomationLifecycleStatusDocument.ReplacementPending,
+            TeamAutomationLifecycleStatusState.Deleting => TeamAutomationLifecycleStatusDocument.Deleting,
+            TeamAutomationLifecycleStatusState.RevocationPending =>
+                TeamAutomationLifecycleStatusDocument.RevocationPending,
+            TeamAutomationLifecycleStatusState.Failed => TeamAutomationLifecycleStatusDocument.Failed,
+            _ => TeamAutomationLifecycleStatusDocument.Unspecified,
+        };
 
     private static long ResolveTimestampSeconds(Timestamp? timestamp) =>
         timestamp?.Seconds ?? 0;

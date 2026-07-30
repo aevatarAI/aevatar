@@ -57,6 +57,8 @@ const studioProxyEntries = [
 }, {});
 
 const studioScopeProxyEntries = {
+  '^/api/scopes/[^/]+/chat-history(?:/.*)?$':
+    buildProxyTarget(studioApiTarget),
   '^/api/scopes/[^/]+/teams/[^/]+/invoke(?:/.*)?$':
     buildProxyTarget(apiTarget),
   '^/api/scopes/[^/]+/teams(?:/.*)?$':

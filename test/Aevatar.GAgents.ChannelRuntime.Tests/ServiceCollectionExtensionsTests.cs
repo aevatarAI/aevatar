@@ -1,3 +1,4 @@
+using Aevatar.GAgents.Scheduled;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.Channel;
 using Aevatar.CQRS.Core.Abstractions.Commands;
@@ -6,7 +7,6 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
-using Aevatar.GAgents.Authoring.Lark;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.Broker;
@@ -18,7 +18,6 @@ using Aevatar.GAgents.Device;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgents.Platform.Lark;
 using Aevatar.GAgents.Platform.Telegram;
-using Aevatar.GAgents.Scheduled;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -215,13 +214,21 @@ public sealed class ServiceCollectionExtensionsTests
     public void AddChannelIdentity_RegistersCommittedStateProjectionActivationProvider()
     {
         var services = new ServiceCollection();
-        var configuration = new ConfigurationBuilder().Build();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [NyxIdBrokerOptions.ResourceServerBaseUrlConfigurationKey] =
+                    " https://api.example.test/// ",
+            })
+            .Build();
 
         services.AddChannelIdentity(configuration);
         using var provider = services.BuildServiceProvider();
 
         AssertProjectionActivationProviderRegistered<ChannelIdentityCommittedStateProjectionActivationPlanProvider>(
             services);
+        provider.GetRequiredService<IOptions<NyxIdBrokerOptions>>()
+            .Value.ResourceServerBaseUrl.Should().Be("https://api.example.test");
         services.Should().NotContain(descriptor =>
             descriptor.ServiceType == typeof(IHostedService) &&
             descriptor.ImplementationType == typeof(AevatarOAuthClientEsAclStartupGuard));

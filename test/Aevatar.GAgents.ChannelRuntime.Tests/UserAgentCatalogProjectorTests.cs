@@ -63,7 +63,7 @@ public sealed class UserAgentCatalogProjectorTests
                         "chat_id",
                         "on_user_1",
                         "union_id"),
-                    OutputFormat = SkillRunnerOutputFormat.FeishuDoc,
+                    OutputFormat = ScheduledAgentOutputFormat.FeishuDoc,
                 },
             },
         };
@@ -97,7 +97,7 @@ public sealed class UserAgentCatalogProjectorTests
         document.ChannelAddress.Fallback.Should().NotBeNull();
         document.ChannelAddress.Fallback!.AddressId.Should().Be("on_user_1");
         document.ChannelAddress.Fallback.AddressType.Should().Be("union_id");
-        document.OutputFormat.Should().Be(SkillRunnerOutputFormat.FeishuDoc);
+        document.OutputFormat.Should().Be(ScheduledAgentOutputFormat.FeishuDoc);
     }
 
     [Fact]
@@ -238,95 +238,6 @@ public sealed class UserAgentCatalogProjectorTests
     }
 
     [Fact]
-    public async Task ProjectAsync_WithSkillRunnerCommittedState_DoesNotWriteCatalogDocument()
-    {
-        var state = new SkillRunnerState
-        {
-            TemplateName = "summary",
-            ScopeId = "scope-1",
-            ScheduleCron = "0 9 * * *",
-            ScheduleTimezone = "UTC",
-            Enabled = true,
-            LastRunAt = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 4, 14, 8, 0, 0, TimeSpan.Zero)),
-            NextRunAt = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 4, 15, 9, 0, 0, TimeSpan.Zero)),
-            ErrorCount = 0,
-        };
-
-        await _projector.ProjectAsync(
-            new UserAgentCatalogMaterializationContext
-            {
-                RootActorId = "runner-1",
-                ProjectionKind = UserAgentCatalogProjectionBootstrapActivator.ProjectionKind,
-            },
-            BuildSkillRunnerCommittedEnvelope("runner-event-2", 2, state),
-            CancellationToken.None);
-
-        _dispatcher.Upserts.Should().BeEmpty("runner-owned execution state has a separate read model");
-    }
-
-    [Fact]
-    public async Task SkillRunnerExecutionProjector_WithSkillRunnerFailedState_ProjectsErrorStatus()
-    {
-        var dispatcher = new RecordingExecutionWriteDispatcher();
-        var projector = new SkillRunnerExecutionProjector(dispatcher, _clock);
-        var state = new SkillRunnerState
-        {
-            Enabled = true,
-            LastRunAt = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 4, 14, 8, 0, 0, TimeSpan.Zero)),
-            ErrorCount = 2,
-            LastError = "tool failed",
-            LastSuccessfulDelivery = new DeliveryLedgerEntry
-            {
-                DeliveryKind = DeliveryKind.TextMessage,
-                Status = DeliveryStatus.Succeeded,
-                Target = new DeliveryTarget
-                {
-                    Channel = ChannelId.From("lark"),
-                    ConversationKey = "oc_chat_1",
-                },
-                LarkMessageId = "om_success",
-                RequestId = "request-success",
-                ProducedAtVersion = 3,
-            },
-        };
-        state.RecentDeliveries.Add(new DeliveryLedgerEntry
-        {
-            DeliveryKind = DeliveryKind.TextMessage,
-            Status = DeliveryStatus.FailedPreSend,
-            Target = new DeliveryTarget
-            {
-                Channel = ChannelId.From("lark"),
-                ConversationKey = "oc_chat_1",
-            },
-            RequestId = "request-failed",
-            ProducedAtVersion = 2,
-        });
-        state.RecentDeliveries.Add(state.LastSuccessfulDelivery.Clone());
-
-        await projector.ProjectAsync(
-            new UserAgentCatalogMaterializationContext
-            {
-                RootActorId = "runner-failed",
-                ProjectionKind = UserAgentCatalogProjectionBootstrapActivator.ProjectionKind,
-            },
-            BuildSkillRunnerCommittedEnvelope("runner-event-4", 4, state),
-            CancellationToken.None);
-
-        var document = dispatcher.Upserts.Should().ContainSingle().Subject;
-        document.Id.Should().Be("runner-failed");
-        document.ActorId.Should().Be("runner-failed");
-        document.Status.Should().Be(SkillRunnerDefaults.StatusError);
-        document.LastError.Should().Be("tool failed");
-        document.ErrorCount.Should().Be(2);
-        document.StateVersion.Should().Be(4);
-        document.LastEventId.Should().Be("runner-event-4");
-        document.RecentDeliveries.Select(delivery => delivery.RequestId)
-            .Should().Equal("request-failed", "request-success");
-        document.LastSuccessfulDelivery.Should().NotBeNull();
-        document.LastSuccessfulDelivery!.LarkMessageId.Should().Be("om_success");
-    }
-
-    [Fact]
     public void ToEntry_ShouldRoundTripChannelAddress_FromDocumentToEntry()
     {
         var document = new UserAgentCatalogDocument
@@ -343,7 +254,7 @@ public sealed class UserAgentCatalogProjectorTests
                 "chat_id",
                 "on_user_1",
                 "union_id"),
-            OutputFormat = SkillRunnerOutputFormat.Text,
+            OutputFormat = ScheduledAgentOutputFormat.Text,
         };
 
         var entry = UserAgentCatalogQueryPort.ToEntry(document);
@@ -356,7 +267,7 @@ public sealed class UserAgentCatalogProjectorTests
         entry.ChannelAddress.Fallback.Should().NotBeNull();
         entry.ChannelAddress.Fallback!.AddressId.Should().Be("on_user_1");
         entry.ChannelAddress.Fallback.AddressType.Should().Be("union_id");
-        entry.OutputFormat.Should().Be(SkillRunnerOutputFormat.Text);
+        entry.OutputFormat.Should().Be(ScheduledAgentOutputFormat.Text);
     }
 
     [Fact]
@@ -1067,28 +978,6 @@ public sealed class UserAgentCatalogProjectorTests
         return document;
     }
 
-    private static EventEnvelope BuildSkillRunnerCommittedEnvelope(string eventId, long version, SkillRunnerState state)
-    {
-        var occurredAt = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 4, 14, 10, 0, 0, TimeSpan.Zero));
-        return new EventEnvelope
-        {
-            Id = eventId,
-            Timestamp = occurredAt.Clone(),
-            Route = EnvelopeRouteSemantics.CreateObserverPublication("runner-1"),
-            Payload = Any.Pack(new CommittedStateEventPublished
-            {
-                StateEvent = new StateEvent
-                {
-                    EventId = eventId,
-                    Version = version,
-                    Timestamp = occurredAt.Clone(),
-                    EventData = Any.Pack(new Empty()),
-                },
-                StateRoot = Any.Pack(state),
-            }),
-        };
-    }
-
     private sealed class RecordingWriteDispatcher : IProjectionWriteDispatcher<UserAgentCatalogDocument>
     {
         public List<UserAgentCatalogDocument> Upserts { get; } = [];
@@ -1277,23 +1166,6 @@ public sealed class UserAgentCatalogProjectorTests
             Deletes.Add(id);
             return Task.FromResult(DeleteResult);
         }
-    }
-
-    private sealed class RecordingExecutionWriteDispatcher : IProjectionWriteDispatcher<SkillRunnerExecutionDocument>
-    {
-        public List<SkillRunnerExecutionDocument> Upserts { get; } = [];
-
-        public Task<ProjectionWriteResult> UpsertAsync(
-            SkillRunnerExecutionDocument readModel,
-            CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            Upserts.Add(readModel.Clone());
-            return Task.FromResult(ProjectionWriteResult.Applied());
-        }
-
-        public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default) =>
-            Task.FromResult(ProjectionWriteResult.Applied());
     }
 
     private sealed class FixedProjectionClock(DateTimeOffset now) : IProjectionClock

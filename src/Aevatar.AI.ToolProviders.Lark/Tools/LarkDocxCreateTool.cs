@@ -5,6 +5,9 @@ namespace Aevatar.AI.ToolProviders.Lark.Tools;
 
 public sealed class LarkDocxCreateTool : AgentToolBase<LarkDocxCreateTool.Parameters>
 {
+    private const string ChannelDeliveryAddressIdMetadataKey = "channel.delivery.address_id";
+    private const string ChannelDeliveryAddressTypeMetadataKey = "channel.delivery.address_type";
+
     private static readonly HashSet<string> AllowedVisibility =
     [
         "readable",
@@ -218,9 +221,9 @@ public sealed class LarkDocxCreateTool : AgentToolBase<LarkDocxCreateTool.Parame
         receiveIdType = parameters.ReceiveIdType?.Trim().ToLowerInvariant();
 
         if (string.IsNullOrWhiteSpace(receiveId))
-            receiveId = AgentToolRequestContext.TryGetExternalMetadata("channel.lark.receive_id")?.Trim();
+            receiveId = AgentToolRequestContext.TryGetExternalMetadata(ChannelDeliveryAddressIdMetadataKey)?.Trim();
         if (string.IsNullOrWhiteSpace(receiveIdType))
-            receiveIdType = AgentToolRequestContext.TryGetExternalMetadata("channel.lark.receive_id_type")?.Trim().ToLowerInvariant();
+            receiveIdType = AgentToolRequestContext.TryGetExternalMetadata(ChannelDeliveryAddressTypeMetadataKey)?.Trim().ToLowerInvariant();
 
         if (string.IsNullOrWhiteSpace(receiveId) && string.IsNullOrWhiteSpace(receiveIdType))
         {

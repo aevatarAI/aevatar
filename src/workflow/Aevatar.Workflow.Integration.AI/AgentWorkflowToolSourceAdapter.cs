@@ -57,7 +57,7 @@ public sealed class AgentWorkflowToolSourceAdapter(
             var credentialContext = WorkflowCallerCredentialToolContextMapper.FromCredential(
                 request.CallerCredential,
                 workflowRuntimeContext);
-            var toolContext = credentialContext with
+            var toolContext = WorkflowRunScopeToolContextMapper.Apply(request.ScopeId, credentialContext with
             {
                 Request = credentialContext.Request with
                 {
@@ -65,12 +65,11 @@ public sealed class AgentWorkflowToolSourceAdapter(
                     CallId = Normalize(request.CallId),
                     IdempotencyKey = Normalize(request.IdempotencyKey),
                 },
-                Caller = credentialContext.Caller with
-                {
-                    ScopeId = Normalize(request.ScopeId),
-                },
                 Schedule = new AgentToolScheduleContext(Normalize(request.ScheduleId)),
-            };
+                OperationAdmission = WorkflowOperationAdmissionToolContextMapper.Map(
+                    request.InvocationAdmission),
+                InvocationSurface = AgentToolInvocationSurface.WorkflowToolCall,
+            });
             _logger.LogInformation(
                 "Workflow tool credential context prepared. toolName={ToolName} scopeId={ScopeId} rootRunId={RootRunId} parentRunId={ParentRunId} parentStepId={ParentStepId} hasCallerCredentialBearer={HasCallerCredentialBearer} hasNyxIdAccessToken={HasNyxIdAccessToken} hasNyxIdOrgToken={HasNyxIdOrgToken}",
                 _tool.Name,
@@ -120,14 +119,23 @@ public sealed class AgentWorkflowToolSourceAdapter(
                         : outcome.SafeMessage);
             }
 
+<<<<<<< HEAD
             return new WorkflowToolExecutionResult(
                 outcome.ResultJson,
                 ToWorkflowManagedHandoffOutcome(outcome.Receipt.ManagedWorkflowHandoff));
+=======
+            var resultJson = toolCallContext.Result
+                             ?? throw new InvalidOperationException(
+                                 $"Tool '{_tool.Name}' returned no result.");
+            var receipt = toolCallContext.Receipt ?? ToolCallReceiptFinalizer.Finalize(toolCallContext).Receipt;
+            return AgentWorkflowToolReceiptOutcomeMapper.Map(receipt, resultJson);
+>>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
         }
 
         private static string? Normalize(string? value) =>
             string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
+<<<<<<< HEAD
         private static WorkflowManagedHandoffOutcome? ToWorkflowManagedHandoffOutcome(
             ManagedWorkflowHandoffReceipt? receipt)
         {
@@ -144,5 +152,80 @@ public sealed class AgentWorkflowToolSourceAdapter(
                 StreamTopic = receipt.StreamTopic ?? string.Empty,
             };
         }
+=======
+        private static string FormatMiddlewareTermination(ToolCallContext context)
+        {
+            var reason = string.IsNullOrWhiteSpace(context.TerminationReason)
+                ? context.Result
+                : context.TerminationReason;
+            var suffix = string.IsNullOrWhiteSpace(reason)
+                ? string.Empty
+                : $": {reason}";
+            return $"Tool '{context.ToolName}' execution terminated by middleware ({context.TerminationKind}){suffix}";
+        }
+
+    }
+}
+
+file static class AgentWorkflowToolReceiptOutcomeMapper
+{
+    public static WorkflowToolExecutionResult Map(AgentToolReceipt receipt, string resultJson)
+    {
+        if (IsFailure(receipt.Status))
+        {
+            return WorkflowToolExecutionResult.Failed(
+                receipt.ResultJson ?? string.Empty,
+                ResolveFailureCode(receipt),
+                ResolveFailureMessage(receipt));
+        }
+
+        return WorkflowToolExecutionResult.Success(
+            resultJson,
+            ToWorkflowManagedHandoffOutcome(receipt.ManagedWorkflowHandoff));
+    }
+
+    private static bool IsFailure(AgentToolReceiptStatus status) =>
+        status is AgentToolReceiptStatus.Error or
+            AgentToolReceiptStatus.Denied or
+            AgentToolReceiptStatus.AuthorizationRequired or
+            AgentToolReceiptStatus.Unspecified;
+
+    private static string ResolveFailureCode(AgentToolReceipt receipt)
+    {
+        if (!string.IsNullOrWhiteSpace(receipt.ErrorCode))
+            return receipt.ErrorCode.Trim();
+
+        return receipt.Status switch
+        {
+            AgentToolReceiptStatus.Denied => "tool_denied",
+            AgentToolReceiptStatus.AuthorizationRequired => "authorization_required",
+            AgentToolReceiptStatus.Unspecified => ToolCallReceiptFinalizer.UnknownErrorCode,
+            _ => "tool_error",
+        };
+    }
+
+    private static string ResolveFailureMessage(AgentToolReceipt receipt) =>
+        string.IsNullOrWhiteSpace(receipt.ErrorMessage)
+            ? receipt.Status == AgentToolReceiptStatus.Unspecified
+                ? ToolCallReceiptFinalizer.UnknownErrorMessage
+                : ResolveFailureCode(receipt)
+            : receipt.ErrorMessage.Trim();
+
+    private static WorkflowManagedHandoffOutcome? ToWorkflowManagedHandoffOutcome(
+        ManagedWorkflowHandoffReceipt? receipt)
+    {
+        if (receipt == null || string.IsNullOrWhiteSpace(receipt.InvocationId))
+            return null;
+
+        return new WorkflowManagedHandoffOutcome
+        {
+            ParentActorId = receipt.ParentActorId ?? string.Empty,
+            ParentRunId = receipt.ParentRunId ?? string.Empty,
+            ParentStepId = receipt.ParentStepId ?? string.Empty,
+            InvocationId = receipt.InvocationId ?? string.Empty,
+            ChildRunId = receipt.ChildRunId ?? string.Empty,
+            StreamTopic = receipt.StreamTopic ?? string.Empty,
+        };
+>>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     }
 }

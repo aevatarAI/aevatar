@@ -1,16 +1,58 @@
+using Aevatar.Workflow.Abstractions;
+
 namespace Aevatar.Workflow.Application.Abstractions.Runs;
 
 public sealed record WorkflowYamlParseResult(
     string WorkflowName,
-    string Error)
+    string Error,
+    WorkflowAuthorizationDependencies? AuthorizationDependencies = null,
+    ExternalCapabilityReadiness? ExternalCapabilityReadiness = null)
 {
     public bool Succeeded => string.IsNullOrWhiteSpace(Error);
 
-    public static WorkflowYamlParseResult Success(string workflowName) =>
-        new(workflowName ?? string.Empty, string.Empty);
+    public static WorkflowYamlParseResult Success(
+        string workflowName,
+        WorkflowAuthorizationDependencies? authorizationDependencies = null) =>
+        new(workflowName ?? string.Empty, string.Empty, authorizationDependencies?.Clone());
 
-    public static WorkflowYamlParseResult Invalid(string error) =>
-        new(string.Empty, error ?? "Workflow YAML is invalid.");
+    public static WorkflowYamlParseResult Invalid(
+        string error,
+        ExternalCapabilityReadiness? externalCapabilityReadiness = null) =>
+        new(
+            string.Empty,
+            error ?? "Workflow YAML is invalid.",
+            null,
+            externalCapabilityReadiness?.Clone());
+}
+
+public sealed record WorkflowInlineYamlBundleParseResult(
+    string EntryWorkflowName,
+    string EntryWorkflowYaml,
+    IReadOnlyDictionary<string, string> WorkflowYamlsByName,
+    string Error,
+    ExternalCapabilityReadiness? ExternalCapabilityReadiness = null)
+{
+    public bool Succeeded => string.IsNullOrWhiteSpace(Error);
+
+    public static WorkflowInlineYamlBundleParseResult Success(
+        string entryWorkflowName,
+        string entryWorkflowYaml,
+        IReadOnlyDictionary<string, string> workflowYamlsByName) =>
+        new(
+            entryWorkflowName ?? string.Empty,
+            entryWorkflowYaml ?? string.Empty,
+            workflowYamlsByName ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+            string.Empty);
+
+    public static WorkflowInlineYamlBundleParseResult Invalid(
+        string error,
+        ExternalCapabilityReadiness? externalCapabilityReadiness = null) =>
+        new(
+            string.Empty,
+            string.Empty,
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+            string.IsNullOrWhiteSpace(error) ? "Workflow YAML is invalid." : error,
+            externalCapabilityReadiness?.Clone());
 }
 
 public enum WorkflowActorKind
@@ -27,7 +69,9 @@ public sealed record WorkflowDefinitionBinding(
     IReadOnlyDictionary<string, string> InlineWorkflowYamls,
     string ScopeId = "",
     string RunOrigin = "",
-    string ScheduleId = "");
+    string ScheduleId = "",
+    string SourceKind = "",
+    WorkflowCapabilityAdmissionPlan? CapabilityAdmissionPlan = null);
 
 public sealed record WorkflowRunCreationReceipt(
     string ActorId,
@@ -50,7 +94,9 @@ public sealed record WorkflowActorBinding(
     long SourceVersion = 0,
     string SourceEventId = "",
     DateTimeOffset? CreatedAt = null,
-    DateTimeOffset? UpdatedAt = null)
+    DateTimeOffset? UpdatedAt = null,
+    string SourceKind = "",
+    WorkflowCapabilityAdmissionPlan? CapabilityAdmissionPlan = null)
 {
     public static WorkflowActorBinding Unsupported(string actorId) =>
         new(
@@ -203,6 +249,8 @@ public interface IWorkflowDefinitionProvisioningPort
         string workflowName,
         IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
         string? scopeId = null,
+        string? sourceKind = null,
+        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan = null,
         CancellationToken ct = default);
 }
 
@@ -215,6 +263,34 @@ public interface IWorkflowRunProvisioningPort
     Task DestroyAsync(string actorId, CancellationToken ct = default);
 }
 
+/// <summary>
+/// Narrow capability for provisioning a workflow Run at a caller-supplied
+/// stable identity. Kept separate from random Run creation so callers cannot
+/// accidentally imply exact-id semantics through the general provisioning port.
+/// </summary>
+public interface IWorkflowRunIdentityProvisioningPort
+{
+    Task<WorkflowRunCreationReceipt> EnsureRunAsync(
+        WorkflowDefinitionBinding definition,
+        string requestedRunId,
+        CancellationToken ct = default);
+}
+
+/// <summary>
+/// Narrow capability for atomically validating an exact Run binding and
+/// executing its first command in the same actor turn.
+/// </summary>
+public interface IWorkflowRunIdentityExecutionPort
+{
+    Task<WorkflowRunCreationReceipt> EnsureRunAndDispatchAsync(
+        WorkflowDefinitionBinding definition,
+        string requestedRunId,
+        WorkflowChatRequestEvent executionRequest,
+        string commandId,
+        string correlationId,
+        CancellationToken ct = default);
+}
+
 public interface IWorkflowDefinitionParser
 {
     /// <summary>
@@ -222,5 +298,9 @@ public interface IWorkflowDefinitionParser
     /// </summary>
     Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(
         string workflowYaml,
+        CancellationToken ct = default);
+
+    Task<WorkflowInlineYamlBundleParseResult> ParseInlineWorkflowBundleAsync(
+        IReadOnlyList<WorkflowChatInlineYamlDocument> inlineWorkflowDocuments,
         CancellationToken ct = default);
 }

@@ -5,9 +5,56 @@ import {
 } from '@xyflow/react';
 import { AGUIEventType } from '@aevatar-react-sdk/types';
 import type { RuntimeEvent } from "@/shared/agui/runtimeEventSemantics";
-import type { StudioGraphEdgeData, StudioGraphNodeData } from './graph';
-import type { StudioExecutionDetail, StudioExecutionFrame } from './models';
+import {
+  formatStudioStepTypeLabel,
+  type StudioGraphEdgeData,
+  type StudioGraphNodeData,
+} from './graph';
+import type {
+  StudioExecutionDetail,
+  StudioExecutionFrame,
+  StudioWorkflowDocument,
+} from './models';
 import { t } from "@/shared/i18n/messages";
+
+export type WorkflowExecutionNodeSnapshot = {
+  readonly stepId: string;
+  readonly stepType: string;
+  readonly subtitle: string;
+  readonly targetRole: string;
+  readonly title: string;
+};
+
+export function buildWorkflowExecutionNodeSnapshots(
+  document: StudioWorkflowDocument,
+): WorkflowExecutionNodeSnapshot[] {
+  if (!Array.isArray(document.steps)) {
+    return [];
+  }
+
+  return document.steps.flatMap((step) => {
+    const stepId = String(step?.id ?? '').trim();
+    if (!stepId) {
+      return [];
+    }
+
+    const stepType =
+      String(step.type ?? '').trim() ||
+      String(step.originalType ?? '').trim() ||
+      'step';
+    const targetRole = String(step.targetRole ?? step.target_role ?? '').trim();
+
+    return [
+      {
+        stepId,
+        stepType,
+        subtitle: formatStudioStepTypeLabel(stepType),
+        targetRole,
+        title: stepId,
+      },
+    ];
+  });
+}
 
 export type ExecutionLogItem = {
   readonly category?:

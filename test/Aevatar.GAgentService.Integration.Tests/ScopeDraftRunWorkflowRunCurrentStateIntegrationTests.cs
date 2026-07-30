@@ -189,6 +189,7 @@ public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
             });
             builder.AddAevatarDefaultHost(options =>
             {
+                options.AllowLocalFileSecretsStore = false;
                 options.ServiceName = "Aevatar.ScopeDraftRunWorkflowActorCurrentState.Tests";
                 options.EnableConnectorBootstrap = false;
                 options.EnableHealthEndpoints = false;

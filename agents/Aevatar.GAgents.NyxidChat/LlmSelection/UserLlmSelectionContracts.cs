@@ -29,7 +29,7 @@ public interface IUserLlmSelectionService
 {
     Task SetByServiceAsync(
         UserLlmSelectionContext context,
-        string serviceId,
+        string userServiceId,
         string? modelOverride,
         CancellationToken ct);
 

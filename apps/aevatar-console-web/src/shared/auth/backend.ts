@@ -1,18 +1,14 @@
-import { readResponseError } from "@/shared/api/http/error";
-import type { NyxIDRuntimeConfig } from "./config";
+import {
+  readResponseErrorDetails,
+  type ResponseErrorDetails,
+} from "@/shared/api/http/error";
 import type { NyxIDAuthSession, NyxIDTokenSet, NyxIDUserInfo } from "./session";
-
-export type NyxIDBackendLoginConfig = Pick<
-  NyxIDRuntimeConfig,
-  "baseUrl" | "clientId" | "scope"
-> & {
-  readonly resources: readonly string[];
-};
 
 export type NyxIDLoginFinalizationRequest = {
   readonly code: string;
   readonly codeVerifier: string;
   readonly redirectUri: string;
+  readonly serviceAccessReview?: boolean;
 };
 
 export type NyxIDLoginFinalizationResult = {
@@ -24,19 +20,19 @@ export type NyxIDTokenRefreshRequest = {
   readonly baseUrl: string;
   readonly clientId: string;
   readonly refreshToken: string;
-  readonly resources: readonly string[];
 };
 
-type BackendLoginConfigResponse = {
-  readonly baseUrl?: unknown;
-  readonly BaseUrl?: unknown;
-  readonly clientId?: unknown;
-  readonly ClientId?: unknown;
-  readonly scope?: unknown;
-  readonly Scope?: unknown;
-  readonly resources?: unknown;
-  readonly Resources?: unknown;
-};
+export class NyxIDLoginFinalizationError extends Error {
+  readonly code?: string;
+  readonly status: number;
+
+  constructor(details: ResponseErrorDetails) {
+    super(details.message);
+    this.name = "NyxIDLoginFinalizationError";
+    this.code = details.code;
+    this.status = details.status;
+  }
+}
 
 type BackendFinalizationResponse = {
   readonly bindingDispatchAccepted?: unknown;
@@ -140,34 +136,6 @@ function readOptionalStringArray(value: unknown): string[] | undefined {
     .filter((entry): entry is string => typeof entry === "string")
     .map((entry) => entry.trim())
     .filter(Boolean);
-}
-
-function readRequiredStringArray(value: unknown, label: string): string[] {
-  if (!Array.isArray(value) || value.length === 0) {
-    throw new Error(`${label} must be a non-empty string array.`);
-  }
-
-  return value.map((entry, index) => readString(entry, `${label}[${index}]`));
-}
-
-function decodeBackendLoginConfig(
-  value: unknown,
-): NyxIDBackendLoginConfig {
-  const record = expectRecord(value, "NyxID backend login config") as
-    BackendLoginConfigResponse;
-
-  return {
-    baseUrl: readString(record.baseUrl ?? record.BaseUrl, "baseUrl").replace(
-      /\/+$/,
-      "",
-    ),
-    clientId: readString(record.clientId ?? record.ClientId, "clientId"),
-    scope: readString(record.scope ?? record.Scope, "scope"),
-    resources: readRequiredStringArray(
-      record.resources ?? record.Resources,
-      "resources",
-    ),
-  };
 }
 
 function decodeTokenSet(value: unknown): NyxIDTokenSet {
@@ -274,25 +242,15 @@ async function requestBackendJson<T>(
   input: string,
   decoder: (value: unknown) => T,
   init?: RequestInit,
+  createError?: (details: ResponseErrorDetails) => Error,
 ): Promise<T> {
   const response = await fetch(input, init);
   if (!response.ok) {
-    throw new Error(await readResponseError(response));
+    const details = await readResponseErrorDetails(response);
+    throw createError?.(details) ?? new Error(details.message);
   }
 
   return decoder(await response.json());
-}
-
-export function loadBackendNyxIDLoginConfig(): Promise<NyxIDBackendLoginConfig> {
-  return requestBackendJson(
-    "/api/auth/nyxid/config",
-    decodeBackendLoginConfig,
-    {
-      headers: {
-        Accept: "application/json",
-      },
-    },
-  );
 }
 
 export function finalizeBackendNyxIDLogin(
@@ -309,6 +267,7 @@ export function finalizeBackendNyxIDLogin(
       },
       method: "POST",
     },
+    (details) => new NyxIDLoginFinalizationError(details),
   );
 }
 
@@ -318,15 +277,11 @@ export function refreshNyxIDTokenSet(
   const baseUrl = readString(request.baseUrl, "baseUrl").replace(/\/+$/, "");
   const clientId = readString(request.clientId, "clientId");
   const refreshToken = readString(request.refreshToken, "refreshToken");
-  const resources = readRequiredStringArray(request.resources, "resources");
   const body = new URLSearchParams({
     grant_type: "refresh_token",
     refresh_token: refreshToken,
     client_id: clientId,
   });
-  for (const resource of resources) {
-    body.append("resource", resource);
-  }
 
   return requestBackendJson(
     `${baseUrl}/oauth/token`,

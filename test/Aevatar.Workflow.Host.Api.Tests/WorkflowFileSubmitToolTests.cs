@@ -71,6 +71,9 @@ public sealed class WorkflowFileSubmitToolTests
         var root = document.RootElement;
         root.GetProperty("success").GetBoolean().Should().BeFalse();
         root.GetProperty("error").GetString().Should().Be("destination_not_allowed");
+        result.Failure.Should().NotBeNull();
+        result.Failure!.ErrorCode.Should().Be("destination_not_allowed");
+        result.Failure.ErrorMessage.Should().Contain("not allowed");
         root.GetProperty("destination").GetProperty("slug").GetString().Should().Be("api-storage");
         artifactPort.DescribeCount.Should().Be(1);
         artifactPort.OpenCount.Should().Be(0);

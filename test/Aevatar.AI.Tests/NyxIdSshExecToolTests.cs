@@ -41,6 +41,8 @@ public class NyxIdSshExecToolTests
         tool.IsDestructive.Should().BeTrue();
         tool.Description.Should().Contain("ssh://");
         tool.Description.Should().Contain("nyxid_proxy");
+        tool.Description.Should().Contain("nyxid_services");
+        tool.Description.Should().NotContain("(no slug)");
         tool.ParametersSchema.Should().Contain("\"service\"");
         tool.ParametersSchema.Should().Contain("\"timeout_secs\"");
     }

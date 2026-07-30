@@ -5,26 +5,27 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
-using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
+using Aevatar.Workflow.Abstractions;
 
 namespace Aevatar.Studio.Application.Studio.Services;
 
 public sealed class StudioMemberWorkflowBindingPort : IStudioMemberWorkflowBindingPort
 {
     private readonly IStudioMemberService _memberService;
-    private readonly IWorkflowDefinitionParser _workflowDefinitionParser;
+    private readonly IWorkflowExternalCapabilityAdmissionService _capabilityAdmissionService;
     private readonly IScopeWorkflowSaveAndBindPort _saveAndBindPort;
     private readonly IStudioMemberCommandPort _memberCommandPort;
 
     public StudioMemberWorkflowBindingPort(
         IStudioMemberService memberService,
-        IWorkflowDefinitionParser workflowDefinitionParser,
+        IWorkflowExternalCapabilityAdmissionService capabilityAdmissionService,
         IScopeWorkflowSaveAndBindPort saveAndBindPort,
         IStudioMemberCommandPort memberCommandPort)
     {
         _memberService = memberService ?? throw new ArgumentNullException(nameof(memberService));
-        _workflowDefinitionParser = workflowDefinitionParser
-            ?? throw new ArgumentNullException(nameof(workflowDefinitionParser));
+        _capabilityAdmissionService = capabilityAdmissionService
+            ?? throw new ArgumentNullException(nameof(capabilityAdmissionService));
         _saveAndBindPort = saveAndBindPort ?? throw new ArgumentNullException(nameof(saveAndBindPort));
         _memberCommandPort = memberCommandPort ?? throw new ArgumentNullException(nameof(memberCommandPort));
     }
@@ -35,28 +36,54 @@ public sealed class StudioMemberWorkflowBindingPort : IStudioMemberWorkflowBindi
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var parseResult = await _workflowDefinitionParser.ParseWorkflowYamlAsync(request.WorkflowYaml, ct);
-        if (!parseResult.Succeeded)
-        {
-            throw new InvalidOperationException(
-                $"workflow_yaml is not a valid workflow definition: {parseResult.Error}");
-        }
+        var suppliedAdmission = request.CapabilityAdmission;
+        var executionMode = suppliedAdmission?.ExecutionMode
+            ?? ExternalCapabilityExecutionMode.Interactive;
+        var capabilityAdmissionPlan = suppliedAdmission?.ExistingPlan is { } existingPlan
+            ? await _capabilityAdmissionService.RevalidatePersistedAsync(
+                new PersistedWorkflowCapabilityAdmissionRequest(
+                    existingPlan,
+                    request.WorkflowYaml,
+                    new Dictionary<string, string>(),
+                    "studio_member_workflow_binding",
+                    executionMode),
+                ct)
+            : await _capabilityAdmissionService.AdmitAsync(
+                new WorkflowExternalCapabilityAdmissionRequest(
+                new ExternalWorkflowCapabilityAccessContext(
+                    request.ScopeId,
+                    suppliedAdmission?.CallerId ?? string.Empty,
+                    suppliedAdmission?.NyxIdCallerBearerToken,
+                    suppliedAdmission?.NyxIdOrganizationBearerToken),
+                request.WorkflowYaml,
+                new Dictionary<string, string>(),
+                "studio_member_workflow_binding",
+                executionMode),
+                ct);
+        var trustedAdmission = new WorkflowCapabilityAdmissionContext(
+            suppliedAdmission?.CallerId ?? string.Empty,
+            suppliedAdmission?.NyxIdCallerBearerToken,
+            suppliedAdmission?.NyxIdOrganizationBearerToken,
+            executionMode,
+            capabilityAdmissionPlan);
 
         try
         {
             var member = await _memberService.GetAsync(request.ScopeId, request.MemberId, ct);
             return IsPublished(member)
-                ? await SaveAndBindPublishedMemberAsync(request, member, ct)
-                : await BindUnpublishedMemberAsync(request, ct);
+                ? await SaveAndBindPublishedMemberAsync(request, member, trustedAdmission, ct)
+                : await BindUnpublishedMemberAsync(request, capabilityAdmissionPlan, trustedAdmission, ct);
         }
         catch (StudioMemberNotFoundException)
         {
-            return await BindUnpublishedMemberAsync(request, ct);
+            return await BindUnpublishedMemberAsync(request, capabilityAdmissionPlan, trustedAdmission, ct);
         }
     }
 
     private async Task<StudioMemberWorkflowBindingResult> BindUnpublishedMemberAsync(
         StudioMemberWorkflowBindingRequest request,
+        WorkflowCapabilityAdmissionPlan capabilityAdmissionPlan,
+        WorkflowCapabilityAdmissionContext trustedAdmission,
         CancellationToken ct)
     {
         var workflowId = ResolveWorkflowId(request);
@@ -64,9 +91,16 @@ public sealed class StudioMemberWorkflowBindingPort : IStudioMemberWorkflowBindi
             request.ScopeId,
             request.MemberId,
             new UpdateStudioMemberBindingRequest(
+                RevisionId: NormalizeOptional(request.RevisionId),
                 Workflow: new StudioMemberWorkflowBindingSpec(
                     workflowId,
-                    [request.WorkflowYaml])),
+                    [request.WorkflowYaml])
+                {
+                    CapabilityAdmissionPlan = capabilityAdmissionPlan,
+                })
+            {
+                CapabilityAdmission = trustedAdmission,
+            },
             ct);
 
         return new StudioMemberWorkflowBindingResult(
@@ -84,6 +118,7 @@ public sealed class StudioMemberWorkflowBindingPort : IStudioMemberWorkflowBindi
     private async Task<StudioMemberWorkflowBindingResult> SaveAndBindPublishedMemberAsync(
         StudioMemberWorkflowBindingRequest request,
         StudioMemberDetailResponse member,
+        WorkflowCapabilityAdmissionContext trustedAdmission,
         CancellationToken ct)
     {
         if (!string.Equals(member.Summary.ImplementationKind, MemberImplementationKindNames.Workflow, StringComparison.Ordinal))
@@ -110,7 +145,10 @@ public sealed class StudioMemberWorkflowBindingPort : IStudioMemberWorkflowBindi
                 InlineWorkflowYamls: null,
                 AppId: "studio",
                 ServiceId: publishedServiceId,
-                ExposureDesired: true),
+                ExposureDesired: true)
+            {
+                CapabilityAdmission = trustedAdmission,
+            },
             ct);
 
         await _memberCommandPort.RecordPublishedBindingAsync(
@@ -144,6 +182,12 @@ public sealed class StudioMemberWorkflowBindingPort : IStudioMemberWorkflowBindi
         string.IsNullOrWhiteSpace(request.WorkflowId)
             ? $"workflow-{BuildWorkflowKey(request.ScopeId, request.MemberId)}"
             : request.WorkflowId.Trim();
+
+    private static string? NormalizeOptional(string? value)
+    {
+        var normalized = value?.Trim() ?? string.Empty;
+        return normalized.Length == 0 ? null : normalized;
+    }
 
     private static string BuildWorkflowKey(string scopeId, string memberId)
     {

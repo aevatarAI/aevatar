@@ -933,6 +933,7 @@ public sealed class IdempotentStepExecutionTests
                     AgentToolScope = new WorkflowAgentToolScopeDefinition
                     {
                         AllowedToolNames = ["search", "calendar"],
+                        ToolSetRefs = ["nyxid.connected_services", "shared"],
                     },
                 },
             ],
@@ -946,6 +947,7 @@ public sealed class IdempotentStepExecutionTests
                     AgentToolScope = new WorkflowAgentToolScopeDefinition
                     {
                         AllowedToolNames = ["calendar", "forbidden"],
+                        ToolSetRefs = ["nyxid.connected_services", "other"],
                     },
                 },
             ],
@@ -957,46 +959,113 @@ public sealed class IdempotentStepExecutionTests
         var request = StepRequests(ctx).Single();
         request.StepParameters.AgentToolScope.Should().NotBeNull();
         request.StepParameters.AgentToolScope.AllowedToolNames.Should().Equal("calendar");
+        request.StepParameters.AgentToolScope.ToolSetRefs.Should().Equal("nyxid.connected_services");
     }
 
     [Fact]
-    public async Task StartWorkflow_WithPresentEmptyStepToolScope_ShouldDispatchNoToolsScope()
+    public async Task StartWorkflow_WhenStepRestrictsOnlyAllowedTools_ShouldInheritRoleToolSets()
     {
         var ctx = new RecordingEventHandlerContext();
         var host = new RecordingStateHost();
-        var workflow = new WorkflowDefinition
-        {
-            Name = "no-tools-workflow",
-            Roles =
-            [
-                new RoleDefinition
-                {
-                    Id = "worker",
-                    Name = "Worker",
-                    AgentToolScope = new WorkflowAgentToolScopeDefinition
-                    {
-                        AllowedToolNames = ["search"],
-                    },
-                },
-            ],
-            Steps =
-            [
-                new StepDefinition
-                {
-                    Id = "scoped",
-                    Type = "llm_call",
-                    TargetRole = "worker",
-                    AgentToolScope = new WorkflowAgentToolScopeDefinition(),
-                },
-            ],
-        };
+        var workflow = new WorkflowParser().Parse(
+            """
+            name: independent-tool-scope
+            roles:
+              - id: worker
+                tool_sets: [nyxid.connected_services]
+            steps:
+              - id: scoped
+                type: llm_call
+                target_role: worker
+                allowed_tools: [search]
+            """);
         var kernel = new WorkflowExecutionKernel(workflow, host);
 
-        await kernel.HandleAsync(Wrap(new StartWorkflowEvent { RunId = "run-no-tools", Input = "hello" }), ctx, CancellationToken.None);
+        await kernel.HandleAsync(Wrap(new StartWorkflowEvent { RunId = "run-independent-static", Input = "hello" }), ctx, CancellationToken.None);
 
         var request = StepRequests(ctx).Single();
-        request.StepParameters.AgentToolScope.Should().NotBeNull();
+        request.StepParameters.AgentToolScope.AllowedToolNames.Should().Equal("search");
+        request.StepParameters.AgentToolScope.ToolSetRefs.Should().Equal("nyxid.connected_services");
+    }
+
+    [Fact]
+    public async Task StartWorkflow_WhenStepRestrictsOnlyToolSets_ShouldInheritRoleAllowedTools()
+    {
+        var ctx = new RecordingEventHandlerContext();
+        var host = new RecordingStateHost();
+        var workflow = new WorkflowParser().Parse(
+            """
+            name: independent-tool-set-scope
+            roles:
+              - id: worker
+                allowed_tools: [search]
+            steps:
+              - id: scoped
+                type: llm_call
+                target_role: worker
+                tool_sets: [nyxid.connected_services]
+            """);
+        var kernel = new WorkflowExecutionKernel(workflow, host);
+
+        await kernel.HandleAsync(Wrap(new StartWorkflowEvent { RunId = "run-independent-tool-set", Input = "hello" }), ctx, CancellationToken.None);
+
+        var request = StepRequests(ctx).Single();
+        request.StepParameters.AgentToolScope.AllowedToolNames.Should().Equal("search");
+        request.StepParameters.AgentToolScope.ToolSetRefs.Should().Equal("nyxid.connected_services");
+    }
+
+    [Fact]
+    public async Task StartWorkflow_WithExplicitEmptyAllowedTools_ShouldClearOnlyStaticTools()
+    {
+        var ctx = new RecordingEventHandlerContext();
+        var host = new RecordingStateHost();
+        var workflow = new WorkflowParser().Parse(
+            """
+            name: empty-static-tool-scope
+            roles:
+              - id: worker
+                allowed_tools: [search]
+                tool_sets: [nyxid.connected_services]
+            steps:
+              - id: scoped
+                type: llm_call
+                target_role: worker
+                allowed_tools: []
+            """);
+        var kernel = new WorkflowExecutionKernel(workflow, host);
+
+        await kernel.HandleAsync(Wrap(new StartWorkflowEvent { RunId = "run-empty-static", Input = "hello" }), ctx, CancellationToken.None);
+
+        var request = StepRequests(ctx).Single();
         request.StepParameters.AgentToolScope.AllowedToolNames.Should().BeEmpty();
+        request.StepParameters.AgentToolScope.ToolSetRefs.Should().Equal("nyxid.connected_services");
+    }
+
+    [Fact]
+    public async Task StartWorkflow_WithExplicitEmptyToolSets_ShouldClearOnlyDynamicTools()
+    {
+        var ctx = new RecordingEventHandlerContext();
+        var host = new RecordingStateHost();
+        var workflow = new WorkflowParser().Parse(
+            """
+            name: empty-dynamic-tool-scope
+            roles:
+              - id: worker
+                allowed_tools: [search]
+                tool_sets: [nyxid.connected_services]
+            steps:
+              - id: scoped
+                type: llm_call
+                target_role: worker
+                tool_sets: []
+            """);
+        var kernel = new WorkflowExecutionKernel(workflow, host);
+
+        await kernel.HandleAsync(Wrap(new StartWorkflowEvent { RunId = "run-empty-dynamic", Input = "hello" }), ctx, CancellationToken.None);
+
+        var request = StepRequests(ctx).Single();
+        request.StepParameters.AgentToolScope.AllowedToolNames.Should().Equal("search");
+        request.StepParameters.AgentToolScope.ToolSetRefs.Should().BeEmpty();
     }
 
     [Fact]

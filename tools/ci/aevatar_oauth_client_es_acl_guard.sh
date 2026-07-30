@@ -58,7 +58,7 @@ if ! grep -q "AevatarOAuthClientEsAclStartupGuard" <<<"${guard_registration_hits
    ! grep -q "GrantMatchesGrainEventStoreInternal" <<<"${guard_registration_hits}" ||
    ! grep -q "AevatarOAuthClientEsAclOptions" <<<"${guard_registration_hits}"; then
   echo "${guard_registration_hits}"
-  echo "Mainnet Host must own the AevatarOAuthClient ES ACL startup guard and explicit ACL assertion."
+  echo "Mainnet Host must own the AevatarOAuthClient ES ACL startup guard and operator-configurable enforcement policy."
   exit 1
 fi
 

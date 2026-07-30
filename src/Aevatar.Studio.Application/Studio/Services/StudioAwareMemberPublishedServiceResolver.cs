@@ -56,14 +56,16 @@ public sealed class StudioAwareMemberPublishedServiceResolver : IMemberPublished
 
         var detail = await _memberQueryPort.GetAsync(normalizedScopeId, normalizedMemberId, ct);
         var publishedServiceId = detail?.Summary.PublishedServiceId;
-        var resolvedServiceId = string.IsNullOrWhiteSpace(publishedServiceId)
-            ? normalizedMemberId  // legacy deterministic mapping for direct platform binds
-            : publishedServiceId;
+        var hasAuthorityBackedServiceId = !string.IsNullOrWhiteSpace(publishedServiceId);
+        var resolvedServiceId = hasAuthorityBackedServiceId
+            ? publishedServiceId!
+            : normalizedMemberId;  // legacy deterministic mapping for direct platform binds
 
         return new MemberPublishedServiceResolution(
             normalizedScopeId,
             normalizedMemberId,
-            resolvedServiceId);
+            resolvedServiceId,
+            hasAuthorityBackedServiceId);
     }
 
     private static string NormalizeRequired(string? value, string fieldName)
