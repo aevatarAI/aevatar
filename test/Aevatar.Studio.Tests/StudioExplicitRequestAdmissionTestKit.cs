@@ -12,8 +12,9 @@ namespace Aevatar.Studio.Tests;
 
 internal static class StudioExplicitRequestAdmissionTestKit
 {
-    public const string CallerId = "caller-studio-alpha";
+    public const string CallerId = "caller-alpha";
     public const string CallerBearer = "studio-transient-bearer-secret";
+    public const string OrganizationBearer = "studio-organization-bearer-secret";
     public const string WorkflowYaml = """
         name: wf-alpha
         steps:
@@ -52,6 +53,7 @@ internal static class StudioExplicitRequestAdmissionTestKit
         new(
             CallerId,
             CallerBearer,
+            OrganizationBearer,
             executionMode: executionMode,
             existingPlan: existingPlan,
             explicitRequestConfirmations: confirmations);

@@ -49,8 +49,10 @@ public sealed class StudioWorkflowProvisioningServiceTests
     private const string OtherScopeId = "scope-2";
     private const string TeamId = "team-alpha";
     private const string OtherTeamId = "team-beta";
-    private const string MemberId = "member-1";
-    private const string PublishedServiceId = "member-member-1";
+    private const string MemberId = "m-alpha";
+    private const string WorkflowId = "wf-alpha";
+    private const string PublishedServiceId = "svc-alpha";
+    private const string RevisionId = "rev-alpha";
     private const string BindingRunId = "bind-run-1";
     private const string ScheduleId = "schedule-xyz";
 
@@ -76,15 +78,23 @@ public sealed class StudioWorkflowProvisioningServiceTests
                     ExternalCapabilityExecutionMode.Durable),
             });
 
-        admission.Requests.Should().ContainSingle()
-            .Which.ExplicitRequestConfirmations.Should().ContainSingle();
+        var admissionRequest = admission.Requests.Should().ContainSingle().Which;
+        admissionRequest.Access.CallerId.Should().Be("caller-alpha");
+        admissionRequest.Access.NyxIdCallerBearerToken.Should()
+            .Be(StudioExplicitRequestAdmissionTestKit.CallerBearer);
+        admissionRequest.Access.NyxIdOrganizationBearerToken.Should()
+            .Be(StudioExplicitRequestAdmissionTestKit.OrganizationBearer);
+        admissionRequest.ExplicitRequestConfirmations.Should().ContainSingle();
         var plan = member.BindRequest!.Workflow!.CapabilityAdmissionPlan;
         plan.Should().NotBeNull();
         plan!.InvocationAdmissions.Should().ContainSingle()
             .Which.NyxIdExplicitRequestGrant.GrantorOwnerSubject.Should()
             .Be(StudioExplicitRequestAdmissionTestKit.CallerId);
         member.BindRequest.CapabilityAdmission!.NyxIdCallerBearerToken.Should().BeNull();
+        member.BindRequest.CapabilityAdmission.NyxIdOrganizationBearerToken.Should().BeNull();
         member.BindRequest.CapabilityAdmission.ExplicitRequestConfirmations.Should().BeEmpty();
+        plan.ToString().Should().NotContain(StudioExplicitRequestAdmissionTestKit.CallerBearer);
+        plan.ToString().Should().NotContain(StudioExplicitRequestAdmissionTestKit.OrganizationBearer);
     }
 
     [Theory]
@@ -121,6 +131,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
         member.CreateInvoked.Should().BeFalse();
         member.BindRequest.Should().BeNull();
         schedule.Ensured.Should().BeFalse();
+        schedule.PreflightRequests.Should().BeEmpty();
         schedule.LastCreateRequest.Should().BeNull();
     }
 
@@ -132,7 +143,8 @@ public sealed class StudioWorkflowProvisioningServiceTests
             new ExternalWorkflowCapabilityAccessContext(
                 "scope-studio-alpha",
                 StudioExplicitRequestAdmissionTestKit.CallerId,
-                StudioExplicitRequestAdmissionTestKit.CallerBearer),
+                StudioExplicitRequestAdmissionTestKit.CallerBearer,
+                StudioExplicitRequestAdmissionTestKit.OrganizationBearer),
             StudioExplicitRequestAdmissionTestKit.WorkflowYaml,
             new Dictionary<string, string>(),
             "test_prepare_plan",
@@ -280,7 +292,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
     {
         var member = NewMemberService();
         var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
-        var sut = NewService(member, schedule);
+        var sut = NewService(member, schedule, out var bindingPort, out var schedulePort);
 
         var response = await sut.ProvisionAsync(
             ScopeId,
@@ -294,7 +306,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
             });
 
         response.BindingStatus.Should().Be(ProvisionWorkflowBindingStatusNames.Accepted);
-        response.MemberId.Should().Be(MemberId);
+        response.MemberId.Should().Be("m-alpha");
         response.ScopeId.Should().Be(ScopeId);
         response.ScheduleId.Should().Be(ScheduleId);
         response.BindingRunId.Should().Be(BindingRunId);
@@ -302,12 +314,28 @@ public sealed class StudioWorkflowProvisioningServiceTests
 
         // create → bind, carrying the caller scope and Team ownership.
         member.CreateScopeId.Should().Be(ScopeId);
+        new[] { "m-alpha", "wf-alpha", "svc-alpha", "rev-alpha" }
+            .Should().NotContain(member.CreateRequest!.MemberId);
         member.CreateRequest!.ImplementationKind.Should().Be(MemberImplementationKindNames.Workflow);
         member.CreateRequest.TeamId.Should().Be(TeamId);
+        member.LastCreateResult!.MemberId.Should().Be("m-alpha");
+        member.LastCreateResult.PublishedServiceId.Should().Be("svc-alpha");
         member.BindScopeId.Should().Be(ScopeId);
+        member.BindMemberId.Should().Be("m-alpha");
         member.BindRequest!.Workflow!.WorkflowYamls.Should().ContainSingle().Which.Should().Be("name: monitor");
         member.BindRequest.Workflow.WorkflowId.Should().NotBeNullOrWhiteSpace();
         member.BindRequest.RevisionId.Should().NotBeNullOrWhiteSpace();
+        bindingPort.LastRequest.Should().NotBeNull();
+        bindingPort.LastRequest!.MemberId.Should().Be("m-alpha");
+        bindingPort.LastRequest.WorkflowId.Should().Be(member.BindRequest.Workflow.WorkflowId);
+        bindingPort.LastRequest.RevisionId.Should().Be(member.BindRequest.RevisionId);
+        new[] { "m-alpha", "wf-alpha", "svc-alpha", "rev-alpha" }
+            .Should().NotContain(bindingPort.LastRequest.WorkflowId);
+        new[] { "m-alpha", "wf-alpha", "svc-alpha", "rev-alpha" }
+            .Should().NotContain(bindingPort.LastRequest.RevisionId);
+        bindingPort.LastResult!.MemberId.Should().Be("m-alpha");
+        bindingPort.LastResult.WorkflowId.Should().Be("wf-alpha");
+        bindingPort.LastResult.RevisionId.Should().Be("rev-alpha");
 
         // The bind is asynchronous; the service must NOT poll it to completion.
         member.GetBindingRunCallCount.Should().Be(0);
@@ -318,7 +346,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
         configuration.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Workflow);
         var invocation = configuration.Target.ServiceInvocation!;
         invocation.Identity.TenantId.Should().Be(ScopeId);
-        invocation.Identity.ServiceId.Should().Be(PublishedServiceId);
+        invocation.Identity.ServiceId.Should().Be("svc-alpha");
         invocation.EndpointId.Should().Be("chat");
         var chat = invocation.Payload.Unpack<ChatRequestEvent>();
         chat.Prompt.Should().Be("go");
@@ -327,10 +355,19 @@ public sealed class StudioWorkflowProvisioningServiceTests
         owner.Should().NotBeNull();
         owner!.ScopeId.Should().Be(ScopeId);
         owner.TeamId.Should().Be(TeamId);
-        owner.MemberId.Should().Be(MemberId);
+        owner.MemberId.Should().Be("m-alpha");
         var acceptedBinding = schedule.LastCreateRequest!.AcceptedBinding;
         acceptedBinding.Should().NotBeNull();
-        acceptedBinding!.WorkflowRevisionId.Should().Be(member.BindRequest.RevisionId);
+        acceptedBinding!.PublishedServiceId.Should().Be("svc-alpha");
+        acceptedBinding.WorkflowId.Should().Be("wf-alpha");
+        acceptedBinding.WorkflowRevisionId.Should().Be("rev-alpha");
+        var preflightRequest = schedule.PreflightRequests.Should().ContainSingle().Which;
+        preflightRequest.Should().BeSameAs(schedulePort.LastPreflightRequest);
+        preflightRequest.MemberId.Should().Be("m-alpha");
+        preflightRequest.AcceptedBinding.Should().BeEquivalentTo(acceptedBinding);
+        schedulePort.LastCreateRequest.Should().BeSameAs(schedule.LastCreateRequest);
+        schedulePort.LastResult!.MemberId.Should().Be("m-alpha");
+        schedulePort.LastResult.PublishedServiceId.Should().Be("svc-alpha");
     }
 
     [Fact]
@@ -878,13 +915,29 @@ public sealed class StudioWorkflowProvisioningServiceTests
     private static StudioWorkflowProvisioningService NewService(
         RecordingMemberService member,
         RecordingScheduleService schedule,
+        out RecordingBindingPort bindingPort,
+        out RecordingWorkflowSchedulePort schedulePort)
+    {
+        bindingPort = new RecordingBindingPort(member, WorkflowId, RevisionId);
+        schedulePort = new RecordingWorkflowSchedulePort(schedule);
+        return new StudioWorkflowProvisioningService(
+            member,
+            bindingPort,
+            schedulePort,
+            new StudioWorkflowCapabilityAdmissionTestService(),
+            new FakeTimeProvider());
+    }
+
+    private static StudioWorkflowProvisioningService NewService(
+        RecordingMemberService member,
+        RecordingScheduleService schedule,
         IWorkflowExternalCapabilityAdmissionService admission,
         out FakeTimeProvider time)
     {
         time = new FakeTimeProvider();
         return new StudioWorkflowProvisioningService(
             member,
-            new RecordingBindingPort(member),
+            new RecordingBindingPort(member, WorkflowId, RevisionId),
             new RecordingWorkflowSchedulePort(schedule),
             admission,
             time);
@@ -893,9 +946,21 @@ public sealed class StudioWorkflowProvisioningServiceTests
     private static RecordingMemberService NewMemberService() =>
         new()
         {
-            MemberId = MemberId,
-            PublishedServiceId = PublishedServiceId,
             BindingRunId = BindingRunId,
+            CreateResultFactory = static (scopeId, request) => new StudioMemberSummaryResponse(
+                MemberId: "m-alpha",
+                ScopeId: scopeId,
+                DisplayName: request.DisplayName,
+                Description: string.Empty,
+                ImplementationKind: request.ImplementationKind,
+                LifecycleStage: MemberLifecycleStageNames.Created,
+                PublishedServiceId: "svc-alpha",
+                LastBoundRevisionId: null,
+                CreatedAt: DateTimeOffset.UtcNow,
+                UpdatedAt: DateTimeOffset.UtcNow)
+            {
+                TeamId = request.TeamId,
+            },
         };
 
     private static AuthenticatedAuthorizationOwnerContext TestAuthenticatedOwner() =>
@@ -914,16 +979,28 @@ public sealed class StudioWorkflowProvisioningServiceTests
     private sealed class RecordingBindingPort : IStudioMemberWorkflowBindingPort
     {
         private readonly RecordingMemberService _member;
+        private readonly string _acceptedWorkflowId;
+        private readonly string _acceptedRevisionId;
 
-        public RecordingBindingPort(RecordingMemberService member)
+        public RecordingBindingPort(
+            RecordingMemberService member,
+            string acceptedWorkflowId,
+            string acceptedRevisionId)
         {
             _member = member;
+            _acceptedWorkflowId = acceptedWorkflowId;
+            _acceptedRevisionId = acceptedRevisionId;
         }
+
+        public StudioMemberWorkflowBindingRequest? LastRequest { get; private set; }
+
+        public StudioMemberWorkflowBindingResult? LastResult { get; private set; }
 
         public async Task<StudioMemberWorkflowBindingResult> BindAsync(
             StudioMemberWorkflowBindingRequest request,
             CancellationToken ct = default)
         {
+            LastRequest = request;
             var receipt = await _member.BindAsync(
                 request.ScopeId,
                 request.MemberId,
@@ -939,7 +1016,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
                     CapabilityAdmission = request.CapabilityAdmission,
                 },
                 ct);
-            return new StudioMemberWorkflowBindingResult(
+            LastResult = new StudioMemberWorkflowBindingResult(
                 true,
                 receipt.ScopeId,
                 receipt.MemberId,
@@ -948,7 +1025,9 @@ public sealed class StudioWorkflowProvisioningServiceTests
                 receipt.BindingRunId,
                 receipt.AckStage,
                 receipt.BindingRunRole,
-                request.WorkflowId);
+                _acceptedWorkflowId,
+                _acceptedRevisionId);
+            return LastResult;
         }
     }
 
@@ -968,8 +1047,11 @@ public sealed class StudioWorkflowProvisioningServiceTests
 
         public Task<StudioMemberWorkflowAuthorizationResult> PreflightForWriteAsync(
             StudioMemberWorkflowScheduleRequest request,
-            CancellationToken ct = default) =>
-            Task.FromResult(new StudioMemberWorkflowAuthorizationResult(
+            CancellationToken ct = default)
+        {
+            LastPreflightRequest = request;
+            _schedule.PreflightRequests.Add(request);
+            return Task.FromResult(new StudioMemberWorkflowAuthorizationResult(
                 true,
                 new ScheduledInvocationAuthorizationPlan
                 {
@@ -981,19 +1063,29 @@ public sealed class StudioWorkflowProvisioningServiceTests
                 },
                 ScheduledInvocationAuthorizationFailureCode.Unspecified,
                 string.Empty));
+        }
+
+        public StudioMemberWorkflowScheduleRequest? LastPreflightRequest { get; private set; }
+
+        public StudioMemberWorkflowScheduleRequest? LastCreateRequest { get; private set; }
+
+        public StudioMemberWorkflowScheduleResult? LastResult { get; private set; }
 
         public async Task<StudioMemberWorkflowScheduleResult> CreateAsync(
             StudioMemberWorkflowScheduleRequest request,
             string confirmedPermissionDigest,
             CancellationToken ct = default)
         {
+            var acceptedBinding = request.AcceptedBinding
+                ?? throw new InvalidOperationException("Accepted binding context is required.");
+            LastCreateRequest = request;
             _schedule.LastCreateRequest = request;
             var scheduleId = request.ScheduleId ?? "schedule-test";
             var owner = new TeamMemberAutomationOwner(request.ScopeId, request.MemberId, request.TeamId ?? TeamId);
             var receipt = await _schedule.EnsureAsync(
                 new ScheduledDispatchConfiguration(
                     ScheduleId: scheduleId,
-                    DisplayName: request.DisplayName ?? $"provision-{PublishedServiceId}",
+                    DisplayName: request.DisplayName ?? $"provision-{acceptedBinding.PublishedServiceId}",
                     Target: new ScheduledDispatchTargetDescriptor(
                         ScheduledDispatchTargetKind.ServiceInvocation,
                         ServiceInvocation: new ScheduledServiceInvocationTargetDescriptor(
@@ -1002,7 +1094,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
                                 TenantId = request.ScopeId,
                                 AppId = ScopeServiceIdentityDefaults.ServiceAppId,
                                 Namespace = ScopeServiceIdentityDefaults.ServiceNamespace,
-                                ServiceId = PublishedServiceId,
+                                ServiceId = acceptedBinding.PublishedServiceId,
                             },
                             EndpointId: "chat",
                             Payload: Any.Pack(new ChatRequestEvent
@@ -1032,14 +1124,15 @@ public sealed class StudioWorkflowProvisioningServiceTests
                 },
                 new ScheduledDispatchMutationContext(TeamAutomationOwner: owner),
                 ct);
-            return new StudioMemberWorkflowScheduleResult(
+            LastResult = new StudioMemberWorkflowScheduleResult(
                 true,
                 request.ScopeId,
                 request.MemberId,
                 receipt.ScheduleId,
-                PublishedServiceId,
+                acceptedBinding.PublishedServiceId,
                 "/workflow/observatory",
                 "pending");
+            return LastResult;
         }
 
         public Task<StudioMemberWorkflowScheduleResult> ReauthorizeAsync(
@@ -1099,15 +1192,16 @@ public sealed class StudioWorkflowProvisioningServiceTests
     /// </summary>
     private sealed class RecordingMemberService : Application.Studio.Abstractions.IStudioMemberService
     {
-        public string MemberId { get; set; } = "member-1";
-        public string PublishedServiceId { get; set; } = "member-member-1";
         public string BindingRunId { get; set; } = "bind-run-1";
-        public string? TeamId { get; set; }
+        public Func<string, CreateStudioMemberRequest, StudioMemberSummaryResponse> CreateResultFactory { get; init; } =
+            static (_, _) => throw new InvalidOperationException("Create result factory is required.");
 
         public bool CreateInvoked { get; private set; }
         public string? CreateScopeId { get; private set; }
         public CreateStudioMemberRequest? CreateRequest { get; private set; }
+        public StudioMemberSummaryResponse? LastCreateResult { get; private set; }
         public string? BindScopeId { get; private set; }
+        public string? BindMemberId { get; private set; }
         public UpdateStudioMemberBindingRequest? BindRequest { get; private set; }
         public int GetBindingRunCallCount { get; private set; }
 
@@ -1126,26 +1220,19 @@ public sealed class StudioWorkflowProvisioningServiceTests
             CreateInvoked = true;
             CreateScopeId = scopeId;
             CreateRequest = request;
-            return Task.FromResult(new StudioMemberSummaryResponse(
-                MemberId: MemberId,
-                ScopeId: scopeId,
-                DisplayName: request.DisplayName,
-                Description: string.Empty,
-                ImplementationKind: request.ImplementationKind,
-                LifecycleStage: MemberLifecycleStageNames.Created,
-                PublishedServiceId: PublishedServiceId,
-                LastBoundRevisionId: null,
-                CreatedAt: DateTimeOffset.UtcNow,
-                UpdatedAt: DateTimeOffset.UtcNow)
-            {
-                TeamId = TeamId,
-            });
+            if (string.IsNullOrWhiteSpace(request.MemberId))
+                throw new InvalidOperationException("Provisioning must submit a member identity candidate.");
+            if (new[] { "m-alpha", "wf-alpha", "svc-alpha", "rev-alpha" }.Contains(request.MemberId))
+                throw new InvalidOperationException("The member identity candidate must remain distinct from resolved identities.");
+            LastCreateResult = CreateResultFactory(scopeId, request);
+            return Task.FromResult(LastCreateResult);
         }
 
         public Task<StudioMemberBindingAcceptedResponse> BindAsync(
             string scopeId, string memberId, UpdateStudioMemberBindingRequest request, CancellationToken ct = default)
         {
             BindScopeId = scopeId;
+            BindMemberId = memberId;
             BindRequest = request;
             return Task.FromResult(new StudioMemberBindingAcceptedResponse(
                 Status: StudioMemberBindingRunStatusNames.Accepted,
@@ -1215,6 +1302,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
         public Exception? ThrowOnEnsure { get; set; }
         public bool Ensured { get; private set; }
         public StudioMemberWorkflowScheduleRequest? LastCreateRequest { get; set; }
+        public List<StudioMemberWorkflowScheduleRequest> PreflightRequests { get; } = [];
         public ScheduledDispatchConfiguration? Configuration { get; private set; }
         public ScheduledDispatchMutationContext? MutationContext { get; private set; }
 

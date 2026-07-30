@@ -47,8 +47,12 @@ public sealed class StudioMemberServiceBindingTests
                     [StudioExplicitRequestAdmissionTestKit.MatchingConfirmation()]),
             });
 
-        admission.Requests.Should().ContainSingle()
-            .Which.ExplicitRequestConfirmations.Should().ContainSingle();
+        var admissionRequest = admission.Requests.Should().ContainSingle().Which;
+        admissionRequest.Access.NyxIdCallerBearerToken.Should()
+            .Be(StudioExplicitRequestAdmissionTestKit.CallerBearer);
+        admissionRequest.Access.NyxIdOrganizationBearerToken.Should()
+            .Be(StudioExplicitRequestAdmissionTestKit.OrganizationBearer);
+        admissionRequest.ExplicitRequestConfirmations.Should().ContainSingle();
         var started = commandPort.StartedRuns.Should().ContainSingle().Which;
         started.ScopeId.Should().Be("scope-studio-alpha");
         started.MemberId.Should().Be("m-alpha");
@@ -60,6 +64,8 @@ public sealed class StudioMemberServiceBindingTests
             .Be(StudioExplicitRequestAdmissionTestKit.CallerId);
         started.Binding.Workflow.CapabilityAdmissionPlan.ToString().Should()
             .NotContain(StudioExplicitRequestAdmissionTestKit.CallerBearer);
+        started.Binding.Workflow.CapabilityAdmissionPlan.ToString().Should()
+            .NotContain(StudioExplicitRequestAdmissionTestKit.OrganizationBearer);
     }
 
     [Theory]
@@ -107,7 +113,8 @@ public sealed class StudioMemberServiceBindingTests
             new ExternalWorkflowCapabilityAccessContext(
                 "scope-studio-alpha",
                 StudioExplicitRequestAdmissionTestKit.CallerId,
-                StudioExplicitRequestAdmissionTestKit.CallerBearer),
+                StudioExplicitRequestAdmissionTestKit.CallerBearer,
+                StudioExplicitRequestAdmissionTestKit.OrganizationBearer),
             StudioExplicitRequestAdmissionTestKit.WorkflowYaml,
             new Dictionary<string, string>(),
             "test_prepare_plan",

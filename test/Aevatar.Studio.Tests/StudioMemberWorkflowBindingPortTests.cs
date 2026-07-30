@@ -37,8 +37,12 @@ public sealed class StudioMemberWorkflowBindingPortTests
                 [StudioExplicitRequestAdmissionTestKit.MatchingConfirmation()]),
         });
 
-        admission.Requests.Should().ContainSingle()
-            .Which.ExplicitRequestConfirmations.Should().ContainSingle();
+        var admissionRequest = admission.Requests.Should().ContainSingle().Which;
+        admissionRequest.Access.NyxIdCallerBearerToken.Should()
+            .Be(StudioExplicitRequestAdmissionTestKit.CallerBearer);
+        admissionRequest.Access.NyxIdOrganizationBearerToken.Should()
+            .Be(StudioExplicitRequestAdmissionTestKit.OrganizationBearer);
+        admissionRequest.ExplicitRequestConfirmations.Should().ContainSingle();
         memberService.LastMemberId.Should().Be("m-alpha");
         memberService.LastRequest!.Workflow!.WorkflowId.Should().Be("wf-alpha");
         memberService.LastRequest.RevisionId.Should().Be("rev-alpha");
@@ -46,6 +50,7 @@ public sealed class StudioMemberWorkflowBindingPortTests
             .Should().ContainSingle().Which.NyxIdExplicitRequestGrant.GrantorOwnerSubject.Should()
             .Be(StudioExplicitRequestAdmissionTestKit.CallerId);
         memberService.LastRequest.CapabilityAdmission!.NyxIdCallerBearerToken.Should().BeNull();
+        memberService.LastRequest.CapabilityAdmission.NyxIdOrganizationBearerToken.Should().BeNull();
         memberService.LastRequest.CapabilityAdmission.ExplicitRequestConfirmations.Should().BeEmpty();
     }
 
@@ -121,16 +126,26 @@ public sealed class StudioMemberWorkflowBindingPortTests
                 [StudioExplicitRequestAdmissionTestKit.MatchingConfirmation()]),
         });
 
+        var admissionRequest = admission.Requests.Should().ContainSingle().Which;
+        admissionRequest.Access.NyxIdCallerBearerToken.Should()
+            .Be(StudioExplicitRequestAdmissionTestKit.CallerBearer);
+        admissionRequest.Access.NyxIdOrganizationBearerToken.Should()
+            .Be(StudioExplicitRequestAdmissionTestKit.OrganizationBearer);
         saveAndBindPort.LastRequest.Should().NotBeNull();
         var saved = saveAndBindPort.LastRequest!;
         saved.ScopeId.Should().Be("scope-studio-alpha");
         saved.WorkflowId.Should().Be("wf-alpha");
         saved.ServiceId.Should().Be("svc-published-alpha");
         saved.CapabilityAdmission!.NyxIdCallerBearerToken.Should().BeNull();
+        saved.CapabilityAdmission.NyxIdOrganizationBearerToken.Should().BeNull();
         saved.CapabilityAdmission.ExplicitRequestConfirmations.Should().BeEmpty();
         saved.CapabilityAdmission.ExistingPlan!.InvocationAdmissions.Should().ContainSingle()
             .Which.NyxIdExplicitRequestGrant.GrantorOwnerSubject.Should()
             .Be(StudioExplicitRequestAdmissionTestKit.CallerId);
+        saved.CapabilityAdmission.ExistingPlan.ToString().Should()
+            .NotContain(StudioExplicitRequestAdmissionTestKit.CallerBearer);
+        saved.CapabilityAdmission.ExistingPlan.ToString().Should()
+            .NotContain(StudioExplicitRequestAdmissionTestKit.OrganizationBearer);
         memberCommandPort.LastMemberId.Should().Be("m-alpha");
         memberCommandPort.LastRecordPublishedBinding!.PublishedServiceId.Should()
             .Be("svc-published-alpha");
@@ -145,7 +160,8 @@ public sealed class StudioMemberWorkflowBindingPortTests
             new ExternalWorkflowCapabilityAccessContext(
                 "scope-studio-alpha",
                 StudioExplicitRequestAdmissionTestKit.CallerId,
-                StudioExplicitRequestAdmissionTestKit.CallerBearer),
+                StudioExplicitRequestAdmissionTestKit.CallerBearer,
+                StudioExplicitRequestAdmissionTestKit.OrganizationBearer),
             StudioExplicitRequestAdmissionTestKit.WorkflowYaml,
             new Dictionary<string, string>(),
             "test_prepare_plan",
