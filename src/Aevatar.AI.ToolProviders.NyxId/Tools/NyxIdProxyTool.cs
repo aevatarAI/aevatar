@@ -6,6 +6,7 @@ using Aevatar.AI.ToolProviders.NyxId.Observability;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Net;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -383,10 +384,13 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
             return await ExecuteAdmittedFileArtifactAsync(
                 token,
                 request,
+                admission.Identity is AgentToolOperationIdentity.AuthoredRequest
+                    ? admission.ServiceInstanceId
+                    : null,
                 ct);
         }
 
-        return await _client.ProxyRequestAsync(
+        var result = await _client.ProxyRequestAsync(
             token,
             request.Slug,
             request.ServiceId,
@@ -395,6 +399,9 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
             request.Body,
             request.Headers,
             ct);
+        return admission.Identity is AgentToolOperationIdentity.AuthoredRequest
+            ? MapAuthoredExactRouteFailure(result, admission.ServiceInstanceId) ?? result
+            : result;
     }
 
     private async Task<string?> RevalidateAdmittedOperationAsync(
@@ -402,6 +409,13 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
         string token,
         CancellationToken ct)
     {
+        if (admission.Identity is AgentToolOperationIdentity.AuthoredRequest)
+        {
+            // The committed explicit-request proof was validated before tool dispatch. Runtime
+            // authority is deliberately enforced by NyxID's exact route, not a catalog read.
+            return null;
+        }
+
         if (admission.Identity is not AgentToolOperationIdentity.PublishedEndpoint publishedEndpoint)
         {
             return AdmissionDriftError(
@@ -440,6 +454,153 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
         return null;
     }
 
+    private static string? MapAuthoredExactRouteFailure(string response, string serviceInstanceId)
+    {
+        if (!TryReadNyxIdTextProxyFailure(response, out var httpStatus, out var error, out var errorCode, out var message))
+            return null;
+
+        return MapAuthoredExactRouteError(httpStatus, error, errorCode, message, serviceInstanceId);
+    }
+
+    private static string? MapAuthoredExactRouteFailure(
+        NyxIdProxyBinaryResponse response,
+        string serviceInstanceId)
+    {
+        if (response.Succeeded ||
+            !TryReadNyxIdError(response.Detail, out var error, out var errorCode, out var message))
+        {
+            return null;
+        }
+
+        return MapAuthoredExactRouteError(response.HttpStatus, error, errorCode, message, serviceInstanceId);
+    }
+
+    private static string? MapAuthoredExactRouteError(
+        int httpStatus,
+        string error,
+        int errorCode,
+        string message,
+        string serviceInstanceId)
+    {
+        if (httpStatus == (int)HttpStatusCode.BadRequest &&
+            error == "bad_request" &&
+            errorCode == 1000 &&
+            message.StartsWith($"Bad request: _nyxid_via UserService '{serviceInstanceId}' has slug '", StringComparison.Ordinal) &&
+            message.Contains("', but the route requested '", StringComparison.Ordinal))
+        {
+            return AdmissionDriftError(
+                "NYXID_OPERATION_AUTHORITY_DRIFT",
+                "NyxID rejected the admitted UserService authority.");
+        }
+
+        if (httpStatus == (int)HttpStatusCode.NotFound &&
+            error == "not_found" &&
+            errorCode == 1003 &&
+            message == $"Not found: UserService '{serviceInstanceId}' not found")
+        {
+            return AdmissionDriftError(
+                "NYXID_OPERATION_AUTHORITY_DRIFT",
+                "NyxID rejected the admitted UserService authority.");
+        }
+
+        if (httpStatus == (int)HttpStatusCode.Forbidden &&
+            error == "org_role_insufficient" &&
+            errorCode == 8103 &&
+            message == "Organization role insufficient: you do not have proxy access to this service")
+        {
+            return AdmissionDriftError(
+                "NYXID_OPERATION_AUTHORITY_ACCESS_DENIED",
+                "NyxID denied access to the admitted UserService authority.");
+        }
+
+        return null;
+    }
+
+    private static bool TryReadNyxIdTextProxyFailure(
+        string? response,
+        out int httpStatus,
+        out string error,
+        out int errorCode,
+        out string message)
+    {
+        httpStatus = 0;
+        error = string.Empty;
+        errorCode = 0;
+        message = string.Empty;
+        if (string.IsNullOrWhiteSpace(response))
+            return false;
+
+        try
+        {
+            using var wrapper = JsonDocument.Parse(response);
+            var root = wrapper.RootElement;
+            if (root.TryGetProperty("error", out var wrapperError) &&
+                wrapperError.ValueKind == JsonValueKind.True &&
+                root.TryGetProperty("status", out var status) &&
+                status.TryGetInt32(out httpStatus) &&
+                root.TryGetProperty("body", out var body) &&
+                body.ValueKind == JsonValueKind.String)
+            {
+                using var payload = JsonDocument.Parse(body.GetString()!);
+                return TryReadNyxIdError(payload.RootElement, out error, out errorCode, out message);
+            }
+
+            return false;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryReadNyxIdError(
+        string? response,
+        out string error,
+        out int errorCode,
+        out string message)
+    {
+        error = string.Empty;
+        errorCode = 0;
+        message = string.Empty;
+        if (string.IsNullOrWhiteSpace(response))
+            return false;
+
+        try
+        {
+            using var payload = JsonDocument.Parse(response);
+            return TryReadNyxIdError(payload.RootElement, out error, out errorCode, out message);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryReadNyxIdError(
+        JsonElement payload,
+        out string error,
+        out int errorCode,
+        out string message)
+    {
+        error = string.Empty;
+        errorCode = 0;
+        message = string.Empty;
+        if (payload.ValueKind != JsonValueKind.Object ||
+            !payload.TryGetProperty("error", out var errorElement) ||
+            errorElement.ValueKind != JsonValueKind.String ||
+            !payload.TryGetProperty("error_code", out var errorCodeElement) ||
+            !errorCodeElement.TryGetInt32(out errorCode) ||
+            !payload.TryGetProperty("message", out var messageElement) ||
+            messageElement.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        error = errorElement.GetString()!;
+        message = messageElement.GetString()!;
+        return true;
+    }
+
     private static string FormatAdmissionIdentity(AgentToolOperationIdentity identity) =>
         identity switch
         {
@@ -456,6 +617,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
     private async Task<string> ExecuteAdmittedFileArtifactAsync(
         string effectiveToken,
         NyxIdOperationRequest request,
+        string? authoredServiceInstanceId,
         CancellationToken ct)
     {
         if (_fileArtifactIngress == null)
@@ -476,6 +638,13 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
             request.Headers,
             _fileArtifactMaxBytes,
             ct);
+
+        if (authoredServiceInstanceId is not null)
+        {
+            var authorityFailure = MapAuthoredExactRouteFailure(response, authoredServiceInstanceId);
+            if (authorityFailure is not null)
+                return authorityFailure;
+        }
 
         return await CompleteFileArtifactAsync(
             response,

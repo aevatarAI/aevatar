@@ -531,6 +531,214 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_ShouldDispatchAuthoredTextThroughExactRouteWithoutCatalogReads()
+    {
+        var handler = new RecordingHandler();
+        var tool = CreateTool(handler);
+        using var scope = PushContext(AuthoredRequestAdmission());
+
+        var result = await tool.ExecuteAsync(
+            """{"path_params":{"event_id":"evt-runtime"},"query":{"notify":"owner"},"body":{"title":"Planning"}}""");
+
+        result.Should().NotContain("error_code");
+        handler.RequestCount.Should().Be(1);
+        handler.McpConfigRequests.Should().BeEmpty();
+        handler.RequestUris.Should().OnlyContain(uri =>
+            !uri.Contains("/api/v1/keys", StringComparison.Ordinal) &&
+            !uri.Contains("/api/v1/mcp/", StringComparison.Ordinal));
+        var request = handler.ProxyRequests.Should().ContainSingle().Subject;
+        request.Method.Should().Be("POST");
+        request.Path.Should().Be("/api/v1/proxy/s/calendar-alpha/events/evt-runtime");
+        request.Query.Should().Be("?_nyxid_via=us-calendar-alpha&notify=owner");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldDispatchAuthoredFileThroughExactRouteWithoutCatalogReads()
+    {
+        var handler = new RecordingHandler(binaryResponse: true);
+        var ingress = new RecordingFileArtifactIngress();
+        var tool = CreateTool(handler, ingress);
+        var admission = AuthoredRequestAdmission() with
+        {
+            HttpMethod = "GET",
+            RequestBody = null,
+            ResponsePolicy = new AgentToolOperationResponsePolicy(false, true, []),
+            ExecutionPolicy = ReadOnlyPolicy(),
+        };
+        using var scope = PushContext(admission);
+
+        var result = await tool.ExecuteAsync(
+            """{"path_params":{"event_id":"evt-runtime"}}""");
+
+        result.Should().Contain("\"success\":true");
+        handler.RequestCount.Should().Be(1);
+        handler.McpConfigRequests.Should().BeEmpty();
+        handler.RequestUris.Should().OnlyContain(uri =>
+            !uri.Contains("/api/v1/keys", StringComparison.Ordinal) &&
+            !uri.Contains("/api/v1/mcp/", StringComparison.Ordinal));
+        handler.ProxyRequests.Should().ContainSingle().Which.Query
+            .Should().Be("?_nyxid_via=us-calendar-alpha");
+        ingress.Requests.Should().ContainSingle();
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.BadRequest, "bad_request", 1000, "Bad request: _nyxid_via UserService 'us-calendar-alpha' has slug 'calendar-beta', but the route requested 'calendar-alpha'", "NYXID_OPERATION_AUTHORITY_DRIFT")]
+    [InlineData(HttpStatusCode.NotFound, "not_found", 1003, "Not found: UserService 'us-calendar-alpha' not found", "NYXID_OPERATION_AUTHORITY_DRIFT")]
+    [InlineData(HttpStatusCode.Forbidden, "org_role_insufficient", 8103, "Organization role insufficient: you do not have proxy access to this service", "NYXID_OPERATION_AUTHORITY_ACCESS_DENIED")]
+    public async Task ExecuteAsync_ShouldMapAuthoredExactRouteAuthorityFailureWithoutFallback(
+        HttpStatusCode status,
+        string error,
+        int errorCode,
+        string message,
+        string expectedOperationErrorCode)
+    {
+        var handler = new RecordingHandler
+        {
+            ProxyStatusCode = status,
+            ProxyResponseBody = JsonSerializer.Serialize(new
+            {
+                error,
+                error_code = errorCode,
+                message,
+            }),
+        };
+        var tool = CreateTool(handler);
+        using var scope = PushContext(AuthoredRequestAdmission());
+
+        var result = await tool.ExecuteAsync(
+            """{"path_params":{"event_id":"evt-runtime"},"body":{"title":"Planning"}}""");
+
+        result.Should().Contain(expectedOperationErrorCode);
+        handler.RequestCount.Should().Be(1);
+        handler.McpConfigRequests.Should().BeEmpty();
+        handler.ProxyRequests.Should().ContainSingle().Which.Query
+            .Should().Be("?_nyxid_via=us-calendar-alpha");
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.BadRequest, "bad_request", 1000, "downstream request was invalid")]
+    [InlineData(HttpStatusCode.NotFound, "not_found", 1003, "downstream resource was not found")]
+    [InlineData(HttpStatusCode.NotFound, "not_found", 1003, "Not found: UserService 'us-other' not found")]
+    public async Task ExecuteAsync_ShouldNotMapOrdinaryAuthoredDownstreamTextFailure(
+        HttpStatusCode status,
+        string error,
+        int errorCode,
+        string message)
+    {
+        var handler = new RecordingHandler
+        {
+            ProxyStatusCode = status,
+            ProxyResponseBody = JsonSerializer.Serialize(new { error, error_code = errorCode, message }),
+        };
+        var tool = CreateTool(handler);
+        using var scope = PushContext(AuthoredRequestAdmission());
+
+        var result = await tool.ExecuteAsync(
+            """{"path_params":{"event_id":"evt-runtime"},"body":{"title":"Planning"}}""");
+
+        result.Should().NotContain("NYXID_OPERATION_AUTHORITY_");
+        result.Should().Contain($"\"status\": {(int)status}");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldNotMapSuccessfulAuthoredDownstreamTextBody()
+    {
+        const string downstreamBody = """{"error":"not_found","error_code":1003,"message":"Not found: UserService 'us-calendar-alpha' not found"}""";
+        var handler = new RecordingHandler
+        {
+            ProxyStatusCode = HttpStatusCode.OK,
+            ProxyResponseBody = downstreamBody,
+        };
+        var tool = CreateTool(handler);
+        using var scope = PushContext(AuthoredRequestAdmission());
+
+        var result = await tool.ExecuteAsync(
+            """{"path_params":{"event_id":"evt-runtime"},"body":{"title":"Planning"}}""");
+
+        result.Equals(downstreamBody, StringComparison.Ordinal).Should().BeTrue();
+        result.Should().NotContain("NYXID_OPERATION_AUTHORITY_");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldKeepAuthoredFileAuthorityFailureOutOfArtifactIngress()
+    {
+        var handler = new RecordingHandler(binaryResponse: true)
+        {
+            ProxyStatusCode = HttpStatusCode.NotFound,
+            ProxyResponseBody = """{"error":"not_found","error_code":1003,"message":"Not found: UserService 'us-calendar-alpha' not found"}""",
+        };
+        var ingress = new RecordingFileArtifactIngress();
+        var tool = CreateTool(handler, ingress);
+        var admission = AuthoredRequestAdmission() with
+        {
+            HttpMethod = "GET",
+            RequestBody = null,
+            ResponsePolicy = new AgentToolOperationResponsePolicy(false, true, []),
+            ExecutionPolicy = ReadOnlyPolicy(),
+        };
+        using var scope = PushContext(admission);
+
+        var result = await tool.ExecuteAsync(
+            """{"path_params":{"event_id":"evt-runtime"}}""");
+
+        result.Should().Contain("NYXID_OPERATION_AUTHORITY_DRIFT");
+        handler.RequestCount.Should().Be(1);
+        handler.McpConfigRequests.Should().BeEmpty();
+        handler.ProxyRequests.Should().ContainSingle().Which.Query
+            .Should().Be("?_nyxid_via=us-calendar-alpha");
+        ingress.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldKeepAuthoredFileDownstreamFailureOnArtifactPolicy()
+    {
+        var handler = new RecordingHandler(binaryResponse: true)
+        {
+            ProxyStatusCode = HttpStatusCode.NotFound,
+            ProxyResponseBody = """{"error":"not_found","error_code":1003,"message":"downstream resource was not found"}""",
+        };
+        var ingress = new RecordingFileArtifactIngress();
+        var tool = CreateTool(handler, ingress);
+        var admission = AuthoredRequestAdmission() with
+        {
+            HttpMethod = "GET",
+            RequestBody = null,
+            ResponsePolicy = new AgentToolOperationResponsePolicy(false, true, []),
+            ExecutionPolicy = ReadOnlyPolicy(),
+        };
+        using var scope = PushContext(admission);
+
+        var result = await tool.ExecuteAsync(
+            """{"path_params":{"event_id":"evt-runtime"}}""");
+
+        result.Should().Contain("provider_binary_download_failed");
+        result.Should().NotContain("NYXID_OPERATION_AUTHORITY_");
+        ingress.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldKeepPublishedFileAuthorityFailureOnArtifactPolicy()
+    {
+        var handler = new RecordingHandler(binaryResponse: true)
+        {
+            ProxyStatusCode = HttpStatusCode.NotFound,
+            ProxyResponseBody = """{"error":"not_found","error_code":1003,"message":"UserService not found"}""",
+        };
+        var ingress = new RecordingFileArtifactIngress();
+        var tool = CreateTool(handler, ingress);
+        using var scope = PushContext(MessageResourceAdmission());
+
+        var result = await tool.ExecuteAsync(
+            """{"path_params":{"message_id":"om-runtime","file_key":"file-runtime"},"response_mode":"file_artifact"}""");
+
+        result.Should().Contain("provider_binary_download_failed");
+        result.Should().NotContain("NYXID_OPERATION_AUTHORITY_DRIFT");
+        handler.McpConfigRequests.Should().ContainSingle();
+        handler.ProxyRequests.Should().ContainSingle();
+        ingress.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ExecuteAsync_ShouldRejectLiveRouteDriftBeforeProxyDispatch()
     {
         var handler = new RecordingHandler
@@ -1187,7 +1395,9 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
             AgentSkillRecoveryContext.Empty,
             new Dictionary<string, string>(StringComparer.Ordinal))
         {
-            OperationAdmission = WithLiveDigest(admission),
+            OperationAdmission = admission.Identity is AgentToolOperationIdentity.PublishedEndpoint
+                ? WithLiveDigest(admission)
+                : admission,
             WorkflowRuntime = new AgentWorkflowRuntimeContext(
                 "workflow-run-actor-alpha",
                 "run-alpha",
@@ -1226,6 +1436,10 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
     private sealed class RecordingHandler(bool binaryResponse = false) : HttpMessageHandler
     {
         public string? McpConfigJson { get; init; }
+
+        public HttpStatusCode? ProxyStatusCode { get; init; }
+
+        public string? ProxyResponseBody { get; init; }
 
         public int RequestCount { get; private set; }
 
@@ -1270,6 +1484,17 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
                     request.RequestUri.AbsolutePath,
                     request.RequestUri.Query,
                     body));
+
+                if (ProxyStatusCode is { } proxyStatusCode)
+                {
+                    return new HttpResponseMessage(proxyStatusCode)
+                    {
+                        Content = new StringContent(
+                            ProxyResponseBody ?? string.Empty,
+                            Encoding.UTF8,
+                            "application/json"),
+                    };
+                }
             }
 
             var response = new HttpResponseMessage(HttpStatusCode.OK)
