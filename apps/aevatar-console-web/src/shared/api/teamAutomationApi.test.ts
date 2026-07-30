@@ -70,21 +70,41 @@ function authorizationResult() {
 
 function automationView(overrides?: Record<string, unknown>) {
   return {
-    scopeId: "scope-alpha",
-    teamId: "team-alpha",
-    memberId: "m-alpha",
     scheduleId: "sch-alpha",
-    publishedServiceId: "svc-alpha",
-    credentialSourceKind: "scheduled_invocation_agent_key",
     displayName: "Daily review",
+    targetKind: "ServiceInvocation",
+    targetActorId: "actor-alpha",
+    payloadTypeUrl: "type.googleapis.com/aevatar.ChatRequestEvent",
+    serviceKey: "scope-alpha:default:default:svc-alpha",
+    serviceId: "svc-alpha",
+    serviceEndpointId: "chat",
     prompt: "Summarize open work.",
-    scheduleCron: "0 9 * * 1-5",
-    scheduleTimezone: "Asia/Singapore",
+    cronExpression: "0 9 * * 1-5",
+    timezone: "Asia/Singapore",
     enabled: true,
-    authorizationStatus: "active",
-    credentialExpiresAtUtc: "2026-10-14T00:00:00Z",
+    createdAt: "2026-07-15T00:00:00Z",
+    updatedAt: "2026-07-16T00:00:00Z",
+    nextFireAt: "2026-07-17T01:00:00Z",
+    lastFireAt: null,
+    lastTargetActorId: "",
+    lastCommandId: "",
+    lastCorrelationId: "",
+    lastError: "",
+    fireCount: 0,
+    failureCount: 0,
+    headers: {},
+    scheduleActorId: "schedule-actor-alpha",
+    scheduleKind: "Workflow",
+    deleted: false,
+    teamOwned: true,
+    teamOwnerScopeId: "scope-alpha",
+    teamOwnerMemberId: "m-alpha",
+    teamId: "team-alpha",
+    credentialSourceKind: "ScheduledInvocationAgentKey",
+    teamAutomationLifecycleStatus: "Active",
+    credentialExpiresAt: "2026-10-14T00:00:00Z",
+    teamAutomationOperationId: "op-alpha",
     lastAuthorizationErrorCode: "",
-    operationId: "op-alpha",
     credentialGeneration: 1,
     revocationPending: false,
     nyxIdRevocationStatus: "NotRequired",
@@ -94,10 +114,7 @@ function automationView(overrides?: Record<string, unknown>) {
     ownerLlmUserServiceId: "us-alpha",
     ownerLlmServiceSlug: "connector-alpha",
     ownerLlmModel: "gpt-5",
-    nextFireAt: "2026-07-17T01:00:00Z",
-    lastFireAt: null,
     stateVersion: 4,
-    updatedAt: "2026-07-16T00:00:00Z",
     ...overrides,
   };
 }
@@ -367,7 +384,7 @@ describe("teamAutomationApi", () => {
     );
   });
 
-  it("lists only the canonical member resource", async () => {
+  it("lists only the canonical owner-scoped schedule resource", async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -387,24 +404,66 @@ describe("teamAutomationApi", () => {
       totalCount: 1,
     });
     expect(fetchMock.mock.calls[0][0]).toBe(
-      "/api/scopes/scope-alpha/teams/team-alpha/members/m-alpha/automations?take=200",
+      "/api/schedules?ownerKind=studio_member_automation&ownerScopeId=scope-alpha&ownerTeamId=team-alpha&ownerMemberId=m-alpha&includeTotalCount=true&take=200",
     );
   });
 
-  it("rejects a list item from a different Team member route", async () => {
+  it.each([
+    ["scope", { teamOwnerScopeId: "scope-other" }],
+    ["Team", { teamId: "team-other" }],
+    ["member", { teamOwnerMemberId: "m-other" }],
+  ])("rejects a list item from a different %s owner", async (_label, overrides) => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        items: [automationView(overrides)],
+        nextCursor: null,
+        totalCount: 1,
+      }),
+    } as Response) as typeof global.fetch;
+
+    await expect(teamAutomationApi.list(draft)).rejects.toThrow(
+      "does not belong to the requested Team member route",
+    );
+  });
+
+  it("rejects a generic schedule from the owner-scoped collection", async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        items: [automationView({ teamOwned: false })],
+        nextCursor: null,
+        totalCount: 1,
+      }),
+    } as Response) as typeof global.fetch;
+
+    await expect(teamAutomationApi.list(draft)).rejects.toThrow(
+      "is not a Team-owned automation schedule",
+    );
+  });
+
+  it("gets canonical owner-scoped schedule detail", async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
       status: 200,
       json: async () => ({
-        items: [automationView({ memberId: "m-other" })],
-        nextCursor: null,
-        totalCount: 1,
+        schedule: automationView(),
+        recentFires: [],
       }),
     } as Response);
     global.fetch = fetchMock as typeof global.fetch;
 
-    await expect(teamAutomationApi.list(draft)).rejects.toThrow(
-      "does not belong to the requested Team member route",
+    await expect(teamAutomationApi.get(draft, " sch/alpha ")).resolves.toEqual(
+      expect.objectContaining({
+        memberId: "m-alpha",
+        publishedServiceId: "svc-alpha",
+        scheduleId: "sch-alpha",
+      }),
+    );
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "/api/schedules/sch%2Falpha?ownerKind=studio_member_automation&ownerScopeId=scope-alpha&ownerTeamId=team-alpha&ownerMemberId=m-alpha",
     );
   });
 
@@ -528,7 +587,7 @@ describe("teamAutomationApi", () => {
     ).toThrow("Unknown Team automation revocation track");
   });
 
-  it("follows scoped list cursors without falling back to the generic schedule API", async () => {
+  it("keeps the canonical owner tuple on every list page", async () => {
     const fetchMock = jest
       .fn()
       .mockResolvedValueOnce({
@@ -558,9 +617,8 @@ describe("teamAutomationApi", () => {
       "sch-second",
     ]);
     expect(fetchMock.mock.calls.map(([path]) => path)).toEqual([
-      "/api/scopes/scope-alpha/teams/team-alpha/members/m-alpha/automations?take=200",
-      "/api/scopes/scope-alpha/teams/team-alpha/members/m-alpha/automations?cursor=cursor-2&take=200",
+      "/api/schedules?ownerKind=studio_member_automation&ownerScopeId=scope-alpha&ownerTeamId=team-alpha&ownerMemberId=m-alpha&includeTotalCount=true&take=200",
+      "/api/schedules?ownerKind=studio_member_automation&ownerScopeId=scope-alpha&ownerTeamId=team-alpha&ownerMemberId=m-alpha&cursor=cursor-2&includeTotalCount=true&take=200",
     ]);
-    expect(fetchMock.mock.calls.map(([path]) => path)).not.toContain("/api/schedules");
   });
 });
