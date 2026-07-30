@@ -619,6 +619,8 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
     [InlineData(HttpStatusCode.BadRequest, "bad_request", 1000, "downstream request was invalid")]
     [InlineData(HttpStatusCode.NotFound, "not_found", 1003, "downstream resource was not found")]
     [InlineData(HttpStatusCode.NotFound, "not_found", 1003, "Not found: UserService 'us-other' not found")]
+    [InlineData(HttpStatusCode.BadRequest, "bad_request", 1000, "Bad request: _nyxid_via UserService 'us-calendar-alpha' has slug 'calendar-beta', but the route requested 'calendar-other'")]
+    [InlineData(HttpStatusCode.BadRequest, "bad_request", 1000, "Bad request: _nyxid_via UserService 'us-calendar-alpha' has slug 'calendar-beta', but the route requested 'calendar-alpha' unexpected suffix")]
     public async Task ExecuteAsync_ShouldNotMapOrdinaryAuthoredDownstreamTextFailure(
         HttpStatusCode status,
         string error,
@@ -659,13 +661,21 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
         result.Should().NotContain("NYXID_OPERATION_AUTHORITY_");
     }
 
-    [Fact]
-    public async Task ExecuteAsync_ShouldKeepAuthoredFileAuthorityFailureOutOfArtifactIngress()
+    [Theory]
+    [InlineData(HttpStatusCode.BadRequest, "bad_request", 1000, "Bad request: _nyxid_via UserService 'us-calendar-alpha' has slug 'calendar-beta', but the route requested 'calendar-alpha'", "NYXID_OPERATION_AUTHORITY_DRIFT")]
+    [InlineData(HttpStatusCode.NotFound, "not_found", 1003, "Not found: UserService 'us-calendar-alpha' not found", "NYXID_OPERATION_AUTHORITY_DRIFT")]
+    [InlineData(HttpStatusCode.Forbidden, "org_role_insufficient", 8103, "Organization role insufficient: you do not have proxy access to this service", "NYXID_OPERATION_AUTHORITY_ACCESS_DENIED")]
+    public async Task ExecuteAsync_ShouldKeepAuthoredFileExactRouteAuthorityFailureOutOfArtifactIngress(
+        HttpStatusCode status,
+        string error,
+        int errorCode,
+        string message,
+        string expectedOperationErrorCode)
     {
         var handler = new RecordingHandler(binaryResponse: true)
         {
-            ProxyStatusCode = HttpStatusCode.NotFound,
-            ProxyResponseBody = """{"error":"not_found","error_code":1003,"message":"Not found: UserService 'us-calendar-alpha' not found"}""",
+            ProxyStatusCode = status,
+            ProxyResponseBody = JsonSerializer.Serialize(new { error, error_code = errorCode, message }),
         };
         var ingress = new RecordingFileArtifactIngress();
         var tool = CreateTool(handler, ingress);
@@ -681,7 +691,7 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
         var result = await tool.ExecuteAsync(
             """{"path_params":{"event_id":"evt-runtime"}}""");
 
-        result.Should().Contain("NYXID_OPERATION_AUTHORITY_DRIFT");
+        result.Should().Contain(expectedOperationErrorCode);
         handler.RequestCount.Should().Be(1);
         handler.McpConfigRequests.Should().BeEmpty();
         handler.ProxyRequests.Should().ContainSingle().Which.Query

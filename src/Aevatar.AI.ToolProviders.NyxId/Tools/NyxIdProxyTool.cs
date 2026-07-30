@@ -400,7 +400,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
             request.Headers,
             ct);
         return admission.Identity is AgentToolOperationIdentity.AuthoredRequest
-            ? MapAuthoredExactRouteFailure(result, admission.ServiceInstanceId) ?? result
+            ? MapAuthoredExactRouteFailure(result, admission.ServiceInstanceId, request.Slug) ?? result
             : result;
     }
 
@@ -454,17 +454,21 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
         return null;
     }
 
-    private static string? MapAuthoredExactRouteFailure(string response, string serviceInstanceId)
+    private static string? MapAuthoredExactRouteFailure(
+        string response,
+        string serviceInstanceId,
+        string serviceSlug)
     {
         if (!TryReadNyxIdTextProxyFailure(response, out var httpStatus, out var error, out var errorCode, out var message))
             return null;
 
-        return MapAuthoredExactRouteError(httpStatus, error, errorCode, message, serviceInstanceId);
+        return MapAuthoredExactRouteError(httpStatus, error, errorCode, message, serviceInstanceId, serviceSlug);
     }
 
     private static string? MapAuthoredExactRouteFailure(
         NyxIdProxyBinaryResponse response,
-        string serviceInstanceId)
+        string serviceInstanceId,
+        string serviceSlug)
     {
         if (response.Succeeded ||
             !TryReadNyxIdError(response.Detail, out var error, out var errorCode, out var message))
@@ -472,7 +476,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
             return null;
         }
 
-        return MapAuthoredExactRouteError(response.HttpStatus, error, errorCode, message, serviceInstanceId);
+        return MapAuthoredExactRouteError(response.HttpStatus, error, errorCode, message, serviceInstanceId, serviceSlug);
     }
 
     private static string? MapAuthoredExactRouteError(
@@ -480,13 +484,13 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
         string error,
         int errorCode,
         string message,
-        string serviceInstanceId)
+        string serviceInstanceId,
+        string serviceSlug)
     {
         if (httpStatus == (int)HttpStatusCode.BadRequest &&
             error == "bad_request" &&
             errorCode == 1000 &&
-            message.StartsWith($"Bad request: _nyxid_via UserService '{serviceInstanceId}' has slug '", StringComparison.Ordinal) &&
-            message.Contains("', but the route requested '", StringComparison.Ordinal))
+            IsExactSlugMismatch(message, serviceInstanceId, serviceSlug))
         {
             return AdmissionDriftError(
                 "NYXID_OPERATION_AUTHORITY_DRIFT",
@@ -514,6 +518,20 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
         }
 
         return null;
+    }
+
+    private static bool IsExactSlugMismatch(string message, string serviceInstanceId, string serviceSlug)
+    {
+        var prefix = $"Bad request: _nyxid_via UserService '{serviceInstanceId}' has slug '";
+        var suffix = $"', but the route requested '{serviceSlug}'";
+        if (!message.StartsWith(prefix, StringComparison.Ordinal) ||
+            !message.EndsWith(suffix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var liveSlugLength = message.Length - prefix.Length - suffix.Length;
+        return liveSlugLength > 0 && !message.AsSpan(prefix.Length, liveSlugLength).Contains('\'');
     }
 
     private static bool TryReadNyxIdTextProxyFailure(
@@ -641,7 +659,10 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
 
         if (authoredServiceInstanceId is not null)
         {
-            var authorityFailure = MapAuthoredExactRouteFailure(response, authoredServiceInstanceId);
+            var authorityFailure = MapAuthoredExactRouteFailure(
+                response,
+                authoredServiceInstanceId,
+                request.Slug);
             if (authorityFailure is not null)
                 return authorityFailure;
         }
