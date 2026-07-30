@@ -151,6 +151,34 @@ public sealed class StudioProvisioningEndpointsTests
     }
 
     [Fact]
+    public async Task HandleProvisionWorkflowAsync_WithNullExplicitRequestConfirmation_ShouldReturnTypedBadRequestWithoutDispatch()
+    {
+        var service = new RecordingProvisioningService();
+        var http = CreateAuthenticatedContext(ScopeId);
+        http.Response.Body = new MemoryStream();
+
+        var result = await InvokeHandle<IResult>(
+            http,
+            ScopeId,
+            new ProvisionWorkflowRequest("Monitor", "name: wf-alpha", Caller: Caller)
+            {
+                TeamId = TeamId,
+                ExplicitRequestConfirmations = [null!],
+            },
+            service,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+        http.Response.Body.Position = 0;
+        using var body = await JsonDocument.ParseAsync(http.Response.Body);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.RootElement.GetProperty("code").GetString().Should()
+            .Be("INVALID_EXPLICIT_REQUEST_CONFIRMATION");
+        service.ProvisionInvoked.Should().BeFalse();
+    }
+
+    [Fact]
     public async Task HandleProvisionWorkflowAsync_ShouldReturnConflict_WhenScheduleOwnerBindingMissing()
     {
         var service = new RecordingProvisioningService { Response = NewResponse() };
@@ -437,6 +465,7 @@ public sealed class StudioProvisioningEndpointsTests
 
     private static IServiceProvider BuildAuthEnabledServices() =>
         new ServiceCollection()
+            .AddLogging()
             .AddSingleton<IConfiguration>(new ConfigurationBuilder()
                 .AddInMemoryCollection(new Dictionary<string, string?>
                 {

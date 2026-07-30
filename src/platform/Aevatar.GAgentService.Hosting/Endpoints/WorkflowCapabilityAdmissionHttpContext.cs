@@ -26,8 +26,8 @@ internal static class WorkflowCapabilityAdmissionHttpContext
             WorkflowCallerCredentialExtractor.Extract(http).Credential?.BearerToken,
             executionMode: executionMode,
             existingPlan: existingPlan,
-            explicitRequestConfirmations: explicitRequestConfirmations?.Select(static input =>
-                input.ToConfirmation()));
+            explicitRequestConfirmations: NyxIdExplicitRequestConfirmationInputs.ToConfirmations(
+                explicitRequestConfirmations));
     }
 
     private static string ResolveCallerId(ClaimsPrincipal? user)

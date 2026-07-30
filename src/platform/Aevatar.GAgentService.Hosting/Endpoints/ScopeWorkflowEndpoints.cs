@@ -144,6 +144,10 @@ public static class ScopeWorkflowEndpoints
             }, ct);
             return Results.Accepted(result.ReadModelUrl, result);
         }
+        catch (NyxIdExplicitRequestConfirmationInputException ex)
+        {
+            return ExplicitRequestConfirmationBadRequest(ex);
+        }
         catch (InvalidOperationException ex)
         {
             return Results.BadRequest(new
@@ -185,6 +189,10 @@ public static class ScopeWorkflowEndpoints
                 ct);
             return Results.Accepted(result.Workflow.ReadModelUrl, result);
         }
+        catch (NyxIdExplicitRequestConfirmationInputException ex)
+        {
+            return ExplicitRequestConfirmationBadRequest(ex);
+        }
         catch (InvalidOperationException ex)
         {
             return Results.BadRequest(new
@@ -194,6 +202,14 @@ public static class ScopeWorkflowEndpoints
             });
         }
     }
+
+    private static IResult ExplicitRequestConfirmationBadRequest(
+        NyxIdExplicitRequestConfirmationInputException exception) =>
+        Results.BadRequest(new
+        {
+            code = NyxIdExplicitRequestConfirmationInputException.ErrorCode,
+            message = exception.Message,
+        });
 
     private static async Task<IResult> HandleExplicitRequestPreviewAsyncCore(
         HttpContext http,

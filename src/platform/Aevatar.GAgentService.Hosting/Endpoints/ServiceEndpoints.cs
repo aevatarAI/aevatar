@@ -160,13 +160,13 @@ public static partial class ServiceEndpoints
                     }
                 }
 
-                var admissionContext = WorkflowCapabilityAdmissionHttpContext.Create(
-                    http,
-                    ExternalCapabilityExecutionMode.Durable,
-                    explicitRequestConfirmations: request.ExplicitRequestConfirmations);
-                spec.WorkflowSpec.ExpectedExecutionMode = admissionContext.ExecutionMode;
                 try
                 {
+                    var admissionContext = WorkflowCapabilityAdmissionHttpContext.Create(
+                        http,
+                        ExternalCapabilityExecutionMode.Durable,
+                        explicitRequestConfirmations: request.ExplicitRequestConfirmations);
+                    spec.WorkflowSpec.ExpectedExecutionMode = admissionContext.ExecutionMode;
                     spec.WorkflowSpec.CapabilityAdmissionPlan = await capabilityAdmissionService.AdmitAsync(
                         new WorkflowExternalCapabilityAdmissionRequest(
                             new ExternalWorkflowCapabilityAccessContext(
@@ -196,6 +196,14 @@ public static partial class ServiceEndpoints
                                 safeMessage = blocker.SafeMessage,
                             }),
                         },
+                    });
+                }
+                catch (NyxIdExplicitRequestConfirmationInputException ex)
+                {
+                    return Results.BadRequest(new
+                    {
+                        code = NyxIdExplicitRequestConfirmationInputException.ErrorCode,
+                        message = ex.Message,
                     });
                 }
 

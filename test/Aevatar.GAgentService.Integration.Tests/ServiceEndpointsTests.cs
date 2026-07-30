@@ -411,6 +411,35 @@ public sealed class ServiceEndpointsTests
     }
 
     [Fact]
+    public async Task CreateRevisionAsync_WithNullExplicitRequestConfirmation_ShouldReturnTypedBadRequestWithoutAdmissionOrDispatch()
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+
+        var response = await host.Client.PostAsJsonAsync(
+            "/api/services/svc-alpha/revisions",
+            new ServiceEndpoints.CreateRevisionHttpRequest(
+                "tenant-alpha",
+                "app-alpha",
+                "ns-alpha",
+                "rev-alpha",
+                "workflow",
+                null,
+                null,
+                new ServiceEndpoints.WorkflowRevisionHttpRequest(
+                    "wf-alpha",
+                    "name: wf-alpha",
+                    "workflow-definition-alpha",
+                    null),
+                [null!]));
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await response.Content.ReadAsStringAsync()).Should()
+            .Contain("INVALID_EXPLICIT_REQUEST_CONFIRMATION");
+        host.CapabilityAdmission.Requests.Should().BeEmpty();
+        host.CommandPort.CreateRevisionCommand.Should().BeNull();
+    }
+
+    [Fact]
     public async Task RevisionLifecycleEndpoints_ShouldDispatchCommandPortCalls()
     {
         await using var host = await EndpointTestHost.StartAsync();

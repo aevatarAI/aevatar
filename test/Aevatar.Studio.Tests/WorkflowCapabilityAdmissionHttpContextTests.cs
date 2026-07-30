@@ -50,6 +50,27 @@ public sealed class WorkflowCapabilityAdmissionHttpContextTests
         }
     }
 
+    [Fact]
+    public void Create_WithNullExplicitRequestConfirmation_ShouldRejectAtSharedHttpBoundary()
+    {
+        var http = new DefaultHttpContext();
+        NyxIdExplicitRequestConfirmationInput[] inputs = [null!];
+
+        var serviceAction = () => WorkflowCapabilityAdmissionHttpContext.Create(
+            http,
+            explicitRequestConfirmations: inputs);
+        var studioAction = () => StudioWorkflowCapabilityAdmissionHttpContext.Create(
+            http,
+            ExternalCapabilityExecutionMode.Interactive,
+            inputs);
+
+        foreach (var action in new[] { serviceAction, studioAction })
+        {
+            action.Should().Throw<InvalidOperationException>()
+                .WithMessage("Explicit request confirmations cannot contain null values.");
+        }
+    }
+
     [Theory]
     [InlineData("bearer_only", "bearer-token")]
     [InlineData("delegation_only", "delegation-token")]

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Aevatar.Capabilities;
+using Aevatar.GAgentService.Abstractions;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Workflow.Abstractions;
@@ -177,6 +178,10 @@ internal static class StudioMemberEndpoints
             return Results.Accepted(
                 $"/api/scopes/{Uri.EscapeDataString(scopeId)}/members/{Uri.EscapeDataString(memberId)}/binding-runs/{Uri.EscapeDataString(receipt.BindingRunId)}",
                 receipt);
+        }
+        catch (NyxIdExplicitRequestConfirmationInputException ex)
+        {
+            return BadRequest(NyxIdExplicitRequestConfirmationInputException.ErrorCode, ex.Message);
         }
         catch (WorkflowExternalCapabilityAdmissionException ex)
         {

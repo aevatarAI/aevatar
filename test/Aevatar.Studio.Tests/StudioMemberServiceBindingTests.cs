@@ -68,6 +68,47 @@ public sealed class StudioMemberServiceBindingTests
             .NotContain(StudioExplicitRequestAdmissionTestKit.OrganizationBearer);
     }
 
+    [Fact]
+    public async Task BindAsync_Workflow_ForNewRevision_ShouldReadmitCurrentAuthenticatedRequest()
+    {
+        var commandPort = new RecordingCommandPort();
+        var admission = StudioExplicitRequestAdmissionTestKit.CreateAdmissionService();
+        var service = NewService(
+            commandPort,
+            new ThrowingBindQueryPort(),
+            capabilityAdmissionService: admission);
+
+        foreach (var revisionId in new[] { "rev-alpha", "rev-beta" })
+        {
+            await service.BindAsync(
+                "scope-studio-alpha",
+                "m-alpha",
+                new UpdateStudioMemberBindingRequest(
+                    RevisionId: revisionId,
+                    Workflow: new StudioMemberWorkflowBindingSpec(
+                        "wf-alpha",
+                        [StudioExplicitRequestAdmissionTestKit.WorkflowYaml]))
+                {
+                    CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(
+                        [StudioExplicitRequestAdmissionTestKit.MatchingConfirmation()]),
+                });
+        }
+
+        admission.Requests.Should().HaveCount(2);
+        admission.PersistedRequests.Should().BeEmpty();
+        admission.Requests.Should().OnlyContain(request =>
+            request.Access.CallerId == StudioExplicitRequestAdmissionTestKit.CallerId &&
+            request.ExecutionMode == ExternalCapabilityExecutionMode.Interactive &&
+            request.WorkflowYamls != null &&
+            request.WorkflowYamls.SequenceEqual(new[] { StudioExplicitRequestAdmissionTestKit.WorkflowYaml }));
+        commandPort.StartedRuns.Select(static run => run.Binding.RevisionId)
+            .Should().Equal("rev-alpha", "rev-beta");
+        commandPort.StartedRuns.Should().OnlyContain(run =>
+            run.Binding.Workflow!.CapabilityAdmissionPlan!.InvocationAdmissions
+                .Single().NyxIdExplicitRequestGrant.GrantorOwnerSubject ==
+            StudioExplicitRequestAdmissionTestKit.CallerId);
+    }
+
     [Theory]
     [InlineData("missing", "NYXID_EXPLICIT_REQUEST_GRANT_REQUIRED")]
     [InlineData("unknown", "NYXID_EXPLICIT_REQUEST_CONFIRMATION_CALL_SITE_MISMATCH")]

@@ -20,3 +20,22 @@ public sealed record NyxIdExplicitRequestConfirmationInput(
         },
     };
 }
+
+public static class NyxIdExplicitRequestConfirmationInputs
+{
+    public static IReadOnlyList<NyxIdExplicitRequestConfirmation> ToConfirmations(
+        IEnumerable<NyxIdExplicitRequestConfirmationInput>? inputs) =>
+        inputs?.Select(static input =>
+                input?.ToConfirmation() ?? throw new NyxIdExplicitRequestConfirmationInputException())
+            .ToArray() ?? [];
+}
+
+public sealed class NyxIdExplicitRequestConfirmationInputException : InvalidOperationException
+{
+    public const string ErrorCode = "INVALID_EXPLICIT_REQUEST_CONFIRMATION";
+
+    public NyxIdExplicitRequestConfirmationInputException()
+        : base("Explicit request confirmations cannot contain null values.")
+    {
+    }
+}

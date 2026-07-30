@@ -236,6 +236,49 @@ public sealed class ScopeWorkflowEndpointsTests
     }
 
     [Fact]
+    public async Task WorkflowWriteEndpoints_WithNullExplicitRequestConfirmation_ShouldReturnTypedBadRequestWithoutDispatch()
+    {
+        var upsertHttp = CreateHttpContext();
+        var upsertPort = new RecordingScopeWorkflowCommandPort();
+        var upsertResult = await ScopeWorkflowEndpoints.HandleUpsertWorkflowAsync(
+            upsertHttp,
+            "user-1",
+            "wf-alpha",
+            new ScopeWorkflowEndpoints.UpsertScopeWorkflowHttpRequest(
+                "name: wf-alpha\nsteps: []\n",
+                RevisionId: "rev-alpha",
+                ExplicitRequestConfirmations: [null!]),
+            upsertPort,
+            CancellationToken.None);
+
+        await upsertResult.ExecuteAsync(upsertHttp);
+        var upsertBody = await ReadBodyAsync(upsertHttp.Response);
+
+        upsertHttp.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        upsertBody.Should().Contain("INVALID_EXPLICIT_REQUEST_CONFIRMATION");
+        upsertPort.Request.Should().BeNull();
+
+        var saveAndBindHttp = CreateHttpContext();
+        var saveAndBindPort = new RecordingScopeWorkflowSaveAndBindPort();
+        var saveAndBindResult = await ScopeWorkflowEndpoints.HandleSaveAndBindWorkflowAsync(
+            saveAndBindHttp,
+            "user-1",
+            new ScopeWorkflowEndpoints.SaveAndBindScopeWorkflowHttpRequest(
+                "wf-alpha",
+                "name: wf-alpha\nsteps: []\n",
+                ExplicitRequestConfirmations: [null!]),
+            saveAndBindPort,
+            CancellationToken.None);
+
+        await saveAndBindResult.ExecuteAsync(saveAndBindHttp);
+        var saveAndBindBody = await ReadBodyAsync(saveAndBindHttp.Response);
+
+        saveAndBindHttp.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        saveAndBindBody.Should().Contain("INVALID_EXPLICIT_REQUEST_CONFIRMATION");
+        saveAndBindPort.Request.Should().BeNull();
+    }
+
+    [Fact]
     public async Task HandleRunWorkflowStreamAsync_ShouldReturnNotFound_WhenActorDoesNotBelongToUser()
     {
         var http = CreateHttpContext();

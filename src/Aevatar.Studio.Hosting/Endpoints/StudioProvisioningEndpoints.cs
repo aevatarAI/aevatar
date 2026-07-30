@@ -1,5 +1,6 @@
 using Aevatar.Capabilities;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
+using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Hosting.Endpoints.Schedules;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
@@ -115,6 +116,10 @@ internal static class StudioProvisioningEndpoints
             return Results.Accepted(
                 BuildScheduleLocation(response.ScheduleId),
                 response);
+        }
+        catch (NyxIdExplicitRequestConfirmationInputException ex)
+        {
+            return BadRequest(NyxIdExplicitRequestConfirmationInputException.ErrorCode, ex.Message);
         }
         catch (StudioMemberAutomationAuthorizationBindingRequiredException)
         {

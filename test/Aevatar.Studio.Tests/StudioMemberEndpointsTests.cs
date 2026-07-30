@@ -540,6 +540,37 @@ public sealed class StudioMemberEndpointsTests
     }
 
     [Fact]
+    public async Task HandleBindAsync_WithNullExplicitRequestConfirmation_ShouldReturnTypedBadRequestWithoutDispatch()
+    {
+        var service = new RecordingMemberService();
+        var http = CreateAuthenticatedContext(ScopeId);
+        http.Response.Body = new MemoryStream();
+
+        var result = await InvokeHandle<IResult>(
+            "HandleBindAsync",
+            http,
+            ScopeId,
+            "m-alpha",
+            new UpdateStudioMemberBindingRequest(
+                RevisionId: "rev-alpha",
+                Workflow: new StudioMemberWorkflowBindingSpec("wf-alpha", ["name: wf-alpha"]))
+            {
+                ExplicitRequestConfirmations = [null!],
+            },
+            service,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+        http.Response.Body.Position = 0;
+        using var body = await JsonDocument.ParseAsync(http.Response.Body);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.RootElement.GetProperty("code").GetString().Should()
+            .Be("INVALID_EXPLICIT_REQUEST_CONFIRMATION");
+        service.BindRequest.Should().BeNull();
+    }
+
+    [Fact]
     public async Task HandleBindAsync_ShouldReturnBadRequest_OnDomainError()
     {
         var service = new RecordingMemberService
