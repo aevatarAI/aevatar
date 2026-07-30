@@ -18,10 +18,6 @@
 - `memberId`、`workflowId`、`publishedServiceId` 是隔离身份，不是同一资源在不同阶段的别名：`memberId` 表示 Studio team member authority；`workflowId` 表示 workspace workflow draft / definition document；`publishedServiceId` 表示 callable service runtime identity。
 - 禁止把 `workflowId` 传给 member API，禁止把 `memberId` 传给 workflow draft API，禁止把二者冒充 `publishedServiceId`。任何身份转换都必须来自明确后端 contract/read model，不能靠字符串规则、前缀、相等关系或路由位置猜测。
 - 正常业务语义下不得假设 `memberId === workflowId`。若历史 repair/migration/materialization 代码中出现从 workflow draft 派生 member 的逻辑，只能作为命名明确的后台修复路径理解，不能进入新前端、路由、API helper、普通业务逻辑或测试 fixture。
-- 前端 Team 资源 canonical 路由必须表达 `scope -> team -> member` 所有权：Team 集合为 `/scopes/:scopeId/teams`，Team detail 为 `/scopes/:scopeId/teams/:teamId`，Team member surface 为 `/scopes/:scopeId/teams/:teamId/members/:memberId/...`。`/scopes` 只能作为登录后解析 scope 的技术入口，不是 Team 集合资源 URL。
-- 前端 team member workflow editor 的 canonical 路由是 `/scopes/:scopeId/teams/:teamId/members/:memberId/workflow` 或 `/scopes/:scopeId/teams/:teamId/members/new/workflow`。其中 `workflow` 是 member implementation editor surface，不是 workflow resource identity；query `workflowId` 若存在，只能表示 draft workflow identity hint，不能覆盖或替代 path `memberId`。
-- 不保留 `/teams/:scopeId...` 或 `/teams/:scopeId/:teamId...` hidden 兼容入口；新代码、测试主断言、跳转 builder 不得继续生成或解析旧路由。解析 path 时必须按资源名读取 `scopeId / teamId / memberId`，不得依赖会把 scope/team/member 顺序混掉的旧 segment index。
-- 前端变量命名必须保留身份边界：从 path 读出的成员身份命名为 `routeMemberId` / `memberId`；从 query 或 draft API 读出的 workflow 身份命名为 `routeDraftWorkflowId` / `draftWorkflowId`；从 member summary 读出的服务身份命名为 `publishedServiceId`。禁止用一个 `workflowId` 变量同时承载 member、service、draft 候选身份。
 - 凡是需要在 `workflowId / memberId / publishedServiceId` 之间做身份判别的值，都不得命名为其中任何一个确定身份；必须先命名为 `routeIdentityCandidate` / `bindingIdentityCandidate` 等候选身份，并在确定来源后一次性解析成具体 ID。解析后的确定身份才能进入对应 API。
 - 测试 fixture 必须使用不同 ID 形态暴露错传：例如 `memberId = "m-alpha"`、`workflowId = "wf-alpha"`、`publishedServiceId = "svc-alpha"`。禁止用同一个字符串或同一前缀规律同时代表多个身份。
 
@@ -150,10 +146,6 @@
 - `bash tools/ci/test_solution_ownership_guard.sh`：校验测试项目只由 `aevatar.slnx` 或慢测守卫拥有。
 - `bash tools/ci/slow_test_guards.sh`：执行独立慢测门禁。
 - `bash tools/docs/lint.sh`：执行文档 lint（也由架构门禁调用）。
-- `pnpm --dir apps/aevatar-console-web install --frozen-lockfile`：还原前端依赖。
-- `pnpm --dir apps/aevatar-console-web tsc`：前端类型检查。
-- `pnpm --dir apps/aevatar-console-web test --runInBand`：前端测试。
-- `pnpm --dir apps/aevatar-console-web build`：前端生产构建。
 - `dotnet test test/Aevatar.Workflow.Host.Api.Tests/Aevatar.Workflow.Host.Api.Tests.csproj --collect:"XPlat Code Coverage"`：单项目覆盖率。
 - `dotnet run --project src/workflow/Aevatar.Workflow.Host.Api`：启动 Workflow API（`/api/chat`、`/api/ws/chat`）。
 
@@ -164,13 +156,11 @@
 - 公开 API 与领域对象命名要表达业务意图，避免含糊词。
 - 把不需要的直接删除, 无需考虑兼容性
 
-## 前端设计默认规则
-- 前端相关请求（页面、组件、控制台、playground、样式重构、视觉 polish）默认遵循 `aevatar-frontend-design` 规范；若运行环境存在同名 skill，优先使用。
-- 先确定一个明确审美方向，再开始编码；禁止把多个弱风格混在一起，禁止生成无记忆点的通用 SaaS 外观。
-- 禁止默认回落到通用 AI 审美：避免把 `Inter/Arial/Roboto/system-ui` 作为首选字体，避免紫白渐变、模板化卡片网格、无差异面板堆叠。
-- 优先抽取 design tokens / CSS variables / theme tokens，统一颜色、字体、间距、圆角、阴影与动效，不接受大面积零散硬编码。
-- 在现有信息架构和交互模型内提升层次、比例、对比、质感与动效；除非用户明确要求大改，否则不要破坏既有导航和工作流。
-- 结果必须可用：响应式、键盘可达、基本可访问性达标，真实内容密度下仍可读。
+## 前端工作边界与规则路由
+- 前端工作边界是 `apps/aevatar-console-web/`。普通前端任务不得顺带修改 `src/`、`test/`、`tools/ci/` 或外部同级仓库；确需跨边界修改时，必须先明确扩展任务范围。
+- 处理 `apps/aevatar-console-web/` 下的文件前，必须完整阅读 `apps/aevatar-console-web/AGENTS.md`。该文件负责具体前端开发、运行、设计与验证流程。
+- 添加、修改、选择或运行前端测试前，还必须完整阅读 `apps/aevatar-console-web/docs/testing-policy.md`。
+- 根文件中的跨栈身份语义、仓库级架构、测试门禁、Git、文档和外部依赖规则继续适用；子目录规则只能细化或收紧，不能放松这些约束。
 
 
 ## 测试与质量门禁
