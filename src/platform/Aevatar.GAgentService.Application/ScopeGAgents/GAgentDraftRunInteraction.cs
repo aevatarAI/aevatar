@@ -480,6 +480,7 @@ internal sealed class GAgentDraftRunCommandEnvelopeFactory
             MediaType = source.MediaType ?? string.Empty,
             Uri = source.Uri ?? string.Empty,
             Name = source.Name ?? string.Empty,
+            FileRef = source.FileRef?.Clone(),
         };
     }
 

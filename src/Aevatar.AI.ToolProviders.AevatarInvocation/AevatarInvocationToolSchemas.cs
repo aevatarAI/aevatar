@@ -6,7 +6,7 @@ internal static class AevatarInvocationToolSchemas
         new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
         {
             ["wait"] = ["ack", "stream", "complete"],
-            ["kind"] = ["text", "image", "audio", "video"],
+            ["kind"] = ["text", "image", "audio", "video", "file"],
         };
 
     public static readonly string InvokeGAgent = ProtoToolSchema.Build(

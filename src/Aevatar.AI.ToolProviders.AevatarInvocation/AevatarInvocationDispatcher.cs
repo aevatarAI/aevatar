@@ -624,6 +624,10 @@ public sealed class AevatarInvocationDispatcher
                 : workflowRuntimeContext.RootRunId.Trim(),
             RequestedDepth = Math.Max(0, workflowRuntimeContext.Depth) + 1,
         };
+        managedStart.InputFileRefs.Add(request.Inputs.InputParts
+            .Select(static part => ToWorkflowEventFileRef(part.FileRef))
+            .Where(static fileRef => fileRef != null)
+            .Select(static fileRef => fileRef!.Clone()));
 
         if (workflowYamls is { Count: > 0 })
         {
@@ -1905,6 +1909,7 @@ public sealed class AevatarInvocationDispatcher
             Kind = part.Kind switch
             {
                 InvocationContentPartKind.Text => ChatContentPartKind.Text,
+                InvocationContentPartKind.File => ChatContentPartKind.Text,
                 InvocationContentPartKind.Image => ChatContentPartKind.Image,
                 InvocationContentPartKind.Audio => ChatContentPartKind.Audio,
                 InvocationContentPartKind.Video => ChatContentPartKind.Video,
@@ -1915,6 +1920,7 @@ public sealed class AevatarInvocationDispatcher
             MediaType = part.MediaType,
             Uri = part.Uri,
             Name = part.Name,
+            FileRef = part.FileRef?.Clone(),
         }).ToArray();
 
     private static IReadOnlyList<GAgentDraftRunInputPart>? ToGAgentInputParts(InvocationPayload payload)
@@ -1927,6 +1933,7 @@ public sealed class AevatarInvocationDispatcher
             Kind = part.Kind switch
             {
                 InvocationContentPartKind.Text => GAgentDraftRunInputPartKind.Text,
+                InvocationContentPartKind.File => GAgentDraftRunInputPartKind.Text,
                 InvocationContentPartKind.Image => GAgentDraftRunInputPartKind.Image,
                 InvocationContentPartKind.Audio => GAgentDraftRunInputPartKind.Audio,
                 InvocationContentPartKind.Video => GAgentDraftRunInputPartKind.Video,
@@ -1937,6 +1944,7 @@ public sealed class AevatarInvocationDispatcher
             MediaType = EmptyToNull(part.MediaType),
             Uri = EmptyToNull(part.Uri),
             Name = EmptyToNull(part.Name),
+            FileRef = part.FileRef?.Clone(),
         }).ToArray();
     }
 
@@ -1950,6 +1958,7 @@ public sealed class AevatarInvocationDispatcher
             Kind = part.Kind switch
             {
                 InvocationContentPartKind.Text => Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind.Text,
+                InvocationContentPartKind.File => Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind.File,
                 InvocationContentPartKind.Image => Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind.Image,
                 InvocationContentPartKind.Audio => Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind.Audio,
                 InvocationContentPartKind.Video => Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind.Video,
@@ -1960,7 +1969,70 @@ public sealed class AevatarInvocationDispatcher
             MediaType = EmptyToNull(part.MediaType),
             Uri = EmptyToNull(part.Uri),
             Name = EmptyToNull(part.Name),
+            FileRef = ToWorkflowFileRef(part.FileRef),
         }).ToArray();
+    }
+
+    private static FileArtifactRef? ToWorkflowFileRef(Aevatar.AI.Abstractions.ChatFileRef? fileRef) =>
+        fileRef is null || !HasFileRefIdentity(fileRef)
+            ? null
+            : new FileArtifactRef
+            {
+                FileId = EmptyToNull(fileRef.FileId),
+                ArtifactId = EmptyToNull(fileRef.ArtifactId),
+                SourceKind = fileRef.SourceKind switch
+                {
+                    Aevatar.AI.Abstractions.ChatFileSourceKind.ChatInput => FileArtifactSourceKind.ChatInput,
+                    Aevatar.AI.Abstractions.ChatFileSourceKind.FormUpload => FileArtifactSourceKind.FormUpload,
+                    Aevatar.AI.Abstractions.ChatFileSourceKind.ConnectedServiceResource => FileArtifactSourceKind.ConnectedServiceResource,
+                    Aevatar.AI.Abstractions.ChatFileSourceKind.ExternalResource => FileArtifactSourceKind.ExternalResource,
+                    Aevatar.AI.Abstractions.ChatFileSourceKind.Generated => FileArtifactSourceKind.Generated,
+                    _ => FileArtifactSourceKind.Unspecified,
+                },
+                SourceMessageId = EmptyToNull(fileRef.SourceMessageId),
+                SourceResourceKey = EmptyToNull(fileRef.SourceResourceKey),
+                FileName = EmptyToNull(fileRef.FileName),
+                MediaType = EmptyToNull(fileRef.MediaType),
+                SizeBytes = fileRef.SizeBytes,
+                Sha256 = EmptyToNull(fileRef.Sha256),
+                CreatedAtUnixMs = fileRef.CreatedAtUnixMs,
+                ExpiresAtUnixMs = fileRef.ExpiresAtUnixMs,
+                OwnerRunId = EmptyToNull(fileRef.OwnerRunId),
+                OwnerScopeId = EmptyToNull(fileRef.OwnerScopeId),
+            };
+
+    private static bool HasFileRefIdentity(Aevatar.AI.Abstractions.ChatFileRef fileRef) =>
+        !string.IsNullOrWhiteSpace(fileRef.FileId) ||
+        !string.IsNullOrWhiteSpace(fileRef.ArtifactId);
+
+    private static Aevatar.Workflow.Abstractions.WorkflowFileRef? ToWorkflowEventFileRef(
+        Aevatar.AI.Abstractions.ChatFileRef? fileRef) =>
+        fileRef is null || !HasFileRefIdentity(fileRef)
+            ? null
+            : new Aevatar.Workflow.Abstractions.WorkflowFileRef
+            {
+                FileId = fileRef.FileId ?? string.Empty,
+                ArtifactId = fileRef.ArtifactId ?? string.Empty,
+                SourceKind = ToWorkflowFileSourceKind(fileRef.SourceKind),
+                SourceMessageId = fileRef.SourceMessageId ?? string.Empty,
+                SourceResourceKey = fileRef.SourceResourceKey ?? string.Empty,
+                FileName = fileRef.FileName ?? string.Empty,
+                MediaType = fileRef.MediaType ?? string.Empty,
+                SizeBytes = fileRef.SizeBytes,
+                Sha256 = fileRef.Sha256 ?? string.Empty,
+                CreatedAtUnixMs = fileRef.CreatedAtUnixMs,
+                ExpiresAtUnixMs = fileRef.ExpiresAtUnixMs,
+                OwnerRunId = fileRef.OwnerRunId ?? string.Empty,
+                OwnerScopeId = fileRef.OwnerScopeId ?? string.Empty,
+            };
+
+    private static Aevatar.Workflow.Abstractions.WorkflowFileSourceKind ToWorkflowFileSourceKind(
+        Aevatar.AI.Abstractions.ChatFileSourceKind sourceKind)
+    {
+        var sourceKindValue = (int)sourceKind;
+        return System.Enum.IsDefined(typeof(Aevatar.Workflow.Abstractions.WorkflowFileSourceKind), sourceKindValue)
+            ? (Aevatar.Workflow.Abstractions.WorkflowFileSourceKind)sourceKindValue
+            : Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.Unspecified;
     }
 
     private static InvocationWaitMode ResolveWait(InvocationWaitMode wait) =>

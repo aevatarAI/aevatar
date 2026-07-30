@@ -38,6 +38,7 @@ message WorkflowState
     map<string, string> inline_workflow_yamls = 14;
     string root_run_id = 15;
     int32 depth = 16;
+    repeated WorkflowFileRef input_file_refs = 17;
   }
 
   message PendingSubWorkflowDefinitionResolution
@@ -54,6 +55,7 @@ message WorkflowState
     int32 timeout_ms = 10;
     string root_run_id = 11;
     int32 requested_depth = 12;
+    repeated WorkflowFileRef input_file_refs = 13;
   }
 
   message ChildRunIdSet
@@ -112,6 +114,7 @@ message WorkflowRunState
     map<string, string> inline_workflow_yamls = 14;
     string root_run_id = 15;
     int32 depth = 16;
+    repeated WorkflowFileRef input_file_refs = 17;
   }
 
   message PendingSubWorkflowDefinitionResolution
@@ -128,6 +131,7 @@ message WorkflowRunState
     int32 timeout_ms = 10;
     string root_run_id = 11;
     int32 requested_depth = 12;
+    repeated WorkflowFileRef input_file_refs = 13;
   }
 
   message ChildRunIdSet

@@ -18,14 +18,12 @@ public sealed class OrleansActorRuntime : IActorRuntime
     private readonly IActorRuntimeCallbackScheduler _callbackScheduler;
     private readonly ILogger<OrleansActorRuntime> _logger;
     private readonly IAgentKindRegistry _agentKindRegistry;
-    private readonly IRuntimeActorStateBindingAccessor _stateBindingAccessor;
 
     public OrleansActorRuntime(
         IGrainFactory grainFactory,
         Aevatar.Foundation.Abstractions.IStreamProvider streams,
         IActorRuntimeCallbackScheduler callbackScheduler,
         IAgentKindRegistry agentKindRegistry,
-        IRuntimeActorStateBindingAccessor stateBindingAccessor,
         IStreamLifecycleManager? streamLifecycleManager = null,
         ILogger<OrleansActorRuntime>? logger = null)
     {
@@ -33,7 +31,6 @@ public sealed class OrleansActorRuntime : IActorRuntime
         _streams = streams;
         _callbackScheduler = callbackScheduler ?? throw new ArgumentNullException(nameof(callbackScheduler));
         _agentKindRegistry = agentKindRegistry ?? throw new ArgumentNullException(nameof(agentKindRegistry));
-        _stateBindingAccessor = stateBindingAccessor ?? throw new ArgumentNullException(nameof(stateBindingAccessor));
         _streamLifecycleManager = streamLifecycleManager ?? NullStreamLifecycleManager.Instance;
         _logger = logger ?? NullLogger<OrleansActorRuntime>.Instance;
     }
@@ -129,21 +126,7 @@ public sealed class OrleansActorRuntime : IActorRuntime
             throw new InvalidOperationException($"Child actor {childId} is not initialized.");
 
         using var reentrancyScope = RequestContext.AllowCallChainReentrancy();
-        var boundParentState = _stateBindingAccessor.Current;
-        if (boundParentState != null &&
-            string.Equals(boundParentState.State.AgentId, parentId, StringComparison.Ordinal))
-        {
-            if (!boundParentState.State.Children.Contains(childId, StringComparer.Ordinal))
-            {
-                boundParentState.State.Children.Add(childId);
-                await boundParentState.WriteStateAsync();
-            }
-        }
-        else
-        {
-            await parent.AddChildAsync(childId);
-        }
-
+        await parent.AddChildAsync(childId);
         await child.SetParentAsync(parentId);
         await _streams.GetStream(parentId).UpsertRelayAsync(
             StreamForwardingRules.CreateHierarchyBinding(parentId, childId),
