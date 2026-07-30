@@ -556,6 +556,8 @@ public static class MainnetHostBuilderExtensions
 
     private static void ConfigureMainnetAIFeatures(AevatarAIFeatureOptions options)
     {
+        options.EnableBindingTools = true;
+
         if (!options.VoicePresence.Module.DirectExternalEventTypeUrls.Contains(
                 DeviceInboundDirectExternalEventTypeUrl,
                 StringComparer.Ordinal))

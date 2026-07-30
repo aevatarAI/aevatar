@@ -120,3 +120,37 @@
 - `git diff --check`: passed.
 - Static caller audit: workflow discovery is the only `GetMcpConfigAsync` caller; proof-bound runtime does not discover; exact-service raw OpenAPI remains only in the ordinary current-turn dynamic path tracked by #3025.
 - Online `/api/chat` smoke verification is intentionally post-deploy: the user required the online environment, and the current online deployment cannot exercise this unmerged change.
+
+### Task 5: Compose capability tools into Mainnet workflow authoring
+
+**Files:**
+- Modify: `test/Aevatar.Capabilities.Tests/MainnetHostCompositionTests.cs`
+- Modify: `src/Aevatar.Mainnet.Host.Api/Hosting/MainnetHostBuilderExtensions.cs`
+
+**Interfaces:**
+- Consumes: existing `AevatarAIFeatureOptions.EnableBindingTools` and `BindingAgentToolSource`.
+- Produces: Mainnet workflow role turns can resolve `list_external_workflow_capabilities` and `inspect_external_workflow_capability_readiness` from the existing binding tool source.
+
+- [x] Add a Mainnet composition test asserting `BindingAgentToolSource` is registered as an `IAgentToolSource`.
+- [x] Run the focused test and confirm it fails because Mainnet never enables binding tools.
+- [x] Enable binding tools only in `ConfigureMainnetAIFeatures`.
+- [x] Re-run the focused test and relevant workflow/binding tests.
+- [x] Run required guards, solution verification, and `git diff --check`.
+
+Production reproduction (2026-07-30): `workflow=studio`, command `issue-3024-studio-canary-20260730-a`, run `workflow-definition:studio:run:cfd6b857583044d9b9828cc5af141d1c` completed with typed diagnostic `capability_tool_unavailable`; no external operation or mutation was executed.
+
+## Verification record (2026-07-30)
+
+- Regression test RED: Mainnet had no `BindingAgentToolSource` service descriptor before enabling binding tools.
+- Focused Mainnet composition test: passed, 1/1.
+- Mainnet composition tests: passed, 46/46.
+- Binding tests: passed, 25/25.
+- `dotnet build aevatar.slnx --nologo --no-restore`: exit 0, 0 errors; 247 existing warnings.
+- `dotnet test aevatar.slnx --nologo --no-restore`: exit 0, 0 failures; environment-dependent integrations remained explicitly skipped by their existing conditions.
+- `bash tools/ci/architecture_guards.sh`: passed.
+- `bash tools/ci/test_stability_guards.sh`: passed.
+- `bash tools/ci/workflow_binding_boundary_guard.sh`: passed.
+- `bash tools/ci/query_projection_priming_guard.sh`: passed.
+- `bash tools/docs/lint.sh`: passed, 83 files checked with 0 errors.
+- `git diff --check`: passed.
+- Online `/api/chat` smoke verification remains post-deploy because the current Mainnet image does not contain this composition fix.
