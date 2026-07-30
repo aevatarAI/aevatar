@@ -143,14 +143,15 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         await act.Should().ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
         commandPort.Calls.Should().BeEmpty();
         lifecyclePort.GetServiceCallCount.Should().Be(0);
-        governanceCommandPort.CreateEndpointCatalogCommand.Should().BeNull();
-        governanceCommandPort.UpdateEndpointCatalogCommand.Should().BeNull();
+        governanceCommandPort.Calls.Should().BeEmpty();
     }
 
     [Theory]
     [InlineData("missing", "NYXID_EXPLICIT_REQUEST_GRANT_REQUIRED")]
     [InlineData("stale_digest", "NYXID_EXPLICIT_REQUEST_CONFIRMATION_DIGEST_MISMATCH")]
     [InlineData("stale_risk", "NYXID_EXPLICIT_REQUEST_CONFIRMATION_RISK_MISMATCH")]
+    [InlineData("unknown_call_site", "NYXID_EXPLICIT_REQUEST_CONFIRMATION_CALL_SITE_MISMATCH")]
+    [InlineData("duplicate", "NYXID_EXPLICIT_REQUEST_CONFIRMATION_CALL_SITE_MISMATCH")]
     public async Task UpsertAsync_WhenExplicitRequestConfirmationIsInvalid_ShouldDispatchNoMutation(
         string scenario,
         string expectedBlockerCode)
@@ -186,8 +187,7 @@ public sealed class ScopeBindingCommandApplicationServiceTests
             .Be(expectedBlockerCode);
         commandPort.Calls.Should().BeEmpty();
         lifecyclePort.GetServiceCallCount.Should().Be(0);
-        governanceCommandPort.CreateEndpointCatalogCommand.Should().BeNull();
-        governanceCommandPort.UpdateEndpointCatalogCommand.Should().BeNull();
+        governanceCommandPort.Calls.Should().BeEmpty();
     }
 
     [Fact]
@@ -225,7 +225,42 @@ public sealed class ScopeBindingCommandApplicationServiceTests
             .Command.Should().BeOfType<CreateServiceRevisionCommand>().Subject;
         ScopeExplicitRequestAdmissionTestFixture.AssertCallerOwnedGrant(
             revision.Spec.WorkflowSpec.CapabilityAdmissionPlan);
-        revision.ToString().Should().NotContain(ScopeExplicitRequestAdmissionTestFixture.BearerToken);
+    }
+
+    [Fact]
+    public async Task UpsertAsync_WithExistingPlanAndNoFreshConfirmation_ShouldRevalidateAndDispatch()
+    {
+        var existingPlan = await ScopeExplicitRequestAdmissionTestFixture.CreatePersistedPlanAsync(
+            "scope_binding_upsert");
+        var admission = new ScopeExplicitRequestAdmissionTestFixture.DelegatingAdmissionService(
+            ScopeExplicitRequestAdmissionTestFixture.CreateAdmissionService());
+        var commandPort = new RecordingServiceCommandPort();
+        var service = CreateService(
+            commandPort,
+            new FakeServiceLifecycleQueryPort(getResult: null),
+            new RecordingServiceGovernanceCommandPort(),
+            new FakeServiceGovernanceQueryPort(),
+            new FakeScopeScriptQueryPort(),
+            new FakeScriptDefinitionSnapshotPort(),
+            new FakeWorkflowRunActorPort(),
+            capabilityAdmissionService: admission);
+
+        var result = await service.UpsertAsync(new ScopeBindingUpsertRequest(
+            ScopeExplicitRequestAdmissionTestFixture.ScopeId,
+            ScopeBindingImplementationKind.Workflow,
+            Workflow: new ScopeBindingWorkflowSpec(
+                ScopeExplicitRequestAdmissionTestFixture.WorkflowId,
+                [ScopeExplicitRequestAdmissionTestFixture.WorkflowYaml]),
+            RevisionId: ScopeExplicitRequestAdmissionTestFixture.RevisionId,
+            ServiceId: ScopeExplicitRequestAdmissionTestFixture.ServiceId)
+        {
+            CapabilityAdmission = ScopeExplicitRequestAdmissionTestFixture.CreatePersistedContext(existingPlan),
+        });
+
+        result.RevisionId.Should().Be(ScopeExplicitRequestAdmissionTestFixture.RevisionId);
+        admission.RevalidatePersistedCallCount.Should().Be(1);
+        admission.AdmitCallCount.Should().Be(0);
+        commandPort.Calls.Should().Contain(call => call.Method == "CreateRevisionAsync");
     }
 
     [Fact]
@@ -2267,26 +2302,47 @@ public sealed class ScopeBindingCommandApplicationServiceTests
             return Task.FromResult(DefaultReceipt);
         }
 
-        public Task<ServiceCommandAcceptedReceipt> DeactivateServiceDeploymentAsync(DeactivateServiceDeploymentCommand command, CancellationToken ct = default) =>
-            Task.FromResult(DefaultReceipt);
+        public Task<ServiceCommandAcceptedReceipt> DeactivateServiceDeploymentAsync(DeactivateServiceDeploymentCommand command, CancellationToken ct = default)
+        {
+            Calls.Add(new CommandCall("DeactivateServiceDeploymentAsync", command));
+            return Task.FromResult(DefaultReceipt);
+        }
 
-        public Task<ServiceCommandAcceptedReceipt> ReplaceServiceServingTargetsAsync(ReplaceServiceServingTargetsCommand command, CancellationToken ct = default) =>
-            Task.FromResult(DefaultReceipt);
+        public Task<ServiceCommandAcceptedReceipt> ReplaceServiceServingTargetsAsync(ReplaceServiceServingTargetsCommand command, CancellationToken ct = default)
+        {
+            Calls.Add(new CommandCall("ReplaceServiceServingTargetsAsync", command));
+            return Task.FromResult(DefaultReceipt);
+        }
 
-        public Task<ServiceCommandAcceptedReceipt> StartServiceRolloutAsync(StartServiceRolloutCommand command, CancellationToken ct = default) =>
-            Task.FromResult(DefaultReceipt);
+        public Task<ServiceCommandAcceptedReceipt> StartServiceRolloutAsync(StartServiceRolloutCommand command, CancellationToken ct = default)
+        {
+            Calls.Add(new CommandCall("StartServiceRolloutAsync", command));
+            return Task.FromResult(DefaultReceipt);
+        }
 
-        public Task<ServiceCommandAcceptedReceipt> AdvanceServiceRolloutAsync(AdvanceServiceRolloutCommand command, CancellationToken ct = default) =>
-            Task.FromResult(DefaultReceipt);
+        public Task<ServiceCommandAcceptedReceipt> AdvanceServiceRolloutAsync(AdvanceServiceRolloutCommand command, CancellationToken ct = default)
+        {
+            Calls.Add(new CommandCall("AdvanceServiceRolloutAsync", command));
+            return Task.FromResult(DefaultReceipt);
+        }
 
-        public Task<ServiceCommandAcceptedReceipt> PauseServiceRolloutAsync(PauseServiceRolloutCommand command, CancellationToken ct = default) =>
-            Task.FromResult(new ServiceCommandAcceptedReceipt("target-actor", "cmd-1", "correlation-1"));
+        public Task<ServiceCommandAcceptedReceipt> PauseServiceRolloutAsync(PauseServiceRolloutCommand command, CancellationToken ct = default)
+        {
+            Calls.Add(new CommandCall("PauseServiceRolloutAsync", command));
+            return Task.FromResult(DefaultReceipt);
+        }
 
-        public Task<ServiceCommandAcceptedReceipt> ResumeServiceRolloutAsync(ResumeServiceRolloutCommand command, CancellationToken ct = default) =>
-            Task.FromResult(new ServiceCommandAcceptedReceipt("target-actor", "cmd-1", "correlation-1"));
+        public Task<ServiceCommandAcceptedReceipt> ResumeServiceRolloutAsync(ResumeServiceRolloutCommand command, CancellationToken ct = default)
+        {
+            Calls.Add(new CommandCall("ResumeServiceRolloutAsync", command));
+            return Task.FromResult(DefaultReceipt);
+        }
 
-        public Task<ServiceCommandAcceptedReceipt> RollbackServiceRolloutAsync(RollbackServiceRolloutCommand command, CancellationToken ct = default) =>
-            Task.FromResult(new ServiceCommandAcceptedReceipt("target-actor", "cmd-1", "correlation-1"));
+        public Task<ServiceCommandAcceptedReceipt> RollbackServiceRolloutAsync(RollbackServiceRolloutCommand command, CancellationToken ct = default)
+        {
+            Calls.Add(new CommandCall("RollbackServiceRolloutAsync", command));
+            return Task.FromResult(DefaultReceipt);
+        }
     }
 
     private sealed class FakeServiceLifecycleQueryPort : IServiceLifecycleQueryPort
@@ -2332,35 +2388,43 @@ public sealed class ScopeBindingCommandApplicationServiceTests
 
         public UpdateServiceEndpointCatalogCommand? UpdateEndpointCatalogCommand { get; private set; }
 
+        public List<CommandCall> Calls { get; } = [];
+
         public Task<ServiceCommandAcceptedReceipt> CreateBindingAsync(CreateServiceBindingCommand command, CancellationToken ct = default) =>
-            Task.FromResult(DefaultReceipt);
+            Record(nameof(CreateBindingAsync), command);
 
         public Task<ServiceCommandAcceptedReceipt> UpdateBindingAsync(UpdateServiceBindingCommand command, CancellationToken ct = default) =>
-            Task.FromResult(DefaultReceipt);
+            Record(nameof(UpdateBindingAsync), command);
 
         public Task<ServiceCommandAcceptedReceipt> RetireBindingAsync(RetireServiceBindingCommand command, CancellationToken ct = default) =>
-            Task.FromResult(DefaultReceipt);
+            Record(nameof(RetireBindingAsync), command);
 
         public Task<ServiceCommandAcceptedReceipt> CreateEndpointCatalogAsync(CreateServiceEndpointCatalogCommand command, CancellationToken ct = default)
         {
             CreateEndpointCatalogCommand = command;
-            return Task.FromResult(DefaultReceipt);
+            return Record(nameof(CreateEndpointCatalogAsync), command);
         }
 
         public Task<ServiceCommandAcceptedReceipt> UpdateEndpointCatalogAsync(UpdateServiceEndpointCatalogCommand command, CancellationToken ct = default)
         {
             UpdateEndpointCatalogCommand = command;
-            return Task.FromResult(DefaultReceipt);
+            return Record(nameof(UpdateEndpointCatalogAsync), command);
         }
 
         public Task<ServiceCommandAcceptedReceipt> CreatePolicyAsync(CreateServicePolicyCommand command, CancellationToken ct = default) =>
-            Task.FromResult(DefaultReceipt);
+            Record(nameof(CreatePolicyAsync), command);
 
         public Task<ServiceCommandAcceptedReceipt> UpdatePolicyAsync(UpdateServicePolicyCommand command, CancellationToken ct = default) =>
-            Task.FromResult(DefaultReceipt);
+            Record(nameof(UpdatePolicyAsync), command);
 
         public Task<ServiceCommandAcceptedReceipt> RetirePolicyAsync(RetireServicePolicyCommand command, CancellationToken ct = default) =>
-            Task.FromResult(DefaultReceipt);
+            Record(nameof(RetirePolicyAsync), command);
+
+        private Task<ServiceCommandAcceptedReceipt> Record(string method, object command)
+        {
+            Calls.Add(new CommandCall(method, command));
+            return Task.FromResult(DefaultReceipt);
+        }
     }
 
     private sealed class FakeServiceGovernanceQueryPort : IServiceGovernanceQueryPort

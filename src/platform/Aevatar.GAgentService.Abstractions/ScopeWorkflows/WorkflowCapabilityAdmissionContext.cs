@@ -8,6 +8,8 @@ namespace Aevatar.GAgentService.Abstractions;
 /// </summary>
 public sealed class WorkflowCapabilityAdmissionContext
 {
+    private readonly IReadOnlyList<NyxIdExplicitRequestConfirmation> _explicitRequestConfirmations;
+
     public WorkflowCapabilityAdmissionContext(
         string callerId,
         string? nyxIdCallerBearerToken = null,
@@ -21,7 +23,7 @@ public sealed class WorkflowCapabilityAdmissionContext
         NyxIdOrganizationBearerToken = NormalizeOptional(nyxIdOrganizationBearerToken);
         ExecutionMode = executionMode;
         ExistingPlan = existingPlan?.Clone();
-        ExplicitRequestConfirmations = CloneConfirmations(explicitRequestConfirmations);
+        _explicitRequestConfirmations = CloneConfirmations(explicitRequestConfirmations);
     }
 
     public string CallerId { get; }
@@ -34,7 +36,8 @@ public sealed class WorkflowCapabilityAdmissionContext
 
     public WorkflowCapabilityAdmissionPlan? ExistingPlan { get; }
 
-    public IReadOnlyList<NyxIdExplicitRequestConfirmation> ExplicitRequestConfirmations { get; }
+    public IReadOnlyList<NyxIdExplicitRequestConfirmation> ExplicitRequestConfirmations =>
+        CloneConfirmations(_explicitRequestConfirmations);
 
     public override string ToString() =>
         $"{nameof(WorkflowCapabilityAdmissionContext)} {{ CallerId = {CallerId}, ExecutionMode = {ExecutionMode}, Credentials = [REDACTED] }}";

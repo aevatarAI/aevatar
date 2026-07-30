@@ -76,7 +76,13 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         var identity = string.IsNullOrWhiteSpace(request.ServiceId)
             ? ScopeWorkflowCapabilityConventions.BuildDefaultServiceIdentity(_options, normalizedScopeId, request.AppId)
             : ScopeWorkflowCapabilityConventions.BuildServiceIdentity(_options, normalizedScopeId, request.ServiceId.Trim(), request.AppId);
-        var desiredBinding = await ResolveDesiredBindingAsync(request, normalizedScopeId, identity, ct);
+        var explicitRequestConfirmations = request.CapabilityAdmission?.ExplicitRequestConfirmations;
+        var desiredBinding = await ResolveDesiredBindingAsync(
+            request,
+            normalizedScopeId,
+            identity,
+            explicitRequestConfirmations,
+            ct);
         var existingService = await _serviceLifecycleQueryPort.GetServiceAsync(identity, ct);
         ApplyExternalExposureIntent(request, desiredBinding.ServiceDefinition);
 
@@ -353,12 +359,18 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         ScopeBindingUpsertRequest request,
         string normalizedScopeId,
         ServiceIdentity identity,
+        IReadOnlyList<NyxIdExplicitRequestConfirmation>? explicitRequestConfirmations,
         CancellationToken ct)
     {
         return request.ImplementationKind switch
         {
             ScopeBindingImplementationKind.Workflow =>
-                await BuildWorkflowBindingAsync(request, normalizedScopeId, identity, ct),
+                await BuildWorkflowBindingAsync(
+                    request,
+                    normalizedScopeId,
+                    identity,
+                    explicitRequestConfirmations,
+                    ct),
             ScopeBindingImplementationKind.Scripting =>
                 await BuildScriptBindingAsync(request, normalizedScopeId, identity, ct),
             ScopeBindingImplementationKind.GAgent =>
@@ -371,6 +383,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         ScopeBindingUpsertRequest request,
         string normalizedScopeId,
         ServiceIdentity identity,
+        IReadOnlyList<NyxIdExplicitRequestConfirmation>? explicitRequestConfirmations,
         CancellationToken ct)
     {
         var workflowBundle = await ParseWorkflowBundleAsync(request.Workflow?.WorkflowYamls, ct);
@@ -396,7 +409,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                 workflowBundle.SubWorkflowYamls,
                 "scope_binding_upsert",
                 executionMode,
-                admissionContext?.ExplicitRequestConfirmations),
+                explicitRequestConfirmations),
                 ct);
         var suppliedWorkflowId = ScopeWorkflowCapabilityConventions.NormalizeOptional(request.Workflow?.WorkflowId);
         var workflowId = ResolveWorkflowBindingWorkflowId(suppliedWorkflowId, identity);

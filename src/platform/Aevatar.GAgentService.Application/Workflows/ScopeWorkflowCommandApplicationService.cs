@@ -49,6 +49,7 @@ public sealed class ScopeWorkflowCommandApplicationService : IScopeWorkflowComma
         var inlineWorkflowYamls = ScopeWorkflowCapabilityConventions.NormalizeInlineWorkflowYamls(request.InlineWorkflowYamls);
         var admissionContext = request.CapabilityAdmission;
         var executionMode = admissionContext?.ExecutionMode ?? ExternalCapabilityExecutionMode.Interactive;
+        var explicitRequestConfirmations = admissionContext?.ExplicitRequestConfirmations;
         var capabilityAdmissionPlan = admissionContext?.ExistingPlan is { } existingPlan
             ? await _capabilityAdmissionService.RevalidatePersistedAsync(
                 new PersistedWorkflowCapabilityAdmissionRequest(
@@ -69,7 +70,7 @@ public sealed class ScopeWorkflowCommandApplicationService : IScopeWorkflowComma
                 inlineWorkflowYamls,
                 "scope_workflow_upsert",
                 executionMode,
-                admissionContext?.ExplicitRequestConfirmations),
+                explicitRequestConfirmations),
                 ct);
         var identity = ScopeWorkflowCapabilityConventions.BuildIdentity(_options, normalizedScopeId, normalizedWorkflowId);
         var definitionActorIdPrefix = ScopeWorkflowCapabilityConventions.BuildDefinitionActorIdPrefix(
