@@ -107,13 +107,33 @@ message AgentProfileCatalogEntry {
   string purpose = 6;
   int64 published_revision = 7;
   bytes snapshot_sha256 = 8;
+  string provisioning_operation_id = 9;
+  bytes provisioning_input_sha256 = 10;
+  string provisioning_timeout_callback_id = 11;
+  int32 provisioning_attempt = 12;
+}
+
+message AgentProfileBindingTarget {
+  AgentProfileOwner owner = 1;
+  string profile_id = 2;
+  int64 published_revision = 3;
+  bytes snapshot_sha256 = 4;
+}
+
+message AgentProfileScopeBindingAdmission {}
+
+message AgentProfileSystemBindingAdmission {
+  bool enabled = 1;
+  int32 cohort_basis_points = 2;
 }
 
 message AgentProfileDefaultBinding {
   string agent_kind = 1;
-  string profile_id = 2;
-  bool enabled = 3;
-  int32 cohort_basis_points = 4;
+  AgentProfileBindingTarget target = 2;
+  oneof admission {
+    AgentProfileScopeBindingAdmission scope = 3;
+    AgentProfileSystemBindingAdmission system = 4;
+  }
 }
 
 message AgentProfileNamespaceState {
@@ -140,13 +160,15 @@ message CreateAgentProfileCommand {
   AgentProfileOwner owner = 1;
   string profile_id = 2;
   string profile_slug = 3;
-  string profile_actor_id = 4;
+  reserved 4;
+  reserved "profile_actor_id";
   AgentProfileOperationFact operation = 5;
 }
 
 message InitializeAgentProfileCommand {
   AgentProfileIdentity identity = 1;
-  string namespace_actor_id = 2;
+  reserved 2;
+  reserved "namespace_actor_id";
   AgentProfileDraft initial_draft = 3;
   AgentProfileOperationFact operation = 4;
 }
@@ -154,6 +176,25 @@ message InitializeAgentProfileCommand {
 message AgentProfileInitialized {
   AgentProfileIdentity identity = 1;
   AgentProfileOperationFact operation = 2;
+  string source_profile_actor_id = 3;
+  int64 source_authority_state_version = 4;
+  string provisioning_operation_id = 5;
+}
+
+message AgentProfileInitializationFailed {
+  AgentProfileIdentity identity = 1;
+  AgentProfileOperationFact operation = 2;
+  string source_profile_actor_id = 3;
+  int64 source_authority_state_version = 4;
+  string provisioning_operation_id = 5;
+  string failure_code = 6;
+}
+
+message AgentProfileProvisioningTimedOut {
+  string profile_id = 1;
+  string provisioning_operation_id = 2;
+  int32 provisioning_attempt = 3;
+  string callback_id = 4;
 }
 
 message UpdateAgentProfileDraftCommand {
@@ -177,14 +218,19 @@ message ObserveAgentProfilePublishedCommand {
   string purpose = 3;
   int64 published_revision = 4;
   bytes snapshot_sha256 = 5;
+  string source_profile_actor_id = 6;
+  int64 source_authority_state_version = 7;
+  string source_operation_id = 8;
 }
 
 message SetAgentProfileDefaultBindingCommand {
   AgentProfileOwner owner = 1;
   string agent_kind = 2;
-  string profile_id = 3;
-  bool enabled = 4;
-  int32 cohort_basis_points = 5;
+  AgentProfileBindingTarget target = 3;
+  oneof admission {
+    AgentProfileScopeBindingAdmission scope = 4;
+    AgentProfileSystemBindingAdmission system = 5;
+  }
   int64 expected_authority_state_version = 6;
   AgentProfileOperationFact operation = 7;
 }

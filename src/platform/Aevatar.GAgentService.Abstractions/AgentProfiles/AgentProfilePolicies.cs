@@ -9,6 +9,8 @@ public static partial class AgentProfilePolicies
     public const string NyxIdChatRouteToolSet = "agent-profile.nyxid-chat";
     public const int FullCohortBasisPoints = 10_000;
     private const int MaximumSlugLength = 63;
+    private static readonly IReadOnlySet<string> SupportedRouteToolSetRefs =
+        new HashSet<string>(StringComparer.Ordinal) { NyxIdChatRouteToolSet };
 
     public static IReadOnlyList<AgentProfileDiagnostic> ValidateProfileSlug(string? profileSlug)
     {
@@ -76,7 +78,7 @@ public static partial class AgentProfilePolicies
         {
             if (!string.Equals(draft.RuntimeProfile.AgentKind, NyxIdChatAgentKind, StringComparison.Ordinal))
                 diagnostics.Add(Diagnostic("UNSUPPORTED_AGENT_KIND", "runtimeProfile.agentKind", "Only nyxid.chat is supported."));
-            if (!string.Equals(draft.RuntimeProfile.RouteToolSetRef, NyxIdChatRouteToolSet, StringComparison.Ordinal))
+            if (!SupportedRouteToolSetRefs.Contains(draft.RuntimeProfile.RouteToolSetRef))
                 diagnostics.Add(Diagnostic("UNSUPPORTED_ROUTE_TOOL_SET", "runtimeProfile.routeToolSetRef", "The route tool set is not registered for nyxid.chat."));
             foreach (var member in draft.RuntimeProfile.Members)
                 diagnostics.AddRange(ValidateExactSkillReference(member));

@@ -8,6 +8,7 @@ using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.GAgents.NyxidChat.AgentProfiles;
 using FluentAssertions;
+using Google.Protobuf;
 
 namespace Aevatar.AI.Tests;
 
@@ -18,6 +19,8 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
     private const string SkillName = "skill-alpha";
     private const string PublisherId = "publisher-alpha";
     private const string SkillMarkdown = "---\nname: skill-alpha\n---\nSelected instructions.";
+    private static readonly ByteString SkillSha256 =
+        ByteString.CopyFrom(Enumerable.Range(0, 32).Select(static value => (byte)value).ToArray());
 
     [Fact]
     public async Task PrepareAsync_ShouldFreezeCandidateRefAndCanonicalCeilingWithoutExactFetch()
@@ -346,7 +349,7 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
                     SkillVersion,
                     "wrong-name",
                     PublisherId,
-                    "hash-alpha",
+                    SkillSha256,
                     SkillMarkdown)))
             .MaterializeCommittedAsync(
                 profile,
@@ -914,9 +917,9 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
         {
             ExactRemoteSkillFetchResult.Failed(ExactRemoteSkillFetchFailureCode.NotFound),
             ExactRemoteSkillFetchResult.Success(
-                SkillGuid, SkillVersion, "wrong-name", PublisherId, "hash", SkillMarkdown),
+                SkillGuid, SkillVersion, "wrong-name", PublisherId, SkillSha256, SkillMarkdown),
             ExactRemoteSkillFetchResult.Success(
-                SkillGuid, SkillVersion, SkillName, PublisherId, "hash", new string('x', 300)),
+                SkillGuid, SkillVersion, SkillName, PublisherId, SkillSha256, new string('x', 300)),
         };
 
         foreach (var failure in failures)
@@ -943,15 +946,15 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
     }
 
     [Theory]
-    [InlineData("22222222-2222-2222-2222-222222222222", SkillVersion, PublisherId, "hash-alpha")]
-    [InlineData(SkillGuid, "9.9", PublisherId, "hash-alpha")]
-    [InlineData(SkillGuid, SkillVersion, "publisher-beta", "hash-alpha")]
-    [InlineData(SkillGuid, SkillVersion, PublisherId, " ")]
+    [InlineData("22222222-2222-2222-2222-222222222222", SkillVersion, PublisherId, false)]
+    [InlineData(SkillGuid, "9.9", PublisherId, false)]
+    [InlineData(SkillGuid, SkillVersion, "publisher-beta", false)]
+    [InlineData(SkillGuid, SkillVersion, PublisherId, true)]
     public async Task MaterializeAsync_ExactFetchIdentityMismatch_ShouldUseRecoveryOnly(
         string fetchedGuid,
         string fetchedVersion,
         string fetchedPublisherId,
-        string fetchedSkillHash)
+        bool missingSkillHash)
     {
         var tools = NewTools("recovery", "task", "extra");
         var fetcher = new RecordingFetcher(ExactRemoteSkillFetchResult.Success(
@@ -959,7 +962,7 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
             fetchedVersion,
             SkillName,
             fetchedPublisherId,
-            fetchedSkillHash,
+            missingSkillHash ? ByteString.Empty : SkillSha256,
             SkillMarkdown));
 
         var catalog = await NewMaterializer(
@@ -982,6 +985,36 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
         catalog.Diagnostics.Should().Contain(diagnostic =>
             diagnostic.Code == AgentProfileTurnDiagnosticCode.ExactSkillIdentityMismatch);
         fetcher.CallCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task MaterializeAsync_FetchedHashMismatchShouldUseRecoveryOnly()
+    {
+        var tools = NewTools("recovery", "task", "extra");
+        var fetcher = new RecordingFetcher(ExactRemoteSkillFetchResult.Success(
+            SkillGuid,
+            SkillVersion,
+            SkillName,
+            PublisherId,
+            ByteString.CopyFrom(Enumerable.Repeat((byte)0xff, 32).ToArray()),
+            SkillMarkdown));
+
+        var catalog = await NewMaterializer(
+                RegistryWithRoute(tools),
+                new RecordingClassifier(AgentProfileTurnClassificationResult.Matched("intent-alpha")),
+                fetcher)
+            .MaterializeAsync(
+                SealProfile(BuildProfile()),
+                "select",
+                "token",
+                tools,
+                ToolContext(),
+                CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().BeEquivalentTo("recovery");
+        catalog.SelectedSkillPromptLayer.Should().BeNull();
+        catalog.Diagnostics.Should().Contain(diagnostic =>
+            diagnostic.Code == AgentProfileTurnDiagnosticCode.ExactSkillIdentityMismatch);
     }
 
     [Fact]
@@ -1382,6 +1415,7 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
             SideEffectClass = AgentProfileSideEffectClass.ReadOnly,
             ExpectedSkillName = SkillName,
             ReviewedPublisherId = PublisherId,
+            SealedSkillSha256 = SkillSha256,
         };
         member.TaskToolPolicy.ToolNames.Add("task");
         if (withAlias)
@@ -1416,7 +1450,7 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
             SkillVersion,
             SkillName,
             PublisherId,
-            "hash-alpha",
+            SkillSha256,
             skillMarkdown);
 
     private static AgentToolExecutionContext ToolContext(string? accessToken = "token") =>

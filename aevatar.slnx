@@ -41,7 +41,6 @@
     <File Path="Directory.Build.props" />
   </Folder>
   <Folder Name="/tools/">
-    <Project Path="tools/Aevatar.Tools.AgentProfileRollout/Aevatar.Tools.AgentProfileRollout.csproj" />
     <Project Path="tools/secret-store/Aevatar.SecretStore.Tools.csproj" />
   </Folder>
   <Folder Name="/src/">

@@ -2072,14 +2072,9 @@ check_system_skill_overlay_dual_seam_injection() {
 
 check_system_skill_overlay_eval_docs() {
   local eval_file="tools/eval/system_skill_overlay_golden_tasks.md"
-  local profile_eval_file="tools/eval/nyxid-chat-profile-rollout-matrix.md"
 
   if [ ! -s "${eval_file}" ]; then
     echo "System skill overlay golden-tasks document is required (tools/eval/system_skill_overlay_golden_tasks.md)."
-    exit 1
-  fi
-  if [ ! -s "${profile_eval_file}" ]; then
-    echo "NyxID chat profile rollout evaluation matrix is required."
     exit 1
   fi
 }

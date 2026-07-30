@@ -7,11 +7,6 @@ namespace Aevatar.GAgentService.Abstractions.AgentProfiles;
 /// </summary>
 public interface IAgentProfileActorPort
 {
-    Task EnsureCreateTargetsAsync(
-        AgentProfileOwner owner,
-        string profileId,
-        CancellationToken ct = default);
-
     Task<DispatchAdmission> DispatchCreateAsync(
         CreateAgentProfileCommand command,
         CancellationToken ct = default);

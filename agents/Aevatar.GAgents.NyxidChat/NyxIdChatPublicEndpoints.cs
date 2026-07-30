@@ -222,7 +222,8 @@ public static partial class NyxIdChatEndpoints
             ClientRequestId: clientRequestId,
             Type: streamType,
             OriginTurnId: request.OriginTurnId,
-            Actions: request.Actions);
+            Actions: request.Actions,
+            AgentProfile: request.AgentProfile);
         await HandleStreamMessageCoreAsync(
             http,
             scopeId,
@@ -344,7 +345,8 @@ public static partial class NyxIdChatEndpoints
         string? Prompt,
         IReadOnlyList<ContentPartDto>? InputParts,
         string? OriginTurnId,
-        IReadOnlyList<NyxIdChatActionReportDto>? Actions);
+        IReadOnlyList<NyxIdChatActionReportDto>? Actions,
+        NyxIdChatAgentProfileReferenceDto? AgentProfile);
 
     [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
     private sealed record PublicApprovalRequest(

@@ -28,8 +28,11 @@ using Aevatar.Bootstrap.Extensions.AI;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.ChatRouting.Core;
 using Aevatar.GAgentService.Abstractions.Responses;
+using Aevatar.GAgentService.Abstractions.AgentProfiles;
+using Aevatar.GAgentService.Application.AgentProfiles;
 using Aevatar.GAgentService.Application.Responses;
 using Aevatar.GAgentService.Hosting.Endpoints;
+using Aevatar.GAgentService.Infrastructure.AgentProfiles;
 using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.Broker;
 using Aevatar.GAgents.Channel.Identity.DependencyInjection;
@@ -57,7 +60,6 @@ using Aevatar.Mainnet.Host.Api.Cqrs;
 using Aevatar.Mainnet.Host.Api.Messages;
 using Aevatar.Mainnet.Host.Api.ManagedCodex;
 using Aevatar.Mainnet.Host.Api.AgentProfiles;
-using Aevatar.Mainnet.Host.Api.Profiles;
 using Aevatar.Mainnet.Host.Api.ProjectionRecovery;
 using Aevatar.Mainnet.Host.Api.Responses;
 using Aevatar.Mainnet.Host.Api.Scheduled;
@@ -150,6 +152,9 @@ public static class MainnetHostBuilderExtensions
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IHostedService, ElasticsearchProjectionIndexReconcileHostedService>());
         builder.AddGAgentServiceCapabilityBundle();
+        builder.Services.AddAgentProfileApplication();
+        builder.Services.TryAddSingleton<IAgentProfileActorPort, AgentProfileActorPort>();
+        builder.Services.TryAddSingleton<AgentProfileApplicationService>();
         builder.AddStudioCapability();
         builder.Services.AddAuditTrailCore(builder.Configuration);
         builder.AddAuditTrailCapabilityBundle();
@@ -163,10 +168,6 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddNyxIdAuthentication();
         builder.AddAevatarAuthentication();
         builder.AddNyxIdIdentityAssertionAuthentication();
-        var agentProfileRolloutSelector = MainnetAgentProfileRolloutSelector.Create(
-            builder.Configuration,
-            builder.Environment.ContentRootPath);
-        builder.Services.AddSingleton(agentProfileRolloutSelector);
         if (builder.Configuration[$"{NyxIdAssistantActionsOptions.ConfigSection}:Enabled"] is null)
         {
             builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
@@ -427,9 +428,11 @@ public static class MainnetHostBuilderExtensions
                 ToolSetNames.NyxIdConnectedServices,
                 [CreateToolSource<NyxIdConnectedServiceToolSource>],
                 "NyxID connected-service operations explicitly marked x-aevatar-tool, registered as individual tools.");
-            agentProfileRolloutSelector.AddReviewedRouteToolSet(
-                options,
-                ToolSetNames.WorkspaceDefault);
+            options.AddToolSet(
+                AgentProfilePolicies.NyxIdChatRouteToolSet,
+                [ToolSetNames.WorkspaceDefault],
+                [],
+                "NyxID chat profile route tool composition with the default workspace tools.");
         });
 
         return builder;
@@ -437,18 +440,9 @@ public static class MainnetHostBuilderExtensions
 
     private static void AddNyxIdChatAgentProfile(WebApplicationBuilder builder)
     {
-        builder.Services.TryAddSingleton(
-            new NyxIdChatAgentProfileValidationBaseline([], []));
-        builder.Services
-            .AddOptions<NyxIdChatAgentProfileOptions>()
-            .Bind(builder.Configuration.GetSection(NyxIdChatAgentProfileOptions.SectionName))
-            .ValidateOnStart();
-        builder.Services.TryAddEnumerable(
-            ServiceDescriptor.Singleton<IValidateOptions<NyxIdChatAgentProfileOptions>,
-                NyxIdChatAgentProfileOptionsValidator>());
         builder.Services.Replace(
-            ServiceDescriptor.Singleton<INyxIdChatAgentProfileSnapshotSource>(serviceProvider =>
-                serviceProvider.GetRequiredService<MainnetAgentProfileRolloutSelector>()));
+            ServiceDescriptor.Singleton<INyxIdChatAgentProfileResolver,
+                MainnetNyxIdChatAgentProfileResolver>());
     }
 
     private static IAgentToolSource CreateToolSource<TSource>(IServiceProvider serviceProvider)
@@ -464,6 +458,7 @@ public static class MainnetHostBuilderExtensions
         app.MapNyxIdChatPublicEndpoints();
         app.MapNyxIdChatEndpoints();
         app.MapChatRoutePolicyAdminEndpoints();
+        app.MapAgentProfileEndpoints();
         app.MapVoicePresenceCapabilityAdminEndpoints();
         app.MapVoiceConsoleEndpoints();
         app.MapAutoConsoleCallbackEndpoints();

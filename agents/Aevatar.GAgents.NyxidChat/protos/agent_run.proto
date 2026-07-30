@@ -10,6 +10,7 @@ import "delivery_ledger.proto";
 import "ai_messages.proto";
 import "workflow_execution_messages.proto";
 import "nyxid_chat_task.proto";
+import "agent_profiles.proto";
 
 enum AgentRunStatus {
   AGENT_RUN_STATUS_UNSPECIFIED = 0;
@@ -742,6 +743,7 @@ message NyxIdChatConversationCreateCommand {
   aevatar.ai.AgentProfileSnapshot agent_profile = 3;
   NyxIdChatStartTurnCommand first_turn = 4;
   string requested_actor_id = 5;
+  aevatar.gagentservice.AgentProfileReference agent_profile_reference = 6;
 }
 
 message NyxIdChatConversationDeleteCommand {

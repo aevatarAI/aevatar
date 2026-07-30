@@ -7,6 +7,7 @@ using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgentService.Abstractions;
 using Aevatar.AGUI.Contracts;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Google.Protobuf;
@@ -28,7 +29,8 @@ public sealed record NyxIdChatCommand(
     string? CorrelationId = null,
     string? ClientRequestId = null,
     bool CreateIfMissing = false,
-    string? OwnerSubject = null)
+    string? OwnerSubject = null,
+    AgentProfileReference? AgentProfileReference = null)
     : ICommandContextSeed
 {
     public IReadOnlyDictionary<string, string>? Headers => null;
@@ -355,6 +357,7 @@ internal sealed class NyxIdChatCommandTargetResolver
         {
             ScopeId = command.ScopeId,
             RequestedActorId = command.ActorId,
+            AgentProfileReference = command.AgentProfileReference?.Clone(),
         };
         var resolved = await _createResolver().ResolveAsync(create, ct);
         if (!resolved.Succeeded || resolved.Target is null)
@@ -474,6 +477,7 @@ internal sealed class NyxIdChatCommandEnvelopeFactory : ICommandEnvelopeFactory<
             ScopeId = command.ScopeId,
             CreatedLocally = command.CreatedLocally,
             AgentProfile = command.AgentProfile?.Clone(),
+            AgentProfileReference = command.AgentProfileReference?.Clone(),
             RequestedActorId = command.ActorId,
             FirstTurn = startTurn,
         });

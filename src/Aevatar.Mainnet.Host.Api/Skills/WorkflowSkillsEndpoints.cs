@@ -47,6 +47,11 @@ internal static class WorkflowSkillsEndpoints
             .WithSummary("Skill detail (authoritative runKind + whenToUse) resolved on selection.")
             .RequireAuthorization();
 
+        data.MapGet("/{guid}/exact", GetExactSkill)
+            .WithName("GetWorkflowExactSkill")
+            .WithSummary("Exact Ornn authority fields for an Agent Profile skill reference.")
+            .RequireAuthorization();
+
         data.MapPost("/{guid}/invoke", InvokeSkill)
             .WithName("InvokeWorkflowSkill")
             .WithSummary("Invoke a skill once as a workflow run; returns the run id for the observatory.")
@@ -106,6 +111,66 @@ internal static class WorkflowSkillsEndpoints
 
         var detail = await catalog.GetSkillAsync(token, guid, ct);
         return detail is null ? Results.NotFound() : Results.Json(detail);
+    }
+
+    internal static async Task<IResult> GetExactSkill(
+        HttpContext http,
+        string guid,
+        [FromServices] IUserSkillCatalogQueryService catalog,
+        string? literalVersion = null,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(http);
+        ArgumentNullException.ThrowIfNull(catalog);
+
+        if (!TryGetBearerToken(http, out var token))
+            return Results.Unauthorized();
+        if (!Guid.TryParseExact(guid, "D", out var parsedGuid) ||
+            !string.Equals(parsedGuid.ToString("D"), guid, StringComparison.Ordinal))
+        {
+            return Results.BadRequest(new AgentProfileExactSkillError(
+                "invalid_guid",
+                "guid must be a canonical lowercase UUID."));
+        }
+        if (literalVersion is not null && !IsLiteralVersion(literalVersion))
+        {
+            return Results.BadRequest(new AgentProfileExactSkillError(
+                "invalid_literal_version",
+                "literalVersion must use canonical major.minor form."));
+        }
+
+        var read = await catalog.GetExactSkillAsync(token, guid, literalVersion, ct);
+        if (read.Detail is not null)
+            return Results.Json(read.Detail);
+        if (read.UpstreamStatus == StatusCodes.Status403Forbidden)
+            return Results.Forbid();
+        if (string.Equals(read.Error, "exact_skill_not_found", StringComparison.Ordinal))
+        {
+            return Results.NotFound(new AgentProfileExactSkillError(
+                "exact_skill_not_found",
+                "The requested exact skill was not found."));
+        }
+
+        return Results.Json(
+            new AgentProfileExactSkillError(
+                read.Error ?? "exact_skill_upstream_failure",
+                "The exact skill authority could not be resolved."),
+            statusCode: StatusCodes.Status502BadGateway);
+    }
+
+    internal static bool IsLiteralVersion(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value) ||
+            value.Split('.', StringSplitOptions.None) is not [var major, var minor] ||
+            !int.TryParse(major, out var majorValue) ||
+            !int.TryParse(minor, out var minorValue) ||
+            majorValue < 0 || minorValue < 0)
+        {
+            return false;
+        }
+
+        return string.Equals(majorValue.ToString(), major, StringComparison.Ordinal) &&
+               string.Equals(minorValue.ToString(), minor, StringComparison.Ordinal);
     }
 
     internal static async Task<IResult> InvokeSkill(

@@ -3,6 +3,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
+using Aevatar.GAgentService.Abstractions;
 using Aevatar.Capabilities;
 using Aevatar.AGUI.Contracts;
 using Microsoft.AspNetCore.Http;
@@ -61,6 +62,7 @@ public static partial class NyxIdChatEndpoints
         var clientRequestId = ResolveClientRequestId(http, request.ClientRequestId);
         var turnId = CreateTurnId(actorId, clientRequestId);
         var ownerSubject = string.Empty;
+        AgentProfileReference? agentProfileReference = null;
         IReadOnlyList<NyxIdChatActionReport> actionReports = [];
 
         try
@@ -89,7 +91,9 @@ public static partial class NyxIdChatEndpoints
                 prompt = request.Prompt?.Trim() ?? string.Empty;
                 if ((string.IsNullOrWhiteSpace(prompt) && request.InputParts is not { Count: > 0 }) ||
                     !string.IsNullOrWhiteSpace(request.OriginTurnId) ||
-                    request.Actions is { Count: > 0 })
+                    request.Actions is { Count: > 0 } ||
+                    (request.AgentProfile is not null &&
+                     (!createIfMissing || !TryMapAgentProfileReference(request.AgentProfile, out agentProfileReference))))
                 {
                     http.Response.StatusCode = StatusCodes.Status400BadRequest;
                     return;
@@ -102,6 +106,7 @@ public static partial class NyxIdChatEndpoints
                     string.IsNullOrWhiteSpace(ownerSubject) ||
                     !string.IsNullOrWhiteSpace(request.Prompt) ||
                     request.InputParts is { Count: > 0 } ||
+                    request.AgentProfile is not null ||
                     !TryMapActionReports(request.Actions, originTurnId, out actionReports))
                 {
                     http.Response.StatusCode = string.IsNullOrWhiteSpace(ownerSubject)
@@ -235,7 +240,8 @@ public static partial class NyxIdChatEndpoints
                         llmControl,
                         ClientRequestId: clientRequestId,
                         CreateIfMissing: createIfMissing,
-                        OwnerSubject: ownerSubject),
+                        OwnerSubject: ownerSubject,
+                        AgentProfileReference: agentProfileReference),
                     EmitAsync,
                     null,
                     interactionCancellation.Token);
@@ -597,6 +603,29 @@ public static partial class NyxIdChatEndpoints
         }
 
         return null;
+    }
+
+    private static bool TryMapAgentProfileReference(
+        NyxIdChatAgentProfileReferenceDto input,
+        out AgentProfileReference? reference)
+    {
+        reference = null;
+        var profileSlug = input.ProfileSlug?.Trim() ?? string.Empty;
+        var ownerKind = input.OwnerKind?.Trim().ToLowerInvariant() switch
+        {
+            "caller" => AgentProfileReferenceOwnerKind.Caller,
+            "system" => AgentProfileReferenceOwnerKind.System,
+            _ => AgentProfileReferenceOwnerKind.Unspecified,
+        };
+        if (ownerKind == AgentProfileReferenceOwnerKind.Unspecified || profileSlug.Length == 0)
+            return false;
+
+        reference = new AgentProfileReference
+        {
+            OwnerKind = ownerKind,
+            ProfileSlug = profileSlug,
+        };
+        return true;
     }
 
     private static bool TryMapActionReports(
@@ -978,7 +1007,13 @@ public static partial class NyxIdChatEndpoints
         string? ClientRequestId = null,
         string? Type = null,
         string? OriginTurnId = null,
-        IReadOnlyList<NyxIdChatActionReportDto>? Actions = null);
+        IReadOnlyList<NyxIdChatActionReportDto>? Actions = null,
+        NyxIdChatAgentProfileReferenceDto? AgentProfile = null);
+
+    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+    public sealed record NyxIdChatAgentProfileReferenceDto(
+        string? OwnerKind,
+        string? ProfileSlug);
 
     [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
     public sealed record NyxIdChatActionReportDto(

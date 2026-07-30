@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
@@ -14,6 +15,7 @@ namespace Aevatar.GAgentService.Core.AgentProfiles;
 public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespaceState>, IProjectedActor
 {
     public const string DurableProjectionKind = "agent-profile-catalog";
+    private static readonly TimeSpan ProvisioningTimeout = TimeSpan.FromSeconds(30);
 
     public static string ProjectionKind => DurableProjectionKind;
 
@@ -22,41 +24,68 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
     {
         ArgumentNullException.ThrowIfNull(command);
         ValidateOwner(command.Owner);
-        ValidateOperation(command.Operation);
+        EnsureActorAddress(command.Owner);
+        var operation = CanonicalOperation(command.Operation, command);
         if (AgentProfilePolicies.ValidateProfileSlug(command.ProfileSlug).Count > 0 ||
-            string.IsNullOrWhiteSpace(command.ProfileId) || string.IsNullOrWhiteSpace(command.ProfileActorId))
+            string.IsNullOrWhiteSpace(command.ProfileId))
         {
             throw new InvalidOperationException("A valid Agent Profile target is required.");
         }
         EnsureOwner(command.Owner);
 
-        if (FindOperation(command.Operation.OperationId) is { } existing)
+        if (FindOperation(operation.OperationId) is { } existing)
         {
-            EnsureOperationReplay(existing, command.Operation);
-            await SendInitializeAsync(command);
+            EnsureOperationReplay(existing, operation);
+            var existingEntry = State.Profiles.FirstOrDefault(x =>
+                string.Equals(x.ProvisioningOperationId, existing.OperationId, StringComparison.Ordinal));
+            if (existingEntry is null)
+                throw new InvalidOperationException("Agent Profile replay target is missing from authority state.");
+            if (existingEntry.Status == AgentProfileProvisioningStatus.Failed)
+            {
+                await RetryProvisioningAsync(existingEntry, existing);
+                return;
+            }
+            if (existingEntry.Status == AgentProfileProvisioningStatus.Provisioning)
+            {
+                await ScheduleProvisioningTimeoutAsync(existingEntry);
+                await SendInitializeAsync(existingEntry, existing);
+            }
             return;
         }
 
-        if (State.Profiles.Any(x => string.Equals(x.ProfileSlug, command.ProfileSlug, StringComparison.Ordinal)))
+        if (State.Profiles.Any(x =>
+                string.Equals(x.ProfileSlug, command.ProfileSlug, StringComparison.Ordinal) &&
+                x.Status is AgentProfileProvisioningStatus.Provisioning or AgentProfileProvisioningStatus.Active))
         {
-            await PersistRejectedAsync(command.Operation, "PROFILE_SLUG_TAKEN");
+            await PersistRejectedAsync(operation, command.Owner, "PROFILE_SLUG_TAKEN");
+            return;
+        }
+        if (State.Profiles.Any(x => string.Equals(x.ProfileId, command.ProfileId, StringComparison.Ordinal)))
+        {
+            await PersistRejectedAsync(operation, command.Owner, "PROFILE_ID_TAKEN");
             return;
         }
 
         var next = State.Clone();
         next.Owner = command.Owner.Clone();
-        next.Profiles.Add(new AgentProfileCatalogEntry
+        var entry = new AgentProfileCatalogEntry
         {
             ProfileId = command.ProfileId.Trim(),
             ProfileSlug = command.ProfileSlug,
-            ProfileActorId = command.ProfileActorId.Trim(),
+            ProfileActorId = AgentProfileActorIds.Profile(command.ProfileId),
             Status = AgentProfileProvisioningStatus.Provisioning,
-        });
-        next.Operations.Add(command.Operation.Clone());
-        next.LastMutation = Outcome(command.Operation, AgentProfileMutationStatus.Succeeded,
+            ProvisioningOperationId = operation.OperationId,
+            ProvisioningInputSha256 = operation.InputSha256,
+            ProvisioningAttempt = 1,
+            ProvisioningTimeoutCallbackId = BuildProvisioningTimeoutCallbackId(command.ProfileId, 1),
+        };
+        next.Profiles.Add(entry);
+        next.Operations.Add(operation.Clone());
+        next.LastMutation = Outcome(operation, AgentProfileMutationStatus.Succeeded,
             "PROFILE_PROVISIONING_STARTED", NextVersion());
         await PersistAsync(next, "provisioning-started");
-        await SendInitializeAsync(command);
+        await ScheduleProvisioningTimeoutAsync(entry);
+        await SendInitializeAsync(entry, operation);
     }
 
     [EventHandler]
@@ -64,21 +93,69 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
     {
         ArgumentNullException.ThrowIfNull(initialized);
         ValidateIdentity(initialized.Identity);
+        EnsureActorAddress(initialized.Identity.Owner);
         var entry = State.Profiles.FirstOrDefault(x =>
             string.Equals(x.ProfileId, initialized.Identity.ProfileId, StringComparison.Ordinal));
-        if (entry is null || !AgentProfileDeterminism.SameOwner(State.Owner, initialized.Identity.Owner) ||
-            !string.Equals(entry.ProfileSlug, initialized.Identity.ProfileSlug, StringComparison.Ordinal))
+        EnsureProfileContinuation(
+            entry,
+            initialized.Identity,
+            initialized.SourceProfileActorId,
+            initialized.SourceAuthorityStateVersion,
+            initialized.ProvisioningOperationId,
+            initialized.Operation);
+        if (entry is null || entry.Status != AgentProfileProvisioningStatus.Provisioning)
+            return;
+        if (!string.Equals(entry.ProfileSlug, initialized.Identity.ProfileSlug, StringComparison.Ordinal))
         {
             throw new InvalidOperationException("Agent Profile initialization does not match namespace authority.");
         }
-        if (entry.Status == AgentProfileProvisioningStatus.Active)
-            return;
 
         var next = State.Clone();
-        next.Profiles.First(x => x.ProfileId == entry.ProfileId).Status = AgentProfileProvisioningStatus.Active;
-        next.LastMutation = Outcome(initialized.Operation, AgentProfileMutationStatus.Succeeded,
+        var updated = next.Profiles.First(x => x.ProfileId == entry.ProfileId);
+        updated.Status = AgentProfileProvisioningStatus.Active;
+        updated.ProvisioningTimeoutCallbackId = string.Empty;
+        next.LastMutation = Outcome(FindOperation(entry.ProvisioningOperationId)!, AgentProfileMutationStatus.Succeeded,
             "PROFILE_ACTIVE", NextVersion());
         await PersistAsync(next, "provisioning-completed");
+    }
+
+    [EventHandler]
+    public async Task HandleInitializationFailedAsync(AgentProfileInitializationFailed failed)
+    {
+        ArgumentNullException.ThrowIfNull(failed);
+        ValidateIdentity(failed.Identity);
+        EnsureActorAddress(failed.Identity.Owner);
+        var entry = State.Profiles.FirstOrDefault(x =>
+            string.Equals(x.ProfileId, failed.Identity.ProfileId, StringComparison.Ordinal));
+        EnsureProfileContinuation(
+            entry,
+            failed.Identity,
+            failed.SourceProfileActorId,
+            failed.SourceAuthorityStateVersion,
+            failed.ProvisioningOperationId,
+            failed.Operation);
+        if (entry is null || entry.Status != AgentProfileProvisioningStatus.Provisioning)
+            return;
+
+        await FailProvisioningAsync(entry, "PROFILE_PROVISIONING_FAILED", "provisioning-failed");
+    }
+
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    public async Task HandleProvisioningTimedOutAsync(AgentProfileProvisioningTimedOut timedOut)
+    {
+        ArgumentNullException.ThrowIfNull(timedOut);
+        EnsureSelfTimeout(timedOut);
+        var entry = State.Profiles.FirstOrDefault(x =>
+            string.Equals(x.ProfileId, timedOut.ProfileId, StringComparison.Ordinal));
+        if (entry is null || entry.Status != AgentProfileProvisioningStatus.Provisioning ||
+            !string.Equals(entry.ProvisioningOperationId, timedOut.ProvisioningOperationId, StringComparison.Ordinal) ||
+            entry.ProvisioningAttempt != timedOut.ProvisioningAttempt ||
+            !string.Equals(entry.ProvisioningTimeoutCallbackId, timedOut.CallbackId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        await FailProvisioningAsync(entry, "PROFILE_PROVISIONING_TIMED_OUT", "provisioning-timed-out");
     }
 
     [EventHandler]
@@ -86,8 +163,10 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
     {
         ArgumentNullException.ThrowIfNull(command);
         ValidateIdentity(command.Identity);
+        EnsureActorAddress(command.Identity.Owner);
         var entry = State.Profiles.FirstOrDefault(x =>
             string.Equals(x.ProfileId, command.Identity.ProfileId, StringComparison.Ordinal));
+        EnsurePublishedContinuation(entry, command);
         if (entry is null || entry.Status != AgentProfileProvisioningStatus.Active ||
             !AgentProfileDeterminism.SameOwner(State.Owner, command.Identity.Owner) ||
             !string.Equals(entry.ProfileSlug, command.Identity.ProfileSlug, StringComparison.Ordinal))
@@ -118,67 +197,128 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
     {
         ArgumentNullException.ThrowIfNull(command);
         ValidateOwner(command.Owner);
-        ValidateOperation(command.Operation);
+        EnsureActorAddress(command.Owner);
+        var operation = CanonicalOperation(command.Operation, command);
         EnsureOwner(command.Owner);
-        if (TryHandleReplay(command.Operation))
+        var namespaceOwner = State.Owner is null || State.Owner.OwnerCase == AgentProfileOwner.OwnerOneofCase.None
+            ? command.Owner
+            : State.Owner;
+        if (TryHandleReplay(operation))
             return;
         if (command.ExpectedAuthorityStateVersion != CurrentVersion())
         {
-            await PersistRejectedAsync(command.Operation, "AUTHORITY_VERSION_CONFLICT");
+            await PersistRejectedAsync(operation, command.Owner, "AUTHORITY_VERSION_CONFLICT");
             return;
         }
         if (!AgentProfilePolicies.IsSupportedAgentKind(command.AgentKind) ||
-            command.CohortBasisPoints is < 0 or > AgentProfilePolicies.FullCohortBasisPoints)
+            !IsValidBindingTarget(command.Target))
         {
-            await PersistRejectedAsync(command.Operation, "BINDING_INVALID");
+            await PersistRejectedAsync(operation, command.Owner, "BINDING_INVALID");
             return;
         }
-        var profile = State.Profiles.FirstOrDefault(x => x.ProfileId == command.ProfileId);
-        if (profile is null || profile.Status != AgentProfileProvisioningStatus.Active)
+        if (!IsValidBindingAdmission(namespaceOwner, command))
         {
-            await PersistRejectedAsync(command.Operation, "PROFILE_NOT_FOUND");
+            await PersistRejectedAsync(operation, command.Owner, "BINDING_ADMISSION_INVALID");
             return;
         }
-        if (profile.PublishedRevision <= 0 || profile.SnapshotSha256.Length != 32)
+        if (!IsAllowedBindingOwner(namespaceOwner, command.Target.Owner))
         {
-            await PersistRejectedAsync(command.Operation, "PROFILE_NOT_PUBLISHED");
+            await PersistRejectedAsync(operation, command.Owner, "BINDING_TARGET_OWNER_INVALID");
+            return;
+        }
+
+        if (AgentProfileDeterminism.SameOwner(namespaceOwner, command.Target.Owner) &&
+            !TryValidateOwnedBindingTarget(command.Target, out var targetError))
+        {
+            await PersistRejectedAsync(operation, command.Owner, targetError);
             return;
         }
 
         var next = State.Clone();
+        if (next.Owner is null || next.Owner.OwnerCase == AgentProfileOwner.OwnerOneofCase.None)
+            next.Owner = command.Owner.Clone();
         var existingBinding = next.DefaultBindings.FirstOrDefault(x => x.AgentKind == command.AgentKind);
         if (existingBinding is not null)
             next.DefaultBindings.Remove(existingBinding);
         next.DefaultBindings.Add(new AgentProfileDefaultBinding
         {
             AgentKind = command.AgentKind,
-            ProfileId = command.ProfileId,
-            Enabled = command.Enabled,
-            CohortBasisPoints = command.CohortBasisPoints,
+            Target = command.Target.Clone(),
         });
-        next.Operations.Add(command.Operation.Clone());
-        next.LastMutation = Outcome(command.Operation, AgentProfileMutationStatus.Succeeded,
+        if (command.AdmissionCase == SetAgentProfileDefaultBindingCommand.AdmissionOneofCase.Scope)
+            next.DefaultBindings[^1].Scope = command.Scope.Clone();
+        else
+            next.DefaultBindings[^1].System = command.System.Clone();
+        next.Operations.Add(operation.Clone());
+        next.LastMutation = Outcome(operation, AgentProfileMutationStatus.Succeeded,
             "DEFAULT_BINDING_SET", NextVersion());
         await PersistAsync(next, "default-binding-set");
     }
+
+    private bool TryValidateOwnedBindingTarget(AgentProfileBindingTarget target, out string error)
+    {
+        var profile = State.Profiles.FirstOrDefault(x => x.ProfileId == target.ProfileId);
+        if (profile is null || profile.Status != AgentProfileProvisioningStatus.Active)
+        {
+            error = "PROFILE_NOT_FOUND";
+            return false;
+        }
+        if (profile.PublishedRevision <= 0 || profile.SnapshotSha256.Length != 32 ||
+            profile.PublishedRevision != target.PublishedRevision ||
+            !profile.SnapshotSha256.Equals(target.SnapshotSha256))
+        {
+            error = "PROFILE_NOT_PUBLISHED";
+            return false;
+        }
+
+        error = string.Empty;
+        return true;
+    }
+
+    private static bool IsValidBindingTarget(AgentProfileBindingTarget? target) =>
+        target?.Owner is not null &&
+        target.Owner.OwnerCase != AgentProfileOwner.OwnerOneofCase.None &&
+        !string.IsNullOrWhiteSpace(target.ProfileId) &&
+        target.PublishedRevision > 0 &&
+        target.SnapshotSha256.Length == 32;
+
+    private static bool IsValidBindingAdmission(
+        AgentProfileOwner owner,
+        SetAgentProfileDefaultBindingCommand command) =>
+        owner.OwnerCase switch
+        {
+            AgentProfileOwner.OwnerOneofCase.Scope =>
+                command.AdmissionCase == SetAgentProfileDefaultBindingCommand.AdmissionOneofCase.Scope,
+            AgentProfileOwner.OwnerOneofCase.System =>
+                command.AdmissionCase == SetAgentProfileDefaultBindingCommand.AdmissionOneofCase.System &&
+                command.System.CohortBasisPoints is >= 0 and <= AgentProfilePolicies.FullCohortBasisPoints,
+            _ => false,
+        };
+
+    private static bool IsAllowedBindingOwner(AgentProfileOwner namespaceOwner, AgentProfileOwner targetOwner) =>
+        AgentProfileDeterminism.SameOwner(namespaceOwner, targetOwner) ||
+        namespaceOwner.OwnerCase == AgentProfileOwner.OwnerOneofCase.Scope &&
+        targetOwner.OwnerCase == AgentProfileOwner.OwnerOneofCase.System &&
+        string.Equals(targetOwner.System.PlatformId, AgentProfileOwners.PlatformId, StringComparison.Ordinal);
 
     [EventHandler]
     public async Task HandleClearDefaultBindingAsync(ClearAgentProfileDefaultBindingCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
         ValidateOwner(command.Owner);
-        ValidateOperation(command.Operation);
+        EnsureActorAddress(command.Owner);
+        var operation = CanonicalOperation(command.Operation, command);
         EnsureOwner(command.Owner);
-        if (TryHandleReplay(command.Operation))
+        if (TryHandleReplay(operation))
             return;
         if (command.ExpectedAuthorityStateVersion != CurrentVersion())
         {
-            await PersistRejectedAsync(command.Operation, "AUTHORITY_VERSION_CONFLICT");
+            await PersistRejectedAsync(operation, command.Owner, "AUTHORITY_VERSION_CONFLICT");
             return;
         }
         if (!AgentProfilePolicies.IsSupportedAgentKind(command.AgentKind))
         {
-            await PersistRejectedAsync(command.Operation, "BINDING_INVALID");
+            await PersistRejectedAsync(operation, command.Owner, "BINDING_INVALID");
             return;
         }
 
@@ -186,8 +326,8 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
         var existing = next.DefaultBindings.FirstOrDefault(x => x.AgentKind == command.AgentKind);
         if (existing is not null)
             next.DefaultBindings.Remove(existing);
-        next.Operations.Add(command.Operation.Clone());
-        next.LastMutation = Outcome(command.Operation,
+        next.Operations.Add(operation.Clone());
+        next.LastMutation = Outcome(operation,
             existing is null ? AgentProfileMutationStatus.NoChange : AgentProfileMutationStatus.Succeeded,
             existing is null ? "DEFAULT_BINDING_ABSENT" : "DEFAULT_BINDING_CLEARED",
             NextVersion());
@@ -208,22 +348,81 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
             ChangeKind = changeKind,
         });
 
-    private Task SendInitializeAsync(CreateAgentProfileCommand command) =>
-        SendToAsync(command.ProfileActorId, new InitializeAgentProfileCommand
+    private Task SendInitializeAsync(
+        AgentProfileCatalogEntry entry,
+        AgentProfileOperationFact operation) =>
+        SendToAsync(entry.ProfileActorId, new InitializeAgentProfileCommand
         {
             Identity = new AgentProfileIdentity
             {
-                ProfileId = command.ProfileId,
-                Owner = command.Owner.Clone(),
-                ProfileSlug = command.ProfileSlug,
+                ProfileId = entry.ProfileId,
+                Owner = State.Owner.Clone(),
+                ProfileSlug = entry.ProfileSlug,
             },
-            NamespaceActorId = Id,
-            Operation = command.Operation.Clone(),
+            Operation = operation.Clone(),
         });
 
-    private async Task PersistRejectedAsync(AgentProfileOperationFact operation, string code)
+    private async Task RetryProvisioningAsync(
+        AgentProfileCatalogEntry entry,
+        AgentProfileOperationFact operation)
     {
         var next = State.Clone();
+        var updated = next.Profiles.First(x =>
+            string.Equals(x.ProfileId, entry.ProfileId, StringComparison.Ordinal));
+        updated.Status = AgentProfileProvisioningStatus.Provisioning;
+        updated.ProvisioningAttempt = checked(updated.ProvisioningAttempt + 1);
+        updated.ProvisioningTimeoutCallbackId =
+            BuildProvisioningTimeoutCallbackId(updated.ProfileId, updated.ProvisioningAttempt);
+        next.LastMutation = Outcome(operation, AgentProfileMutationStatus.Succeeded,
+            "PROFILE_PROVISIONING_RETRIED", NextVersion());
+        await PersistAsync(next, "provisioning-retried");
+        await ScheduleProvisioningTimeoutAsync(updated);
+        await SendInitializeAsync(updated, operation);
+    }
+
+    private async Task FailProvisioningAsync(
+        AgentProfileCatalogEntry entry,
+        string outcomeCode,
+        string changeKind)
+    {
+        var operation = FindOperation(entry.ProvisioningOperationId) ??
+                        throw new InvalidOperationException(
+                            "Agent Profile provisioning operation is missing from authority state.");
+        var next = State.Clone();
+        var updated = next.Profiles.First(x =>
+            string.Equals(x.ProfileId, entry.ProfileId, StringComparison.Ordinal));
+        updated.Status = AgentProfileProvisioningStatus.Failed;
+        updated.ProvisioningTimeoutCallbackId = string.Empty;
+        next.LastMutation = Outcome(
+            operation,
+            AgentProfileMutationStatus.Rejected,
+            outcomeCode,
+            NextVersion());
+        await PersistAsync(next, changeKind);
+    }
+
+    private async Task ScheduleProvisioningTimeoutAsync(AgentProfileCatalogEntry entry)
+    {
+        await ScheduleSelfDurableTimeoutAsync(
+            entry.ProvisioningTimeoutCallbackId,
+            ProvisioningTimeout,
+            new AgentProfileProvisioningTimedOut
+            {
+                ProfileId = entry.ProfileId,
+                ProvisioningOperationId = entry.ProvisioningOperationId,
+                ProvisioningAttempt = entry.ProvisioningAttempt,
+                CallbackId = entry.ProvisioningTimeoutCallbackId,
+            });
+    }
+
+    private async Task PersistRejectedAsync(
+        AgentProfileOperationFact operation,
+        AgentProfileOwner owner,
+        string code)
+    {
+        var next = State.Clone();
+        if (next.Owner is null || next.Owner.OwnerCase == AgentProfileOwner.OwnerOneofCase.None)
+            next.Owner = owner.Clone();
         next.Operations.Add(operation.Clone());
         next.LastMutation = Outcome(operation, AgentProfileMutationStatus.Rejected, code, NextVersion());
         await PersistAsync(next, "rejected");
@@ -258,14 +457,18 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
 
     private static void ValidateIdentity(AgentProfileIdentity? identity)
     {
-        if (identity?.Owner is null || string.IsNullOrWhiteSpace(identity.ProfileId) ||
+        if (identity?.Owner is null || identity.Owner.OwnerCase == AgentProfileOwner.OwnerOneofCase.None ||
+            string.IsNullOrWhiteSpace(identity.ProfileId) ||
             AgentProfilePolicies.ValidateProfileSlug(identity.ProfileSlug).Count > 0)
             throw new InvalidOperationException("A valid Agent Profile identity is required.");
+        _ = AgentProfileActorIds.Namespace(identity.Owner);
     }
 
     private static void ValidateOperation(AgentProfileOperationFact? operation)
     {
         if (operation is null || string.IsNullOrWhiteSpace(operation.OperationId) ||
+            string.IsNullOrWhiteSpace(operation.CommandId) ||
+            string.IsNullOrWhiteSpace(operation.CorrelationId) ||
             operation.InputSha256.Length != 32)
             throw new InvalidOperationException("A complete Agent Profile operation fact is required.");
     }
@@ -274,6 +477,107 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
     {
         if (!existing.InputSha256.Equals(incoming.InputSha256))
             throw new InvalidOperationException("Agent Profile operation payload drift is not allowed.");
+    }
+
+    private static AgentProfileOperationFact CanonicalOperation(
+        AgentProfileOperationFact? operation,
+        IMessage command)
+    {
+        ValidateOperation(operation);
+        var canonical = operation!.Clone();
+        canonical.InputSha256 = AgentProfileDeterminism.ComputeSemanticCommandDigest(command);
+        return canonical;
+    }
+
+    private void EnsureActorAddress(AgentProfileOwner owner)
+    {
+        if (!string.Equals(Id, AgentProfileActorIds.Namespace(owner), StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                "Agent Profile namespace authority address does not match its typed identity.");
+    }
+
+    private void EnsureProfileContinuation(
+        AgentProfileCatalogEntry? entry,
+        AgentProfileIdentity identity,
+        string sourceProfileActorId,
+        long sourceAuthorityStateVersion,
+        string provisioningOperationId,
+        AgentProfileOperationFact operation)
+    {
+        ValidateOperation(operation);
+        if (entry is null ||
+            !AgentProfileDeterminism.SameOwner(State.Owner, identity.Owner) ||
+            !string.Equals(entry.ProfileSlug, identity.ProfileSlug, StringComparison.Ordinal) ||
+            !string.Equals(entry.ProfileActorId, sourceProfileActorId, StringComparison.Ordinal) ||
+            !string.Equals(sourceProfileActorId, AgentProfileActorIds.Profile(identity.ProfileId), StringComparison.Ordinal) ||
+            sourceAuthorityStateVersion <= 0 ||
+            !string.Equals(entry.ProvisioningOperationId, provisioningOperationId, StringComparison.Ordinal) ||
+            !string.Equals(operation.OperationId, provisioningOperationId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Agent Profile continuation does not match namespace authority.");
+        }
+
+        var authorityOperation = FindOperation(provisioningOperationId);
+        if (authorityOperation is null ||
+            !string.Equals(authorityOperation.CommandId, operation.CommandId, StringComparison.Ordinal) ||
+            !string.Equals(authorityOperation.CorrelationId, operation.CorrelationId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Agent Profile continuation operation does not match namespace authority.");
+        }
+
+        EnsurePublisher(sourceProfileActorId);
+    }
+
+    private void EnsurePublishedContinuation(
+        AgentProfileCatalogEntry? entry,
+        ObserveAgentProfilePublishedCommand command)
+    {
+        if (entry is null ||
+            !string.Equals(entry.ProfileActorId, command.SourceProfileActorId, StringComparison.Ordinal) ||
+            !string.Equals(
+                command.SourceProfileActorId,
+                AgentProfileActorIds.Profile(command.Identity.ProfileId),
+                StringComparison.Ordinal) ||
+            command.SourceAuthorityStateVersion <= 0 ||
+            string.IsNullOrWhiteSpace(command.SourceOperationId))
+        {
+            throw new InvalidOperationException(
+                "Published Profile continuation does not match namespace authority.");
+        }
+
+        EnsurePublisher(command.SourceProfileActorId);
+    }
+
+    private void EnsureSelfTimeout(AgentProfileProvisioningTimedOut timedOut)
+    {
+        var envelope = ActiveInboundEnvelope;
+        var callback = envelope?.Runtime?.Callback;
+        if (string.IsNullOrWhiteSpace(timedOut.CallbackId) || timedOut.ProvisioningAttempt <= 0 ||
+            !string.Equals(envelope?.Route?.PublisherActorId, Id, StringComparison.Ordinal) ||
+            envelope?.Route.GetTopologyAudience() != TopologyAudience.Self ||
+            callback is null ||
+            !string.Equals(callback.CallbackId, timedOut.CallbackId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Agent Profile provisioning timeout is not a valid durable self callback.");
+        }
+    }
+
+    private void EnsurePublisher(string expectedPublisherActorId)
+    {
+        var publisherActorId = ActiveInboundEnvelope?.Route?.PublisherActorId ?? string.Empty;
+        if (!string.Equals(publisherActorId, expectedPublisherActorId, StringComparison.Ordinal))
+            throw new InvalidOperationException("Agent Profile continuation publisher does not match authority.");
+    }
+
+    private static string BuildProvisioningTimeoutCallbackId(string profileId, int attempt)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(profileId);
+        ArgumentOutOfRangeException.ThrowIfLessThan(attempt, 1);
+        var digest = AgentProfileDeterminism.Sha256Utf8(profileId.Trim());
+        return $"agent-profile-provisioning-{Convert.ToHexStringLower(digest.AsSpan(0, 16))}-{attempt}";
     }
 
     private long CurrentVersion() => EventSourcing?.CurrentVersion ?? 0;

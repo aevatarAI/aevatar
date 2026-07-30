@@ -43,15 +43,34 @@ public static class AgentProfileDeterminism
         return ByteString.CopyFrom(SHA256.HashData(SerializeDeterministically(NormalizeDraft(draft))));
     }
 
+    public static ByteString ComputeSemanticCommandDigest(IMessage command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        return ByteString.CopyFrom(SHA256.HashData(SerializeDeterministically(WithoutOperation(command))));
+    }
+
     public static AgentProfilePublishedSnapshot BuildPublishedSnapshot(
         AgentProfileIdentity identity,
         AgentProfileDraft draft,
         long draftRevision,
         long publishedRevision,
-        DateTimeOffset publishedAt)
+        DateTimeOffset publishedAt) =>
+        BuildPublishedSnapshot(identity, draft, draftRevision, publishedRevision, publishedAt, []);
+
+    public static AgentProfilePublishedSnapshot BuildPublishedSnapshot(
+        AgentProfileIdentity identity,
+        AgentProfileDraft draft,
+        long draftRevision,
+        long publishedRevision,
+        DateTimeOffset publishedAt,
+        IReadOnlyCollection<AgentProfileSealedSkillEvidence> sealedSkills)
     {
         ArgumentNullException.ThrowIfNull(identity);
+        ArgumentNullException.ThrowIfNull(draft);
+        ArgumentNullException.ThrowIfNull(sealedSkills);
         var normalized = NormalizeDraft(draft);
+        var draftSha256 = ComputeDraftDigest(normalized);
+        ApplySealedSkills(normalized.RuntimeProfile, sealedSkills);
         var runtime = normalized.RuntimeProfile?.Clone() ?? new AgentProfileSnapshot();
         runtime.ProfileId = identity.ProfileId;
         runtime.ProfileVersion = publishedRevision.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -59,7 +78,6 @@ public static class AgentProfileDeterminism
         runtime.Instructions = normalized.Instructions;
         runtime.PublishedRevision = publishedRevision;
         runtime.DeterministicPolicySha256 = ByteString.Empty;
-        runtime.PublishedSnapshotSha256 = ByteString.Empty;
         runtime.DeterministicPolicySha256 = ByteString.CopyFrom(
             SHA256.HashData(SerializeDeterministically(runtime)));
 
@@ -71,31 +89,53 @@ public static class AgentProfileDeterminism
             Instructions = normalized.Instructions,
             RuntimeProfile = runtime,
             DraftRevision = draftRevision,
-            DraftSha256 = ComputeDraftDigest(normalized),
+            DraftSha256 = draftSha256,
             PublishedRevision = publishedRevision,
             PublishedAt = Timestamp.FromDateTimeOffset(publishedAt),
         };
         snapshot.SnapshotSha256 = ComputePublishedSnapshotDigest(snapshot);
-        snapshot.RuntimeProfile.PublishedSnapshotSha256 = snapshot.SnapshotSha256;
-        snapshot.SnapshotSha256 = ComputePublishedSnapshotDigest(snapshot);
-        snapshot.RuntimeProfile.PublishedSnapshotSha256 = snapshot.SnapshotSha256;
         return snapshot;
     }
 
-    public static bool VerifyPublishedSnapshot(AgentProfilePublishedSnapshot? snapshot)
+    public static bool VerifyPublishedSnapshot(
+        AgentProfilePublishedSnapshot? snapshot,
+        AgentProfileDraft authorityDraft)
     {
+        ArgumentNullException.ThrowIfNull(authorityDraft);
         if (snapshot?.Identity is null || snapshot.RuntimeProfile is null ||
+            snapshot.PublishedAt is null ||
             snapshot.SnapshotSha256.Length != Sha256Length ||
             snapshot.DraftSha256.Length != Sha256Length)
         {
             return false;
         }
 
-        var expected = ComputePublishedSnapshotDigest(snapshot);
-        return CryptographicOperations.FixedTimeEquals(expected.Span, snapshot.SnapshotSha256.Span) &&
-               snapshot.RuntimeProfile.PublishedRevision == snapshot.PublishedRevision &&
-               snapshot.RuntimeProfile.PublishedSnapshotSha256.Equals(snapshot.SnapshotSha256) &&
-               string.Equals(snapshot.RuntimeProfile.Instructions, snapshot.Instructions, StringComparison.Ordinal);
+        try
+        {
+            var sealedSkills = snapshot.RuntimeProfile.Members
+                .Select(static member => new AgentProfileSealedSkillEvidence(
+                    member.IntentId,
+                    member.SkillRef?.Guid ?? string.Empty,
+                    member.SkillRef?.LiteralVersion ?? string.Empty,
+                    member.SealedSkillSha256))
+                .ToArray();
+            var expected = BuildPublishedSnapshot(
+                snapshot.Identity,
+                authorityDraft,
+                snapshot.DraftRevision,
+                snapshot.PublishedRevision,
+                snapshot.PublishedAt.ToDateTimeOffset(),
+                sealedSkills);
+            return CryptographicOperations.FixedTimeEquals(
+                       expected.SnapshotSha256.Span,
+                       snapshot.SnapshotSha256.Span) &&
+                   SerializeDeterministically(expected).AsSpan()
+                       .SequenceEqual(SerializeDeterministically(snapshot));
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or ArgumentException)
+        {
+            return false;
+        }
     }
 
     public static AgentProfileDraft NormalizeDraft(AgentProfileDraft draft)
@@ -125,7 +165,6 @@ public static class AgentProfileDeterminism
                 SortDistinct(member.TaskToolPolicy?.ToolSetRefs);
             }
             normalized.RuntimeProfile.DeterministicPolicySha256 = ByteString.Empty;
-            normalized.RuntimeProfile.PublishedSnapshotSha256 = ByteString.Empty;
         }
         return normalized;
     }
@@ -137,9 +176,98 @@ public static class AgentProfileDeterminism
     {
         var input = snapshot.Clone();
         input.SnapshotSha256 = ByteString.Empty;
-        if (input.RuntimeProfile is not null)
-            input.RuntimeProfile.PublishedSnapshotSha256 = ByteString.Empty;
         return ByteString.CopyFrom(SHA256.HashData(SerializeDeterministically(input)));
+    }
+
+    private static void ApplySealedSkills(
+        AgentProfileSnapshot? runtimeProfile,
+        IReadOnlyCollection<AgentProfileSealedSkillEvidence> sealedSkills)
+    {
+        if (sealedSkills.Count == 0)
+            return;
+        if (runtimeProfile is null || sealedSkills.Count != runtimeProfile.Members.Count)
+            throw new InvalidOperationException("Sealed skill evidence must cover every Profile member.");
+
+        var byIdentity = new Dictionary<SealedSkillIdentity, ByteString>();
+        foreach (var evidence in sealedSkills)
+        {
+            if (evidence.SkillSha256.Length != Sha256Length ||
+                !byIdentity.TryAdd(
+                    new SealedSkillIdentity(
+                        evidence.IntentId,
+                        evidence.SkillGuid,
+                        evidence.LiteralVersion),
+                    evidence.SkillSha256))
+            {
+                throw new InvalidOperationException("Sealed skill evidence is invalid or duplicated.");
+            }
+        }
+
+        foreach (var member in runtimeProfile.Members)
+        {
+            var identity = new SealedSkillIdentity(
+                member.IntentId,
+                member.SkillRef?.Guid ?? string.Empty,
+                member.SkillRef?.LiteralVersion ?? string.Empty);
+            if (!byIdentity.Remove(identity, out var skillSha256))
+                throw new InvalidOperationException("Sealed skill evidence does not match the authority draft.");
+            member.SealedSkillSha256 = skillSha256;
+        }
+
+        if (byIdentity.Count != 0)
+            throw new InvalidOperationException("Sealed skill evidence contains unknown Profile members.");
+    }
+
+    private readonly record struct SealedSkillIdentity(
+        string IntentId,
+        string SkillGuid,
+        string LiteralVersion);
+
+    private static IMessage WithoutOperation(IMessage command)
+    {
+        switch (command)
+        {
+            case CreateAgentProfileCommand value:
+            {
+                var copy = value.Clone();
+                copy.Operation = null;
+                return copy;
+            }
+            case InitializeAgentProfileCommand value:
+            {
+                var copy = value.Clone();
+                copy.Operation = null;
+                return copy;
+            }
+            case UpdateAgentProfileDraftCommand value:
+            {
+                var copy = value.Clone();
+                copy.Operation = null;
+                return copy;
+            }
+            case PublishAgentProfileCommand value:
+            {
+                var copy = value.Clone();
+                copy.Operation = null;
+                return copy;
+            }
+            case SetAgentProfileDefaultBindingCommand value:
+            {
+                var copy = value.Clone();
+                copy.Operation = null;
+                return copy;
+            }
+            case ClearAgentProfileDefaultBindingCommand value:
+            {
+                var copy = value.Clone();
+                copy.Operation = null;
+                return copy;
+            }
+            default:
+                throw new ArgumentException(
+                    $"Unsupported Agent Profile command type '{command.Descriptor.FullName}'.",
+                    nameof(command));
+        }
     }
 
     private static string CreateStableId(

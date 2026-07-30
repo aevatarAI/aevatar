@@ -82,6 +82,236 @@ public sealed class BackendConsoleStaticAssetEndpointTests
     }
 
     [Fact]
+    public async Task AdminShell_AgentProfiles_ShouldExposeStructuredLoginModuleAndHonestStates()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        html.Should().Contain("agentProfiles:{name:'Agent Profile', auth:'login'");
+        html.Should().Contain("items:['studio','agentProfiles','skills','schedules']");
+        html.Should().Contain("agentProfileField('显示名称','displayName'");
+        html.Should().Contain("agentProfileField('Instructions','instructions'");
+        html.Should().Contain("agentProfileSelect('Activation mode','activationMode'");
+        html.Should().Contain("agentProfileField('Exact skill GUID','exactSkillGuid'");
+        html.Should().Contain("agentProfileField('Literal version','literalVersion'");
+        html.Should().Contain("data-ap-skill-search");
+        html.Should().Contain("/api/workflow/skills/'+encodeURIComponent(guid)+'/exact");
+        html.Should().Contain("loadAgentProfileBindings()");
+        html.Should().Contain("AGENT_PROFILE_STATE.systemBinding&&AGENT_PROFILE_STATE.systemBinding.etag");
+        html.Should().Contain("agentProfileField('Maximum tools','maximumTools'");
+        html.Should().Contain("仅影响新建实例");
+        html.Should().Contain("已接受，等待提交/投影");
+        html.Should().Contain("其他人已修改此 Profile");
+        html.Should().Contain("投影暂时不可用");
+        html.Should().Contain("window.addEventListener('beforeunload',agentProfileBeforeUnload)");
+        html.Should().Contain("@media (max-width:768px)");
+        html.Should().NotContain("data-ap-field=\"rawJson\"");
+    }
+
+    [Fact]
+    public async Task AdminShell_AgentProfiles_ShouldResolveOwnerAuthorityAndTypedProblems()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name, nextName) {
+              const start = html.indexOf('function ' + name + '(');
+              const end = html.indexOf('\nfunction ' + nextName + '(', start);
+              assert.notEqual(start, -1, name + ' must exist in the served admin asset');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return html.slice(start, end);
+            }
+
+            const context = {};
+            vm.createContext(context);
+            vm.runInContext(`
+              ${functionSource('agentProfileOwnerEndpoint', 'agentProfileCanWrite')}
+              ${functionSource('agentProfileCanWrite', 'agentProfileProblem')}
+              ${functionSource('agentProfileProblem', 'agentProfileDraftFromFields')}
+              ${functionSource('agentProfileDraftFromFields', 'agentProfileEmptyDraft')}
+            `, context);
+
+            assert.equal(
+              vm.runInContext("agentProfileOwnerEndpoint('mine','scope-alpha')", context),
+              '/api/scopes/scope-alpha/agent-profiles');
+            assert.equal(
+              vm.runInContext("agentProfileOwnerEndpoint('system','scope-alpha')", context),
+              '/api/agent-profiles/system');
+            assert.equal(
+              vm.runInContext("agentProfileCanWrite({ownerKind:'system'},{admin:false})", context),
+              false);
+            assert.equal(
+              vm.runInContext("agentProfileCanWrite({ownerKind:'system'},{admin:true})", context),
+              true);
+            assert.equal(
+              vm.runInContext("agentProfileCanWrite({ownerKind:'scope'},{admin:false})", context),
+              true);
+            assert.equal(vm.runInContext('agentProfileProblem(412)', context).kind, 'stale');
+            assert.equal(vm.runInContext('agentProfileProblem(422)', context).kind, 'validation');
+            assert.equal(vm.runInContext('agentProfileProblem(503)', context).kind, 'unavailable');
+
+            const draft = vm.runInContext(`agentProfileDraftFromFields({
+              displayName:'Research', purpose:'Read evidence', instructions:'Cite sources',
+              activationMode:'ENFORCED', exactSkillGuid:'11111111-1111-1111-1111-111111111111',
+              literalVersion:'1.2', expectedSkillName:'research', reviewedPublisherId:'publisher-alpha',
+              maximumTools:'web_search, fetch_url', taskTools:'web_search', maxPlanSteps:'4'
+            })`, context);
+            assert.equal(draft.displayName, 'Research');
+            assert.equal(draft.runtimeProfile.activationMode, 'ENFORCED');
+            assert.equal(draft.runtimeProfile.maximumToolPolicy.toolNames.join(','), 'web_search,fetch_url');
+            assert.equal(draft.runtimeProfile.members[0].skillRef.literalVersion, '1.2');
+            assert.equal(draft.runtimeProfile.members[0].taskToolPolicy.toolNames.join(','), 'web_search');
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error);
+    }
+
+    [Fact]
+    public async Task AdminShell_AgentProfiles_ShouldPreserveWorkingDraftAndRestoreSystemRollout()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name, nextName) {
+              const starts = [
+                html.indexOf('function ' + name + '('),
+                html.indexOf('async function ' + name + '(')
+              ].filter(function(index) { return index !== -1; });
+              const start = starts.length ? Math.min.apply(null, starts) : -1;
+              const nextStarts = [
+                html.indexOf('\nfunction ' + nextName + '(', start),
+                html.indexOf('\nasync function ' + nextName + '(', start)
+              ].filter(function(index) { return index !== -1; });
+              const end = nextStarts.length ? Math.min.apply(null, nextStarts) : -1;
+              assert.notEqual(start, -1, name + ' must exist in the served admin asset');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return html.slice(start, end);
+            }
+
+            const context = {};
+            vm.createContext(context);
+            vm.runInContext(`
+              ${functionSource('agentProfileDraftFromFields', 'agentProfileEmptyDraft')}
+              ${functionSource('agentProfileEmptyDraft', 'agentProfileRolloutFromBinding')}
+              ${functionSource('agentProfileRolloutFromBinding', 'agentProfileApplyExactSkill')}
+              ${functionSource('agentProfileApplyExactSkill', 'agentProfileCaptureDraft')}
+            `, context);
+
+            const rollout = vm.runInContext(
+              "agentProfileRolloutFromBinding({enabled:false,cohortBasisPoints:2750})",
+              context);
+            assert.equal(rollout.enabled, false);
+            assert.equal(rollout.cohortBasisPoints, 2750);
+
+            const draft = vm.runInContext(`agentProfileDraftFromFields({
+              displayName:'Unsaved name', instructions:'Unsaved instructions',
+              exactSkillGuid:'11111111-1111-1111-1111-111111111111', literalVersion:'1.0',
+              expectedSkillName:'old-skill', reviewedPublisherId:'old-publisher',
+              maximumTools:'web_search', intentId:'primary'
+            })`, context);
+            context.draft = draft;
+            context.exact = {
+              guid:'22222222-2222-4222-8222-222222222222', literalVersion:'2.3',
+              name:'new-skill', publisher:'new-publisher'
+            };
+            const updated = vm.runInContext('agentProfileApplyExactSkill(draft, exact)', context);
+            assert.equal(updated.displayName, 'Unsaved name');
+            assert.equal(updated.instructions, 'Unsaved instructions');
+            assert.equal(updated.runtimeProfile.maximumToolPolicy.toolNames.join(','), 'web_search');
+            assert.equal(updated.runtimeProfile.members[0].skillRef.literalVersion, '2.3');
+            assert.equal(updated.runtimeProfile.members[0].expectedSkillName, 'new-skill');
+
+            const searchSource = functionSource('agentProfileSearchSkills', 'agentProfileSelectSkill');
+            assert.ok(searchSource.indexOf('agentProfileCaptureDraft(root);') >= 0);
+            assert.ok(searchSource.indexOf('agentProfileCaptureDraft(root);') < searchSource.indexOf('render();'));
+            const selectSource = functionSource('agentProfileSelectSkill', 'agentProfileEditorHtml');
+            assert.ok(selectSource.indexOf('agentProfileCaptureDraft(root);') >= 0);
+            assert.ok(selectSource.indexOf('agentProfileCaptureDraft(root);') < selectSource.indexOf('render();'));
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error);
+    }
+
+    [Fact]
+    public async Task AdminShell_AgentProfiles_ShouldReconcileAcceptedReceiptWithCommittedProjection()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name, nextName) {
+              const start = html.indexOf('function ' + name + '(');
+              const end = html.indexOf('\nfunction ' + nextName + '(', start);
+              assert.notEqual(start, -1, name + ' must exist in the served admin asset');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return html.slice(start, end);
+            }
+
+            const context = {
+              AGENT_PROFILE_STATE: {pending:null,notice:null,error:null}
+            };
+            vm.createContext(context);
+            vm.runInContext(`
+              ${functionSource('agentProfileTrackAccepted', 'agentProfileOutcomeIsTerminal')}
+              ${functionSource('agentProfileOutcomeIsTerminal', 'agentProfileReconcilePending')}
+              ${functionSource('agentProfileReconcilePending', 'agentProfileScheduleRefresh')}
+            `, context);
+
+            context.result = {status:202,body:{operationId:'op-profile-alpha'}};
+            vm.runInContext("agentProfileTrackAccepted(result,'catalog')", context);
+            assert.equal(context.AGENT_PROFILE_STATE.pending.operationId, 'op-profile-alpha');
+            assert.equal(context.AGENT_PROFILE_STATE.pending.kind, 'catalog');
+
+            context.outcome = {operationId:'op-profile-alpha',status:'SUCCEEDED',code:'PROFILE_PROVISIONING_STARTED'};
+            assert.equal(vm.runInContext('agentProfileReconcilePending(outcome)', context), false);
+            assert.equal(context.AGENT_PROFILE_STATE.pending.operationId, 'op-profile-alpha');
+
+            context.outcome = {operationId:'op-other',status:'SUCCEEDED',code:'PROFILE_ACTIVE'};
+            assert.equal(vm.runInContext('agentProfileReconcilePending(outcome)', context), false);
+
+            context.outcome = {operationId:'op-profile-alpha',status:'SUCCEEDED',code:'PROFILE_ACTIVE'};
+            assert.equal(vm.runInContext('agentProfileReconcilePending(outcome)', context), true);
+            assert.equal(context.AGENT_PROFILE_STATE.pending, null);
+            assert.match(context.AGENT_PROFILE_STATE.notice, /完成投影/);
+
+            context.result = {status:202,body:{operationId:'op-publish-alpha'}};
+            vm.runInContext("agentProfileTrackAccepted(result,'publish')", context);
+            context.outcome = {operationId:'op-publish-alpha',status:'SUCCEEDED',code:'PROFILE_PUBLISHED',executionAvailable:false};
+            assert.equal(vm.runInContext('agentProfileReconcilePending(outcome)', context), false);
+            context.outcome.executionAvailable = true;
+            assert.equal(vm.runInContext('agentProfileReconcilePending(outcome)', context), true);
+
+            context.result = {status:202,body:{operationId:'op-binding-alpha'}};
+            vm.runInContext("agentProfileTrackAccepted(result,'binding')", context);
+            context.outcome = {operationId:'op-binding-alpha',status:'REJECTED',code:'AUTHORITY_VERSION_CONFLICT'};
+            assert.equal(vm.runInContext('agentProfileReconcilePending(outcome)', context), true);
+            assert.equal(context.AGENT_PROFILE_STATE.error.title, 'AUTHORITY_VERSION_CONFLICT');
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error);
+    }
+
+    [Fact]
     public async Task AdminShell_AuditTrail_ShouldRenderCurrentContract()
     {
         await using var app = await CreateAppAsync();

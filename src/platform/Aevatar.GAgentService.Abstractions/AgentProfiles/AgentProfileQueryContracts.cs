@@ -16,8 +16,11 @@ public sealed record AgentProfileManagementSnapshot(
     AgentProfileDraft? Draft,
     long DraftRevision,
     Google.Protobuf.ByteString DraftSha256,
-    AgentProfilePublishedSnapshot? Published,
+    string PublishedDisplayName,
+    string PublishedPurpose,
     long PublishedRevision,
+    Google.Protobuf.ByteString PublishedSnapshotSha256,
+    DateTimeOffset? PublishedAt,
     AgentProfileMutationOutcome? LastMutation,
     DateTimeOffset UpdatedAt);
 
@@ -38,13 +41,13 @@ public interface IAgentProfileCatalogQueryPort
 public interface IAgentProfileManagementQueryPort
 {
     Task<AgentProfileManagementSnapshot?> GetAsync(
-        string profileActorId,
+        AgentProfileIdentity identity,
         CancellationToken ct = default);
 }
 
 public interface IAgentProfileExecutionQueryPort
 {
     Task<AgentProfileExecutionSnapshot?> GetAsync(
-        string profileActorId,
+        AgentProfileBindingTarget target,
         CancellationToken ct = default);
 }

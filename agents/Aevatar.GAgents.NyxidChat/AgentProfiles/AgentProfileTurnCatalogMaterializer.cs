@@ -1,4 +1,5 @@
 using System.Text;
+using System.Security.Cryptography;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.Prompting;
 using Aevatar.AI.Abstractions.ToolProviders;
@@ -462,7 +463,12 @@ public sealed class AgentProfileTurnCatalogMaterializer
             !string.Equals(fetchResult.LiteralVersion, candidate.SkillRef.LiteralVersion, StringComparison.Ordinal) ||
             !string.Equals(fetchResult.Name, candidate.ExpectedSkillName, StringComparison.Ordinal) ||
             !string.Equals(fetchResult.PublisherId, candidate.ReviewedPublisherId, StringComparison.Ordinal) ||
-            string.IsNullOrWhiteSpace(fetchResult.SkillHash))
+            fetchResult.SkillSha256 is null ||
+            fetchResult.SkillSha256.Length != 32 ||
+            candidate.SealedSkillSha256.Length != 32 ||
+            !CryptographicOperations.FixedTimeEquals(
+                fetchResult.SkillSha256.Span,
+                candidate.SealedSkillSha256.Span))
         {
             diagnostics.Add(new AgentProfileTurnDiagnostic(
                 AgentProfileTurnDiagnosticCode.ExactSkillIdentityMismatch,

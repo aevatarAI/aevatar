@@ -19,8 +19,13 @@ public sealed class AgentProfileCatalogQueryReader : IAgentProfileCatalogQueryPo
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(owner);
-        var document = await _reader.GetAsync(AgentProfileActorIds.Namespace(owner), ct);
-        return document is null ? null : new AgentProfileCatalogSnapshot(
+        var actorId = AgentProfileActorIds.Namespace(owner);
+        var document = await _reader.GetAsync(actorId, ct);
+        return document is null || document.Owner is null ||
+               !AgentProfileDeterminism.SameOwner(document.Owner, owner) ||
+               !string.Equals(document.ActorId, actorId, StringComparison.Ordinal)
+            ? null
+            : new AgentProfileCatalogSnapshot(
             document.ActorId,
             document.StateVersion,
             document.Owner.Clone(),
@@ -40,24 +45,39 @@ public sealed class AgentProfileManagementQueryReader : IAgentProfileManagementQ
         _reader = reader ?? throw new ArgumentNullException(nameof(reader));
 
     public async Task<AgentProfileManagementSnapshot?> GetAsync(
-        string profileActorId,
+        AgentProfileIdentity identity,
         CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(profileActorId))
+        ArgumentNullException.ThrowIfNull(identity);
+        if (!IsValidIdentity(identity))
             return null;
-        var document = await _reader.GetAsync(profileActorId.Trim(), ct);
-        return document is null ? null : new AgentProfileManagementSnapshot(
+        var actorId = AgentProfileActorIds.Profile(identity.ProfileId);
+        var document = await _reader.GetAsync(actorId, ct);
+        return document is null || document.Identity is null ||
+               !document.Identity.Equals(identity) ||
+               !string.Equals(document.ActorId, actorId, StringComparison.Ordinal)
+            ? null
+            : new AgentProfileManagementSnapshot(
             document.ActorId,
             document.StateVersion,
             document.Identity.Clone(),
             document.Draft?.Clone(),
             document.DraftRevision,
             document.DraftSha256,
-            document.Published?.Clone(),
+            document.PublishedDisplayName,
+            document.PublishedPurpose,
             document.PublishedRevision,
+            document.PublishedSnapshotSha256,
+            document.PublishedAt?.ToDateTimeOffset(),
             document.LastMutation?.Clone(),
             document.UpdatedAt);
     }
+
+    private static bool IsValidIdentity(AgentProfileIdentity identity) =>
+        identity.Owner is not null &&
+        identity.Owner.OwnerCase != AgentProfileOwner.OwnerOneofCase.None &&
+        !string.IsNullOrWhiteSpace(identity.ProfileId) &&
+        AgentProfilePolicies.ValidateProfileSlug(identity.ProfileSlug).Count == 0;
 }
 
 public sealed class AgentProfileExecutionQueryReader : IAgentProfileExecutionQueryPort
@@ -69,17 +89,33 @@ public sealed class AgentProfileExecutionQueryReader : IAgentProfileExecutionQue
         _reader = reader ?? throw new ArgumentNullException(nameof(reader));
 
     public async Task<AgentProfileExecutionSnapshot?> GetAsync(
-        string profileActorId,
+        AgentProfileBindingTarget target,
         CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(profileActorId))
+        ArgumentNullException.ThrowIfNull(target);
+        if (!IsValidTarget(target))
             return null;
-        var document = await _reader.GetAsync(profileActorId.Trim(), ct);
-        return document?.Snapshot is null ? null : new AgentProfileExecutionSnapshot(
+        var actorId = AgentProfileActorIds.Profile(target.ProfileId);
+        var document = await _reader.GetAsync(actorId, ct);
+        return document?.Identity is null || document.Snapshot is null ||
+               !string.Equals(document.ActorId, actorId, StringComparison.Ordinal) ||
+               !AgentProfileDeterminism.SameOwner(document.Identity.Owner, target.Owner) ||
+               !string.Equals(document.Identity.ProfileId, target.ProfileId, StringComparison.Ordinal) ||
+               document.Snapshot.PublishedRevision != target.PublishedRevision ||
+               !document.Snapshot.SnapshotSha256.Equals(target.SnapshotSha256)
+            ? null
+            : new AgentProfileExecutionSnapshot(
             document.ActorId,
             document.StateVersion,
             document.Identity.Clone(),
             document.Snapshot.Clone(),
             document.UpdatedAt);
     }
+
+    private static bool IsValidTarget(AgentProfileBindingTarget target) =>
+        target.Owner is not null &&
+        target.Owner.OwnerCase != AgentProfileOwner.OwnerOneofCase.None &&
+        !string.IsNullOrWhiteSpace(target.ProfileId) &&
+        target.PublishedRevision > 0 &&
+        target.SnapshotSha256.Length == 32;
 }

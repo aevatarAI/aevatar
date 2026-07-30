@@ -12,15 +12,36 @@ internal static class AgentProfileEnvelopeFactory
     internal static EventEnvelope Create(
         string targetActorId,
         AgentProfileOperationFact operation,
-        IMessage command) => new()
+        IMessage command)
     {
-        Id = operation.CommandId,
-        Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-        Payload = Any.Pack(command),
-        Route = EnvelopeRouteSemantics.CreateDirect(PublisherId, targetActorId),
-        Propagation = new EnvelopePropagation
+        ArgumentException.ThrowIfNullOrWhiteSpace(targetActorId);
+        ArgumentNullException.ThrowIfNull(command);
+        ValidateOperation(operation);
+
+        return new EventEnvelope
         {
-            CorrelationId = operation.CorrelationId,
-        },
-    };
+            Id = operation.CommandId,
+            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Payload = Any.Pack(command),
+            Route = EnvelopeRouteSemantics.CreateDirect(PublisherId, targetActorId),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = operation.CorrelationId,
+            },
+        };
+    }
+
+    internal static void ValidateOperation(AgentProfileOperationFact? operation)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+        ValidateIdentifier(operation.OperationId, "operation_id");
+        ValidateIdentifier(operation.CommandId, "command_id");
+        ValidateIdentifier(operation.CorrelationId, "correlation_id");
+    }
+
+    private static void ValidateIdentifier(string value, string fieldName)
+    {
+        if (string.IsNullOrWhiteSpace(value) || !string.Equals(value, value.Trim(), StringComparison.Ordinal))
+            throw new ArgumentException($"A stable {fieldName} is required.", fieldName);
+    }
 }

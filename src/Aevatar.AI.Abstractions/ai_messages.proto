@@ -662,6 +662,7 @@ message AgentProfileSkillMember {
   AgentProfileSideEffectClass side_effect_class = 6;
   string expected_skill_name = 7;
   string reviewed_publisher_id = 8;
+  bytes sealed_skill_sha256 = 9;
 }
 
 message AgentProfileSnapshot {
@@ -683,7 +684,8 @@ message AgentProfileSnapshot {
   AgentProfileActivationMode activation_mode = 16;
   string instructions = 17;
   int64 published_revision = 18;
-  bytes published_snapshot_sha256 = 19;
+  reserved 19;
+  reserved "published_snapshot_sha256";
 }
 
 message AgentProfileBoundEvent {

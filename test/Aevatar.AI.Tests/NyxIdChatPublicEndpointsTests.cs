@@ -5,6 +5,7 @@ using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.Studio.Application.Studio.Abstractions;
@@ -38,7 +39,11 @@ public sealed class NyxIdChatPublicEndpointsTests
             {
               "type": "text",
               "clientRequestId": "body-request",
-              "prompt": "Summarize my bill"
+              "prompt": "Summarize my bill",
+              "agentProfile": {
+                "ownerKind": "caller",
+                "profileSlug": "research-assistant"
+              }
             }
             """));
 
@@ -47,6 +52,11 @@ public sealed class NyxIdChatPublicEndpointsTests
         command.OwnerSubject.Should().Be("user-alpha");
         command.ClientRequestId.Should().Be("body-request");
         command.CreateIfMissing.Should().BeTrue();
+        command.AgentProfileReference.Should().BeEquivalentTo(new AgentProfileReference
+        {
+            OwnerKind = AgentProfileReferenceOwnerKind.Caller,
+            ProfileSlug = "research-assistant",
+        });
         command.ActorId.Should().Be(NyxIdChatPublicIdentity.CreateConversationActorId(
             "scope-alpha",
             "body-request"));
@@ -61,9 +71,9 @@ public sealed class NyxIdChatPublicEndpointsTests
                 "command-alpha",
                 "correlation-alpha",
                 new Dictionary<string, string>()));
-        var start = envelope.Payload
-            .Unpack<NyxIdChatConversationCreateCommand>()
-            .FirstTurn;
+        var create = envelope.Payload.Unpack<NyxIdChatConversationCreateCommand>();
+        create.AgentProfileReference.Should().BeEquivalentTo(command.AgentProfileReference);
+        var start = create.FirstTurn;
         start.ToolContext.Caller.ScopeId.Should().Be("scope-alpha");
         start.ToolContext.Caller.OwnerScopeId.Should().Be("scope-alpha");
         start.ToolContext.Caller.OwnerSubject.Should().Be("user-alpha");
@@ -104,6 +114,63 @@ public sealed class NyxIdChatPublicEndpointsTests
             target.ScopeId == "scope-alpha" &&
             target.ActorId == "conversation-alpha" &&
             target.Operation == ScopeResourceOperation.Stream);
+    }
+
+    [Fact]
+    public async Task ContinuedText_ShouldRejectAgentProfileSwitch()
+    {
+        var chat = new RecordingInteraction<NyxIdChatCommand>();
+        var admission = new RecordingAdmissionPort();
+        var context = CreateContext("scope-alpha", services => services
+            .AddSingleton<ICommandInteractionService<NyxIdChatCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>(chat)
+            .AddSingleton<ICommandInteractionService<NyxIdActionContinuationCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>(new RecordingInteraction<NyxIdActionContinuationCommand>())
+            .AddSingleton<IScopeResourceAdmissionPort>(admission));
+        context.Request.Headers.Authorization = "Bearer delegated-token";
+        context.Response.Body = new MemoryStream();
+
+        await NyxIdChatEndpoints.HandlePublicChatAsync(context, Parse("""
+            {
+              "type": "text",
+              "conversationId": "conversation-alpha",
+              "clientRequestId": "request-beta",
+              "prompt": "Only July",
+              "agentProfile": {
+                "ownerKind": "system",
+                "profileSlug": "research-assistant"
+              }
+            }
+            """));
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        chat.Commands.Should().BeEmpty();
+        admission.Targets.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task FirstText_ShouldRejectInvalidAgentProfileOwnerKind()
+    {
+        var chat = new RecordingInteraction<NyxIdChatCommand>();
+        var context = CreateContext("scope-alpha", services => services
+            .AddSingleton<ICommandInteractionService<NyxIdChatCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>(chat)
+            .AddSingleton<ICommandInteractionService<NyxIdActionContinuationCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>(new RecordingInteraction<NyxIdActionContinuationCommand>())
+            .AddSingleton<IScopeResourceAdmissionPort>(new RecordingAdmissionPort()));
+        context.Request.Headers.Authorization = "Bearer delegated-token";
+        context.Response.Body = new MemoryStream();
+
+        await NyxIdChatEndpoints.HandlePublicChatAsync(context, Parse("""
+            {
+              "type": "text",
+              "clientRequestId": "request-alpha",
+              "prompt": "hello",
+              "agentProfile": {
+                "ownerKind": "scope",
+                "profileSlug": "research-assistant"
+              }
+            }
+            """));
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        chat.Commands.Should().BeEmpty();
     }
 
     [Fact]

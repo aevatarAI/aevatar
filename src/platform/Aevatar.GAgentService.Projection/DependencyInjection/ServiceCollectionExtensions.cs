@@ -311,6 +311,8 @@ public static class ServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ScheduledDispatchFireDispatchedAuditTranslator>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ScheduledDispatchFireFailedAuditTranslator>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, RoleChatSessionCompletedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, AgentProfileStateChangedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, AgentProfileNamespaceStateChangedAuditTranslator>());
         services.AddProjectionArtifactMaterializer<
             ServiceCatalogProjectionContext,
             ServiceCatalogProjector>();
@@ -363,12 +365,14 @@ public static class ServiceCollectionExtensions
         services.AddCurrentStateProjectionMaterializer<
             AgentProfileCatalogProjectionContext,
             AgentProfileCatalogCurrentStateProjector>();
+        services.AddAuditCommittedFactMaterializer<AgentProfileCatalogProjectionContext>();
         services.AddCurrentStateProjectionMaterializer<
             AgentProfileCurrentStateProjectionContext,
             AgentProfileManagementCurrentStateProjector>();
         services.AddCurrentStateProjectionMaterializer<
             AgentProfileCurrentStateProjectionContext,
             AgentProfileExecutionCurrentStateProjector>();
+        services.AddAuditCommittedFactMaterializer<AgentProfileCurrentStateProjectionContext>();
         services.AddAuditCommittedFactMaterializer<ScheduledDispatchProjectionContext>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IProjectionProjector<GAgentDraftRunProjectionContext>,

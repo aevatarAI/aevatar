@@ -22,6 +22,19 @@ The default transitional fallback is `true` for Phase 1. Production hardening se
 
 `PlatformCaller.GrantSource` reports which grant admitted the caller: `allowed_user_id`, `allowed_email`, or `nyxid_platform_role`. Denials use an empty grant source.
 
+## System Agent Profile Writes
+
+System Agent Profile 的 draft 与写操作使用比通用 Admin 面更窄的端点级授权。每个 `/api/admin/agent-profiles*` endpoint 都必须在任何 query 或 dispatch 之前：
+
+1. 要求认证并提取 bearer；
+2. 调用 `IPlatformAdminAuthorizer.ResolveCallerAsync`；
+3. 要求 `caller.IsElevated` 且 `caller.UserId` 非空；
+4. 要求 `caller.GrantSource == PlatformAdminGrantSources.AllowedUserId`。
+
+因此，仅由 `allowed_email` 或 `nyxid_platform_role` 获得 elevated 的 caller 不能创建、编辑、校验、发布 system Profile，也不能设置 system default 或 rollout。这个收紧不修改全局 authorizer 配置，其他 Admin surface 继续按各自 contract 使用兼容 grant。
+
+System 写审计只记录 allowlisted `userId` 的稳定 hash，不记录 raw userId、Profile instructions、skill body、token、credential 或远端响应。普通登录用户仍可读取 published system 摘要，并把允许的 system Profile 绑定为自己的默认；这不授予 system draft 可见性或写权限。
+
 ## Failure Semantics
 
 Admin authorization fails closed:

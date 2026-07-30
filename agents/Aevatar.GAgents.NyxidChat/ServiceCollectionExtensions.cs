@@ -82,7 +82,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<NyxIdRelayTransport>();
         services.TryAddSingleton<NyxIdRelayAuthValidator>();
         services.TryAddSingleton<INyxIdRelayIngressPort, NyxIdRelayIngressPort>();
-        services.TryAddSingleton<INyxIdChatAgentProfileSnapshotSource, DisabledNyxIdChatAgentProfileSnapshotSource>();
+        services.TryAddSingleton<INyxIdChatAgentProfileResolver, DisabledNyxIdChatAgentProfileResolver>();
         services.TryAddSingleton<SkillFrontmatterParser>();
         services.TryAddSingleton<StreamingAgentProfileTurnClassifier>();
         services.TryAddSingleton<IAgentProfileTurnClassifier>(sp =>

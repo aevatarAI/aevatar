@@ -3,6 +3,7 @@ using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using Aevatar.GAgentService.Core.AgentProfiles;
 using Aevatar.GAgentService.Tests.TestSupport;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Persistence;
 using FluentAssertions;
 using Google.Protobuf;
@@ -17,10 +18,9 @@ public sealed class AgentProfileGAgentTests
     {
         var actor = CreateActor();
         var identity = Identity();
-        await actor.HandleInitializeAsync(new InitializeAgentProfileCommand
+        await InitializeAsync(actor, new InitializeAgentProfileCommand
         {
             Identity = identity.Clone(),
-            NamespaceActorId = "namespace-alpha",
             Operation = Operation("op-init", "init"),
         });
 
@@ -72,7 +72,71 @@ public sealed class AgentProfileGAgentTests
         actor.State.DraftRevision.Should().Be(1);
         actor.State.PublishedRevision.Should().Be(1);
         actor.State.Published.RuntimeProfile.Instructions.Should().Be("First instructions");
-        AgentProfileDeterminism.VerifyPublishedSnapshot(actor.State.Published).Should().BeTrue();
+        AgentProfileDeterminism.VerifyPublishedSnapshot(actor.State.Published, actor.State.Draft).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Publish_ShouldRejectSelfConsistentSnapshotBuiltFromDifferentDraft()
+    {
+        var actor = CreateActor();
+        var identity = Identity();
+        await InitializeAsync(actor, new InitializeAgentProfileCommand
+        {
+            Identity = identity.Clone(),
+            InitialDraft = Draft("Authority instructions"),
+            Operation = Operation("op-init-canonical", "init-canonical"),
+        });
+        var forged = AgentProfileDeterminism.BuildPublishedSnapshot(
+            identity,
+            Draft("Forged instructions"),
+            draftRevision: 1,
+            publishedRevision: 1,
+            publishedAt: DateTimeOffset.Parse("2026-07-30T00:00:00Z"));
+
+        await actor.HandlePublishAsync(new PublishAgentProfileCommand
+        {
+            Identity = identity.Clone(),
+            Snapshot = forged,
+            SourceDraftSha256 = actor.State.DraftSha256,
+            ExpectedAuthorityStateVersion = 1,
+            Operation = Operation("op-publish-forged", "publish-forged"),
+        });
+
+        actor.State.PublishedRevision.Should().Be(0);
+        actor.State.LastMutation.Code.Should().Be("PUBLISHED_SNAPSHOT_INVALID");
+    }
+
+    [Fact]
+    public async Task Publish_ShouldRejectTamperedInnerRuntimeDigest()
+    {
+        var actor = CreateActor();
+        var identity = Identity();
+        var draft = Draft("Authority instructions");
+        await InitializeAsync(actor, new InitializeAgentProfileCommand
+        {
+            Identity = identity.Clone(),
+            InitialDraft = draft.Clone(),
+            Operation = Operation("op-init-digest", "init-digest"),
+        });
+        var snapshot = AgentProfileDeterminism.BuildPublishedSnapshot(
+            identity,
+            draft,
+            draftRevision: 1,
+            publishedRevision: 1,
+            publishedAt: DateTimeOffset.Parse("2026-07-30T00:00:00Z"));
+        snapshot.RuntimeProfile.DeterministicPolicySha256 = ByteString.CopyFrom(new byte[32]);
+
+        await actor.HandlePublishAsync(new PublishAgentProfileCommand
+        {
+            Identity = identity.Clone(),
+            Snapshot = snapshot,
+            SourceDraftSha256 = actor.State.DraftSha256,
+            ExpectedAuthorityStateVersion = 1,
+            Operation = Operation("op-publish-digest", "publish-digest"),
+        });
+
+        actor.State.PublishedRevision.Should().Be(0);
+        actor.State.LastMutation.Code.Should().Be("PUBLISHED_SNAPSHOT_INVALID");
     }
 
     [Fact]
@@ -83,22 +147,84 @@ public sealed class AgentProfileGAgentTests
         var command = new InitializeAgentProfileCommand
         {
             Identity = Identity(),
-            NamespaceActorId = "namespace-alpha",
             Operation = Operation("op-init", "init"),
         };
 
-        await actor.HandleInitializeAsync(command);
-        await actor.HandleInitializeAsync(command.Clone());
+        await InitializeAsync(actor, command);
+        await InitializeAsync(actor, command.Clone());
 
         actor.State.Operations.Should().ContainSingle();
-        (await store.GetEventsAsync("agent-profile-test")).Should().ContainSingle();
+        (await store.GetEventsAsync(actor.Id)).Should().ContainSingle();
     }
 
-    private static AgentProfileGAgent CreateActor(InMemoryEventStore? store = null) =>
+    [Fact]
+    public async Task Initialize_ShouldRejectActorAddressOrNamespacePublisherMismatch()
+    {
+        var identity = Identity();
+        var forgedActor = CreateActor(actorId: "forged-profile-actor");
+        var command = new InitializeAgentProfileCommand
+        {
+            Identity = identity.Clone(),
+            Operation = Operation("op-forged-actor", "forged-actor"),
+        };
+
+        var forgedAddress = () => forgedActor.HandleEventAsync(
+            Envelope(command, AgentProfileActorIds.Namespace(identity.Owner), forgedActor.Id));
+
+        await forgedAddress.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*address*");
+
+        var actor = CreateActor();
+        var forgedPublisher = () => actor.HandleEventAsync(
+            Envelope(command, "forged-namespace-actor", actor.Id));
+
+        await forgedPublisher.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*publisher*");
+        actor.State.Identity.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task InitializeReplay_ShouldRejectSemanticDriftDespiteCallerDigestReuse()
+    {
+        var actor = CreateActor();
+        var command = new InitializeAgentProfileCommand
+        {
+            Identity = Identity(),
+            InitialDraft = Draft("Original instructions"),
+            Operation = Operation("op-semantic-replay", "caller-digest"),
+        };
+        await InitializeAsync(actor, command);
+        var drifted = command.Clone();
+        drifted.InitialDraft = Draft("Changed instructions");
+
+        var act = () => InitializeAsync(actor, drifted);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*payload drift*");
+        actor.State.Draft.Instructions.Should().Be("Original instructions");
+    }
+
+    private static AgentProfileGAgent CreateActor(
+        InMemoryEventStore? store = null,
+        string? actorId = null) =>
         GAgentServiceTestKit.CreateStatefulAgent<AgentProfileGAgent, AgentProfileState>(
             store ?? new InMemoryEventStore(),
-            "agent-profile-test",
+            actorId ?? AgentProfileActorIds.Profile(Identity().ProfileId),
             static () => new AgentProfileGAgent());
+
+    private static Task InitializeAsync(AgentProfileGAgent actor, InitializeAgentProfileCommand command) =>
+        actor.HandleEventAsync(Envelope(
+            command,
+            AgentProfileActorIds.Namespace(command.Identity.Owner),
+            actor.Id));
+
+    private static EventEnvelope Envelope(IMessage payload, string publisherActorId, string targetActorId) => new()
+    {
+        Id = $"test-{Guid.NewGuid():N}",
+        Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-30T00:00:00Z")),
+        Route = EnvelopeRouteSemantics.CreateDirect(publisherActorId, targetActorId),
+        Payload = Any.Pack(payload),
+    };
 
     private static AgentProfileIdentity Identity() => new()
     {

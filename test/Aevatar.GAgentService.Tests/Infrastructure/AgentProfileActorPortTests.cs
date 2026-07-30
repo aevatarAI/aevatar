@@ -32,26 +32,8 @@ public sealed class AgentProfileActorPortTests
         dispatch.Calls.Should().ContainSingle();
         dispatch.Calls[0].ActorId.Should().Be(expectedNamespaceActorId);
         AssertEnvelope(dispatch.Calls[0].Envelope, expectedNamespaceActorId, command);
-    }
-
-    [Fact]
-    public async Task EnsureCreateTargetsAsync_ShouldKeepDifferentOwnerNamespacesSeparate()
-    {
-        var runtime = new RecordingActorRuntime();
-        var port = new AgentProfileActorPort(runtime, new RecordingDispatchPort());
-        var scopeOwner = AgentProfileOwners.ForScope("scope-alpha");
-        var systemOwner = AgentProfileOwners.ForSystem();
-
-        await port.EnsureCreateTargetsAsync(scopeOwner, "prof-alpha");
-        await port.EnsureCreateTargetsAsync(systemOwner, "prof-beta");
-
-        var scopeNamespaceActorId = AgentProfileActorIds.Namespace(scopeOwner);
-        var systemNamespaceActorId = AgentProfileActorIds.Namespace(systemOwner);
-        scopeNamespaceActorId.Should().NotBe(systemNamespaceActorId);
-        runtime.CreateCalls.Should().Contain((typeof(AgentProfileNamespaceGAgent), scopeNamespaceActorId));
-        runtime.CreateCalls.Should().Contain((typeof(AgentProfileNamespaceGAgent), systemNamespaceActorId));
-        runtime.CreateCalls.Should().Contain((typeof(AgentProfileGAgent), AgentProfileActorIds.Profile("prof-alpha")));
-        runtime.CreateCalls.Should().Contain((typeof(AgentProfileGAgent), AgentProfileActorIds.Profile("prof-beta")));
+        admission.CommandId.Should().Be(dispatch.Calls[0].Envelope.Id);
+        admission.CorrelationId.Should().Be(dispatch.Calls[0].Envelope.Propagation.CorrelationId);
     }
 
     [Fact]
@@ -66,7 +48,6 @@ public sealed class AgentProfileActorPortTests
         var initialize = new InitializeAgentProfileCommand
         {
             Identity = identity.Clone(),
-            NamespaceActorId = AgentProfileActorIds.Namespace(identity.Owner),
             Operation = Operation("initialize"),
         };
         var update = new UpdateAgentProfileDraftCommand
@@ -97,6 +78,25 @@ public sealed class AgentProfileActorPortTests
     }
 
     [Fact]
+    public async Task DispatchInitializeAsync_ShouldRejectForgedProfileAddressBeforeLifecycle()
+    {
+        var identity = Identity("prof-alpha");
+        var forgedProfileRuntime = new RecordingActorRuntime();
+        var forgedProfileDispatch = new RecordingDispatchPort();
+        var forgedProfilePort = new AgentProfileActorPort(forgedProfileRuntime, forgedProfileDispatch);
+        var command = new InitializeAgentProfileCommand
+        {
+            Identity = identity.Clone(),
+            Operation = Operation("initialize-forged-profile"),
+        };
+
+        var forgedProfile = () => forgedProfilePort.DispatchInitializeAsync("forged-profile-actor", command);
+
+        await forgedProfile.Should().ThrowAsync<ArgumentException>();
+        AssertNoRuntimeSideEffects(forgedProfileRuntime, forgedProfileDispatch);
+    }
+
+    [Fact]
     public async Task DispatchBindingCommandsAsync_ShouldTargetOnlyTypedOwnerNamespace()
     {
         var runtime = new RecordingActorRuntime();
@@ -108,9 +108,14 @@ public sealed class AgentProfileActorPortTests
         {
             Owner = owner.Clone(),
             AgentKind = AgentProfilePolicies.NyxIdChatAgentKind,
-            ProfileId = "prof-alpha",
-            Enabled = true,
-            CohortBasisPoints = 10_000,
+            Target = new AgentProfileBindingTarget
+            {
+                Owner = owner.Clone(),
+                ProfileId = "prof-alpha",
+                PublishedRevision = 1,
+                SnapshotSha256 = ByteString.CopyFrom(new byte[32]),
+            },
+            Scope = new AgentProfileScopeBindingAdmission(),
             ExpectedAuthorityStateVersion = 7,
             Operation = Operation("set-binding"),
         };
@@ -136,11 +141,12 @@ public sealed class AgentProfileActorPortTests
     [Fact]
     public async Task DispatchUpdateDraftAsync_ShouldReturnRejectedAdmissionUnchanged()
     {
+        var profileActorId = AgentProfileActorIds.Profile("prof-alpha");
         var expectedAdmission = new DispatchAdmission(
             false,
             "cmd-rejected",
             DateTimeOffset.Parse("2026-07-30T00:00:00Z"),
-            "profile-actor",
+            profileActorId,
             "corr-rejected");
         var dispatch = new RecordingDispatchPort(expectedAdmission);
         var port = new AgentProfileActorPort(new RecordingActorRuntime(), dispatch);
@@ -151,10 +157,106 @@ public sealed class AgentProfileActorPortTests
             Operation = Operation("rejected"),
         };
 
-        var admission = await port.DispatchUpdateDraftAsync("profile-actor", command);
+        var admission = await port.DispatchUpdateDraftAsync(profileActorId, command);
 
         admission.Should().BeSameAs(expectedAdmission);
         admission.Accepted.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task DispatchCommandsAsync_ShouldRejectIncompleteOperationBeforeLifecycleOrAdmission()
+    {
+        var runtime = new RecordingActorRuntime();
+        var dispatch = new RecordingDispatchPort();
+        var port = new AgentProfileActorPort(runtime, dispatch);
+        var identity = Identity("prof-alpha");
+        var profileActorId = AgentProfileActorIds.Profile(identity.ProfileId);
+        var invalid = new AgentProfileOperationFact
+        {
+            OperationId = "op-invalid",
+            CommandId = string.Empty,
+            CorrelationId = "corr-invalid",
+        };
+        var create = CreateCreateCommand(identity.Owner, identity.ProfileId, "create-invalid");
+        create.Operation = invalid.Clone();
+        var initialize = new InitializeAgentProfileCommand
+        {
+            Identity = identity.Clone(),
+            Operation = invalid.Clone(),
+        };
+        var update = new UpdateAgentProfileDraftCommand
+        {
+            Identity = identity.Clone(),
+            Operation = invalid.Clone(),
+        };
+        var publish = new PublishAgentProfileCommand
+        {
+            Identity = identity.Clone(),
+            Operation = invalid.Clone(),
+        };
+        var set = new SetAgentProfileDefaultBindingCommand
+        {
+            Owner = identity.Owner.Clone(),
+            Operation = invalid.Clone(),
+        };
+        var clear = new ClearAgentProfileDefaultBindingCommand
+        {
+            Owner = identity.Owner.Clone(),
+            Operation = invalid.Clone(),
+        };
+
+        var dispatches = new Func<Task>[]
+        {
+            () => port.DispatchCreateAsync(create),
+            () => port.DispatchInitializeAsync(profileActorId, initialize),
+            () => port.DispatchUpdateDraftAsync(profileActorId, update),
+            () => port.DispatchPublishAsync(profileActorId, publish),
+            () => port.DispatchSetDefaultBindingAsync(set),
+            () => port.DispatchClearDefaultBindingAsync(clear),
+        };
+
+        foreach (var dispatchCommand in dispatches)
+            await dispatchCommand.Should().ThrowAsync<ArgumentException>();
+
+        AssertNoRuntimeSideEffects(runtime, dispatch);
+    }
+
+    [Theory]
+    [InlineData(" op-invalid", "cmd-invalid", "corr-invalid")]
+    [InlineData("op-invalid", " cmd-invalid", "corr-invalid")]
+    [InlineData("op-invalid", "cmd-invalid", " corr-invalid")]
+    public async Task DispatchUpdateDraftAsync_ShouldRejectOperationIdentifiersThatWouldDriftFromAdmission(
+        string operationId,
+        string commandId,
+        string correlationId)
+    {
+        var runtime = new RecordingActorRuntime();
+        var dispatch = new RecordingDispatchPort();
+        var port = new AgentProfileActorPort(runtime, dispatch);
+        var identity = Identity("prof-alpha");
+        var command = new UpdateAgentProfileDraftCommand
+        {
+            Identity = identity.Clone(),
+            Operation = new AgentProfileOperationFact
+            {
+                OperationId = operationId,
+                CommandId = commandId,
+                CorrelationId = correlationId,
+            },
+        };
+
+        var act = () => port.DispatchUpdateDraftAsync(AgentProfileActorIds.Profile(identity.ProfileId), command);
+
+        await act.Should().ThrowAsync<ArgumentException>();
+        AssertNoRuntimeSideEffects(runtime, dispatch);
+    }
+
+    private static void AssertNoRuntimeSideEffects(RecordingActorRuntime runtime, RecordingDispatchPort dispatch)
+    {
+        runtime.GetCalls.Should().BeEmpty();
+        runtime.CreateCalls.Should().BeEmpty();
+        runtime.ActivationCalls.Should().BeEmpty();
+        dispatch.Calls.Should().BeEmpty();
     }
 
     private static void AssertEnvelope(EventEnvelope envelope, string expectedActorId, IMessage command)
@@ -184,7 +286,6 @@ public sealed class AgentProfileActorPortTests
         Owner = owner.Clone(),
         ProfileId = profileId,
         ProfileSlug = "research-assistant",
-        ProfileActorId = AgentProfileActorIds.Profile(profileId),
         Operation = Operation(operationId),
     };
 
@@ -210,7 +311,11 @@ public sealed class AgentProfileActorPortTests
 
         public List<(System.Type ActorType, string ActorId)> CreateCalls { get; } = [];
 
-        public void MarkExisting(string actorId) => _actors[actorId] = new RecordingActor(actorId);
+        public List<string> GetCalls { get; } = [];
+
+        public List<string> ActivationCalls { get; } = [];
+
+        public void MarkExisting(string actorId) => _actors[actorId] = new RecordingActor(actorId, ActivationCalls);
 
         public int GetActivationCount(string actorId) => _actors[actorId].ActivationCount;
 
@@ -221,15 +326,18 @@ public sealed class AgentProfileActorPortTests
         {
             var actorId = id ?? throw new InvalidOperationException("A deterministic actor id is required.");
             CreateCalls.Add((agentType, actorId));
-            var actor = new RecordingActor(actorId);
+            var actor = new RecordingActor(actorId, ActivationCalls);
             _actors[actorId] = actor;
             return Task.FromResult<IActor>(actor);
         }
 
         public Task DestroyAsync(string id, CancellationToken ct = default) => Task.CompletedTask;
 
-        public Task<IActor?> GetAsync(string id) =>
-            Task.FromResult<IActor?>(_actors.GetValueOrDefault(id));
+        public Task<IActor?> GetAsync(string id)
+        {
+            GetCalls.Add(id);
+            return Task.FromResult<IActor?>(_actors.GetValueOrDefault(id));
+        }
 
         public Task<bool> ExistsAsync(string id) => Task.FromResult(_actors.ContainsKey(id));
 
@@ -249,7 +357,7 @@ public sealed class AgentProfileActorPortTests
         }
     }
 
-    private sealed class RecordingActor(string id) : IActor
+    private sealed class RecordingActor(string id, List<string> activationCalls) : IActor
     {
         public string Id { get; } = id;
 
@@ -260,6 +368,7 @@ public sealed class AgentProfileActorPortTests
         public Task ActivateAsync(CancellationToken ct = default)
         {
             ActivationCount++;
+            activationCalls.Add(Id);
             return Task.CompletedTask;
         }
 

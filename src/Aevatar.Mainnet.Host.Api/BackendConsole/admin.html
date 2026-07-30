@@ -817,6 +817,68 @@ button{font-family:inherit;cursor:pointer;}
 .sched-card.off{opacity:.66;}
 .sc-top{display:flex;align-items:center;gap:10px;margin-bottom:9px;}
 .sc-name{font-size:13.5px;font-weight:600;color:var(--heading);}
+
+/* ---------------- Agent Profile ---------------- */
+.ap-shell{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;background:var(--bg);}
+.ap-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:12px var(--pad);background:var(--surface);border-bottom:1px solid var(--border);}
+.ap-toolbar .search{width:min(280px,100%);}
+.ap-layout{flex:1 1 auto;min-height:0;display:grid;grid-template-columns:minmax(280px,340px) minmax(0,1fr);}
+.ap-list-pane{min-height:0;overflow:auto;border-right:1px solid var(--border);background:var(--surface);padding:10px;}
+.ap-list{display:flex;flex-direction:column;gap:4px;}
+.ap-row{width:100%;border:1px solid transparent;background:transparent;border-radius:6px;padding:10px 11px;text-align:left;display:flex;flex-direction:column;gap:5px;}
+.ap-row:hover{background:var(--surface-3);}
+.ap-row.on{background:var(--primary-weak);border-color:#c4d6ff;}
+.ap-row-head,.ap-row-meta,.ap-head,.ap-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.ap-row-head{justify-content:space-between;}
+.ap-row-name{font-weight:600;color:var(--heading);min-width:0;overflow-wrap:anywhere;}
+.ap-row-meta{font-size:11.5px;color:var(--faint);}
+.ap-workspace{min-width:0;min-height:0;overflow:auto;padding:18px 20px 28px;}
+.ap-workspace-inner{max-width:1040px;margin:0 auto;}
+.ap-head{align-items:flex-start;margin-bottom:14px;}
+.ap-title{font-size:18px;font-weight:650;color:var(--heading);overflow-wrap:anywhere;}
+.ap-sub{font-size:12px;color:var(--faint);margin-top:3px;}
+.ap-actions{margin-left:auto;justify-content:flex-end;}
+.ap-status{display:inline-flex;align-items:center;min-height:22px;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:600;border:1px solid var(--border);background:var(--surface-3);color:var(--muted);}
+.ap-status.published{background:var(--success-bg);border-color:var(--success-bd);color:var(--success);}
+.ap-status.pending{background:var(--waiting-bg);border-color:var(--waiting-bd);color:#9a5b07;}
+.ap-banner{display:flex;align-items:flex-start;gap:9px;padding:10px 12px;border:1px solid var(--border);border-radius:6px;background:var(--surface);margin-bottom:12px;font-size:12.5px;color:var(--muted);}
+.ap-banner.pending{background:var(--waiting-bg);border-color:var(--waiting-bd);color:#8a5309;}
+.ap-banner.error{background:var(--failed-bg);border-color:var(--failed-bd);color:var(--failed);}
+.ap-section{padding:16px 0;border-top:1px solid var(--border);}
+.ap-section:first-of-type{border-top:0;}
+.ap-section h3{font-size:13px;color:var(--heading);font-weight:650;margin-bottom:11px;}
+.ap-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 14px;}
+.ap-grid.three{grid-template-columns:repeat(3,minmax(0,1fr));}
+.ap-field{display:flex;flex-direction:column;gap:5px;min-width:0;}
+.ap-field.wide{grid-column:1/-1;}
+.ap-field label,.ap-field legend{font-size:11.5px;color:var(--muted);font-weight:550;}
+.ap-field input,.ap-field textarea,.ap-field select{width:100%;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--fg);font:13px var(--sans);padding:8px 9px;}
+.ap-field textarea{min-height:110px;resize:vertical;line-height:1.55;}
+.ap-field input:focus,.ap-field textarea:focus,.ap-field select:focus{outline:0;border-color:var(--primary);box-shadow:0 0 0 2px var(--primary-weak);}
+.ap-field input[disabled],.ap-field textarea[disabled],.ap-field select[disabled]{background:var(--surface-3);color:var(--subtle);cursor:not-allowed;}
+.ap-help{font-size:11px;color:var(--faint);}
+.ap-member{border:1px solid var(--border);border-radius:6px;padding:13px;margin-bottom:10px;background:var(--surface);}
+.ap-member-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:11px;}
+.ap-diagnostics{display:flex;flex-direction:column;gap:6px;}
+.ap-diagnostic{border-left:3px solid var(--failed);background:var(--failed-bg);padding:7px 9px;font-size:12px;color:var(--failed);}
+.ap-empty{padding:34px 18px;text-align:center;color:var(--faint);font-size:12.5px;}
+.ap-create{display:flex;align-items:center;gap:7px;margin-left:auto;}
+.ap-create input{height:30px;width:190px;border:1px solid var(--border);border-radius:6px;padding:0 9px;font:12.5px var(--sans);}
+.ap-rollout{display:flex;align-items:end;gap:10px;flex-wrap:wrap;padding:11px;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);}
+.ap-rollout .ap-field{width:170px;}
+.ap-skill-search{display:flex;align-items:end;gap:8px;grid-column:1/-1;}
+.ap-skill-search .ap-field{flex:1 1 auto;}
+.ap-skill-results{grid-column:1/-1;border:1px solid var(--border);border-radius:6px;overflow:hidden;background:var(--surface);}
+.ap-skill-result{width:100%;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 10px;border:0;border-bottom:1px solid var(--border);background:transparent;text-align:left;}
+.ap-skill-result:last-child{border-bottom:0;}.ap-skill-result:hover{background:var(--surface-3);}
+.ap-skill-result span{min-width:0;overflow-wrap:anywhere;}.ap-skill-result small{color:var(--faint);}
+.ap-skill-proof{grid-column:1/-1;font-size:11.5px;color:var(--success);overflow-wrap:anywhere;}
+@media (max-width:900px){.ap-layout{grid-template-columns:minmax(240px,300px) minmax(0,1fr)}.ap-grid.three{grid-template-columns:repeat(2,minmax(0,1fr));}}
+@media (max-width:768px){
+  .ap-toolbar{align-items:stretch}.ap-toolbar .search{width:100%}.ap-create{width:100%;margin-left:0}.ap-create input{flex:1 1 auto;width:auto}
+  .ap-layout{display:block;overflow:auto}.ap-list-pane{max-height:36vh;border-right:0;border-bottom:1px solid var(--border)}.ap-workspace{overflow:visible;padding:14px}
+  .ap-grid,.ap-grid.three{grid-template-columns:1fr}.ap-actions{width:100%;margin-left:0;justify-content:flex-start}.ap-field.wide{grid-column:auto}
+}
 .sc-cron{font-size:11.5px;background:var(--surface-3);border:1px solid var(--border);padding:1px 7px;border-radius:4px;color:var(--muted);}
 .sc-state{margin-left:auto;font-size:11px;font-weight:600;padding:2px 9px;border-radius:999px;}
 .sc-state.on{color:var(--success);background:var(--success-bg);}
@@ -2232,6 +2294,7 @@ var NAV_ICON={
   obs:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>',
   cqrs:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="5" rx="1"/><rect x="3" y="15" width="18" height="5" rx="1"/><path d="M8 9v6M16 9v6"/></svg>',
   studio:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12a8 8 0 0 1-11.3 7.3L3 21l1.7-6.7A8 8 0 1 1 21 12Z"/></svg>',
+  agentProfiles:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3 4 7v5c0 5 3.4 8 8 9 4.6-1 8-4 8-9V7l-8-4Z"/><path d="M9 12h6M12 9v6"/></svg>',
   skills:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M13 2 3 14h8l-1 8 10-12h-8l1-8Z"/></svg>',
   sched:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>',
   channels:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 17H7A5 5 0 0 1 7 7h2M15 7h2a5 5 0 0 1 0 10h-2M8 12h8"/></svg>',
@@ -2242,7 +2305,7 @@ var NAV_ICON={
 var NAV=[
   {group:'总览',   items:['fleet','status','audit']},
   {group:'运行观测', items:['observatory','cqrs']},
-  {group:'编排调度', items:['studio','skills','schedules']},
+  {group:'编排调度', items:['studio','agentProfiles','skills','schedules']},
   {group:'接入',   items:['channels','voice']}
 ];
 var MODULE_META={
@@ -2251,6 +2314,7 @@ var MODULE_META={
   observatory:{name:'运行观测台', auth:'login', icon:NAV_ICON.obs, live:true},
   cqrs:{name:'投影管道 CQRS', auth:'platform-admin', icon:NAV_ICON.cqrs},
   studio:{name:'编排工作台', auth:'login', icon:NAV_ICON.studio},
+  agentProfiles:{name:'Agent Profile', auth:'login', icon:NAV_ICON.agentProfiles},
   skills:{name:'技能调用', auth:'login', icon:NAV_ICON.skills},
   schedules:{name:'排班调度', auth:'login', icon:NAV_ICON.sched},
   channels:{name:'通道管理', auth:'login', icon:NAV_ICON.channels},
@@ -2305,6 +2369,354 @@ function renderRail(active){
           '<span class="acc-meta"><b>未登录</b><span>点击使用 NyxID 登录</span></span></button>')+
     '</div>'+
   '</aside>';
+}
+
+/* ---------------- Agent Profile ---------------- */
+var AGENT_PROFILE_STATE={owner:'mine',status:'all',search:'',items:[],selected:null,detail:null,
+  loaded:false,loading:false,error:null,forbidden:false,dirty:false,busy:false,notice:null,diagnostics:[],etag:null,
+  binding:null,systemBinding:null,rolloutDraft:null,skillQuery:'',skillResults:[],skillLoading:false,skillError:null,skillProof:null,
+  pending:null,pollTimer:null};
+
+function agentProfileOwnerEndpoint(owner,scope){
+  return owner==='system'?'/api/agent-profiles/system':'/api/scopes/'+encodeURIComponent(scope)+'/agent-profiles';
+}
+function agentProfileCanWrite(profile,account){
+  return !!profile && (profile.ownerKind!=='system'||!!(account&&account.admin));
+}
+function agentProfileProblem(status){
+  if(status===403)return {kind:'forbidden',title:'没有权限执行此操作'};
+  if(status===412)return {kind:'stale',title:'其他人已修改此 Profile'};
+  if(status===422)return {kind:'validation',title:'Profile 校验未通过'};
+  if(status===428)return {kind:'precondition',title:'缺少并发控制版本'};
+  if(status===503)return {kind:'unavailable',title:'投影暂时不可用'};
+  return {kind:'error',title:'请求失败'};
+}
+function agentProfileDraftFromFields(fields){
+  function csv(value){return String(value||'').split(',').map(function(x){return x.trim();}).filter(Boolean);}
+  return {displayName:String(fields.displayName||'').trim(),purpose:String(fields.purpose||'').trim(),instructions:String(fields.instructions||''),runtimeProfile:{
+    agentKind:'nyxid.chat',routeToolSetRef:'agent-profile.nyxid-chat',activationMode:fields.activationMode||'SHADOW',
+    maximumToolPolicy:{toolNames:csv(fields.maximumTools),toolSetRefs:csv(fields.maximumToolSets)},
+    recoveryToolPolicy:{toolNames:csv(fields.recoveryTools),toolSetRefs:csv(fields.recoveryToolSets)},
+    maxPlanSteps:Number(fields.maxPlanSteps||4),handoffTtlSeconds:Number(fields.handoffTtlSeconds||900),
+    classifierTimeoutMs:Number(fields.classifierTimeoutMs||600),exactSkillFetchTimeoutMs:Number(fields.exactSkillFetchTimeoutMs||1500),
+    maxSelectedSkillBytes:Number(fields.maxSelectedSkillBytes||24576),members:[{
+      intentId:String(fields.intentId||'primary').trim(),routingDescription:String(fields.routingDescription||'').trim(),
+      skillRef:{guid:String(fields.exactSkillGuid||'').trim(),literalVersion:String(fields.literalVersion||'').trim()},
+      explicitTriggerAliases:csv(fields.triggerAliases),sideEffectClass:fields.sideEffectClass||'READ_ONLY',
+      expectedSkillName:String(fields.expectedSkillName||'').trim(),reviewedPublisherId:String(fields.reviewedPublisherId||'').trim(),
+      taskToolPolicy:{toolNames:csv(fields.taskTools),toolSetRefs:csv(fields.taskToolSets)}
+    }]}};
+}
+function agentProfileEmptyDraft(){
+  return agentProfileDraftFromFields({activationMode:'SHADOW',maxPlanSteps:4,handoffTtlSeconds:900,classifierTimeoutMs:600,
+    exactSkillFetchTimeoutMs:1500,maxSelectedSkillBytes:24576,sideEffectClass:'READ_ONLY'});
+}
+function agentProfileRolloutFromBinding(binding){
+  return {enabled:!!(binding&&binding.enabled),cohortBasisPoints:Number(binding&&binding.cohortBasisPoints||0)};
+}
+function agentProfileApplyExactSkill(draft,detail){
+  var runtime=draft.runtimeProfile,member=runtime.members[0];member.skillRef=member.skillRef||{};
+  member.skillRef.guid=detail.guid||'';member.skillRef.literalVersion=detail.literalVersion||'';
+  member.expectedSkillName=detail.name||'';member.reviewedPublisherId=detail.publisher||'';return draft;
+}
+function agentProfileCaptureDraft(root){
+  if(!root||!AGENT_PROFILE_STATE.detail)return;
+  var fields=agentProfileCollectFields(root);AGENT_PROFILE_STATE.detail.draft=agentProfileDraftFromFields(fields);
+  if(Object.prototype.hasOwnProperty.call(fields,'rolloutEnabled'))AGENT_PROFILE_STATE.rolloutDraft={
+    enabled:fields.rolloutEnabled!=='false',cohortBasisPoints:Number(fields.cohortBasisPoints||0)};
+}
+function agentProfileScope(){return ACCOUNT&&ACCOUNT.scope?ACCOUNT.scope:'';}
+function agentProfileCollectionEndpoint(){
+  if(AGENT_PROFILE_STATE.owner==='system'&&ACCOUNT&&ACCOUNT.admin)return '/api/admin/agent-profiles';
+  return agentProfileOwnerEndpoint(AGENT_PROFILE_STATE.owner,agentProfileScope());
+}
+function agentProfileItemEndpoint(item){
+  var slug=encodeURIComponent(item.profileSlug);
+  if(item.ownerKind==='system'&&ACCOUNT&&ACCOUNT.admin)return '/api/admin/agent-profiles/'+slug;
+  return agentProfileOwnerEndpoint(item.ownerKind==='system'?'system':'mine',agentProfileScope())+'/'+slug;
+}
+function agentProfileIdempotencyKey(){
+  if(globalThis.crypto&&typeof globalThis.crypto.randomUUID==='function')return globalThis.crypto.randomUUID();
+  return 'ap-'+Date.now()+'-'+Math.random().toString(16).slice(2);
+}
+async function agentProfileJson(path,opts){
+  var res=await adminApi(path,opts);
+  if(res&&res.forbidden)throw {status:403,problem:agentProfileProblem(403)};
+  var body=null;try{body=await res.json();}catch(_){body=null;}
+  if(!res.ok)throw {status:res.status,problem:agentProfileProblem(res.status),body:body};
+  return {body:body,etag:res.headers&&res.headers.get?res.headers.get('ETag'):null,status:res.status};
+}
+function agentProfileNormalizeItem(item,owner){
+  return {ownerKind:item.ownerKind||(owner==='system'?'system':'scope'),profileSlug:item.profileSlug||'',profileId:item.profileId||'',
+    displayName:item.displayName||item.profileSlug||'',purpose:item.purpose||'',draftRevision:Number(item.draftRevision||0),
+    publishedRevision:Number(item.publishedRevision||0),activationMode:item.activationMode||'UNSPECIFIED',updatedAt:item.updatedAt||null,
+    authorityStateVersion:Number(item.authorityStateVersion||0),isDefault:!!item.isDefault,available:item.available!==false,etag:item.etag||null};
+}
+async function loadAgentProfileBindings(){
+  AGENT_PROFILE_STATE.binding=null;AGENT_PROFILE_STATE.systemBinding=null;
+  var scope=agentProfileScope();if(!scope)return;
+  try{
+    var personal=await agentProfileJson('/api/scopes/'+encodeURIComponent(scope)+'/agent-profile-bindings/nyxid.chat');
+    AGENT_PROFILE_STATE.binding=Object.assign({},personal.body||{},{etag:personal.etag||(personal.body&&personal.body.etag)||null});
+    agentProfileReconcilePending(personal.body&&personal.body.lastMutation);
+  }catch(e){if(!e||e.status!==404)AGENT_PROFILE_STATE.error=e&&e.problem?e.problem:agentProfileProblem(e&&e.status);}
+  if(ACCOUNT&&ACCOUNT.admin){
+    try{
+      var system=await agentProfileJson('/api/admin/agent-profile-bindings/nyxid.chat');
+      AGENT_PROFILE_STATE.systemBinding=Object.assign({},system.body||{},{etag:system.etag||(system.body&&system.body.etag)||null});
+      agentProfileReconcilePending(system.body&&system.body.lastMutation);
+    }catch(e){if(e&&e.status!==403&&e.status!==404)AGENT_PROFILE_STATE.error=e.problem||agentProfileProblem(e.status);}
+  }
+}
+function agentProfileApplyBinding(items){
+  var target=AGENT_PROFILE_STATE.binding&&AGENT_PROFILE_STATE.binding.target;
+  items.forEach(function(item){item.isDefault=!!target&&target.profileId===item.profileId&&target.ownerKind===item.ownerKind;});
+  return items;
+}
+async function loadAgentProfiles(){
+  if(AGENT_PROFILE_STATE.loading)return;
+  AGENT_PROFILE_STATE.loading=true;AGENT_PROFILE_STATE.error=null;AGENT_PROFILE_STATE.forbidden=false;
+  try{
+    var q='?take=100',result=await agentProfileJson(agentProfileCollectionEndpoint()+q);
+    AGENT_PROFILE_STATE.items=(result.body&&result.body.items||[]).map(function(x){return agentProfileNormalizeItem(x,AGENT_PROFILE_STATE.owner);});
+    agentProfileReconcilePending(result.body&&result.body.lastMutation);
+    await loadAgentProfileBindings();agentProfileApplyBinding(AGENT_PROFILE_STATE.items);
+    AGENT_PROFILE_STATE.loaded=true;
+    if(AGENT_PROFILE_STATE.selected&&!AGENT_PROFILE_STATE.items.some(function(x){return x.profileSlug===AGENT_PROFILE_STATE.selected;}))AGENT_PROFILE_STATE.selected=null;
+    if(!AGENT_PROFILE_STATE.selected&&AGENT_PROFILE_STATE.items.length)AGENT_PROFILE_STATE.selected=AGENT_PROFILE_STATE.items[0].profileSlug;
+    if(AGENT_PROFILE_STATE.selected)await loadAgentProfileDetail(AGENT_PROFILE_STATE.selected,false);
+  }catch(e){AGENT_PROFILE_STATE.loaded=true;AGENT_PROFILE_STATE.forbidden=e&&e.status===403;AGENT_PROFILE_STATE.error=e&&e.problem?e.problem:agentProfileProblem(e&&e.status);}
+  AGENT_PROFILE_STATE.loading=false;render();
+}
+async function loadAgentProfileDetail(slug,rerender){
+  var item=AGENT_PROFILE_STATE.items.filter(function(x){return x.profileSlug===slug;})[0];if(!item)return;
+  AGENT_PROFILE_STATE.selected=slug;AGENT_PROFILE_STATE.diagnostics=[];
+  try{
+    var result=await agentProfileJson(agentProfileItemEndpoint(item));
+    AGENT_PROFILE_STATE.detail=Object.assign({},item,result.body||{});
+    AGENT_PROFILE_STATE.etag=result.etag||(result.body&&result.body.etag)||item.etag||null;
+    AGENT_PROFILE_STATE.rolloutDraft=null;AGENT_PROFILE_STATE.dirty=false;
+    if(result.body&&result.body.lastMutation)agentProfileReconcilePending(Object.assign({},result.body.lastMutation,{executionAvailable:result.body.executionAvailable===true}));
+  }catch(e){AGENT_PROFILE_STATE.error=e&&e.problem?e.problem:agentProfileProblem(e&&e.status);}
+  if(rerender!==false)render();
+}
+function agentProfileRows(){
+  var text=AGENT_PROFILE_STATE.search.trim().toLowerCase(),status=AGENT_PROFILE_STATE.status;
+  return AGENT_PROFILE_STATE.items.filter(function(x){
+    var hit=!text||(x.profileSlug+' '+x.displayName+' '+x.purpose).toLowerCase().indexOf(text)>=0;
+    var state=x.publishedRevision>0?'published':'draft';return hit&&(status==='all'||status===state);
+  });
+}
+function agentProfileStatus(item){
+  if(!item||!item.publishedRevision)return '<span class="ap-status">未发布</span>';
+  if(item.available===false)return '<span class="ap-status pending">投影滞后</span>';
+  return '<span class="ap-status published">已发布 r'+esc(item.publishedRevision)+'</span>';
+}
+function agentProfileListHtml(){
+  var rows=agentProfileRows();if(!rows.length)return '<div class="ap-empty">'+(AGENT_PROFILE_STATE.search?'没有匹配的 Profile':'还没有 Profile')+'</div>';
+  return '<div class="ap-list">'+rows.map(function(x){return '<button class="ap-row'+(x.profileSlug===AGENT_PROFILE_STATE.selected?' on':'')+'" data-ap-select="'+esc(x.profileSlug)+'">'+
+    '<span class="ap-row-head"><span class="ap-row-name">'+esc(x.displayName||x.profileSlug)+'</span>'+agentProfileStatus(x)+'</span>'+
+    '<span class="ap-row-meta"><span>'+esc((x.ownerKind==='system'?'system/':'mine/associate:')+x.profileSlug)+'</span><span>draft r'+esc(x.draftRevision)+'</span>'+
+      (x.isDefault?'<span class="ap-status published">默认</span>':'')+'</span></button>';}).join('')+'</div>';
+}
+function agentProfileField(label,name,value,opts){
+  opts=opts||{};var id='ap-'+name,disabled=opts.disabled?' disabled':'',wide=opts.wide?' wide':'';
+  var control=opts.textarea?'<textarea id="'+id+'" data-ap-field="'+name+'"'+disabled+'>'+esc(value||'')+'</textarea>':
+    '<input id="'+id+'" data-ap-field="'+name+'" type="'+(opts.type||'text')+'" value="'+esc(value==null?'':value)+'"'+disabled+
+      (opts.min!=null?' min="'+opts.min+'"':'')+(opts.max!=null?' max="'+opts.max+'"':'')+(opts.required?' required':'')+'>';
+  return '<div class="ap-field'+wide+'"><label for="'+id+'">'+esc(label)+'</label>'+control+(opts.help?'<span class="ap-help">'+esc(opts.help)+'</span>':'')+'</div>';
+}
+function agentProfileSelect(label,name,value,options,disabled){
+  var id='ap-'+name;return '<div class="ap-field"><label for="'+id+'">'+esc(label)+'</label><select id="'+id+'" data-ap-field="'+name+'"'+(disabled?' disabled':'')+'>'+options.map(function(o){
+    return '<option value="'+esc(o.value)+'"'+(o.value===value?' selected':'')+'>'+esc(o.label)+'</option>';}).join('')+'</select></div>';
+}
+function agentProfileRuntime(detail){return detail&&detail.draft&&detail.draft.runtimeProfile?detail.draft.runtimeProfile:(detail&&detail.runtimeProfile)||agentProfileEmptyDraft().runtimeProfile;}
+function agentProfileMember(runtime){return runtime&&runtime.members&&runtime.members.length?runtime.members[0]:agentProfileEmptyDraft().runtimeProfile.members[0];}
+function agentProfileDiagnosticsHtml(){
+  if(!AGENT_PROFILE_STATE.diagnostics.length)return '';
+  return '<section class="ap-section" aria-live="polite"><h3>校验结果</h3><div class="ap-diagnostics">'+AGENT_PROFILE_STATE.diagnostics.map(function(d){
+    return '<div class="ap-diagnostic" data-ap-diagnostic="'+esc(d.field||'profile')+'"><b>'+esc(d.code||'INVALID_PROFILE')+'</b> · '+esc(d.message||d.field||'请检查字段')+'</div>';}).join('')+'</div></section>';
+}
+function agentProfileSkillSearchHtml(disabled){
+  if(disabled)return '';
+  var results=AGENT_PROFILE_STATE.skillResults||[];
+  var list=results.length?'<div class="ap-skill-results">'+results.map(function(item){return '<button type="button" class="ap-skill-result" data-ap-skill="'+esc(item.guid||'')+'"><span><b>'+esc(item.name||item.guid)+'</b><br><small>'+esc(item.description||'')+'</small></span><small>'+esc(item.guid||'')+'</small></button>';}).join('')+'</div>':'';
+  var problem=AGENT_PROFILE_STATE.skillError?'<div class="ap-diagnostic">'+esc(AGENT_PROFILE_STATE.skillError)+'</div>':'';
+  var proof=AGENT_PROFILE_STATE.skillProof?'<div class="ap-skill-proof">已固定 '+esc(AGENT_PROFILE_STATE.skillProof.literalVersion)+' · '+esc(AGENT_PROFILE_STATE.skillProof.publisher)+' · SHA-256 '+esc(AGENT_PROFILE_STATE.skillProof.skillHash)+'</div>':'';
+  return '<div class="ap-skill-search">'+agentProfileField('搜索可用 Ornn skill','skillQuery',AGENT_PROFILE_STATE.skillQuery,{})+'<button type="button" class="btn" data-ap-skill-search'+(AGENT_PROFILE_STATE.skillLoading?' disabled':'')+'>'+ICON.search+' 搜索</button></div>'+list+problem+proof;
+}
+async function agentProfileSearchSkills(root){
+  var input=root.querySelector('[data-ap-field="skillQuery"]'),query=String(input&&input.value||'').trim();
+  agentProfileCaptureDraft(root);AGENT_PROFILE_STATE.skillQuery=query;AGENT_PROFILE_STATE.skillLoading=true;AGENT_PROFILE_STATE.skillError=null;render();
+  try{
+    var result=await agentProfileJson('/api/workflow/skills?query='+encodeURIComponent(query)+'&page=1&pageSize=20');
+    AGENT_PROFILE_STATE.skillResults=result.body&&result.body.items||[];
+  }catch(e){AGENT_PROFILE_STATE.skillResults=[];AGENT_PROFILE_STATE.skillError=e&&e.problem?e.problem.title:'无法读取 Ornn skills';}
+  AGENT_PROFILE_STATE.skillLoading=false;render();
+}
+async function agentProfileSelectSkill(guid,root){
+  agentProfileCaptureDraft(root);AGENT_PROFILE_STATE.skillLoading=true;AGENT_PROFILE_STATE.skillError=null;render();
+  try{
+    var result=await agentProfileJson('/api/workflow/skills/'+encodeURIComponent(guid)+'/exact');
+    var detail=result.body||{};AGENT_PROFILE_STATE.detail.draft=agentProfileApplyExactSkill(AGENT_PROFILE_STATE.detail.draft,detail);
+    AGENT_PROFILE_STATE.skillProof=detail;AGENT_PROFILE_STATE.skillResults=[];AGENT_PROFILE_STATE.dirty=true;
+  }catch(e){AGENT_PROFILE_STATE.skillError=e&&e.problem?e.problem.title:'无法固定 exact skill';}
+  AGENT_PROFILE_STATE.skillLoading=false;render();
+}
+function agentProfileEditorHtml(){
+  var d=AGENT_PROFILE_STATE.detail;if(!d)return '<div class="ap-empty">从左侧选择一个 Profile，或创建新 Profile。</div>';
+  var writable=agentProfileCanWrite(d,ACCOUNT),draft=d.draft||d,rt=agentProfileRuntime(d),member=agentProfileMember(rt),ref=member.skillRef||{};
+  var max=rt.maximumToolPolicy||{},recovery=rt.recoveryToolPolicy||{},task=member.taskToolPolicy||{};
+  var rollout=AGENT_PROFILE_STATE.rolloutDraft||agentProfileRolloutFromBinding(AGENT_PROFILE_STATE.systemBinding);
+  var notice=AGENT_PROFILE_STATE.notice?'<div class="ap-banner pending" role="status">'+esc(AGENT_PROFILE_STATE.notice)+'</div>':'';
+  var error=AGENT_PROFILE_STATE.error?'<div class="ap-banner error" role="alert">'+esc(AGENT_PROFILE_STATE.error.title)+'</div>':'';
+  var dis=!writable||!!AGENT_PROFILE_STATE.pending,actionDisabled=AGENT_PROFILE_STATE.busy||!!AGENT_PROFILE_STATE.pending;
+  return '<div class="ap-workspace-inner">'+
+    '<div class="ap-head"><div><div class="ap-title">'+esc(d.displayName||d.profileSlug)+'</div><div class="ap-sub">'+esc((d.ownerKind==='system'?'system/':'mine/')+d.profileSlug)+
+      ' · ETag '+esc(AGENT_PROFILE_STATE.etag||'等待投影')+' · state '+esc(d.authorityStateVersion||0)+'</div></div>'+agentProfileStatus(d)+
+      '<div class="ap-actions">'+(writable?'<button class="btn" data-ap-action="save"'+(actionDisabled?' disabled':'')+'>保存草稿</button><button class="btn" data-ap-action="validate"'+(actionDisabled?' disabled':'')+'>校验</button><button class="btn btn-primary" data-ap-action="publish"'+(actionDisabled?' disabled':'')+'>发布</button>':'')+
+      '<button class="btn" data-ap-action="personal-default"'+(actionDisabled?' disabled':'')+'>设为我的默认</button>'+(d.isDefault?'<button class="btn" data-ap-action="clear-default"'+(actionDisabled?' disabled':'')+'>清除默认</button>':'')+'</div></div>'+notice+error+
+    '<div class="ap-banner"><b>仅影响新建实例</b><span>发布新 revision 不会热更新已经运行的 Conversation。</span></div>'+
+    '<form data-ap-form novalidate><section class="ap-section"><h3>基础信息</h3><div class="ap-grid">'+
+      agentProfileField('显示名称','displayName',draft.displayName,{required:true,disabled:dis})+agentProfileField('用途','purpose',draft.purpose,{disabled:dis})+
+      agentProfileField('Instructions','instructions',draft.instructions,{textarea:true,wide:true,required:true,disabled:dis})+
+      agentProfileSelect('Activation mode','activationMode',String(rt.activationMode||'SHADOW').replace(/^AGENT_PROFILE_ACTIVATION_MODE_/,''),[
+        {value:'SHADOW',label:'Shadow'},{value:'ENFORCED',label:'Enforced'}],dis)+'</div></section>'+
+    '<section class="ap-section"><h3>Exact Ornn member</h3><div class="ap-member"><div class="ap-grid three">'+agentProfileSkillSearchHtml(dis)+
+      agentProfileField('Intent ID','intentId',member.intentId,{required:true,disabled:dis})+agentProfileField('Exact skill GUID','exactSkillGuid',ref.guid,{required:true,disabled:dis})+
+      agentProfileField('Literal version','literalVersion',ref.literalVersion,{required:true,disabled:dis})+agentProfileField('Expected name','expectedSkillName',member.expectedSkillName,{required:true,disabled:dis})+
+      agentProfileField('Publisher','reviewedPublisherId',member.reviewedPublisherId,{required:true,disabled:dis})+agentProfileSelect('Side-effect class','sideEffectClass',String(member.sideEffectClass||'READ_ONLY').replace(/^AGENT_PROFILE_SIDE_EFFECT_CLASS_/,''),[
+        {value:'READ_ONLY',label:'Read only'},{value:'EXTERNAL_HANDOFF',label:'External handoff'},{value:'SERVICE_CALL',label:'Service call'},{value:'MAINTENANCE',label:'Maintenance'}],dis)+
+      agentProfileField('Routing description','routingDescription',member.routingDescription,{wide:true,disabled:dis})+agentProfileField('Trigger aliases','triggerAliases',(member.explicitTriggerAliases||[]).join(', '),{wide:true,disabled:dis,help:'逗号分隔；路由只使用发布后 sealed aliases。'})+
+      agentProfileField('Task tools','taskTools',(task.toolNames||[]).join(', '),{disabled:dis})+agentProfileField('Task tool sets','taskToolSets',(task.toolSetRefs||[]).join(', '),{disabled:dis})+'</div></div></section>'+
+    '<section class="ap-section"><h3>Tool policy ceiling</h3><div class="ap-grid">'+
+      agentProfileField('Maximum tools','maximumTools',(max.toolNames||[]).join(', '),{disabled:dis})+agentProfileField('Maximum tool sets','maximumToolSets',(max.toolSetRefs||[]).join(', '),{disabled:dis})+
+      agentProfileField('Recovery tools','recoveryTools',(recovery.toolNames||[]).join(', '),{disabled:dis})+agentProfileField('Recovery tool sets','recoveryToolSets',(recovery.toolSetRefs||[]).join(', '),{disabled:dis})+'</div></section>'+
+    '<section class="ap-section"><h3>高级运行参数</h3><div class="ap-grid three">'+
+      agentProfileField('Max plan steps','maxPlanSteps',rt.maxPlanSteps||4,{type:'number',min:1,max:4,disabled:dis})+
+      agentProfileField('Handoff TTL (s)','handoffTtlSeconds',rt.handoffTtlSeconds||900,{type:'number',min:1,max:900,disabled:dis})+
+      agentProfileField('Classifier timeout (ms)','classifierTimeoutMs',rt.classifierTimeoutMs||600,{type:'number',min:1,max:600,disabled:dis})+
+      agentProfileField('Exact fetch timeout (ms)','exactSkillFetchTimeoutMs',rt.exactSkillFetchTimeoutMs||1500,{type:'number',min:1,max:1500,disabled:dis})+
+      agentProfileField('Max selected skill bytes','maxSelectedSkillBytes',rt.maxSelectedSkillBytes||24576,{type:'number',min:1024,max:24576,disabled:dis})+'</div></section>'+agentProfileDiagnosticsHtml()+'</form>'+
+    ((d.ownerKind==='system'&&ACCOUNT&&ACCOUNT.admin)?'<section class="ap-section"><h3>System default rollout</h3><div class="ap-rollout">'+
+      agentProfileSelect('Enabled','rolloutEnabled',String(rollout.enabled),[{value:'true',label:'启用'},{value:'false',label:'停用'}],false)+
+      agentProfileField('Cohort basis points','cohortBasisPoints',rollout.cohortBasisPoints,{type:'number',min:0,max:10000})+
+      '<button class="btn" data-ap-action="system-default"'+(actionDisabled?' disabled':'')+'>保存 system 默认</button></div></section>':'')+'</div>';
+}
+function agentProfileCollectFields(root){
+  var out={};root.querySelectorAll('[data-ap-field]').forEach(function(el){out[el.getAttribute('data-ap-field')]=el.value;});return out;
+}
+function agentProfileLocalDiagnostics(draft){
+  var out=[];if(!draft.displayName)out.push({code:'DISPLAY_NAME_REQUIRED',field:'displayName',message:'显示名称不能为空'});
+  if(!draft.instructions)out.push({code:'INSTRUCTIONS_REQUIRED',field:'instructions',message:'Instructions 不能为空'});
+  var rt=draft.runtimeProfile,m=rt.members[0];if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(m.skillRef.guid))out.push({code:'INVALID_SKILL_GUID',field:'exactSkillGuid',message:'请输入 canonical lowercase GUID'});
+  if(!/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(m.skillRef.literalVersion))out.push({code:'INVALID_LITERAL_VERSION',field:'literalVersion',message:'版本必须是 major.minor'});
+  if(rt.maxPlanSteps<1||rt.maxPlanSteps>4)out.push({code:'PROFILE_MAX_PLAN_STEPS_INVALID',field:'maxPlanSteps',message:'范围为 1..4'});
+  return out;
+}
+async function agentProfileMutation(path,method,body,etag){
+  var headers={'Content-Type':'application/json','Idempotency-Key':agentProfileIdempotencyKey()};if(etag)headers['If-Match']=etag;
+  return agentProfileJson(path,{method:method,headers:headers,body:body==null?null:JSON.stringify(body)});
+}
+function agentProfileTrackAccepted(result,kind){
+  var operationId=result&&result.status===202&&result.body&&result.body.operationId;
+  if(!operationId)return false;
+  if(AGENT_PROFILE_STATE.pollTimer){clearTimeout(AGENT_PROFILE_STATE.pollTimer);AGENT_PROFILE_STATE.pollTimer=null;}
+  AGENT_PROFILE_STATE.pending={operationId:operationId,kind:kind,attempts:0};
+  AGENT_PROFILE_STATE.notice='已接受，等待提交/投影';AGENT_PROFILE_STATE.error=null;return true;
+}
+function agentProfileOutcomeIsTerminal(pending,outcome){
+  if(!pending||!outcome)return false;
+  if(outcome.status==='REJECTED')return true;
+  if(pending.kind==='catalog')return outcome.code==='PROFILE_ACTIVE'||outcome.code==='PROFILE_PROVISIONING_FAILED'||outcome.code==='PROFILE_PROVISIONING_TIMED_OUT';
+  if(pending.kind==='publish')return outcome.code==='PROFILE_PUBLISHED'&&outcome.executionAvailable===true;
+  return outcome.status==='SUCCEEDED'||outcome.status==='NO_CHANGE';
+}
+function agentProfileReconcilePending(outcome){
+  var pending=AGENT_PROFILE_STATE.pending;
+  if(!pending||!outcome||outcome.operationId!==pending.operationId||!agentProfileOutcomeIsTerminal(pending,outcome))return false;
+  if(AGENT_PROFILE_STATE.pollTimer){clearTimeout(AGENT_PROFILE_STATE.pollTimer);AGENT_PROFILE_STATE.pollTimer=null;}
+  var failed=outcome.status==='REJECTED'||outcome.code==='PROFILE_PROVISIONING_FAILED'||outcome.code==='PROFILE_PROVISIONING_TIMED_OUT';
+  AGENT_PROFILE_STATE.pending=null;
+  if(failed){AGENT_PROFILE_STATE.notice=null;AGENT_PROFILE_STATE.error={kind:'mutation',title:outcome.code||'AGENT_PROFILE_MUTATION_REJECTED'};}
+  else{AGENT_PROFILE_STATE.error=null;AGENT_PROFILE_STATE.notice=(outcome.code||'操作完成')+'，完成投影';}
+  return true;
+}
+function agentProfileScheduleRefresh(){
+  var pending=AGENT_PROFILE_STATE.pending;if(!pending)return;
+  if(pending.attempts>=20){AGENT_PROFILE_STATE.pending=null;AGENT_PROFILE_STATE.pollTimer=null;AGENT_PROFILE_STATE.notice='已接受，但投影尚未可见，可手动刷新';render();return;}
+  if(AGENT_PROFILE_STATE.pollTimer)clearTimeout(AGENT_PROFILE_STATE.pollTimer);
+  AGENT_PROFILE_STATE.pollTimer=setTimeout(async function(){
+    AGENT_PROFILE_STATE.pollTimer=null;if(!AGENT_PROFILE_STATE.pending)return;
+    if(AGENT_PROFILE_STATE.loading){agentProfileScheduleRefresh();return;}
+    AGENT_PROFILE_STATE.pending.attempts+=1;await loadAgentProfiles();
+    if(AGENT_PROFILE_STATE.pending)agentProfileScheduleRefresh();
+  },750);
+}
+async function agentProfileHandleAction(action,root){
+  var d=AGENT_PROFILE_STATE.detail;if(!d||AGENT_PROFILE_STATE.busy||AGENT_PROFILE_STATE.pending)return;
+  var base=agentProfileItemEndpoint(d),fields=agentProfileCollectFields(root),draft=agentProfileDraftFromFields(fields);
+  AGENT_PROFILE_STATE.error=null;AGENT_PROFILE_STATE.notice=null;
+  if((action==='validate'||action==='publish')&&AGENT_PROFILE_STATE.dirty){AGENT_PROFILE_STATE.error={kind:'stale-draft',title:'请先保存草稿并等待投影'};render();return;}
+  try{
+    AGENT_PROFILE_STATE.busy=true;
+    if(action==='save'){
+      AGENT_PROFILE_STATE.diagnostics=agentProfileLocalDiagnostics(draft);if(AGENT_PROFILE_STATE.diagnostics.length){AGENT_PROFILE_STATE.busy=false;render();return;}
+      var saved=await agentProfileMutation(base+'/draft','PUT',{draft:draft},AGENT_PROFILE_STATE.etag);agentProfileTrackAccepted(saved,'draft');AGENT_PROFILE_STATE.dirty=false;
+    }else if(action==='validate'){
+      var validated=await agentProfileJson(base+':validate',{method:'POST'});AGENT_PROFILE_STATE.diagnostics=validated.body&&validated.body.diagnostics||[];
+      AGENT_PROFILE_STATE.notice=AGENT_PROFILE_STATE.diagnostics.length?'校验完成，请修正标记字段':'校验通过，可以发布';
+    }else if(action==='publish'){
+      if(!confirm('发布只影响新建实例，已有 Conversation 保持当前 revision。确定发布？')){AGENT_PROFILE_STATE.busy=false;return;}
+      var published=await agentProfileMutation(base+':publish','POST',null,AGENT_PROFILE_STATE.etag);agentProfileTrackAccepted(published,'publish');
+    }else if(action==='personal-default'||action==='clear-default'){
+      var bind='/api/scopes/'+encodeURIComponent(agentProfileScope())+'/agent-profile-bindings/nyxid.chat';
+      var bindingResult=action==='personal-default'
+        ?await agentProfileMutation(bind,'PUT',{agentProfile:{ownerKind:d.ownerKind==='system'?'system':'caller',profileSlug:d.profileSlug}},AGENT_PROFILE_STATE.binding&&AGENT_PROFILE_STATE.binding.etag)
+        :await agentProfileMutation(bind,'DELETE',null,AGENT_PROFILE_STATE.binding&&AGENT_PROFILE_STATE.binding.etag);
+      agentProfileTrackAccepted(bindingResult,'binding');
+    }else if(action==='system-default'){
+      var enabled=fields.rolloutEnabled!=='false',cohort=Number(fields.cohortBasisPoints||0);
+      var systemResult=await agentProfileMutation('/api/admin/agent-profile-bindings/nyxid.chat','PUT',{agentProfile:{ownerKind:'system',profileSlug:d.profileSlug},enabled:enabled,cohortBasisPoints:cohort},AGENT_PROFILE_STATE.systemBinding&&AGENT_PROFILE_STATE.systemBinding.etag);
+      agentProfileTrackAccepted(systemResult,'systemBinding');
+    }
+    if(AGENT_PROFILE_STATE.pending)agentProfileScheduleRefresh();
+  }catch(e){AGENT_PROFILE_STATE.error=e&&e.problem?e.problem:agentProfileProblem(e&&e.status);AGENT_PROFILE_STATE.diagnostics=e&&e.body&&e.body.diagnostics||[];}
+  AGENT_PROFILE_STATE.busy=false;render();
+}
+function agentProfileBeforeUnload(event){
+  if(!AGENT_PROFILE_STATE.dirty)return;event.preventDefault();event.returnValue='';
+}
+window.addEventListener('beforeunload',agentProfileBeforeUnload);
+function viewAgentProfiles(){
+  var mine=AGENT_PROFILE_STATE.owner==='mine',canCreate=mine||!!(ACCOUNT&&ACCOUNT.admin);
+  var body=moduleSubHeader('agentProfiles','<span class="ap-status">Actor-backed read model</span>')+
+    '<div class="ap-shell"><div class="ap-toolbar"><div class="segmented" role="tablist" aria-label="Profile owner">'+
+      '<button role="tab" data-ap-owner="mine" class="'+(mine?'on':'')+'">我的 Profile</button><button role="tab" data-ap-owner="system" class="'+(!mine?'on':'')+'">system/</button></div>'+
+      '<div class="search" role="search">'+ICON.search+'<input aria-label="搜索 Profile" data-ap-search value="'+esc(AGENT_PROFILE_STATE.search)+'" placeholder="搜索 slug / 名称"></div>'+
+      '<select class="std-select" style="width:120px" aria-label="发布状态" data-ap-status><option value="all">全部状态</option><option value="published"'+(AGENT_PROFILE_STATE.status==='published'?' selected':'')+'>已发布</option><option value="draft"'+(AGENT_PROFILE_STATE.status==='draft'?' selected':'')+'>未发布</option></select>'+
+      (canCreate?'<div class="ap-create"><label class="sr-only" for="ap-new-slug">Profile slug</label><input id="ap-new-slug" data-ap-new-slug placeholder="new-profile-slug" pattern="[a-z0-9]+(?:-[a-z0-9]+)*"><button class="btn btn-primary" data-ap-create>新建</button></div>':'')+'</div>'+
+    '<div class="ap-layout"><aside class="ap-list-pane" aria-label="Profile 列表">'+(AGENT_PROFILE_STATE.loading&&!AGENT_PROFILE_STATE.loaded?'<div class="ap-empty">正在加载 Profile…</div>':
+      AGENT_PROFILE_STATE.forbidden?auth403('当前账号不能读取该 Profile 管理面。'):AGENT_PROFILE_STATE.error&&!AGENT_PROFILE_STATE.detail?'<div class="ap-empty">'+esc(AGENT_PROFILE_STATE.error.title)+'</div>':agentProfileListHtml())+'</aside>'+
+      '<main class="ap-workspace">'+agentProfileEditorHtml()+'</main></div></div>';
+  return {html:body,mount:mountAgentProfiles};
+}
+function mountAgentProfiles(root){
+  if(!AGENT_PROFILE_STATE.loaded&&!AGENT_PROFILE_STATE.loading){loadAgentProfiles();return;}
+  root.addEventListener('click',function(ev){
+    var owner=ev.target.closest('[data-ap-owner]');if(owner){if(AGENT_PROFILE_STATE.pending){toast('当前操作仍在等待投影');return;}if(AGENT_PROFILE_STATE.dirty&&!confirm('有未保存修改，确定离开？'))return;AGENT_PROFILE_STATE.owner=owner.getAttribute('data-ap-owner');AGENT_PROFILE_STATE.loaded=false;AGENT_PROFILE_STATE.detail=null;AGENT_PROFILE_STATE.selected=null;loadAgentProfiles();return;}
+    var row=ev.target.closest('[data-ap-select]');if(row){if(AGENT_PROFILE_STATE.pending){toast('当前操作仍在等待投影');return;}if(AGENT_PROFILE_STATE.dirty&&!confirm('有未保存修改，确定离开？'))return;AGENT_PROFILE_STATE.error=null;loadAgentProfileDetail(row.getAttribute('data-ap-select'));return;}
+    var create=ev.target.closest('[data-ap-create]');if(create){if(AGENT_PROFILE_STATE.pending){toast('当前操作仍在等待投影');return;}var slug=(root.querySelector('[data-ap-new-slug]')||{}).value||'';slug=slug.trim();if(!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)){toast('slug 只能使用小写字母、数字和单连字符');return;}
+      var path=agentProfileCollectionEndpoint();agentProfileMutation(path,'POST',{profileSlug:slug},null).then(function(result){agentProfileTrackAccepted(result,'catalog');AGENT_PROFILE_STATE.notice='已接受，等待提交/投影';AGENT_PROFILE_STATE.loaded=false;agentProfileScheduleRefresh();render();}).catch(function(e){AGENT_PROFILE_STATE.error=e.problem||agentProfileProblem(e.status);render();});return;}
+    var skillSearch=ev.target.closest('[data-ap-skill-search]');if(skillSearch){agentProfileSearchSkills(root);return;}
+    var skill=ev.target.closest('[data-ap-skill]');if(skill){agentProfileSelectSkill(skill.getAttribute('data-ap-skill'),root);return;}
+    var action=ev.target.closest('[data-ap-action]');if(action){agentProfileHandleAction(action.getAttribute('data-ap-action'),root);}
+  });
+  root.addEventListener('input',function(ev){
+    if(ev.target.matches('[data-ap-search]')){AGENT_PROFILE_STATE.search=ev.target.value;var pane=root.querySelector('.ap-list-pane');if(pane)pane.innerHTML=agentProfileListHtml();return;}
+    if(ev.target.matches('[data-ap-field]'))AGENT_PROFILE_STATE.dirty=true;
+  });
+  root.addEventListener('change',function(ev){if(ev.target.matches('[data-ap-status]')){AGENT_PROFILE_STATE.status=ev.target.value;var pane=root.querySelector('.ap-list-pane');if(pane)pane.innerHTML=agentProfileListHtml();}});
 }
 
 /* ---------------- cron 控件（Skills / Schedules 共用） ---------------- */
@@ -3344,6 +3756,7 @@ function opsView(module){
     case 'observatory': return viewObservatoryFrame();
     case 'cqrs': return viewCqrs();
     case 'studio': return viewStudio();
+    case 'agentProfiles': return viewAgentProfiles();
     case 'skills': return viewSkills();
     case 'schedules': return viewSchedules();
     case 'channels': return viewChannels();

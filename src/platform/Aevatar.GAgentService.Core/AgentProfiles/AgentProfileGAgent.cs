@@ -22,41 +22,43 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>, IProject
     {
         ArgumentNullException.ThrowIfNull(command);
         ValidateIdentity(command.Identity);
-        ValidateOperation(command.Operation);
-        ArgumentException.ThrowIfNullOrWhiteSpace(command.NamespaceActorId);
+        EnsureActorAddress(command.Identity.ProfileId);
+        EnsurePublisher(AgentProfileActorIds.Namespace(command.Identity.Owner));
+        var operation = CanonicalOperation(command.Operation, command);
 
-        if (FindOperation(command.Operation.OperationId) is { } existing)
+        if (FindOperation(operation.OperationId) is { } existing)
         {
-            EnsureOperationReplay(existing, command.Operation);
-            await SendInitializedAsync(command.Identity, command.Operation);
+            EnsureOperationReplay(existing, operation);
+            await SendInitializedAsync(State.Identity, existing, CurrentVersion());
             return;
         }
 
         if (State.Identity is not null && !string.IsNullOrWhiteSpace(State.Identity.ProfileId))
         {
-            await PersistRejectedAsync(command.Operation, "PROFILE_ALREADY_INITIALIZED");
+            await PersistRejectedAsync(operation, "PROFILE_ALREADY_INITIALIZED");
+            await SendInitializationFailedAsync(command.Identity, operation, "PROFILE_ALREADY_INITIALIZED");
             return;
         }
 
         var next = State.Clone();
         next.Identity = command.Identity.Clone();
-        next.NamespaceActorId = command.NamespaceActorId.Trim();
+        next.NamespaceActorId = AgentProfileActorIds.Namespace(command.Identity.Owner);
         if (command.InitialDraft is not null)
         {
             next.Draft = AgentProfileDeterminism.NormalizeDraft(command.InitialDraft);
             next.DraftRevision = 1;
             next.DraftSha256 = AgentProfileDeterminism.ComputeDraftDigest(next.Draft);
         }
-        next.Operations.Add(command.Operation.Clone());
+        next.Operations.Add(operation.Clone());
         next.LastMutation = Outcome(
-            command.Operation,
+            operation,
             AgentProfileMutationStatus.Succeeded,
             "PROFILE_INITIALIZED",
             NextVersion(),
             next.DraftRevision,
             next.PublishedRevision);
         await PersistAsync(next, "initialized");
-        await SendInitializedAsync(command.Identity, command.Operation);
+        await SendInitializedAsync(next.Identity, operation, CurrentVersion());
     }
 
     [EventHandler]
@@ -64,30 +66,30 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>, IProject
     {
         ArgumentNullException.ThrowIfNull(command);
         EnsureIdentity(command.Identity);
-        ValidateOperation(command.Operation);
-        if (TryHandleReplay(command.Operation))
+        var operation = CanonicalOperation(command.Operation, command);
+        if (TryHandleReplay(operation))
             return;
         if (command.ExpectedAuthorityStateVersion != CurrentVersion())
         {
-            await PersistRejectedAsync(command.Operation, "AUTHORITY_VERSION_CONFLICT");
+            await PersistRejectedAsync(operation, "AUTHORITY_VERSION_CONFLICT");
             return;
         }
 
         var diagnostics = AgentProfilePolicies.ValidateDraft(command.Draft);
         if (diagnostics.Count > 0)
         {
-            await PersistRejectedAsync(command.Operation, diagnostics[0].Code);
+            await PersistRejectedAsync(operation, diagnostics[0].Code);
             return;
         }
 
         var normalized = AgentProfileDeterminism.NormalizeDraft(command.Draft);
         var digest = AgentProfileDeterminism.ComputeDraftDigest(normalized);
         var next = State.Clone();
-        next.Operations.Add(command.Operation.Clone());
+        next.Operations.Add(operation.Clone());
         if (digest.Equals(State.DraftSha256))
         {
             next.LastMutation = Outcome(
-                command.Operation,
+                operation,
                 AgentProfileMutationStatus.NoChange,
                 "DRAFT_UNCHANGED",
                 NextVersion(),
@@ -100,7 +102,7 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>, IProject
             next.DraftRevision = checked(State.DraftRevision + 1);
             next.DraftSha256 = digest;
             next.LastMutation = Outcome(
-                command.Operation,
+                operation,
                 AgentProfileMutationStatus.Succeeded,
                 "DRAFT_UPDATED",
                 NextVersion(),
@@ -115,52 +117,53 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>, IProject
     {
         ArgumentNullException.ThrowIfNull(command);
         EnsureIdentity(command.Identity);
-        ValidateOperation(command.Operation);
-        if (TryHandleReplay(command.Operation))
+        var operation = CanonicalOperation(command.Operation, command);
+        if (TryHandleReplay(operation))
         {
             if (State.Published is not null)
-                await SendPublishedSummaryAsync(State.Published);
+                await SendPublishedSummaryAsync(State.Published, operation.OperationId);
             return;
         }
         if (command.ExpectedAuthorityStateVersion != CurrentVersion())
         {
-            await PersistRejectedAsync(command.Operation, "AUTHORITY_VERSION_CONFLICT");
+            await PersistRejectedAsync(operation, "AUTHORITY_VERSION_CONFLICT");
             return;
         }
         if (!command.SourceDraftSha256.Equals(State.DraftSha256))
         {
-            await PersistRejectedAsync(command.Operation, "DRAFT_SOURCE_MISMATCH");
+            await PersistRejectedAsync(operation, "DRAFT_SOURCE_MISMATCH");
             return;
         }
-        if (command.Snapshot is null || !AgentProfileDeterminism.VerifyPublishedSnapshot(command.Snapshot) ||
+        if (command.Snapshot is null ||
+            !AgentProfileDeterminism.VerifyPublishedSnapshot(command.Snapshot, State.Draft) ||
             !command.Snapshot.Identity.Equals(State.Identity) ||
             !command.Snapshot.DraftSha256.Equals(State.DraftSha256) ||
             command.Snapshot.DraftRevision != State.DraftRevision)
         {
-            await PersistRejectedAsync(command.Operation, "PUBLISHED_SNAPSHOT_INVALID");
+            await PersistRejectedAsync(operation, "PUBLISHED_SNAPSHOT_INVALID");
             return;
         }
 
         var expectedRevision = checked(State.PublishedRevision + 1);
         if (command.Snapshot.PublishedRevision != expectedRevision)
         {
-            await PersistRejectedAsync(command.Operation, "PUBLISHED_REVISION_INVALID");
+            await PersistRejectedAsync(operation, "PUBLISHED_REVISION_INVALID");
             return;
         }
 
         var next = State.Clone();
         next.Published = command.Snapshot.Clone();
         next.PublishedRevision = command.Snapshot.PublishedRevision;
-        next.Operations.Add(command.Operation.Clone());
+        next.Operations.Add(operation.Clone());
         next.LastMutation = Outcome(
-            command.Operation,
+            operation,
             AgentProfileMutationStatus.Succeeded,
             "PROFILE_PUBLISHED",
             NextVersion(),
             next.DraftRevision,
             next.PublishedRevision);
         await PersistAsync(next, "published");
-        await SendPublishedSummaryAsync(next.Published);
+        await SendPublishedSummaryAsync(next.Published, operation.OperationId);
     }
 
     protected override AgentProfileState TransitionState(AgentProfileState current, IMessage evt) =>
@@ -202,14 +205,34 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>, IProject
         State.Operations.FirstOrDefault(x =>
             string.Equals(x.OperationId, operationId, StringComparison.Ordinal));
 
-    private Task SendInitializedAsync(AgentProfileIdentity identity, AgentProfileOperationFact operation) =>
-        SendToAsync(State.NamespaceActorId.Length > 0 ? State.NamespaceActorId : string.Empty, new AgentProfileInitialized
+    private Task SendInitializedAsync(
+        AgentProfileIdentity identity,
+        AgentProfileOperationFact operation,
+        long sourceAuthorityStateVersion) =>
+        SendToAsync(AgentProfileActorIds.Namespace(identity.Owner), new AgentProfileInitialized
         {
             Identity = identity.Clone(),
             Operation = operation.Clone(),
+            SourceProfileActorId = Id,
+            SourceAuthorityStateVersion = sourceAuthorityStateVersion,
+            ProvisioningOperationId = operation.OperationId,
         });
 
-    private Task SendPublishedSummaryAsync(AgentProfilePublishedSnapshot snapshot) =>
+    private Task SendInitializationFailedAsync(
+        AgentProfileIdentity identity,
+        AgentProfileOperationFact operation,
+        string failureCode) =>
+        SendToAsync(AgentProfileActorIds.Namespace(identity.Owner), new AgentProfileInitializationFailed
+        {
+            Identity = identity.Clone(),
+            Operation = operation.Clone(),
+            SourceProfileActorId = Id,
+            SourceAuthorityStateVersion = CurrentVersion(),
+            ProvisioningOperationId = operation.OperationId,
+            FailureCode = failureCode,
+        });
+
+    private Task SendPublishedSummaryAsync(AgentProfilePublishedSnapshot snapshot, string sourceOperationId) =>
         SendToAsync(State.NamespaceActorId, new ObserveAgentProfilePublishedCommand
         {
             Identity = snapshot.Identity.Clone(),
@@ -217,22 +240,28 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>, IProject
             Purpose = snapshot.Purpose,
             PublishedRevision = snapshot.PublishedRevision,
             SnapshotSha256 = snapshot.SnapshotSha256,
+            SourceProfileActorId = Id,
+            SourceAuthorityStateVersion = CurrentVersion(),
+            SourceOperationId = sourceOperationId,
         });
 
     private void EnsureIdentity(AgentProfileIdentity identity)
     {
         ValidateIdentity(identity);
+        EnsureActorAddress(identity.ProfileId);
         if (State.Identity is null || !State.Identity.Equals(identity))
             throw new InvalidOperationException("Agent Profile identity does not match the authority state.");
     }
 
     private static void ValidateIdentity(AgentProfileIdentity? identity)
     {
-        if (identity?.Owner is null || string.IsNullOrWhiteSpace(identity.ProfileId) ||
+        if (identity?.Owner is null || identity.Owner.OwnerCase == AgentProfileOwner.OwnerOneofCase.None ||
+            string.IsNullOrWhiteSpace(identity.ProfileId) ||
             AgentProfilePolicies.ValidateProfileSlug(identity.ProfileSlug).Count > 0)
         {
             throw new InvalidOperationException("A valid Agent Profile identity is required.");
         }
+        _ = AgentProfileActorIds.Namespace(identity.Owner);
     }
 
     private static void ValidateOperation(AgentProfileOperationFact? operation)
@@ -251,6 +280,29 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>, IProject
     {
         if (!existing.InputSha256.Equals(incoming.InputSha256))
             throw new InvalidOperationException("Agent Profile operation payload drift is not allowed.");
+    }
+
+    private static AgentProfileOperationFact CanonicalOperation(
+        AgentProfileOperationFact? operation,
+        IMessage command)
+    {
+        ValidateOperation(operation);
+        var canonical = operation!.Clone();
+        canonical.InputSha256 = AgentProfileDeterminism.ComputeSemanticCommandDigest(command);
+        return canonical;
+    }
+
+    private void EnsureActorAddress(string profileId)
+    {
+        if (!string.Equals(Id, AgentProfileActorIds.Profile(profileId), StringComparison.Ordinal))
+            throw new InvalidOperationException("Agent Profile authority address does not match its typed identity.");
+    }
+
+    private void EnsurePublisher(string expectedPublisherActorId)
+    {
+        var publisherActorId = ActiveInboundEnvelope?.Route?.PublisherActorId ?? string.Empty;
+        if (!string.Equals(publisherActorId, expectedPublisherActorId, StringComparison.Ordinal))
+            throw new InvalidOperationException("Agent Profile command publisher does not match namespace authority.");
     }
 
     private long CurrentVersion() => EventSourcing?.CurrentVersion ?? 0;

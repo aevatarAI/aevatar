@@ -57,7 +57,7 @@
     <Protobuf Include="protos\*.proto"
               GrpcServices="None"
               ProtoRoot="protos"
-              AdditionalImportDirs="..\Aevatar.GAgents.Channel.Runtime\protos;..\Aevatar.GAgents.Channel.Abstractions\protos;..\..\src\Aevatar.ChatRouting.Abstractions;..\..\src\Aevatar.Foundation.Abstractions;..\..\src\Aevatar.AI.Abstractions;..\..\src\Aevatar.Foundation.VoicePresence.Abstractions;..\..\src\workflow\Aevatar.Workflow.Abstractions" />
+              AdditionalImportDirs="..\Aevatar.GAgents.Channel.Runtime\protos;..\Aevatar.GAgents.Channel.Abstractions\protos;..\..\src\Aevatar.ChatRouting.Abstractions;..\..\src\Aevatar.Foundation.Abstractions;..\..\src\Aevatar.AI.Abstractions;..\..\src\Aevatar.Foundation.VoicePresence.Abstractions;..\..\src\workflow\Aevatar.Workflow.Abstractions;..\..\src\platform\Aevatar.GAgentService.Abstractions\Protos" />
   </ItemGroup>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />

@@ -92,4 +92,45 @@ public sealed class AgentProfileContractsTests
         fields.Should().Equal("owner_kind", "profile_slug");
         fields.Should().NotContain(["profile_id", "scope_id", "user_id", "content", "metadata"]);
     }
+
+    [Fact]
+    public void DefaultBinding_ShouldUseTypedTargetAndOwnerSpecificAdmission()
+    {
+        var file = AgentProfileDefaultBinding.Descriptor.File;
+        var target = file.MessageTypes.SingleOrDefault(x => x.Name == "AgentProfileBindingTarget");
+        var scopeAdmission = file.MessageTypes.SingleOrDefault(x => x.Name == "AgentProfileScopeBindingAdmission");
+        var systemAdmission = file.MessageTypes.SingleOrDefault(x => x.Name == "AgentProfileSystemBindingAdmission");
+
+        target.Should().NotBeNull();
+        target!.Fields.InFieldNumberOrder().Select(x => x.Name).Should().Equal(
+            "owner",
+            "profile_id",
+            "published_revision",
+            "snapshot_sha256");
+        scopeAdmission.Should().NotBeNull();
+        scopeAdmission!.Fields.InFieldNumberOrder().Should().BeEmpty();
+        systemAdmission.Should().NotBeNull();
+        systemAdmission!.Fields.InFieldNumberOrder().Select(x => x.Name).Should().Equal(
+            "enabled",
+            "cohort_basis_points");
+
+        AgentProfileDefaultBinding.Descriptor.Fields.InFieldNumberOrder()
+            .Select(x => x.Name)
+            .Should().Equal("agent_kind", "target", "scope", "system");
+        AgentProfileDefaultBinding.Descriptor.Oneofs
+            .Should().ContainSingle(x => x.Name == "admission");
+
+        SetAgentProfileDefaultBindingCommand.Descriptor.Fields.InFieldNumberOrder()
+            .Select(x => x.Name)
+            .Should().Equal(
+                "owner",
+                "agent_kind",
+                "target",
+                "scope",
+                "system",
+                "expected_authority_state_version",
+                "operation");
+        SetAgentProfileDefaultBindingCommand.Descriptor.Oneofs
+            .Should().ContainSingle(x => x.Name == "admission");
+    }
 }

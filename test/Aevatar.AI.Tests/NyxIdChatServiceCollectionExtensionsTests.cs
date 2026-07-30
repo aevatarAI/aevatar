@@ -57,15 +57,15 @@ public sealed class NyxIdChatServiceCollectionExtensionsTests
     }
 
     [Fact]
-    public void AddNyxIdChat_ShouldRegisterDefaultDisabledAgentProfileSource()
+    public void AddNyxIdChat_ShouldRegisterDefaultDisabledAgentProfileResolver()
     {
         var services = new ServiceCollection();
 
         services.AddNyxIdChat(new ConfigurationBuilder().Build());
 
         services.Should().ContainSingle(descriptor =>
-            descriptor.ServiceType == typeof(INyxIdChatAgentProfileSnapshotSource) &&
-            descriptor.ImplementationType == typeof(DisabledNyxIdChatAgentProfileSnapshotSource));
+            descriptor.ServiceType == typeof(INyxIdChatAgentProfileResolver) &&
+            descriptor.ImplementationType == typeof(DisabledNyxIdChatAgentProfileResolver));
     }
 
     [Fact]

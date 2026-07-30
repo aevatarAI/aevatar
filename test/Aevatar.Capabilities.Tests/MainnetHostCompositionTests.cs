@@ -38,7 +38,10 @@ using Aevatar.Foundation.VoicePresence.Modules;
 using Aevatar.Foundation.VoicePresence.Hosting;
 using Aevatar.Foundation.VoicePresence.Transport;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.AgentProfiles;
+using Aevatar.GAgentService.Application.AgentProfiles;
 using Aevatar.GAgentService.Hosting.Endpoints;
+using Aevatar.GAgentService.Infrastructure.AgentProfiles;
 using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Broker;
@@ -51,7 +54,6 @@ using Aevatar.GAgents.StatusDashboard;
 using Aevatar.GAgents.StatusDashboard.Executors;
 using Aevatar.Mainnet.Host.Api.AgentProfiles;
 using Aevatar.Mainnet.Host.Api.Hosting;
-using Aevatar.Mainnet.Host.Api.Profiles;
 using Aevatar.Mainnet.Host.Api.Responses;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.Foundation.Abstractions.Credentials;
@@ -86,6 +88,16 @@ namespace Aevatar.Capabilities.Tests;
 [Collection(ProcessEnvSerialCollection.Name)]
 public sealed class MainnetHostCompositionTests
 {
+    [Fact]
+    public void MainnetHost_ShouldExposeAnActorBackedNyxIdChatProfileResolver()
+    {
+        var resolver = typeof(MainnetHostBuilderExtensions).Assembly.GetType(
+            "Aevatar.Mainnet.Host.Api.AgentProfiles.MainnetNyxIdChatAgentProfileResolver");
+
+        resolver.Should().NotBeNull();
+        resolver!.GetInterfaces().Should().Contain(typeof(INyxIdChatAgentProfileResolver));
+    }
+
     [Fact]
     public void AddAevatarMainnetHost_ShouldRegisterBindingAgentToolSource()
     {
@@ -141,7 +153,7 @@ public sealed class MainnetHostCompositionTests
     }
 
     [Fact]
-    public void AddAevatarMainnetHost_ShouldComposeDisabledProfileSourceWithEmptyReplaceableBaseline()
+    public void AddAevatarMainnetHost_ShouldReplaceDefaultProfileResolverAndRegisterStaticRouteToolSet()
     {
         using var home = new TemporaryAevatarHomeScope();
         var builder = CreateBuilder();
@@ -153,90 +165,36 @@ public sealed class MainnetHostCompositionTests
         });
 
         using var app = builder.Build();
-        var profileOptions = app.Services.GetRequiredService<IOptions<NyxIdChatAgentProfileOptions>>().Value;
-        var baseline = app.Services.GetRequiredService<NyxIdChatAgentProfileValidationBaseline>();
-        var source = app.Services.GetRequiredService<INyxIdChatAgentProfileSnapshotSource>();
-
-        profileOptions.Enabled.Should().BeFalse();
-        profileOptions.ExternalReference.Should().Be(NyxIdChatAgentProfileOptions.StableExternalReference);
-        baseline.RequiredRecoveryToolNames.Should().BeEmpty();
-        baseline.DeniedLegacyToolNames.Should().BeEmpty();
-        source.Should().BeSameAs(app.Services.GetRequiredService<MainnetAgentProfileRolloutSelector>());
-        source.GetSnapshotForNewConversation("conversation-a").Should().BeNull();
-    }
-
-    [Fact]
-    public void AddAevatarMainnetHost_ShouldAllowReviewedBaselineReplacementAtCompositionSeam()
-    {
-        using var home = new TemporaryAevatarHomeScope();
-        var builder = CreateBuilder();
-        builder.AddAevatarMainnetHost(options =>
-        {
-            options.EnableConnectorBootstrap = false;
-            options.EnableCors = false;
-        });
-        var reviewed = new NyxIdChatAgentProfileValidationBaseline(
-            ["recover_tool"],
-            ["legacy_tool"]);
-        builder.Services.Replace(ServiceDescriptor.Singleton(reviewed));
-
-        using var app = builder.Build();
-
-        app.Services.GetRequiredService<NyxIdChatAgentProfileValidationBaseline>()
+        app.Services.GetRequiredService<INyxIdChatAgentProfileResolver>()
             .Should()
-            .BeSameAs(reviewed);
+            .BeOfType<MainnetNyxIdChatAgentProfileResolver>();
+        var registry = app.Services.GetRequiredService<IToolSetRegistry>();
+        registry.GetRegisteredNames().Should().Contain(AgentProfilePolicies.NyxIdChatRouteToolSet);
     }
 
     [Fact]
-    public void AddAevatarMainnetHost_WithEnabledRollout_ShouldRegisterTheReviewedRouteToolSet()
+    public void AddAevatarMainnetHost_ShouldComposeAgentProfilePublishingApplication()
     {
         using var home = new TemporaryAevatarHomeScope();
-        var profilePath = Path.Combine(
-            Path.GetTempPath(),
-            $"aevatar-mainnet-profile-{Guid.NewGuid():N}.profile.pb.json");
-        File.WriteAllText(profilePath, MainnetAgentProfileRolloutSelectorTests.BuildValidProfileJson());
-        try
-        {
-            using var enabled = new EnvironmentVariableScope(
-                "AEVATAR_Aevatar__AgentProfileRollout__NyxIdChat__NewBindingsEnabled", "true");
-            using var cohort = new EnvironmentVariableScope(
-                "AEVATAR_Aevatar__AgentProfileRollout__NyxIdChat__CohortBasisPoints", "500");
-            using var reviewedProfile = new EnvironmentVariableScope(
-                "AEVATAR_Aevatar__AgentProfileRollout__NyxIdChat__ReviewedProfilePath", profilePath);
-            using var runtimeProvider = new EnvironmentVariableScope(
-                "AEVATAR_ActorRuntime__Provider", "InMemory");
-            using var documentProvider = new EnvironmentVariableScope(
-                "AEVATAR_Projection__Document__Providers__InMemory__Enabled", "true");
-            using var documentElasticsearch = new EnvironmentVariableScope(
-                "AEVATAR_Projection__Document__Providers__Elasticsearch__Enabled", "false");
-            using var graphProvider = new EnvironmentVariableScope(
-                "AEVATAR_Projection__Graph__Providers__InMemory__Enabled", "true");
-            using var graphNeo4j = new EnvironmentVariableScope(
-                "AEVATAR_Projection__Graph__Providers__Neo4j__Enabled", "false");
-            using var projectionEnvironment = new EnvironmentVariableScope(
-                "Projection__Policies__Environment", "Development");
-            using var denyInMemoryDocument = new EnvironmentVariableScope(
-                "Projection__Policies__DenyInMemoryDocumentReadStore", "false");
-            using var denyInMemoryGraph = new EnvironmentVariableScope(
-                "Projection__Policies__DenyInMemoryGraphFactStore", "false");
-            var builder = CreateBuilder();
-            builder.AddAevatarMainnetHost(options =>
-            {
-                options.EnableConnectorBootstrap = false;
-                options.EnableCors = false;
-            });
+        var builder = CreateBuilder();
 
-            using var app = builder.Build();
-            var registry = app.Services.GetRequiredService<IToolSetRegistry>();
-
-            registry.GetRegisteredNames().Should().Contain("profile.route.v1");
-            registry.Resolve("profile.route.v1")
-                .IsSuccess.Should().BeTrue();
-        }
-        finally
+        builder.AddAevatarMainnetHost(options =>
         {
-            File.Delete(profilePath);
-        }
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        app.Services.GetRequiredService<IExactOrnnSkillResolver>()
+            .Should()
+            .BeOfType<OrnnExactAgentProfileSkillResolver>();
+        app.Services.GetRequiredService<IAgentProfileSkillSealer>()
+            .Should()
+            .BeOfType<AgentProfileSkillSealer>();
+        app.Services.GetRequiredService<IAgentProfileActorPort>()
+            .Should()
+            .BeOfType<AgentProfileActorPort>();
+        app.Services.GetRequiredService<AgentProfileApplicationService>().Should().NotBeNull();
     }
 
     [Fact]
@@ -286,9 +244,9 @@ public sealed class MainnetHostCompositionTests
         app.Services.GetRequiredService<NyxIdToolOptions>()
             .SandboxServiceSlug.Should().Be(NyxIdToolOptions.DefaultSandboxServiceSlug);
         app.Services.GetRequiredService<IServiceRolloutCommandObservationQueryReader>().Should().NotBeNull();
-        app.Services.GetRequiredService<MainnetAgentProfileRolloutSelector>()
-            .GetSnapshotForNewConversation("new-conversation")
-            .Should().BeNull();
+        app.Services.GetRequiredService<INyxIdChatAgentProfileResolver>()
+            .Should()
+            .BeOfType<MainnetNyxIdChatAgentProfileResolver>();
         app.Services.GetRequiredService<IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string>>()
             .Should()
             .NotBeNull();
@@ -652,6 +610,7 @@ public sealed class MainnetHostCompositionTests
             .Value.Defaults.DefaultForwardToModelToolSetName.Should().Be(ToolSetNames.WorkspaceDefault);
 
         registry.GetRegisteredNames().Should().Equal(
+            AgentProfilePolicies.NyxIdChatRouteToolSet,
             ToolSetNames.LarkSelfNotify,
             ToolSetNames.NyxIdConnectedServices,
             ToolSetNames.WorkspaceDefault);

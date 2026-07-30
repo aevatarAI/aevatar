@@ -35,9 +35,12 @@ message AgentProfileManagementReadModel {
   aevatar.gagentservice.AgentProfileDraft draft = 7;
   int64 draft_revision = 8;
   bytes draft_sha256 = 9;
-  aevatar.gagentservice.AgentProfilePublishedSnapshot published = 10;
-  int64 published_revision = 11;
-  aevatar.gagentservice.AgentProfileMutationOutcome last_mutation = 12;
+  string published_display_name = 10;
+  string published_purpose = 11;
+  int64 published_revision = 12;
+  bytes published_snapshot_sha256 = 13;
+  google.protobuf.Timestamp published_at = 14;
+  aevatar.gagentservice.AgentProfileMutationOutcome last_mutation = 15;
 }
 
 message AgentProfileExecutionReadModel {

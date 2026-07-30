@@ -1,6 +1,7 @@
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgentService.Projection.Contexts;
 using Aevatar.GAgentService.Projection.ReadModels;
 
@@ -44,7 +45,21 @@ public sealed class AgentProfileCatalogCurrentStateProjector
         };
         document.Profiles.Add(state.Profiles.Select(static x => x.Clone()));
         document.DefaultBindings.Add(state.DefaultBindings.Select(static x => x.Clone()));
-        await _writes.UpsertAsync(document, ct);
+        var result = await _writes.UpsertAsync(document, ct);
+        EnsureWriteAccepted(result, stateEvent.Version, "catalog");
+    }
+
+    internal static void EnsureWriteAccepted(
+        ProjectionWriteResult result,
+        long stateVersion,
+        string readModelKind)
+    {
+        if (result.IsRejected)
+        {
+            throw new InvalidOperationException(
+                $"Agent Profile {readModelKind} projection rejected state version " +
+                $"{stateVersion}: {result.Disposition}.");
+        }
     }
 }
 
@@ -69,7 +84,7 @@ public sealed class AgentProfileManagementCurrentStateProjector
     {
         if (!TryUnpack(envelope, out var stateEvent, out var state))
             return;
-        await _writes.UpsertAsync(new AgentProfileManagementReadModel
+        var result = await _writes.UpsertAsync(new AgentProfileManagementReadModel
         {
             Id = context.RootActorId,
             ActorId = context.RootActorId,
@@ -80,10 +95,17 @@ public sealed class AgentProfileManagementCurrentStateProjector
             Draft = state.Draft?.Clone(),
             DraftRevision = state.DraftRevision,
             DraftSha256 = state.DraftSha256,
-            Published = state.Published?.Clone(),
+            PublishedDisplayName = state.Published?.DisplayName ?? string.Empty,
+            PublishedPurpose = state.Published?.Purpose ?? string.Empty,
             PublishedRevision = state.PublishedRevision,
+            PublishedSnapshotSha256 = state.Published?.SnapshotSha256 ?? Google.Protobuf.ByteString.Empty,
+            PublishedAt = state.Published?.PublishedAt?.Clone(),
             LastMutation = state.LastMutation?.Clone(),
         }, ct);
+        AgentProfileCatalogCurrentStateProjector.EnsureWriteAccepted(
+            result,
+            stateEvent.Version,
+            "management");
     }
 
     internal static bool TryUnpack(
@@ -119,7 +141,7 @@ public sealed class AgentProfileExecutionCurrentStateProjector
         if (!AgentProfileManagementCurrentStateProjector.TryUnpack(envelope, out var stateEvent, out var state) ||
             state!.Published is null || state.PublishedRevision <= 0)
             return;
-        await _writes.UpsertAsync(new AgentProfileExecutionReadModel
+        var result = await _writes.UpsertAsync(new AgentProfileExecutionReadModel
         {
             Id = context.RootActorId,
             ActorId = context.RootActorId,
@@ -129,5 +151,9 @@ public sealed class AgentProfileExecutionCurrentStateProjector
             Identity = state.Identity.Clone(),
             Snapshot = state.Published.Clone(),
         }, ct);
+        AgentProfileCatalogCurrentStateProjector.EnsureWriteAccepted(
+            result,
+            stateEvent.Version,
+            "execution");
     }
 }

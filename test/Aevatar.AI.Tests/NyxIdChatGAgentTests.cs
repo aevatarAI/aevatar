@@ -23,6 +23,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Implementations.Local.Actors;
 using Aevatar.Foundation.Runtime.Streaming;
+using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgents.NyxidChat.AgentProfiles;
@@ -42,12 +43,41 @@ public class NyxIdChatGAgentTests
     private const string ExactSkillVersion = "1.2";
     private const string ExactSkillName = "skill-alpha";
     private const string ExactSkillPublisher = "publisher-alpha";
+    private static readonly ByteString ExactSkillSha256 =
+        ByteString.CopyFrom(Enumerable.Range(0, 32).Select(static value => (byte)value).ToArray());
+
+    [Fact]
+    public void ConversationCreateCommand_ShouldExposeExplicitAgentProfileReference()
+    {
+        NyxIdChatConversationCreateCommand.Descriptor.Fields
+            .InFieldNumberOrder()
+            .Select(static field => field.Name)
+            .Should().Equal(
+                "scope_id",
+                "created_locally",
+                "agent_profile",
+                "first_turn",
+                "requested_actor_id",
+                "agent_profile_reference");
+    }
+
+    [Fact]
+    public void AgentProfileSelection_ShouldUseAnAsyncResolverContract()
+    {
+        var resolver = typeof(NyxIdChatGAgent).Assembly.GetType(
+            "Aevatar.GAgents.NyxidChat.AgentProfiles.INyxIdChatAgentProfileResolver");
+
+        resolver.Should().NotBeNull();
+        resolver!.GetMethod("ResolveAsync")!.ReturnType.IsGenericType.Should().BeTrue();
+        resolver.GetMethod("ResolveAsync")!.ReturnType.GetGenericTypeDefinition()
+            .Should().Be(typeof(Task<>));
+    }
 
     [Fact]
     public async Task CreateTargetResolver_ShouldCopySelectedProfileForMatchingDirectRoute()
     {
         var runtime = new RecordingActorRuntime();
-        var source = new FixedAgentProfileSnapshotSource(BuildSealedProfile("profile-v1", "profile.route"));
+        var source = new FixedAgentProfileResolver(BuildSealedProfile("profile-v1", "profile.route"));
         var routeQueryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
             new ChatRouteAction
             {
@@ -62,15 +92,26 @@ public class NyxIdChatGAgentTests
             routeQueryPort,
             NewChatRouteResolver(),
             source);
-        var command = new NyxIdChatConversationCreateCommand { ScopeId = "scope-a" };
+        var command = new NyxIdChatConversationCreateCommand
+        {
+            ScopeId = "scope-a",
+            AgentProfileReference = new AgentProfileReference
+            {
+                OwnerKind = AgentProfileReferenceOwnerKind.Caller,
+                ProfileSlug = "research-assistant",
+            },
+        };
 
         var result = await resolver.ResolveAsync(command);
 
         result.Succeeded.Should().BeTrue();
-        source.CallCount.Should().Be(1);
+        source.ResolveCalls.Should().Be(1);
         runtime.CreateCalls.Should().ContainSingle().Which.Type.Should()
             .Be(typeof(NyxIdChatConversationGAgent));
-        source.ActorIds.Should().Equal(runtime.CreateCalls.Select(static call => call.Id!));
+        source.Requests.Select(static request => request.ScopeId).Should().Equal("scope-a");
+        source.Requests.Should().ContainSingle().Which.ExplicitReference.Should()
+            .BeEquivalentTo(command.AgentProfileReference);
+        source.Requests[0].ExplicitReference.Should().NotBeSameAs(command.AgentProfileReference);
         command.AgentProfile.Should().NotBeNull();
         AgentProfileSnapshotCodec.ByteEquivalent(command.AgentProfile, source.Snapshot).Should().BeTrue();
         command.AgentProfile.Should().NotBeSameAs(source.Snapshot);
@@ -80,7 +121,7 @@ public class NyxIdChatGAgentTests
     public async Task CreateTargetResolver_ShouldPreserveFirstDispatchOwnershipWhenRequestedActorAlreadyExists()
     {
         var runtime = new RecordingActorRuntime();
-        var source = new FixedAgentProfileSnapshotSource(BuildSealedProfile("profile-v1", "profile.route"));
+        var source = new FixedAgentProfileResolver(BuildSealedProfile("profile-v1", "profile.route"));
         var routeQueryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
             new ChatRouteAction
             {
@@ -105,7 +146,7 @@ public class NyxIdChatGAgentTests
 
         result.Succeeded.Should().BeTrue();
         result.Target!.CreatedLocally.Should().BeTrue();
-        source.ActorIds.Should().Equal("nyxid-chat-retry");
+        source.Requests.Select(static request => request.ScopeId).Should().Equal("scope-a");
         AgentProfileSnapshotCodec.ByteEquivalent(command.AgentProfile, source.Snapshot).Should().BeTrue();
     }
 
@@ -113,7 +154,7 @@ public class NyxIdChatGAgentTests
     public async Task CreateTargetResolver_ShouldRejectProfileRouteDriftBeforeCreatingActor()
     {
         var runtime = new RecordingActorRuntime();
-        var source = new FixedAgentProfileSnapshotSource(BuildSealedProfile("profile-v1", "reviewed.route"));
+        var source = new FixedAgentProfileResolver(BuildSealedProfile("profile-v1", "reviewed.route"));
         var routeQueryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
             new ChatRouteAction
             {
@@ -133,7 +174,7 @@ public class NyxIdChatGAgentTests
 
         result.Succeeded.Should().BeFalse();
         result.Error.Should().Be(NyxIdChatLifecycleCommandStartError.AdmissionUnavailable);
-        source.CallCount.Should().Be(1);
+        source.ResolveCalls.Should().Be(1);
         runtime.CreateCalls.Should().BeEmpty();
     }
 
@@ -144,7 +185,7 @@ public class NyxIdChatGAgentTests
         bool missingForwardToModel)
     {
         var runtime = new RecordingActorRuntime();
-        var source = new FixedAgentProfileSnapshotSource(BuildSealedProfile("profile-v1", "reviewed.route"));
+        var source = new FixedAgentProfileResolver(BuildSealedProfile("profile-v1", "reviewed.route"));
         var routeSnapshot = missingForwardToModel
             ? null
             : new ChatRoutePolicySnapshot(
@@ -165,9 +206,38 @@ public class NyxIdChatGAgentTests
 
         result.Succeeded.Should().BeFalse();
         result.Error.Should().Be(NyxIdChatLifecycleCommandStartError.AdmissionUnavailable);
-        source.CallCount.Should().Be(1);
+        source.ResolveCalls.Should().Be(1);
         runtime.CreateCalls.Should().BeEmpty();
         command.AgentProfile.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task CreateTargetResolver_ShouldFailClosedWhenProfileResolutionIsUnavailable()
+    {
+        var runtime = new RecordingActorRuntime();
+        var source = FixedAgentProfileResolver.Failure(
+            NyxIdChatAgentProfileResolutionStatus.ReadModelUnavailable);
+        var routeQueryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
+            new ChatRouteAction
+            {
+                ForwardToModel = new ForwardToModel
+                {
+                    ToolSetRef = new ChatRouteToolSetRef { Name = "profile.route" },
+                },
+            },
+            []));
+        var resolver = new NyxIdChatConversationCreateCommandTargetResolver(
+            runtime,
+            routeQueryPort,
+            NewChatRouteResolver(),
+            source);
+
+        var result = await resolver.ResolveAsync(new NyxIdChatConversationCreateCommand { ScopeId = "scope-a" });
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(NyxIdChatLifecycleCommandStartError.AdmissionUnavailable);
+        source.ResolveCalls.Should().Be(1);
+        runtime.CreateCalls.Should().BeEmpty();
     }
 
     [Fact]
@@ -1196,7 +1266,7 @@ public class NyxIdChatGAgentTests
             ExactSkillVersion,
             ExactSkillName,
             ExactSkillPublisher,
-            "hash-alpha",
+            ExactSkillSha256,
             "---\nname: skill-alpha\n---\nSelected turn instructions."));
         var materializer = new AgentProfileTurnCatalogMaterializer(
             registry,
@@ -1257,7 +1327,7 @@ public class NyxIdChatGAgentTests
             ExactSkillVersion,
             ExactSkillName,
             ExactSkillPublisher,
-            "hash-alpha",
+            ExactSkillSha256,
             "---\nname: skill-alpha\n---\nSelected turn instructions."));
         var materializer = new AgentProfileTurnCatalogMaterializer(
             registry,
@@ -1338,7 +1408,7 @@ public class NyxIdChatGAgentTests
                 ExactSkillVersion,
                 ExactSkillName,
                 ExactSkillPublisher,
-                "hash-alpha",
+                ExactSkillSha256,
                 "---\nname: skill-alpha\n---\nSelected turn instructions.")));
         using var provider = BuildServiceProvider(historyCommandPort: new RecordingChatHistoryCommandPort());
         const string actorId = "nyxid-chat-five-telemetry-seams";
@@ -2285,6 +2355,7 @@ public class NyxIdChatGAgentTests
             SideEffectClass = AgentProfileSideEffectClass.ReadOnly,
             ExpectedSkillName = ExactSkillName,
             ReviewedPublisherId = ExactSkillPublisher,
+            SealedSkillSha256 = ExactSkillSha256,
         };
         member.ExplicitTriggerAliases.Add("/alpha");
         member.TaskToolPolicy.ToolNames.Add("task");
@@ -2355,19 +2426,32 @@ public class NyxIdChatGAgentTests
             Task.FromResult(snapshot);
     }
 
-    private sealed class FixedAgentProfileSnapshotSource(AgentProfileSnapshot snapshot)
-        : INyxIdChatAgentProfileSnapshotSource
+    private sealed class FixedAgentProfileResolver(NyxIdChatAgentProfileResolution resolution)
+        : INyxIdChatAgentProfileResolver
     {
-        public AgentProfileSnapshot Snapshot { get; } = snapshot;
-        public int CallCount { get; private set; }
-        public List<string> ActorIds { get; } = [];
-
-        public AgentProfileSnapshot? GetSnapshotForNewConversation(string actorId)
+        public FixedAgentProfileResolver(AgentProfileSnapshot snapshot)
+            : this(NyxIdChatAgentProfileResolution.Selected(
+                snapshot,
+                NyxIdChatAgentProfileSelectionSource.ScopeDefault))
         {
-            CallCount++;
-            ActorIds.Add(actorId);
-            return Snapshot.Clone();
         }
+
+        public AgentProfileSnapshot Snapshot => resolution.Profile!;
+        public int ResolveCalls { get; private set; }
+        public List<NyxIdChatAgentProfileSelectionRequest> Requests { get; } = [];
+
+        public static FixedAgentProfileResolver Failure(NyxIdChatAgentProfileResolutionStatus status) =>
+            new(NyxIdChatAgentProfileResolution.Failure(status));
+
+        public Task<NyxIdChatAgentProfileResolution> ResolveAsync(
+            NyxIdChatAgentProfileSelectionRequest request,
+            CancellationToken ct = default)
+        {
+            ResolveCalls++;
+            Requests.Add(request);
+            return Task.FromResult(resolution);
+        }
+
     }
 
     private sealed class RecordingGAgentActorRegistryCommandPort(List<string>? operations = null) : IGAgentActorRegistryCommandPort

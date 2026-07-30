@@ -17,26 +17,17 @@ public sealed class AgentProfileActorPort : IAgentProfileActorPort
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
     }
 
-    public async Task EnsureCreateTargetsAsync(
-        AgentProfileOwner owner,
-        string profileId,
-        CancellationToken ct = default)
-    {
-        ArgumentNullException.ThrowIfNull(owner);
-        ArgumentException.ThrowIfNullOrWhiteSpace(profileId);
-        ct.ThrowIfCancellationRequested();
-
-        await EnsureTargetAsync<AgentProfileNamespaceGAgent>(AgentProfileActorIds.Namespace(owner), ct);
-        await EnsureTargetAsync<AgentProfileGAgent>(AgentProfileActorIds.Profile(profileId), ct);
-    }
-
     public async Task<DispatchAdmission> DispatchCreateAsync(
         CreateAgentProfileCommand command,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(command);
-        await EnsureCreateTargetsAsync(command.Owner, command.ProfileId, ct);
-        return await DispatchAsync(AgentProfileActorIds.Namespace(command.Owner), command.Operation, command, ct);
+        AgentProfileEnvelopeFactory.ValidateOperation(command.Operation);
+        var namespaceActorId = ResolveNamespaceActorId(command.Owner);
+        var profileActorId = ResolveProfileActorId(command.ProfileId);
+        await EnsureTargetAsync<AgentProfileNamespaceGAgent>(namespaceActorId, ct);
+        await EnsureTargetAsync<AgentProfileGAgent>(profileActorId, ct);
+        return await DispatchAsync(namespaceActorId, command.Operation, command, ct);
     }
 
     public async Task<DispatchAdmission> DispatchInitializeAsync(
@@ -45,8 +36,10 @@ public sealed class AgentProfileActorPort : IAgentProfileActorPort
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(command);
-        await EnsureProfileTargetAsync(profileActorId, ct);
-        return await DispatchAsync(profileActorId, command.Operation, command, ct);
+        AgentProfileEnvelopeFactory.ValidateOperation(command.Operation);
+        var expectedProfileActorId = ResolveProfileActorId(command.Identity, profileActorId);
+        await EnsureTargetAsync<AgentProfileGAgent>(expectedProfileActorId, ct);
+        return await DispatchAsync(expectedProfileActorId, command.Operation, command, ct);
     }
 
     public async Task<DispatchAdmission> DispatchUpdateDraftAsync(
@@ -55,8 +48,10 @@ public sealed class AgentProfileActorPort : IAgentProfileActorPort
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(command);
-        await EnsureProfileTargetAsync(profileActorId, ct);
-        return await DispatchAsync(profileActorId, command.Operation, command, ct);
+        AgentProfileEnvelopeFactory.ValidateOperation(command.Operation);
+        var expectedProfileActorId = ResolveProfileActorId(command.Identity, profileActorId);
+        await EnsureTargetAsync<AgentProfileGAgent>(expectedProfileActorId, ct);
+        return await DispatchAsync(expectedProfileActorId, command.Operation, command, ct);
     }
 
     public async Task<DispatchAdmission> DispatchPublishAsync(
@@ -65,8 +60,10 @@ public sealed class AgentProfileActorPort : IAgentProfileActorPort
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(command);
-        await EnsureProfileTargetAsync(profileActorId, ct);
-        return await DispatchAsync(profileActorId, command.Operation, command, ct);
+        AgentProfileEnvelopeFactory.ValidateOperation(command.Operation);
+        var expectedProfileActorId = ResolveProfileActorId(command.Identity, profileActorId);
+        await EnsureTargetAsync<AgentProfileGAgent>(expectedProfileActorId, ct);
+        return await DispatchAsync(expectedProfileActorId, command.Operation, command, ct);
     }
 
     public async Task<DispatchAdmission> DispatchSetDefaultBindingAsync(
@@ -74,7 +71,9 @@ public sealed class AgentProfileActorPort : IAgentProfileActorPort
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(command);
-        var namespaceActorId = await EnsureNamespaceTargetAsync(command.Owner, ct);
+        AgentProfileEnvelopeFactory.ValidateOperation(command.Operation);
+        var namespaceActorId = ResolveNamespaceActorId(command.Owner);
+        await EnsureTargetAsync<AgentProfileNamespaceGAgent>(namespaceActorId, ct);
         return await DispatchAsync(namespaceActorId, command.Operation, command, ct);
     }
 
@@ -83,22 +82,33 @@ public sealed class AgentProfileActorPort : IAgentProfileActorPort
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(command);
-        var namespaceActorId = await EnsureNamespaceTargetAsync(command.Owner, ct);
+        AgentProfileEnvelopeFactory.ValidateOperation(command.Operation);
+        var namespaceActorId = ResolveNamespaceActorId(command.Owner);
+        await EnsureTargetAsync<AgentProfileNamespaceGAgent>(namespaceActorId, ct);
         return await DispatchAsync(namespaceActorId, command.Operation, command, ct);
     }
 
-    private async Task EnsureProfileTargetAsync(string profileActorId, CancellationToken ct)
+    private static string ResolveProfileActorId(string profileId) =>
+        AgentProfileActorIds.Profile(profileId);
+
+    private static string ResolveProfileActorId(AgentProfileIdentity? identity, string profileActorId)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(profileActorId);
-        await EnsureTargetAsync<AgentProfileGAgent>(profileActorId, ct);
+        ArgumentNullException.ThrowIfNull(identity);
+        var expectedActorId = ResolveProfileActorId(identity.ProfileId);
+        EnsureExpectedActorId(profileActorId, expectedActorId, "profileActorId");
+        return expectedActorId;
     }
 
-    private async Task<string> EnsureNamespaceTargetAsync(AgentProfileOwner owner, CancellationToken ct)
+    private static string ResolveNamespaceActorId(AgentProfileOwner? owner)
     {
         ArgumentNullException.ThrowIfNull(owner);
-        var namespaceActorId = AgentProfileActorIds.Namespace(owner);
-        await EnsureTargetAsync<AgentProfileNamespaceGAgent>(namespaceActorId, ct);
-        return namespaceActorId;
+        return AgentProfileActorIds.Namespace(owner);
+    }
+
+    private static void EnsureExpectedActorId(string actorId, string expectedActorId, string parameterName)
+    {
+        if (!string.Equals(actorId, expectedActorId, StringComparison.Ordinal))
+            throw new ArgumentException("The actor target does not match the typed identity.", parameterName);
     }
 
     private async Task EnsureTargetAsync<TAgent>(string actorId, CancellationToken ct)
