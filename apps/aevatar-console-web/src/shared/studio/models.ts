@@ -162,6 +162,56 @@ export interface StudioSaveAndBindWorkflowInput {
   readonly appId?: string | null;
   readonly serviceId?: string | null;
   readonly exposureDesired?: boolean | null;
+  readonly explicitRequestConfirmations?: readonly StudioExplicitRequestConfirmation[] | null;
+}
+
+export type StudioExplicitRequestMethod =
+  | "get"
+  | "head"
+  | "options"
+  | "post"
+  | "put"
+  | "patch"
+  | "delete";
+
+export type StudioExplicitRequestBodyMode = "none" | "json";
+
+export type StudioExplicitRequestResponseMode = "text" | "file_artifact";
+
+export type StudioExplicitRequestRisk =
+  | "read_only"
+  | "write"
+  | "destructive";
+
+export type StudioExplicitRequestExecutionMode = "interactive" | "durable";
+
+export interface StudioExplicitRequestPreviewInput {
+  readonly scopeId: string;
+  readonly workflowId: string;
+  readonly workflowYaml: string;
+  readonly executionMode: "interactive";
+  readonly inlineWorkflowYamls?: Record<string, string> | null;
+  readonly revisionId?: string | null;
+}
+
+export interface StudioExplicitRequestPreviewItem {
+  readonly callSiteId: string;
+  readonly requestContractDigest: string;
+  readonly userServiceId: string;
+  readonly method: StudioExplicitRequestMethod;
+  readonly pathTemplate: string;
+  readonly bodyMode: StudioExplicitRequestBodyMode;
+  readonly bodyRequired: boolean;
+  readonly responseMode: StudioExplicitRequestResponseMode;
+  readonly effectiveRisk: StudioExplicitRequestRisk;
+  readonly approvalRequired: boolean;
+  readonly allowedExecutionModes: readonly StudioExplicitRequestExecutionMode[];
+}
+
+export interface StudioExplicitRequestConfirmation {
+  readonly callSiteId: string;
+  readonly requestContractDigest: string;
+  readonly attestedRisk: StudioExplicitRequestRisk;
 }
 
 export interface StudioWorkflowDraftCreateReadiness {
@@ -281,6 +331,7 @@ export interface StudioMemberWorkflowBindingInput {
   readonly workflowId: string;
   readonly workflowYamls: readonly string[];
   readonly revisionId?: string | null;
+  readonly explicitRequestConfirmations?: readonly StudioExplicitRequestConfirmation[] | null;
 }
 
 export type StudioScopeBindingImplementationKind =

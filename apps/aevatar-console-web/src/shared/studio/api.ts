@@ -13,6 +13,12 @@ import type {
   StudioScopeBindingStatus,
   StudioExecutionDetail,
   StudioExecutionSummary,
+  StudioExplicitRequestBodyMode,
+  StudioExplicitRequestMethod,
+  StudioExplicitRequestPreviewInput,
+  StudioExplicitRequestPreviewItem,
+  StudioExplicitRequestResponseMode,
+  StudioExplicitRequestRisk,
   StudioMemberBindingContract,
   StudioMemberBindingAcceptedResponse,
   StudioMemberBindingAckStage,
@@ -169,6 +175,92 @@ function compactObject<T extends Record<string, unknown>>(value: T): T {
   return Object.fromEntries(
     Object.entries(value).filter(([, entry]) => entry !== undefined)
   ) as T;
+}
+
+function readExplicitRequestEnum<T extends string>(
+  record: Record<string, unknown>,
+  key: string,
+  label: string,
+  allowedValues: readonly T[],
+): T {
+  const value = readString(record, key, label);
+  if (!allowedValues.includes(value as T)) {
+    throw new Error(`${label} is not supported.`);
+  }
+
+  return value as T;
+}
+
+function decodeStudioExplicitRequestPreviewItem(
+  value: unknown,
+  label = "StudioExplicitRequestPreviewItem",
+): StudioExplicitRequestPreviewItem {
+  const record = expectRecord(value, label);
+  const allowedExecutionModes = expectArray(
+    record.allowedExecutionModes,
+    `${label}.allowedExecutionModes`,
+    (entry, entryLabel) => {
+      if (entry !== "interactive" && entry !== "durable") {
+        throw new Error(`${entryLabel} is not supported.`);
+      }
+
+      return entry;
+    },
+  );
+  if (allowedExecutionModes.length === 0) {
+    throw new Error(`${label}.allowedExecutionModes must not be empty.`);
+  }
+
+  return {
+    callSiteId: readString(record, "callSiteId", `${label}.callSiteId`),
+    requestContractDigest: readString(
+      record,
+      "requestContractDigest",
+      `${label}.requestContractDigest`,
+    ),
+    userServiceId: readString(record, "userServiceId", `${label}.userServiceId`),
+    method: readExplicitRequestEnum<StudioExplicitRequestMethod>(
+      record,
+      "method",
+      `${label}.method`,
+      ["get", "head", "options", "post", "put", "patch", "delete"],
+    ),
+    pathTemplate: readString(record, "pathTemplate", `${label}.pathTemplate`),
+    bodyMode: readExplicitRequestEnum<StudioExplicitRequestBodyMode>(
+      record,
+      "bodyMode",
+      `${label}.bodyMode`,
+      ["none", "json"],
+    ),
+    bodyRequired: readBoolean(record, "bodyRequired", `${label}.bodyRequired`),
+    responseMode: readExplicitRequestEnum<StudioExplicitRequestResponseMode>(
+      record,
+      "responseMode",
+      `${label}.responseMode`,
+      ["text", "file_artifact"],
+    ),
+    effectiveRisk: readExplicitRequestEnum<StudioExplicitRequestRisk>(
+      record,
+      "effectiveRisk",
+      `${label}.effectiveRisk`,
+      ["read_only", "write", "destructive"],
+    ),
+    approvalRequired: readBoolean(
+      record,
+      "approvalRequired",
+      `${label}.approvalRequired`,
+    ),
+    allowedExecutionModes,
+  };
+}
+
+function decodeStudioExplicitRequestPreview(value: unknown): StudioExplicitRequestPreviewItem[] {
+  const record = expectRecord(value, "StudioExplicitRequestPreview");
+  return expectArray(
+    record.items,
+    "StudioExplicitRequestPreview.items",
+    decodeStudioExplicitRequestPreviewItem,
+  );
 }
 
 function toScopeWorkflowDirectoryId(scopeId: string): string {
@@ -2750,6 +2842,32 @@ export const studioApi = {
     );
   },
 
+  previewExplicitRequests(
+    input: StudioExplicitRequestPreviewInput,
+  ): Promise<StudioExplicitRequestPreviewItem[]> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/workflows:explicit-request-preview`,
+      decodeStudioExplicitRequestPreview,
+      {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify(
+          compactObject({
+            workflowYaml: input.workflowYaml,
+            executionMode: input.executionMode,
+            inlineWorkflowYamls:
+              input.inlineWorkflowYamls &&
+              Object.keys(input.inlineWorkflowYamls).length > 0
+                ? input.inlineWorkflowYamls
+                : undefined,
+            workflowId: input.workflowId.trim(),
+            revisionId: trimOptional(input.revisionId),
+          }),
+        ),
+      },
+    );
+  },
+
   async saveWorkflow(input: StudioSaveWorkflowInput): Promise<StudioWorkflowSaveResult> {
     const normalizedWorkflowId = trimOptional(input.workflowId);
     const shouldUpdate =
@@ -2799,6 +2917,15 @@ export const studioApi = {
             appId: trimOptional(input.appId),
             serviceId: trimOptional(input.serviceId),
             exposureDesired: input.exposureDesired ?? undefined,
+            explicitRequestConfirmations:
+              input.explicitRequestConfirmations &&
+              input.explicitRequestConfirmations.length > 0
+                ? input.explicitRequestConfirmations.map((confirmation) => ({
+                    callSiteId: confirmation.callSiteId,
+                    requestContractDigest: confirmation.requestContractDigest,
+                    attestedRisk: confirmation.attestedRisk,
+                  }))
+                : undefined,
           })
         ),
       }
@@ -2987,6 +3114,15 @@ export const studioApi = {
               workflowYamls: input.workflowYamls,
             },
             revisionId: trimOptional(input.revisionId),
+            explicitRequestConfirmations:
+              input.explicitRequestConfirmations &&
+              input.explicitRequestConfirmations.length > 0
+                ? input.explicitRequestConfirmations.map((confirmation) => ({
+                    callSiteId: confirmation.callSiteId,
+                    requestContractDigest: confirmation.requestContractDigest,
+                    attestedRisk: confirmation.attestedRisk,
+                  }))
+                : undefined,
           })
         ),
       }

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { message } from "antd";
+import { Modal, Typography, message } from "antd";
 import React from "react";
 import {
   applyRuntimeEvent,
@@ -55,6 +55,8 @@ import { normalizeStudioMemberLifecycleStage } from "@/shared/studio/models";
 import type {
   StudioExecutionDetail,
   StudioExecutionFrame,
+  StudioExplicitRequestConfirmation,
+  StudioExplicitRequestPreviewItem,
   StudioMemberBindingRunStatusResponse,
   StudioMemberDetail,
   StudioSaveAndBindWorkflowAcceptedResult,
@@ -118,6 +120,109 @@ class PublishWorkflowStatusError extends Error {
     this.name = "PublishWorkflowStatusError";
     this.showAsError = showAsError;
   }
+}
+
+async function confirmExplicitRequestPreview(
+  previewItems: readonly StudioExplicitRequestPreviewItem[],
+): Promise<readonly StudioExplicitRequestConfirmation[] | null> {
+  if (previewItems.length === 0) {
+    return [];
+  }
+
+  if (
+    previewItems.some(
+      (item) => !item.allowedExecutionModes.includes("interactive"),
+    )
+  ) {
+    throw new Error(
+      t(
+        "teamMemberWorkflowStudio.explicitRequest.interactiveUnavailable",
+        "An external request is not available for interactive publication.",
+      ),
+    );
+  }
+
+  return new Promise((resolve) => {
+    Modal.confirm({
+      autoFocusButton: "cancel",
+      cancelText: t("teamMemberWorkflowStudio.explicitRequest.cancel", "Cancel"),
+      centered: true,
+      content: React.createElement(
+        "div",
+        { style: { display: "grid", gap: 12 } },
+        React.createElement(
+          Typography.Text,
+          null,
+          t(
+            "teamMemberWorkflowStudio.explicitRequest.description",
+            "Review each external request before publishing this workflow.",
+          ),
+        ),
+        ...previewItems.map((item) =>
+          React.createElement(
+            "div",
+            { key: item.callSiteId, style: { display: "grid", gap: 4 } },
+            React.createElement(
+              Typography.Text,
+              { strong: true },
+              `${t("teamMemberWorkflowStudio.explicitRequest.service", "Service")}: ${item.userServiceId}`,
+            ),
+            React.createElement(
+              Typography.Text,
+              null,
+              `${t("teamMemberWorkflowStudio.explicitRequest.methodPath", "Method and path")}: ${item.method.toUpperCase()} ${item.pathTemplate}`,
+            ),
+            React.createElement(
+              Typography.Text,
+              null,
+              `${t("teamMemberWorkflowStudio.explicitRequest.risk", "Risk")}: ${item.effectiveRisk}`,
+            ),
+            React.createElement(
+              Typography.Text,
+              null,
+              `${t("teamMemberWorkflowStudio.explicitRequest.approval", "Approval")}: ${item.approvalRequired
+                ? t("teamMemberWorkflowStudio.explicitRequest.required", "Required")
+                : t("teamMemberWorkflowStudio.explicitRequest.notRequired", "Not required")}`,
+            ),
+            React.createElement(
+              Typography.Text,
+              null,
+              `${t("teamMemberWorkflowStudio.explicitRequest.body", "Request body")}: ${item.bodyMode} (${item.bodyRequired
+                ? t("teamMemberWorkflowStudio.explicitRequest.required", "Required")
+                : t("teamMemberWorkflowStudio.explicitRequest.notRequired", "Not required")})`,
+            ),
+            React.createElement(
+              Typography.Text,
+              null,
+              `${t("teamMemberWorkflowStudio.explicitRequest.response", "Response")}: ${item.responseMode}`,
+            ),
+            React.createElement(
+              Typography.Text,
+              null,
+              `${t("teamMemberWorkflowStudio.explicitRequest.executionModes", "Allowed execution modes")}: ${item.allowedExecutionModes.join(", ")}`,
+            ),
+          ),
+        ),
+      ),
+      okText: t(
+        "teamMemberWorkflowStudio.explicitRequest.confirm",
+        "Confirm and publish",
+      ),
+      onCancel: () => resolve(null),
+      onOk: () =>
+        resolve(
+          previewItems.map((item) => ({
+            callSiteId: item.callSiteId,
+            requestContractDigest: item.requestContractDigest,
+            attestedRisk: item.effectiveRisk,
+          })),
+        ),
+      title: t(
+        "teamMemberWorkflowStudio.explicitRequest.title",
+        "Review external requests",
+      ),
+    });
+  });
 }
 
 type CreatedWorkflowMember = {
@@ -998,11 +1103,12 @@ async function saveAndBindPublishedWorkflowDraft(input: {
   readonly document: StudioWorkflowDocument;
   readonly layout: unknown;
   readonly routeScopeId: string;
+  readonly revisionId?: string | null;
   readonly serviceId?: string | null;
   readonly title: string;
   readonly workflow: StudioWorkflowFile;
 }): Promise<SavedAndBoundWorkflow> {
-  const { document, layout, routeScopeId, serviceId, title, workflow } = input;
+  const { document, layout, routeScopeId, revisionId, serviceId, title, workflow } = input;
   const workflowId = trimOptional(workflow.workflowId);
   if (!workflowId) {
     throw new Error("Resolve a stable workflow id before saving the published workflow.");
@@ -1019,6 +1125,24 @@ async function saveAndBindPublishedWorkflowDraft(input: {
     availableStepTypes: AVAILABLE_STEP_TYPES,
   });
   assertNoBlockingFindings(serialized.findings);
+  const workflowYamlForPublication = serialized.yaml;
+  const explicitRequestPreview = await studioApi.previewExplicitRequests({
+    scopeId: routeScopeId,
+    workflowId,
+    workflowYaml: workflowYamlForPublication,
+    executionMode: "interactive",
+    inlineWorkflowYamls: {},
+    revisionId: trimOptional(revisionId) || undefined,
+  });
+  const explicitRequestConfirmations = await confirmExplicitRequestPreview(
+    explicitRequestPreview,
+  );
+  if (explicitRequestConfirmations === null) {
+    throw new PublishWorkflowStatusError(
+      "Explicit request confirmation was cancelled.",
+      false,
+    );
+  }
   const savedDocument =
     cloneWorkflowDocument(serialized.document) ?? documentWithTitle;
   const graphForLayout = buildStudioGraphElements(savedDocument, layout);
@@ -1030,17 +1154,20 @@ async function saveAndBindPublishedWorkflowDraft(input: {
   const result = await studioApi.saveAndBindWorkflow({
     scopeId: routeScopeId,
     workflowId,
-    workflowYaml: serialized.yaml,
+    workflowYaml: workflowYamlForPublication,
     workflowName: normalizedTitle,
     displayName: normalizedTitle,
     inlineWorkflowYamls: {},
     appId: "studio",
     serviceId,
     exposureDesired: true,
+    ...(explicitRequestConfirmations.length > 0
+      ? { explicitRequestConfirmations }
+      : {}),
   });
   const resultWorkflowId = trimOptional(result.workflowId) || workflowId;
   const materializedWorkflow = await waitForSaveAndBindWorkflowMaterialized({
-    expectedYaml: serialized.yaml,
+    expectedYaml: workflowYamlForPublication,
     scopeId: routeScopeId,
     workflowId: resultWorkflowId,
   });
@@ -1055,7 +1182,7 @@ async function saveAndBindPublishedWorkflowDraft(input: {
         ...workflow,
         workflowId: resultWorkflowId,
         name: normalizedTitle,
-        yaml: serialized.yaml,
+        yaml: workflowYamlForPublication,
         layout: nextLayout,
         document: savedDocument,
         findings: [],
@@ -1707,17 +1834,20 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       const savedAndBound = await saveAndBindPublishedWorkflowDraft({
         ...variables,
         routeScopeId: route.scopeId,
+        revisionId: memberQuery.data?.lastBinding?.revisionId,
         serviceId: memberQuery.data?.summary.publishedServiceId,
       });
       await renameExistingMemberFromTitle(savedAndBound.savedDraft.title);
       return savedAndBound;
     },
     onError: (error) => {
-      void message.error(
-        error instanceof Error
-          ? error.message
-          : "Failed to save and publish workflow.",
-      );
+      if (!(error instanceof PublishWorkflowStatusError && !error.showAsError)) {
+        void message.error(
+          error instanceof Error
+            ? error.message
+            : "Failed to save and publish workflow.",
+        );
+      }
     },
     onSuccess: ({ materializedWorkflow, savedDraft }, variables) => {
       markSavedDraft(savedDraft, ["published"], variables.draftRevision);
@@ -2422,13 +2552,34 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         availableStepTypes: AVAILABLE_STEP_TYPES,
       });
       assertNoBlockingFindings(serialized.findings);
+      const workflowYamlForPublication = serialized.yaml;
+      const explicitRequestPreview = await studioApi.previewExplicitRequests({
+        scopeId: route.scopeId,
+        workflowId: workflowIdForPublish,
+        workflowYaml: workflowYamlForPublication,
+        executionMode: "interactive",
+        inlineWorkflowYamls: {},
+        revisionId: trimOptional(currentMember.lastBinding?.revisionId) || undefined,
+      });
+      const explicitRequestConfirmations = await confirmExplicitRequestPreview(
+        explicitRequestPreview,
+      );
+      if (explicitRequestConfirmations === null) {
+        throw new PublishWorkflowStatusError(
+          "Explicit request confirmation was cancelled.",
+          false,
+        );
+      }
       await renameExistingMemberFromTitle(titleForPublish);
       const receipt = await studioApi.bindMemberWorkflow({
         scopeId: route.scopeId,
         memberId: route.memberId,
         displayName: titleForPublish,
         workflowId: workflowIdForPublish,
-        workflowYamls: [serialized.yaml],
+        workflowYamls: [workflowYamlForPublication],
+        ...(explicitRequestConfirmations.length > 0
+          ? { explicitRequestConfirmations }
+          : {}),
       });
 
       let lastRun: StudioMemberBindingRunStatusResponse | null = null;
@@ -2463,9 +2614,13 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       };
     },
     onError: (error) => {
-      setPublishErrorVisible(
-        !(error instanceof PublishWorkflowStatusError && !error.showAsError),
-      );
+      if (error instanceof PublishWorkflowStatusError && !error.showAsError) {
+        setPublishError("");
+        setPublishErrorVisible(false);
+        return;
+      }
+
+      setPublishErrorVisible(true);
       setPublishError(
         error instanceof Error ? error.message : "Failed to publish workflow member.",
       );

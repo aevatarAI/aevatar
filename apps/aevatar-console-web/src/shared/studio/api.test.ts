@@ -1,4 +1,5 @@
 import { StudioApiError, studioApi } from './api';
+import type { StudioExplicitRequestConfirmation } from './models';
 import { persistAuthSession } from '@/shared/auth/session';
 
 describe('studioApi host-session requests', () => {
@@ -1119,6 +1120,132 @@ describe('studioApi host-session requests', () => {
         workflowYamls: [runtimeWorkflowYaml],
       },
       revisionId: 'rev-1',
+    });
+  });
+
+  it('previews sanitized explicit requests and forwards only their confirmations to workflow publication transports', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          items: [
+            {
+              callSiteId: 'wf-alpha/request-alpha',
+              requestContractDigest: 'digest-alpha',
+              userServiceId: 'usvc-alpha',
+              method: 'post',
+              pathTemplate: '/records/{id}',
+              bodyMode: 'json',
+              bodyRequired: true,
+              responseMode: 'text',
+              effectiveRisk: 'write',
+              approvalRequired: true,
+              allowedExecutionModes: ['interactive'],
+            },
+          ],
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 202,
+        json: async () => ({
+          status: 'accepted',
+          bindingRunId: 'bind-alpha',
+          scopeId: 'scope-alpha',
+          memberId: 'm-alpha',
+          ackStage: 'dispatch_accepted',
+          bindingRunRole: 'candidate',
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 202,
+        json: async () => ({
+          scopeId: 'scope-alpha',
+          workflowId: 'wf-alpha',
+          revisionId: 'rev-alpha',
+          acceptanceStage: 'accepted',
+          propagationStage: 'readmodel_propagating',
+        }),
+      } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    const preview = await studioApi.previewExplicitRequests({
+      scopeId: 'scope-alpha',
+      workflowId: 'wf-alpha',
+      workflowYaml: 'name: Workflow Alpha\nsteps: []\n',
+      executionMode: 'interactive',
+      revisionId: 'rev-alpha',
+    });
+
+    expect(preview).toEqual([
+      {
+        callSiteId: 'wf-alpha/request-alpha',
+        requestContractDigest: 'digest-alpha',
+        userServiceId: 'usvc-alpha',
+        method: 'post',
+        pathTemplate: '/records/{id}',
+        bodyMode: 'json',
+        bodyRequired: true,
+        responseMode: 'text',
+        effectiveRisk: 'write',
+        approvalRequired: true,
+        allowedExecutionModes: ['interactive'],
+      },
+    ]);
+
+    const confirmations: StudioExplicitRequestConfirmation[] = [
+      {
+        callSiteId: 'wf-alpha/request-alpha',
+        requestContractDigest: 'digest-alpha',
+        attestedRisk: 'write',
+      },
+    ];
+    await studioApi.bindMemberWorkflow({
+      scopeId: 'scope-alpha',
+      memberId: 'm-alpha',
+      workflowId: 'wf-alpha',
+      workflowYamls: ['name: Workflow Alpha\nsteps: []\n'],
+      explicitRequestConfirmations: confirmations,
+    });
+    await studioApi.saveAndBindWorkflow({
+      scopeId: 'scope-alpha',
+      workflowId: 'wf-alpha',
+      workflowYaml: 'name: Workflow Alpha\nsteps: []\n',
+      explicitRequestConfirmations: confirmations,
+    });
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+      workflowYaml: 'name: Workflow Alpha\nsteps: []\n',
+      executionMode: 'interactive',
+      workflowId: 'wf-alpha',
+      revisionId: 'rev-alpha',
+    });
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toMatchObject({
+      implementationKind: 'workflow',
+      explicitRequestConfirmations: confirmations,
+      workflow: {
+        workflowId: 'wf-alpha',
+      },
+    });
+    expect(JSON.parse(String(fetchMock.mock.calls[2]?.[1]?.body))).toEqual({
+      workflowId: 'wf-alpha',
+      workflowYaml: 'name: Workflow Alpha\nsteps: []\n',
+      explicitRequestConfirmations: confirmations,
     });
   });
 
