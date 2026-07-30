@@ -40,6 +40,114 @@ public sealed class WorkflowAuthorizationDependenciesTests
     }
 
     [Fact]
+    public void WorkflowParser_ShouldMapStepLevelNyxIdRequestSelector()
+    {
+        const string yaml = """
+            name: selector-workflow
+            roles: []
+            steps:
+              - id: read-item
+                type: tool_call
+                capability:
+                  nyxid_request:
+                    user_service_id: usvc-alpha
+                    method: GET
+                    path_template: /api/resources/{resource_id}
+                    query_parameters: [page_size, filter]
+                    header_parameters: [If-Match]
+                    body_mode: none
+                    response_mode: text
+                parameters:
+                  tool: nyxid_proxy
+                  arguments: '{"path_params":{"resource_id":"${input.resource_id}"},"query":{"page_size":500}}'
+            """;
+
+        var dependencies = new WorkflowGAgent().EvaluateAuthorizationDependencies(yaml);
+
+        dependencies.Should().NotBeNull();
+        var selector = dependencies!.ExternalInvocations.Should().ContainSingle().Subject.Selector;
+        selector.SelectorCase.Should().Be(ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdRequest);
+        selector.NyxIdRequest.UserServiceId.Should().Be("usvc-alpha");
+        selector.NyxIdRequest.Method.Should().Be(NyxIdRequestMethod.Get);
+        selector.NyxIdRequest.PathTemplate.Should().Be("/api/resources/{resource_id}");
+        selector.NyxIdRequest.QueryParameters.Should().Equal("filter", "page_size");
+        selector.NyxIdRequest.HeaderParameters.Should().Equal("If-Match");
+        selector.NyxIdRequest.BodyMode.Should().Be(NyxIdRequestBodyMode.None);
+        selector.NyxIdRequest.ResponseMode.Should().Be(NyxIdRequestResponseMode.Text);
+    }
+
+    [Fact]
+    public void WorkflowParser_ShouldRejectMultipleNyxIdSelectors()
+    {
+        const string yaml = """
+            name: selector-workflow
+            roles: []
+            steps:
+              - id: read-item
+                type: tool_call
+                capability:
+                  nyxid_operation:
+                    user_service_id: usvc-alpha
+                    endpoint_id: endpoint-alpha
+                  nyxid_request:
+                    user_service_id: usvc-alpha
+                    method: GET
+                    path_template: /api/resources
+                    body_mode: none
+                    response_mode: text
+                parameters:
+                  tool: nyxid_proxy
+            """;
+
+        var act = () => new Aevatar.Workflow.Core.Primitives.WorkflowParser().Parse(yaml);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*exactly one*NyxID capability selector*");
+    }
+
+    [Theory]
+    [InlineData("TRACE", "/api/resources", "page_size", "If-Match", "none", "text")]
+    [InlineData("GET", "https://example.com/api", "page_size", "If-Match", "none", "text")]
+    [InlineData("GET", "/api/%252e%252e/secrets", "page_size", "If-Match", "none", "text")]
+    [InlineData("GET", "/api/{id}/{id}", "page_size", "If-Match", "none", "text")]
+    [InlineData("GET", "/api/resources", "page_size,page_size", "If-Match", "none", "text")]
+    [InlineData("GET", "/api/resources", "page_size", "Authorization", "none", "text")]
+    [InlineData("POST", "/api/resources", "page_size", "If-Match", "json", "file_artifact")]
+    public void EvaluateAuthorizationDependencies_ShouldRejectInvalidExplicitRequestContract(
+        string method,
+        string pathTemplate,
+        string queryParameters,
+        string headerParameters,
+        string bodyMode,
+        string responseMode)
+    {
+        var queryYaml = string.Join(", ", queryParameters.Split(','));
+        var headerYaml = string.Join(", ", headerParameters.Split(','));
+        var yaml = $$"""
+            name: selector-workflow
+            roles: []
+            steps:
+              - id: request
+                type: tool_call
+                capability:
+                  nyxid_request:
+                    user_service_id: usvc-alpha
+                    method: {{method}}
+                    path_template: {{pathTemplate}}
+                    query_parameters: [{{queryYaml}}]
+                    header_parameters: [{{headerYaml}}]
+                    body_mode: {{bodyMode}}
+                    response_mode: {{responseMode}}
+                parameters:
+                  tool: nyxid_proxy
+            """;
+
+        var act = () => new WorkflowGAgent().EvaluateAuthorizationDependencies(yaml);
+
+        act.Should().Throw<WorkflowExternalCapabilityValidationException>();
+    }
+
+    [Fact]
     public void EvaluateAuthorizationDependencies_ShouldCompileSelectorOnlyInvocation()
     {
         const string yaml = """

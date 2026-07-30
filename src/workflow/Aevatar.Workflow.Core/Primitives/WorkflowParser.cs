@@ -212,18 +212,73 @@ public sealed class WorkflowParser
 
     private static ExternalWorkflowCapabilitySelector? MapCapability(RawStepCapability? capability)
     {
-        if (capability?.NyxIdOperation is null)
+        if (capability is null)
+            return null;
+        if (capability.NyxIdOperation is not null && capability.NyxIdRequest is not null)
+            throw new InvalidOperationException("Step capability must contain exactly one NyxID capability selector.");
+
+        if (capability.NyxIdOperation is not null)
+        {
+            return new ExternalWorkflowCapabilitySelector
+            {
+                NyxIdOperation = new NyxIdOperationSelector
+                {
+                    UserServiceId = NormalizeText(capability.NyxIdOperation.UserServiceId) ?? string.Empty,
+                    EndpointId = NormalizeText(capability.NyxIdOperation.EndpointId) ?? string.Empty,
+                },
+            };
+        }
+
+        if (capability.NyxIdRequest is null)
             return null;
 
-        return new ExternalWorkflowCapabilitySelector
+        var request = capability.NyxIdRequest;
+        var selector = new NyxIdRequestSelector
         {
-            NyxIdOperation = new NyxIdOperationSelector
-            {
-                UserServiceId = NormalizeText(capability.NyxIdOperation.UserServiceId) ?? string.Empty,
-                EndpointId = NormalizeText(capability.NyxIdOperation.EndpointId) ?? string.Empty,
-            },
+            UserServiceId = NormalizeText(request.UserServiceId) ?? string.Empty,
+            Method = ParseNyxIdRequestMethod(request.Method),
+            PathTemplate = NormalizeText(request.PathTemplate) ?? string.Empty,
+            BodyMode = ParseNyxIdRequestBodyMode(request.BodyMode),
+            ResponseMode = ParseNyxIdRequestResponseMode(request.ResponseMode),
         };
+        selector.QueryParameters.Add(NormalizeNames(request.QueryParameters, StringComparer.Ordinal));
+        selector.HeaderParameters.Add(NormalizeNames(request.HeaderParameters, StringComparer.OrdinalIgnoreCase));
+        return new ExternalWorkflowCapabilitySelector { NyxIdRequest = selector };
     }
+
+    private static IEnumerable<string> NormalizeNames(IEnumerable<string>? values, StringComparer comparer) =>
+        (values ?? [])
+        .Select(static value => value?.Trim() ?? string.Empty)
+        .OrderBy(static value => value, comparer);
+
+    private static NyxIdRequestMethod ParseNyxIdRequestMethod(string? value) =>
+        value?.Trim().ToUpperInvariant() switch
+        {
+            "GET" => NyxIdRequestMethod.Get,
+            "HEAD" => NyxIdRequestMethod.Head,
+            "OPTIONS" => NyxIdRequestMethod.Options,
+            "POST" => NyxIdRequestMethod.Post,
+            "PUT" => NyxIdRequestMethod.Put,
+            "PATCH" => NyxIdRequestMethod.Patch,
+            "DELETE" => NyxIdRequestMethod.Delete,
+            _ => NyxIdRequestMethod.Unspecified,
+        };
+
+    private static NyxIdRequestBodyMode ParseNyxIdRequestBodyMode(string? value) =>
+        value?.Trim().ToLowerInvariant() switch
+        {
+            "none" => NyxIdRequestBodyMode.None,
+            "json" => NyxIdRequestBodyMode.Json,
+            _ => NyxIdRequestBodyMode.Unspecified,
+        };
+
+    private static NyxIdRequestResponseMode ParseNyxIdRequestResponseMode(string? value) =>
+        value?.Trim().ToLowerInvariant() switch
+        {
+            "text" => NyxIdRequestResponseMode.Text,
+            "file_artifact" => NyxIdRequestResponseMode.FileArtifact,
+            _ => NyxIdRequestResponseMode.Unspecified,
+        };
 
     private static StepPresentation? MapPresentation(
         string canonicalStepType,
@@ -1443,12 +1498,26 @@ public sealed class WorkflowParser
     {
         [YamlMember(Alias = "nyxid_operation")]
         public RawNyxIdOperationSelector? NyxIdOperation { get; set; }
+
+        [YamlMember(Alias = "nyxid_request")]
+        public RawNyxIdRequestSelector? NyxIdRequest { get; set; }
     }
 
     private sealed class RawNyxIdOperationSelector
     {
         public string? UserServiceId { get; set; }
         public string? EndpointId { get; set; }
+    }
+
+    private sealed class RawNyxIdRequestSelector
+    {
+        public string? UserServiceId { get; set; }
+        public string? Method { get; set; }
+        public string? PathTemplate { get; set; }
+        public List<string>? QueryParameters { get; set; }
+        public List<string>? HeaderParameters { get; set; }
+        public string? BodyMode { get; set; }
+        public string? ResponseMode { get; set; }
     }
     private sealed class RawStepPresentation
     {
