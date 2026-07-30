@@ -282,6 +282,121 @@ public sealed class EditorControllerSerializationTests
         serializeBody.Should().Contain("allowed_tools: []");
     }
 
+    [Fact]
+    public async Task ParseAndSerializeYaml_ShouldPreserveTypedNyxIdCapabilitiesRecursively()
+    {
+        using var host = await StartHostAsync();
+        var client = host.GetTestClient();
+        using var parseResponse = await client.PostAsJsonAsync("/api/editor/parse-yaml", new
+        {
+            yaml = """
+                   name: typed_capabilities
+                   steps:
+                     - id: catalog_call
+                       type: tool_call
+                       capability:
+                         nyxid_operation:
+                           user_service_id: usvc-alpha
+                           endpoint_id: endpoint-alpha
+                       parameters:
+                         tool: nyxid_proxy
+                     - id: nested
+                       type: parallel
+                       children:
+                         - id: explicit_call
+                           type: tool_call
+                           capability:
+                             nyxid_request:
+                               user_service_id: usvc-beta
+                               method: GET
+                               path_template: /api/resources/{resource_id}
+                               query_parameters: [page_size]
+                               body_mode: none
+                               response_mode: file_artifact
+                           parameters:
+                             tool: nyxid_proxy
+                   """,
+            availableStepTypes = new[] { "tool_call", "parallel" },
+        });
+
+        var parseBody = await parseResponse.Content.ReadAsStringAsync();
+        parseResponse.StatusCode.Should().Be(HttpStatusCode.OK, parseBody);
+        parseBody.Should().NotContain("\"code\":\"unknown_field\"");
+        parseBody.Should().Contain("\"nyxIdOperation\":{\"userServiceId\":\"usvc-alpha\",\"endpointId\":\"endpoint-alpha\"}");
+        parseBody.Should().Contain("\"nyxIdRequest\":{\"userServiceId\":\"usvc-beta\",\"method\":\"GET\",\"pathTemplate\":\"/api/resources/{resource_id}\"");
+
+        using var parsedJson = JsonDocument.Parse(parseBody);
+        var document = parsedJson.RootElement.GetProperty("document").Clone();
+        using var serializeResponse = await client.PostAsJsonAsync("/api/editor/serialize-yaml", new
+        {
+            document,
+            availableStepTypes = new[] { "tool_call", "parallel" },
+        });
+
+        var serializeBody = await serializeResponse.Content.ReadAsStringAsync();
+        serializeResponse.StatusCode.Should().Be(HttpStatusCode.OK, serializeBody);
+        serializeBody.Should().Contain("nyxid_operation:");
+        serializeBody.Should().Contain("endpoint_id: endpoint-alpha");
+        serializeBody.Should().Contain("nyxid_request:");
+        serializeBody.Should().Contain("path_template: /api/resources/{resource_id}");
+        serializeBody.Should().Contain("response_mode: file_artifact");
+    }
+
+    [Fact]
+    public async Task ParseYaml_ShouldRejectUnknownCapabilitySelector()
+    {
+        using var host = await StartHostAsync();
+        var client = host.GetTestClient();
+        using var response = await client.PostAsJsonAsync("/api/editor/parse-yaml", new
+        {
+            yaml = """
+                   name: invalid_capability
+                   steps:
+                     - id: call
+                       type: tool_call
+                       capability:
+                         guessed_proxy:
+                           service: anything
+                       parameters:
+                         tool: nyxid_proxy
+                   """,
+            availableStepTypes = new[] { "tool_call" },
+        });
+
+        var body = await response.Content.ReadAsStringAsync();
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        body.Should().Contain("\"path\":\"/steps/0/capability/guessed_proxy\"");
+        body.Should().Contain("\"code\":\"unknown_field\"");
+    }
+
+    [Theory]
+    [InlineData("nyxid_operation")]
+    [InlineData("nyxid_request")]
+    public async Task ParseYaml_ShouldRejectNonMappingCapabilitySelector(string selector)
+    {
+        using var host = await StartHostAsync();
+        var client = host.GetTestClient();
+        using var response = await client.PostAsJsonAsync("/api/editor/parse-yaml", new
+        {
+            yaml = $$"""
+                   name: invalid_capability
+                   steps:
+                     - id: call
+                       type: tool_call
+                       capability:
+                         {{selector}}: invalid-scalar
+                       parameters:
+                         tool: nyxid_proxy
+                   """,
+            availableStepTypes = new[] { "tool_call" },
+        });
+
+        var body = await response.Content.ReadAsStringAsync();
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        body.Should().Contain($"\"path\":\"/steps/0/capability/{selector}\"");
+        body.Should().Contain("\"code\":\"invalid_field\"");
+    }
+
     private static object BuildPlainParameterRequest() => new
     {
         document = new
