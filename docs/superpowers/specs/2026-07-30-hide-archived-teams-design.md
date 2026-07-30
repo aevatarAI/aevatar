@@ -40,9 +40,11 @@ archived Team and enforce their own lifecycle-specific behavior.
 
 The existing pending-roster merge remains responsible only for keeping a newly
 created Team visible while the roster projection catches up. When the server
-returns the same Team ID, the pending entry is cleared before visibility is
-derived. Therefore, an older pending active summary cannot reintroduce a Team
-after the authoritative roster reports it as archived.
+returns the same Team ID, the merge gives the server summary precedence by
+excluding the duplicate pending summary. The following React effect then clears
+the synchronized pending entry from session storage. Therefore, an older
+pending active summary cannot reintroduce a Team after the authoritative roster
+reports it as archived.
 
 ## Removed Behavior
 
