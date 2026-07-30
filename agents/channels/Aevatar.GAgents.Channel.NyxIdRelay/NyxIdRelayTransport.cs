@@ -233,14 +233,14 @@ public sealed class NyxIdRelayTransport
             {
                 var attachment = BuildAttachment(callbackAttachment);
                 if (attachment is not null)
-                    AddAttachment(attachments, seenAttachmentKeys, attachment);
+                    AddAttachment(attachments, seenAttachmentKeys, attachment, platform);
             }
         }
 
         if (IsLark(platform))
         {
             foreach (var candidate in EnumerateLarkRawAttachmentCandidates(payload))
-                AddAttachment(attachments, seenAttachmentKeys, BuildLarkAttachment(candidate));
+                AddAttachment(attachments, seenAttachmentKeys, BuildLarkAttachment(candidate), platform);
         }
 
         return attachments;
@@ -249,11 +249,40 @@ public sealed class NyxIdRelayTransport
     private static void AddAttachment(
         List<AttachmentRef> attachments,
         HashSet<string> seenAttachmentKeys,
-        AttachmentRef attachment)
+        AttachmentRef attachment,
+        string platform)
     {
-        var dedupeKey = $"{attachment.Kind}:{attachment.AttachmentId}";
+        var dedupeKey = BuildAttachmentDedupeKey(attachment, platform);
         if (seenAttachmentKeys.Add(dedupeKey))
             attachments.Add(attachment);
+    }
+
+    private static string BuildAttachmentDedupeKey(AttachmentRef attachment, string platform)
+    {
+        var attachmentId = IsLark(platform)
+            ? NormalizeLarkResourceKey(attachment.AttachmentId) ?? attachment.AttachmentId
+            : attachment.AttachmentId;
+        return $"{attachment.Kind}:{attachmentId}";
+    }
+
+    private static string? NormalizeLarkResourceKey(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        var resourceKey = value.Trim();
+        if (!Uri.TryCreate(resourceKey, UriKind.Absolute, out var uri) ||
+            (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+            return resourceKey;
+
+        var segments = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        for (var i = 0; i < segments.Length - 1; i++)
+        {
+            if (string.Equals(segments[i], "resources", StringComparison.OrdinalIgnoreCase))
+                return Uri.UnescapeDataString(segments[i + 1]);
+        }
+
+        return null;
     }
 
     private static AttachmentRef? BuildAttachment(NyxIdRelayAttachmentPayload attachment)
