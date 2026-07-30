@@ -35,7 +35,7 @@ internal sealed record NyxIdOperationRequestBuildResult(
 /// values. The proof owns method, path template, parameter names and schemas; the caller owns only
 /// values. Nothing here reads a contract, and any rejection happens before an HTTP request exists.
 /// </summary>
-internal static class NyxIdOperationRequestBuilder
+internal static class NyxIdAdmittedRequestBuilder
 {
     private const string PathParamsSlot = "path_params";
     private const string QuerySlot = "query";
@@ -45,13 +45,21 @@ internal static class NyxIdOperationRequestBuilder
     private const string TextResponseMode = "text";
     private const string FileArtifactResponseMode = "file_artifact";
 
-    private static readonly HashSet<string> RuntimeSlots = new(StringComparer.Ordinal)
+    private static readonly HashSet<string> PublishedRuntimeSlots = new(StringComparer.Ordinal)
     {
         PathParamsSlot,
         QuerySlot,
         HeadersSlot,
         BodySlot,
         ResponseModeSlot,
+    };
+
+    private static readonly HashSet<string> AuthoredRuntimeSlots = new(StringComparer.Ordinal)
+    {
+        PathParamsSlot,
+        QuerySlot,
+        HeadersSlot,
+        BodySlot,
     };
 
     public static NyxIdOperationRequestBuildResult Build(
@@ -84,9 +92,12 @@ internal static class NyxIdOperationRequestBuilder
                     "nyxid_proxy runtime arguments must be a JSON object.");
             }
 
+            var runtimeSlots = admission.Identity is AgentToolOperationIdentity.AuthoredRequest
+                ? AuthoredRuntimeSlots
+                : PublishedRuntimeSlots;
             foreach (var property in root.EnumerateObject())
             {
-                if (!RuntimeSlots.Contains(property.Name))
+                if (!runtimeSlots.Contains(property.Name))
                 {
                     return NyxIdOperationRequestBuildResult.Failed(
                         "NYXID_OPERATION_ARGUMENT_NOT_SUPPORTED",
@@ -145,6 +156,21 @@ internal static class NyxIdOperationRequestBuilder
         out NyxIdOperationRequestFailure? failure)
     {
         failure = null;
+        if (admission.Identity is AgentToolOperationIdentity.AuthoredRequest)
+        {
+            if (admission.ResponsePolicy.TextAllowed == admission.ResponsePolicy.FileArtifactAllowed)
+            {
+                failure = new NyxIdOperationRequestFailure(
+                    "NYXID_OPERATION_RESPONSE_POLICY_INVALID",
+                    "The authored request must admit exactly one response mode.");
+                return TextResponseMode;
+            }
+
+            return admission.ResponsePolicy.FileArtifactAllowed
+                ? FileArtifactResponseMode
+                : TextResponseMode;
+        }
+
         if (!root.TryGetProperty(ResponseModeSlot, out var value))
             return TextResponseMode;
 
@@ -249,7 +275,11 @@ internal static class NyxIdOperationRequestBuilder
                 return string.Empty;
             }
 
-            var segment = EncodePathSegment(name, value, out failure);
+            var segment = EncodePathSegment(
+                name,
+                value,
+                admission.Identity is AgentToolOperationIdentity.AuthoredRequest,
+                out failure);
             if (failure is not null)
                 return string.Empty;
             builder.Append(segment);
@@ -281,6 +311,7 @@ internal static class NyxIdOperationRequestBuilder
     private static string EncodePathSegment(
         string name,
         JsonElement value,
+        bool rejectPreEncodedOctets,
         out NyxIdOperationRequestFailure? failure)
     {
         failure = null;
@@ -301,7 +332,7 @@ internal static class NyxIdOperationRequestBuilder
             return string.Empty;
         }
 
-        if (!IsSafePathSegment(raw))
+        if (!IsSafePathSegment(raw, rejectPreEncodedOctets))
         {
             failure = new NyxIdOperationRequestFailure(
                 "NYXID_OPERATION_PATH_PARAMETER_INVALID",
@@ -312,7 +343,7 @@ internal static class NyxIdOperationRequestBuilder
         return Uri.EscapeDataString(raw);
     }
 
-    private static bool IsSafePathSegment(string raw)
+    private static bool IsSafePathSegment(string raw, bool rejectPreEncodedOctets)
     {
         if (raw is "." or "..")
             return false;
@@ -322,6 +353,19 @@ internal static class NyxIdOperationRequestBuilder
             return false;
         if (raw.Contains("${", StringComparison.Ordinal))
             return false;
+
+        if (rejectPreEncodedOctets)
+        {
+            for (var index = 0; index + 2 < raw.Length; index++)
+            {
+                if (raw[index] == '%' &&
+                    Uri.IsHexDigit(raw[index + 1]) &&
+                    Uri.IsHexDigit(raw[index + 2]))
+                {
+                    return false;
+                }
+            }
+        }
 
         // Reject pre-encoded traversal delimiters so a caller cannot smuggle a separator through
         // an extra decode hop in a downstream service.

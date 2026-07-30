@@ -343,7 +343,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
         string argumentsJson,
         CancellationToken ct)
     {
-        var build = NyxIdOperationRequestBuilder.Build(admission, argumentsJson);
+        var build = NyxIdAdmittedRequestBuilder.Build(admission, argumentsJson);
         if (!build.Succeeded)
         {
             var failure = build.Failure!;

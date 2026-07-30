@@ -41,6 +41,153 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
         root.TryGetProperty("required", out _).Should().BeFalse();
     }
 
+    [Fact]
+    public void AdmittedRequestBuilder_ShouldBuildAuthoredRequestOnlyFromDeclaredValues()
+    {
+        var result = NyxIdAdmittedRequestBuilder.Build(
+            AuthoredRequestAdmission(),
+            """{"path_params":{"event_id":"evt alpha"},"query":{"notify":"owner"},"headers":{"If-Match":"etag-alpha"},"body":{"title":"Planning"}}""");
+
+        result.Succeeded.Should().BeTrue();
+        result.Failure.Should().BeNull();
+        result.Request.Should().BeEquivalentTo(new NyxIdOperationRequest(
+            "us-calendar-alpha",
+            "calendar-alpha",
+            "POST",
+            "/events/evt%20alpha?notify=owner",
+            """{"title":"Planning"}""",
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["If-Match"] = "etag-alpha",
+            },
+            false));
+    }
+
+    [Fact]
+    public void AdmittedRequestBuilder_ShouldDeriveAuthoredFileArtifactModeFromAdmission()
+    {
+        var admission = AuthoredRequestAdmission() with
+        {
+            HttpMethod = "GET",
+            RequestBody = null,
+            ResponsePolicy = new AgentToolOperationResponsePolicy(false, true, []),
+        };
+
+        var result = NyxIdAdmittedRequestBuilder.Build(
+            admission,
+            """{"path_params":{"event_id":"evt-alpha"}}""");
+
+        result.Succeeded.Should().BeTrue();
+        result.Request!.FileArtifact.Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("text")]
+    [InlineData("file_artifact")]
+    public void AdmittedRequestBuilder_ShouldRejectAuthoredResponseModeOverride(string responseMode)
+    {
+        var result = NyxIdAdmittedRequestBuilder.Build(
+            AuthoredRequestAdmission(),
+            JsonSerializer.Serialize(new
+            {
+                path_params = new { event_id = "evt-alpha" },
+                response_mode = responseMode,
+            }));
+
+        result.Succeeded.Should().BeFalse();
+        result.Failure!.Code.Should().Be("NYXID_OPERATION_ARGUMENT_NOT_SUPPORTED");
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    public void AdmittedRequestBuilder_ShouldRejectAmbiguousAuthoredResponsePolicy(
+        bool textAllowed,
+        bool fileArtifactAllowed)
+    {
+        var admission = AuthoredRequestAdmission() with
+        {
+            ResponsePolicy = new AgentToolOperationResponsePolicy(
+                textAllowed,
+                fileArtifactAllowed,
+                []),
+        };
+
+        var result = NyxIdAdmittedRequestBuilder.Build(
+            admission,
+            """{"path_params":{"event_id":"evt-alpha"}}""");
+
+        result.Succeeded.Should().BeFalse();
+        result.Failure!.Code.Should().Be("NYXID_OPERATION_RESPONSE_POLICY_INVALID");
+    }
+
+    [Theory]
+    [InlineData("""{"service_id":"us-override"}""")]
+    [InlineData("""{"slug":"slug-override"}""")]
+    [InlineData("""{"endpoint_id":"endpoint-override"}""")]
+    [InlineData("""{"request_contract_digest":"sha256:override"}""")]
+    [InlineData("""{"method":"DELETE"}""")]
+    [InlineData("""{"path":"/override"}""")]
+    [InlineData("""{"path_template":"/override/{id}"}""")]
+    [InlineData("""{"response_policy":{"text_allowed":true}}""")]
+    [InlineData("""{"execution_policy":{"risk":"read_only"}}""")]
+    public void AdmittedRequestBuilder_ShouldRejectAuthoredRouteIdentityOrPolicyOverride(
+        string argumentsJson)
+    {
+        var result = NyxIdAdmittedRequestBuilder.Build(
+            AuthoredRequestAdmission(),
+            argumentsJson);
+
+        result.Succeeded.Should().BeFalse();
+        result.Failure!.Code.Should().Be("NYXID_OPERATION_ARGUMENT_NOT_SUPPORTED");
+    }
+
+    [Theory]
+    [InlineData("""{"path_params":{"event_id":"evt-alpha","other":"blocked"}}""", "NYXID_OPERATION_PATH_PARAMETER_UNKNOWN")]
+    [InlineData("""{"path_params":{"event_id":"evt-alpha"},"query":{"other":"blocked"}}""", "NYXID_OPERATION_QUERY_PARAMETER_UNKNOWN")]
+    [InlineData("""{"path_params":{"event_id":"evt-alpha"},"headers":{"other":"blocked"}}""", "NYXID_OPERATION_HEADER_NOT_DECLARED")]
+    public void AdmittedRequestBuilder_ShouldRejectUndeclaredAuthoredValueSlot(
+        string argumentsJson,
+        string errorCode)
+    {
+        var result = NyxIdAdmittedRequestBuilder.Build(
+            AuthoredRequestAdmission(),
+            argumentsJson);
+
+        result.Succeeded.Should().BeFalse();
+        result.Failure!.Code.Should().Be(errorCode);
+    }
+
+    [Theory]
+    [InlineData("../secret")]
+    [InlineData("%2fsecret")]
+    [InlineData("evt%20alpha")]
+    public void AdmittedRequestBuilder_ShouldRejectUnsafeOrPreEncodedAuthoredPathSegment(
+        string eventId)
+    {
+        var result = NyxIdAdmittedRequestBuilder.Build(
+            AuthoredRequestAdmission(),
+            JsonSerializer.Serialize(new { path_params = new { event_id = eventId } }));
+
+        result.Succeeded.Should().BeFalse();
+        result.Failure!.Code.Should().Be("NYXID_OPERATION_PATH_PARAMETER_INVALID");
+    }
+
+    [Theory]
+    [InlineData("""{"path_params":{"event_id":"evt-alpha"},"query":{"notify":7}}""", "NYXID_OPERATION_QUERY_PARAMETER_INVALID")]
+    [InlineData("""{"path_params":{"event_id":"evt-alpha"},"headers":{"If-Match":false}}""", "NYXID_OPERATION_HEADER_INVALID")]
+    public void AdmittedRequestBuilder_ShouldRejectNonStringAuthoredQueryOrHeader(
+        string argumentsJson,
+        string errorCode)
+    {
+        var result = NyxIdAdmittedRequestBuilder.Build(
+            AuthoredRequestAdmission(),
+            argumentsJson);
+
+        result.Succeeded.Should().BeFalse();
+        result.Failure!.Code.Should().Be(errorCode);
+    }
+
     [Theory]
     [InlineData("text")]
     [InlineData("file_artifact")]
@@ -703,6 +850,38 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
             null,
             new AgentToolOperationResponsePolicy(false, true, ["application/octet-stream"]),
             ReadOnlyPolicy());
+
+    private static AgentToolOperationAdmission AuthoredRequestAdmission() =>
+        new(
+            "us-calendar-alpha",
+            "calendar-alpha",
+            new AgentToolOperationIdentity.AuthoredRequest(
+                "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+            AgentToolOperationAuthorizationBasis.ExplicitRequest,
+            "POST",
+            "/events/{event_id}",
+            "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            [
+                PathParameter("event_id"),
+                QueryParameter("notify", required: false),
+                new AgentToolOperationParameter(
+                    "If-Match",
+                    AgentToolOperationParameterLocation.Header,
+                    false,
+                    AgentToolOperationValueSchema.Text),
+            ],
+            new AgentToolOperationRequestBody(
+                false,
+                "application/json",
+                new AgentToolOperationValueSchema(
+                    AgentToolOperationValueKind.Object,
+                    [],
+                    new HashSet<string>(StringComparer.Ordinal),
+                    null,
+                    [],
+                    true)),
+            AgentToolOperationResponsePolicy.TextOnly,
+            WritePolicy());
 
     private static AgentToolOperationAdmission ListMessagesAdmission()
     {
