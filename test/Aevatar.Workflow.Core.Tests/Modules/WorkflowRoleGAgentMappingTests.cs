@@ -411,9 +411,9 @@ public sealed class WorkflowRoleGAgentMappingTests
 
         public IReadOnlyList<string> GetRegisteredNames() => ["nyxid.connected_services"];
 
-        public ToolSetResolveResult Resolve(ChatRouteToolSetRef? toolSetRef)
+        public ToolSetResolveResult Resolve(string? name)
         {
-            var name = toolSetRef?.Name ?? string.Empty;
+            name ??= string.Empty;
             ResolvedNames.Add(name);
             return ToolSetResolveResult.Success(name, [source]);
         }

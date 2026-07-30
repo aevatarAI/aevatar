@@ -7,10 +7,18 @@ public interface IToolSetRegistry
 {
     IReadOnlyList<string> GetRegisteredNames();
 
-    ToolSetResolveResult Resolve(string? name) =>
-        Resolve(new ChatRouteToolSetRef { Name = name ?? string.Empty });
+    ToolSetResolveResult Resolve(string? name);
+}
 
-    ToolSetResolveResult Resolve(ChatRouteToolSetRef? toolSetRef);
+public static class ToolSetRegistryExtensions
+{
+    public static ToolSetResolveResult Resolve(
+        this IToolSetRegistry registry,
+        ChatRouteToolSetRef? toolSetRef)
+    {
+        ArgumentNullException.ThrowIfNull(registry);
+        return registry.Resolve(toolSetRef?.Name);
+    }
 }
 
 public sealed class ToolSetResolveResult

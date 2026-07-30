@@ -6,6 +6,7 @@ using FluentAssertions;
 using Google.Protobuf;
 using Microsoft.Extensions.Options;
 using ApplicationWorkflowChatInputPartKind = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind;
+using ApplicationWorkflowChatInputParts = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputParts;
 using ApplicationFileArtifactRef = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactRef;
 using ApplicationFileArtifactSourceKind = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactSourceKind;
 
@@ -53,6 +54,59 @@ public sealed class WorkflowChatFileInputPartContractTests
         parsed.FileRef.Sha256.Should().Be("abc");
         parsed.FileRef.CreatedAtUnixMs.Should().Be(1710000000000);
         parsed.FileRef.ExpiresAtUnixMs.Should().Be(1710003600000);
+    }
+
+    [Fact]
+    public void WorkflowChatInputParts_FromFileRef_ShouldShapeTypedFileParts()
+    {
+        var image = ApplicationWorkflowChatInputParts.FromFileRef(new ApplicationFileArtifactRef
+        {
+            FileId = "file-image",
+            ArtifactId = "workflow-file://file-image",
+            SourceKind = ApplicationFileArtifactSourceKind.ConnectedServiceResource,
+            SourceMessageId = "om_1",
+            SourceResourceKey = "image_key_1",
+            FileName = "image.png",
+            MediaType = "image/png",
+        });
+        var audio = ApplicationWorkflowChatInputParts.FromFileRef(new ApplicationFileArtifactRef
+        {
+            FileId = "file-audio",
+            FileName = "audio.mp3",
+            MediaType = "audio/mpeg",
+        });
+        var video = ApplicationWorkflowChatInputParts.FromFileRef(new ApplicationFileArtifactRef
+        {
+            ArtifactId = "artifact://video",
+            FileName = "video.mp4",
+            MediaType = "video/mp4",
+        });
+        var document = ApplicationWorkflowChatInputParts.FromFileRef(new ApplicationFileArtifactRef
+        {
+            FileId = "file-document",
+            FileName = "invoice.pdf",
+            MediaType = "application/pdf",
+        });
+        var invalid = () => ApplicationWorkflowChatInputParts.FromFileRef(new ApplicationFileArtifactRef
+        {
+            FileName = "missing-id.pdf",
+            MediaType = "application/pdf",
+        });
+
+        image.Kind.Should().Be(ApplicationWorkflowChatInputPartKind.Image);
+        image.Uri.Should().Be("workflow-file://file-image");
+        image.DataBase64.Should().BeNull();
+        image.FileRef.Should().NotBeNull();
+        image.FileRef!.SourceMessageId.Should().Be("om_1");
+        image.FileRef.SourceResourceKey.Should().Be("image_key_1");
+        audio.Kind.Should().Be(ApplicationWorkflowChatInputPartKind.Audio);
+        audio.Uri.Should().Be("workflow-file://file-audio");
+        video.Kind.Should().Be(ApplicationWorkflowChatInputPartKind.Video);
+        video.Uri.Should().Be("artifact://video");
+        document.Kind.Should().Be(ApplicationWorkflowChatInputPartKind.File);
+        document.Uri.Should().Be("workflow-file://file-document");
+        invalid.Should().Throw<ArgumentException>()
+            .WithMessage("Workflow chat file input requires fileId or artifactId.*");
     }
 
     [Fact]
