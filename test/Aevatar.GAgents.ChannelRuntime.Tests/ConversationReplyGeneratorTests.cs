@@ -1,5 +1,6 @@
 using Aevatar.GAgents.Scheduled;
 using System.Runtime.CompilerServices;
+using System.Text;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Prompting;
@@ -22,6 +23,10 @@ using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.NyxidChat;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using UglyToad.PdfPig.Core;
+using UglyToad.PdfPig.Fonts.Standard14Fonts;
+using UglyToad.PdfPig.Content;
+using UglyToad.PdfPig.Writer;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Schedules;
 using ApplicationFileArtifactRef = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactRef;
@@ -121,6 +126,15 @@ public sealed class ConversationReplyGeneratorTests
                 NyxUserAccessToken = token ?? string.Empty,
             },
         };
+
+    private static byte[] BuildSimplePdf(string text)
+    {
+        var builder = new PdfDocumentBuilder();
+        var page = builder.AddPage(PageSize.A4);
+        var font = builder.AddStandard14Font(Standard14Font.Helvetica);
+        page.AddText(text, 12, new PdfPoint(50, 750), font);
+        return builder.Build();
+    }
 
     [Fact]
     public async Task GenerateReplyAsync_WithPriorConversationHistory_BuildsSecondTurnRequestWithPreviousUserAndAssistant()
@@ -493,7 +507,7 @@ public sealed class ConversationReplyGeneratorTests
         var request = providerFactory.Requests[0];
         request.Messages.Single(message => message.Role == "system").Content.Should()
             .Contain("Attachment visibility warning")
-            .And.Contain("one or more attachments could not be converted to LLM image input");
+            .And.Contain("one or more attachments could not be converted to LLM input");
         request.Messages.Single(message => message.Role == "user").ContentParts.Should()
             .ContainSingle(part => part.Kind == ContentPartKind.Text && part.Text == "describe it");
         lark.Downloads.Should().BeEmpty();
@@ -530,7 +544,7 @@ public sealed class ConversationReplyGeneratorTests
         providerFactory.Requests.Should().ContainSingle();
         providerFactory.Requests[0].Messages.Single(message => message.Role == "system").Content.Should()
             .Contain("Attachment visibility warning")
-            .And.Contain("one or more attachments could not be converted to LLM image input");
+            .And.Contain("one or more attachments could not be converted to LLM input");
         lark.Downloads.Should().ContainSingle();
     }
 
@@ -566,7 +580,7 @@ public sealed class ConversationReplyGeneratorTests
         providerFactory.Requests.Should().ContainSingle();
         providerFactory.Requests[0].Messages.Single(message => message.Role == "system").Content.Should()
             .Contain("Attachment visibility warning")
-            .And.Contain("one or more attachments could not be converted to LLM image input");
+            .And.Contain("one or more attachments could not be converted to LLM input");
         lark.Downloads.Should().ContainSingle();
     }
 
@@ -647,6 +661,79 @@ public sealed class ConversationReplyGeneratorTests
                        request.SourceResourceKey == "img_recent" &&
                        request.FileName == "recent.jpg" &&
                        request.MediaType == "image/jpeg");
+    }
+
+    [Fact]
+    public async Task BuildStepPlanAsync_WithRecentLarkPdfAttachment_PersistsFileRefWithoutExtractedText()
+    {
+        var pdfBytes = BuildSimplePdf("confidential extracted document text");
+        var lark = new RecordingLarkNyxClient(
+            new LarkMessageResourceDownloadResult(true, pdfBytes, "application/pdf", "recent.pdf"));
+        var fileArtifacts = new RecordingWorkflowFileArtifactPort();
+        var providerFactory = new RecordingProviderFactory
+        {
+            Capabilities = LLMProviderCapabilities.TextOnly,
+        };
+        IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            BuiltInPromptFloorProvider,
+            larkClient: lark,
+            fileIngressPort: fileArtifacts,
+            fileArtifactReadPort: fileArtifacts);
+        var recentActivity = CreateLarkActivity(
+            "msg-pdf-recent",
+            "earlier pdf",
+            "om_recent_pdf",
+            token: null);
+        recentActivity.Content.Attachments.Add(new AttachmentRef
+        {
+            AttachmentId = "pdf_recent",
+            Kind = AttachmentKind.File,
+            ContentType = "application/pdf",
+            Name = "recent.pdf",
+            SizeBytes = pdfBytes.Length,
+        });
+        var currentActivity = new ChatActivity
+        {
+            Id = "msg-follow-up-pdf",
+            ChannelId = ChannelId.From("lark"),
+            Conversation = new ConversationReference { CanonicalKey = "lark:scope-a:chat-1" },
+            Content = new MessageContent { Text = "what was in the pdf?" },
+        };
+        var attachmentContext = new ChatAttachmentInputContext(
+            [
+                new RecentConversationAttachmentActivity
+                {
+                    ActivityId = recentActivity.Id,
+                    AcceptedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    Activity = recentActivity.Clone(),
+                },
+            ],
+            "recent-token");
+
+        var plan = await generator.BuildStepPlanAsync(
+            currentActivity,
+            new Dictionary<string, string>(),
+            llmControl: null,
+            toolContext: null,
+            priorHistory: null,
+            attachmentContext,
+            forceDisableTools: false,
+            CancellationToken.None);
+
+        var userMessage = plan.InitialMessages.Last(message => message.Role == "user");
+        var documentPart = userMessage.ContentParts.Should().NotBeNull().And.Subject
+            .Single(part => part.Kind == ContentPartKind.Text && part.FileRef is not null);
+        documentPart.Text.Should().BeNull();
+        documentPart.FileRef!.ArtifactId.Should().Be("workflow-file://wf-file-1");
+        documentPart.FileRef.SourceKind.Should().Be(LlmChatFileSourceKind.ChatInput);
+        documentPart.FileRef.SourceMessageId.Should().Be("om_recent_pdf");
+        documentPart.FileRef.SourceResourceKey.Should().Be("pdf_recent");
+        documentPart.MediaType.Should().Be("application/pdf");
+        documentPart.Name.Should().Be("recent.pdf");
+        userMessage.ContentParts!.Should().NotContain(part =>
+            part.Text != null &&
+            part.Text.Contains("confidential extracted document text", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -958,19 +1045,26 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
-    public async Task GenerateReplyAsync_WithNonImageAttachment_AddsHonestVisibilityWarning()
+    public async Task GenerateReplyAsync_WithLarkPdfFileAttachment_AddsExtractedTextPart()
     {
+        var pdfBytes = BuildSimplePdf("Invoice total 42.00 USD");
         var lark = new RecordingLarkNyxClient(
-            new LarkMessageResourceDownloadResult(true, [1], "image/png", "photo.png"));
+            new LarkMessageResourceDownloadResult(true, pdfBytes, "application/pdf", "report.pdf"));
+        var fileArtifacts = new RecordingWorkflowFileArtifactPort();
         var providerFactory = new RecordingProviderFactory
         {
-            Capabilities = MultimodalCapabilities,
+            Capabilities = LLMProviderCapabilities.TextOnly,
         };
-        var generator = new NyxIdConversationReplyGenerator(providerFactory, BuiltInPromptFloorProvider, larkClient: lark);
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            BuiltInPromptFloorProvider,
+            larkClient: lark,
+            fileIngressPort: fileArtifacts,
+            fileArtifactReadPort: fileArtifacts);
         var activity = CreateLarkActivity(
-            "msg-file",
+            "msg-file-pdf",
             "read this",
-            "om_file",
+            "om_file_pdf",
             token: "user-token");
         activity.Content.Attachments.Add(new AttachmentRef
         {
@@ -978,6 +1072,203 @@ public sealed class ConversationReplyGeneratorTests
             Kind = AttachmentKind.File,
             ContentType = "application/pdf",
             Name = "report.pdf",
+            SizeBytes = pdfBytes.Length,
+        });
+
+        var result = await generator.GenerateReplyAsync(
+            activity,
+            new Dictionary<string, string>(),
+            streamingSink: null,
+            CancellationToken.None);
+
+        var userMessage = providerFactory.Requests.Should().ContainSingle().Subject
+            .Messages.Last(message => message.Role == "user");
+        userMessage.ContentParts.Should().NotBeNull();
+        userMessage.ContentParts!.Should().NotContain(part => part.Kind == ContentPartKind.Image);
+        userMessage.ContentParts!.Should().Contain(part =>
+            part.Kind == ContentPartKind.Text &&
+            part.Text == "read this");
+        userMessage.ContentParts!.Should().Contain(part =>
+            part.Kind == ContentPartKind.Text &&
+            part.Text != null &&
+            part.Text.Contains("PDF attachment 'report.pdf' extracted text", StringComparison.Ordinal) &&
+            part.Text.Contains("Invoice total 42.00 USD", StringComparison.Ordinal));
+        providerFactory.Requests[0].Messages.First(message => message.Role == "system").Content.Should()
+            .NotContain("Attachment visibility warning");
+        lark.Downloads.Should().ContainSingle().Which.Should().Be((
+            "user-token",
+            "om_file_pdf",
+            "file_key",
+            LarkMessageResourceKind.File));
+        var ingress = fileArtifacts.IngressRequests.Should().ContainSingle().Subject;
+        ingress.Content.ToArray().Should().Equal(pdfBytes);
+        ingress.SourceKind.Should().Be(FileArtifactSourceKind.ChatInput);
+        ingress.SourceMessageId.Should().Be("om_file_pdf");
+        ingress.SourceResourceKey.Should().Be("file_key");
+        ingress.FileName.Should().Be("report.pdf");
+        ingress.MediaType.Should().Be("application/pdf");
+        result.AppendedHistory.Should().NotContain(entry =>
+            entry.ContentParts.Any(part =>
+                part.Text.Contains("Invoice total 42.00 USD", StringComparison.Ordinal)));
+        result.AppendedHistory.SelectMany(entry => entry.ContentParts)
+            .Should().Contain(part =>
+                part.Kind == Aevatar.AI.Abstractions.ChatContentPartKind.Text &&
+                part.Text.Length == 0 &&
+                part.FileRef != null &&
+                part.FileRef.ArtifactId == "workflow-file://wf-file-1");
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_WithLongLarkPdfFileAttachment_MarksExtractedTextAsTruncated()
+    {
+        var pdfBytes = BuildSimplePdf(new string('A', 21_000));
+        var lark = new RecordingLarkNyxClient(
+            new LarkMessageResourceDownloadResult(true, pdfBytes, "application/pdf", "long-report.pdf"));
+        var fileArtifacts = new RecordingWorkflowFileArtifactPort();
+        var providerFactory = new RecordingProviderFactory
+        {
+            Capabilities = LLMProviderCapabilities.TextOnly,
+        };
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            BuiltInPromptFloorProvider,
+            larkClient: lark,
+            fileIngressPort: fileArtifacts,
+            fileArtifactReadPort: fileArtifacts);
+        var activity = CreateLarkActivity(
+            "msg-file-long-pdf",
+            "read this",
+            "om_file_long_pdf",
+            token: "user-token");
+        activity.Content.Attachments.Add(new AttachmentRef
+        {
+            AttachmentId = "file_key",
+            Kind = AttachmentKind.File,
+            ContentType = "application/pdf",
+            Name = "long-report.pdf",
+            SizeBytes = pdfBytes.Length,
+        });
+
+        await generator.GenerateReplyAsync(
+            activity,
+            new Dictionary<string, string>(),
+            streamingSink: null,
+            CancellationToken.None);
+
+        var userMessage = providerFactory.Requests.Should().ContainSingle().Subject
+            .Messages.Last(message => message.Role == "user");
+        userMessage.ContentParts.Should().NotBeNull();
+        userMessage.ContentParts!.Should().Contain(part =>
+            part.Kind == ContentPartKind.Text &&
+            part.Text != null &&
+            part.Text.Contains("PDF attachment 'long-report.pdf' extracted text", StringComparison.Ordinal) &&
+            part.Text.Contains("truncated to first 20000 characters", StringComparison.Ordinal));
+        providerFactory.Requests[0].Messages.First(message => message.Role == "system").Content.Should()
+            .NotContain("Attachment visibility warning");
+    }
+
+    [Theory]
+    [InlineData("text/plain", "notes.txt", "hello from notes")]
+    [InlineData("application/json", "config.json", "{\"enabled\":true}")]
+    [InlineData("application/octet-stream", "config.yaml", "enabled: true")]
+    public async Task GenerateReplyAsync_WithLarkTextFileAttachment_AddsTextContentPart(
+        string contentType,
+        string fileName,
+        string fileContent)
+    {
+        var fileBytes = Encoding.UTF8.GetBytes(fileContent);
+        var lark = new RecordingLarkNyxClient(
+            new LarkMessageResourceDownloadResult(true, fileBytes, contentType, fileName));
+        var fileArtifacts = new RecordingWorkflowFileArtifactPort();
+        var providerFactory = new RecordingProviderFactory
+        {
+            Capabilities = LLMProviderCapabilities.TextOnly,
+        };
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            BuiltInPromptFloorProvider,
+            larkClient: lark,
+            fileIngressPort: fileArtifacts,
+            fileArtifactReadPort: fileArtifacts);
+        var activity = CreateLarkActivity(
+            $"msg-file-{fileName}",
+            "read this",
+            $"om_file_{fileName}",
+            token: "user-token");
+        activity.Content.Attachments.Add(new AttachmentRef
+        {
+            AttachmentId = "file_key",
+            Kind = AttachmentKind.File,
+            ContentType = contentType,
+            Name = fileName,
+            SizeBytes = fileBytes.Length,
+        });
+
+        var result = await generator.GenerateReplyAsync(
+            activity,
+            new Dictionary<string, string>(),
+            streamingSink: null,
+            CancellationToken.None);
+
+        var userMessage = providerFactory.Requests.Should().ContainSingle().Subject
+            .Messages.Last(message => message.Role == "user");
+        userMessage.ContentParts.Should().NotBeNull();
+        userMessage.ContentParts!.Should().Contain(part =>
+            part.Kind == ContentPartKind.Text &&
+            part.Text == "read this");
+        userMessage.ContentParts!.Should().Contain(part =>
+            part.Kind == ContentPartKind.Text &&
+            part.Text != null &&
+            part.Text.Contains($"Text attachment '{fileName}' content", StringComparison.Ordinal) &&
+            part.Text.Contains(fileContent, StringComparison.Ordinal));
+        providerFactory.Requests[0].Messages.First(message => message.Role == "system").Content.Should()
+            .NotContain("Attachment visibility warning");
+        lark.Downloads.Should().ContainSingle().Which.Should().Be((
+            "user-token",
+            $"om_file_{fileName}",
+            "file_key",
+            LarkMessageResourceKind.File));
+        var ingress = fileArtifacts.IngressRequests.Should().ContainSingle().Subject;
+        ingress.Content.ToArray().Should().Equal(fileBytes);
+        ingress.SourceKind.Should().Be(FileArtifactSourceKind.ChatInput);
+        ingress.SourceMessageId.Should().Be($"om_file_{fileName}");
+        ingress.SourceResourceKey.Should().Be("file_key");
+        ingress.FileName.Should().Be(fileName);
+        ingress.MediaType.Should().Be(fileName.EndsWith(".yaml", StringComparison.Ordinal)
+            ? "application/yaml"
+            : contentType);
+        result.AppendedHistory.Should().NotContain(entry =>
+            entry.ContentParts.Any(part =>
+                part.Text.Contains(fileContent, StringComparison.Ordinal)));
+        result.AppendedHistory.SelectMany(entry => entry.ContentParts)
+            .Should().Contain(part =>
+                part.Kind == Aevatar.AI.Abstractions.ChatContentPartKind.Text &&
+                part.Text.Length == 0 &&
+                part.FileRef != null &&
+                part.FileRef.ArtifactId == "workflow-file://wf-file-1");
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_WithUnsupportedFileAttachment_AddsHonestVisibilityWarning()
+    {
+        var lark = new RecordingLarkNyxClient(
+            new LarkMessageResourceDownloadResult(true, [1], "application/zip", "archive.zip"));
+        var providerFactory = new RecordingProviderFactory
+        {
+            Capabilities = MultimodalCapabilities,
+        };
+        var generator = new NyxIdConversationReplyGenerator(providerFactory, BuiltInPromptFloorProvider, larkClient: lark);
+        var activity = CreateLarkActivity(
+            "msg-file-zip",
+            "read this",
+            "om_file_zip",
+            token: "user-token");
+        activity.Content.Attachments.Add(new AttachmentRef
+        {
+            AttachmentId = "file_key",
+            Kind = AttachmentKind.File,
+            ContentType = "application/zip",
+            Name = "archive.zip",
             SizeBytes = 512,
         });
 
@@ -990,13 +1281,12 @@ public sealed class ConversationReplyGeneratorTests
         var userMessage = providerFactory.Requests.Should().ContainSingle().Subject
             .Messages.Last(message => message.Role == "user");
         userMessage.ContentParts.Should().NotBeNull();
-        userMessage.ContentParts!.Should().NotContain(part => part.Kind == ContentPartKind.Image);
         userMessage.ContentParts!.Should().ContainSingle(part =>
             part.Kind == ContentPartKind.Text &&
             part.Text == "read this");
         var systemMessage = providerFactory.Requests[0].Messages.First(message => message.Role == "system");
         systemMessage.Content.Should().Contain("Attachment visibility warning");
-        systemMessage.Content.Should().Contain("could not be converted to LLM image input");
+        systemMessage.Content.Should().Contain("one or more attachments could not be converted to LLM input");
         lark.Downloads.Should().BeEmpty();
     }
 
@@ -1031,7 +1321,7 @@ public sealed class ConversationReplyGeneratorTests
             part.Text == "describe it");
         var systemMessage = providerFactory.Requests[0].Messages.First(message => message.Role == "system");
         systemMessage.Content.Should().Contain("Attachment visibility warning");
-        systemMessage.Content.Should().Contain("could not be converted to LLM image input");
+        systemMessage.Content.Should().Contain("could not be converted to LLM input");
         lark.Downloads.Should().ContainSingle();
     }
 
@@ -1934,7 +2224,11 @@ public sealed class ConversationReplyGeneratorTests
             Control(),
             AgentToolExecutionContext.Empty with
             {
-                Caller = new AgentToolCallerContext("scope-1", "scope-1", null),
+                Caller = new AgentToolCallerContext("scope-alpha", "owner-alpha", null),
+                NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                    "nyxid",
+                    "tenant-alpha",
+                    "nyx-user-alpha"),
             },
             streamingSink: null,
             CancellationToken.None);
@@ -1945,8 +2239,10 @@ public sealed class ConversationReplyGeneratorTests
         reply.Text.Should().NotContain("scope workflow command port is not available in this host");
         commandPort.Requests.Should().ContainSingle()
             .Which.Should().Match<ScopeWorkflowUpsertRequest>(request =>
-                request.ScopeId == "scope-1" &&
-                request.WorkflowId == "demo_dinner");
+                request.ScopeId == "scope-alpha" &&
+                request.WorkflowId == "demo_dinner" &&
+                request.CapabilityAdmission != null &&
+                request.CapabilityAdmission.CallerId == "nyx-user-alpha");
     }
 
     [Fact]
@@ -3262,8 +3558,10 @@ public sealed class ConversationReplyGeneratorTests
                 MediaType = request.MediaType,
                 SizeBytes = content.LongLength,
                 Sha256 = $"sha-{fileId}",
-                CreatedAtUnixMs = 1_000 + _nextId,
-                ExpiresAtUnixMs = 2_000 + _nextId,
+                CreatedAtUnixMs = new DateTimeOffset(2026, 7, 29, 0, 0, 0, TimeSpan.Zero)
+                    .ToUnixTimeMilliseconds(),
+                ExpiresAtUnixMs = new DateTimeOffset(2100, 1, 1, 0, 0, 0, TimeSpan.Zero)
+                    .ToUnixTimeMilliseconds(),
                 OwnerRunId = request.OwnerRunId,
                 OwnerScopeId = request.OwnerScopeId,
             };

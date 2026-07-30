@@ -69,11 +69,11 @@ public static class StatusEndpoints
         [property: JsonPropertyName("counts")] StatusCounts Counts,
         [property: JsonPropertyName("targets")] IReadOnlyList<StatusTarget> Targets)
     {
-        public static StatusResponse Build(IReadOnlyList<HealthProbeTargetDocument> documents)
+        public static StatusResponse Build(IReadOnlyList<HealthProbeOperationalSnapshot> snapshots)
         {
-            var targets = documents
-                .OrderBy(d => d.Category, StringComparer.Ordinal)
-                .ThenBy(d => d.Slug, StringComparer.Ordinal)
+            var targets = snapshots
+                .OrderBy(d => d.Target?.Category, StringComparer.Ordinal)
+                .ThenBy(d => d.Target?.Slug, StringComparer.Ordinal)
                 .Select(StatusTarget.From)
                 .ToArray();
 
@@ -168,47 +168,51 @@ public static class StatusEndpoints
         [property: JsonPropertyName("availability_percent")] double? AvailabilityPercent,
         [property: JsonPropertyName("history")] IReadOnlyList<StatusSample> History)
     {
-        public static StatusTarget From(HealthProbeTargetDocument d)
+        public static StatusTarget From(HealthProbeOperationalSnapshot snapshot)
         {
-            var history = BuildHistory(d);
+            var target = snapshot.Target ?? new HealthProbeTargetDescriptor();
+            var outcome = snapshot.LastOutcome;
+            var history = BuildHistory(snapshot);
             return new StatusTarget(
-                d.Slug,
-                string.IsNullOrWhiteSpace(d.DisplayName) ? d.Slug : d.DisplayName,
-                string.IsNullOrWhiteSpace(d.Category) ? "upstream" : d.Category,
-                string.IsNullOrWhiteSpace(d.Severity) ? "standard" : d.Severity,
-                d.ProbeKind,
-                MapStatus(d.Status),
-                d.Enabled,
-                d.IntervalSeconds,
-                d.LatencyMs,
-                NullIfBlank(d.Detail),
-                NullIfBlank(d.ErrorMessage),
-                d.ConsecutiveFailures,
-                ToDateTime(d.LastCheckAt),
-                ToDateTime(d.LastSuccessAt),
+                target.Slug,
+                string.IsNullOrWhiteSpace(target.DisplayName) ? target.Slug : target.DisplayName,
+                string.IsNullOrWhiteSpace(target.Category) ? "upstream" : target.Category,
+                string.IsNullOrWhiteSpace(target.Severity) ? "standard" : target.Severity,
+                target.ProbeKind,
+                MapStatus(outcome?.Status ?? HealthOutcomeStatus.Unknown),
+                target.Enabled,
+                target.IntervalSeconds,
+                outcome?.LatencyMs ?? 0,
+                NullIfBlank(outcome?.Detail),
+                NullIfBlank(outcome?.ErrorMessage),
+                snapshot.ConsecutiveFailures,
+                ToDateTime(snapshot.LastCheckAt),
+                ToDateTime(snapshot.LastSuccessAt),
                 CalculateAvailability(history),
                 history);
         }
 
-        private static IReadOnlyList<StatusSample> BuildHistory(HealthProbeTargetDocument d)
+        private static IReadOnlyList<StatusSample> BuildHistory(HealthProbeOperationalSnapshot snapshot)
         {
-            var history = d.RecentOutcomes
+            var history = snapshot.RecentOutcomes
                 .Select(StatusSample.From)
                 .TakeLast(HistorySampleCount)
                 .ToArray();
 
-            if (history.Length > 0 || ToDateTime(d.LastCheckAt) is not { } lastCheckAt)
+            if (history.Length > 0 || ToDateTime(snapshot.LastCheckAt) is not { } lastCheckAt)
             {
                 return history;
             }
 
+            var outcome = snapshot.LastOutcome;
+
             return
             [
                 new StatusSample(
-                    MapStatus(d.Status),
-                    d.LatencyMs,
-                    NullIfBlank(d.Detail),
-                    NullIfBlank(d.ErrorMessage),
+                    MapStatus(outcome?.Status ?? HealthOutcomeStatus.Unknown),
+                    outcome?.LatencyMs ?? 0,
+                    NullIfBlank(outcome?.Detail),
+                    NullIfBlank(outcome?.ErrorMessage),
                     lastCheckAt),
             ];
         }

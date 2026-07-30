@@ -486,6 +486,44 @@ public sealed class NyxIdChatTurnGAgentTests
             "service-alpha");
     }
 
+    [Fact]
+    public async Task OperationExecutor_StateChangeWake_ShouldQueryWithoutCompletionClaim()
+    {
+        var port = new RecordingActionPostconditionPort
+        {
+            Result = new NyxIdChatActionPostconditionResult
+            {
+                ActionRequestId = "action-alpha",
+                Disposition = NyxIdChatActionDisposition.Completed,
+                Verified = true,
+                Resource = new NyxIdChatSafeResourceRef
+                {
+                    UserService = new NyxIdChatUserServiceRef
+                    {
+                        UserServiceId = "service-alpha",
+                    },
+                },
+            },
+        };
+        var executor = new NyxIdChatTurnOperationExecutor(
+            new CapabilityGeneratingReplyExecutor(),
+            port);
+        var command = PostconditionCommand(NyxIdChatActionDisposition.Unspecified);
+        command.ActionPostcondition.ResourceHint = null;
+
+        var execution = await executor.ExecuteAsync(
+            command,
+            new NyxIdChatTransientExecutionSession(),
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        port.Inputs.Should().ContainSingle().Which.Should().BeEquivalentTo(
+            command.ActionPostcondition);
+        execution.Result.ActionPostcondition.Verified.Should().BeTrue();
+        execution.Result.ActionPostcondition.Disposition.Should().Be(
+            NyxIdChatActionDisposition.Completed);
+    }
+
     [Theory]
     [InlineData(NyxIdChatActionDisposition.Declined)]
     [InlineData(NyxIdChatActionDisposition.Failed)]

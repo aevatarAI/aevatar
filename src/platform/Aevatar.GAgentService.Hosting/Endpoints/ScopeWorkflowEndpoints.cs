@@ -461,6 +461,16 @@ public static class ScopeWorkflowEndpoints
 
             if (!result.Succeeded && !started)
             {
+                if (result.FailureDetail?.Error == WorkflowChatRunStartError.InvalidWorkflowYaml)
+                {
+                    await WriteJsonErrorResponseAsync(
+                        http,
+                        ChatRunStartErrorMapper.ToHttpStatusCode(result.Error),
+                        ChatRunStartErrorMapper.ToErrorBody(result.FailureDetail),
+                        ct);
+                    return;
+                }
+
                 var (statusCode, code, message) = MapRunStartError(result.Error);
                 await WriteJsonErrorResponseAsync(http, statusCode, code, message, ct);
             }
@@ -762,6 +772,17 @@ public static class ScopeWorkflowEndpoints
         http.Response.StatusCode = statusCode;
         http.Response.ContentType = "application/json";
         await http.Response.WriteAsJsonAsync(new { code, message }, cancellationToken: ct);
+    }
+
+    private static async Task WriteJsonErrorResponseAsync(
+        HttpContext http,
+        int statusCode,
+        object body,
+        CancellationToken ct)
+    {
+        http.Response.StatusCode = statusCode;
+        http.Response.ContentType = "application/json";
+        await http.Response.WriteAsJsonAsync(body, cancellationToken: ct);
     }
 
     private static string NormalizeRequired(string? value, string paramName)

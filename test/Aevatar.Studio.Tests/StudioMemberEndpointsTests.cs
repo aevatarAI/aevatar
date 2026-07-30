@@ -1,10 +1,18 @@
 using System.Reflection;
 using System.Security.Claims;
 using System.Text.Json;
+using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.GAgents.StudioMember;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Hosting.Endpoints;
+using Aevatar.Studio.Projection.QueryPorts;
+using Aevatar.Studio.Projection.ReadModels;
+using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.Extensions.Configuration;
@@ -397,6 +405,68 @@ public sealed class StudioMemberEndpointsTests
     }
 
     [Fact]
+    public async Task DeleteAccepted_WhenCommittedDeleteIsProjected_ShouldMakeDetail404AndRosterEmpty()
+    {
+        var actorId = StudioMemberConventions.BuildActorId(ScopeId, "m-alpha");
+        var store = new InMemoryProjectionDocumentStore<StudioMemberCurrentStateDocument, string>(
+            keySelector: model => model.Id);
+        await store.UpsertAsync(new StudioMemberCurrentStateDocument
+        {
+            Id = actorId,
+            ActorId = actorId,
+            StateVersion = 7,
+            LastEventId = "evt-7",
+            UpdatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-29T00:00:07Z")),
+            MemberId = "m-alpha",
+            ScopeId = ScopeId,
+            DisplayName = "Alpha",
+            ImplementationKind = MemberImplementationKindNames.Workflow,
+            LifecycleStage = MemberLifecycleStageNames.BindReady,
+            PublishedServiceId = "svc-alpha",
+            CreatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-28T00:00:00Z")),
+        });
+        var service = new ProjectionBackedMemberService(new ProjectionStudioMemberQueryPort(store));
+
+        var acceptedResult = await InvokeHandle<IResult>(
+            "HandleDeleteAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            "m-alpha",
+            service,
+            CancellationToken.None);
+
+        var accepted = acceptedResult.Should().BeOfType<Accepted<StudioMemberCommandResponse>>().Subject;
+        accepted.Value!.Status.Should().Be(StudioMemberCommandStatusNames.DeleteAccepted);
+
+        await store.DeleteAsync(new ProjectionDocumentDeleteMarker(
+            actorId,
+            actorId,
+            8,
+            "evt-8-delete",
+            DateTimeOffset.Parse("2026-07-29T00:00:08Z")));
+
+        var getResult = await InvokeHandle<IResult>(
+            "HandleGetAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            "m-alpha",
+            service,
+            CancellationToken.None);
+        var listResult = await InvokeHandle<IResult>(
+            "HandleListAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            service,
+            (int?)null,
+            (string?)null,
+            CancellationToken.None);
+
+        AssertNotFoundResult(getResult, "STUDIO_MEMBER_NOT_FOUND");
+        listResult.Should().BeOfType<Ok<StudioMemberRosterResponse>>()
+            .Which.Value!.Members.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task HandleBindAsync_ShouldReturnAccepted_OnSuccess()
     {
         var binding = new StudioMemberBindingAcceptedResponse(
@@ -443,6 +513,101 @@ public sealed class StudioMemberEndpointsTests
         // BadRequest<TAnonymousType> — the anonymous type is internal, so we
         // assert via the open generic shape rather than nailing the closed type.
         result.GetType().Name.Should().StartWith("BadRequest");
+    }
+
+    [Fact]
+    public async Task HandleBindAsync_ShouldReturnTypedSafeReadiness_WhenCapabilityAdmissionFails()
+    {
+        const string secret = "Bearer endpoint-secret-value";
+        var readiness = new ExternalCapabilityReadiness
+        {
+            ExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+            Status = ExternalCapabilityReadinessStatus.OperationSelectionRequired,
+            SelectedSelector = new ExternalWorkflowCapabilitySelector
+            {
+                NyxIdOperation = new NyxIdOperationSelector
+                {
+                    UserServiceId = "us-alpha",
+                    EndpointId = "get-resource",
+                },
+            },
+            SelectedCapability = new ExternalWorkflowCapabilityRef
+            {
+                NyxIdUserService = new NyxIdUserServiceCapabilityRef
+                {
+                    UserServiceId = "us-alpha",
+                    ServiceSlugSnapshot = secret,
+                    EndpointId = "get-resource",
+                    HttpMethod = "GET",
+                    PathTemplate = "/internal/{id}",
+                    ContractDigest = secret,
+                },
+            },
+        };
+        readiness.Blockers.Add(new ExternalCapabilityBlocker
+        {
+            Status = ExternalCapabilityReadinessStatus.OperationSelectionRequired,
+            Code = "OPERATION_NOT_ALLOWLISTED",
+            SafeMessage = "Select an operation published through the allowlist.",
+        });
+        readiness.Remediations.Add(new ExternalCapabilityRemediation
+        {
+            ActionKind = ExternalCapabilityRemediationActionKind.SelectOperation,
+            Label = "Select operation",
+            TrustedLocator = "nyxid:services",
+        });
+        readiness.Sources.Add(new ExternalCapabilitySourceStamp
+        {
+            SourceKind = ExternalCapabilitySourceKind.NyxIdMcpConfig,
+            SourceId = "nyxid-mcp-config:caller:nyx-user-alpha",
+            SourceVersion = 0,
+            ObservedAt = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 7, 28, 1, 0, 0, TimeSpan.Zero)),
+            FreshUntil = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 7, 28, 1, 5, 0, TimeSpan.Zero)),
+            ContentDigest = secret,
+        });
+        var service = new RecordingMemberService
+        {
+            BindException = new WorkflowExternalCapabilityAdmissionException(readiness),
+        };
+        var http = CreateAuthenticatedContext(ScopeId);
+        http.Response.Body = new MemoryStream();
+
+        var result = await InvokeHandle<IResult>(
+            "HandleBindAsync",
+            http,
+            ScopeId,
+            "m-1",
+            new UpdateStudioMemberBindingRequest(),
+            service,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+        http.Response.Body.Position = 0;
+        using var body = await JsonDocument.ParseAsync(http.Response.Body);
+        var root = body.RootElement;
+        root.GetProperty("code").GetString().Should()
+            .Be("STUDIO_MEMBER_EXTERNAL_CAPABILITY_NOT_READY");
+        root.GetProperty("message").GetString().Should()
+            .Be("External workflow capability admission failed.");
+        var readinessJson = root.GetProperty("readiness");
+        readinessJson.GetProperty("status").GetString().Should()
+            .Be("operation_selection_required");
+        var selected = readinessJson.GetProperty("selectedCapability");
+        selected.GetProperty("userServiceId").GetString().Should().Be("us-alpha");
+        selected.GetProperty("endpointId").GetString().Should().Be("get-resource");
+        selected.GetProperty("operationId").ValueKind.Should().Be(JsonValueKind.Null);
+        readinessJson.GetProperty("blockers")[0].GetProperty("code").GetString().Should()
+            .Be("OPERATION_NOT_ALLOWLISTED");
+        readinessJson.GetProperty("remediations")[0].GetProperty("actionKind").GetString().Should()
+            .Be("select_operation");
+        readinessJson.GetProperty("sources")[0].GetProperty("sourceKind").GetString().Should()
+            .Be("nyx_id_mcp_config");
+
+        var responseJson = root.GetRawText();
+        responseJson.Should().NotContain(secret);
+        responseJson.Should().NotContain("contractDigest");
+        responseJson.Should().NotContain("pathTemplate");
+        responseJson.Should().NotContain("contentDigest");
     }
 
     [Fact]
@@ -886,6 +1051,7 @@ public sealed class StudioMemberEndpointsTests
             [new Claim("scope_id", claimedScopeId)],
             "test");
         var services = new ServiceCollection()
+            .AddLogging()
             .AddSingleton<IConfiguration>(new ConfigurationBuilder()
                 .AddInMemoryCollection(new Dictionary<string, string?>
                 {
@@ -1095,6 +1261,87 @@ public sealed class StudioMemberEndpointsTests
                 memberId,
                 DateTimeOffset.UtcNow));
         }
+    }
+
+    private sealed class ProjectionBackedMemberService(
+        ProjectionStudioMemberQueryPort queryPort) : IStudioMemberService
+    {
+        public Task<StudioMemberSummaryResponse> CreateAsync(
+            string scopeId,
+            CreateStudioMemberRequest request,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("delete projection regression must not create members.");
+
+        public Task<StudioMemberRosterResponse> ListAsync(
+            string scopeId,
+            StudioMemberRosterPageRequest? page = null,
+            CancellationToken ct = default) =>
+            queryPort.ListAsync(scopeId, page, ct);
+
+        public async Task<StudioMemberDetailResponse> GetAsync(
+            string scopeId,
+            string memberId,
+            CancellationToken ct = default) =>
+            await queryPort.GetAsync(scopeId, memberId, ct)
+            ?? throw new StudioMemberNotFoundException(scopeId, memberId);
+
+        public Task<StudioMemberBindingAcceptedResponse> BindAsync(
+            string scopeId,
+            string memberId,
+            UpdateStudioMemberBindingRequest request,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("delete projection regression must not bind members.");
+
+        public Task<StudioMemberBindingViewResponse> GetBindingAsync(
+            string scopeId,
+            string memberId,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("delete projection regression must not read bindings.");
+
+        public Task<StudioMemberBindingRunStatusResponse> GetBindingRunAsync(
+            string scopeId,
+            string memberId,
+            string bindingRunId,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("delete projection regression must not read binding runs.");
+
+        public Task<StudioMemberEndpointContractResponse?> GetEndpointContractAsync(
+            string scopeId,
+            string memberId,
+            string endpointId,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("delete projection regression must not read endpoint contracts.");
+
+        public Task<StudioMemberBindingActivationResponse> ActivateBindingRevisionAsync(
+            string scopeId,
+            string memberId,
+            string revisionId,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("delete projection regression must not activate revisions.");
+
+        public Task<StudioMemberBindingRevisionActionResponse> RetireBindingRevisionAsync(
+            string scopeId,
+            string memberId,
+            string revisionId,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("delete projection regression must not retire revisions.");
+
+        public Task<StudioMemberCommandResponse> UpdateAsync(
+            string scopeId,
+            string memberId,
+            UpdateStudioMemberRequest request,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("delete projection regression must not update members.");
+
+        public Task<StudioMemberCommandResponse> DeleteAsync(
+            string scopeId,
+            string memberId,
+            CancellationToken ct = default) =>
+            Task.FromResult(new StudioMemberCommandResponse(
+                StudioMemberCommandStatusNames.DeleteAccepted,
+                scopeId,
+                memberId,
+                DateTimeOffset.Parse("2026-07-29T00:00:08Z")));
     }
 
     private sealed class TestHostEnvironment : IHostEnvironment

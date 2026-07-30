@@ -8,8 +8,8 @@ metadata:
     - nyxid_service_update
     - nyxid_service_route
     - nyxid_service_delete
-    - nyxid_service_handoff
-version: "1.2"
+    - nyxid_require_service
+version: "1.3"
 ---
 
-Resolve one exact connected-service instance before maintenance. Updates and route changes require approval; deletion is always destructive and requires approval. Use a typed handoff when authorization must be repaired. Never rotate, collect, or expose credentials.
+Resolve one exact connected-service instance before maintenance. Updates and route changes require approval; deletion is always destructive and requires approval. If the required connection is absent, call `nyxid_require_service` with the exact catalog slug and trust only its typed result. Never rotate, collect, or expose credentials.

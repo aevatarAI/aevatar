@@ -140,7 +140,7 @@ internal sealed class InvokeMemberTool : IAevatarInvocationTool
     public string Name => "aevatar_invoke_member";
 
     public string Description =>
-        "Invoke a Studio member endpoint by member_id and endpoint_id with a typed chat payload. Use this for members whose workflow binding is bind_ready or otherwise published as a service.";
+        "Invoke a Studio member by member_id with a typed chat payload. endpoint_id is optional and defaults to chat, which is the standard Studio workflow member endpoint; pass endpoint_id only when a different published endpoint is explicitly known.";
 
     public string ParametersSchema => AevatarInvocationToolSchemas.InvokeMember;
 

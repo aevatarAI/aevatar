@@ -471,7 +471,7 @@ public sealed class ChatEndpointsInternalTests
         var interactionService = new FakeCommandInteractionService
         {
             ResultFactory = (_, _, _, _) => Task.FromResult(
-                CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                WorkflowChatRunInteractionResult
                     .Failure(WorkflowChatRunStartError.AgentNotFound)),
         };
 
@@ -503,7 +503,7 @@ public sealed class ChatEndpointsInternalTests
                     "corr-empty");
                 if (onAcceptedAsync != null)
                     await onAcceptedAsync(receipt, ct);
-                return CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                return WorkflowChatRunInteractionResult
                     .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
             },
         };
@@ -548,7 +548,7 @@ public sealed class ChatEndpointsInternalTests
             {
                 called = true;
                 return Task.FromResult(
-                    CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    WorkflowChatRunInteractionResult
                         .Failure(WorkflowChatRunStartError.AgentNotFound));
             },
         };
@@ -581,7 +581,7 @@ public sealed class ChatEndpointsInternalTests
         var interactionService = new FakeCommandInteractionService
         {
             ResultFactory = (_, _, _, _) => Task.FromResult(
-                CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                WorkflowChatRunInteractionResult
                     .Failure(WorkflowChatRunStartError.WorkflowBindingMismatch)),
         };
 
@@ -606,7 +606,7 @@ public sealed class ChatEndpointsInternalTests
             {
                 capturedCommand = command;
                 return Task.FromResult(
-                    CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    WorkflowChatRunInteractionResult
                         .Failure(WorkflowChatRunStartError.WorkflowBindingMismatch));
             },
         };
@@ -652,7 +652,7 @@ public sealed class ChatEndpointsInternalTests
             {
                 capturedCommand = command;
                 return Task.FromResult(
-                    CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    WorkflowChatRunInteractionResult
                         .Failure(WorkflowChatRunStartError.WorkflowBindingMismatch));
             },
         };
@@ -698,7 +698,7 @@ public sealed class ChatEndpointsInternalTests
             {
                 capturedCommand = command;
                 return Task.FromResult(
-                    CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    WorkflowChatRunInteractionResult
                         .Failure(WorkflowChatRunStartError.WorkflowBindingMismatch));
             },
         };
@@ -742,7 +742,7 @@ public sealed class ChatEndpointsInternalTests
             {
                 capturedCommand = command;
                 return Task.FromResult(
-                    CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    WorkflowChatRunInteractionResult
                         .Failure(WorkflowChatRunStartError.WorkflowBindingMismatch));
             },
         };
@@ -769,7 +769,7 @@ public sealed class ChatEndpointsInternalTests
             new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerNyxIdAuthority(
                 "nyxid",
                 string.Empty,
-                "caller-scope",
+                "different-uid",
                 "proxy"));
     }
 
@@ -784,7 +784,7 @@ public sealed class ChatEndpointsInternalTests
             {
                 capturedCommand = command;
                 return Task.FromResult(
-                    CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    WorkflowChatRunInteractionResult
                         .Failure(WorkflowChatRunStartError.WorkflowBindingMismatch));
             },
         };
@@ -840,7 +840,7 @@ public sealed class ChatEndpointsInternalTests
             {
                 capturedCommand = command;
                 return Task.FromResult(
-                    CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    WorkflowChatRunInteractionResult
                         .Failure(WorkflowChatRunStartError.WorkflowBindingMismatch));
             },
         };
@@ -921,7 +921,7 @@ public sealed class ChatEndpointsInternalTests
             {
                 capturedCommand = command;
                 return Task.FromResult(
-                    CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    WorkflowChatRunInteractionResult
                         .Failure(WorkflowChatRunStartError.WorkflowBindingMismatch));
             },
         };
@@ -964,7 +964,7 @@ public sealed class ChatEndpointsInternalTests
             {
                 capturedCommand = command;
                 return Task.FromResult(
-                    CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    WorkflowChatRunInteractionResult
                         .Failure(WorkflowChatRunStartError.WorkflowBindingMismatch));
             },
         };
@@ -974,7 +974,11 @@ public sealed class ChatEndpointsInternalTests
         var bindingQueryPort = new RecordingBindingQueryPort("bnd_sender");
         var http = CreateHttpContext("Bearer trusted-token");
         http.RequestServices = CreateRequestServices(bindingQueryPort: bindingQueryPort);
-        http.User = AuthenticatedScopePrincipal("trusted-scope");
+        http.User = new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim("scope_id", "trusted-scope"),
+            new Claim("uid", "nyx-user-alpha"),
+        ], "test"));
         http.Request.ContentType = "application/json";
         http.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(
             """
@@ -997,8 +1001,21 @@ public sealed class ChatEndpointsInternalTests
         {
             Platform = "nyxid",
             Tenant = string.Empty,
-            ExternalUserId = "trusted-scope",
+            ExternalUserId = "nyx-user-alpha",
         });
+    }
+
+    [Fact]
+    public void WorkflowCallerCredentialExtractor_ShouldNotTreatScopeAsNyxIdUser()
+    {
+        var http = CreateHttpContext("Bearer trusted-token");
+        http.User = AuthenticatedScopePrincipal("scope-owner-alpha");
+
+        var result = WorkflowCallerCredentialExtractor.Extract(http);
+
+        result.Succeeded.Should().BeTrue();
+        result.Credential!.BearerToken.Should().Be("trusted-token");
+        result.Credential.NyxIdAuthority.Should().BeNull();
     }
 
     [Fact]
@@ -1011,7 +1028,7 @@ public sealed class ChatEndpointsInternalTests
             {
                 capturedCommand = command;
                 return Task.FromResult(
-                    CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    WorkflowChatRunInteractionResult
                         .Failure(WorkflowChatRunStartError.WorkflowBindingMismatch));
             },
         };
@@ -1052,7 +1069,7 @@ public sealed class ChatEndpointsInternalTests
             {
                 capturedCommand = command;
                 return Task.FromResult(
-                    CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    WorkflowChatRunInteractionResult
                         .Failure(WorkflowChatRunStartError.WorkflowBindingMismatch));
             },
         };
@@ -1090,7 +1107,7 @@ public sealed class ChatEndpointsInternalTests
             {
                 called = true;
                 return Task.FromResult(
-                    CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    WorkflowChatRunInteractionResult
                         .Failure(WorkflowChatRunStartError.WorkflowBindingMismatch));
             },
         };
@@ -1134,7 +1151,7 @@ public sealed class ChatEndpointsInternalTests
             {
                 called = true;
                 return Task.FromResult(
-                    CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    WorkflowChatRunInteractionResult
                         .Failure(WorkflowChatRunStartError.WorkflowBindingMismatch));
             },
         };
@@ -1172,7 +1189,7 @@ public sealed class ChatEndpointsInternalTests
             {
                 called = true;
                 return Task.FromResult(
-                    CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    WorkflowChatRunInteractionResult
                         .Failure(WorkflowChatRunStartError.WorkflowBindingMismatch));
             },
         };
@@ -1215,7 +1232,7 @@ public sealed class ChatEndpointsInternalTests
             {
                 called = true;
                 return Task.FromResult(
-                    CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    WorkflowChatRunInteractionResult
                         .Failure(WorkflowChatRunStartError.WorkflowBindingMismatch));
             },
         };
@@ -1258,7 +1275,7 @@ public sealed class ChatEndpointsInternalTests
             {
                 called = true;
                 return Task.FromResult(
-                    CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    WorkflowChatRunInteractionResult
                         .Failure(WorkflowChatRunStartError.WorkflowBindingMismatch));
             },
         };
@@ -1305,7 +1322,7 @@ public sealed class ChatEndpointsInternalTests
                     new WorkflowChatContext("trusted-scope", "generated-conversation", "generated-turn", 7));
                 if (onAcceptedAsync != null)
                     await onAcceptedAsync(accepted, ct);
-                return CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                return WorkflowChatRunInteractionResult
                     .Success(accepted, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
             },
         };
@@ -1359,7 +1376,7 @@ public sealed class ChatEndpointsInternalTests
                     new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "create-cmd-1", "corr-1"),
                     new WorkflowChatContext("trusted-scope", "recovered-conversation", "recovered-turn"));
                 return Task.FromResult(
-                    CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    WorkflowChatRunInteractionResult
                         .Success(recovered, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, false)));
             },
         };
@@ -1406,7 +1423,7 @@ public sealed class ChatEndpointsInternalTests
             {
                 called = true;
                 return Task.FromResult(
-                    CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    WorkflowChatRunInteractionResult
                         .Failure(WorkflowChatRunStartError.WorkflowBindingMismatch));
             },
         };
@@ -1439,7 +1456,7 @@ public sealed class ChatEndpointsInternalTests
             {
                 called = true;
                 return Task.FromResult(
-                    CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    WorkflowChatRunInteractionResult
                         .Failure(WorkflowChatRunStartError.WorkflowBindingMismatch));
             },
         };
@@ -1517,7 +1534,7 @@ public sealed class ChatEndpointsInternalTests
             {
                 called = true;
                 return Task.FromResult(
-                    CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    WorkflowChatRunInteractionResult
                         .Failure(WorkflowChatRunStartError.AgentNotFound));
             },
         };
@@ -1635,7 +1652,7 @@ public sealed class ChatEndpointsInternalTests
                         Delta = "hello",
                     },
                 }, ct);
-                return CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                return WorkflowChatRunInteractionResult
                     .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
             },
         };
@@ -1665,7 +1682,7 @@ public sealed class ChatEndpointsInternalTests
                 if (onAcceptedAsync != null)
                     await onAcceptedAsync(receipt, ct);
                 await emitAsync(BuildRawObservedWorkflowExecutionStartedFrame(), ct);
-                return CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                return WorkflowChatRunInteractionResult
                     .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
             },
         };
@@ -1696,7 +1713,7 @@ public sealed class ChatEndpointsInternalTests
                 if (onAcceptedAsync != null)
                     await onAcceptedAsync(receipt, ct);
                 await emitAsync(BuildRawObservedWorkflowExecutionStateUpsertedFrame(), ct);
-                return CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                return WorkflowChatRunInteractionResult
                     .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
             },
         };
@@ -2739,12 +2756,12 @@ public sealed class ChatEndpointsInternalTests
 
     private sealed class FakeCommandInteractionService : IWorkflowChatRunInteractionPort
     {
-        public Func<WorkflowChatRunRequest, Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask>, Func<WorkflowChatInteractionAcceptedReceipt, CancellationToken, ValueTask>?, CancellationToken, Task<CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>>> ResultFactory { get; set; } =
+        public Func<WorkflowChatRunRequest, Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask>, Func<WorkflowChatInteractionAcceptedReceipt, CancellationToken, ValueTask>?, CancellationToken, Task<WorkflowChatRunInteractionResult>> ResultFactory { get; set; } =
             (_, _, _, _) => Task.FromResult(
-                CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                WorkflowChatRunInteractionResult
                     .Failure(WorkflowChatRunStartError.AgentNotFound));
 
-        public Task<CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>> ExecuteAsync(
+        public Task<WorkflowChatRunInteractionResult> ExecuteAsync(
             WorkflowChatRunRequest request,
             Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask> emitAsync,
             Func<WorkflowChatInteractionAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,

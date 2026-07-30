@@ -34,6 +34,12 @@ message NyxIdAuthorizationCatalogState {
   NyxIdAuthorizationCatalogLifecycleFenceSemanticsVersion lifecycle_fence_semantics_version = 25;
 }
 
+enum NyxIdAuthorizationCatalogObservationCoverageKind {
+  NYX_ID_AUTHORIZATION_CATALOG_OBSERVATION_COVERAGE_KIND_UNSPECIFIED = 0;
+  NYX_ID_AUTHORIZATION_CATALOG_OBSERVATION_COVERAGE_KIND_FULL_OWNER = 1;
+  NYX_ID_AUTHORIZATION_CATALOG_OBSERVATION_COVERAGE_KIND_REQUIRED_SERVICE_SUBSET = 2;
+}
+
 message ObserveNyxIdAuthorizationCatalogCommand {
   reserved 5, 7;
   reserved "external_revision", "expected_lifecycle_fence";
@@ -47,6 +53,8 @@ message ObserveNyxIdAuthorizationCatalogCommand {
   string policy_version = 9;
   google.protobuf.Timestamp evaluated_at = 10;
   string refresh_id = 11;
+  NyxIdAuthorizationCatalogObservationCoverageKind coverage_kind = 12;
+  repeated string covered_user_service_ids = 13;
 }
 
 message BeginNyxIdAuthorizationCatalogRefreshCommand {
@@ -69,6 +77,7 @@ message RecordNyxIdAuthorizationCatalogRefreshFailureCommand {
   google.protobuf.Timestamp failed_at = 2;
   string failure_code = 3;
   string refresh_id = 4;
+  NyxIdAuthorizationCatalogRefreshOutcomeStatusState outcome_status = 5;
 }
 
 message InvalidateNyxIdAuthorizationCatalogCommand {
@@ -113,6 +122,8 @@ message NyxIdAuthorizationCatalogObservedEvent {
   google.protobuf.Timestamp evaluated_at = 10;
   string refresh_id = 11;
   NyxIdAuthorizationCatalogLifecycleFenceSemanticsVersion lifecycle_fence_semantics_version = 12;
+  NyxIdAuthorizationCatalogObservationCoverageKind coverage_kind = 13;
+  repeated string covered_user_service_ids = 14;
 }
 
 message NyxIdAuthorizationCatalogRefreshFailedEvent {

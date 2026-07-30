@@ -190,6 +190,62 @@ public sealed class NyxIdChatBrowserActionTests
     }
 
     [Fact]
+    public void EmptyActionWake_ShouldReverifyPendingActionWithoutPersistingACompletionClaim()
+    {
+        var blocked = BlockedActionState();
+        var command = ContinueCommand(
+            blocked.PendingActions.Single().ActionRequestId,
+            NyxIdChatActionDisposition.Completed);
+        command.OriginTurnId = string.Empty;
+        command.Actions.Clear();
+
+        var decision = NyxIdChatBrowserActions.Continue(blocked, command, Now);
+
+        decision.ShouldCommit.Should().BeTrue();
+        decision.ShouldDispatch.Should().BeTrue();
+        decision.Admission.ActionReports.Should().BeEmpty();
+        decision.State.PendingActions.Should().ContainSingle()
+            .Which.Reports.Should().BeEmpty();
+        decision.State.ActiveTask.Steps.Should().ContainSingle(step =>
+            step.Kind == NyxIdChatStepKind.Postcondition &&
+            step.ActionRequestId == blocked.PendingActions.Single().ActionRequestId);
+        decision.NextCommand!.ActionPostcondition.ReportedDisposition.Should().Be(
+            NyxIdChatActionDisposition.Unspecified);
+        decision.NextCommand.ActionPostcondition.ResourceHint.Should().BeNull();
+        decision.NextCommand.ActionPostcondition.Params.CatalogServiceConnect.ServiceSlug
+            .Should().Be("api-github");
+    }
+
+    [Fact]
+    public void EmptyActionWakeWithoutPendingActions_ShouldCommitFastNoOpTerminal()
+    {
+        var terminal = AuthorizationWaitingState();
+        terminal.ActiveTurn.Status = NyxIdChatTurnStatus.Succeeded;
+        terminal.LatestTurn = terminal.ActiveTurn.Clone();
+        terminal.ActiveTask.Status = NyxIdChatTaskStatus.Succeeded;
+        terminal.ActiveTask.ActiveStepId = string.Empty;
+        terminal.ActiveTask.ActiveOperationId = string.Empty;
+        terminal.ActiveTask.Steps.Clear();
+        var command = ContinueCommand("unused-action", NyxIdChatActionDisposition.Completed);
+        command.OriginTurnId = string.Empty;
+        command.Actions.Clear();
+
+        var decision = NyxIdChatBrowserActions.Continue(terminal, command, Now);
+
+        decision.ShouldCommit.Should().BeTrue();
+        decision.ShouldDispatch.Should().BeFalse();
+        decision.Outcome.Should().Be(NyxIdChatTransitionOutcome.Accepted);
+        decision.Admission.OriginTurnId.Should().BeEmpty();
+        decision.Admission.ActionReports.Should().BeEmpty();
+        decision.State.ActiveTurn.TurnId.Should().Be("turn-action-alpha");
+        decision.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Succeeded);
+        decision.State.ActiveTurn.TerminalAt.Should().NotBeNull();
+        decision.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Succeeded);
+        decision.State.ActiveTask.Steps.Should().BeEmpty();
+        decision.NextCommand.Should().BeNull();
+    }
+
+    [Fact]
     public void ExactContinuationReplayAtRequestedWaterline_ShouldRedispatchWithoutCommit()
     {
         var blocked = BlockedActionState();

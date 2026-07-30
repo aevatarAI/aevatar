@@ -23,7 +23,6 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
     private readonly IEventStore _eventStore;
     private readonly IEventSourcingSnapshotStore<TState>? _snapshotStore;
     private readonly ISnapshotStrategy _snapshotStrategy;
-    private readonly IEventStoreCompactionScheduler? _compactionScheduler;
     private readonly bool _enableEventCompaction;
     private readonly int _retainedEventsAfterSnapshot;
     private readonly bool _recoverFromVersionDriftOnReplay;
@@ -31,6 +30,7 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
     private readonly List<IMessage> _pending = [];
     private readonly string _agentId;
     private long _currentVersion;
+    private long _lastSnapshotVersion;
 
     public EventSourcingBehavior(
         IEventStore eventStore,
@@ -40,14 +40,12 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
         ILogger<EventSourcingBehavior<TState>>? logger = null,
         bool enableEventCompaction = false,
         int retainedEventsAfterSnapshot = 0,
-        IEventStoreCompactionScheduler? compactionScheduler = null,
         bool recoverFromVersionDriftOnReplay = false)
     {
         _eventStore = eventStore;
         _agentId = agentId;
         _snapshotStore = snapshotStore;
         _snapshotStrategy = snapshotStrategy ?? NeverSnapshotStrategy.Instance;
-        _compactionScheduler = compactionScheduler;
         _enableEventCompaction = enableEventCompaction;
         _retainedEventsAfterSnapshot = Math.Max(0, retainedEventsAfterSnapshot);
         _recoverFromVersionDriftOnReplay = recoverFromVersionDriftOnReplay;
@@ -193,16 +191,19 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
         if (_snapshotStore == null)
             return;
 
-        if (!_snapshotStrategy.ShouldCreateSnapshot(_currentVersion))
+        var eventsSinceLastSnapshot = _currentVersion - _lastSnapshotVersion;
+        if (!_snapshotStrategy.ShouldCreateSnapshot(eventsSinceLastSnapshot))
             return;
 
         try
         {
+            var snapshotVersion = _currentVersion;
             await _snapshotStore.SaveAsync(
                 _agentId,
-                new EventSourcingSnapshot<TState>(currentState.Clone(), _currentVersion),
+                new EventSourcingSnapshot<TState>(currentState.Clone(), snapshotVersion),
                 ct);
-            await TryScheduleCompactionAsync(ct);
+            _lastSnapshotVersion = snapshotVersion;
+            await TryCompactEventsAsync(ct);
         }
         catch (Exception ex)
         {
@@ -223,6 +224,7 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
     public async Task<TState?> ReplayAsync(string agentId, CancellationToken ct = default)
     {
         var snapshot = await TryLoadSnapshotAsync(agentId, ct);
+        _lastSnapshotVersion = snapshot?.Version ?? 0;
         long? fromVersion = snapshot?.Version;
         var events = await _eventStore.GetEventsAsync(agentId, fromVersion, ct);
 
@@ -342,12 +344,9 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
         return eventTypes.Length == 0 ? "<none>" : string.Join(",", eventTypes);
     }
 
-    private async Task TryScheduleCompactionAsync(CancellationToken ct)
+    private async Task TryCompactEventsAsync(CancellationToken ct)
     {
         if (!_enableEventCompaction)
-            return;
-
-        if (_compactionScheduler == null)
             return;
 
         var compactToVersion = _currentVersion - _retainedEventsAfterSnapshot;
@@ -356,13 +355,19 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
 
         try
         {
-            await _compactionScheduler.ScheduleAsync(_agentId, compactToVersion, ct);
+            var deleted = await _eventStore.DeleteEventsUpToAsync(_agentId, compactToVersion, ct);
+            _logger.LogInformation(
+                "Event sourcing checkpoint compaction completed. agentId={AgentId} compactToVersion={CompactToVersion} deletedEvents={DeletedEvents} result={Result}",
+                _agentId,
+                compactToVersion,
+                deleted,
+                "ok");
         }
         catch (Exception ex)
         {
             _logger.LogWarning(
                 ex,
-                "Event sourcing compaction scheduling failed and will be ignored. agentId={AgentId} compactToVersion={CompactToVersion} retainedRecentEvents={RetainedRecentEvents} result={Result} errorType={ErrorType}",
+                "Event sourcing checkpoint compaction failed and will be retried at the next snapshot. agentId={AgentId} compactToVersion={CompactToVersion} retainedRecentEvents={RetainedRecentEvents} result={Result} errorType={ErrorType}",
                 _agentId,
                 compactToVersion,
                 _retainedEventsAfterSnapshot,

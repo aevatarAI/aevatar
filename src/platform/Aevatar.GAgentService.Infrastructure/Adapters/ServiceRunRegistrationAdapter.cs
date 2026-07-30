@@ -1,3 +1,6 @@
+using System.Security.Cryptography;
+using System.Text;
+using Aevatar.ContentArtifacts.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
@@ -11,7 +14,9 @@ namespace Aevatar.GAgentService.Infrastructure.Adapters;
 /// commands to <see cref="ServiceRunGAgent"/> actors. The actor commits the events
 /// and the current-state projection materializes them into the durable readmodel.
 /// </summary>
-public sealed class ServiceRunRegistrationAdapter : IServiceRunRegistrationPort
+public sealed class ServiceRunRegistrationAdapter :
+    IServiceRunRegistrationPort,
+    IServiceRunResultArtifactAttachmentPort
 {
     private const string PublisherId = "gagent-service.runs";
 
@@ -97,6 +102,52 @@ public sealed class ServiceRunRegistrationAdapter : IServiceRunRegistrationPort
             commandId,
             commandId);
         await _dispatchPort.DispatchAsync(runActorId, envelope, ct);
+    }
+
+    public async Task<ServiceRunArtifactAttachmentResult> AttachResultArtifactsAsync(
+        string runActorId,
+        string runId,
+        long expectedStateVersion,
+        IReadOnlyList<ContentArtifactReference> resultArtifacts,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(runActorId))
+            throw new ArgumentException("runActorId is required.", nameof(runActorId));
+        if (string.IsNullOrWhiteSpace(runId))
+            throw new ArgumentException("runId is required.", nameof(runId));
+        ArgumentNullException.ThrowIfNull(resultArtifacts);
+        if (resultArtifacts.Count == 0)
+            throw new InvalidOperationException("At least one result artifact reference is required.");
+
+        var command = new AttachServiceRunResultArtifactsRequested
+        {
+            RunId = runId.Trim(),
+            ExpectedStateVersion = expectedStateVersion,
+        };
+        command.ResultArtifacts.Add(resultArtifacts.Select(static artifact => artifact.Clone()));
+        var commandId = BuildResultArtifactCommandId(command);
+        await _dispatchPort.DispatchAsync(
+            runActorId,
+            CreateEnvelope(runActorId, Any.Pack(command), commandId, commandId),
+            ct);
+        return new ServiceRunArtifactAttachmentResult(
+            command.RunId,
+            commandId,
+            commandId,
+            DateTimeOffset.UtcNow);
+    }
+
+    private static string BuildResultArtifactCommandId(AttachServiceRunResultArtifactsRequested command)
+    {
+        var identity = string.Join(
+            "\n",
+            command.ResultArtifacts
+                .OrderBy(static artifact => artifact.ArtifactId, StringComparer.Ordinal)
+                .ThenBy(static artifact => artifact.RevisionId, StringComparer.Ordinal)
+                .Select(static artifact =>
+                    $"{artifact.ArtifactId}\t{artifact.RevisionId}\t{artifact.ContentHash}\t{artifact.MediaType}"));
+        var digest = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(identity)));
+        return $"service-run-artifacts-{command.RunId}-v{command.ExpectedStateVersion}-{digest}";
     }
 
     private static EventEnvelope CreateEnvelope(

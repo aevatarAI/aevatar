@@ -380,7 +380,7 @@ public sealed class WorkflowRunFallbackCoverageTests
             Task.CompletedTask;
     }
 
-    private sealed class FakeWorkflowRunActorPort : IWorkflowRunProvisioningPort, IWorkflowDefinitionParser
+    private sealed class FakeWorkflowRunActorPort : IWorkflowRunProvisioningPort
     {
         public List<string> DestroyCalls { get; } = [];
         public TaskCompletionSource<bool> Destroyed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -410,8 +410,6 @@ public sealed class WorkflowRunFallbackCoverageTests
             CancellationToken ct = default) =>
             Task.CompletedTask;
 
-        public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(string workflowYaml, CancellationToken ct = default) =>
-            throw new NotSupportedException();
     }
 
     private sealed class FakeProjectionLease(string actorId, string commandId) : IWorkflowExecutionProjectionLease

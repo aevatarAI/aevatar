@@ -82,7 +82,7 @@ export type ServiceEndpoint = {
 export type ServiceOption = {
   id: string;
   label: string;
-  kind: "nyxid-chat" | "onboarding" | "service";
+  kind: "nyxid-chat" | "service";
   endpoints: ServiceEndpoint[];
   deploymentStatus?: string;
   primaryActorId?: string;

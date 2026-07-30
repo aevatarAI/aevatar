@@ -22,8 +22,9 @@ orchestration, while Infrastructure owns only external transport:
 
 - `PrivateSshCodexExecutionAdapter` maps `private_ssh` to the typed NyxID SSH executor.
 - `ManagedCodexExecutionCoordinator` is the managed-sandbox
-  `ICodexExecutionPort`; it ensures committed per-user credential readiness
-  before executing and performs at most one authorization-repair retry.
+  `ICodexExecutionPort`; it reads one committed per-user credential current-state
+  read model, evaluates execution readiness, and either fails fast or executes
+  exactly once.
 - `NyxIdManagedCodexChronoTransport` receives an already-authoritative
   credential descriptor and maps it to the fixed NyxID proxy route for
   `chrono-sandbox`. It does not query credential state or own lifecycle
@@ -33,13 +34,24 @@ The normal managed path is:
 
 ```text
 codex_exec
-  -> Application EnsureReadyAsync
-  -> committed credential observation
+  -> Application read one committed credential snapshot
+  -> pure execution-readiness assessment
   -> chrono transport
   -> terminal Codex result
 ```
 
 The workflow run actor remains the authority for step lifecycle and terminal state. A per-user `ManagedCodexCredentialGAgent` separately owns durable, non-secret invocation-credential facts. Its current-state projection is the only query source. No process-local identity or execution registry is introduced.
+
+Managed execution failures retain their typed `CodexExecutionFailureKind` at
+the shared tool-receipt boundary. Synthetic receipts and audit artifacts derive
+a closed `codex_execution_*` classification from that enum; they never copy the
+provider-owned `Code`, `Message`, or `DiagnosticId` into the audit record. The
+safe exception class remains `CodexExecutionException`, and `TimedOut` and
+`Cancelled` retain their corresponding terminal audit outcomes. Generic thrown
+tool exceptions continue to use `tool_execution_exception`. This keeps detector
+fingerprints aligned with the established failure domain instead of merging
+admission, readiness, transport, response, and execution failures into one
+incident class.
 
 ## Typed request contract
 
@@ -61,14 +73,19 @@ The temporary internal path uses one constrained NyxID agent key per eligible
 NyxID user. It is an invocation credential for NyxID proxy access, not an LLM
 provider credential.
 
-Readiness is transparent to `codex_exec`. On the first eligible interactive
-call, Application uses the caller's current NyxID bearer only when it must
-create or repair that user's key. It derives the NyxID subject from the native
-authority, never from `scope_id`, and verifies the bearer owner against NyxID
-`/api/v1/users/me`. Once a ready descriptor is committed, later interactive or
-background execution resolves the Vault-backed key without requiring a current
-bearer. Request bodies and tool arguments cannot nominate another user or
-provide credential/provisioning controls.
+Normal `codex_exec` never provisions, reconciles, rotates, or repairs a
+credential. It reads one committed credential snapshot and fails fast when the
+snapshot is not execution-ready. It does not acquire the mutation lease, bind
+or wait for a Projection Session, contact NyxID or Vault for repair, dispatch a
+credential Actor command, or retry the chrono request.
+
+Credential mutation is an explicit authenticated operation. The lifecycle API
+derives the NyxID subject from the native authority, never from `scope_id`, and
+verifies the bearer owner against NyxID `/api/v1/users/me`. Once a ready
+descriptor is committed, interactive and background execution resolve the
+Vault-backed invocation key without needing a current bearer. Request bodies
+and tool arguments cannot nominate another user or provide
+credential/provisioning controls.
 
 Native NyxID managed-Codex authority is canonicalized as
 `platform=nyxid`, empty tenant, and the exact NyxID user ID. A non-empty tenant
@@ -96,8 +113,7 @@ The issued key must have exactly:
 No extra service grant is accepted. NyxID's `chrono-sandbox` UserService must
 set `forward_access_token=false`, `inject_delegation_token=true`, and the
 temporary internal-canary `delegation_token_scope=proxy:*`. Aevatar validates
-these settings during provisioning, rotation, and transparent readiness
-repair.
+these settings during explicit provisioning, reconciliation, and rotation.
 
 The only persistent raw-key copy is stored in `ISecretVault`. Actor state, events, read models, APIs, logs, workflow state, and chrono request bodies contain only typed non-secret facts such as the key ID and `SecretReference`. Execution resolves the raw value immediately before the NyxID request and uses it only as that request's Authorization value. Aevatar never intentionally serializes or forwards it to chrono-sandbox or codex-runner.
 
@@ -135,34 +151,65 @@ exit code, elapsed milliseconds, and a diagnostic ID. Proxy errors and malformed
 chrono responses map to stable typed failures. Raw upstream bodies and
 infrastructure exception text are never returned or logged.
 
+The production deadline chain is ordered outside chrono-sandbox's complete
+180-second execution lifecycle:
+
+- chrono execution: 180 seconds
+- Aevatar managed request: `timeout_secs + ExecutionLifecycleGraceSeconds`,
+  normally 300 seconds (`180 + 120`)
+- NyxID/ingress non-streaming proxy: at least 315 seconds
+- Aevatar NyxID `HttpClient`: 330 seconds
+- Workflow canary: at least 360 seconds
+
+`ExecutionLifecycleGraceSeconds` is validated between 120 and 180 seconds. The
+transport deadline is linked with caller cancellation, so a shorter caller
+deadline still wins. The NyxID client ceiling is only a transport backstop and
+must remain above the managed request deadline.
+
 ## Credential lifecycle
 
-The normal execution path does not call a provisioning endpoint. It binds a
-credential Projection Session before mutation, observes only committed Actor
-state, and continues the original `codex_exec` call with the observed
-descriptor. A proxy authorization denial or missing Vault credential may
-trigger one bearer-authorized forced repair and one transport retry; other
-failures do not loop.
+Normal execution reads one committed credential current-state read model. If
+`execution_ready` is false, `codex_exec` returns the corresponding
+`execution_readiness_reason`; it does not acquire the mutation lease or call
+credential lifecycle dependencies. A proxy authorization denial or
+`managed_credential_unavailable` is terminal for that invocation and does not
+trigger same-turn repair or retry.
 
-The authenticated lifecycle API remains available for diagnostics and
-emergency operations:
+The authenticated lifecycle API is the explicit repair boundary:
 
 - `GET /api/managed-codex/credential`: read projected status
-- `POST /api/managed-codex/credential`: provision
-- `POST /api/managed-codex/credential/rotate`: rotate
+- `POST /api/managed-codex/credential`: idempotently provision or reconcile
+- `POST /api/managed-codex/credential/rotate`: force replacement
 - `DELETE /api/managed-codex/credential`: revoke
 
-`GET` is read-only and reports `enabled`, `eligible`, projected status,
-authoritative state version, and pending cleanup count. Its credential owner is
-resolved from `uid`, `sub`, `ClaimTypes.NameIdentifier`, or `user_id`;
-`scope_id` is never treated as a NyxID subject.
+`GET` is read-only and reports `enabled`, `eligible`, lifecycle `status`,
+`execution_ready`, `execution_readiness_reason`, authoritative `state_version`,
+and pending cleanup count. `status` describes the stored lifecycle state;
+`execution_ready` answers whether normal execution may use that exact committed
+snapshot. They are deliberately separate: for example, an active descriptor
+with an invalid Vault reference has `status=active` and
+`execution_ready=false`. The credential owner is resolved from `uid`, `sub`,
+`ClaimTypes.NameIdentifier`, or `user_id`; `scope_id` is never treated as a
+NyxID subject.
+
+Stable execution-readiness reasons are:
+
+- `ready`: the committed descriptor satisfies every execution invariant
+- `managed_target_disabled`: the managed target kill switch is off
+- `managed_feature_not_enabled`: the native NyxID user is not eligible
+- `managed_credential_not_provisioned`: no committed credential exists
+- `managed_credential_inactive`: the committed credential is not active
+- `managed_credential_expired`: expiry is missing, malformed, or elapsed
+- `managed_credential_owner_invalid`: committed and caller owner identities differ
+- `managed_credential_reference_invalid`: the Vault reference contract is invalid
+- `managed_credential_service_binding_invalid`: key or UserService binding is invalid
 
 Manual mutation responses are accepted-only receipts. They do not claim that
 Actor commit or projection observation has completed. Diagnostic clients may
 re-read `GET` to observe the current state, but the normal workflow path does
 not poll.
 
-Provision, rotation, revocation, and transparent readiness repair are
+Provision, reconciliation, rotation, and revocation are
 serialized per NyxID authority by a cluster-shared Garnet lease in production.
 Development and Testing may use the explicitly scoped in-memory lease. Every
 lease holder anchors one absolute deadline immediately before acquisition.
@@ -191,7 +238,7 @@ listed key that fails validation or lacks its deterministic Vault reference is
 carried as obsolete cleanup on the subsequent credential command; a rejected
 command deletes nothing. An active reserved NyxID entry without a stable
 nonblank key ID cannot form an exact cleanup identity and fails closed before
-any provision, rotation, or readiness-repair mutation. This validation applies
+any provision, reconciliation, or rotation mutation. This validation applies
 to every active-key list and relist, including post-issuance persistence
 confirmation and policy reconciliation. Issuance compensation may use only the
 exact stable nonblank ID returned by that local create or rotate operation; a

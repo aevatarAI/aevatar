@@ -203,6 +203,8 @@ internal static class NyxIdChatConversationAguiFrameBuilder
     }
 
     public static IReadOnlyList<AGUIEvent> BuildContinuationChanged(
+        string actorId,
+        string turnId,
         NyxIdChatContinuationAdmissionCommittedEvent committed,
         long sequence)
     {
@@ -210,10 +212,37 @@ internal static class NyxIdChatConversationAguiFrameBuilder
         if (committed.Admission is null || sequence <= 0)
             return [];
 
-        return
-        [
+        var frames = new List<AGUIEvent>
+        {
             Custom(ContinuationChangedEventName, committed.Admission, sequence),
-        ];
+        };
+        if (committed.Admission.Kind == NyxIdChatContinuationKind.Action &&
+            committed.Admission.Status == NyxIdChatContinuationAdmissionStatus.Rejected)
+        {
+            frames.Add(new AGUIEvent
+            {
+                Sequence = sequence,
+                RunError = new RunErrorEvent
+                {
+                    RunId = turnId,
+                    Code = committed.Admission.ReasonCode,
+                    Message = committed.Admission.SafeMessage,
+                },
+            });
+            return frames;
+        }
+        if (committed.Admission.Kind != NyxIdChatContinuationKind.Action ||
+            committed.State?.ActiveTask is not { } task ||
+            committed.State.ActiveTurn is not { } turn ||
+            !string.Equals(task.TurnId, turnId, StringComparison.Ordinal) ||
+            !string.Equals(turn.TurnId, turnId, StringComparison.Ordinal))
+        {
+            return frames;
+        }
+
+        frames.AddRange(BuildTaskFrames(task, ResolveActiveOrLast(task), sequence));
+        AppendTerminalIfNeeded(frames, actorId, turnId, task, turn, sequence);
+        return frames;
     }
 
     public static IReadOnlyList<AGUIEvent> BuildLateOperationEvidence(

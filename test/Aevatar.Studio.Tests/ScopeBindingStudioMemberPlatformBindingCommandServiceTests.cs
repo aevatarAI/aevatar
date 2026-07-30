@@ -655,10 +655,21 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
             {
                 UserServiceId = "us-gamma",
                 ServiceSlugSnapshot = "service-gamma",
-                OperationId = "invoke-gamma",
-                HttpMethod = "POST",
+                EndpointId = "invoke-gamma",
+                HttpMethod = "GET",
                 PathTemplate = "/invoke",
                 ContractDigest = "operation-gamma-digest",
+                ExecutionPolicy = new NyxIdOperationExecutionPolicy
+                {
+                    Risk = NyxIdOperationRisk.ReadOnly,
+                    Approval = NyxIdOperationApproval.None,
+                    EnforcementOwner = NyxIdOperationEnforcementOwner.Aevatar,
+                    AllowedExecutionModes =
+                    {
+                        ExternalCapabilityExecutionMode.Interactive,
+                        ExternalCapabilityExecutionMode.Durable,
+                    },
+                },
             },
         };
         var owner = new ExternalCapabilityAuthorizationOwner
@@ -673,18 +684,17 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
                 workflowYaml,
                 new Dictionary<string, string>(),
                 ExternalCapabilityExecutionMode.Durable,
-                [capability],
+                [new WorkflowCapabilityInvocationAdmission
+                {
+                    CallSiteId = "workflow-main/invoke-gamma",
+                    Capability = capability,
+                }],
                 [
                     Source(
-                        ExternalCapabilitySourceKind.NyxIdUserServices,
-                        "nyxid-user-services:caller-alpha",
+                        ExternalCapabilitySourceKind.NyxIdMcpConfig,
+                        "nyxid-mcp-config:caller:nyx-user-gamma",
                         observedAt,
-                        "user-services-gamma-digest"),
-                    Source(
-                        ExternalCapabilitySourceKind.NyxIdOpenApi,
-                        "us-gamma",
-                        observedAt,
-                        "openapi-gamma-digest"),
+                        "mcp-config-gamma-digest"),
                     Source(
                         ExternalCapabilitySourceKind.DurableAuthorizationCatalog,
                         NyxIdAuthorizationCatalogActorIds.Build(new AuthorizationOwnerIdentity

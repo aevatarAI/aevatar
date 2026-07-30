@@ -707,6 +707,45 @@ public sealed class NyxIdServiceToolsTests
     }
 
     [Theory]
+    [InlineData("https://contracts.example.test/shop-openapi.json")]
+    [InlineData("")]
+    public async Task UpdateTool_OpenApiSpecUrl_ShouldUsePublishedNyxIdOverrideContract(
+        string openApiSpecUrl)
+    {
+        var handler = new ServiceHandler();
+        var instance = Instance("us-personal-7", "api-shop", "svc-shop", true);
+        handler.KeysByToken["user-token"] = Keys(instance);
+        handler.ExactKeys["us-personal-7"] = instance;
+        handler.SpecsByServiceId["us-personal-7"] = OperationSpec;
+        var source = CreateSource(handler);
+
+        using var scope = PushContext("user-token");
+        var update = (await source.DiscoverToolsAsync())
+            .Single(tool => tool.Name == "nyxid_service_update");
+        using var schema = JsonDocument.Parse(update.ParametersSchema);
+        schema.RootElement.GetProperty("properties")
+            .TryGetProperty("openapi_spec_url", out _)
+            .Should().BeTrue();
+
+        var result = await update.ExecuteAsync(JsonSerializer.Serialize(new
+        {
+            user_service_id = "us-personal-7",
+            openapi_spec_url = openApiSpecUrl,
+        }));
+
+        result.Should().Contain("\"accepted\": true");
+        handler.ExactReads.Should().ContainSingle().Which.Should().Be("us-personal-7");
+        var mutation = handler.Requests.Should().ContainSingle().Subject;
+        mutation.Method.Should().Be("PUT");
+        mutation.Path.Should().Be("/api/v1/keys/us-personal-7");
+        using var body = JsonDocument.Parse(mutation.Body);
+        body.RootElement.EnumerateObject().Select(static property => property.Name)
+            .Should().Equal("openapi_spec_url");
+        body.RootElement.GetProperty("openapi_spec_url").GetString()
+            .Should().Be(openApiSpecUrl);
+    }
+
+    [Theory]
     [MemberData(nameof(RequestMethodCases))]
     public async Task RequestTool_PublicHttpMethod_ShouldPreserveTransportAndApprovalContract(
         string method,

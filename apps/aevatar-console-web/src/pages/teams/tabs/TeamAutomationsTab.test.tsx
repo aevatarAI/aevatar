@@ -38,7 +38,6 @@ jest.mock("@/shared/api/teamAutomationApi", () => ({
     pause: jest.fn(),
     preflightCreate: jest.fn(),
     reauthorize: jest.fn(),
-    refreshAuthorizationCatalog: jest.fn(),
     resume: jest.fn(),
     retryRevocation: jest.fn(),
     runNow: jest.fn(),
@@ -325,7 +324,7 @@ describe("TeamAutomationsTab canonical member authority", () => {
     expect(history.replace).not.toHaveBeenCalled();
   });
 
-  it("requires preflight and explicit review before create", async () => {
+  it("starts scoped preflight directly and requires explicit review before create", async () => {
     (teamAutomationApi.preflightCreate as jest.Mock).mockResolvedValue(
       authorizationReview(),
     );
@@ -368,7 +367,7 @@ describe("TeamAutomationsTab canonical member authority", () => {
     const messageError = jest
       .spyOn(message, "error")
       .mockImplementation(() => undefined as never);
-    (teamAutomationApi.refreshAuthorizationCatalog as jest.Mock).mockRejectedValue(
+    (teamAutomationApi.preflightCreate as jest.Mock).mockRejectedValue(
       new Error(rawCatalogFailure),
     );
     renderTab("m-alpha");

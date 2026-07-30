@@ -180,6 +180,46 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         toolEvent.ToolCall.Success.Should().BeTrue();
     }
 
+    [Fact]
+    public async Task GetRunForScopeAsync_ShouldExposeActiveHumanApprovalFacts()
+    {
+        var snapshot = Snapshot(
+            "run-1",
+            CallerScope,
+            WorkflowRunCompletionStatus.Running,
+            started: 1,
+            updated: 5);
+        var currentState = new FakeCurrentStateQueryPort { SingleResult = snapshot };
+        var report = new WorkflowRunReport
+        {
+            Steps =
+            [
+                new WorkflowRunStepTrace
+                {
+                    StepId = "show_for_approval",
+                    StepType = "human_approval",
+                    RequestedAt = DateTimeOffset.UnixEpoch.AddSeconds(4),
+                    SuspensionType = "human_approval",
+                    SuspensionPrompt = "Review the generated workflow YAML.",
+                    SuspensionContent = "name: daily_tech_digest\nsteps: []",
+                    SuspensionTimeoutSeconds = 3600,
+                },
+            ],
+        };
+        var service = new WorkflowRunObservatoryQueryService(
+            currentState,
+            new FakeArtifactQueryPort { Report = report });
+
+        var detail = await service.GetRunForScopeAsync(CallerScope, "run-1");
+
+        var approval = detail!.Steps.Should().ContainSingle().Subject;
+        approval.CompletedAtUtc.Should().BeNull();
+        approval.SuspensionType.Should().Be("human_approval");
+        approval.SuspensionPrompt.Should().Be("Review the generated workflow YAML.");
+        approval.SuspensionContent.Should().Be("name: daily_tech_digest\nsteps: []");
+        approval.SuspensionTimeoutSeconds.Should().Be(3600);
+    }
+
     // 06-26 detail enrichment: the final result + per-step trace + rollup statistics are surfaced from the
     // committed run-report artifact. Final output/input are NOT truncated; step output is a 240-char preview.
     [Fact]

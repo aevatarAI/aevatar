@@ -1,6 +1,7 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.GAgents.ChatHistory;
+using Aevatar.GAgents.ContentArtifacts;
 using Aevatar.GAgents.ConnectorCatalog;
 using Aevatar.GAgents.Registry;
 using Aevatar.GAgents.RoleCatalog;
@@ -33,6 +34,7 @@ public sealed class StudioCommittedStateProjectionActivationPlanProvider : IProj
             [typeof(StudioMemberGAgent)] = StudioMemberGAgent.ProjectionKind,
             [typeof(StudioMemberBindingRunGAgent)] = StudioMemberBindingRunGAgent.ProjectionKind,
             [typeof(StudioTeamGAgent)] = StudioTeamGAgent.ProjectionKind,
+            [typeof(ContentArtifactGAgent)] = ContentArtifactGAgent.ProjectionKind,
             [typeof(WorkOrderGAgent)] = WorkOrderGAgent.ProjectionKind,
             [typeof(StudioWorkspaceGAgent)] = StudioWorkspaceGAgent.ProjectionKind,
         };

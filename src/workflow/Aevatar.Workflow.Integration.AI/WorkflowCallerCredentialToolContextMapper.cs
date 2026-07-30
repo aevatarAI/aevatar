@@ -26,7 +26,8 @@ internal static class WorkflowCallerCredentialToolContextMapper
                 : new AgentToolNyxIdAuthorityContext(
                     Normalize(credential.NyxIdAuthority.Platform),
                     Normalize(credential.NyxIdAuthority.Tenant),
-                    Normalize(credential.NyxIdAuthority.ExternalUserId)),
+                    Normalize(credential.NyxIdAuthority.ExternalUserId),
+                    Normalize(credential.NyxIdAuthority.Scope)),
             SenderBinding = credential?.NyxIdAuthority == null
                 ? AgentToolSenderBindingContext.Empty
                 : new AgentToolSenderBindingContext(
@@ -48,6 +49,34 @@ internal static class WorkflowCallerCredentialToolContextMapper
             },
         };
     }
+
+    private static string? Normalize(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+}
+
+internal static class WorkflowRunScopeToolContextMapper
+{
+    public static AgentToolExecutionContext Apply(
+        string? runScopeId,
+        AgentToolExecutionContext toolContext)
+    {
+        var scopeId = Normalize(runScopeId);
+        if (scopeId is null)
+            return toolContext;
+
+        return toolContext with
+        {
+            Caller = toolContext.Caller with
+            {
+                ScopeId = Fill(toolContext.Caller.ScopeId, scopeId),
+                OwnerScopeId = Fill(toolContext.Caller.OwnerScopeId, scopeId),
+                OwnerSubject = Fill(toolContext.Caller.OwnerSubject, scopeId),
+            },
+        };
+    }
+
+    private static string Fill(string? current, string fallback) =>
+        string.IsNullOrWhiteSpace(current) ? fallback : current;
 
     private static string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

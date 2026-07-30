@@ -60,6 +60,10 @@ public sealed class WorkflowScheduleProvisioningPort : IWorkflowScheduleProvisio
         {
             TeamId = request.TeamId,
             CapabilityAdmission = request.CapabilityAdmission,
+            AuthenticatedOwner = request.AuthenticatedOwner,
+            ProvisioningBearerToken = request.ProvisioningBearerToken,
+            ScheduleOperationId = request.ScheduleOperationId,
+            ScheduleIdempotencyKey = request.ScheduleIdempotencyKey,
         };
 
         var response = await _provisioningService.ProvisionAsync(

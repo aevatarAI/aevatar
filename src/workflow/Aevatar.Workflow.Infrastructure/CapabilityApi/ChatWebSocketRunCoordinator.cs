@@ -51,7 +51,9 @@ internal static class ChatWebSocketRunCoordinator
 
         if (!executionResult.Succeeded || executionResult.Receipt == null)
         {
-            var (code, message) = ChatRunStartErrorMapper.ToCommandError(executionResult.Error);
+            var (code, message) = executionResult.FailureDetail == null
+                ? ChatRunStartErrorMapper.ToCommandError(executionResult.Error)
+                : ChatRunStartErrorMapper.ToCommandError(executionResult.FailureDetail);
             var statusCode = ChatRunStartErrorMapper.ToHttpStatusCode(executionResult.Error);
             scope.MarkResult(statusCode);
             var context = ResolveContext();

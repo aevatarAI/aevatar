@@ -13,6 +13,107 @@ namespace Aevatar.Studio.Tests;
 public sealed class ChatConversationGAgentAppendTests
 {
     private const string ActorId = "chat-scope-a-conversation-a";
+    private static readonly DateTimeOffset ConversationCreatedAt =
+        DateTimeOffset.Parse("2026-07-15T00:00:00Z");
+
+    [Fact]
+    public async Task InitializeChatConversationCommand_ShouldCreateEmptyTranscript()
+    {
+        var eventStore = new RecordingEventStore();
+        var agent = await CreateAgentAsync(eventStore: eventStore);
+
+        await agent.HandleEventAsync(Envelope(CreateInitialize()));
+
+        agent.State.ScopeId.Should().Be("scope-a");
+        agent.State.ConversationId.Should().Be("conversation-a");
+        agent.State.ServiceId.Should().Be("service-a");
+        agent.State.ServiceKind.Should().Be("nyxid.chat");
+        agent.State.Title.Should().Be("Initial title");
+        agent.State.CreatedAtMs.Should().Be(ConversationCreatedAt.ToUnixTimeMilliseconds());
+        agent.State.UpdatedAtMs.Should().Be(ConversationCreatedAt.ToUnixTimeMilliseconds());
+        agent.State.Turns.Should().BeEmpty();
+        var persisted = await eventStore.GetEventsAsync(ActorId);
+        persisted.Count(evt => evt.EventData.Is(ChatConversationInitializedEvent.Descriptor))
+            .Should().Be(1);
+    }
+
+    [Fact]
+    public async Task InitializeChatConversationCommand_WhenExactlyRepeated_ShouldNotPersistAgain()
+    {
+        var eventStore = new RecordingEventStore();
+        var agent = await CreateAgentAsync(eventStore: eventStore);
+        var command = CreateInitialize();
+
+        await agent.HandleEventAsync(Envelope(command));
+        await agent.HandleEventAsync(Envelope(command.Clone()));
+
+        agent.State.Turns.Should().BeEmpty();
+        var persisted = await eventStore.GetEventsAsync(ActorId);
+        persisted.Count(evt => evt.EventData.Is(ChatConversationInitializedEvent.Descriptor))
+            .Should().Be(1);
+    }
+
+    [Fact]
+    public async Task InitializeChatConversationCommand_WhenOperationOrPayloadChanges_ShouldFailClosed()
+    {
+        var eventStore = new RecordingEventStore();
+        var agent = await CreateAgentAsync(eventStore: eventStore);
+        await agent.HandleEventAsync(Envelope(CreateInitialize()));
+        var conflicts = new[]
+        {
+            Changed(static command => command.OperationId = "initialize-2"),
+            Changed(static command => command.ScopeId = "scope-b"),
+            Changed(static command => command.ConversationId = "conversation-b"),
+            Changed(static command => command.ServiceId = "service-b"),
+            Changed(static command => command.ServiceKind = "workflow"),
+            Changed(static command => command.CreatedAt = Timestamp.FromDateTimeOffset(ConversationCreatedAt.AddSeconds(1))),
+            Changed(static command => command.InitialTitle = "Changed title"),
+        };
+
+        foreach (var conflict in conflicts)
+        {
+            var act = () => agent.HandleEventAsync(Envelope(conflict));
+
+            await act.Should().ThrowAsync<InvalidOperationException>()
+                .WithMessage("*initialization conflicts*");
+        }
+
+        agent.State.ScopeId.Should().Be("scope-a");
+        agent.State.ConversationId.Should().Be("conversation-a");
+        agent.State.ServiceId.Should().Be("service-a");
+        agent.State.ServiceKind.Should().Be("nyxid.chat");
+        agent.State.Title.Should().Be("Initial title");
+        agent.State.CreatedAtMs.Should().Be(ConversationCreatedAt.ToUnixTimeMilliseconds());
+        agent.State.UpdatedAtMs.Should().Be(ConversationCreatedAt.ToUnixTimeMilliseconds());
+        (await eventStore.GetEventsAsync(ActorId)).Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task InitializeChatConversationCommand_AfterSameIdentityAppend_ShouldPreserveExistingTurn()
+    {
+        var eventStore = new RecordingEventStore();
+        var agent = await CreateAgentAsync(eventStore: eventStore);
+        await agent.HandleEventAsync(Envelope(CreateAppend(
+            "turn-1",
+            "hello",
+            "hi",
+            ChatTurnTerminalStatus.Completed)));
+
+        await agent.HandleEventAsync(Envelope(CreateInitialize()));
+
+        agent.State.ScopeId.Should().Be("scope-a");
+        agent.State.ConversationId.Should().Be("conversation-a");
+        agent.State.ServiceId.Should().Be("service-a");
+        agent.State.ServiceKind.Should().Be("nyxid.chat");
+        agent.State.Title.Should().Be("hello");
+        agent.State.CreatedAtMs.Should().Be(ConversationCreatedAt.ToUnixTimeMilliseconds());
+        agent.State.UpdatedAtMs.Should().Be(
+            DateTimeOffset.Parse("2026-07-16T00:00:00Z").ToUnixTimeMilliseconds());
+        agent.State.Turns.Should().ContainSingle().Which.TurnId.Should().Be("turn-1");
+        var persisted = await eventStore.GetEventsAsync(ActorId);
+        persisted.Count(evt => evt.EventData.Is(ChatTurnAppendedEvent.Descriptor)).Should().Be(1);
+        persisted.Count(evt => evt.EventData.Is(ChatConversationInitializedEvent.Descriptor)).Should().Be(1);
+    }
 
     [Fact]
     public async Task AppendChatTurnCommand_ShouldAppendSingleTerminalTurnWithoutReplacingTranscript()
@@ -198,6 +299,26 @@ public sealed class ChatConversationGAgentAppendTests
                 LlmModel = "model-a",
             },
         };
+
+    private static InitializeChatConversationCommand CreateInitialize() =>
+        new()
+        {
+            OperationId = "initialize-1",
+            ScopeId = "scope-a",
+            ConversationId = "conversation-a",
+            ServiceId = "service-a",
+            ServiceKind = "nyxid.chat",
+            CreatedAt = Timestamp.FromDateTimeOffset(ConversationCreatedAt),
+            InitialTitle = "Initial title",
+        };
+
+    private static InitializeChatConversationCommand Changed(
+        Action<InitializeChatConversationCommand> change)
+    {
+        var command = CreateInitialize();
+        change(command);
+        return command;
+    }
 
     private static EventEnvelope Envelope(Google.Protobuf.IMessage payload) =>
         new()

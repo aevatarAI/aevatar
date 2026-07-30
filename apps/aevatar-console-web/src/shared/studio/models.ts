@@ -977,57 +977,6 @@ export interface StudioRoleDraftResponse {
   readonly draft: StudioRoleDefinition | null;
 }
 
-export interface StudioProviderType {
-  readonly id: string;
-  readonly displayName: string;
-  readonly category: string;
-  readonly description: string;
-  readonly recommended: boolean;
-  readonly defaultEndpoint: string;
-  readonly defaultModel: string;
-}
-
-export interface StudioProviderSettings {
-  readonly providerName: string;
-  readonly providerType: string;
-  readonly displayName: string;
-  readonly category: string;
-  readonly description: string;
-  readonly model: string;
-  readonly endpoint: string;
-  readonly apiKey: string;
-  readonly apiKeyConfigured: boolean;
-  readonly clearApiKeyRequested?: boolean;
-}
-
-export interface StudioSettings {
-  readonly runtimeBaseUrl: string;
-  readonly defaultProviderName: string;
-  readonly providerTypes: StudioProviderType[];
-  readonly providers: StudioProviderSettings[];
-}
-
-export interface StudioSaveSettingsInput {
-  readonly runtimeBaseUrl?: string | null;
-  readonly defaultProviderName?: string | null;
-  readonly providers?: Array<{
-    readonly providerName: string;
-    readonly providerType: string;
-    readonly model: string;
-    readonly endpoint?: string | null;
-    readonly apiKey?: string | null;
-    readonly clearApiKey?: boolean | null;
-  }>;
-}
-
-export interface StudioRuntimeTestResult {
-  readonly runtimeBaseUrl: string;
-  readonly reachable: boolean;
-  readonly checkedUrl: string;
-  readonly statusCode: number | null;
-  readonly message: string;
-}
-
 export interface StudioUserConfig {
   readonly defaultModel: string;
   readonly preferredLlmRoute?: string | null;

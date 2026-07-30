@@ -299,48 +299,6 @@ describe("teamAutomationApi", () => {
     );
   });
 
-  it("refreshes the owner catalog through the authenticated lifecycle before review", async () => {
-    const fetchMock = jest.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({ ready: true, status: "observed", failureCode: "" }),
-    } as Response);
-    global.fetch = fetchMock as typeof global.fetch;
-
-    await expect(teamAutomationApi.refreshAuthorizationCatalog()).resolves.toBeUndefined();
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/api/auth/nyxid/authorization-catalog:refresh",
-      expect.objectContaining({ method: "POST" }),
-    );
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(init.body).toBeUndefined();
-  });
-
-  it("turns a catalog refresh 202 projection into a typed retryable state", async () => {
-    const fetchMock = jest.fn().mockResolvedValue({
-      ok: true,
-      status: 202,
-      json: async () => ({
-        ready: false,
-        refreshStatus: "observed",
-        refreshFailureCode: "",
-        visibilityStatus: "projection_pending",
-        visibilityFailureCode: "projection_pending",
-        requiredStateVersion: 19,
-        visibleStateVersion: 18,
-      }),
-    } as Response);
-    global.fetch = fetchMock as typeof global.fetch;
-
-    await expect(teamAutomationApi.refreshAuthorizationCatalog()).rejects.toMatchObject({
-      code: "TEAM_AUTOMATION_AUTHORIZATION_PROJECTION_PENDING",
-      requiredStateVersion: 19,
-      retryable: true,
-      status: 202,
-    });
-  });
-
   it("uses one scoped create command after confirmation", async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,

@@ -14,8 +14,8 @@ namespace Aevatar.Tools.AgentProfileRollout;
 
 public sealed class AgentProfileRolloutCommands
 {
-    public const string ShadowProfileFileName = "nyxid-chat-shadow-v1.profile.pb.json";
-    public const string EnforcedProfileFileName = "nyxid-chat-enforced-v1.profile.pb.json";
+    public const string ShadowProfileFileName = "nyxid-chat-shadow-v2.profile.pb.json";
+    public const string EnforcedProfileFileName = "nyxid-chat-enforced-v2.profile.pb.json";
     private static readonly JsonFormatter ProfileFormatter = new(
         JsonFormatter.Settings.Default.WithIndentation("  "));
     private readonly IAgentProfileRolloutOrnnGateway _ornnGateway;
@@ -526,7 +526,8 @@ public sealed class AgentProfileRolloutCommands
     private static void RejectLegacyOrCredentialNames(IEnumerable<string> names)
     {
         var forbidden = names.Where(static name =>
-            name is "nyxid_services" or "nyxid_proxy" or "nyxid_external_keys" ||
+            name is "nyxid_services" or "nyxid_proxy" or "nyxid_external_keys" or
+                "nyxid_service_handoff" ||
             name.Contains("credential", StringComparison.OrdinalIgnoreCase) ||
             name.Contains("api_key", StringComparison.OrdinalIgnoreCase)).ToArray();
         if (forbidden.Length > 0)
@@ -823,6 +824,13 @@ internal static class ReviewedReleaseTextProto
             return configuredPath;
 
         var executableName = OperatingSystem.IsWindows() ? "protoc.exe" : "protoc";
+        var pathCompiler = (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
+            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+            .Select(directory => Path.Combine(directory, executableName))
+            .FirstOrDefault(File.Exists);
+        if (pathCompiler is not null)
+            return pathCompiler;
+
         var bundledPath = Path.Combine(AppContext.BaseDirectory, executableName);
         return File.Exists(bundledPath) ? bundledPath : executableName;
     }

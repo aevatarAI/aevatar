@@ -195,7 +195,7 @@ public sealed class ServiceRunQueryReader : IServiceRunQueryPort
     }
 
     private static ServiceRunSnapshot Map(ServiceRunCurrentStateReadModel readModel) =>
-        new(
+        new ServiceRunSnapshot(
             readModel.ScopeId,
             readModel.ServiceId,
             readModel.ServiceKey,
@@ -218,5 +218,8 @@ public sealed class ServiceRunQueryReader : IServiceRunQueryPort
             readModel.CreatedAt,
             readModel.UpdatedAt,
             readModel.LastOutput,
-            readModel.LastError);
+            readModel.LastError)
+        {
+            ResultArtifacts = readModel.ResultArtifacts.Select(static artifact => artifact.Clone()).ToArray(),
+        };
 }

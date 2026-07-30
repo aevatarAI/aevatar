@@ -82,7 +82,7 @@ public sealed class WorkflowTuringCompletenessTests : WorkflowGAgentTestBase
                     Type = "tool_call",
                     Parameters = new Dictionary<string, string>
                     {
-                        ["tool"] = "nyxid_proxy",
+                        ["tool"] = "failing_tool",
                     },
                 },
             ],
@@ -102,7 +102,7 @@ public sealed class WorkflowTuringCompletenessTests : WorkflowGAgentTestBase
     }
 
     [Fact]
-    public async Task NyxIdMissingServiceId_ShouldRemainFailedThroughSchedulingProjectionAndSse()
+    public async Task NyxIdMissingAdmission_ShouldRemainFailedThroughSchedulingProjectionAndSse()
     {
         const string arguments =
             """{"slug":"home-assistant-q1000","path":"/q1000","method":"GET"}""";
@@ -146,7 +146,7 @@ public sealed class WorkflowTuringCompletenessTests : WorkflowGAgentTestBase
             new WorkflowCallerCredential { BearerToken = "user-token" });
 
         completed.Success.Should().BeFalse();
-        completed.Error.Should().Contain("NYXID_PROXY_SERVICE_ID_REQUIRED");
+        completed.Error.Should().Contain("EXTERNAL_CAPABILITY_CALL_SITE_NOT_ADMITTED");
         requestedStepIds.Should().ContainSingle().Which.Should().Be("call_service");
         requestedStepIds.Should().NotContain("report_q1000");
         requestHandler.RequestCount.Should().Be(0);
@@ -510,7 +510,7 @@ public sealed class WorkflowTuringCompletenessTests : WorkflowGAgentTestBase
 
     private sealed class FailingWorkflowTool : IWorkflowTool
     {
-        public string Name => "nyxid_proxy";
+        public string Name => "failing_tool";
 
         public Task<WorkflowToolExecutionResult> ExecuteAsync(
             WorkflowToolExecutionRequest request,

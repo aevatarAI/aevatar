@@ -50,6 +50,7 @@ using Aevatar.GAgents.StreamingProxy;
 using Aevatar.Foundation.Runtime.Hosting.Maintenance;
 using Aevatar.Foundation.VoicePresence;
 using Aevatar.Mainnet.Host.Api.BackendConsole;
+using Aevatar.Mainnet.Host.Api.Chat;
 using Aevatar.Mainnet.Host.Api.ChatCompletions;
 using Aevatar.Mainnet.Host.Api.ChatRouting;
 using Aevatar.Mainnet.Host.Api.Cqrs;
@@ -63,6 +64,7 @@ using Aevatar.Mainnet.Host.Api.Scheduled;
 using Aevatar.Mainnet.Host.Api.Skills;
 using Aevatar.Mainnet.Host.Api.Status;
 using Aevatar.Mainnet.Host.Api.Voice;
+using Aevatar.Mainnet.Host.Api.WorkflowAdmission;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Hosting;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -139,6 +141,7 @@ public static class MainnetHostBuilderExtensions
             // tenant-supplied C#) must never be composed into this host. Stated explicitly so a
             // future change to the platform default cannot silently re-enable it here.
             options.EnableScriptingCapability = false;
+            options.MapWorkflowChatPost = false;
             options.ConfigureAIFeatures = ConfigureMainnetAIFeatures;
         });
         // Hosted services start in registration order. Register the provider-local index
@@ -164,6 +167,13 @@ public static class MainnetHostBuilderExtensions
             builder.Configuration,
             builder.Environment.ContentRootPath);
         builder.Services.AddSingleton(agentProfileRolloutSelector);
+        if (builder.Configuration[$"{NyxIdAssistantActionsOptions.ConfigSection}:Enabled"] is null)
+        {
+            builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [$"{NyxIdAssistantActionsOptions.ConfigSection}:Enabled"] = bool.TrueString,
+            });
+        }
         builder.Services.AddNyxIdChat(builder.Configuration);
         AddNyxIdChatAgentProfile(builder);
         builder.Services.AddStreamingProxy(builder.Configuration);
@@ -331,9 +341,17 @@ public static class MainnetHostBuilderExtensions
             o.BypassSshExecApproval = true; // mainnet Lark bot internal-only
             o.EnableManagedCodexExecTool = builder.Configuration.GetValue<bool>(
                 $"{ManagedCodexOptions.SectionName}:Enabled");
+            o.MaxRequestDurationSeconds = builder.Configuration.GetValue(
+                "Aevatar:NyxId:MaxRequestDurationSeconds",
+                o.MaxRequestDurationSeconds);
             if (long.TryParse(builder.Configuration["Aevatar:NyxId:ProxyFileArtifactMaxBytes"], out var maxBytes))
                 o.ProxyFileArtifactMaxBytes = maxBytes;
+            o.ManagedWorkflowAdmissionMode = builder.Configuration.GetValue(
+                "Aevatar:NyxId:ManagedWorkflowAdmissionMode",
+                o.ManagedWorkflowAdmissionMode);
         });
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IHostedService, NyxIdWorkflowAdmissionEnforcementStartupGuard>());
         builder.Services.Replace(ServiceDescriptor.Singleton<
             IWorkflowFileMultipartUploadPolicyResolver,
             MainnetWorkflowFileMultipartUploadSafetyPolicyResolver>());
@@ -441,6 +459,8 @@ public static class MainnetHostBuilderExtensions
         ArgumentNullException.ThrowIfNull(app);
 
         app.UseAevatarDefaultHost();
+        app.MapMainnetChatEndpoints();
+        app.MapNyxIdChatPublicEndpoints();
         app.MapNyxIdChatEndpoints();
         app.MapChatRoutePolicyAdminEndpoints();
         app.MapVoicePresenceCapabilityAdminEndpoints();
@@ -458,6 +478,7 @@ public static class MainnetHostBuilderExtensions
         app.MapDeviceEventEndpoints();
         app.MapIdentityOAuthEndpoints();
         app.MapScheduledAgentCredentialRepairAdminEndpoints();
+        app.MapDevelopmentNyxIdApiKeyEndpoints();
         app.MapProjectionVersionRegressionRepairAdminEndpoints();
         app.MapManagedCodexCredentialEndpoints();
         app.MapWorkflowSkillsEndpoints();

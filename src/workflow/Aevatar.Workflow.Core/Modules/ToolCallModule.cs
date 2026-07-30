@@ -6,6 +6,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Abstractions.Credentials;
 using Microsoft.Extensions.Logging;
@@ -72,6 +73,13 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         var argumentsJson = ResolveArgumentsJson(request);
         ctx.Logger.LogInformation("ToolCall: {StepId} → 工具 {Tool}", request.StepId, toolName);
 
+        var admission = ResolveInvocationAdmission(ctx, request, toolName, out var admissionError);
+        if (admissionError != null)
+        {
+            await PublishToolFailureAsync(ctx, request, toolName, admissionError, ct);
+            return;
+        }
+
         // 发布 Tool 调用开始事件（供观测/UI）
         await ctx.PublishAsync(new WorkflowToolCallStartedEvent
         {
@@ -92,7 +100,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
 
         try
         {
-            var result = await ExecuteToolAsync(tool, argumentsJson, request, callId, ctx, ct);
+            var result = await ExecuteToolAsync(tool, argumentsJson, request, callId, ctx, ct, admission: admission);
             if (result.PendingApproval != null)
             {
                 await SuspendForApprovalAsync(ctx, request, toolName, callId, result.PendingApproval, ct);
@@ -108,6 +116,46 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         }
     }
 
+    /// <summary>
+    /// Resolves the committed proof for this call site from actor-owned Run state. A step that the
+    /// compiler classified as an external invocation must not dispatch without exactly one proof.
+    /// </summary>
+    private static ExternalWorkflowCapabilityRef? ResolveInvocationAdmission(
+        IWorkflowExecutionContext ctx,
+        StepRequestEvent request,
+        string toolName,
+        out string? error)
+    {
+        error = null;
+        var invocation = request.ExternalInvocation;
+        if (invocation is null)
+        {
+            if (WorkflowAuthorizationDependencyEvaluator.RequiresExternalCapabilityAdmission(toolName))
+            {
+                error = "EXTERNAL_CAPABILITY_CALL_SITE_NOT_ADMITTED: " +
+                        "this call site has no compiled external capability invocation";
+            }
+
+            return null;
+        }
+
+        if (!string.Equals(invocation.ToolName, toolName, StringComparison.OrdinalIgnoreCase))
+        {
+            error = "EXTERNAL_CAPABILITY_TOOL_MISMATCH: " +
+                    "the dispatched tool does not match the admitted call-site tool";
+            return null;
+        }
+
+        var lookup = WorkflowCapabilityAdmissionRuntimeAccess.Resolve(ctx, invocation);
+        if (!lookup.IsResolved)
+        {
+            error = $"{lookup.FailureCode}: {lookup.FailureMessage}";
+            return null;
+        }
+
+        return lookup.Proof;
+    }
+
     private async Task<WorkflowToolExecutionResult> ExecuteToolAsync(
         IWorkflowTool tool,
         string argumentsJson,
@@ -115,7 +163,8 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         string callId,
         IWorkflowExecutionContext ctx,
         CancellationToken ct,
-        ToolApprovalGrant? approvalGrant = null)
+        ToolApprovalGrant? approvalGrant = null,
+        ExternalWorkflowCapabilityRef? admission = null)
     {
         var credential = await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(ctx, ct);
         var callerCredential = credential.Found
@@ -142,7 +191,8 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
                 ApprovalGrant: approvalGrant,
                 InputFileRefs: request.InputFileRefs,
                 IdempotencyKey: request.IdempotencyKey ?? string.Empty,
-                ScheduleId: ctx.ScheduleId ?? string.Empty),
+                ScheduleId: ctx.ScheduleId ?? string.Empty,
+                InvocationAdmission: admission),
             ct);
     }
 
@@ -183,6 +233,16 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             return;
         }
 
+        var resumedRequest = ToStepRequest(pending);
+        var admission = ResolveInvocationAdmission(ctx, resumedRequest, pending.ToolName, out var admissionError);
+        if (admissionError != null)
+        {
+            state.PendingApprovals.Remove(pendingKey);
+            await SaveStateAsync(state, ctx, ct);
+            await PublishToolFailureAsync(ctx, pending, admissionError, ct);
+            return;
+        }
+
         try
         {
             state.PendingApprovals.Remove(pendingKey);
@@ -191,20 +251,21 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             var result = await ExecuteToolAsync(
                 tool,
                 pending.ArgumentsJson,
-                ToStepRequest(pending),
+                resumedRequest,
                 pending.ToolCallId,
                 ctx,
                 ct,
                 new ToolApprovalGrant(
                     pending.ApprovalRequestId,
                     pending.ToolName,
-                    pending.ToolCallId));
+                    pending.ToolCallId),
+                admission);
 
             if (result.PendingApproval != null)
             {
                 await SuspendForApprovalAsync(
                     ctx,
-                    ToStepRequest(pending),
+                    resumedRequest,
                     pending.ToolName,
                     pending.ToolCallId,
                     result.PendingApproval,
@@ -214,7 +275,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
 
             await PublishToolOutcomeAsync(
                 ctx,
-                ToStepRequest(pending),
+                resumedRequest,
                 pending.ToolName,
                 pending.ToolCallId,
                 result,
@@ -284,6 +345,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             ApprovalRequestId = NormalizeRequired(pending.ApprovalRequestId),
             ArgumentsJson = pending.ArgumentsJson ?? string.Empty,
             IdempotencyKey = request.IdempotencyKey ?? string.Empty,
+            ExternalInvocation = request.ExternalInvocation?.Clone(),
         };
         pendingState.InputFileRefs.Add(request.InputFileRefs.Select(static fileRef => fileRef.Clone()));
         state.PendingApprovals[BuildPendingKey(pendingState)] = pendingState;
@@ -376,6 +438,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             IdempotencyKey = pending.IdempotencyKey,
             Parameters = { ["tool"] = pending.ToolName },
             InputFileRefs = { pending.InputFileRefs.Select(static fileRef => fileRef.Clone()) },
+            ExternalInvocation = pending.ExternalInvocation?.Clone(),
         };
 
     private static string BuildRejectedApprovalError(WorkflowResumedEvent resumed)

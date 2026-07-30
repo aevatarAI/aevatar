@@ -743,7 +743,6 @@ jest.mock("@/shared/api/teamAutomationApi", () => ({
     pause: jest.fn(),
     preflightCreate: jest.fn(),
     reauthorize: jest.fn(),
-    refreshAuthorizationCatalog: jest.fn(),
     resume: jest.fn(),
     retryRevocation: jest.fn(),
     runNow: jest.fn(),
