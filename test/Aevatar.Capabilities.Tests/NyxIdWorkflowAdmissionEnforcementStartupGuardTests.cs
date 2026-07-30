@@ -1,4 +1,6 @@
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.NyxId.Tools;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Projection.ReadModels;
@@ -9,12 +11,70 @@ using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Projection.ReadModels;
 using FluentAssertions;
-using Microsoft.Extensions.Options;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Capabilities.Tests;
 
 public sealed class NyxIdWorkflowAdmissionEnforcementStartupGuardTests
 {
+    [Theory]
+    [InlineData(NyxIdManagedWorkflowAdmissionMode.Shadow)]
+    [InlineData(NyxIdManagedWorkflowAdmissionMode.Enforce)]
+    public async Task AddNyxIdTools_ShouldUseTheSameModeForProxyAndStartupGuard(
+        NyxIdManagedWorkflowAdmissionMode mode)
+    {
+        var definitions = new PagedReader<WorkflowActorBindingDocument>(
+            [[Definition("wf-v2", LegacyPlan())]]);
+        var runs = new PagedReader<WorkflowExecutionCurrentStateDocument>([]);
+        var deployments = new PagedReader<ServiceDeploymentCatalogReadModel>([]);
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddNyxIdTools(options =>
+        {
+            options.BaseUrl = "https://nyxid.invalid";
+            options.ManagedWorkflowAdmissionMode = mode;
+        });
+        services.AddSingleton<IWorkflowDefinitionParser, TestWorkflowDefinitionParser>();
+        services.AddSingleton<IProjectionDocumentReader<WorkflowActorBindingDocument, string>>(definitions);
+        services.AddSingleton<IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string>>(runs);
+        services.AddSingleton<IProjectionDocumentReader<ServiceDeploymentCatalogReadModel, string>>(deployments);
+        services.AddSingleton<NyxIdWorkflowAdmissionEnforcementStartupGuard>();
+
+        await using var provider = services.BuildServiceProvider();
+        var source = provider.GetServices<IAgentToolSource>()
+            .OfType<NyxIdAgentToolSource>()
+            .Single();
+        var proxy = (NyxIdProxyTool)(await source.DiscoverToolsAsync())
+            .Single(static tool => tool.Name == "nyxid_proxy");
+        using var context = AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
+        {
+            WorkflowRuntime = new AgentWorkflowRuntimeContext(
+                "workflow-run-actor-alpha",
+                "run-alpha",
+                "llm-alpha",
+                "run-alpha",
+                1),
+            InvocationSurface = AgentToolInvocationSurface.WorkflowLlmToolLoop,
+        });
+
+        var proxyResult = await proxy.ExecuteAsync("{}");
+        var startGuard = () => provider
+            .GetRequiredService<NyxIdWorkflowAdmissionEnforcementStartupGuard>()
+            .StartAsync(CancellationToken.None);
+
+        if (mode == NyxIdManagedWorkflowAdmissionMode.Enforce)
+        {
+            proxyResult.Should().Contain("NYXID_OPERATION_ADMISSION_REQUIRED");
+            await startGuard.Should().ThrowAsync<InvalidOperationException>()
+                .WithMessage("*CAPABILITY_ADMISSION_REBIND_REQUIRED*wf-v2*");
+        }
+        else
+        {
+            proxyResult.Should().NotContain("NYXID_OPERATION_ADMISSION_REQUIRED");
+            await startGuard.Should().NotThrowAsync();
+        }
+    }
+
     [Fact]
     public async Task StartAsync_WhenShadow_ShouldNotReadInventory()
     {
@@ -192,7 +252,7 @@ public sealed class NyxIdWorkflowAdmissionEnforcementStartupGuardTests
         IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string> runs,
         IProjectionDocumentReader<ServiceDeploymentCatalogReadModel, string> deployments) =>
         new(
-            Options.Create(new NyxIdToolOptions { ManagedWorkflowAdmissionMode = mode }),
+            new NyxIdToolOptions { ManagedWorkflowAdmissionMode = mode },
             new TestWorkflowDefinitionParser(),
             definitions,
             runs,
