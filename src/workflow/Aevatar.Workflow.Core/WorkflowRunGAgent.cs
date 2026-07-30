@@ -567,11 +567,18 @@ public sealed partial class WorkflowRunGAgent
             Input = executionInput,
             RunId = runId,
             ForkSeed = request.ForkSeed,
+            CommandId = ResolveStartWorkflowCommandId(commandId),
         };
         start.InputFileRefs.Add(inputFileRefs.Select(static fileRef => fileRef.Clone()));
         await PublishStartWorkflowOrTerminalFailureAsync(start, request.SessionId, CancellationToken.None);
         await SendWorkflowRunStartedNotificationAsync(CancellationToken.None);
     }
+
+    private string ResolveStartWorkflowCommandId(string commandId) =>
+        !string.IsNullOrWhiteSpace(commandId) &&
+        ActiveInboundEnvelope?.Route.IsDirect() == true
+            ? commandId
+            : string.Empty;
 
     [EventHandler]
     public async Task HandleReplaceWorkflowDefinitionAndExecute(ReplaceWorkflowDefinitionAndExecuteEvent request)

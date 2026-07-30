@@ -271,6 +271,10 @@ message StartWorkflowEvent
   WorkflowRunForkSeed fork_seed = 5;
   WorkflowToolRuntimeContextPayload workflow_runtime = 6;
   repeated WorkflowFileRef input_file_refs = 7;
+  // Producer command id for this workflow execution. Workflow steps inherit it
+  // as their default side-effect idempotency key so retries and tool fallbacks
+  // converge on the caller-owned operation identity instead of run attempts.
+  string command_id = 8;
 }
 message BindWorkflowRunDefinitionEvent
 {

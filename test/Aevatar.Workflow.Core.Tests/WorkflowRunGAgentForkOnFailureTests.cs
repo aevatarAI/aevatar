@@ -264,7 +264,7 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
     {
         var runId = "work-order-run-" + Guid.NewGuid().ToString("N");
         var harness = await CreateRunAsync(runId, WorkflowYaml(onFailure: false));
-        var envelope = EnvelopeFrom("work-order", new WorkflowChatRequestEvent
+        var envelope = DirectEnvelopeFrom("api", runId, new WorkflowChatRequestEvent
         {
             Prompt = "hello",
             ScopeId = "scope-1",
@@ -277,9 +277,39 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
 
         CommittedEvents<WorkflowRunExecutionStartedEvent>(harness.CommittedPublisher)
             .Should().ContainSingle();
-        harness.Publisher.Published.Count(item => item.Event is StartWorkflowEvent)
-            .Should().Be(1);
+        var start = harness.Publisher.Published
+            .Where(item => item.Event is StartWorkflowEvent)
+            .Select(item => (StartWorkflowEvent)item.Event)
+            .Should()
+            .ContainSingle()
+            .Subject;
+        start.CommandId.Should().Be("work-order-dispatch-command-1");
         harness.Agent.State.LastCommandId.Should().Be("work-order-dispatch-command-1");
+    }
+
+    [Fact]
+    public async Task ChatRequest_FromTopologyPublication_ShouldNotSeedStartCommandId()
+    {
+        var runId = "work-order-run-" + Guid.NewGuid().ToString("N");
+        var harness = await CreateRunAsync(runId, WorkflowYaml(onFailure: false));
+        var envelope = EnvelopeFrom("api", new WorkflowChatRequestEvent
+        {
+            Prompt = "hello",
+            ScopeId = "scope-1",
+        });
+        envelope.Id = "transport-delivery-1";
+        envelope.Propagation.CorrelationId = "transport-delivery-1";
+
+        await harness.Agent.HandleEventAsync(envelope);
+
+        var start = harness.Publisher.Published
+            .Where(item => item.Event is StartWorkflowEvent)
+            .Select(item => (StartWorkflowEvent)item.Event)
+            .Should()
+            .ContainSingle()
+            .Subject;
+        start.CommandId.Should().BeEmpty();
+        harness.Agent.State.LastCommandId.Should().Be("transport-delivery-1");
     }
 
     private static async Task<RunHarness> CreateStartedRunAsync(string workflowYaml, int attempt)
@@ -363,6 +393,19 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
 
     private static EventEnvelope SelfEnvelope(string runId, IMessage payload) =>
         EnvelopeFrom(runId, payload);
+
+    private static EventEnvelope DirectEnvelopeFrom(string publisherActorId, string targetActorId, IMessage payload) =>
+        new()
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(payload),
+            Route = EnvelopeRouteSemantics.CreateDirect(publisherActorId, targetActorId),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = Guid.NewGuid().ToString("N"),
+            },
+        };
 
     private static EventEnvelope EnvelopeFrom(string publisherActorId, IMessage payload) =>
         new()

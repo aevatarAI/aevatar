@@ -70,6 +70,7 @@ public sealed class WorkflowSagaContractTests
         AssertField<CompensableStepDispatchedEvent>("compensation_step_id", 3);
         AssertField<CompensableStepDispatchedEvent>("idempotency_key", 4);
         AssertField<CompensableStepDispatchedEvent>("dispatched_at_unix_ms", 5);
+        AssertField<StartWorkflowEvent>("command_id", 8);
         AssertRoundTrip(new CompensableStepDispatchedEvent
         {
             RunId = "run-1",
@@ -169,6 +170,7 @@ public sealed class WorkflowSagaContractTests
         AssertField<WorkflowRunState>("saga_status", 27);
         AssertField<WorkflowExecutionKernelState>("compensation_phase_deadline_lease", 17);
         AssertField<WorkflowExecutionKernelState>("compensation_phase_deadline_callback_id", 18);
+        AssertField<WorkflowExecutionKernelState>("command_id", 19);
         AssertField<WorkflowRunState>("compensation_origin_failed_step_id", 32);
         AssertField<WorkflowRunState>("terminal_workflow_completion_recorded", 33);
         AssertRoundTrip(new CompletedStepLedgerEntry
