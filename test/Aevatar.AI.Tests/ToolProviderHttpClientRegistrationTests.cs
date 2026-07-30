@@ -435,19 +435,15 @@ public sealed class ToolProviderHttpClientRegistrationTests
         var sshExec = tools.Should().ContainSingle(tool => tool is NyxIdSshExecTool).Subject;
         var codexExec = tools.Should().ContainSingle(tool => tool is NyxIdCodexExecTool).Subject;
         codexExec.Name.Should().Be("codex_exec");
-<<<<<<< HEAD
         sshExec.ApprovalMode.Should().Be(ToolApprovalMode.AlwaysRequire);
         sshExec.IsDestructive.Should().BeTrue();
         codexExec.ApprovalMode.Should().Be(ToolApprovalMode.AlwaysRequire);
-        codexExec.IsDestructive.Should().BeTrue();
-=======
-        sshExec.RequiresApproval("""{"service":"host","command":"uptime","principal":"ubuntu"}""")
-            .Should()
-            .BeFalse();
         codexExec.RequiresApproval("""{"target":{"kind":"private_ssh","private_ssh":{"service":"host","principal":"ubuntu"}},"prompt":"check"}""")
             .Should()
+            .BeTrue();
+        codexExec.RequiresApproval("""{"target":{"kind":"managed_sandbox"},"workspace":{"kind":"empty_git"},"prompt":"check"}""")
+            .Should()
             .BeFalse();
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     }
 
     [Fact]

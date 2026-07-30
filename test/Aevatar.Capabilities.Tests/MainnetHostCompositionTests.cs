@@ -1,6 +1,3 @@
-<<<<<<< HEAD
-using Aevatar.AI.Abstractions.ToolProviders;
-=======
 using Aevatar.GAgents.Scheduled;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.AI.Abstractions.Middleware;
@@ -10,7 +7,6 @@ using Aevatar.AI.Abstractions.CodexExecution;
 using Aevatar.AI.Application.CodexExecution;
 using Aevatar.AI.Infrastructure.ChronoSandbox;
 using Aevatar.AI.Core.Middleware;
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
 using Aevatar.AI.ToolProviders.AgentCatalog;
 using Aevatar.AI.ToolProviders.AevatarInvocation;
 using Aevatar.AI.ToolProviders.Binding;
@@ -25,12 +21,9 @@ using Aevatar.AI.ToolProviders.StudioProvisioning;
 using Aevatar.AI.ToolProviders.Telegram;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.AI.ToolProviders.Web;
-<<<<<<< HEAD
 using Aevatar.Audit.Abstractions.Identity;
 using Aevatar.Audit.Abstractions.Ports;
-=======
 using Aevatar.AI.ToolProviders.Workflow;
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
 using Aevatar.Audit.Core.Identity;
 using Aevatar.Bootstrap.Extensions.AI;
 using Aevatar.Bootstrap.Hosting;

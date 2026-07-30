@@ -10,12 +10,9 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Observability;
-<<<<<<< HEAD
 using Aevatar.AI.Core.Tools;
-=======
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.Tools;
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
@@ -2187,12 +2184,8 @@ public class NyxIdChatGAgentTests
         var services = new ServiceCollection()
             .AddSingleton(eventStore)
             .AddSingleton<EventSourcingRuntimeOptions>()
-<<<<<<< HEAD
-            .AddSingleton<IActorRuntimeCallbackScheduler, NoopRuntimeCallbackScheduler>()
-            .AddSingleton<IAgentToolExecutionPort, TestAgentToolExecutionPort>()
-=======
             .AddSingleton(callbackScheduler)
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
+            .AddSingleton<IAgentToolExecutionPort, TestAgentToolExecutionPort>()
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
 
         if (registryCommandPort is not null)
@@ -3113,7 +3106,6 @@ public class NyxIdChatGAgentTests
             Task.FromResult(execute(argumentsJson));
     }
 
-<<<<<<< HEAD
     private sealed class TestAgentToolExecutionPort : IAgentToolExecutionPort
     {
         public async Task<AgentToolExecutionOutcome> ExecuteAsync(
@@ -3139,7 +3131,8 @@ public class NyxIdChatGAgentTests
                 Retryable: false,
                 AuditCompleted: true);
         }
-=======
+    }
+
     private sealed class VerifiedMissingServiceTool : IAgentTool
     {
         public string Name => "nyxid_require_service";
@@ -3171,7 +3164,6 @@ public class NyxIdChatGAgentTests
                     SafeMessage = "No caller-visible NyxID UserService matches the requested service.",
                 },
             };
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     }
 
     private sealed class RecordingEventPublisher : IEventPublisher

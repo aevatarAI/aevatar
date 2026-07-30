@@ -402,16 +402,11 @@ public sealed class ChatRuntime
 
             var authorizedToolContext = AgentToolExecutionContextMapper.FromRequest(baseRequest);
             var streamingExecutor = new StreamingToolExecutor(
-<<<<<<< HEAD
                 authorizedTools, _hooks,
                 toolContext: authorizedToolContext,
                 toolExecutionPort: _toolLoop.ToolExecutionPort,
-                approvalContinuationMode: _toolLoop.ApprovalContinuationMode);
-=======
-                authorizedTools, _hooks, _toolLoop.ToolMiddlewares,
-                toolContext: authorizedToolContext,
+                approvalContinuationMode: _toolLoop.ApprovalContinuationMode,
                 logger: _logger);
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
             using var streamingToolState = streamingExecutor.CreateExecutionState();
 
             void BindAuthorizedRequest(LLMRequest authorizedRequest)
@@ -419,16 +414,11 @@ public sealed class ChatRuntime
                 authorizedToolContext = AgentToolExecutionContextMapper.FromRequest(authorizedRequest);
                 authorizedTools = ToolCallLoop.CreateRequestToolManager(authorizedRequest.Tools);
                 streamingExecutor = new StreamingToolExecutor(
-<<<<<<< HEAD
                     authorizedTools, _hooks,
                     toolContext: authorizedToolContext,
                     toolExecutionPort: _toolLoop.ToolExecutionPort,
-                    approvalContinuationMode: _toolLoop.ApprovalContinuationMode);
-=======
-                    authorizedTools, _hooks, _toolLoop.ToolMiddlewares,
-                    toolContext: authorizedToolContext,
+                    approvalContinuationMode: _toolLoop.ApprovalContinuationMode,
                     logger: _logger);
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
             }
 
             List<ToolCall>? deferredToolCalls = _hooks != null ? [] : null;
@@ -604,16 +594,11 @@ public sealed class ChatRuntime
                             parsed.ToolCalls)!;
 
                         var textToolExecutor = new StreamingToolExecutor(
-<<<<<<< HEAD
                             authorizedTools, _hooks,
                             toolContext: authorizedToolContext,
                             toolExecutionPort: _toolLoop.ToolExecutionPort,
-                            approvalContinuationMode: _toolLoop.ApprovalContinuationMode);
-=======
-                            authorizedTools, _hooks, _toolLoop.ToolMiddlewares,
-                            toolContext: authorizedToolContext,
+                            approvalContinuationMode: _toolLoop.ApprovalContinuationMode,
                             logger: _logger);
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
                         using var textToolState = textToolExecutor.CreateExecutionState();
                         foreach (var tc in parsed.ToolCalls)
                         {
@@ -805,16 +790,11 @@ public sealed class ChatRuntime
                     finalParsed.ToolCalls)!;
 
                 var finalToolExecutor = new StreamingToolExecutor(
-<<<<<<< HEAD
                     authorizedTools, _hooks,
                     toolContext: finalRequest.ToolContext,
                     toolExecutionPort: _toolLoop.ToolExecutionPort,
-                    approvalContinuationMode: _toolLoop.ApprovalContinuationMode);
-=======
-                    authorizedTools, _hooks, _toolLoop.ToolMiddlewares,
-                    toolContext: finalRequest.ToolContext,
+                    approvalContinuationMode: _toolLoop.ApprovalContinuationMode,
                     logger: _logger);
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
                 using var finalToolState = finalToolExecutor.CreateExecutionState();
                 foreach (var tc in finalParsed.ToolCalls)
                 {
@@ -899,12 +879,9 @@ public sealed class ChatRuntime
                 _hooks,
                 requestMetadata: baseRequest.Metadata,
                 toolContext: toolContext ?? AgentToolExecutionContextMapper.FromRequest(baseRequest),
-<<<<<<< HEAD
                 toolExecutionPort: _toolLoop.ToolExecutionPort,
-                approvalContinuationMode: _toolLoop.ApprovalContinuationMode));
-=======
+                approvalContinuationMode: _toolLoop.ApprovalContinuationMode,
                 logger: _logger));
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
 
     private List<ChatMessage> BuildFinalNoToolsMessages(
         IReadOnlyList<ChatMessage> messages,
@@ -1218,15 +1195,10 @@ public sealed class ChatRuntime
         var executor = new StreamingToolExecutor(
             ToolCallLoop.CreateRequestToolManager(tools),
             _hooks,
-<<<<<<< HEAD
             toolContext: toolContext,
             toolExecutionPort: _toolLoop.ToolExecutionPort,
-            approvalContinuationMode: _toolLoop.ApprovalContinuationMode);
-=======
-            _toolLoop.ToolMiddlewares,
-            toolContext: toolContext,
+            approvalContinuationMode: _toolLoop.ApprovalContinuationMode,
             logger: _logger);
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
         using var toolState = executor.CreateExecutionState();
         foreach (var toolCall in toolCalls)
             executor.AddTool(toolState, toolCall);

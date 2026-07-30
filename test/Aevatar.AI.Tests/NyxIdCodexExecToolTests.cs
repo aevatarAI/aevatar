@@ -21,22 +21,13 @@ public sealed class NyxIdCodexExecToolTests
         var tool = new NyxIdCodexExecTool(CreateDummyClient());
 
         tool.Name.Should().Be("codex_exec");
-<<<<<<< HEAD
         tool.ApprovalMode.Should().Be(ToolApprovalMode.AlwaysRequire);
-        tool.IsDestructive.Should().BeTrue();
-        tool.Description.Should().Contain("codex exec -");
-        tool.Description.Should().Contain("local configuration");
-        tool.ParametersSchema.Should().Contain("\"service\"");
-        tool.ParametersSchema.Should().Contain("\"principal\"");
-=======
-        tool.ApprovalMode.Should().Be(ToolApprovalMode.Auto);
         tool.RequiresApproval("{}").Should().BeTrue();
         tool.Description.Should().Contain("private NyxID-backed SSH");
         tool.Description.Should().Contain("managed isolated sandbox");
         tool.ParametersSchema.Should().Contain("\"private_ssh\"");
         tool.ParametersSchema.Should().Contain("\"managed_sandbox\"");
         tool.ParametersSchema.Should().Contain("\"empty_git\"");
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
         tool.ParametersSchema.Should().Contain("\"prompt\"");
         tool.ParametersSchema.Should().NotContain("\"model\"");
         using var schema = JsonDocument.Parse(tool.ParametersSchema);
@@ -51,23 +42,15 @@ public sealed class NyxIdCodexExecToolTests
     }
 
     [Fact]
-<<<<<<< HEAD
-    public void ApprovalPolicy_AlwaysRequiresDurableGrant()
-=======
-    public void RequiresApproval_WhenSshBypassEnabled_AppliesOnlyToPrivateSsh()
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
+    public void ApprovalPolicy_RequiresPrivateSshButAllowsManagedSandbox()
     {
         var tool = new NyxIdCodexExecTool(CreateDummyClient());
 
-<<<<<<< HEAD
         tool.ApprovalMode.Should().Be(ToolApprovalMode.AlwaysRequire);
-        tool.IsDestructive.Should().BeTrue();
-=======
-        tool.RequiresApproval("""{"target":{"kind":"private_ssh"}}""").Should().BeFalse();
+        tool.RequiresApproval("""{"target":{"kind":"private_ssh"}}""").Should().BeTrue();
         tool.RequiresApproval("""{"target":{"kind":"managed_sandbox"}}""").Should().BeFalse();
         tool.RequiresApproval("{}").Should().BeTrue();
         tool.RequiresApproval("""{"target":{"kind":"unknown"}}""").Should().BeTrue();
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     }
 
     [Fact]

@@ -104,37 +104,6 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
     }
 
     [Fact]
-    public async Task ToolApprovalMiddleware_ShouldKeepOrdinaryHumanRawProxyOnNyxIdOwnedApprovalPath()
-    {
-        var handler = new RecordingHandler();
-        var tool = CreateTool(
-            handler,
-            managedWorkflowAdmissionMode: NyxIdManagedWorkflowAdmissionMode.Enforce);
-        var approvalHandler = new RecordingApprovalHandler();
-        using var scope = PushHumanContext();
-        const string arguments =
-            """{"service_id":"us-service-alpha","slug":"calendar-alpha","path":"/events/evt-alpha"}""";
-        var context = new ToolCallContext
-        {
-            Tool = tool,
-            ToolName = tool.Name,
-            ToolCallId = "call-human-alpha",
-            ArgumentsJson = arguments,
-        };
-
-        var nextExecuted = false;
-        await new ToolApprovalMiddleware(approvalHandler).InvokeAsync(context, async () =>
-        {
-            nextExecuted = true;
-            context.Result = await tool.ExecuteAsync(arguments);
-        });
-
-        nextExecuted.Should().BeTrue();
-        approvalHandler.Requests.Should().BeEmpty();
-        handler.ProxyRequests.Should().ContainSingle();
-    }
-
-    [Fact]
     public async Task ExecuteAsync_ShouldRecordOnlyBoundedProoflessManagedDecisionTelemetry()
     {
         var measurements = new List<KeyValuePair<string, object?>[]>();
@@ -1089,17 +1058,4 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
         }
     }
 
-    private sealed class RecordingApprovalHandler : IToolApprovalHandler
-    {
-        public List<ToolApprovalRequest> Requests { get; } = [];
-
-        public Task<ToolApprovalResult> RequestApprovalAsync(
-            ToolApprovalRequest request,
-            CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            Requests.Add(request);
-            return Task.FromResult(ToolApprovalResult.Denied("unexpected local approval"));
-        }
-    }
 }

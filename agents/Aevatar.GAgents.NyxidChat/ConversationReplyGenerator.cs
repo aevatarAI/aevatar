@@ -129,11 +129,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         ILogger<NyxIdConversationReplyGenerator>? logger = null,
         ISystemSkillOverlayProvider? overlayProvider = null,
         ILarkOutboundClientFactory? larkOutboundClientFactory = null,
-<<<<<<< HEAD
-        IAgentToolExecutionPort? toolExecutionPort = null)
-=======
+        IAgentToolExecutionPort? toolExecutionPort = null,
         IRemoteSkillAccessTokenResolver? remoteSkillAccessTokenResolver = null)
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     {
         _llmProviderFactory = llmProviderFactory ?? throw new ArgumentNullException(nameof(llmProviderFactory));
         _toolSources = (toolSources ?? []).ToArray();

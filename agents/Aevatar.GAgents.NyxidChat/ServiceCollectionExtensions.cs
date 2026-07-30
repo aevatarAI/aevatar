@@ -178,11 +178,8 @@ public static class ServiceCollectionExtensions
                 logger: sp.GetService<ILogger<NyxIdConversationReplyGenerator>>(),
                 overlayProvider: sp.GetService<ISystemSkillOverlayProvider>(),
                 larkOutboundClientFactory: sp.GetService<ILarkOutboundClientFactory>(),
-<<<<<<< HEAD
-                toolExecutionPort: sp.GetRequiredService<IAgentToolExecutionPort>()));
-=======
+                toolExecutionPort: sp.GetRequiredService<IAgentToolExecutionPort>(),
                 remoteSkillAccessTokenResolver: sp.GetService<IRemoteSkillAccessTokenResolver>()));
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
         services.TryAddSingleton<ChannelNyxIdConnectedServiceInventoryToolSource>();
         services.TryAddSingleton<IAgentRunReplyGenerationExecutorPort, AgentRunReplyGenerationExecutor>();
         services.TryAddSingleton<INyxIdActionPostconditionPort>(sp =>

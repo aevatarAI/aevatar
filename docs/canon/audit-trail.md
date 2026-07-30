@@ -135,7 +135,6 @@ optional middleware around individual callers. Every server-owned `IAgentTool`
 call enters `IAgentToolExecutionPort`; only `AdmittedAgentToolExecutor` may call
 the raw `IAgentTool.ExecuteAsync` terminal.
 
-<<<<<<< HEAD
 The executor freezes the final argument string after caller-owned hooks, derives
 its SHA-256 digest, and calls `GetCallSafety` once. Credential policy,
 actor-owned approval, audit artifacts, receipt construction, and terminal
@@ -168,12 +167,12 @@ artifact reference and record only that reference in the audit artifact.
 Client-forwarded tools are outside the local terminal boundary. They are
 recorded as forwarded continuation state and do not enter
 `IAgentToolExecutionPort`.
-=======
+
 `AgentToolReceipt` is the single execution-outcome fact shared by audit,
 workflow artifacts, streaming results, and user-visible completion. A tool that
 returns without throwing but does not provide a receipt has an unverified
-outcome: the finalizer writes back a synthetic `Unspecified` receipt, audit
-records it as running and nonterminal, and consumers must not upgrade it to
+outcome: the admitted executor records an `Unspecified` receipt, audit keeps the
+business outcome running and nonterminal, and consumers must not upgrade it to
 success. Providers must emit typed receipts for outcomes they can classify,
 including HTTP/authentication failures, DNS or TLS failures, and timeouts. Only
 an explicit `Success` receipt confirms completed execution; approval-required
@@ -196,7 +195,6 @@ model responses, bearer tokens, OAuth codes, API keys, cookies, headers, or
 connector credential material. If a tool result needs later inspection, the
 tool must produce a separate safe artifact reference and record only that
 reference in the audit artifact.
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
 
 ### 3.3 Projection Pipeline Artifact Sink
 

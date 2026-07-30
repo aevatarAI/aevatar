@@ -1496,13 +1496,14 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                     inboundEvent,
                     runtimeContext,
                     ct);
-<<<<<<< HEAD
             var executionContext = BuildAgentBuilderToolContext(
                     inboundEvent,
                     activity,
                     registration,
                     ResolveUserAccessToken(activity, runtimeContext),
-                    metadata)
+                    senderBinding,
+                    channelContext.Metadata,
+                    channelContext.IdentityHints)
                 .WithCallId($"{inboundEvent.MessageId}:agent-builder");
             var tool = ActivatorUtilities.CreateInstance<AgentBuilderTool>(_toolServiceProvider);
             var outcome = await _toolExecutionPort.ExecuteAsync(
@@ -1514,21 +1515,6 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                     null),
                 ct).ConfigureAwait(false);
             replyContent = AgentBuilderCardFlow.FormatToolResult(decision, outcome.ResultJson);
-=======
-            using (AgentToolContextScope.Push(BuildAgentBuilderToolContext(
-                       inboundEvent,
-                       activity,
-                       registration,
-                       ResolveUserAccessToken(activity, runtimeContext),
-                       senderBinding,
-                       channelContext.Metadata,
-                       channelContext.IdentityHints)))
-            {
-                var tool = ActivatorUtilities.CreateInstance<AgentBuilderTool>(_toolServiceProvider);
-                var toolResult = await tool.ExecuteAsync(decision.ToolArgumentsJson!, ct);
-                replyContent = AgentBuilderCardFlow.FormatToolResult(decision, toolResult);
-            }
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
         }
 
         var inbound = ToInboundMessage(activity);

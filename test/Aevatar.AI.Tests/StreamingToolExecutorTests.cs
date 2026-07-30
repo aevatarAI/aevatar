@@ -661,11 +661,7 @@ public class StreamingToolExecutorTests
     }
 
     [Fact]
-<<<<<<< HEAD
-    public async Task ExecutedOutcomes_ShouldAlwaysExposeReceiptSafetyAndSideEffectDetails()
-=======
     public async Task ProviderSuccessReceipts_ShouldPreserveSafetyFacts()
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     {
         var tools = new ToolManager();
         tools.Register(new ConcurrencyTrackingTool("plain-write", isReadOnly: false, _ => """{"ok":true}"""));
@@ -694,17 +690,12 @@ public class StreamingToolExecutorTests
             results.Add(result);
 
         results.Should().HaveCount(4);
-<<<<<<< HEAD
         var plainWriteReceipt = results[0].Receipt;
         plainWriteReceipt.Should().NotBeNull();
         plainWriteReceipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
         plainWriteReceipt.ApprovalMode.Should().Be(AgentToolReceiptApprovalMode.NeverRequire);
         plainWriteReceipt.IsDestructive.Should().BeFalse();
         plainWriteReceipt.SideEffectKind.Should().BeEmpty();
-=======
-        results[0].Receipt.Should().NotBeNull();
-        results[0].Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
         var approvalReceipt = results[1].Receipt;
         approvalReceipt.Should().NotBeNull();
         approvalReceipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
@@ -720,11 +711,7 @@ public class StreamingToolExecutorTests
     }
 
     [Fact]
-<<<<<<< HEAD
-    public async Task ReadOnlySearchTool_ShouldExposeSuccessfulReceipt()
-=======
     public async Task ErrorJsonWithoutReceipt_ShouldEmitUnknownFailure()
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     {
         var tools = new ToolManager();
         tools.Register(new ConcurrencyTrackingTool(
@@ -745,20 +732,11 @@ public class StreamingToolExecutorTests
             results.Add(result);
 
         results.Should().ContainSingle();
-<<<<<<< HEAD
-        results[0].IsError.Should().BeFalse();
-        results[0].Receipt.Should().NotBeNull();
-        results[0].Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
-        results[0].Receipt!.IsDestructive.Should().BeFalse();
-        results[0].Receipt!.SideEffectKind.Should().BeEmpty();
-=======
         results[0].IsError.Should().BeTrue();
-        results[0].Result.Should().Be(
-            """{"status":"unknown","message":"The tool outcome could not be verified."}""");
+        results[0].Result.Should().Be("""{"error":true,"status":503}""");
         results[0].Receipt.Should().NotBeNull();
         results[0].Receipt!.Status.Should().Be(AgentToolReceiptStatus.Unspecified);
         results[0].Receipt!.ResultJson.Should().Be(results[0].Result);
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     }
 
     [Fact]
@@ -966,9 +944,6 @@ public class StreamingToolExecutorTests
             Task.FromResult(execute(argumentsJson));
     }
 
-<<<<<<< HEAD
-    private sealed class TestExecutionPort : IAgentToolExecutionPort
-=======
     private sealed class SafeFailureReceiptTool : IAgentTool
     {
         public string Name => "safe_failure";
@@ -995,9 +970,7 @@ public class StreamingToolExecutorTests
             };
     }
 
-    private sealed class DelegateToolCallMiddleware(
-        Func<ToolCallContext, Func<Task>, Task> handler) : IToolCallMiddleware
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
+    private sealed class TestExecutionPort : IAgentToolExecutionPort
     {
         public async Task<AgentToolExecutionOutcome> ExecuteAsync(
             AgentToolExecutionRequest request,

@@ -5,20 +5,14 @@ namespace Aevatar.AI.Core.Tools;
 
 internal static class AgentToolReceiptFactory
 {
-<<<<<<< HEAD
-    public static AgentToolReceipt CreateSuccess(
-=======
-    public static bool IsReceiptWorthy(IAgentTool tool, AgentToolCallSafety callSafety)
-    {
-        ArgumentNullException.ThrowIfNull(tool);
-        ArgumentNullException.ThrowIfNull(callSafety);
-        return tool.ApprovalMode != ToolApprovalMode.NeverRequire ||
-               callSafety.IsDestructive ||
-               !string.IsNullOrWhiteSpace(tool.SideEffectKind);
-    }
+    public static AgentToolReceipt CreateRunning(
+        IAgentTool tool,
+        string callId,
+        string toolName,
+        AgentToolCallSafety callSafety) =>
+        CreateBase(tool, callId, toolName, callSafety, AgentToolReceiptStatus.Unspecified);
 
-    public static AgentToolReceipt? CreateResult(
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
+    public static AgentToolReceipt CreateResult(
         IAgentTool tool,
         string callId,
         string toolName,
@@ -26,20 +20,31 @@ internal static class AgentToolReceiptFactory
         string resultJson,
         string argumentsJson = "")
     {
-<<<<<<< HEAD
-        var providerReceipt = tool.CreateSuccessReceipt(callId, toolName, resultJson ?? string.Empty);
-=======
         var providerReceipt = tool.CreateResultReceipt(
             callId,
             toolName,
             argumentsJson ?? string.Empty,
             resultJson ?? string.Empty);
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
         if (providerReceipt is not null)
             return NormalizeProviderResultReceipt(tool, callId, toolName, callSafety, resultJson, providerReceipt);
 
-        return null;
+        var unverifiedReceipt = CreateBase(
+            tool,
+            callId,
+            toolName,
+            callSafety,
+            AgentToolReceiptStatus.Unspecified);
+        unverifiedReceipt.ResultJson = resultJson ?? string.Empty;
+        return unverifiedReceipt;
     }
+
+    public static AgentToolReceipt CreateSuccess(
+        IAgentTool tool,
+        string callId,
+        string toolName,
+        AgentToolCallSafety callSafety,
+        string resultJson) =>
+        CreateResult(tool, callId, toolName, callSafety, resultJson);
 
     public static AgentToolReceipt CreateError(
         IAgentTool tool,

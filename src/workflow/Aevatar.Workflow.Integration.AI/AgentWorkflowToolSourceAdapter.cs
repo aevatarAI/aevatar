@@ -119,56 +119,20 @@ public sealed class AgentWorkflowToolSourceAdapter(
                         : outcome.SafeMessage);
             }
 
-<<<<<<< HEAD
-            return new WorkflowToolExecutionResult(
-                outcome.ResultJson,
-                ToWorkflowManagedHandoffOutcome(outcome.Receipt.ManagedWorkflowHandoff));
-=======
-            var resultJson = toolCallContext.Result
-                             ?? throw new InvalidOperationException(
-                                 $"Tool '{_tool.Name}' returned no result.");
-            var receipt = toolCallContext.Receipt ?? ToolCallReceiptFinalizer.Finalize(toolCallContext).Receipt;
-            return AgentWorkflowToolReceiptOutcomeMapper.Map(receipt, resultJson);
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
+            return AgentWorkflowToolReceiptOutcomeMapper.Map(outcome.Receipt, outcome.ResultJson);
         }
 
         private static string? Normalize(string? value) =>
             string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-
-<<<<<<< HEAD
-        private static WorkflowManagedHandoffOutcome? ToWorkflowManagedHandoffOutcome(
-            ManagedWorkflowHandoffReceipt? receipt)
-        {
-            if (receipt == null || string.IsNullOrWhiteSpace(receipt.InvocationId))
-                return null;
-
-            return new WorkflowManagedHandoffOutcome
-            {
-                ParentActorId = receipt.ParentActorId ?? string.Empty,
-                ParentRunId = receipt.ParentRunId ?? string.Empty,
-                ParentStepId = receipt.ParentStepId ?? string.Empty,
-                InvocationId = receipt.InvocationId ?? string.Empty,
-                ChildRunId = receipt.ChildRunId ?? string.Empty,
-                StreamTopic = receipt.StreamTopic ?? string.Empty,
-            };
-        }
-=======
-        private static string FormatMiddlewareTermination(ToolCallContext context)
-        {
-            var reason = string.IsNullOrWhiteSpace(context.TerminationReason)
-                ? context.Result
-                : context.TerminationReason;
-            var suffix = string.IsNullOrWhiteSpace(reason)
-                ? string.Empty
-                : $": {reason}";
-            return $"Tool '{context.ToolName}' execution terminated by middleware ({context.TerminationKind}){suffix}";
-        }
 
     }
 }
 
 file static class AgentWorkflowToolReceiptOutcomeMapper
 {
+    private const string UnknownErrorCode = "tool_outcome_unknown";
+    private const string UnknownErrorMessage = "The tool outcome could not be verified.";
+
     public static WorkflowToolExecutionResult Map(AgentToolReceipt receipt, string resultJson)
     {
         if (IsFailure(receipt.Status))
@@ -199,7 +163,7 @@ file static class AgentWorkflowToolReceiptOutcomeMapper
         {
             AgentToolReceiptStatus.Denied => "tool_denied",
             AgentToolReceiptStatus.AuthorizationRequired => "authorization_required",
-            AgentToolReceiptStatus.Unspecified => ToolCallReceiptFinalizer.UnknownErrorCode,
+            AgentToolReceiptStatus.Unspecified => UnknownErrorCode,
             _ => "tool_error",
         };
     }
@@ -207,7 +171,7 @@ file static class AgentWorkflowToolReceiptOutcomeMapper
     private static string ResolveFailureMessage(AgentToolReceipt receipt) =>
         string.IsNullOrWhiteSpace(receipt.ErrorMessage)
             ? receipt.Status == AgentToolReceiptStatus.Unspecified
-                ? ToolCallReceiptFinalizer.UnknownErrorMessage
+                ? UnknownErrorMessage
                 : ResolveFailureCode(receipt)
             : receipt.ErrorMessage.Trim();
 
@@ -226,6 +190,5 @@ file static class AgentWorkflowToolReceiptOutcomeMapper
             ChildRunId = receipt.ChildRunId ?? string.Empty,
             StreamTopic = receipt.StreamTopic ?? string.Empty,
         };
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     }
 }

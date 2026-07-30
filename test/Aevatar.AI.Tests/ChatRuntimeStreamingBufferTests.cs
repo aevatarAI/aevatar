@@ -568,102 +568,6 @@ public sealed class ChatRuntimeStreamingBufferTests
     }
 
     [Fact]
-    public async Task ChatStreamAsync_WhenMiddlewareFailureContainsArguments_ShouldUseSafeFailurePayload()
-    {
-        const string secretArguments = "{\"token\":\"middleware-secret\"}";
-        var provider = new QueuedStreamingProvider(
-        [
-            [new LLMStreamChunk
-            {
-                DeltaToolCall = new ToolCall
-                {
-                    Id = "tc-middleware-failure",
-                    Name = "failing_tool",
-                    ArgumentsJson = secretArguments,
-                },
-            }],
-            [new LLMStreamChunk { DeltaContent = "safe follow-up" }],
-        ]);
-        var tools = new ToolManager();
-        tools.Register(new DelegateTool("failing_tool", _ => "should-not-run"));
-        var middleware = new DelegateToolCallMiddleware((context, _) =>
-            throw new InvalidOperationException($"failed with {context.ArgumentsJson}"));
-        var runtime = CreateRuntime(provider, tools: tools, toolMiddlewares: [middleware]);
-        var receipts = new List<AgentToolReceipt>();
-
-        await foreach (var chunk in runtime.ChatStreamAsync("hello", maxToolRounds: 2, turnCatalog: null))
-        {
-            if (chunk.ToolReceipt is not null)
-                receipts.Add(chunk.ToolReceipt);
-        }
-
-        var receipt = receipts.Should().ContainSingle().Which;
-        receipt.Status.Should().Be(AgentToolReceiptStatus.Error);
-        receipt.ResultJson.Should().NotContain("middleware-secret");
-        receipt.ErrorMessage.Should().NotContain("middleware-secret");
-        var followUpMessages = provider.StreamRequests.Should().HaveCount(2).And.Subject.Last().Messages;
-        followUpMessages
-            .Where(message => message.Role == "tool")
-            .Select(message => message.Content)
-            .Should().NotContain(content => content != null && content.Contains("middleware-secret", StringComparison.Ordinal));
-        followUpMessages
-            .SelectMany(message => message.ToolCalls ?? [])
-            .Select(call => call.ArgumentsJson)
-            .Should().NotContain(arguments => arguments.Contains("middleware-secret", StringComparison.Ordinal));
-    }
-
-    [Fact]
-    public async Task ChatStreamAsync_WhenMiddlewareDeniesWithoutReceipt_ShouldRedactArgumentsBeforeFollowUpRound()
-    {
-        const string secretArguments = "{\"token\":\"denied-secret\"}";
-        var provider = new QueuedStreamingProvider(
-        [
-            [new LLMStreamChunk
-            {
-                DeltaToolCall = new ToolCall
-                {
-                    Id = "tc-middleware-denied",
-                    Name = "denied_tool",
-                    ArgumentsJson = secretArguments,
-                },
-            }],
-            [new LLMStreamChunk { DeltaContent = "safe follow-up" }],
-        ]);
-        var tools = new ToolManager();
-        tools.Register(new DelegateTool("denied_tool", _ => "should-not-run"));
-        var middleware = new DelegateToolCallMiddleware((context, _) =>
-        {
-            context.Terminate = true;
-            context.TerminationKind = ToolCallTerminationKind.ApprovalDenied;
-            context.TerminationReason = "The tool request was denied.";
-            context.Result = "The tool request was denied.";
-            return Task.CompletedTask;
-        });
-        var runtime = CreateRuntime(provider, tools: tools, toolMiddlewares: [middleware]);
-        var receipts = new List<AgentToolReceipt>();
-
-        await foreach (var chunk in runtime.ChatStreamAsync("hello", maxToolRounds: 2, turnCatalog: null))
-        {
-            if (chunk.ToolReceipt is not null)
-                receipts.Add(chunk.ToolReceipt);
-        }
-
-        receipts.Should().ContainSingle(receipt => receipt.Status == AgentToolReceiptStatus.Denied);
-        var followUpMessages = provider.StreamRequests.Should().HaveCount(2).And.Subject.Last().Messages;
-        var assistant = followUpMessages.Should().ContainSingle(message =>
-            message.Role == "assistant" && message.ToolCalls != null && message.ToolCalls.Count == 1).Which;
-        assistant.ToolCalls![0].Id.Should().Be("tc-middleware-denied");
-        assistant.ToolCalls[0].Name.Should().Be("denied_tool");
-        assistant.ToolCalls[0].ArgumentsJson.Should().Be("{}");
-        followUpMessages.Should().ContainSingle(message =>
-            message.Role == "tool" && message.ToolCallId == "tc-middleware-denied");
-        followUpMessages
-            .SelectMany(message => message.ToolCalls ?? [])
-            .Select(call => call.ArgumentsJson)
-            .Should().NotContain(arguments => arguments.Contains("denied-secret", StringComparison.Ordinal));
-    }
-
-    [Fact]
     public async Task ChatStreamAsync_WhenToolCallRoundHasReasoning_ShouldPreserveItInFollowUpRequest()
     {
         var provider = new QueuedStreamingProvider(
@@ -1626,20 +1530,15 @@ public sealed class ChatRuntimeStreamingBufferTests
     private static ChatRuntime CreateRuntime(
         ILLMProvider provider,
         ToolManager? tools = null,
-        IReadOnlyList<IToolCallMiddleware>? toolMiddlewares = null,
         IReadOnlyList<IAgentRunMiddleware>? agentMiddlewares = null,
         IReadOnlyList<ILLMCallMiddleware>? llmMiddlewares = null,
         Func<AgentProfileTurnCatalog?, LLMRequest>? requestBuilder = null)
     {
         var history = new ChatHistory();
         var effectiveTools = tools ?? new ToolManager();
-<<<<<<< HEAD
         var toolLoop = new ToolCallLoop(
             effectiveTools,
             toolExecutionPort: new TestAgentToolExecutionPort());
-=======
-        var toolLoop = new ToolCallLoop(effectiveTools, toolMiddlewares: toolMiddlewares);
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
 
         return new ChatRuntime(
             providerFactory: () => provider,
@@ -1815,12 +1714,6 @@ public sealed class ChatRuntimeStreamingBufferTests
         public Task InvokeAsync(LLMCallContext context, Func<Task> next) => handler(context, next);
     }
 
-    private sealed class DelegateToolCallMiddleware(
-        Func<ToolCallContext, Func<Task>, Task> handler) : IToolCallMiddleware
-    {
-        public Task InvokeAsync(ToolCallContext context, Func<Task> next) => handler(context, next);
-    }
-
     private sealed class DelegateTool(
         string name,
         Func<string, string> execute,
@@ -1846,7 +1739,6 @@ public sealed class ChatRuntimeStreamingBufferTests
         }
     }
 
-<<<<<<< HEAD
     private sealed class TestAgentToolExecutionPort : IAgentToolExecutionPort
     {
         public async Task<AgentToolExecutionOutcome> ExecuteAsync(
@@ -1897,7 +1789,8 @@ public sealed class ChatRuntimeStreamingBufferTests
                     AuditCompleted: true);
             }
         }
-=======
+    }
+
     private static AgentToolReceipt SuccessReceipt(
         string callId,
         string toolName,
@@ -1936,6 +1829,5 @@ public sealed class ChatRuntimeStreamingBufferTests
                 ErrorMessage = "The tool request failed.",
                 ResultJson = "{\"error\":\"safe tool failure\"}",
             };
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     }
 }

@@ -19,9 +19,6 @@ public sealed class NyxIdCodexExecTool : INyxIdBuiltInTool
     private const int DefaultManagedTimeoutSeconds = 180;
     private const int MaxManagedTimeoutSeconds = 180;
 
-<<<<<<< HEAD
-    private readonly INyxIdSshCommandExecutor _executor;
-=======
     private static readonly JsonSerializerOptions ResultJsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -29,8 +26,6 @@ public sealed class NyxIdCodexExecTool : INyxIdBuiltInTool
 
     private readonly IReadOnlyList<ICodexExecutionPort> _ports;
     private readonly NyxIdToolOptions _options;
-
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     public NyxIdCodexExecTool(
         NyxIdApiClient client,
         NyxIdToolOptions? options = null,
@@ -46,10 +41,6 @@ public sealed class NyxIdCodexExecTool : INyxIdBuiltInTool
         NyxIdToolOptions options)
         : this([new PrivateSshCodexExecutionAdapter(executor)], options)
     {
-<<<<<<< HEAD
-        _executor = executor ?? throw new ArgumentNullException(nameof(executor));
-        ArgumentNullException.ThrowIfNull(options);
-=======
     }
 
     internal NyxIdCodexExecTool(
@@ -62,7 +53,6 @@ public sealed class NyxIdCodexExecTool : INyxIdBuiltInTool
             throw new ArgumentException("At least one Codex execution port is required.", nameof(ports));
         if (_ports.GroupBy(static port => port.TargetKind).Any(static group => group.Count() != 1))
             throw new ArgumentException("Only one Codex execution port may be registered per target kind.", nameof(ports));
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     }
 
     public string Name => "codex_exec";
@@ -74,9 +64,6 @@ public sealed class NyxIdCodexExecTool : INyxIdBuiltInTool
 
     public ToolApprovalMode ApprovalMode => ToolApprovalMode.AlwaysRequire;
 
-<<<<<<< HEAD
-    public bool IsDestructive => true;
-=======
     public bool? RequiresApproval(string argumentsJson)
     {
         var args = ToolArgs.Parse(argumentsJson);
@@ -87,11 +74,10 @@ public sealed class NyxIdCodexExecTool : INyxIdBuiltInTool
         return kind switch
         {
             "managed_sandbox" => false,
-            "private_ssh" => !_options.BypassSshExecApproval,
+            "private_ssh" => true,
             _ => true,
         };
     }
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
 
     public string ParametersSchema => """
         {

@@ -5,18 +5,12 @@
 // 结果按调用顺序 yield，保持对话流一致性。
 // ─────────────────────────────────────────────────────────────
 
-using Aevatar.AI.Abstractions.CodexExecution;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Abstractions;
-using Aevatar.AI.Core.Auditing;
 using Aevatar.AI.Core.Hooks;
-<<<<<<< HEAD
-=======
-using Aevatar.AI.Core.Middleware;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 
@@ -57,36 +51,26 @@ public sealed class StreamingToolExecutor
     private readonly ToolManager _tools;
     private readonly AgentHookPipeline? _hooks;
     private readonly AgentToolExecutionContext? _toolContext;
-<<<<<<< HEAD
     private readonly IAgentToolExecutionPort? _toolExecutionPort;
     private readonly AgentToolApprovalContinuationMode _approvalContinuationMode;
-=======
     private readonly ILogger _logger;
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
 
     public StreamingToolExecutor(
         ToolManager tools,
         AgentHookPipeline? hooks = null,
         IReadOnlyDictionary<string, string>? requestMetadata = null,
         AgentToolExecutionContext? toolContext = null,
-<<<<<<< HEAD
         IAgentToolExecutionPort? toolExecutionPort = null,
-        AgentToolApprovalContinuationMode approvalContinuationMode = AgentToolApprovalContinuationMode.None)
-=======
+        AgentToolApprovalContinuationMode approvalContinuationMode = AgentToolApprovalContinuationMode.None,
         ILogger? logger = null)
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     {
         // Refactor (issue1574): Old pattern: streaming tool execution promoted request Metadata into tool control.
         // New principle: streaming tool control is typed; request Metadata remains external annotations only.
         _tools = tools;
         _hooks = hooks;
-<<<<<<< HEAD
         _toolExecutionPort = toolExecutionPort;
         _approvalContinuationMode = approvalContinuationMode;
-=======
         _logger = logger ?? NullLogger.Instance;
-        _toolMiddlewares = toolMiddlewares ?? [];
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
         _toolContext = toolContext
             ?? AgentToolRequestContext.Current
             ?? (requestMetadata == null
@@ -340,25 +324,6 @@ public sealed class StreamingToolExecutor
     private static string BuildSafeFailureResult() =>
         ToolManager.BuildErrorJson(SafeToolFailureMessage);
 
-    private static AgentToolReceipt CreateExecutionErrorReceipt(
-        ToolCallContext context,
-        Exception exception,
-        string resultJson)
-    {
-        if (exception is CodexExecutionException)
-            return ToolCallReceiptFinalizer.Finalize(context, exception).Receipt;
-
-        return AgentToolReceiptFactory.CreateError(
-                   context.Tool,
-                   context.ToolCallId,
-                   context.ToolName,
-                   context.Tool.GetCallSafety(context.ArgumentsJson),
-                   resultJson,
-                   errorCode: "tool_execution_error",
-                   errorMessage: SafeToolFailureMessage) ??
-               ToolCallReceiptFinalizer.Finalize(context, exception).Receipt;
-    }
-
     private static void CompletePendingToolsAsDiscarded(ExecutionState state)
     {
         foreach (var tracked in state.Tools)
@@ -397,15 +362,11 @@ public sealed class StreamingToolExecutor
             try { if (_hooks != null) await _hooks.RunToolExecuteStartAsync(toolCtx, ct); }
             catch (Exception ex)
             {
-<<<<<<< HEAD
-                Trace.TraceError("Tool execute-start hook failed for {0}: {1}", call.Name, ex);
-=======
                 _logger.LogWarning(
                     ex,
                     "Tool execution start hook failed for tool {ToolName} and call {CallId}",
                     call.Name,
                     call.Id);
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
             }
             var toolStartedAt = Stopwatch.GetTimestamp();
 
@@ -439,7 +400,6 @@ public sealed class StreamingToolExecutor
                         SchedulerFault: true);
             }
 
-<<<<<<< HEAD
             var executionPort = _toolExecutionPort
                 ?? throw new InvalidOperationException("IAgentToolExecutionPort is required for server-owned tool execution.");
             var outcome = await executionPort.ExecuteAsync(
@@ -452,72 +412,24 @@ public sealed class StreamingToolExecutor
                 ct).ConfigureAwait(false);
             var toolResult = outcome.ResultJson;
             var receipt = outcome.Receipt;
-            var isErrorReceipt = receipt?.Status is AgentToolReceiptStatus.Error or AgentToolReceiptStatus.Denied;
-=======
-            var toolCallContext = new ToolCallContext
-            {
-                Tool = effectiveTool,
-                ToolName = effectiveToolName,
-                ToolCallId = call.Id,
-                ArgumentsJson = toolCtx.ToolArguments ?? call.ArgumentsJson,
-                CancellationToken = ct, ExecutionContext = executionContext,
-            };
-
-            var executionFailed = false;
-            await MiddlewarePipeline.RunToolCallAsync(_toolMiddlewares, toolCallContext, async () =>
-            {
-                if (toolCallContext.Terminate) return;
-
-                var resolvedCall = new ToolCall
-                {
-                    Id = toolCallContext.ToolCallId,
-                    Name = toolCallContext.ToolName,
-                    ArgumentsJson = toolCallContext.ArgumentsJson,
-                };
-
-                var (result, error) = await _tools.ExecuteToolCallRawAsync(resolvedCall, ct);
-                toolCallContext.Result = result;
-                if (error is not null)
-                {
-                    executionFailed = true;
-                    var safeFailureResult = BuildSafeFailureResult();
-                    toolCallContext.Result = safeFailureResult;
-                    toolCallContext.Receipt = CreateExecutionErrorReceipt(
-                        toolCallContext,
-                        error,
-                        safeFailureResult);
-                }
-            });
-
-            var toolResult = toolCallContext.Result
-                ?? (toolCallContext.Terminate
-                    ? "Tool call terminated by middleware"
-                    : $"Tool '{toolCallContext.ToolName}' returned no result");
-            var receipt = toolCallContext.Receipt ?? ToolCallReceiptFinalizer.Finalize(toolCallContext).Receipt;
-            var isErrorReceipt = executionFailed ||
-                receipt?.Status is AgentToolReceiptStatus.Error or
+            var isErrorReceipt = receipt?.Status is AgentToolReceiptStatus.Error or
                 AgentToolReceiptStatus.Denied or
                 AgentToolReceiptStatus.AuthorizationRequired or
                 AgentToolReceiptStatus.Unspecified;
             var safeToolResult = isErrorReceipt && !string.IsNullOrWhiteSpace(receipt?.ResultJson)
                 ? receipt.ResultJson
                 : toolResult;
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
 
             toolCtx.ToolResult = safeToolResult;
             toolCtx.Duration = Stopwatch.GetElapsedTime(toolStartedAt);
             try { if (_hooks != null) await _hooks.RunToolExecuteEndAsync(toolCtx, ct); }
             catch (Exception ex)
             {
-<<<<<<< HEAD
-                Trace.TraceError("Tool execute-end hook failed for {0}: {1}", effectiveToolName, ex);
-=======
                 _logger.LogWarning(
                     ex,
                     "Tool execution end hook failed for tool {ToolName} and call {CallId}",
-                    toolCallContext.ToolName,
-                    toolCallContext.ToolCallId);
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
+                    effectiveToolName,
+                    call.Id);
             }
 
             if (ct.IsCancellationRequested)

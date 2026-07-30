@@ -328,30 +328,16 @@ public static class MainnetHostBuilderExtensions
                                ?? builder.Configuration["Aevatar:Authentication:Authority"];
             if (!string.IsNullOrWhiteSpace(nyxAuthority))
                 o.BaseUrl = nyxAuthority;
-<<<<<<< HEAD
+            o.SandboxServiceSlug = sandboxServiceSlug;
             // SSH-backed tools are disabled unless the deployment opts in explicitly.
             // Even when exposed, their contract always requires a durable actor-owned grant.
             if (bool.TryParse(builder.Configuration["Aevatar:NyxId:EnableSshExecTool"], out var enableSsh))
                 o.EnableSshExecTool = enableSsh;
-=======
-            o.SandboxServiceSlug = sandboxServiceSlug;
-            // Opt-in: only the mainnet host (which runs the channel relay's approval-aware
-            // tool execution pipeline) advertises ssh_exec to the LLM. Other hosts that pull
-            // in NyxId tools (CLI, workflow runner) leave this off so a generic agent can't
-            // shell into a remote without an approval gate. Defaults to false in
-            // NyxIdToolOptions; flip via Aevatar:NyxId:EnableSshExecTool=true if a
-            // deployment opts in.
-            if (bool.TryParse(builder.Configuration["Aevatar:NyxId:EnableSshExecTool"], out var enableSsh))
-                o.EnableSshExecTool = enableSsh;
-            else
-                o.EnableSshExecTool = true; // mainnet default: enabled (Lark bot needs it)
-            o.BypassSshExecApproval = true; // mainnet Lark bot internal-only
             o.EnableManagedCodexExecTool = builder.Configuration.GetValue<bool>(
                 $"{ManagedCodexOptions.SectionName}:Enabled");
             o.MaxRequestDurationSeconds = builder.Configuration.GetValue(
                 "Aevatar:NyxId:MaxRequestDurationSeconds",
                 o.MaxRequestDurationSeconds);
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
             if (long.TryParse(builder.Configuration["Aevatar:NyxId:ProxyFileArtifactMaxBytes"], out var maxBytes))
                 o.ProxyFileArtifactMaxBytes = maxBytes;
             o.ManagedWorkflowAdmissionMode = builder.Configuration.GetValue(

@@ -8,11 +8,9 @@ owner: eanzhao
 
 NyxID 是 exact UserService、credential、route、effective OpenAPI 与 normalized operation catalog 的唯一权威 owner。Aevatar 不托管 OpenAPI、不保存 UserService/endpoint 影子目录、不从 slug 推导实例身份，也不在 prompt 中维护第二份权限目录。
 
-<<<<<<< HEAD
 模型看到的最终 tool schema 与实际执行对象来自同一份 `LLMRequest.Tools`。工具调用仍经 NyxID proxy 下发，凭证注入、proxy/broker 审计、node routing 和 delegation 由 NyxID 负责；Aevatar 在进入 proxy 前统一执行 credential policy、actor-owned durable approval 和平台 tool audit。两边各自记录本边界事实，NyxID 的审批能力不能替代 Aevatar 本地准入。
-=======
+
 NyxID `GET /api/v1/mcp/config` 是 Aevatar 唯一的 operation descriptor source。`GET /api/v1/keys` 及其 exact instance endpoint 只负责实例 inventory、credential ownership、管理动作与执行前实例重验；Aevatar 不再从 `/keys` 的 `openapi_url` 拉取或解析 raw OpenAPI。
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
 
 ## 1. 实例与 operation 身份
 
@@ -66,39 +64,21 @@ current-turn discovery 仍 request-locally 读取并解析 MCP catalog，以验�
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
-<<<<<<< HEAD
-sequenceDiagram
-    participant L as "LLMRequest.Tools"
-    participant A as "IAgentToolExecutionPort"
-    participant T as "Exact IAgentTool terminal"
-    participant K as "NyxID /keys/{user_service_id}"
-    participant P as "NyxID proxy"
-    L->>A: "frozen tool_call + enumerated user_service_id"
-    A->>A: "classify once, credential, grant, RUNNING audit"
-    A->>T: "admitted exact arguments"
-    T->>K: "revalidate with bound token"
-    K-->>T: "identity, scope, active, route, spec"
-    T->>P: "route constraint + encoded _nyxid_via"
-    P-->>T: "JSON response"
-=======
 flowchart LR
     A["NyxID GET /api/v1/mcp/config"] --> B["Shared typed adapter"]
     B --> C["Exact service_id + endpoint_id selector"]
     C --> D["Server-owned v4 definition proof"]
     D --> E["Workflow run actor"]
     E --> F["Proof-bound NyxID Proxy request"]
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
 ```
 
 Workflow live discovery 使用当前 caller token 读取 MCP catalog，列出 exact non-generic UserService endpoints。作者只持久化 typed selector；definition actor 提交 call-site-scoped v4 proof，其中包含 service slug、endpoint identity、method/path、parameter/body schema、typed response policy、execution policy、source stamp 与 contract digest。
 
-<<<<<<< HEAD
 这个重验是 terminal 内的资源一致性检查，不能代替 terminal 前的统一准入。所有 server-owned connected-service 工具都通过 `IAgentToolExecutionPort`；只有 `AdmittedAgentToolExecutor` 可以调用 raw `IAgentTool.ExecuteAsync`。端口冻结最终 arguments 并只分类一次，随后依次执行 credential policy、exact actor-owned grant、`WAITING_APPROVAL/RUNNING/TERMINAL` durable audit。只有 `RUNNING Appended` 才能进入上述 `/keys` 重验和 proxy 调用；`Duplicate`、`Conflict`、审批拒绝或 credential 拒绝的下游请求数都为 0。
 
 proxy 请求只接受相对路径，拒绝绝对 URL、fragment、query-in-path 和 dot segment。路由只来自冻结并重验后的 catalog ID 或 custom slug；Aevatar 追加 URL 编码后的 `_nyxid_via={user_service_id}`，调用参数不得提供任何 `_nyxid_*` query。header allow-list 仅含 JSON `Accept`/`Content-Type` 与条件头 `If-Match`/`If-None-Match`，禁止调用者注入 authorization、routing 或 hop-by-hop header。非 safe method 由客户端生成 typed idempotency key。
-=======
+
 Studio authoring 在 exact descriptor 缺失时不再把“当前不可运行”误报成“不能创建 workflow”。`/api/chat` 的 Studio agent 仍先调用 `list_external_workflow_capabilities`；若没有匹配项，可用 `web_search` / `web_fetch` 查询官方文档，官方文档也不可用时可根据用户描述推导最小 authoring shape。搜索或推导只用于生成可编辑 YAML，不是 route authority：不得据此生成 `user_service_id`、`endpoint_id`、selector、admission proof、HTTP method 或 path authority。
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
 
 缺 exact selector 的 YAML 不写 step-level `capability`，只通过 `aevatar_create_member_workflow_draft` 创建或复用 Team-owned workflow member shell，并保存独立的 scope-owned draft。返回值必须保持三类身份分离：`member_id`、draft `workflow_id`、未来的 `published_service_id` 互不替代；Studio URL 固定为 `/scopes/:scopeId/teams/:teamId/members/:memberId/workflow?workflowId=:workflowId`。draft receipt 只表示 command `Accepted`，readiness 为 `projection_pending`，并显式返回 `runnable=false`、`binding_status=not_bound` 与 `NYXID_OPERATION_SELECTION_REQUIRED`。该分支不得 bind、schedule、provision、publish、run 或发出 proxy request。
 
@@ -113,27 +93,23 @@ Studio authoring 在 exact descriptor 缺失时不再把“当前不可运行”
 
 Dynamic exposure、workflow definition admission 与 runtime authorization 是三个独立 policy；authoring draft 位于这些授权 policy 之前，不授予执行权限：
 
-<<<<<<< HEAD
+1. **Current-turn exposure**：缺 NyxID typed exposure policy，因此 operation 数量为零。
+2. **Workflow definition admission**：live MCP catalog 把 exact selector 解析并提交为 actor-owned proof。
+3. **Runtime authorization**：managed workflow 只接受当前 call site 的 proof；durable mode 还要求 owner-scoped catalog 对 exact `user_service_id` 的 durable grant。
+
+GET/HEAD/OPTIONS 默认为 read-only；POST/PUT/PATCH 为 write；DELETE 为 destructive。write/destructive operation 必须由 Aevatar 审批并只允许 interactive；read-only operation 可允许 interactive 与 durable。一个 policy 的通过不能冒充另两个 policy 的授权。
+
 - NyxID 是实例、credential、route 与 spec 的唯一真实源；Aevatar 不维护 process-local catalog 或 spec cache。
 - Aevatar 不新增 NyxID endpoint，不绕过 proxy 直连下游，不引入第二条投影或 read model。
 - 外部 JSON 只在 NyxID adapter 边界解析；内部实例、请求与结果语义使用 Protobuf。
 - 平台审计由 canonical `AdmittedAgentToolExecutor` 消费 typed execution context、credential source、冻结参数 digest 和 receipt；默认不记录完整 arguments、result 或 `receipt.result_json`。
 - prompt-prefetch、API hint、slug-bound proxy 和独立 connected-service spec cache 已从主链删除；prompt 不能替代最终 tool schema 做能力判断。
 
-### 6.1 NyxID 聚合工具的 closed action
+### NyxID 聚合工具的 closed action
 
 `nyxid_approvals` 与 `nyxid_services` 使用同一个 closed typed action parser 生成 schema enum、执行 `GetCallSafety` 分类并选择 terminal action，三处不能维护不同的 action 列表。只有合法 JSON object 缺少 `action` 时才默认只读 `list`。空白、malformed JSON、数组、scalar、非字符串/null/空白 action 和 unknown action 一律按 `requires approval + non-read-only + destructive` 分类；若进入 terminal，只返回 `invalid_action`，不调用 NyxID HTTP。
 
 所有 mutation 都需要 durable approval，包括 approval decision、grant revoke、service create/update/route/delete 和 credential rotation。准入发生在 mutation 的任何预读之前，因此 credential rotation 被拒绝时，查找 `api_key_id` 的 GET 和后续 update 都必须为 0。
-
-## 7. `QuotaLedger` profile
-=======
-1. **Current-turn exposure**：缺 NyxID typed exposure policy，因此 operation 数量为零。
-2. **Workflow definition admission**：live MCP catalog 把 exact selector 解析并提交为 actor-owned proof。
-3. **Runtime authorization**：managed workflow 只接受当前 call site 的 proof；durable mode 还要求 owner-scoped catalog 对 exact `user_service_id` 的 durable grant。
-
-GET/HEAD/OPTIONS 默认为 read-only；POST/PUT/PATCH 为 write；DELETE 为 destructive。write/destructive operation 必须由 Aevatar 审批并只允许 interactive；read-only operation 可允许 interactive 与 durable。一个 policy 的通过不能冒充另两个 policy 的授权。
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
 
 ## 5. 执行与重验
 
@@ -179,10 +155,7 @@ proxy request 只接受 relative path，拒绝 absolute URL、fragment、query-i
 - `src/Aevatar.AI.ToolProviders.NyxId/NyxIdExternalWorkflowCapabilitySource.cs`
 - `src/Aevatar.AI.ToolProviders.NyxId/Tools/NyxIdProxyTool.cs`
 - `src/Aevatar.AI.ToolProviders.NyxId/NyxIdApiClient.cs`
-<<<<<<< HEAD
 - `src/Aevatar.AI.ToolProviders.ToolSetRegistry/ToolSetNames.cs`
 - `src/Aevatar.AI.Abstractions/ToolProviders/IAgentToolExecutionPort.cs`
 - `src/Aevatar.AI.Core/Tools/AdmittedAgentToolExecutor.cs`
-=======
 - `agents/Aevatar.GAgents.NyxidChat/ChannelNyxIdConnectedServiceInventoryToolSource.cs`
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential

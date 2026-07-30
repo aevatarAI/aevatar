@@ -1,34 +1,15 @@
 using System.Text.Json;
-<<<<<<< HEAD
-=======
 using Aevatar.AI.Abstractions;
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 using Aevatar.GAgents.Channel.Abstractions;
-<<<<<<< HEAD
-using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
-using Google.Protobuf;
-=======
-using Aevatar.GAgents.Channel.Identity.Abstractions;
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.GAgents.NyxidChat;
 
-<<<<<<< HEAD
-public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentToolSource
-{
-    private static readonly JsonFormatter ResultFormatter = new(
-        JsonFormatter.Settings.Default.WithFormatDefaultValues(true));
-    private readonly NyxIdToolOptions? _options;
-    private readonly INyxIdApiClientFactory? _apiClientFactory;
-    private readonly INyxIdCapabilityBroker? _capabilityBroker;
-    private readonly ILogger _logger;
-=======
 /// <summary>
 /// Channel-only connected-service inventory source. It binds discovery to the
 /// channel sender: a verified sender-route token is reused when available;
@@ -42,20 +23,10 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
     private readonly INyxIdConnectedServiceInventoryCapabilityIssuer? _capabilityIssuer;
     private readonly ILogger _logger;
     private readonly ILogger<NyxIdConnectedServiceInventoryToolSource>? _inventoryLogger;
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
 
     public ChannelNyxIdConnectedServiceInventoryToolSource(
         NyxIdToolOptions? options = null,
         INyxIdApiClientFactory? apiClientFactory = null,
-<<<<<<< HEAD
-        INyxIdCapabilityBroker? capabilityBroker = null,
-        ILogger<ChannelNyxIdConnectedServiceInventoryToolSource>? logger = null)
-    {
-        _options = options;
-        _apiClientFactory = apiClientFactory;
-        _capabilityBroker = capabilityBroker;
-        _logger = logger ?? NullLogger<ChannelNyxIdConnectedServiceInventoryToolSource>.Instance;
-=======
         INyxIdConnectedServiceInventoryCapabilityIssuer? capabilityIssuer = null,
         ILogger<ChannelNyxIdConnectedServiceInventoryToolSource>? logger = null,
         ILogger<NyxIdConnectedServiceInventoryToolSource>? inventoryLogger = null)
@@ -65,21 +36,12 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         _capabilityIssuer = capabilityIssuer;
         _logger = logger ?? NullLogger<ChannelNyxIdConnectedServiceInventoryToolSource>.Instance;
         _inventoryLogger = inventoryLogger;
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     }
 
     public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
         var context = AgentToolRequestContext.Current;
-<<<<<<< HEAD
-        return context is null || Normalize(context.SenderBinding.BindingId) is null
-            ? Task.FromResult<IReadOnlyList<IAgentTool>>([])
-            : Task.FromResult<IReadOnlyList<IAgentTool>>([new SenderInventoryTool(this)]);
-    }
-
-    private async Task<string> ExecuteInventoryAsync(string argumentsJson, CancellationToken ct)
-=======
         var bindingId = Normalize(context?.SenderBinding.BindingId);
         if (context is null || bindingId is null)
             return Task.FromResult<IReadOnlyList<IAgentTool>>([]);
@@ -87,10 +49,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         return Task.FromResult<IReadOnlyList<IAgentTool>>([new SenderInventoryTool(this)]);
     }
 
-    private async Task<string> ExecuteInventoryAsync(
-        string argumentsJson,
-        CancellationToken ct)
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
+    private async Task<string> ExecuteInventoryAsync(string argumentsJson, CancellationToken ct)
     {
         if (!HasOnlyListArguments(argumentsJson))
             return JsonSerializer.Serialize(new { error = "invalid_arguments" });
@@ -102,33 +61,16 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
 
         var strictSenderToken = Normalize(context.Credentials.SenderNyxIdAccessToken);
         if (strictSenderToken is not null)
-<<<<<<< HEAD
-            return await ExecuteWithSenderTokenAsync(strictSenderToken, ct).ConfigureAwait(false);
-
-        if (_capabilityBroker is null || !TryBuildSubject(context, out var subject))
-=======
+        {
             return await ExecuteWithSenderTokenAsync(context, strictSenderToken, argumentsJson, ct)
                 .ConfigureAwait(false);
+        }
 
         if (_capabilityIssuer is null || !TryBuildSubject(context, out var subject))
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
             return InventoryFailure("inventory_capability_unavailable");
 
         try
         {
-<<<<<<< HEAD
-            var capability = await _capabilityBroker
-                .IssueShortLivedByBindingIdAsync(
-                    subject,
-                    bindingId,
-                    new CapabilityScope { Value = AevatarOAuthClientScopes.Proxy },
-                    ct)
-                .ConfigureAwait(false);
-            var inventoryToken = Normalize(capability.AccessToken);
-            return inventoryToken is null
-                ? InventoryFailure("inventory_capability_unavailable")
-                : await ExecuteWithSenderTokenAsync(inventoryToken, ct).ConfigureAwait(false);
-=======
             var capability = await _capabilityIssuer
                 .IssueByBindingIdAsync(subject, bindingId, ct)
                 .ConfigureAwait(false);
@@ -138,7 +80,6 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
 
             return await ExecuteWithSenderTokenAsync(context, inventoryToken, argumentsJson, ct)
                 .ConfigureAwait(false);
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -146,53 +87,36 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         }
         catch (BindingRevokedException ex)
         {
-<<<<<<< HEAD
-            _logger.LogWarning(ex, "NyxID connected-service inventory binding was revoked");
-=======
             _logger.LogWarning(
                 ex,
                 "NyxID connected-service inventory binding was revoked. subject={Platform}:{Tenant}:{User}",
                 subject.Platform,
                 subject.Tenant,
                 subject.ExternalUserId);
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
             return InventoryFailure("inventory_binding_revoked");
         }
         catch (BindingScopeMismatchException ex)
         {
-<<<<<<< HEAD
-            _logger.LogWarning(ex, "NyxID connected-service inventory scope is unavailable");
-=======
             _logger.LogWarning(
                 ex,
                 "NyxID connected-service inventory scope is unavailable. subject={Platform}:{Tenant}:{User}",
                 subject.Platform,
                 subject.Tenant,
                 subject.ExternalUserId);
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
             return InventoryFailure("inventory_scope_unavailable");
         }
         catch (Exception ex)
         {
-<<<<<<< HEAD
-            _logger.LogWarning(ex, "NyxID connected-service inventory capability issue failed");
-=======
             _logger.LogWarning(
                 ex,
                 "NyxID connected-service inventory capability issue failed. subject={Platform}:{Tenant}:{User}",
                 subject.Platform,
                 subject.Tenant,
                 subject.ExternalUserId);
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
             return InventoryFailure("inventory_capability_unavailable");
         }
     }
 
-<<<<<<< HEAD
-    private async Task<string> ExecuteWithSenderTokenAsync(string token, CancellationToken ct)
-    {
-        if (_options is null || string.IsNullOrWhiteSpace(_options.BaseUrl) || _apiClientFactory is null)
-=======
     private async Task<string> ExecuteWithSenderTokenAsync(
         AgentToolExecutionContext context,
         string token,
@@ -200,17 +124,10 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         CancellationToken ct)
     {
         if (_options is null || _apiClientFactory is null)
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
             return InventoryFailure("inventory_source_unavailable");
 
         try
         {
-<<<<<<< HEAD
-            var reader = new NyxIdConnectedServiceInventoryReader(
-                new NyxIdServiceInstanceClient(_apiClientFactory.CreateClient()));
-            var result = await reader.ReadAsync(token, organizationToken: null, ct).ConfigureAwait(false);
-            return ResultFormatter.Format(result);
-=======
             var inventorySource = new NyxIdConnectedServiceInventoryToolSource(
                 _options,
                 new NyxIdServiceInstanceClient(_apiClientFactory.CreateClient()),
@@ -229,7 +146,6 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
             return inventoryTool is null
                 ? InventoryFailure("inventory_query_unavailable")
                 : await inventoryTool.ExecuteAsync(argumentsJson, ct).ConfigureAwait(false);
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -237,36 +153,12 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         }
         catch (Exception ex)
         {
-<<<<<<< HEAD
-            _logger.LogWarning(ex, "NyxID connected-service inventory read failed");
-            return InventoryFailure("inventory_query_unavailable");
-        }
-    }
-
-    private static bool TryBuildSubject(AgentToolExecutionContext context, out ExternalSubjectRef subject)
-    {
-        subject = new ExternalSubjectRef();
-        var platform = Normalize(context.Channel.Platform);
-        var externalUserId = Normalize(context.Channel.SenderId);
-        if (platform is null || externalUserId is null)
-            return false;
-
-        subject = new ExternalSubjectRef
-        {
-            Platform = platform.ToLowerInvariant(),
-            Tenant = Normalize(context.SenderBinding.SenderTenant) ?? string.Empty,
-            ExternalUserId = externalUserId,
-        };
-        return true;
-=======
             _logger.LogWarning(ex, "NyxID connected-service inventory source creation failed");
             return InventoryFailure("inventory_source_unavailable");
         }
     }
 
-    private static bool TryBuildSubject(
-        AgentToolExecutionContext context,
-        out ExternalSubjectRef subject)
+    private static bool TryBuildSubject(AgentToolExecutionContext context, out ExternalSubjectRef subject)
     {
         subject = new ExternalSubjectRef();
         var authorityPlatform = Normalize(context.NyxIdAuthority.Platform);
@@ -289,7 +181,6 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
     {
         var normalized = value?.Trim();
         return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     }
 
     private static bool HasOnlyListArguments(string argumentsJson)
@@ -314,33 +205,18 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
             message = "The connected-service inventory for the bound NyxID account is temporarily unavailable. Retry shortly.",
         });
 
-<<<<<<< HEAD
-    private static string? Normalize(string? value)
-    {
-        var normalized = value?.Trim();
-        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
-    }
-
-=======
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     private sealed class SenderInventoryTool(ChannelNyxIdConnectedServiceInventoryToolSource source) : IAgentTool
     {
         private const string Schema =
             """{"type":"object","properties":{},"required":[],"additionalProperties":false}""";
 
         public string Name => "nyxid_service_inventory";
-<<<<<<< HEAD
-        public string Description => "List the bound caller's active NyxID connected-service instances.";
-=======
         public string Description =>
             "List the bound caller's exact NyxID connected-service instances.";
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
         public string ParametersSchema => Schema;
         public bool IsReadOnly => true;
         public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
 
-<<<<<<< HEAD
-=======
         public AgentToolReceipt? CreateResultReceipt(
             string callId,
             string toolName,
@@ -348,7 +224,6 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
             string resultJson) =>
             NyxIdServiceInventoryReceiptFactory.Create(callId, toolName, resultJson);
 
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
             source.ExecuteInventoryAsync(argumentsJson, ct);
     }

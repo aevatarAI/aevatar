@@ -37,17 +37,9 @@ public sealed class SkillRecoveryPlannerTests
         var messages = new List<ChatMessage> { ChatMessage.User("/goal ship") };
         var pending = new List<ChatMessage> { messages[0] };
 
-<<<<<<< HEAD
-        var applied = await orchestrator.ApplyInitialDirectivesAsync(
-            toolContext: TestToolContext("req-orchestrator"),
-            messages,
-            pending,
-            callIdPrefix: "req-orchestrator",
-            CancellationToken.None);
-=======
         var progress = new List<SkillRecoveryToolProgress>();
         await foreach (var item in orchestrator.ApplyInitialDirectivesAsync(
-                           toolContext: null,
+                           toolContext: TestToolContext("req-orchestrator"),
                            messages,
                            pending,
                            callIdPrefix: "req-orchestrator",
@@ -55,7 +47,6 @@ public sealed class SkillRecoveryPlannerTests
         {
             progress.Add(item);
         }
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
 
         progress.Should().HaveCount(4);
         var searchMessage = messages.Single(message =>
@@ -93,17 +84,9 @@ public sealed class SkillRecoveryPlannerTests
         var pending = new List<ChatMessage> { messages[0] };
         var longPrefix = "req-" + new string('a', 50);
 
-<<<<<<< HEAD
-        var applied = await orchestrator.ApplyInitialDirectivesAsync(
-            toolContext: TestToolContext(longPrefix),
-            messages,
-            pending,
-            longPrefix,
-            CancellationToken.None);
-=======
         var progress = new List<SkillRecoveryToolProgress>();
         await foreach (var item in orchestrator.ApplyInitialDirectivesAsync(
-                           toolContext: null,
+                           toolContext: TestToolContext(longPrefix),
                            messages,
                            pending,
                            longPrefix,
@@ -111,7 +94,6 @@ public sealed class SkillRecoveryPlannerTests
         {
             progress.Add(item);
         }
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
 
         progress.Should().HaveCount(4);
         var toolCallIds = messages
@@ -154,19 +136,10 @@ public sealed class SkillRecoveryPlannerTests
         };
         var pending = new List<ChatMessage>(messages);
 
-<<<<<<< HEAD
-        var recovered = await orchestrator.TryRecoverFinalAnswerAsync(
-            toolContext: TestToolContext("req-nudge"),
-            messages,
-            pending,
-            finalContent: "cannot complete",
-            callIdPrefix: "req-nudge",
-            CancellationToken.None);
-=======
         orchestrator.ShouldRecoverFinalAnswer(pending, "cannot complete", "req-nudge").Should().BeTrue();
         var progress = new List<SkillRecoveryToolProgress>();
         await foreach (var item in orchestrator.RecoverFinalAnswerAsync(
-                           toolContext: null,
+                           toolContext: TestToolContext("req-nudge"),
                            messages,
                            pending,
                            finalContent: "cannot complete",
@@ -175,7 +148,6 @@ public sealed class SkillRecoveryPlannerTests
         {
             progress.Add(item);
         }
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
 
         progress.Should().HaveCount(2);
         messages.Last().Role.Should().Be("tool");
@@ -193,13 +165,13 @@ public sealed class SkillRecoveryPlannerTests
                 maxAttempts: 1,
                 originalCommand: "/goal query-secret",
                 commandArguments: "header-secret"),
-            _ => new StreamingToolExecutor(tools));
+            toolContext => NewStreamingToolExecutor(tools, toolContext));
         var messages = new List<ChatMessage> { ChatMessage.User("/goal query-secret") };
         var pending = new List<ChatMessage> { messages[0] };
 
         var progress = new List<SkillRecoveryToolProgress>();
         await foreach (var item in orchestrator.ApplyInitialDirectivesAsync(
-                           toolContext: null,
+                           toolContext: TestToolContext("req-sensitive-recovery"),
                            messages,
                            pending,
                            callIdPrefix: "req-sensitive-recovery",
@@ -230,12 +202,12 @@ public sealed class SkillRecoveryPlannerTests
         tools.Register(new FailedReceiptTool("ornn_search_skills"));
         var orchestrator = new SkillRecoveryOrchestrator(
             Recovery(primarySkillName: "project-summary", maxAttempts: 1),
-            _ => new StreamingToolExecutor(tools));
+            toolContext => NewStreamingToolExecutor(tools, toolContext));
         var messages = new List<ChatMessage> { ChatMessage.User("/goal ship") };
         var pending = new List<ChatMessage> { messages[0] };
 
         await foreach (var _ in orchestrator.ApplyInitialDirectivesAsync(
-                           toolContext: null,
+                           toolContext: TestToolContext("req-primary-failure"),
                            messages,
                            pending,
                            callIdPrefix: "req-primary-failure",
@@ -764,9 +736,8 @@ public sealed class SkillRecoveryPlannerTests
         public string Name => name;
         public string Description => "delegate";
         public string ParametersSchema => "{}";
-<<<<<<< HEAD
         public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
-=======
+
         public AgentToolReceipt? CreateSuccessReceipt(
             string callId,
             string toolName,
@@ -778,7 +749,6 @@ public sealed class SkillRecoveryPlannerTests
                 Status = AgentToolReceiptStatus.Success,
                 ResultJson = resultJson,
             };
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
         {
@@ -787,7 +757,6 @@ public sealed class SkillRecoveryPlannerTests
         }
     }
 
-<<<<<<< HEAD
     private sealed class AppendedAuditTrail : IAuditTrailAppender
     {
         public Task<AuditTrailAppendResult> AppendAsync(
@@ -801,7 +770,8 @@ public sealed class SkillRecoveryPlannerTests
         public AuditActorIdentity Hash(string canonicalActorKey) => new("actor-hash", "key-1");
 
         public bool Verify(string canonicalActorKey, string auditActorId, string identityKeyId) => true;
-=======
+    }
+
     private sealed class FailedReceiptTool(string name) : IAgentTool
     {
         public string Name => name;
@@ -832,6 +802,5 @@ public sealed class SkillRecoveryPlannerTests
                 ErrorMessage = "Search failed.",
                 ResultJson = resultJson,
             };
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     }
 }

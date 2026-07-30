@@ -49,27 +49,16 @@ public sealed class NyxIdToolOptions
     public bool EnableSshExecTool { get; set; }
 
     /// <summary>
-<<<<<<< HEAD
-=======
     /// When <c>true</c>, expose the managed-sandbox target of <c>codex_exec</c>.
     /// A matching <c>ICodexExecutionPort</c> must be registered by the host; endpoint,
     /// image, credential, and admission policy remain operator-owned configuration.
     /// </summary>
     public bool EnableManagedCodexExecTool { get; set; }
 
-    /// <summary>
-    /// When <c>true</c>, <c>ssh_exec</c> returns <c>RequiresApproval=false</c> so the
-    /// local tool approval middleware executes it immediately. Defaults to false; enable
-    /// only in a host-owned, internal-only deployment where the surrounding channel and
-    /// identity policy already define the trust boundary.
-    /// </summary>
-    public bool BypassSshExecApproval { get; set; }
-
     public NyxIdManagedWorkflowAdmissionMode ManagedWorkflowAdmissionMode { get; set; } =
         NyxIdManagedWorkflowAdmissionMode.Shadow;
 
     /// <summary>
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     /// Maximum bytes accepted by nyxid_proxy response_mode=file_artifact.
     /// </summary>
     public long ProxyFileArtifactMaxBytes { get; set; } = DefaultProxyFileArtifactMaxBytes;

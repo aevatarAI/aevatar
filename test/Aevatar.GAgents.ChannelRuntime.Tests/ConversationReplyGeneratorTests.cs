@@ -2561,17 +2561,12 @@ public sealed class ConversationReplyGeneratorTests
             [
                 new SingleToolSource(new FixedResultTool("ornn_search_skills", "Found 1 skills:\n- **project-summary**")),
                 new SingleToolSource(new FixedResultTool("use_skill", "# project-summary\n## Instructions\nFetch project data.")),
-<<<<<<< HEAD
-                new SingleToolSource(new FixedResultTool("chrono_storage_query", "Error: Invalid URI: The hostname could not be parsed.")),
-            ],
-            toolExecutionPort: new ChannelConversationTurnRunnerTests.TestAgentToolExecutionPort());
-=======
                 new SingleToolSource(new FixedResultTool(
                     "chrono_storage_query",
                     "Error: Invalid URI: The hostname could not be parsed.",
                     AgentToolReceiptStatus.Error)),
-            ]);
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
+            ],
+            toolExecutionPort: new ChannelConversationTurnRunnerTests.TestAgentToolExecutionPort());
         var skillRecovery = new AgentSkillRecoveryContext(
             RequireInitialOrnnSearch: true,
             RequireOrnnSearchOnBlocker: true,

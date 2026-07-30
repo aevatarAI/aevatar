@@ -124,13 +124,6 @@ public sealed class NyxIdServiceToolsTests
         delete.IsDestructive.Should().BeTrue();
     }
 
-<<<<<<< HEAD
-    [Fact]
-    public async Task FixedMutationAndRequestTools_ShouldRevalidateAndReturnTypedResults()
-    {
-        var handler = new ServiceHandler();
-        var instance = Instance("us-personal-7", "api-shop", "svc-shop", true);
-=======
     [Theory]
     [InlineData("nyxid_service_update", "{ \"user_service_id\": \"usvc-alpha\", \"label\": \"Changed\" }")]
     [InlineData("nyxid_service_route", "{ \"user_service_id\": \"usvc-alpha\", \"route\": \"node\", \"node_id\": \"node-c\" }")]
@@ -159,7 +152,6 @@ public sealed class NyxIdServiceToolsTests
     {
         var handler = new ServiceHandler();
         var instance = Instance("usvc-alpha", "api-shop", "svc-shop", true);
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
         handler.KeysByToken["user-token"] = Keys(instance);
         handler.ExactKeys["usvc-alpha"] = instance;
         var source = CreateSource(handler);
@@ -343,20 +335,7 @@ public sealed class NyxIdServiceToolsTests
             : null;
     }
 
-<<<<<<< HEAD
-    private sealed record RequestRecord(
-        string Method,
-        string Path,
-        string Query,
-        string Body,
-        string Authorization,
-        string? IdempotencyKey,
-        string? Accept,
-        string? ContentType,
-        string? IfMatch);
-=======
     private sealed record RequestRecord(string Method, string Path, string Body);
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
 
     private sealed class ServiceHandler : HttpMessageHandler
     {

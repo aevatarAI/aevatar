@@ -430,14 +430,10 @@ steps:
 - 常用参数：`tool`。
 - 工具输出若是 JSON object 且步骤成功，运行时会把顶层字段镜像为 `steps.<step_id>.json.<field>` 变量，供后续 `switch` / `conditional` / `while` 分支使用。
 - 当前 step 的 typed input file refs 会随 `WorkflowToolExecutionRequest` 传给 workflow tool。工具若同时支持 arguments `fileRef` 与当前输入文件上下文，显式 `fileRef` 优先；未显式选择时，只能在恰好 1 个当前输入文件时 fallback，多文件必须 fail closed 并要求调用方显式选择。
-<<<<<<< HEAD
 - `tool_call` dispatch 语义是 at-least-once。workflow actor 在 dispatch seam 解析并持久化 typed `idempotency_key`；若 step 声明 `compensation`，同一 seam 先写入 `PROVISIONAL` compensation ledger，再发布 tool invocation envelope。审批 resume 会复用同一个 key；该 key 仍只是 callee-side 幂等建议。server-owned `IAgentTool` terminal 另由 durable `RUNNING` audit 做 admission：只有 `Appended` 执行，`Duplicate/Conflict` 不重放，因此 crash 落在 `RUNNING` 与 `TERMINAL` 之间时必须按 outcome uncertain 处理，不能靠再次调用 raw terminal 猜结果。
-=======
 - workflow tool 的成功或失败是 typed outcome。外部协议的 provider/adapter 负责把 HTTP 非 2xx、第三方错误 envelope 或 provider receipt 归一化为 typed failure；Workflow Core 与前端不得根据任意 output JSON 中的 `error`、`status` 等字段猜测执行结果。
-- typed failure 会发布 `WorkflowToolCallCompletedEvent.Success=false` 与 `StepCompletedEvent.Success=false`，保留 provider 提供的安全结果输出，并进入与异常失败相同的 retry、`on_error`、saga compensation 和 terminal run failure 链路。未被 provider 分类的普通返回值保持成功，即使业务 payload 恰好包含名为 `error` 的字段。
+- typed failure 会发布 `WorkflowToolCallCompletedEvent.Success=false` 与 `StepCompletedEvent.Success=false`，保留 provider 提供的安全结果输出，并进入与异常失败相同的 retry、`on_error`、saga compensation 和 terminal run failure 链路。provider 未提供 typed receipt 时，结果保持 `unknown` 并按失败处理；不得根据业务 payload 中名为 `error`、`status` 等字段反推成功或失败。
 - 升级后，过去以 success-wrapped error 返回的 tool 若已由 provider/adapter 分类，会从“步骤成功”变为正确的失败或进入 workflow 配置的恢复策略。workflow 作者应检查依赖旧假成功输出分支的定义，并改用 `on_error`、retry 或 compensation 表达恢复语义。
-- `tool_call` side effect 是 at-least-once。workflow actor 在 dispatch seam 解析并持久化 typed `idempotency_key`；若 step 声明 `compensation`，同一 seam 先写入 `PROVISIONAL` compensation ledger，再发布 tool invocation envelope。审批 replay / crash replay 会复用同一个 key；该 key 只用于 callee-side 幂等建议，不表示 engine-side dedup 或 exactly-once。
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
 - 需要人工审批的 direct `tool_call` 不把 `ApprovalPending` 当作失败完成。`ToolCallModule` 将原始 tool name、arguments、`execution_id`、`tool_call_id`、`approval_request_id` 持久化到 workflow actor state，并发布 `WorkflowSuspendedEvent.tool_approval`。该 suspension 只暴露审批对账键，不暴露工具参数。
 - tool approval resume 使用 `WorkflowResumedEvent.tool_approval` nested payload，仅携带 `execution_id`、`tool_call_id`、`approval_request_id`。客户端不得在 resume payload 中提交 tool name、arguments 或 digest；approved resume 必须从 actor pending state 读取原始工具和参数，由原始 `arguments_json` 派生 SHA-256，并向 `IAgentToolExecutionPort` 传递 typed `AgentToolApprovalGrant`。grant 精确绑定 `ApprovalRequestId/RequestId/ToolName/ToolCallId/ArgumentsSha256`。
 - resume 对账按 `run_id + step_id + execution_id + tool_call_id + approval_request_id` 精确匹配。approved 后重放原工具；rejected / timed out / non-pending termination fail closed 并清理 pending state；stale 或 mismatched resume event 直接忽略。
@@ -490,19 +486,12 @@ steps:
 
 `codex_exec` 是 NyxID tool provider 暴露的受限执行路由，不是独立 workflow primitive，也不使用 Aevatar CLI connector 或 `~/.aevatar/connectors.json`。它只接受强类型 target；workflow 不能选择镜像、provider、Codex flags 或 sandbox/isolation 配置。
 
-<<<<<<< HEAD
-- 路由：`service` 是 NyxID SSH 类型 UserService 的 slug/UUID，不是裸 `node_id`。NyxID 把 service 解析为 catalog SSH service，再通过该 service 的 node binding 路由。若 Codex 装在 node 机器本身，SSH service 必须指向该机器并绑定该 node。
-- 输入：工具只接受 `service`、`principal`、`prompt` 与可选 `timeout_secs`。prompt 会在 Aevatar 内编码后，由固定的 `codex exec -` 命令通过 stdin 提交，workflow 不能追加 shell/Codex flags。
-- 实现：`ssh_exec` 与 `codex_exec` 共用 typed NyxID SSH executor；service 解析、caller token、HTTP 调用和 timeout 只有一份实现。两个 tool 各自只负责边界参数解析与策略。
-- 配置：Codex 安装、登录态、model、sandbox、approval policy 与其他 Codex 行为由目标 SSH principal 的 node-local Codex 配置负责；进程工作目录由该 SSH 账号/目标主机部署负责。Aevatar 和 NyxID 不选择 Codex Pro 或任何模型。
-- 边界：NyxID SSH exec 最长 `300s`，prompt 最多 `6000` UTF-8 bytes，stdout/stderr 各最多 `1MiB`。预计超过五分钟的任务使用 `workflows/codex_long_running_handoff.yaml` 的 submit/callback continuation 模式。
-- 安全：`codex_exec` 与 `ssh_exec` 默认关闭，只有显式设置 `NyxIdToolOptions.EnableSshExecTool` 才暴露。显式 opt-in 只改变可见性，不改变准入；两者始终要求匹配当前冻结参数的 actor-owned durable grant，不存在 approval bypass。目标主机应是专用 sandbox；不要在 workflow YAML 中携带 Codex token、`CODEX_HOME`、model 或 sandbox bypass 参数。
-=======
 - `managed_sandbox`：Aevatar 通过 `ICodexExecutionPort` 使用用户级 Vault agent key 调用固定 NyxID `chrono-sandbox` proxy 路由，只接受 `empty_git` workspace 和最长 `180s` timeout。内部 canary 阶段 NyxID 为该请求注入五分钟 `proxy:*` delegation token，Codex 只配置固定 `chrono-llm-public` proxy URL；chrono-sandbox 负责 OpenSandbox、runner 镜像、gVisor 隔离、provider 配置与清理（ADR-0044）。用户必须先通过 authenticated self-service endpoint 完成 allowlisted credential provisioning；在 NyxID 提供窄 scope 前禁止扩大到全用户。
 - `private_ssh`：`target.private_ssh.service` 是 NyxID SSH UserService 的 slug/UUID，不是 `node_id`；`principal` 是该 service 允许的 Unix principal。Codex 登录态、workspace 与 sandbox policy 由目标机固定 wrapper 负责，最长 `300s`。
 - prompt 最多 `6000` UTF-8 bytes，只通过 stdin/file boundary 进入固定命令，不参与 shell command 拼接。
 - managed target 返回包含 `status/target/output/exit_code/diagnostic_id/elapsed_ms` 的 JSON；private SSH target 保留 NyxID SSH executor 的结构化结果。
 - 配置检查、credential status 或 chrono-sandbox health 只证明局部依赖；必须运行真实 workflow sample 并得到精确 `CODEX_EXEC_READY` 才能声明可用。
+- 安全：private SSH 只有显式设置 `NyxIdToolOptions.EnableSshExecTool` 才暴露，且始终要求匹配当前冻结参数的 actor-owned durable grant，不存在 approval bypass。managed sandbox 的启用由独立 host 配置和执行端口控制。
 
 Managed sample 不接收调用者路由参数：
 
@@ -518,7 +507,6 @@ steps:
 ```
 
 Private SSH sample 使用 nested target，禁止继续使用旧的 root-level `service/principal`：
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
 
 ```yaml
 steps:

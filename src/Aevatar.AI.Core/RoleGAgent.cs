@@ -217,16 +217,18 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 //   Old pattern: Approval resume rebuilt control context from a durable annotation bag.
                 //   New principle: Use typed pending.ToolContext only; metadata is never a control source.
                 var pendingToolContext = ResolvePendingToolContext(pending);
+                var approvedExecution = await ResolveApprovedToolExecutionAsync(
+                    pending,
+                    pendingToolContext,
+                    CancellationToken.None);
+                pendingToolContext = approvedExecution.ExecutionContext;
                 await PersistDomainEventAsync(new ClearPendingApprovalEvent { RequestId = pending.RequestId });
                 using (AgentToolContextScope.Push(pendingToolContext))
                 {
-<<<<<<< HEAD
-                    var tool = Tools.Get(pending.ToolName)
-                               ?? throw new InvalidOperationException($"Tool '{pending.ToolName}' not found");
                     var executionPort = Services.GetRequiredService<IAgentToolExecutionPort>();
                     var toolOutcome = await executionPort.ExecuteAsync(
                         new AgentToolExecutionRequest(
-                            tool,
+                            approvedExecution.Tool,
                             pending.ArgumentsJson,
                             pendingToolContext.WithCallId(pending.ToolCallId),
                             AgentToolApprovalContinuationMode.ActorOwned,
@@ -236,12 +238,6 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                                 pending.ToolName,
                                 pending.ToolCallId,
                                 AgentToolArgumentsDigest.ComputeSha256(pending.ArgumentsJson))),
-=======
-                    // Execute the yielded tool call
-                    var toolResult = await ExecuteApprovedToolAsync(
-                        pending,
-                        pendingToolContext,
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
                         CancellationToken.None);
                     if (toolOutcome.Kind is not (AgentToolExecutionOutcomeKind.Executed or
                         AgentToolExecutionOutcomeKind.ExecutedAuditIncomplete))
@@ -594,18 +590,16 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         await ScheduleApprovalTimeoutAsync(pending);
     }
 
-    protected virtual Task<ChatMessage> ExecuteApprovedToolAsync(
+    protected virtual Task<(IAgentTool Tool, AgentToolExecutionContext ExecutionContext)>
+        ResolveApprovedToolExecutionAsync(
         PendingToolApprovalState pending,
         AgentToolExecutionContext toolContext,
-        CancellationToken ct) =>
-        Tools.ExecuteToolCallAsync(
-            new ToolCall
-            {
-                Id = pending.ToolCallId,
-                Name = pending.ToolName,
-                ArgumentsJson = pending.ArgumentsJson,
-            },
-            ct);
+        CancellationToken ct)
+    {
+        var tool = Tools.Get(pending.ToolName)
+                   ?? throw new InvalidOperationException($"Tool '{pending.ToolName}' not found");
+        return Task.FromResult((tool, toolContext));
+    }
 
     protected virtual Task OnApprovalTerminalFailureAsync(
         PendingToolApprovalState pending,

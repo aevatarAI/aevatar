@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.CodexExecution;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Auditing;
 using Aevatar.AI.Core.Observability;
@@ -195,12 +196,11 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
                 ct).ConfigureAwait(false);
         }
 
-        var runningReceipt = AgentToolReceiptFactory.CreateSuccess(
+        var runningReceipt = AgentToolReceiptFactory.CreateRunning(
             tool,
             toolCallId,
             toolName,
-            callSafety,
-            string.Empty);
+            callSafety);
         var runningAppend = await AppendAsync(
             CreateRunningAuditId(requestId, toolCallId),
             "running",
@@ -284,7 +284,13 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
         {
             using var contextScope = AgentToolContextScope.Push(credentialDecision.ExecutionContext);
             var resultJson = await tool.ExecuteAsync(argumentsJson, ct).ConfigureAwait(false);
-            var receipt = AgentToolReceiptFactory.CreateSuccess(tool, toolCallId, toolName, callSafety, resultJson);
+            var receipt = AgentToolReceiptFactory.CreateResult(
+                tool,
+                toolCallId,
+                toolName,
+                callSafety,
+                resultJson,
+                argumentsJson);
             outcome = new AgentToolExecutionOutcome(
                 AgentToolExecutionOutcomeKind.Executed,
                 resultJson ?? string.Empty,
@@ -306,7 +312,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
                 toolCallId,
                 callSafety,
                 isMutation,
-                "tool_execution_failed",
+                ResolveExceptionErrorCode(ex),
                 SafeExceptionClass(ex),
                 AgentToolExecutionFailureStage.TerminalExecution,
                 terminalInvoked: true,
@@ -785,6 +791,26 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
         JsonSerializer.Serialize(new { error = code, code, message, tool_name = toolName });
 
     private static string SafeExceptionClass(Exception ex) => ex.GetType().Name;
+
+    private static string ResolveExceptionErrorCode(Exception exception) =>
+        exception is CodexExecutionException codexException
+            ? codexException.Failure.Kind switch
+            {
+                CodexExecutionFailureKind.TargetNotConfigured => "codex_execution_target_not_configured",
+                CodexExecutionFailureKind.AdmissionDenied => "codex_execution_admission_denied",
+                CodexExecutionFailureKind.LlmProviderNotConnected => "codex_execution_llm_provider_not_connected",
+                CodexExecutionFailureKind.CapacityUnavailable => "codex_execution_capacity_unavailable",
+                CodexExecutionFailureKind.ProvisioningFailed => "codex_execution_provisioning_failed",
+                CodexExecutionFailureKind.ReadinessFailed => "codex_execution_readiness_failed",
+                CodexExecutionFailureKind.IsolationUnavailable => "codex_execution_isolation_unavailable",
+                CodexExecutionFailureKind.MalformedOutput => "codex_execution_malformed_output",
+                CodexExecutionFailureKind.TerminalFailure => "codex_execution_terminal_failure",
+                CodexExecutionFailureKind.TimedOut => "codex_execution_timed_out",
+                CodexExecutionFailureKind.Cancelled => "codex_execution_cancelled",
+                CodexExecutionFailureKind.CleanupFailed => "codex_execution_cleanup_failed",
+                _ => "tool_execution_failed",
+            }
+            : "tool_execution_failed";
 
     private static string? NormalizeIdentity(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
