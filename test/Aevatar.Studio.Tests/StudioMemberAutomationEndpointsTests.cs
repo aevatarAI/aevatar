@@ -160,6 +160,7 @@ public sealed class StudioMemberAutomationEndpointsTests
             CancellationToken.None);
 
         StatusCode(result).Should().Be(StatusCodes.Status200OK);
+        schedules.WritePreflightCalls.Should().Be(1);
         schedules.LastPreflight.Should().NotBeNull();
         schedules.LastPreflight!.ScopeId.Should().Be(ScopeId);
         schedules.LastPreflight.TeamId.Should().Be(TeamId);
@@ -811,6 +812,7 @@ public sealed class StudioMemberAutomationEndpointsTests
         public Exception? Exception { get; init; }
         public int ListCalls { get; private set; }
         public int ScheduleMutationCalls { get; private set; }
+        public int WritePreflightCalls { get; private set; }
         public StudioMemberAutomationView? View { get; init; }
         public StudioMemberWorkflowScheduleRequest? LastPreflight { get; private set; }
         public StudioMemberWorkflowScheduleRequest? LastCreate { get; private set; }
@@ -839,8 +841,11 @@ public sealed class StudioMemberAutomationEndpointsTests
 
         public Task<StudioMemberWorkflowAuthorizationResult> PreflightForWriteAsync(
             StudioMemberWorkflowScheduleRequest request,
-            CancellationToken ct = default) =>
-            PreflightAsync(request, ct);
+            CancellationToken ct = default)
+        {
+            WritePreflightCalls++;
+            return PreflightAsync(request, ct);
+        }
 
         public Task<StudioMemberWorkflowScheduleResult> CreateAsync(
             StudioMemberWorkflowScheduleRequest request,
