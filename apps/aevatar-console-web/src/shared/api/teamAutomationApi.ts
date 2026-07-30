@@ -103,6 +103,62 @@ export type TeamAutomationAuthorizationStatus =
   | "revocation_pending"
   | "failed";
 
+const teamAutomationStatusAliases = new Map<
+  string,
+  TeamAutomationAuthorizationStatus
+>([
+  ["1", "provisioning_pending"],
+  ["2", "active"],
+  ["3", "needs_authorization"],
+  ["4", "replacement_pending"],
+  ["5", "deleting"],
+  ["6", "revocation_pending"],
+  ["7", "failed"],
+  ["provisioning_pending", "provisioning_pending"],
+  ["active", "active"],
+  ["needs_authorization", "needs_authorization"],
+  ["replacement_pending", "replacement_pending"],
+  ["deleting", "deleting"],
+  ["revocation_pending", "revocation_pending"],
+  ["failed", "failed"],
+  ["provisioningpending", "provisioning_pending"],
+  ["needsauthorization", "needs_authorization"],
+  ["replacementpending", "replacement_pending"],
+  ["revocationpending", "revocation_pending"],
+  [
+    "studio_member_automation_status_provisioning_pending",
+    "provisioning_pending",
+  ],
+  ["studio_member_automation_status_active", "active"],
+  [
+    "studio_member_automation_status_needs_authorization",
+    "needs_authorization",
+  ],
+  [
+    "studio_member_automation_status_replacement_pending",
+    "replacement_pending",
+  ],
+  ["studio_member_automation_status_deleting", "deleting"],
+  [
+    "studio_member_automation_status_revocation_pending",
+    "revocation_pending",
+  ],
+  ["studio_member_automation_status_failed", "failed"],
+  ["team_automation_status_provisioning_pending", "provisioning_pending"],
+  ["team_automation_status_active", "active"],
+  [
+    "team_automation_status_needs_authorization",
+    "needs_authorization",
+  ],
+  [
+    "team_automation_status_replacement_pending",
+    "replacement_pending",
+  ],
+  ["team_automation_status_deleting", "deleting"],
+  ["team_automation_status_revocation_pending", "revocation_pending"],
+  ["team_automation_status_failed", "failed"],
+]);
+
 export type TeamAutomationRevocationTrack =
   | "NotRequired"
   | "Pending"
@@ -268,30 +324,13 @@ function decodeNullableTimestamp(value: unknown, label: string): string | null {
 }
 
 function normalizeStatus(value: unknown): TeamAutomationAuthorizationStatus {
-  const normalized = String(value ?? "").trim().toLowerCase();
-  const compactStatus = normalized
-    .replace(
-      /^(?:studio[_\s-]*member[_\s-]*automation[_\s-]*status|team[_\s-]*automation[_\s-]*status)[_\s-]*/,
-      "",
-    )
-    .replace(/[_\s-]+/g, "");
-  const statuses: Record<string, TeamAutomationAuthorizationStatus> = {
-    "1": "provisioning_pending",
-    "2": "active",
-    "3": "needs_authorization",
-    "4": "replacement_pending",
-    "5": "deleting",
-    "6": "revocation_pending",
-    "7": "failed",
-    provisioningpending: "provisioning_pending",
-    active: "active",
-    needsauthorization: "needs_authorization",
-    replacementpending: "replacement_pending",
-    deleting: "deleting",
-    revocationpending: "revocation_pending",
-    failed: "failed",
-  };
-  const status = statuses[compactStatus];
+  if (typeof value !== "string" && typeof value !== "number") {
+    throw new Error(`Unknown Team automation status: ${String(value)}.`);
+  }
+
+  const normalized =
+    typeof value === "string" ? value.trim().toLowerCase() : value.toString();
+  const status = teamAutomationStatusAliases.get(normalized);
   if (status === undefined) {
     throw new Error(`Unknown Team automation status: ${String(value)}.`);
   }

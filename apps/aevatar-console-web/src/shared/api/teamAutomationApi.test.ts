@@ -174,6 +174,28 @@ describe("teamAutomationApi", () => {
     },
   );
 
+  it.each([
+    "constructor",
+    [2],
+    ["NeedsAuthorization"],
+    {},
+    true,
+    null,
+    undefined,
+    "act-ive",
+    "n e e d s authorization",
+    "TEAM---AUTOMATION STATUS--ACTIVE",
+  ] as const)(
+    "rejects malformed Team automation lifecycle value %s",
+    (wireStatus) => {
+      expect(() =>
+        teamAutomationApiDecoders.view(
+          automationView({ teamAutomationLifecycleStatus: wireStatus }),
+        ),
+      ).toThrow(`Unknown Team automation status: ${String(wireStatus)}.`);
+    },
+  );
+
   it("decodes exact typed service and node authorization grants", () => {
     const review = teamAutomationApiDecoders.permissionReview(authorizationResult());
 
