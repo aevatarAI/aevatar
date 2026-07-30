@@ -37,6 +37,19 @@ public sealed class AgentWorkflowToolSourceAdapterTests
     }
 
     [Fact]
+    public void OperationAdmissionMapper_ShouldRejectPublishedAdmissionWithInvalidExecutionPolicy()
+    {
+        var admission = WriteInvocationAdmission();
+        admission.Capability.NyxIdUserService.ExecutionPolicy.EnforcementOwner =
+            NyxIdOperationEnforcementOwner.NyxId;
+
+        FluentActions.Invoking(() => WorkflowOperationAdmissionToolContextMapper.Map(admission))
+            .Should()
+            .Throw<InvalidOperationException>()
+            .WithMessage("*execution policy*");
+    }
+
+    [Fact]
     public async Task WorkflowTool_ShouldMapExplicitRequestAdmissionToProviderNeutralToolContext()
     {
         var agentTool = new CapturingAgentTool();
@@ -144,6 +157,40 @@ public sealed class AgentWorkflowToolSourceAdapterTests
             default:
                 throw new ArgumentOutOfRangeException(nameof(mutation), mutation, null);
         }
+
+        FluentActions.Invoking(() => WorkflowOperationAdmissionToolContextMapper.Map(admission))
+            .Should()
+            .Throw<InvalidOperationException>();
+    }
+
+    [Theory]
+    [InlineData("grant_authority")]
+    [InlineData("blank_slug")]
+    [InlineData("method_risk_floor")]
+    public void OperationAdmissionMapper_ShouldRejectIntrinsicallyInvalidExplicitAdmission(
+        string mutation)
+    {
+        var admission = ExplicitRequestInvocationAdmission();
+        switch (mutation)
+        {
+            case "grant_authority":
+                admission.NyxIdExplicitRequestGrant.GrantorAuthority =
+                    NyxIdExplicitRequestGrantorAuthority.Unspecified;
+                break;
+            case "blank_slug":
+                admission.Capability.NyxIdUserRequest.ServiceSlugSnapshot = " ";
+                break;
+            case "method_risk_floor":
+                admission.NyxIdExplicitRequestGrant.Risk = NyxIdOperationRisk.ReadOnly;
+                admission.Capability.NyxIdUserRequest.ExecutionPolicy.Risk =
+                    NyxIdOperationRisk.ReadOnly;
+                admission.Capability.NyxIdUserRequest.ExecutionPolicy.Approval =
+                    NyxIdOperationApproval.None;
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(mutation), mutation, null);
+        }
+        RefreshExplicitAdmissionDigests(admission);
 
         FluentActions.Invoking(() => WorkflowOperationAdmissionToolContextMapper.Map(admission))
             .Should()
@@ -737,6 +784,22 @@ public sealed class AgentWorkflowToolSourceAdapterTests
             },
             NyxIdExplicitRequestGrant = grant,
         };
+    }
+
+    private static void RefreshExplicitAdmissionDigests(
+        WorkflowCapabilityInvocationAdmission admission)
+    {
+        var proof = admission.Capability.NyxIdUserRequest;
+        var grant = admission.NyxIdExplicitRequestGrant;
+        var requestContractDigest = WorkflowCapabilityAdmissionPlanIntegrity
+            .ComputeNyxIdRequestContractDigest(proof.Request);
+        grant.RequestContractDigest = requestContractDigest;
+        proof.ContractDigest = WorkflowCapabilityAdmissionPlanIntegrity
+            .ComputeNyxIdExplicitRequestProofDigest(
+                requestContractDigest,
+                proof.ServiceSlugSnapshot);
+        proof.ExplicitRequestGrantDigest = WorkflowCapabilityAdmissionPlanIntegrity
+            .ComputeNyxIdExplicitRequestGrantDigest(grant);
     }
 
     private sealed class ResultReceiptAgentTool(

@@ -329,47 +329,68 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
     {
         foreach (var admission in admissions)
         {
-            ValidateCallSiteId(admission.CallSiteId);
-            if (admission.Capability is null ||
-                admission.Capability.CapabilityCase ==
-                ExternalWorkflowCapabilityRef.CapabilityOneofCase.None)
-            {
-                throw new InvalidOperationException("Workflow capability invocation admission proof is required.");
-            }
-
-            if (admission.Capability.CapabilityCase ==
-                ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService)
-            {
-                if (admission.NyxIdExplicitRequestGrant is not null)
-                {
-                    throw new InvalidOperationException(
-                        "Workflow NyxID explicit request grant is not applicable to a published operation proof.");
-                }
-                var policy = admission.Capability.NyxIdUserService.ExecutionPolicy;
-                ValidateNyxIdExecutionPolicy(policy);
-                if (!policy.AllowedExecutionModes.Contains(executionMode))
-                {
-                    throw new InvalidOperationException(
-                        "Workflow capability admission execution mode is not allowed by the NyxID operation execution policy.");
-                }
-            }
-            else if (admission.Capability.CapabilityCase ==
-                     ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest)
-            {
-                ValidateNyxIdExplicitRequestAdmission(admission, executionMode);
-            }
-            else if (admission.NyxIdExplicitRequestGrant is not null)
-            {
-                throw new InvalidOperationException(
-                    "Workflow NyxID explicit request grant is not applicable to this capability.");
-            }
+            ValidateInvocationAdmissionIntrinsicIntegrity(admission);
+            ValidateInvocationAdmissionExecutionMode(admission, executionMode);
         }
         EnsureUniqueCallSites(admissions.Select(static admission => admission.CallSiteId));
     }
 
-    private static void ValidateNyxIdExplicitRequestAdmission(
-        WorkflowCapabilityInvocationAdmission admission,
-        ExternalCapabilityExecutionMode executionMode)
+    /// <summary>
+    /// Validates one admission's mode-independent internal consistency. This does not establish
+    /// that the admission is allowed for any particular plan execution mode.
+    /// </summary>
+    public static void ValidateInvocationAdmissionIntrinsicIntegrity(
+        WorkflowCapabilityInvocationAdmission admission)
+    {
+        ArgumentNullException.ThrowIfNull(admission);
+        ValidateCallSiteId(admission.CallSiteId);
+        if (admission.Capability is null ||
+            admission.Capability.CapabilityCase ==
+            ExternalWorkflowCapabilityRef.CapabilityOneofCase.None)
+        {
+            throw new InvalidOperationException(
+                "Workflow capability invocation admission proof is required.");
+        }
+
+        switch (admission.Capability.CapabilityCase)
+        {
+            case ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService:
+                ValidateNyxIdPublishedOperationAdmissionIntrinsicIntegrity(admission);
+                break;
+            case ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest:
+                ValidateNyxIdExplicitRequestAdmissionIntrinsicIntegrity(admission);
+                break;
+            default:
+                if (admission.NyxIdExplicitRequestGrant is not null)
+                {
+                    throw new InvalidOperationException(
+                        "Workflow NyxID explicit request grant is not applicable to this capability.");
+                }
+                break;
+        }
+    }
+
+    private static void ValidateNyxIdPublishedOperationAdmissionIntrinsicIntegrity(
+        WorkflowCapabilityInvocationAdmission admission)
+    {
+        if (admission.NyxIdExplicitRequestGrant is not null)
+        {
+            throw new InvalidOperationException(
+                "Workflow NyxID explicit request grant is not applicable to a published operation proof.");
+        }
+
+        var proof = admission.Capability.NyxIdUserService;
+        if (string.IsNullOrWhiteSpace(proof.EndpointId) ||
+            !string.Equals(proof.EndpointId, proof.EndpointId.Trim(), StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Workflow NyxID published endpoint identity is invalid.");
+        }
+        ValidateNyxIdExecutionPolicy(proof.ExecutionPolicy);
+    }
+
+    private static void ValidateNyxIdExplicitRequestAdmissionIntrinsicIntegrity(
+        WorkflowCapabilityInvocationAdmission admission)
     {
         var proof = admission.Capability.NyxIdUserRequest;
         var grant = admission.NyxIdExplicitRequestGrant;
@@ -412,8 +433,7 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
             grant.AllowedExecutionModes.Any(static mode =>
                 mode is not (ExternalCapabilityExecutionMode.Interactive or
                     ExternalCapabilityExecutionMode.Durable)) ||
-            grant.AllowedExecutionModes.Distinct().Count() != grant.AllowedExecutionModes.Count ||
-            !grant.AllowedExecutionModes.Contains(executionMode))
+            grant.AllowedExecutionModes.Distinct().Count() != grant.AllowedExecutionModes.Count)
         {
             throw new InvalidOperationException("Workflow NyxID explicit request grant policy is invalid.");
         }
@@ -439,6 +459,25 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
                 ComputeNyxIdExplicitRequestGrantDigest(grant)))
         {
             throw new InvalidOperationException("Workflow NyxID explicit request grant digest is invalid.");
+        }
+    }
+
+    private static void ValidateInvocationAdmissionExecutionMode(
+        WorkflowCapabilityInvocationAdmission admission,
+        ExternalCapabilityExecutionMode executionMode)
+    {
+        var policy = admission.Capability.CapabilityCase switch
+        {
+            ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService =>
+                admission.Capability.NyxIdUserService.ExecutionPolicy,
+            ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest =>
+                admission.Capability.NyxIdUserRequest.ExecutionPolicy,
+            _ => null,
+        };
+        if (policy is not null && !policy.AllowedExecutionModes.Contains(executionMode))
+        {
+            throw new InvalidOperationException(
+                "Workflow capability admission execution mode is not allowed by the NyxID operation execution policy.");
         }
     }
 

@@ -11,8 +11,11 @@ public static class WorkflowOperationAdmissionToolContextMapper
 {
     public static AgentToolOperationAdmission? Map(WorkflowCapabilityInvocationAdmission? admission)
     {
-        if (admission?.Capability is null)
+        if (admission is null)
             return null;
+
+        WorkflowCapabilityAdmissionPlanIntegrity
+            .ValidateInvocationAdmissionIntrinsicIntegrity(admission);
 
         return admission.Capability.CapabilityCase switch
         {
@@ -27,20 +30,7 @@ public static class WorkflowOperationAdmissionToolContextMapper
     private static AgentToolOperationAdmission MapPublished(
         WorkflowCapabilityInvocationAdmission admission)
     {
-        if (admission.NyxIdExplicitRequestGrant is not null)
-        {
-            throw new InvalidOperationException(
-                "A published operation admission cannot carry an explicit request grant.");
-        }
-
         var proof = admission.Capability.NyxIdUserService;
-        if (string.IsNullOrWhiteSpace(proof.EndpointId) ||
-            !string.Equals(proof.EndpointId, proof.EndpointId.Trim(), StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException(
-                "Workflow NyxID published endpoint identity is invalid.");
-        }
-
         return new AgentToolOperationAdmission(
             proof.UserServiceId,
             proof.ServiceSlugSnapshot,
@@ -59,52 +49,9 @@ public static class WorkflowOperationAdmissionToolContextMapper
         WorkflowCapabilityInvocationAdmission admission)
     {
         var proof = admission.Capability.NyxIdUserRequest;
-        if (proof.Request is null)
-        {
-            throw new InvalidOperationException(
-                "Workflow NyxID explicit request admission selector is required.");
-        }
-        if (!NyxIdRequestSelectorContract.TryNormalize(
-                proof.Request,
-                out var request,
-                out var selectorError))
-        {
-            throw new InvalidOperationException(
-                $"Workflow NyxID explicit request admission is invalid: {selectorError}.");
-        }
-        if (!proof.Request.Equals(request))
-        {
-            throw new InvalidOperationException(
-                "Workflow NyxID explicit request admission selector is not canonical.");
-        }
-
+        var request = proof.Request;
         var requestContractDigest = WorkflowCapabilityAdmissionPlanIntegrity
             .ComputeNyxIdRequestContractDigest(request);
-        var grant = admission.NyxIdExplicitRequestGrant;
-        if (grant is null ||
-            !string.Equals(grant.CallSiteId, admission.CallSiteId, StringComparison.Ordinal) ||
-            !string.Equals(
-                grant.RequestContractDigest,
-                requestContractDigest,
-                StringComparison.Ordinal) ||
-            !string.Equals(
-                proof.ContractDigest,
-                WorkflowCapabilityAdmissionPlanIntegrity.ComputeNyxIdExplicitRequestProofDigest(
-                    requestContractDigest,
-                    proof.ServiceSlugSnapshot),
-                StringComparison.Ordinal) ||
-            !string.Equals(
-                proof.ExplicitRequestGrantDigest,
-                WorkflowCapabilityAdmissionPlanIntegrity.ComputeNyxIdExplicitRequestGrantDigest(grant),
-                StringComparison.Ordinal) ||
-            proof.ExecutionPolicy is null ||
-            proof.ExecutionPolicy.Risk != grant.Risk ||
-            !proof.ExecutionPolicy.AllowedExecutionModes.Order()
-                .SequenceEqual(grant.AllowedExecutionModes.Order()))
-        {
-            throw new InvalidOperationException(
-                "Workflow NyxID explicit request admission does not match its grant.");
-        }
 
         var parameters = NyxIdRequestSelectorContract.PathParameters(request)
             .Select(static name => new AgentToolOperationParameter(
