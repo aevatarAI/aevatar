@@ -313,7 +313,7 @@ function bindCreateRecovery(
     conversationId: recovery.conversationId,
     expectedTurnCount: conversation.expectedTurnCount + 1,
     latestTurnId: recovery.turnId,
-    stateVersion: Math.max(conversation.stateVersion ?? 0, recovery.stateVersion),
+    stateVersion: undefined,
   };
 }
 

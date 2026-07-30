@@ -342,7 +342,7 @@ describe("ChatPage server-backed history", () => {
     ).toBeTruthy();
   });
 
-  it("recovers an accepted create after the stream disconnects before context", async () => {
+  it("hydrates a recovered create from its conversation version before continuing", async () => {
     const stream = createControlledSseResponse();
     const recoveredMeta = {
       ...serverConversation,
@@ -371,11 +371,11 @@ describe("ChatPage server-backed history", () => {
       .mockResolvedValueOnce([])
       .mockResolvedValue([recoveredMeta]);
     (chatHistoryApi.loadConversation as jest.Mock).mockResolvedValue(
-      conversationDetail(recoveredMessages, 2)
+      conversationDetail(recoveredMessages, 1)
     );
     (chatHistoryApi.recoverCreate as jest.Mock).mockResolvedValue({
       conversationId: "recovered-after-disconnect",
-      stateVersion: 2,
+      stateVersion: 4,
       status: "append_committed",
       turnId: "recovered-turn",
     });
@@ -387,7 +387,7 @@ describe("ChatPage server-backed history", () => {
             "recovered-after-disconnect",
             "continued-turn",
             "scope-a",
-            2
+            1
           ),
           { runFinished: { result: { output: "Continued recovered chat." } } },
         ])
@@ -411,7 +411,7 @@ describe("ChatPage server-backed history", () => {
     expect(chatRequestBodies()[1]).toMatchObject({
       conversation: {
         conversationId: "recovered-after-disconnect",
-        minimumStateVersion: 2,
+        minimumStateVersion: 1,
       },
       prompt: "Continue the recovered chat",
     });
