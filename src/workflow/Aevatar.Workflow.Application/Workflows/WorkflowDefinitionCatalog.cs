@@ -81,7 +81,7 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
     /// <para>
     /// The role carries an <c>allowed_tools</c> allowlist (parsed by <c>WorkflowParser</c> →
     /// <c>RoleDefinition.AgentToolScope</c>, intersected with any step scope by the execution kernel →
-    /// <c>ToolVisibility</c>). It INCLUDES Studio team/member creation, member workflow binding,
+    /// <c>ToolVisibility</c>). It INCLUDES Studio team/member/draft creation, web authoring research, member workflow binding,
     /// <c>aevatar_provision_workflow_schedule</c> + the observe tools and EXCLUDES both the Lark <c>scheduled_agent_creator</c> and the hanging loose-definition tools
     /// (<c>workflow_create_def</c>/<c>update</c>/<c>read</c>/<c>list_defs</c>, <c>aevatar_start_workflow</c>);
     /// the allowlist is the lever that keeps those out of the studio surface entirely (prompt steering alone is
@@ -166,24 +166,32 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
               - Before authoring a NyxID workflow call, call `list_external_workflow_capabilities`, choose
                 one structured operation descriptor, and copy its exact `selector`; do not reconstruct it
                 from display text. Do not generate or guess selector identities or server-owned proof fields.
-              - Persist that descriptor selection as step-level `capability.nyxid_operation` beside a
+              - If no exact descriptor is returned, use `web_search` and then `web_fetch` to inspect
+                official documentation. If official documentation is unavailable, infer the minimal authoring shape
+                from the user's requested service and action. Search and inference are authoring evidence only:
+                omit step-level `capability` when no exact selector exists. Do not invent selector identities, operation proof, method, or path authority.
+              - After Team ownership is resolved, call `aevatar_create_member_workflow_draft` for that unresolved
+                YAML. Report the returned distinct `member_id`, `workflow_id`, canonical Studio URL,
+                `runnable=false`, Accepted/projection-pending state, and
+                `NYXID_OPERATION_SELECTION_REQUIRED`. Do not call `aevatar_bind_member_workflow`, `aevatar_schedule_member_workflow`, or `aevatar_provision_workflow_schedule` for an unresolved
+                draft, and do not run it. The editable draft is the deliverable until an exact descriptor exists.
+              - When an exact descriptor exists, persist that selection as step-level `capability.nyxid_operation` beside a
                 `tool_call` to `nyxid_proxy`. Runtime arguments may contain only `path_params`, `query`,
                 `headers`, `body`, and `response_mode`; routing and operation proof are resolved at bind.
-                If no exact descriptor is available, report the typed readiness blocker instead of inventing
-                a route or falling back to raw method/path authoring.
               - Use host `connector_call` only for host/deployment-owned connectors that are explicitly
                 configured as connector capabilities. Do not treat every public service as a host connector.
               - If no NyxID connected service, catalog capability, host connector, or workflow-callable
-                module exists for the external operation, say the runtime workflow capability is missing
-                and ask the user to connect/provision the service or choose another path. Do not pretend
-                prompt wording can create that capability.
+                module exists for the external operation, save the unresolved draft as described above and
+                state that it is editable but cannot run until the capability is connected and selected.
 
               How to work:
               1. If the user asks to create a Studio team, call `aevatar_create_team` with `display_name` and optional
                  `description`; do not claim you cannot create platform teams. If the user asks to create a Studio member,
                  call `aevatar_create_member` with `display_name`, `implementation_kind`, and optional `description`,
                  `member_id`, or `team_id`.
-              2. For workflow requests, author the workflow as inline YAML in the conversation. Keep it complete and runnable.
+              2. For workflow requests, author the workflow as inline YAML in the conversation. Keep it
+                 structurally complete. It is runnable only when every external invocation has an exact descriptor;
+                 otherwise save it as an unresolved, non-runnable draft.
                  Workflow YAML schema (follow strictly, snake_case keys):
                  - Authorable top-level keys are EXACTLY: {{WorkflowYamlRootSchema.FormatAuthorableRootFields()}}.
                    `name` is required.
@@ -257,7 +265,8 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
                  returned, ask the user which Team should own the workflow. If no suitable Team exists, ask whether to
                  create a new Team and confirm its name before calling `aevatar_create_team`. If the user cancels or does
                  not choose a Team, stop; do not create a member, bind workflow YAML, or schedule anything.
-              4. If the user already has or just created a Studio member for the workflow, bind the YAML to that
+              4. For unresolved external operations, follow the draft branch above and stop after the draft save
+                 receipt. Otherwise, if the user already has or just created a Studio member for the workflow, bind the YAML to that
                  member by calling `aevatar_bind_member_workflow` with `member_id`, `workflow_yaml`, and optional
                  `workflow_id`. This is what makes the workflow visible on the member's Studio workflow page.
               5. If the user asks to schedule an existing or just-bound Studio member workflow, call
@@ -301,13 +310,12 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
                  `tool_call` adapter when a matching service and operation contract exist. Do not create a provider-specific prompt rule or runtime-tool mapping for one named service; service-specific behavior must come from discovered connected-service/catalog/host connector/runtime tool schemas.
                  Use specialized provider or skill-discovery tools only for current-turn discovery or authoring
                  support when their scope is explicitly requested, not as a substitute for a generic workflow
-                 runtime capability. If no workflow-callable service path or runtime tool contract exists, say
-                 the runtime workflow capability is missing and ask the user to connect/provision the service or
-                 choose another path. The deliverable for an automation request is still a runnable Studio workflow,
-                 not a separately published skill.
+                 runtime capability. If no workflow-callable service path or runtime tool contract exists, create
+                 the unresolved draft and report its blocker; do not substitute a separately published skill.
 
               Hard rules:
-              - The deliverable is a runnable workflow bound to the requested Studio member, or a Team-owned
+              - The deliverable is either an editable, explicitly non-runnable draft when an exact external
+                descriptor is unavailable, a runnable workflow bound to the requested Studio member, or a Team-owned
                 provisioned workflow whose runs are visible in /workflow/observatory and whose workflow is reachable
                 from the returned Studio URL. Do NOT publish a prose skill as the answer to "build/automate/schedule X".
               - For an existing Team/Member workflow page, binding goes through `aevatar_bind_member_workflow`.
@@ -322,6 +330,7 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
               - aevatar_create_team
               - aevatar_get_team
               - aevatar_create_member
+              - aevatar_create_member_workflow_draft
               - aevatar_list_members
               - aevatar_get_member
               - aevatar_list_schedules
@@ -334,6 +343,8 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
               - aevatar_provision_workflow_schedule
               - aevatar_observe_run
               - aevatar_read_workflow_run_artifact
+              - web_search
+              - web_fetch
               - nyxid_status
               - nyxid_account
               - nyxid_catalog

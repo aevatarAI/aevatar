@@ -72,9 +72,20 @@ flowchart LR
 
 Workflow live discovery 使用当前 caller token 读取 MCP catalog，列出 exact non-generic UserService endpoints。作者只持久化 typed selector；definition actor 提交 call-site-scoped v4 proof，其中包含 service slug、endpoint identity、method/path、parameter/body schema、typed response policy、execution policy、source stamp 与 contract digest。
 
+Studio authoring 在 exact descriptor 缺失时不再把“当前不可运行”误报成“不能创建 workflow”。`/api/chat` 的 Studio agent 仍先调用 `list_external_workflow_capabilities`；若没有匹配项，可用 `web_search` / `web_fetch` 查询官方文档，官方文档也不可用时可根据用户描述推导最小 authoring shape。搜索或推导只用于生成可编辑 YAML，不是 route authority：不得据此生成 `user_service_id`、`endpoint_id`、selector、admission proof、HTTP method 或 path authority。
+
+缺 exact selector 的 YAML 不写 step-level `capability`，只通过 `aevatar_create_member_workflow_draft` 创建或复用 Team-owned workflow member shell，并保存独立的 scope-owned draft。返回值必须保持三类身份分离：`member_id`、draft `workflow_id`、未来的 `published_service_id` 互不替代；Studio URL 固定为 `/scopes/:scopeId/teams/:teamId/members/:memberId/workflow?workflowId=:workflowId`。draft receipt 只表示 command `Accepted`，readiness 为 `projection_pending`，并显式返回 `runnable=false`、`binding_status=not_bound` 与 `NYXID_OPERATION_SELECTION_REQUIRED`。该分支不得 bind、schedule、provision、publish、run 或发出 proxy request。
+
+因此 workflow 外部能力有四个诚实阶段：
+
+1. **Authoring draft**：允许无 exact descriptor 保存不可运行草稿；搜索/推导只影响可编辑内容。
+2. **Workflow definition admission**：有 exact `user_service_id + endpoint_id` 后，live MCP catalog 才能把 selector 解析为 actor-owned proof。
+3. **Binding / publication**：只有 admission 成功的定义才能进入 bind/publish；draft save 不能冒充该阶段。
+4. **Runtime authorization**：run 仍必须按 committed proof、execution mode 和当前 NyxID authority 重验；前面任一阶段不能扩大 runtime 权限。
+
 身份边界保持独立：`scope_id`、`owner_scope_id` 与 `owner_subject` 只表达 Aevatar 资源所有权/调用上下文；NyxID caller 只能来自认证 principal 映射出的 typed `NyxIdAuthority`。缺失 authority 时 live discovery/admission fail closed，禁止从 scope、member、workflow、route 或 owner 字符串推导。
 
-Dynamic exposure、workflow definition admission 与 runtime authorization 是三个独立 policy：
+Dynamic exposure、workflow definition admission 与 runtime authorization 是三个独立 policy；authoring draft 位于这些授权 policy 之前，不授予执行权限：
 
 1. **Current-turn exposure**：缺 NyxID typed exposure policy，因此 operation 数量为零。
 2. **Workflow definition admission**：live MCP catalog 把 exact selector 解析并提交为 actor-owned proof。
