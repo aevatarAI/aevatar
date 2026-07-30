@@ -231,7 +231,8 @@ public sealed class MainnetAgentProfileRolloutSelector : INyxIdChatAgentProfileS
             throw new InvalidOperationException("Reviewed profile policies must not have an empty toolNames set.");
 
         var forbidden = toolNames.Where(static name =>
-            name is "nyxid_services" or "nyxid_proxy" or "nyxid_external_keys" ||
+            name is "nyxid_services" or "nyxid_proxy" or "nyxid_external_keys" or
+                "nyxid_service_handoff" ||
             name.Contains("credential", StringComparison.OrdinalIgnoreCase) ||
             name.Contains("api_key", StringComparison.OrdinalIgnoreCase)).ToArray();
         if (forbidden.Length > 0)

@@ -29,13 +29,18 @@ public sealed class NyxIdAssistantActionRegistryTests
     }
 
     [Fact]
-    public void Load_ShouldRejectUnknownActionAndUnsupportedTier()
+    public void Load_ShouldIgnoreUnknownActionWhenExecutableActionsArePresent()
     {
-        Action unknown = () => NyxIdAssistantActionRegistry.Load(
-            RegistryJson(action: "device.approve"));
-        unknown.Should().Throw<NyxIdAssistantActionRegistryException>()
-            .Which.Code.Should().Be("NYXID_ACTION_UNSUPPORTED");
+        var registry = NyxIdAssistantActionRegistry.Load(
+            RegistryJsonWithUnknownAction());
 
+        registry.TryGetDefinition("service.connect", out _).Should().BeTrue();
+        registry.TryGetDefinition("workflow.launch", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Load_ShouldRejectUnsupportedTierForKnownAction()
+    {
         Action v2 = () => NyxIdAssistantActionRegistry.Load(
             RegistryJson(tier: "v2"));
         v2.Should().Throw<NyxIdAssistantActionRegistryException>()
@@ -323,6 +328,31 @@ public sealed class NyxIdAssistantActionRegistryTests
               "params_schema": {{DeveloperAppSchema}},
               "risk": "grant",
               "tier": "v1",
+              "remember_eligible": false
+            }
+          ]
+        }
+        """;
+
+    private static string RegistryJsonWithUnknownAction() => $$"""
+        {
+          "schema_version": 4,
+          "revision": "{{SupportedRevision}}",
+          "actions": [
+            {
+              "action": "service.connect",
+              "description": "Connect a service.",
+              "params_schema": {{ServiceConnectSchema}},
+              "risk": "grant",
+              "tier": "v1",
+              "remember_eligible": true
+            },
+            {
+              "action": "workflow.launch",
+              "description": "Launch a workflow.",
+              "params_schema": {"type": "object"},
+              "risk": "execute",
+              "tier": "v2",
               "remember_eligible": false
             }
           ]

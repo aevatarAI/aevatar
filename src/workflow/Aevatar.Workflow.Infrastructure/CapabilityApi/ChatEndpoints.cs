@@ -28,11 +28,16 @@ public static class WorkflowCapabilityEndpoints
         "UNSUPPORTED_MEDIA_TYPE",
         "Content-Type must be application/json or multipart/form-data.");
 
-    public static IEndpointRouteBuilder MapWorkflowCapabilityEndpoints(this IEndpointRouteBuilder app)
+    public static IEndpointRouteBuilder MapWorkflowCapabilityEndpoints(
+        this IEndpointRouteBuilder app,
+        bool mapChatPost = true)
     {
         var group = app.MapGroup("/api").WithTags("Chat");
-        group.MapPost("/chat", HandleChatPost)
-            .WithName("StartWorkflowChat");
+        if (mapChatPost)
+        {
+            group.MapPost("/chat", HandleChatPost)
+                .WithName("StartWorkflowChat");
+        }
         group.MapGet(
                 "/ws/chat",
                 async (
@@ -56,6 +61,13 @@ public static class WorkflowCapabilityEndpoints
 
         return app;
     }
+
+    public static Task HandleChatPostAsync(HttpContext http, CancellationToken ct = default) =>
+        HandleChatPost(
+            http,
+            http.RequestServices.GetRequiredService<IWorkflowChatRunInteractionPort>(),
+            http.RequestServices.GetRequiredService<WorkflowMultipartChatRequestParser>(),
+            ct);
 
     internal static async Task HandleChatPost(
         HttpContext http,
@@ -239,10 +251,9 @@ public static class WorkflowCapabilityEndpoints
 
             if (!result.Succeeded && !writer.Started)
             {
-                var (code, message) = ChatRunStartErrorMapper.ToCommandError(result.Error);
                 var statusCode = ChatRunStartErrorMapper.ToHttpStatusCode(result.Error);
                 scope.MarkResult(statusCode);
-                await WriteJsonErrorResponseAsync(http, statusCode, code, message, ct);
+                await WriteRunStartFailureResponseAsync(http, statusCode, result, ct);
             }
         }
         catch (OperationCanceledException)
@@ -346,10 +357,9 @@ public static class WorkflowCapabilityEndpoints
 
             if (!result.Succeeded && !writer.Started)
             {
-                var (code, message) = ChatRunStartErrorMapper.ToCommandError(result.Error);
                 var statusCode = ChatRunStartErrorMapper.ToHttpStatusCode(result.Error);
                 scope.MarkResult(statusCode);
-                await WriteJsonErrorResponseAsync(http, statusCode, code, message, ct);
+                await WriteRunStartFailureResponseAsync(http, statusCode, result, ct);
             }
         }
         catch (OperationCanceledException)
@@ -958,6 +968,21 @@ public static class WorkflowCapabilityEndpoints
                 code,
                 message,
             },
+            cancellationToken: ct);
+    }
+
+    private static async Task WriteRunStartFailureResponseAsync(
+        HttpContext http,
+        int statusCode,
+        WorkflowChatRunInteractionResult result,
+        CancellationToken ct)
+    {
+        http.Response.StatusCode = statusCode;
+        http.Response.ContentType = "application/json; charset=utf-8";
+        await http.Response.WriteAsJsonAsync(
+            result.FailureDetail == null
+                ? ChatRunStartErrorMapper.ToErrorBody(result.Error)
+                : ChatRunStartErrorMapper.ToErrorBody(result.FailureDetail),
             cancellationToken: ct);
     }
 

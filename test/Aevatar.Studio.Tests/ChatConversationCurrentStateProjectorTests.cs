@@ -17,6 +17,47 @@ public sealed class ChatConversationCurrentStateProjectorTests
     private const string RootActorId = "chat-history-conversation-scope-a-conversation-a";
 
     [Fact]
+    public async Task ProjectAsync_ShouldMaterializeInitializedConversationWithoutTurns()
+    {
+        var dispatcher = new RecordingWriteDispatcher();
+        var projector = new ChatConversationCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-07-28T09:00:00Z")));
+        var state = new ChatConversationState
+        {
+            ScopeId = "scope-a",
+            ConversationId = "conversation-a",
+            Title = "Initial title",
+            ServiceId = "service-a",
+            ServiceKind = "nyxid.chat",
+            CreatedAtMs = 1785200523000,
+            UpdatedAtMs = 1785200523000,
+        };
+
+        await projector.ProjectAsync(
+            NewContext(),
+            WrapCommitted(
+                new ChatConversationInitializedEvent
+                {
+                    OperationId = "initialize-1",
+                    ScopeId = "scope-a",
+                    ConversationId = "conversation-a",
+                },
+                state,
+                version: 1,
+                eventId: "evt-chat-initialized",
+                stateEventTimestamp: DateTimeOffset.Parse("2026-07-28T01:02:03Z")));
+
+        var document = dispatcher.Upserts.Should().ContainSingle().Subject;
+        document.ScopeId.Should().Be("scope-a");
+        document.ConversationId.Should().Be("conversation-a");
+        document.ServiceKind.Should().Be("nyxid.chat");
+        document.StateVersion.Should().Be(1);
+        document.MessageCount.Should().Be(0);
+        document.Turns.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ProjectAsync_ShouldMaterializeBlockedTurnStatus()
     {
         var dispatcher = new RecordingWriteDispatcher();

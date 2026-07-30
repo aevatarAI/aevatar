@@ -238,6 +238,14 @@ public static class IdentityServiceCollectionExtensions
             static _ => new ChannelIdentityOAuthCommandTarget(
                 AevatarOAuthClientGAgent.WellKnownId,
                 "channel-identity.oauth-rebuild"));
+        services.AddIdentityOAuthCommandDispatch<RebuildAevatarOAuthClientProjectionCommand, AevatarOAuthClientGAgent>(
+            static _ => new ChannelIdentityOAuthCommandTarget(
+                AevatarOAuthClientGAgent.WellKnownId,
+                "channel-identity.oauth-projection-rebuild"));
+        services.AddIdentityOAuthCommandDispatch<RotateAevatarOAuthClientHmacKeyCommand, AevatarOAuthClientGAgent>(
+            static _ => new ChannelIdentityOAuthCommandTarget(
+                AevatarOAuthClientGAgent.WellKnownId,
+                "channel-identity.oauth-hmac-rotate"));
 
         // ─── Broker ───
         // Register broker as a *singleton* and inject IHttpClientFactory so

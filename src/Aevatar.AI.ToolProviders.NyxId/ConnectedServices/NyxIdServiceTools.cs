@@ -178,6 +178,11 @@ internal static class NyxIdServiceTools
             requireInstance: true,
             ("label", new JsonObject { ["type"] = "string" }, false),
             ("endpoint_url", new JsonObject { ["type"] = "string" }, false),
+            ("openapi_spec_url", new JsonObject
+            {
+                ["type"] = "string",
+                ["description"] = "NyxID-owned OpenAPI override URL. Use an empty string to clear the override.",
+            }, false),
             ("is_active", new JsonObject { ["type"] = "boolean" }, false));
 
         public override async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
@@ -195,6 +200,9 @@ internal static class NyxIdServiceTools
                 var endpointUrl = ReadString(document.RootElement, "endpoint_url");
                 if (endpointUrl is not null)
                     request.EndpointUrl = endpointUrl;
+                var openApiSpecUrl = ReadString(document.RootElement, "openapi_spec_url");
+                if (openApiSpecUrl is not null)
+                    request.OpenapiSpecUrl = openApiSpecUrl;
                 var active = ReadBool(document.RootElement, "is_active");
                 if (active.HasValue)
                     request.IsActive = active.Value;

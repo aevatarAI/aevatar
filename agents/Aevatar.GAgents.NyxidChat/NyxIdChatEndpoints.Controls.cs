@@ -74,7 +74,7 @@ public static partial class NyxIdChatEndpoints
             CorrelationId = correlationId,
             ExpectedStateVersion = request.ExpectedStateVersion,
         }, ct).ConfigureAwait(false);
-        return AcceptedControl(normalizedScopeId, normalizedActorId, receipt);
+        return AcceptedControl(http, normalizedScopeId, normalizedActorId, receipt);
     }
 
     private static async Task<IResult> HandleSteeringControlAsync(
@@ -136,7 +136,7 @@ public static partial class NyxIdChatEndpoints
         };
         command.InputParts.AddRange(request.InputParts?.Select(static part => part.ToProto()) ?? []);
         var receipt = await commandPort.DispatchSteeringAsync(command, ct).ConfigureAwait(false);
-        return AcceptedControl(normalizedScopeId, normalizedActorId, receipt);
+        return AcceptedControl(http, normalizedScopeId, normalizedActorId, receipt);
     }
 
     private static async Task<IResult> HandleRetryControlAsync(
@@ -202,7 +202,7 @@ public static partial class NyxIdChatEndpoints
                 accessToken,
                 control),
         }, ct).ConfigureAwait(false);
-        return AcceptedControl(identity.ScopeId, identity.ActorId, receipt);
+        return AcceptedControl(http, identity.ScopeId, identity.ActorId, receipt);
     }
 
     private static async Task<IResult> HandleSkipControlAsync(
@@ -257,7 +257,7 @@ public static partial class NyxIdChatEndpoints
             ExpectedOperationGeneration = request.ExpectedOperationGeneration,
             ExpectedStateVersion = request.ExpectedStateVersion,
         }, ct).ConfigureAwait(false);
-        return AcceptedControl(identity.ScopeId, identity.ActorId, receipt);
+        return AcceptedControl(http, identity.ScopeId, identity.ActorId, receipt);
     }
 
     private static AgentToolExecutionContextPayload BuildControlToolContext(
@@ -278,11 +278,12 @@ public static partial class NyxIdChatEndpoints
     }
 
     private static IResult AcceptedControl(
+        HttpContext http,
         string scopeId,
         string actorId,
         NyxIdChatControlAcceptedReceipt receipt)
     {
-        var stateUrl = BuildControlStateUrl(scopeId, actorId);
+        var stateUrl = BuildControlStateUrl(http, scopeId, actorId);
         return Results.Accepted(stateUrl, new
         {
             status = "accepted",
@@ -293,9 +294,11 @@ public static partial class NyxIdChatEndpoints
         });
     }
 
-    private static string BuildControlStateUrl(string scopeId, string actorId) =>
-        $"/api/scopes/{Uri.EscapeDataString(scopeId)}/nyxid-chat/conversations/" +
-        $"{Uri.EscapeDataString(actorId)}/state";
+    private static string BuildControlStateUrl(HttpContext http, string scopeId, string actorId) =>
+        http.Request.Path.StartsWithSegments("/api/chat")
+            ? $"/api/chat/conversations/{Uri.EscapeDataString(actorId)}/state"
+            : $"/api/scopes/{Uri.EscapeDataString(scopeId)}/nyxid-chat/conversations/" +
+              $"{Uri.EscapeDataString(actorId)}/state";
 
     private static (string CommandId, string CorrelationId) CreateControlTraceIdentity()
     {

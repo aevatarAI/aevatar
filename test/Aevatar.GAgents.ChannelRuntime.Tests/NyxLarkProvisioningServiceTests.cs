@@ -56,7 +56,8 @@ public class NyxLarkProvisioningServiceTests
                 WebhookBaseUrl: "https://aevatar.example.com",
                 ScopeId: "scope-1",
                 Label: "Ops Bot",
-                NyxProviderSlug: "api-lark-bot"),
+                NyxProviderSlug: "api-lark-bot",
+                EncryptKey: " encrypt-alpha "),
             CancellationToken.None);
 
         result.Succeeded.Should().BeTrue();
@@ -94,6 +95,8 @@ public class NyxLarkProvisioningServiceTests
         handler.Requests[1].Body.Should().Contain("\"bot_token\":\"__unused_for_lark__\"");
         handler.Requests[1].Body.Should().Contain("\"app_id\":\"cli_a1b2c3\"");
         handler.Requests[1].Body.Should().Contain("\"verification_token\":\"verify-123\"");
+        handler.Requests[1].Body.Should().Contain("\"encrypt_key\":\"encrypt-alpha\"");
+        capturedEnvelope.ToString().Should().NotContain("encrypt-alpha");
         handler.Requests[2].Body.Should().Contain("\"default_agent\":true");
         handler.Requests[3].Body.Should().Contain("\"label\":\"Lark App cli_a1b2c3\"");
         handler.Requests[3].Body.Should().Contain("\"service_slug\":\"api-lark-bot\"");
@@ -134,6 +137,40 @@ public class NyxLarkProvisioningServiceTests
         capturedEnvelope.Should().NotBeNull();
         capturedEnvelope!.Payload.Unpack<ChannelBotRegisterCommand>()
             .WorkflowResultDeliveryCredential.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_Omits_Blank_EncryptKey_From_ChannelBot_Payload()
+    {
+        var handler = new RecordingHandler();
+        handler.Enqueue("/api/v1/api-keys", """{"id":"key-123","full_key":"full-key"}""");
+        handler.Enqueue("/api/v1/channel-bots", """{"id":"bot-456"}""");
+        handler.Enqueue("/api/v1/channel-conversations", """{"id":"route-789"}""");
+        handler.Enqueue("/api/v1/keys", """{"id":"svc-1"}""");
+
+        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
+        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
+            .Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
+        ((IActorDispatchPort)actorRuntime).DispatchAsync(
+                ChannelBotRegistrationGAgent.WellKnownId,
+                Arg.Any<EventEnvelope>(),
+                Arg.Any<CancellationToken>())
+            .Returns(ActorDispatchPortTestSupport.AcceptAsync);
+        var service = new NyxLarkProvisioningService(
+            new NyxIdApiClient(
+                new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+                new HttpClient(handler)),
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
+            new InMemorySecretVault(),
+            Substitute.For<Microsoft.Extensions.Logging.ILogger<NyxLarkProvisioningService>>());
+
+        var result = await service.ProvisionAsync(
+            BuildRequest() with { EncryptKey = "   " },
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+        handler.Requests[1].Body.Should().NotContain("encrypt_key");
     }
 
     [Fact]
@@ -257,15 +294,17 @@ public class NyxLarkProvisioningServiceTests
     }
 
     [Theory]
-    [InlineData("", "cli_a1b2c3", "secret-xyz", "https://aevatar.example.com", "scope-1", "missing_access_token")]
-    [InlineData("user-token", "", "secret-xyz", "https://aevatar.example.com", "scope-1", "missing_app_id")]
-    [InlineData("user-token", "cli_a1b2c3", "", "https://aevatar.example.com", "scope-1", "missing_app_secret")]
-    [InlineData("user-token", "cli_a1b2c3", "secret-xyz", "", "scope-1", "missing_webhook_base_url")]
-    [InlineData("user-token", "cli_a1b2c3", "secret-xyz", "https://aevatar.example.com", "", "missing_scope_id")]
+    [InlineData("", "cli_a1b2c3", "secret-xyz", "verify-123", "https://aevatar.example.com", "scope-1", "missing_access_token")]
+    [InlineData("user-token", "", "secret-xyz", "verify-123", "https://aevatar.example.com", "scope-1", "missing_app_id")]
+    [InlineData("user-token", "cli_a1b2c3", "", "verify-123", "https://aevatar.example.com", "scope-1", "missing_app_secret")]
+    [InlineData("user-token", "cli_a1b2c3", "secret-xyz", "", "https://aevatar.example.com", "scope-1", "missing_verification_token")]
+    [InlineData("user-token", "cli_a1b2c3", "secret-xyz", "verify-123", "", "scope-1", "missing_webhook_base_url")]
+    [InlineData("user-token", "cli_a1b2c3", "secret-xyz", "verify-123", "https://aevatar.example.com", "", "missing_scope_id")]
     public async Task ProvisionAsync_ShouldRejectInvalidRequests_BeforeCallingNyx(
         string accessToken,
         string appId,
         string appSecret,
+        string verificationToken,
         string webhookBaseUrl,
         string scopeId,
         string expectedError)
@@ -278,7 +317,7 @@ public class NyxLarkProvisioningServiceTests
                 AccessToken: accessToken,
                 AppId: appId,
                 AppSecret: appSecret,
-                VerificationToken: string.Empty,
+                VerificationToken: verificationToken,
                 WebhookBaseUrl: webhookBaseUrl,
                 ScopeId: scopeId,
                 Label: "Ops Bot",
@@ -538,7 +577,7 @@ public class NyxLarkProvisioningServiceTests
             AccessToken: "user-token",
             AppId: "cli_a1b2c3",
             AppSecret: "secret-xyz",
-            VerificationToken: string.Empty,
+            VerificationToken: "verify-123",
             WebhookBaseUrl: "https://aevatar.example.com",
             ScopeId: "scope-1",
             Label: "Ops Bot",

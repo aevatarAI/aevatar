@@ -809,10 +809,7 @@ const TeamAutomationsTab: React.FC<Props> = ({
     async (nextDraft: TeamAutomationCreateDraft, mode: AuthorizationMode, scheduleId?: string) => {
       setAuthorizationFlow({ state: "preflighting", draft: nextDraft, mode, scheduleId });
       try {
-        const review = await retryTypedPreflight(async () => {
-          await teamAutomationApi.refreshAuthorizationCatalog();
-          return teamAutomationApi.preflightCreate(nextDraft);
-        });
+        const review = await retryTypedPreflight(() => teamAutomationApi.preflightCreate(nextDraft));
         if (review.status === "plan-changed") {
           setAuthorizationFlow({ state: "plan_changed", draft: nextDraft, mode, scheduleId });
           return;

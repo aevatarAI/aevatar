@@ -701,8 +701,70 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
     public async Task HandleRotateHmacKey(RotateAevatarOAuthClientHmacKeyCommand cmd)
     {
         ArgumentNullException.ThrowIfNull(cmd);
-        await PersistDomainEventAsync(await BuildHmacKeyRotatedEventAsync());
+        var idempotencyKey = cmd.IdempotencyKey?.Trim() ?? string.Empty;
+        var expectedCurrentKid = cmd.ExpectedCurrentKid?.Trim() ?? string.Empty;
+        if (idempotencyKey.Length == 0 || expectedCurrentKid.Length == 0)
+        {
+            Logger.LogWarning("Ignored HMAC rotation without an idempotency key and expected current kid");
+            return;
+        }
+        if (string.Equals(
+                State.LastHmacRotationIdempotencyKey,
+                idempotencyKey,
+                StringComparison.Ordinal))
+        {
+            Logger.LogInformation("Ignored already-applied HMAC rotation request");
+            return;
+        }
+        if (!string.Equals(State.HmacKid, expectedCurrentKid, StringComparison.Ordinal))
+        {
+            Logger.LogWarning(
+                "Ignored HMAC rotation because expected kid does not match committed state. expected={ExpectedKid} current={CurrentKid}",
+                expectedCurrentKid,
+                State.HmacKid);
+            return;
+        }
+
+        await PersistDomainEventAsync(await BuildHmacKeyRotatedEventAsync(idempotencyKey));
         Logger.LogInformation("Rotated HMAC key for aevatar OAuth client");
+    }
+
+    /// <summary>
+    /// Maintenance / disaster-recovery: re-materialize the cluster OAuth client
+    /// current-state readmodel from the surviving authoritative actor state.
+    /// Appends no event and changes no OAuth client fact — it re-emits the
+    /// current committed state so a projection store that was wiped/reset
+    /// (while the actor state in the event store survived) rebuilds the
+    /// document. No-op when the actor holds no provisioned client.
+    /// </summary>
+    [EventHandler]
+    public async Task HandleRebuildProjection(RebuildAevatarOAuthClientProjectionCommand cmd)
+    {
+        ArgumentNullException.ThrowIfNull(cmd);
+        if (string.IsNullOrEmpty(State.ClientId))
+        {
+            Logger.LogInformation(
+                "RebuildAevatarOAuthClientProjection found no provisioned client; nothing to rebuild");
+            return;
+        }
+
+        // Routing payload only: the activation plan provider recognizes the
+        // Provisioned descriptor; the materialized document comes from the
+        // current state snapshot, not this reconstructed event.
+        var provisioned = new AevatarOAuthClientProvisionedEvent
+        {
+            ClientId = State.ClientId,
+            ClientIdIssuedAtUnix = State.ClientIdIssuedAtUnix,
+            NyxidAuthority = State.NyxidAuthority,
+            RedirectUri = State.RedirectUri,
+            OauthScope = State.OauthScope,
+        };
+        provisioned.RedirectUris.AddRange(State.RedirectUris);
+        await RepublishCommittedStateAsync(provisioned);
+
+        Logger.LogInformation(
+            "Rebuilt aevatar OAuth client readmodel from surviving actor state: client_id={ClientId}",
+            State.ClientId);
     }
 
     /// <summary>
@@ -727,7 +789,8 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
         Logger.LogInformation("Observed broker_capability_enabled on aevatar OAuth client");
     }
 
-    private async Task<AevatarOAuthClientHmacKeyRotatedEvent> BuildHmacKeyRotatedEventAsync()
+    private async Task<AevatarOAuthClientHmacKeyRotatedEvent> BuildHmacKeyRotatedEventAsync(
+        string idempotencyKey = "")
     {
         var keyBytes = new byte[HmacKeyBytes];
         RandomNumberGenerator.Fill(keyBytes);
@@ -763,6 +826,7 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
             PreviousHmacKey = demotingExisting ? State.HmacKey : ByteString.Empty,
             PreviousHmacKid = demotingExisting ? State.HmacKid : string.Empty,
             PreviousHmacDemotedAtUnix = demotingExisting ? now.ToUnixTimeSeconds() : 0,
+            IdempotencyKey = idempotencyKey,
         };
         if (demotingExisting && State.HmacKeyRef is not null)
             evt.PreviousHmacKeyRef = State.HmacKeyRef;
@@ -832,6 +896,7 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
         next.PreviousHmacKey = evt.PreviousHmacKey ?? ByteString.Empty;
         next.PreviousHmacKid = evt.PreviousHmacKid ?? string.Empty;
         next.PreviousHmacDemotedAtUnix = evt.PreviousHmacDemotedAtUnix;
+        next.LastHmacRotationIdempotencyKey = evt.IdempotencyKey ?? string.Empty;
         return next;
     }
 

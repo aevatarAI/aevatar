@@ -77,6 +77,15 @@ public sealed record AgentToolExecutionContext(
     public AgentToolNyxIdAuthorityContext NyxIdAuthority { get; init; } =
         AgentToolNyxIdAuthorityContext.Empty;
 
+    /// <summary>
+    /// Committed proof for the exact operation this call site was admitted to invoke. Null for
+    /// call sites that are not under external-capability admission (ordinary human sessions).
+    /// </summary>
+    public AgentToolOperationAdmission? OperationAdmission { get; init; }
+
+    public AgentToolInvocationSurface InvocationSurface { get; init; } =
+        AgentToolInvocationSurface.Unspecified;
+
     public static AgentToolExecutionContext Empty { get; } = new(
         AgentToolRequestIdentity.Empty,
         AgentToolCredentials.Empty,
@@ -96,6 +105,14 @@ public sealed record AgentToolExecutionContext(
 
     internal static string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+}
+
+public enum AgentToolInvocationSurface
+{
+    Unspecified = 0,
+    HumanSession = 1,
+    WorkflowToolCall = 2,
+    WorkflowLlmToolLoop = 3,
 }
 
 public sealed record AgentToolVisibilityScope(IReadOnlySet<string>? AllowedToolNames)
@@ -166,7 +183,8 @@ public sealed record AgentToolCallerContext(string? ScopeId, string? OwnerSubjec
 public sealed record AgentToolNyxIdAuthorityContext(
     string? Platform,
     string? Tenant,
-    string? ExternalUserId)
+    string? ExternalUserId,
+    string? Scope = null)
 {
     public static AgentToolNyxIdAuthorityContext Empty { get; } = new(null, null, null);
 

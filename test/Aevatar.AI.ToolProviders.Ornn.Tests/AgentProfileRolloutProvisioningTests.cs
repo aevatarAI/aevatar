@@ -41,14 +41,22 @@ public sealed class AgentProfileRolloutProvisioningTests
         gateway.PublishCount.Should().Be(4);
         gateway.CreatedSkillsetMembers.Should().Equal(
             "00000000-0000-0000-0000-000000000001@1.2",
-            "00000000-0000-0000-0000-000000000002@1.2",
+            "00000000-0000-0000-0000-000000000002@1.3",
             "00000000-0000-0000-0000-000000000003@1.2",
-            "00000000-0000-0000-0000-000000000004@1.2");
+            "00000000-0000-0000-0000-000000000004@1.3");
+        gateway.CreatedSkillsetLiteralVersion.Should().Be("1.1");
+        Directory.GetFiles(output.Path).Select(System.IO.Path.GetFileName).Should().BeEquivalentTo([
+            "nyxid-chat-shadow-v2.profile.pb.json",
+            "nyxid-chat-enforced-v2.profile.pb.json",
+        ]);
         var shadow = ParseProfile(output, AgentProfileRolloutCommands.ShadowProfileFileName);
         var enforced = ParseProfile(output, AgentProfileRolloutCommands.EnforcedProfileFileName);
         shadow.ActivationMode.Should().Be(AgentProfileActivationMode.Shadow);
         enforced.ActivationMode.Should().Be(AgentProfileActivationMode.Enforced);
-        shadow.ProfileVersion.Should().NotBe(enforced.ProfileVersion);
+        shadow.ProfileVersion.Should().Be("nyxid-chat-shadow-v2");
+        enforced.ProfileVersion.Should().Be("nyxid-chat-enforced-v2");
+        shadow.PolicyRevision.Should().Be("nyxid-chat-policy-1.3-shadow-v2");
+        enforced.PolicyRevision.Should().Be("nyxid-chat-policy-1.3-enforced-v2");
         shadow.Members.Should().HaveCount(4);
         shadow.DeterministicPolicySha256.Length.Should().Be(32);
         AgentProfileSnapshotCodec.Verify(shadow).Should().BeTrue();
@@ -57,7 +65,38 @@ public sealed class AgentProfileRolloutProvisioningTests
     }
 
     [Fact]
-    public async Task Provision_should_use_GrpcTools_protoc_when_no_global_compiler_exists()
+    public async Task Reviewed_release_should_route_missing_services_only_through_typed_requirement()
+    {
+        using var releaseInput = new TemporaryDirectory();
+        using var output = new TemporaryDirectory();
+        var commands = new AgentProfileRolloutCommands(FakeGateway.Valid());
+        var releaseSpecPath = await WriteReleaseFixtureAsync(releaseInput);
+
+        var exitCode = await commands.ProvisionAsync(
+            "access-token",
+            releaseSpecPath,
+            output.Path,
+            CancellationToken.None);
+
+        exitCode.Should().Be(0);
+        var profile = ParseProfile(output, AgentProfileRolloutCommands.EnforcedProfileFileName);
+        profile.Members.Single(member => member.IntentId == "service_connect")
+            .TaskToolPolicy.ToolNames.Should().Equal(
+                "nyxid_service_inventory",
+                "nyxid_catalog",
+                "nyxid_require_service");
+        profile.MaximumToolPolicy.ToolNames.Should().Contain("nyxid_require_service");
+        profile.MaximumToolPolicy.ToolNames.Should().NotContain([
+            "nyxid_service_handoff",
+            "nyxid_services",
+            "nyxid_proxy",
+            "nyxid_external_keys",
+            "nyxid_api_keys",
+        ]);
+    }
+
+    [Fact]
+    public async Task Provision_should_use_path_protoc_or_packaged_fallback()
     {
         using var releaseInput = new TemporaryDirectory();
         using var output = new TemporaryDirectory();
@@ -67,10 +106,13 @@ public sealed class AgentProfileRolloutProvisioningTests
         var releaseSpecPath = await WriteReleaseFixtureAsync(releaseInput);
         var originalPath = Environment.GetEnvironmentVariable("PATH");
         var originalProtoc = Environment.GetEnvironmentVariable("PROTOC");
+        var pathProtoc = FindProtocOnPath(originalPath);
 
         try
         {
-            Environment.SetEnvironmentVariable("PATH", emptyPath.Path);
+            Environment.SetEnvironmentVariable(
+                "PATH",
+                pathProtoc is null ? emptyPath.Path : System.IO.Path.GetDirectoryName(pathProtoc));
             Environment.SetEnvironmentVariable("PROTOC", null);
 
             var exitCode = await commands.ProvisionAsync(
@@ -86,6 +128,15 @@ public sealed class AgentProfileRolloutProvisioningTests
             Environment.SetEnvironmentVariable("PATH", originalPath);
             Environment.SetEnvironmentVariable("PROTOC", originalProtoc);
         }
+    }
+
+    private static string? FindProtocOnPath(string? path)
+    {
+        var executableName = OperatingSystem.IsWindows() ? "protoc.exe" : "protoc";
+        return (path ?? string.Empty)
+            .Split(System.IO.Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+            .Select(directory => System.IO.Path.Combine(directory, executableName))
+            .FirstOrDefault(File.Exists);
     }
 
     [Fact]
@@ -237,8 +288,8 @@ public sealed class AgentProfileRolloutProvisioningTests
         "side_effect_class: AGENT_PROFILE_SIDE_EFFECT_CLASS_MAINTENANCE",
         "side_effect_class: AGENT_PROFILE_SIDE_EFFECT_CLASS_UNSPECIFIED")]
     [InlineData(
-        "profile_version: \"nyxid-chat-enforced-v1\"",
-        "profile_version: \"nyxid-chat-shadow-v1\"")]
+        "profile_version: \"nyxid-chat-enforced-v2\"",
+        "profile_version: \"nyxid-chat-shadow-v2\"")]
     [InlineData(
         "literal_version: \"1.2\"",
         "literal_version: \"01.2\"")]
@@ -394,7 +445,7 @@ evaluation_report_sha256: "{evaluationReportSha256}"
 
     private static AgentProfileEvaluationReport PassingReport() => new()
     {
-        ProfileVersion = "nyxid-chat-shadow-v1",
+        ProfileVersion = "nyxid-chat-shadow-v2",
         ActivationMode = AgentProfileActivationMode.Shadow,
         TotalCases = 64,
         PassedCases = 64,
@@ -423,9 +474,9 @@ evaluation_report_sha256: "{evaluationReportSha256}"
         private static readonly string[][] Tools =
         [
             ["nyxid_service_inventory", "nyxid_catalog", "nyxid_llm_status"],
-            ["nyxid_service_inventory", "nyxid_catalog", "nyxid_service_handoff"],
+            ["nyxid_service_inventory", "nyxid_catalog", "nyxid_require_service"],
             ["nyxid_service_inventory", "nyxid_service_request"],
-            ["nyxid_service_inventory", "nyxid_service_update", "nyxid_service_route", "nyxid_service_delete", "nyxid_service_handoff"],
+            ["nyxid_service_inventory", "nyxid_service_update", "nyxid_service_route", "nyxid_service_delete", "nyxid_require_service"],
         ];
 
         public string PublisherId { get; init; } = "5d0d7b72-acff-49af-bb1b-9f30bbb7c102";
@@ -434,6 +485,7 @@ evaluation_report_sha256: "{evaluationReportSha256}"
         public int ExactSkillReadCount { get; private set; }
         public int ExactSkillsetReadCount { get; private set; }
         public IReadOnlyList<string> CreatedSkillsetMembers { get; private set; } = [];
+        public string CreatedSkillsetLiteralVersion { get; private set; } = string.Empty;
 
         public static FakeGateway Valid() => new();
 
@@ -467,6 +519,7 @@ evaluation_report_sha256: "{evaluationReportSha256}"
             CancellationToken ct)
         {
             CreatedSkillsetMembers = request.Members;
+            CreatedSkillsetLiteralVersion = request.LiteralVersion;
             return Task.FromResult(new PublishedOrnnSkillset("10000000-0000-0000-0000-000000000000"));
         }
 
@@ -485,7 +538,7 @@ evaluation_report_sha256: "{evaluationReportSha256}"
                 Enumerable.Range(1, 4)
                     .Select(index => new VerifiedOrnnSkillsetMember(
                         ReturnDifferentExactGuids ? GuidFor(index + 4) : GuidFor(index),
-                        "1.2"))
+                        index is 2 or 4 ? "1.3" : "1.2"))
                     .ToArray()));
         }
 

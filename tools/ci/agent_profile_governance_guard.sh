@@ -51,14 +51,14 @@ if rg -ni 'latest|placeholder|todo' "${release_spec}" "${profile_root}/packages"
   echo "Reviewed package/release data must not contain mutable or unresolved identities."
   exit 1
 fi
-if rg -n '^[[:space:]]*-[[:space:]]*(nyxid_services|nyxid_proxy|nyxid_external_keys|[^[:space:]]*credential[^[:space:]]*|[^[:space:]]*api_key[^[:space:]]*)[[:space:]]*$' "${profile_root}/packages"; then
+if rg -n '^[[:space:]]*-[[:space:]]*(nyxid_services|nyxid_proxy|nyxid_external_keys|nyxid_service_handoff|[^[:space:]]*credential[^[:space:]]*|[^[:space:]]*api_key[^[:space:]]*)[[:space:]]*$' "${profile_root}/packages"; then
   echo "Reviewed focused packages must not declare broad or credential-bearing tools."
   exit 1
 fi
 
 profile_files=(
-  "${profile_root}/nyxid-chat-shadow-v1.profile.pb.json"
-  "${profile_root}/nyxid-chat-enforced-v1.profile.pb.json"
+  "${profile_root}/nyxid-chat-shadow-v2.profile.pb.json"
+  "${profile_root}/nyxid-chat-enforced-v2.profile.pb.json"
 )
 existing_profiles=0
 for profile_file in "${profile_files[@]}"; do

@@ -150,6 +150,14 @@ public sealed class ObservatoryStepDetail
 
     public string BranchKey { get; init; } = string.Empty;
 
+    public string SuspensionType { get; init; } = string.Empty;
+
+    public string SuspensionPrompt { get; init; } = string.Empty;
+
+    public string SuspensionContent { get; init; } = string.Empty;
+
+    public int? SuspensionTimeoutSeconds { get; init; }
+
     public ObservatoryUsageTotals Usage { get; init; } = new();
 }
 

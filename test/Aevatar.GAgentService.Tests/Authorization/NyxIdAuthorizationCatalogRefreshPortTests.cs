@@ -5,6 +5,7 @@ using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Infrastructure.Schedules.Authorization;
+using Aevatar.Workflow.Abstractions;
 using FluentAssertions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -791,6 +792,79 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
     }
 
     [Fact]
+    public async Task RefreshAsync_WhenRequiredServicesAreProvided_ShouldRequestOnlyRequiredScopePlanServices()
+    {
+        var commands = new RecordingCommandPort();
+        var handler = new RoutingJsonHandler(
+            Ok(UserServicesJson()),
+            Ok(ScopePlanJsonForServiceA()));
+
+        var result = await Create(commands, handler)
+            .RefreshAsync(
+                Owner(),
+                "bearer-secret",
+                [new NyxIdUserServiceCapabilityRef { UserServiceId = "service-a" }]);
+
+        result.Status.Should().Be(NyxIdAuthorizationCatalogRefreshStatus.Observed);
+        result.FailureCode.Should().BeEmpty();
+        handler.Requests.Select(static request => (request.Method, request.Path))
+            .Should().Equal(
+                (HttpMethod.Get, "/api/v1/user-services"),
+                (HttpMethod.Post, "/api/v1/api-keys/scope-plan"));
+        handler.RequestBodies.Should().ContainSingle();
+        using (var request = JsonDocument.Parse(handler.RequestBodies.Single()))
+        {
+            request.RootElement.GetProperty("selected_service_ids")
+                .EnumerateArray()
+                .Select(static item => item.GetString())
+                .Should().Equal("service-a");
+        }
+
+        var observation = commands.Observations.Should().ContainSingle().Subject;
+        observation.Coverage.Should().Be(NyxIdAuthorizationCatalogObservationCoverage.RequiredServiceSubset);
+        observation.CoveredUserServiceIds.Should().Equal("service-a");
+        observation.ContentDigest.Should().BeEmpty();
+        observation.Services.Select(static service => service.UserServiceId)
+            .Should().Equal("service-a");
+        observation.Services.Single().Access.Should().Be(NyxIdAuthorizationAccess.Permitted);
+        observation.ContractVersion.Should().Be("1");
+        observation.PolicyVersion.Should().Be("api-key-scope-v1");
+        observation.EvaluatedAtUtc.Should().Be(EvaluatedAt);
+        observation.ObservedAtUtc.Should().Be(Now);
+        observation.FreshUntilUtc.Should().Be(Now.AddMinutes(15));
+        commands.Invalidations.Should().BeEmpty();
+        commands.Failures.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RefreshAsync_WhenRequiredServiceIsMissing_ShouldFailClosedWithoutObservation()
+    {
+        var commands = new RecordingCommandPort();
+        var handler = new RoutingJsonHandler(Ok(UserServicesJson()));
+
+        var result = await Create(commands, handler)
+            .RefreshAsync(
+                Owner(),
+                "bearer-secret",
+                [new NyxIdUserServiceCapabilityRef { UserServiceId = "service-missing" }]);
+
+        result.Status.Should().Be(NyxIdAuthorizationCatalogRefreshStatus.CatalogUnstable);
+        result.FailureCode.Should().Be("nyxid_required_service_not_found:service-missing");
+        handler.Requests.Select(static request => (request.Method, request.Path))
+            .Should().Equal((HttpMethod.Get, "/api/v1/user-services"));
+        commands.Invalidations.Should().BeEmpty();
+        commands.Observations.Should().BeEmpty();
+        commands.Failures.Should().ContainSingle().Which.Should().Match<(
+            AuthorizationOwnerIdentity Owner,
+            string RefreshId,
+            DateTimeOffset FailedAt,
+            string FailureCode,
+            NyxIdAuthorizationCatalogRefreshStatus Status)>(failure =>
+            failure.FailureCode == "nyxid_required_service_not_found:service-missing" &&
+            failure.Status == NyxIdAuthorizationCatalogRefreshStatus.CatalogUnstable);
+    }
+
+    [Fact]
     public async Task RefreshPersonalAsync_WhenNoServicesAreEligible_ShouldObserveEmptyCatalog()
     {
         var commands = new RecordingCommandPort();
@@ -880,6 +954,11 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
 
         result.Status.Should().Be(NyxIdAuthorizationCatalogRefreshStatus.AccessDenied);
         result.FailureCode.Should().Be("api_key_scope_plan_denied");
+        handler.Requests.Select(static request => (request.Method, request.Path))
+            .Should().Equal(
+                (HttpMethod.Get, "/api/v1/user-services"),
+                (HttpMethod.Post, "/api/v1/api-keys/scope-plan"));
+        handler.RequestBodies.Should().ContainSingle();
         commands.Beginnings.Should().ContainSingle();
         commands.Invalidations.Should().ContainSingle();
         commands.Invalidations[0].RefreshId.Should().Be(commands.Beginnings[0].RefreshId);
@@ -1074,6 +1153,25 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
         }
         """;
 
+    private static string ScopePlanJsonForServiceA() => $$$"""
+        {
+          "authority":"nyxid",
+          "contract_version":"1",
+          "policy_version":"api-key-scope-v1",
+          "authenticated_actor":{"id":"owner-alpha","type":"personal"},
+          "intended_key_owner":{"id":"owner-alpha","type":"personal"},
+          "services":[
+            {"user_service_id":"service-a","resource_owner":{"id":"owner-alpha","type":"personal"},"node_grant":{"type":"not_required"}}
+          ],
+          "allowed_service_ids":["service-a"],
+          "allowed_node_ids":[],
+          "evaluated_at":"{{{EvaluatedAt:O}}}",
+          "normalized_grant_digest":"sha256:{{{new string('b', 64)}}}",
+          "freshness":{"mode":"mutation_revalidated_snapshot","precondition_field":"scope_plan_digest","post_creation_drift":"fail_closed"},
+          "completeness":{"list_complete":true,"no_duplicates":true,"route_candidate_basis":"active_configured_routes","transient_node_state_excluded":true}
+        }
+        """;
+
     private static QueuedResponse Ok(string body) => new(HttpStatusCode.OK, body);
 
     private static QueuedResponse Error(HttpStatusCode status, string code, int errorCode) =>
@@ -1114,6 +1212,8 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
 
         public List<bool> CancellationStates { get; } = [];
 
+        public Action<int>? OnRequest { get; set; }
+
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken)
@@ -1123,6 +1223,7 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
             CancellationStates.Add(cancellationToken.IsCancellationRequested);
             if (request.Content != null)
                 RequestBodies.Add(await request.Content.ReadAsStringAsync(cancellationToken));
+            OnRequest?.Invoke(Requests.Count - 1);
             if (!_responses.TryDequeue(out var response))
                 throw new InvalidOperationException("No queued response remains.");
             if (response.Failure != null)
@@ -1446,7 +1547,7 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
             long MinimumSourceStateVersion,
             string RepairRequestId)> RepairBeginnings { get; } = [];
         public List<NyxIdAuthorizationCatalogObservation> Observations { get; } = [];
-        public List<(AuthorizationOwnerIdentity Owner, string RefreshId, DateTimeOffset At, string Code)> Failures { get; } = [];
+        public List<(AuthorizationOwnerIdentity Owner, string RefreshId, DateTimeOffset At, string Code, NyxIdAuthorizationCatalogRefreshStatus Status)> Failures { get; } = [];
         public List<(
             AuthorizationOwnerIdentity Owner,
             string RefreshId,
@@ -1534,16 +1635,19 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
             string refreshId,
             DateTimeOffset failedAtUtc,
             string failureCode,
+            NyxIdAuthorizationCatalogRefreshStatus status = NyxIdAuthorizationCatalogRefreshStatus.Failed,
             CancellationToken ct = default)
         {
-            Failures.Add((owner.Clone(), refreshId, failedAtUtc, failureCode));
+            Failures.Add((owner.Clone(), refreshId, failedAtUtc, failureCode, status));
             if (RefreshFailureException != null)
                 return Task.FromException(RefreshFailureException);
             if (PublishTerminalOutcomes)
             {
                 Observation?.Publish(
                     refreshId,
-                    NyxIdAuthorizationCatalogRefreshOutcomeStatus.Failed,
+                    status == NyxIdAuthorizationCatalogRefreshStatus.CatalogUnstable
+                        ? NyxIdAuthorizationCatalogRefreshOutcomeStatus.CatalogUnstable
+                        : NyxIdAuthorizationCatalogRefreshOutcomeStatus.Failed,
                     failureCode,
                     failedAtUtc);
             }

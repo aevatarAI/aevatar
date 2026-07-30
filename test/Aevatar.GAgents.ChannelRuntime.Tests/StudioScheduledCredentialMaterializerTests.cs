@@ -86,6 +86,65 @@ public sealed class StudioScheduledCredentialMaterializerTests
     }
 
     [Fact]
+    public async Task MaterializeAsync_WhenAuthorizationPlanMismatch_ShouldPropagateTypedConflict()
+    {
+        var issuer = new RecordingIssuer
+        {
+            IssueResult = ScheduledAgentApiKeyIssueResult.Failed(
+                "authorization_plan_changed",
+                authorizationPlanMismatchReason: ScheduledAuthorizationPlanMismatchReason.AllowedNodeIdsMismatch),
+        };
+        var vault = new RecordingSecretVault();
+
+        var action = () => new StudioScheduledCredentialMaterializer(issuer, vault).MaterializeAsync(
+            "bearer-alpha",
+            Plan(AuthorizationOwnerKind.Personal, "owner-alpha"),
+            "schedule-alpha",
+            "operation-alpha",
+            EffectLocator("schedule-alpha", "operation-alpha"),
+            1,
+            OwnerScope.ForNyxIdNative("owner-alpha"));
+
+        var conflict = await action.Should().ThrowAsync<StudioMemberAutomationPlanConflictException>()
+            .WithMessage("authorization_plan_changed");
+        conflict.Which.Code.Should().Be("authorization_plan_changed");
+        conflict.Which.AuthorizationPlanMismatchReason.Should()
+            .Be(ScheduledAuthorizationPlanMismatchReason.AllowedNodeIdsMismatch);
+        vault.Stores.Should().BeEmpty();
+        issuer.Revocations.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task MaterializeAsync_WhenAuthorizationPlanMismatchAfterIssue_ShouldCleanupAndPropagateTypedConflict()
+    {
+        var issuer = new RecordingIssuer
+        {
+            IssueResult = ScheduledAgentApiKeyIssueResult.FailedAfterIssue(
+                "api-key-alpha",
+                "authorization_plan_changed",
+                authorizationPlanMismatchReason: ScheduledAuthorizationPlanMismatchReason.AllowedServiceIdsMismatch),
+        };
+        var vault = new RecordingSecretVault();
+
+        var action = () => new StudioScheduledCredentialMaterializer(issuer, vault).MaterializeAsync(
+            "bearer-alpha",
+            Plan(AuthorizationOwnerKind.Personal, "owner-alpha"),
+            "schedule-alpha",
+            "operation-alpha",
+            EffectLocator("schedule-alpha", "operation-alpha"),
+            1,
+            OwnerScope.ForNyxIdNative("owner-alpha"));
+
+        var conflict = await action.Should().ThrowAsync<StudioMemberAutomationPlanConflictException>()
+            .WithMessage("authorization_plan_changed");
+        conflict.Which.AuthorizationPlanMismatchReason.Should()
+            .Be(ScheduledAuthorizationPlanMismatchReason.AllowedServiceIdsMismatch);
+        issuer.Revocations.Should().ContainSingle().Which.Should().Be(("bearer-alpha", "api-key-alpha"));
+        vault.Revocations.Should().ContainSingle().Which.SubjectId.Should().Be("api-key-alpha");
+        vault.Stores.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task MaterializeAsync_WhenVaultFails_ShouldRevokeIssuedKey()
     {
         var issuer = new RecordingIssuer

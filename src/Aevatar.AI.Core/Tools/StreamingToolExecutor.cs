@@ -5,6 +5,7 @@
 // 结果按调用顺序 yield，保持对话流一致性。
 // ─────────────────────────────────────────────────────────────
 
+using Aevatar.AI.Abstractions.CodexExecution;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
@@ -324,6 +325,25 @@ public sealed class StreamingToolExecutor
     private static string BuildSafeFailureResult() =>
         ToolManager.BuildErrorJson(SafeToolFailureMessage);
 
+    private static AgentToolReceipt CreateExecutionErrorReceipt(
+        ToolCallContext context,
+        Exception exception,
+        string resultJson)
+    {
+        if (exception is CodexExecutionException)
+            return ToolCallReceiptFinalizer.Finalize(context, exception).Receipt;
+
+        return AgentToolReceiptFactory.CreateError(
+                   context.Tool,
+                   context.ToolCallId,
+                   context.ToolName,
+                   context.Tool.GetCallSafety(context.ArgumentsJson),
+                   resultJson,
+                   errorCode: "tool_execution_error",
+                   errorMessage: SafeToolFailureMessage) ??
+               ToolCallReceiptFinalizer.Finalize(context, exception).Receipt;
+    }
+
     private static void CompletePendingToolsAsDiscarded(ExecutionState state)
     {
         foreach (var tracked in state.Tools)
@@ -428,15 +448,10 @@ public sealed class StreamingToolExecutor
                     executionFailed = true;
                     var safeFailureResult = BuildSafeFailureResult();
                     toolCallContext.Result = safeFailureResult;
-                    toolCallContext.Receipt = AgentToolReceiptFactory.CreateError(
-                        effectiveTool,
-                        toolCallContext.ToolCallId,
-                        toolCallContext.ToolName,
-                        callSafety: effectiveTool.GetCallSafety(toolCallContext.ArgumentsJson),
-                        resultJson: safeFailureResult,
-                        errorCode: "tool_execution_error",
-                        errorMessage: SafeToolFailureMessage) ??
-                        ToolCallReceiptFinalizer.Finalize(toolCallContext, error).Receipt;
+                    toolCallContext.Receipt = CreateExecutionErrorReceipt(
+                        toolCallContext,
+                        error,
+                        safeFailureResult);
                 }
                 else
                 {

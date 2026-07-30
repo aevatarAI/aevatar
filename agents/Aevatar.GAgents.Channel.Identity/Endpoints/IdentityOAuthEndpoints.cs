@@ -66,6 +66,21 @@ public static class IdentityOAuthEndpoints
                 captureUnauthenticated: true)
             .AddEndpointFilter<RebuildAuthEndpointFilter>()
             .AllowAnonymous();
+        // Operator-only: force a fresh HMAC state-token signing key. Recovery
+        // path when the vault entry behind the persisted key reference is lost
+        // (secret store data loss): rotation writes new key material and its
+        // committed event re-materializes the readmodel. Same admin gate as
+        // the client rebuild.
+        app.MapPost("/api/oauth/aevatar-client/rotate-hmac", HandleAevatarOAuthClientRotateHmacAsync)
+            .WithTags("ChannelIdentity")
+            .WithEndpointAudit(
+                "identity.oauth-client.hmac-rotate",
+                AuditSensitivityLevel.Restricted,
+                "aevatar_oauth_client",
+                EndpointAuditTargetResolvers.Static("aevatar_oauth_client", "hmac-rotate"),
+                captureUnauthenticated: true)
+            .AddEndpointFilter<RebuildAuthEndpointFilter>()
+            .AllowAnonymous();
         // Operator-only: rebuild a wiped/reset current-state readmodel for one NyxID
         // owner binding from the surviving actor state — headless disaster recovery,
         // no browser round-trip. Same admin gate as the client rebuild.
@@ -147,7 +162,7 @@ public static class IdentityOAuthEndpoints
             // protection added in this PR). This is the same "still
             // initializing / drift not yet healed" condition the state-token
             // decoder surfaces above, so route it to the same retry-friendly
-            // 400 path instead of letting the generic catch return 502
+            // 400 path instead of letting the generic catch return 503
             // token_exchange_failed — that misclassifies a self-recoverable
             // condition as a NyxID outage.
             logger.LogWarning(
@@ -172,14 +187,28 @@ public static class IdentityOAuthEndpoints
                 detail = "NyxID 授权未包含 Aevatar、默认 LLM、Ornn service 或 Sandbox service。请回到 Lark 重新发送 /init,并在授权页保留这些必需 services。",
             }, statusCode: StatusCodes.Status409Conflict);
         }
+        // RFC 6749 §5.2: the token endpoint answers 400 for a bad grant
+        // (expired/replayed code) — a user-recoverable condition, not an
+        // upstream outage.
+        catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.BadRequest)
+        {
+            logger.LogWarning(ex, "NyxID rejected the OAuth callback authorization code for correlation {CorrelationId}", decode.CorrelationId);
+            return OAuthCallbackProblem(
+                StatusCodes.Status400BadRequest,
+                "authorization_code_rejected",
+                "NyxID 拒绝了本次授权码,绑定链接可能已过期。请回到 Lark 重新发送 /init。");
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             logger.LogError(ex, "OAuth callback authorization-code exchange failed for correlation {CorrelationId}", decode.CorrelationId);
-            return Results.Json(new
-            {
-                error = "token_exchange_failed",
-                detail = "NyxID 绑定失败,稍后重试 /init",
-            }, statusCode: StatusCodes.Status502BadGateway);
+            return OAuthCallbackProblem(
+                StatusCodes.Status503ServiceUnavailable,
+                "token_exchange_failed",
+                "NyxID 绑定失败,稍后重试 /init");
         }
 
         var existingBinding = await queryPort.ResolveAsync(subject, ct).ConfigureAwait(false);
@@ -247,11 +276,10 @@ public static class IdentityOAuthEndpoints
                 "OAuth callback succeeded but id_token did not carry a stable NyxID uid/sub claim. correlation={CorrelationId}",
                 decode.CorrelationId);
             await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
-            return Results.Json(new
-            {
-                error = "owner_scope_missing",
-                detail = "NyxID binding succeeded but Aevatar could not resolve the canonical owner scope. Re-run /init later.",
-            }, statusCode: StatusCodes.Status502BadGateway);
+            return OAuthCallbackProblem(
+                StatusCodes.Status503ServiceUnavailable,
+                "owner_scope_missing",
+                "NyxID binding succeeded but Aevatar could not resolve the canonical owner scope. Re-run /init later.");
         }
 
         var stateExpectedBindingHash = decode.ExpectedBindingHash?.Trim() ?? string.Empty;
@@ -498,22 +526,30 @@ public static class IdentityOAuthEndpoints
     private static IResult BuildIssuedBindingProbeError(IssuedBindingProbeResult probeResult) =>
         probeResult switch
         {
-            IssuedBindingProbeResult.MissingRequiredAccess => Results.Json(new
-            {
-                error = "required_service_access_missing",
-                detail = "NyxID 授权没有覆盖 Aevatar 所需的 scope 或 services。请回到 Lark 重新发送 /init，并在授权页保留所有必需 services。",
-            }, statusCode: StatusCodes.Status409Conflict),
-            IssuedBindingProbeResult.Invalid => Results.Json(new
-            {
-                error = "issued_binding_invalid",
-                detail = "NyxID 新授权在 Aevatar 接管前已失效。请回到 Lark 重新发送 /init。",
-            }, statusCode: StatusCodes.Status502BadGateway),
-            _ => Results.Json(new
-            {
-                error = "issued_binding_probe_failed",
-                detail = "Aevatar 暂时无法验证新的 NyxID 服务授权。请稍后回到 Lark 重新发送 /init。",
-            }, statusCode: StatusCodes.Status503ServiceUnavailable),
+            IssuedBindingProbeResult.MissingRequiredAccess => OAuthCallbackProblem(
+                StatusCodes.Status409Conflict,
+                "required_service_access_missing",
+                "NyxID 授权没有覆盖 Aevatar 所需的 scope 或 services。请回到 Lark 重新发送 /init，并在授权页保留所有必需 services。"),
+            IssuedBindingProbeResult.Invalid => OAuthCallbackProblem(
+                StatusCodes.Status503ServiceUnavailable,
+                "issued_binding_invalid",
+                "NyxID 新授权在 Aevatar 接管前已失效。请回到 Lark 重新发送 /init。"),
+            _ => OAuthCallbackProblem(
+                StatusCodes.Status503ServiceUnavailable,
+                "issued_binding_probe_failed",
+                "Aevatar 暂时无法验证新的 NyxID 服务授权。请稍后回到 Lark 重新发送 /init。"),
         };
+
+    // Callback failure branches must never answer with 502/504: Cloudflare
+    // replaces origin-generated 502/504 responses with its own opaque branded
+    // error page, which strips this structured body before it reaches the
+    // client (2026-07-28 login incident). Upstream faults are reported as 503
+    // with a stable error code.
+    private static IResult OAuthCallbackProblem(int statusCode, string errorCode, string detail) =>
+        Results.Problem(
+            detail: detail,
+            statusCode: statusCode,
+            extensions: new Dictionary<string, object?> { ["error"] = errorCode });
 
     // ─── Status endpoint ───
 
@@ -583,6 +619,7 @@ public static class IdentityOAuthEndpoints
         HttpContext http,
         [FromServices] IOptions<AevatarOAuthClientOptions> clientOptions,
         [FromServices] ICommandDispatchService<ProvisionAevatarOAuthClientCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> rebuildDispatch,
+        [FromServices] ICommandDispatchService<RebuildAevatarOAuthClientProjectionCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> projectionRebuildDispatch,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct) =>
         HandleAevatarOAuthClientRebuildCoreAsync(
@@ -590,6 +627,7 @@ public static class IdentityOAuthEndpoints
             clientOptions.Value,
             http.RequestServices.GetService<IPlatformAdminAuthorizer>(),
             rebuildDispatch,
+            projectionRebuildDispatch,
             loggerFactory,
             ct);
 
@@ -602,6 +640,7 @@ public static class IdentityOAuthEndpoints
         AevatarOAuthClientOptions clientOptions,
         IPlatformAdminAuthorizer? adminAuthorizer,
         ICommandDispatchService<ProvisionAevatarOAuthClientCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> rebuildDispatch,
+        ICommandDispatchService<RebuildAevatarOAuthClientProjectionCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> projectionRebuildDispatch,
         ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -665,12 +704,44 @@ public static class IdentityOAuthEndpoints
             }, statusCode: StatusCodes.Status503ServiceUnavailable);
         }
 
+        // Reconciliation is a no-op when the surviving actor state already
+        // matches deployment configuration, so a wiped projection store would
+        // stay empty forever. The explicit projection-rebuild command re-emits
+        // the current committed state without appending an event.
+        CommandDispatchResult<ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> projectionAccepted;
+        try
+        {
+            projectionAccepted = await projectionRebuildDispatch
+                .DispatchAsync(new RebuildAevatarOAuthClientProjectionCommand(), ct)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Rebuild endpoint failed to dispatch RebuildAevatarOAuthClientProjectionCommand.");
+            return Results.Json(new
+            {
+                error = "actor_dispatch_failed",
+                detail = "Provision reconciliation was accepted, but the projection rebuild command could not be dispatched. Check silo logs.",
+            }, statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+
+        if (!projectionAccepted.Succeeded || projectionAccepted.Receipt is null)
+        {
+            logger.LogError("Rebuild endpoint projection-rebuild dispatch rejected: error={Error}", projectionAccepted.Error);
+            return Results.Json(new
+            {
+                error = "actor_dispatch_rejected",
+                detail = "Provision reconciliation was accepted, but the projection rebuild command was rejected before entering the OAuth client actor inbox.",
+            }, statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+
         logger.LogWarning(
-            "Operator rebuild accepted for AevatarOAuthClientGAgent: client_id={ClientId}, authority={Authority}, redirect_uri={RedirectUri}, command_id={CommandId}, admin_user_id={AdminUserId}, admin_email={AdminEmail}, admin_grant_source={GrantSource}.",
+            "Operator rebuild accepted for AevatarOAuthClientGAgent: client_id={ClientId}, authority={Authority}, redirect_uri={RedirectUri}, command_id={CommandId}, projection_rebuild_command_id={ProjectionRebuildCommandId}, admin_user_id={AdminUserId}, admin_email={AdminEmail}, admin_grant_source={GrantSource}.",
             clientOptions.ClientId,
             authority,
             redirectUri,
             accepted.Receipt.CommandId,
+            projectionAccepted.Receipt.CommandId,
             authorization.Caller.UserId,
             authorization.Caller.Email,
             authorization.Caller.GrantSource);
@@ -681,9 +752,120 @@ public static class IdentityOAuthEndpoints
             command_id = accepted.Receipt.CommandId,
             correlation_id = accepted.Receipt.CorrelationId,
             actor_id = accepted.Receipt.ActorId,
+            projection_rebuild_command_id = projectionAccepted.Receipt.CommandId,
             status_url = OAuthClientStatusUrl,
             admin_grant_source = authorization.Caller.GrantSource,
             detail = "Configured client reconciliation accepted for dispatch. Re-poll the status URL until actor state and projection materialize.",
+        });
+    }
+
+    // ─── Operator HMAC key rotation (disaster recovery) ───
+
+    /// <summary>
+    /// Forces a fresh HMAC state-token signing key. Recovery path for a lost
+    /// secret-vault entry: rotation writes new key material to the vault and
+    /// commits a rotation event, which also re-materializes the readmodel.
+    /// Grace window: state tokens signed with the previous key (TTL ≤ 5 min)
+    /// keep verifying; in-flight callbacks older than that fail decode.
+    /// </summary>
+    internal static Task<IResult> HandleAevatarOAuthClientRotateHmacAsync(
+        HttpContext http,
+        [FromServices] ICommandDispatchService<RotateAevatarOAuthClientHmacKeyCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> rotateDispatch,
+        [FromServices] ILoggerFactory loggerFactory,
+        CancellationToken ct) =>
+        HandleAevatarOAuthClientRotateHmacCoreAsync(
+            http,
+            http.RequestServices.GetService<IPlatformAdminAuthorizer>(),
+            rotateDispatch,
+            loggerFactory,
+            ct);
+
+    /// <summary>
+    /// Core method exposed for tests to pass the admin authorizer and the typed
+    /// dispatch service directly, without resolving endpoint-bound services.
+    /// </summary>
+    internal static async Task<IResult> HandleAevatarOAuthClientRotateHmacCoreAsync(
+        HttpContext http,
+        IPlatformAdminAuthorizer? adminAuthorizer,
+        ICommandDispatchService<RotateAevatarOAuthClientHmacKeyCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> rotateDispatch,
+        ILoggerFactory loggerFactory,
+        CancellationToken ct)
+    {
+        var logger = loggerFactory.CreateLogger("Aevatar.Channel.Identity.OAuthHmacRotate");
+
+        var authorization = await AuthorizeRebuildAsync(http, adminAuthorizer, logger, ct)
+            .ConfigureAwait(false);
+        if (authorization.Rejection is not null)
+            return authorization.Rejection;
+
+        var idempotencyKeys = http.Request.Headers["Idempotency-Key"];
+        var idempotencyKey = idempotencyKeys.ToString().Trim();
+        var ifMatch = http.Request.Headers.IfMatch.ToString().Trim();
+        var strongIfMatch = ifMatch.Length >= 3 &&
+                            ifMatch[0] == '"' &&
+                            ifMatch[^1] == '"' &&
+                            !ifMatch.AsSpan(1, ifMatch.Length - 2).Contains('"');
+        var expectedCurrentKid = strongIfMatch ? ifMatch[1..^1] : string.Empty;
+        if (idempotencyKeys.Count != 1 ||
+            idempotencyKey.Length is 0 or > 200 ||
+            idempotencyKey.Contains(',') ||
+            expectedCurrentKid.Length is 0 or > 128 ||
+            expectedCurrentKid.Contains(','))
+        {
+            return Results.BadRequest(new
+            {
+                error = "rotation_precondition_required",
+                detail = "Supply one Idempotency-Key and the expected current kid as If-Match.",
+            });
+        }
+
+        CommandDispatchResult<ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> accepted;
+        try
+        {
+            accepted = await rotateDispatch
+                .DispatchAsync(new RotateAevatarOAuthClientHmacKeyCommand
+                {
+                    IdempotencyKey = idempotencyKey,
+                    ExpectedCurrentKid = expectedCurrentKid,
+                }, ct)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Rotate endpoint failed to dispatch RotateAevatarOAuthClientHmacKeyCommand.");
+            return Results.Json(new
+            {
+                error = "actor_dispatch_failed",
+                detail = "Failed to dispatch the HMAC rotation command to the OAuth client actor. Check silo logs.",
+            }, statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+
+        if (!accepted.Succeeded || accepted.Receipt is null)
+        {
+            logger.LogError("Rotate endpoint dispatch rejected: error={Error}", accepted.Error);
+            return Results.Json(new
+            {
+                error = "actor_dispatch_rejected",
+                detail = "HMAC rotation command was rejected before entering the OAuth client actor inbox.",
+            }, statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+
+        logger.LogWarning(
+            "Operator HMAC rotation accepted for AevatarOAuthClientGAgent: command_id={CommandId}, admin_user_id={AdminUserId}, admin_email={AdminEmail}, admin_grant_source={GrantSource}.",
+            accepted.Receipt.CommandId,
+            authorization.Caller.UserId,
+            authorization.Caller.Email,
+            authorization.Caller.GrantSource);
+
+        return Results.Accepted(OAuthClientStatusUrl, new
+        {
+            status = "rotate_pending",
+            command_id = accepted.Receipt.CommandId,
+            correlation_id = accepted.Receipt.CorrelationId,
+            actor_id = accepted.Receipt.ActorId,
+            status_url = OAuthClientStatusUrl,
+            admin_grant_source = authorization.Caller.GrantSource,
+            detail = "HMAC key rotation accepted for dispatch. Re-poll the status URL until the rotated key materializes.",
         });
     }
 

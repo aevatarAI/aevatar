@@ -16,6 +16,117 @@ namespace Aevatar.Workflow.Core.Tests.Modules;
 public sealed class ToolCallModuleContextTests
 {
     [Fact]
+    public void ExternalOperationAdmissionContract_ShouldCrossEveryRuntimeBoundaryAsTypedData()
+    {
+        BindWorkflowRunDefinitionEvent.Descriptor.FindFieldByName("capability_admission_plan")
+            .Should().NotBeNull();
+        WorkflowRunState.Descriptor.FindFieldByName("capability_admission_plan")
+            .Should().NotBeNull();
+        StepRequestEvent.Descriptor.FindFieldByName("external_invocation")
+            .Should().NotBeNull();
+        typeof(WorkflowToolExecutionRequest).GetProperty("InvocationAdmission")
+            .Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task ToolCallModule_ShouldHandTheExactCallSiteProofToTheTool()
+    {
+        var tool = new RecordingWorkflowTool("nyxid_proxy");
+        var module = CreateModule(tool);
+        var plan = AdmissionPlan("wf-alpha/other_step", operationId: "list_items");
+        plan.InvocationAdmissions.Add(AdmissionPlan("wf-alpha/call_proxy").InvocationAdmissions[0]);
+        var ctx = new RecordingWorkflowContext { CapabilityAdmissionPlan = plan };
+
+        await ExecuteToolCallAsync(
+            module,
+            ctx,
+            tool.Name,
+            externalInvocation: NyxIdInvocation("wf-alpha/call_proxy"));
+
+        var admission = tool.Requests.Should().ContainSingle().Subject.InvocationAdmission;
+        admission.Should().NotBeNull();
+        admission!.NyxIdUserService.EndpointId.Should().Be("get_item");
+        admission.NyxIdUserService.PathTemplate.Should().Be("/items/{item_id}");
+        admission.NyxIdUserService.ContractDigest.Should().Be("server-derived-digest");
+    }
+
+    [Theory]
+    [InlineData("wf-alpha/wrong_step", "us-shop-alpha", "get_item", "EXTERNAL_CAPABILITY_CALL_SITE_NOT_ADMITTED")]
+    [InlineData("wf-alpha/call_proxy", "us-shop-beta", "get_item", "EXTERNAL_CAPABILITY_PROOF_SELECTOR_MISMATCH")]
+    [InlineData("wf-alpha/call_proxy", "us-shop-alpha", "delete_item", "EXTERNAL_CAPABILITY_PROOF_SELECTOR_MISMATCH")]
+    public async Task ToolCallModule_ShouldFailClosed_WhenTheCallSiteProofDoesNotMatch(
+        string callSiteId,
+        string userServiceId,
+        string operationId,
+        string expectedCode)
+    {
+        var tool = new RecordingWorkflowTool("nyxid_proxy");
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext
+        {
+            CapabilityAdmissionPlan = AdmissionPlan("wf-alpha/call_proxy"),
+        };
+
+        await ExecuteToolCallAsync(
+            module,
+            ctx,
+            tool.Name,
+            externalInvocation: NyxIdInvocation(callSiteId, userServiceId, operationId));
+
+        tool.Requests.Should().BeEmpty();
+        LastCompleted(ctx).Success.Should().BeFalse();
+        LastCompleted(ctx).Error.Should().Contain(expectedCode);
+    }
+
+    [Fact]
+    public async Task ToolCallModule_ShouldFailClosed_WhenAnAdmittedToolHasNoCompiledCallSite()
+    {
+        var tool = new RecordingWorkflowTool("nyxid_proxy");
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext
+        {
+            CapabilityAdmissionPlan = AdmissionPlan("wf-alpha/call_proxy"),
+        };
+
+        await ExecuteToolCallAsync(module, ctx, tool.Name);
+
+        tool.Requests.Should().BeEmpty();
+        LastCompleted(ctx).Success.Should().BeFalse();
+        LastCompleted(ctx).Error.Should().Contain("EXTERNAL_CAPABILITY_CALL_SITE_NOT_ADMITTED");
+    }
+
+    [Fact]
+    public async Task ToolCallModule_ShouldFailClosed_WhenTheRunHasNoCommittedAdmissionPlan()
+    {
+        var tool = new RecordingWorkflowTool("nyxid_proxy");
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext();
+
+        await ExecuteToolCallAsync(
+            module,
+            ctx,
+            tool.Name,
+            externalInvocation: NyxIdInvocation("wf-alpha/call_proxy"));
+
+        tool.Requests.Should().BeEmpty();
+        LastCompleted(ctx).Success.Should().BeFalse();
+        LastCompleted(ctx).Error.Should().Contain("EXTERNAL_CAPABILITY_ADMISSION_PLAN_MISSING");
+    }
+
+    [Fact]
+    public async Task ToolCallModule_ShouldNotRequireAdmission_ForToolsOutsideExternalCapabilityPolicy()
+    {
+        var tool = new RecordingWorkflowTool("summarize");
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext();
+
+        await ExecuteToolCallAsync(module, ctx, tool.Name);
+
+        tool.Requests.Should().ContainSingle().Which.InvocationAdmission.Should().BeNull();
+        LastCompleted(ctx).Success.Should().BeTrue();
+    }
+
+    [Fact]
     public async Task ToolCallModule_ShouldPublishToolEventsWithWorkflowExecutionCallId()
     {
         var tool = new FakeAgentTool("call_id_reader", _ => "{}");
@@ -67,9 +178,17 @@ public sealed class ToolCallModuleContextTests
                 "NYXID_PROXY_HTTP_503",
                 "The service request failed."));
         var module = CreateModule(tool);
-        var ctx = new RecordingWorkflowContext();
+        var ctx = new RecordingWorkflowContext
+        {
+            CapabilityAdmissionPlan = AdmissionPlan("wf-alpha/call_proxy"),
+        };
 
-        await ExecuteToolCallAsync(module, ctx, tool.Name, executionId: "exec-1");
+        await ExecuteToolCallAsync(
+            module,
+            ctx,
+            tool.Name,
+            executionId: "exec-1",
+            externalInvocation: NyxIdInvocation("wf-alpha/call_proxy"));
 
         var toolCompleted = ctx.Published.Select(x => x.Event)
             .OfType<WorkflowToolCallCompletedEvent>()
@@ -332,6 +451,52 @@ public sealed class ToolCallModuleContextTests
             Scope = "invoke",
         };
 
+    private static ExternalToolInvocationSpec NyxIdInvocation(
+        string callSiteId,
+        string userServiceId = "us-shop-alpha",
+        string operationId = "get_item") =>
+        new()
+        {
+            CallSiteId = callSiteId,
+            ToolName = "nyxid_proxy",
+            Selector = new ExternalWorkflowCapabilitySelector
+            {
+                NyxIdOperation = new NyxIdOperationSelector
+                {
+                    UserServiceId = userServiceId,
+                    EndpointId = operationId,
+                },
+            },
+        };
+
+    private static WorkflowCapabilityAdmissionPlan AdmissionPlan(
+        string callSiteId,
+        string userServiceId = "us-shop-alpha",
+        string operationId = "get_item")
+    {
+        var plan = new WorkflowCapabilityAdmissionPlan
+        {
+            SchemaVersion = WorkflowCapabilityAdmissionPlanIntegrity.SchemaVersion,
+        };
+        plan.InvocationAdmissions.Add(new WorkflowCapabilityInvocationAdmission
+        {
+            CallSiteId = callSiteId,
+            Capability = new ExternalWorkflowCapabilityRef
+            {
+                NyxIdUserService = new NyxIdUserServiceCapabilityRef
+                {
+                    UserServiceId = userServiceId,
+                    ServiceSlugSnapshot = "api-shop",
+                    EndpointId = operationId,
+                    HttpMethod = "GET",
+                    PathTemplate = "/items/{item_id}",
+                    ContractDigest = "server-derived-digest",
+                },
+            },
+        });
+        return plan;
+    }
+
     private static async Task ExecuteToolCallAsync(
         ToolCallModule module,
         RecordingWorkflowContext ctx,
@@ -340,7 +505,8 @@ public sealed class ToolCallModuleContextTests
         string input = "{}",
         string executionId = "",
         IReadOnlyList<WorkflowFileRef>? inputFileRefs = null,
-        string idempotencyKey = "")
+        string idempotencyKey = "",
+        ExternalToolInvocationSpec? externalInvocation = null)
     {
         var request = new StepRequestEvent
         {
@@ -351,6 +517,7 @@ public sealed class ToolCallModuleContextTests
             IdempotencyKey = idempotencyKey,
             Input = input,
             Parameters = { ["tool"] = toolName },
+            ExternalInvocation = externalInvocation,
         };
         request.InputFileRefs.Add(inputFileRefs?.Select(static fileRef => fileRef.Clone()) ?? []);
 
@@ -421,6 +588,22 @@ public sealed class ToolCallModuleContextTests
         {
             ct.ThrowIfCancellationRequested();
             return Task.FromResult(result);
+        }
+    }
+
+    private sealed class RecordingWorkflowTool(string name) : IWorkflowTool
+    {
+        public string Name { get; } = name;
+
+        public List<WorkflowToolExecutionRequest> Requests { get; } = [];
+
+        public Task<WorkflowToolExecutionResult> ExecuteAsync(
+            WorkflowToolExecutionRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Requests.Add(request);
+            return Task.FromResult(WorkflowToolExecutionResult.Success("{}"));
         }
     }
 
@@ -503,6 +686,10 @@ public sealed class ToolCallModuleContextTests
         public WorkflowRunExecutionContextState ExecutionContextState { get; } = new();
 
         public WorkflowRunExecutionContextState ExecutionContextSnapshot => ExecutionContextState.Clone();
+
+        public WorkflowCapabilityAdmissionPlan CapabilityAdmissionPlan { get; init; } = new();
+
+        public WorkflowCapabilityAdmissionPlan CapabilityAdmissionPlanSnapshot => CapabilityAdmissionPlan.Clone();
 
         public List<(IMessage Event, TopologyAudience Direction)> Published { get; } = [];
 

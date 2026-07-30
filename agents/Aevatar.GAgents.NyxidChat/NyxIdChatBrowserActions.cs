@@ -203,9 +203,10 @@ public static class NyxIdChatBrowserActions
         ArgumentNullException.ThrowIfNull(command);
         ArgumentNullException.ThrowIfNull(now);
 
-        if (!ValidContinuationIdentity(state, command))
+        var isStateChangeWake = command.Actions.Count == 0;
+        if (!ValidContinuationIdentity(state, command, isStateChangeWake))
             return RejectContinuation(state, ActionContinuationInvalid);
-        if (command.Actions.Count == 0 ||
+        if (!isStateChangeWake &&
             command.Actions.Any(report => !ValidReport(report, command.OriginTurnId)))
         {
             return RejectContinuation(state, ActionContinuationInvalid);
@@ -341,6 +342,29 @@ public static class NyxIdChatBrowserActions
         };
 
         NyxIdChatOperationDispatchCommand? firstDispatch = null;
+        if (isStateChangeWake)
+        {
+            var pending = next.PendingActions
+                .OrderBy(static request => request.ActionRequestId, StringComparer.Ordinal)
+                .ToArray();
+            for (var index = 0; index < pending.Length; index++)
+            {
+                var step = BuildPostconditionStep(next, turn, task, pending[index], index, now);
+                task.Steps.Add(step);
+                if (firstDispatch is not null)
+                    continue;
+
+                step.Status = NyxIdChatStepStatus.Running;
+                task.ActiveStepId = step.StepId;
+                task.ActiveOperationId = step.Operation.Key.OperationId;
+                firstDispatch = BuildPostconditionCommand(
+                    next.ScopeId,
+                    admission.OwnerSubject,
+                    pending[index],
+                    report: null,
+                    step.Operation.Key);
+            }
+        }
         for (var reportIndex = 0; reportIndex < sanitizedReports.Length; reportIndex++)
         {
             var report = sanitizedReports[reportIndex];
@@ -353,7 +377,6 @@ public static class NyxIdChatBrowserActions
                     turn,
                     task,
                     request,
-                    report,
                     reportIndex,
                     now);
                 task.Steps.Add(step);
@@ -509,7 +532,6 @@ public static class NyxIdChatBrowserActions
         NyxIdChatTurnState turn,
         NyxIdChatTaskState task,
         NyxIdChatActionRequestState request,
-        NyxIdChatActionReport report,
         int index,
         Timestamp now)
     {
@@ -653,7 +675,7 @@ public static class NyxIdChatBrowserActions
         string scopeId,
         string ownerSubject,
         NyxIdChatActionRequestState request,
-        NyxIdChatActionReport report,
+        NyxIdChatActionReport? report,
         NyxIdChatOperationKey key) =>
         new()
         {
@@ -665,8 +687,8 @@ public static class NyxIdChatBrowserActions
                 OriginTurnId = request.OriginTurnId,
                 ActionRequestId = request.ActionRequestId,
                 Action = request.Action,
-                ReportedDisposition = report.Disposition,
-                ResourceHint = report.Resource?.Clone(),
+                ReportedDisposition = report?.Disposition ?? NyxIdChatActionDisposition.Unspecified,
+                ResourceHint = report?.Resource?.Clone(),
                 Params = request.Params?.Clone(),
             },
         };
@@ -685,8 +707,7 @@ public static class NyxIdChatBrowserActions
             action.ActionRequestId,
             step.ActionRequestId,
             StringComparison.Ordinal));
-        var report = request.Reports.Last(report =>
-            report.Disposition == NyxIdChatActionDisposition.Completed);
+        var report = FindAdmissionReport(state.ContinuationAdmission, request.ActionRequestId);
         step.Status = NyxIdChatStepStatus.Running;
         step.Operation.Phase = NyxIdChatOperationPhase.Requested;
         step.Operation.RequestedAt = now.Clone();
@@ -718,9 +739,10 @@ public static class NyxIdChatBrowserActions
             candidate.ActionRequestId,
             step.ActionRequestId,
             StringComparison.Ordinal));
-        var report = request?.Reports.LastOrDefault(candidate =>
-            candidate.Disposition == NyxIdChatActionDisposition.Completed);
-        return request is null || report is null
+        var report = request is null
+            ? null
+            : FindAdmissionReport(admission, request.ActionRequestId);
+        return request is null
             ? null
             : BuildPostconditionCommand(
                 state.ScopeId,
@@ -766,9 +788,10 @@ public static class NyxIdChatBrowserActions
             candidate.ActionRequestId,
             step.ActionRequestId,
             StringComparison.Ordinal));
-        var report = request?.Reports.LastOrDefault(candidate =>
-            candidate.Disposition == NyxIdChatActionDisposition.Completed);
-        return request is null || report is null
+        var report = request is null
+            ? null
+            : FindAdmissionReport(admission, request.ActionRequestId);
+        return request is null
             ? null
             : BuildPostconditionCommand(
                 state.ScopeId,
@@ -798,12 +821,22 @@ public static class NyxIdChatBrowserActions
         string.Equals(state.ActiveTurn.TurnId, request.OriginTurnId, StringComparison.Ordinal) &&
         string.Equals(state.ActiveTask.TaskId, request.TaskId, StringComparison.Ordinal);
 
+    private static NyxIdChatActionReport? FindAdmissionReport(
+        NyxIdChatContinuationAdmissionState admission,
+        string actionRequestId) =>
+        admission.ActionReports.FirstOrDefault(report =>
+            string.Equals(report.ActionRequestId, actionRequestId, StringComparison.Ordinal) &&
+            report.Disposition == NyxIdChatActionDisposition.Completed);
+
     private static bool ValidContinuationIdentity(
         NyxIdChatConversationGAgentState state,
-        NyxIdChatActionContinueCommand command) =>
+        NyxIdChatActionContinueCommand command,
+        bool isStateChangeWake) =>
         !string.IsNullOrWhiteSpace(command.ScopeId) &&
         !string.IsNullOrWhiteSpace(command.ConversationActorId) &&
-        !string.IsNullOrWhiteSpace(command.OriginTurnId) &&
+        (isStateChangeWake
+            ? string.IsNullOrWhiteSpace(command.OriginTurnId)
+            : !string.IsNullOrWhiteSpace(command.OriginTurnId)) &&
         !string.IsNullOrWhiteSpace(command.ContinuationTurnId) &&
         !string.IsNullOrWhiteSpace(command.OwnerSubject) &&
         !string.IsNullOrWhiteSpace(command.ClientRequestId) &&

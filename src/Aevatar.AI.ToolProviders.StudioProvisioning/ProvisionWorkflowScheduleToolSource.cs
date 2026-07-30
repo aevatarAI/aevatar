@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Studio.Application.Provisioning;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.AI.ToolProviders.StudioProvisioning;
 
@@ -94,10 +95,14 @@ public sealed class BindStudioMemberWorkflowToolSource : IAgentToolSource
 public sealed class ScheduleStudioMemberWorkflowToolSource : IAgentToolSource
 {
     private readonly IStudioMemberWorkflowSchedulePort? _schedulePort;
+    private readonly ILoggerFactory? _loggerFactory;
 
-    public ScheduleStudioMemberWorkflowToolSource(IStudioMemberWorkflowSchedulePort? schedulePort = null)
+    public ScheduleStudioMemberWorkflowToolSource(
+        IStudioMemberWorkflowSchedulePort? schedulePort = null,
+        ILoggerFactory? loggerFactory = null)
     {
         _schedulePort = schedulePort;
+        _loggerFactory = loggerFactory;
     }
 
     public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
@@ -106,6 +111,8 @@ public sealed class ScheduleStudioMemberWorkflowToolSource : IAgentToolSource
         return Task.FromResult<IReadOnlyList<IAgentTool>>(
             _schedulePort is null
                 ? []
-                : [new ScheduleStudioMemberWorkflowTool(_schedulePort)]);
+                : [new ScheduleStudioMemberWorkflowTool(
+                    _schedulePort,
+                    _loggerFactory?.CreateLogger<ScheduleStudioMemberWorkflowTool>())]);
     }
 }

@@ -32,22 +32,6 @@ public sealed class WorkflowServiceImplementationAdapter : IServiceImplementatio
         if (string.IsNullOrWhiteSpace(spec.WorkflowYaml))
             throw new InvalidOperationException("workflow_yaml is required.");
 
-        var parse = await _workflowDefinitionParser.ParseWorkflowYamlAsync(spec.WorkflowYaml, ct);
-        if (!parse.Succeeded)
-            throw new InvalidOperationException(parse.Error);
-
-        var resolvedWorkflowName = spec.WorkflowName?.Trim() ?? string.Empty;
-        if (string.IsNullOrWhiteSpace(resolvedWorkflowName))
-        {
-            resolvedWorkflowName = parse.WorkflowName;
-        }
-        else if (!string.Equals(resolvedWorkflowName, parse.WorkflowName, StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException("workflow_name must match workflow_yaml name.");
-        }
-
-        var authorizationDependencies = parse.AuthorizationDependencies
-            ?? throw new InvalidOperationException("workflow authorization dependencies are required.");
         var expectedExecutionMode = spec.CapabilityAdmissionPlan is null &&
                                     spec.ExpectedExecutionMode == ExternalCapabilityExecutionMode.Unspecified
             ? ExternalCapabilityExecutionMode.Interactive
@@ -71,6 +55,23 @@ public sealed class WorkflowServiceImplementationAdapter : IServiceImplementatio
                     "service_revision_prepare",
                     expectedExecutionMode),
                 ct);
+
+        var parse = await _workflowDefinitionParser.ParseWorkflowYamlAsync(spec.WorkflowYaml, ct);
+        if (!parse.Succeeded)
+            throw new InvalidOperationException(parse.Error);
+
+        var resolvedWorkflowName = spec.WorkflowName?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(resolvedWorkflowName))
+        {
+            resolvedWorkflowName = parse.WorkflowName;
+        }
+        else if (!string.Equals(resolvedWorkflowName, parse.WorkflowName, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("workflow_name must match workflow_yaml name.");
+        }
+
+        var authorizationDependencies = parse.AuthorizationDependencies
+            ?? throw new InvalidOperationException("workflow authorization dependencies are required.");
 
         return WorkflowServiceRevisionArtifactBuilder.Build(
             request.Spec,

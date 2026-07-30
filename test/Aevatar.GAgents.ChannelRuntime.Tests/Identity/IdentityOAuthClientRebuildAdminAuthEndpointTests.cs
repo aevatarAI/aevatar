@@ -115,6 +115,7 @@ public sealed class IdentityOAuthClientRebuildAdminAuthEndpointTests
             clientOptions: new AevatarOAuthClientOptions { ClientId = ConfiguredClientId },
             adminAuthorizer: authorizer,
             rebuildDispatch: dispatch,
+            projectionRebuildDispatch: new RecordingCommandDispatch<RebuildAevatarOAuthClientProjectionCommand>(),
             loggerFactory: NullLoggerFactory.Instance,
             ct: default);
     }

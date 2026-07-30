@@ -1,9 +1,11 @@
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
+using Aevatar.ContentArtifacts.Abstractions;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgents.ChatHistory;
+using Aevatar.GAgents.ContentArtifacts;
 using Aevatar.GAgents.ConnectorCatalog;
 using Aevatar.GAgents.Registry;
 using Aevatar.GAgents.RoleCatalog;
@@ -78,6 +80,7 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
             services.TryAddSingleton<
                 IStudioWorkspaceVersionRegressionRepairService,
                 StudioWorkspaceVersionRegressionRepairService>();
+            RegisterElasticsearch<ContentArtifactCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<WorkOrderCurrentStateDocument>(services, configuration);
         }
         else
@@ -101,6 +104,7 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
             RegisterInMemory<StudioMemberBindingRunCurrentStateDocument>(services);
             RegisterInMemory<StudioTeamCurrentStateDocument>(services);
             RegisterInMemory<StudioWorkspaceCurrentStateDocument>(services);
+            RegisterInMemory<ContentArtifactCurrentStateDocument>(services);
             RegisterInMemory<WorkOrderCurrentStateDocument>(services);
         }
 
@@ -179,6 +183,7 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
                && HasDocumentReaderForProvider<StudioMemberBindingRunCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<StudioTeamCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<StudioWorkspaceCurrentStateDocument>(services, providerKind)
+               && HasDocumentReaderForProvider<ContentArtifactCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<WorkOrderCurrentStateDocument>(services, providerKind);
     }
 
@@ -229,6 +234,7 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
             StudioMemberBindingRunState.Descriptor,
             StudioTeamState.Descriptor,
             StudioWorkspaceState.Descriptor,
+            ContentArtifactState.Descriptor,
             WorkOrderState.Descriptor);
     }
 

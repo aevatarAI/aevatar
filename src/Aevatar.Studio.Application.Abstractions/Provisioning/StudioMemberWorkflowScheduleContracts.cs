@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 
 namespace Aevatar.Studio.Application.Provisioning;
@@ -34,6 +36,23 @@ public sealed record StudioMemberWorkflowScheduleRequest(
     public string? ProvisioningBearerToken { get; init; }
 
     public bool Enabled { get; init; } = true;
+
+    public ScheduledDispatchScheduleMode ScheduleMode { get; init; } = ScheduledDispatchScheduleMode.RecurringCron;
+
+    public DateTimeOffset? OneShotFireAt { get; init; }
+
+    [JsonIgnore]
+    public StudioMemberWorkflowAcceptedBindingContext? AcceptedBinding { get; init; }
+}
+
+public sealed record StudioMemberWorkflowAcceptedBindingContext(
+    string TeamId,
+    string PublishedServiceId,
+    string WorkflowId,
+    string? WorkflowRevisionId)
+{
+    [JsonIgnore]
+    public ScheduledInvocationWorkflowEvidence? WorkflowEvidence { get; init; }
 }
 
 public sealed class StudioMemberWorkflowSchedulePolicy
@@ -108,6 +127,17 @@ public sealed record StudioMemberAutomationActionCommand(
     public AuthenticatedAuthorizationOwnerContext? AuthenticatedOwner { get; init; }
 }
 
+public sealed record StudioMemberAutomationRetryRevocationCommand(
+    string ScopeId,
+    string TeamId,
+    string MemberId,
+    string ScheduleId)
+{
+    public string? ProvisioningBearerToken { get; init; }
+
+    public AuthenticatedAuthorizationOwnerContext? AuthenticatedOwner { get; init; }
+}
+
 public sealed record StudioMemberAutomationView(
     string ScopeId,
     string TeamId,
@@ -170,13 +200,20 @@ public sealed class StudioMemberAutomationNotFoundException : Exception
 
 public sealed class StudioMemberAutomationPlanConflictException : Exception
 {
-    public StudioMemberAutomationPlanConflictException(string code, string message)
+    public StudioMemberAutomationPlanConflictException(
+        string code,
+        string message,
+        ScheduledAuthorizationPlanMismatchReason authorizationPlanMismatchReason =
+            ScheduledAuthorizationPlanMismatchReason.Unspecified)
         : base(message)
     {
         Code = string.IsNullOrWhiteSpace(code) ? "authorization_plan_changed" : code.Trim();
+        AuthorizationPlanMismatchReason = authorizationPlanMismatchReason;
     }
 
     public string Code { get; }
+
+    public ScheduledAuthorizationPlanMismatchReason AuthorizationPlanMismatchReason { get; }
 }
 
 public sealed class StudioMemberAutomationProjectionPendingException : Exception

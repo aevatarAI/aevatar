@@ -63,8 +63,6 @@ public static class ServiceCollectionExtensions
                 (IEventStoreMaintenance)sp.GetRequiredService<IEventStore>());
         }
 
-        services.TryAddSingleton<IEventStoreCompactionScheduler, DeferredEventStoreCompactionScheduler>();
-        services.TryAddSingleton<IActorDeactivationHook, EventStoreCompactionDeactivationHook>();
         services.TryAddSingleton<IActorDeactivationHookDispatcher, ActorDeactivationHookDispatcher>();
         services.TryAddSingleton<IEventDeduplicator, MemoryCacheDeduplicator>();
 

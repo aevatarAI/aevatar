@@ -49,18 +49,21 @@ public sealed class ListExternalWorkflowCapabilitiesTool : IAgentTool
             if (!ExternalWorkflowCapabilityToolSupport.TryResolveAccess(out var access, out var error))
                 return JsonDefaults.Error(error!);
 
-            var descriptors = await _listPort.ListAsync(
+            var discovery = await _listPort.ListAsync(
                 new ListExternalWorkflowCapabilitiesRequest(access!),
                 ct);
             var maxResults = Math.Clamp(args.Int("max_results", _options.MaxListResults), 1, _options.MaxListResults);
-            var limited = descriptors.Take(maxResults).Select(ToJsonElement).ToArray();
+            var limited = discovery.Capabilities.Take(maxResults).Select(ToJsonElement).ToArray();
 
             return JsonSerializer.Serialize(new
             {
                 scope_id = access!.ScopeId,
                 count = limited.Length,
-                total = descriptors.Count,
+                total = discovery.Capabilities.Count,
+                candidate_count = discovery.CandidateCount,
+                rejected_count = discovery.RejectedCount,
                 capabilities = limited,
+                diagnostics = discovery.Diagnostics.Select(ToJsonElement).ToArray(),
             }, JsonDefaults.SnakeCase);
         }
         catch (OperationCanceledException)

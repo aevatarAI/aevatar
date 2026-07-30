@@ -11,33 +11,47 @@ public sealed record StudioMemberAutomationHttpAuthority(
     AuthenticatedAuthorizationOwnerContext AuthenticatedOwner,
     string ProvisioningBearerToken);
 
+public sealed class StudioMemberAutomationAuthorizationBindingRequiredException : UnauthorizedAccessException
+{
+    public StudioMemberAutomationAuthorizationBindingRequiredException()
+        : base("Reconnect NyxID to authorize this automation.")
+    {
+    }
+}
+
 public static class StudioMemberAutomationHttpAuthorityResolver
 {
+    public static Task<StudioMemberAutomationHttpAuthority> ResolveAsync(
+        HttpContext http,
+        IExternalIdentityBindingQueryPort bindingQuery,
+        CancellationToken ct = default) =>
+        ResolveAsync(http, bindingQuery, null, ct);
+
     public static async Task<StudioMemberAutomationHttpAuthority> ResolveAsync(
         HttpContext http,
         IExternalIdentityBindingQueryPort bindingQuery,
+        string? fallbackSubjectExternalUserId,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(http);
         ArgumentNullException.ThrowIfNull(bindingQuery);
 
-        var subject =
-            http.User.FindFirst(ClaimTypes.NameIdentifier)?.Value ??
-            http.User.FindFirst("sub")?.Value;
-        if (string.IsNullOrWhiteSpace(subject))
+        var subject = ResolveHttpSubject(http) ?? NormalizeOptional(fallbackSubjectExternalUserId);
+        if (subject is null)
             throw new UnauthorizedAccessException("nyxid_subject_missing");
 
-        var normalizedSubject = subject.Trim();
         var binding = await bindingQuery.ResolveAsync(
             new ExternalSubjectRef
             {
                 Platform = OwnerScope.NyxIdPlatform,
                 Tenant = string.Empty,
-                ExternalUserId = normalizedSubject,
+                ExternalUserId = subject,
             },
             ct);
-        if (binding == null || string.IsNullOrWhiteSpace(binding.Value))
-            throw new UnauthorizedAccessException("nyxid_binding_missing");
+        var bindingId = NormalizeOptional(binding?.Value) ??
+            BuildFallbackBindingId(fallbackSubjectExternalUserId, subject);
+        if (bindingId is null)
+            throw new StudioMemberAutomationAuthorizationBindingRequiredException();
 
         return new StudioMemberAutomationHttpAuthority(
             new AuthenticatedAuthorizationOwnerContext(
@@ -45,13 +59,38 @@ public static class StudioMemberAutomationHttpAuthorityResolver
                 {
                     Authority = NyxIdAuthorizationAuthorities.NyxId,
                     OwnerKind = AuthorizationOwnerKind.Personal,
-                    OwnerSubject = normalizedSubject,
+                    OwnerSubject = subject,
                 },
                 OwnerScope.NyxIdPlatform,
                 string.Empty,
-                normalizedSubject,
-                binding.Value.Trim()),
-            ResolveBearerToken(http));
+                subject,
+                bindingId),
+            IsAuthDisabledFallback(bindingId, subject)
+                ? subject
+                : ResolveBearerToken(http));
+    }
+
+    private static string? ResolveHttpSubject(HttpContext http) =>
+        NormalizeOptional(http.User.FindFirst(ClaimTypes.NameIdentifier)?.Value) ??
+        NormalizeOptional(http.User.FindFirst("sub")?.Value);
+
+    private static string? BuildFallbackBindingId(
+        string? fallbackSubjectExternalUserId,
+        string subject) =>
+        string.Equals(
+            NormalizeOptional(fallbackSubjectExternalUserId),
+            subject,
+            StringComparison.Ordinal)
+            ? $"auth-disabled:{subject}"
+            : null;
+
+    private static bool IsAuthDisabledFallback(string bindingId, string subject) =>
+        string.Equals(bindingId, $"auth-disabled:{subject}", StringComparison.Ordinal);
+
+    private static string? NormalizeOptional(string? value)
+    {
+        var normalized = value?.Trim();
+        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
     }
 
     private static string ResolveBearerToken(HttpContext http)

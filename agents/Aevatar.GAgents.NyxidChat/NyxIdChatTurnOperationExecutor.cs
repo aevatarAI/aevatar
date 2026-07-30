@@ -101,7 +101,9 @@ public sealed class NyxIdChatTurnOperationExecutor
     {
         var input = command.ActionPostcondition;
         if (input is null ||
-            input.ReportedDisposition != NyxIdChatActionDisposition.Completed ||
+            input.ReportedDisposition is not
+                (NyxIdChatActionDisposition.Completed or
+                 NyxIdChatActionDisposition.Unspecified) ||
             string.IsNullOrWhiteSpace(input.ScopeId) ||
             string.IsNullOrWhiteSpace(input.OwnerSubject) ||
             string.IsNullOrWhiteSpace(input.OriginTurnId) ||
@@ -125,7 +127,9 @@ public sealed class NyxIdChatTurnOperationExecutor
                 result.ActionRequestId,
                 input.ActionRequestId,
                 StringComparison.Ordinal) ||
-            result.Disposition != input.ReportedDisposition)
+            (result.Disposition != input.ReportedDisposition &&
+             (input.ReportedDisposition != NyxIdChatActionDisposition.Unspecified ||
+              result.Disposition != NyxIdChatActionDisposition.Completed)))
         {
             return Postcondition(
                 command.Key,

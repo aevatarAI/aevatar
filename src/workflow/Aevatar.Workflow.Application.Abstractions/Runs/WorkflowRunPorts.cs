@@ -5,7 +5,8 @@ namespace Aevatar.Workflow.Application.Abstractions.Runs;
 public sealed record WorkflowYamlParseResult(
     string WorkflowName,
     string Error,
-    WorkflowAuthorizationDependencies? AuthorizationDependencies = null)
+    WorkflowAuthorizationDependencies? AuthorizationDependencies = null,
+    ExternalCapabilityReadiness? ExternalCapabilityReadiness = null)
 {
     public bool Succeeded => string.IsNullOrWhiteSpace(Error);
 
@@ -14,8 +15,44 @@ public sealed record WorkflowYamlParseResult(
         WorkflowAuthorizationDependencies? authorizationDependencies = null) =>
         new(workflowName ?? string.Empty, string.Empty, authorizationDependencies?.Clone());
 
-    public static WorkflowYamlParseResult Invalid(string error) =>
-        new(string.Empty, error ?? "Workflow YAML is invalid.", null);
+    public static WorkflowYamlParseResult Invalid(
+        string error,
+        ExternalCapabilityReadiness? externalCapabilityReadiness = null) =>
+        new(
+            string.Empty,
+            error ?? "Workflow YAML is invalid.",
+            null,
+            externalCapabilityReadiness?.Clone());
+}
+
+public sealed record WorkflowInlineYamlBundleParseResult(
+    string EntryWorkflowName,
+    string EntryWorkflowYaml,
+    IReadOnlyDictionary<string, string> WorkflowYamlsByName,
+    string Error,
+    ExternalCapabilityReadiness? ExternalCapabilityReadiness = null)
+{
+    public bool Succeeded => string.IsNullOrWhiteSpace(Error);
+
+    public static WorkflowInlineYamlBundleParseResult Success(
+        string entryWorkflowName,
+        string entryWorkflowYaml,
+        IReadOnlyDictionary<string, string> workflowYamlsByName) =>
+        new(
+            entryWorkflowName ?? string.Empty,
+            entryWorkflowYaml ?? string.Empty,
+            workflowYamlsByName ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+            string.Empty);
+
+    public static WorkflowInlineYamlBundleParseResult Invalid(
+        string error,
+        ExternalCapabilityReadiness? externalCapabilityReadiness = null) =>
+        new(
+            string.Empty,
+            string.Empty,
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+            string.IsNullOrWhiteSpace(error) ? "Workflow YAML is invalid." : error,
+            externalCapabilityReadiness?.Clone());
 }
 
 public enum WorkflowActorKind
@@ -261,5 +298,9 @@ public interface IWorkflowDefinitionParser
     /// </summary>
     Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(
         string workflowYaml,
+        CancellationToken ct = default);
+
+    Task<WorkflowInlineYamlBundleParseResult> ParseInlineWorkflowBundleAsync(
+        IReadOnlyList<WorkflowChatInlineYamlDocument> inlineWorkflowDocuments,
         CancellationToken ct = default);
 }

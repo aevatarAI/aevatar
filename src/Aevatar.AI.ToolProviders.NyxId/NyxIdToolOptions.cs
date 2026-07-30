@@ -1,11 +1,25 @@
 namespace Aevatar.AI.ToolProviders.NyxId;
 
+public enum NyxIdManagedWorkflowAdmissionMode
+{
+    Shadow = 0,
+    Enforce = 1,
+}
+
 /// <summary>NyxID tool provider configuration.</summary>
 public sealed class NyxIdToolOptions
 {
     public const long DefaultProxyFileArtifactMaxBytes = 25L * 1024 * 1024;
     public const long HardProxyFileArtifactMaxBytes = 100L * 1024 * 1024;
     public const string DefaultSandboxServiceSlug = "chrono-sandbox";
+
+    /// <summary>
+    /// Transport ceiling for a single NyxID HTTP call. Must stay above the longest per-call
+    /// deadline any caller imposes, otherwise the transport aborts first and the caller's own
+    /// timeout never gets to report the honest failure. The longest managed request deadline
+    /// today is 300 seconds.
+    /// </summary>
+    public const int DefaultMaxRequestDurationSeconds = 330;
 
     /// <summary>
     /// Default NyxID REST API base URL. Deployments may configure a dedicated API/resource-server
@@ -49,6 +63,9 @@ public sealed class NyxIdToolOptions
     /// </summary>
     public bool BypassSshExecApproval { get; set; }
 
+    public NyxIdManagedWorkflowAdmissionMode ManagedWorkflowAdmissionMode { get; set; } =
+        NyxIdManagedWorkflowAdmissionMode.Shadow;
+
     /// <summary>
     /// Maximum bytes accepted by nyxid_proxy response_mode=file_artifact.
     /// </summary>
@@ -58,4 +75,18 @@ public sealed class NyxIdToolOptions
         ProxyFileArtifactMaxBytes <= 0
             ? DefaultProxyFileArtifactMaxBytes
             : Math.Min(ProxyFileArtifactMaxBytes, HardProxyFileArtifactMaxBytes);
+
+    /// <summary>
+    /// Transport ceiling for a single NyxID HTTP call, in seconds. Defaults to
+    /// <see cref="DefaultMaxRequestDurationSeconds"/>. This is a backstop, not a per-call
+    /// deadline: callers that need to fail sooner impose their own linked
+    /// <see cref="CancellationTokenSource"/>.
+    /// </summary>
+    public int MaxRequestDurationSeconds { get; set; } = DefaultMaxRequestDurationSeconds;
+
+    public TimeSpan EffectiveMaxRequestDuration =>
+        TimeSpan.FromSeconds(
+            MaxRequestDurationSeconds <= 0
+                ? DefaultMaxRequestDurationSeconds
+                : MaxRequestDurationSeconds);
 }

@@ -64,7 +64,7 @@ if AGENT_PROFILE_GOVERNANCE_ROOT="${fixture}" bash "${GUARD}" >/dev/null 2>&1; t
 fi
 
 copy_fixture
-touch "${fixture}/src/Aevatar.Mainnet.Host.Api/Profiles/nyxid-chat/nyxid-chat-shadow-v1.profile.pb.json"
+touch "${fixture}/src/Aevatar.Mainnet.Host.Api/Profiles/nyxid-chat/nyxid-chat-shadow-v2.profile.pb.json"
 if AGENT_PROFILE_GOVERNANCE_ROOT="${fixture}" bash "${GUARD}" >/dev/null 2>&1; then
   echo "Guard accepted an incomplete immutable profile pair."
   exit 1

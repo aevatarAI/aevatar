@@ -12,7 +12,7 @@ public sealed class NyxIdChatBrowserCredentialTests
         ?? throw new InvalidOperationException("ExtractNyxIdAccessToken not found.");
 
     [Fact]
-    public void ExtractAccessToken_ShouldPreferDelegationAndNeverUseIdentityAssertion()
+    public void ExtractAccessToken_ShouldPreferForwardedBearerAndNeverUseIdentityAssertion()
     {
         var delegated = new DefaultHttpContext();
         delegated.Request.Headers["X-NyxID-Delegation-Token"] = "delegation-token";
@@ -21,16 +21,16 @@ public sealed class NyxIdChatBrowserCredentialTests
         var both = new DefaultHttpContext();
         both.Request.Headers.Authorization = "Bearer forwarded-access-token";
         both.Request.Headers["X-NyxID-Delegation-Token"] = "delegation-token";
-        Extract(both).Should().Be("delegation-token");
+        Extract(both).Should().Be("forwarded-access-token");
 
         var identityOnly = new DefaultHttpContext();
         identityOnly.Request.Headers["X-NyxID-Identity-Token"] = "identity-assertion";
         Extract(identityOnly).Should().BeNull();
 
-        var malformedDelegation = new DefaultHttpContext();
-        malformedDelegation.Request.Headers.Authorization = "Bearer fallback-token";
-        malformedDelegation.Request.Headers["X-NyxID-Delegation-Token"] = "token with spaces";
-        Extract(malformedDelegation).Should().BeNull();
+        var malformedBearer = new DefaultHttpContext();
+        malformedBearer.Request.Headers.Authorization = "Basic invalid";
+        malformedBearer.Request.Headers["X-NyxID-Delegation-Token"] = "delegation-token";
+        Extract(malformedBearer).Should().BeNull();
     }
 
     private static string? Extract(HttpContext http) =>

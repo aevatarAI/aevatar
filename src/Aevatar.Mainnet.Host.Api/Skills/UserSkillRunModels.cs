@@ -52,8 +52,7 @@ internal sealed record SkillScheduleOutcome(
 }
 
 // Invokes a visible ornn skill once as an observable workflow run, or provisions a recurring schedule for it.
-// The one-shot caller credential and the scheduled access token + scope + owner subject are INPUTS resolved
-// from the caller at the endpoint, not read from HttpContext here.
+// Caller credentials are INPUTS resolved from the caller at the endpoint, not read from HttpContext here.
 internal interface IUserSkillRunService
 {
     Task<SkillRunOutcome> InvokeOnceAsync(
@@ -65,9 +64,8 @@ internal interface IUserSkillRunService
 
     Task<SkillScheduleOutcome> ScheduleAsync(
         string skillGuid,
-        string accessToken,
+        WorkflowCallerCredential callerCredential,
         string scopeId,
-        string? ownerSubjectExternalUserId,
         string prompt,
         string cronExpression,
         string timezone,

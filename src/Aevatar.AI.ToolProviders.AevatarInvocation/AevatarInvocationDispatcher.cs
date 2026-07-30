@@ -28,6 +28,7 @@ public sealed class AevatarInvocationDispatcher
     private const string DirectGAgentPublisherId = "aevatar.tools.invoke_gagent";
     private const string DeletedGAgentActorNameAlias = "actor_name";
     private const string WorkflowBackgroundDeliveryBindingDegradedCode = "binding_degraded";
+    private const string DefaultMemberEndpointId = "chat";
     private const string ChannelWorkflowDeliveryUnavailableMessage =
         "This channel bot is not provisioned for workflow result delivery, so the workflow was not started. Open /channels, select this registration, and choose Repair workflow replies. This repairs Aevatar's workflow result delivery binding; provider webhook settings usually do not need changes. You can also start the workflow from a surface that can observe its result.";
     private const string WorkflowBackgroundDeliveryReservationFailedMessage =
@@ -212,8 +213,8 @@ public sealed class AevatarInvocationDispatcher
 
         var request = parsed.Value!;
         var payload = request.Payload;
+        var endpointId = ResolveMemberEndpointId(request.EndpointId);
         var error = ProtoToolArguments.Require(request.MemberId, "member_id", "member_id is required.") ??
-                    ProtoToolArguments.Require(request.EndpointId, "endpoint_id", "endpoint_id is required.") ??
                     ProtoToolArguments.RequirePayload(payload, "payload");
         if (error != null)
             return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(error), error);
@@ -232,7 +233,7 @@ public sealed class AevatarInvocationDispatcher
                 memberResolution.ScopeId,
                 memberResolution.MemberId,
                 memberResolution.PublishedServiceId);
-            var invocationRequest = BuildServiceInvocationRequest(resolution, payload, request.EndpointId);
+            var invocationRequest = BuildServiceInvocationRequest(resolution, payload, endpointId);
             var target = await _serviceInvocationResolutionPort.ResolveAsync(invocationRequest, ct);
             await _admissionAuthorizer.AuthorizeAsync(
                 target.Service.ServiceKey,
@@ -249,7 +250,7 @@ public sealed class AevatarInvocationDispatcher
                         chatRunRequest,
                         resolution,
                         payload,
-                        request.EndpointId,
+                        endpointId,
                         wait,
                         ct),
 
@@ -257,7 +258,7 @@ public sealed class AevatarInvocationDispatcher
                     await InvokeWorkflowServiceToAcceptanceAsync(
                         chatRunRequest,
                         resolution,
-                        request.EndpointId,
+                        endpointId,
                         invocationRequest,
                         target,
                         wait,
@@ -1966,6 +1967,9 @@ public sealed class AevatarInvocationDispatcher
         wait == InvocationWaitMode.Unspecified
             ? InvocationWaitMode.Stream
             : wait;
+
+    private static string ResolveMemberEndpointId(string endpointId) =>
+        Normalize(endpointId) ?? DefaultMemberEndpointId;
 
     private static string ResolveCommandId() =>
         Normalize(AgentToolRequestContext.CallId)

@@ -8,6 +8,8 @@ owner: eanzhao
 
 This document is the canonical Aevatar contract for NyxID Assistant Chat v1. It covers conversation and turn identity, actor-owned task execution, live AGUI observation, stop and steering controls, browser-action handoff, conditional current-state reads, recovery, and the secret boundary.
 
+The canonical client surface is Mainnet `POST /api/chat` plus `/api/chat/conversations/**`. Assistant commands are selected only by one of the seven explicit `type` discriminators: `text`, `action.continue`, `approval.resolve`, `task.stop`, `task.steer`, `step.retry`, and `step.skip`. The public routes never accept `scopeId`; they derive one unambiguous scope from the authenticated principal and fail closed otherwise.
+
 The authoritative runtime is one durable conversation-controller actor plus a run-scoped turn actor that executes one authorized operation at a time. The controller's committed protobuf state is the task authority. AGUI and the current-state query are two consumers of the same committed Projection Pipeline; neither endpoint nor projector reconstructs task truth.
 
 ## Architecture and ownership
@@ -41,12 +43,22 @@ The conversation controller owns active/latest turns, task and step status, oper
 
 The Host authenticates, validates identities, dispatches commands, and maps typed results. It does not decide task transitions. Projection consumes committed controller facts only. Query reads `NyxIdChatConversationCurrentStateDocument` only; it does not activate an actor, read the event store, attach or prime a projection, replay events, or create a turn.
 
+Conversation creation has three deliberately separate authorities:
+
+| Concern | Authority | Query surface |
+|---|---|---|
+| Admission and transcript index | Existing registry/history projections | `GET /api/chat/conversations` |
+| Task, turn, and control state | `NyxIdChatConversationGAgent` | `GET /api/chat/conversations/{conversationId}/state` |
+| Durable transcript | `ChatConversationGAgent` | `GET /api/chat/conversations/{conversationId}` |
+
+The HTTP endpoint owns only authentication/protocol adaptation, serialized SSE writes, and the wall-clock connection deadline. No one surface implies synchronous visibility in the other two.
+
 ## Identity model
 
 | Identity | Owner and lifetime | Meaning |
 |---|---|---|
 | `scopeId` | Authenticated resource scope | Ownership/admission boundary for the conversation. |
-| `actorId` | Server-created, conversation lifetime | Canonical conversation-controller identity and public thread identity. Reuse it across turns. |
+| `conversationId` / actor `actorId` | Server-created, conversation lifetime | One exact identity for the existing conversation-controller actor and public thread. There is no mapping table or second ID. |
 | `turnId` | Server-created, one normal submission or continuation | One observed run. It is not the conversation actor ID. |
 | `taskId` | Conversation actor, one task plan | Actor-owned task identity. It is distinct from `turnId`. |
 | `stepId` | Conversation actor, one task step | Selects a typed step inside `taskId`. |
@@ -71,24 +83,37 @@ actorId + turnId + taskId + stepId + operationId + operationGeneration
 
 A mismatch in any component is stale or foreign evidence and cannot advance state.
 
-## Start and observe a turn
+## Start and observe a conversation
 
 ```http
-POST /api/scopes/{scopeId}/nyxid-chat/conversations/{actorId}:stream
+POST /api/chat
 Authorization: Bearer <nyxid-access-token>
 Content-Type: application/json
 Idempotency-Key: client-alpha
 ```
 
+The first text request omits `conversationId`. Mainnet derives a stable scope/client-bound conversation actor, sends one typed create command containing the first turn, and streams the authoritative conversation and turn identities. The client must not call a separate create endpoint or synthesize context:
+
 ```json
 {
   "type": "text",
-  "prompt": "Summarize the connected repository",
-  "clientRequestId": "client-alpha"
+  "clientRequestId": "client-alpha",
+  "prompt": "Summarize the connected repository"
 }
 ```
 
-`clientRequestId` may be supplied in the body or `Idempotency-Key`; the body wins. The server derives a stable actor-scoped `turnId` when a key is present and creates a fresh `turnId` otherwise. An exact retry reuses committed admission/result semantics; the same identity with different content fails closed. The deprecated `sessionId` field is ignored.
+The server starts the SSE stream with authoritative `conversationId/actorId` and `turnId` context. Subsequent text requests include that exact `conversationId`; they reuse the controller and create a new server-authored turn. `clientRequestId` may be supplied in the body or `Idempotency-Key`; the body wins. An exact retry reuses committed admission/result semantics, while identity reuse with different content fails closed. The deprecated `sessionId` field is ignored.
+
+```json
+{
+  "type": "text",
+  "conversationId": "conversation-alpha",
+  "clientRequestId": "client-beta",
+  "prompt": "Only include July"
+}
+```
+
+Registration, transcript, and current-state visibility are eventually consistent. Recover through `GET /api/chat/conversations`, `GET /api/chat/conversations/{conversationId}`, and `GET /api/chat/conversations/{conversationId}/state`; Workflow `create-recovery` is not a NyxID Assistant recovery contract.
 
 An ordinary text submission is not an implicit steering command. If the controller already has active work, it commits and projects a typed failure with code `ACTIVE_TURN_REQUIRES_STEERING`; it does not queue a hidden turn or fork the active plan.
 
@@ -122,7 +147,7 @@ Text, reasoning, tool-start, task, control, and terminal frames share the actor-
 - task and turn `failed`: `RUN_ERROR` with a stable code and safe message;
 - inconsistent committed task/turn terminal states: fail closed with `NYXID_CHAT_TERMINAL_STATE_CONFLICT`.
 
-Heartbeat stops before terminal output. A bounded terminal deadline emits a safe `RUN_ERROR` instead of leaving a keepalive-only connection open indefinitely.
+Heartbeat and text/action/approval frames share one serialized writer gate. A real terminal atomically closes that gate. If the configured wall-clock deadline wins, the endpoint closes the same gate, emits exactly one safe `RUN_ERROR` with code `STREAM_TIMEOUT`, and only then cancels the inner interaction. It returns without waiting for an interaction that ignores cancellation; any later content or terminal callback is discarded. A provider or interaction that completes by throwing its own `TimeoutException` is instead an inner execution failure and maps to the safe `STREAM_FAILURE` terminal. Request cancellation closes the gate without attempting a synthetic terminal on a disconnected client.
 
 ## Actor-owned state machine
 
@@ -168,19 +193,21 @@ The actor computes `retry`, `skip`, and `stop` availability. Retry requires rebu
 
 ## Stop, steering, retry, and skip
 
-All control endpoints require scope/conversation admission. A successful endpoint response is `202 Accepted` and contains `requestId`, `commandId`, `correlationId`, and the canonical `stateUrl`; acceptance promises dispatch only. Observe committed outcome through AGUI or the state query.
+All controls use authenticated JSON requests to `POST /api/chat`. A successful response is `202 Accepted` and contains `requestId`, `commandId`, `correlationId`, and the canonical `stateUrl`; acceptance promises dispatch only. Observe committed outcome through AGUI or the state query.
 
-| Intent | Route | Required request facts |
+| Intent | `type` | Required request facts |
 |---|---|---|
-| Stop active work | `POST /api/scopes/{scopeId}/nyxid-chat/conversations/{actorId}:stop` | `turnId`, `stopRequestId`, `clientRequestId`, `expectedStateVersion` |
-| Steer active work | `POST /api/scopes/{scopeId}/nyxid-chat/conversations/{actorId}:steer` | `turnId`, `steeringId`, `clientRequestId`, `instruction`, optional `inputParts`, `expectedStateVersion` |
-| Retry one step | `POST /api/scopes/{scopeId}/nyxid-chat/conversations/{actorId}/turns/{turnId}/steps/{stepId}:retry` | `taskId`, `retryRequestId`, `clientRequestId`, `expectedOperationGeneration`, `expectedStateVersion` |
-| Skip one step | `POST /api/scopes/{scopeId}/nyxid-chat/conversations/{actorId}/turns/{turnId}/steps/{stepId}:skip` | `taskId`, `skipRequestId`, `clientRequestId`, `expectedOperationGeneration`, `expectedStateVersion` |
+| Stop active work | `task.stop` | `conversationId`, `turnId`, `stopRequestId`, `clientRequestId`, `expectedStateVersion` |
+| Steer active work | `task.steer` | `conversationId`, `turnId`, `steeringId`, `clientRequestId`, `instruction`, optional `inputParts`, `expectedStateVersion` |
+| Retry one step | `step.retry` | `conversationId`, `turnId`, `taskId`, `stepId`, `retryRequestId`, `clientRequestId`, `expectedOperationGeneration`, `expectedStateVersion` |
+| Skip one step | `step.skip` | `conversationId`, `turnId`, `taskId`, `stepId`, `skipRequestId`, `clientRequestId`, `expectedOperationGeneration`, `expectedStateVersion` |
 
 Example stop request:
 
 ```json
 {
+  "type": "task.stop",
+  "conversationId": "conversation-alpha",
   "turnId": "turn-alpha",
   "stopRequestId": "stop-alpha",
   "clientRequestId": "client-stop-alpha",
@@ -192,18 +219,18 @@ The controller commits a stop or steering fence before any successor decision. O
 
 Steering is serialized by the actor. If an operation is physically in flight, the controller may commit `accepted_for_later`; the server starts the new `continuationTurnId` only after a safe checkpoint. Completed steps and prior effect evidence are preserved and never re-executed.
 
-Retry and skip validate path `turnId`/`stepId`, body `taskId`, expected generation, expected actor version, and current actor-computed availability. Replaying the same request and content is idempotent. Reusing an identity with different content fails closed.
+Retry and skip validate the body `conversationId`, `turnId`, `taskId`, `stepId`, expected generation, expected actor version, and current actor-computed availability. Replaying the same request and content is idempotent. Reusing an identity with different content fails closed.
 
 ## Tool approval versus NyxID browser actions
 
 These are separate products and identities:
 
-- `POST .../{actorId}:approve` resolves a real `PendingToolApprovalState.requestId` for an Aevatar tool decision;
+- `POST /api/chat` with `type=approval.resolve` resolves a real `PendingToolApprovalState.requestId` for an Aevatar tool decision;
 - `action.continue` reports a NyxID browser journey and starts a new continuation turn;
-- an authorization/browser-action blocked turn cannot be continued via `:approve`;
+- an authorization/browser-action blocked turn cannot be continued via `approval.resolve`;
 - neither route reuses the old turn ID.
 
-`:approve` accepts the actor-owned approval `requestId`, `approved`, and optional safe `reason`. Unknown or stale IDs return a typed error and do not modify another pending approval.
+`approval.resolve` includes `conversationId`, `clientRequestId`, the actor-owned approval `requestId`, required explicit boolean `approved`, and an optional safe `reason`. Omitting `approved` returns `400 APPROVAL_DECISION_REQUIRED`. Unknown or stale IDs return a typed error and do not modify another pending approval. The response uses the existing AGUI stream/accepted interaction semantics rather than a task-control `202` receipt.
 
 ## NyxID browser-action handoff: schema v4
 
@@ -213,7 +240,7 @@ Aevatar owns action intent, task correlation, safe parameter references, and the
 
 Aevatar snapshots `GET /api/v1/assistant/actions` at startup and accepts only schema version `4` with registry revision `nyxid-assistant-actions.v4`. The registry's `risk` and `remember_eligible` values are advisory inputs to Aevatar presentation/planning. The caller cannot submit or lower them, and NyxID recomputes and enforces authorization at execution time.
 
-This startup dependency is active only when `Aevatar:NyxId:AssistantActions:Enabled=true`. The default is `false`: Aevatar does not call the registry endpoint and injects an immutable registry with no executable actions, so browser-action requests fail closed with `NYXID_ACTION_UNSUPPORTED` without preventing unrelated Host capabilities from starting. When explicitly enabled, registry fetch and schema/revision validation remain strict startup requirements.
+This startup dependency is active only when `Aevatar:NyxId:AssistantActions:Enabled=true`. The reusable NyxIdChat composition default is `false`: a host that does not opt in does not call the registry endpoint and injects an immutable registry with no executable actions, so browser-action requests fail closed with `NYXID_ACTION_UNSUPPORTED` without preventing unrelated capabilities from starting. Mainnet explicitly enables assistant actions and therefore fails startup unless the registry fetch and schema/revision validation succeed.
 
 The typed registry recognizes closed action schemas, but executable v1 handoff is narrower: an action must also have an Aevatar producer, wire mapper, and typed postcondition reader. In this version, `service.connect` is the executable browser-action path. Catalog and custom connection are distinct variants; a boolean such as `custom: true` never changes the meaning of one shared field set.
 
@@ -251,11 +278,12 @@ Before the action frame is observable, the controller atomically commits the act
 
 ### Continuation input and dispositions
 
-The existing stream route accepts a discriminated authenticated body:
+The canonical `POST /api/chat` route accepts this discriminated authenticated body:
 
 ```json
 {
   "type": "action.continue",
+  "conversationId": "conversation-alpha",
   "clientRequestId": "client-action-alpha",
   "originTurnId": "turn-alpha",
   "actions": [
@@ -285,12 +313,29 @@ Safe resource variants are `userService`, `key`, `node`, `serviceAccount`, `deve
 
 `action.continue` is a wake-up signal, not mutation proof and not an old-run resume. The server creates a new `continuationTurnId` from the conversation and authenticated client request identity. A `completed` report starts the action-specific typed read-model postcondition. Only an exact, current match can change the step to `done / confirmed`. Missing, stale, unavailable, or mismatched evidence remains blocked/unverified; it never guesses success. Non-completed dispositions become typed terminal action outcomes without a postcondition success.
 
+The continuation is archived as a separate transcript turn, but its user-side transcript input is a fixed disposition-only summary such as `NyxID action update: completed.` It never copies action resource IDs, request payloads, credentials, tool arguments, or raw results into chat history.
+
 Multiple reports are reconciled independently; a batch is not a transaction. Duplicate exact reports are idempotent, while conflicting or cross-scope/conversation/origin reports fail closed.
+
+An out-of-band change can wake the conversation without claiming that any action completed:
+
+```json
+{
+  "type": "action.continue",
+  "conversationId": "conversation-alpha",
+  "clientRequestId": "client-wake-alpha",
+  "actions": []
+}
+```
+
+This form intentionally omits `originTurnId`. It starts a distinct continuation turn and rechecks every actor-owned pending action through its existing typed postcondition. It creates no synthetic disposition, completion report, or resource hint. Only authoritative read-model evidence can confirm a step. Its transcript input is the fixed safe text `NyxID state changed; recheck pending actions.`
+
+If the actor-owned pending set is already empty, the wake commits a zero-step succeeded continuation and immediately emits its task snapshot and terminal frames; it never waits on keepalive alone.
 
 ## Conditional current-state query
 
 ```http
-GET /api/scopes/{scopeId}/nyxid-chat/conversations/{actorId}/state
+GET /api/chat/conversations/{conversationId}/state
     ?afterStateVersion={version}&turnId={turnId}
 ```
 
@@ -327,6 +372,33 @@ The snapshot contains query-shaped safe data: active/latest/recent turns, ordere
 
 The read model is eventually consistent and says so through its actor-derived `stateVersion`. Writes are monotonic overwrite: newer replaces older, byte-equivalent equal-version duplicates are idempotent, equal-version conflicts fail, and older versions cannot overwrite newer state. Query-time priming and replay are forbidden.
 
+## Conversation resources
+
+All resources use the authenticated scope and the same public `conversationId`; none accepts `scopeId` in the path, query, or body.
+
+| Route | Behavior |
+|---|---|
+| `GET /api/chat/conversations?pageSize={n}&cursor={cursor}` | Lists the caller's NyxID Assistant transcript index. `pageSize` defaults to `50`; `cursor` is opaque. The response contains `conversations` and an optional `nextCursor`. |
+| `GET /api/chat/conversations/{conversationId}` | Returns the durable transcript as `messages` plus its `stateVersion`. |
+| `GET /api/chat/conversations/{conversationId}/state` | Returns the conditional current-state result documented above. |
+| `DELETE /api/chat/conversations/{conversationId}` | Submits the existing authoritative conversation retirement/deletion commands. |
+
+Delete returns `202 Accepted` only after dispatch was accepted. Its `Location` header and response `stateUrl` are `/api/chat/conversations/{conversationId}/state`; they do not claim that controller registration and transcript projection have both disappeared. A missing conversation returns `404`, cross-scope access returns `403`, and unavailable admission returns `503`.
+
+Transcript and index materialization are eventually consistent. A transient `404` immediately after first-turn admission can mean projection lag; clients retry the same public resource and must not reconstruct history from actor events or create a second transcript store.
+
+## Public protocol, idempotency, and errors
+
+NyxID Assistant ingress is `application/json` (including `+json`) with one recognized `type`. JSON without `type` and `multipart/form-data` remain Workflow Chat inputs on Mainnet. A malformed/non-object body, unsupported media type, malformed discriminator, or unknown explicit discriminator returns `400 INVALID_CHAT_INPUT` and never falls through to Workflow. Assistant DTOs reject unknown fields, including caller-supplied `scopeId`.
+
+The caller must authenticate with exactly one non-conflicting `scope_id` or `workflow.scope_id` claim. Missing or ambiguous scope returns `401`; an owned-resource mismatch returns `403`; absent conversations/read models return `404`; unavailable admission returns `503`. Stream setup and execution failures are emitted as safe AGUI `RUN_ERROR` terminals when streaming has begun.
+
+`clientRequestId` is the transport idempotency identity. When both the body and `Idempotency-Key` header provide one, the body wins. An exact retry preserves the existing admission/result, while reuse with different content fails closed. Controls and delete return honest `202` receipts; committed state and projection visibility are observed later through AGUI or the public state resource.
+
+## Scoped-route compatibility
+
+`/api/scopes/{scopeId}/nyxid-chat/**` remains a compatibility adapter for existing callers. It is deprecated as a client contract and must reuse the same application ports and actor authority; it must not evolve separate DTO, state, continuation, control, or recovery behavior. New clients use only `POST /api/chat` and `/api/chat/conversations/**`. Standalone Workflow Host `POST /api/chat` and `GET /api/ws/chat` remain Workflow-only.
+
 ## Restart, cancellation, and uncertainty
 
 Activation never executes provider/tool work inline. It may publish a typed self recovery signal containing the complete operation key, expected committed version, and closed recovery kind. The normal actor handler revalidates current state before acting; a stale key or version is a no-op.
@@ -361,21 +433,34 @@ Action names such as `service_account.rotate_secret` describe a NyxID-owned jour
 
 ## Conversation transcript
 
-All turns under one `actorId` share a conversation transcript, including after passivation/reactivation. Transcript/history remains a separate `ChatConversationGAgent` concern and is not the task current-state read model. A blocked or stopped turn is archived with its typed terminal and safe summary. A new `clientRequestId` starts a new turn over the same conversation; reconnect uses the current-state endpoint instead of replaying actor events inside the query path.
+All turns under one public `conversationId` (the controller `actorId`) share a conversation transcript, including after passivation/reactivation. Transcript/history remains a separate `ChatConversationGAgent` concern and is not the task current-state read model. Accepted registration initializes this authority even with zero turns. Completed, failed, stopped, and blocked terminal turns are delivered through the existing chat-history delivery actor at least once; stable delivery identities make initialization, reservation, and terminal replay idempotent and prevent duplicate transcript turns. Once a reservation is committed, any malformed or conflicting reuse fails without replacing that authoritative delivery state.
+
+For a text turn whose `prompt` is empty and whose content is supplied only by
+typed `inputParts`, transcript `userText` is the fixed safe placeholder
+`Shared input content.` Raw part text, bytes, URI, and name are not copied into
+history. The idempotency fingerprint still includes an irreversible digest of
+the complete typed parts, so the same request identity cannot replay different
+input as if it were an exact retry.
+
+A blocked or stopped turn is archived with its typed terminal and safe summary. A new `clientRequestId` starts a new turn over the same conversation; reconnect uses the current-state endpoint instead of replaying actor events inside the query path.
+
+Historical `nyxid.chat.legacy` actors are not controller actors. Their existing chat-history documents remain readable through compatibility chat-history endpoints, but the public facade does not reinterpret `serviceKind`, actor-ID text, or history rows as a migration. Presenting a legacy actor ID to the public stream may therefore return `ACTOR_NOT_FOUND`. Legacy conversations remain read-only until an explicit migration contract creates a controller identity and records a real mapping.
 
 ## Caller checklist
 
 Callers must:
 
-1. reuse `actorId` only as conversation identity;
+1. reuse the public `conversationId` only as the existing controller actor identity;
 2. treat each `turnId` as one server-created run;
 3. send `clientRequestId` only for transport idempotency;
-4. use `:steer` rather than a normal text turn while work is active;
+4. use `type=task.steer` rather than a normal text turn while work is active;
 5. preserve the exact task/step/generation/version when invoking retry or skip;
 6. preserve approval `requestId` separately from browser `actionRequestId`;
-7. send schema v4 action reports with `actionRequestId`, `originTurnId`, `disposition`, and typed resource refs;
-8. treat browser `completed` as a signal pending typed postcondition proof;
-9. poll with `stateVersion` and obey `reload_required`;
-10. never send a secret, OAuth/device/user code, raw credential, or secret-bearing URL in action params or reports.
+7. send schema v4 action reports with `actionRequestId`, `originTurnId`, `disposition`, and typed resource refs, or send `actions=[]` as a signal-only wake-up;
+8. treat browser `completed` and empty wake-up as signals pending typed postcondition proof;
+9. query `/api/chat/conversations/{conversationId}/state` with `stateVersion` and obey `reload_required`;
+10. use `/api/chat/conversations`, not Workflow `create-recovery`, to confirm creation;
+11. tolerate eventual transcript/current-state materialization after admission;
+12. never send `scopeId`, a secret, OAuth/device/user code, raw credential, or secret-bearing URL in action params or reports.
 
 Earlier schema v3 drafts that use action `id`, inner `payload`, only `completed/declined`, or a device user-code action are obsolete and must not be used to implement or test this contract.

@@ -26,17 +26,18 @@ public static class WorkflowServiceRevisionArtifactBuilder
             throw new InvalidOperationException("workflow authorization dependencies are required.");
         }
 
+        var admittedCapabilities =
+            WorkflowCapabilityAdmissionPlanIntegrity.DistinctCapabilities(capabilityAdmissionPlan);
         var authorizationEvidence = new WorkflowRevisionAuthorizationEvidence
         {
             OwnerLlmRouteRequired = authorizationDependencies.OwnerLlmRouteRequired,
-            ServiceGrantRequirement = capabilityAdmissionPlan.ExternalCapabilities.Any(static capability =>
+            ServiceGrantRequirement = admittedCapabilities.Any(static capability =>
                 capability.CapabilityCase ==
                 ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService)
                 ? AuthorizationGrantRequirement.Required
                 : AuthorizationGrantRequirement.NotRequired,
         };
-        authorizationEvidence.ExternalCapabilities.Add(
-            capabilityAdmissionPlan.ExternalCapabilities.Select(static capability => capability.Clone()));
+        authorizationEvidence.ExternalCapabilities.Add(admittedCapabilities);
 
         return new PreparedServiceRevisionArtifact
         {

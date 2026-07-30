@@ -6,8 +6,8 @@ metadata:
   tool-list:
     - nyxid_service_inventory
     - nyxid_catalog
-    - nyxid_service_handoff
-version: "1.2"
+    - nyxid_require_service
+version: "1.3"
 ---
 
-Inspect the inventory, then the catalog entry for the requested capability. When authorization is required, use the typed service handoff. Do not accept credentials, arbitrary headers, service IDs guessed from labels, or inline connection secrets.
+Inspect the inventory, then call `nyxid_require_service` with the exact catalog slug. Only its verified registration-required receipt may request the typed connection journey. Do not accept credentials, arbitrary headers, service IDs guessed from labels, or inline connection secrets.

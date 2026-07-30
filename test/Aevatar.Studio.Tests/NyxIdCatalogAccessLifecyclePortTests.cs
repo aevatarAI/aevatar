@@ -88,6 +88,7 @@ public sealed class NyxIdCatalogAccessLifecyclePortTests
             string refreshId,
             DateTimeOffset failedAtUtc,
             string failureCode,
+            NyxIdAuthorizationCatalogRefreshStatus status = NyxIdAuthorizationCatalogRefreshStatus.Failed,
             CancellationToken ct = default) => throw new NotSupportedException();
 
         public Task InvalidateAsync(

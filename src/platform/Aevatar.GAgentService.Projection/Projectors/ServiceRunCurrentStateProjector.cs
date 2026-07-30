@@ -74,6 +74,7 @@ public sealed class ServiceRunCurrentStateProjector
             LastOutput = record.LastOutput ?? string.Empty,
             LastError = record.LastError ?? string.Empty,
         };
+        document.ResultArtifacts.Add(record.ResultArtifacts.Select(static artifact => artifact.Clone()));
 
         await _writeDispatcher.UpsertAsync(document, ct);
     }

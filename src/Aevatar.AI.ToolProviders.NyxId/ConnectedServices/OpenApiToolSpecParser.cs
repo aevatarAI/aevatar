@@ -5,9 +5,31 @@ namespace Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 /// <summary>The outcome of parsing one proxy-aware OpenAPI document for tool admission.</summary>
 public sealed record ConnectedServiceSpecParseResult(
     AevatarToolMarker? ServiceMarker,
-    IReadOnlyList<ConnectedServiceToolOperation> Operations)
+    IReadOnlyList<ConnectedServiceToolOperation> Operations,
+    IReadOnlyList<ConnectedServiceSpecIssue> Issues,
+    IReadOnlyList<string> DeclaredOperationIds)
 {
-    public static ConnectedServiceSpecParseResult Empty { get; } = new(null, []);
+    public static ConnectedServiceSpecParseResult Empty { get; } = new(null, [], [], []);
+
+    public bool HasFatalIdentityAmbiguity => Issues.Any(static issue =>
+        issue.Kind == ConnectedServiceSpecIssueKind.DuplicateOperationId);
+
+    public bool HasDeclaredOperation(string? operationId) =>
+        !string.IsNullOrWhiteSpace(operationId) &&
+        DeclaredOperationIds.Contains(operationId, StringComparer.Ordinal);
+
+    public ConnectedServiceSpecIssue? FindIssue(
+        string? operationId,
+        params ConnectedServiceSpecIssueKind[] kinds)
+    {
+        if (string.IsNullOrWhiteSpace(operationId))
+            return null;
+
+        var acceptedKinds = kinds.ToHashSet();
+        return Issues.FirstOrDefault(issue =>
+            acceptedKinds.Contains(issue.Kind) &&
+            string.Equals(issue.OperationId, operationId, StringComparison.Ordinal));
+    }
 
     /// <summary>
     /// Applies the explicit allow-list. An operation is eligible only when it carries an
@@ -16,6 +38,9 @@ public sealed record ConnectedServiceSpecParseResult(
     /// </summary>
     public IEnumerable<ConnectedServiceToolOperation> AdmittedOperations()
     {
+        if (HasFatalIdentityAmbiguity)
+            yield break;
+
         var serviceEnabled = ServiceMarker is { Enabled: true };
         foreach (var operation in Operations)
         {
@@ -29,6 +54,21 @@ public sealed record ConnectedServiceSpecParseResult(
         }
     }
 }
+
+public enum ConnectedServiceSpecIssueKind
+{
+    InvalidDocument = 0,
+    MissingOperationId = 1,
+    DuplicateOperationId = 2,
+    RequiredHeaderNotAllowed = 3,
+    RequiredRequestBodyUnsupported = 4,
+}
+
+public sealed record ConnectedServiceSpecIssue(
+    ConnectedServiceSpecIssueKind Kind,
+    string? OperationId,
+    string Method,
+    string PathTemplate);
 
 /// <summary>
 /// Parses a NyxID proxy-aware OpenAPI document into the operations Aevatar may register as
@@ -67,7 +107,7 @@ public static class OpenApiToolSpecParser
             }
 
             if (!root.TryGetProperty("paths", out var paths) || paths.ValueKind != JsonValueKind.Object)
-                return new ConnectedServiceSpecParseResult(serviceMarker, []);
+                return new ConnectedServiceSpecParseResult(serviceMarker, [], [], []);
 
             var inliner = OpenApiSchemaInliner.FromDocument(root);
             var components = root.TryGetProperty("components", out var c) && c.ValueKind == JsonValueKind.Object
@@ -75,6 +115,8 @@ public static class OpenApiToolSpecParser
                 : default;
 
             var operations = new List<ConnectedServiceToolOperation>();
+            var issues = new List<ConnectedServiceSpecIssue>();
+            var declaredOperationIds = new List<string>();
             foreach (var pathEntry in paths.EnumerateObject())
             {
                 if (pathEntry.Value.ValueKind != JsonValueKind.Object)
@@ -91,40 +133,88 @@ public static class OpenApiToolSpecParser
                         continue;
                     }
 
+                    var method = methodEntry.Name.ToUpperInvariant();
+                    var operationId = ReadOperationId(methodEntry.Value);
+                    if (operationId is null)
+                    {
+                        issues.Add(new ConnectedServiceSpecIssue(
+                            ConnectedServiceSpecIssueKind.MissingOperationId,
+                            null,
+                            method,
+                            pathEntry.Name));
+                        continue;
+                    }
+
+                    declaredOperationIds.Add(operationId);
                     var parsed = BuildOperation(
                         pathEntry.Name,
-                        methodEntry.Name.ToUpperInvariant(),
+                        method,
+                        operationId,
                         methodEntry.Value,
                         sharedParameters,
                         inliner,
-                        components);
+                        components,
+                        issues);
                     if (parsed is not null)
                         operations.Add(parsed);
                 }
             }
 
-            return new ConnectedServiceSpecParseResult(serviceMarker, operations);
+            foreach (var duplicateOperationId in declaredOperationIds
+                         .GroupBy(static operationId => operationId, StringComparer.Ordinal)
+                         .Where(static group => group.Count() > 1)
+                         .Select(static group => group.Key)
+                         .OrderBy(static operationId => operationId, StringComparer.Ordinal))
+            {
+                issues.Add(new ConnectedServiceSpecIssue(
+                    ConnectedServiceSpecIssueKind.DuplicateOperationId,
+                    duplicateOperationId,
+                    string.Empty,
+                    string.Empty));
+            }
+
+            return new ConnectedServiceSpecParseResult(
+                serviceMarker,
+                operations,
+                issues,
+                declaredOperationIds.Distinct(StringComparer.Ordinal).ToArray());
         }
         catch (JsonException)
         {
-            return ConnectedServiceSpecParseResult.Empty;
+            return new ConnectedServiceSpecParseResult(
+                null,
+                [],
+                [new ConnectedServiceSpecIssue(
+                    ConnectedServiceSpecIssueKind.InvalidDocument,
+                    null,
+                    string.Empty,
+                    string.Empty)],
+                []);
         }
+    }
+
+    private static string? ReadOperationId(JsonElement operation)
+    {
+        if (!operation.TryGetProperty("operationId", out var operationId) ||
+            operationId.ValueKind != JsonValueKind.String)
+        {
+            return null;
+        }
+
+        var normalized = operationId.GetString()?.Trim();
+        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
     }
 
     private static ConnectedServiceToolOperation? BuildOperation(
         string path,
         string method,
+        string operationId,
         JsonElement operation,
         IReadOnlyList<ConnectedServiceToolParameter> sharedParameters,
         OpenApiSchemaInliner inliner,
-        JsonElement components)
+        JsonElement components,
+        ICollection<ConnectedServiceSpecIssue> issues)
     {
-        var operationId = operation.TryGetProperty("operationId", out var oid) &&
-                          oid.ValueKind == JsonValueKind.String &&
-                          !string.IsNullOrWhiteSpace(oid.GetString())
-            ? oid.GetString()!.Trim()
-            : $"{method}_{path}";
-
         var summary = operation.TryGetProperty("summary", out var s) && s.ValueKind == JsonValueKind.String
             ? s.GetString()
             : operation.TryGetProperty("description", out var d) && d.ValueKind == JsonValueKind.String
@@ -137,6 +227,11 @@ public static class OpenApiToolSpecParser
                 parameter.Required &&
                 !AllowedHeaders.Contains(parameter.Name)))
         {
+            issues.Add(new ConnectedServiceSpecIssue(
+                ConnectedServiceSpecIssueKind.RequiredHeaderNotAllowed,
+                operationId,
+                method,
+                path));
             return null;
         }
         parameters = parameters
@@ -145,7 +240,14 @@ public static class OpenApiToolSpecParser
         var (bodySchema, bodyRequired, bodyMediaType, unsupportedRequiredBody) =
             ParseRequestBody(operation, inliner, components);
         if (unsupportedRequiredBody)
+        {
+            issues.Add(new ConnectedServiceSpecIssue(
+                ConnectedServiceSpecIssueKind.RequiredRequestBodyUnsupported,
+                operationId,
+                method,
+                path));
             return null;
+        }
 
         return new ConnectedServiceToolOperation(
             operationId,
@@ -156,7 +258,33 @@ public static class OpenApiToolSpecParser
             parameters,
             bodySchema,
             bodyRequired,
-            bodyMediaType);
+            bodyMediaType,
+            ParseResponseMediaTypes(operation));
+    }
+
+    private static IReadOnlyList<string> ParseResponseMediaTypes(JsonElement operation)
+    {
+        if (!operation.TryGetProperty("responses", out var responses) ||
+            responses.ValueKind != JsonValueKind.Object)
+        {
+            return [];
+        }
+
+        return responses.EnumerateObject()
+            .Where(static response =>
+                response.Name == "default" ||
+                response.Name.Length == 3 && response.Name[0] == '2')
+            .SelectMany(static response =>
+                response.Value.ValueKind == JsonValueKind.Object &&
+                response.Value.TryGetProperty("content", out var content) &&
+                content.ValueKind == JsonValueKind.Object
+                    ? content.EnumerateObject().Select(static media => media.Name)
+                    : [])
+            .Where(static mediaType => !string.IsNullOrWhiteSpace(mediaType))
+            .Select(static mediaType => mediaType.Trim().ToLowerInvariant())
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(static mediaType => mediaType, StringComparer.Ordinal)
+            .ToArray();
     }
 
     private static IReadOnlyList<ConnectedServiceToolParameter> MergeParameters(
