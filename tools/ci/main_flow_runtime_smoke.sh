@@ -366,16 +366,44 @@ with open(sys.argv[1], encoding="utf-8") as handle:
 print(data.get("scheduleId") or "")
 PY
 )"
+provisioned_member_id="$(python3 - "${provision_response}" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    data = json.load(handle)
+print(data.get("memberId") or "")
+PY
+)"
 if [[ -z "${schedule_id}" ]]; then
   echo "Provisioning response did not include scheduleId." >&2
   python3 -m json.tool "${provision_response}" >&2 2>/dev/null || cat "${provision_response}" >&2
   exit 1
 fi
+if [[ -z "${provisioned_member_id}" ]]; then
+  echo "Provisioning response did not include memberId." >&2
+  python3 -m json.tool "${provision_response}" >&2 2>/dev/null || cat "${provision_response}" >&2
+  exit 1
+fi
 
-wait_for_status_code "/api/schedules/${schedule_id}" "200" "${schedule_readmodel_response}"
+schedule_owner_query="ownerKind=studio_member_automation&ownerScopeId=${scope_id}&ownerTeamId=${team_id}&ownerMemberId=${provisioned_member_id}"
+wait_for_status_code "/api/schedules/${schedule_id}?${schedule_owner_query}" "200" "${schedule_readmodel_response}"
 assert_json_field "${schedule_readmodel_response}" "schedule.scheduleId" "${schedule_id}"
 
-request_json POST "/api/schedules/${schedule_id}:run-now" "{}" "202" "${run_now_response}"
+run_now_body="$(python3 - "${scope_id}" "${team_id}" "${provisioned_member_id}" <<'PY'
+import json
+import sys
+scope_id, team_id, member_id = sys.argv[1:]
+print(json.dumps({
+    "owner": {
+        "kind": "studio_member_automation",
+        "scopeId": scope_id,
+        "teamId": team_id,
+        "memberId": member_id,
+    },
+}))
+PY
+)"
+request_json POST "/api/schedules/${schedule_id}:run-now" "${run_now_body}" "202" "${run_now_response}"
 
 print_key_logs
 if grep -qE "Duplicate workflow definition name|Unhandled exception|Application startup exception" "${log_file}"; then

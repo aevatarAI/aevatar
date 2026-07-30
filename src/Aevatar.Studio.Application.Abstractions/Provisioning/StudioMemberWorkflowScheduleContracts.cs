@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 
 namespace Aevatar.Studio.Application.Provisioning;
@@ -34,6 +36,23 @@ public sealed record StudioMemberWorkflowScheduleRequest(
     public string? ProvisioningBearerToken { get; init; }
 
     public bool Enabled { get; init; } = true;
+
+    public ScheduledDispatchScheduleMode ScheduleMode { get; init; } = ScheduledDispatchScheduleMode.RecurringCron;
+
+    public DateTimeOffset? OneShotFireAt { get; init; }
+
+    [JsonIgnore]
+    public StudioMemberWorkflowAcceptedBindingContext? AcceptedBinding { get; init; }
+}
+
+public sealed record StudioMemberWorkflowAcceptedBindingContext(
+    string TeamId,
+    string PublishedServiceId,
+    string WorkflowId,
+    string? WorkflowRevisionId)
+{
+    [JsonIgnore]
+    public ScheduledInvocationWorkflowEvidence? WorkflowEvidence { get; init; }
 }
 
 public sealed class StudioMemberWorkflowSchedulePolicy
