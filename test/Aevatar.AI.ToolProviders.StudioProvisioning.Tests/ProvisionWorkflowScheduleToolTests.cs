@@ -1443,6 +1443,51 @@ public sealed class ProvisionWorkflowScheduleToolTests
     }
 
     [Fact]
+    public async Task CreateResultReceipt_WithAcceptedSchedule_ShouldReturnSuccessReceipt()
+    {
+        var tool = await DiscoverToolAsync(new RecordingProvisioningPort());
+        var resultJson = JsonSerializer.Serialize(new
+        {
+            status = "accepted",
+            member_id = "member-1",
+            scope_id = "scope-1",
+            team_id = "team-alpha",
+            schedule_id = "schedule-1",
+            studio_url = "/scopes/scope-1/teams/team-alpha/members/member-1/workflow",
+            observatory_url = "/workflow/observatory",
+        });
+
+        var receipt = tool.CreateResultReceipt("call-1", ScheduleToolName, "{}", resultJson);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        receipt.CallId.Should().Be("call-1");
+        receipt.ToolName.Should().Be(ScheduleToolName);
+        receipt.SideEffectKind.Should().Be("studio.workflow.schedule.provision");
+        receipt.SubjectKind.Should().Be("studio_member_workflow_schedule");
+        receipt.SubjectId.Should().Be("schedule-1");
+        receipt.ResultJson.Should().Be(resultJson);
+    }
+
+    [Fact]
+    public async Task CreateResultReceipt_WithToolError_ShouldReturnErrorReceipt()
+    {
+        var tool = await DiscoverToolAsync(new RecordingProvisioningPort());
+        var resultJson = """
+            {"error":{"code":"caller_identity_unavailable","message":"Verified NyxID caller identity is required in AgentToolRequestContext."}}
+            """;
+
+        var receipt = tool.CreateResultReceipt("call-1", ScheduleToolName, "{}", resultJson);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ErrorCode.Should().Be("caller_identity_unavailable");
+        receipt.ErrorMessage.Should().Be("Verified NyxID caller identity is required in AgentToolRequestContext.");
+        receipt.SideEffectKind.Should().Be("studio.workflow.schedule.provision");
+        receipt.ResultJson.Should().Be(resultJson);
+    }
+
+    [Fact]
     public async Task Execute_ShouldMapArgumentsAndContextOntoProvisioningRequest()
     {
         var port = new RecordingProvisioningPort(new WorkflowScheduleProvisioningResult(
