@@ -10,16 +10,12 @@ internal static class StudioWorkflowProvisioningToolIdentity
     public const string ConflictErrorCode = "workflow_provisioning_identity_conflict";
 
     public const string MissingIdentityErrorMessage =
-        "A trusted idempotency key or request identity is required to provision a workflow without creating duplicate fallback resources.";
+        "A trusted idempotency key is required to provision a workflow without creating duplicate fallback resources.";
 
     public static string? ResolveTrustedIdempotencyKey()
     {
         var callerIdempotencyKey = Normalize(AgentToolRequestContext.IdempotencyKey);
-        if (callerIdempotencyKey is not null)
-            return $"agent-tool-idempotency:{callerIdempotencyKey}";
-
-        var requestId = Normalize(AgentToolRequestContext.RequestId);
-        return requestId is null ? null : $"agent-tool-request:{requestId}";
+        return callerIdempotencyKey is null ? null : $"agent-tool-idempotency:{callerIdempotencyKey}";
     }
 
     public static string BuildMemberId(string scopeId, string idempotencyKey) =>

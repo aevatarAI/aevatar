@@ -309,9 +309,13 @@ public sealed class ProvisionWorkflowScheduleToolTests
         var tool = await DiscoverCreateMemberToolAsync(memberPort);
         var expectedMemberId = WorkflowProvisioningIdentity.BuildMemberId(
             "scope-current",
-            "agent-tool-request:request-1");
+            "agent-tool-idempotency:create-member-alpha");
 
-        using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
+        using var _ = PushContext(
+            scopeId: "scope-current",
+            ownerSubject: "owner-1",
+            accessToken: "access-token-1",
+            idempotencyKey: "create-member-alpha");
         var output = await tool.ExecuteAsync("""
             {
               "display_name": "Alpha Member",
@@ -349,6 +353,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
             scopeId: "registration-scope",
             ownerSubject: "owner-1",
             accessToken: "access-token-1",
+            idempotencyKey: "create-member-owner-alpha",
             ownerScopeId: "owner-scope");
         var output = await tool.ExecuteAsync("""
             {
@@ -426,14 +431,15 @@ public sealed class ProvisionWorkflowScheduleToolTests
         var tool = await DiscoverCreateMemberToolAsync(memberPort);
         var expectedMemberId = WorkflowProvisioningIdentity.BuildMemberId(
             "scope-current",
-            "agent-tool-request:chat-turn-alpha");
+            "agent-tool-idempotency:workflow-create-alpha");
 
         using var _ = PushContext(
             scopeId: "scope-current",
             ownerSubject: "owner-1",
             accessToken: "access-token-1",
-            requestId: "chat-turn-alpha",
-            callId: "fallback-create-call");
+            requestId: "conversation-session-alpha",
+            callId: "fallback-create-call",
+            idempotencyKey: "workflow-create-alpha");
         var output = await tool.ExecuteAsync("""
             {
               "display_name": "Weekly Report Fallback",
@@ -461,8 +467,9 @@ public sealed class ProvisionWorkflowScheduleToolTests
             scopeId: "scope-current",
             ownerSubject: "owner-1",
             accessToken: "access-token-1",
-            requestId: "chat-turn-alpha",
-            callId: "fallback-create-call");
+            requestId: "conversation-session-alpha",
+            callId: "fallback-create-call",
+            idempotencyKey: "workflow-create-alpha");
         var output = await tool.ExecuteAsync("""
             {
               "display_name": "Weekly Report Fallback",
@@ -923,17 +930,18 @@ public sealed class ProvisionWorkflowScheduleToolTests
         var tool = await DiscoverBindMemberWorkflowToolAsync(bindingPort);
         var expectedMemberId = WorkflowProvisioningIdentity.BuildMemberId(
             "scope-current",
-            "agent-tool-request:chat-turn-alpha");
+            "agent-tool-idempotency:workflow-create-alpha");
         var expectedWorkflowId = WorkflowProvisioningIdentity.BuildWorkflowId(
             "scope-current",
-            "agent-tool-request:chat-turn-alpha");
+            "agent-tool-idempotency:workflow-create-alpha");
 
         using var _ = PushContext(
             scopeId: "scope-current",
             ownerSubject: "owner-1",
             accessToken: "access-token-1",
-            requestId: "chat-turn-alpha",
-            callId: "fallback-bind-call");
+            requestId: "conversation-session-alpha",
+            callId: "fallback-bind-call",
+            idempotencyKey: "workflow-create-alpha");
         var output = await tool.ExecuteAsync($$"""
             {
               "member_id": "{{expectedMemberId}}",
@@ -956,14 +964,15 @@ public sealed class ProvisionWorkflowScheduleToolTests
         var tool = await DiscoverBindMemberWorkflowToolAsync(bindingPort);
         var expectedMemberId = WorkflowProvisioningIdentity.BuildMemberId(
             "scope-current",
-            "agent-tool-request:chat-turn-alpha");
+            "agent-tool-idempotency:workflow-create-alpha");
 
         using var _ = PushContext(
             scopeId: "scope-current",
             ownerSubject: "owner-1",
             accessToken: "access-token-1",
-            requestId: "chat-turn-alpha",
-            callId: "fallback-bind-call");
+            requestId: "conversation-session-alpha",
+            callId: "fallback-bind-call",
+            idempotencyKey: "workflow-create-alpha");
         var output = await tool.ExecuteAsync($$"""
             {
               "member_id": "{{expectedMemberId}}",
@@ -1468,7 +1477,11 @@ public sealed class ProvisionWorkflowScheduleToolTests
         });
         var tool = await DiscoverToolAsync(port);
 
-        using var _ = PushContext(scopeId: "scope-1", ownerSubject: "owner-1", accessToken: "access-token-1");
+        using var _ = PushContext(
+            scopeId: "scope-1",
+            ownerSubject: "owner-1",
+            accessToken: "access-token-1",
+            idempotencyKey: "workflow-provision-alpha");
         var output = await tool.ExecuteAsync("""
             {
               "team_id": "team-alpha",
@@ -1491,7 +1504,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         request.ScheduleCron.Should().Be("0 9 * * *");
         request.ScheduleTimezone.Should().Be("Asia/Shanghai");
         request.RunImmediately.Should().BeFalse();
-        request.IdempotencyKey.Should().Be("agent-tool-request:request-1");
+        request.IdempotencyKey.Should().Be("agent-tool-idempotency:workflow-provision-alpha");
         // Caller identity is taken from the tool execution context (W1-threaded), not arguments.
         request.CallerSubjectExternalUserId.Should().Be("owner-1");
         request.CapabilityAdmission.Should().NotBeNull();
@@ -1541,7 +1554,11 @@ public sealed class ProvisionWorkflowScheduleToolTests
         });
         var tool = await DiscoverToolAsync(port);
 
-        using var _ = PushContext(scopeId: "scope-1", ownerSubject: "owner-1", accessToken: "access-token-1");
+        using var _ = PushContext(
+            scopeId: "scope-1",
+            ownerSubject: "owner-1",
+            accessToken: "access-token-1",
+            idempotencyKey: "workflow-provision-blocked");
         var output = await tool.ExecuteAsync("""
             {
               "team_id": "team-alpha",
@@ -1585,6 +1602,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
             scopeId: "registration-scope",
             ownerSubject: "owner-1",
             accessToken: "access-token-1",
+            idempotencyKey: "workflow-provision-owner",
             ownerScopeId: "owner-scope");
         var output = await tool.ExecuteAsync("""
             {
@@ -1607,7 +1625,11 @@ public sealed class ProvisionWorkflowScheduleToolTests
         var port = new RecordingProvisioningPort();
         var tool = await DiscoverToolAsync(port);
 
-        using var _ = PushContext(scopeId: "scope-1", ownerSubject: "owner-1", accessToken: "access-token-1");
+        using var _ = PushContext(
+            scopeId: "scope-1",
+            ownerSubject: "owner-1",
+            accessToken: "access-token-1",
+            idempotencyKey: "workflow-provision-default");
         await tool.ExecuteAsync("""
             {
               "team_id": "team-alpha",
@@ -1618,6 +1640,31 @@ public sealed class ProvisionWorkflowScheduleToolTests
 
         port.LastRequest.Should().NotBeNull();
         port.LastRequest!.RunImmediately.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Execute_WhenOnlyRequestIdPresent_ShouldFailBeforeProvisioning()
+    {
+        var port = new RecordingProvisioningPort();
+        var tool = await DiscoverToolAsync(port);
+
+        using var _ = PushContext(
+            scopeId: "scope-1",
+            ownerSubject: "owner-1",
+            accessToken: "access-token-1",
+            requestId: "conversation-session-alpha",
+            callId: "tool-call-alpha",
+            idempotencyKey: null);
+        var output = await tool.ExecuteAsync("""
+            {
+              "team_id": "team-alpha",
+              "workflow_yaml": "name: demo\n",
+              "display_name": "Demo"
+            }
+            """);
+
+        ErrorCode(output).Should().Be("operation_identity_unavailable");
+        port.LastRequest.Should().BeNull();
     }
 
     [Fact]
@@ -1711,7 +1758,11 @@ public sealed class ProvisionWorkflowScheduleToolTests
         };
         var tool = await DiscoverToolAsync(port);
 
-        using var _ = PushContext(scopeId: "scope-1", ownerSubject: "owner-1", accessToken: "access-token-1");
+        using var _ = PushContext(
+            scopeId: "scope-1",
+            ownerSubject: "owner-1",
+            accessToken: "access-token-1",
+            idempotencyKey: "workflow-provision-validation-error");
         var output = await tool.ExecuteAsync("""
             {
               "team_id": "team-alpha",
@@ -1743,7 +1794,11 @@ public sealed class ProvisionWorkflowScheduleToolTests
         });
         var tool = await DiscoverToolAsync(port);
 
-        using var _ = PushContext(scopeId: "scope-1", ownerSubject: "owner-1", accessToken: "access-token-1");
+        using var _ = PushContext(
+            scopeId: "scope-1",
+            ownerSubject: "owner-1",
+            accessToken: "access-token-1",
+            idempotencyKey: "workflow-provision-result");
         var output = await tool.ExecuteAsync("""
             {
               "team_id": "team-alpha",
