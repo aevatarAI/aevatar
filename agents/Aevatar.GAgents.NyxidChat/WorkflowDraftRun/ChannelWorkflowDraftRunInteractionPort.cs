@@ -2,6 +2,7 @@ using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Google.Protobuf;

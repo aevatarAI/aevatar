@@ -12,6 +12,7 @@ using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;

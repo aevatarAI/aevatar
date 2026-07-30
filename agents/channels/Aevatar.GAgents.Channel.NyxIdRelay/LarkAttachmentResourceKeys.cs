@@ -1,6 +1,6 @@
-namespace Aevatar.GAgents.NyxidChat;
+namespace Aevatar.GAgents.Channel.NyxIdRelay;
 
-internal static class LarkAttachmentResourceKeys
+public static class LarkAttachmentResourceKeys
 {
     public static string? Normalize(string? value)
     {
