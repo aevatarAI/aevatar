@@ -395,15 +395,19 @@ internal static class StudioMemberWorkflowScheduleAuthorizationResolver
     private static StudioMemberWorkflowScheduleSubjectResolution ResolveSubject(
         AgentToolNyxIdAuthorityContext typedAuthority)
     {
-        if (typedAuthority.IsComplete)
+        var typedPlatform = Normalize(typedAuthority.Platform);
+        var typedExternalUserId = Normalize(typedAuthority.ExternalUserId);
+        if (typedAuthority.IsComplete && string.Equals(
+                typedPlatform,
+                NyxIdAuthorizationAuthorities.NyxId,
+                StringComparison.Ordinal))
         {
-            var nyxUserId = Normalize(typedAuthority.ExternalUserId)!;
             return StudioMemberWorkflowScheduleSubjectResolution.Success(
                 new StudioMemberWorkflowScheduleSubject(
-                    nyxUserId,
-                    Normalize(typedAuthority.Platform) ?? NyxIdAuthorizationAuthorities.NyxId,
+                    typedExternalUserId!,
+                    typedPlatform!,
                     Normalize(typedAuthority.Tenant) ?? string.Empty,
-                    nyxUserId));
+                    typedExternalUserId!));
         }
 
         var senderNyxUserId = Normalize(AgentToolRequestContext.SenderNyxUserId);
@@ -412,6 +416,19 @@ internal static class StudioMemberWorkflowScheduleAuthorizationResolver
             return StudioMemberWorkflowScheduleSubjectResolution.Failure(
                 "caller_subject_unavailable",
                 "A caller NyxID user id is required in AgentToolRequestContext so the schedule can re-mint caller NyxID credentials when it fires.");
+        }
+
+        if (typedAuthority.IsComplete)
+        {
+            var typedTenant = Normalize(typedAuthority.Tenant) ??
+                              Normalize(AgentToolRequestContext.Current?.SenderBinding.SenderTenant) ??
+                              string.Empty;
+            return StudioMemberWorkflowScheduleSubjectResolution.Success(
+                new StudioMemberWorkflowScheduleSubject(
+                    senderNyxUserId,
+                    typedPlatform!,
+                    typedTenant,
+                    typedExternalUserId!));
         }
 
         var channelPlatform = Normalize(AgentToolRequestContext.ChannelPlatform);

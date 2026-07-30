@@ -1093,6 +1093,68 @@ public sealed class ProvisionWorkflowScheduleToolTests
     }
 
     [Fact]
+    public async Task ScheduleMemberWorkflow_WhenTypedLarkAuthorityPresent_ShouldKeepNyxIdOwnerSeparateFromChannelSubject()
+    {
+        var schedulePort = new RecordingMemberWorkflowSchedulePort();
+        var tool = await DiscoverScheduleMemberWorkflowToolAsync(schedulePort);
+
+        using var _ = PushContext(
+            scopeId: "registration-scope",
+            ownerSubject: "fallback-owner",
+            accessToken: "access-token-1",
+            ownerScopeId: "owner-scope",
+            senderBindingId: "binding-lark",
+            senderNyxUserId: "nyx-lark-user",
+            senderTenant: "tenant-binding",
+            nyxIdAuthority: new AgentToolNyxIdAuthorityContext("lark", "tenant-authority", "ou_authority"));
+        var output = await tool.ExecuteAsync("""
+            {
+              "member_id": "member-alpha",
+              "schedule_cron": "0 9 * * *",
+              "schedule_timezone": "Asia/Shanghai"
+            }
+            """);
+
+        ErrorCode(output).Should().BeNull();
+        schedulePort.LastRequest.Should().NotBeNull();
+        schedulePort.LastRequest!.ScopeId.Should().Be("owner-scope");
+        var owner = schedulePort.LastRequest.AuthenticatedOwner;
+        owner.Owner.OwnerSubject.Should().Be("nyx-lark-user");
+        owner.SubjectPlatform.Should().Be("lark");
+        owner.SubjectTenant.Should().Be("tenant-authority");
+        owner.SubjectExternalUserId.Should().Be("ou_authority");
+        owner.VerifiedBindingId.Should().Be("binding-lark");
+    }
+
+    [Fact]
+    public async Task ScheduleMemberWorkflow_WhenTypedLarkAuthorityHasNoNyxIdOwner_ShouldFailBeforePreflight()
+    {
+        var schedulePort = new RecordingMemberWorkflowSchedulePort();
+        var tool = await DiscoverScheduleMemberWorkflowToolAsync(schedulePort);
+
+        using var _ = PushContext(
+            scopeId: "registration-scope",
+            ownerSubject: "fallback-owner",
+            accessToken: "access-token-1",
+            ownerScopeId: "owner-scope",
+            senderBindingId: "binding-lark",
+            senderTenant: "tenant-lark",
+            nyxIdAuthority: new AgentToolNyxIdAuthorityContext("lark", "tenant-authority", "ou_authority"));
+        var output = await tool.ExecuteAsync("""
+            {
+              "member_id": "member-alpha",
+              "schedule_cron": "0 9 * * *",
+              "schedule_timezone": "Asia/Shanghai"
+            }
+            """);
+
+        ErrorCode(output).Should().Be("caller_subject_unavailable");
+        output.Should().NotContain("ou_authority");
+        schedulePort.PreflightRequests.Should().BeEmpty();
+        schedulePort.CreateRequests.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ScheduleMemberWorkflow_WhenBearerMissingAndTypedNyxIdAuthorityPresent_ShouldDeferTokenIssuanceToPort()
     {
         var schedulePort = new RecordingMemberWorkflowSchedulePort();
