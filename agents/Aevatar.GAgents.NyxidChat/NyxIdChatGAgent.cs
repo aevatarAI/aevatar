@@ -57,7 +57,6 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         ILLMProviderFactory? llmProviderFactory = null,
         IEnumerable<IAIGAgentExecutionHook>? additionalHooks = null,
         IEnumerable<IAgentRunMiddleware>? agentMiddlewares = null,
-        IEnumerable<IToolCallMiddleware>? toolMiddlewares = null,
         IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
         IEnumerable<IAgentToolSource>? toolSources = null,
         LocalSkillCatalog? localSkillCatalog = null,
@@ -66,7 +65,7 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         NyxIdRelayOptions? relayOptions = null,
         TimeProvider? timeProvider = null,
         AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer = null)
-        : base(llmProviderFactory, additionalHooks, agentMiddlewares, toolMiddlewares, llmMiddlewares, toolSources,
+        : base(llmProviderFactory, additionalHooks, agentMiddlewares, llmMiddlewares, toolSources,
                remoteToolApprovalPort: remoteToolApprovalPort,
                remoteToolApprovalNotificationPort: remoteToolApprovalNotificationPort)
     {

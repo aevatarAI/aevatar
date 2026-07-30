@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Chat;
@@ -363,15 +364,16 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         }
         else
         {
-            var deniedTools = new ToolManager();
             var deniedResults = new List<ToolExecutionResult>(toolCalls.Length);
             foreach (var toolCall in toolCalls)
             {
-                var (denial, _) = await deniedTools.ExecuteToolCallRawAsync(toolCall, ct).ConfigureAwait(false);
                 deniedResults.Add(new ToolExecutionResult(
                     toolCall.Id,
                     toolCall.Name,
-                    denial,
+                    JsonSerializer.Serialize(new
+                    {
+                        error = $"Tool '{toolCall.Name}' is not authorized for this actor-owned step.",
+                    }),
                     IsError: true));
             }
             toolStepResult = BuildToolStepResult(deniedResults);

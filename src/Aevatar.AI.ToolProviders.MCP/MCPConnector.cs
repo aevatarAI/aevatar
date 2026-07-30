@@ -15,6 +15,7 @@ namespace Aevatar.AI.ToolProviders.MCP;
 public sealed class MCPConnector : IConnector, IAsyncDisposable
 {
     private readonly IMCPToolDiscoveryPort _clientManager;
+    private readonly IAgentToolExecutionPort _toolExecutionPort;
     private readonly MCPServerConfig _serverConfig;
     private readonly string? _defaultTool;
     private readonly HashSet<string> _allowedTools;
@@ -32,6 +33,7 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
         IEnumerable<string>? allowedTools = null,
         IEnumerable<string>? allowedInputKeys = null,
         IMCPToolDiscoveryPort? clientManager = null,
+        IAgentToolExecutionPort? toolExecutionPort = null,
         ILogger? logger = null)
     {
         if (string.IsNullOrWhiteSpace(name)) throw new ArgumentException("name is required", nameof(name));
@@ -41,6 +43,8 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
         _allowedTools = new HashSet<string>(allowedTools ?? [], StringComparer.OrdinalIgnoreCase);
         _allowedInputKeys = new HashSet<string>(allowedInputKeys ?? [], StringComparer.OrdinalIgnoreCase);
         _clientManager = clientManager ?? new MCPClientManager(logger);
+        _toolExecutionPort = toolExecutionPort
+            ?? throw new ArgumentNullException(nameof(toolExecutionPort));
         _ownsClientManager = clientManager == null;
         _logger = logger ?? NullLogger.Instance;
     }
@@ -96,7 +100,28 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
                 };
             }
 
-            var result = await tool.ExecuteAsync(request.Payload ?? "", ct);
+            var requestId = Guid.NewGuid().ToString("N");
+            var outcome = await _toolExecutionPort.ExecuteAsync(
+                new AgentToolExecutionRequest(
+                    tool,
+                    request.Payload ?? string.Empty,
+                    AgentToolExecutionContext.Empty with
+                    {
+                        Request = new AgentToolRequestIdentity(requestId, $"{requestId}:mcp"),
+                    },
+                    AgentToolApprovalContinuationMode.None,
+                    null),
+                ct).ConfigureAwait(false);
+            if (outcome.Kind is not (AgentToolExecutionOutcomeKind.Executed or
+                AgentToolExecutionOutcomeKind.ExecutedAuditIncomplete))
+            {
+                throw new InvalidOperationException(
+                    string.IsNullOrWhiteSpace(outcome.SafeMessage)
+                        ? outcome.FailureCode
+                        : outcome.SafeMessage);
+            }
+
+            var result = outcome.ResultJson;
             sw.Stop();
             return new ConnectorResponse
             {
@@ -206,9 +231,9 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
             {
                 await toolsTask;
             }
-            catch
+            catch (Exception ex)
             {
-                // Discovery may be canceled or faulted while shutdown is releasing the transport.
+                _logger.LogWarning(ex, "MCP discovery ended with an error while connector {ConnectorName} was shutting down", Name);
             }
         }
 

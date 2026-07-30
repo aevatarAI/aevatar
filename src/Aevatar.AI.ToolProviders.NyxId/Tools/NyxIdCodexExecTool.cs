@@ -14,8 +14,6 @@ public sealed class NyxIdCodexExecTool : IAgentTool
     private const int MaxPromptUtf8Bytes = 6_000;
 
     private readonly INyxIdSshCommandExecutor _executor;
-    private readonly NyxIdToolOptions _options;
-
     public NyxIdCodexExecTool(
         NyxIdApiClient client,
         NyxIdToolOptions? options = null,
@@ -29,7 +27,7 @@ public sealed class NyxIdCodexExecTool : IAgentTool
         NyxIdToolOptions options)
     {
         _executor = executor ?? throw new ArgumentNullException(nameof(executor));
-        _options = options ?? throw new ArgumentNullException(nameof(options));
+        ArgumentNullException.ThrowIfNull(options);
     }
 
     public string Name => "codex_exec";
@@ -40,9 +38,9 @@ public sealed class NyxIdCodexExecTool : IAgentTool
         "installed and authenticated. The command uses 'codex exec -' and leaves model, auth, " +
         "sandbox, and other Codex behavior to the target host's local configuration.";
 
-    public ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
+    public ToolApprovalMode ApprovalMode => ToolApprovalMode.AlwaysRequire;
 
-    public bool? RequiresApproval(string argumentsJson) => !_options.BypassSshExecApproval;
+    public bool IsDestructive => true;
 
     public string ParametersSchema => """
         {

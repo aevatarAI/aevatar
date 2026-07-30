@@ -5,25 +5,13 @@ namespace Aevatar.AI.Core.Tools;
 
 internal static class AgentToolReceiptFactory
 {
-    public static bool IsReceiptWorthy(IAgentTool tool, AgentToolCallSafety callSafety)
-    {
-        ArgumentNullException.ThrowIfNull(tool);
-        ArgumentNullException.ThrowIfNull(callSafety);
-        return tool.ApprovalMode != ToolApprovalMode.NeverRequire ||
-               callSafety.IsDestructive ||
-               !string.IsNullOrWhiteSpace(tool.SideEffectKind);
-    }
-
-    public static AgentToolReceipt? CreateSuccess(
+    public static AgentToolReceipt CreateSuccess(
         IAgentTool tool,
         string callId,
         string toolName,
         AgentToolCallSafety callSafety,
         string resultJson)
     {
-        if (!IsReceiptWorthy(tool, callSafety))
-            return null;
-
         var providerReceipt = tool.CreateSuccessReceipt(callId, toolName, resultJson ?? string.Empty);
         if (providerReceipt is not null)
             return NormalizeProviderSuccessReceipt(tool, callId, toolName, callSafety, resultJson, providerReceipt);
@@ -33,7 +21,7 @@ internal static class AgentToolReceiptFactory
         return receipt;
     }
 
-    public static AgentToolReceipt? CreateError(
+    public static AgentToolReceipt CreateError(
         IAgentTool tool,
         string callId,
         string toolName,
@@ -42,9 +30,6 @@ internal static class AgentToolReceiptFactory
         string errorCode,
         string errorMessage)
     {
-        if (!IsReceiptWorthy(tool, callSafety))
-            return null;
-
         var receipt = CreateBase(tool, callId, toolName, callSafety, AgentToolReceiptStatus.Error);
         receipt.ResultJson = resultJson ?? string.Empty;
         receipt.ErrorCode = errorCode ?? string.Empty;
@@ -80,6 +65,24 @@ internal static class AgentToolReceiptFactory
         receipt.ApprovalRequestId = approvalRequestId ?? string.Empty;
         receipt.ErrorCode = "approval_denied";
         receipt.ErrorMessage = reason ?? string.Empty;
+        return receipt;
+    }
+
+    public static AgentToolReceipt CreateDenied(
+        IAgentTool tool,
+        string callId,
+        string toolName,
+        AgentToolCallSafety callSafety,
+        string resultJson,
+        string errorCode,
+        string errorMessage,
+        string approvalRequestId = "")
+    {
+        var receipt = CreateBase(tool, callId, toolName, callSafety, AgentToolReceiptStatus.Denied);
+        receipt.ResultJson = resultJson ?? string.Empty;
+        receipt.ApprovalRequestId = approvalRequestId ?? string.Empty;
+        receipt.ErrorCode = errorCode ?? string.Empty;
+        receipt.ErrorMessage = errorMessage ?? string.Empty;
         return receipt;
     }
 

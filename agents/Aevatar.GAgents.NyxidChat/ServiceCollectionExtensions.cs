@@ -3,6 +3,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.AgentProfiles;
+using Aevatar.AI.Core.DependencyInjection;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
@@ -49,6 +50,7 @@ public static class ServiceCollectionExtensions
         services.AddAevatarAgentKindRegistry(builder => builder.ScanAssemblies(typeof(NyxIdChatGAgent).Assembly));
 
         services.AddCqrsCore();
+        services.AddAgentToolExecution();
         services.AddToolSetRegistry();
         services.AddHttpClient();
         services.TryAddSingleton(provider => BindRelayOptions(configuration));
@@ -130,9 +132,8 @@ public static class ServiceCollectionExtensions
             new NyxIdConversationReplyGenerator(
                 sp.GetRequiredService<ILLMProviderFactory>(),
                 sp.GetRequiredService<IBuiltInPromptFloorProvider>(),
-                sp.GetServices<IAgentToolSource>(),
+                ResolveChannelToolSources(sp),
                 sp.GetServices<IAgentRunMiddleware>(),
-                sp.GetServices<IToolCallMiddleware>(),
                 sp.GetServices<ILLMCallMiddleware>(),
                 sp.GetService<LocalSkillCatalog>(),
                 sp.GetService<IRemoteSkillFetcher>(),
@@ -142,10 +143,11 @@ public static class ServiceCollectionExtensions
                 larkClient: sp.GetService<ILarkNyxClient>(),
                 fileIngressPort: sp.GetService<Aevatar.Workflow.Application.Abstractions.Runs.IFileArtifactIngressPort>(),
                 fileArtifactReadPort: sp.GetService<Aevatar.Workflow.Application.Abstractions.Runs.IFileArtifactReadPort>(),
-                approvalHandler: null,
                 logger: sp.GetService<ILogger<NyxIdConversationReplyGenerator>>(),
                 overlayProvider: sp.GetService<ISystemSkillOverlayProvider>(),
-                larkOutboundClientFactory: sp.GetService<ILarkOutboundClientFactory>()));
+                larkOutboundClientFactory: sp.GetService<ILarkOutboundClientFactory>(),
+                toolExecutionPort: sp.GetRequiredService<IAgentToolExecutionPort>()));
+        services.TryAddSingleton<ChannelNyxIdConnectedServiceInventoryToolSource>();
         services.TryAddSingleton<IAgentRunReplyGenerationExecutorPort, AgentRunReplyGenerationExecutor>();
         services.TryAddSingleton<IAgentToolReceiptRenderer, AgentToolReceiptRenderer>();
         services.TryAddSingleton<ILarkCardReplyStreamRenderer, LarkCardReplyStreamRenderer>();
@@ -204,6 +206,16 @@ public static class ServiceCollectionExtensions
         AddNyxIdStreamingInteractions(services);
 
         return services;
+    }
+
+    private static IEnumerable<IAgentToolSource> ResolveChannelToolSources(IServiceProvider serviceProvider)
+    {
+        foreach (var source in serviceProvider.GetServices<IAgentToolSource>())
+            yield return source;
+
+        var inventory = serviceProvider.GetService<ChannelNyxIdConnectedServiceInventoryToolSource>();
+        if (inventory is not null)
+            yield return inventory;
     }
 
     private static void AddNyxIdStreamingInteractions(IServiceCollection services)

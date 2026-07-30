@@ -115,17 +115,45 @@ Allowed endpoint summaries are intentionally narrow: route template, safe route
 ids, status/outcome class, trace/request correlation, and sanitized target
 identity. Token-shaped or secret-key-shaped values are redacted before append.
 
-### 3.2 Tool-Execution Middleware
+### 3.2 Admitted Tool Execution
 
-Tool-execution middleware records tool-plane facts around tool invocation. It
-captures the tool identity, execution phase, safe caller and scope identity,
-safe resource target, timing, result class, and redacted diagnostic summary.
+Tool-plane audit is part of the canonical admitted execution boundary, not an
+optional middleware around individual callers. Every server-owned `IAgentTool`
+call enters `IAgentToolExecutionPort`; only `AdmittedAgentToolExecutor` may call
+the raw `IAgentTool.ExecuteAsync` terminal.
 
-It must not store full prompts, full tool arguments, full tool results, raw
-model responses, bearer tokens, OAuth codes, API keys, cookies, headers, or
-connector credential material. If a tool result needs later inspection, the
-tool must produce a separate safe artifact reference and record only that
-reference in the audit artifact.
+The executor freezes the final argument string after caller-owned hooks, derives
+its SHA-256 digest, and calls `GetCallSafety` once. Credential policy,
+actor-owned approval, audit artifacts, receipt construction, and terminal
+execution all use that exact payload and classification.
+
+The durable phase protocol is:
+
+| Phase | Meaning | Append rule |
+|---|---|---|
+| `WAITING_APPROVAL` | The owning actor must persist and later reconcile an exact pending call. | `Appended` or same-fact `Duplicate` may return `ApprovalRequired`; `Conflict` or unavailable fails closed. |
+| `RUNNING` | Durable permission to enter the raw terminal. | Only `Appended` may execute. `Duplicate` means the call already started; `Conflict` also fails closed. Neither is replayed. |
+| `TERMINAL` | The actual executed, denied, or failed outcome. | `Appended` or same-fact `Duplicate` completes audit. Failure after terminal invocation preserves the actual result and never makes the tool retryable. |
+
+A required approval is valid only in `ActorOwned` continuation mode and only
+when its durable grant matches `ApprovalRequestId`, `RequestId`, `ToolName`,
+`ToolCallId`, and `ArgumentsSha256`. Credential policy runs before grant
+validation. An unavailable pre-terminal `RUNNING` append may be retryable because
+the terminal was not invoked; a successful execution whose terminal audit is
+incomplete returns `ExecutedAuditIncomplete` with its real result and
+`Retryable=false`.
+
+Tool audit captures the tool identity, execution phase, argument digest, safe
+caller and scope identity, safe resource target, credential source, timing,
+result class, and redacted diagnostic summary. It must not store full prompts,
+full tool arguments, full tool results, raw model responses, bearer tokens,
+OAuth codes, API keys, cookies, headers, or connector credential material. If a
+tool result needs later inspection, the tool must produce a separate safe
+artifact reference and record only that reference in the audit artifact.
+
+Client-forwarded tools are outside the local terminal boundary. They are
+recorded as forwarded continuation state and do not enter
+`IAgentToolExecutionPort`.
 
 ### 3.3 Projection Pipeline Artifact Sink
 
@@ -223,6 +251,10 @@ Do not implement platform audit trail as:
    headers, cookies, tokens, OAuth codes, API keys, credential material,
    `sender_binding_id`, raw token-minting subject ids, or full tool results.
 7. A governance decision source for command execution.
+8. Per-caller tool middleware, wrappers, receipt finalizers, or optional audit
+   wiring that can reach a raw `IAgentTool` terminal.
+9. Replaying a tool after `RUNNING` returned `Duplicate` or `Conflict`, or after
+   the raw terminal ran but terminal audit append failed.
 
 ## 7. Query Semantics
 
@@ -309,10 +341,18 @@ Changes to audit trail contracts or implementation must verify:
    subjects.
 6. HTTP query endpoints authorize cross-scope reads and resolver calls before
    invoking `IAuditTrailQueryPort` or `IAuditActorIdentityHasher`.
+7. Solution-graph checks find exactly one raw `IAgentTool.ExecuteAsync` caller,
+   and every known server-owned execution surface invokes
+   `IAgentToolExecutionPort`.
+8. Credential or approval denial, `RUNNING` duplicate/conflict, and invalid
+   closed NyxID actions produce zero downstream side effects.
+9. Terminal audit failure preserves the actual terminal result and cannot make
+   the tool call retryable.
 
 Related references:
 
 - [ADR-0039: Platform Audit Trail](../adr/0039-platform-audit-trail.md)
+- [ADR-0045: Admitted Agent Tool Execution](../adr/0045-admitted-agent-tool-execution.md)
 - [CQRS Projection](cqrs-projection.md)
 - [Event Sourcing](event-sourcing.md)
 - [Observability](observability.md)

@@ -6,11 +6,9 @@
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Core.Hooks;
-using Aevatar.AI.Core.Middleware;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 
@@ -35,21 +33,24 @@ public sealed class StreamingToolExecutor
 {
     private readonly ToolManager _tools;
     private readonly AgentHookPipeline? _hooks;
-    private readonly IReadOnlyList<IToolCallMiddleware> _toolMiddlewares;
     private readonly AgentToolExecutionContext? _toolContext;
+    private readonly IAgentToolExecutionPort? _toolExecutionPort;
+    private readonly AgentToolApprovalContinuationMode _approvalContinuationMode;
 
     public StreamingToolExecutor(
         ToolManager tools,
         AgentHookPipeline? hooks = null,
-        IReadOnlyList<IToolCallMiddleware>? toolMiddlewares = null,
         IReadOnlyDictionary<string, string>? requestMetadata = null,
-        AgentToolExecutionContext? toolContext = null)
+        AgentToolExecutionContext? toolContext = null,
+        IAgentToolExecutionPort? toolExecutionPort = null,
+        AgentToolApprovalContinuationMode approvalContinuationMode = AgentToolApprovalContinuationMode.None)
     {
         // Refactor (issue1574): Old pattern: streaming tool execution promoted request Metadata into tool control.
         // New principle: streaming tool control is typed; request Metadata remains external annotations only.
         _tools = tools;
         _hooks = hooks;
-        _toolMiddlewares = toolMiddlewares ?? [];
+        _toolExecutionPort = toolExecutionPort;
+        _approvalContinuationMode = approvalContinuationMode;
         _toolContext = toolContext
             ?? AgentToolRequestContext.Current
             ?? (requestMetadata == null
@@ -315,7 +316,10 @@ public sealed class StreamingToolExecutor
                 ToolCallId = call.Id,
             };
             try { if (_hooks != null) await _hooks.RunToolExecuteStartAsync(toolCtx, ct); }
-            catch { /* Hook failures must not crash tool execution */ }
+            catch (Exception ex)
+            {
+                Trace.TraceError("Tool execute-start hook failed for {0}: {1}", call.Name, ex);
+            }
             var toolStartedAt = Stopwatch.GetTimestamp();
 
             // Re-resolve tool after hooks — hooks may have rewritten the tool name.
@@ -348,56 +352,27 @@ public sealed class StreamingToolExecutor
                         SchedulerFault: true);
             }
 
-            var toolCallContext = new ToolCallContext
-            {
-                Tool = effectiveTool,
-                ToolName = effectiveToolName,
-                ToolCallId = call.Id,
-                ArgumentsJson = toolCtx.ToolArguments ?? call.ArgumentsJson,
-                CancellationToken = ct, ExecutionContext = executionContext,
-            };
-
-            await MiddlewarePipeline.RunToolCallAsync(_toolMiddlewares, toolCallContext, async () =>
-            {
-                if (toolCallContext.Terminate) return;
-
-                var resolvedCall = new ToolCall
-                {
-                    Id = toolCallContext.ToolCallId,
-                    Name = toolCallContext.ToolName,
-                    ArgumentsJson = toolCallContext.ArgumentsJson,
-                };
-
-                var (result, error) = await _tools.ExecuteToolCallRawAsync(resolvedCall, ct);
-                toolCallContext.Result = result;
-                if (error is not null)
-                {
-                    toolCallContext.Receipt = AgentToolReceiptFactory.CreateError(
-                        effectiveTool,
-                        toolCallContext.ToolCallId,
-                        toolCallContext.ToolName,
-                        callSafety: effectiveTool.GetCallSafety(toolCallContext.ArgumentsJson), resultJson: result,
-                        "tool_execution_error",
-                        error.Message);
-                }
-            });
-
-            var toolResult = toolCallContext.Result
-                ?? (toolCallContext.Terminate
-                    ? "Tool call terminated by middleware"
-                    : $"Tool '{toolCallContext.ToolName}' returned no result");
-            var receipt = toolCallContext.Receipt ??
-                          AgentToolReceiptFactory.CreateSuccess(
-                              effectiveTool,
-                              toolCallContext.ToolCallId,
-                              toolCallContext.ToolName,
-                              callSafety: effectiveTool.GetCallSafety(toolCallContext.ArgumentsJson), resultJson: toolResult);
+            var executionPort = _toolExecutionPort
+                ?? throw new InvalidOperationException("IAgentToolExecutionPort is required for server-owned tool execution.");
+            var outcome = await executionPort.ExecuteAsync(
+                new AgentToolExecutionRequest(
+                    effectiveTool,
+                    toolCtx.ToolArguments ?? call.ArgumentsJson,
+                    executionContext ?? AgentToolExecutionContext.Empty.WithCallId(call.Id),
+                    _approvalContinuationMode,
+                    null),
+                ct).ConfigureAwait(false);
+            var toolResult = outcome.ResultJson;
+            var receipt = outcome.Receipt;
             var isErrorReceipt = receipt?.Status is AgentToolReceiptStatus.Error or AgentToolReceiptStatus.Denied;
 
             toolCtx.ToolResult = toolResult;
             toolCtx.Duration = Stopwatch.GetElapsedTime(toolStartedAt);
             try { if (_hooks != null) await _hooks.RunToolExecuteEndAsync(toolCtx, ct); }
-            catch { /* Hook failures must not crash tool execution */ }
+            catch (Exception ex)
+            {
+                Trace.TraceError("Tool execute-end hook failed for {0}: {1}", effectiveToolName, ex);
+            }
 
             if (ct.IsCancellationRequested)
                 return new ToolExecutionCompletion(

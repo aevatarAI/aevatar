@@ -18,16 +18,6 @@ public static class MiddlewarePipeline
             static (mw, ctx, next) => mw.InvokeAsync(ctx, next));
     }
 
-    /// <summary>Executes tool call middleware chain, then the core handler.</summary>
-    public static Task RunToolCallAsync(
-        IReadOnlyList<IToolCallMiddleware> middlewares,
-        ToolCallContext context,
-        Func<Task> coreHandler)
-    {
-        return Execute(middlewares, 0, context, coreHandler,
-            static (mw, ctx, next) => mw.InvokeAsync(ctx, next));
-    }
-
     /// <summary>Executes LLM call middleware chain, then the core handler.</summary>
     public static Task RunLLMCallAsync(
         IReadOnlyList<ILLMCallMiddleware> middlewares,

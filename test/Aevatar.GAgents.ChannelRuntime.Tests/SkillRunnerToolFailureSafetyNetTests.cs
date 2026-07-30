@@ -1,7 +1,6 @@
 using System.Reflection;
-using Aevatar.AI.Abstractions.Middleware;
-using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core;
+using Aevatar.AI.Core.Hooks;
 using Aevatar.GAgents.Scheduled;
 using FluentAssertions;
 using Xunit;
@@ -14,9 +13,9 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 /// produced plausible plain-text output. Tests are split across:
 ///
 ///   - <see cref="SkillRunnerToolFailureCounter"/>: state primitive
-///   - <see cref="NyxIdProxyToolFailureCountingMiddleware"/>: classification + counting
+///   - <see cref="NyxIdProxyToolFailureCountingMiddleware"/>: classification + counting hook
 ///   - <see cref="SkillRunnerGAgent.EnsureToolStatusAllowsCompletion"/>: failure policy
-///   - End-to-end wiring: middleware registered on the agent feeds the agent's counter
+///   - End-to-end wiring: hook registered on the agent feeds the agent's counter
 ///
 /// We deliberately don't drive the full LLM loop in these tests — see the existing
 /// SkillRunnerGAgentTests pattern: ChatStreamAsync requires a live LLM provider, and the
@@ -189,19 +188,19 @@ public class SkillRunnerToolFailureSafetyNetTests
             .Should().Be(NyxIdProxyToolFailureCountingMiddleware.ResultClassification.Unknown);
     }
 
-    // ─── Middleware behaviour ───
+    // ─── Hook behaviour ───
 
     [Fact]
     public async Task Middleware_OnNyxIdProxyError_IncrementsFailureCount()
     {
         var counter = new SkillRunnerToolFailureCounter();
-        var middleware = new NyxIdProxyToolFailureCountingMiddleware(counter);
+        var hook = new NyxIdProxyToolFailureCountingMiddleware(counter);
         var ctx = BuildContext(
             "nyxid_proxy",
             result: """{"error":true,"status":401,"body":"{\"message\":\"Bad credentials\"}"}""",
             argumentsJson: """{"slug":"api-github","method":"GET","path":"/repos/org/repo/issues"}""");
 
-        await middleware.InvokeAsync(ctx, () => Task.CompletedTask);
+        await hook.OnToolExecuteEndAsync(ctx, CancellationToken.None);
 
         counter.FailureCount.Should().Be(1);
         counter.SuccessCount.Should().Be(0);
@@ -214,10 +213,10 @@ public class SkillRunnerToolFailureSafetyNetTests
     public async Task Middleware_OnNyxIdProxyOk_IncrementsSuccessCount()
     {
         var counter = new SkillRunnerToolFailureCounter();
-        var middleware = new NyxIdProxyToolFailureCountingMiddleware(counter);
+        var hook = new NyxIdProxyToolFailureCountingMiddleware(counter);
         var ctx = BuildContext("nyxid_proxy", result: """{"total_count":12,"items":[]}""");
 
-        await middleware.InvokeAsync(ctx, () => Task.CompletedTask);
+        await hook.OnToolExecuteEndAsync(ctx, CancellationToken.None);
 
         counter.FailureCount.Should().Be(0);
         counter.SuccessCount.Should().Be(1);
@@ -230,13 +229,13 @@ public class SkillRunnerToolFailureSafetyNetTests
         // injected a marker field that risked being echoed by weaker models — this test
         // pins that we read the body in place.
         var counter = new SkillRunnerToolFailureCounter();
-        var middleware = new NyxIdProxyToolFailureCountingMiddleware(counter);
+        var hook = new NyxIdProxyToolFailureCountingMiddleware(counter);
         const string body = """{"total_count":12,"items":[{"sha":"abc"}]}""";
         var ctx = BuildContext("nyxid_proxy", result: body);
 
-        await middleware.InvokeAsync(ctx, () => Task.CompletedTask);
+        await hook.OnToolExecuteEndAsync(ctx, CancellationToken.None);
 
-        ctx.Result.Should().Be(body);
+        ctx.ToolResult.Should().Be(body);
     }
 
     [Fact]
@@ -245,29 +244,25 @@ public class SkillRunnerToolFailureSafetyNetTests
         // Other tools may have their own success semantics and are intentionally outside
         // the safety net's scope.
         var counter = new SkillRunnerToolFailureCounter();
-        var middleware = new NyxIdProxyToolFailureCountingMiddleware(counter);
+        var hook = new NyxIdProxyToolFailureCountingMiddleware(counter);
         var ctx = BuildContext("not_nyxid_proxy", result: """{"error":true}""");
 
-        await middleware.InvokeAsync(ctx, () => Task.CompletedTask);
+        await hook.OnToolExecuteEndAsync(ctx, CancellationToken.None);
 
         counter.FailureCount.Should().Be(0);
         counter.SuccessCount.Should().Be(0);
     }
 
     [Fact]
-    public async Task Middleware_AwaitsNextBeforeReadingResult()
+    public async Task Hook_ObservesCompletedToolResult()
     {
         // The result is only set once `next()` runs the underlying tool, so the middleware
         // must await before classifying — otherwise it would always observe a null result.
         var counter = new SkillRunnerToolFailureCounter();
-        var middleware = new NyxIdProxyToolFailureCountingMiddleware(counter);
-        var ctx = BuildContext("nyxid_proxy", result: null);
+        var hook = new NyxIdProxyToolFailureCountingMiddleware(counter);
+        var ctx = BuildContext("nyxid_proxy", result: """{"error":true}""");
 
-        await middleware.InvokeAsync(ctx, () =>
-        {
-            ctx.Result = """{"error":true}""";
-            return Task.CompletedTask;
-        });
+        await hook.OnToolExecuteEndAsync(ctx, CancellationToken.None);
 
         counter.FailureCount.Should().Be(1);
     }
@@ -429,74 +424,61 @@ public class SkillRunnerToolFailureSafetyNetTests
     // ─── End-to-end wiring ───
 
     [Fact]
-    public async Task Wiring_MiddlewareRegisteredOnAgent_FeedsAgentCounter()
+    public async Task Wiring_HookRegisteredOnAgent_FeedsAgentCounter()
     {
         // The previous wiring assertion was tautological (compared the test-only accessor
-        // to itself). Drive the middleware that AIGAgentBase actually registered for this
+        // to itself). Drive the hook that AIGAgentBase actually registered for this
         // agent and verify the same counter the runner reads in
         // EnsureToolStatusAllowsCompletion gets incremented. This catches regressions in
-        // BuildToolMiddlewareChain where the counter could be detached from the
-        // middleware that the chat loop runs.
+        // BuildAdditionalHooks where the counter could be detached from the hook that
+        // the chat loop runs.
         var agent = new SkillRunnerGAgent();
 
         var registeredField = typeof(AIGAgentBase<SkillRunnerState>).GetField(
-            "_toolMiddlewares", BindingFlags.Instance | BindingFlags.NonPublic);
+            "_additionalHooks", BindingFlags.Instance | BindingFlags.NonPublic);
         registeredField.Should().NotBeNull();
-        var registered = (IReadOnlyList<IToolCallMiddleware>?)registeredField!.GetValue(agent);
+        var registered = (IReadOnlyList<IAIGAgentExecutionHook>?)registeredField!.GetValue(agent);
         registered.Should().NotBeNull();
 
         var registeredCounting = registered!
             .OfType<NyxIdProxyToolFailureCountingMiddleware>()
-            .Should().ContainSingle("the runner appends exactly one counting middleware to the chain")
+            .Should().ContainSingle("the runner appends exactly one counting hook")
             .Subject;
 
         var ctx = BuildContext("nyxid_proxy", result: """{"error":true,"status":502}""");
-        await registeredCounting.InvokeAsync(ctx, () => Task.CompletedTask);
+        await registeredCounting.OnToolExecuteEndAsync(ctx, CancellationToken.None);
 
         agent.ToolFailureCounterForTesting.FailureCount.Should().Be(1);
     }
 
     [Fact]
-    public void Wiring_PreservesCallerInjectedMiddleware()
+    public void Wiring_PreservesCallerInjectedHook()
     {
-        // DI may pre-register middleware (e.g., the org-wide approval middleware). The
-        // counting middleware must be appended, not overwrite — otherwise wiring this
-        // safety net into a DI graph would silently drop existing middleware behaviour.
-        var injected = new RecordingMiddleware();
-        var agent = new SkillRunnerGAgent(toolMiddlewares: new IToolCallMiddleware[] { injected });
+        var injected = new RecordingHook();
+        var agent = new SkillRunnerGAgent(additionalHooks: new IAIGAgentExecutionHook[] { injected });
 
         var registeredField = typeof(AIGAgentBase<SkillRunnerState>).GetField(
-            "_toolMiddlewares", BindingFlags.Instance | BindingFlags.NonPublic);
-        var registered = (IReadOnlyList<IToolCallMiddleware>?)registeredField!.GetValue(agent);
+            "_additionalHooks", BindingFlags.Instance | BindingFlags.NonPublic);
+        var registered = (IReadOnlyList<IAIGAgentExecutionHook>?)registeredField!.GetValue(agent);
 
-        registered.Should().Contain(injected, "caller-injected middleware must survive");
-        registered.Should().ContainSingle(m => m is NyxIdProxyToolFailureCountingMiddleware);
+        registered.Should().Contain(injected, "caller-injected hooks must survive");
+        registered.Should().ContainSingle(hook => hook is NyxIdProxyToolFailureCountingMiddleware);
     }
 
-    private static ToolCallContext BuildContext(
+    private static AIGAgentExecutionHookContext BuildContext(
         string toolName,
         string? result,
         string argumentsJson = "{}") => new()
     {
-        Tool = new StubAgentTool(toolName),
         ToolName = toolName,
         ToolCallId = "call-1",
-        ArgumentsJson = argumentsJson,
-        Result = result,
+        ToolArguments = argumentsJson,
+        ToolResult = result,
     };
 
-    private sealed class StubAgentTool : IAgentTool
+    private sealed class RecordingHook : IAIGAgentExecutionHook
     {
-        public StubAgentTool(string name) => Name = name;
-        public string Name { get; }
-        public string Description => string.Empty;
-        public string ParametersSchema => "{}";
-        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
-            Task.FromResult(string.Empty);
-    }
-
-    private sealed class RecordingMiddleware : IToolCallMiddleware
-    {
-        public Task InvokeAsync(ToolCallContext context, Func<Task> next) => next();
+        public string Name => nameof(RecordingHook);
+        public int Priority => 0;
     }
 }

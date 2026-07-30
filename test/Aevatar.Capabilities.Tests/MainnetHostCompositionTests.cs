@@ -1,6 +1,4 @@
-using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.ToolProviders.AgentCatalog;
 using Aevatar.AI.ToolProviders.AevatarInvocation;
 using Aevatar.AI.ToolProviders.Channel;
@@ -14,6 +12,8 @@ using Aevatar.AI.ToolProviders.StudioProvisioning;
 using Aevatar.AI.ToolProviders.Telegram;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.AI.ToolProviders.Web;
+using Aevatar.Audit.Abstractions.Identity;
+using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.Audit.Core.Identity;
 using Aevatar.Bootstrap.Extensions.AI;
 using Aevatar.ChatRouting.Abstractions;
@@ -226,14 +226,7 @@ public sealed class MainnetHostCompositionTests
         app.Services.GetRequiredService<IRemoteToolApprovalNotificationPort>()
             .Should()
             .BeOfType<NyxIdRelayRemoteToolApprovalNotificationPort>();
-        // Yield capability follows the actor, never the container (#2004): a DI-global
-        // yielding handler hands "I will resume you" to surfaces with no pending-approval
-        // continuation, stranding dead-letter approvals. RoleGAgent wires its own handler;
-        // every other surface must fall through to MissingApprovalHandler and fail closed.
-        app.Services.GetServices<IToolApprovalHandler>().Should().BeEmpty();
-        app.Services.GetServices<IToolCallMiddleware>()
-            .Should()
-            .NotContain(middleware => middleware is ToolApprovalMiddleware);
+        app.Services.GetRequiredService<IAgentToolExecutionPort>().Should().NotBeNull();
 
         await app.StopAsync();
     }
@@ -632,6 +625,46 @@ public sealed class MainnetHostCompositionTests
         act.Should()
             .Throw<Exception>()
             .WithMessage("*MissingMainnetDependency*");
+    }
+
+    [Fact]
+    public void AddAevatarMainnetHost_WithoutAuditTrailAppender_ShouldFailDuringBuild()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder();
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+        builder.Services.RemoveAll<IAuditTrailAppender>();
+
+        var act = () => builder.Build();
+
+        act.Should()
+            .Throw<Exception>()
+            .WithMessage("*IAuditTrailAppender*");
+    }
+
+    [Fact]
+    public void AddAevatarMainnetHost_WithoutAuditActorIdentityHasher_ShouldFailDuringBuild()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder();
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+        builder.Services.RemoveAll<IAuditActorIdentityHasher>();
+
+        var act = () => builder.Build();
+
+        act.Should()
+            .Throw<Exception>()
+            .WithMessage("*IAuditActorIdentityHasher*");
     }
 
     [Fact]

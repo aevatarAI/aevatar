@@ -230,107 +230,6 @@ public class GenAIObservabilityMiddlewareTests : IDisposable
     }
 
     [Fact]
-    public async Task ToolCall_EmitsExecuteToolSpan()
-    {
-        _activities.Clear();
-
-        var ctx = new ToolCallContext
-        {
-            Tool = new FakeTool("search"),
-            ToolName = "search",
-            ToolCallId = "call-1",
-            ArgumentsJson = "{\"q\":\"test\"}",
-        };
-
-        await _middleware.InvokeAsync(ctx, () =>
-        {
-            ctx.Result = "found it";
-            return Task.CompletedTask;
-        });
-
-        var matching = _activities.Where(a =>
-            a.GetTagItem("gen_ai.operation.name")?.ToString() == "execute_tool").ToList();
-        matching.Should().NotBeEmpty();
-        matching.Last().Kind.Should().Be(ActivityKind.Internal);
-        matching.Last().GetTagItem("gen_ai.tool.name").Should().Be("search");
-        matching.Last().GetTagItem("gen_ai.tool.status").Should().Be("ok");
-    }
-
-    [Fact]
-    public async Task ToolCall_WhenTerminateTrue_SetsTerminatedStatus()
-    {
-        _activities.Clear();
-
-        var ctx = new ToolCallContext
-        {
-            Tool = new FakeTool("search"),
-            ToolName = "search",
-            ToolCallId = "call-1",
-            ArgumentsJson = "{}",
-        };
-
-        await _middleware.InvokeAsync(ctx, () =>
-        {
-            ctx.Terminate = true;
-            return Task.CompletedTask;
-        });
-
-        var activity = _activities.Where(a =>
-            a.GetTagItem("gen_ai.operation.name")?.ToString() == "execute_tool").Last();
-        activity.GetTagItem("gen_ai.tool.status").Should().Be("terminated");
-    }
-
-    [Fact]
-    public async Task ToolCall_OnError_SetsErrorTag()
-    {
-        _activities.Clear();
-
-        var ctx = new ToolCallContext
-        {
-            Tool = new FakeTool("search"),
-            ToolName = "search",
-            ToolCallId = "call-1",
-            ArgumentsJson = "{}",
-        };
-
-        var act = async () => await _middleware.InvokeAsync(ctx, () =>
-            throw new InvalidOperationException("tool boom"));
-
-        await act.Should().ThrowAsync<InvalidOperationException>();
-
-        var activity = _activities.Where(a =>
-            a.GetTagItem("gen_ai.operation.name")?.ToString() == "execute_tool").Last();
-        activity.GetTagItem("gen_ai.tool.status").Should().Be("error");
-        activity.GetTagItem("error.message").Should().Be("tool boom");
-    }
-
-    [Fact]
-    public async Task ToolCall_WithSensitiveDataEnabled_IncludesArgumentsAndResult()
-    {
-        _activities.Clear();
-        GenAIActivitySource.EnableSensitiveData = true;
-
-        var ctx = new ToolCallContext
-        {
-            Tool = new FakeTool("search"),
-            ToolName = "search",
-            ToolCallId = "call-2",
-            ArgumentsJson = "{\"q\":\"test\"}",
-        };
-
-        await _middleware.InvokeAsync(ctx, () =>
-        {
-            ctx.Result = "ok";
-            return Task.CompletedTask;
-        });
-
-        var activity = _activities.Where(a =>
-            a.GetTagItem("gen_ai.operation.name")?.ToString() == "execute_tool").Last();
-        activity.GetTagItem("gen_ai.tool.arguments").Should().Be("{\"q\":\"test\"}");
-        activity.GetTagItem("gen_ai.tool.result").Should().Be("ok");
-    }
-
-    [Fact]
     public async Task SensitiveData_IncludesContent_WhenEnabled()
     {
         _activities.Clear();
@@ -364,15 +263,6 @@ public class GenAIObservabilityMiddlewareTests : IDisposable
         var activity = _activities.Last();
         activity.GetTagItem("gen_ai.request.input").Should().BeNull();
         activity.GetTagItem("gen_ai.response.output").Should().BeNull();
-    }
-
-    private sealed class FakeTool(string name) : IAgentTool
-    {
-        public string Name => name;
-        public string Description => "";
-        public string ParametersSchema => "{}";
-        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct) =>
-            Task.FromResult("fake");
     }
 
     private sealed class FakeLLMProvider(string name = "fake") : ILLMProvider

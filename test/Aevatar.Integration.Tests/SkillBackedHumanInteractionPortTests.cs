@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.Foundation.Abstractions.Interactions;
@@ -19,6 +20,7 @@ public sealed class SkillBackedHumanInteractionPortTests
     public void AddSkillBackedHumanInteractionDelivery_ShouldNotRegisterHumanInteractionChannelToolSource()
     {
         var services = new ServiceCollection();
+        services.AddSingleton<IAgentToolExecutionPort, PassThroughExecutionPort>();
 
         services.AddSkillBackedHumanInteractionDelivery();
 
@@ -35,6 +37,7 @@ public sealed class SkillBackedHumanInteractionPortTests
     public void AddChannelBackedHumanInteractionTools_ShouldRegisterHumanInteractionChannelToolSource()
     {
         var services = new ServiceCollection();
+        services.AddSingleton<IAgentToolExecutionPort, PassThroughExecutionPort>();
         services.AddSingleton<IChannelInteractionNotificationPort>(new RecordingNotificationPort());
         services.AddSingleton<ILogger<HumanInteractionChannelToolSource>>(
             NullLogger<HumanInteractionChannelToolSource>.Instance);
@@ -53,6 +56,7 @@ public sealed class SkillBackedHumanInteractionPortTests
         var deliveryTool = new RecordingTool("configured-delivery-tool", "configured delivery");
         var capabilityTool = new RecordingTool("capability-delivery-tool", "generic delivery", ["human_interaction.delivery"]);
         var services = new ServiceCollection();
+        services.AddSingleton<IAgentToolExecutionPort, PassThroughExecutionPort>();
         services.AddSingleton<IAgentToolSource>(new RecordingToolSource(capabilityTool, deliveryTool));
         services.AddSkillBackedHumanInteractionDelivery(options =>
         {
@@ -82,7 +86,9 @@ public sealed class SkillBackedHumanInteractionPortTests
     public async Task DeliverSuspensionAsync_ShouldInvokeCapabilityMatchedToolWithStructuredPayload()
     {
         var tool = new RecordingTool("generic-human-delivery", "generic delivery", ["human_interaction.delivery"]);
-        var port = new SkillBackedHumanInteractionPort([new RecordingToolSource(tool)]);
+        var port = new SkillBackedHumanInteractionPort(
+            [new RecordingToolSource(tool)],
+            new PassThroughExecutionPort());
 
         await port.DeliverSuspensionAsync(
             new HumanInteractionRequest
@@ -117,7 +123,7 @@ public sealed class SkillBackedHumanInteractionPortTests
             notificationPort,
             NullLogger<HumanInteractionChannelToolSource>.Instance);
         var tools = await source.DiscoverToolsAsync();
-        var port = new SkillBackedHumanInteractionPort([source]);
+        var port = new SkillBackedHumanInteractionPort([source], new PassThroughExecutionPort());
 
         await port.DeliverSuspensionAsync(
             new HumanInteractionRequest
@@ -157,6 +163,7 @@ public sealed class SkillBackedHumanInteractionPortTests
     {
         var port = new SkillBackedHumanInteractionPort(
             [new RecordingToolSource()],
+            new PassThroughExecutionPort(),
             Options.Create(new SkillBackedHumanInteractionPortOptions
             {
                 DeliveryToolName = "configured-delivery-tool",
@@ -182,7 +189,9 @@ public sealed class SkillBackedHumanInteractionPortTests
     [Fact]
     public async Task DeliverApprovalResolutionAsync_ShouldThrowWhenResolutionToolIsMissing()
     {
-        var port = new SkillBackedHumanInteractionPort([new RecordingToolSource()]);
+        var port = new SkillBackedHumanInteractionPort(
+            [new RecordingToolSource()],
+            new PassThroughExecutionPort());
 
         var act = () => port.DeliverApprovalResolutionAsync(
             new HumanApprovalResolution
@@ -207,6 +216,7 @@ public sealed class SkillBackedHumanInteractionPortTests
         var resolutionTool = new RecordingTool("resolution-tool", "generic resolution updater");
         var port = new SkillBackedHumanInteractionPort(
             [new RecordingToolSource(deliveryTool, resolutionTool)],
+            new PassThroughExecutionPort(),
             Options.Create(new SkillBackedHumanInteractionPortOptions
             {
                 ResolutionToolName = "resolution-tool",
@@ -237,6 +247,33 @@ public sealed class SkillBackedHumanInteractionPortTests
     {
         public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<IAgentTool>>(tools);
+    }
+
+    private sealed class PassThroughExecutionPort : IAgentToolExecutionPort
+    {
+        public async Task<AgentToolExecutionOutcome> ExecuteAsync(
+            AgentToolExecutionRequest request,
+            CancellationToken ct = default)
+        {
+            var resultJson = await request.Tool.ExecuteAsync(request.ArgumentsJson, ct);
+            return new AgentToolExecutionOutcome(
+                AgentToolExecutionOutcomeKind.Executed,
+                resultJson,
+                new AgentToolReceipt
+                {
+                    CallId = request.ExecutionContext.Request.CallId ?? string.Empty,
+                    ToolName = request.Tool.Name,
+                    Status = AgentToolReceiptStatus.Success,
+                    ResultJson = resultJson,
+                },
+                IsMutation: false,
+                FailureCode: string.Empty,
+                SafeMessage: string.Empty,
+                AgentToolExecutionFailureStage.None,
+                TerminalInvoked: true,
+                Retryable: false,
+                AuditCompleted: true);
+        }
     }
 
     private sealed class RecordingNotificationPort : IChannelInteractionNotificationPort

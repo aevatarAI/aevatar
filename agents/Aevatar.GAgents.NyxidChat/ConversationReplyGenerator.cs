@@ -68,9 +68,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
     private readonly ILLMProviderFactory _llmProviderFactory;
     private readonly IReadOnlyList<IAgentToolSource> _toolSources;
     private readonly IReadOnlyList<IAgentRunMiddleware> _agentMiddlewares;
-    private readonly IReadOnlyList<IToolCallMiddleware> _toolMiddlewares;
     private readonly IReadOnlyList<ILLMCallMiddleware> _llmMiddlewares;
-    private readonly IToolApprovalHandler? _approvalHandler;
+    private readonly IAgentToolExecutionPort? _toolExecutionPort;
     private readonly LocalSkillCatalog? _localSkillCatalog;
     private readonly IRemoteSkillFetcher? _remoteSkillFetcher;
     private readonly global::Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? _relayOptions;
@@ -112,7 +111,6 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         IBuiltInPromptFloorProvider builtInPromptFloorProvider,
         IEnumerable<IAgentToolSource>? toolSources = null,
         IEnumerable<IAgentRunMiddleware>? agentMiddlewares = null,
-        IEnumerable<IToolCallMiddleware>? toolMiddlewares = null,
         IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
         LocalSkillCatalog? localSkillCatalog = null,
         IRemoteSkillFetcher? remoteSkillFetcher = null,
@@ -122,17 +120,16 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         ILarkNyxClient? larkClient = null,
         IFileArtifactIngressPort? fileIngressPort = null,
         IFileArtifactReadPort? fileArtifactReadPort = null,
-        IToolApprovalHandler? approvalHandler = null,
         ILogger<NyxIdConversationReplyGenerator>? logger = null,
         ISystemSkillOverlayProvider? overlayProvider = null,
-        ILarkOutboundClientFactory? larkOutboundClientFactory = null)
+        ILarkOutboundClientFactory? larkOutboundClientFactory = null,
+        IAgentToolExecutionPort? toolExecutionPort = null)
     {
         _llmProviderFactory = llmProviderFactory ?? throw new ArgumentNullException(nameof(llmProviderFactory));
         _toolSources = (toolSources ?? []).ToArray();
         _agentMiddlewares = (agentMiddlewares ?? []).ToArray();
-        _toolMiddlewares = (toolMiddlewares ?? []).ToArray();
         _llmMiddlewares = (llmMiddlewares ?? []).ToArray();
-        _approvalHandler = approvalHandler;
+        _toolExecutionPort = toolExecutionPort;
         _localSkillCatalog = localSkillCatalog;
         _remoteSkillFetcher = remoteSkillFetcher;
         _relayOptions = relayOptions;
@@ -426,8 +423,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             toolLoop: new ToolCallLoop(
                 tools,
                 hooks: null,
-                toolMiddlewares: BuildToolMiddlewaresForTurn(),
-                llmMiddlewares: _llmMiddlewares),
+                llmMiddlewares: _llmMiddlewares,
+                toolExecutionPort: _toolExecutionPort),
             hooks: null,
             requestBuilder: _ => new LLMRequest
             {
@@ -1052,18 +1049,6 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
     private static ReplyTokenUsage MapUsage(TokenUsage usage) =>
         new(usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens);
 
-    private IReadOnlyList<IToolCallMiddleware> BuildToolMiddlewaresForTurn()
-    {
-        var effective = new List<IToolCallMiddleware>(_toolMiddlewares.Count + 2)
-        {
-            new ToolCallCredentialPolicyMiddleware(),
-            new ToolApprovalMiddleware(_approvalHandler ?? MissingApprovalHandler.Instance),
-        };
-        effective.AddRange(_toolMiddlewares.Where(static middleware =>
-            middleware is not ToolApprovalMiddleware and not ToolCallCredentialPolicyMiddleware));
-        return effective;
-    }
-
     private ChatRuntime BuildRuntime(
         ChatActivity activity,
         LLMControlContext llmControl,
@@ -1082,8 +1067,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             toolLoop: new ToolCallLoop(
                 tools,
                 hooks: null,
-                toolMiddlewares: BuildToolMiddlewaresForTurn(),
-                llmMiddlewares: _llmMiddlewares),
+                llmMiddlewares: _llmMiddlewares,
+                toolExecutionPort: _toolExecutionPort),
             hooks: null,
             requestBuilder: _ => new LLMRequest
             {

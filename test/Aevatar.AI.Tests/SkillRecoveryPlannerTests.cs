@@ -3,6 +3,10 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Tools;
+using Aevatar.Audit;
+using Aevatar.Audit.Abstractions.Identity;
+using Aevatar.Audit.Abstractions.Models;
+using Aevatar.Audit.Abstractions.Ports;
 using FluentAssertions;
 
 namespace Aevatar.AI.Tests;
@@ -28,12 +32,12 @@ public sealed class SkillRecoveryPlannerTests
             text: "loaded:" + args)));
         var orchestrator = new SkillRecoveryOrchestrator(
             Recovery(primarySkillName: null),
-            _ => new StreamingToolExecutor(tools));
+            toolContext => NewStreamingToolExecutor(tools, toolContext));
         var messages = new List<ChatMessage> { ChatMessage.User("/goal ship") };
         var pending = new List<ChatMessage> { messages[0] };
 
         var applied = await orchestrator.ApplyInitialDirectivesAsync(
-            toolContext: null,
+            toolContext: TestToolContext("req-orchestrator"),
             messages,
             pending,
             callIdPrefix: "req-orchestrator",
@@ -70,13 +74,13 @@ public sealed class SkillRecoveryPlannerTests
             text: "# project-summary\n\nInstructions")));
         var orchestrator = new SkillRecoveryOrchestrator(
             Recovery(primarySkillName: null),
-            _ => new StreamingToolExecutor(tools));
+            toolContext => NewStreamingToolExecutor(tools, toolContext));
         var messages = new List<ChatMessage> { ChatMessage.User("/goal ship") };
         var pending = new List<ChatMessage> { messages[0] };
         var longPrefix = "req-" + new string('a', 50);
 
         var applied = await orchestrator.ApplyInitialDirectivesAsync(
-            toolContext: null,
+            toolContext: TestToolContext(longPrefix),
             messages,
             pending,
             longPrefix,
@@ -108,7 +112,7 @@ public sealed class SkillRecoveryPlannerTests
             text: "# project-summary\n\nInstructions")));
         var orchestrator = new SkillRecoveryOrchestrator(
             Recovery(primarySkillName: null, maxAttempts: 1),
-            _ => new StreamingToolExecutor(tools));
+            toolContext => NewStreamingToolExecutor(tools, toolContext));
         var messages = new List<ChatMessage>
         {
             ChatMessage.User("/goal ship"),
@@ -124,7 +128,7 @@ public sealed class SkillRecoveryPlannerTests
         var pending = new List<ChatMessage>(messages);
 
         var recovered = await orchestrator.TryRecoverFinalAnswerAsync(
-            toolContext: null,
+            toolContext: TestToolContext("req-nudge"),
             messages,
             pending,
             finalContent: "cannot complete",
@@ -499,6 +503,22 @@ public sealed class SkillRecoveryPlannerTests
             CommandArguments: commandArguments,
             DiscoveryRequested: false);
 
+    private static StreamingToolExecutor NewStreamingToolExecutor(
+        ToolManager tools,
+        AgentToolExecutionContext? toolContext) =>
+        new(
+            tools,
+            toolContext: toolContext,
+            toolExecutionPort: new AdmittedAgentToolExecutor(
+                new AppendedAuditTrail(),
+                new StableIdentityHasher()));
+
+    private static AgentToolExecutionContext TestToolContext(string requestId) =>
+        AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity(requestId, null),
+        };
+
     private static ChatMessage AssistantToolCall(string id, string name, string argumentsJson) =>
         new()
         {
@@ -554,11 +574,27 @@ public sealed class SkillRecoveryPlannerTests
         public string Name => name;
         public string Description => "delegate";
         public string ParametersSchema => "{}";
+        public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             return Task.FromResult(execute(argumentsJson));
         }
+    }
+
+    private sealed class AppendedAuditTrail : IAuditTrailAppender
+    {
+        public Task<AuditTrailAppendResult> AppendAsync(
+            AuditRecord record,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(AuditTrailAppendResult.Appended(record.AuditId));
+    }
+
+    private sealed class StableIdentityHasher : IAuditActorIdentityHasher
+    {
+        public AuditActorIdentity Hash(string canonicalActorKey) => new("actor-hash", "key-1");
+
+        public bool Verify(string canonicalActorKey, string auditActorId, string identityKeyId) => true;
     }
 }

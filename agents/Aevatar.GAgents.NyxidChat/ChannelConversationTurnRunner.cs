@@ -71,6 +71,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private sealed record LarkSubjectContactIds(string? UserId, string? EmployeeId);
 
     private readonly IServiceProvider _toolServiceProvider;
+    private readonly IAgentToolExecutionPort _toolExecutionPort;
     private readonly IChannelBotRegistrationQueryPort _registrationQueryPort;
     private readonly IChannelBotRegistrationQueryByNyxIdentityPort? _registrationQueryByNyxIdentityPort;
     private readonly IEnumerable<IPlatformAdapter> _platformAdapters;
@@ -121,9 +122,11 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ILarkBotIdentityResolver? botIdentityResolver = null,
         INyxIdCurrentUserResolver? nyxIdCurrentUserResolver = null,
         IChannelRelayTailTextSender? relayTailTextSender = null,
-        IChannelRelayProxyResponseClassifier? relayProxyResponseClassifier = null)
+        IChannelRelayProxyResponseClassifier? relayProxyResponseClassifier = null,
+        IAgentToolExecutionPort? toolExecutionPort = null)
     {
         _toolServiceProvider = services ?? throw new ArgumentNullException(nameof(services));
+        _toolExecutionPort = toolExecutionPort ?? services.GetRequiredService<IAgentToolExecutionPort>();
         _registrationQueryPort = registrationQueryPort ?? throw new ArgumentNullException(nameof(registrationQueryPort));
         _registrationQueryByNyxIdentityPort = registrationQueryByNyxIdentityPort;
         _platformAdapters = platformAdapters ?? throw new ArgumentNullException(nameof(platformAdapters));
@@ -1408,17 +1411,23 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                     inboundEvent,
                     runtimeContext,
                     ct);
-            using (AgentToolContextScope.Push(BuildAgentBuilderToolContext(
-                       inboundEvent,
-                       activity,
-                       registration,
-                       ResolveUserAccessToken(activity, runtimeContext),
-                       metadata)))
-            {
-                var tool = ActivatorUtilities.CreateInstance<AgentBuilderTool>(_toolServiceProvider);
-                var toolResult = await tool.ExecuteAsync(decision.ToolArgumentsJson!, ct);
-                replyContent = AgentBuilderCardFlow.FormatToolResult(decision, toolResult);
-            }
+            var executionContext = BuildAgentBuilderToolContext(
+                    inboundEvent,
+                    activity,
+                    registration,
+                    ResolveUserAccessToken(activity, runtimeContext),
+                    metadata)
+                .WithCallId($"{inboundEvent.MessageId}:agent-builder");
+            var tool = ActivatorUtilities.CreateInstance<AgentBuilderTool>(_toolServiceProvider);
+            var outcome = await _toolExecutionPort.ExecuteAsync(
+                new AgentToolExecutionRequest(
+                    tool,
+                    decision.ToolArgumentsJson!,
+                    executionContext,
+                    AgentToolApprovalContinuationMode.None,
+                    null),
+                ct).ConfigureAwait(false);
+            replyContent = AgentBuilderCardFlow.FormatToolResult(decision, outcome.ResultJson);
         }
 
         var inbound = ToInboundMessage(activity);

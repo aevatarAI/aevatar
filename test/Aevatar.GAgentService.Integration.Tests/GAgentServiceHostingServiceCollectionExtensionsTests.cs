@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
@@ -126,6 +127,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
             .AddInMemoryCollection(new Dictionary<string, string?>())
             .Build();
         services.AddSingleton<ILLMProviderFactory>(new ThrowingLlmProviderFactory());
+        services.AddSingleton<IAgentToolExecutionPort, UnusedAgentToolExecutionPort>();
 
         services.AddGAgentServiceCapability(configuration);
 
@@ -428,6 +430,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
             options.AutoMapCapabilities = false;
         });
         builder.Services.AddSingleton<ILLMProviderFactory, UnusedLlmProviderFactory>();
+        builder.Services.AddSingleton<IAgentToolExecutionPort, UnusedAgentToolExecutionPort>();
         builder.AddGAgentServiceCapabilityBundle();
 
         await using var app = builder.Build();
@@ -479,6 +482,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
             options.EnableScriptingCapability = false;
         });
         builder.Services.AddSingleton<ILLMProviderFactory, UnusedLlmProviderFactory>();
+        builder.Services.AddSingleton<IAgentToolExecutionPort, UnusedAgentToolExecutionPort>();
         builder.AddGAgentServiceCapabilityBundle();
 
         await using var app = builder.Build();
@@ -791,6 +795,14 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
             throw new InvalidOperationException("The hosting startup test must not execute LLM requests.");
 
         public IReadOnlyList<string> GetAvailableProviders() => [];
+    }
+
+    private sealed class UnusedAgentToolExecutionPort : IAgentToolExecutionPort
+    {
+        public Task<AgentToolExecutionOutcome> ExecuteAsync(
+            AgentToolExecutionRequest request,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("The hosting composition test must not execute agent tools.");
     }
 
     private sealed class UnusedExternalIdentityBindingQueryPort : IExternalIdentityBindingQueryPort

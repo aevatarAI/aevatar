@@ -42,7 +42,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     private readonly ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>? _workflowDispatchService;
     private readonly IClock _clock;
     // Per-run counter for nyxid_proxy outcomes, populated by the instance-owned
-    // NyxIdProxyToolFailureCountingMiddleware appended to the tool-call middleware chain.
+    // NyxIdProxyToolFailureCountingMiddleware completion hook.
     // The runner reads it after each ChatStreamAsync to enforce the safety net for issue
     // #439 — see EnsureToolStatusAllowsCompletion.
     private readonly SkillRunnerToolFailureCounter _toolFailureCounter;
@@ -55,20 +55,17 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         ILLMProviderFactory? llmProviderFactory = null,
         IEnumerable<IAIGAgentExecutionHook>? additionalHooks = null,
         IEnumerable<IAgentRunMiddleware>? agentMiddlewares = null,
-        IEnumerable<IToolCallMiddleware>? toolMiddlewares = null,
         IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
         IEnumerable<IAgentToolSource>? toolSources = null,
         NyxIdApiClient? nyxIdApiClient = null,
         IOwnerLlmConfigSource? ownerLlmConfigSource = null,
         IRemoteSkillFetcher? remoteSkillFetcher = null,
         ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>? workflowDispatchService = null,
-        IToolApprovalHandler? approvalHandler = null,
         IClock? clock = null,
         ISkillRunnerOutboundDeliveryPort? outboundDeliveryPort = null)
         : this(
-            BuildToolMiddlewareChain(toolMiddlewares),
+            BuildAdditionalHooks(additionalHooks),
             llmProviderFactory,
-            additionalHooks,
             agentMiddlewares,
             llmMiddlewares,
             toolSources,
@@ -76,16 +73,14 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             ownerLlmConfigSource,
             remoteSkillFetcher,
             workflowDispatchService,
-            approvalHandler,
             clock,
             outboundDeliveryPort)
     {
     }
 
     private SkillRunnerGAgent(
-        ToolMiddlewareChain toolMiddlewareChain,
+        AdditionalHookSet additionalHookSet,
         ILLMProviderFactory? llmProviderFactory,
-        IEnumerable<IAIGAgentExecutionHook>? additionalHooks,
         IEnumerable<IAgentRunMiddleware>? agentMiddlewares,
         IEnumerable<ILLMCallMiddleware>? llmMiddlewares,
         IEnumerable<IAgentToolSource>? toolSources,
@@ -93,17 +88,14 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         IOwnerLlmConfigSource? ownerLlmConfigSource,
         IRemoteSkillFetcher? remoteSkillFetcher,
         ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>? workflowDispatchService,
-        IToolApprovalHandler? approvalHandler,
         IClock? clock,
         ISkillRunnerOutboundDeliveryPort? outboundDeliveryPort)
         : base(
             llmProviderFactory,
-            additionalHooks,
+            additionalHookSet.Hooks,
             agentMiddlewares,
-            toolMiddlewareChain.Middlewares,
             llmMiddlewares,
-            toolSources,
-            approvalHandler)
+            toolSources)
     {
         _nyxIdApiClient = nyxIdApiClient;
         _outboundDeliveryPort = outboundDeliveryPort;
@@ -111,12 +103,12 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         _remoteSkillFetcher = remoteSkillFetcher;
         _workflowDispatchService = workflowDispatchService;
         _clock = clock ?? new SystemClock();
-        _toolFailureCounter = toolMiddlewareChain.Counter;
-        _interactiveDeliverySignals = toolMiddlewareChain.InteractiveDeliverySignals;
+        _toolFailureCounter = additionalHookSet.Counter;
+        _interactiveDeliverySignals = additionalHookSet.InteractiveDeliverySignals;
     }
 
-    private readonly record struct ToolMiddlewareChain(
-        IReadOnlyList<IToolCallMiddleware> Middlewares,
+    private readonly record struct AdditionalHookSet(
+        IReadOnlyList<IAIGAgentExecutionHook> Hooks,
         SkillRunnerToolFailureCounter Counter,
         SkillRunnerInteractiveDeliverySignalCollector InteractiveDeliverySignals);
 
@@ -200,15 +192,15 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     /// <summary>Test-only accessor for the per-run nyxid_proxy counter.</summary>
     internal SkillRunnerToolFailureCounter ToolFailureCounterForTesting => _toolFailureCounter;
 
-    private static ToolMiddlewareChain BuildToolMiddlewareChain(
-        IEnumerable<IToolCallMiddleware>? input)
+    private static AdditionalHookSet BuildAdditionalHooks(
+        IEnumerable<IAIGAgentExecutionHook>? input)
     {
         var counter = new SkillRunnerToolFailureCounter();
         var interactiveDeliverySignals = new SkillRunnerInteractiveDeliverySignalCollector();
-        var combined = (input ?? Array.Empty<IToolCallMiddleware>()).ToList();
+        var combined = (input ?? []).ToList();
         combined.Add(new NyxIdProxyToolFailureCountingMiddleware(counter));
         combined.Add(new SkillRunnerInteractiveDeliveryTrackingMiddleware(interactiveDeliverySignals));
-        return new ToolMiddlewareChain(combined, counter, interactiveDeliverySignals);
+        return new AdditionalHookSet(combined, counter, interactiveDeliverySignals);
     }
 
     protected override async Task OnActivateAsync(CancellationToken ct)
@@ -1637,17 +1629,21 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             Request = toolContext.Request with { RequestId = $"{requestId}:lark-docx", CallId = "required-lark-docx" },
         };
 
-        using var _ = AgentToolContextScope.Push(scopedToolContext);
-        var result = await Tools.ExecuteToolCallAsync(
-            new ToolCall
-            {
-                Id = "required-lark-docx",
-                Name = LarkDocxCreateToolName,
-                ArgumentsJson = arguments,
-            },
+        var tool = Tools.Get(LarkDocxCreateToolName)
+                   ?? throw new InvalidOperationException($"Tool '{LarkDocxCreateToolName}' not found");
+        var executionPort = Services.GetRequiredService<IAgentToolExecutionPort>();
+        var outcome = await executionPort.ExecuteAsync(
+            new AgentToolExecutionRequest(
+                tool,
+                arguments,
+                scopedToolContext,
+                AgentToolApprovalContinuationMode.None,
+                null),
             ct);
 
-        if (!TryExtractSuccessfulDocumentUrl(result.Content, out var documentUrl))
+        if (outcome.Kind is not (AgentToolExecutionOutcomeKind.Executed or
+                AgentToolExecutionOutcomeKind.ExecutedAuditIncomplete) ||
+            !TryExtractSuccessfulDocumentUrl(outcome.ResultJson, out var documentUrl))
         {
             throw new InvalidOperationException(
                 "Feishu document output was requested, but document creation did not return a usable link.");

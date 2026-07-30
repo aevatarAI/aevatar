@@ -340,7 +340,7 @@ public class AIComponentCoverageTests
             },
         };
 
-        var provider = new MEAILLMProvider("meai", client);
+        var provider = new MEAILLMProvider("meai", client, toolExecutionPort: TestAgentToolExecutionPort.Instance);
 
         var tool = new StubTool("search");
         var response = await ChatStreamContentAggregator.AggregateResponseAsync(provider, new LLMRequest
@@ -777,8 +777,8 @@ public class AIComponentCoverageTests
             name: "mcp-1",
             serverConfig: new MCPServerConfig { Name = "server-1", Command = "missing-cmd" },
             defaultTool: "tool-a",
-            allowedTools: ["tool-a"],
-            allowedInputKeys: ["q"]);
+            allowedTools: ["tool-a"], allowedInputKeys: ["q"],
+            toolExecutionPort: TestAgentToolExecutionPort.Instance);
 
         SetPrivateField(connector, "_tools",
             CompletedLazy<IReadOnlyDictionary<string, IAgentTool>>(
@@ -809,8 +809,8 @@ public class AIComponentCoverageTests
         var discoveredMiss = new MCPConnector(
             name: "mcp-2",
             serverConfig: new MCPServerConfig { Name = "server-2", Command = "missing-cmd" },
-            allowedTools: [],
-            allowedInputKeys: []);
+            allowedTools: [], allowedInputKeys: [],
+            toolExecutionPort: TestAgentToolExecutionPort.Instance);
         SetPrivateField(discoveredMiss, "_tools",
             CompletedLazy<IReadOnlyDictionary<string, IAgentTool>>(
                 new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase)));
@@ -825,7 +825,7 @@ public class AIComponentCoverageTests
         var throwingConnector = new MCPConnector(
             name: "mcp-3",
             serverConfig: new MCPServerConfig { Name = "server-3", Command = "missing-cmd" },
-            defaultTool: "tool-x");
+            defaultTool: "tool-x", toolExecutionPort: TestAgentToolExecutionPort.Instance);
         SetPrivateField(throwingConnector, "_tools",
             CompletedLazy<IReadOnlyDictionary<string, IAgentTool>>(
                 new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase) { ["tool-x"] = new ThrowingTool("tool-x") }));
@@ -868,7 +868,7 @@ public class AIComponentCoverageTests
                 Url = "https://example.com/mcp",
                 HttpClient = client,
                 OwnsHttpClient = true,
-            });
+            }, toolExecutionPort: TestAgentToolExecutionPort.Instance);
 
         await connector.DisposeAsync();
         await connector.DisposeAsync();
@@ -1074,7 +1074,7 @@ public class AIComponentCoverageTests
         var openAiClient = new OpenAI.OpenAIClient(
             new System.ClientModel.ApiKeyCredential("test-key"), clientOptions);
         var chatClient = openAiClient.GetChatClient("gpt-5.4").AsIChatClient();
-        var provider = new MEAILLMProvider("test", chatClient);
+        var provider = new MEAILLMProvider("test", chatClient, toolExecutionPort: TestAgentToolExecutionPort.Instance);
 
         var tools = new IAgentTool[]
         {
@@ -1146,4 +1146,5 @@ public class AIComponentCoverageTests
             base.Dispose(disposing);
         }
     }
+
 }

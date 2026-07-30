@@ -13,6 +13,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Google.Protobuf;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.AI.Core;
@@ -62,10 +63,11 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
     private readonly ILLMProviderFactory _llmProviderFactory;
     private readonly IReadOnlyList<IAIGAgentExecutionHook> _additionalHooks;
     private readonly IReadOnlyList<IAgentRunMiddleware> _agentMiddlewares;
-    private readonly IReadOnlyList<IToolCallMiddleware> _toolMiddlewares;
     private readonly IReadOnlyList<ILLMCallMiddleware> _llmMiddlewares;
     private readonly IReadOnlyList<IAgentToolSource> _toolSources;
-    private readonly IToolApprovalHandler? _approvalHandler;
+
+    protected virtual AgentToolApprovalContinuationMode ToolApprovalContinuationMode =>
+        AgentToolApprovalContinuationMode.None;
 
     // ─── 组合的组件（各做一件事） ───
     /// <summary>工具管理器。</summary>
@@ -84,18 +86,14 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         ILLMProviderFactory? llmProviderFactory = null,
         IEnumerable<IAIGAgentExecutionHook>? additionalHooks = null,
         IEnumerable<IAgentRunMiddleware>? agentMiddlewares = null,
-        IEnumerable<IToolCallMiddleware>? toolMiddlewares = null,
         IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
-        IEnumerable<IAgentToolSource>? toolSources = null,
-        IToolApprovalHandler? approvalHandler = null)
+        IEnumerable<IAgentToolSource>? toolSources = null)
     {
         _llmProviderFactory = llmProviderFactory ?? NullLLMProviderFactory.Instance;
         _additionalHooks = (additionalHooks ?? []).ToArray();
         _agentMiddlewares = (agentMiddlewares ?? []).ToArray();
-        _toolMiddlewares = (toolMiddlewares ?? []).ToArray();
         _llmMiddlewares = (llmMiddlewares ?? []).ToArray();
         _toolSources = (toolSources ?? []).ToArray();
-        _approvalHandler = approvalHandler;
     }
 
     // ─── 初始化 ───
@@ -335,14 +333,14 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
             _foundationHooksRegistered = true;
         }
 
-        // 构建 Tool Call Middleware 链（审批中间件在最前面，不可绕过）
-        var effectiveToolMiddlewares = ToolCallMiddlewareChainFactory.ForAgentRuntime(
-            _toolMiddlewares,
-            _approvalHandler,
-            _hooks);
-
         // 构建 Chat Runtime
-        var toolLoop = new ToolCallLoop(Tools, _hooks, effectiveToolMiddlewares, _llmMiddlewares, History.Budget);
+        var toolLoop = new ToolCallLoop(
+            Tools,
+            _hooks,
+            _llmMiddlewares,
+            History.Budget,
+            Services.GetService<IAgentToolExecutionPort>(),
+            ToolApprovalContinuationMode);
         var compressionConfig = new Chat.ContextCompressionConfig(
             MaxPromptTokenBudget: EffectiveConfig.MaxPromptTokenBudget,
             CompressionThreshold: EffectiveConfig.CompressionThreshold,

@@ -1,9 +1,5 @@
-using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.AI.Core.Auditing;
-using Aevatar.AI.Core.Hooks;
-using Aevatar.AI.Core.Middleware;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Modules;
 using Microsoft.Extensions.Logging;
@@ -13,18 +9,13 @@ namespace Aevatar.Workflow.Integration.AI;
 
 public sealed class AgentWorkflowToolSourceAdapter(
     IEnumerable<IAgentToolSource> agentToolSources,
-    IEnumerable<IToolCallMiddleware>? toolMiddlewares = null,
-    IToolApprovalHandler? approvalHandler = null,
-    IEnumerable<IAIGAgentExecutionHook>? hooks = null,
+    IAgentToolExecutionPort toolExecutionPort,
     ILogger<AgentWorkflowToolSourceAdapter>? logger = null) : IWorkflowToolSource
 {
     private readonly IEnumerable<IAgentToolSource> _agentToolSources =
         agentToolSources ?? throw new ArgumentNullException(nameof(agentToolSources));
-    private readonly IReadOnlyList<IToolCallMiddleware> _toolMiddlewares =
-        ToolCallMiddlewareChainFactory.ForAgentRuntime(
-            toolMiddlewares ?? [],
-            approvalHandler,
-            hooks == null ? null : new AgentHookPipeline(hooks));
+    private readonly IAgentToolExecutionPort _toolExecutionPort =
+        toolExecutionPort ?? throw new ArgumentNullException(nameof(toolExecutionPort));
     private readonly ILogger<AgentWorkflowToolSourceAdapter> _logger =
         logger ?? NullLogger<AgentWorkflowToolSourceAdapter>.Instance;
 
@@ -35,7 +26,7 @@ public sealed class AgentWorkflowToolSourceAdapter(
         {
             var tools = await source.DiscoverToolsAsync(ct).ConfigureAwait(false);
             foreach (var tool in tools)
-                workflowTools.Add(new AgentWorkflowToolAdapter(tool, _toolMiddlewares, _logger));
+                workflowTools.Add(new AgentWorkflowToolAdapter(tool, _toolExecutionPort, _logger));
         }
 
         return workflowTools;
@@ -43,12 +34,12 @@ public sealed class AgentWorkflowToolSourceAdapter(
 
     private sealed class AgentWorkflowToolAdapter(
         IAgentTool tool,
-        IReadOnlyList<IToolCallMiddleware> toolMiddlewares,
+        IAgentToolExecutionPort toolExecutionPort,
         ILogger logger) : IWorkflowTool
     {
         private readonly IAgentTool _tool = tool ?? throw new ArgumentNullException(nameof(tool));
-        private readonly IReadOnlyList<IToolCallMiddleware> _toolMiddlewares =
-            toolMiddlewares ?? throw new ArgumentNullException(nameof(toolMiddlewares));
+        private readonly IAgentToolExecutionPort _toolExecutionPort =
+            toolExecutionPort ?? throw new ArgumentNullException(nameof(toolExecutionPort));
         private readonly ILogger _logger = logger ?? NullLogger.Instance;
 
         public string Name => _tool.Name;
@@ -70,6 +61,7 @@ public sealed class AgentWorkflowToolSourceAdapter(
             {
                 Request = credentialContext.Request with
                 {
+                    RequestId = Normalize(request.RunId),
                     CallId = Normalize(request.CallId),
                     IdempotencyKey = Normalize(request.IdempotencyKey),
                 },
@@ -89,76 +81,52 @@ public sealed class AgentWorkflowToolSourceAdapter(
                 !string.IsNullOrWhiteSpace(request.CallerCredential?.BearerToken),
                 !string.IsNullOrWhiteSpace(toolContext.Credentials.NyxIdAccessToken),
                 !string.IsNullOrWhiteSpace(toolContext.Credentials.NyxIdOrgToken));
-            using var scope = AgentToolContextScope.Push(toolContext);
-            var toolCallContext = new ToolCallContext
-            {
-                Tool = _tool,
-                ToolName = _tool.Name,
-                ToolCallId = Normalize(request.CallId) ?? string.Empty,
-                ArgumentsJson = request.ArgumentsJson,
-                CancellationToken = ct,
-                ExecutionContext = toolContext,
-                ApprovalGrant = request.ApprovalGrant == null
-                    ? null
-                    : new Aevatar.AI.Abstractions.Middleware.ToolApprovalGrant(
-                        request.ApprovalGrant.ApprovalRequestId,
-                        request.ApprovalGrant.ToolName,
-                        request.ApprovalGrant.ToolCallId),
-            };
+            var outcome = await _toolExecutionPort.ExecuteAsync(
+                new AgentToolExecutionRequest(
+                    _tool,
+                    request.ArgumentsJson,
+                    toolContext,
+                    AgentToolApprovalContinuationMode.ActorOwned,
+                    request.ApprovalGrant == null
+                        ? null
+                        : new AgentToolApprovalGrant(
+                            request.ApprovalGrant.ApprovalRequestId,
+                            request.RunId,
+                            request.ApprovalGrant.ToolName,
+                            request.ApprovalGrant.ToolCallId,
+                            AgentToolArgumentsDigest.ComputeSha256(request.ArgumentsJson))),
+                ct).ConfigureAwait(false);
 
-            await MiddlewarePipeline.RunToolCallAsync(_toolMiddlewares, toolCallContext, async () =>
-            {
-                if (toolCallContext.Terminate)
-                    return;
-
-                toolCallContext.Result = await _tool.ExecuteAsync(toolCallContext.ArgumentsJson, ct).ConfigureAwait(false);
-            }).ConfigureAwait(false);
-
-            if (toolCallContext.Terminate &&
-                toolCallContext.TerminationKind == ToolCallTerminationKind.ApprovalPending &&
-                toolCallContext.PendingApproval != null)
+            if (outcome.Kind == AgentToolExecutionOutcomeKind.ApprovalRequired)
             {
                 return new WorkflowToolExecutionResult(
                     string.Empty,
-                    PendingApproval: ToWorkflowToolApprovalPendingOutcome(toolCallContext.PendingApproval));
+                    PendingApproval: new WorkflowToolApprovalPendingOutcome(
+                        outcome.Receipt.ApprovalRequestId,
+                        outcome.Receipt.ToolName,
+                        outcome.Receipt.CallId,
+                        request.ArgumentsJson,
+                        outcome.Receipt.ApprovalMode.ToString(),
+                        IsReadOnly: !outcome.IsMutation,
+                        outcome.Receipt.IsDestructive));
             }
 
-            if (toolCallContext.Terminate)
-                throw new InvalidOperationException(FormatMiddlewareTermination(toolCallContext));
+            if (outcome.Kind is not (AgentToolExecutionOutcomeKind.Executed or
+                AgentToolExecutionOutcomeKind.ExecutedAuditIncomplete))
+            {
+                throw new InvalidOperationException(
+                    string.IsNullOrWhiteSpace(outcome.SafeMessage)
+                        ? outcome.FailureCode
+                        : outcome.SafeMessage);
+            }
 
-            var resultJson = toolCallContext.Result
-                             ?? throw new InvalidOperationException(
-                                 $"Tool '{_tool.Name}' returned no result.");
-            var receipt = ToolCallReceiptFinalizer.Finalize(toolCallContext).Receipt;
             return new WorkflowToolExecutionResult(
-                resultJson,
-                ToWorkflowManagedHandoffOutcome(receipt?.ManagedWorkflowHandoff));
+                outcome.ResultJson,
+                ToWorkflowManagedHandoffOutcome(outcome.Receipt.ManagedWorkflowHandoff));
         }
-
-        private static WorkflowToolApprovalPendingOutcome ToWorkflowToolApprovalPendingOutcome(
-            ToolApprovalPendingContext pending) =>
-            new(
-                pending.ApprovalRequestId,
-                pending.ToolName,
-                pending.ToolCallId,
-                pending.ArgumentsJson,
-                pending.ApprovalMode.ToString(),
-                pending.IsReadOnly,
-                pending.IsDestructive);
 
         private static string? Normalize(string? value) =>
             string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-
-        private static string FormatMiddlewareTermination(ToolCallContext context)
-        {
-            var reason = string.IsNullOrWhiteSpace(context.TerminationReason)
-                ? context.Result
-                : context.TerminationReason;
-            var suffix = string.IsNullOrWhiteSpace(reason)
-                ? string.Empty
-                : $": {reason}";
-            return $"Tool '{context.ToolName}' execution terminated by middleware ({context.TerminationKind}){suffix}";
-        }
 
         private static WorkflowManagedHandoffOutcome? ToWorkflowManagedHandoffOutcome(
             ManagedWorkflowHandoffReceipt? receipt)

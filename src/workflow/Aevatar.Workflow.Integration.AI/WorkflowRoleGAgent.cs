@@ -19,19 +19,15 @@ public class WorkflowRoleGAgent(
     ILLMProviderFactory? llmProviderFactory = null,
     IEnumerable<IAIGAgentExecutionHook>? additionalHooks = null,
     IEnumerable<IAgentRunMiddleware>? agentMiddlewares = null,
-    IEnumerable<IToolCallMiddleware>? toolMiddlewares = null,
     IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
     IEnumerable<IAgentToolSource>? toolSources = null,
-    IToolApprovalHandler? approvalHandler = null,
     IRemoteToolApprovalPort? remoteToolApprovalPort = null)
     : RoleGAgent(
         llmProviderFactory,
         additionalHooks,
         agentMiddlewares,
-        toolMiddlewares,
         llmMiddlewares,
         toolSources,
-        approvalHandler,
         remoteToolApprovalPort)
 {
     public const string WorkflowAssistantRoleAgentKind = "workflow.assistant-role";

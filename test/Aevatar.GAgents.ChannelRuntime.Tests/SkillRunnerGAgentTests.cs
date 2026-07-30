@@ -3375,6 +3375,8 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         services.AddSingleton<ISecretVault>(new FixedScheduledSecretVault());
         services.AddSingleton<EventSourcingRuntimeOptions>();
         services.AddSingleton<IActorRuntimeCallbackScheduler>(new RecordingCallbackScheduler());
+        services.AddSingleton<IAgentToolExecutionPort>(
+            new ChannelConversationTurnRunnerTests.TestAgentToolExecutionPort());
         services.AddTransient(
             typeof(IEventSourcingBehaviorFactory<>),
             typeof(DefaultEventSourcingBehaviorFactory<>));

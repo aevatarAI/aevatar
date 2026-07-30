@@ -1,6 +1,6 @@
 using System.Text.Json;
-using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.Hooks;
 using Aevatar.GAgents.Channel.Abstractions;
 
 namespace Aevatar.GAgents.Scheduled;
@@ -31,7 +31,7 @@ internal sealed class SkillRunnerInteractiveDeliverySignalCollector
 /// Tracks Lark interactive/card sends performed inside a scheduled skill run so the runner
 /// does not append a second outer reply after the skill has already delivered the card.
 /// </summary>
-internal sealed class SkillRunnerInteractiveDeliveryTrackingMiddleware : IToolCallMiddleware
+internal sealed class SkillRunnerInteractiveDeliveryTrackingMiddleware : IAIGAgentExecutionHook
 {
     private static readonly HashSet<string> LarkMessageTools =
     [
@@ -46,22 +46,25 @@ internal sealed class SkillRunnerInteractiveDeliveryTrackingMiddleware : IToolCa
         _collector = collector ?? throw new ArgumentNullException(nameof(collector));
     }
 
-    public async Task InvokeAsync(ToolCallContext context, Func<Task> next)
-    {
-        await next().ConfigureAwait(false);
+    public string Name => nameof(SkillRunnerInteractiveDeliveryTrackingMiddleware);
 
-        if (!IsInteractiveDeliveryTool(context.ToolName, context.ArgumentsJson))
-            return;
-        if (!TryReadSuccessfulToolResult(context.Result, out var larkMessageId, out var cardId))
-            return;
+    public int Priority => 0;
+
+    public Task OnToolExecuteEndAsync(AIGAgentExecutionHookContext context, CancellationToken ct)
+    {
+        if (!IsInteractiveDeliveryTool(context.ToolName ?? string.Empty, context.ToolArguments))
+            return Task.CompletedTask;
+        if (!TryReadSuccessfulToolResult(context.ToolResult, out var larkMessageId, out var cardId))
+            return Task.CompletedTask;
 
         _collector.Record(new SkillRunnerInteractiveDeliverySignal(
-            ResolveDeliveryKind(context.ToolName, context.ArgumentsJson),
+            ResolveDeliveryKind(context.ToolName ?? string.Empty, context.ToolArguments),
             DeliveryStatus.Succeeded,
             NormalizeOptional(AgentToolRequestContext.RequestId) ?? string.Empty,
             NormalizeOptional(context.ToolCallId) ?? NormalizeOptional(AgentToolRequestContext.CallId) ?? string.Empty,
             larkMessageId,
             cardId));
+        return Task.CompletedTask;
     }
 
     private static bool IsInteractiveDeliveryTool(string toolName, string? argumentsJson)

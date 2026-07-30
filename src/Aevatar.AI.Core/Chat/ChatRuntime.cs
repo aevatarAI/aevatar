@@ -397,8 +397,10 @@ public sealed class ChatRuntime
 
             var authorizedToolContext = AgentToolExecutionContextMapper.FromRequest(baseRequest);
             var streamingExecutor = new StreamingToolExecutor(
-                authorizedTools, _hooks, _toolLoop.ToolMiddlewares,
-                toolContext: authorizedToolContext);
+                authorizedTools, _hooks,
+                toolContext: authorizedToolContext,
+                toolExecutionPort: _toolLoop.ToolExecutionPort,
+                approvalContinuationMode: _toolLoop.ApprovalContinuationMode);
             using var streamingToolState = streamingExecutor.CreateExecutionState();
 
             void BindAuthorizedRequest(LLMRequest authorizedRequest)
@@ -406,8 +408,10 @@ public sealed class ChatRuntime
                 authorizedToolContext = AgentToolExecutionContextMapper.FromRequest(authorizedRequest);
                 authorizedTools = ToolCallLoop.CreateRequestToolManager(authorizedRequest.Tools);
                 streamingExecutor = new StreamingToolExecutor(
-                    authorizedTools, _hooks, _toolLoop.ToolMiddlewares,
-                    toolContext: authorizedToolContext);
+                    authorizedTools, _hooks,
+                    toolContext: authorizedToolContext,
+                    toolExecutionPort: _toolLoop.ToolExecutionPort,
+                    approvalContinuationMode: _toolLoop.ApprovalContinuationMode);
             }
 
             List<ToolCall>? deferredToolCalls = _hooks != null ? [] : null;
@@ -561,8 +565,10 @@ public sealed class ChatRuntime
                             parsed.ToolCalls);
 
                         var textToolExecutor = new StreamingToolExecutor(
-                            authorizedTools, _hooks, _toolLoop.ToolMiddlewares,
-                            toolContext: authorizedToolContext);
+                            authorizedTools, _hooks,
+                            toolContext: authorizedToolContext,
+                            toolExecutionPort: _toolLoop.ToolExecutionPort,
+                            approvalContinuationMode: _toolLoop.ApprovalContinuationMode);
                         using var textToolState = textToolExecutor.CreateExecutionState();
                         foreach (var tc in parsed.ToolCalls)
                             textToolExecutor.AddTool(textToolState, tc);
@@ -710,8 +716,10 @@ public sealed class ChatRuntime
                     finalParsed.ToolCalls);
 
                 var finalToolExecutor = new StreamingToolExecutor(
-                    authorizedTools, _hooks, _toolLoop.ToolMiddlewares,
-                    toolContext: finalRequest.ToolContext);
+                    authorizedTools, _hooks,
+                    toolContext: finalRequest.ToolContext,
+                    toolExecutionPort: _toolLoop.ToolExecutionPort,
+                    approvalContinuationMode: _toolLoop.ApprovalContinuationMode);
                 using var finalToolState = finalToolExecutor.CreateExecutionState();
                 foreach (var tc in finalParsed.ToolCalls)
                     finalToolExecutor.AddTool(finalToolState, tc);
@@ -775,9 +783,10 @@ public sealed class ChatRuntime
             toolContext => new StreamingToolExecutor(
                 authorizedTools(),
                 _hooks,
-                _toolLoop.ToolMiddlewares,
                 requestMetadata: baseRequest.Metadata,
-                toolContext: toolContext ?? AgentToolExecutionContextMapper.FromRequest(baseRequest)));
+                toolContext: toolContext ?? AgentToolExecutionContextMapper.FromRequest(baseRequest),
+                toolExecutionPort: _toolLoop.ToolExecutionPort,
+                approvalContinuationMode: _toolLoop.ApprovalContinuationMode));
 
     private List<ChatMessage> BuildFinalNoToolsMessages(
         IReadOnlyList<ChatMessage> messages,
@@ -1028,8 +1037,9 @@ public sealed class ChatRuntime
         var executor = new StreamingToolExecutor(
             ToolCallLoop.CreateRequestToolManager(tools),
             _hooks,
-            _toolLoop.ToolMiddlewares,
-            toolContext: toolContext);
+            toolContext: toolContext,
+            toolExecutionPort: _toolLoop.ToolExecutionPort,
+            approvalContinuationMode: _toolLoop.ApprovalContinuationMode);
         using var toolState = executor.CreateExecutionState();
         foreach (var toolCall in toolCalls)
             executor.AddTool(toolState, toolCall);

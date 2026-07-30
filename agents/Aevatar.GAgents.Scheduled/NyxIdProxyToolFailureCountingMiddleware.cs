@@ -1,5 +1,5 @@
 using System.Text.Json;
-using Aevatar.AI.Abstractions.Middleware;
+using Aevatar.AI.Core.Hooks;
 
 namespace Aevatar.GAgents.Scheduled;
 
@@ -19,7 +19,7 @@ namespace Aevatar.GAgents.Scheduled;
 /// semantics (e.g., a search tool that returns 0 hits is not a failure), and the safety
 /// net is scoped to the proxy fan-out that powers fetch-and-summarize skills.
 /// </remarks>
-internal sealed class NyxIdProxyToolFailureCountingMiddleware : IToolCallMiddleware
+internal sealed class NyxIdProxyToolFailureCountingMiddleware : IAIGAgentExecutionHook
 {
     private const string ToolName = "nyxid_proxy";
 
@@ -30,25 +30,29 @@ internal sealed class NyxIdProxyToolFailureCountingMiddleware : IToolCallMiddlew
         _counter = counter;
     }
 
-    public async Task InvokeAsync(ToolCallContext context, Func<Task> next)
+    public string Name => nameof(NyxIdProxyToolFailureCountingMiddleware);
+
+    public int Priority => 0;
+
+    public Task OnToolExecuteEndAsync(AIGAgentExecutionHookContext context, CancellationToken ct)
     {
-        await next();
-
         if (!string.Equals(context.ToolName, ToolName, StringComparison.Ordinal))
-            return;
+            return Task.CompletedTask;
 
-        var classification = ClassifyResult(context.Result);
+        var classification = ClassifyResult(context.ToolResult);
         switch (classification)
         {
             case ResultClassification.Error:
-                _counter.RecordFailure(ExtractFailureSample(context.ArgumentsJson, context.Result));
+                _counter.RecordFailure(ExtractFailureSample(context.ToolArguments, context.ToolResult));
                 break;
             case ResultClassification.Ok:
                 _counter.RecordSuccess();
                 break;
             // ResultClassification.Unknown (null/empty/non-JSON) is intentionally
-            // ignored — it carries no signal about success or failure.
+                // ignored — it carries no signal about success or failure.
         }
+
+        return Task.CompletedTask;
     }
 
     /// <summary>

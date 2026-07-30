@@ -221,7 +221,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
         result.ResultMessages.Select(static message => message.ToolCallId)
             .Should().Equal("call-1", "call-2");
         result.ResultMessages.Should().OnlyContain(static message =>
-            message.Content.Contains("not found", StringComparison.Ordinal));
+            message.Content.Contains("not authorized", StringComparison.Ordinal));
         registeredTool.ExecuteCount.Should().Be(0);
     }
 
@@ -259,7 +259,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
         result.Should().NotBeNull();
         result!.ResultMessages.Should().HaveCount(toolWorkItem.StepState.PendingToolCalls.Count);
         result.ResultMessages.Should().OnlyContain(static message =>
-            message.Content.Contains("not found", StringComparison.Ordinal));
+            message.Content.Contains("not authorized", StringComparison.Ordinal));
         registeredTool.ExecuteCount.Should().Be(0);
     }
 
@@ -301,7 +301,9 @@ public sealed class AgentRunReplyGenerationExecutorTests
         var runtime = new ChatRuntime(
             () => provider,
             new ChatHistory(),
-            new ToolCallLoop(tools),
+            new ToolCallLoop(
+                tools,
+                toolExecutionPort: new ChannelConversationTurnRunnerTests.TestAgentToolExecutionPort()),
             hooks: null,
             requestBuilder: _ => new LLMRequest { Messages = [], Tools = tools.GetAll() },
             llmMiddlewares: llmMiddlewares);

@@ -31,7 +31,6 @@ public sealed class ToolProviderHttpClientRegistrationTests
             .NotBeNull();
         provider.GetRequiredService<IRemoteToolApprovalPort>().Should()
             .BeOfType<NyxIdRemoteToolApprovalPort>();
-        provider.GetServices<IToolApprovalHandler>().Should().BeEmpty();
     }
 
     [Fact]
@@ -83,7 +82,7 @@ public sealed class ToolProviderHttpClientRegistrationTests
     }
 
     [Fact]
-    public async Task AddNyxIdTools_WithSshBypass_DiscoversSshExecWithoutLocalApprovalHandler()
+    public async Task AddNyxIdTools_WithSshOptIn_DiscoversToolsThatAlwaysRequireApproval()
     {
         var services = new ServiceCollection();
 
@@ -91,23 +90,19 @@ public sealed class ToolProviderHttpClientRegistrationTests
         {
             options.BaseUrl = "https://nyx.test";
             options.EnableSshExecTool = true;
-            options.BypassSshExecApproval = true;
         });
 
         await using var provider = services.BuildServiceProvider();
-        provider.GetServices<IToolApprovalHandler>().Should().BeEmpty();
         var source = provider.GetServices<IAgentToolSource>().OfType<NyxIdAgentToolSource>().Single();
 
         var tools = await source.DiscoverToolsAsync();
         var sshExec = tools.Should().ContainSingle(tool => tool is NyxIdSshExecTool).Subject;
         var codexExec = tools.Should().ContainSingle(tool => tool is NyxIdCodexExecTool).Subject;
         codexExec.Name.Should().Be("codex_exec");
-        sshExec.RequiresApproval("""{"service":"host","command":"uptime","principal":"ubuntu"}""")
-            .Should()
-            .BeFalse();
-        codexExec.RequiresApproval("""{"service":"host","principal":"ubuntu","prompt":"check"}""")
-            .Should()
-            .BeFalse();
+        sshExec.ApprovalMode.Should().Be(ToolApprovalMode.AlwaysRequire);
+        sshExec.IsDestructive.Should().BeTrue();
+        codexExec.ApprovalMode.Should().Be(ToolApprovalMode.AlwaysRequire);
+        codexExec.IsDestructive.Should().BeTrue();
     }
 
     [Fact]

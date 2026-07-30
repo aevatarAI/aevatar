@@ -12,8 +12,6 @@ namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 public sealed class NyxIdSshExecTool : IAgentTool
 {
     private readonly INyxIdSshCommandExecutor _executor;
-    private readonly NyxIdToolOptions _options;
-
     public NyxIdSshExecTool(
         NyxIdApiClient client,
         NyxIdToolOptions? options = null,
@@ -27,7 +25,7 @@ public sealed class NyxIdSshExecTool : IAgentTool
         NyxIdToolOptions options)
     {
         _executor = executor ?? throw new ArgumentNullException(nameof(executor));
-        _options = options ?? throw new ArgumentNullException(nameof(options));
+        ArgumentNullException.ThrowIfNull(options);
     }
 
     public string Name => "ssh_exec";
@@ -40,13 +38,9 @@ public sealed class NyxIdSshExecTool : IAgentTool
         "NyxID enforces an 8 KiB command length, a 1 MiB stdout/stderr cap, a 300s " +
         "timeout, and blocks dangerous commands (rm -rf /, mkfs, dd if=, fork bombs).";
 
-    public ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
+    public ToolApprovalMode ApprovalMode => ToolApprovalMode.AlwaysRequire;
 
-    /// <summary>
-    /// SSH execution can mutate the remote host arbitrarily. Hosts may explicitly bypass
-    /// this local approval gate only for internal-only deployments with their own trust boundary.
-    /// </summary>
-    public bool? RequiresApproval(string argumentsJson) => !_options.BypassSshExecApproval;
+    public bool IsDestructive => true;
 
     public string ParametersSchema => """
         {

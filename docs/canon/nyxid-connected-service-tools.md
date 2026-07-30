@@ -8,7 +8,7 @@ owner: eanzhao
 
 NyxID connected-service 工具以 `user_service_id` 为实例身份。Aevatar 在请求期从 NyxID `/keys` live surface 读取调用者可见的实例与 proxy-aware OpenAPI，构造 request-local `IAgentTool`；不保存 service/endpoint 影子目录，不从 slug 猜实例，也不在 prompt 里另建权限目录。
 
-模型看到的最终 tool schema 与实际执行对象来自同一份 `LLMRequest.Tools`。工具调用仍经 NyxID proxy 下发，凭证注入、proxy/broker 审计、approval、node routing 和 delegation 由 NyxID 负责；Aevatar 只记录自己的平台 tool invocation 与 typed receipt 审计。
+模型看到的最终 tool schema 与实际执行对象来自同一份 `LLMRequest.Tools`。工具调用仍经 NyxID proxy 下发，凭证注入、proxy/broker 审计、node routing 和 delegation 由 NyxID 负责；Aevatar 在进入 proxy 前统一执行 credential policy、actor-owned durable approval 和平台 tool audit。两边各自记录本边界事实，NyxID 的审批能力不能替代 Aevatar 本地准入。
 
 ## 1. 实例发现与身份
 
@@ -68,10 +68,13 @@ OpenAPI 参数通过结构化解析生成 JSON Schema：path/query/header 参数
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 sequenceDiagram
     participant L as "LLMRequest.Tools"
-    participant T as "Exact IAgentTool"
+    participant A as "IAgentToolExecutionPort"
+    participant T as "Exact IAgentTool terminal"
     participant K as "NyxID /keys/{user_service_id}"
     participant P as "NyxID proxy"
-    L->>T: "tool_call + enumerated user_service_id"
+    L->>A: "frozen tool_call + enumerated user_service_id"
+    A->>A: "classify once, credential, grant, RUNNING audit"
+    A->>T: "admitted exact arguments"
     T->>K: "revalidate with bound token"
     K-->>T: "identity, scope, active, route, spec"
     T->>P: "route constraint + encoded _nyxid_via"
@@ -79,6 +82,8 @@ sequenceDiagram
 ```
 
 每次 update、route、delete、request 或 operation 执行，都先用发现时绑定的 token 调用 exact `/keys/{user_service_id}`。当前记录必须与冻结记录在 identity、credential/token source、credential-allowed、catalog/slug、endpoint、`node_id`、route constraint 和 proxy spec 上一致，而且仍为 active；否则在副作用前 fail closed。
+
+这个重验是 terminal 内的资源一致性检查，不能代替 terminal 前的统一准入。所有 server-owned connected-service 工具都通过 `IAgentToolExecutionPort`；只有 `AdmittedAgentToolExecutor` 可以调用 raw `IAgentTool.ExecuteAsync`。端口冻结最终 arguments 并只分类一次，随后依次执行 credential policy、exact actor-owned grant、`WAITING_APPROVAL/RUNNING/TERMINAL` durable audit。只有 `RUNNING Appended` 才能进入上述 `/keys` 重验和 proxy 调用；`Duplicate`、`Conflict`、审批拒绝或 credential 拒绝的下游请求数都为 0。
 
 proxy 请求只接受相对路径，拒绝绝对 URL、fragment、query-in-path 和 dot segment。路由只来自冻结并重验后的 catalog ID 或 custom slug；Aevatar 追加 URL 编码后的 `_nyxid_via={user_service_id}`，调用参数不得提供任何 `_nyxid_*` query。header allow-list 仅含 JSON `Accept`/`Content-Type` 与条件头 `If-Match`/`If-None-Match`，禁止调用者注入 authorization、routing 或 hop-by-hop header。非 safe method 由客户端生成 typed idempotency key。
 
@@ -95,8 +100,14 @@ Voice realtime attach 也遵循同一边界。带 `voice-tool:` credential ref �
 - NyxID 是实例、credential、route 与 spec 的唯一真实源；Aevatar 不维护 process-local catalog 或 spec cache。
 - Aevatar 不新增 NyxID endpoint，不绕过 proxy 直连下游，不引入第二条投影或 read model。
 - 外部 JSON 只在 NyxID adapter 边界解析；内部实例、请求与结果语义使用 Protobuf。
-- 平台审计只由 canonical `ToolExecutionAuditMiddleware` 消费 typed execution context、credential source 和 receipt；默认不记录完整 arguments、result 或 `receipt.result_json`。
+- 平台审计由 canonical `AdmittedAgentToolExecutor` 消费 typed execution context、credential source、冻结参数 digest 和 receipt；默认不记录完整 arguments、result 或 `receipt.result_json`。
 - prompt-prefetch、API hint、slug-bound proxy 和独立 connected-service spec cache 已从主链删除；prompt 不能替代最终 tool schema 做能力判断。
+
+### 6.1 NyxID 聚合工具的 closed action
+
+`nyxid_approvals` 与 `nyxid_services` 使用同一个 closed typed action parser 生成 schema enum、执行 `GetCallSafety` 分类并选择 terminal action，三处不能维护不同的 action 列表。只有合法 JSON object 缺少 `action` 时才默认只读 `list`。空白、malformed JSON、数组、scalar、非字符串/null/空白 action 和 unknown action 一律按 `requires approval + non-read-only + destructive` 分类；若进入 terminal，只返回 `invalid_action`，不调用 NyxID HTTP。
+
+所有 mutation 都需要 durable approval，包括 approval decision、grant revoke、service create/update/route/delete 和 credential rotation。准入发生在 mutation 的任何预读之前，因此 credential rotation 被拒绝时，查找 `api_key_id` 的 GET 和后续 update 都必须为 0。
 
 ## 7. `QuotaLedger` profile
 
@@ -115,3 +126,5 @@ Voice realtime attach 也遵循同一边界。带 `voice-tool:` credential ref �
 - `src/Aevatar.AI.ToolProviders.NyxId/NyxIdConnectedServiceToolSource.cs`
 - `src/Aevatar.AI.ToolProviders.NyxId/NyxIdApiClient.cs`
 - `src/Aevatar.AI.ToolProviders.ToolSetRegistry/ToolSetNames.cs`
+- `src/Aevatar.AI.Abstractions/ToolProviders/IAgentToolExecutionPort.cs`
+- `src/Aevatar.AI.Core/Tools/AdmittedAgentToolExecutor.cs`

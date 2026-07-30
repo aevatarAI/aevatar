@@ -100,6 +100,7 @@ public class AIFeatureBootstrapCoverageTests
     public void AddAevatarAIFeatures_ShouldRegisterCoreServicesWithExplicitApiKey()
     {
         var services = new ServiceCollection();
+        VoicePresenceBootstrapTests.AddToolExecutionAuditDependencies(services);
         var config = new ConfigurationBuilder().Build();
 
         services.AddAevatarAIFeatures(config, options =>
@@ -227,6 +228,7 @@ public class AIFeatureBootstrapCoverageTests
         services.AddSingleton<IProjectionDocumentReader<VoicePresenceCapabilityReadModel, string>>(
             new EmptyVoicePresenceCapabilityReader());
         AddVoicePresenceTestCredentialResolver(services);
+        VoicePresenceBootstrapTests.AddToolExecutionAuditDependencies(services);
 
         services.AddAevatarAIFeatures(config, options =>
         {
@@ -291,6 +293,7 @@ public class AIFeatureBootstrapCoverageTests
         services.AddSingleton<IProjectionDocumentReader<VoicePresenceCapabilityReadModel, string>>(
             new EmptyVoicePresenceCapabilityReader());
         AddVoicePresenceTestCredentialResolver(services);
+        VoicePresenceBootstrapTests.AddToolExecutionAuditDependencies(services);
 
         services.AddAevatarAIFeatures(config, options =>
         {
@@ -607,15 +610,13 @@ public class AIFeatureBootstrapCoverageTests
         var source = new StubAgentToolSource([new StubAgentTool("demo_tool", """{"ok":true}""")]);
         var services = new ServiceCollection()
             .AddSingleton<IAgentToolSource>(source);
+        VoicePresenceBootstrapTests.AddToolExecutionAuditDependencies(services);
         var config = new ConfigurationBuilder().Build();
 
         services.AddAevatarAIFeatures(config, options => options.EnableMEAIProviders = false);
 
         await using var provider = services.BuildServiceProvider();
-        // Yield capability follows the actor, never the container (#2004): bootstrap must
-        // not hand a yielding handler to surfaces without a pending-approval continuation.
-        provider.GetService<IToolApprovalHandler>().Should().BeNull();
-        provider.GetServices<IToolCallMiddleware>().Should().NotContain(x => x is ToolApprovalMiddleware);
+        services.Should().Contain(descriptor => descriptor.ServiceType == typeof(IAgentToolExecutionPort));
 
         var workflowSource = provider.GetServices<IWorkflowToolSource>()
             .Should()
@@ -642,7 +643,9 @@ public class AIFeatureBootstrapCoverageTests
     [Fact]
     public void MCPConnectorBuilder_ShouldValidateCommandAndBuildConnector()
     {
-        var builder = new MCPConnectorBuilder();
+        var builder = new MCPConnectorBuilder(
+            new VoicePresenceBootstrapTests.TestHttpClientFactory(),
+            new VoicePresenceBootstrapTests.UnusedAgentToolExecutionPort());
 
         var invalidEntry = new ConnectorConfigEntry
         {
@@ -681,7 +684,9 @@ public class AIFeatureBootstrapCoverageTests
     [Fact]
     public void MCPConnectorBuilder_ShouldSupportRemoteUrlConfiguration()
     {
-        var builder = new MCPConnectorBuilder();
+        var builder = new MCPConnectorBuilder(
+            new VoicePresenceBootstrapTests.TestHttpClientFactory(),
+            new VoicePresenceBootstrapTests.UnusedAgentToolExecutionPort());
         var entry = new ConnectorConfigEntry
         {
             Name = "nyxid_mcp",

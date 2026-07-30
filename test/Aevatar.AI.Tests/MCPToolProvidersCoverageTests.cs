@@ -97,8 +97,8 @@ public sealed class MCPToolProvidersCoverageTests
         var connector = new MCPConnector(
             name: "mcp-connector",
             serverConfig: new MCPServerConfig { Name = "srv", Command = "cmd" },
-            defaultTool: "mcp_echo",
-            clientManager: discovery);
+            defaultTool: "mcp_echo", clientManager: discovery,
+            toolExecutionPort: TestAgentToolExecutionPort.Instance);
         var ready = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var start = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var readyCount = 0;

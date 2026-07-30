@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Voice;
 using Aevatar.Foundation.Abstractions.Credentials;
@@ -14,7 +15,7 @@ public class AgentToolVoiceInvokerTests
     {
         var invoker = new AgentToolVoiceInvoker([
             new StubToolSource(new FakeAgentTool("door.open", """{"ok":true}""")),
-        ]);
+        ], new PassThroughExecutionPort());
 
         var result = await invoker.ExecuteAsync("door.open", """{"target":"front"}""");
 
@@ -24,7 +25,7 @@ public class AgentToolVoiceInvokerTests
     [Fact]
     public async Task ExecuteAsync_ShouldThrowWhenToolMissing()
     {
-        var invoker = new AgentToolVoiceInvoker([]);
+        var invoker = new AgentToolVoiceInvoker([], new PassThroughExecutionPort());
 
         var act = () => invoker.ExecuteAsync("missing", "{}");
 
@@ -36,7 +37,7 @@ public class AgentToolVoiceInvokerTests
     public async Task ExecuteAsync_ShouldCacheDiscoveredTools()
     {
         var source = new CountingToolSource(new FakeAgentTool("door.open", """{"ok":true}"""));
-        var invoker = new AgentToolVoiceInvoker([source]);
+        var invoker = new AgentToolVoiceInvoker([source], new PassThroughExecutionPort());
 
         await invoker.ExecuteAsync("door.open", "{}");
         await invoker.ExecuteAsync("door.open", "{}");
@@ -48,7 +49,7 @@ public class AgentToolVoiceInvokerTests
     public async Task ExecuteAsync_ConcurrentFirstUse_ShouldStartSourceDiscoveryOnce()
     {
         using var source = new BlockingCountingToolSource(new FakeAgentTool("door.open", """{"ok":true}"""));
-        var invoker = new AgentToolVoiceInvoker([source]);
+        var invoker = new AgentToolVoiceInvoker([source], new PassThroughExecutionPort());
         var ready = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var start = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var readyCount = 0;
@@ -80,7 +81,10 @@ public class AgentToolVoiceInvokerTests
     {
         var captured = new CapturingAgentTool("nyxid_proxy");
         var credentials = new StubCredentialProvider(("voice-tool:ref-1", "caller-token-123"));
-        var invoker = new AgentToolVoiceInvoker([new StubToolSource(captured)], credentials);
+        var invoker = new AgentToolVoiceInvoker(
+            [new StubToolSource(captured)],
+            new PassThroughExecutionPort(),
+            credentials);
         var toolContext = new VoiceToolExecutionContext
         {
             CredentialRef = "voice-tool:ref-1",
@@ -99,7 +103,10 @@ public class AgentToolVoiceInvokerTests
         var allowed = new CapturingAgentTool("door.open");
         var hidden = new CapturingAgentTool("lights.toggle");
         var credentials = new StubCredentialProvider(("voice-tool:ref-2", "caller-token-456"));
-        var invoker = new AgentToolVoiceInvoker([new StubToolSource(allowed, hidden)], credentials);
+        var invoker = new AgentToolVoiceInvoker(
+            [new StubToolSource(allowed, hidden)],
+            new PassThroughExecutionPort(),
+            credentials);
         var toolContext = CreateFullToolContext("voice-tool:ref-2");
 
         await invoker.ExecuteAsync("door.open", "{}", toolContext);
@@ -132,7 +139,9 @@ public class AgentToolVoiceInvokerTests
     public async Task ExecuteAsync_ShouldNotSetCredentialContext_WhenNoScope()
     {
         var captured = new CapturingAgentTool("nyxid_proxy");
-        var invoker = new AgentToolVoiceInvoker([new StubToolSource(captured)]);
+        var invoker = new AgentToolVoiceInvoker(
+            [new StubToolSource(captured)],
+            new PassThroughExecutionPort());
 
         await invoker.ExecuteAsync("nyxid_proxy", "{}");
 
@@ -186,6 +195,36 @@ public class AgentToolVoiceInvokerTests
         {
             _ = ct;
             return Task.FromResult<IReadOnlyList<IAgentTool>>(tools);
+        }
+    }
+
+    private sealed class PassThroughExecutionPort : IAgentToolExecutionPort
+    {
+        public async Task<AgentToolExecutionOutcome> ExecuteAsync(
+            AgentToolExecutionRequest request,
+            CancellationToken ct = default)
+        {
+            string resultJson;
+            using (AgentToolContextScope.Push(request.ExecutionContext))
+                resultJson = await request.Tool.ExecuteAsync(request.ArgumentsJson, ct);
+
+            return new AgentToolExecutionOutcome(
+                AgentToolExecutionOutcomeKind.Executed,
+                resultJson,
+                new AgentToolReceipt
+                {
+                    CallId = request.ExecutionContext.Request.CallId ?? string.Empty,
+                    ToolName = request.Tool.Name,
+                    Status = AgentToolReceiptStatus.Success,
+                    ResultJson = resultJson,
+                },
+                IsMutation: false,
+                FailureCode: string.Empty,
+                SafeMessage: string.Empty,
+                AgentToolExecutionFailureStage.None,
+                TerminalInvoked: true,
+                Retryable: false,
+                AuditCompleted: true);
         }
     }
 

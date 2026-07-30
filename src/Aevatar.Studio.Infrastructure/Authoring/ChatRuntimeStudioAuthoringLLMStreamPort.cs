@@ -51,7 +51,6 @@ internal sealed class ChatRuntimeStudioAuthoringLLMStreamPort : IStudioAuthoring
             toolLoop: new ToolCallLoop(
                 new ToolManager(),
                 hooks: null,
-                toolMiddlewares: null,
                 llmMiddlewares: _llmMiddlewares),
             hooks: null,
             requestBuilder: _ => BuildRequest(config),

@@ -10,13 +10,16 @@ public sealed class SkillBackedHumanInteractionPort : IHumanInteractionPort
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     private readonly IEnumerable<IAgentToolSource> _toolSources;
+    private readonly IAgentToolExecutionPort _toolExecutionPort;
     private readonly SkillBackedHumanInteractionPortOptions _options;
 
     public SkillBackedHumanInteractionPort(
         IEnumerable<IAgentToolSource> toolSources,
+        IAgentToolExecutionPort toolExecutionPort,
         IOptions<SkillBackedHumanInteractionPortOptions>? options = null)
     {
         _toolSources = toolSources ?? throw new ArgumentNullException(nameof(toolSources));
+        _toolExecutionPort = toolExecutionPort ?? throw new ArgumentNullException(nameof(toolExecutionPort));
         _options = options?.Value ?? new SkillBackedHumanInteractionPortOptions();
     }
 
@@ -66,7 +69,26 @@ public sealed class SkillBackedHumanInteractionPort : IHumanInteractionPort
         if (tool == null)
             throw MissingTool(configuredToolName, capability);
 
-        await tool.ExecuteAsync(JsonSerializer.Serialize(payload, JsonOptions), ct).ConfigureAwait(false);
+        var requestId = Guid.NewGuid().ToString("N");
+        var outcome = await _toolExecutionPort.ExecuteAsync(
+            new AgentToolExecutionRequest(
+                tool,
+                JsonSerializer.Serialize(payload, JsonOptions),
+                AgentToolExecutionContext.Empty with
+                {
+                    Request = new AgentToolRequestIdentity(requestId, $"{requestId}:delivery"),
+                },
+                AgentToolApprovalContinuationMode.None,
+                null),
+            ct).ConfigureAwait(false);
+        if (outcome.Kind is not (AgentToolExecutionOutcomeKind.Executed or
+            AgentToolExecutionOutcomeKind.ExecutedAuditIncomplete))
+        {
+            throw new InvalidOperationException(
+                string.IsNullOrWhiteSpace(outcome.SafeMessage)
+                    ? outcome.FailureCode
+                    : outcome.SafeMessage);
+        }
     }
 
     private async Task<IAgentTool?> ResolveToolAsync(

@@ -41,7 +41,8 @@ public sealed class AgentToolAIFunctionSchemaSanitizationTests
         var openAiClient = new OpenAI.OpenAIClient(
             new System.ClientModel.ApiKeyCredential("test-key"), clientOptions);
         var chatClient = openAiClient.GetChatClient("gpt-5.5").AsIChatClient();
-        var provider = new MEAILLMProvider("test", chatClient);
+        var executionPort = new RecordingExecutionPort();
+        var provider = new MEAILLMProvider("test", chatClient, toolExecutionPort: executionPort);
 
         // Root-level map (additionalProperties is a schema object) + a nested map — both must be coerced.
         const string mapSchema =
@@ -67,6 +68,7 @@ public sealed class AgentToolAIFunctionSchemaSanitizationTests
         using var doc = System.Text.Json.JsonDocument.Parse(capturedRequestBody!);
         var parameters = doc.RootElement.GetProperty("tools")[0].GetProperty("function").GetProperty("parameters");
         AssertNoObjectAdditionalProperties(parameters);
+        executionPort.Calls.Should().Be(0);
     }
 
     [Fact]
@@ -92,7 +94,8 @@ public sealed class AgentToolAIFunctionSchemaSanitizationTests
         var openAiClient = new OpenAI.OpenAIClient(
             new System.ClientModel.ApiKeyCredential("test-key"), clientOptions);
         var chatClient = openAiClient.GetChatClient("gpt-5.5").AsIChatClient();
-        var provider = new MEAILLMProvider("test", chatClient);
+        var executionPort = new RecordingExecutionPort();
+        var provider = new MEAILLMProvider("test", chatClient, toolExecutionPort: executionPort);
 
         const string strictSchema =
             """{"type":"object","properties":{"city":{"type":"string"}},"required":["city"],"additionalProperties":false}""";
@@ -110,6 +113,31 @@ public sealed class AgentToolAIFunctionSchemaSanitizationTests
         using var doc = System.Text.Json.JsonDocument.Parse(capturedRequestBody!);
         var parameters = doc.RootElement.GetProperty("tools")[0].GetProperty("function").GetProperty("parameters");
         parameters.GetProperty("additionalProperties").ValueKind.Should().Be(System.Text.Json.JsonValueKind.False);
+        executionPort.Calls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task InvokeAsync_WithoutStableAmbientIdentities_ShouldNotEnterExecutionPort()
+    {
+        var executionPort = new RecordingExecutionPort();
+        var functionType = typeof(MEAILLMProvider).Assembly.GetType(
+            "Aevatar.AI.LLMProviders.MEAI.AgentToolAIFunction",
+            throwOnError: true)!;
+        var function = (AIFunction)Activator.CreateInstance(
+            functionType,
+            System.Reflection.BindingFlags.Instance |
+            System.Reflection.BindingFlags.Public |
+            System.Reflection.BindingFlags.NonPublic,
+            binder: null,
+            args: [new SchemaStubTool("test_tool", "{}"), executionPort],
+            culture: null)!;
+        using var _ = AgentToolContextScope.Push(AgentToolExecutionContext.Empty);
+
+        var act = async () => await function.InvokeAsync(new AIFunctionArguments());
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*stable request and function-call identities*");
+        executionPort.Calls.Should().Be(0);
     }
 
     private static void AssertNoObjectAdditionalProperties(System.Text.Json.JsonElement element)
@@ -144,6 +172,19 @@ public sealed class AgentToolAIFunctionSchemaSanitizationTests
         {
             ct.ThrowIfCancellationRequested();
             return Task.FromResult("{}");
+        }
+    }
+
+    private sealed class RecordingExecutionPort : IAgentToolExecutionPort
+    {
+        public int Calls { get; private set; }
+
+        public Task<AgentToolExecutionOutcome> ExecuteAsync(
+            AgentToolExecutionRequest request,
+            CancellationToken ct = default)
+        {
+            Calls++;
+            throw new InvalidOperationException("The execution port should not be called by this test.");
         }
     }
 

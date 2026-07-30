@@ -14,19 +14,16 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
     private readonly NyxIdToolOptions _options;
     private readonly NyxIdApiClient _client;
     private readonly ILogger _logger;
-    private readonly bool _toolApprovalHandlerAvailable;
     private readonly INyxIdProxyFileArtifactIngress? _fileArtifactIngress;
 
     public NyxIdAgentToolSource(
         NyxIdToolOptions options,
         NyxIdApiClient client,
-        IToolApprovalHandler? approvalHandler = null,
         INyxIdProxyFileArtifactIngress? fileArtifactIngress = null,
         ILogger<NyxIdAgentToolSource>? logger = null)
     {
         _options = options;
         _client = client;
-        _toolApprovalHandlerAvailable = approvalHandler is not null;
         _fileArtifactIngress = fileArtifactIngress;
         _logger = logger ?? NullLogger<NyxIdAgentToolSource>.Instance;
     }
@@ -67,24 +64,8 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
             new NyxIdAdminTool(_client),
         };
 
-        // Refactor (iter23/cluster-001-nyxid-tool-approval-polling):
-        //   Old pattern: NyxID remote fallback registration could be mistaken for local execution gating.
-        //   New principle: ssh_exec exposure requires a local approval handler/middleware; remote fallback is separate.
-        // SSH-backed execution tools are opt-in. Their Auto/RequiresApproval=true contract relies on the
-        // host wiring an approval middleware around tool execution; without that middleware,
-        // a host would let the LLM run remote shell commands directly. Make hosts opt in
-        // explicitly so that exposure is a deliberate decision. A deployment may also opt
-        // into BypassSshExecApproval, in which case this source does not require a local
-        // approval handler because the tool deliberately returns RequiresApproval=false.
         if (_options.EnableSshExecTool)
         {
-            if (!_options.BypassSshExecApproval && !_toolApprovalHandlerAvailable)
-            {
-                throw new InvalidOperationException(
-                    "NyxID SSH execution tools are enabled but no IToolApprovalHandler is registered. " +
-                    "Register a local approval handler or explicitly set BypassSshExecApproval before exposing them.");
-            }
-
             var sshExecutor = new NyxIdSshCommandExecutor(_client, _logger);
             tools.Add(new NyxIdSshExecTool(sshExecutor, _options));
             tools.Add(new NyxIdCodexExecTool(sshExecutor, _options));

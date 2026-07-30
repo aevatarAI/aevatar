@@ -1325,7 +1325,9 @@ public sealed class ChatRuntimeStreamingBufferTests
     {
         var history = new ChatHistory();
         var effectiveTools = tools ?? new ToolManager();
-        var toolLoop = new ToolCallLoop(effectiveTools);
+        var toolLoop = new ToolCallLoop(
+            effectiveTools,
+            toolExecutionPort: new TestAgentToolExecutionPort());
 
         return new ChatRuntime(
             providerFactory: () => provider,
@@ -1515,6 +1517,58 @@ public sealed class ChatRuntimeStreamingBufferTests
         {
             ct.ThrowIfCancellationRequested();
             return Task.FromResult(execute(argumentsJson));
+        }
+    }
+
+    private sealed class TestAgentToolExecutionPort : IAgentToolExecutionPort
+    {
+        public async Task<AgentToolExecutionOutcome> ExecuteAsync(
+            AgentToolExecutionRequest request,
+            CancellationToken ct = default)
+        {
+            var safety = request.Tool.GetCallSafety(request.ArgumentsJson);
+            try
+            {
+                var resultJson = await request.Tool.ExecuteAsync(request.ArgumentsJson, ct);
+                return new AgentToolExecutionOutcome(
+                    AgentToolExecutionOutcomeKind.Executed,
+                    resultJson,
+                    AgentToolReceiptFactory.CreateSuccess(
+                        request.Tool,
+                        request.ExecutionContext.Request.CallId ?? string.Empty,
+                        request.Tool.Name,
+                        safety,
+                        resultJson),
+                    IsMutation: !safety.IsReadOnly,
+                    FailureCode: string.Empty,
+                    SafeMessage: string.Empty,
+                    AgentToolExecutionFailureStage.None,
+                    TerminalInvoked: true,
+                    Retryable: false,
+                    AuditCompleted: true);
+            }
+            catch (Exception ex)
+            {
+                var resultJson = ToolManager.BuildErrorJson(ex.GetType().Name);
+                return new AgentToolExecutionOutcome(
+                    AgentToolExecutionOutcomeKind.Failed,
+                    resultJson,
+                    AgentToolReceiptFactory.CreateError(
+                        request.Tool,
+                        request.ExecutionContext.Request.CallId ?? string.Empty,
+                        request.Tool.Name,
+                        safety,
+                        resultJson,
+                        "tool_execution_failed",
+                        ex.GetType().Name),
+                    IsMutation: !safety.IsReadOnly,
+                    FailureCode: "tool_execution_failed",
+                    SafeMessage: ex.GetType().Name,
+                    AgentToolExecutionFailureStage.TerminalExecution,
+                    TerminalInvoked: true,
+                    Retryable: false,
+                    AuditCompleted: true);
+            }
         }
     }
 }

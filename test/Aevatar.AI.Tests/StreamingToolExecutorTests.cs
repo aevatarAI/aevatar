@@ -44,7 +44,7 @@ public class StreamingToolExecutorTests
         tools.Register(new ConcurrencyTrackingTool("read3", isReadOnly: true, async ct =>
             await TrackConcurrencyAsync("r3", gate, ct)));
 
-        var executor = new StreamingToolExecutor(tools);
+        var executor = NewStreamingToolExecutor(tools);
         using var executionState = executor.CreateExecutionState();
 
         executor.AddTool(executionState, new ToolCall { Id = "tc-1", Name = "read1", ArgumentsJson = "{}" });
@@ -86,7 +86,7 @@ public class StreamingToolExecutorTests
         tools.Register(new ConcurrencyTrackingTool("write2", isReadOnly: false, async ct =>
             await TrackConcurrencyAsync("w2", ct)));
 
-        var executor = new StreamingToolExecutor(tools);
+        var executor = NewStreamingToolExecutor(tools);
         using var executionState = executor.CreateExecutionState();
 
         executor.AddTool(executionState, new ToolCall { Id = "tc-1", Name = "write1", ArgumentsJson = "{}" });
@@ -137,7 +137,7 @@ public class StreamingToolExecutorTests
             return "fast-result";
         }));
 
-        var executor = new StreamingToolExecutor(tools);
+        var executor = NewStreamingToolExecutor(tools);
         using var executionState = executor.CreateExecutionState();
 
         executor.AddTool(executionState, new ToolCall { Id = "tc-slow", Name = "slow", ArgumentsJson = "{}" });
@@ -188,7 +188,7 @@ public class StreamingToolExecutorTests
             return "w1";
         }));
 
-        var executor = new StreamingToolExecutor(tools);
+        var executor = NewStreamingToolExecutor(tools);
         using var executionState = executor.CreateExecutionState();
 
         executor.AddTool(executionState, new ToolCall { Id = "tc-1", Name = "read1", ArgumentsJson = "{}" });
@@ -220,24 +220,13 @@ public class StreamingToolExecutorTests
     [Fact]
     public async Task ErrorCascading_ShouldSkipSubsequentQueuedTools()
     {
-        // Use middleware to simulate an exception that escapes past ToolManager's catch.
-        // ToolManager itself catches exceptions, so we need middleware to throw instead.
         var tools = new ToolManager();
         tools.Register(new ConcurrencyTrackingTool("failing", isReadOnly: false, _ => "ok"));
         tools.Register(new ConcurrencyTrackingTool("skipped", isReadOnly: false, _ => "should-not-run"));
 
-        var throwOnFirst = true;
-        var middleware = new DelegateToolCallMiddleware(async (ctx, next) =>
-        {
-            if (ctx.ToolName == "failing" && throwOnFirst)
-            {
-                throwOnFirst = false;
-                throw new InvalidOperationException("boom");
-            }
-            await next();
-        });
-
-        var executor = new StreamingToolExecutor(tools, toolMiddlewares: [middleware]);
+        var executor = NewStreamingToolExecutor(
+            tools,
+            toolExecutionPort: new ThrowingExecutionPort());
         using var executionState = executor.CreateExecutionState();
 
         executor.AddTool(executionState, new ToolCall { Id = "tc-fail", Name = "failing", ArgumentsJson = "{}" });
@@ -269,7 +258,7 @@ public class StreamingToolExecutorTests
         }));
         tools.Register(new ConcurrencyTrackingTool("queued", isReadOnly: false, _ => "q"));
 
-        var executor = new StreamingToolExecutor(tools);
+        var executor = NewStreamingToolExecutor(tools);
         using var executionState = executor.CreateExecutionState();
 
         executor.AddTool(executionState, new ToolCall { Id = "tc-1", Name = "slow", ArgumentsJson = "{}" });
@@ -293,7 +282,7 @@ public class StreamingToolExecutorTests
         var tools = new ToolManager();
         tools.Register(new ConcurrencyTrackingTool("echo", isReadOnly: true, _ => "ok"));
 
-        var executor = new StreamingToolExecutor(tools);
+        var executor = NewStreamingToolExecutor(tools);
         using var executionState = executor.CreateExecutionState();
         executor.Discard(executionState);
 
@@ -322,7 +311,7 @@ public class StreamingToolExecutorTests
         }));
         tools.Register(new ConcurrencyTrackingTool("echo", isReadOnly: true, _ => "ok"));
 
-        var executor = new StreamingToolExecutor(tools);
+        var executor = NewStreamingToolExecutor(tools);
         using var firstState = executor.CreateExecutionState();
         using var secondState = executor.CreateExecutionState();
 
@@ -377,7 +366,7 @@ public class StreamingToolExecutorTests
             },
         };
 
-        var executor = new StreamingToolExecutor(
+        var executor = NewStreamingToolExecutor(
             tools, toolContext: toolContext);
         using var executionState = executor.CreateExecutionState();
 
@@ -413,7 +402,7 @@ public class StreamingToolExecutorTests
             ["auth_token"] = "secret-123",
         };
 
-        var executor = new StreamingToolExecutor(
+        var executor = NewStreamingToolExecutor(
             tools,
             requestMetadata: metadata);
         using var executionState = executor.CreateExecutionState();
@@ -456,7 +445,7 @@ public class StreamingToolExecutorTests
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "metadata-token",
             ["trace-id"] = "metadata-trace",
         };
-        var executor = new StreamingToolExecutor(
+        var executor = NewStreamingToolExecutor(
             tools,
             requestMetadata: requestMetadata,
             toolContext: typedContext);
@@ -483,7 +472,7 @@ public class StreamingToolExecutorTests
             return "ok";
         }));
 
-        var executor = new StreamingToolExecutor(tools);
+        var executor = NewStreamingToolExecutor(tools);
         using var executionState = executor.CreateExecutionState();
 
         executor.AddTool(executionState, new ToolCall { Id = "tc-1", Name = "meta-check", ArgumentsJson = "{}" });
@@ -500,7 +489,7 @@ public class StreamingToolExecutorTests
         var tools = new ToolManager();
         tools.Register(new ConcurrencyTrackingTool("echo", isReadOnly: true, _ => "ok"));
 
-        var executor = new StreamingToolExecutor(tools);
+        var executor = NewStreamingToolExecutor(tools);
         using var executionState = executor.CreateExecutionState();
 
         // Before adding any tools
@@ -523,7 +512,7 @@ public class StreamingToolExecutorTests
     }
 
     [Fact]
-    public async Task HooksAndMiddleware_ShouldFirePerTool()
+    public async Task Hooks_ShouldFirePerTool()
     {
         var tools = new ToolManager();
         tools.Register(new ConcurrencyTrackingTool("echo", isReadOnly: true, _ => "result"));
@@ -531,14 +520,7 @@ public class StreamingToolExecutorTests
         var hook = new CountingHook();
         var hooks = new AgentHookPipeline([hook]);
 
-        var middlewareCalls = 0;
-        var middleware = new DelegateToolCallMiddleware(async (_, next) =>
-        {
-            Interlocked.Increment(ref middlewareCalls);
-            await next();
-        });
-
-        var executor = new StreamingToolExecutor(tools, hooks, [middleware]);
+        var executor = NewStreamingToolExecutor(tools, hooks);
         using var executionState = executor.CreateExecutionState();
 
         executor.AddTool(executionState, new ToolCall { Id = "tc-1", Name = "echo", ArgumentsJson = "{}" });
@@ -551,7 +533,6 @@ public class StreamingToolExecutorTests
         results.Should().HaveCount(2);
         hook.ToolStartCount.Should().Be(2);
         hook.ToolEndCount.Should().Be(2);
-        middlewareCalls.Should().Be(2);
     }
 
     [Fact]
@@ -573,7 +554,7 @@ public class StreamingToolExecutorTests
         }));
 
         var hooks = new AgentHookPipeline([new RewriteToolNameHook("read", "write")]);
-        var executor = new StreamingToolExecutor(tools, hooks);
+        var executor = NewStreamingToolExecutor(tools, hooks);
         using var executionState = executor.CreateExecutionState();
 
         executor.AddTool(executionState, new ToolCall { Id = "tc-rewrite", Name = "read", ArgumentsJson = "{}" });
@@ -598,7 +579,7 @@ public class StreamingToolExecutorTests
     public async Task UnknownTool_ShouldReturnNotFoundResult()
     {
         var tools = new ToolManager();
-        var executor = new StreamingToolExecutor(tools);
+        var executor = NewStreamingToolExecutor(tools);
         using var executionState = executor.CreateExecutionState();
 
         executor.AddTool(executionState, new ToolCall { Id = "tc-1", Name = "nonexistent", ArgumentsJson = "{}" });
@@ -622,7 +603,7 @@ public class StreamingToolExecutorTests
             executed = true;
             return "{}";
         }));
-        var executor = new StreamingToolExecutor(
+        var executor = NewStreamingToolExecutor(
             tools,
             toolContext: AgentToolExecutionContext.Empty with
             {
@@ -650,7 +631,7 @@ public class StreamingToolExecutorTests
         tools.Register(new DelegateAgentTool("allowed", _ => "{}"));
         tools.Register(new DelegateAgentTool("blocked", _ => """{"blocked":true}"""));
         var hooks = new AgentHookPipeline([new RewriteToolNameHook("allowed", "blocked")]);
-        var executor = new StreamingToolExecutor(
+        var executor = NewStreamingToolExecutor(
             tools,
             hooks,
             toolContext: AgentToolExecutionContext.Empty with
@@ -672,7 +653,7 @@ public class StreamingToolExecutorTests
     }
 
     [Fact]
-    public async Task ReceiptWorthyFormula_ShouldIgnoreNonReadOnlyAlone_AndEmitForApprovalDestructiveOrSideEffect()
+    public async Task ExecutedOutcomes_ShouldAlwaysExposeReceiptSafetyAndSideEffectDetails()
     {
         var tools = new ToolManager();
         tools.Register(new ConcurrencyTrackingTool("plain-write", isReadOnly: false, _ => """{"ok":true}"""));
@@ -689,7 +670,7 @@ public class StreamingToolExecutorTests
             SideEffectKind = "Example.Publish",
         });
 
-        var executor = new StreamingToolExecutor(tools);
+        var executor = NewStreamingToolExecutor(tools);
         using var executionState = executor.CreateExecutionState();
         executor.AddTool(executionState, new ToolCall { Id = "tc-write", Name = "plain-write", ArgumentsJson = "{}" });
         executor.AddTool(executionState, new ToolCall { Id = "tc-approval", Name = "approval", ArgumentsJson = "{}" });
@@ -701,7 +682,12 @@ public class StreamingToolExecutorTests
             results.Add(result);
 
         results.Should().HaveCount(4);
-        results[0].Receipt.Should().BeNull("non-read-only alone is not a receipt-worthy side effect");
+        var plainWriteReceipt = results[0].Receipt;
+        plainWriteReceipt.Should().NotBeNull();
+        plainWriteReceipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        plainWriteReceipt.ApprovalMode.Should().Be(AgentToolReceiptApprovalMode.NeverRequire);
+        plainWriteReceipt.IsDestructive.Should().BeFalse();
+        plainWriteReceipt.SideEffectKind.Should().BeEmpty();
         var approvalReceipt = results[1].Receipt;
         approvalReceipt.Should().NotBeNull();
         approvalReceipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
@@ -715,7 +701,7 @@ public class StreamingToolExecutorTests
     }
 
     [Fact]
-    public async Task ReceiptWorthyReadOnlySearchTool_ShouldNotEmitReceipt()
+    public async Task ReadOnlySearchTool_ShouldExposeSuccessfulReceipt()
     {
         var tools = new ToolManager();
         tools.Register(new ConcurrencyTrackingTool("ornn_search_skills", isReadOnly: true, _ => """{"status":"success"}""")
@@ -723,7 +709,7 @@ public class StreamingToolExecutorTests
             SideEffectKind = "",
         });
 
-        var executor = new StreamingToolExecutor(tools);
+        var executor = NewStreamingToolExecutor(tools);
         using var executionState = executor.CreateExecutionState();
         executor.AddTool(executionState, new ToolCall { Id = "tc-search", Name = "ornn_search_skills", ArgumentsJson = "{}" });
 
@@ -733,7 +719,10 @@ public class StreamingToolExecutorTests
 
         results.Should().ContainSingle();
         results[0].IsError.Should().BeFalse();
-        results[0].Receipt.Should().BeNull();
+        results[0].Receipt.Should().NotBeNull();
+        results[0].Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        results[0].Receipt!.IsDestructive.Should().BeFalse();
+        results[0].Receipt!.SideEffectKind.Should().BeEmpty();
     }
 
     [Fact]
@@ -743,7 +732,7 @@ public class StreamingToolExecutorTests
         tools.Register(new OrnnPublishSubjectReceiptTool(
             """{"id":"skill-2","version":"1.0","hash":"hash-2"}"""));
 
-        var executor = new StreamingToolExecutor(tools);
+        var executor = NewStreamingToolExecutor(tools);
         using var executionState = executor.CreateExecutionState();
         executor.AddTool(executionState, new ToolCall
         {
@@ -776,7 +765,7 @@ public class StreamingToolExecutorTests
             SideEffectKind = "ornn.publish.skill",
         });
 
-        var executor = new StreamingToolExecutor(tools);
+        var executor = NewStreamingToolExecutor(tools);
         using var executionState = executor.CreateExecutionState();
         executor.AddTool(executionState, new ToolCall { Id = "tc-publish", Name = "publish", ArgumentsJson = "{}" });
 
@@ -794,6 +783,21 @@ public class StreamingToolExecutorTests
     }
 
     // ─── Test helpers ───
+
+    private static StreamingToolExecutor NewStreamingToolExecutor(
+        ToolManager tools,
+        AgentHookPipeline? hooks = null,
+        IReadOnlyDictionary<string, string>? requestMetadata = null,
+        AgentToolExecutionContext? toolContext = null,
+        IAgentToolExecutionPort? toolExecutionPort = null,
+        AgentToolApprovalContinuationMode approvalContinuationMode = AgentToolApprovalContinuationMode.None) =>
+        new(
+            tools,
+            hooks,
+            requestMetadata,
+            toolContext,
+            toolExecutionPort ?? new TestExecutionPort(),
+            approvalContinuationMode);
 
     private sealed class ConcurrencyTrackingTool : IAgentTool
     {
@@ -862,10 +866,67 @@ public class StreamingToolExecutorTests
             Task.FromResult(execute(argumentsJson));
     }
 
-    private sealed class DelegateToolCallMiddleware(
-        Func<ToolCallContext, Func<Task>, Task> handler) : IToolCallMiddleware
+    private sealed class TestExecutionPort : IAgentToolExecutionPort
     {
-        public Task InvokeAsync(ToolCallContext context, Func<Task> next) => handler(context, next);
+        public async Task<AgentToolExecutionOutcome> ExecuteAsync(
+            AgentToolExecutionRequest request,
+            CancellationToken ct = default)
+        {
+            var safety = request.Tool.GetCallSafety(request.ArgumentsJson)
+                ?? new AgentToolCallSafety(true, false, true);
+            try
+            {
+                var result = await request.Tool.ExecuteAsync(request.ArgumentsJson, ct);
+                var receipt = AgentToolReceiptFactory.CreateSuccess(
+                    request.Tool,
+                    request.ExecutionContext.Request.CallId ?? string.Empty,
+                    request.Tool.Name,
+                    safety,
+                    result);
+                return new AgentToolExecutionOutcome(
+                    AgentToolExecutionOutcomeKind.Executed,
+                    result,
+                    receipt,
+                    !safety.IsReadOnly,
+                    string.Empty,
+                    string.Empty,
+                    AgentToolExecutionFailureStage.None,
+                    TerminalInvoked: true,
+                    Retryable: false,
+                    AuditCompleted: true);
+            }
+            catch (Exception ex)
+            {
+                var result = ToolManager.BuildErrorJson(ex.Message);
+                var receipt = AgentToolReceiptFactory.CreateError(
+                    request.Tool,
+                    request.ExecutionContext.Request.CallId ?? string.Empty,
+                    request.Tool.Name,
+                    safety,
+                    result,
+                    "tool_execution_error",
+                    ex.Message);
+                return new AgentToolExecutionOutcome(
+                    AgentToolExecutionOutcomeKind.Failed,
+                    result,
+                    receipt,
+                    !safety.IsReadOnly,
+                    "tool_execution_error",
+                    ex.Message,
+                    AgentToolExecutionFailureStage.TerminalExecution,
+                    TerminalInvoked: true,
+                    Retryable: false,
+                    AuditCompleted: true);
+            }
+        }
+    }
+
+    private sealed class ThrowingExecutionPort : IAgentToolExecutionPort
+    {
+        public Task<AgentToolExecutionOutcome> ExecuteAsync(
+            AgentToolExecutionRequest request,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("boom");
     }
 
     private sealed class CountingHook : IAIGAgentExecutionHook

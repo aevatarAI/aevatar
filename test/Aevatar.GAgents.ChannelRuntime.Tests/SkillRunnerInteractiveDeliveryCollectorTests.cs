@@ -1,6 +1,6 @@
-using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.Hooks;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Scheduled;
 using FluentAssertions;
@@ -10,7 +10,7 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 public sealed class SkillRunnerInteractiveDeliveryCollectorTests
 {
     [Fact]
-    public async Task Middleware_ShouldRecordSuccessfulInteractiveToolDeliverySignal()
+    public async Task Hook_ShouldRecordSuccessfulInteractiveToolDeliverySignal()
     {
         var previous = AgentToolRequestContext.Current;
         try
@@ -22,12 +22,12 @@ public sealed class SkillRunnerInteractiveDeliveryCollectorTests
                     [LLMRequestMetadataKeys.CallId] = "fallback-call",
                 });
             var collector = new SkillRunnerInteractiveDeliverySignalCollector();
-            var middleware = new SkillRunnerInteractiveDeliveryTrackingMiddleware(collector);
+            var hook = new SkillRunnerInteractiveDeliveryTrackingMiddleware(collector);
             var context = BuildContext(
                 "reply_with_interaction",
                 """{"success":true,"message_id":"om_interactive","card_id":"card_1"}""");
 
-            await middleware.InvokeAsync(context, () => Task.CompletedTask);
+            await hook.OnToolExecuteEndAsync(context, CancellationToken.None);
 
             collector.HasSuccessfulInteractiveDelivery.Should().BeTrue();
             var signal = collector.Signals.Should().ContainSingle().Subject;
@@ -45,41 +45,30 @@ public sealed class SkillRunnerInteractiveDeliveryCollectorTests
     }
 
     [Fact]
-    public async Task Middleware_ShouldIgnoreFailedOrNonInteractiveToolResults()
+    public async Task Hook_ShouldIgnoreFailedOrNonInteractiveToolResults()
     {
         var collector = new SkillRunnerInteractiveDeliverySignalCollector();
-        var middleware = new SkillRunnerInteractiveDeliveryTrackingMiddleware(collector);
+        var hook = new SkillRunnerInteractiveDeliveryTrackingMiddleware(collector);
 
-        await middleware.InvokeAsync(
+        await hook.OnToolExecuteEndAsync(
             BuildContext("lark_messages_send", """{"code":230002}""", """{"message_type":"interactive"}"""),
-            () => Task.CompletedTask);
-        await middleware.InvokeAsync(
+            CancellationToken.None);
+        await hook.OnToolExecuteEndAsync(
             BuildContext("lark_messages_send", """{"code":0,"data":{"message_id":"om_text"}}""", """{"message_type":"text"}"""),
-            () => Task.CompletedTask);
+            CancellationToken.None);
 
         collector.Signals.Should().BeEmpty();
         collector.HasSuccessfulInteractiveDelivery.Should().BeFalse();
     }
 
-    private static ToolCallContext BuildContext(
+    private static AIGAgentExecutionHookContext BuildContext(
         string toolName,
         string? result,
         string argumentsJson = "{}") => new()
     {
-        Tool = new StubAgentTool(toolName),
         ToolName = toolName,
         ToolCallId = "call-1",
-        ArgumentsJson = argumentsJson,
-        Result = result,
+        ToolArguments = argumentsJson,
+        ToolResult = result,
     };
-
-    private sealed class StubAgentTool(string name) : IAgentTool
-    {
-        public string Name { get; } = name;
-        public string Description => string.Empty;
-        public string ParametersSchema => "{}";
-
-        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
-            Task.FromResult(string.Empty);
-    }
 }

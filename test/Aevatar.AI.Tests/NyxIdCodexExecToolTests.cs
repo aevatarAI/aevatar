@@ -19,8 +19,8 @@ public sealed class NyxIdCodexExecToolTests
         var tool = new NyxIdCodexExecTool(CreateDummyClient());
 
         tool.Name.Should().Be("codex_exec");
-        tool.ApprovalMode.Should().Be(ToolApprovalMode.Auto);
-        tool.RequiresApproval("{}").Should().BeTrue();
+        tool.ApprovalMode.Should().Be(ToolApprovalMode.AlwaysRequire);
+        tool.IsDestructive.Should().BeTrue();
         tool.Description.Should().Contain("codex exec -");
         tool.Description.Should().Contain("local configuration");
         tool.ParametersSchema.Should().Contain("\"service\"");
@@ -30,13 +30,12 @@ public sealed class NyxIdCodexExecToolTests
     }
 
     [Fact]
-    public void RequiresApproval_WhenSshBypassEnabled_ReturnsFalse()
+    public void ApprovalPolicy_AlwaysRequiresDurableGrant()
     {
-        var tool = new NyxIdCodexExecTool(
-            CreateDummyClient(),
-            new NyxIdToolOptions { BypassSshExecApproval = true });
+        var tool = new NyxIdCodexExecTool(CreateDummyClient());
 
-        tool.RequiresApproval("{}").Should().BeFalse();
+        tool.ApprovalMode.Should().Be(ToolApprovalMode.AlwaysRequire);
+        tool.IsDestructive.Should().BeTrue();
     }
 
     [Fact]

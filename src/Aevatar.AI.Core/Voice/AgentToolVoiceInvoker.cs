@@ -14,15 +14,18 @@ public sealed class AgentToolVoiceInvoker : IVoiceToolInvoker
 {
     private readonly IEnumerable<IAgentToolSource> _toolSources;
     private readonly IReadOnlyList<ICredentialProvider> _credentialProviders;
+    private readonly IAgentToolExecutionPort _toolExecutionPort;
     private readonly ILogger _logger;
     private volatile Lazy<Task<IReadOnlyDictionary<string, IAgentTool>>>? _toolIndex;
 
     public AgentToolVoiceInvoker(
         IEnumerable<IAgentToolSource> toolSources,
+        IAgentToolExecutionPort toolExecutionPort,
         ICredentialProvider? credentialProvider = null,
         ILogger<AgentToolVoiceInvoker>? logger = null)
         : this(
             toolSources,
+            toolExecutionPort,
             credentialProvider is null ? [] : [credentialProvider],
             logger)
     {
@@ -30,10 +33,12 @@ public sealed class AgentToolVoiceInvoker : IVoiceToolInvoker
 
     public AgentToolVoiceInvoker(
         IEnumerable<IAgentToolSource> toolSources,
+        IAgentToolExecutionPort toolExecutionPort,
         IEnumerable<ICredentialProvider> credentialProviders,
         ILogger<AgentToolVoiceInvoker>? logger = null)
     {
         _toolSources = toolSources ?? throw new ArgumentNullException(nameof(toolSources));
+        _toolExecutionPort = toolExecutionPort ?? throw new ArgumentNullException(nameof(toolExecutionPort));
         _credentialProviders = credentialProviders?.ToList() ?? [];
         _logger = logger ?? NullLogger<AgentToolVoiceInvoker>.Instance;
     }
@@ -55,16 +60,37 @@ public sealed class AgentToolVoiceInvoker : IVoiceToolInvoker
 
         if (toolContext is null ||
             !VoiceToolExecutionContextMapper.IsUsableCredentialRef(toolContext, DateTimeOffset.UtcNow))
-            return await tool.ExecuteAsync(arguments, ct);
+            return await ExecuteAdmittedAsync(tool, arguments, AgentToolExecutionContext.Empty, ct);
 
         var agentToolContext = await ResolveToolContextAsync(toolContext, ct);
         if (agentToolContext is null)
-            return await tool.ExecuteAsync(arguments, ct);
+            return await ExecuteAdmittedAsync(tool, arguments, AgentToolExecutionContext.Empty, ct);
         if (!agentToolContext.ToolVisibility.Allows(toolName))
             throw new InvalidOperationException($"Tool '{toolName}' not found");
 
-        using var scope = AgentToolContextScope.Push(agentToolContext);
-        return await tool.ExecuteAsync(arguments, ct);
+        return await ExecuteAdmittedAsync(tool, arguments, agentToolContext, ct);
+    }
+
+    private async Task<string> ExecuteAdmittedAsync(
+        IAgentTool tool,
+        string argumentsJson,
+        AgentToolExecutionContext executionContext,
+        CancellationToken ct)
+    {
+        var requestId = executionContext.Caller.ResponseId ?? Guid.NewGuid().ToString("N");
+        var callId = $"{requestId}:voice:{Guid.NewGuid():N}";
+        var outcome = await _toolExecutionPort.ExecuteAsync(
+            new AgentToolExecutionRequest(
+                tool,
+                argumentsJson,
+                executionContext with
+                {
+                    Request = new AgentToolRequestIdentity(requestId, callId),
+                },
+                AgentToolApprovalContinuationMode.None,
+                null),
+            ct).ConfigureAwait(false);
+        return outcome.ResultJson;
     }
 
     private async Task<AgentToolExecutionContext?> ResolveToolContextAsync(
