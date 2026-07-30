@@ -829,6 +829,10 @@ message WorkflowLlmExecutionIntent
   string scope_id = 18;
   // Per-schedule correlation id threaded from the owning workflow run for tool audit identity.
   string schedule_id = 19;
+  // Stable idempotency key for this workflow LLM step. Tool calls produced by
+  // the step inherit this key so effectful tools can converge across retry and
+  // fallback branches of the same Chat operation.
+  string idempotency_key = 20;
 }
 
 message WorkflowToolRuntimeContextPayload
