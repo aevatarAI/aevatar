@@ -42,9 +42,10 @@ public sealed class ChatTurnHistoryTerminalDeliveryPortTests
         command.DeliveryId.Should().Be(DeliveryId);
         command.ConversationId.Should().Be(result.ChatContext.ConversationId);
         command.TurnId.Should().Be(result.ChatContext.TurnId);
-        command.WorkflowActorId.Should().Be(WorkflowActorId);
-        command.WorkflowCommandId.Should().Be(WorkflowCommandId);
+        command.SourceActorId.Should().Be(WorkflowActorId);
+        command.SourceCommandId.Should().Be(WorkflowCommandId);
         command.CreateConversationIfMissing.Should().BeTrue();
+        command.ExposeCreateRecovery.Should().BeTrue();
     }
 
     [Fact]

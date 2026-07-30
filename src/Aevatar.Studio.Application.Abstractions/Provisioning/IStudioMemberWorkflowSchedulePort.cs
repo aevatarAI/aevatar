@@ -60,7 +60,7 @@ public interface IStudioMemberWorkflowSchedulePort : IStudioMemberAutomationQuer
         CancellationToken ct = default);
 
     Task<StudioMemberAutomationMutationReceipt> RetryRevocationAsync(
-        StudioMemberAutomationActionCommand command,
+        StudioMemberAutomationRetryRevocationCommand command,
         CancellationToken ct = default) =>
         throw new NotSupportedException();
 }

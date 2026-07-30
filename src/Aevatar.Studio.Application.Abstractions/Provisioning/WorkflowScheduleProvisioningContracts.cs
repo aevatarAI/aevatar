@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 
 namespace Aevatar.Studio.Application.Provisioning;
 
@@ -65,6 +66,16 @@ public sealed record WorkflowScheduleProvisioningRequest(
 
     /// <summary>Optional caller NyxID subject tenant.</summary>
     public string? CallerSubjectTenant { get; init; }
+
+    [JsonIgnore]
+    public AuthenticatedAuthorizationOwnerContext? AuthenticatedOwner { get; init; }
+
+    [JsonIgnore]
+    public string? ProvisioningBearerToken { get; init; }
+
+    public string? ScheduleOperationId { get; init; }
+
+    public string? ScheduleIdempotencyKey { get; init; }
 }
 
 /// <summary>

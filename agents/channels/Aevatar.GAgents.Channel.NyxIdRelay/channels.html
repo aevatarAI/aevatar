@@ -567,11 +567,12 @@ const PLATFORMS = {
       { name:"app_id", ph:"cli_xxxxxxxxxxxx", help:"开发者后台 → 凭证与基础信息 → App ID" },
       { name:"app_secret", ph:"••••••••••••••••", help:"开发者后台 → 凭证与基础信息 → App Secret", secret:true },
       { name:"verification_token", ph:"事件订阅页的 Verification Token", help:"开发者后台 → 事件订阅 → Verification Token（第③步在 Lark 后台还会用到）" },
+      { name:"encrypt_key", ph:"事件订阅页的 Encrypt Key（可选）", help:"仅当 Lark 事件订阅启用了加密时填写；Aevatar 不会留存或回显", secret:true, optional:true },
       { name:"label", ph:"给这个 bot 起个名字（可选）", help:"便于在「已接入」列表里区分；可留空", optional:true }
     ],
-    requiredOk:(c)=> !!(c.app_id.trim() && c.app_secret.trim()),
-    requiredMsg:"请先填写 app_id 和 app_secret",
-    buildBody:(c)=>({ platform:"lark", webhook_base_url:location.origin, app_id:c.app_id.trim(), app_secret:c.app_secret, verification_token:c.verification_token.trim(), label:(c.label||"").trim() }),
+    requiredOk:(c)=> !!(c.app_id.trim() && c.app_secret.trim() && c.verification_token.trim()),
+    requiredMsg:"请先填写 app_id、app_secret 和 verification_token",
+    buildBody:(c)=>({ platform:"lark", webhook_base_url:location.origin, app_id:c.app_id.trim(), app_secret:c.app_secret, verification_token:c.verification_token.trim(), encrypt_key:c.encrypt_key.trim(), label:(c.label||"").trim() }),
     step3Title:"Lark 后台配置", stepSub3:"lark console",
     step2Next:"下一步：去 Lark 后台配置"
   },
@@ -611,7 +612,7 @@ const state = {
   s:"idle",                           // idle | running | done | failed
   err:null,                           // step2: 'auth' | '409' | 'cred' | 'infra' | 'other' | 'network'
   errMsg:null,
-  cred:{ app_id:"", app_secret:"", verification_token:"", bot_token:"", label:"" },
+  cred:{ app_id:"", app_secret:"", verification_token:"", encrypt_key:"", bot_token:"", label:"" },
   reg:null,                           // last registration result
   registrations:[],                   // GET /api/channels/registrations
   statuses:{},                        // registrationId -> { status, last_event_at }
@@ -627,6 +628,7 @@ const state = {
   manageReg:null,                     // registration row being managed
   workflowRepairing:{},               // registrationId -> request in flight
   workflowRepairNotice:null,          // safe user-facing result message
+  registrationActionError:null,       // authoritative delete/replace failure
   lights:["pending","pending"],
   _statusTimer:null
 };
@@ -889,6 +891,7 @@ async function doRegister(){
       workflowDeliveryStatus: d.workflow_result_delivery_status || "repair_required",
       scope: state.scopeId || (r.data && r.data.scope_id) || "",
       verificationToken: (c.verification_token||"").trim(),
+      encryptKey: (c.encrypt_key||"").trim(),
       label: (c.label||"").trim()
     };
     state.s="done"; render();
@@ -908,12 +911,24 @@ function classifyRegError(status, errText){
   if(t.includes("nyx_base_url")) return "infra";
   return "other";
 }
-async function doDelete(regId, after){
-  try { await apiSend("/api/channels/registrations/" + encodeURIComponent(regId), "DELETE", null); }
-  catch(e){ if(e.message==="unauthorized") return; }
+async function doDelete(regId){
+  state.registrationActionError=null;
+  let result;
+  try { result=await apiSend("/api/channels/registrations/" + encodeURIComponent(regId), "DELETE", null); }
+  catch(e){
+    if(e.message==="unauthorized") return false;
+    state.registrationActionError="删除失败，请重试。";
+    render();
+    return false;
+  }
+  if(!result.ok){
+    state.registrationActionError=(result.data && (result.data.error||result.data.note)) || ("删除失败 · HTTP " + result.status);
+    render();
+    return false;
+  }
   delete state.statuses[regId];
   await loadRegistrations();
-  if(typeof after==="function") after();
+  return true;
 }
 function freezeLlmPending(target){
   return Object.freeze({
@@ -1475,7 +1490,11 @@ async function deleteExistingThenRegister(){
   try {
     const list = (await apiGet("/api/channels/registrations")) || [];
     const existing = list.filter(r => (r.platform||"").toLowerCase()===state.platform);
-    for(const r of existing){ await apiSend("/api/channels/registrations/" + encodeURIComponent(r.id), "DELETE", null); }
+    for(const r of existing){
+      if(!await doDelete(r.id)){
+        state.s="failed"; state.err="other"; state.errMsg=state.registrationActionError||"删除旧接入失败"; render(); return;
+      }
+    }
   } catch(e){ if(e.message==="unauthorized") return; }
   doRegister();
 }
@@ -1513,7 +1532,7 @@ function renderStep3(){
   wrap.appendChild(sub("① 事件订阅 —— 回调地址 & Token"));
   wrap.appendChild(copyRow("事件订阅 Request URL（回调地址）", reg.webhookUrl||""));
   wrap.appendChild(copyRow("Verification Token", reg.verificationToken||""));
-  wrap.appendChild(copyRow("Encrypt Key", "（留空）"));
+  wrap.appendChild(copyRow("Encrypt Key", reg.encryptKey||"（未启用）"));
 
   wrap.appendChild(el("div",{class:"callout warn"},`${ICON.warn}<div class="body"><span class="ct-title">别填错回调地址</span>Lark 后台填的是上面这个 <b>webhook_url</b>（指向 NyxID）。⚠️ <b>不要</b>填 relay 内部用的 <code class="kbd">callback_url</code>${reg.relayCallbackUrl?`（<span class="mono">${esc(reg.relayCallbackUrl)}</span>，仅供参考，勿填）`:""}。卡片回调（如有单独字段）也填同一个 webhook_url。</div>`));
 
@@ -1532,7 +1551,7 @@ function renderStep3(){
   wrap.appendChild(jb);
 
   const jumpRow=el("div",{style:"display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:2px 0"});
-  jumpRow.appendChild(el("a",{class:"copybtn",href:"https://open.larksuite.com",target:"_blank",rel:"noopener"},`${ICON.ext}<span>去权限管理</span>`));
+  jumpRow.appendChild(el("a",{class:"copybtn",href:"https://open.larksuite.com/app",target:"_blank",rel:"noopener"},`${ICON.ext}<span>打开 Lark 开发者后台</span>`));
   jumpRow.appendChild(el("span",{style:"font-size:11.5px;color:var(--muted-2)"},"导入后点「确认申请」，再到「版本管理与发布」发布版本才生效。"));
   wrap.appendChild(jumpRow);
 
@@ -1745,6 +1764,17 @@ function renderStep5(){
 }
 function findReg(regId){ return (state.registrations||[]).find(r=>r.id===regId) || null; }
 
+async function replaceRegistration(registration){
+  if(!registration || !registration.id) return;
+  const platform=(registration.platform||"lark").toLowerCase();
+  const manual=hasConsole(platform)
+    ? "替换会生成新的 bot_id 和 Request URL，你必须随后更新 Lark Event Subscriptions。"
+    : "替换会删除当前 bot 和路由，再创建一个新的接入。";
+  if(!confirm("替换该接入？\n\n"+manual)) return;
+  if(!await doDelete(registration.id)) return;
+  enterWizard((registration.platform||"lark").toLowerCase());
+}
+
 /* ===========================================================================
    Manage
    =========================================================================== */
@@ -1786,6 +1816,21 @@ function renderManage(){
   rows.forEach(([k,v,pl])=> card.appendChild(el("div",{class:"kv"},`<span class="k">${esc(k)}</span><span class="v ${pl||""}">${esc(v||"—")}</span>`)) );
   p.appendChild(card);
 
+  const ownedLark = r.owned === true && (r.platform||"").toLowerCase()==="lark";
+  if(ownedLark && st==="pending"){
+    const recovery=el("section",{class:"status-card",style:"margin-top:16px"});
+    recovery.appendChild(el("div",{class:"sec-title",style:"margin:0 0 10px"},"Lark pending_webhook 恢复清单"));
+    recovery.appendChild(copyRow("Event Subscriptions Request URL", r.webhook_url||""));
+    recovery.appendChild(el("div",{class:"callout warn",style:"margin-top:12px"},`${ICON.warn}<div class="body"><ol style="margin:0;padding-left:20px"><li>把上面的精确 Request URL 粘贴到 Lark <b>Event Subscriptions</b>。</li><li>确认 Lark 中的 Verification Token，以及启用加密时的 Encrypt Key，与本次注册输入完全一致；Aevatar 不保存或回显这些秘密。</li><li>在权限管理中导入页面提供的权限 JSON。</li><li>订阅事件 <code class="kbd">im.message.receive_v1</code>。</li><li>创建、发布并由管理员批准应用版本。</li><li>给 bot 发送一条测试消息，刷新状态直到 <code class="kbd">active</code>。</li></ol><div style="margin-top:10px"><b>只有收到验证通过的入站消息并变为 active 才算完成</b>；Aevatar 无法代替你修改 Lark 后台。</div></div>`));
+    const actions=el("div",{style:"display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px"});
+    const copyPermissions=el("button",{class:"copybtn"},`${ICON.copy}<span>复制权限 JSON</span>`);
+    bindCopy(copyPermissions,LARK_SCOPE_IMPORT_JSON);
+    actions.appendChild(copyPermissions);
+    actions.appendChild(el("a",{class:"copybtn",href:"https://open.larksuite.com/app",target:"_blank",rel:"noopener"},`${ICON.ext}<span>打开 Lark 开发者后台</span>`));
+    recovery.appendChild(actions);
+    p.appendChild(recovery);
+  }
+
   if(st!=="active"){
     const pf=(r.platform||"lark").toLowerCase();
     const cn=esc(connectName(pf));
@@ -1795,7 +1840,6 @@ function renderManage(){
     p.appendChild(el("div",{class:"callout warn",style:"margin-top:16px"},`${ICON.warn}<div class="body"><span class="ct-title">bot 还没激活</span>${warnBody}</div>`));
   }
 
-  const ownedLark = r.owned === true && (r.platform||"").toLowerCase()==="lark";
   if(ownedLark && (deliveryStatus==="repair_required" || deliveryStatus==="repair_failed")){
     const failedDetail = deliveryStatus==="repair_failed" && (failurePhase || failureReason)
       ? `<div class="repair-detail">${esc(failurePhase||"unspecified")} · ${esc(failureReason||"unspecified")}</div>`
@@ -1810,6 +1854,10 @@ function renderManage(){
     p.appendChild(el("div",{class:`callout ${noticeKind}`,style:"margin-top:16px",role:"status","aria-live":"polite"},`${deliveryStatus==="enabled"?ICON.check:ICON.info}<div class="body">${esc(state.workflowRepairNotice.message)}</div>`));
   }
 
+  if(state.registrationActionError){
+    p.appendChild(el("div",{class:"callout err",style:"margin-top:16px",role:"alert"},`${ICON.warn}<div class="body"><span class="ct-title">操作未完成</span>${esc(state.registrationActionError)}</div>`));
+  }
+
   const foot=el("div",{class:"step-foot",style:"border-top:0;margin-top:18px;padding-top:0"});
   if(ownedLark && (committedDeliveryStatus==="repair_required" || committedDeliveryStatus==="repair_failed")){
     foot.appendChild(btn(
@@ -1820,8 +1868,8 @@ function renderManage(){
       {disabled:repairInFlight}));
   }
   foot.appendChild(btn("刷新状态","ghost",ICON.refresh,()=>{ if(r.id) fetchStatus(r.id).then(s=>{ if(s){ state.statuses[r.id]=s; render(); } }); }));
-  foot.appendChild(btn("重新接入","ghost",ICON.gear,()=>{ enterWizard((r.platform||"lark").toLowerCase()); }));
-  foot.appendChild(btn("删除接入","danger",ICON.trash,()=>{ const recover = hasConsole((r.platform||"lark").toLowerCase()) ? "如需恢复要重新注册并回后台改回调。" : "如需恢复重新注册即可（Telegram 无需后台改动）。"; if(confirm("删除该接入？\n\n这会删除 registration 和 mirror，bot 将不再路由。"+recover)){ doDelete(r.id, ()=>{ state.view="catalog"; render(); }); } }));
+  foot.appendChild(btn("替换接入","ghost",ICON.gear,()=>replaceRegistration(r)));
+  foot.appendChild(btn("删除接入","danger",ICON.trash,async()=>{ const recover = hasConsole((r.platform||"lark").toLowerCase()) ? "如需恢复要重新注册并回后台改回调。" : "如需恢复重新注册即可（Telegram 无需后台改动）。"; if(confirm("删除该接入？\n\n这会删除 registration 和 mirror，bot 将不再路由。"+recover) && await doDelete(r.id)){ state.view="catalog"; state.manageReg=null; render(); } }));
   p.appendChild(foot);
   return p;
 }
@@ -1829,7 +1877,7 @@ function renderManage(){
 /* ===========================================================================
    Compose / render
    =========================================================================== */
-function enterWizard(platformId){ state.llmSaveToken+=1; state.llmDraftRevision+=1; state.platform=(platformId&&PLATFORMS[platformId])?platformId:"lark"; state.view="wizard"; state.step=1; state.s="idle"; state.err=null; state.reg=null; state.llmSel={ value:null, model:null }; state.llmDraftOption=null; state.llmPending=null; state.llmSaveState="idle"; state.llmSaveError=null; state.llmSaved=false; state.cred={ app_id:"", app_secret:"", verification_token:"", bot_token:"", label:"" }; render(); }
+function enterWizard(platformId){ state.llmSaveToken+=1; state.llmDraftRevision+=1; state.platform=(platformId&&PLATFORMS[platformId])?platformId:"lark"; state.view="wizard"; state.step=1; state.s="idle"; state.err=null; state.reg=null; state.manageReg=null; state.registrationActionError=null; state.llmSel={ value:null, model:null }; state.llmDraftOption=null; state.llmPending=null; state.llmSaveState="idle"; state.llmSaveError=null; state.llmSaved=false; state.cred={ app_id:"", app_secret:"", verification_token:"", encrypt_key:"", bot_token:"", label:"" }; render(); }
 function render(){
   const app=$("#app"); app.innerHTML="";
   app.appendChild(renderTopbar());

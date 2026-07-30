@@ -1,6 +1,7 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.StudioMember;
 using Aevatar.Studio.Projection.Mapping;
@@ -54,7 +55,14 @@ public sealed class StudioMemberCurrentStateProjector
 
         if (state.Deleted)
         {
-            await _writeDispatcher.DeleteAsync(context.RootActorId, ct);
+            await _writeDispatcher.DeleteAsync(
+                new ProjectionDocumentDeleteMarker(
+                    context.RootActorId,
+                    context.RootActorId,
+                    stateEvent.Version,
+                    stateEvent.EventId ?? string.Empty,
+                    updatedAt),
+                ct);
             return;
         }
 

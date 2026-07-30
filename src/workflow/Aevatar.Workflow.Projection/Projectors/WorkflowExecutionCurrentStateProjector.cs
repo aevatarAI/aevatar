@@ -87,6 +87,8 @@ public sealed class WorkflowExecutionCurrentStateProjector
             InputFileRefs = seedSnapshot.InputFileRefs.Select(MapInputFileRef).ToList(),
             ConnectorApprovals = MapConnectorApprovals(state),
         };
+        if (state.CapabilityAdmissionPlan is not null)
+            document.CapabilityAdmissionPlan = state.CapabilityAdmissionPlan.Clone();
 
         // O2 (06-19-workflow-run-observatory): started_at is derived from the committed WorkflowRunState's
         // own start fact (StartedAtUtc), so the projector stays a pure committed-state -> readmodel mapper

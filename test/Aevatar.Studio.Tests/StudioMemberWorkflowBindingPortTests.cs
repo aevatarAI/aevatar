@@ -5,6 +5,7 @@ using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Application.Studio.Services;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 
@@ -69,6 +70,60 @@ public sealed class StudioMemberWorkflowBindingPortTests
         request.Access.NyxIdCallerBearerToken.Should().Be("runtime-caller-credential");
         request.SourceKind.Should().Be("studio_member_workflow_binding");
         request.ExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Interactive);
+        memberService.GetCallCount.Should().Be(0);
+        memberService.LastRequest.Should().BeNull();
+        saveAndBindPort.LastRequest.Should().BeNull();
+        memberCommandPort.LastRecordPublishedBinding.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task BindAsync_ShouldPreserveTypedRebindReadiness_ForPersistedV2Plan()
+    {
+        var readiness = new ExternalCapabilityReadiness
+        {
+            ExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+            Status = ExternalCapabilityReadinessStatus.AdmissionRebindRequired,
+            Blockers =
+            {
+                new ExternalCapabilityBlocker
+                {
+                    Status = ExternalCapabilityReadinessStatus.AdmissionRebindRequired,
+                    Code = WorkflowCapabilityAdmissionPlanIntegrity.RebindRequiredCode,
+                    SafeMessage = "The persisted workflow capability admission plan must be rebound.",
+                },
+            },
+        };
+        var admission = new StudioWorkflowCapabilityAdmissionTestService(
+            new WorkflowExternalCapabilityAdmissionException(readiness));
+        var memberService = new RecordingMemberService();
+        var saveAndBindPort = new RecordingSaveAndBindPort();
+        var memberCommandPort = new RecordingMemberCommandPort();
+        var port = new StudioMemberWorkflowBindingPort(
+            memberService,
+            admission,
+            saveAndBindPort,
+            memberCommandPort);
+        var legacyPlan = new WorkflowCapabilityAdmissionPlan
+        {
+            SchemaVersion = WorkflowCapabilityAdmissionPlanIntegrity.LegacySchemaVersion,
+            ExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+        };
+
+        var action = () => port.BindAsync(new StudioMemberWorkflowBindingRequest(
+            "scope-1",
+            "member-1",
+            "name: legacy\nsteps: []\n")
+        {
+            CapabilityAdmission = new WorkflowCapabilityAdmissionContext(
+                "caller-alpha",
+                existingPlan: legacyPlan),
+        });
+
+        var exception = await action.Should().ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
+        exception.Which.Readiness.Blockers.Should().ContainSingle().Which.Code.Should()
+            .Be(WorkflowCapabilityAdmissionPlanIntegrity.RebindRequiredCode);
+        admission.PersistedRequests.Should().ContainSingle().Which.SourceKind.Should()
+            .Be("studio_member_workflow_binding");
         memberService.GetCallCount.Should().Be(0);
         memberService.LastRequest.Should().BeNull();
         saveAndBindPort.LastRequest.Should().BeNull();

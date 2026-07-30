@@ -38,16 +38,16 @@ public sealed class ChatHistoryCreateRecoveryCurrentStateProjector
                 out var state) ||
             stateEvent?.EventData == null ||
             state == null ||
-            !state.CreateConversationIfMissing ||
+            !state.ExposeCreateRecovery ||
             string.IsNullOrWhiteSpace(state.ScopeId) ||
-            string.IsNullOrWhiteSpace(state.WorkflowCommandId))
+            string.IsNullOrWhiteSpace(state.SourceCommandId))
         {
             return;
         }
 
         var updatedAt = CommittedStateEventEnvelope.ResolveTimestamp(envelope, _clock.UtcNow);
         var normalizedScopeId = state.ScopeId.Trim();
-        var normalizedCommandId = state.WorkflowCommandId.Trim();
+        var normalizedCommandId = state.SourceCommandId.Trim();
         var document = new ChatHistoryCreateRecoveryCurrentStateDocument
         {
             Id = ChatHistoryCreateRecoveryIds.FromScopeAndCommandId(normalizedScopeId, normalizedCommandId),
@@ -58,9 +58,9 @@ public sealed class ChatHistoryCreateRecoveryCurrentStateProjector
             ScopeId = normalizedScopeId,
             ConversationId = state.ConversationId,
             TurnId = state.TurnId,
-            WorkflowActorId = state.WorkflowActorId,
+            WorkflowActorId = state.SourceActorId,
             WorkflowCommandId = normalizedCommandId,
-            WorkflowCorrelationId = state.WorkflowCorrelationId,
+            WorkflowCorrelationId = state.SourceCorrelationId,
             RequestFingerprint = state.RequestFingerprint,
             Status = ToStatusName(state.Status),
             ReservedAtUnixMs = state.ReservedAtUnixMs,

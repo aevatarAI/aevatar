@@ -182,6 +182,8 @@ message WorkflowRunState
   int32 terminal_notification_attempt = 40;
   WorkflowRunTerminalNotificationDeliveryStatus terminal_notification_delivery_status = 41;
   string terminal_notification_retry_callback_id = 42;
+  // Committed call-site admission proof owned by this Run for its whole lifetime.
+  WorkflowCapabilityAdmissionPlan capability_admission_plan = 43;
 }
 
 message WorkflowRunExecutionContextState
@@ -444,6 +446,7 @@ message PendingToolCallApprovalState
   string input = 8;
   repeated WorkflowFileRef input_file_refs = 9;
   string idempotency_key = 10;
+  ExternalToolInvocationSpec external_invocation = 11;
 }
 
 message ToolCallModuleState
@@ -479,6 +482,7 @@ message WhileRuntimeState
   int32 iteration = 6;
   int32 max_iterations = 7;
   string condition_expression = 8;
+  ExternalToolInvocationSpec sub_external_invocation = 9;
 }
 
 message WhileModuleState
@@ -758,6 +762,7 @@ message BackpressureQueueEntry
   string target_role = 5;
   map<string, string> parameters = 6;
   repeated WorkflowFileRef input_file_refs = 7;
+  ExternalToolInvocationSpec external_invocation = 8;
 }
 
 message BackpressureQueueState

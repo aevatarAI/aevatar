@@ -11,6 +11,7 @@ using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.NyxidChat;
+using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Projection.Orchestration;
 using Aevatar.Studio.Projection.Projectors;
 using Aevatar.Studio.Projection.ReadModels;
@@ -175,7 +176,12 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
 
         runtime.CreateCalls.Should().BeEmpty();
         runtime.LinkCalls.Should().BeEmpty();
-        dispatch.Calls.Should().BeEmpty("recovery must not repeat an effect-capable tool");
+        dispatch.Calls.Should().NotContain(call =>
+            call.Envelope.Payload.Is(NyxIdChatOperationDispatchCommand.Descriptor),
+            "recovery must not repeat an effect-capable tool");
+        dispatch.Calls.Should().ContainSingle(call =>
+            call.Envelope.Payload.Is(NyxIdChatHistoryTerminalDispatchRequested.Descriptor),
+            "the committed failed turn must continue to transcript delivery");
         var step = agent.State.ActiveTask.Steps.Should().ContainSingle().Which;
         step.Status.Should().Be(NyxIdChatStepStatus.Uncertain);
         step.Operation.Phase.Should().Be(NyxIdChatOperationPhase.Uncertain);
@@ -396,7 +402,9 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
 
         await agent.HandleEventAsync(CreateEnvelope(actorId, start));
 
-        var transientCommand = dispatch.Calls.Should().ContainSingle().Which.Envelope.Payload
+        var transientCommand = dispatch.Calls.Single(call =>
+                call.Envelope.Payload.Is(NyxIdChatOperationDispatchCommand.Descriptor))
+            .Envelope.Payload
             .Unpack<NyxIdChatOperationDispatchCommand>();
         transientCommand.Llm.Request.LlmControl.NyxIdAccessToken.Should().Be(secret);
         transientCommand.Llm.Request.ToolContext.Credentials.NyxIdAccessToken.Should().Be(secret);
@@ -416,12 +424,55 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
             CancellationToken.None);
         AssertSecretAbsent(projectionWrites.Upserts.Should().ContainSingle().Which, secret);
 
+        var frameState = agent.State.Clone();
+        frameState.PendingHistoryInitialization = new NyxIdChatHistoryInitializationOutbox
+        {
+            OperationId = "agui-initialization-outbox-sentinel",
+            ScopeId = "scope-alpha",
+            ConversationId = actorId,
+            ServiceId = actorId,
+            ServiceKind = NyxIdChatServiceDefaults.GAgentKind,
+            InitialTitle = "agui-credential-outbox-sentinel",
+            CreatedAt = Timestamp.FromDateTimeOffset(FixedNow),
+            Attempt = 1,
+        };
+        frameState.HistoryDeliveryReservation = new NyxIdChatHistoryDeliveryReservationState
+        {
+            DeliveryId = "agui-reservation-outbox-sentinel",
+            ScopeId = "scope-alpha",
+            ConversationId = actorId,
+            TurnId = "turn-alpha",
+            UserText = "agui-credential-outbox-sentinel",
+            SourceActorId = actorId,
+            SourceCommandId = "command-alpha",
+            RequestFingerprint = "fingerprint-alpha",
+            CreateConversationIfMissing = true,
+        };
+        frameState.PendingHistoryTerminal = new NyxIdChatHistoryTerminalOutbox
+        {
+            DeliveryId = "agui-reservation-outbox-sentinel",
+            TurnId = "turn-alpha",
+            SourceActorId = actorId,
+            SourceCommandId = "command-alpha",
+            Status = NyxIdChatTurnStatus.Blocked,
+            Text = "agui-terminal-outbox-sentinel agui-credential-outbox-sentinel",
+            ErrorCode = "SAFE_BLOCKED",
+            ObservedAt = Timestamp.FromDateTimeOffset(FixedNow),
+            Attempt = 1,
+        };
         var frames = NyxIdChatConversationAguiFrameBuilder.BuildStarted(
             actorId,
             "turn-alpha",
-            agent.State);
+            frameState);
         frames.Should().NotBeEmpty();
         frames.Should().OnlyContain(frame => !ContainsSecret(frame, secret));
+        var frameBytes = Encoding.UTF8.GetString(
+            frames.SelectMany(static frame => frame.ToByteArray()).ToArray());
+        frameBytes.Should()
+            .NotContain("agui-initialization-outbox-sentinel")
+            .And.NotContain("agui-reservation-outbox-sentinel")
+            .And.NotContain("agui-terminal-outbox-sentinel")
+            .And.NotContain("agui-credential-outbox-sentinel");
     }
 
     private static NyxIdChatConversationGAgentState CreateRequestedPostconditionState()
@@ -470,6 +521,21 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
             },
             ProgressSequence = 7,
             UpdatedAt = Timestamp.FromDateTimeOffset(FixedNow),
+            HistoryDeliveryReservation = new NyxIdChatHistoryDeliveryReservationState
+            {
+                DeliveryId = "delivery-continuation-alpha",
+                ScopeId = "scope-alpha",
+                ConversationId = "conversation-alpha",
+                TurnId = key.TurnId,
+                UserText = "Continue after the approved action.",
+                SourceActorId = "conversation-alpha",
+                SourceCommandId = "command-action-alpha",
+                SourceCorrelationId = "correlation-action-alpha",
+                RequestFingerprint = "fingerprint-continuation-alpha",
+                CreateConversationIfMissing = true,
+                Dispatched = true,
+                DispatchedAt = Timestamp.FromDateTimeOffset(FixedNow),
+            },
         };
         state.LatestTurn = state.ActiveTurn.Clone();
         state.ActiveTask.Steps.Add(new NyxIdChatTaskStepState
@@ -794,10 +860,39 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
             .AddSingleton(eventStore)
             .AddSingleton<EventSourcingRuntimeOptions>()
             .AddSingleton<IActorRuntimeCallbackScheduler, NoopRuntimeCallbackScheduler>()
+            .AddSingleton<IChatHistoryCommandPort, NoopChatHistoryCommandPort>()
             .AddTransient(
                 typeof(IEventSourcingBehaviorFactory<>),
                 typeof(DefaultEventSourcingBehaviorFactory<>))
             .BuildServiceProvider();
+
+    private sealed class NoopChatHistoryCommandPort : IChatHistoryCommandPort
+    {
+        public Task InitializeConversationAsync(
+            ChatHistoryConversationInitialization request,
+            CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task ReserveTurnDeliveryAsync(
+            ChatHistoryTurnDeliveryReservation request,
+            CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task NotifyTurnTerminalAsync(
+            ChatHistoryTurnTerminalNotification notification,
+            CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task SaveMessagesAsync(
+            string scopeId,
+            string conversationId,
+            ConversationMeta meta,
+            IReadOnlyList<StoredChatMessage> messages,
+            CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<ChatHistoryDeleteResult> DeleteConversationAsync(
+            string scopeId,
+            string conversationId,
+            CancellationToken ct = default) =>
+            Task.FromResult(ChatHistoryDeleteResult.Accepted());
+    }
 
     private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
     {

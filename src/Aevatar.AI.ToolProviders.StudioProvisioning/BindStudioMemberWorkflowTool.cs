@@ -92,11 +92,19 @@ internal sealed class BindStudioMemberWorkflowTool : IAgentTool
         if (workflowYaml is null)
             return ErrorJson("invalid_arguments", "workflow_yaml is required.");
 
+        var capabilityAdmission = StudioWorkflowCapabilityToolContext.Resolve(
+            ExternalCapabilityExecutionMode.Interactive);
+        if (capabilityAdmission is null)
+        {
+            return ErrorJson(
+                "caller_identity_unavailable",
+                "Verified NyxID caller identity is required in AgentToolRequestContext.");
+        }
+
         var request = new StudioMemberWorkflowBindingRequest(scopeId, memberId, workflowYaml)
         {
             WorkflowId = Normalize(args.WorkflowId),
-            CapabilityAdmission = StudioWorkflowCapabilityToolContext.Create(
-                ExternalCapabilityExecutionMode.Interactive),
+            CapabilityAdmission = capabilityAdmission,
         };
 
         try

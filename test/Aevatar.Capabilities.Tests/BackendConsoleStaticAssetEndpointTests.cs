@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using System.Text.RegularExpressions;
 using Aevatar.BackendConsole.Hosting;
@@ -34,7 +35,8 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         html.Should().Contain("https://id.example.test");
         html.Should().Contain("client-example");
         html.Should().Contain("console:test");
-        html.Should().Contain("\"resources\":[\"https://api.example.test/api/v1/proxy/s/aevatar\"]");
+        html.Should().Contain(
+            "\"resources\":[\"https://api.example.test/api/v1/proxy/s/aevatar\",\"https://api.example.test/api/v1/proxy/s/ornn-api\"]");
         html.Should().NotContain("__BACKEND_CONSOLE_CONFIG__");
         html.Should().NotContain("https://nyx.chrono-ai.fun");
         html.Should().NotContain("https://nyx-api.chrono-ai.fun");
@@ -83,6 +85,19 @@ public sealed class BackendConsoleStaticAssetEndpointTests
     }
 
     [Fact]
+    public async Task AdminShell_Channels_ShouldEmbedCanonicalSurfaceWithoutDuplicateMutations()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        html.Should().Contain("suiteFrame('/channels','通道接入')");
+        html.Should().NotContain("function doRegister()");
+        html.Should().NotContain("a==='wzPermImport'");
+        html.Should().NotContain("a==='wzPublish'");
+        html.Should().NotContain("CHANNELS_DATA.splice");
+    }
+
+    [Fact]
     public async Task AdminShell_ObservatoryPolling_ShouldKeepCachedDetailVisible()
     {
         await using var app = await CreateAppAsync();
@@ -93,6 +108,345 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         html.Should().Contain("if(cache&&cache.loading&&!d)");
         html.Should().Contain("loadObsDetail(selected.id,function(){ reList();");
         html.Should().NotContain("delete OBS_DETAIL[selected.id]");
+    }
+
+    [Fact]
+    public async Task AdminShell_ObservatoryPolling_ShouldStopAfterHandled404UntilExplicitReloadRecovers()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            (async function() {
+            function functionSource(name, nextName) {
+              const start = html.indexOf('function ' + name + '(');
+              const end = html.indexOf('\nfunction ' + nextName + '(', start);
+              assert.notEqual(start, -1, name + ' must exist in the served admin asset');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return html.slice(start, end);
+            }
+
+            const context = { assert, setImmediate };
+            vm.createContext(context);
+            vm.runInContext(`
+              var runId = 'run-a';
+              var OBS_DETAIL = {}, OBS_DETAIL_REQUESTS = {}, OBS_DETAIL_SCOPE_VERSION = 0;
+              var OBS_RUNS = [], OBS_RUNS_ERR = null, OBS_POLL_TIMER = null;
+              var OBS_STATE = { selectedId: runId, immersive: false };
+              var detailRequests = 0, intervalCallback = null, clickHandler = null;
+              var detailResponses = [
+                function() { return Promise.reject({ status: 404 }); },
+                function() { return Promise.resolve({ runId: runId, visible: true }); }
+              ];
+
+              function adminJson(path) {
+                if (path === '/graph') return Promise.resolve(null);
+                assert.equal(path, '/detail');
+                detailRequests++;
+                return detailResponses.shift()();
+              }
+              function obsDetailRequestBase() { return '/detail'; }
+              function obsGraphRequestUrl() { return '/graph'; }
+              function mapObsDetail(detail) { return detail; }
+              function obsReconcileApprovalState() {}
+              function obsUpsertRunFromDetail() {}
+              function obsDetailsEqual(left, right) { return JSON.stringify(left) === JSON.stringify(right); }
+              function loadObsRuns(rerender) { if (rerender) rerender(); return Promise.resolve(); }
+              function obsSelected() { return { id: OBS_STATE.selectedId }; }
+              function obsRunsFiltered() { return OBS_RUNS; }
+              function obsSetImmersive() {}
+              function curParts() { return ['observatory']; }
+              function defaultModule() { return 'observatory'; }
+              function setInterval(callback) { intervalCallback = callback; return 1; }
+              function clearInterval() {}
+              var document = { hidden: false };
+
+              ${functionSource('obsNextDetailRequest', 'obsInvalidateDetail')}
+              ${functionSource('obsDetailRequestCurrent', 'obsDetailRequestBase')}
+              ${functionSource('loadObsDetail', 'loadObsGraph')}
+              ${functionSource('loadObsGraph', 'loadObsResolveScope')}
+              ${functionSource('bindObservatory', 'cqrsPipeline')}
+            `, context);
+
+            await vm.runInContext(`(async function() {
+              var root = {
+                querySelector: function() { return null; },
+                addEventListener: function(type, handler) {
+                  if (type === 'click') clickHandler = handler;
+                }
+              };
+              bindObservatory(root);
+              await new Promise(setImmediate);
+
+              assert.equal(detailRequests, 1);
+              assert.equal(OBS_DETAIL[runId].notFound, true);
+
+              intervalCallback();
+              await new Promise(setImmediate);
+              assert.equal(detailRequests, 1, 'automatic polling must stop after the handled 404');
+
+              var reload = { getAttribute: function() { return 'obsReload'; } };
+              clickHandler({ target: {
+                closest: function(selector) { return selector === '[data-act]' ? reload : null; }
+              }});
+              await new Promise(setImmediate);
+
+              assert.equal(detailRequests, 2, 'explicit reload must retry the detail request');
+              assert.equal(OBS_DETAIL[runId].notFound, undefined);
+              assert.equal(OBS_DETAIL[runId].detail.runId, runId);
+              assert.equal(OBS_DETAIL[runId].detail.visible, true);
+            })()`, context);
+            })().catch(function(error) {
+              console.error(error);
+              process.exitCode = 1;
+            });
+            """;
+
+        var startInfo = new ProcessStartInfo("node")
+        {
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        startInfo.ArgumentList.Add("--eval");
+        startInfo.ArgumentList.Add(script);
+
+        using var process = Process.Start(startInfo);
+        process.Should().NotBeNull("Node.js is required to execute the shipped admin polling behavior");
+        var outputTask = process!.StandardOutput.ReadToEndAsync();
+        var errorTask = process.StandardError.ReadToEndAsync();
+        await process.StandardInput.WriteAsync(html);
+        process.StandardInput.Close();
+        await process.WaitForExitAsync();
+        var output = await outputTask;
+        var error = await errorTask;
+
+        process.ExitCode.Should().Be(0, $"the causal polling regression should pass. stdout: {output} stderr: {error}");
+    }
+
+    [Fact]
+    public async Task AdminShell_ObservatoryHumanApproval_ShouldBeTypedOwnerOnlyAndUseScopeResume()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            (async function() {
+            function functionSource(name) {
+              const asyncStart = html.indexOf('async function ' + name + '(');
+              const syncStart = html.indexOf('function ' + name + '(');
+              const start = asyncStart !== -1 ? asyncStart : syncStart;
+              assert.notEqual(start, -1, name + ' must exist in the served admin asset');
+              const nextStarts = [
+                html.indexOf('\nfunction ', start + 1),
+                html.indexOf('\nasync function ', start + 1)
+              ].filter(function(index) { return index !== -1; });
+              assert.ok(nextStarts.length, 'a following function must delimit ' + name);
+              return html.slice(start, Math.min.apply(null, nextStarts));
+            }
+
+            const context = { assert };
+            vm.createContext(context);
+            vm.runInContext(`
+              var ACCOUNT = null, OBS_APPROVAL = {}, requests = [];
+              var OBS_DETAIL = {}, OBS_RUNS = [], OBS_POLL_TIMER = null;
+              var OBS_STATE = { selectedId: 'run-approval', immersive: false };
+              var approvalClickHandler = null, approvalInputHandler = null;
+              function adminJson(path, options) {
+                requests.push({ path: path, options: options });
+                return Promise.resolve({ accepted: true });
+              }
+              function obsSelected() { return { id: OBS_STATE.selectedId }; }
+              function obsRunsFiltered() { return OBS_RUNS; }
+              function obsSetImmersive() {}
+              function obsList() { return ''; }
+              function obsDetail(run) { return run ? obsApprovalPanel(run) : ''; }
+              function obsFilterBar() { return ''; }
+              function loadObsRuns() { return Promise.resolve(); }
+              function loadObsDetail() { return Promise.resolve(); }
+              function curParts() { return ['observatory']; }
+              function defaultModule() { return 'observatory'; }
+              function setInterval() { return 1; }
+              function clearInterval() {}
+              function esc(value) {
+                return String(value == null ? '' : value).replace(/[&<>"]/g, function(character) {
+                  return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[character];
+                });
+              }
+              function obsStepStatus() { return 'running'; }
+              function obsDurMs() { return '—'; }
+              function obsNum(value) { return value == null ? '—' : String(value); }
+              function obsTimeline_span() { return '—'; }
+              function obsCost() { return '$0.00'; }
+              function obsTime() { return '—'; }
+              function obsEventTitle() { return 'event'; }
+              function obsStepHint() { return ''; }
+              function obsMapGraph() { return { rootNodeId: '', nodes: [], edges: [] }; }
+              function obsMapStatus(status) { return status === 'failed' ? 'failed' : 'running'; }
+              function obsBytes(value) { return String(value || '').length; }
+              function obsIssuePayload() { return {}; }
+
+              ${functionSource('mapObsDetail')}
+              ${functionSource('obsApprovalKey')}
+              ${functionSource('obsApprovalState')}
+              ${functionSource('obsActiveApproval')}
+              ${functionSource('obsReconcileApprovalState')}
+              ${functionSource('obsCanApprove')}
+              ${functionSource('obsApprovalPanel')}
+              ${functionSource('obsSubmitApproval')}
+              ${functionSource('obsDiagnosticStrip')}
+              ${functionSource('bindObservatory')}
+            `, context);
+
+            await vm.runInContext(`(async function() {
+              const raw = {
+                summary: {
+                  runId: 'run-approval',
+                  workflowName: 'auto_review',
+                  status: 'running',
+                  scopeId: 'scope-owner',
+                  stateVersion: 58
+                },
+                steps: [{
+                  stepId: 'show_for_approval',
+                  stepType: 'human_approval',
+                  requestedAtUtc: '2026-07-29T02:38:47Z',
+                  suspensionType: 'human_approval',
+                  suspensionPrompt: 'Review this workflow',
+                  suspensionContent: 'name: daily_tech_digest\\nsteps: []',
+                  suspensionTimeoutSeconds: 3600
+                }],
+                diagnostics: [{ severity: 'info', code: 'active_step', message: 'waiting' }]
+              };
+
+              const run = mapObsDetail(raw, null);
+              assert.equal(run.steps[0].suspensionType, 'human_approval');
+              assert.equal(run.steps[0].suspensionContent, 'name: daily_tech_digest\\nsteps: []');
+              assert.equal(obsActiveApproval({
+                steps: [{ stepId: 'show_for_approval', suspensionType: '', completedAtUtc: '' }]
+              }), null, 'step names must not infer approval eligibility');
+
+              ACCOUNT = { scope: 'scope-owner', admin: false };
+              assert.equal(obsCanApprove(run), true);
+              let panel = obsApprovalPanel(run);
+              assert.match(panel, /需要审批/);
+              assert.match(panel, /daily_tech_digest/);
+              assert.match(panel, /data-act="obsApprovalApprove"/);
+              assert.doesNotMatch(obsDiagnosticStrip(run), /失败诊断/);
+              assert.match(obsDiagnosticStrip(run), /当前位置/);
+
+              OBS_DETAIL[run.id] = { detail: run };
+              bindObservatory({
+                querySelector: function() { return null; },
+                addEventListener: function(type, handler) {
+                  if (type === 'click') approvalClickHandler = handler;
+                  if (type === 'input') approvalInputHandler = handler;
+                }
+              });
+              function clickApproval(action) {
+                const element = { getAttribute: function() { return action; } };
+                approvalClickHandler({ target: {
+                  closest: function(selector) { return selector === '[data-act]' ? element : null; }
+                }});
+              }
+
+              clickApproval('obsApprovalReject');
+              assert.match(obsApprovalPanel(run), /id="obs-approval-feedback"/);
+              approvalInputHandler({ target: {
+                value: '请补充来源',
+                getAttribute: function() { return 'obsApprovalFeedback'; }
+              }});
+              assert.ok(obsApprovalPanel(run).includes('>请补充来源</textarea>'));
+              clickApproval('obsApprovalRejectCancel');
+              assert.doesNotMatch(obsApprovalPanel(run), /id="obs-approval-feedback"/);
+
+              assert.equal(await obsSubmitApproval(run, true, function() {}), true);
+              assert.equal(requests[0].path, '/api/scopes/scope-owner/runs/run-approval:resume');
+              assert.deepEqual(JSON.parse(requests[0].options.body), {
+                stepId: 'show_for_approval',
+                approved: true
+              });
+              assert.match(obsApprovalPanel(run), /审批决定已接受/);
+
+              obsReconcileApprovalState(run);
+              assert.match(
+                obsApprovalPanel(run),
+                /data-act="obsApprovalApprove"/,
+                'the next committed read must clear the optimistic 202 latch when the same approval is still pending'
+              );
+              const nextApprovalRun = Object.assign({}, run, { steps: [{
+                stepId: 'second_approval',
+                stepType: 'human_approval',
+                requestedAtUtc: '2026-07-29T02:39:47Z',
+                completedAtUtc: '',
+                suspensionType: 'human_approval',
+                suspensionContent: 'second decision'
+              }] });
+              obsReconcileApprovalState(nextApprovalRun);
+              assert.match(obsApprovalPanel(nextApprovalRun), /data-act="obsApprovalApprove"/);
+
+              ACCOUNT = { scope: 'scope-admin', admin: true };
+              assert.equal(obsCanApprove(run), false);
+              panel = obsApprovalPanel(run);
+              assert.match(panel, /只读/);
+              assert.doesNotMatch(panel, /obsApprovalApprove/);
+
+              ACCOUNT = { scope: 'scope-owner', admin: false };
+              const state = obsApprovalState(run, obsActiveApproval(run));
+              state.rejecting = true;
+              state.feedback = '  ';
+              assert.equal(await obsSubmitApproval(run, false, function() {}), false);
+              assert.equal(requests.length, 1);
+              state.feedback = '请补充来源';
+              assert.equal(await obsSubmitApproval(run, false, function() {}), true);
+              assert.deepEqual(JSON.parse(requests[1].options.body), {
+                stepId: 'show_for_approval',
+                approved: false,
+                userInput: '请补充来源'
+              });
+
+              assert.match(obsDiagnosticStrip({
+                status: 'failed',
+                rawStatus: 'failed',
+                diagnostics: [{ severity: 'error', code: 'step_failed', message: 'boom' }]
+              }), /失败诊断/);
+            })()`, context);
+            })().catch(function(error) {
+              console.error(error);
+              process.exitCode = 1;
+            });
+            """;
+
+        var startInfo = new ProcessStartInfo("node")
+        {
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        startInfo.ArgumentList.Add("--eval");
+        startInfo.ArgumentList.Add(script);
+
+        using var process = Process.Start(startInfo);
+        process.Should().NotBeNull("Node.js is required to execute the shipped admin approval behavior");
+        var outputTask = process!.StandardOutput.ReadToEndAsync();
+        var errorTask = process.StandardError.ReadToEndAsync();
+        await process.StandardInput.WriteAsync(html);
+        process.StandardInput.Close();
+        await process.WaitForExitAsync();
+        var output = await outputTask;
+        var error = await errorTask;
+
+        process.ExitCode.Should().Be(0, $"the observatory approval behavior should pass. stdout: {output} stderr: {error}");
     }
 
     [Fact]
@@ -270,6 +624,77 @@ public sealed class BackendConsoleStaticAssetEndpointTests
     }
 
     [Fact]
+    public async Task AdminShell_ObservatoryGraph_ShouldPreserveEdgesAndDeriveNodeStatus()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        html.Should().Contain("function obsMapGraph(graph,steps,runStatus)");
+        html.Should().Contain("edges:validEdges");
+        html.Should().Contain("st:step?step.status:");
+        html.Should().Contain("return {rootNodeId:rootNodeId,nodes:mappedNodes,edges:validEdges}");
+        html.Should().NotContain(".join('<div class=\"dag-link\"></div>')");
+    }
+
+    [Fact]
+    public async Task AdminShell_ObservatoryGraph_ShouldExposeInteractiveDagControlsAndNodeDetails()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        html.Should().Contain("function obsGraphView(r)");
+        html.Should().Contain("function obsBindGraph(root)");
+        html.Should().Contain("addEventListener('wheel'");
+        html.Should().Contain("addEventListener('pointerdown'");
+        html.Should().Contain("data-obs-graph-act=\"fit\"");
+        html.Should().Contain("data-obs-node=\"");
+        html.Should().Contain("function obsOpenGraphNode(nodeId)");
+    }
+
+    [Fact]
+    public async Task AdminShell_ObservatoryDetail_ShouldSurfaceExecutionEvidence()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        html.Should().Contain("function obsNarrativeView(r)");
+        html.Should().Contain("function obsRenderToolCall(tc,forceOpen)");
+        html.Should().Contain("argumentsJson");
+        html.Should().Contain("resultJson");
+        html.Should().Contain("最终输出 · finalOutput");
+        html.Should().Contain("输入 · input");
+        html.Should().Contain("outputPreview 为 240 字预览");
+        html.Should().Contain("派生视图：由 diagnostics + committed timeline 组装");
+        html.Should().Contain("promptTokens:obsNum(ut.promptTokens)");
+        html.Should().Contain("completionTokens:obsNum(ut.completionTokens)");
+    }
+
+    [Fact]
+    public async Task AdminShell_CrossLinks_ShouldBridgeObservatoryCqrsAndAudit()
+    {
+        await using var app = await CreateAppAsync();
+        var client = app.GetTestClient();
+        var admin = await client.GetStringAsync("/admin");
+        var cqrs = await client.GetStringAsync("/cqrs");
+
+        admin.Should().Contain("data-act=\"obsToCqrs\"");
+        admin.Should().Contain("data-act=\"obsToAudit\"");
+        admin.Should().Contain("data-act=\"auditOpenRun\"");
+        admin.Should().Contain("function viewCqrs()");
+        admin.Should().Contain("p.set('owner',q.owner)");
+        admin.Should().Contain("AUDIT_STATE.text=rid||''");
+
+        cqrs.Should().Contain("function renderPurposeBanner()");
+        cqrs.Should().Contain("function healthOf(s)");
+        cqrs.Should().Contain("版本滞后");
+        cqrs.Should().Contain("规划中能力");
+        cqrs.Should().Contain("function openAdminObservatory(scopeId)");
+        cqrs.Should().Contain("function readDeepLinkFilters()");
+        cqrs.Should().Contain("本页回答：读侧投影是否健康");
+        cqrs.Should().Contain("StateVersion 差，不是毫秒");
+    }
+
+    [Fact]
     public async Task WorkflowSkillScheduleProducers_ShouldSendSelectedTeamId()
     {
         await using var app = await CreateAppAsync();
@@ -292,6 +717,17 @@ public sealed class BackendConsoleStaticAssetEndpointTests
                 "adminApi('/api/workflow/skills/'+encodeURIComponent(s.guid)+'/schedule'")
             .Should()
             .Contain("teamId:");
+    }
+
+    [Fact]
+    public async Task AdminShell_SkillsWithLegacyToken_ShouldOfferResourceReauthorization()
+    {
+        await using var app = await CreateAppAsync();
+        var admin = await app.GetTestClient().GetStringAsync("/admin");
+
+        admin.Should().Contain("if(!loginResourcesGranted())");
+        admin.Should().Contain("当前登录未授权技能服务");
+        admin.Should().Contain("data-act=\"skAuthorize\"");
     }
 
     private static string ScheduleRequestSnippet(string html, string scheduleCall)

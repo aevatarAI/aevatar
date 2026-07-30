@@ -116,6 +116,21 @@ public sealed class ManagedCodexOptionsValidatorTests
         _validator.Validate(null, sufficient).Succeeded.Should().BeTrue();
     }
 
+    [Fact]
+    public void Validate_WhenExecutionLifecycleGraceIsOutsideItsRange_Fails()
+    {
+        var tooShort = ValidOptions();
+        tooShort.ExecutionLifecycleGraceSeconds = 119;
+        var minimum = ValidOptions();
+        minimum.ExecutionLifecycleGraceSeconds = 120;
+        var tooLong = ValidOptions();
+        tooLong.ExecutionLifecycleGraceSeconds = 181;
+
+        _validator.Validate(null, tooShort).Failed.Should().BeTrue();
+        _validator.Validate(null, minimum).Succeeded.Should().BeTrue();
+        _validator.Validate(null, tooLong).Failed.Should().BeTrue();
+    }
+
     internal static ManagedCodexOptions ValidOptions() => new()
     {
         Enabled = true,

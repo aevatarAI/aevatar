@@ -869,73 +869,6 @@ async function requestTeamAutomation<T>(
   return decoder(await response.json());
 }
 
-async function refreshAuthorizationCatalog(): Promise<void> {
-  const response = await authFetch("/api/auth/nyxid/authorization-catalog:refresh", {
-    method: "POST",
-  });
-  if (!response.ok) {
-    const details = await readResponseErrorDetails(response);
-    throw new TeamAutomationApiError(details.message, details.status, details.code, details);
-  }
-
-  const payload = expectRecord(
-    await response.json(),
-    "NyxIdAuthorizationCatalogRefreshResponse",
-  );
-  if (readBoolean(payload, ["ready", "Ready"], "authorizationCatalog.ready")) {
-    return;
-  }
-
-  const refreshStatus = requiredString(
-    payload,
-    ["refreshStatus", "RefreshStatus"],
-    "authorizationCatalog.refreshStatus",
-  );
-  const refreshFailureCode = optionalString(
-    payload,
-    ["refreshFailureCode", "RefreshFailureCode"],
-  );
-  const visibilityStatus = requiredString(
-    payload,
-    ["visibilityStatus", "VisibilityStatus"],
-    "authorizationCatalog.visibilityStatus",
-  );
-  const visibilityFailureCode = optionalString(
-    payload,
-    ["visibilityFailureCode", "VisibilityFailureCode"],
-  );
-  const requiredStateVersion = requiredNonNegativeInteger(
-    payload,
-    ["requiredStateVersion", "RequiredStateVersion"],
-    "authorizationCatalog.requiredStateVersion",
-  );
-
-  if (visibilityStatus === "projection_pending") {
-    throw new TeamAutomationApiError(
-      visibilityFailureCode || "NyxID authorization catalog projection is pending.",
-      response.status,
-      "TEAM_AUTOMATION_AUTHORIZATION_PROJECTION_PENDING",
-      { requiredStateVersion, retryable: true },
-    );
-  }
-  if (refreshStatus === "superseded") {
-    throw new TeamAutomationApiError(
-      refreshFailureCode || "NyxID authorization catalog refresh was superseded.",
-      response.status,
-      "TEAM_AUTOMATION_AUTHORIZATION_REFRESH_SUPERSEDED",
-      { requiredStateVersion, retryable: true },
-    );
-  }
-  throw new TeamAutomationApiError(
-    visibilityFailureCode ||
-      refreshFailureCode ||
-      "NyxID authorization catalog is not ready.",
-    response.status,
-    "TEAM_AUTOMATION_AUTHORIZATION_REFRESH_UNAVAILABLE",
-    { requiredStateVersion, retryable: true },
-  );
-}
-
 function listTeamAutomations(
   route: TeamAutomationRoute,
   query?: { readonly cursor?: string; readonly take?: number },
@@ -976,8 +909,6 @@ async function listAllTeamAutomations(
 }
 
 export const teamAutomationApi = {
-  refreshAuthorizationCatalog,
-
   preflightCreate(draft: TeamAutomationCreateDraft): Promise<TeamAutomationPermissionReview> {
     return requestTeamAutomation(
       `${basePath(draft)}/preflight`,

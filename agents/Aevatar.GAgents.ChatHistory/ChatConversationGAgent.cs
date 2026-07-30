@@ -25,6 +25,34 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>,
     private const int MaxSynthesizedConversationTitleLength = 48;
     private const string TitleEllipsis = "…";
 
+    [EventHandler(EndpointName = "initializeChatConversation")]
+    public async Task HandleInitializeChatConversation(InitializeChatConversationCommand command)
+    {
+        ValidateInitialization(command);
+
+        if (State.Initialization is not null)
+        {
+            if (HasSameInitialization(State.Initialization, command))
+                return;
+
+            throw new InvalidOperationException("Chat conversation initialization conflicts with the committed initialization.");
+        }
+
+        if (State.Deleted || HasIdentityConflict(State, command))
+            throw new InvalidOperationException("Chat conversation initialization conflicts with the current conversation state.");
+
+        await PersistDomainEventAsync(new ChatConversationInitializedEvent
+        {
+            OperationId = command.OperationId,
+            ScopeId = command.ScopeId,
+            ConversationId = command.ConversationId,
+            ServiceId = command.ServiceId,
+            ServiceKind = command.ServiceKind,
+            CreatedAt = command.CreatedAt.Clone(),
+            InitialTitle = command.InitialTitle,
+        });
+    }
+
     [EventHandler(EndpointName = "appendChatTurn")]
     public async Task HandleAppendChatTurn(AppendChatTurnCommand command)
     {
@@ -94,11 +122,51 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>,
     {
         return StateTransitionMatcher
             .Match(current, evt)
+            .On<ChatConversationInitializedEvent>(ApplyChatConversationInitialized)
             .On<ChatTurnAppendedEvent>(ApplyChatTurnAppended)
             .On<ChatTurnAppendRejectedEvent>(ApplyChatTurnAppendRejected)
             .On<ConversationDeletedEvent>(ApplyConversationDeleted)
             .OrCurrent();
     }
+
+    private static void ValidateInitialization(InitializeChatConversationCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (string.IsNullOrWhiteSpace(command.OperationId) ||
+            string.IsNullOrWhiteSpace(command.ScopeId) ||
+            string.IsNullOrWhiteSpace(command.ConversationId) ||
+            string.IsNullOrWhiteSpace(command.ServiceId) ||
+            string.IsNullOrWhiteSpace(command.ServiceKind) ||
+            command.CreatedAt is null)
+        {
+            throw new InvalidOperationException("Chat conversation initialization requires stable identity and creation time.");
+        }
+
+        _ = command.CreatedAt.ToDateTimeOffset();
+    }
+
+    private static bool HasIdentityConflict(
+        ChatConversationState state,
+        InitializeChatConversationCommand command) =>
+        HasDifferentValue(state.ScopeId, command.ScopeId) ||
+        HasDifferentValue(state.ConversationId, command.ConversationId) ||
+        HasDifferentValue(state.ServiceId, command.ServiceId) ||
+        HasDifferentValue(state.ServiceKind, command.ServiceKind);
+
+    private static bool HasDifferentValue(string existing, string candidate) =>
+        !string.IsNullOrWhiteSpace(existing) &&
+        !string.Equals(existing, candidate, StringComparison.Ordinal);
+
+    private static bool HasSameInitialization(
+        ChatConversationInitialization existing,
+        InitializeChatConversationCommand candidate) =>
+        string.Equals(existing.OperationId, candidate.OperationId, StringComparison.Ordinal) &&
+        string.Equals(existing.ScopeId, candidate.ScopeId, StringComparison.Ordinal) &&
+        string.Equals(existing.ConversationId, candidate.ConversationId, StringComparison.Ordinal) &&
+        string.Equals(existing.ServiceId, candidate.ServiceId, StringComparison.Ordinal) &&
+        string.Equals(existing.ServiceKind, candidate.ServiceKind, StringComparison.Ordinal) &&
+        Equals(existing.CreatedAt, candidate.CreatedAt) &&
+        string.Equals(existing.InitialTitle, candidate.InitialTitle, StringComparison.Ordinal);
 
     private bool TryValidateAppend(
         AppendChatTurnCommand command,
@@ -264,6 +332,35 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>,
         next.LastRejectedAppend = null;
         if (evt.Turn is not null)
             next.Turns.Add(evt.Turn.Clone());
+        return next;
+    }
+
+    private static ChatConversationState ApplyChatConversationInitialized(
+        ChatConversationState state,
+        ChatConversationInitializedEvent evt)
+    {
+        var next = state.Clone();
+        next.ScopeId = evt.ScopeId;
+        next.ConversationId = evt.ConversationId;
+        next.ServiceId = evt.ServiceId;
+        next.ServiceKind = evt.ServiceKind;
+        if (string.IsNullOrWhiteSpace(next.Title))
+            next.Title = evt.InitialTitle;
+
+        var createdAtMs = evt.CreatedAt.ToDateTimeOffset().ToUnixTimeMilliseconds();
+        next.CreatedAtMs = createdAtMs;
+        next.UpdatedAtMs = Math.Max(next.UpdatedAtMs, createdAtMs);
+        next.Deleted = false;
+        next.Initialization = new ChatConversationInitialization
+        {
+            OperationId = evt.OperationId,
+            ScopeId = evt.ScopeId,
+            ConversationId = evt.ConversationId,
+            ServiceId = evt.ServiceId,
+            ServiceKind = evt.ServiceKind,
+            CreatedAt = evt.CreatedAt.Clone(),
+            InitialTitle = evt.InitialTitle,
+        };
         return next;
     }
 

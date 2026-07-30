@@ -57,6 +57,7 @@ public sealed class OrleansActorRuntimeForwardingTests
 
         await runtime.LinkAsync("parent", "child");
 
+        grains["parent"].AddChildCallCount.Should().Be(1);
         grains["parent"].Children.Should().Contain("child");
         grains["child"].ParentId.Should().Be("parent");
         var parentBindings = await registry.ListBySourceAsync("parent", CancellationToken.None);
@@ -70,6 +71,51 @@ public sealed class OrleansActorRuntimeForwardingTests
         committedObservationBinding.DirectionFilter.SetEquals([TopologyAudience.Unspecified]).Should().BeTrue();
         committedObservationBinding.EventTypeFilter.Should().ContainSingle()
             .Which.Should().Be($"type.googleapis.com/{CommittedStateEventPublished.Descriptor.FullName}");
+    }
+
+    [Fact]
+    public async Task LinkAsync_WithBoundCurrentParent_ShouldPersistChildWithoutCallingParentGrain()
+    {
+        var stateBindingAccessor = new AsyncLocalRuntimeActorStateBindingAccessor();
+        var runtime = CreateRuntime(
+            out _,
+            out var grains,
+            out _,
+            stateBindingAccessor: stateBindingAccessor);
+        var boundState = CreatePersistentState("parent");
+        var stateProxy = (RuntimeActorPersistentStateProxy)(object)boundState;
+
+        using (stateBindingAccessor.Bind(boundState))
+            await runtime.LinkAsync("parent", "child");
+
+        stateProxy.State.Children.Should().ContainSingle("child");
+        stateProxy.WriteCount.Should().Be(1);
+        grains["parent"].AddChildCallCount.Should().Be(0);
+        grains["child"].ParentId.Should().Be("parent");
+    }
+
+    [Fact]
+    public async Task LinkAsync_WithBoundCurrentParent_WhenRepeated_ShouldRemainIdempotent()
+    {
+        var stateBindingAccessor = new AsyncLocalRuntimeActorStateBindingAccessor();
+        var runtime = CreateRuntime(
+            out _,
+            out var grains,
+            out _,
+            stateBindingAccessor: stateBindingAccessor);
+        var boundState = CreatePersistentState("parent");
+        var stateProxy = (RuntimeActorPersistentStateProxy)(object)boundState;
+
+        using (stateBindingAccessor.Bind(boundState))
+        {
+            await runtime.LinkAsync("parent", "child");
+            await runtime.LinkAsync("parent", "child");
+        }
+
+        stateProxy.State.Children.Should().ContainSingle("child");
+        stateProxy.WriteCount.Should().Be(1);
+        grains["parent"].AddChildCallCount.Should().Be(0);
+        grains["child"].ParentId.Should().Be("parent");
     }
 
     [Fact]
@@ -259,7 +305,8 @@ public sealed class OrleansActorRuntimeForwardingTests
         out InMemoryStreamForwardingRegistry registry,
         out Dictionary<string, RecordingRuntimeActorGrain> grains,
         out Dictionary<string, RecordingCallbackSchedulerGrain> callbackSchedulerGrains,
-        IStreamLifecycleManager? streamLifecycleManager = null)
+        IStreamLifecycleManager? streamLifecycleManager = null,
+        IRuntimeActorStateBindingAccessor? stateBindingAccessor = null)
     {
         var grainMap = new Dictionary<string, RecordingRuntimeActorGrain>(StringComparer.Ordinal);
         var callbackSchedulerGrainMap = new Dictionary<string, RecordingCallbackSchedulerGrain>(StringComparer.Ordinal);
@@ -297,7 +344,17 @@ public sealed class OrleansActorRuntimeForwardingTests
             streams,
             new OrleansActorRuntimeDurableCallbackScheduler(grainFactory),
             new AgentKindRegistry([]),
+            stateBindingAccessor ?? new AsyncLocalRuntimeActorStateBindingAccessor(),
             streamLifecycleManager: streamLifecycleManager);
+    }
+
+    private static IPersistentState<RuntimeActorGrainState> CreatePersistentState(string actorId)
+    {
+        var persistentState = DispatchProxy.Create<
+            IPersistentState<RuntimeActorGrainState>,
+            RuntimeActorPersistentStateProxy>();
+        ((RuntimeActorPersistentStateProxy)(object)persistentState).State.AgentId = actorId;
+        return persistentState;
     }
 
     private class GrainFactoryProxy : DispatchProxy
@@ -360,6 +417,7 @@ public sealed class OrleansActorRuntimeForwardingTests
         public List<EventEnvelope> HandledEnvelopes { get; } = [];
 
         public int IsInitializedCallCount { get; private set; }
+        public int AddChildCallCount { get; private set; }
 
         private async Task<bool> SubscribeSelfStreamOnceAsync()
         {
@@ -407,6 +465,7 @@ public sealed class OrleansActorRuntimeForwardingTests
         public Task AddChildAsync(string childId)
         {
             ObservedReentrancyIds.Add(RequestContext.ReentrancyId);
+            AddChildCallCount++;
             Children.Add(childId);
             return Task.CompletedTask;
         }
@@ -462,6 +521,44 @@ public sealed class OrleansActorRuntimeForwardingTests
             ParentId = null;
             Children.Clear();
             return Task.CompletedTask;
+        }
+    }
+
+    private class RuntimeActorPersistentStateProxy : DispatchProxy
+    {
+        public RuntimeActorGrainState State { get; set; } = new();
+
+        public int WriteCount { get; private set; }
+
+        protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
+        {
+            var name = targetMethod?.Name;
+            if (name == "get_State")
+                return State;
+            if (name == "set_State")
+            {
+                State = args?[0] as RuntimeActorGrainState ?? new RuntimeActorGrainState();
+                return null;
+            }
+
+            if (name == "WriteStateAsync")
+            {
+                WriteCount++;
+                return Task.CompletedTask;
+            }
+
+            if (name == "ReadStateAsync" || name == "ClearStateAsync")
+                return Task.CompletedTask;
+            if (name == "get_RecordExists")
+                return true;
+            if (name == "get_Etag")
+                return string.Empty;
+            if (name == "set_Etag")
+                return null;
+
+            return targetMethod?.ReturnType?.IsValueType == true
+                ? Activator.CreateInstance(targetMethod.ReturnType)
+                : null;
         }
     }
 

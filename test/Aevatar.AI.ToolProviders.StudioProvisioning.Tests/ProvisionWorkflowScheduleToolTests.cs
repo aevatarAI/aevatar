@@ -11,6 +11,7 @@ using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Workflow.Abstractions;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace Aevatar.AI.ToolProviders.StudioProvisioning.Tests;
@@ -819,7 +820,11 @@ public sealed class ProvisionWorkflowScheduleToolTests
         var bindingPort = new RecordingMemberWorkflowBindingPort();
         var tool = await DiscoverBindMemberWorkflowToolAsync(bindingPort);
 
-        using var context = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
+        using var context = PushContext(
+            scopeId: "scope-alpha",
+            ownerSubject: "owner-alpha",
+            accessToken: "access-token-1",
+            nyxIdAuthority: new AgentToolNyxIdAuthorityContext("nyxid", "tenant-alpha", "nyx-user-alpha"));
         var output = await tool.ExecuteAsync("""
             {
               "member_id": "member-alpha",
@@ -829,12 +834,12 @@ public sealed class ProvisionWorkflowScheduleToolTests
             """);
 
         bindingPort.LastRequest.Should().NotBeNull();
-        bindingPort.LastRequest!.ScopeId.Should().Be("scope-current");
+        bindingPort.LastRequest!.ScopeId.Should().Be("scope-alpha");
         bindingPort.LastRequest.MemberId.Should().Be("member-alpha");
         bindingPort.LastRequest.WorkflowYaml.Should().Contain("name: team_workflow");
         bindingPort.LastRequest.WorkflowId.Should().Be("workflow-alpha");
         bindingPort.LastRequest.CapabilityAdmission.Should().NotBeNull();
-        bindingPort.LastRequest.CapabilityAdmission!.CallerId.Should().Be("owner-1");
+        bindingPort.LastRequest.CapabilityAdmission!.CallerId.Should().Be("nyx-user-alpha");
         bindingPort.LastRequest.CapabilityAdmission.NyxIdCallerBearerToken.Should().Be("access-token-1");
         bindingPort.LastRequest.CapabilityAdmission.NyxIdOrganizationBearerToken.Should().Be("org-token");
         bindingPort.LastRequest.CapabilityAdmission.ExecutionMode.Should()
@@ -843,7 +848,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         using var document = JsonDocument.Parse(output);
         var root = document.RootElement;
         root.GetProperty("success").GetBoolean().Should().BeTrue();
-        root.GetProperty("scope_id").GetString().Should().Be("scope-current");
+        root.GetProperty("scope_id").GetString().Should().Be("scope-alpha");
         root.GetProperty("member_id").GetString().Should().Be("member-alpha");
         root.GetProperty("operation").GetString().Should().Be(StudioMemberWorkflowBindingOperationNames.Bind);
         root.GetProperty("status").GetString().Should().Be("accepted");
@@ -851,9 +856,9 @@ public sealed class ProvisionWorkflowScheduleToolTests
         root.GetProperty("ack_stage").GetString().Should().Be("dispatch_accepted");
         root.GetProperty("binding_run_role").GetString().Should().Be("candidate");
         root.GetProperty("binding_run_url").GetString()
-            .Should().Be("/api/scopes/scope-current/members/member-alpha/binding-runs/binding-run-1");
+            .Should().Be("/api/scopes/scope-alpha/members/member-alpha/binding-runs/binding-run-1");
         root.GetProperty("member_workflow_url").GetString()
-            .Should().Be("/api/scopes/scope-current/members/member-alpha/binding");
+            .Should().Be("/api/scopes/scope-alpha/members/member-alpha/binding");
         root.GetProperty("workflow_id").GetString().Should().Be("workflow-alpha");
         root.TryGetProperty("revision_id", out _).Should().BeFalse();
         root.TryGetProperty("service_id", out _).Should().BeFalse();
@@ -867,9 +872,10 @@ public sealed class ProvisionWorkflowScheduleToolTests
 
         using var _ = PushContext(
             scopeId: "registration-scope",
-            ownerSubject: "owner-1",
+            ownerSubject: "owner-alpha",
             accessToken: "access-token-1",
-            ownerScopeId: "owner-scope");
+            ownerScopeId: "owner-scope",
+            nyxIdAuthority: new AgentToolNyxIdAuthorityContext("nyxid", "tenant-alpha", "nyx-user-alpha"));
         var output = await tool.ExecuteAsync("""
             {
               "member_id": "member-alpha",
@@ -894,6 +900,22 @@ public sealed class ProvisionWorkflowScheduleToolTests
         var output = await tool.ExecuteAsync("""{"member_id":"member-alpha","workflow_yaml":"name: demo\n"}""");
 
         ErrorCode(output).Should().Be("caller_scope_unavailable");
+        bindingPort.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task BindMemberWorkflow_WhenOnlyOwnerSubjectIdentifiesCaller_ShouldRejectAndNotCallPort()
+    {
+        var bindingPort = new RecordingMemberWorkflowBindingPort();
+        var tool = await DiscoverBindMemberWorkflowToolAsync(bindingPort);
+
+        using var _ = PushContext(
+            scopeId: "scope-alpha",
+            ownerSubject: "owner-alpha",
+            accessToken: "access-token-1");
+        var output = await tool.ExecuteAsync("""{"member_id":"m-alpha","workflow_yaml":"name: demo\n"}""");
+
+        ErrorCode(output).Should().Be("caller_identity_unavailable");
         bindingPort.LastRequest.Should().BeNull();
     }
 
@@ -932,7 +954,11 @@ public sealed class ProvisionWorkflowScheduleToolTests
         var schedulePort = new RecordingMemberWorkflowSchedulePort();
         var tool = await DiscoverScheduleMemberWorkflowToolAsync(schedulePort);
 
-        using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
+        using var _ = PushContext(
+            scopeId: "scope-current",
+            ownerSubject: "owner-1",
+            accessToken: "access-token-1",
+            nyxIdAuthority: new AgentToolNyxIdAuthorityContext("nyxid", "tenant-alpha", "nyx-user-alpha"));
         var output = await tool.ExecuteAsync("""
             {
               "member_id": "member-alpha",
@@ -950,7 +976,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         schedulePort.LastRequest.ScheduleTimezone.Should().Be("Asia/Shanghai");
         schedulePort.LastRequest.Prompt.Should().Be("run digest");
         schedulePort.LastRequest.DisplayName.Should().Be("Daily digest");
-        schedulePort.LastRequest.CallerSubjectExternalUserId.Should().Be("owner-1");
+        schedulePort.LastRequest.CallerSubjectExternalUserId.Should().Be("nyx-user-alpha");
         schedulePort.LastRequest.OperationId.Should()
             .MatchRegex("^studio-member-workflow-create:[0-9a-f]{64}$");
         schedulePort.LastRequest.IdempotencyKey.Should()
@@ -985,7 +1011,8 @@ public sealed class ProvisionWorkflowScheduleToolTests
             scopeId: "registration-scope",
             ownerSubject: "owner-1",
             accessToken: "access-token-1",
-            ownerScopeId: "owner-scope");
+            ownerScopeId: "owner-scope",
+            nyxIdAuthority: new AgentToolNyxIdAuthorityContext("nyxid", "tenant-alpha", "nyx-user-alpha"));
         var output = await tool.ExecuteAsync("""
             {
               "member_id": "member-alpha",
@@ -1066,6 +1093,68 @@ public sealed class ProvisionWorkflowScheduleToolTests
     }
 
     [Fact]
+    public async Task ScheduleMemberWorkflow_WhenTypedLarkAuthorityPresent_ShouldKeepNyxIdOwnerSeparateFromChannelSubject()
+    {
+        var schedulePort = new RecordingMemberWorkflowSchedulePort();
+        var tool = await DiscoverScheduleMemberWorkflowToolAsync(schedulePort);
+
+        using var _ = PushContext(
+            scopeId: "registration-scope",
+            ownerSubject: "fallback-owner",
+            accessToken: "access-token-1",
+            ownerScopeId: "owner-scope",
+            senderBindingId: "binding-lark",
+            senderNyxUserId: "nyx-lark-user",
+            senderTenant: "tenant-binding",
+            nyxIdAuthority: new AgentToolNyxIdAuthorityContext("lark", "tenant-authority", "ou_authority"));
+        var output = await tool.ExecuteAsync("""
+            {
+              "member_id": "member-alpha",
+              "schedule_cron": "0 9 * * *",
+              "schedule_timezone": "Asia/Shanghai"
+            }
+            """);
+
+        ErrorCode(output).Should().BeNull();
+        schedulePort.LastRequest.Should().NotBeNull();
+        schedulePort.LastRequest!.ScopeId.Should().Be("owner-scope");
+        var owner = schedulePort.LastRequest.AuthenticatedOwner;
+        owner.Owner.OwnerSubject.Should().Be("nyx-lark-user");
+        owner.SubjectPlatform.Should().Be("lark");
+        owner.SubjectTenant.Should().Be("tenant-authority");
+        owner.SubjectExternalUserId.Should().Be("ou_authority");
+        owner.VerifiedBindingId.Should().Be("binding-lark");
+    }
+
+    [Fact]
+    public async Task ScheduleMemberWorkflow_WhenTypedLarkAuthorityHasNoNyxIdOwner_ShouldFailBeforePreflight()
+    {
+        var schedulePort = new RecordingMemberWorkflowSchedulePort();
+        var tool = await DiscoverScheduleMemberWorkflowToolAsync(schedulePort);
+
+        using var _ = PushContext(
+            scopeId: "registration-scope",
+            ownerSubject: "fallback-owner",
+            accessToken: "access-token-1",
+            ownerScopeId: "owner-scope",
+            senderBindingId: "binding-lark",
+            senderTenant: "tenant-lark",
+            nyxIdAuthority: new AgentToolNyxIdAuthorityContext("lark", "tenant-authority", "ou_authority"));
+        var output = await tool.ExecuteAsync("""
+            {
+              "member_id": "member-alpha",
+              "schedule_cron": "0 9 * * *",
+              "schedule_timezone": "Asia/Shanghai"
+            }
+            """);
+
+        ErrorCode(output).Should().Be("caller_subject_unavailable");
+        output.Should().NotContain("ou_authority");
+        schedulePort.PreflightRequests.Should().BeEmpty();
+        schedulePort.CreateRequests.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ScheduleMemberWorkflow_WhenBearerMissingAndTypedNyxIdAuthorityPresent_ShouldDeferTokenIssuanceToPort()
     {
         var schedulePort = new RecordingMemberWorkflowSchedulePort();
@@ -1113,7 +1202,8 @@ public sealed class ProvisionWorkflowScheduleToolTests
                    accessToken: "access-token-1",
                    requestId: "transport-request-1",
                    callId: "tool-call-1",
-                   idempotencyKey: "caller-operation-1"))
+                   idempotencyKey: "caller-operation-1",
+                   nyxIdAuthority: new AgentToolNyxIdAuthorityContext("nyxid", "tenant-alpha", "nyx-user-alpha")))
         {
             ErrorCode(await tool.ExecuteAsync(arguments)).Should().BeNull();
         }
@@ -1124,7 +1214,8 @@ public sealed class ProvisionWorkflowScheduleToolTests
                    accessToken: "access-token-1",
                    requestId: "transport-request-2",
                    callId: "tool-call-2",
-                   idempotencyKey: "caller-operation-1"))
+                   idempotencyKey: "caller-operation-1",
+                   nyxIdAuthority: new AgentToolNyxIdAuthorityContext("nyxid", "tenant-alpha", "nyx-user-alpha")))
         {
             ErrorCode(await tool.ExecuteAsync(arguments)).Should().BeNull();
         }
@@ -1199,7 +1290,8 @@ public sealed class ProvisionWorkflowScheduleToolTests
             accessToken: "access-token-1",
             requestId: null,
             callId: null,
-            idempotencyKey: null);
+            idempotencyKey: null,
+            nyxIdAuthority: new AgentToolNyxIdAuthorityContext("nyxid", "tenant-alpha", "nyx-user-alpha"));
 
         var output = await tool.ExecuteAsync("""
             {
@@ -1231,7 +1323,11 @@ public sealed class ProvisionWorkflowScheduleToolTests
         };
         var tool = await DiscoverScheduleMemberWorkflowToolAsync(schedulePort);
 
-        using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
+        using var _ = PushContext(
+            scopeId: "scope-current",
+            ownerSubject: "owner-1",
+            accessToken: "access-token-1",
+            nyxIdAuthority: new AgentToolNyxIdAuthorityContext("nyxid", "tenant-alpha", "nyx-user-alpha"));
         var output = await tool.ExecuteAsync("""
             {
               "member_id": "member-alpha",
@@ -1258,7 +1354,11 @@ public sealed class ProvisionWorkflowScheduleToolTests
         };
         var tool = await DiscoverScheduleMemberWorkflowToolAsync(schedulePort);
 
-        using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
+        using var _ = PushContext(
+            scopeId: "scope-current",
+            ownerSubject: "owner-1",
+            accessToken: "access-token-1",
+            nyxIdAuthority: new AgentToolNyxIdAuthorityContext("nyxid", "tenant-alpha", "nyx-user-alpha"));
         var output = await tool.ExecuteAsync("""
             {
               "member_id": "member-alpha",
@@ -1285,7 +1385,11 @@ public sealed class ProvisionWorkflowScheduleToolTests
         };
         var tool = await DiscoverScheduleMemberWorkflowToolAsync(schedulePort);
 
-        using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
+        using var _ = PushContext(
+            scopeId: "scope-current",
+            ownerSubject: "owner-1",
+            accessToken: "access-token-1",
+            nyxIdAuthority: new AgentToolNyxIdAuthorityContext("nyxid", "tenant-alpha", "nyx-user-alpha"));
         var output = await tool.ExecuteAsync("""
             {
               "member_id": "member-alpha",
@@ -1309,7 +1413,11 @@ public sealed class ProvisionWorkflowScheduleToolTests
         };
         var tool = await DiscoverScheduleMemberWorkflowToolAsync(schedulePort);
 
-        using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
+        using var _ = PushContext(
+            scopeId: "scope-current",
+            ownerSubject: "owner-1",
+            accessToken: "access-token-1",
+            nyxIdAuthority: new AgentToolNyxIdAuthorityContext("nyxid", "tenant-alpha", "nyx-user-alpha"));
         var output = await tool.ExecuteAsync("""
             {
               "member_id": "member-alpha",
@@ -1320,6 +1428,42 @@ public sealed class ProvisionWorkflowScheduleToolTests
 
         ErrorCode(output).Should().Be("authorization_catalog_refresh_unavailable");
         ErrorMessage(output).Should().Be("The authorization catalog could not be refreshed. Retry this request.");
+        schedulePort.WritePreflightRequests.Should().ContainSingle();
+        schedulePort.CreateCallCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ScheduleMemberWorkflow_WhenAuthorizationPlanMismatchDuringCreate_ShouldReturnSanitizedReason()
+    {
+        var schedulePort = new RecordingMemberWorkflowSchedulePort
+        {
+            CreateException = new StudioMemberAutomationPlanConflictException(
+                "authorization_plan_changed",
+                "private authorization planner detail owner-alpha node-a",
+                ScheduledAuthorizationPlanMismatchReason.AllowedNodeIdsMismatch),
+        };
+        var tool = await DiscoverScheduleMemberWorkflowToolAsync(schedulePort);
+
+        using var _ = PushContext(
+            scopeId: "scope-current",
+            ownerSubject: "owner-1",
+            accessToken: "access-token-1",
+            nyxIdAuthority: new AgentToolNyxIdAuthorityContext("nyxid", "tenant-alpha", "nyx-user-alpha"));
+        var output = await tool.ExecuteAsync("""
+            {
+              "member_id": "member-alpha",
+              "schedule_cron": "0 9 * * *",
+              "schedule_timezone": "Asia/Shanghai"
+            }
+            """);
+
+        ErrorCode(output).Should().Be("authorization_plan_changed");
+        ErrorMessage(output).Should().Be("The authorization plan changed. Run schedule preflight again before retrying.");
+        ErrorAuthorizationPlanMismatchReason(output).Should().Be("allowed_node_ids_mismatch");
+        output.Should()
+            .NotContain("private authorization planner detail")
+            .And.NotContain("owner-alpha")
+            .And.NotContain("node-a");
         schedulePort.WritePreflightRequests.Should().ContainSingle();
         schedulePort.CreateCallCount.Should().Be(1);
     }
@@ -1338,7 +1482,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
     }
 
     [Fact]
-    public async Task ScheduleMemberWorkflow_WhenOwnerSubjectMissing_ShouldReturnStructuredErrorAndNotCallPort()
+    public async Task ScheduleMemberWorkflow_WhenNyxIdCallerSubjectMissing_ShouldReturnStructuredErrorAndNotCallPort()
     {
         var schedulePort = new RecordingMemberWorkflowSchedulePort();
         var tool = await DiscoverScheduleMemberWorkflowToolAsync(schedulePort);
@@ -1351,6 +1495,86 @@ public sealed class ProvisionWorkflowScheduleToolTests
     }
 
     [Fact]
+    public async Task ScheduleMemberWorkflow_WhenLarkOwnerSubjectIsTransformedScopeAndSenderNyxUserMissing_ShouldFailBeforePreflight()
+    {
+        var schedulePort = new RecordingMemberWorkflowSchedulePort();
+        var tool = await DiscoverScheduleMemberWorkflowToolAsync(schedulePort);
+
+        using var _ = PushContext(
+            scopeId: "registration-scope",
+            ownerSubject: "rscope_transformed_owner",
+            accessToken: "access-token-1",
+            ownerScopeId: "rscope_transformed_owner",
+            senderBindingId: "binding-lark",
+            senderTenant: "tenant-lark",
+            channelPlatform: "lark",
+            channelSenderId: "ou_sender",
+            channelRegistrationScopeId: "rscope_transformed_owner");
+        var output = await tool.ExecuteAsync("""
+            {
+              "member_id": "m-alpha",
+              "schedule_cron": "0 9 * * *",
+              "schedule_timezone": "Asia/Shanghai"
+            }
+            """);
+
+        ErrorCode(output).Should().Be("caller_subject_unavailable");
+        output.Should().NotContain("rscope_transformed_owner");
+        schedulePort.PreflightRequests.Should().BeEmpty();
+        schedulePort.CreateRequests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ScheduleMemberWorkflow_WhenAuthorizationResolutionFails_ShouldLogPrivacySafeDiagnostics()
+    {
+        var schedulePort = new RecordingMemberWorkflowSchedulePort();
+        var logger = new RecordingLogger<ScheduleStudioMemberWorkflowTool>();
+        var tool = await DiscoverScheduleMemberWorkflowToolAsync(schedulePort, logger);
+
+        using var _ = PushContext(
+            scopeId: "registration-scope",
+            ownerSubject: "owner-sensitive",
+            accessToken: "access-token-sensitive",
+            ownerScopeId: "owner-scope-sensitive",
+            senderBindingId: "binding-sensitive",
+            senderTenant: "tenant-sensitive",
+            channelPlatform: "lark-sensitive",
+            channelSenderId: "ou-sensitive",
+            channelRegistrationScopeId: "channel-scope-sensitive");
+        var output = await tool.ExecuteAsync("""
+            {
+              "member_id": "m-sensitive",
+              "schedule_cron": "0 9 * * *",
+              "schedule_timezone": "Asia/Shanghai"
+            }
+            """);
+
+        ErrorCode(output).Should().Be("caller_subject_unavailable");
+        var entry = logger.Entries.Should().ContainSingle().Subject;
+        entry.Level.Should().Be(LogLevel.Warning);
+        entry.Message.Should()
+            .Contain("code=caller_subject_unavailable")
+            .And.Contain("has_typed_authority=False")
+            .And.Contain("has_binding_id=True")
+            .And.Contain("has_sender_nyx_user_id=False")
+            .And.Contain("has_sender_tenant=True")
+            .And.Contain("has_channel_platform=True")
+            .And.Contain("has_channel_sender_id=True")
+            .And.Contain("has_owner_subject=True")
+            .And.Contain("has_owner_scope_id=True");
+        entry.Message.Should()
+            .NotContain("owner-sensitive")
+            .And.NotContain("access-token-sensitive")
+            .And.NotContain("owner-scope-sensitive")
+            .And.NotContain("binding-sensitive")
+            .And.NotContain("tenant-sensitive")
+            .And.NotContain("lark-sensitive")
+            .And.NotContain("ou-sensitive")
+            .And.NotContain("channel-scope-sensitive")
+            .And.NotContain("m-sensitive");
+    }
+
+    [Fact]
     public async Task ScheduleMemberWorkflow_WhenSenderBindingMissing_ShouldReturnAuthorizationContextUnavailable()
     {
         var schedulePort = new RecordingMemberWorkflowSchedulePort();
@@ -1360,7 +1584,11 @@ public sealed class ProvisionWorkflowScheduleToolTests
             scopeId: "scope-current",
             ownerSubject: "owner-1",
             accessToken: "access-token-1",
-            senderBindingId: null);
+            senderBindingId: null,
+            senderNyxUserId: "nyx-user-alpha",
+            senderTenant: "tenant-alpha",
+            channelPlatform: "lark",
+            channelSenderId: "ou-alpha");
         var output = await tool.ExecuteAsync("""{"member_id":"member-alpha","schedule_cron":"0 9 * * *","schedule_timezone":"Asia/Shanghai"}""");
 
         ErrorCode(output).Should().Be("authenticated_owner_context_unavailable");
@@ -1374,7 +1602,11 @@ public sealed class ProvisionWorkflowScheduleToolTests
         var schedulePort = new RecordingMemberWorkflowSchedulePort();
         var tool = await DiscoverScheduleMemberWorkflowToolAsync(schedulePort);
 
-        using var _ = PushContext(scopeId: "scope-context", ownerSubject: "owner-1", accessToken: "access-token-1");
+        using var _ = PushContext(
+            scopeId: "scope-context",
+            ownerSubject: "owner-1",
+            accessToken: "access-token-1",
+            nyxIdAuthority: new AgentToolNyxIdAuthorityContext("nyxid", "tenant-alpha", "nyx-user-alpha"));
         var output = await tool.ExecuteAsync("""
             {
               "scope_id": "scope-model",
@@ -1395,7 +1627,11 @@ public sealed class ProvisionWorkflowScheduleToolTests
         var schedulePort = new RecordingMemberWorkflowSchedulePort();
         var tool = await DiscoverScheduleMemberWorkflowToolAsync(schedulePort);
 
-        using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
+        using var _ = PushContext(
+            scopeId: "scope-current",
+            ownerSubject: "owner-1",
+            accessToken: "access-token-1",
+            nyxIdAuthority: new AgentToolNyxIdAuthorityContext("nyxid", "tenant-alpha", "nyx-user-alpha"));
         var output = await tool.ExecuteAsync("""{"member_id":"member-alpha","schedule_cron":"0 9 * * *"}""");
 
         ErrorCode(output).Should().Be("invalid_arguments");
@@ -1437,7 +1673,11 @@ public sealed class ProvisionWorkflowScheduleToolTests
         });
         var tool = await DiscoverToolAsync(port);
 
-        using var _ = PushContext(scopeId: "scope-1", ownerSubject: "owner-1", accessToken: "access-token-1");
+        using var _ = PushContext(
+            scopeId: "scope-alpha",
+            ownerSubject: "owner-alpha",
+            accessToken: "access-token-1",
+            nyxIdAuthority: new AgentToolNyxIdAuthorityContext("nyxid", "tenant-alpha", "nyx-user-alpha"));
         var output = await tool.ExecuteAsync("""
             {
               "team_id": "team-alpha",
@@ -1452,7 +1692,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
 
         port.LastRequest.Should().NotBeNull();
         var request = port.LastRequest!;
-        request.ScopeId.Should().Be("scope-1");
+        request.ScopeId.Should().Be("scope-alpha");
         request.GetType().GetProperty("TeamId")!.GetValue(request).Should().Be("team-alpha");
         request.DisplayName.Should().Be("Daily Tech News");
         request.WorkflowYaml.Should().Contain("name: daily-tech-news");
@@ -1461,9 +1701,9 @@ public sealed class ProvisionWorkflowScheduleToolTests
         request.ScheduleTimezone.Should().Be("Asia/Shanghai");
         request.RunImmediately.Should().BeFalse();
         // Caller identity is taken from the tool execution context (W1-threaded), not arguments.
-        request.CallerSubjectExternalUserId.Should().Be("owner-1");
+        request.CallerSubjectExternalUserId.Should().Be("nyx-user-alpha");
         request.CapabilityAdmission.Should().NotBeNull();
-        request.CapabilityAdmission!.CallerId.Should().Be("owner-1");
+        request.CapabilityAdmission!.CallerId.Should().Be("nyx-user-alpha");
         request.CapabilityAdmission.NyxIdCallerBearerToken.Should().Be("access-token-1");
         request.CapabilityAdmission.NyxIdOrganizationBearerToken.Should().Be("org-token");
         request.CapabilityAdmission.ExecutionMode.Should()
@@ -1495,9 +1735,10 @@ public sealed class ProvisionWorkflowScheduleToolTests
 
         using var _ = PushContext(
             scopeId: "registration-scope",
-            ownerSubject: "owner-1",
+            ownerSubject: "owner-alpha",
             accessToken: "access-token-1",
-            ownerScopeId: "owner-scope");
+            ownerScopeId: "owner-scope",
+            nyxIdAuthority: new AgentToolNyxIdAuthorityContext("nyxid", "tenant-alpha", "nyx-user-alpha"));
         var output = await tool.ExecuteAsync("""
             {
               "team_id": "team-alpha",
@@ -1519,7 +1760,11 @@ public sealed class ProvisionWorkflowScheduleToolTests
         var port = new RecordingProvisioningPort();
         var tool = await DiscoverToolAsync(port);
 
-        using var _ = PushContext(scopeId: "scope-1", ownerSubject: "owner-1", accessToken: "access-token-1");
+        using var _ = PushContext(
+            scopeId: "scope-alpha",
+            ownerSubject: "owner-alpha",
+            accessToken: "access-token-1",
+            nyxIdAuthority: new AgentToolNyxIdAuthorityContext("nyxid", "tenant-alpha", "nyx-user-alpha"));
         await tool.ExecuteAsync("""
             {
               "team_id": "team-alpha",
@@ -1538,7 +1783,11 @@ public sealed class ProvisionWorkflowScheduleToolTests
         var port = new RecordingProvisioningPort();
         var tool = await DiscoverToolAsync(port);
 
-        using var _ = PushContext(scopeId: "scope-1", ownerSubject: "owner-1", accessToken: "access-token-1");
+        using var _ = PushContext(
+            scopeId: "scope-alpha",
+            ownerSubject: "owner-alpha",
+            accessToken: "access-token-1",
+            nyxIdAuthority: new AgentToolNyxIdAuthorityContext("nyxid", "tenant-alpha", "nyx-user-alpha"));
         var output = await tool.ExecuteAsync("""
             {
               "workflow_yaml": "name: demo\n",
@@ -1571,12 +1820,38 @@ public sealed class ProvisionWorkflowScheduleToolTests
     }
 
     [Fact]
+    public async Task Execute_WhenOnlyOwnerSubjectIdentifiesCaller_ShouldRejectAndNotCallPort()
+    {
+        var port = new RecordingProvisioningPort();
+        var tool = await DiscoverToolAsync(port);
+
+        using var _ = PushContext(
+            scopeId: "scope-alpha",
+            ownerSubject: "owner-alpha",
+            accessToken: "access-token-1");
+        var output = await tool.ExecuteAsync("""
+            {
+              "team_id": "team-alpha",
+              "workflow_yaml": "name: demo\n",
+              "display_name": "Demo"
+            }
+            """);
+
+        ErrorCode(output).Should().Be("caller_identity_unavailable");
+        port.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
     public async Task Execute_WhenWorkflowYamlMissing_ShouldReturnInvalidArguments()
     {
         var port = new RecordingProvisioningPort();
         var tool = await DiscoverToolAsync(port);
 
-        using var _ = PushContext(scopeId: "scope-1", ownerSubject: "owner-1", accessToken: "access-token-1");
+        using var _ = PushContext(
+            scopeId: "scope-alpha",
+            ownerSubject: "owner-alpha",
+            accessToken: "access-token-1",
+            nyxIdAuthority: new AgentToolNyxIdAuthorityContext("nyxid", "tenant-alpha", "nyx-user-alpha"));
         var output = await tool.ExecuteAsync("""
             {
               "team_id": "team-alpha",
@@ -1598,7 +1873,11 @@ public sealed class ProvisionWorkflowScheduleToolTests
         };
         var tool = await DiscoverToolAsync(port);
 
-        using var _ = PushContext(scopeId: "scope-1", ownerSubject: "owner-1", accessToken: "access-token-1");
+        using var _ = PushContext(
+            scopeId: "scope-alpha",
+            ownerSubject: "owner-alpha",
+            accessToken: "access-token-1",
+            nyxIdAuthority: new AgentToolNyxIdAuthorityContext("nyxid", "tenant-alpha", "nyx-user-alpha"));
         var output = await tool.ExecuteAsync("""
             {
               "team_id": "team-alpha",
@@ -1720,8 +1999,12 @@ public sealed class ProvisionWorkflowScheduleToolTests
     }
 
     private static async Task<IAgentTool> DiscoverScheduleMemberWorkflowToolAsync(
-        IStudioMemberWorkflowSchedulePort schedulePort)
+        IStudioMemberWorkflowSchedulePort schedulePort,
+        ILogger<ScheduleStudioMemberWorkflowTool>? logger = null)
     {
+        if (logger is not null)
+            return new ScheduleStudioMemberWorkflowTool(schedulePort, logger);
+
         var source = new ScheduleStudioMemberWorkflowToolSource(schedulePort);
         var tools = await source.DiscoverToolsAsync();
         return tools.Single(tool => tool.Name == ScheduleMemberWorkflowToolName);
@@ -1742,7 +2025,8 @@ public sealed class ProvisionWorkflowScheduleToolTests
             accessToken: "access-token-1",
             requestId: "request-shared",
             callId: "call-shared",
-            idempotencyKey: "caller-operation-shared");
+            idempotencyKey: "caller-operation-shared",
+            nyxIdAuthority: new AgentToolNyxIdAuthorityContext("nyxid", "tenant-alpha", "nyx-user-alpha"));
         var output = await tool.ExecuteAsync(JsonSerializer.Serialize(new Dictionary<string, string>
         {
             ["member_id"] = memberId,
@@ -1829,6 +2113,15 @@ public sealed class ProvisionWorkflowScheduleToolTests
             : null;
     }
 
+    private static string? ErrorAuthorizationPlanMismatchReason(string output)
+    {
+        using var document = JsonDocument.Parse(output);
+        return document.RootElement.TryGetProperty("error", out var error)
+            && error.TryGetProperty("authorization_plan_mismatch_reason", out var reason)
+            ? reason.GetString()
+            : null;
+    }
+
     private sealed class RecordingProvisioningPort : IWorkflowScheduleProvisioningPort
     {
         private readonly WorkflowScheduleProvisioningResult _result;
@@ -1857,6 +2150,29 @@ public sealed class ProvisionWorkflowScheduleToolTests
 
             LastRequest = request;
             return Task.FromResult(_result);
+        }
+    }
+
+    private sealed record RecordedLogEntry(LogLevel Level, string Message);
+
+    private sealed class RecordingLogger<T> : ILogger<T>
+    {
+        public List<RecordedLogEntry> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull =>
+            null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            Entries.Add(new RecordedLogEntry(logLevel, formatter(state, exception)));
         }
     }
 

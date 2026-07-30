@@ -20,7 +20,7 @@ public sealed class ScopeServiceDraftRunMultipartTests : ScopeServiceEndpointTes
             if (onAcceptedAsync != null)
                 await onAcceptedAsync(receipt, ct);
 
-            return CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+            return WorkflowChatRunInteractionResult
                 .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(
                     WorkflowProjectionCompletionStatus.Completed,
                     true));
@@ -72,7 +72,7 @@ public sealed class ScopeServiceDraftRunMultipartTests : ScopeServiceEndpointTes
             if (onAcceptedAsync != null)
                 await onAcceptedAsync(receipt, ct);
 
-            return CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+            return WorkflowChatRunInteractionResult
                 .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(
                     WorkflowProjectionCompletionStatus.Completed,
                     true));
@@ -109,7 +109,7 @@ public sealed class ScopeServiceDraftRunMultipartTests : ScopeServiceEndpointTes
             if (onAcceptedAsync != null)
                 await onAcceptedAsync(receipt, ct);
 
-            return CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+            return WorkflowChatRunInteractionResult
                 .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(
                     WorkflowProjectionCompletionStatus.Completed,
                     true));

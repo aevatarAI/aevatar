@@ -60,7 +60,7 @@ public sealed class ProjectionScheduledInvocationAuthorityQueryPortTests
             {
                 UserServiceId = "us-home-alpha",
                 ServiceSlugSnapshot = "home-assistant",
-                OperationId = "read_states",
+                EndpointId = "read_states",
                 HttpMethod = "GET",
                 PathTemplate = "/api/states",
                 ContractDigest = "nyxid-digest-alpha",

@@ -46,6 +46,7 @@ using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Device;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgents.NyxidChat.AgentProfiles;
+using Aevatar.GAgents.StatusDashboard;
 using Aevatar.GAgents.StatusDashboard.Executors;
 using Aevatar.Mainnet.Host.Api.AgentProfiles;
 using Aevatar.Mainnet.Host.Api.Hosting;
@@ -258,6 +259,8 @@ public sealed class MainnetHostCompositionTests
         app.MapAevatarMainnetHost();
         await app.StartAsync();
 
+        app.Services.GetRequiredService<NyxIdAssistantActionRegistry>()
+            .TryGetDefinition("service.connect", out _).Should().BeTrue();
         var brokerOptions = app.Services.GetRequiredService<IOptions<NyxIdBrokerOptions>>().Value;
         brokerOptions.RequiredLlmServiceSlug.Should().Be(LlmDefaults.NyxIdRoute);
         brokerOptions.AdditionalRequiredServiceSlugs.Should().Equal(
@@ -282,7 +285,7 @@ public sealed class MainnetHostCompositionTests
         readModelDescriptors.Select(static descriptor => descriptor.Name)
             .Should()
             .OnlyHaveUniqueItems();
-        readModelDescriptors.Should().HaveCount(19);
+        readModelDescriptors.Should().HaveCount(18);
         readModelDescriptors.Should()
             .ContainSingle(static descriptor => descriptor.Name == "workflow-external-approval-continuation");
         readModelDescriptors.Should()
@@ -536,6 +539,66 @@ public sealed class MainnetHostCompositionTests
                     .Single()
                     .HttpMethods
                     .Contains(HttpMethods.Post, StringComparer.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void MapAevatarMainnetHost_ShouldOwnTheSingleChatPostRoute()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder();
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        app.MapAevatarMainnetHost();
+
+        var chatPosts = ((IEndpointRouteBuilder)app).DataSources
+            .SelectMany(static source => source.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Where(static endpoint =>
+                endpoint.RoutePattern.RawText == "/api/chat" &&
+                endpoint.Metadata
+                    .OfType<HttpMethodMetadata>()
+                    .Single()
+                    .HttpMethods
+                    .Contains(HttpMethods.Post, StringComparer.OrdinalIgnoreCase))
+            .ToList();
+
+        chatPosts.Should().ContainSingle();
+        chatPosts.Single().Metadata.GetMetadata<IEndpointNameMetadata>()
+            ?.EndpointName.Should().Be("StartMainnetChat");
+
+        var publicConversationRoutes = ((IEndpointRouteBuilder)app).DataSources
+            .SelectMany(static source => source.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Where(static endpoint =>
+                endpoint.RoutePattern.RawText?.StartsWith(
+                    "/api/chat/conversations",
+                    StringComparison.Ordinal) == true)
+            .Select(static endpoint => new
+            {
+                Route = endpoint.RoutePattern.RawText,
+                Methods = endpoint.Metadata.GetMetadata<HttpMethodMetadata>()!.HttpMethods,
+            })
+            .ToList();
+
+        publicConversationRoutes.Should().ContainSingle(route =>
+            route.Route == "/api/chat/conversations" &&
+            route.Methods.Contains(HttpMethods.Get));
+        publicConversationRoutes.Should().ContainSingle(route =>
+            route.Route == "/api/chat/conversations/{conversationId}" &&
+            route.Methods.Contains(HttpMethods.Get));
+        publicConversationRoutes.Should().ContainSingle(route =>
+            route.Route == "/api/chat/conversations/{conversationId}/state" &&
+            route.Methods.Contains(HttpMethods.Get));
+        publicConversationRoutes.Should().ContainSingle(route =>
+            route.Route == "/api/chat/conversations/{conversationId}" &&
+            route.Methods.Contains(HttpMethods.Delete));
+        publicConversationRoutes.Should().OnlyContain(route =>
+            !route.Route!.Contains("scopeId", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -868,6 +931,26 @@ public sealed class MainnetHostCompositionTests
     }
 
     [Fact]
+    public void AddAevatarMainnetHost_ShouldBindNyxIdRequestDurationCeiling()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder(new Dictionary<string, string?>
+        {
+            ["Aevatar:NyxId:MaxRequestDurationSeconds"] = "420",
+        });
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        app.Services.GetRequiredService<NyxIdToolOptions>()
+            .MaxRequestDurationSeconds.Should().Be(420);
+    }
+
+    [Fact]
     public void AddAevatarMainnetHost_ShouldNotBindMalformedLegacyWorkflowFileSubmitEndpointPolicy()
     {
         using var home = new TemporaryAevatarHomeScope();
@@ -1024,6 +1107,13 @@ public sealed class MainnetHostCompositionTests
         app.Services.GetServices<IProjectionIndexReconcileTarget>()
             .Should()
             .ContainSingle(static target => target.IndexAlias.EndsWith("-audit-trail-current", StringComparison.Ordinal));
+        app.Services.GetServices<IProjectionIndexReconcileTarget>()
+            .Should()
+            .ContainSingle(static target => target.IndexAlias.EndsWith(
+                "-health-probe-operational-snapshots",
+                StringComparison.Ordinal));
+        app.Services.GetRequiredService<IHealthProbeOperationalSnapshotStore>()
+            .GetType().Name.Should().Be("ElasticsearchHealthProbeOperationalSnapshotStore");
         app.Services.GetServices<IProjectionReadModelDescriptor>()
             .Should()
             .NotContain(static descriptor => descriptor.Name.Contains("audit", StringComparison.OrdinalIgnoreCase));

@@ -10,6 +10,100 @@ namespace Aevatar.Workflow.Core.Tests;
 public sealed class WorkflowAuthorizationDependenciesTests
 {
     [Fact]
+    public void WorkflowParser_ShouldMapStepLevelNyxIdOperationSelector()
+    {
+        const string yaml = """
+            name: selector-workflow
+            roles: []
+            steps:
+              - id: read-item
+                type: tool_call
+                capability:
+                  nyxid_operation:
+                    user_service_id: us-shop-alpha
+                    endpoint_id: endpoint-get-item
+                parameters:
+                  tool: nyxid_proxy
+                  arguments: '{"path_params":{"item_id":"${input}"}}'
+            """;
+
+        var step = new Aevatar.Workflow.Core.Primitives.WorkflowParser()
+            .Parse(yaml)
+            .Steps
+            .Should().ContainSingle().Subject;
+
+        step.Capability.Should().NotBeNull();
+        step.Capability!.NyxIdOperation.Should().NotBeNull();
+        step.Capability.NyxIdOperation!.UserServiceId.Should().Be("us-shop-alpha");
+        step.Capability.NyxIdOperation.EndpointId.Should().Be("endpoint-get-item");
+        step.Parameters.Should().NotContainKey("capability");
+    }
+
+    [Fact]
+    public void EvaluateAuthorizationDependencies_ShouldCompileSelectorOnlyInvocation()
+    {
+        const string yaml = """
+            name: selector-workflow
+            roles: []
+            steps:
+              - id: read-item
+                type: tool_call
+                capability:
+                  nyxid_operation:
+                    user_service_id: us-shop-alpha
+                    endpoint_id: endpoint-get-item
+                parameters:
+                  tool: nyxid_proxy
+                  arguments: '{"path_params":{"item_id":"${input}"}}'
+            """;
+
+        var dependencies = new WorkflowGAgent().EvaluateAuthorizationDependencies(yaml);
+
+        dependencies.Should().NotBeNull();
+        var invocation = dependencies!.ExternalInvocations.Should().ContainSingle().Subject;
+        invocation.CallSiteId.Should().Be("selector-workflow/read-item");
+        invocation.ToolName.Should().Be("nyxid_proxy");
+        invocation.Selector.NyxIdOperation.UserServiceId.Should().Be("us-shop-alpha");
+        invocation.Selector.NyxIdOperation.EndpointId.Should().Be("endpoint-get-item");
+        dependencies.ServiceGrantPolicy.Should().Be(WorkflowServiceGrantPolicy.Required);
+    }
+
+    [Theory]
+    [InlineData("foreach", "sub_step_type")]
+    [InlineData("for_each", "sub_step_type")]
+    [InlineData("foreach_llm", "sub_step_type")]
+    [InlineData("while", "step")]
+    [InlineData("loop", "step")]
+    public void EvaluateAuthorizationDependencies_IndirectNyxIdProxy_ShouldNeverBypassAdmission(
+        string primitive,
+        string subStepTypeKey)
+    {
+        var yaml = $$$"""
+            name: indirect-workflow
+            roles: []
+            steps:
+              - id: invoke-each
+                type: {{{primitive}}}
+                parameters:
+                  {{{subStepTypeKey}}}: tool_call
+                  sub_param_tool: nyxid_proxy
+                  sub_param_arguments: '{"path_params":{"item_id":"runtime-value"}}'
+                  max_iterations: "1"
+                  condition: "false"
+            """;
+
+        var dependencies = new WorkflowGAgent().EvaluateAuthorizationDependencies(yaml);
+
+        dependencies.Should().NotBeNull();
+        var invocation = dependencies!.ExternalInvocations.Should().ContainSingle().Subject;
+        invocation.CallSiteId.Should().Be("indirect-workflow/invoke-each/sub-step");
+        invocation.ToolName.Should().Be("nyxid_proxy");
+        invocation.Selector.SelectorCase.Should()
+            .Be(ExternalWorkflowCapabilitySelector.SelectorOneofCase.None);
+        dependencies.ServiceGrantPolicy.Should().Be(WorkflowServiceGrantPolicy.Required);
+    }
+
+    [Fact]
     public void BindWorkflowDefinitionScopeId_ShouldTrackPresence()
     {
         var scopeField = BindWorkflowDefinitionEvent.Descriptor.FindFieldByNumber(4);
@@ -115,10 +209,11 @@ public sealed class WorkflowAuthorizationDependenciesTests
         var result = new WorkflowGAgent().EvaluateAuthorizationDependencies(yaml);
 
         result.Should().NotBeNull();
-        result!.ExternalCapabilities.Should().ContainSingle();
-        result.ExternalCapabilities[0].CapabilityCase.Should()
-            .Be(ExternalWorkflowCapabilityRef.CapabilityOneofCase.HostConnector);
-        result.ExternalCapabilities[0].HostConnector.Should().BeEquivalentTo(
+        var invocation = result!.ExternalInvocations.Should().ContainSingle().Subject;
+        invocation.CallSiteId.Should().Be("wf-alpha/nested-call");
+        invocation.Selector.SelectorCase.Should()
+            .Be(ExternalWorkflowCapabilitySelector.SelectorOneofCase.HostConnector);
+        invocation.Selector.HostConnector.Should().BeEquivalentTo(
             new HostConnectorCapabilityRef
             {
                 ConnectorCapabilityRef = "connector-home-alpha",
@@ -137,44 +232,52 @@ public sealed class WorkflowAuthorizationDependenciesTests
             steps:
               - id: proxy-a
                 type: tool_call
+                capability:
+                  nyxid_operation:
+                    user_service_id: us-home-alpha
+                    endpoint_id: list-items
                 parameters:
                   tool: nyxid_proxy
-                  arguments: '{"service_id":"us-home-alpha","slug":"home-assistant","operation_id":"list-items","method":"GET","path":"/api/items","contract_digest":"sha256:home-v1"}'
+                  arguments: '{"query":{}}'
               - id: nested
                 type: sequence
                 children:
                   - id: proxy-b
                     type: tool_call
+                    capability:
+                      nyxid_operation:
+                        user_service_id: us-home-beta
+                        endpoint_id: list-items
                     parameters:
                       tool: nyxid_proxy
-                      arguments: '{"service_id":"us-home-beta","slug":"home-assistant","operation_id":"list-items","method":"GET","path":"/api/items","contract_digest":"sha256:home-v1"}'
+                      arguments: '{"query":{}}'
             """;
 
         var result = new WorkflowGAgent().EvaluateAuthorizationDependencies(yaml);
 
         result.Should().NotBeNull();
-        result!.ExternalCapabilities.Should().HaveCount(2);
-        result.ExternalCapabilities.Select(static capability =>
-                capability.NyxIdUserService.UserServiceId)
+        result!.ExternalInvocations.Should().HaveCount(2);
+        result.ExternalInvocations.Select(static invocation =>
+                invocation.Selector.NyxIdOperation.UserServiceId)
             .Should().Equal("us-home-alpha", "us-home-beta");
-        result.ExternalCapabilities.Should().OnlyContain(static capability =>
-            capability.NyxIdUserService.ServiceSlugSnapshot == "home-assistant" &&
-            capability.NyxIdUserService.OperationId == "list-items" &&
-            capability.NyxIdUserService.HttpMethod == "GET" &&
-            capability.NyxIdUserService.PathTemplate == "/api/items" &&
-            capability.NyxIdUserService.ContractDigest == "sha256:home-v1");
+        result.ExternalInvocations.Should().OnlyContain(static invocation =>
+            invocation.Selector.NyxIdOperation.EndpointId == "list-items");
         result.ServiceGrantPolicy.Should().Be(WorkflowServiceGrantPolicy.Required);
     }
 
     [Theory]
-    [InlineData("{\"service_id\":\"${service_id}\",\"slug\":\"home-assistant\",\"operation_id\":\"list-items\",\"method\":\"GET\",\"path\":\"/api/items\",\"contract_digest\":\"sha256:home-v1\"}", "service_id")]
-    [InlineData("{\"slug\":\"home-assistant\",\"operation_id\":\"list-items\",\"method\":\"GET\",\"path\":\"/api/items\",\"contract_digest\":\"sha256:home-v1\"}", "service_id")]
-    [InlineData("{\"service\":\"us-home-alpha\",\"slug\":\"home-assistant\",\"operation_id\":\"list-items\",\"method\":\"GET\",\"path\":\"/api/items\",\"contract_digest\":\"sha256:home-v1\"}", "service_id")]
-    [InlineData("{\"service_id\":\"us-home-alpha\",\"slug\":\"home-assistant\",\"method\":\"GET\",\"path\":\"/api/items\",\"contract_digest\":\"sha256:home-v1\"}", "operation_id")]
-    [InlineData("{\"service_id\":\"us-home-alpha\",\"slug\":\"home-assistant\",\"operation_id\":\"list-items\",\"method\":\"${method}\",\"path\":\"/api/items\",\"contract_digest\":\"sha256:home-v1\"}", "method")]
-    public void EvaluateAuthorizationDependencies_ShouldRejectUnresolvedNyxIdIdentity(
-        string arguments,
-        string expectedField)
+    [InlineData("service_id")]
+    [InlineData("service")]
+    [InlineData("slug")]
+    [InlineData("operation_id")]
+    [InlineData("endpoint_id")]
+    [InlineData("method")]
+    [InlineData("path")]
+    [InlineData("path_template")]
+    [InlineData("contract_digest")]
+    [InlineData("source_stamp")]
+    public void EvaluateAuthorizationDependencies_ShouldRejectAuthoredServerDerivedProofFields(
+        string derivedField)
     {
         var yaml = $$"""
             name: wf-alpha
@@ -182,15 +285,86 @@ public sealed class WorkflowAuthorizationDependenciesTests
             steps:
               - id: proxy
                 type: tool_call
+                capability:
+                  nyxid_operation:
+                    user_service_id: us-home-alpha
+                    endpoint_id: list-items
                 parameters:
                   tool: nyxid_proxy
-                  arguments: '{{arguments}}'
+                  arguments: '{"{{derivedField}}":"forged"}'
             """;
 
         var act = () => new WorkflowGAgent().EvaluateAuthorizationDependencies(yaml);
 
         act.Should().Throw<WorkflowExternalCapabilityValidationException>()
-            .WithMessage($"*{expectedField}*");
+            .WithMessage($"*{derivedField}*rebind*");
+    }
+
+    [Fact]
+    public void EvaluateAuthorizationDependencies_ShouldRejectDynamicOrMissingNyxIdSelector()
+    {
+        const string dynamicSelector = """
+            name: wf-alpha
+            roles: []
+            steps:
+              - id: proxy
+                type: tool_call
+                capability:
+                  nyxid_operation:
+                    user_service_id: ${service_id}
+                    endpoint_id: list-items
+                parameters:
+                  tool: nyxid_proxy
+                  arguments: '{"query":{}}'
+            """;
+
+        var dynamicAct = () => new WorkflowGAgent().EvaluateAuthorizationDependencies(dynamicSelector);
+
+        dynamicAct.Should().Throw<WorkflowExternalCapabilityValidationException>()
+            .WithMessage("*must be static*");
+
+        const string missingOperation = """
+            name: wf-alpha
+            roles: []
+            steps:
+              - id: proxy
+                type: tool_call
+                capability:
+                  nyxid_operation:
+                    user_service_id: us-home-alpha
+                parameters:
+                  tool: nyxid_proxy
+                  arguments: '{"query":{}}'
+            """;
+
+        var missingAct = () => new WorkflowGAgent().EvaluateAuthorizationDependencies(missingOperation);
+
+        missingAct.Should().Throw<WorkflowExternalCapabilityValidationException>()
+            .WithMessage("*exact connected service and operation*");
+    }
+
+    [Fact]
+    public void EvaluateAuthorizationDependencies_ShouldRejectUnsupportedNyxIdRuntimeArguments()
+    {
+        const string yaml = """
+            name: wf-alpha
+            roles: []
+            steps:
+              - id: proxy
+                type: tool_call
+                capability:
+                  nyxid_operation:
+                    user_service_id: us-home-alpha
+                    endpoint_id: list-items
+                parameters:
+                  tool: nyxid_proxy
+                  arguments: '{"unsupported_slot":{}}'
+            """;
+
+        var act = () => new WorkflowGAgent().EvaluateAuthorizationDependencies(yaml);
+
+        act.Should().Throw<WorkflowExternalCapabilityValidationException>()
+            .WithMessage("*unsupported_slot*is not supported*");
     }
 
     [Theory]
@@ -207,9 +381,13 @@ public sealed class WorkflowAuthorizationDependenciesTests
             steps:
               - id: proxy
                 type: tool_call
+                capability:
+                  nyxid_operation:
+                    user_service_id: us-home-alpha
+                    endpoint_id: list-items
                 parameters:
                   tool: nyxid_proxy
-                  arguments: '{"service_id":"us-home-alpha","slug":"home-assistant","operation_id":"list-items","method":"GET","path":"/api/items","contract_digest":"sha256:home-v1","headers":{"{{{headerName}}}":"must-not-enter-workflow"}}'
+                  arguments: '{"headers":{"{{{headerName}}}":"must-not-enter-workflow"}}'
             """;
 
         var act = () => new WorkflowGAgent().EvaluateAuthorizationDependencies(yaml);
@@ -227,21 +405,26 @@ public sealed class WorkflowAuthorizationDependenciesTests
             steps:
               - id: proxy
                 type: tool_call
+                capability:
+                  nyxid_operation:
+                    user_service_id: us-home-alpha
+                    endpoint_id: list-items
                 parameters:
                   tool: nyxid_proxy
-                  arguments: '{"service_id":"us-home-alpha","slug":"home-assistant","operation_id":"list-items","method":"GET","path":"/api/items","contract_digest":"sha256:home-v1"}'
+                  arguments: '{"query":{}}'
             """;
         var forged = new WorkflowAuthorizationDependencies();
-        forged.ExternalCapabilities.Add(new ExternalWorkflowCapabilityRef
+        forged.ExternalInvocations.Add(new ExternalToolInvocationSpec
         {
-            NyxIdUserService = new NyxIdUserServiceCapabilityRef
+            CallSiteId = "wf-alpha/proxy",
+            ToolName = "nyxid_proxy",
+            Selector = new ExternalWorkflowCapabilitySelector
             {
-                UserServiceId = "us-forged-beta",
-                ServiceSlugSnapshot = "forged-service",
-                OperationId = "forged-operation",
-                HttpMethod = "DELETE",
-                PathTemplate = "/everything",
-                ContractDigest = "sha256:forged",
+                NyxIdOperation = new NyxIdOperationSelector
+                {
+                    UserServiceId = "us-forged-beta",
+                    EndpointId = "forged-operation",
+                },
             },
         });
         var agent = new WorkflowGAgent
@@ -253,7 +436,7 @@ public sealed class WorkflowAuthorizationDependenciesTests
             yaml,
             new Dictionary<string, string>(),
             ExternalCapabilityExecutionMode.Interactive,
-            actual.ExternalCapabilities,
+            ReadyAdmissions(actual),
             ReadySourceStamps());
 
         await agent.HandleBindWorkflowDefinition(new BindWorkflowDefinitionEvent
@@ -264,9 +447,9 @@ public sealed class WorkflowAuthorizationDependenciesTests
             CapabilityAdmissionPlan = admissionPlan,
         });
 
-        agent.State.AuthorizationDependencies.ExternalCapabilities.Should().ContainSingle();
-        agent.State.AuthorizationDependencies.ExternalCapabilities[0]
-            .NyxIdUserService.UserServiceId.Should().Be("us-home-alpha");
+        agent.State.AuthorizationDependencies.ExternalInvocations.Should().ContainSingle();
+        agent.State.AuthorizationDependencies.ExternalInvocations[0]
+            .Selector.NyxIdOperation.UserServiceId.Should().Be("us-home-alpha");
     }
 
     [Fact]
@@ -278,7 +461,7 @@ public sealed class WorkflowAuthorizationDependenciesTests
             "name: another-workflow\nsteps: []\n",
             new Dictionary<string, string>(),
             ExternalCapabilityExecutionMode.Interactive,
-            dependencies.ExternalCapabilities,
+            ReadyAdmissions(dependencies),
             ReadySourceStamps());
         var agent = NewAgent();
 
@@ -299,8 +482,8 @@ public sealed class WorkflowAuthorizationDependenciesTests
     {
         var yaml = ExactNyxIdWorkflowYaml();
         var dependencies = new WorkflowGAgent().EvaluateAuthorizationDependencies(yaml)!;
-        var forged = dependencies.ExternalCapabilities[0].Clone();
-        forged.NyxIdUserService.UserServiceId = "us-forged-beta";
+        var forged = ReadyAdmissions(dependencies).Single();
+        forged.Capability.NyxIdUserService.UserServiceId = "us-forged-beta";
         var plan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
             yaml,
             new Dictionary<string, string>(),
@@ -340,7 +523,7 @@ public sealed class WorkflowAuthorizationDependenciesTests
 
         result.Should().NotBeNull();
         result!.OwnerLlmRouteRequired.Should().Be(ownerLlmRequired);
-        result.ExternalCapabilities.Should().BeEmpty();
+        result.ExternalInvocations.Should().BeEmpty();
         result.ServiceGrantPolicy.Should().Be(WorkflowServiceGrantPolicy.NotRequiredNoExternalService);
     }
 
@@ -357,33 +540,67 @@ public sealed class WorkflowAuthorizationDependenciesTests
         steps:
           - id: proxy
             type: tool_call
+            capability:
+              nyxid_operation:
+                user_service_id: us-home-alpha
+                endpoint_id: get-state
             parameters:
               tool: nyxid_proxy
-              arguments: '{"service_id":"us-home-alpha","slug":"home-assistant","operation_id":"get-state","method":"GET","path":"/states/{entity_id}","contract_digest":"operation-digest"}'
+              arguments: '{"path_params":{"entity_id":"${input}"}}'
         """;
+
+    private static WorkflowCapabilityInvocationAdmission[] ReadyAdmissions(
+        WorkflowAuthorizationDependencies dependencies) =>
+        dependencies.ExternalInvocations.Select(static invocation => new WorkflowCapabilityInvocationAdmission
+        {
+            CallSiteId = invocation.CallSiteId,
+            Capability = invocation.Selector.SelectorCase switch
+            {
+                ExternalWorkflowCapabilitySelector.SelectorOneofCase.HostConnector =>
+                    new ExternalWorkflowCapabilityRef
+                    {
+                        HostConnector = invocation.Selector.HostConnector.Clone(),
+                    },
+                ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdOperation =>
+                    new ExternalWorkflowCapabilityRef
+                    {
+                        NyxIdUserService = new NyxIdUserServiceCapabilityRef
+                        {
+                            UserServiceId = invocation.Selector.NyxIdOperation.UserServiceId,
+                            ServiceSlugSnapshot = "home-assistant",
+                            EndpointId = invocation.Selector.NyxIdOperation.EndpointId,
+                            HttpMethod = "GET",
+                            PathTemplate = "/states/{entity_id}",
+                            ContractDigest = "operation-digest",
+                            ExecutionPolicy = new NyxIdOperationExecutionPolicy
+                            {
+                                Risk = NyxIdOperationRisk.ReadOnly,
+                                Approval = NyxIdOperationApproval.None,
+                                EnforcementOwner = NyxIdOperationEnforcementOwner.Aevatar,
+                                AllowedExecutionModes =
+                                {
+                                    ExternalCapabilityExecutionMode.Interactive,
+                                    ExternalCapabilityExecutionMode.Durable,
+                                },
+                            },
+                        },
+                    },
+                _ => throw new InvalidOperationException("A selected capability is required."),
+            },
+        }).ToArray();
 
     private static ExternalCapabilitySourceStamp[] ReadySourceStamps(
         string userServiceId = "us-home-alpha") =>
         [
             new()
             {
-                SourceKind = ExternalCapabilitySourceKind.NyxIdUserServices,
-                SourceId = "nyxid-user-services:caller",
+                SourceKind = ExternalCapabilitySourceKind.NyxIdMcpConfig,
+                SourceId = "nyxid-mcp-config:caller:nyx-user-alpha",
                 ObservedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
                     new DateTimeOffset(2026, 7, 21, 10, 0, 0, TimeSpan.Zero)),
                 FreshUntil = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
                     new DateTimeOffset(2026, 7, 21, 10, 5, 0, TimeSpan.Zero)),
-                ContentDigest = "source-digest",
-            },
-            new()
-            {
-                SourceKind = ExternalCapabilitySourceKind.NyxIdOpenApi,
-                SourceId = userServiceId,
-                ObservedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
-                    new DateTimeOffset(2026, 7, 21, 10, 0, 0, TimeSpan.Zero)),
-                FreshUntil = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
-                    new DateTimeOffset(2026, 7, 21, 10, 5, 0, TimeSpan.Zero)),
-                ContentDigest = "openapi-digest",
+                ContentDigest = "mcp-config-digest",
             },
         ];
 

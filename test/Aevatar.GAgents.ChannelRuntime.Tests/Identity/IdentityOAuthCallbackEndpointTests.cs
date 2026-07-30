@@ -436,8 +436,90 @@ public sealed class IdentityOAuthCallbackEndpointTests
         await broker.Received(1).RevokeBindingByIdAsync(incoming, Arg.Any<CancellationToken>());
         bindingDispatch.Commands.Should().BeEmpty();
         capabilityDispatch.Commands.Should().BeEmpty();
-        using var document = await ExecuteJsonAsync(result, StatusCodes.Status502BadGateway);
+        // 503, never 502: Cloudflare replaces origin-generated 502/504 with its
+        // own opaque error page, stripping this structured body.
+        using var document = await ExecuteJsonAsync(result, StatusCodes.Status503ServiceUnavailable);
         document.RootElement.GetProperty("error").GetString().Should().Be("issued_binding_invalid");
+        document.RootElement.GetProperty("status").GetInt32().Should().Be(StatusCodes.Status503ServiceUnavailable);
+        document.RootElement.GetProperty("detail").GetString().Should().NotBeNullOrWhiteSpace();
+    }
+
+    [Fact]
+    public async Task TokenExchangeFailure_ReturnsStructured503InsteadOf502()
+    {
+        var subject = SampleSubject();
+        var broker = NewBroker(subject, "bnd_incoming");
+        broker.ExchangeAuthorizationCodeAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>())
+            .Returns<Task<BrokerAuthorizationCodeResult>>(_ => throw new HttpRequestException("NyxID unreachable"));
+        var bindingDispatch = new RecordingCommandDispatch<CommitBindingCommand>();
+
+        var result = await InvokeCallbackAsync(
+            broker,
+            Substitute.For<IExternalIdentityBindingQueryPort>(),
+            bindingDispatch,
+            new RecordingCommandDispatch<ObserveBrokerCapabilityCommand>(),
+            format: "json");
+
+        bindingDispatch.Commands.Should().BeEmpty();
+        using var document = await ExecuteJsonAsync(result, StatusCodes.Status503ServiceUnavailable);
+        document.RootElement.GetProperty("error").GetString().Should().Be("token_exchange_failed");
+        document.RootElement.GetProperty("status").GetInt32().Should().Be(StatusCodes.Status503ServiceUnavailable);
+        document.RootElement.GetProperty("detail").GetString().Should().NotBeNullOrWhiteSpace();
+    }
+
+    [Fact]
+    public async Task TokenExchangeRejectedAuthorizationCode_ReturnsStructured400()
+    {
+        var subject = SampleSubject();
+        var broker = NewBroker(subject, "bnd_incoming");
+        broker.ExchangeAuthorizationCodeAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>())
+            .Returns<Task<BrokerAuthorizationCodeResult>>(_ => throw new HttpRequestException(
+                "invalid_grant",
+                null,
+                System.Net.HttpStatusCode.BadRequest));
+        var bindingDispatch = new RecordingCommandDispatch<CommitBindingCommand>();
+
+        var result = await InvokeCallbackAsync(
+            broker,
+            Substitute.For<IExternalIdentityBindingQueryPort>(),
+            bindingDispatch,
+            new RecordingCommandDispatch<ObserveBrokerCapabilityCommand>(),
+            format: "json");
+
+        bindingDispatch.Commands.Should().BeEmpty();
+        using var document = await ExecuteJsonAsync(result, StatusCodes.Status400BadRequest);
+        document.RootElement.GetProperty("error").GetString().Should().Be("authorization_code_rejected");
+    }
+
+    [Fact]
+    public async Task OwnerScopeMissing_RevokesIncomingAndReturnsStructured503()
+    {
+        const string incoming = "bnd_incoming";
+        var subject = SampleSubject();
+        var broker = NewBroker(subject, incoming, ownerScopeId: "");
+        var queryPort = Substitute.For<IExternalIdentityBindingQueryPort>();
+        queryPort.ResolveAsync(Arg.Any<ExternalSubjectRef>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<BindingId?>(null));
+        var bindingDispatch = new RecordingCommandDispatch<CommitBindingCommand>();
+
+        var result = await InvokeCallbackAsync(
+            broker,
+            queryPort,
+            bindingDispatch,
+            new RecordingCommandDispatch<ObserveBrokerCapabilityCommand>(),
+            format: "json");
+
+        await broker.Received(1).RevokeBindingByIdAsync(incoming, Arg.Any<CancellationToken>());
+        bindingDispatch.Commands.Should().BeEmpty();
+        using var document = await ExecuteJsonAsync(result, StatusCodes.Status503ServiceUnavailable);
+        document.RootElement.GetProperty("error").GetString().Should().Be("owner_scope_missing");
+        document.RootElement.GetProperty("status").GetInt32().Should().Be(StatusCodes.Status503ServiceUnavailable);
     }
 
     [Fact]

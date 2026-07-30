@@ -25,10 +25,33 @@ public sealed record NyxIdChatCommand(
     LLMControlContext? LlmControl = null,
     string? CommandId = null,
     string? CorrelationId = null,
-    string? ClientRequestId = null)
+    string? ClientRequestId = null,
+    bool CreateIfMissing = false,
+    string? OwnerSubject = null)
     : ICommandContextSeed
 {
     public IReadOnlyDictionary<string, string>? Headers => null;
+
+    internal bool CreatedLocally { get; set; }
+
+    internal AgentProfileSnapshot? AgentProfile { get; set; }
+}
+
+internal static class NyxIdChatPublicIdentity
+{
+    public static string CreateConversationActorId(string scopeId, string clientRequestId) =>
+        Build("nyxid-chat", scopeId.Trim(), clientRequestId.Trim());
+
+    public static string CreateTurnId(string actorId, string clientRequestId) =>
+        Build("turn", actorId.Trim(), clientRequestId.Trim());
+
+    private static string Build(string prefix, params string[] parts)
+    {
+        var identity = string.Concat(parts.Select(static part => $"{part.Length}:{part}"));
+        var hash = System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(identity));
+        return $"{prefix}-{Convert.ToHexStringLower(hash)[..32]}";
+    }
 }
 
 public sealed record NyxIdApprovalCommand(
@@ -222,6 +245,65 @@ internal sealed class NyxIdChatCommandTargetResolver<TCommand>
     }
 }
 
+internal sealed class NyxIdChatCommandTargetResolver
+    : ICommandTargetResolver<NyxIdChatCommand, NyxIdChatCommandTarget, NyxIdChatStartError>
+{
+    private readonly IActorRuntime _actorRuntime;
+    private readonly INyxIdChatSessionProjectionPort _projectionPort;
+    private readonly Func<ICommandTargetResolver<
+        NyxIdChatConversationCreateCommand,
+        NyxIdChatConversationCreateCommandTarget,
+        NyxIdChatLifecycleCommandStartError>> _createResolver;
+
+    public NyxIdChatCommandTargetResolver(
+        IActorRuntime actorRuntime,
+        INyxIdChatSessionProjectionPort projectionPort,
+        Func<ICommandTargetResolver<
+            NyxIdChatConversationCreateCommand,
+            NyxIdChatConversationCreateCommandTarget,
+            NyxIdChatLifecycleCommandStartError>> createResolver)
+    {
+        _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
+        _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
+        _createResolver = createResolver ?? throw new ArgumentNullException(nameof(createResolver));
+    }
+
+    public async Task<CommandTargetResolution<NyxIdChatCommandTarget, NyxIdChatStartError>> ResolveAsync(
+        NyxIdChatCommand command,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (!command.CreateIfMissing)
+        {
+            var existing = await _actorRuntime.GetAsync(command.ActorId);
+            return existing is null
+                ? CommandTargetResolution<NyxIdChatCommandTarget, NyxIdChatStartError>.Failure(
+                    NyxIdChatStartError.ActorNotFound)
+                : CommandTargetResolution<NyxIdChatCommandTarget, NyxIdChatStartError>.Success(
+                    new NyxIdChatCommandTarget(existing, _projectionPort));
+        }
+
+        var create = new NyxIdChatConversationCreateCommand
+        {
+            ScopeId = command.ScopeId,
+            RequestedActorId = command.ActorId,
+        };
+        var resolved = await _createResolver().ResolveAsync(create, ct);
+        if (!resolved.Succeeded || resolved.Target is null)
+        {
+            return CommandTargetResolution<NyxIdChatCommandTarget, NyxIdChatStartError>.Failure(
+                resolved.Error == NyxIdChatLifecycleCommandStartError.TargetNotFound
+                    ? NyxIdChatStartError.ActorNotFound
+                    : NyxIdChatStartError.ProjectionUnavailable);
+        }
+
+        command.CreatedLocally = resolved.Target.CreatedLocally;
+        command.AgentProfile = create.AgentProfile?.Clone();
+        return CommandTargetResolution<NyxIdChatCommandTarget, NyxIdChatStartError>.Success(
+            new NyxIdChatCommandTarget(resolved.Target.Actor, _projectionPort));
+    }
+}
+
 internal sealed class NyxIdChatObservationLifecycle<TCommand>
     : ICommandObservationLifecycle<TCommand, NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt, NyxIdChatStartError>
 {
@@ -314,7 +396,17 @@ internal sealed class NyxIdChatCommandEnvelopeFactory : ICommandEnvelopeFactory<
         startTurn.ToolContext = BuildToolContext(command, effectiveControl).ToPayload();
         AppendExternalContext(startTurn.ToolContext.ExternalMetadata, command.Metadata);
 
-        return CreateDirectEnvelope(context, startTurn);
+        if (!command.CreateIfMissing)
+            return CreateDirectEnvelope(context, startTurn);
+
+        return CreateDirectEnvelope(context, new NyxIdChatConversationCreateCommand
+        {
+            ScopeId = command.ScopeId,
+            CreatedLocally = command.CreatedLocally,
+            AgentProfile = command.AgentProfile?.Clone(),
+            RequestedActorId = command.ActorId,
+            FirstTurn = startTurn,
+        });
     }
 
     private static AgentToolExecutionContext BuildToolContext(NyxIdChatCommand command, LLMControlContext effectiveControl)
@@ -326,9 +418,18 @@ internal sealed class NyxIdChatCommandEnvelopeFactory : ICommandEnvelopeFactory<
         {
             Request = new AgentToolRequestIdentity(command.TurnId, null),
             Credentials = new AgentToolCredentials(command.AccessToken, null, null),
-            Caller = new AgentToolCallerContext(command.ScopeId, command.ScopeId, command.TurnId),
+            Caller = new AgentToolCallerContext(
+                command.ScopeId,
+                command.OwnerSubject,
+                command.TurnId,
+                command.ScopeId),
             Channel = new AgentToolChannelContext("nyxid-chat", null, command.ScopeId, null, null),
             SkillRecovery = skillRecovery,
+            NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                "nyxid",
+                string.Empty,
+                command.OwnerSubject,
+                "proxy"),
         };
         return effectiveControl.ToToolContext(toolContext);
     }
@@ -518,10 +619,13 @@ internal static class NyxIdChatInteractionFactories
 {
     public static ICommandTargetResolver<NyxIdChatCommand, NyxIdChatCommandTarget, NyxIdChatStartError> CreateChatResolver(
         IServiceProvider sp) =>
-        new NyxIdChatCommandTargetResolver<NyxIdChatCommand>(
+        new NyxIdChatCommandTargetResolver(
             sp.GetRequiredService<IActorRuntime>(),
             sp.GetRequiredService<INyxIdChatSessionProjectionPort>(),
-            static command => command.ActorId);
+            () => sp.GetRequiredService<ICommandTargetResolver<
+                NyxIdChatConversationCreateCommand,
+                NyxIdChatConversationCreateCommandTarget,
+                NyxIdChatLifecycleCommandStartError>>());
 
     public static ICommandTargetResolver<NyxIdApprovalCommand, NyxIdChatCommandTarget, NyxIdChatStartError> CreateApprovalResolver(
         IServiceProvider sp) =>

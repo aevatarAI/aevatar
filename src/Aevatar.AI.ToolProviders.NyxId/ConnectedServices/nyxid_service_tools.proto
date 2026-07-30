@@ -63,6 +63,7 @@ message NyxIdServiceUpdateRequest {
   optional string label = 2;
   optional string endpoint_url = 3;
   optional bool is_active = 4;
+  optional string openapi_spec_url = 5;
 }
 
 message NyxIdServiceRouteRequest {

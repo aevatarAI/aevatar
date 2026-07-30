@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.ContentArtifacts.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Projection.Contexts;
@@ -32,6 +33,13 @@ public sealed class ServiceRunCurrentStateProjectorTests
             createdAt: observedAt);
         record.LastOutput = "final output";
         record.LastError = "final error";
+        record.ResultArtifacts.Add(new ContentArtifactReference
+        {
+            ArtifactId = "artifact-1",
+            RevisionId = "artifact-1-revision-1",
+            ContentHash = new string('a', 64),
+            MediaType = "text/markdown",
+        });
         var envelope = WrapCommittedRunState(
             record,
             stateVersion: 3,
@@ -58,6 +66,8 @@ public sealed class ServiceRunCurrentStateProjectorTests
         doc.Status.Should().Be((int)ServiceRunStatus.Accepted);
         doc.LastOutput.Should().Be("final output");
         doc.LastError.Should().Be("final error");
+        doc.ResultArtifacts.Should().ContainSingle()
+            .Which.RevisionId.Should().Be("artifact-1-revision-1");
         doc.StateVersion.Should().Be(3);
         doc.LastEventId.Should().Be("evt-registered");
     }
@@ -92,10 +102,24 @@ public sealed class ServiceRunCurrentStateProjectorTests
             store,
             new FixedProjectionClock(DateTimeOffset.Parse("2026-04-27T00:00:00+00:00")));
         var reader = new ServiceRunQueryReader(store);
+        var runA = BuildRecord(
+            "tenant-1",
+            "svc-1",
+            "run-a",
+            "cmd-a",
+            ServiceImplementationKind.Static,
+            "actor-a");
+        runA.ResultArtifacts.Add(new ContentArtifactReference
+        {
+            ArtifactId = "artifact-a",
+            RevisionId = "artifact-a-revision-1",
+            ContentHash = new string('a', 64),
+            MediaType = "text/markdown",
+        });
         await projector.ProjectAsync(
             CreateContext("service-run:run-a"),
             WrapCommittedRunState(
-                BuildRecord("tenant-1", "svc-1", "run-a", "cmd-a", ServiceImplementationKind.Static, "actor-a"),
+                runA,
                 stateVersion: 1,
                 eventId: "evt-a",
                 observedAt: DateTimeOffset.Parse("2026-04-27T01:00:00+00:00")));
@@ -126,6 +150,8 @@ public sealed class ServiceRunCurrentStateProjectorTests
         byRun!.CommandId.Should().Be("cmd-a");
         byRun.LastOutput.Should().BeEmpty();
         byRun.LastError.Should().BeEmpty();
+        byRun.ResultArtifacts.Should().ContainSingle()
+            .Which.RevisionId.Should().Be("artifact-a-revision-1");
 
         var byCommand = await reader.GetByCommandIdAsync("tenant-1", "svc-1", "cmd-b");
         byCommand.Should().NotBeNull();

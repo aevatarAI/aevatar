@@ -19,31 +19,37 @@ public sealed class MainnetStatusEndpointsTests
     public async Task GetStatusJson_ShouldIncludeTwoHourHistoryAndAvailability()
     {
         var lastCheckAt = DateTimeOffset.Parse("2026-05-21T10:01:00+00:00");
-        var document = new HealthProbeTargetDocument
+        var snapshot = new HealthProbeOperationalSnapshot
         {
-            Id = "responses-api-auth-gate",
-            Slug = "responses-api-auth-gate",
-            DisplayName = "Responses API auth gate",
-            Category = "feature",
-            Severity = "critical",
-            ProbeKind = "http_status",
-            IntervalSeconds = 60,
-            Enabled = true,
-            Status = HealthOutcomeStatus.Down,
-            LatencyMs = 31,
-            Detail = "http_500",
-            ErrorMessage = "upstream failed",
+            Target = new HealthProbeTargetDescriptor
+            {
+                Slug = "responses-api-auth-gate",
+                DisplayName = "Responses API auth gate",
+                Category = "feature",
+                Severity = "critical",
+                ProbeKind = "http_status",
+                IntervalSeconds = 60,
+                Enabled = true,
+            },
+            LastOutcome = new HealthProbeOutcome
+            {
+                Status = HealthOutcomeStatus.Down,
+                LatencyMs = 31,
+                Detail = "http_500",
+                ErrorMessage = "upstream failed",
+                ObservedAt = Timestamp.FromDateTimeOffset(lastCheckAt),
+            },
             LastCheckAt = Timestamp.FromDateTimeOffset(lastCheckAt),
             LastSuccessAt = Timestamp.FromDateTimeOffset(lastCheckAt.AddMinutes(-1)),
         };
-        document.RecentOutcomes.Add(new HealthProbeOutcome
+        snapshot.RecentOutcomes.Add(new HealthProbeOutcome
         {
             Status = HealthOutcomeStatus.Ok,
             LatencyMs = 18,
             Detail = "http_401",
             ObservedAt = Timestamp.FromDateTimeOffset(lastCheckAt.AddMinutes(-1)),
         });
-        document.RecentOutcomes.Add(new HealthProbeOutcome
+        snapshot.RecentOutcomes.Add(new HealthProbeOutcome
         {
             Status = HealthOutcomeStatus.Down,
             LatencyMs = 31,
@@ -52,7 +58,7 @@ public sealed class MainnetStatusEndpointsTests
             ObservedAt = Timestamp.FromDateTimeOffset(lastCheckAt),
         });
 
-        await using var app = await CreateAppAsync([document]);
+        await using var app = await CreateAppAsync([snapshot]);
         var client = app.GetTestClient();
 
         var response = await client.GetAsync("/api/status");
@@ -123,28 +129,30 @@ public sealed class MainnetStatusEndpointsTests
         json.RootElement.GetProperty("overall").GetString().Should().Be("ok");
     }
 
-    private static HealthProbeTargetDocument Doc(string slug, string severity, HealthOutcomeStatus status) =>
+    private static HealthProbeOperationalSnapshot Doc(string slug, string severity, HealthOutcomeStatus status) =>
         new()
         {
-            Id = slug,
-            Slug = slug,
-            DisplayName = slug,
-            Category = "feature",
-            Severity = severity,
-            ProbeKind = "http_status",
-            IntervalSeconds = 60,
-            Enabled = true,
-            Status = status,
+            Target = new HealthProbeTargetDescriptor
+            {
+                Slug = slug,
+                DisplayName = slug,
+                Category = "feature",
+                Severity = severity,
+                ProbeKind = "http_status",
+                IntervalSeconds = 60,
+                Enabled = true,
+            },
+            LastOutcome = new HealthProbeOutcome { Status = status },
         };
 
-    private static async Task<WebApplication> CreateAppAsync(IReadOnlyList<HealthProbeTargetDocument> documents)
+    private static async Task<WebApplication> CreateAppAsync(IReadOnlyList<HealthProbeOperationalSnapshot> snapshots)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
             EnvironmentName = Environments.Development,
         });
         builder.WebHost.UseTestServer();
-        builder.Services.AddSingleton<IHealthStatusQueryPort>(new InMemoryStatusQueryPort(documents));
+        builder.Services.AddSingleton<IHealthStatusQueryPort>(new InMemoryStatusQueryPort(snapshots));
         builder.Services.AddBackendConsoleStaticAssets(builder.Configuration);
 
         var app = builder.Build();
@@ -155,23 +163,23 @@ public sealed class MainnetStatusEndpointsTests
 
     private sealed class InMemoryStatusQueryPort : IHealthStatusQueryPort
     {
-        private readonly IReadOnlyList<HealthProbeTargetDocument> _documents;
+        private readonly IReadOnlyList<HealthProbeOperationalSnapshot> _snapshots;
 
-        public InMemoryStatusQueryPort(IReadOnlyList<HealthProbeTargetDocument> documents)
+        public InMemoryStatusQueryPort(IReadOnlyList<HealthProbeOperationalSnapshot> snapshots)
         {
-            _documents = documents;
+            _snapshots = snapshots;
         }
 
-        public Task<IReadOnlyList<HealthProbeTargetDocument>> ListAllAsync(CancellationToken ct = default)
+        public Task<IReadOnlyList<HealthProbeOperationalSnapshot>> ListAllAsync(CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            return Task.FromResult(_documents);
+            return Task.FromResult(_snapshots);
         }
 
-        public Task<HealthProbeTargetDocument?> GetBySlugAsync(string slug, CancellationToken ct = default)
+        public Task<HealthProbeOperationalSnapshot?> GetBySlugAsync(string slug, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            return Task.FromResult(_documents.FirstOrDefault(d => d.Slug == slug));
+            return Task.FromResult(_snapshots.FirstOrDefault(d => d.Target.Slug == slug));
         }
     }
 }

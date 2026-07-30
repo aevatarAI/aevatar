@@ -9,6 +9,7 @@ import "conversation_events.proto";
 import "delivery_ledger.proto";
 import "ai_messages.proto";
 import "workflow_execution_messages.proto";
+import "nyxid_chat_task.proto";
 
 enum AgentRunStatus {
   AGENT_RUN_STATUS_UNSPECIFIED = 0;
@@ -739,6 +740,8 @@ message NyxIdChatConversationCreateCommand {
   string scope_id = 1;
   bool created_locally = 2;
   aevatar.ai.AgentProfileSnapshot agent_profile = 3;
+  NyxIdChatStartTurnCommand first_turn = 4;
+  string requested_actor_id = 5;
 }
 
 message NyxIdChatConversationDeleteCommand {
@@ -775,6 +778,7 @@ message NyxIdChatConversationRegistrationAcceptedEvent {
   string actor_id = 2;
   string command_id = 3;
   string correlation_id = 4;
+  NyxIdChatConversationGAgentState state = 5;
 }
 
 message NyxIdChatConversationRegistrationUnavailableEvent {

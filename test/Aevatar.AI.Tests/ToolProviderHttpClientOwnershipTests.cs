@@ -12,6 +12,43 @@ namespace Aevatar.AI.Tests;
 public sealed class ToolProviderHttpClientOwnershipTests
 {
     [Fact]
+    public void NyxIdApiClient_WhenItOwnsTheHttpClient_UsesTheConfiguredRequestCeiling()
+    {
+        var options = new NyxIdToolOptions
+        {
+            BaseUrl = "https://nyx.test",
+            MaxRequestDurationSeconds = 420,
+        };
+        using var client = new NyxIdApiClient(options);
+
+        GetNyxIdHttpClient(client).Timeout.Should().Be(TimeSpan.FromSeconds(420));
+    }
+
+    [Fact]
+    public async Task NyxIdApiClient_WhenTheCallerOwnsAStartedHttpClient_DoesNotChangeItsTimeout()
+    {
+        var handler = new RecordingHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("{}"),
+        });
+        using var http = new HttpClient(handler)
+        {
+            Timeout = TimeSpan.FromSeconds(17),
+        };
+        await http.GetAsync("https://nyx.test/warmup");
+
+        using var client = new NyxIdApiClient(
+            new NyxIdToolOptions
+            {
+                BaseUrl = "https://nyx.test",
+                MaxRequestDurationSeconds = 420,
+            },
+            http);
+
+        http.Timeout.Should().Be(TimeSpan.FromSeconds(17));
+    }
+
+    [Fact]
     public async Task NyxIdApiClient_Dispose_ShouldNotDisposeInjectedHttpClient()
     {
         var handler = new RecordingHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
@@ -187,4 +224,9 @@ public sealed class ToolProviderHttpClientOwnershipTests
             return clone;
         }
     }
+
+    private static HttpClient GetNyxIdHttpClient(NyxIdApiClient client) =>
+        (HttpClient)typeof(NyxIdApiClient)
+            .GetField("_http", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .GetValue(client)!;
 }

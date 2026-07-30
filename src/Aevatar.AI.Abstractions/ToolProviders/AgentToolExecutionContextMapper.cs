@@ -163,7 +163,9 @@ public static class AgentToolExecutionContextMapper
             NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
                 AgentToolExecutionContext.Normalize(payload.NyxIdAuthority?.Platform),
                 AgentToolExecutionContext.Normalize(payload.NyxIdAuthority?.Tenant),
-                AgentToolExecutionContext.Normalize(payload.NyxIdAuthority?.ExternalUserId)),
+                AgentToolExecutionContext.Normalize(payload.NyxIdAuthority?.ExternalUserId),
+                AgentToolExecutionContext.Normalize(payload.NyxIdAuthority?.Scope)),
+            InvocationSurface = FromInvocationSurfacePayload(payload.InvocationSurface),
         };
     }
 
@@ -211,6 +213,7 @@ public static class AgentToolExecutionContextMapper
             },
             WorkflowRuntime = ToWorkflowRuntimePayload(context.WorkflowRuntime),
             CredentialSource = ToCredentialSourcePayload(context.CredentialSource),
+            InvocationSurface = ToInvocationSurfacePayload(context.InvocationSurface),
             SkillRecovery = ToSkillRecoveryPayload(context.SkillRecovery),
         };
 
@@ -318,6 +321,7 @@ public static class AgentToolExecutionContextMapper
             Platform = context.Platform ?? string.Empty,
             Tenant = context.Tenant ?? string.Empty,
             ExternalUserId = context.ExternalUserId ?? string.Empty,
+            Scope = context.Scope ?? string.Empty,
         };
 
     private static void CopyExternalMetadata(
@@ -391,6 +395,26 @@ public static class AgentToolExecutionContextMapper
             AgentToolCredentialSource.System => AgentToolCredentialSourcePayload.System,
             AgentToolCredentialSource.ServiceAccount => AgentToolCredentialSourcePayload.ServiceAccount,
             _ => AgentToolCredentialSourcePayload.Unspecified,
+        };
+
+    private static AgentToolInvocationSurface FromInvocationSurfacePayload(
+        AgentToolInvocationSurfacePayload surface) =>
+        surface switch
+        {
+            AgentToolInvocationSurfacePayload.HumanSession => AgentToolInvocationSurface.HumanSession,
+            AgentToolInvocationSurfacePayload.WorkflowToolCall => AgentToolInvocationSurface.WorkflowToolCall,
+            AgentToolInvocationSurfacePayload.WorkflowLlmToolLoop => AgentToolInvocationSurface.WorkflowLlmToolLoop,
+            _ => AgentToolInvocationSurface.Unspecified,
+        };
+
+    private static AgentToolInvocationSurfacePayload ToInvocationSurfacePayload(
+        AgentToolInvocationSurface surface) =>
+        surface switch
+        {
+            AgentToolInvocationSurface.HumanSession => AgentToolInvocationSurfacePayload.HumanSession,
+            AgentToolInvocationSurface.WorkflowToolCall => AgentToolInvocationSurfacePayload.WorkflowToolCall,
+            AgentToolInvocationSurface.WorkflowLlmToolLoop => AgentToolInvocationSurfacePayload.WorkflowLlmToolLoop,
+            _ => AgentToolInvocationSurfacePayload.Unspecified,
         };
 
     private static AgentWorkflowRuntimeContext FromWorkflowRuntimePayload(AgentWorkflowRuntimeContextPayload? payload)

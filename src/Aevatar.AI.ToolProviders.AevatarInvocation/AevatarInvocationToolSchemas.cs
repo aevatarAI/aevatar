@@ -35,7 +35,6 @@ internal static class AevatarInvocationToolSchemas
         requiredFields: new HashSet<string>(StringComparer.Ordinal)
         {
             "member_id",
-            "endpoint_id",
             "payload",
         },
         stringEnums: WaitValues);

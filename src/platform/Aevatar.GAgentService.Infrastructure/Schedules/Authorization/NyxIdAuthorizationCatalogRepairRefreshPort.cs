@@ -63,6 +63,7 @@ internal sealed class NyxIdAuthorizationCatalogRepairRefreshPort
             bearerToken,
             refreshId,
             startedAt,
+            requiredServiceIds: null,
             (refreshIdentity, refreshStartedAt, dispatchCancellation) =>
                 _repairCommandPort.BeginRepairRefreshAsync(
                     normalizedOwner,

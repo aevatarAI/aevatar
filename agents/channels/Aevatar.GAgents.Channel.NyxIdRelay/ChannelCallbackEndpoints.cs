@@ -142,7 +142,8 @@ public static class ChannelCallbackEndpoints
                 Lark: new NyxChannelLarkCredentials(
                     AppId: request.AppId?.Trim() ?? string.Empty,
                     AppSecret: request.AppSecret?.Trim() ?? string.Empty,
-                    VerificationToken: request.VerificationToken?.Trim() ?? string.Empty),
+                    VerificationToken: request.VerificationToken?.Trim() ?? string.Empty,
+                    EncryptKey: request.EncryptKey?.Trim() ?? string.Empty),
                 Credentials: BuildCredentialsMap(platformNormalized, request),
                 DefaultSkillName: request.DefaultSkillName?.Trim() ?? string.Empty),
             ct);
@@ -227,6 +228,7 @@ public static class ChannelCallbackEndpoints
                 nyx_provider_slug = e.NyxProviderSlug,
                 scope_id = e.ScopeId,
                 callback_url = string.Empty,
+                webhook_url = e.WebhookUrl,
                 nyx_channel_bot_id = e.NyxChannelBotId,
                 nyx_agent_api_key_id = e.NyxAgentApiKeyId,
                 nyx_conversation_route_id = e.NyxConversationRouteId,
@@ -756,6 +758,7 @@ public static class ChannelCallbackEndpoints
         string? AppId,
         string? AppSecret,
         string? VerificationToken,
+        string? EncryptKey,
         // Telegram-specific shorthand: equivalent to Credentials["bot_token"].
         string? BotToken,
         // Platform-extensible credential bag. Per-platform provisioning services document

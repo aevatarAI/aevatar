@@ -34,4 +34,14 @@ public sealed class ProjectionDocumentStoreBinding<TReadModel>
 
         return _writer.DeleteAsync(id, ct);
     }
+
+    public Task<ProjectionWriteResult> DeleteAsync(
+        ProjectionDocumentDeleteMarker marker,
+        CancellationToken ct = default)
+    {
+        if (_writer is null)
+            return Task.FromResult(ProjectionWriteResult.Applied());
+
+        return _writer.DeleteAsync(marker, ct);
+    }
 }

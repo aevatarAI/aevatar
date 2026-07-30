@@ -287,6 +287,9 @@ message BindWorkflowRunDefinitionEvent
   // Per-schedule correlation id stamped at bind for provisioned (cron-fired) runs; empty for
   // non-scheduled runs. Carried from ServiceInvocationRequest.schedule_id via WorkflowDefinitionBinding.
   string schedule_id = 8;
+  // Committed call-site admission proof copied from the authoritative Definition binding.
+  // The Run actor owns this copy for its whole lifetime; runtime never re-reads the Definition.
+  WorkflowCapabilityAdmissionPlan capability_admission_plan = 9;
 }
 
 // Idempotent provisioning command for a stable Run actor identity. The first
@@ -321,7 +324,9 @@ message WorkflowAuthorizationDependencies {
   reserved "connector_capability_refs", "nyx_id_service_ids", "nyx_id_service_slugs";
   bool owner_llm_route_required = 2;
   WorkflowServiceGrantPolicy service_grant_policy = 5;
-  repeated ExternalWorkflowCapabilityRef external_capabilities = 6;
+  // Legacy v2 projection/read slot. New compilation writes only external_invocations.
+  repeated ExternalWorkflowCapabilityRef external_capabilities = 6 [deprecated = true];
+  repeated ExternalToolInvocationSpec external_invocations = 7;
 }
 message WorkflowRunExecutionStartedEvent
 {
@@ -545,6 +550,9 @@ message StepRequestEvent
   WorkflowStepParameters step_parameters = 8;
   repeated WorkflowFileRef input_file_refs = 9;
   string idempotency_key = 10;
+  // Compiled external tool invocation for this call site. Present for direct external tool
+  // steps and for the primitives that synthesize external sub-steps at runtime.
+  ExternalToolInvocationSpec external_invocation = 11;
 }
 message WorkflowUsageMetrics {
   int32 prompt_tokens = 1;
@@ -843,6 +851,9 @@ message WorkflowToolRuntimeContextPayload
 message WorkflowAgentToolScope
 {
   repeated string allowed_tool_names = 1;
+  repeated string tool_set_refs = 2;
+  bool restrict_allowed_tool_names = 3;
+  bool restrict_tool_sets = 4;
 }
 
 message WorkflowLlmInvocationStartedEvent

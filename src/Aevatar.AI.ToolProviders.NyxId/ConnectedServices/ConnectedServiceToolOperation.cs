@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Aevatar.Workflow.Abstractions;
 
 namespace Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 
@@ -34,7 +35,8 @@ public sealed record ConnectedServiceToolOperation(
     IReadOnlyList<ConnectedServiceToolParameter> Parameters,
     JsonNode? RequestBodySchema,
     bool RequestBodyRequired,
-    string? RequestBodyMediaType)
+    string? RequestBodyMediaType,
+    IReadOnlyList<string> ResponseMediaTypes)
 {
     public bool HasRequestBody => RequestBodySchema is not null;
 
@@ -63,6 +65,29 @@ public sealed record ConnectedServiceToolOperation(
             ? Aevatar.AI.Abstractions.ToolProviders.ToolApprovalMode.AlwaysRequire
             : Aevatar.AI.Abstractions.ToolProviders.ToolApprovalMode.NeverRequire;
 
+    public NyxIdOperationExecutionPolicy ExecutionPolicy
+    {
+        get
+        {
+            var policy = new NyxIdOperationExecutionPolicy
+            {
+                Risk = IsDestructive
+                    ? NyxIdOperationRisk.Destructive
+                    : IsReadOnly
+                        ? NyxIdOperationRisk.ReadOnly
+                        : NyxIdOperationRisk.Write,
+                Approval = IsReadOnly
+                    ? NyxIdOperationApproval.None
+                    : NyxIdOperationApproval.Required,
+                EnforcementOwner = NyxIdOperationEnforcementOwner.Aevatar,
+            };
+            policy.AllowedExecutionModes.Add(ExternalCapabilityExecutionMode.Interactive);
+            if (IsReadOnly)
+                policy.AllowedExecutionModes.Add(ExternalCapabilityExecutionMode.Durable);
+            return policy;
+        }
+    }
+
     public string CanonicalContract()
     {
         var parameters = Parameters.Select(parameter => new
@@ -83,6 +108,14 @@ public sealed record ConnectedServiceToolOperation(
             IsReadOnly,
             IsDestructive,
             ApprovalMode,
+            ExecutionPolicy = new
+            {
+                Risk = ExecutionPolicy.Risk.ToString(),
+                Approval = ExecutionPolicy.Approval.ToString(),
+                EnforcementOwner = ExecutionPolicy.EnforcementOwner.ToString(),
+                AllowedExecutionModes = ExecutionPolicy.AllowedExecutionModes
+                    .Select(static mode => mode.ToString()),
+            },
         });
     }
 

@@ -309,7 +309,7 @@ public sealed class SkillWorkflowsWiringTests
     [Fact]
     public async Task UseSkillTool_MountWorkflowsTrueWithoutCallerAuthority_ReturnsMissingIdentityAndDoesNotUpsert()
     {
-        using var _ = BeginContextScope(scopeId: "scope-alpha");
+        using var _ = BeginContextScope(scopeId: "scope-alpha", ownerSubject: "owner-alpha");
         var commandPort = new RecordingScopeWorkflowCommandPort();
         var tool = new UseSkillTool(CreateCatalogWithWorkflowSkill(), scopeWorkflowCommandPort: commandPort);
 
@@ -343,7 +343,10 @@ public sealed class SkillWorkflowsWiringTests
     [Fact]
     public async Task UseSkillTool_MountWorkflowsTrueWithBlankWorkflowId_ReturnsErrorAndDoesNotUpsert()
     {
-        using var _ = BeginContextScope(scopeId: "scope-alpha", ownerSubject: "caller-alpha");
+        using var _ = BeginContextScope(
+            scopeId: "scope-alpha",
+            ownerSubject: "owner-alpha",
+            nyxIdUserId: "nyx-user-alpha");
         var catalog = new LocalSkillCatalog();
         catalog.Register(new SkillDefinition
         {
@@ -374,7 +377,10 @@ public sealed class SkillWorkflowsWiringTests
     [Fact]
     public async Task UseSkillTool_MountWorkflowsTrueWithBlankWorkflowYamls_ReturnsErrorAndDoesNotUpsert()
     {
-        using var _ = BeginContextScope(scopeId: "scope-alpha", ownerSubject: "caller-alpha");
+        using var _ = BeginContextScope(
+            scopeId: "scope-alpha",
+            ownerSubject: "owner-alpha",
+            nyxIdUserId: "nyx-user-alpha");
         var catalog = new LocalSkillCatalog();
         catalog.Register(new SkillDefinition
         {
@@ -405,7 +411,10 @@ public sealed class SkillWorkflowsWiringTests
     [Fact]
     public async Task UseSkillTool_MountWorkflowsTrue_UpsertsAllSkillWorkflowsThroughScopeWorkflowCommandPort()
     {
-        using var _ = BeginContextScope(scopeId: "scope-alpha", ownerSubject: "caller-alpha");
+        using var _ = BeginContextScope(
+            scopeId: "scope-alpha",
+            ownerSubject: "owner-alpha",
+            nyxIdUserId: "nyx-user-alpha");
         var commandPort = new RecordingScopeWorkflowCommandPort();
         var tool = new UseSkillTool(CreateCatalogWithWorkflowSkill(), scopeWorkflowCommandPort: commandPort);
 
@@ -420,10 +429,10 @@ public sealed class SkillWorkflowsWiringTests
         commandPort.Requests[0].InlineWorkflowYamls.Should().ContainSingle()
             .Which.Should().Be(new KeyValuePair<string, string>("workflow_1", "name: helper_flow\nsteps: []\n"));
         commandPort.Requests[0].CapabilityAdmission.Should().NotBeNull();
-        commandPort.Requests[0].CapabilityAdmission!.CallerId.Should().Be("caller-alpha");
+        commandPort.Requests[0].CapabilityAdmission!.CallerId.Should().Be("nyx-user-alpha");
         commandPort.Requests[1].WorkflowId.Should().Be("qa_flow");
         commandPort.Requests[1].CapabilityAdmission.Should().NotBeNull();
-        commandPort.Requests[1].CapabilityAdmission!.CallerId.Should().Be("caller-alpha");
+        commandPort.Requests[1].CapabilityAdmission!.CallerId.Should().Be("nyx-user-alpha");
         output.Should().Contain("## Mounted Workflows");
         output.Should().Contain("Workflow mount/import commands were accepted for dispatch through the Scope Workflow command path; read models may still be propagating before the workflows are page-visible or runnable.");
         output.Should().Contain("\"accepted\": true");
@@ -438,7 +447,10 @@ public sealed class SkillWorkflowsWiringTests
     [Fact]
     public async Task UseSkillTool_MountWorkflowsTrue_PreservesDescriptorWorkflowIdAndLetsCommandPortParseYamlName()
     {
-        using var _ = BeginContextScope(scopeId: "scope-alpha", ownerSubject: "caller-alpha");
+        using var _ = BeginContextScope(
+            scopeId: "scope-alpha",
+            ownerSubject: "owner-alpha",
+            nyxIdUserId: "nyx-user-alpha");
         var catalog = new LocalSkillCatalog();
         catalog.Register(new SkillDefinition
         {
@@ -473,7 +485,8 @@ public sealed class SkillWorkflowsWiringTests
         using var _ = BeginContextScope(
             scopeId: "scope-alpha",
             token: "current-token",
-            ownerSubject: "caller-alpha");
+            ownerSubject: "owner-alpha",
+            nyxIdUserId: "nyx-user-alpha");
         var fetcher = new RecordingRemoteSkillFetcher(new SkillDefinition
         {
             Name = "remote-translator",
@@ -576,7 +589,8 @@ public sealed class SkillWorkflowsWiringTests
     private static AgentToolRequestContextScope BeginContextScope(
         string? scopeId = null,
         string? token = null,
-        string? ownerSubject = null)
+        string? ownerSubject = null,
+        string? nyxIdUserId = null)
     {
         var metadata = new Dictionary<string, string>();
         if (!string.IsNullOrWhiteSpace(scopeId))
@@ -585,7 +599,19 @@ public sealed class SkillWorkflowsWiringTests
             metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = token;
         if (!string.IsNullOrWhiteSpace(ownerSubject))
             metadata[LLMRequestMetadataKeys.OwnerSubject] = ownerSubject;
-        return new AgentToolRequestContextScope(global::TestAgentToolContexts.FromMetadata(metadata));
+        var context = global::TestAgentToolContexts.FromMetadata(metadata);
+        if (!string.IsNullOrWhiteSpace(nyxIdUserId))
+        {
+            context = context with
+            {
+                NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                    "nyxid",
+                    "tenant-alpha",
+                    nyxIdUserId.Trim()),
+            };
+        }
+
+        return new AgentToolRequestContextScope(context);
     }
 
     private sealed class AgentToolRequestContextScope : IDisposable

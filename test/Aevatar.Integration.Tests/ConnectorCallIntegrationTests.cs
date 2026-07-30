@@ -274,7 +274,15 @@ public class ConnectorCallIntegrationTests
             workflowYaml,
             new Dictionary<string, string>(),
             ExternalCapabilityExecutionMode.Interactive,
-            dependencies.ExternalCapabilities,
+            dependencies.ExternalInvocations.Select(static invocation =>
+                new WorkflowCapabilityInvocationAdmission
+                {
+                    CallSiteId = invocation.CallSiteId,
+                    Capability = new ExternalWorkflowCapabilityRef
+                    {
+                        HostConnector = invocation.Selector.HostConnector.Clone(),
+                    },
+                }),
             [new ExternalCapabilitySourceStamp
             {
                 SourceKind = ExternalCapabilitySourceKind.ConnectorCatalog,
