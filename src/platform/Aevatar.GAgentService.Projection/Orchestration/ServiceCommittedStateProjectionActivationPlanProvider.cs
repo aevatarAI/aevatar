@@ -5,6 +5,7 @@ using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Core.GAgents;
 using Aevatar.GAgentService.Core.Schedules;
 using Aevatar.GAgentService.Core.Schedules.Authorization;
+using Aevatar.GAgentService.Core.AgentProfiles;
 using Aevatar.GAgentService.Projection.Contexts;
 using Google.Protobuf.WellKnownTypes;
 
@@ -42,6 +43,8 @@ public sealed class ServiceCommittedStateProjectionActivationPlanProvider : IPro
             var type when type == typeof(ResponsesAgentToolStateGAgent) => ResponsesAgentToolPlans(context.ActorId),
             var type when type == typeof(ScheduledDispatchGAgent) => ScheduledDispatchPlans(context.ActorId),
             var type when type == typeof(NyxIdAuthorizationCatalogGAgent) => NyxIdAuthorizationCatalogPlans(context.ActorId),
+            var type when type == typeof(AgentProfileNamespaceGAgent) => AgentProfileCatalogPlans(context.ActorId),
+            var type when type == typeof(AgentProfileGAgent) => AgentProfileCurrentStatePlans(context.ActorId),
             _ => [],
         };
     }
@@ -87,6 +90,20 @@ public sealed class ServiceCommittedStateProjectionActivationPlanProvider : IPro
         DurablePlan<NyxIdAuthorizationCatalogProjectionContext>(
             actorId,
             ServiceProjectionKinds.NyxIdAuthorizationCatalog),
+    ];
+
+    private static IEnumerable<ProjectionActivationPlan> AgentProfileCatalogPlans(string actorId) =>
+    [
+        DurablePlan<AgentProfileCatalogProjectionContext>(
+            actorId,
+            ServiceProjectionKinds.AgentProfileCatalog),
+    ];
+
+    private static IEnumerable<ProjectionActivationPlan> AgentProfileCurrentStatePlans(string actorId) =>
+    [
+        DurablePlan<AgentProfileCurrentStateProjectionContext>(
+            actorId,
+            ServiceProjectionKinds.AgentProfileCurrentState),
     ];
 
     private static IEnumerable<ProjectionActivationPlan> DeploymentPlans(string actorId, Any payload)

@@ -287,6 +287,9 @@ public static class ServiceCollectionExtensions
 
         if (documentProvider.ElasticsearchEnabled)
         {
+            TryAddElasticsearchDocumentProjectionStore<AgentProfileCatalogReadModel>(services, configuration, static readModel => readModel.Id);
+            TryAddElasticsearchDocumentProjectionStore<AgentProfileManagementReadModel>(services, configuration, static readModel => readModel.Id);
+            TryAddElasticsearchDocumentProjectionStore<AgentProfileExecutionReadModel>(services, configuration, static readModel => readModel.Id);
             TryAddElasticsearchDocumentProjectionStore<ServiceCatalogReadModel>(services, configuration, static readModel => readModel.Id);
             TryAddElasticsearchDocumentProjectionStore<ServiceRevisionCatalogReadModel>(services, configuration, static readModel => readModel.Id);
             TryAddElasticsearchDocumentProjectionStore<ServiceDeploymentCatalogReadModel>(services, configuration, static readModel => readModel.Id);
@@ -316,6 +319,9 @@ public static class ServiceCollectionExtensions
         }
         else
         {
+            TryAddInMemoryDocumentProjectionStore<AgentProfileCatalogReadModel>(services, static readModel => readModel.Id);
+            TryAddInMemoryDocumentProjectionStore<AgentProfileManagementReadModel>(services, static readModel => readModel.Id);
+            TryAddInMemoryDocumentProjectionStore<AgentProfileExecutionReadModel>(services, static readModel => readModel.Id);
             TryAddInMemoryDocumentProjectionStore<ServiceCatalogReadModel>(services, static readModel => readModel.Id);
             TryAddInMemoryDocumentProjectionStore<ServiceRevisionCatalogReadModel>(services, static readModel => readModel.Id);
             TryAddInMemoryDocumentProjectionStore<ServiceDeploymentCatalogReadModel>(services, static readModel => readModel.Id);
@@ -342,6 +348,9 @@ public static class ServiceCollectionExtensions
         ProjectionDocumentProviderKind providerKind)
     {
         return HasProjectionDocumentReaderForProvider<ServiceCatalogReadModel>(services, providerKind)
+               && HasProjectionDocumentReaderForProvider<AgentProfileCatalogReadModel>(services, providerKind)
+               && HasProjectionDocumentReaderForProvider<AgentProfileManagementReadModel>(services, providerKind)
+               && HasProjectionDocumentReaderForProvider<AgentProfileExecutionReadModel>(services, providerKind)
                && HasProjectionDocumentReaderForProvider<ServiceRevisionCatalogReadModel>(services, providerKind)
                && HasProjectionDocumentReaderForProvider<ServiceDeploymentCatalogReadModel>(services, providerKind)
                && HasProjectionDocumentReaderForProvider<ServiceServingSetReadModel>(services, providerKind)

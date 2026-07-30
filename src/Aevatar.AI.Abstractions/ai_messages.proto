@@ -681,6 +681,9 @@ message AgentProfileSnapshot {
   int32 exact_skill_fetch_timeout_ms = 14;
   int32 max_selected_skill_bytes = 15;
   AgentProfileActivationMode activation_mode = 16;
+  string instructions = 17;
+  int64 published_revision = 18;
+  bytes published_snapshot_sha256 = 19;
 }
 
 message AgentProfileBoundEvent {

@@ -11,6 +11,44 @@ import "service_definition.proto";
 import "service_invocation_catalog.proto";
 import "service_revision.proto";
 import "content_artifact_messages.proto";
+import "agent_profiles.proto";
+
+message AgentProfileCatalogReadModel {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at_utc_value = 5;
+  aevatar.gagentservice.AgentProfileOwner owner = 6;
+  repeated aevatar.gagentservice.AgentProfileCatalogEntry profiles = 7;
+  repeated aevatar.gagentservice.AgentProfileDefaultBinding default_bindings = 8;
+  aevatar.gagentservice.AgentProfileMutationOutcome last_mutation = 9;
+}
+
+message AgentProfileManagementReadModel {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at_utc_value = 5;
+  aevatar.gagentservice.AgentProfileIdentity identity = 6;
+  aevatar.gagentservice.AgentProfileDraft draft = 7;
+  int64 draft_revision = 8;
+  bytes draft_sha256 = 9;
+  aevatar.gagentservice.AgentProfilePublishedSnapshot published = 10;
+  int64 published_revision = 11;
+  aevatar.gagentservice.AgentProfileMutationOutcome last_mutation = 12;
+}
+
+message AgentProfileExecutionReadModel {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at_utc_value = 5;
+  aevatar.gagentservice.AgentProfileIdentity identity = 6;
+  aevatar.gagentservice.AgentProfilePublishedSnapshot snapshot = 7;
+}
 
 // --- ServiceCatalogReadModel ---
 

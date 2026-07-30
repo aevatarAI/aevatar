@@ -9,6 +9,7 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
+using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using Aevatar.GAgentService.Projection.Configuration;
 using Aevatar.GAgentService.Projection.Contexts;
 using Aevatar.GAgentService.Projection.Audit;
@@ -130,6 +131,20 @@ public static class ServiceCollectionExtensions
                 ProjectionKind = scopeKey.ProjectionKind,
             },
             static context => new ServiceProjectionRuntimeLease<NyxIdAuthorizationCatalogProjectionContext>(context.RootActorId, context));
+        services.AddServiceProjectionRuntime<AgentProfileCatalogProjectionContext, ProjectionMaterializationScopeGAgent<AgentProfileCatalogProjectionContext>>(
+            static scopeKey => new AgentProfileCatalogProjectionContext
+            {
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+            },
+            static context => new ServiceProjectionRuntimeLease<AgentProfileCatalogProjectionContext>(context.RootActorId, context));
+        services.AddServiceProjectionRuntime<AgentProfileCurrentStateProjectionContext, ProjectionMaterializationScopeGAgent<AgentProfileCurrentStateProjectionContext>>(
+            static scopeKey => new AgentProfileCurrentStateProjectionContext
+            {
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+            },
+            static context => new ServiceProjectionRuntimeLease<AgentProfileCurrentStateProjectionContext>(context.RootActorId, context));
         services.AddEventSinkProjectionRuntimeCore<
             GAgentDraftRunProjectionContext,
             GAgentDraftRunRuntimeLease,
@@ -246,6 +261,9 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ResponsesAgentToolStateCurrentStateReadModel>, ResponsesAgentToolStateCurrentStateReadModelMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ScheduledDispatchDocument>, ScheduledDispatchDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<NyxIdAuthorizationCatalogDocument>, NyxIdAuthorizationCatalogDocumentMetadataProvider>();
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<AgentProfileCatalogReadModel>, AgentProfileCatalogReadModelMetadataProvider>();
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<AgentProfileManagementReadModel>, AgentProfileManagementReadModelMetadataProvider>();
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<AgentProfileExecutionReadModel>, AgentProfileExecutionReadModelMetadataProvider>();
         services.TryAddSingleton<IServiceCatalogQueryReader, ServiceCatalogQueryReader>();
         services.TryAddSingleton<IServiceDeploymentCatalogQueryReader, ServiceDeploymentCatalogQueryReader>();
         services.TryAddSingleton<IServiceServingSetQueryReader, ServiceServingSetQueryReader>();
@@ -262,6 +280,9 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ScheduledDispatchQueryPort>();
         services.TryAddSingleton<IScheduledDispatchQueryPort>(sp => sp.GetRequiredService<ScheduledDispatchQueryPort>());
         services.TryAddSingleton<INyxIdAuthorizationCatalogQueryPort, ProjectionNyxIdAuthorizationCatalogQueryPort>();
+        services.TryAddSingleton<IAgentProfileCatalogQueryPort, AgentProfileCatalogQueryReader>();
+        services.TryAddSingleton<IAgentProfileManagementQueryPort, AgentProfileManagementQueryReader>();
+        services.TryAddSingleton<IAgentProfileExecutionQueryPort, AgentProfileExecutionQueryReader>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ServiceRegistrationSucceededAuditTranslator>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ServiceRegistrationFailedAuditTranslator>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ServiceRegistrationRetiredAuditTranslator>());
@@ -339,6 +360,15 @@ public static class ServiceCollectionExtensions
         services.AddCurrentStateProjectionMaterializer<
             NyxIdAuthorizationCatalogProjectionContext,
             NyxIdAuthorizationCatalogCurrentStateProjector>();
+        services.AddCurrentStateProjectionMaterializer<
+            AgentProfileCatalogProjectionContext,
+            AgentProfileCatalogCurrentStateProjector>();
+        services.AddCurrentStateProjectionMaterializer<
+            AgentProfileCurrentStateProjectionContext,
+            AgentProfileManagementCurrentStateProjector>();
+        services.AddCurrentStateProjectionMaterializer<
+            AgentProfileCurrentStateProjectionContext,
+            AgentProfileExecutionCurrentStateProjector>();
         services.AddAuditCommittedFactMaterializer<ScheduledDispatchProjectionContext>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IProjectionProjector<GAgentDraftRunProjectionContext>,

@@ -44,6 +44,7 @@ public static class AgentProfileSnapshotCodec
     {
         var hashInput = snapshot.Clone();
         hashInput.DeterministicPolicySha256 = ByteString.Empty;
+        hashInput.PublishedSnapshotSha256 = ByteString.Empty;
         return SerializeDeterministically(hashInput);
     }
 
