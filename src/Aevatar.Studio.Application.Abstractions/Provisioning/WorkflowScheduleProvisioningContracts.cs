@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json.Serialization;
 using Aevatar.GAgentService.Abstractions;
 
@@ -26,6 +28,34 @@ public sealed record WorkflowScheduleProvisioningStageFailure(
     string Code,
     string Message);
 
+public static class WorkflowProvisioningIdentity
+{
+    private const string SchemaVersion = "studio-workflow-provisioning/v1";
+
+    public static string BuildMemberId(string scopeId, string idempotencyKey) =>
+        $"wf-{BuildResourceKey(scopeId, idempotencyKey)}";
+
+    public static string BuildWorkflowId(string scopeId, string idempotencyKey) =>
+        $"workflow-{BuildResourceKey(scopeId, idempotencyKey)}";
+
+    public static string BuildResourceKey(string scopeId, string idempotencyKey)
+    {
+        var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
+        var normalizedIdempotencyKey = NormalizeRequired(idempotencyKey, nameof(idempotencyKey));
+        var identity = Encoding.UTF8.GetBytes($"{SchemaVersion}\n{normalizedScopeId}\n{normalizedIdempotencyKey}");
+        var hash = SHA256.HashData(identity);
+        return Convert.ToHexString(hash.AsSpan(0, 16)).ToLowerInvariant();
+    }
+
+    private static string NormalizeRequired(string? value, string fieldName)
+    {
+        var normalized = value?.Trim() ?? string.Empty;
+        if (normalized.Length == 0)
+            throw new ArgumentException($"{fieldName} is required.", fieldName);
+        return normalized;
+    }
+}
+
 /// <summary>
 /// Request to provision a runnable, Observatory-delivered workflow schedule.
 ///
@@ -51,6 +81,13 @@ public sealed record WorkflowScheduleProvisioningRequest(
 {
     [JsonIgnore]
     public WorkflowCapabilityAdmissionContext? CapabilityAdmission { get; init; }
+
+    /// <summary>
+    /// Trusted operation idempotency key for the Chat turn or caller operation.
+    /// When present, it owns the deterministic member/workflow identities so
+    /// retries and fallback create/bind paths converge even if display text drifts.
+    /// </summary>
+    public string? IdempotencyKey { get; init; }
 
     /// <summary>Optional user prompt the scheduled run starts from.</summary>
     public string? Prompt { get; init; }

@@ -538,6 +538,39 @@ public sealed class StudioWorkflowProvisioningServiceTests
     }
 
     [Fact]
+    public async Task ProvisionAsync_SameIdempotencyKeyAcrossDisplayNames_ConvergesOnSameResourceIds()
+    {
+        var firstMember = NewMemberService();
+        var firstSchedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var first = NewService(firstMember, firstSchedule);
+        var fallbackMember = NewMemberService();
+        var fallbackSchedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var fallback = NewService(fallbackMember, fallbackSchedule);
+
+        await first.ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest(DisplayName: "Weekly Report", WorkflowYaml: "name: weekly\n")
+            {
+                TeamId = TeamId,
+                IdempotencyKey = "chat-turn-alpha",
+            });
+        await fallback.ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest(DisplayName: "Weekly Report Fallback", WorkflowYaml: "name: weekly\n")
+            {
+                TeamId = TeamId,
+                IdempotencyKey = "chat-turn-alpha",
+            });
+
+        firstMember.CreateRequest!.MemberId.Should().NotBeNullOrWhiteSpace();
+        firstMember.CreateRequest.MemberId.Should().Be(fallbackMember.CreateRequest!.MemberId);
+        firstMember.BindRequest!.Workflow!.WorkflowId.Should().Be(
+            fallbackMember.BindRequest!.Workflow!.WorkflowId);
+    }
+
+    [Fact]
     public async Task ProvisionAsync_DifferentDisplayNameOrScope_DerivesDistinctMemberIds()
     {
         var baseline = NewMemberService();

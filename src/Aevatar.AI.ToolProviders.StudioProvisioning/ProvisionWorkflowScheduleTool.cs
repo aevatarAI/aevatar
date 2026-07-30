@@ -147,6 +147,14 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool, IAgentToolCapa
         if (displayName is null)
             return ErrorJson("invalid_arguments", "display_name is required.");
 
+        var idempotencyKey = StudioWorkflowProvisioningToolIdentity.ResolveTrustedIdempotencyKey();
+        if (idempotencyKey is null)
+        {
+            return ErrorJson(
+                StudioWorkflowProvisioningToolIdentity.MissingIdentityErrorCode,
+                StudioWorkflowProvisioningToolIdentity.MissingIdentityErrorMessage);
+        }
+
         var typedAuthority = AgentToolRequestContext.NyxIdAuthority;
         var request = new WorkflowScheduleProvisioningRequest(
             ScopeId: scopeId,
@@ -165,6 +173,7 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool, IAgentToolCapa
             CallerSubjectExternalUserId = typedAuthority.IsComplete
                 ? Normalize(typedAuthority.ExternalUserId)
                 : Normalize(AgentToolRequestContext.OwnerSubject),
+            IdempotencyKey = idempotencyKey,
             CapabilityAdmission = StudioWorkflowCapabilityToolContext.Create(
                 ExternalCapabilityExecutionMode.Durable),
         };

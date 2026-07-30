@@ -138,10 +138,14 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
 
         var subjectRef = BuildSenderNyxIdCredentialSource(callerCredential);
 
-        // Provision identity: one (scope, team, display name) tuple owns exactly
-        // one member + workflow id + schedule, so retries converge on the same
-        // Team-owned resources instead of leaving an orphan pair per attempt.
-        var provisionKey = BuildProvisionKey(normalizedScopeId, teamId, displayName);
+        // Provision identity: the Chat/tool path supplies a trusted idempotency
+        // key so retries and create/bind fallbacks for the same operation converge
+        // even when display text drifts. Direct callers that omit it retain the
+        // older (scope, team, display name) convergence rule.
+        var idempotencyKey = NormalizeOptional(request.IdempotencyKey);
+        var provisionKey = idempotencyKey is null
+            ? BuildProvisionKey(normalizedScopeId, teamId, displayName)
+            : WorkflowProvisioningIdentity.BuildResourceKey(normalizedScopeId, idempotencyKey);
 
         // 1. Resolve the member: reuse the existing one for this (scope, display
         //    name), else create it. The deterministic id is the member's identity;

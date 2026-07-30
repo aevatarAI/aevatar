@@ -307,6 +307,9 @@ public sealed class ProvisionWorkflowScheduleToolTests
     {
         var memberPort = new RecordingMemberProvisioningPort();
         var tool = await DiscoverCreateMemberToolAsync(memberPort);
+        var expectedMemberId = WorkflowProvisioningIdentity.BuildMemberId(
+            "scope-current",
+            "agent-tool-request:request-1");
 
         using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
         var output = await tool.ExecuteAsync("""
@@ -314,7 +317,6 @@ public sealed class ProvisionWorkflowScheduleToolTests
               "display_name": "Alpha Member",
               "implementation_kind": "workflow",
               "description": "Current caller scope member",
-              "member_id": "member-alpha",
               "team_id": "team-alpha"
             }
             """);
@@ -324,16 +326,17 @@ public sealed class ProvisionWorkflowScheduleToolTests
         memberPort.LastRequest.DisplayName.Should().Be("Alpha Member");
         memberPort.LastRequest.ImplementationKind.Should().Be("workflow");
         memberPort.LastRequest.Description.Should().Be("Current caller scope member");
-        memberPort.LastRequest.MemberId.Should().Be("member-alpha");
+        memberPort.LastRequest.MemberId.Should().Be(expectedMemberId);
         memberPort.LastRequest.TeamId.Should().Be("team-alpha");
 
         using var document = JsonDocument.Parse(output);
         var root = document.RootElement;
         root.GetProperty("success").GetBoolean().Should().BeTrue();
         root.GetProperty("scope_id").GetString().Should().Be("scope-current");
-        root.GetProperty("member_id").GetString().Should().Be("member-alpha");
+        root.GetProperty("member_id").GetString().Should().Be(expectedMemberId);
         root.GetProperty("team_id").GetString().Should().Be("team-alpha");
-        root.GetProperty("member_url").GetString().Should().Be("/api/scopes/scope-current/members/member-alpha");
+        root.GetProperty("member_url").GetString().Should()
+            .Be($"/api/scopes/scope-current/members/{expectedMemberId}");
     }
 
     [Fact]
@@ -351,7 +354,6 @@ public sealed class ProvisionWorkflowScheduleToolTests
             {
               "display_name": "Alpha Member",
               "implementation_kind": "workflow",
-              "member_id": "member-alpha",
               "team_id": "team-alpha"
             }
             """);
@@ -414,6 +416,63 @@ public sealed class ProvisionWorkflowScheduleToolTests
 
         ErrorCode(output).Should().Be("invalid_arguments");
         ErrorMessage(output).Should().Be("Unknown argument: scope_id");
+        memberPort.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task CreateMember_ForWorkflowFallback_ShouldUseTrustedProvisioningIdentity()
+    {
+        var memberPort = new RecordingMemberProvisioningPort();
+        var tool = await DiscoverCreateMemberToolAsync(memberPort);
+        var expectedMemberId = WorkflowProvisioningIdentity.BuildMemberId(
+            "scope-current",
+            "agent-tool-request:chat-turn-alpha");
+
+        using var _ = PushContext(
+            scopeId: "scope-current",
+            ownerSubject: "owner-1",
+            accessToken: "access-token-1",
+            requestId: "chat-turn-alpha",
+            callId: "fallback-create-call");
+        var output = await tool.ExecuteAsync("""
+            {
+              "display_name": "Weekly Report Fallback",
+              "implementation_kind": "workflow",
+              "description": "Fallback member",
+              "team_id": "team-alpha"
+            }
+            """);
+
+        ErrorCode(output).Should().BeNull(output);
+        memberPort.LastRequest.Should().NotBeNull();
+        memberPort.LastRequest!.MemberId.Should().Be(expectedMemberId);
+
+        using var document = JsonDocument.Parse(output);
+        document.RootElement.GetProperty("member_id").GetString().Should().Be(expectedMemberId);
+    }
+
+    [Fact]
+    public async Task CreateMember_ForWorkflowFallback_WhenMemberIdConflictsWithTrustedIdentity_ShouldFailClosed()
+    {
+        var memberPort = new RecordingMemberProvisioningPort();
+        var tool = await DiscoverCreateMemberToolAsync(memberPort);
+
+        using var _ = PushContext(
+            scopeId: "scope-current",
+            ownerSubject: "owner-1",
+            accessToken: "access-token-1",
+            requestId: "chat-turn-alpha",
+            callId: "fallback-create-call");
+        var output = await tool.ExecuteAsync("""
+            {
+              "display_name": "Weekly Report Fallback",
+              "implementation_kind": "workflow",
+              "member_id": "m-conflicting",
+              "team_id": "team-alpha"
+            }
+            """);
+
+        ErrorCode(output).Should().Be("workflow_provisioning_identity_conflict");
         memberPort.LastRequest.Should().BeNull();
     }
 
@@ -855,6 +914,66 @@ public sealed class ProvisionWorkflowScheduleToolTests
         root.GetProperty("workflow_id").GetString().Should().Be("workflow-alpha");
         root.TryGetProperty("revision_id", out _).Should().BeFalse();
         root.TryGetProperty("service_id", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task BindMemberWorkflow_ForWorkflowFallback_ShouldUseTrustedWorkflowIdentity()
+    {
+        var bindingPort = new RecordingMemberWorkflowBindingPort();
+        var tool = await DiscoverBindMemberWorkflowToolAsync(bindingPort);
+        var expectedMemberId = WorkflowProvisioningIdentity.BuildMemberId(
+            "scope-current",
+            "agent-tool-request:chat-turn-alpha");
+        var expectedWorkflowId = WorkflowProvisioningIdentity.BuildWorkflowId(
+            "scope-current",
+            "agent-tool-request:chat-turn-alpha");
+
+        using var _ = PushContext(
+            scopeId: "scope-current",
+            ownerSubject: "owner-1",
+            accessToken: "access-token-1",
+            requestId: "chat-turn-alpha",
+            callId: "fallback-bind-call");
+        var output = await tool.ExecuteAsync($$"""
+            {
+              "member_id": "{{expectedMemberId}}",
+              "workflow_yaml": "name: team_workflow\nsteps: []\n"
+            }
+            """);
+
+        ErrorCode(output).Should().BeNull(output);
+        bindingPort.LastRequest.Should().NotBeNull();
+        bindingPort.LastRequest!.WorkflowId.Should().Be(expectedWorkflowId);
+
+        using var document = JsonDocument.Parse(output);
+        document.RootElement.GetProperty("workflow_id").GetString().Should().Be(expectedWorkflowId);
+    }
+
+    [Fact]
+    public async Task BindMemberWorkflow_ForWorkflowFallback_WhenWorkflowIdConflictsWithTrustedIdentity_ShouldFailClosed()
+    {
+        var bindingPort = new RecordingMemberWorkflowBindingPort();
+        var tool = await DiscoverBindMemberWorkflowToolAsync(bindingPort);
+        var expectedMemberId = WorkflowProvisioningIdentity.BuildMemberId(
+            "scope-current",
+            "agent-tool-request:chat-turn-alpha");
+
+        using var _ = PushContext(
+            scopeId: "scope-current",
+            ownerSubject: "owner-1",
+            accessToken: "access-token-1",
+            requestId: "chat-turn-alpha",
+            callId: "fallback-bind-call");
+        var output = await tool.ExecuteAsync($$"""
+            {
+              "member_id": "{{expectedMemberId}}",
+              "workflow_yaml": "name: team_workflow\nsteps: []\n",
+              "workflow_id": "workflow-conflicting"
+            }
+            """);
+
+        ErrorCode(output).Should().Be("workflow_provisioning_identity_conflict");
+        bindingPort.LastRequest.Should().BeNull();
     }
 
     [Fact]
@@ -1372,6 +1491,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         request.ScheduleCron.Should().Be("0 9 * * *");
         request.ScheduleTimezone.Should().Be("Asia/Shanghai");
         request.RunImmediately.Should().BeFalse();
+        request.IdempotencyKey.Should().Be("agent-tool-request:request-1");
         // Caller identity is taken from the tool execution context (W1-threaded), not arguments.
         request.CallerSubjectExternalUserId.Should().Be("owner-1");
         request.CapabilityAdmission.Should().NotBeNull();
@@ -1498,6 +1618,31 @@ public sealed class ProvisionWorkflowScheduleToolTests
 
         port.LastRequest.Should().NotBeNull();
         port.LastRequest!.RunImmediately.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Execute_WhenTrustedOperationIdentityMissing_ShouldFailBeforeProvisioning()
+    {
+        var port = new RecordingProvisioningPort();
+        var tool = await DiscoverToolAsync(port);
+
+        using var _ = PushContext(
+            scopeId: "scope-1",
+            ownerSubject: "owner-1",
+            accessToken: "access-token-1",
+            requestId: null,
+            callId: "call-1",
+            idempotencyKey: null);
+        var output = await tool.ExecuteAsync("""
+            {
+              "team_id": "team-alpha",
+              "workflow_yaml": "name: demo\n",
+              "display_name": "Demo"
+            }
+            """);
+
+        ErrorCode(output).Should().Be("operation_identity_unavailable");
+        port.LastRequest.Should().BeNull();
     }
 
     [Fact]

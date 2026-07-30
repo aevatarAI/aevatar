@@ -83,6 +83,13 @@ public sealed record ProvisionWorkflowRequest(
     public WorkflowCapabilityAdmissionContext? CapabilityAdmission { get; init; }
 
     /// <summary>
+    /// Trusted operation idempotency key. When supplied, it owns deterministic
+    /// member/workflow identities across the provision tool and any create/bind
+    /// fallback for the same Chat turn.
+    /// </summary>
+    public string? IdempotencyKey { get; init; }
+
+    /// <summary>
     /// Target Studio Team that owns the provisioned workflow member. Required:
     /// Chat-created workflows must be discoverable through the Team member route
     /// before any member, binding, or schedule side effects are created.
