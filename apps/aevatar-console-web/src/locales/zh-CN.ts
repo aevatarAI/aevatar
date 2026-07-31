@@ -767,6 +767,8 @@ const zhCNMessages = {
   'teams.automations.authorization.error': '无法继续授权',
   'teams.automations.authorization.exactAccess': '精确权限',
   'teams.automations.authorization.expiry': '凭证有效期',
+  'teams.automations.authorization.noExternalGrants': '无需外部 NyxID 服务或所有者 LLM 模型授权。',
+  'teams.automations.authorization.noOwnerLLMGrant': '此工作流无需所有者 LLM 模型授权。',
   'teams.automations.authorization.preparing': '正在准备授权检查',
   'teams.automations.authorization.review': '检查授权',
   'teams.automations.authorization.reviewAgain': '重新检查',
@@ -975,6 +977,9 @@ const zhCNMessages = {
     '这个成员是团队入口成员。删除后会移除成员权威状态并从团队成员列表中清除；已发布服务产物、修订和历史运行记录会保留。',
   'teams.members.delete.failed': '删除成员失败。',
   'teams.members.delete.keep': '保留成员',
+  'teams.members.delete.notConfirmed':
+    '删除尚未确认。成员仍保留在列表中，请刷新后重试。',
+  'teams.members.delete.submitted': '删除请求已提交，正在等待确认。',
   'teams.members.delete.success': '已删除成员 {member}。',
   'teams.members.delete.title': '删除成员',
   'teams.members.delete.warning':

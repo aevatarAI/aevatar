@@ -790,6 +790,13 @@ jest.mock("@/shared/api/runtimeRunsApi", () => ({
 }));
 
 jest.mock("@/shared/studio/api", () => ({
+  isStudioApiErrorCode: (error: unknown, status: number, code: string) =>
+    typeof error === "object" &&
+    error !== null &&
+    "status" in error &&
+    (error as { status?: unknown }).status === status &&
+    "code" in error &&
+    (error as { code?: unknown }).code === code,
   isStudioApiStatus: (error: unknown, status: number) =>
     typeof error === "object" &&
     error !== null &&
@@ -991,6 +998,11 @@ jest.mock("@/shared/studio/api", () => ({
       scopeId: _input.scopeId,
       status: "delete_accepted",
     })),
+    getMember: jest.fn(async () => ({
+      summary: mockCreateTeamMembersCatalog().members[0],
+      implementationRef: null,
+      lastBinding: null,
+    })),
     listTeamMembers: jest.fn(async () => mockCreateTeamMembersCatalog()),
     parseYaml: jest.fn(async () => ({
       document: {
@@ -1009,8 +1021,14 @@ jest.mock("@/shared/studio/api", () => ({
   },
 }));
 
-function createStudioApiStatusError(message: string, status: number): Error & { status: number } {
-  const error = new Error(message) as Error & { status: number };
+function createStudioApiStatusError(
+  message: string,
+  status: number,
+  code?: string,
+): Error & { code?: string; status: number } {
+  const error = new Error(message) as Error & { code?: string; status: number };
+  error.name = "StudioApiError";
+  error.code = code;
   error.status = status;
   return error;
 }
@@ -1156,6 +1174,12 @@ describe("TeamDetailPage", () => {
         status: "delete_accepted",
       }),
     );
+    (studioApi.getMember as jest.Mock).mockReset();
+    (studioApi.getMember as jest.Mock).mockResolvedValue({
+      summary: mockCreateTeamMembersCatalog().members[0],
+      implementationRef: null,
+      lastBinding: null,
+    });
     (studioApi.listTeamMembers as jest.Mock).mockReset();
     (studioApi.listTeamMembers as jest.Mock).mockImplementation(
       async () => mockCreateTeamMembersCatalog(),
@@ -1441,14 +1465,14 @@ describe("TeamDetailPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "自动化" }));
 
     expect(await screen.findByRole("heading", { name: "自动化" })).toBeTruthy();
-    expect(screen.getByText("这个成员还没有自动化")).toBeTruthy();
-    expect(screen.getByText("Team Alpha Operator")).toBeTruthy();
-    await waitFor(() =>
-      expect(window.location.pathname).toBe(
-        "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/automations",
-      ),
+    expect(await screen.findByText("还没有周期任务")).toBeTruthy();
+    expect(screen.queryByText("Team Alpha Operator")).toBeNull();
+    expect(window.location.pathname).toBe("/scopes/scope-1/teams/t-alpha");
+    expect(window.location.search).toBe("?tab=automations");
+    expect(teamAutomationApi.listAll).toHaveBeenCalledWith(
+      { scopeId: "scope-1", teamId: "t-alpha" },
+      { take: 200 },
     );
-    expect(window.location.search).toBe("");
 
     fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
 
@@ -1923,12 +1947,38 @@ describe("TeamDetailPage", () => {
     });
   });
 
-  it("deletes a Studio member authority from the members tab", async () => {
+  it("keeps an accepted member visible until removal is observable", async () => {
     window.history.replaceState(
       {},
       "",
       "/scopes/scope-1/teams/t-alpha?memberId=member-team-alpha&tab=members",
     );
+    (studioApi.deleteMember as jest.Mock).mockResolvedValue({
+      ackedAt: "2026-05-01T08:08:00Z",
+      commandId: "cmd-delete-member",
+      correlationId: "corr-delete-member",
+      memberId: "member-team-alpha",
+      scopeId: "scope-1",
+      status: "delete_accepted",
+    });
+    let confirmRemoval: (() => void) | undefined;
+    const removalObserved = new Promise<void>((resolve) => {
+      confirmRemoval = resolve;
+    });
+    (studioApi.getMember as jest.Mock)
+      .mockResolvedValueOnce({
+        summary: mockCreateTeamMembersCatalog().members[0],
+        implementationRef: null,
+        lastBinding: null,
+      })
+      .mockImplementationOnce(async () => {
+        await removalObserved;
+        throw createStudioApiStatusError(
+          "Member not found",
+          404,
+          "STUDIO_MEMBER_NOT_FOUND",
+        );
+      });
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
@@ -1951,8 +2001,9 @@ describe("TeamDetailPage", () => {
       onOk?: () => Promise<void>;
     };
 
-    await act(async () => {
-      await confirmConfig.onOk?.();
+    let deletePromise: Promise<void> | undefined;
+    act(() => {
+      deletePromise = confirmConfig.onOk?.();
     });
 
     await waitFor(() => {
@@ -1960,13 +2011,88 @@ describe("TeamDetailPage", () => {
         scopeId: "scope-1",
         memberId: "member-team-alpha",
       });
+      expect(studioApi.getMember).toHaveBeenCalledTimes(2);
     });
+    expect(screen.getByText("Team Alpha Operator")).toBeTruthy();
+    expect(message.info).toHaveBeenCalled();
+    expect(message.success).not.toHaveBeenCalled();
+
+    await act(async () => {
+      confirmRemoval?.();
+      await deletePromise;
+    });
+
     expect(message.success).toHaveBeenCalledWith(
       "已删除成员 Team Alpha Operator。",
     );
     await waitFor(() => {
+      expect(studioApi.listTeamMembers).toHaveBeenCalledTimes(2);
+      expect(screen.queryByText("Team Alpha Operator")).toBeNull();
       expect(new URLSearchParams(window.location.search).get("memberId")).toBeNull();
       expect(new URLSearchParams(window.location.search).get("tab")).toBe("members");
+    });
+  });
+
+  it("surfaces an unrelated delete 404 instead of treating it as success", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha?tab=members",
+    );
+    (studioApi.deleteMember as jest.Mock).mockRejectedValue(
+      createStudioApiStatusError("Delete route not found", 404, "ROUTE_NOT_FOUND"),
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByText("Team Alpha Operator")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "删除成员" }));
+    const confirmCalls = (Modal.confirm as jest.Mock).mock.calls;
+    const confirmConfig = confirmCalls[confirmCalls.length - 1]?.[0] as {
+      onOk?: () => Promise<void>;
+    };
+
+    await act(async () => {
+      await confirmConfig.onOk?.();
+    });
+
+    expect(message.error).toHaveBeenCalledWith("Delete route not found");
+    expect(message.success).not.toHaveBeenCalled();
+    expect(studioApi.getMember).not.toHaveBeenCalled();
+    expect(screen.getByText("Team Alpha Operator")).toBeTruthy();
+  });
+
+  it("keeps a member visible when accepted deletion is not confirmed", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha?tab=members",
+    );
+    (studioApi.getMember as jest.Mock).mockResolvedValue({
+      summary: mockCreateTeamMembersCatalog().members[0],
+      implementationRef: null,
+      lastBinding: null,
+    });
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByText("Team Alpha Operator")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "删除成员" }));
+    const confirmCalls = (Modal.confirm as jest.Mock).mock.calls;
+    const confirmConfig = confirmCalls[confirmCalls.length - 1]?.[0] as {
+      onOk?: () => Promise<void>;
+    };
+
+    await act(async () => {
+      await confirmConfig.onOk?.();
+    });
+
+    expect(message.success).not.toHaveBeenCalled();
+    expect(message.error).toHaveBeenCalledWith(
+      "删除尚未确认。成员仍保留在列表中，请刷新后重试。",
+    );
+    await waitFor(() => {
+      expect(screen.getByText("Team Alpha Operator")).toBeTruthy();
     });
   });
 
@@ -2521,7 +2647,7 @@ describe("TeamDetailPage", () => {
 
   });
 
-  it("canonicalizes the selected Team member and queries its automations", async () => {
+  it("does not promote Team query hints into member automation identity", async () => {
     window.history.replaceState(
       {},
       "",
@@ -2530,20 +2656,14 @@ describe("TeamDetailPage", () => {
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    await waitFor(() => {
-      expect(window.location.pathname).toBe(
-        "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/automations",
-      );
+    expect(await screen.findByRole("heading", { name: "自动化" })).toBeTruthy();
+    expect(window.location.pathname).toBe("/scopes/scope-1/teams/t-alpha");
+    await waitFor(() =>
       expect(teamAutomationApi.listAll).toHaveBeenCalledWith(
-        {
-          scopeId: "scope-1",
-          teamId: "t-alpha",
-          memberId: "member-team-alpha",
-        },
+        { scopeId: "scope-1", teamId: "t-alpha" },
         { take: 200 },
-      );
-    });
-    expect(window.location.search).toBe("");
+      ),
+    );
     expect(teamAutomationApi.listAll).toHaveBeenCalledTimes(1);
     expect(scheduledDispatchApi.listAll).not.toHaveBeenCalled();
   });

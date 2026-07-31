@@ -81,6 +81,11 @@ import {
   createWorkflowRevisionIdentityCandidate,
 } from '@/shared/studio/explicitRequestConfirmation';
 import { isStudioApiStatus, studioApi } from '@/shared/studio/api';
+import {
+  isStudioMemberNotFound,
+  StudioMemberDeletionNotConfirmedError,
+  waitForStudioMemberDeletion,
+} from '@/shared/studio/memberDeletion';
 import { scriptsApi } from '@/shared/studio/scriptsApi';
 import type { ScopedScriptDetail } from '@/shared/studio/scriptsModels';
 import {
@@ -3048,6 +3053,8 @@ const StudioPage: React.FC = () => {
   const [optimisticStudioMembers, setOptimisticStudioMembers] = useState<
     StudioMemberSummary[]
   >([]);
+  const [confirmedDeletedStudioMemberIds, setConfirmedDeletedStudioMemberIds] =
+    useState(() => new Set<string>());
   const [createMemberModalOpen, setCreateMemberModalOpen] = useState(false);
   const [createMemberKind, setCreateMemberKind] = useState<BuildMode>('workflow');
   const [createMemberName, setCreateMemberName] = useState('');
@@ -3431,14 +3438,21 @@ const StudioPage: React.FC = () => {
         optimisticStudioMembers,
         resolvedStudioScopeId,
         resolvedStudioTeamId,
+      ).filter(
+        (member) =>
+          !confirmedDeletedStudioMemberIds.has(trimOptional(member.memberId)),
       ),
     [
+      confirmedDeletedStudioMemberIds,
       optimisticStudioMembers,
       resolvedStudioScopeId,
       resolvedStudioTeamId,
       studioMembersQuery.data?.members,
     ],
   );
+  useEffect(() => {
+    setConfirmedDeletedStudioMemberIds(new Set());
+  }, [resolvedStudioScopeId, resolvedStudioTeamId]);
   const studioMemberByPublishedServiceId = useMemo(() => {
     const members = new Map<string, (typeof studioScopeMembers)[number]>();
     for (const member of studioScopeMembers) {
@@ -9435,31 +9449,40 @@ const StudioPage: React.FC = () => {
           setInventoryBusyAction('delete');
 
           try {
+            let alreadyDeleted = false;
             try {
               await studioApi.deleteMember({
                 scopeId,
                 memberId,
               });
             } catch (error) {
-              if (!isStudioApiStatus(error, 404)) {
-                void message.error(
-                  error instanceof Error
-                    ? error.message
-                    : t("pages.studio.index.failed.delete.member", "Failed to delete member."),
-                );
-                return;
+              if (!isStudioMemberNotFound(error)) {
+                throw error;
               }
+              alreadyDeleted = true;
             }
 
+            if (!alreadyDeleted) {
+              void message.info(
+                t(
+                  "pages.studio.index.delete.member.submitted",
+                  "Deletion submitted. Waiting for confirmation.",
+                ),
+              );
+            }
+            if (!alreadyDeleted) {
+              await waitForStudioMemberDeletion({ scopeId, memberId });
+            }
+
+            setConfirmedDeletedStudioMemberIds((current) => {
+              const next = new Set(current);
+              next.add(memberId);
+              return next;
+            });
             setOptimisticStudioMembers((current) =>
               current.filter(
                 (member) => trimOptional(member.memberId) !== memberId,
               ),
-            );
-            queryClient.setQueryData<StudioMemberRoster>(
-              studioMembersQueryKey,
-              (current) =>
-                removeStudioMemberRosterMember(current, scopeId, memberId),
             );
 
             const invalidations = [
@@ -9484,6 +9507,11 @@ const StudioPage: React.FC = () => {
               );
             }
             await Promise.all(invalidations);
+            queryClient.setQueryData<StudioMemberRoster>(
+              studioMembersQueryKey,
+              (current) =>
+                removeStudioMemberRosterMember(current, scopeId, memberId),
+            );
 
             const deletedMemberKey = buildBackendMemberKey(memberId);
             if (
@@ -9518,12 +9546,17 @@ const StudioPage: React.FC = () => {
             );
           } catch (error) {
             void message.error(
-              error instanceof Error
-                ? error.message
-                : t(
-                    "pages.studio.index.failed.delete.member",
-                    "Failed to delete member.",
-                  ),
+              error instanceof StudioMemberDeletionNotConfirmedError
+                ? t(
+                    "pages.studio.index.delete.member.not.confirmed",
+                    "Deletion was not confirmed. The member remains in the list; refresh and retry.",
+                  )
+                : error instanceof Error
+                  ? error.message
+                  : t(
+                      "pages.studio.index.failed.delete.member",
+                      "Failed to delete member.",
+                    ),
             );
           } finally {
             setInventoryBusyKey('');

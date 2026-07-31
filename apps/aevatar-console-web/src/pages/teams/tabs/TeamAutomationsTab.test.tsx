@@ -5,6 +5,7 @@ import * as React from "react";
 import TeamAutomationsTab, {
   mutationObservationComplete,
 } from "./TeamAutomationsTab";
+import TeamAutomationAuthorizationReview from "../components/TeamAutomationAuthorizationReview";
 import {
   teamAutomationApi,
   TeamAutomationApiError,
@@ -76,7 +77,6 @@ jest.mock("@/shared/auth/config", () => ({
 }));
 
 const member = {
-  automationsHref: "/scopes/scope-alpha/teams/team-alpha/members/m-alpha/automations",
   canAutomateMember: true,
   disabledReason: "",
   implementationKind: "Workflow",
@@ -111,7 +111,6 @@ function renderTab(
 function authorizationReview() {
   return {
     status: "ready",
-    schemaVersion: "scheduled-invocation-authorization/v1",
     permissionDigest: "digest-alpha",
     policyVersion: "scheduled-invocation-auth/v1",
     serviceGrants: [
@@ -131,11 +130,17 @@ function authorizationReview() {
       allowAllServices: false,
       browserReceivesRawKey: false,
       expiresAt: "2026-10-14T00:00:00Z",
+      hostedBy: "Aevatar",
+      mode: "dedicated-per-schedule",
+      nodeGrantRequirement: "required",
+      serviceGrantRequirement: "required",
       scopes: ["read", "proxy"],
     },
     ownerLLMSelection: {
       model: "gpt-5",
+      nyxIdUserServiceId: "us-alpha",
       routeKind: "nyx_id_user_service",
+      routeValue: "us-alpha",
       serviceSlugSnapshot: "connector-alpha",
     },
     disclosures: [
@@ -146,7 +151,37 @@ function authorizationReview() {
       "pause_resume_preserves_credential",
       "node_ids_are_permission_set",
     ],
-  };
+  } satisfies import("@/shared/api/teamAutomationApi").TeamAutomationPermissionReview;
+}
+
+function noServiceAuthorizationReview() {
+  return {
+    status: "ready",
+    permissionDigest: "digest-no-service",
+    policyVersion: "scheduled-invocation-auth/v1",
+    serviceGrants: [],
+    nodeGrants: [],
+    credentialPlan: {
+      allowAllNodes: false,
+      allowAllServices: false,
+      browserReceivesRawKey: false,
+      expiresAt: "2026-10-14T00:00:00Z",
+      hostedBy: "Aevatar",
+      mode: "dedicated-per-schedule",
+      nodeGrantRequirement: "not_required",
+      serviceGrantRequirement: "not_required",
+      scopes: ["read", "proxy"],
+    },
+    ownerLLMSelection: null,
+    disclosures: [
+      "dedicated_credential",
+      "aevatar_secret_custody",
+      "browser_never_receives_secret",
+      "delete_revokes_credential",
+      "pause_resume_preserves_credential",
+      "node_ids_are_permission_set",
+    ],
+  } satisfies import("@/shared/api/teamAutomationApi").TeamAutomationPermissionReview;
 }
 
 function automationView(overrides: Record<string, unknown> = {}) {
@@ -207,6 +242,7 @@ describe("TeamAutomationsTab canonical member authority", () => {
         {
           kind: "retryRevocation",
           scheduleId: "sch-alpha",
+          acceptedAt: 0,
           baselineStateVersion: 4,
         },
         [],
@@ -214,40 +250,35 @@ describe("TeamAutomationsTab canonical member authority", () => {
     ).toBe(true);
   });
 
-  it("canonicalizes the sole eligible member from the Team shell", async () => {
-    renderTab();
-
-    expect(await screen.findByRole("heading", { name: "Automations" })).toBeInTheDocument();
-    await waitFor(() =>
-      expect(history.replace).toHaveBeenCalledWith(member.automationsHref),
-    );
-    expect(teamAutomationApi.listAll).not.toHaveBeenCalled();
-    expect(scheduledDispatchApi.listAll).not.toHaveBeenCalled();
-  });
-
-  it("canonicalizes the explicitly selected eligible member", async () => {
-    const selectedMember = {
-      ...member,
-      automationsHref: "/scopes/scope-alpha/teams/team-alpha/members/m-beta/automations",
-      isSelectedMember: true,
-      key: "m-beta",
-      memberId: "m-beta",
-      name: "Reviewer",
-      serviceId: "svc-beta",
+  it("renders repeated exact grant occurrences without duplicate React keys", () => {
+    const consoleError = jest.spyOn(console, "error").mockImplementation(() => undefined);
+    const review = authorizationReview();
+    const duplicateGrant = {
+      ...review.serviceGrants[0],
+      nodeIds: ["node-alpha", "node-alpha"],
     };
 
-    renderTab("", [member, selectedMember]);
-
-    await waitFor(() =>
-      expect(history.replace).toHaveBeenCalledWith(selectedMember.automationsHref),
+    render(
+      <TeamAutomationAuthorizationReview
+        review={{
+          ...review,
+          serviceGrants: [duplicateGrant, duplicateGrant],
+        }}
+      />,
     );
-    expect(teamAutomationApi.listAll).not.toHaveBeenCalled();
+
+    expect(screen.getAllByText("Connector Alpha")).toHaveLength(2);
+    expect(screen.getAllByText("node-alpha")).toHaveLength(4);
+    expect(
+      consoleError.mock.calls.some((call) =>
+        call.join(" ").includes("Encountered two children with the same key"),
+      ),
+    ).toBe(false);
   });
 
-  it("requires an explicit choice when multiple eligible members are unresolved", async () => {
+  it("keeps member selection inside the create form when multiple members are eligible", async () => {
     const otherMember = {
       ...member,
-      automationsHref: "/scopes/scope-alpha/teams/team-alpha/members/m-beta/automations",
       key: "m-beta",
       memberId: "m-beta",
       name: "Reviewer",
@@ -256,14 +287,132 @@ describe("TeamAutomationsTab canonical member authority", () => {
 
     renderTab("", [member, otherMember]);
 
-    expect(await screen.findByRole("combobox", { name: "Automation member" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Automations" })).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Automation member" })).not.toBeInTheDocument();
     expect(history.replace).not.toHaveBeenCalled();
-    expect(teamAutomationApi.listAll).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(teamAutomationApi.listAll).toHaveBeenCalledWith(
+        { scopeId: "scope-alpha", teamId: "team-alpha" },
+        { take: 200 },
+      ),
+    );
 
-    fireEvent.mouseDown(screen.getByRole("combobox", { name: "Automation member" }));
+    fireEvent.click(screen.getByRole("button", { name: "New automation" }));
+
+    const form = await screen.findByRole("dialog");
+    expect(within(form).getByRole("combobox", { name: "Automation member" })).toBeEnabled();
+    expect(within(form).queryByText("Planner")).not.toBeInTheDocument();
+    expect(within(form).queryByText("Reviewer")).not.toBeInTheDocument();
+    expect(history.push).not.toHaveBeenCalled();
+  });
+
+  it("stays on the Team collection after creating for an explicitly selected member", async () => {
+    const otherMember = {
+      ...member,
+      key: "m-beta",
+      memberId: "m-beta",
+      name: "Reviewer",
+      serviceId: "svc-beta",
+    };
+    (teamAutomationApi.preflightCreate as jest.Mock).mockResolvedValue(
+      authorizationReview(),
+    );
+    (teamAutomationApi.create as jest.Mock).mockResolvedValue({
+      accepted: true,
+      commandId: "cmd-beta",
+      operationId: "op-beta",
+      scheduleId: "sch-beta",
+      status: "accepted",
+    });
+
+    renderTab("", [member, otherMember]);
+
+    fireEvent.click(await screen.findByRole("button", { name: "New automation" }));
+    const form = await screen.findByRole("dialog");
+    fireEvent.mouseDown(within(form).getByRole("combobox", { name: "Automation member" }));
     fireEvent.click(await screen.findByText("Reviewer"));
+    fireEvent.click(within(form).getByRole("button", { name: "Create automation" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Authorize and continue" }));
 
-    expect(history.push).toHaveBeenCalledWith(otherMember.automationsHref);
+    await waitFor(() => expect(teamAutomationApi.create).toHaveBeenCalledTimes(1));
+    expect(teamAutomationApi.create).toHaveBeenCalledWith(
+      expect.objectContaining({ memberId: "m-beta" }),
+      "digest-alpha",
+      "scheduled-invocation-auth/v1",
+      { idempotencyKey: "idem-alpha", operationId: "op-alpha" },
+    );
+    expect(history.push).not.toHaveBeenCalled();
+  });
+
+  it("attributes Team collection rows to each automation member", async () => {
+    const otherMember = {
+      ...member,
+      key: "m-beta",
+      memberId: "m-beta",
+      name: "Reviewer",
+      serviceId: "svc-beta",
+    };
+    (teamAutomationApi.listAll as jest.Mock).mockResolvedValue({
+      items: [
+        automationView({ displayName: "Planner review" }),
+        automationView({
+          displayName: "Reviewer review",
+          memberId: "m-beta",
+          publishedServiceId: "svc-beta",
+          scheduleId: "sch-beta",
+        }),
+      ],
+      nextCursor: null,
+      totalCount: 2,
+    });
+
+    renderTab("", [member, otherMember]);
+
+    const plannerRow = await screen.findByRole("article", { name: "Planner review" });
+    const reviewerRow = await screen.findByRole("article", { name: "Reviewer review" });
+    expect(within(plannerRow).getByText("Planner")).toBeInTheDocument();
+    expect(within(reviewerRow).getByText("Reviewer")).toBeInTheDocument();
+  });
+
+  it("uses the row member authority for Team collection actions", async () => {
+    const otherMember = {
+      ...member,
+      key: "m-beta",
+      memberId: "m-beta",
+      name: "Reviewer",
+      serviceId: "svc-beta",
+    };
+    const reviewerAutomation = automationView({
+      displayName: "Reviewer review",
+      memberId: "m-beta",
+      publishedServiceId: "svc-beta",
+      scheduleId: "sch-beta",
+    });
+    (teamAutomationApi.listAll as jest.Mock).mockResolvedValue({
+      items: [reviewerAutomation],
+      nextCursor: null,
+      totalCount: 1,
+    });
+    (teamAutomationApi.runNow as jest.Mock).mockResolvedValue({
+      accepted: true,
+      commandId: "cmd-beta",
+      operationId: "op-beta",
+      scheduleId: "sch-beta",
+      status: "accepted",
+    });
+
+    renderTab("", [member, otherMember]);
+
+    const reviewerRow = await screen.findByRole("article", { name: "Reviewer review" });
+    fireEvent.click(within(reviewerRow).getByRole("button", { name: "Run now" }));
+
+    await waitFor(() =>
+      expect(teamAutomationApi.runNow).toHaveBeenCalledWith(
+        { scopeId: "scope-alpha", teamId: "team-alpha", memberId: "m-beta" },
+        "sch-beta",
+        { idempotencyKey: "idem-alpha", operationId: "op-alpha" },
+      ),
+    );
   });
 
   it("opens the complete dev form directly from the Team shell", async () => {
@@ -280,7 +429,10 @@ describe("TeamAutomationsTab canonical member authority", () => {
     expect(screen.getByRole("button", { name: "Create automation" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Review authorization" })).not.toBeInTheDocument();
     expect(history.push).not.toHaveBeenCalled();
-    expect(teamAutomationApi.listAll).not.toHaveBeenCalled();
+    expect(teamAutomationApi.listAll).toHaveBeenCalledWith(
+      { scopeId: "scope-alpha", teamId: "team-alpha" },
+      { take: 200 },
+    );
   });
 
   it("loads only the exact canonical member collection", async () => {
@@ -355,6 +507,67 @@ describe("TeamAutomationsTab canonical member authority", () => {
     await waitFor(() => expect(teamAutomationApi.create).toHaveBeenCalledTimes(1));
     expect(await screen.findByText("Authorization request accepted")).toBeInTheDocument();
     expect(screen.queryByText("Automation created")).not.toBeInTheDocument();
+  });
+
+  it("shows a no-service authorization review and requires confirmation before creating", async () => {
+    (teamAutomationApi.preflightCreate as jest.Mock).mockResolvedValue(
+      noServiceAuthorizationReview(),
+    );
+    (teamAutomationApi.create as jest.Mock).mockResolvedValue({
+      accepted: true,
+      status: "accepted",
+      scheduleId: "sch-no-service",
+      operationId: "op-alpha",
+      commandId: "cmd-no-service",
+    });
+    renderTab("m-alpha");
+
+    fireEvent.click(await screen.findByRole("button", { name: "New automation" }));
+    fireEvent.change(screen.getByLabelText("Recurring prompt"), {
+      target: { value: "Summarize open work." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create automation" }));
+
+    await waitFor(() => expect(teamAutomationApi.preflightCreate).toHaveBeenCalledTimes(1));
+    expect(teamAutomationApi.create).not.toHaveBeenCalled();
+
+    const reviewDialog = await screen.findByRole("dialog");
+    expect(reviewDialog).toHaveAttribute(
+      "aria-describedby",
+      "team-automation-authorization-description",
+    );
+    expect(
+      within(reviewDialog).getByText(
+        "No external NyxID service or owner LLM model grant is required.",
+      ),
+    ).toBeInTheDocument();
+    expect(within(reviewDialog).queryByText(/gateway\s*\//)).not.toBeInTheDocument();
+    expect(within(reviewDialog).queryByText("gpt-5")).not.toBeInTheDocument();
+
+    const confirmation = within(reviewDialog).getByRole("button", {
+      name: "Authorize and continue",
+    });
+    const modalFooter = reviewDialog.querySelector(".ant-modal-footer");
+    const modalBody = reviewDialog.querySelector(".ant-modal-body");
+    expect(modalFooter).toContainElement(confirmation);
+    expect(modalBody).not.toContainElement(confirmation);
+    expect(modalBody).toHaveStyle({
+      maxHeight: "min(70vh, 640px)",
+      overflowY: "auto",
+    });
+
+    fireEvent.click(confirmation);
+
+    await waitFor(() => expect(teamAutomationApi.create).toHaveBeenCalledTimes(1));
+    expect(teamAutomationApi.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        memberId: "m-alpha",
+        prompt: "Summarize open work.",
+      }),
+      "digest-no-service",
+      "scheduled-invocation-auth/v1",
+      { idempotencyKey: "idem-alpha", operationId: "op-alpha" },
+    );
   });
 
   it("reports authorization preflight failures through the shared toast without changing the modal layout", async () => {
@@ -518,6 +731,136 @@ describe("TeamAutomationsTab canonical member authority", () => {
     expect(screen.queryByText("Still pending")).not.toBeInTheDocument();
   });
 
+  it("shows an accepted create while the authoritative row is unavailable", async () => {
+    (teamAutomationApi.preflightCreate as jest.Mock).mockResolvedValue(
+      authorizationReview(),
+    );
+    (teamAutomationApi.create as jest.Mock).mockResolvedValue({
+      accepted: true,
+      status: "accepted",
+      scheduleId: "sch-pending",
+      operationId: "op-alpha",
+      commandId: "cmd-alpha",
+    });
+    renderTab("m-alpha");
+
+    fireEvent.click(await screen.findByRole("button", { name: "New automation" }));
+    fireEvent.change(screen.getByLabelText("Automation name"), {
+      target: { value: "Daily review" },
+    });
+    fireEvent.change(screen.getByLabelText("Recurring prompt"), {
+      target: { value: "Summarize open work." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create automation" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Authorize and continue" }));
+
+    const acceptedRow = await screen.findByRole("article", { name: "Daily review" });
+    expect(
+      within(acceptedRow).getByRole("status", {
+        name: "Waiting for schedule sync",
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("offers an explicit one-shot list refresh", async () => {
+    renderTab("m-alpha");
+
+    await screen.findByText("No automations for this member");
+    expect(teamAutomationApi.listAll).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+
+    await waitFor(() => expect(teamAutomationApi.listAll).toHaveBeenCalledTimes(2));
+  });
+
+  it("does not poll for an existing pending automation", async () => {
+    jest.useFakeTimers({ now: 0 });
+    try {
+      (teamAutomationApi.listAll as jest.Mock).mockResolvedValue({
+        items: [automationView({ authorizationStatus: "provisioning_pending" })],
+        nextCursor: null,
+        totalCount: 1,
+      });
+      renderTab("m-alpha");
+
+      await act(async () => {
+        await Promise.resolve();
+        await jest.advanceTimersByTimeAsync(0);
+      });
+      expect(teamAutomationApi.listAll).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(20_000);
+      });
+
+      expect(teamAutomationApi.listAll).toHaveBeenCalledTimes(1);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it("stops create polling after six seconds and manual refresh stays one-shot", async () => {
+    (teamAutomationApi.preflightCreate as jest.Mock).mockResolvedValue(
+      authorizationReview(),
+    );
+    (teamAutomationApi.create as jest.Mock).mockResolvedValue({
+      accepted: true,
+      status: "accepted",
+      scheduleId: "sch-pending",
+      operationId: "op-alpha",
+      commandId: "cmd-alpha",
+    });
+    renderTab("m-alpha");
+
+    fireEvent.click(await screen.findByRole("button", { name: "New automation" }));
+    fireEvent.change(screen.getByLabelText("Automation name"), {
+      target: { value: "Daily review" },
+    });
+    fireEvent.change(screen.getByLabelText("Recurring prompt"), {
+      target: { value: "Summarize open work." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create automation" }));
+    const authorizeButton = await screen.findByRole("button", {
+      name: "Authorize and continue",
+    });
+    jest.useFakeTimers({ now: Date.now() });
+    try {
+      fireEvent.click(authorizeButton);
+      await act(async () => {
+        await Promise.resolve();
+        await jest.advanceTimersByTimeAsync(0);
+      });
+      expect(screen.getByRole("article", { name: "Daily review" })).toBeInTheDocument();
+
+      const callsAtAcceptance = (teamAutomationApi.listAll as jest.Mock).mock.calls.length;
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(6_000);
+      });
+      const callsAtDeadline = (teamAutomationApi.listAll as jest.Mock).mock.calls.length;
+      expect(callsAtDeadline).toBeGreaterThan(callsAtAcceptance);
+      expect(screen.getByText("Still pending")).toBeInTheDocument();
+
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(20_000);
+      });
+      expect(teamAutomationApi.listAll).toHaveBeenCalledTimes(callsAtDeadline);
+
+      const refreshButton = screen.getByRole("button", { name: "Refresh" });
+      fireEvent.click(refreshButton);
+      await act(async () => {
+        await Promise.resolve();
+        await jest.advanceTimersByTimeAsync(0);
+      });
+      expect(teamAutomationApi.listAll).toHaveBeenCalledTimes(callsAtDeadline + 1);
+
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(20_000);
+      });
+      expect(teamAutomationApi.listAll).toHaveBeenCalledTimes(callsAtDeadline + 1);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it("recovers a confirmed create when the fresh binding is missing", async () => {
     (teamAutomationApi.preflightCreate as jest.Mock).mockResolvedValue(
       authorizationReview(),
@@ -660,7 +1003,7 @@ describe("TeamAutomationsTab canonical member authority", () => {
     expect(await screen.findByText("Pause request accepted")).toBeInTheDocument();
     await waitFor(
       () => expect(screen.getByRole("button", { name: "Resume" })).toBeInTheDocument(),
-      { timeout: 3_500 },
+      { timeout: 7_500 },
     );
     expect(teamAutomationApi.listAll).toHaveBeenCalledTimes(3);
   });

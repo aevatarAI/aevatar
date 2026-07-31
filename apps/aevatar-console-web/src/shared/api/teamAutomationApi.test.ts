@@ -43,6 +43,8 @@ function authorizationResult() {
       ],
       credentialPolicy: {
         scopes: ["NYX_ID_CREDENTIAL_SCOPE_READ", "NYX_ID_CREDENTIAL_SCOPE_PROXY"],
+        serviceGrantRequirement: "AUTHORIZATION_GRANT_REQUIREMENT_REQUIRED",
+        nodeGrantRequirement: "AUTHORIZATION_GRANT_REQUIREMENT_REQUIRED",
         allowAllServices: false,
         allowAllNodes: false,
         expiresAt: "2026-10-14T00:00:00Z",
@@ -65,6 +67,50 @@ function authorizationResult() {
         model: "gpt-5",
       },
     },
+  };
+}
+
+function noServiceAuthorizationResult() {
+  return {
+    success: true,
+    failureCode: "SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_UNSPECIFIED",
+    detail: "",
+    plan: {
+      schemaVersion: "scheduled-invocation-authorization/v2",
+      invocationTarget: {
+        studioMember: {
+          scopeId: "scope-alpha",
+          teamId: "team-alpha",
+          memberId: "m-alpha",
+          publishedServiceId: "svc-alpha",
+          draftWorkflowId: "wf-alpha",
+          workflowRevisionId: "rev-alpha",
+        },
+      },
+      nyxIdServiceGrants: [],
+      credentialPolicy: {
+        scopes: [1, 2],
+        serviceGrantRequirement: 2,
+        nodeGrantRequirement: 2,
+        allowAllServices: false,
+        allowAllNodes: false,
+        expiresAt: { seconds: "1791936000", nanos: 0 },
+        policyVersion: "scheduled-invocation-auth/v2",
+      },
+      disclosures: [1, 2, 3, 4, 5, 6],
+      permissionDigest: "digest-no-service",
+      catalogAuthority: null,
+      ownerLlmSelection: null,
+    },
+  };
+}
+
+function authorizationResultWithoutOwnerLlmSelection() {
+  const result = authorizationResult();
+  const { ownerLlmSelection: _ownerLlmSelection, ...plan } = result.plan;
+  return {
+    ...result,
+    plan,
   };
 }
 
@@ -145,6 +191,28 @@ describe("teamAutomationApi", () => {
       ).toEqual(expect.objectContaining({ authorizationStatus }));
     },
   );
+
+  it("decodes canonical no-owner LLM runtime evidence", () => {
+    expect(
+      teamAutomationApiDecoders.view(
+        automationView({
+          ownerLlmRouteKind: "unspecified",
+          ownerLlmRoute: "",
+          ownerLlmUserServiceId: "",
+          ownerLlmServiceSlug: "",
+          ownerLlmModel: "",
+        }),
+      ),
+    ).toEqual(
+      expect.objectContaining({
+        ownerLLMRouteKind: "unspecified",
+        ownerLLMRoute: "",
+        ownerLLMUserServiceId: "",
+        ownerLLMServiceSlug: "",
+        ownerLLMModel: "",
+      }),
+    );
+  });
 
   it.each([
     ["NeedsAuthorization", "needs_authorization"],
@@ -237,6 +305,213 @@ describe("teamAutomationApi", () => {
     expect(JSON.stringify(review)).not.toContain("m-alpha");
     expect(JSON.stringify(review)).not.toContain("wf-alpha");
     expect(JSON.stringify(review)).not.toContain("svc-alpha");
+  });
+
+  it("decodes a v2 non-LLM plan without service or node authorization", () => {
+    const review = teamAutomationApiDecoders.permissionReview(
+      noServiceAuthorizationResult(),
+    );
+
+    expect(review).toEqual(
+      expect.objectContaining({
+        status: "ready",
+        ownerLLMSelection: null,
+        serviceGrants: [],
+        nodeGrants: [],
+        credentialPlan: expect.objectContaining({
+          serviceGrantRequirement: "not_required",
+          nodeGrantRequirement: "not_required",
+        }),
+      }),
+    );
+  });
+
+  it("keeps an absent owner LLM selection independent from required workflow service grants", () => {
+    const base = authorizationResult();
+    const result = {
+      ...base,
+      plan: {
+        ...base.plan,
+        ownerLlmSelection: null,
+        nyxIdServiceGrants: base.plan.nyxIdServiceGrants.map((grant) => ({
+          ...grant,
+          nodeGrantRequirement: "AUTHORIZATION_GRANT_REQUIREMENT_NOT_REQUIRED",
+          nodeIds: [],
+        })),
+        credentialPolicy: {
+          ...base.plan.credentialPolicy,
+          nodeGrantRequirement: "AUTHORIZATION_GRANT_REQUIREMENT_NOT_REQUIRED",
+        },
+      },
+    };
+
+    expect(teamAutomationApiDecoders.permissionReview(result)).toEqual(
+      expect.objectContaining({
+        ownerLLMSelection: null,
+        serviceGrants: [
+          expect.objectContaining({
+            targetId: "us-alpha",
+            nodeGrantRequirement: "not_required",
+          }),
+        ],
+        credentialPlan: expect.objectContaining({
+          serviceGrantRequirement: "required",
+          nodeGrantRequirement: "not_required",
+        }),
+      }),
+    );
+  });
+
+  it("decodes an omitted owner LLM selection as null", () => {
+    expect(
+      teamAutomationApiDecoders.permissionReview(
+        authorizationResultWithoutOwnerLlmSelection(),
+      ),
+    ).toEqual(expect.objectContaining({ ownerLLMSelection: null }));
+  });
+
+  it.each([
+    ["requires services but returns none", () => {
+      const base = noServiceAuthorizationResult();
+      return {
+        ...base,
+        plan: {
+          ...base.plan,
+          credentialPolicy: {
+            ...base.plan.credentialPolicy,
+            serviceGrantRequirement: 1,
+          },
+        },
+      };
+    }],
+    ["does not require services but returns one", () => {
+      const base = authorizationResult();
+      return {
+        ...base,
+        plan: {
+          ...base.plan,
+          credentialPolicy: {
+            ...base.plan.credentialPolicy,
+            serviceGrantRequirement:
+              "AUTHORIZATION_GRANT_REQUIREMENT_NOT_REQUIRED",
+          },
+        },
+      };
+    }],
+  ])("fails closed when the service-grant policy %s", (_caseName, createResult) => {
+    expect(() => teamAutomationApiDecoders.permissionReview(createResult())).toThrow(
+      "Team Automation authorization service grant requirement does not match exact service grants.",
+    );
+  });
+
+  it("fails closed when node policy disagrees with required service nodes", () => {
+    const base = authorizationResult();
+    const result = {
+      ...base,
+      plan: {
+        ...base.plan,
+        credentialPolicy: {
+          ...base.plan.credentialPolicy,
+          nodeGrantRequirement: "AUTHORIZATION_GRANT_REQUIREMENT_NOT_REQUIRED",
+        },
+      },
+    };
+
+    expect(() => teamAutomationApiDecoders.permissionReview(result)).toThrow(
+      "Team Automation authorization node grant requirement does not match exact service grants.",
+    );
+  });
+
+  it.each([
+    [
+      "requires nodes but returns none",
+      "AUTHORIZATION_GRANT_REQUIREMENT_REQUIRED",
+      [],
+      "AUTHORIZATION_GRANT_REQUIREMENT_REQUIRED",
+    ],
+    [
+      "does not require nodes but returns one",
+      "AUTHORIZATION_GRANT_REQUIREMENT_NOT_REQUIRED",
+      ["node-alpha"],
+      "AUTHORIZATION_GRANT_REQUIREMENT_NOT_REQUIRED",
+    ],
+  ] as const)(
+    "fails closed when a service grant %s",
+    (
+      _caseName,
+      serviceNodeGrantRequirement,
+      nodeIds,
+      credentialNodeGrantRequirement,
+    ) => {
+      const base = authorizationResult();
+      const result = {
+        ...base,
+        plan: {
+          ...base.plan,
+          nyxIdServiceGrants: base.plan.nyxIdServiceGrants.map((grant) => ({
+            ...grant,
+            nodeGrantRequirement: serviceNodeGrantRequirement,
+            nodeIds,
+          })),
+          credentialPolicy: {
+            ...base.plan.credentialPolicy,
+            nodeGrantRequirement: credentialNodeGrantRequirement,
+          },
+        },
+      };
+
+      expect(() => teamAutomationApiDecoders.permissionReview(result)).toThrow(
+        "Team Automation authorization node grant requirement does not match per-service node grants.",
+      );
+    },
+  );
+
+  it.each([
+    ["service policy", () => {
+      const base = authorizationResult();
+      return {
+        ...base,
+        plan: {
+          ...base.plan,
+          credentialPolicy: {
+            ...base.plan.credentialPolicy,
+            serviceGrantRequirement:
+              "AUTHORIZATION_GRANT_REQUIREMENT_UNSPECIFIED",
+          },
+        },
+      };
+    }],
+    ["node policy", () => {
+      const base = authorizationResult();
+      return {
+        ...base,
+        plan: {
+          ...base.plan,
+          credentialPolicy: {
+            ...base.plan.credentialPolicy,
+            nodeGrantRequirement: 0,
+          },
+        },
+      };
+    }],
+    ["service grant", () => {
+      const base = authorizationResult();
+      return {
+        ...base,
+        plan: {
+          ...base.plan,
+          nyxIdServiceGrants: base.plan.nyxIdServiceGrants.map((grant) => ({
+            ...grant,
+            nodeGrantRequirement:
+              "AUTHORIZATION_GRANT_REQUIREMENT_CONDITIONAL_REQUIRED",
+          })),
+        },
+      };
+    }],
+  ])("fails closed on unspecified or unknown %s grant requirements", (_label, createResult) => {
+    expect(() => teamAutomationApiDecoders.permissionReview(createResult())).toThrow(
+      "grant requirement",
+    );
   });
 
   it("fails closed when a preflight plan allows all services", () => {
@@ -634,6 +909,36 @@ describe("teamAutomationApi", () => {
         automationView({ nyxIdRevocationStatus: "Future" }),
       ),
     ).toThrow("Unknown Team automation revocation track");
+  });
+
+  it("lists every member automation in a Team without ownerMemberId", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        items: [
+          automationView({ scheduleId: "sch-alpha" }),
+          automationView({
+            scheduleId: "sch-beta",
+            serviceId: "svc-beta",
+            teamOwnerMemberId: "m-beta",
+          }),
+        ],
+        nextCursor: null,
+        totalCount: 2,
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    const result = await teamAutomationApi.listAll(
+      { scopeId: "scope-alpha", teamId: "team-alpha" },
+      { take: 200 },
+    );
+
+    expect(result.items.map((item) => item.memberId)).toEqual(["m-alpha", "m-beta"]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/schedules?ownerKind=studio_member_automation&ownerScopeId=scope-alpha&ownerTeamId=team-alpha&includeTotalCount=true&take=200",
+    );
   });
 
   it("keeps the canonical owner tuple on every list page", async () => {

@@ -3493,6 +3493,8 @@ const projectMessages = {
   "pages.studio.index.delete.member.confirm.body": "删除",
   "pages.studio.index.delete.member.confirm.body.suffix": "从当前成员清单中删除？",
   "pages.studio.index.delete.member.label": "删除 {member}",
+  "pages.studio.index.delete.member.not.confirmed": "删除尚未确认。成员仍保留在列表中，请刷新后重试。",
+  "pages.studio.index.delete.member.submitted": "删除请求已提交，正在等待确认。",
   "pages.studio.index.delete.studio.member": "删除 Studio 成员",
   "pages.studio.index.delete.workflow.member": "删除 Workflow 成员",
   "pages.studio.index.delete.workflow.member.2": "删除 Workflow 成员",
