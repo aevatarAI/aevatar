@@ -1678,6 +1678,30 @@ public sealed class AevatarInvocationToolSourceTests
         harness.WorkflowDispatch.Command.Source.WorkflowName.Should().Be("invoice_pdf_workflow");
     }
 
+    [Fact]
+    public async Task StartWorkflow_WhenScopeWorkflowIsMissing_ShouldNotFallbackToCatalog()
+    {
+        var harness = new Harness();
+        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
+
+        using var _ = PushContext(callId: "call-scope-workflow-missing");
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_id": "invoice-pdf-extraction-workflow",
+              "inputs": { "prompt": "process pdf" },
+              "wait": "stream"
+            }
+            """);
+
+        ErrorCode(output).Should().Be("scope_workflow_not_found");
+        ErrorMessage(output).Should().Contain("invoice-pdf-extraction-workflow");
+        ErrorMessage(output).Should().Contain("scope-1");
+        ErrorMessage(output).Should().Contain("service_catalog_missing");
+        harness.ScopeWorkflowQuery.Lookups.Should().ContainSingle()
+            .Which.Should().Be(("scope-1", "invoice-pdf-extraction-workflow"));
+        harness.WorkflowDispatch.Command.Should().BeNull();
+    }
+
     [Theory]
     [InlineData(ScopeWorkflowLookupStatus.NotReady, "deployment_readmodel_missing")]
     [InlineData(ScopeWorkflowLookupStatus.Stale, "workflow_actor_binding_mismatched")]
@@ -2799,7 +2823,7 @@ public sealed class AevatarInvocationToolSourceTests
         using var _ = PushContext(callId: "call-workflow-fail");
         var output = await tool.ExecuteAsync("""
             {
-              "workflow_id": "missing",
+              "workflow_id": "wf-main",
               "inputs": { "prompt": "run workflow" }
             }
             """);
@@ -3939,6 +3963,17 @@ public sealed class AevatarInvocationToolSourceTests
 
         public Harness()
         {
+            ScopeWorkflowQuery.Workflows["wf-main"] = new ScopeWorkflowSummary(
+                "scope-1",
+                "wf-main",
+                "Workflow Main",
+                "scope-1:aevatar:workflows:wf-main",
+                "wf-main",
+                "workflow-definition-actor-wf-main",
+                "revision-wf-main",
+                "deployment-wf-main",
+                "Active",
+                DateTimeOffset.UtcNow);
             ConfigureServiceTarget(
                 ServiceImplementationKind.Static,
                 serviceId: "service-1",
@@ -4219,10 +4254,27 @@ public sealed class AevatarInvocationToolSourceTests
             if (LookupResults.TryGetValue(workflowId, out var lookupResult))
                 return Task.FromResult(lookupResult);
 
-            return Task.FromResult(Workflows.TryGetValue(workflowId, out var workflow) &&
-                                   string.Equals(workflow.ScopeId, scopeId, StringComparison.Ordinal)
-                ? new ScopeWorkflowLookupResult(ScopeWorkflowLookupStatus.Runnable, workflow, "runnable")
-                : new ScopeWorkflowLookupResult(ScopeWorkflowLookupStatus.NotFound, null, "service_catalog_missing"));
+            if (Workflows.TryGetValue(workflowId, out var workflow) &&
+                string.Equals(workflow.ScopeId, scopeId, StringComparison.Ordinal))
+            {
+                return Task.FromResult(new ScopeWorkflowLookupResult(
+                    ScopeWorkflowLookupStatus.Runnable,
+                    workflow,
+                    "runnable"));
+            }
+
+            if (string.Equals(workflowId, "wf-main", StringComparison.Ordinal))
+            {
+                return Task.FromResult(new ScopeWorkflowLookupResult(
+                    ScopeWorkflowLookupStatus.Runnable,
+                    BuildWorkflow(scopeId, workflowId),
+                    "runnable"));
+            }
+
+            return Task.FromResult(new ScopeWorkflowLookupResult(
+                ScopeWorkflowLookupStatus.NotFound,
+                null,
+                "service_catalog_missing"));
         }
 
         public Task<ScopeWorkflowSummary?> GetByWorkflowIdAsync(
@@ -4241,6 +4293,19 @@ public sealed class AevatarInvocationToolSourceTests
             Task.FromResult<ScopeWorkflowSummary?>(Workflows.Values.FirstOrDefault(workflow =>
                 string.Equals(workflow.ScopeId, scopeId, StringComparison.Ordinal) &&
                 string.Equals(workflow.ActorId, actorId, StringComparison.Ordinal)));
+
+        private static ScopeWorkflowSummary BuildWorkflow(string scopeId, string workflowId) =>
+            new(
+                scopeId,
+                workflowId,
+                "Workflow Main",
+                $"{scopeId}:aevatar:workflows:{workflowId}",
+                workflowId,
+                $"workflow-definition-actor-{scopeId}-{workflowId}",
+                $"revision-{workflowId}",
+                $"deployment-{workflowId}",
+                "Active",
+                DateTimeOffset.UtcNow);
     }
 
     private sealed class RecordingWorkflowDispatchService
