@@ -149,6 +149,13 @@ failed calls. Invocation ids are correlation identifiers only and must not
 stand in for the downstream resource. NyxID proxy receipts identify an admitted
 exact UserService as `nyxid.user-service/<user_service_id>`; they do not derive
 identity from service slugs, request paths, call ids, or response content.
+When outcome classification depends on execution-only facts such as HTTP status
+or completed file ingress, the provider returns that receipt with the execution
+result. Post-result `CreateResultReceipt` remains the compatibility path for
+tools whose result and arguments retain sufficient evidence. Both paths pass
+through the same canonical receipt finalizer before audit, workflow, or
+streaming consumption; response JSON shape alone never proves success or
+failure.
 
 NyxID proxy failure classification is limited to exact
 `NYXID_PROXY_UNAUTHORIZED`, exact `NYXID_PROXY_FORBIDDEN`, and the full-value

@@ -110,7 +110,14 @@ public sealed class AgentWorkflowToolSourceAdapter(
                 if (toolCallContext.Terminate)
                     return;
 
-                toolCallContext.Result = await _tool.ExecuteAsync(toolCallContext.ArgumentsJson, ct).ConfigureAwait(false);
+                var outcome = await _tool.ExecuteWithOutcomeAsync(
+                    toolCallContext.ToolCallId,
+                    toolCallContext.ToolName,
+                    toolCallContext.ArgumentsJson,
+                    ct).ConfigureAwait(false);
+                toolCallContext.Result = outcome.ResultJson;
+                if (outcome.Receipt is not null)
+                    toolCallContext.Receipt = outcome.Receipt;
             }).ConfigureAwait(false);
 
             if (toolCallContext.Terminate &&
@@ -128,7 +135,7 @@ public sealed class AgentWorkflowToolSourceAdapter(
             var resultJson = toolCallContext.Result
                              ?? throw new InvalidOperationException(
                                  $"Tool '{_tool.Name}' returned no result.");
-            var receipt = toolCallContext.Receipt ?? ToolCallReceiptFinalizer.Finalize(toolCallContext).Receipt;
+            var receipt = ToolCallReceiptFinalizer.Finalize(toolCallContext).Receipt;
             return AgentWorkflowToolReceiptOutcomeMapper.Map(receipt, resultJson);
         }
 

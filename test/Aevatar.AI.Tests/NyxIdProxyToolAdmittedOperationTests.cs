@@ -553,6 +553,46 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
     }
 
     [Fact]
+    public async Task ExecuteWithOutcomeAsync_ShouldReceiptPublishedTextSuccessWithExactService()
+    {
+        var handler = new RecordingHandler
+        {
+            ProxyStatusCode = HttpStatusCode.OK,
+            ProxyResponseBody = """{"error":true,"status":503,"body":"domain payload"}""",
+        };
+        var tool = CreateTool(handler);
+        using var scope = PushContext(ListMessagesAdmission());
+
+        var outcome = await ((IAgentTool)tool).ExecuteWithOutcomeAsync(
+            "call-published",
+            tool.Name,
+            """{"query":{"container_id":"oc_1"}}""");
+
+        outcome.Receipt.Should().NotBeNull();
+        outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        outcome.Receipt.SubjectKind.Should().Be("nyxid.user-service");
+        outcome.Receipt.SubjectId.Should().Be("us-lark-alpha");
+        handler.ProxyRequests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ExecuteWithOutcomeAsync_ShouldNotReceiptRejectedProofArguments()
+    {
+        var handler = new RecordingHandler();
+        var tool = CreateTool(handler);
+        using var scope = PushContext(AuthoredRequestAdmission());
+
+        var outcome = await ((IAgentTool)tool).ExecuteWithOutcomeAsync(
+            "call-rejected",
+            tool.Name,
+            """{"path":"/forged"}""");
+
+        outcome.ResultJson.Should().Contain("NYXID_OPERATION_ARGUMENT_NOT_SUPPORTED");
+        outcome.Receipt.Should().BeNull();
+        handler.RequestCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_ShouldDispatchAuthoredFileThroughExactRouteWithoutCatalogReads()
     {
         var handler = new RecordingHandler(binaryResponse: true);
@@ -578,6 +618,34 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
             !uri.Contains("/api/v1/mcp/", StringComparison.Ordinal));
         handler.ProxyRequests.Should().ContainSingle().Which.Query
             .Should().Be("?_nyxid_via=us-calendar-alpha");
+        ingress.Requests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ExecuteWithOutcomeAsync_ShouldReceiptAuthoredFileSuccessWithExactService()
+    {
+        var handler = new RecordingHandler(binaryResponse: true);
+        var ingress = new RecordingFileArtifactIngress();
+        var tool = CreateTool(handler, ingress);
+        var admission = AuthoredRequestAdmission() with
+        {
+            HttpMethod = "GET",
+            RequestBody = null,
+            ResponsePolicy = new AgentToolOperationResponsePolicy(false, true, []),
+            ExecutionPolicy = ReadOnlyPolicy(),
+        };
+        using var scope = PushContext(admission);
+
+        var outcome = await ((IAgentTool)tool).ExecuteWithOutcomeAsync(
+            "call-file",
+            tool.Name,
+            """{"path_params":{"event_id":"evt-runtime"}}""");
+
+        outcome.ResultJson.Should().Contain("\"success\":true");
+        outcome.Receipt.Should().NotBeNull();
+        outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        outcome.Receipt.SubjectKind.Should().Be("nyxid.user-service");
+        outcome.Receipt.SubjectId.Should().Be("us-calendar-alpha");
         ingress.Requests.Should().ContainSingle();
     }
 
@@ -613,6 +681,35 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
         handler.McpConfigRequests.Should().BeEmpty();
         handler.ProxyRequests.Should().ContainSingle().Which.Query
             .Should().Be("?_nyxid_via=us-calendar-alpha");
+    }
+
+    [Fact]
+    public async Task ExecuteWithOutcomeAsync_ShouldReceiptAuthoredExactRouteAuthorityFailure()
+    {
+        var handler = new RecordingHandler
+        {
+            ProxyStatusCode = HttpStatusCode.NotFound,
+            ProxyResponseBody = JsonSerializer.Serialize(new
+            {
+                error = "not_found",
+                error_code = 1003,
+                message = "Not found: UserService 'us-calendar-alpha' not found",
+            }),
+        };
+        var tool = CreateTool(handler);
+        using var scope = PushContext(AuthoredRequestAdmission());
+
+        var outcome = await ((IAgentTool)tool).ExecuteWithOutcomeAsync(
+            "call-authority-drift",
+            tool.Name,
+            """{"path_params":{"event_id":"evt-runtime"},"body":{"title":"Planning"}}""");
+
+        outcome.ResultJson.Should().Contain("NYXID_OPERATION_AUTHORITY_DRIFT");
+        outcome.Receipt.Should().NotBeNull();
+        outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        outcome.Receipt.ErrorCode.Should().Be("NYXID_OPERATION_AUTHORITY_DRIFT");
+        outcome.Receipt.SubjectKind.Should().Be("nyxid.user-service");
+        outcome.Receipt.SubjectId.Should().Be("us-calendar-alpha");
     }
 
     [Theory]
@@ -659,6 +756,30 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
 
         result.Equals(downstreamBody, StringComparison.Ordinal).Should().BeTrue();
         result.Should().NotContain("NYXID_OPERATION_AUTHORITY_");
+    }
+
+    [Fact]
+    public async Task ExecuteWithOutcomeAsync_ShouldNotMapSuccessfulAuthoredProxyShapedPayload()
+    {
+        const string downstreamBody =
+            """{"error":true,"status":404,"body":"{\"error\":\"not_found\",\"error_code\":1003,\"message\":\"Not found: UserService 'us-calendar-alpha' not found\"}"}""";
+        var handler = new RecordingHandler
+        {
+            ProxyStatusCode = HttpStatusCode.OK,
+            ProxyResponseBody = downstreamBody,
+        };
+        var tool = CreateTool(handler);
+        using var scope = PushContext(AuthoredRequestAdmission());
+
+        var outcome = await ((IAgentTool)tool).ExecuteWithOutcomeAsync(
+            "call-domain-payload",
+            tool.Name,
+            """{"path_params":{"event_id":"evt-runtime"},"body":{"title":"Planning"}}""");
+
+        outcome.ResultJson.Equals(downstreamBody, StringComparison.Ordinal).Should().BeTrue();
+        outcome.Receipt.Should().NotBeNull();
+        outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        outcome.Receipt.SubjectId.Should().Be("us-calendar-alpha");
     }
 
     [Theory]
