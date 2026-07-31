@@ -1507,56 +1507,6 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
-    public async Task StartWorkflow_ShouldMergeAmbientInputFileRefs_WhenPayloadHasNoExplicitFileRef()
-    {
-        var harness = new Harness();
-        harness.WorkflowDispatch.Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
-            .Success(new WorkflowChatRunAcceptedReceipt("workflow-actor", "wf-main", "wf-command", "wf-correlation"));
-        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
-        var ambientFileRef = new Aevatar.AI.Abstractions.ChatFileRef
-        {
-            FileId = "file-current-1",
-            ArtifactId = "workflow-file://file-current-1",
-            SourceKind = Aevatar.AI.Abstractions.ChatFileSourceKind.ConnectedServiceResource,
-            SourceMessageId = "om_current_1",
-            SourceResourceKey = "file_key_current_1",
-            FileName = "Invoice-O3XHKQSN-0004.pdf",
-            MediaType = "application/pdf",
-            SizeBytes = 4321,
-        };
-
-        using var _ = PushContext(
-            callId: "call-workflow-ambient-file",
-            inputFileRefs: [ambientFileRef]);
-        var output = await tool.ExecuteAsync("""
-            {
-              "workflow_id": "wf-main",
-              "inputs": {
-                "prompt": "run workflow from the current invoice"
-              },
-              "wait": "stream"
-            }
-            """);
-
-        ErrorCodeOrNull(output).Should().BeNull(output);
-        harness.WorkflowDispatch.Command.Should().NotBeNull();
-        var command = harness.WorkflowDispatch.Command!;
-        command.InputParts.Should().ContainSingle();
-        var inputPart = command.InputParts!.Single();
-        inputPart.Kind.Should().Be(Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind.File);
-        inputPart.DataBase64.Should().BeNull();
-        inputPart.FileRef.Should().NotBeNull();
-        inputPart.FileRef!.FileId.Should().Be("file-current-1");
-        inputPart.FileRef.ArtifactId.Should().Be("workflow-file://file-current-1");
-        inputPart.FileRef.SourceKind.Should().Be(FileArtifactSourceKind.ConnectedServiceResource);
-        inputPart.FileRef.SourceMessageId.Should().Be("om_current_1");
-        inputPart.FileRef.SourceResourceKey.Should().Be("file_key_current_1");
-        inputPart.FileRef.FileName.Should().Be("Invoice-O3XHKQSN-0004.pdf");
-        inputPart.FileRef.MediaType.Should().Be("application/pdf");
-        inputPart.FileRef.SizeBytes.Should().Be(4321);
-    }
-
-    [Fact]
     public async Task StartWorkflow_ShouldUseOwnerScope_WhenLarkChannelCarriesOwnerScope()
     {
         var harness = new Harness();
@@ -2314,6 +2264,54 @@ public sealed class AevatarInvocationToolSourceTests
         chatRequest.ToolContext.WorkflowRuntime.RootRunId.Should().Be("root-run");
         chatRequest.ToolContext.WorkflowRuntime.Depth.Should().Be(2);
         chatRequest.ToolContext.SkillRecovery.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task InvokeGAgentForChatRun_ShouldPreserveInputFileRefsInCanonicalToolContextPayload()
+    {
+        var harness = new Harness();
+        var dispatcher = harness.CreateDispatcher();
+        var inputFileRef = new Aevatar.AI.Abstractions.ChatFileRef
+        {
+            FileId = "file-current-1",
+            ArtifactId = "workflow-file://file-current-1",
+            SourceKind = Aevatar.AI.Abstractions.ChatFileSourceKind.ConnectedServiceResource,
+            SourceMessageId = "om_current_1",
+            SourceResourceKey = "file_key_current_1",
+            FileName = "Invoice-O3XHKQSN-0004.pdf",
+            MediaType = "application/pdf",
+            SizeBytes = 4321,
+        };
+
+        using var _ = PushContext(
+            callId: "call-gagent-input-file-ref",
+            inputFileRefs: [inputFileRef]);
+        var request = BuildChatRunRequest(
+            "response-gagent",
+            "call-gagent-input-file-ref-tool",
+            "aevatar_invoke_gagent",
+            """
+            {
+              "actor_id": "actor-1",
+              "payload": { "prompt": "run gagent" }
+            }
+            """);
+
+        var result = await dispatcher.InvokeGAgentForChatRunAsync(request, request.ArgumentsJson);
+
+        result.ErrorCode.Should().BeEmpty();
+        harness.ActorDispatch.Calls.Should().ContainSingle();
+        var chatRequest = harness.ActorDispatch.Calls.Single().Envelope.Payload.Unpack<ChatRequestEvent>();
+        chatRequest.InputParts.Should().BeEmpty();
+        var fileRef = chatRequest.ToolContext.InputFileRefs.Should().ContainSingle().Subject;
+        fileRef.FileId.Should().Be("file-current-1");
+        fileRef.ArtifactId.Should().Be("workflow-file://file-current-1");
+        fileRef.SourceKind.Should().Be(Aevatar.AI.Abstractions.ChatFileSourceKind.ConnectedServiceResource);
+        fileRef.SourceMessageId.Should().Be("om_current_1");
+        fileRef.SourceResourceKey.Should().Be("file_key_current_1");
+        fileRef.FileName.Should().Be("Invoice-O3XHKQSN-0004.pdf");
+        fileRef.MediaType.Should().Be("application/pdf");
+        fileRef.SizeBytes.Should().Be(4321);
     }
 
     [Fact]
