@@ -1584,7 +1584,7 @@ const TeamAutomationsTab: React.FC<Props> = ({
     if (!expectedDraft) return null;
     const cadence = describeDraftCadence(
       expectedDraft.cronExpression,
-      expectedDraft.timezone,
+      expectedDraft.timezone ?? "UTC",
       copy,
     );
     const ownerMember = membersById.get(trim(expectedDraft.memberId));
