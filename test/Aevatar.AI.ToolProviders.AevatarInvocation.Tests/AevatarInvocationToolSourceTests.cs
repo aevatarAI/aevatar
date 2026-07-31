@@ -1581,6 +1581,35 @@ public sealed class AevatarInvocationToolSourceTests
         harness.WorkflowDispatch.Command.Source.WorkflowName.Should().Be("invoice_pdf_workflow");
     }
 
+    [Theory]
+    [InlineData(ScopeWorkflowLookupStatus.NotReady, "deployment_readmodel_missing")]
+    [InlineData(ScopeWorkflowLookupStatus.Stale, "workflow_actor_binding_mismatched")]
+    public async Task StartWorkflow_WhenScopeWorkflowIsNotRunnable_ShouldNotFallbackToCatalog(
+        ScopeWorkflowLookupStatus status,
+        string reason)
+    {
+        var harness = new Harness();
+        harness.ScopeWorkflowQuery.LookupResults["98a81d707d4f4294b9b06f61a9fa8ac0"] =
+            new ScopeWorkflowLookupResult(status, null, reason);
+        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
+
+        using var _ = PushContext(callId: "call-scope-workflow-not-runnable");
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_id": "98a81d707d4f4294b9b06f61a9fa8ac0",
+              "inputs": { "prompt": "process pdf" },
+              "wait": "stream"
+            }
+            """);
+
+        ErrorCode(output).Should().Be("scope_workflow_not_runnable");
+        ErrorMessage(output).Should().Contain(status.ToString());
+        ErrorMessage(output).Should().Contain(reason);
+        harness.ScopeWorkflowQuery.Lookups.Should().ContainSingle()
+            .Which.Should().Be(("scope-1", "98a81d707d4f4294b9b06f61a9fa8ac0"));
+        harness.WorkflowDispatch.Command.Should().BeNull();
+    }
+
     [Fact]
     public async Task StartWorkflow_ShouldUseOwnerScope_WhenLarkChannelCarriesOwnerScope()
     {
@@ -3948,6 +3977,7 @@ public sealed class AevatarInvocationToolSourceTests
     private sealed class RecordingScopeWorkflowQueryPort : IScopeWorkflowQueryPort
     {
         public Dictionary<string, ScopeWorkflowSummary> Workflows { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, ScopeWorkflowLookupResult> LookupResults { get; } = new(StringComparer.Ordinal);
         public List<(string ScopeId, string WorkflowId)> Lookups { get; } = [];
 
         public Task<IReadOnlyList<ScopeWorkflowSummary>> ListAsync(
@@ -3963,6 +3993,9 @@ public sealed class AevatarInvocationToolSourceTests
             CancellationToken ct = default)
         {
             Lookups.Add((scopeId, workflowId));
+            if (LookupResults.TryGetValue(workflowId, out var lookupResult))
+                return Task.FromResult(lookupResult);
+
             return Task.FromResult(Workflows.TryGetValue(workflowId, out var workflow) &&
                                    string.Equals(workflow.ScopeId, scopeId, StringComparison.Ordinal)
                 ? new ScopeWorkflowLookupResult(ScopeWorkflowLookupStatus.Runnable, workflow, "runnable")

@@ -449,16 +449,19 @@ public sealed class AevatarInvocationDispatcher
             return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(callerCredential.Error), callerCredential.Error);
 
         var metadata = BuildPayloadHeaders(request.Inputs.Headers);
-        var source = await ResolveWorkflowStartSourceAsync(
+        var sourceResolution = await ResolveWorkflowStartSourceAsync(
                 scope.Value!.ScopeId,
                 workflowName,
                 actorId,
                 workflowYamls,
                 ct)
             .ConfigureAwait(false);
+        if (sourceResolution.Error != null)
+            return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(sourceResolution.Error), sourceResolution.Error);
+
         var command = new WorkflowChatRunRequest(
             Prompt: request.Inputs.Prompt,
-            Source: source,
+            Source: sourceResolution.Source!,
             SessionId: ResolveSessionId(),
             InputParts: ToWorkflowInputParts(request.Inputs),
             Metadata: metadata,
@@ -475,7 +478,7 @@ public sealed class AevatarInvocationDispatcher
             ct);
     }
 
-    private async ValueTask<WorkflowChatSource> ResolveWorkflowStartSourceAsync(
+    private async ValueTask<WorkflowStartSourceResolution> ResolveWorkflowStartSourceAsync(
         string scopeId,
         string workflowName,
         string? actorId,
@@ -483,37 +486,46 @@ public sealed class AevatarInvocationDispatcher
         CancellationToken ct)
     {
         if (workflowYamls is { Length: > 0 })
-            return WorkflowChatSource.InlineYamlBundle(workflowYamls, workflowName, actorId);
+            return WorkflowStartSourceResolution.Success(
+                WorkflowChatSource.InlineYamlBundle(workflowYamls, workflowName, actorId));
 
         if (!string.IsNullOrWhiteSpace(actorId))
-            return WorkflowChatSource.DefinitionActor(actorId, workflowName);
+            return WorkflowStartSourceResolution.Success(
+                WorkflowChatSource.DefinitionActor(actorId, workflowName));
 
         var scopeWorkflow = await TryResolveScopeWorkflowAsync(scopeId, workflowName, ct).ConfigureAwait(false);
-        if (scopeWorkflow is not null)
+        if (scopeWorkflow.Error != null)
+            return scopeWorkflow;
+
+        if (scopeWorkflow.Workflow is not null)
         {
-            var resolvedWorkflowName = string.IsNullOrWhiteSpace(scopeWorkflow.WorkflowName)
+            var resolvedWorkflowName = string.IsNullOrWhiteSpace(scopeWorkflow.Workflow.WorkflowName)
                 ? null
-                : scopeWorkflow.WorkflowName.Trim();
-            return WorkflowChatSource.DefinitionActor(scopeWorkflow.ActorId.Trim(), resolvedWorkflowName);
+                : scopeWorkflow.Workflow.WorkflowName.Trim();
+            return WorkflowStartSourceResolution.Success(
+                WorkflowChatSource.DefinitionActor(scopeWorkflow.Workflow.ActorId.Trim(), resolvedWorkflowName));
         }
 
-        return WorkflowChatSource.CatalogWorkflow(workflowName);
+        return WorkflowStartSourceResolution.Success(WorkflowChatSource.CatalogWorkflow(workflowName));
     }
 
-    private async ValueTask<ScopeWorkflowSummary?> TryResolveScopeWorkflowAsync(
+    private async ValueTask<WorkflowStartSourceResolution> TryResolveScopeWorkflowAsync(
         string scopeId,
         string workflowId,
         CancellationToken ct)
     {
         if (_scopeWorkflowQueryPort is null)
-            return null;
+            return WorkflowStartSourceResolution.NotResolved();
 
         try
         {
             var lookup = await _scopeWorkflowQueryPort.LookupByWorkflowIdAsync(scopeId, workflowId, ct)
                 .ConfigureAwait(false);
             if (lookup.IsRunnable && !string.IsNullOrWhiteSpace(lookup.Workflow!.ActorId))
-                return lookup.Workflow;
+                return WorkflowStartSourceResolution.Resolved(lookup.Workflow);
+
+            if (lookup.Status != ScopeWorkflowLookupStatus.NotFound)
+                return WorkflowStartSourceResolution.Failed(ScopeWorkflowUnavailableError(scopeId, workflowId, lookup));
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -524,7 +536,7 @@ public sealed class AevatarInvocationDispatcher
                 workflowId);
         }
 
-        return null;
+        return WorkflowStartSourceResolution.NotResolved();
     }
 
     private async Task<ChatRunToolCompletionRequest> DispatchWorkflowForChatRunAsync(
@@ -1417,6 +1429,15 @@ public sealed class AevatarInvocationDispatcher
                 ExpiresAtUnixMs = deliveryReservation.Reservation.ExpiresAtUnixMs,
             };
 
+    private static InvocationToolError ScopeWorkflowUnavailableError(
+        string scopeId,
+        string workflowId,
+        ScopeWorkflowLookupResult lookup) =>
+        Error(
+            "scope_workflow_not_runnable",
+            $"Current-scope workflow '{workflowId}' in scope '{scopeId}' is {lookup.Status} and cannot be started yet: {lookup.Reason}. List current scope workflows and retry when the descriptor is runnable.",
+            "workflow_id");
+
     private static InvocationToolError ChannelWorkflowDeliveryUnavailableError() =>
         Error(
             AgentToolFailureCodes.ChannelWorkflowResultDeliveryUnavailable,
@@ -2145,6 +2166,20 @@ public sealed class AevatarInvocationDispatcher
         string ScopeId,
         string MemberId,
         string PublishedServiceId);
+
+    private sealed record WorkflowStartSourceResolution(
+        WorkflowChatSource? Source,
+        ScopeWorkflowSummary? Workflow,
+        InvocationToolError? Error)
+    {
+        public static WorkflowStartSourceResolution Success(WorkflowChatSource source) => new(source, null, null);
+
+        public static WorkflowStartSourceResolution Resolved(ScopeWorkflowSummary workflow) => new(null, workflow, null);
+
+        public static WorkflowStartSourceResolution NotResolved() => new(null, null, null);
+
+        public static WorkflowStartSourceResolution Failed(InvocationToolError error) => new(null, null, error);
+    }
 
     private sealed record CallerScopeResolution(InvocationCallerScope? Value, InvocationToolError? Error)
     {
