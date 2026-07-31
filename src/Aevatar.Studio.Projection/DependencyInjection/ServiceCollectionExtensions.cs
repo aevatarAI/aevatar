@@ -169,6 +169,9 @@ public static class ServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, UserConfigGithubUsernameUpdatedAuditTranslator>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, MemoryEntriesClearedAuditTranslator>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ConversationDeletedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, NyxIdChatActionRequestedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, NyxIdChatActionContinuationResolvedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, NyxIdChatActionPostconditionResolvedAuditTranslator>());
         services.AddAuditCommittedFactMaterializer<StudioMaterializationContext>();
 
         services.AddProjectionArtifactMaterializer<
