@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Tools;
@@ -21,6 +23,146 @@ public sealed class AdmittedAgentToolExecutorTests
 
         AgentToolArgumentsDigest.ComputeSha256("{\"a\":1}")
             .Should().NotBe(AgentToolArgumentsDigest.ComputeSha256("{ \"a\": 1 }"));
+    }
+
+    [Theory]
+    [InlineData("request")]
+    [InlineData("call")]
+    [InlineData("tool")]
+    public async Task ExecuteAsync_WhenStableIdentityIsMissing_ShouldFailBeforeAnyCollaborator(
+        string missingIdentity)
+    {
+        var appender = new RecordingAuditTrailAppender((record, _) =>
+            AuditTrailAppendResult.Appended(record.AuditId));
+        var ledger = new RecordingAdmissionLedger(AgentToolAdmissionStatus.Started);
+        var tool = new RecordingTool(
+            new AgentToolCallSafety(false, true, false),
+            name: missingIdentity == "tool" ? " " : "test_tool");
+        var executor = CreateExecutor(appender, ledger);
+        var request = CreateRequest(tool) with
+        {
+            ExecutionContext = AgentToolExecutionContext.Empty with
+            {
+                Request = new AgentToolRequestIdentity(
+                    missingIdentity == "request" ? " " : "request-1",
+                    missingIdentity == "call" ? " " : "call-1"),
+            },
+        };
+
+        var outcome = await executor.ExecuteAsync(request);
+
+        outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Failed);
+        outcome.FailureCode.Should().Be("invalid_tool_execution_identity");
+        outcome.FailureStage.Should().Be(AgentToolExecutionFailureStage.RequestValidation);
+        outcome.TerminalInvoked.Should().BeFalse();
+        outcome.AuditCompleted.Should().BeFalse();
+        outcome.Retryable.Should().BeFalse();
+        tool.SafetyCalls.Should().Be(0);
+        tool.ExecutionCalls.Should().Be(0);
+        ledger.Facts.Should().BeEmpty();
+        appender.Records.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenTerminalSucceeds_ShouldEmitSafeSpanAndDurationMetric()
+    {
+        const string secret = "telemetry-secret";
+        var activities = new List<Activity>();
+        var measurements = new List<(double Value, KeyValuePair<string, object?>[] Tags)>();
+        using var activityListener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "Aevatar.GenAI",
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
+                ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = activity => activities.Add(activity),
+        };
+        ActivitySource.AddActivityListener(activityListener);
+        using var meterListener = new MeterListener();
+        meterListener.InstrumentPublished = (instrument, listener) =>
+        {
+            if (instrument.Meter.Name == "Aevatar.GenAI" &&
+                instrument.Name == "aevatar.tool.invocation.duration")
+            {
+                listener.EnableMeasurementEvents(instrument);
+            }
+        };
+        meterListener.SetMeasurementEventCallback<double>((_, value, tags, _) =>
+            measurements.Add((value, tags.ToArray())));
+        meterListener.Start();
+        var appender = new RecordingAuditTrailAppender((record, _) =>
+            AuditTrailAppendResult.Appended(record.AuditId));
+        var tool = new RecordingTool(
+            new AgentToolCallSafety(false, true, false),
+            _ => $"{{\"value\":\"{secret}\"}}");
+        var executor = CreateExecutor(appender);
+        var request = CreateRequest(tool) with
+        {
+            ArgumentsJson = $"{{\"token\":\"{secret}\"}}",
+            ExecutionContext = AgentToolExecutionContext.Empty with
+            {
+                Request = new AgentToolRequestIdentity("request-observable-success", "call-observable-success"),
+            },
+        };
+
+        var outcome = await executor.ExecuteAsync(request);
+
+        outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Executed);
+        var activity = activities.Single(item =>
+            Equals(item.GetTagItem("gen_ai.tool.call_id"), "call-observable-success"));
+        activity.Kind.Should().Be(ActivityKind.Internal);
+        activity.GetTagItem("gen_ai.operation.name").Should().Be("execute_tool");
+        activity.GetTagItem("gen_ai.tool.name").Should().Be("test_tool");
+        activity.GetTagItem("gen_ai.tool.status").Should().Be("ok");
+        activity.GetTagItem("gen_ai.tool.arguments").Should().BeNull();
+        activity.GetTagItem("gen_ai.tool.result").Should().BeNull();
+        activity.ToString().Should().NotContain(secret);
+        measurements.Should().Contain(item =>
+            item.Value >= 0 &&
+            item.Tags.Any(tag =>
+                tag.Key == "gen_ai.tool.name" && Equals(tag.Value, "test_tool")));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenTerminalThrows_ShouldEmitSafeErrorSpanWithoutPayload()
+    {
+        const string secret = "telemetry-secret";
+        var activities = new List<Activity>();
+        using var activityListener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "Aevatar.GenAI",
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
+                ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = activity => activities.Add(activity),
+        };
+        ActivitySource.AddActivityListener(activityListener);
+        var appender = new RecordingAuditTrailAppender((record, _) =>
+            AuditTrailAppendResult.Appended(record.AuditId));
+        var tool = new RecordingTool(
+            new AgentToolCallSafety(false, true, false),
+            _ => throw new InvalidOperationException($"terminal failed with {secret}"));
+        var executor = CreateExecutor(appender);
+        var request = CreateRequest(tool) with
+        {
+            ArgumentsJson = $"{{\"token\":\"{secret}\"}}",
+            ExecutionContext = AgentToolExecutionContext.Empty with
+            {
+                Request = new AgentToolRequestIdentity("request-observable-error", "call-observable-error"),
+            },
+        };
+
+        var outcome = await executor.ExecuteAsync(request);
+
+        outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Failed);
+        var activity = activities.Single(item =>
+            Equals(item.GetTagItem("gen_ai.tool.call_id"), "call-observable-error"));
+        activity.GetTagItem("gen_ai.tool.status").Should().Be("error");
+        activity.GetTagItem("error.type").Should().Be(typeof(InvalidOperationException).FullName);
+        activity.GetTagItem("error.message").Should().BeNull();
+        activity.GetTagItem("gen_ai.tool.arguments").Should().BeNull();
+        activity.GetTagItem("gen_ai.tool.result").Should().BeNull();
+        activity.Status.Should().Be(ActivityStatusCode.Error);
+        activity.StatusDescription.Should().Be(nameof(InvalidOperationException));
+        activity.ToString().Should().NotContain(secret);
     }
 
     [Theory]
@@ -97,7 +239,7 @@ public sealed class AdmittedAgentToolExecutorTests
         executedContext.Credentials.NyxIdAccessToken.Should().Be("sender-token");
         executedContext.Credentials.NyxIdOrgToken.Should().Be("sender-token");
         executedContext.Credentials.SenderNyxIdAccessToken.Should().Be("sender-token");
-        appender.Records.Single(record => record.Annotations["execution_phase"] == "terminal")
+        appender.Records.Single(record => record.ToolExecution.ExecutionPhase == AuditToolExecutionPhase.Terminal)
             .CredentialSource.Should().Be(AuditCredentialSource.ChannelRegistration);
     }
 
@@ -138,7 +280,7 @@ public sealed class AdmittedAgentToolExecutorTests
         var outcome = await executor.ExecuteAsync(CreateRequest(tool) with { ExecutionContext = context });
 
         outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Executed);
-        appender.Records.Single(record => record.Annotations["execution_phase"] == "terminal")
+        appender.Records.Single(record => record.ToolExecution.ExecutionPhase == AuditToolExecutionPhase.Terminal)
             .CredentialSource.Should().Be(expectedSource);
     }
 
@@ -163,7 +305,12 @@ public sealed class AdmittedAgentToolExecutorTests
         var events = new List<string>();
         var appender = new RecordingAuditTrailAppender((record, _) =>
         {
-            events.Add(record.Annotations["execution_phase"]);
+            events.Add(record.ToolExecution.ExecutionPhase switch
+            {
+                AuditToolExecutionPhase.Running => "running",
+                AuditToolExecutionPhase.Terminal => "terminal",
+                _ => record.ToolExecution.ExecutionPhase.ToString(),
+            });
             return AuditTrailAppendResult.Appended(record.AuditId);
         });
         var tool = new RecordingTool(
@@ -191,7 +338,7 @@ public sealed class AdmittedAgentToolExecutorTests
     public async Task ExecuteAsync_WhenRunningAuditIsDuplicate_ShouldExecuteAfterAdmissionStarts()
     {
         var appender = new RecordingAuditTrailAppender((record, _) =>
-            record.Annotations["execution_phase"] == "running"
+            record.ToolExecution.ExecutionPhase == AuditToolExecutionPhase.Running
                 ? AuditTrailAppendResult.Duplicate(record.AuditId)
                 : AuditTrailAppendResult.Appended(record.AuditId));
         var tool = new RecordingTool(new AgentToolCallSafety(false, true, false));
@@ -215,7 +362,7 @@ public sealed class AdmittedAgentToolExecutorTests
         string failureCode)
     {
         var appender = new RecordingAuditTrailAppender((record, _) =>
-            record.Annotations["execution_phase"] == "running"
+            record.ToolExecution.ExecutionPhase == AuditToolExecutionPhase.Running
                 ? CreateAppendResult(appendStatus, record.AuditId)
                 : AuditTrailAppendResult.Appended(record.AuditId));
         var tool = new RecordingTool(new AgentToolCallSafety(false, true, false));
@@ -236,7 +383,7 @@ public sealed class AdmittedAgentToolExecutorTests
     public async Task ExecuteAsync_WhenRunningAuditIsUnavailable_ShouldNotMakeAuditTheAdmissionAuthority()
     {
         var appender = new RecordingAuditTrailAppender((record, _) =>
-            record.Annotations["execution_phase"] == "running"
+            record.ToolExecution.ExecutionPhase == AuditToolExecutionPhase.Running
                 ? AuditTrailAppendResult.StoreUnavailable(record.AuditId, "offline")
                 : AuditTrailAppendResult.Appended(record.AuditId));
         var tool = new RecordingTool(new AgentToolCallSafety(false, true, false));
@@ -292,7 +439,7 @@ public sealed class AdmittedAgentToolExecutorTests
         var appender = new RecordingAuditTrailAppender((record, _) =>
         {
             appendCount++;
-            return record.Annotations["execution_phase"] == "terminal"
+            return record.ToolExecution.ExecutionPhase == AuditToolExecutionPhase.Terminal
                 ? AuditTrailAppendResult.StoreUnavailable(record.AuditId, "offline")
                 : AuditTrailAppendResult.Appended(record.AuditId);
         });
@@ -320,7 +467,7 @@ public sealed class AdmittedAgentToolExecutorTests
         AuditTrailAppendStatus appendStatus)
     {
         var appender = new RecordingAuditTrailAppender((record, _) =>
-            record.Annotations["execution_phase"] == "terminal"
+            record.ToolExecution.ExecutionPhase == AuditToolExecutionPhase.Terminal
                 ? CreateAppendResult(appendStatus, record.AuditId)
                 : AuditTrailAppendResult.Appended(record.AuditId));
         var tool = new RecordingTool(
@@ -365,8 +512,8 @@ public sealed class AdmittedAgentToolExecutorTests
         outcome.Receipt.ErrorMessage.Should().Be(nameof(InvalidOperationException));
         outcome.Receipt.ResultJson.Should().Be(outcome.ResultJson);
         tool.ExecutionCalls.Should().Be(1);
-        appender.Records.Select(record => record.Annotations["execution_phase"])
-            .Should().Equal("running", "terminal");
+        appender.Records.Select(record => record.ToolExecution.ExecutionPhase)
+            .Should().Equal(AuditToolExecutionPhase.Running, AuditToolExecutionPhase.Terminal);
     }
 
     [Fact]
@@ -395,8 +542,8 @@ public sealed class AdmittedAgentToolExecutorTests
         outcome.Retryable.Should().BeFalse();
         outcome.AuditCompleted.Should().BeTrue();
         tool.ExecutionCalls.Should().Be(1);
-        appender.Records.Select(record => record.Annotations["execution_phase"])
-            .Should().Equal("running", "terminal");
+        appender.Records.Select(record => record.ToolExecution.ExecutionPhase)
+            .Should().Equal(AuditToolExecutionPhase.Running, AuditToolExecutionPhase.Terminal);
     }
 
     [Fact]
@@ -480,7 +627,8 @@ public sealed class AdmittedAgentToolExecutorTests
         outcome.AuditCompleted.Should().BeTrue();
         tool.ExecutionCalls.Should().Be(0);
         appender.Records.Should().ContainSingle();
-        appender.Records[0].Annotations["execution_phase"].Should().Be("waiting_approval");
+        appender.Records[0].ToolExecution.ExecutionPhase
+            .Should().Be(AuditToolExecutionPhase.WaitingApproval);
     }
 
     [Theory]
@@ -490,7 +638,7 @@ public sealed class AdmittedAgentToolExecutorTests
         AuditTrailAppendStatus appendStatus)
     {
         var appender = new RecordingAuditTrailAppender((record, _) =>
-            record.Annotations["execution_phase"] == "waiting_approval"
+            record.ToolExecution.ExecutionPhase == AuditToolExecutionPhase.WaitingApproval
                 ? CreateAppendResult(appendStatus, record.AuditId)
                 : AuditTrailAppendResult.Appended(record.AuditId));
         var tool = new RecordingTool(new AgentToolCallSafety(true, false, true))
@@ -593,11 +741,12 @@ public sealed class AdmittedAgentToolExecutorTests
         AgentToolCallSafety safety,
         Func<string, string>? execute = null,
         bool throwOnReceipt = false,
-        Func<string, AgentToolReceipt?>? createReceipt = null) : IAgentTool
+        Func<string, AgentToolReceipt?>? createReceipt = null,
+        string name = "test_tool") : IAgentTool
     {
         private readonly Func<string, string> _execute = execute ?? (_ => "{}");
 
-        public string Name => "test_tool";
+        public string Name => name;
         public string Description => "test";
         public string ParametersSchema => "{}";
         public ToolApprovalMode ApprovalMode { get; init; } = ToolApprovalMode.NeverRequire;

@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.Mainnet.Host.Api.Responses;
+using Aevatar.AI.Core.Tools;
+using Aevatar.AI.Infrastructure.ToolExecution;
 using FluentAssertions;
 
 namespace Aevatar.Capabilities.Tests;
@@ -39,6 +40,28 @@ public sealed class AgentToolAdmissionLedgerTests
     }
 
     [Fact]
+    public async Task TryStartAsync_WhenRejectedFactCannotBeRead_ShouldReportStoreUnavailable()
+    {
+        var ledger = new DistributedAgentToolAdmissionLedger(
+            new RecordingAdmissionFactStore { RejectAddWithoutValue = true });
+
+        var result = await ledger.TryStartAsync(CreateFact());
+
+        result.Status.Should().Be(AgentToolAdmissionStatus.StoreUnavailable);
+        result.SafeMessage.Should().Be(
+            "The admission fact could not be read after the atomic insert was rejected.");
+    }
+
+    [Fact]
+    public async Task UnavailableLedger_ShouldFailClosedWithStableMessage()
+    {
+        var result = await new UnavailableAgentToolAdmissionLedger().TryStartAsync(CreateFact());
+
+        result.Status.Should().Be(AgentToolAdmissionStatus.StoreUnavailable);
+        result.SafeMessage.Should().Be("The durable tool admission ledger is not configured.");
+    }
+
+    [Fact]
     public async Task InMemoryLedger_ShouldApplyTheSameFactSemantics()
     {
         var ledger = new InMemoryAgentToolAdmissionLedger();
@@ -66,6 +89,7 @@ public sealed class AgentToolAdmissionLedgerTests
         private readonly Dictionary<string, byte[]> _values = new(StringComparer.Ordinal);
 
         public bool ThrowOnAdd { get; init; }
+        public bool RejectAddWithoutValue { get; init; }
         public IReadOnlyCollection<string> Keys => _values.Keys;
         public IReadOnlyCollection<byte[]> Values => _values.Values;
 
@@ -77,6 +101,8 @@ public sealed class AgentToolAdmissionLedgerTests
             ct.ThrowIfCancellationRequested();
             if (ThrowOnAdd)
                 throw new InvalidOperationException("offline");
+            if (RejectAddWithoutValue)
+                return Task.FromResult(false);
 
             if (_values.ContainsKey(key))
                 return Task.FromResult(false);

@@ -529,11 +529,17 @@ public sealed partial class RoleGAgentStateCoverageTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             Records.Add(record);
-            record.Annotations.TryGetValue("execution_phase", out var phase);
-            var status = phase switch
+            var phase = record.ToolExecution.ExecutionPhase switch
             {
-                "running" => NextRunningStatus(),
-                "terminal" => CountTerminalAttempt(),
+                AuditToolExecutionPhase.Running => "running",
+                AuditToolExecutionPhase.Terminal => "terminal",
+                AuditToolExecutionPhase.WaitingApproval => "waiting_approval",
+                _ => "unspecified",
+            };
+            var status = record.ToolExecution.ExecutionPhase switch
+            {
+                AuditToolExecutionPhase.Running => NextRunningStatus(),
+                AuditToolExecutionPhase.Terminal => CountTerminalAttempt(),
                 _ => AuditTrailAppendStatus.Appended,
             };
             timeline?.Add($"audit:{phase}:{status}");

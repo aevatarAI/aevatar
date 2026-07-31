@@ -3,6 +3,7 @@ using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Application.CodexExecution;
 using Aevatar.AI.Infrastructure.ChronoSandbox;
+using Aevatar.AI.Infrastructure.ToolExecution;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.ToolProviders.AgentCatalog;
 using Aevatar.AI.ToolProviders.AevatarInvocation;
@@ -148,16 +149,11 @@ public static class MainnetHostBuilderExtensions
         });
         if (builder.Environment.IsDevelopment() || builder.Environment.IsEnvironment("Testing"))
         {
-            builder.Services.Replace(ServiceDescriptor.Singleton<
-                IAgentToolAdmissionLedger,
-                InMemoryAgentToolAdmissionLedger>());
+            builder.Services.AddInMemoryAgentToolAdmissionLedger();
         }
         else
         {
-            builder.Services.TryAddSingleton<IAgentToolAdmissionFactStore, GarnetAgentToolAdmissionFactStore>();
-            builder.Services.Replace(ServiceDescriptor.Singleton<
-                IAgentToolAdmissionLedger,
-                DistributedAgentToolAdmissionLedger>());
+            builder.Services.AddGarnetAgentToolAdmissionLedger();
         }
         // Hosted services start in registration order. Register the provider-local index
         // reconcile before capability modules can add startup readers so schema drift is

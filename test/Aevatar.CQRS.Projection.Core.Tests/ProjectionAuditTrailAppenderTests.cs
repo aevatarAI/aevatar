@@ -53,6 +53,32 @@ public sealed class ProjectionAuditTrailAppenderTests
     }
 
     [Fact]
+    public async Task AppendAsync_ToolExecution_ShouldMapTypedDetailsIntoArtifactDocument()
+    {
+        var store = new RecordingAuditTrailArtifactStore();
+        var appender = new ProjectionAuditTrailAppender([store]);
+        var record = CreateRecord("audit-tool");
+        record.CapturePlane = AuditCapturePlane.ToolExecution;
+        record.OperationKind = AuditOperationKind.Tool;
+        record.Source = "urn:aevatar:audit:tool-execution";
+        record.ToolExecution = new AuditToolExecution
+        {
+            ArgumentsSha256 = new string('a', 64),
+            ExecutionPhase = AuditToolExecutionPhase.Terminal,
+            IsMutation = true,
+        };
+
+        var result = await appender.AppendAsync(record);
+
+        result.Status.Should().Be(AuditTrailAppendStatus.Appended);
+        var document = store.Documents.Should().ContainSingle().Subject;
+        document.ToolArgumentsSha256.Should().Be(new string('a', 64));
+        document.ToolExecutionPhase.Should().Be(AuditToolExecutionPhase.Terminal);
+        document.ToolIsMutation.Should().BeTrue();
+        document.Record.ToolExecution.Should().Be(record.ToolExecution);
+    }
+
+    [Fact]
     public async Task AppendAsync_ShouldSanitizeBeforeHashingAndWriting()
     {
         var store = new RecordingAuditTrailArtifactStore();

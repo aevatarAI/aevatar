@@ -31,6 +31,31 @@ public sealed class AuditTrailEndpointsTests
     private const string OtherScope = "scope-bob";
 
     [Fact]
+    public void ToRecordResponse_ToolExecution_ShouldExposeTypedSafeDetails()
+    {
+        var response = AuditTrailResponseMapper.ToRecordResponse(new AuditRecord
+        {
+            AuditId = "audit-tool",
+            EventKind = "tool.execute",
+            Subject = "tool/test_tool",
+            Source = "urn:aevatar:audit:tool-execution",
+            SchemaVersion = "1.0",
+            OperationName = "test_tool",
+            ToolExecution = new AuditToolExecution
+            {
+                ArgumentsSha256 = new string('a', 64),
+                ExecutionPhase = AuditToolExecutionPhase.Terminal,
+                IsMutation = true,
+            },
+        });
+
+        response.ToolExecution.Should().BeEquivalentTo(new AuditToolExecutionResponse(
+            new string('a', 64),
+            "terminal",
+            IsMutation: true));
+    }
+
+    [Fact]
     public async Task QueryAuditTrail_WhenScopeOmitted_UsesCallerScopeWithoutAdminAuthorization()
     {
         var queryPort = new RecordingAuditTrailQueryPort();

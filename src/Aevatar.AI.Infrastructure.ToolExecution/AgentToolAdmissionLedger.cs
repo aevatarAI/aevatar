@@ -4,7 +4,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Google.Protobuf;
 using StackExchange.Redis;
 
-namespace Aevatar.Mainnet.Host.Api.Responses;
+namespace Aevatar.AI.Infrastructure.ToolExecution;
 
 internal interface IAgentToolAdmissionFactStore
 {

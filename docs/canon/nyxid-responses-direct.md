@@ -140,7 +140,7 @@ Responses、Messages 和 Chat Completions 三条直连入口都把模型调用�
 - Aevatar additive tools：由服务端额外注入，供模型主动调用。
 - forwarded tools：保留给客户端或上游模型继续处理。
 
-前两类是 server-owned tools，最终参数在 caller-owned trusted prefill/hook 完成后冻结，并统一进入 `IAgentToolExecutionPort`。端口内只做一次 safety classification，再执行 credential policy、actor-owned grant 和 `WAITING_APPROVAL/RUNNING/TERMINAL` durable audit；只有 `RUNNING Appended` 可以进入唯一 raw terminal `AdmittedAgentToolExecutor`。Responses 不再拥有单独的 safe-executor wrapper，也不组装第二套 approval/audit middleware。
+前两类是 server-owned tools，最终参数在 caller-owned trusted prefill/hook 完成后冻结，并统一进入 `IAgentToolExecutionPort`。端口内只做一次 safety classification，再执行 credential policy、actor-owned grant、start-once admission ledger 和 `WAITING_APPROVAL/RUNNING/TERMINAL` audit observation；只有 ledger 返回 `Started` 可以进入唯一 raw terminal `AdmittedAgentToolExecutor`。audit append status 不授予执行，terminal 已调用后的 audit failure 保留实际结果且不可重试。Responses 不再拥有单独的 safe-executor wrapper，也不组装第二套 approval/audit middleware。
 
 当前 substitute tools 包括：
 

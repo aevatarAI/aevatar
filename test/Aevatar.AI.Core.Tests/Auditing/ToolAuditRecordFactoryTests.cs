@@ -56,6 +56,13 @@ public sealed class ToolAuditRecordFactoryTests
         record.CredentialSource.Should().Be(AuditCredentialSource.ChannelRegistration);
         record.Target.Kind.Should().Be("record");
         record.Target.Id.Should().Be("record-1");
+        record.ToolExecution.ArgumentsSha256.Should().Be("arguments-hash");
+        record.ToolExecution.ExecutionPhase.Should().Be(AuditToolExecutionPhase.Terminal);
+        record.ToolExecution.IsMutation.Should().BeTrue();
+        record.Annotations.Should().NotContainKeys(
+            "arguments_sha256",
+            "execution_phase",
+            "is_mutation");
         record.Annotations.Should().Contain("channel_platform", "lark");
         record.Annotations.Should().Contain("side_effect_kind", "channel.message");
         record.Annotations.Should().Contain("subject_version", "v2");
@@ -196,6 +203,40 @@ public sealed class ToolAuditRecordFactoryTests
         record.Failure.FailedPhase.Should().Be(AuditLifecyclePhase.WaitingApproval);
         record.Failure.SanitizedMessage.Should().Be("approval_denied");
         record.ToString().Should().NotContain("provider-secret-must-not-appear");
+    }
+
+    [Fact]
+    public void Create_UnknownProviderErrorCode_ShouldUseStableGenericFailure()
+    {
+        const string providerError = "provider-secret-classification";
+        var receipt = new AgentToolReceipt
+        {
+            CallId = "call-1",
+            ToolName = "provider_tool",
+            Status = AgentToolReceiptStatus.Error,
+            ErrorCode = providerError,
+            ErrorMessage = "provider-secret-must-not-appear",
+        };
+
+        var record = CreateFactory().Create(
+            "audit-unknown-provider-error",
+            "terminal",
+            new TestTool("provider_tool"),
+            "provider_tool",
+            "call-1",
+            "arguments-hash",
+            new AgentToolCallSafety(false, true, false),
+            BaseContext(),
+            AgentToolCredentialSource.System,
+            receipt,
+            AuditOutcome.Error,
+            isMutation: false);
+
+        record.ErrorCode.Should().Be("tool_error");
+        record.ErrorSummary.Should().Be("tool_error");
+        record.Failure.Code.Should().Be("tool_error");
+        record.Failure.SanitizedMessage.Should().Be("tool_error");
+        record.ToString().Should().NotContain(providerError);
     }
 
     private static ToolAuditRecordFactory CreateFactory() =>

@@ -841,8 +841,8 @@ public class StreamingToolExecutorTests
         outcome.AuditCompleted.Should().BeTrue();
         outcome.ResultJson.Should().NotContain("was not found");
         outcome.Receipt.ResultJson.Should().Be(outcome.ResultJson);
-        executionPort.Records.Select(record => record.Annotations["execution_phase"])
-            .Should().Equal("running", "terminal");
+        executionPort.Records.Select(record => record.ToolExecution.ExecutionPhase)
+            .Should().Equal(AuditToolExecutionPhase.Running, AuditToolExecutionPhase.Terminal);
     }
 
     [Fact]

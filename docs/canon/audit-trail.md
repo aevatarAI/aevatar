@@ -166,9 +166,14 @@ was not invoked; a successful execution whose running or terminal audit is
 incomplete returns `ExecutedAuditIncomplete` with its real result and
 `Retryable=false`.
 
-Tool audit captures the tool identity, execution phase, argument digest, safe
+Tool audit captures the tool identity, execution phase, lifecycle phase,
+argument digest, safe
 caller and scope identity, safe resource target, credential source, timing,
-result class, and redacted diagnostic summary. It must not store full prompts,
+result class, and redacted diagnostic summary. Business lifecycle uses the typed
+`AuditLifecyclePhase`; the observation phase, argument digest, and mutation
+semantics use the typed `AuditToolExecution` submessage and
+`AuditToolExecutionPhase`. These platform semantics must not be written
+to `Annotations`. It must not store full prompts,
 full tool arguments, full tool results, raw model responses, bearer tokens,
 OAuth codes, API keys, cookies, headers, or connector credential material. If a
 tool result needs later inspection, the tool must produce a separate safe

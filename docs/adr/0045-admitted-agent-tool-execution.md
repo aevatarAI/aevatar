@@ -16,8 +16,8 @@ payload but execute another.
 
 Approval is also a continuation problem. A decision made outside the owning actor is not
 enough to authorize a later replay unless the actor durably owns the pending call and the
-grant is bound to that exact call. Audit append results must participate in admission rather
-than describe a side effect after it has already happened.
+grant is bound to that exact call. Start-once admission therefore requires a separate durable
+authority; audit append results describe the decision and outcome but never grant execution.
 
 ## Decision
 
@@ -30,8 +30,8 @@ The request contract is fixed to `Tool`, `ArgumentsJson`, `ExecutionContext`,
 `ApprovalContinuationMode`, and `ApprovalGrant`. Callers may run hooks that rewrite arguments
 before constructing the request. Once the request enters the port, the executor freezes the
 exact argument string, derives its SHA-256 digest, and invokes `GetCallSafety` exactly once.
-Credential policy, approval, durable audit, and terminal execution all use that same frozen
-payload and classification.
+Credential policy, approval, the admission ledger, audit observation, and terminal execution
+all use that same frozen payload and classification.
 
 Approval continuation has only two modes: `None` and `ActorOwned`. A durable actor-owned grant
 must match all of `ApprovalRequestId`, `RequestId`, `ToolName`, `ToolCallId`, and
@@ -44,17 +44,19 @@ Admission proceeds in this order:
 1. Validate stable request, call, and tool identities.
 2. Classify the frozen arguments once.
 3. Apply credential policy.
-4. Validate the exact actor-owned grant or durably append `WAITING_APPROVAL` and yield.
-5. Durably append `RUNNING`.
-6. Invoke the raw terminal only when the `RUNNING` append result is `Appended`.
-7. Durably append `TERMINAL` with the actual outcome.
+4. Validate the exact actor-owned grant or append `WAITING_APPROVAL` and yield.
+5. Atomically create the typed admission fact in `IAgentToolAdmissionLedger`.
+6. Append the observational `RUNNING` audit fact.
+7. Invoke the raw terminal only when the ledger result is `Started`.
+8. Append `TERMINAL` with the actual outcome.
 
-`RUNNING` `Duplicate` means that the exact call already obtained execution permission and
-must not be replayed. `RUNNING` `Conflict` also fails closed without invoking the terminal.
-An unavailable pre-terminal audit may be retried because no side effect has started. Once the
-terminal has been invoked, audit failure never makes the tool call retryable: the outcome
-preserves the real tool result and reports `ExecutedAuditIncomplete` when execution succeeded
-but the terminal audit could not be durably recorded.
+Admission-ledger `Duplicate` means that the exact call already obtained execution permission
+and must not be replayed. `Conflict` also fails closed without invoking the terminal, while
+`StoreUnavailable` fails closed and may be retried because no side effect has started. Audit
+append status is observational and never changes that ledger decision. Once the terminal has
+been invoked, running or terminal audit failure never makes the tool call retryable: the
+outcome preserves the real tool result and reports `ExecutedAuditIncomplete` when execution
+succeeded but the audit facts could not be durably recorded.
 
 The public outcome is one of `Executed`, `ExecutedAuditIncomplete`, `ApprovalRequired`,
 `Denied`, or `Failed`, with an explicit failure stage, `TerminalInvoked`, `Retryable`, and
@@ -84,9 +86,10 @@ and SSH bypass option are removed. They are not compatibility surfaces.
 - Tool admission is complete mediation: all server-owned callers share one abstraction and
   one raw terminal.
 - Classification cannot drift from execution arguments, closing the argument TOCTOU gap.
-- Credential denial, approval denial, stale grants, and non-appended `RUNNING` intents have
-  zero downstream side effects.
-- Audit availability is fail-closed before execution and honest after execution.
+- Credential denial, approval denial, stale grants, and non-started admission facts have zero
+  downstream side effects.
+- Admission-ledger availability is fail-closed before execution; audit completeness remains
+  observational and honest after execution.
 - Actor-owned approval can be resumed without trusting client-supplied execution payloads.
 - Architecture tests can enforce the single raw terminal and the known port callers across
   the solution graph.

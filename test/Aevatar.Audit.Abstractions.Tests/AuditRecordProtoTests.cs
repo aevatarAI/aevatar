@@ -29,6 +29,9 @@ public sealed class AuditRecordProtoTests
         parsed.Correlation.Traceparent.ShouldBe("00-0123456789abcdef0123456789abcdef-0123456789abcdef-01");
         parsed.CommittedFactRef.CommittedEventId.ShouldBe("event-1");
         parsed.CommittedFactRef.StateVersion.ShouldBe(42);
+        parsed.ToolExecution.ArgumentsSha256.ShouldBe(new string('a', 64));
+        parsed.ToolExecution.ExecutionPhase.ShouldBe(AuditToolExecutionPhase.Terminal);
+        parsed.ToolExecution.IsMutation.ShouldBeTrue();
         parsed.Annotations["risk"].ShouldBe("low");
     }
 
@@ -79,6 +82,11 @@ public sealed class AuditRecordProtoTests
         auditRecordFields.ShouldContain("failure");
         auditRecordFields.ShouldContain("provenance");
         auditRecordFields.ShouldContain("redaction");
+        var toolExecutionField = AuditRecord.Descriptor.FindFieldByName("tool_execution");
+        toolExecutionField.ShouldNotBeNull();
+        toolExecutionField!.MessageType.Fields.InFieldNumberOrder()
+            .Select(static field => field.Name)
+            .ShouldBe(["arguments_sha256", "execution_phase", "is_mutation"]);
         committedFactFields.ShouldBe(
         [
             "committed_event_id",
@@ -143,6 +151,12 @@ public sealed class AuditRecordProtoTests
             {
                 Policy = "aevatar.audit.safe-fields.v1",
                 ValuesSanitized = true,
+            },
+            ToolExecution = new AuditToolExecution
+            {
+                ArgumentsSha256 = new string('a', 64),
+                ExecutionPhase = AuditToolExecutionPhase.Terminal,
+                IsMutation = true,
             },
         };
         record.Redaction.OmittedFields.Add("tool.arguments");

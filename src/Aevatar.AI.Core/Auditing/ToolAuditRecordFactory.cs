@@ -86,17 +86,20 @@ public sealed class ToolAuditRecordFactory
                 Policy = "aevatar.audit.tool-safe-fields.v1",
                 ValuesSanitized = true,
             },
+            ToolExecution = new AuditToolExecution
+            {
+                ArgumentsSha256 = argumentsSha256,
+                ExecutionPhase = MapExecutionPhase(executionPhase),
+                IsMutation = isMutation,
+            },
             ErrorCode = errorCode,
             ErrorSummary = errorCode,
         };
         record.Redaction.OmittedFields.Add(["model.prompt", "tool.arguments", "tool.result"]);
 
         record.Annotations.Add("tool_name", toolName);
-        record.Annotations.Add("arguments_sha256", argumentsSha256);
-        record.Annotations.Add("execution_phase", executionPhase);
         record.Annotations.Add("tool_receipt_status", receipt.Status.ToString());
         record.Annotations.Add("approval_mode", receipt.ApprovalMode.ToString());
-        record.Annotations.Add("is_mutation", isMutation ? "true" : "false");
         record.Annotations.Add("is_destructive", callSafety.IsDestructive ? "true" : "false");
         AddIfPresent(
             record.Annotations,
@@ -184,6 +187,15 @@ public sealed class ToolAuditRecordFactory
             : AuditLifecyclePhase.Running;
     }
 
+    private static AuditToolExecutionPhase MapExecutionPhase(string executionPhase) =>
+        executionPhase switch
+        {
+            "running" => AuditToolExecutionPhase.Running,
+            "waiting_approval" => AuditToolExecutionPhase.WaitingApproval,
+            "terminal" => AuditToolExecutionPhase.Terminal,
+            _ => AuditToolExecutionPhase.Unspecified,
+        };
+
     private static AuditTerminalOutcome MapTerminalOutcome(
         AuditLifecyclePhase lifecyclePhase,
         AgentToolReceipt receipt,
@@ -209,15 +221,87 @@ public sealed class ToolAuditRecordFactory
     private static string ResolveFailureCode(string? value, AgentToolReceiptStatus status)
     {
         var normalized = Normalize(value);
-        if (normalized is not null)
-            return normalized;
+        if (IsOwnedNyxIdProxyFailureCode(normalized) ||
+            IsOwnedWebFetchFailureCode(normalized))
+        {
+            return normalized!;
+        }
 
-        return status switch
+        return normalized switch
+        {
+            "approval_cancelled" or
+            "approval_continuation_failed" or
+            "approval_denied" or
+            "approval_grant_mismatch" or
+            "approval_required_without_actor_continuation" or
+            "approval_timeout" or
+            "approval_unsupported_channel" or
+            "codex_execution_admission_denied" or
+            "codex_execution_cancelled" or
+            "codex_execution_capacity_unavailable" or
+            "codex_execution_cleanup_failed" or
+            "codex_execution_isolation_unavailable" or
+            "codex_execution_llm_provider_not_connected" or
+            "codex_execution_malformed_output" or
+            "codex_execution_provisioning_failed" or
+            "codex_execution_readiness_failed" or
+            "codex_execution_target_not_configured" or
+            "codex_execution_terminal_failure" or
+            "codex_execution_timed_out" or
+            "credential_denied" or
+            "invalid_tool_execution_identity" or
+            "middleware_terminated" or
+            "tool_admission_conflict" or
+            "tool_admission_unavailable" or
+            "tool_call_terminated" or
+            "tool_classification_failed" or
+            "tool_execution_already_started" or
+            "tool_execution_error" or
+            "tool_execution_exception" or
+            "tool_outcome_unknown" or
+            "CODE_EXECUTE_FAILED" => normalized,
+            _ => DefaultFailureCode(status),
+        };
+    }
+
+    private static string DefaultFailureCode(AgentToolReceiptStatus status) =>
+        status switch
         {
             AgentToolReceiptStatus.Denied => "tool_denied",
             AgentToolReceiptStatus.Error => "tool_error",
             _ => string.Empty,
         };
+
+    private static bool IsOwnedNyxIdProxyFailureCode(string? value)
+    {
+        if (value is "NYXID_PROXY_UNAUTHORIZED" or "NYXID_PROXY_FORBIDDEN")
+            return true;
+
+        return value != null &&
+               value.Length == NyxIdProxyHttpFailurePrefix.Length + 3 &&
+               value.StartsWith(NyxIdProxyHttpFailurePrefix, StringComparison.Ordinal) &&
+               value[NyxIdProxyHttpFailurePrefix.Length] is >= '1' and <= '5' &&
+               value[NyxIdProxyHttpFailurePrefix.Length + 1] is >= '0' and <= '9' &&
+               value[NyxIdProxyHttpFailurePrefix.Length + 2] is >= '0' and <= '9';
+    }
+
+    private static bool IsOwnedWebFetchFailureCode(string? value)
+    {
+        if (value is "WEB_FETCH_DNS_FAILURE" or
+            "WEB_FETCH_TLS_FAILURE" or
+            "WEB_FETCH_TIMEOUT" or
+            "WEB_FETCH_TRANSPORT_FAILURE" or
+            "WEB_FETCH_URL_REJECTED")
+        {
+            return true;
+        }
+
+        return value != null &&
+               value.Length == WebFetchHttpFailurePrefix.Length + 3 &&
+               value.StartsWith(WebFetchHttpFailurePrefix, StringComparison.Ordinal) &&
+               value[WebFetchHttpFailurePrefix.Length] is >= '1' and <= '5' &&
+               value[WebFetchHttpFailurePrefix.Length + 1] is >= '0' and <= '9' &&
+               value[WebFetchHttpFailurePrefix.Length + 2] is >= '0' and <= '9';
     }
 
     private static ToolAuditActor ResolveActor(AgentToolExecutionContext context)
