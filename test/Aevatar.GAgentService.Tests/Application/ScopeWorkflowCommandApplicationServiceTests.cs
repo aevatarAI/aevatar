@@ -261,6 +261,7 @@ public sealed class ScopeWorkflowCommandApplicationServiceTests
             .Command.Should().BeOfType<CreateServiceRevisionCommand>().Subject;
         revision.Spec.Identity.TenantId.Should().Be(ScopeExplicitRequestAdmissionTestFixture.ScopeId);
         revision.Spec.RevisionId.Should().Be(ScopeExplicitRequestAdmissionTestFixture.RevisionId);
+        revision.Spec.WorkflowSpec.WorkflowId.Should().Be(ScopeExplicitRequestAdmissionTestFixture.WorkflowId);
         ScopeExplicitRequestAdmissionTestFixture.AssertCallerOwnedGrant(
             revision.Spec.WorkflowSpec.CapabilityAdmissionPlan);
     }
@@ -715,14 +716,16 @@ internal static class ScopeExplicitRequestAdmissionTestFixture
                 null,
                 sourceKind,
                 ExternalCapabilityExecutionMode.Interactive,
-                context.ExplicitRequestConfirmations));
+                context.ExplicitRequestConfirmations,
+                WorkflowId,
+                RevisionId));
     }
 
     public static WorkflowCapabilityAdmissionContext CreatePersistedContext(
         WorkflowCapabilityAdmissionPlan existingPlan) =>
         new(
             CallerId,
-            BearerToken,
+            NyxIdCallerCredentialSelection.SourceReadableUserBearer(BearerToken),
             executionMode: ExternalCapabilityExecutionMode.Interactive,
             existingPlan: existingPlan);
 
@@ -819,6 +822,8 @@ internal static class ScopeExplicitRequestAdmissionTestFixture
             RequestContractDigest = WorkflowCapabilityAdmissionPlanIntegrity
                 .ComputeNyxIdRequestContractDigest(Selector()),
             AttestedRisk = NyxIdOperationRisk.ReadOnly,
+            WorkflowId = WorkflowId,
+            RevisionId = RevisionId,
         };
 
     private static NyxIdExplicitRequestConfirmation StaleDigestConfirmation()

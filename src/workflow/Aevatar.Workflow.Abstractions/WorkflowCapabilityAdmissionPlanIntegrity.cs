@@ -791,8 +791,12 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
                 "Workflow NyxID explicit request grants do not share one workflow revision identity.");
         }
 
-        if (expectedWorkflowId is null && expectedRevisionId is null)
-            return (workflowId, revisionId);
+        if (string.IsNullOrWhiteSpace(expectedWorkflowId) ||
+            string.IsNullOrWhiteSpace(expectedRevisionId))
+        {
+            throw new InvalidOperationException(
+                "Workflow NyxID explicit request binding identity is required.");
+        }
         ValidateBindingIdentity(expectedWorkflowId, nameof(expectedWorkflowId));
         ValidateBindingIdentity(expectedRevisionId, nameof(expectedRevisionId));
         if (!string.Equals(workflowId, expectedWorkflowId, StringComparison.Ordinal) ||

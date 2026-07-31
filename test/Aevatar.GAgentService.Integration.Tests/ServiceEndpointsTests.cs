@@ -315,14 +315,21 @@ public sealed class ServiceEndpointsTests
     [Fact]
     public async Task CreateRevisionAsync_ForWorkflow_ShouldAdmitExactBundleWithTransientHttpAuthority()
     {
+        const string publishedServiceId = "svc-published-alpha";
+        const string workflowId = "wf-draft-alpha";
+        const string revisionId = "rev-alpha";
+        new[] { publishedServiceId, workflowId, revisionId }
+            .Distinct(StringComparer.Ordinal).Should().HaveCount(3);
         await using var host = await EndpointTestHost.StartAsync();
-        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/services/orders/revisions")
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"/api/services/{publishedServiceId}/revisions")
         {
             Content = JsonContent.Create(new ServiceEndpoints.CreateRevisionHttpRequest(
                 "spoof-tenant",
                 "spoof-app",
                 "spoof-ns",
-                "rev-workflow",
+                revisionId,
                 "workflow",
                 null,
                 null,
@@ -333,7 +340,8 @@ public sealed class ServiceEndpointsTests
                     new Dictionary<string, string>
                     {
                         ["child"] = "name: child",
-                    }))),
+                    },
+                    workflowId))),
         };
         request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
             "Bearer",
@@ -356,7 +364,10 @@ public sealed class ServiceEndpointsTests
         admissionRequest.InlineWorkflowYamls.Should().Contain("child", "name: child");
         admissionRequest.SourceKind.Should().Be("service_revision");
         admissionRequest.ExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Durable);
+        admissionRequest.WorkflowId.Should().Be(workflowId);
+        admissionRequest.RevisionId.Should().Be(revisionId);
         host.CommandPort.CreateRevisionCommand!.Spec.WorkflowSpec.CapabilityAdmissionPlan.Should().NotBeNull();
+        host.CommandPort.CreateRevisionCommand.Spec.WorkflowSpec.WorkflowId.Should().Be(workflowId);
         host.CommandPort.CreateRevisionCommand.Spec.WorkflowSpec.CapabilityAdmissionPlan.ExecutionMode.Should()
             .Be(ExternalCapabilityExecutionMode.Durable);
         host.CommandPort.CreateRevisionCommand.Spec.WorkflowSpec.ExpectedExecutionMode.Should()

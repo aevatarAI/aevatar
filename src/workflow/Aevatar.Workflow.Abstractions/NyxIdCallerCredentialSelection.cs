@@ -1,12 +1,5 @@
 namespace Aevatar.Workflow.Abstractions;
 
-public enum NyxIdCallerCredentialKind
-{
-    Unspecified = 0,
-    SourceReadableUserBearer = 1,
-    ProxyDelegation = 2,
-}
-
 /// <summary>
 /// Transient NyxID caller credential selected at an ingress boundary. This type must not be
 /// serialized, persisted, logged, or included in generated output.

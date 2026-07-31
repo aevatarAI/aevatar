@@ -322,6 +322,31 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
         act.Should().NotThrow();
     }
 
+    [Fact]
+    public void ValidateOrThrow_ShouldRejectExplicitPlanWithoutExpectedWorkflowRevisionIdentity()
+    {
+        const string yaml = "name: explicit-workflow\nsteps: []\n";
+        var selector = ExplicitSelector();
+        var plan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            yaml,
+            new Dictionary<string, string>(),
+            ExternalCapabilityExecutionMode.Interactive,
+            [ExplicitAdmission(ExplicitCapability(selector.NyxIdRequest))],
+            [ExplicitSource()],
+            workflowId: "wf-alpha",
+            revisionId: "rev-alpha");
+
+        var act = () => WorkflowCapabilityAdmissionPlanIntegrity.ValidateOrThrow(
+            plan,
+            yaml,
+            new Dictionary<string, string>(),
+            ExternalCapabilityExecutionMode.Interactive,
+            [ExplicitInvocation(selector)]);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*binding identity is required*");
+    }
+
     [Theory]
     [InlineData("request_user_service_id")]
     [InlineData("request_method")]
@@ -1450,6 +1475,8 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
         var policy = capability.NyxIdUserRequest.ExecutionPolicy;
         var grant = new NyxIdExplicitRequestGrant
         {
+            WorkflowId = "wf-alpha",
+            RevisionId = "rev-alpha",
             CallSiteId = callSiteId,
             RequestContractDigest = ExplicitRequestContractDigest(
                 capability.NyxIdUserRequest.Request),
@@ -1548,18 +1575,7 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
             slug);
 
     private static string ExplicitGrantDigest(NyxIdExplicitRequestGrant grant) =>
-        ExternalWorkflowCapabilityContractDigest.Compute(
-            "nyxid-explicit-request-grant.v1",
-            grant.CallSiteId,
-            grant.RequestContractDigest,
-            ((int)grant.GrantorAuthority).ToString(System.Globalization.CultureInfo.InvariantCulture),
-            ((int)grant.GrantorOwnerKind).ToString(System.Globalization.CultureInfo.InvariantCulture),
-            grant.GrantorOwnerSubject,
-            ((int)grant.Risk).ToString(System.Globalization.CultureInfo.InvariantCulture),
-            string.Join("\n", grant.AllowedExecutionModes
-                .Select(static mode => (int)mode)
-                .Order()
-                .Select(static mode => mode.ToString(System.Globalization.CultureInfo.InvariantCulture))));
+        WorkflowCapabilityAdmissionPlanIntegrity.ComputeNyxIdExplicitRequestGrantDigest(grant);
 
     private static void MutateCanonicalBoundInvocation(
         WorkflowCapabilityInvocationAdmission admission,

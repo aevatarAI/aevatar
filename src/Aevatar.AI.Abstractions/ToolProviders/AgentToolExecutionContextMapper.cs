@@ -139,7 +139,8 @@ public static class AgentToolExecutionContextMapper
             new AgentToolCredentials(
                 AgentToolExecutionContext.Normalize(payload.Credentials?.NyxIdAccessToken),
                 AgentToolExecutionContext.Normalize(payload.Credentials?.NyxIdOrgToken),
-                AgentToolExecutionContext.Normalize(payload.Credentials?.SenderNyxIdAccessToken)),
+                AgentToolExecutionContext.Normalize(payload.Credentials?.SenderNyxIdAccessToken),
+                FromNyxIdCredentialKindPayload(payload.Credentials?.NyxIdCredentialKind)),
             new AgentToolCallerContext(
                 AgentToolExecutionContext.Normalize(payload.Caller?.ScopeId),
                 AgentToolExecutionContext.Normalize(payload.Caller?.OwnerSubject),
@@ -187,6 +188,7 @@ public static class AgentToolExecutionContextMapper
                 NyxIdAccessToken = context.Credentials.NyxIdAccessToken ?? string.Empty,
                 NyxIdOrgToken = context.Credentials.NyxIdOrgToken ?? string.Empty,
                 SenderNyxIdAccessToken = context.Credentials.SenderNyxIdAccessToken ?? string.Empty,
+                NyxIdCredentialKind = ToNyxIdCredentialKindPayload(context.Credentials.NyxIdCredentialKind),
             },
             Caller = new AgentToolCallerContextPayload
             {
@@ -246,6 +248,28 @@ public static class AgentToolExecutionContextMapper
             FromWorkflowResultDeliveryCredentialPayload(payload?.WorkflowResultDeliveryCredential),
             AgentToolExecutionContext.Normalize(payload?.BotRegistrationId),
             FromIdentityHintPayloads(payload?.IdentityHints));
+
+    private static AgentToolNyxIdCredentialKind FromNyxIdCredentialKindPayload(
+        AgentToolNyxIdCredentialKindPayload? kind) =>
+        kind switch
+        {
+            AgentToolNyxIdCredentialKindPayload.SourceReadableUserBearer =>
+                AgentToolNyxIdCredentialKind.SourceReadableUserBearer,
+            AgentToolNyxIdCredentialKindPayload.ProxyDelegation =>
+                AgentToolNyxIdCredentialKind.ProxyDelegation,
+            _ => AgentToolNyxIdCredentialKind.Unspecified,
+        };
+
+    private static AgentToolNyxIdCredentialKindPayload ToNyxIdCredentialKindPayload(
+        AgentToolNyxIdCredentialKind kind) =>
+        kind switch
+        {
+            AgentToolNyxIdCredentialKind.SourceReadableUserBearer =>
+                AgentToolNyxIdCredentialKindPayload.SourceReadableUserBearer,
+            AgentToolNyxIdCredentialKind.ProxyDelegation =>
+                AgentToolNyxIdCredentialKindPayload.ProxyDelegation,
+            _ => AgentToolNyxIdCredentialKindPayload.Unspecified,
+        };
 
     private static LLMRequestRoutingContext FromRoutingPayload(LLMRequestRoutingContextPayload? payload) =>
         new(

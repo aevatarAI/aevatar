@@ -506,7 +506,8 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
                     "nyxid",
                     string.Empty,
                     "nyx-user-42",
-                    "proxy")));
+                    "proxy"),
+                Aevatar.Workflow.Abstractions.NyxIdCallerCredentialKind.ProxyDelegation));
 
         var envelope = factory.CreateEnvelope(command, new CommandContext(
             "actor-1",
@@ -521,6 +522,8 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         request.LlmControl.UserMemoryPrompt.Should().Be("memory");
         request.LlmControl.RoutePreference.Should().Be("route-a");
         request.CallerCredential.BearerToken.Should().Be("trusted-token");
+        request.CallerCredential.Kind.Should().Be(
+            Aevatar.Workflow.Abstractions.NyxIdCallerCredentialKind.ProxyDelegation);
         request.CallerCredential.NyxIdAuthority.Should().BeEquivalentTo(
             new Aevatar.Workflow.Abstractions.WorkflowCallerNyxIdAuthority
             {

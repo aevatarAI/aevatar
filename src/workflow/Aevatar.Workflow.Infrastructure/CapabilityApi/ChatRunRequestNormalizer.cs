@@ -99,7 +99,8 @@ internal static class ChatRunRequestNormalizer
         return new CallerCredentialNormalizationResult(
             new WorkflowCallerCredential(
                 parsed.IsMissing ? null : parsed.NormalizedBearerToken,
-                authority),
+                authority,
+                source.Kind),
             WorkflowChatRunStartError.None);
     }
 

@@ -52,6 +52,7 @@ internal static class WorkflowRunExecutionContextStateAccess
             {
                 DurableCallerCredential = credential!.DurableCallerCredential.Clone(),
                 NyxIdAuthority = authority,
+                Kind = credential.Kind,
             };
             return delta;
         }
@@ -63,6 +64,7 @@ internal static class WorkflowRunExecutionContextStateAccess
                 delta.CallerCredential = new WorkflowCallerCredential
                 {
                     NyxIdAuthority = authority,
+                    Kind = credential!.Kind,
                 };
             }
 
@@ -78,6 +80,7 @@ internal static class WorkflowRunExecutionContextStateAccess
                 OwnerStepId = WorkflowCallerCredentialRuntimeContextAccess.OwnerStepId,
             },
             NyxIdAuthority = authority,
+            Kind = credential!.Kind,
         };
 
         return delta;
@@ -175,6 +178,7 @@ internal static class WorkflowRunExecutionContextStateAccess
                 {
                     BearerToken = resolved.Secret,
                     NyxIdAuthority = callerCredential.NyxIdAuthority?.Clone(),
+                    Kind = callerCredential.Kind,
                 })
                 : (false, new WorkflowCallerCredential());
         }
@@ -187,6 +191,7 @@ internal static class WorkflowRunExecutionContextStateAccess
                 {
                     BearerToken = resolved.Secret,
                     NyxIdAuthority = callerCredential.NyxIdAuthority?.Clone(),
+                    Kind = callerCredential.Kind,
                 })
                 : (false, new WorkflowCallerCredential());
         }
@@ -196,6 +201,7 @@ internal static class WorkflowRunExecutionContextStateAccess
             return (true, new WorkflowCallerCredential
             {
                 NyxIdAuthority = authority,
+                Kind = callerCredential!.Kind,
             });
         }
 
@@ -215,6 +221,7 @@ internal static class WorkflowRunExecutionContextStateAccess
             {
                 BearerToken = parsed.NormalizedBearerToken ?? string.Empty,
                 NyxIdAuthority = callerCredential?.NyxIdAuthority?.Clone(),
+                Kind = callerCredential?.Kind ?? NyxIdCallerCredentialKind.Unspecified,
             };
             return true;
         }

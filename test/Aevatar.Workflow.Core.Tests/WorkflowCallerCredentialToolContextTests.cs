@@ -41,6 +41,30 @@ public sealed class WorkflowCallerCredentialToolContextTests
         tool.SenderTenant.Should().Be("tenant-alpha");
     }
 
+    [Fact]
+    public async Task ExecuteAsync_WhenCallerCredentialIsProxyDelegation_ShouldPreserveCredentialKind()
+    {
+        var tool = new RecordingAgentTool();
+        var source = new SingleToolSource(tool);
+        var adapter = new AgentWorkflowToolSourceAdapter([source]);
+        var workflowTool = (await adapter.GetToolsAsync()).Should().ContainSingle().Subject;
+
+        await workflowTool.ExecuteAsync(new WorkflowToolExecutionRequest(
+            "{}",
+            "run-alpha",
+            "step-alpha",
+            "execution-alpha",
+            "call-alpha",
+            "scope-alpha",
+            new WorkflowCallerCredential
+            {
+                BearerToken = "delegation-alpha",
+                Kind = NyxIdCallerCredentialKind.ProxyDelegation,
+            }));
+
+        tool.NyxIdCredentialKind.Should().Be(AgentToolNyxIdCredentialKind.ProxyDelegation);
+    }
+
     private sealed class SingleToolSource(IAgentTool tool) : IAgentToolSource
     {
         public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
@@ -61,12 +85,15 @@ public sealed class WorkflowCallerCredentialToolContextTests
 
         public string? SenderTenant { get; private set; }
 
+        public AgentToolNyxIdCredentialKind NyxIdCredentialKind { get; private set; }
+
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
         {
             var senderBinding = AgentToolRequestContext.Current?.SenderBinding;
             BindingId = senderBinding?.BindingId;
             NyxUserId = senderBinding?.NyxUserId;
             SenderTenant = senderBinding?.SenderTenant;
+            NyxIdCredentialKind = AgentToolRequestContext.NyxIdCredentialKind;
             return Task.FromResult("{}");
         }
     }

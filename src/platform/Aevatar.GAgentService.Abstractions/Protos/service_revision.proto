@@ -59,6 +59,7 @@ message WorkflowServiceRevisionSpec {
   map<string, string> inline_workflow_yamls = 4;
   aevatar.workflow.WorkflowCapabilityAdmissionPlan capability_admission_plan = 5;
   aevatar.workflow.ExternalCapabilityExecutionMode expected_execution_mode = 6;
+  string workflow_id = 7;
 }
 
 message ServiceRevisionSpec {

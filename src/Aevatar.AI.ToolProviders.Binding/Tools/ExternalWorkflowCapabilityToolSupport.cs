@@ -36,7 +36,8 @@ internal static class ExternalWorkflowCapabilityToolSupport
         access = new ExternalWorkflowCapabilityAccessContext(
             scopeId,
             callerId,
-            NyxIdCallerCredentialSelection.SourceReadableUserBearerOrNull(
+            ResolveCallerCredential(
+                AgentToolRequestContext.NyxIdCredentialKind,
                 AgentToolRequestContext.NyxIdAccessToken),
             AgentToolRequestContext.NyxIdOrgToken);
         error = null;
@@ -45,4 +46,18 @@ internal static class ExternalWorkflowCapabilityToolSupport
 
     private static string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static NyxIdCallerCredentialSelection? ResolveCallerCredential(
+        AgentToolNyxIdCredentialKind kind,
+        string? bearerToken) =>
+        string.IsNullOrWhiteSpace(bearerToken)
+            ? null
+            : kind switch
+            {
+                AgentToolNyxIdCredentialKind.SourceReadableUserBearer =>
+                    NyxIdCallerCredentialSelection.SourceReadableUserBearer(bearerToken),
+                AgentToolNyxIdCredentialKind.ProxyDelegation =>
+                    NyxIdCallerCredentialSelection.ProxyDelegation(bearerToken),
+                _ => null,
+            };
 }

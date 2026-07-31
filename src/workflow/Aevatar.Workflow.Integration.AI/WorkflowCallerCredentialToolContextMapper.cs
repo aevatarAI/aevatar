@@ -46,6 +46,14 @@ internal static class WorkflowCallerCredentialToolContextMapper
                 NyxIdAccessToken = token.NormalizedBearerToken,
                 NyxIdOrgToken = token.NormalizedBearerToken,
                 SenderNyxIdAccessToken = token.NormalizedBearerToken,
+                NyxIdCredentialKind = credential!.Kind switch
+                {
+                    NyxIdCallerCredentialKind.SourceReadableUserBearer =>
+                        AgentToolNyxIdCredentialKind.SourceReadableUserBearer,
+                    NyxIdCallerCredentialKind.ProxyDelegation =>
+                        AgentToolNyxIdCredentialKind.ProxyDelegation,
+                    _ => AgentToolNyxIdCredentialKind.Unspecified,
+                },
             },
         };
     }

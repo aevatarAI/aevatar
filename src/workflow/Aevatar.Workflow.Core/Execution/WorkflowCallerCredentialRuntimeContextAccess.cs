@@ -35,6 +35,7 @@ internal static class WorkflowCallerCredentialRuntimeContextAccess
             {
                 DurableCallerCredential = credential!.DurableCallerCredential.Clone(),
                 NyxIdAuthority = authority,
+                Kind = credential.Kind,
             };
             return delta;
         }
@@ -46,6 +47,7 @@ internal static class WorkflowCallerCredentialRuntimeContextAccess
                 delta.CallerCredential = new WorkflowCallerCredential
                 {
                     NyxIdAuthority = authority,
+                    Kind = credential!.Kind,
                 };
             }
 
@@ -68,6 +70,7 @@ internal static class WorkflowCallerCredentialRuntimeContextAccess
         {
             RuntimeSecretReference = stored.Reference,
             NyxIdAuthority = authority,
+            Kind = credential!.Kind,
         };
         return delta;
     }

@@ -806,6 +806,7 @@ public sealed class ServiceImplementationAdaptersTests
                 ImplementationKind = ServiceImplementationKind.Workflow,
                 WorkflowSpec = new WorkflowServiceRevisionSpec
                 {
+                    WorkflowId = "wf-alpha",
                     WorkflowYaml = workflowYaml,
                     CapabilityAdmissionPlan = persistedPlan,
                     ExpectedExecutionMode = ExternalCapabilityExecutionMode.Durable,
@@ -820,6 +821,8 @@ public sealed class ServiceImplementationAdaptersTests
             .GetProperty(nameof(WorkflowExternalCapabilityAdmissionRequest.Access))
             .Should().BeNull();
         persistedRequest.ExpectedExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Durable);
+        persistedRequest.WorkflowId.Should().Be("wf-alpha");
+        persistedRequest.RevisionId.Should().Be("r-persisted");
         persistedRequest.Plan.DurableAuthorizationOwner.OwnerSubject.Should().Be("caller-alpha");
         persistedRequest.Plan.DurableAuthorizationOwner.OwnerSubject.Should().NotBe("app-beta");
         persistedRequest.Plan.DurableAuthorizationOwner.OwnerSubject.Should().NotBe("svc-gamma");

@@ -148,6 +148,7 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         var credential = new Aevatar.Workflow.Abstractions.WorkflowCallerCredential
         {
             BearerToken = parsed.NormalizedBearerToken ?? string.Empty,
+            Kind = source?.Kind ?? NyxIdCallerCredentialKind.Unspecified,
         };
         if (authority != null)
         {

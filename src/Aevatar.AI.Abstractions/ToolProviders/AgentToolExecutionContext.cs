@@ -158,10 +158,18 @@ public sealed record AgentToolRequestIdentity(string? RequestId, string? CallId,
     public static AgentToolRequestIdentity Empty { get; } = new(null, null, null);
 }
 
+public enum AgentToolNyxIdCredentialKind
+{
+    Unspecified = 0,
+    SourceReadableUserBearer = 1,
+    ProxyDelegation = 2,
+}
+
 public sealed record AgentToolCredentials(
     string? NyxIdAccessToken,
     string? NyxIdOrgToken,
-    string? SenderNyxIdAccessToken)
+    string? SenderNyxIdAccessToken,
+    AgentToolNyxIdCredentialKind NyxIdCredentialKind = AgentToolNyxIdCredentialKind.Unspecified)
 {
     public static AgentToolCredentials Empty { get; } = new(null, null, null);
 }

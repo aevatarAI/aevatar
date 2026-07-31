@@ -448,6 +448,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                     ImplementationKind = ServiceImplementationKind.Workflow,
                     WorkflowSpec = new WorkflowServiceRevisionSpec
                     {
+                        WorkflowId = workflowId,
                         WorkflowName = workflowBundle.EntryWorkflowName,
                         WorkflowYaml = workflowBundle.EntryWorkflowYaml,
                         DefinitionActorId = definitionActorIdPrefix,

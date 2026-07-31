@@ -160,11 +160,18 @@ message WorkflowLlmControlContext {
   string sender_nyx_id_access_token = 5;
 }
 
+enum NyxIdCallerCredentialKind {
+  NYX_ID_CALLER_CREDENTIAL_KIND_UNSPECIFIED = 0;
+  NYX_ID_CALLER_CREDENTIAL_KIND_SOURCE_READABLE_USER_BEARER = 1;
+  NYX_ID_CALLER_CREDENTIAL_KIND_PROXY_DELEGATION = 2;
+}
+
 message WorkflowCallerCredential {
   string bearer_token = 1;
   aevatar.credentials.RuntimeSecretReference runtime_secret_reference = 2;
   aevatar.credentials.DurableCallerCredentialRef durable_caller_credential = 3;
   WorkflowCallerNyxIdAuthority nyx_id_authority = 4;
+  NyxIdCallerCredentialKind kind = 5;
 }
 
 message WorkflowCallerNyxIdAuthority {

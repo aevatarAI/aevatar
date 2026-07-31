@@ -133,6 +133,7 @@ public sealed class ScopeWorkflowCommandApplicationService : IScopeWorkflowComma
             ImplementationKind = ServiceImplementationKind.Workflow,
             WorkflowSpec = new WorkflowServiceRevisionSpec
             {
+                WorkflowId = normalizedWorkflowId,
                 WorkflowName = ScopeWorkflowCapabilityConventions.NormalizeOptional(request.WorkflowName),
                 WorkflowYaml = workflowYaml,
                 DefinitionActorId = definitionActorIdPrefix,

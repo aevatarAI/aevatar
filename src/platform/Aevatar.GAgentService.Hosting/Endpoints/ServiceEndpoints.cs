@@ -149,6 +149,7 @@ public static partial class ServiceEndpoints
                 var workflowRequest = request.Workflow;
                 spec.WorkflowSpec = new WorkflowServiceRevisionSpec
                 {
+                    WorkflowId = workflowRequest?.WorkflowId ?? string.Empty,
                     WorkflowName = workflowRequest?.WorkflowName ?? string.Empty,
                     WorkflowYaml = workflowRequest?.WorkflowYaml ?? string.Empty,
                     DefinitionActorId = workflowRequest?.DefinitionActorId ?? string.Empty,

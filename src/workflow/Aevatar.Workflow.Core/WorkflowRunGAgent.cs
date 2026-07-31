@@ -1739,6 +1739,7 @@ public sealed partial class WorkflowRunGAgent
                 RuntimeSecretReference = delta.CallerCredential.RuntimeSecretReference?.Clone(),
                 DurableCallerCredential = delta.CallerCredential.DurableCallerCredential?.Clone(),
                 NyxIdAuthority = delta.CallerCredential.NyxIdAuthority?.Clone(),
+                Kind = delta.CallerCredential.Kind,
             };
         }
 

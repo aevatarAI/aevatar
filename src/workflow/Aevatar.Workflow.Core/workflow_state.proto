@@ -215,6 +215,7 @@ message WorkflowCallerCredentialState
   aevatar.credentials.RuntimeSecretReference runtime_secret_reference = 2;
   aevatar.credentials.DurableCallerCredentialRef durable_caller_credential = 3;
   WorkflowCallerNyxIdAuthority nyx_id_authority = 4;
+  NyxIdCallerCredentialKind kind = 5;
 }
 
 message WorkflowToolRuntimeContextState

@@ -159,6 +159,67 @@ public class BindingToolsTests
     }
 
     [Fact]
+    public async Task ExternalWorkflowCapabilityToolSupport_PreservesProxyDelegationCredentialKind()
+    {
+        var listPort = new StubExternalWorkflowCapabilityListPort(
+            new ExternalWorkflowCapabilityDiscoveryResult());
+        var tool = new ListExternalWorkflowCapabilitiesTool(listPort);
+        AgentToolRequestContext.Current = CapabilityContext(
+            "owner-scope-alpha",
+            "caller-subject-alpha",
+            "delegation-alpha",
+            "organization-bearer-alpha") with
+        {
+            Credentials = new AgentToolCredentials(
+                "delegation-alpha",
+                "organization-bearer-alpha",
+                null,
+                AgentToolNyxIdCredentialKind.ProxyDelegation),
+        };
+
+        try
+        {
+            await tool.ExecuteAsync("{}");
+
+            var credential = listPort.Request!.Access.NyxIdCallerCredential!;
+            credential.Kind.Should().Be(NyxIdCallerCredentialKind.ProxyDelegation);
+            credential.ProxyDelegationToken.Should().Be("delegation-alpha");
+            credential.SourceReadableUserBearerToken.Should().BeNull();
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExternalWorkflowCapabilityToolSupport_DoesNotPromoteUnspecifiedCredentialKind()
+    {
+        var listPort = new StubExternalWorkflowCapabilityListPort(
+            new ExternalWorkflowCapabilityDiscoveryResult());
+        var tool = new ListExternalWorkflowCapabilitiesTool(listPort);
+        AgentToolRequestContext.Current = CapabilityContext(
+            "owner-scope-alpha",
+            "caller-subject-alpha",
+            "legacy-alpha",
+            "organization-bearer-alpha") with
+        {
+            Credentials = new AgentToolCredentials("legacy-alpha", "organization-bearer-alpha", null),
+        };
+
+        try
+        {
+            await tool.ExecuteAsync("{}");
+
+            listPort.Request!.Access.NyxIdCallerCredential.Should().BeNull();
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
     public async Task ListExternalWorkflowCapabilitiesTool_RejectsOwnerSubjectWithoutNyxIdAuthority()
     {
         var listPort = new StubExternalWorkflowCapabilityListPort(
@@ -993,7 +1054,11 @@ public class BindingToolsTests
                 callerSubject,
                 ResponseId: "response-alpha",
                 OwnerScopeId: ownerScopeId),
-            Credentials = new AgentToolCredentials(callerBearer, organizationBearer, null),
+            Credentials = new AgentToolCredentials(
+                callerBearer,
+                organizationBearer,
+                null,
+                AgentToolNyxIdCredentialKind.SourceReadableUserBearer),
             NyxIdAuthority = new AgentToolNyxIdAuthorityContext("nyxid", "tenant-alpha", callerSubject),
         };
 

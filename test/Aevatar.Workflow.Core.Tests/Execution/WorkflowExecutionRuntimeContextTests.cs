@@ -284,6 +284,30 @@ public sealed class WorkflowExecutionRuntimeContextTests
     }
 
     [Fact]
+    public async Task WorkflowCallerCredentialRuntimeAccess_ShouldPersistAndRecoverCredentialKind()
+    {
+        var host = new RecordingStateHost(new InMemoryRuntimeSecretStore());
+
+        await WorkflowCallerCredentialRuntimeContextAccess.SetCredentialAsync(
+            host,
+            new WorkflowCallerCredential
+            {
+                BearerToken = "delegation-token",
+                Kind = NyxIdCallerCredentialKind.ProxyDelegation,
+            });
+
+        var serializedState = WorkflowRunExecutionContextState.Parser.ParseFrom(
+            host.ExecutionContextState.ToByteArray());
+        serializedState.CallerCredential!.Kind.Should().Be(NyxIdCallerCredentialKind.ProxyDelegation);
+
+        var credential = await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(host);
+
+        credential.Found.Should().BeTrue();
+        credential.Credential.BearerToken.Should().Be("delegation-token");
+        credential.Credential.Kind.Should().Be(NyxIdCallerCredentialKind.ProxyDelegation);
+    }
+
+    [Fact]
     public async Task WorkflowCallerCredentialRuntimeAccess_ShouldPersistAndRecoverAuthorityWithoutSecretReference()
     {
         var host = new RecordingStateHost();
@@ -1166,6 +1190,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
                 RuntimeSecretReference = delta.CallerCredential.RuntimeSecretReference?.Clone(),
                 DurableCallerCredential = delta.CallerCredential.DurableCallerCredential?.Clone(),
                 NyxIdAuthority = delta.CallerCredential.NyxIdAuthority?.Clone(),
+                Kind = delta.CallerCredential.Kind,
             };
         }
     }

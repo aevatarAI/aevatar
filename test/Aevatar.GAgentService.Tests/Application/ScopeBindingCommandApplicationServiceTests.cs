@@ -223,6 +223,7 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         var revision = commandPort.Calls
             .Single(call => call.Method == "CreateRevisionAsync")
             .Command.Should().BeOfType<CreateServiceRevisionCommand>().Subject;
+        revision.Spec.WorkflowSpec.WorkflowId.Should().Be(ScopeExplicitRequestAdmissionTestFixture.WorkflowId);
         ScopeExplicitRequestAdmissionTestFixture.AssertCallerOwnedGrant(
             revision.Spec.WorkflowSpec.CapabilityAdmissionPlan);
     }

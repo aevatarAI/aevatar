@@ -765,6 +765,7 @@ public sealed class ChatEndpointsInternalTests
         capturedCommand.Should().NotBeNull();
         capturedCommand!.ScopeId.Should().Be("caller-scope");
         capturedCommand.CallerCredential!.BearerToken.Should().Be("delegation-token");
+        capturedCommand.CallerCredential.Kind.Should().Be(NyxIdCallerCredentialKind.ProxyDelegation);
         capturedCommand.CallerCredential.NyxIdAuthority.Should().BeEquivalentTo(
             new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerNyxIdAuthority(
                 "nyxid",
@@ -1608,6 +1609,7 @@ public sealed class ChatEndpointsInternalTests
         missing.Credential.Should().BeNull();
         valid.Succeeded.Should().BeTrue();
         valid.Credential!.BearerToken.Should().Be("token-123");
+        valid.Credential.Kind.Should().Be(NyxIdCallerCredentialKind.SourceReadableUserBearer);
         valid.NyxIdCredentialSelection!.Kind.Should().Be(
             NyxIdCallerCredentialKind.SourceReadableUserBearer);
         bareBearer.Succeeded.Should().BeFalse();
@@ -1623,6 +1625,7 @@ public sealed class ChatEndpointsInternalTests
         unsupportedScheme.Credential.Should().BeNull();
         delegationOnly.Succeeded.Should().BeTrue();
         delegationOnly.Credential!.BearerToken.Should().Be("delegation-token");
+        delegationOnly.Credential.Kind.Should().Be(NyxIdCallerCredentialKind.ProxyDelegation);
         delegationOnly.NyxIdCredentialSelection!.Kind.Should().Be(
             NyxIdCallerCredentialKind.ProxyDelegation);
         malformedAuthorizationWithDelegation.Succeeded.Should().BeFalse();

@@ -89,7 +89,8 @@ public static class WorkflowCallerCredentialExtractor
             return WorkflowCallerCredentialExtractionResult.Success(
                 new WorkflowCallerCredential(
                     parsed.NormalizedBearerToken,
-                    ResolveAuthenticatedNyxIdAuthority(http)),
+                    ResolveAuthenticatedNyxIdAuthority(http),
+                    token.Kind),
                 selection);
         }
 
@@ -110,7 +111,8 @@ public static class WorkflowCallerCredentialExtractor
             return WorkflowCallerCredentialExtractionResult.Success(
                 new WorkflowCallerCredential(
                     parsed.NormalizedBearerToken,
-                    await ResolveAuthenticatedNyxIdAuthorityAsync(http, bindingQueryPort, logger, ct)),
+                    await ResolveAuthenticatedNyxIdAuthorityAsync(http, bindingQueryPort, logger, ct),
+                    token.Kind),
                 selection);
         }
 

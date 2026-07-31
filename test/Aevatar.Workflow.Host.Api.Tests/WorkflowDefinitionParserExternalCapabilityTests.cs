@@ -184,10 +184,11 @@ public sealed class WorkflowDefinitionParserExternalCapabilityTests
     {
         const string memberId = "m-alpha";
         const string workflowId = "wf-alpha";
+        const string revisionId = "rev-alpha";
         const string publishedServiceId = "svc-alpha";
         const string userServiceId = "usvc-alpha";
-        new[] { memberId, workflowId, publishedServiceId, userServiceId }
-            .Distinct(StringComparer.Ordinal).Should().HaveCount(4);
+        new[] { memberId, workflowId, revisionId, publishedServiceId, userServiceId }
+            .Distinct(StringComparer.Ordinal).Should().HaveCount(5);
         var workflowYaml = File.ReadAllText(Path.Combine(
             FindRepositoryRoot(),
             "test",
@@ -241,7 +242,11 @@ public sealed class WorkflowDefinitionParserExternalCapabilityTests
                 CallSiteId = invocation.CallSiteId,
                 RequestContractDigest = requestContractDigest,
                 AttestedRisk = NyxIdOperationRisk.ReadOnly,
-            }]));
+                WorkflowId = workflowId,
+                RevisionId = revisionId,
+            }],
+            workflowId,
+            revisionId));
 
         var admission = plan.InvocationAdmissions.Should().ContainSingle().Subject;
         admission.NyxIdExplicitRequestGrant.Should().NotBeNull();
@@ -272,7 +277,9 @@ public sealed class WorkflowDefinitionParserExternalCapabilityTests
             workflowYaml,
             new Dictionary<string, string>(),
             ExternalCapabilityExecutionMode.Interactive,
-            parsed.AuthorizationDependencies!.ExternalInvocations);
+            parsed.AuthorizationDependencies!.ExternalInvocations,
+            workflowId,
+            revisionId);
     }
 
     private static string FindRepositoryRoot()
