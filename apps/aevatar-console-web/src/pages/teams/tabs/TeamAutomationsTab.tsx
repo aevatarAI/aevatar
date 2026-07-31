@@ -107,6 +107,7 @@ export type MutationObservation = {
     | "delete"
     | "retryRevocation";
   readonly scheduleId: string;
+  readonly acceptedAt: number;
   readonly baselineStateVersion: number;
   readonly expectedDraft?: TeamAutomationCreateDraft;
   readonly baselineLastFireAt?: string | null;
@@ -150,7 +151,7 @@ type AuthorizationFlow =
 const listTake = 200;
 const promptMaxLength = 4_000;
 const pendingPollIntervalMs = 2_000;
-const pendingPollDurationMs = 60_000;
+const pendingPollDurationMs = 6_000;
 const retryablePreflightCodes = new Set([
   "TEAM_AUTOMATION_AUTHORIZATION_PROJECTION_PENDING",
   "TEAM_AUTOMATION_AUTHORIZATION_REFRESH_SUPERSEDED",
@@ -751,9 +752,10 @@ const TeamAutomationsTab: React.FC<Props> = ({
   const [authorizationFlow, setAuthorizationFlow] = React.useState<AuthorizationFlow>({ state: "idle" });
   const [mutationObservation, setMutationObservation] =
     React.useState<MutationObservation | null>(null);
+  const [expiredMutationObservation, setExpiredMutationObservation] =
+    React.useState<MutationObservation | null>(null);
   const [busyScheduleId, setBusyScheduleId] = React.useState("");
   const [previewTimes, setPreviewTimes] = React.useState<readonly string[]>([]);
-  const pollingStartedAtRef = React.useRef<number | null>(null);
   const recoveredRouteRef = React.useRef("");
   const modalPanelRef = React.useRef<HTMLDivElement | null>(null);
   const flowBusy = authorizationFlow.state === "preflighting" || authorizationFlow.state === "submitting";
@@ -777,22 +779,34 @@ const TeamAutomationsTab: React.FC<Props> = ({
       error instanceof TeamAutomationApiError &&
       Boolean(error.code && retryablePreflightCodes.has(error.code)),
     retryDelay: (attempt) => [500, 1_000, 2_000][Math.min(attempt, 2)],
-    refetchInterval: (query) => {
-      const data = query.state.data;
-      const pending =
-        mutationObservation !== null ||
-        Boolean(data?.items.some(isPending));
-      if (!pending) {
-        pollingStartedAtRef.current = null;
-        return false;
-      }
-      pollingStartedAtRef.current ??= Date.now();
-      return Date.now() - pollingStartedAtRef.current < pendingPollDurationMs
+    refetchInterval: () => {
+      if (!mutationObservation) return false;
+      return Date.now() - mutationObservation.acceptedAt < pendingPollDurationMs
         ? pendingPollIntervalMs
         : false;
     },
     refetchOnWindowFocus: true,
   });
+
+  React.useEffect(() => {
+    if (!mutationObservation) {
+      setExpiredMutationObservation(null);
+      return;
+    }
+    const remainingMs = Math.max(
+      0,
+      mutationObservation.acceptedAt + pendingPollDurationMs - Date.now(),
+    );
+    if (remainingMs === 0) {
+      setExpiredMutationObservation(mutationObservation);
+      return;
+    }
+    const timeoutId = window.setTimeout(
+      () => setExpiredMutationObservation(mutationObservation),
+      remainingMs,
+    );
+    return () => window.clearTimeout(timeoutId);
+  }, [mutationObservation]);
 
   React.useEffect(() => {
     const data = automationsQuery.data;
@@ -812,7 +826,6 @@ const TeamAutomationsTab: React.FC<Props> = ({
         ? { state: "idle" }
         : current,
     );
-    pollingStartedAtRef.current = null;
   }, [automationsQuery.data, mutationObservation]);
 
   const invalidate = React.useCallback(
@@ -1001,10 +1014,10 @@ const TeamAutomationsTab: React.FC<Props> = ({
       setMutationObservation({
         kind: mode,
         scheduleId: receipt.scheduleId,
+        acceptedAt: Date.now(),
         baselineStateVersion: mode === "reauthorize" ? editing?.stateVersion ?? 0 : 0,
         expectedDraft: confirmedDraft,
       });
-      pollingStartedAtRef.current = Date.now();
       void message.info(copy(
         "teams.automations.messages.authorizationAccepted",
         "Authorization request accepted",
@@ -1066,10 +1079,10 @@ const TeamAutomationsTab: React.FC<Props> = ({
       setMutationObservation({
         kind: "update",
         scheduleId: receipt.scheduleId,
+        acceptedAt: Date.now(),
         baselineStateVersion: editing.stateVersion,
         expectedDraft: next,
       });
-      pollingStartedAtRef.current = Date.now();
       void message.info(copy("teams.automations.messages.updateAccepted", "Update request accepted"));
       setFormOpen(false);
       await invalidate();
@@ -1140,10 +1153,10 @@ const TeamAutomationsTab: React.FC<Props> = ({
       setMutationObservation({
         kind: action,
         scheduleId: receipt.scheduleId,
+        acceptedAt: Date.now(),
         baselineStateVersion: view.stateVersion,
         baselineLastFireAt: action === "runNow" ? view.lastFireAt : undefined,
       });
-      pollingStartedAtRef.current = Date.now();
       await invalidate();
     } catch (error) {
       if (requiresBindingRecovery(error)) {
@@ -1545,6 +1558,14 @@ const TeamAutomationsTab: React.FC<Props> = ({
   const formCadence = describeDraftCadence(draft.cronExpression, draft.timezone, copy);
   const promptTooLong = draft.prompt.trim().length > promptMaxLength;
   const automationItems = automationsQuery.data?.items ?? [];
+  const acceptedCreateObservation =
+    mutationObservation?.kind === "create" &&
+    mutationObservation.expectedDraft &&
+    !automationItems.some(
+      (automation) => automation.scheduleId === mutationObservation.scheduleId,
+    )
+      ? mutationObservation
+      : null;
   const activeAutomationCount = automationItems.filter(
     (automation) => automationStatus(automation) === "active",
   ).length;
@@ -1555,6 +1576,92 @@ const TeamAutomationsTab: React.FC<Props> = ({
     (automation) => automationStatus(automation) === "error",
   ).length;
   const unavailableMembers = members.filter((member) => !member.canAutomateMember);
+  const mutationObservationExpired =
+    mutationObservation !== null &&
+    expiredMutationObservation === mutationObservation;
+  const renderAcceptedCreateRow = (observation: MutationObservation) => {
+    const expectedDraft = observation.expectedDraft;
+    if (!expectedDraft) return null;
+    const cadence = describeDraftCadence(
+      expectedDraft.cronExpression,
+      expectedDraft.timezone,
+      copy,
+    );
+    const ownerMember = membersById.get(trim(expectedDraft.memberId));
+    const statusLabel = copy(
+      "teams.automations.row.awaitingReadModel",
+      "Waiting for schedule sync",
+    );
+    const displayName = expectedDraft.displayName || copy(
+      "teams.automations.form.title",
+      "New member automation",
+    );
+
+    return (
+      <article
+        aria-label={displayName}
+        className="team-automation-row"
+        key={`accepted:${observation.scheduleId}`}
+        style={{
+          ...commitmentRowStyle,
+          borderColor: token.colorInfoBorder,
+          boxShadow: "none",
+        }}
+      >
+        <div style={{ display: "grid", gap: 5, minWidth: 0 }}>
+          <span
+            aria-label={statusLabel}
+            role="status"
+            style={{
+              ...automationStatusBadgeStyle,
+              background: token.colorInfoBg,
+              border: `1px solid ${token.colorInfoBorder}`,
+              color: token.colorInfo,
+            }}
+          >
+            <span
+              aria-hidden="true"
+              style={{ ...automationStatusDotStyle, background: "currentColor" }}
+            />
+            {statusLabel}
+          </span>
+          <Typography.Text ellipsis strong>{displayName}</Typography.Text>
+          <FactLine
+            rows={2}
+            secondary
+            text={expectedDraft.prompt || copy(
+              "teams.automations.row.noPrompt",
+              "No recurring prompt",
+            )}
+          />
+        </div>
+        <div style={{ display: "grid", gap: 5, minWidth: 0 }}>
+          <Typography.Text ellipsis strong>{ownerMember?.name ?? "--"}</Typography.Text>
+          <FactLine
+            rows={2}
+            secondary
+            text={copy(
+              "teams.automations.preview.runsThroughService",
+              "Runs through published service",
+            )}
+          />
+        </div>
+        <div style={{ display: "grid", gap: 5, minWidth: 0 }}>
+          <FactLine
+            monospace={false}
+            text={cadence.summary}
+            tooltipText={`${cadence.detail} · ${expectedDraft.cronExpression}`}
+          />
+          <Typography.Text style={{ fontSize: 12 }} type="secondary">
+            {statusLabel}
+          </Typography.Text>
+        </div>
+        <div style={{ justifySelf: "end" }}>
+          <Spin size="small" />
+        </div>
+      </article>
+    );
+  };
 
   return (
     <>
@@ -1577,16 +1684,26 @@ const TeamAutomationsTab: React.FC<Props> = ({
                 )}
               </Typography.Text>
             </div>
-            <Button
-              className="team-automations-create-button"
-              disabled={eligibleMembers.length === 0}
-              icon={<PlusOutlined />}
-              onClick={openCreate}
-              style={primaryHeaderButtonStyle}
-              type="primary"
-            >
-              {copy("teams.automations.actions.create", "New automation")}
-            </Button>
+            <Space>
+              <Tooltip title={copy("teams.automations.actions.refresh", "Refresh")}>
+                <Button
+                  aria-label={copy("teams.automations.actions.refresh", "Refresh")}
+                  icon={<ReloadOutlined />}
+                  loading={automationsQuery.isFetching}
+                  onClick={() => void automationsQuery.refetch()}
+                />
+              </Tooltip>
+              <Button
+                className="team-automations-create-button"
+                disabled={eligibleMembers.length === 0}
+                icon={<PlusOutlined />}
+                onClick={openCreate}
+                style={primaryHeaderButtonStyle}
+                type="primary"
+              >
+                {copy("teams.automations.actions.create", "New automation")}
+              </Button>
+            </Space>
           </div>
 
           <div aria-live="polite" style={{ display: "grid", gap: 12, marginTop: 16 }}>
@@ -1616,14 +1733,28 @@ const TeamAutomationsTab: React.FC<Props> = ({
                 )}
               />
             ) : null}
-            {!automationsQuery.isLoading && !automationsQuery.isError && !automationItems.length ? (
+            {mutationObservationExpired ? (
+              <Alert
+                description={copy(
+                  "teams.automations.pending.description",
+                  "Automatic refresh stopped. Use Refresh to check authoritative state.",
+                )}
+                message={copy("teams.automations.pending.title", "Still pending")}
+                showIcon
+                type="warning"
+              />
+            ) : null}
+            {!automationsQuery.isLoading &&
+            !automationsQuery.isError &&
+            !automationItems.length &&
+            !acceptedCreateObservation ? (
               <Empty
                 description={routeMember
                   ? copy("teams.automations.empty.member", "No automations for this member")
                   : copy("teams.automations.empty.title", "No recurring work yet")}
               />
             ) : null}
-            {automationItems.length ? (
+            {automationItems.length || acceptedCreateObservation ? (
               <div style={commitmentGridStyle}>
                 <div className="team-automation-summary" style={automationSummaryGridStyle}>
                   {renderSummaryTile({
@@ -1659,6 +1790,9 @@ const TeamAutomationsTab: React.FC<Props> = ({
                     {copy("teams.automations.columns.actions", "Actions")}
                   </Typography.Text>
                 </div>
+                {acceptedCreateObservation
+                  ? renderAcceptedCreateRow(acceptedCreateObservation)
+                  : null}
                 {automationItems.map(renderRow)}
               </div>
             ) : null}

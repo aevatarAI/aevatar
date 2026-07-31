@@ -793,6 +793,33 @@ function decodeView(value: unknown, label = "ScheduledDispatchSummary"): TeamAut
   if (!teamOwned) {
     throw new Error(`${label} is not a Team-owned automation schedule.`);
   }
+  const ownerLLMRouteKind = requiredString(
+    record,
+    ["ownerLlmRouteKind", "OwnerLlmRouteKind", "ownerLLMRouteKind", "OwnerLLMRouteKind"],
+    `${label}.ownerLlmRouteKind`,
+  );
+  const ownerLLMRoute = ownerLLMRouteKind === "unspecified"
+    ? readString(
+        record,
+        ["ownerLlmRoute", "OwnerLlmRoute", "ownerLLMRoute", "OwnerLLMRoute"],
+        `${label}.ownerLlmRoute`,
+      ).trim()
+    : requiredString(
+        record,
+        ["ownerLlmRoute", "OwnerLlmRoute", "ownerLLMRoute", "OwnerLLMRoute"],
+        `${label}.ownerLlmRoute`,
+      );
+  const ownerLLMModel = ownerLLMRouteKind === "unspecified"
+    ? readString(
+        record,
+        ["ownerLlmModel", "OwnerLlmModel", "ownerLLMModel", "OwnerLLMModel"],
+        `${label}.ownerLlmModel`,
+      ).trim()
+    : requiredString(
+        record,
+        ["ownerLlmModel", "OwnerLlmModel", "ownerLLMModel", "OwnerLLMModel"],
+        `${label}.ownerLlmModel`,
+      );
 
   return {
     scopeId: requiredString(
@@ -869,16 +896,8 @@ function decodeView(value: unknown, label = "ScheduledDispatchSummary"): TeamAut
     vaultRevocationStatus: normalizeRevocationTrack(
       field(record, "vaultRevocationStatus", "VaultRevocationStatus"),
     ),
-    ownerLLMRouteKind: requiredString(
-      record,
-      ["ownerLlmRouteKind", "OwnerLlmRouteKind", "ownerLLMRouteKind", "OwnerLLMRouteKind"],
-      `${label}.ownerLlmRouteKind`,
-    ),
-    ownerLLMRoute: requiredString(
-      record,
-      ["ownerLlmRoute", "OwnerLlmRoute", "ownerLLMRoute", "OwnerLLMRoute"],
-      `${label}.ownerLlmRoute`,
-    ),
+    ownerLLMRouteKind,
+    ownerLLMRoute,
     ownerLLMUserServiceId: readString(
       record,
       ["ownerLlmUserServiceId", "OwnerLlmUserServiceId", "ownerLLMUserServiceId", "OwnerLLMUserServiceId"],
@@ -889,11 +908,7 @@ function decodeView(value: unknown, label = "ScheduledDispatchSummary"): TeamAut
       ["ownerLlmServiceSlug", "OwnerLlmServiceSlug", "ownerLLMServiceSlug", "OwnerLLMServiceSlug"],
       `${label}.ownerLlmServiceSlug`,
     ),
-    ownerLLMModel: requiredString(
-      record,
-      ["ownerLlmModel", "OwnerLlmModel", "ownerLLMModel", "OwnerLLMModel"],
-      `${label}.ownerLlmModel`,
-    ),
+    ownerLLMModel,
     stateVersion: requiredNonNegativeInteger(
       record,
       ["stateVersion", "StateVersion"],
