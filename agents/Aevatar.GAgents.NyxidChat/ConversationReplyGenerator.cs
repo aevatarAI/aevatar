@@ -1,5 +1,6 @@
 using System.Text;
 using Aevatar.AI.Abstractions;
+using Google.Protobuf;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.Prompting;
@@ -2306,6 +2307,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         }
 
         AppendRuntimeFact(runtimeFacts, attachmentVisibilityInstruction);
+        AppendRuntimeFact(runtimeFacts, BuildCurrentInputFileRefsSection(toolContext.InputFileRefs));
         AppendRuntimeFact(runtimeFacts, runtimeNotice);
 
         var global = _overlayProvider?.GetCurrent(new SystemSkillOverlayRequest(
@@ -2341,6 +2343,38 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             ? platform
             : null;
     }
+
+    private static readonly JsonFormatter InputFileRefJsonFormatter = new(
+        JsonFormatter.Settings.Default
+            .WithFormatDefaultValues(false)
+            .WithPreserveProtoFieldNames(true)
+            .WithFormatEnumsAsIntegers(true));
+
+    private static string? BuildCurrentInputFileRefsSection(IReadOnlyList<Aevatar.AI.Abstractions.ChatFileRef> fileRefs)
+    {
+        var handles = fileRefs
+            .Where(HasFileRefIdentity)
+            .Select(ToPromptFileHandle)
+            .ToArray();
+        if (handles.Length == 0)
+            return null;
+
+        var builder = new StringBuilder();
+        builder.AppendLine("## Current input files");
+        builder.AppendLine("The current turn includes runtime-owned typed file references. When a tool accepts file input, pass one exact handle under `input_parts[].file_ref`; do not invent attachment identifiers or report that no file reference exists.");
+        foreach (var handle in handles)
+            builder.AppendLine($"- file_ref: {InputFileRefJsonFormatter.Format(handle)}");
+
+        return builder.ToString();
+    }
+
+    private static Aevatar.AI.Abstractions.ChatFileRef ToPromptFileHandle(Aevatar.AI.Abstractions.ChatFileRef fileRef) =>
+        new()
+        {
+            FileId = fileRef.FileId,
+            ArtifactId = fileRef.ArtifactId,
+            SourceKind = fileRef.SourceKind,
+        };
 
     private static void AppendRuntimeFact(StringBuilder builder, string? content)
     {
