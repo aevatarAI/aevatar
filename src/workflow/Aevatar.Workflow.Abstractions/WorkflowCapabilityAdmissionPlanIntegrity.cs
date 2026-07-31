@@ -13,6 +13,9 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
     public const string RebindRequiredCode = "CAPABILITY_ADMISSION_REBIND_REQUIRED";
     public const string NyxIdAuthority = "nyxid";
 
+    public static bool RequiresExplicitRequestBindingIdentity(WorkflowCapabilityAdmissionPlan? plan) =>
+        plan?.InvocationAdmissions.Any(static admission => admission.NyxIdExplicitRequestGrant is not null) == true;
+
     public static WorkflowCapabilityAdmissionPlan Create(
         string workflowYaml,
         IReadOnlyDictionary<string, string>? inlineWorkflowYamls,

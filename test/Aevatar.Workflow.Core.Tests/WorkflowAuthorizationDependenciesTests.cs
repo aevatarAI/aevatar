@@ -240,6 +240,8 @@ public sealed class WorkflowAuthorizationDependenciesTests
     [Fact]
     public async Task BindWorkflowDefinition_ShouldRequireServiceGrantForExplicitRequestSelector()
     {
+        const string workflowId = "wf-explicit-alpha";
+        const string revisionId = "rev-explicit-alpha";
         var yaml = ExactNyxIdRequestWorkflowYaml();
         var agent = NewAgent();
         var dependencies = agent.EvaluateAuthorizationDependencies(yaml)!;
@@ -247,23 +249,138 @@ public sealed class WorkflowAuthorizationDependenciesTests
             yaml,
             new Dictionary<string, string>(),
             ExternalCapabilityExecutionMode.Interactive,
-            ReadyAdmissions(dependencies),
-            ReadyExplicitRequestSourceStamps());
+            ReadyAdmissions(dependencies, workflowId, revisionId),
+            ReadyExplicitRequestSourceStamps(),
+            workflowId: workflowId,
+            revisionId: revisionId);
 
         await agent.BindWorkflowDefinitionAsync(
             yaml,
-            "wf-explicit-alpha",
-            capabilityAdmissionPlan: plan);
+            "explicit-workflow",
+            capabilityAdmissionPlan: plan,
+            workflowId: workflowId,
+            revisionId: revisionId);
 
         agent.State.AuthorizationDependencies.ServiceGrantPolicy.Should()
             .Be(WorkflowServiceGrantPolicy.Required);
         agent.State.AuthorizationDependencies.ExternalInvocations.Should().ContainSingle()
             .Which.Selector.NyxIdRequest.UserServiceId.Should().Be("usvc-explicit-alpha");
+        agent.State.WorkflowId.Should().Be(workflowId);
+        agent.State.RevisionId.Should().Be(revisionId);
+    }
+
+    [Fact]
+    public async Task BindWorkflowDefinition_WhenExplicitIdentityChanges_ShouldRejectAndPreserveAuthority()
+    {
+        var yaml = ExactNyxIdRequestWorkflowYaml();
+        var agent = NewAgent();
+        var planAlpha = CreateExplicitRequestPlan(yaml, "wf-alpha", "rev-alpha");
+        var planBeta = CreateExplicitRequestPlan(yaml, "wf-beta", "rev-beta");
+        await agent.BindWorkflowDefinitionAsync(
+            yaml,
+            "explicit-workflow",
+            capabilityAdmissionPlan: planAlpha,
+            workflowId: "wf-alpha",
+            revisionId: "rev-alpha");
+
+        var act = () => agent.BindWorkflowDefinitionAsync(
+            yaml,
+            "explicit-workflow",
+            capabilityAdmissionPlan: planBeta,
+            workflowId: "wf-beta",
+            revisionId: "rev-beta");
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*workflow revision identity*");
+        agent.State.WorkflowId.Should().Be("wf-alpha");
+        agent.State.RevisionId.Should().Be("rev-alpha");
+    }
+
+    [Fact]
+    public async Task BindWorkflowDefinition_WhenInvalidBindingClearsPlan_ShouldStillRejectIdentityChange()
+    {
+        var yaml = ExactNyxIdRequestWorkflowYaml();
+        var agent = NewAgent();
+        var planAlpha = CreateExplicitRequestPlan(yaml, "wf-alpha", "rev-alpha");
+        var planBeta = CreateExplicitRequestPlan(yaml, "wf-beta", "rev-beta");
+        await agent.BindWorkflowDefinitionAsync(
+            yaml,
+            "explicit-workflow",
+            capabilityAdmissionPlan: planAlpha,
+            workflowId: "wf-alpha",
+            revisionId: "rev-alpha");
+        await agent.BindWorkflowDefinitionAsync(
+            "name: explicit-workflow\nroles: [\n",
+            "explicit-workflow",
+            capabilityAdmissionPlan: planAlpha,
+            workflowId: "wf-alpha",
+            revisionId: "rev-alpha");
+
+        agent.State.Compiled.Should().BeFalse();
+        agent.State.CapabilityAdmissionPlan.Should().BeNull();
+
+        var act = () => agent.BindWorkflowDefinitionAsync(
+            yaml,
+            "explicit-workflow",
+            capabilityAdmissionPlan: planBeta,
+            workflowId: "wf-beta",
+            revisionId: "rev-beta");
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*workflow revision identity*");
+        agent.State.WorkflowId.Should().Be("wf-alpha");
+        agent.State.RevisionId.Should().Be("rev-alpha");
+    }
+
+    [Fact]
+    public async Task BindWorkflowDefinition_WhenExistingRevisionOnlyDiffers_ShouldRejectIdentityChange()
+    {
+        var explicitYaml = ExactNyxIdRequestWorkflowYaml();
+        var agent = NewAgent();
+        var plan = CreateExplicitRequestPlan(explicitYaml, "wf-beta", "rev-beta");
+        await agent.BindWorkflowDefinitionAsync(
+            "name: explicit-workflow\nroles: []\nsteps: []\n",
+            "explicit-workflow",
+            revisionId: "rev-alpha");
+
+        var act = () => agent.BindWorkflowDefinitionAsync(
+            explicitYaml,
+            "explicit-workflow",
+            capabilityAdmissionPlan: plan,
+            workflowId: "wf-beta",
+            revisionId: "rev-beta");
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*workflow revision identity*");
+        agent.State.WorkflowId.Should().BeEmpty();
+        agent.State.RevisionId.Should().Be("rev-alpha");
+    }
+
+    [Fact]
+    public async Task BindWorkflowDefinition_WhenExistingExplicitIdentityIsMissing_ShouldRequireRebind()
+    {
+        var yaml = ExactNyxIdRequestWorkflowYaml();
+        var plan = CreateExplicitRequestPlan(yaml, "wf-alpha", "rev-alpha");
+        var agent = NewAgent();
+        agent.State.WorkflowName = "explicit-workflow";
+        agent.State.WorkflowYaml = yaml;
+        agent.State.CapabilityAdmissionPlan = plan.Clone();
+
+        var act = () => agent.BindWorkflowDefinitionAsync(
+            yaml,
+            "explicit-workflow",
+            capabilityAdmissionPlan: plan,
+            workflowId: "wf-alpha",
+            revisionId: "rev-alpha");
+
+        await act.Should().ThrowAsync<WorkflowCapabilityAdmissionRebindRequiredException>();
     }
 
     [Fact]
     public async Task BindWorkflowDefinition_WithExplicitRequestOnlyInInlineWorkflow_ShouldRequireServiceGrant()
     {
+        const string workflowId = "wf-root-alpha";
+        const string revisionId = "rev-root-alpha";
         const string rootYaml = """
             name: root-workflow
             roles: []
@@ -282,14 +399,18 @@ public sealed class WorkflowAuthorizationDependenciesTests
             rootYaml,
             inlineWorkflowYamls,
             ExternalCapabilityExecutionMode.Interactive,
-            ReadyAdmissions(inlineDependencies),
-            ReadyExplicitRequestSourceStamps());
+            ReadyAdmissions(inlineDependencies, workflowId, revisionId),
+            ReadyExplicitRequestSourceStamps(),
+            workflowId: workflowId,
+            revisionId: revisionId);
 
         await agent.BindWorkflowDefinitionAsync(
             rootYaml,
             "root-workflow",
             inlineWorkflowYamls,
-            capabilityAdmissionPlan: plan);
+            capabilityAdmissionPlan: plan,
+            workflowId: workflowId,
+            revisionId: revisionId);
 
         agent.State.AuthorizationDependencies.ServiceGrantPolicy.Should()
             .Be(WorkflowServiceGrantPolicy.Required);
@@ -339,6 +460,13 @@ public sealed class WorkflowAuthorizationDependenciesTests
 
         scopeField.ContainingOneof.Should().NotBeNull();
         scopeField.ContainingOneof!.IsSynthetic.Should().BeTrue();
+    }
+
+    [Fact]
+    public void WorkflowStateContract_ShouldCarryBoundWorkflowRevisionIdentity()
+    {
+        WorkflowState.Descriptor.FindFieldByName("workflow_id")!.FieldNumber.Should().Be(20);
+        WorkflowState.Descriptor.FindFieldByName("revision_id")!.FieldNumber.Should().Be(21);
     }
 
     [Fact]
@@ -780,7 +908,7 @@ public sealed class WorkflowAuthorizationDependenciesTests
 
     private static string ExactNyxIdRequestWorkflowYaml() =>
         """
-        name: wf-explicit-alpha
+        name: explicit-workflow
         roles: []
         steps:
           - id: request-alpha
@@ -798,8 +926,10 @@ public sealed class WorkflowAuthorizationDependenciesTests
         """;
 
     private static WorkflowCapabilityInvocationAdmission[] ReadyAdmissions(
-        WorkflowAuthorizationDependencies dependencies) =>
-        dependencies.ExternalInvocations.Select(static invocation => new WorkflowCapabilityInvocationAdmission
+        WorkflowAuthorizationDependencies dependencies,
+        string? workflowId = null,
+        string? revisionId = null) =>
+        dependencies.ExternalInvocations.Select(invocation => new WorkflowCapabilityInvocationAdmission
         {
             CallSiteId = invocation.CallSiteId,
             Capability = invocation.Selector.SelectorCase switch
@@ -834,22 +964,24 @@ public sealed class WorkflowAuthorizationDependenciesTests
                         },
                     },
                 ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdRequest =>
-                    BuildExplicitRequestAdmissionCapability(invocation),
+                    BuildExplicitRequestAdmissionCapability(invocation, workflowId, revisionId),
                 _ => throw new InvalidOperationException("A selected capability is required."),
             },
             NyxIdExplicitRequestGrant = invocation.Selector.SelectorCase ==
                                         ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdRequest
-                ? BuildExplicitRequestGrant(invocation)
+                ? BuildExplicitRequestGrant(invocation, workflowId, revisionId)
                 : null,
         }).ToArray();
 
     private static ExternalWorkflowCapabilityRef BuildExplicitRequestAdmissionCapability(
-        ExternalToolInvocationSpec invocation)
+        ExternalToolInvocationSpec invocation,
+        string? workflowId,
+        string? revisionId)
     {
         var request = invocation.Selector.NyxIdRequest.Clone();
         var requestDigest = WorkflowCapabilityAdmissionPlanIntegrity
             .ComputeNyxIdRequestContractDigest(request);
-        var grant = BuildExplicitRequestGrant(invocation);
+        var grant = BuildExplicitRequestGrant(invocation, workflowId, revisionId);
         return new ExternalWorkflowCapabilityRef
         {
             NyxIdUserRequest = new NyxIdUserRequestCapabilityRef
@@ -872,10 +1004,14 @@ public sealed class WorkflowAuthorizationDependenciesTests
     }
 
     private static NyxIdExplicitRequestGrant BuildExplicitRequestGrant(
-        ExternalToolInvocationSpec invocation)
+        ExternalToolInvocationSpec invocation,
+        string? workflowId,
+        string? revisionId)
     {
         var grant = new NyxIdExplicitRequestGrant
         {
+            WorkflowId = workflowId ?? string.Empty,
+            RevisionId = revisionId ?? string.Empty,
             CallSiteId = invocation.CallSiteId,
             RequestContractDigest = WorkflowCapabilityAdmissionPlanIntegrity
                 .ComputeNyxIdRequestContractDigest(invocation.Selector.NyxIdRequest),
@@ -902,6 +1038,22 @@ public sealed class WorkflowAuthorizationDependenciesTests
                 ContentDigest = "explicit-user-services-digest-alpha",
             },
         ];
+
+    private static WorkflowCapabilityAdmissionPlan CreateExplicitRequestPlan(
+        string workflowYaml,
+        string workflowId,
+        string revisionId)
+    {
+        var dependencies = new WorkflowGAgent().EvaluateAuthorizationDependencies(workflowYaml)!;
+        return WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            workflowYaml,
+            new Dictionary<string, string>(),
+            ExternalCapabilityExecutionMode.Interactive,
+            ReadyAdmissions(dependencies, workflowId, revisionId),
+            ReadyExplicitRequestSourceStamps(),
+            workflowId: workflowId,
+            revisionId: revisionId);
+    }
 
     private static ExternalCapabilitySourceStamp[] ReadySourceStamps(
         string userServiceId = "us-home-alpha") =>

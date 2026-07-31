@@ -7492,6 +7492,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
         memberId: "m-alpha",
         scopeId: "scope-1",
         workflowId: "wf-alpha",
+        revisionId: expect.stringMatching(/^rev-/),
         workflowYamls: [expect.stringContaining("name: Workflow Alpha")],
       });
       expect(screen.getByText("Published")).toBeTruthy();

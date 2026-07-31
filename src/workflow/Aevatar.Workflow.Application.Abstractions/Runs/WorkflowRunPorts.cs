@@ -71,7 +71,9 @@ public sealed record WorkflowDefinitionBinding(
     string RunOrigin = "",
     string ScheduleId = "",
     string SourceKind = "",
-    WorkflowCapabilityAdmissionPlan? CapabilityAdmissionPlan = null);
+    WorkflowCapabilityAdmissionPlan? CapabilityAdmissionPlan = null,
+    string WorkflowId = "",
+    string RevisionId = "");
 
 public sealed record WorkflowRunCreationReceipt(
     string ActorId,
@@ -96,7 +98,9 @@ public sealed record WorkflowActorBinding(
     DateTimeOffset? CreatedAt = null,
     DateTimeOffset? UpdatedAt = null,
     string SourceKind = "",
-    WorkflowCapabilityAdmissionPlan? CapabilityAdmissionPlan = null)
+    WorkflowCapabilityAdmissionPlan? CapabilityAdmissionPlan = null,
+    string WorkflowId = "",
+    string RevisionId = "")
 {
     public static WorkflowActorBinding Unsupported(string actorId) =>
         new(
@@ -251,6 +255,8 @@ public interface IWorkflowDefinitionProvisioningPort
         string? scopeId = null,
         string? sourceKind = null,
         WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan = null,
+        string? workflowId = null,
+        string? revisionId = null,
         CancellationToken ct = default);
 }
 

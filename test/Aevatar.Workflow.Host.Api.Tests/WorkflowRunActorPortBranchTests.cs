@@ -135,6 +135,157 @@ public sealed class WorkflowRunActorPortBranchTests
     }
 
     [Fact]
+    public async Task EnsureDefinitionAsync_WhenExistingExplicitIdentityDiffers_ShouldRejectWithoutRebinding()
+    {
+        const string workflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        var plan = CreateExplicitCapabilityAdmissionPlan("wf-alpha", "rev-alpha");
+        var runtime = new RecordingActorRuntime();
+        var definitionAgent = CreateBoundDefinitionAgent(
+            workflowYaml,
+            plan,
+            workflowId: "wf-alpha",
+            revisionId: "rev-alpha");
+        var definitionActor = new RecordingActor("definition-explicit", definitionAgent);
+        runtime.StoredActors[definitionActor.Id] = definitionActor;
+        var port = CreatePort(runtime);
+
+        var act = () => port.EnsureDefinitionAsync(
+            new WorkflowDefinitionBinding(
+                definitionActor.Id,
+                "direct",
+                workflowYaml,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                CapabilityAdmissionPlan: plan,
+                WorkflowId: "wf-beta",
+                RevisionId: "rev-beta"),
+            definitionActor.Id,
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*workflow revision identity*");
+        definitionActor.LastHandledEnvelope.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task CreateRunAsync_WhenExistingExplicitIdentityDiffers_ShouldRejectBeforeCreatingRun()
+    {
+        const string workflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        var plan = CreateExplicitCapabilityAdmissionPlan("wf-alpha", "rev-alpha");
+        var runtime = new RecordingActorRuntime();
+        var definitionAgent = CreateBoundDefinitionAgent(
+            workflowYaml,
+            plan,
+            workflowId: "wf-alpha",
+            revisionId: "rev-alpha");
+        var definitionActor = new RecordingActor("definition-explicit-run", definitionAgent);
+        runtime.StoredActors[definitionActor.Id] = definitionActor;
+        runtime.ActorsToCreate.Enqueue(new RecordingActor("unexpected-run", new StubAgent("unexpected-run")));
+        var port = CreatePort(runtime);
+
+        var act = () => port.CreateRunAsync(
+            new WorkflowDefinitionBinding(
+                definitionActor.Id,
+                "direct",
+                workflowYaml,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                CapabilityAdmissionPlan: plan,
+                WorkflowId: "wf-beta",
+                RevisionId: "rev-beta"),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*workflow revision identity*");
+        runtime.CreateRequests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task EnsureDefinitionAsync_WhenExplicitBindingIdentityIsMissing_ShouldRequireRebind()
+    {
+        const string workflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        var plan = CreateExplicitCapabilityAdmissionPlan("wf-alpha", "rev-alpha");
+        var runtime = new RecordingActorRuntime();
+        var definitionAgent = CreateBoundDefinitionAgent(workflowYaml, plan);
+        var definitionActor = new RecordingActor("definition-legacy-explicit", definitionAgent);
+        runtime.StoredActors[definitionActor.Id] = definitionActor;
+        var port = CreatePort(runtime);
+
+        var act = () => port.EnsureDefinitionAsync(
+            new WorkflowDefinitionBinding(
+                definitionActor.Id,
+                "direct",
+                workflowYaml,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                CapabilityAdmissionPlan: plan,
+                WorkflowId: "wf-alpha",
+                RevisionId: "rev-alpha"),
+            definitionActor.Id,
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<WorkflowCapabilityAdmissionRebindRequiredException>();
+        definitionActor.LastHandledEnvelope.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task EnsureDefinitionAsync_WhenExistingExplicitIdentityMatches_ShouldReuseWithoutRebinding()
+    {
+        const string workflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        var plan = CreateExplicitCapabilityAdmissionPlan("wf-alpha", "rev-alpha");
+        var runtime = new RecordingActorRuntime();
+        var definitionAgent = CreateBoundDefinitionAgent(
+            workflowYaml,
+            plan,
+            workflowId: "wf-alpha",
+            revisionId: "rev-alpha");
+        var definitionActor = new RecordingActor("definition-explicit-same", definitionAgent);
+        runtime.StoredActors[definitionActor.Id] = definitionActor;
+        var port = CreatePort(runtime);
+
+        var receipt = await port.EnsureDefinitionAsync(
+            new WorkflowDefinitionBinding(
+                definitionActor.Id,
+                "direct",
+                workflowYaml,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                CapabilityAdmissionPlan: plan,
+                WorkflowId: "wf-alpha",
+                RevisionId: "rev-alpha"),
+            definitionActor.Id,
+            CancellationToken.None);
+
+        receipt.ActorId.Should().Be(definitionActor.Id);
+        receipt.CreatedNow.Should().BeFalse();
+        definitionActor.LastHandledEnvelope.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task EnsureDefinitionAsync_WhenExistingRevisionOnlyDiffers_ShouldRejectWithoutRebinding()
+    {
+        const string workflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        var runtime = new RecordingActorRuntime();
+        var definitionAgent = new WorkflowGAgent();
+        definitionAgent.State.WorkflowName = "direct";
+        definitionAgent.State.WorkflowYaml = workflowYaml;
+        definitionAgent.State.RevisionId = "rev-alpha";
+        var definitionActor = new RecordingActor("definition-revision-only", definitionAgent);
+        runtime.StoredActors[definitionActor.Id] = definitionActor;
+        var port = CreatePort(runtime);
+
+        var act = () => port.EnsureDefinitionAsync(
+            new WorkflowDefinitionBinding(
+                definitionActor.Id,
+                "direct",
+                workflowYaml,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                RevisionId: "rev-beta"),
+            definitionActor.Id,
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*workflow revision identity*");
+        definitionActor.LastHandledEnvelope.Should().BeNull();
+    }
+
+    [Fact]
     public async Task CreateRunAsync_ShouldPropagateScopeIdIntoRunBindingEvent()
     {
         var runtime = new RecordingActorRuntime();
@@ -670,6 +821,8 @@ public sealed class WorkflowRunActorPortBranchTests
             },
             sourceKind: "service_revision",
             capabilityAdmissionPlan: capabilityAdmissionPlan,
+            workflowId: "wf-direct-alpha",
+            revisionId: "rev-direct-alpha",
             ct: CancellationToken.None);
 
         actor.LastHandledEnvelope.Should().NotBeNull();
@@ -680,6 +833,8 @@ public sealed class WorkflowRunActorPortBranchTests
         bind.HasScopeId.Should().BeFalse();
         bind.SourceKind.Should().Be("service_revision");
         bind.CapabilityAdmissionPlan.AdmissionDigest.Should().Be(capabilityAdmissionPlan.AdmissionDigest);
+        bind.WorkflowId.Should().Be("wf-direct-alpha");
+        bind.RevisionId.Should().Be("rev-direct-alpha");
     }
 
     [Fact]
@@ -892,6 +1047,49 @@ public sealed class WorkflowRunActorPortBranchTests
     }
 
     [Fact]
+    public async Task EnsureDefinitionAsync_WhenDefinitionCreateRaceWinnerHasDifferentExplicitIdentity_ShouldReject()
+    {
+        const string workflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        var plan = CreateExplicitCapabilityAdmissionPlan("wf-alpha", "rev-alpha");
+        var runtime = new RecordingActorRuntime();
+        var racedDefinition = new RecordingActor(
+            "definition-explicit-race",
+            CreateBoundDefinitionAgent(
+                workflowYaml,
+                plan,
+                workflowId: "wf-alpha",
+                revisionId: "rev-alpha"));
+        runtime.CreateExceptionFactory = (agentType, requestedId) =>
+        {
+            if (agentType == typeof(WorkflowGAgent) &&
+                string.Equals(requestedId, racedDefinition.Id, StringComparison.Ordinal))
+            {
+                runtime.StoredActors[racedDefinition.Id] = racedDefinition;
+                return new InvalidOperationException($"Actor {racedDefinition.Id} already exists");
+            }
+
+            return null;
+        };
+        var port = CreatePort(runtime);
+
+        var act = () => port.EnsureDefinitionAsync(
+            new WorkflowDefinitionBinding(
+                racedDefinition.Id,
+                "direct",
+                workflowYaml,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                CapabilityAdmissionPlan: plan,
+                WorkflowId: "wf-beta",
+                RevisionId: "rev-beta"),
+            racedDefinition.Id,
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*workflow revision identity*");
+        racedDefinition.LastHandledEnvelope.Should().BeNull();
+    }
+
+    [Fact]
     public async Task EnsureRunAsync_ShouldUseExactRunIdentityAndIdempotentBindingCommand()
     {
         const string workflowYaml = "name: direct\nroles: []\nsteps: []\n";
@@ -1030,6 +1228,44 @@ public sealed class WorkflowRunActorPortBranchTests
             ExternalCapabilityExecutionMode.Interactive,
             [],
             []);
+
+    private static WorkflowCapabilityAdmissionPlan CreateExplicitCapabilityAdmissionPlan(
+        string workflowId,
+        string revisionId)
+    {
+        var plan = new WorkflowCapabilityAdmissionPlan
+        {
+            SchemaVersion = WorkflowCapabilityAdmissionPlanIntegrity.SchemaVersion,
+            ExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+            DefinitionDigest = "definition-digest-explicit",
+            AdmissionDigest = "admission-digest-explicit",
+        };
+        plan.InvocationAdmissions.Add(new WorkflowCapabilityInvocationAdmission
+        {
+            CallSiteId = "direct/request",
+            NyxIdExplicitRequestGrant = new NyxIdExplicitRequestGrant
+            {
+                WorkflowId = workflowId,
+                RevisionId = revisionId,
+            },
+        });
+        return plan;
+    }
+
+    private static WorkflowGAgent CreateBoundDefinitionAgent(
+        string workflowYaml,
+        WorkflowCapabilityAdmissionPlan capabilityAdmissionPlan,
+        string workflowId = "",
+        string revisionId = "")
+    {
+        var agent = new WorkflowGAgent();
+        agent.State.WorkflowName = "direct";
+        agent.State.WorkflowYaml = workflowYaml;
+        agent.State.CapabilityAdmissionPlan = capabilityAdmissionPlan.Clone();
+        agent.State.WorkflowId = workflowId;
+        agent.State.RevisionId = revisionId;
+        return agent;
+    }
 
     private static WorkflowGAgent CreateWorkflowDefinitionAgent()
     {
@@ -1239,7 +1475,9 @@ public sealed class WorkflowRunActorPortBranchTests
                         StringComparer.OrdinalIgnoreCase),
                     definition.State.ScopeId,
                     SourceKind: definition.State.SourceKind,
-                    CapabilityAdmissionPlan: definition.State.CapabilityAdmissionPlan?.Clone()),
+                    CapabilityAdmissionPlan: definition.State.CapabilityAdmissionPlan?.Clone(),
+                    WorkflowId: definition.State.WorkflowId,
+                    RevisionId: definition.State.RevisionId),
                 WorkflowRunGAgent run => new WorkflowActorBinding(
                     WorkflowActorKind.Run,
                     actor.Id,

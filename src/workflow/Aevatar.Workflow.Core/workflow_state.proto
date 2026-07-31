@@ -83,6 +83,8 @@ message WorkflowState
   int32 max_active_sub_workflows = 17;
   WorkflowAuthorizationDependencies authorization_dependencies = 18;
   WorkflowCapabilityAdmissionPlan capability_admission_plan = 19;
+  string workflow_id = 20;
+  string revision_id = 21;
 }
 
 message WorkflowRunState

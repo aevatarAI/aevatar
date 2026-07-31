@@ -227,7 +227,7 @@ public class ChatRunStartErrorMapperTests
     public void ToErrorBody_ShouldMapExplicitRequestSelectorToSafeExactIdentity()
     {
         var request = ExplicitRequest("usvc-explicit-alpha");
-        request.HeaderParameters.Add("X-Private-Header-Name");
+        request.HeaderParameters.Add("If-Match");
         var readiness = new ExternalCapabilityReadiness
         {
             Status = ExternalCapabilityReadinessStatus.ContractDrift,
@@ -253,7 +253,7 @@ public class ChatRunStartErrorMapperTests
         selected.GetProperty("operationId").ValueKind.Should().Be(JsonValueKind.Null);
         selected.GetProperty("connectorCapabilityRef").ValueKind.Should().Be(JsonValueKind.Null);
         serialized.Should().NotContain("/api/private/{resource_id}");
-        serialized.Should().NotContain("X-Private-Header-Name");
+        serialized.Should().NotContain("If-Match");
     }
 
     [Fact]

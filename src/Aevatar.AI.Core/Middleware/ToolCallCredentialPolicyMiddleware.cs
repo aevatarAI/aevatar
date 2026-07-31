@@ -15,6 +15,35 @@ public sealed class ToolCallCredentialPolicyMiddleware : IToolCallMiddleware
         ArgumentNullException.ThrowIfNull(next);
 
         var current = context.ExecutionContext ?? AgentToolRequestContext.Current;
+        if (current?.Credentials.NyxIdCredentialKind == AgentToolNyxIdCredentialKind.ProxyDelegation)
+        {
+            var proxyDelegationToken = current.Credentials.NyxIdAccessToken?.Trim();
+            if (string.IsNullOrWhiteSpace(proxyDelegationToken))
+            {
+                Deny(
+                    context,
+                    $"Tool '{context.ToolName}' was not executed because the typed NyxID proxy delegation credential has no valid primary token. Credential fallback was not used.",
+                    ResolveCredentialSource(current),
+                    current.SenderBinding.BindingId?.Trim());
+                return;
+            }
+
+            var delegationContext = current with
+            {
+                Credentials = current.Credentials with
+                {
+                    NyxIdAccessToken = proxyDelegationToken,
+                    NyxIdOrgToken = null,
+                    SenderNyxIdAccessToken = null,
+                },
+            };
+
+            context.CredentialSource = ResolveCredentialSource(delegationContext);
+            using var delegationScope = AgentToolContextScope.Push(delegationContext);
+            await next();
+            return;
+        }
+
         var senderBindingId = current?.SenderBinding.BindingId?.Trim();
         if (string.IsNullOrWhiteSpace(senderBindingId))
         {

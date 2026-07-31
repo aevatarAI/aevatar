@@ -212,7 +212,11 @@ public sealed class AgentWorkflowToolSourceAdapterTests
                 ExecutionId: "exec-1",
                 CallId: "call-1",
                 ScopeId: "scope-1",
-                CallerCredential: new WorkflowCallerCredential { BearerToken = "token-123" },
+                CallerCredential: new WorkflowCallerCredential
+                {
+                    BearerToken = "token-123",
+                    Kind = NyxIdCallerCredentialKind.SourceReadableUserBearer,
+                },
                 RuntimeContext: WorkflowToolRuntimeContext.Empty,
                 IdempotencyKey: "idem-agent-tool-1",
                 ScheduleId: " schedule-1 "),
@@ -752,6 +756,8 @@ public sealed class AgentWorkflowToolSourceAdapterTests
             .ComputeNyxIdRequestContractDigest(request);
         var grant = new NyxIdExplicitRequestGrant
         {
+            WorkflowId = "wf-explicit-alpha",
+            RevisionId = "rev-explicit-alpha",
             CallSiteId = callSiteId,
             RequestContractDigest = requestContractDigest,
             GrantorAuthority = NyxIdExplicitRequestGrantorAuthority.AevatarWorkflowBinder,

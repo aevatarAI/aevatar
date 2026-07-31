@@ -83,6 +83,8 @@ public sealed class WorkflowActorBindingProjector
             WorkflowYaml = evt.WorkflowYaml ?? string.Empty,
             ScopeId = evt.ScopeId?.Trim() ?? string.Empty,
             SourceKind = evt.SourceKind?.Trim() ?? string.Empty,
+            WorkflowId = evt.WorkflowId ?? string.Empty,
+            RevisionId = evt.RevisionId ?? string.Empty,
         };
         if (evt.CapabilityAdmissionPlan is not null)
             document.CapabilityAdmissionPlan = evt.CapabilityAdmissionPlan.Clone();

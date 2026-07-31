@@ -1303,7 +1303,8 @@ public sealed class DefaultServiceInvocationDispatcherTests
         var target = CreateTarget(
             ServiceImplementationKind.Workflow,
             endpointId: "chat",
-            requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
+            requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl,
+            revisionId: "rev-artifact-alpha");
         var request = new ServiceInvocationRequest
         {
             Identity = GAgentServiceTestKit.CreateIdentity(),
@@ -1317,6 +1318,8 @@ public sealed class DefaultServiceInvocationDispatcherTests
             WorkflowName = "artifact-wf",
             WorkflowYaml = "name: artifact-wf",
             DefinitionActorId = "artifact-definition-actor",
+            WorkflowId = "wf-artifact-alpha",
+            RevisionId = "rev-artifact-alpha",
             InlineWorkflowYamls =
             {
                 ["helper"] = "name: helper",
@@ -1338,9 +1341,57 @@ public sealed class DefaultServiceInvocationDispatcherTests
         workflowPort.CreateRunCalls[0].WorkflowName.Should().Be("artifact-wf");
         workflowPort.CreateRunCalls[0].WorkflowYaml.Should().Be("name: artifact-wf");
         workflowPort.CreateRunCalls[0].InlineWorkflowYamls.Should().Contain("helper", "name: helper");
+        workflowPort.CreateRunCalls[0].WorkflowId.Should().Be("wf-artifact-alpha");
+        workflowPort.CreateRunCalls[0].RevisionId.Should().Be("rev-artifact-alpha");
         // 06-24: scheduleId must ride from the service-invocation request into the run binding so the
         // observatory can filter this schedule's runs (previously dropped on the workflow branch).
         workflowPort.CreateRunCalls[0].ScheduleId.Should().Be("schedule-wf");
+    }
+
+    [Fact]
+    public async Task DispatchAsync_ShouldRejectWorkflowArtifactRevisionMismatch()
+    {
+        var workflowPort = new RecordingWorkflowRunActorPort();
+        var registry = new RecordingServiceRunRegistrationPort();
+        var dispatcher = new DefaultServiceInvocationDispatcher(
+            new RecordingDispatchPort(),
+            new RecordingScriptRuntimeCommandPort(),
+            workflowPort,
+            registry);
+        var target = CreateExplicitWorkflowTarget(
+            resolvedRevisionId: "rev-resolved-alpha",
+            artifactRevisionId: "rev-artifact-beta",
+            planRevisionId: "rev-resolved-alpha");
+
+        var act = () => dispatcher.DispatchAsync(target, CreateWorkflowInvocationRequest());
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*artifact revision_id*");
+        workflowPort.CreateRunCalls.Should().BeEmpty();
+        registry.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task DispatchAsync_ShouldRejectWorkflowPlanRevisionMismatch()
+    {
+        var workflowPort = new RecordingWorkflowRunActorPort();
+        var registry = new RecordingServiceRunRegistrationPort();
+        var dispatcher = new DefaultServiceInvocationDispatcher(
+            new RecordingDispatchPort(),
+            new RecordingScriptRuntimeCommandPort(),
+            workflowPort,
+            registry);
+        var target = CreateExplicitWorkflowTarget(
+            resolvedRevisionId: "rev-resolved-alpha",
+            artifactRevisionId: "rev-resolved-alpha",
+            planRevisionId: "rev-plan-beta");
+
+        var act = () => dispatcher.DispatchAsync(target, CreateWorkflowInvocationRequest());
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*workflow plan revision_id*");
+        workflowPort.CreateRunCalls.Should().BeEmpty();
+        registry.Calls.Should().BeEmpty();
     }
 
     [Fact]
@@ -1403,11 +1454,12 @@ public sealed class DefaultServiceInvocationDispatcherTests
         ServiceImplementationKind implementationKind,
         string endpointId,
         string requestTypeUrl = "",
-        string primaryActorId = "primary-actor")
+        string primaryActorId = "primary-actor",
+        string revisionId = "r1")
     {
         var artifact = GAgentServiceTestKit.CreatePreparedStaticArtifact(
             GAgentServiceTestKit.CreateIdentity(),
-            "r1",
+            revisionId,
             GAgentServiceTestKit.CreateEndpointDescriptor(endpointId: endpointId, requestTypeUrl: requestTypeUrl));
         artifact.ImplementationKind = implementationKind;
         if (artifact.DeploymentPlan.PlanSpecCase == ServiceDeploymentPlan.PlanSpecOneofCase.StaticPlan &&
@@ -1419,7 +1471,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
         return new ServiceInvocationResolvedTarget(
             new ServiceInvocationResolvedService(
                 "tenant:app:default:svc",
-                "r1",
+                revisionId,
                 "dep-1",
                 primaryActorId,
                 ServiceDeploymentStatus.Active.ToString(),
@@ -1433,6 +1485,43 @@ public sealed class DefaultServiceInvocationDispatcherTests
                 RequestTypeUrl = requestTypeUrl,
             });
     }
+
+    private static ServiceInvocationResolvedTarget CreateExplicitWorkflowTarget(
+        string resolvedRevisionId,
+        string artifactRevisionId,
+        string planRevisionId)
+    {
+        var target = CreateTarget(
+            ServiceImplementationKind.Workflow,
+            endpointId: "chat",
+            requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl,
+            revisionId: resolvedRevisionId);
+        var admissionPlan = new WorkflowCapabilityAdmissionPlan();
+        admissionPlan.InvocationAdmissions.Add(new WorkflowCapabilityInvocationAdmission
+        {
+            CallSiteId = "workflow/request-alpha",
+            NyxIdExplicitRequestGrant = new NyxIdExplicitRequestGrant(),
+        });
+        target.Artifact.RevisionId = artifactRevisionId;
+        target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
+        {
+            WorkflowName = "workflow",
+            WorkflowYaml = "name: workflow",
+            WorkflowId = "wf-dispatch-alpha",
+            RevisionId = planRevisionId,
+            CapabilityAdmissionPlan = admissionPlan,
+        };
+        return target;
+    }
+
+    private static ServiceInvocationRequest CreateWorkflowInvocationRequest() =>
+        new()
+        {
+            Identity = GAgentServiceTestKit.CreateIdentity(),
+            EndpointId = "chat",
+            CommandId = "cmd-workflow-identity",
+            Payload = Any.Pack(new ChatRequestEvent { Prompt = "hi" }),
+        };
 
     private static DurableCallerCredentialRef CreateDurableCallerCredentialRef() =>
         new()
@@ -1616,6 +1705,8 @@ public sealed class DefaultServiceInvocationDispatcherTests
             string? scopeId = null,
             string? sourceKind = null,
             WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan = null,
+            string? workflowId = null,
+            string? revisionId = null,
             CancellationToken ct = default) => Task.CompletedTask;
 
         public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(string workflowYaml, CancellationToken ct = default) =>

@@ -15,6 +15,7 @@ using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Extensions.Hosting;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
+using Aevatar.Workflow.Infrastructure.Workflows;
 using Aevatar.Workflow.Projection;
 using Aevatar.Workflow.Projection.Orchestration;
 using FluentAssertions;
@@ -197,6 +198,11 @@ public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
                 options.EnableScriptingCapability = false;
             });
             builder.AddGAgentServiceCapabilityBundle();
+            builder.Services.Configure<WorkflowDefinitionFileSourceOptions>(options =>
+            {
+                options.WorkflowDirectories.Clear();
+                options.WorkflowDirectories.Add(Path.Combine(repoRoot, "workflows"));
+            });
             builder.Services.AddSingleton<InMemoryGAgentActorStore>();
             builder.Services.AddSingleton<IGAgentActorRegistryCommandPort>(sp => sp.GetRequiredService<InMemoryGAgentActorStore>());
             builder.Services.AddSingleton<IGAgentActorRegistryQueryPort>(sp => sp.GetRequiredService<InMemoryGAgentActorStore>());

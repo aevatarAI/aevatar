@@ -310,14 +310,18 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
             new Dictionary<string, string>(),
             ExternalCapabilityExecutionMode.Interactive,
             [ExplicitAdmission(capability)],
-            [ExplicitSource()]);
+            [ExplicitSource()],
+            workflowId: ExplicitWorkflowId,
+            revisionId: ExplicitRevisionId);
 
         var act = () => WorkflowCapabilityAdmissionPlanIntegrity.ValidateOrThrow(
             plan,
             yaml,
             new Dictionary<string, string>(),
             ExternalCapabilityExecutionMode.Interactive,
-            [ExplicitInvocation(selector)]);
+            [ExplicitInvocation(selector)],
+            workflowId: ExplicitWorkflowId,
+            revisionId: ExplicitRevisionId);
 
         act.Should().NotThrow();
     }
@@ -373,7 +377,9 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
             new Dictionary<string, string>(),
             ExternalCapabilityExecutionMode.Interactive,
             [ExplicitAdmission(capability)],
-            [ExplicitSource()]);
+            [ExplicitSource()],
+            workflowId: ExplicitWorkflowId,
+            revisionId: ExplicitRevisionId);
         var originalDigest = plan.AdmissionDigest;
 
         MutateCanonicalBoundInvocation(plan.InvocationAdmissions.Single(), mutation);
@@ -385,7 +391,9 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
             yaml,
             new Dictionary<string, string>(),
             ExternalCapabilityExecutionMode.Interactive,
-            [ExplicitInvocation(selector)]);
+            [ExplicitInvocation(selector)],
+            workflowId: ExplicitWorkflowId,
+            revisionId: ExplicitRevisionId);
         act.Should().Throw<InvalidOperationException>()
             .WithMessage("Workflow capability invocation admissions do not match the bound definition.");
     }
@@ -420,7 +428,9 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
             new Dictionary<string, string>(),
             ExternalCapabilityExecutionMode.Interactive,
             [ExplicitAdmission(capability)],
-            [ExplicitSource()]);
+            [ExplicitSource()],
+            workflowId: ExplicitWorkflowId,
+            revisionId: ExplicitRevisionId);
 
         MutateValidProofOrGrantCorrespondence(plan.InvocationAdmissions.Single(), mutation);
         plan.AdmissionDigest = WorkflowCapabilityAdmissionPlanIntegrity.ComputeAdmissionDigest(plan);
@@ -430,7 +440,9 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
             yaml,
             new Dictionary<string, string>(),
             ExternalCapabilityExecutionMode.Interactive,
-            [ExplicitInvocation(selector)]);
+            [ExplicitInvocation(selector)],
+            workflowId: ExplicitWorkflowId,
+            revisionId: ExplicitRevisionId);
         act.Should().Throw<InvalidOperationException>()
             .WithMessage(expectedMessage);
     }
@@ -453,7 +465,9 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
             new Dictionary<string, string>(),
             ExternalCapabilityExecutionMode.Interactive,
             [ExplicitAdmission(ExplicitCapability(selector.NyxIdRequest))],
-            [ExplicitSource()]);
+            [ExplicitSource()],
+            workflowId: ExplicitWorkflowId,
+            revisionId: ExplicitRevisionId);
 
         MutateGrantOrProofPolicyIntegrity(plan.InvocationAdmissions.Single(), mutation);
         plan.AdmissionDigest = WorkflowCapabilityAdmissionPlanIntegrity.ComputeAdmissionDigest(plan);
@@ -463,7 +477,9 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
             yaml,
             new Dictionary<string, string>(),
             ExternalCapabilityExecutionMode.Interactive,
-            [ExplicitInvocation(selector)]);
+            [ExplicitInvocation(selector)],
+            workflowId: ExplicitWorkflowId,
+            revisionId: ExplicitRevisionId);
         act.Should().Throw<InvalidOperationException>()
             .WithMessage(expectedMessage);
     }
@@ -481,7 +497,9 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
             new Dictionary<string, string>(),
             ExternalCapabilityExecutionMode.Interactive,
             [ExplicitAdmission(ExplicitCapability(selector.NyxIdRequest))],
-            [ExplicitSource()]);
+            [ExplicitSource()],
+            workflowId: ExplicitWorkflowId,
+            revisionId: ExplicitRevisionId);
 
         MutateExplicitSourceEvidence(plan, sourceCase);
         plan.AdmissionDigest = WorkflowCapabilityAdmissionPlanIntegrity.ComputeAdmissionDigest(plan);
@@ -491,7 +509,9 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
             yaml,
             new Dictionary<string, string>(),
             ExternalCapabilityExecutionMode.Interactive,
-            [ExplicitInvocation(selector)]);
+            [ExplicitInvocation(selector)],
+            workflowId: ExplicitWorkflowId,
+            revisionId: ExplicitRevisionId);
         act.Should().Throw<InvalidOperationException>()
             .WithMessage("Workflow capability admission required source evidence is invalid.");
     }
@@ -510,7 +530,9 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
                 CallSiteId = ExplicitCallSiteId,
                 Capability = capability,
             }],
-            [ExplicitSource()]);
+            [ExplicitSource()],
+            workflowId: ExplicitWorkflowId,
+            revisionId: ExplicitRevisionId);
 
         act.Should().Throw<InvalidOperationException>()
             .WithMessage("*explicit request grant*");
@@ -535,7 +557,9 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
             new Dictionary<string, string>(),
             ExternalCapabilityExecutionMode.Interactive,
             [admission],
-            [ExplicitSource()]);
+            [ExplicitSource()],
+            workflowId: ExplicitWorkflowId,
+            revisionId: ExplicitRevisionId);
 
         act.Should().Throw<InvalidOperationException>()
             .WithMessage("*risk*");
@@ -561,7 +585,9 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
             new Dictionary<string, string>(),
             ExternalCapabilityExecutionMode.Durable,
             [admission],
-            [ExplicitSource()]);
+            [ExplicitSource()],
+            workflowId: ExplicitWorkflowId,
+            revisionId: ExplicitRevisionId);
 
         act.Should().Throw<InvalidOperationException>()
             .WithMessage("*durable*read-only*");
@@ -577,14 +603,18 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
             new Dictionary<string, string>(),
             ExternalCapabilityExecutionMode.Durable,
             [ExplicitAdmission(ExplicitCapability(selector.NyxIdRequest))],
-            [ExplicitSource()]);
+            [ExplicitSource()],
+            workflowId: ExplicitWorkflowId,
+            revisionId: ExplicitRevisionId);
 
         var act = () => WorkflowCapabilityAdmissionPlanIntegrity.ValidateOrThrow(
             plan,
             yaml,
             new Dictionary<string, string>(),
             ExternalCapabilityExecutionMode.Durable,
-            [ExplicitInvocation(selector)]);
+            [ExplicitInvocation(selector)],
+            workflowId: ExplicitWorkflowId,
+            revisionId: ExplicitRevisionId);
 
         act.Should().Throw<InvalidOperationException>()
             .WithMessage("*durable authorization catalog source*");
@@ -601,14 +631,18 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
             ExternalCapabilityExecutionMode.Durable,
             [ExplicitAdmission(ExplicitCapability(selector.NyxIdRequest))],
             [ExplicitSource(), DurableCatalogSource()],
-            DurableOwner());
+            DurableOwner(),
+            workflowId: ExplicitWorkflowId,
+            revisionId: ExplicitRevisionId);
 
         var act = () => WorkflowCapabilityAdmissionPlanIntegrity.ValidateOrThrow(
             plan,
             yaml,
             new Dictionary<string, string>(),
             ExternalCapabilityExecutionMode.Durable,
-            [ExplicitInvocation(selector)]);
+            [ExplicitInvocation(selector)],
+            workflowId: ExplicitWorkflowId,
+            revisionId: ExplicitRevisionId);
 
         act.Should().NotThrow();
     }
@@ -628,7 +662,9 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
             new Dictionary<string, string>(),
             ExternalCapabilityExecutionMode.Interactive,
             [first, second],
-            [ExplicitSource()]);
+            [ExplicitSource()],
+            workflowId: ExplicitWorkflowId,
+            revisionId: ExplicitRevisionId);
 
         WorkflowCapabilityAdmissionPlanIntegrity.CapabilityKey(first.Capability).Should()
             .NotBe(WorkflowCapabilityAdmissionPlanIntegrity.CapabilityKey(second.Capability));
@@ -1419,6 +1455,8 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
         };
 
     private const string ExplicitCallSiteId = "explicit-workflow/request-alpha";
+    private const string ExplicitWorkflowId = "wf-alpha";
+    private const string ExplicitRevisionId = "rev-alpha";
 
     private static ExternalWorkflowCapabilitySelector ExplicitSelector()
     {
@@ -1475,8 +1513,8 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
         var policy = capability.NyxIdUserRequest.ExecutionPolicy;
         var grant = new NyxIdExplicitRequestGrant
         {
-            WorkflowId = "wf-alpha",
-            RevisionId = "rev-alpha",
+            WorkflowId = ExplicitWorkflowId,
+            RevisionId = ExplicitRevisionId,
             CallSiteId = callSiteId,
             RequestContractDigest = ExplicitRequestContractDigest(
                 capability.NyxIdUserRequest.Request),

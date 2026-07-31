@@ -265,16 +265,18 @@ public sealed class ScopeBindingCommandApplicationServiceTests
     }
 
     [Fact]
-    public async Task UpsertAsync_ShouldKeepDefaultDefinitionPrefix_WhenWorkflowIdIsOmitted()
+    public async Task UpsertAsync_ShouldNotInferWorkflowIdFromServiceId_WhenWorkflowIdIsOmitted()
     {
         var commandPort = new RecordingServiceCommandPort();
         var lifecyclePort = new FakeServiceLifecycleQueryPort(getResult: null);
+        var admission = new RecordingWorkflowCapabilityAdmissionService();
         var service = CreateService(
             commandPort,
             lifecyclePort,
             new FakeScopeScriptQueryPort(),
             new FakeScriptDefinitionSnapshotPort(),
-            new FakeWorkflowRunActorPort());
+            new FakeWorkflowRunActorPort(),
+            capabilityAdmissionService: admission);
 
         var result = await service.UpsertAsync(new ScopeBindingUpsertRequest(
             ScopeId,
@@ -287,13 +289,16 @@ public sealed class ScopeBindingCommandApplicationServiceTests
 
         var expectedDefinitionActorIdPrefix = ScopeWorkflowCapabilityConventions.BuildDefaultDefinitionActorIdPrefix(DefaultOptions, ScopeId);
         result.Workflow.Should().NotBeNull();
-        result.Workflow!.WorkflowId.Should().Be("custom-service");
+        result.Workflow!.WorkflowId.Should().BeEmpty();
         result.Workflow.DefinitionActorIdPrefix.Should().Be(expectedDefinitionActorIdPrefix);
         result.ExpectedActorId.Should().StartWith($"{expectedDefinitionActorIdPrefix}:");
 
         var revisionCommand = commandPort.Calls[1].Command.Should().BeOfType<CreateServiceRevisionCommand>().Subject;
         revisionCommand.Spec.WorkflowSpec.Should().NotBeNull();
+        revisionCommand.Spec.WorkflowSpec!.WorkflowId.Should().BeEmpty();
         revisionCommand.Spec.WorkflowSpec!.DefinitionActorId.Should().Be(expectedDefinitionActorIdPrefix);
+        admission.Request.Should().NotBeNull();
+        admission.Request!.WorkflowId.Should().BeNullOrEmpty();
     }
 
     [Fact]
@@ -2464,6 +2469,8 @@ public sealed class ScopeBindingCommandApplicationServiceTests
             string? scopeId = null,
             string? sourceKind = null,
             WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan = null,
+            string? workflowId = null,
+            string? revisionId = null,
             CancellationToken ct = default) =>
             throw new NotSupportedException();
 

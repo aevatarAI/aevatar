@@ -25,14 +25,19 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
         string? scopeId = null,
         string? sourceKind = null,
         WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan = null,
+        string? workflowId = null,
+        string? revisionId = null,
         CancellationToken ct = default)
     {
         EnsureWorkflowNameCanBind(workflowName);
+        EnsureExistingBindingIdentityCanBind(capabilityAdmissionPlan, workflowId, revisionId);
         var bindDefinitionEvent = new BindWorkflowDefinitionEvent
         {
             WorkflowName = workflowName ?? string.Empty,
             WorkflowYaml = workflowYaml ?? string.Empty,
             SourceKind = sourceKind?.Trim() ?? string.Empty,
+            WorkflowId = workflowId ?? string.Empty,
+            RevisionId = revisionId ?? string.Empty,
         };
         if (scopeId is not null)
             bindDefinitionEvent.ScopeId = scopeId.Trim();
@@ -52,7 +57,9 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
                 bindDefinitionEvent.WorkflowYaml,
                 bindDefinitionEvent.InlineWorkflowYamls,
                 dependencies,
-                capabilityAdmissionPlan);
+                capabilityAdmissionPlan,
+                bindDefinitionEvent.WorkflowId,
+                bindDefinitionEvent.RevisionId);
             bindDefinitionEvent.AuthorizationDependencies = dependencies;
             bindDefinitionEvent.CapabilityAdmissionPlan = capabilityAdmissionPlan?.Clone();
         }
@@ -68,7 +75,9 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
             request.InlineWorkflowYamls,
             request.HasScopeId ? request.ScopeId : null,
             request.SourceKind,
-            request.CapabilityAdmissionPlan);
+            request.CapabilityAdmissionPlan,
+            request.WorkflowId,
+            request.RevisionId);
 
     [EventHandler]
     public Task HandleSubWorkflowDefinitionResolveRequested(SubWorkflowDefinitionResolveRequestedEvent request) =>
@@ -115,12 +124,53 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
             : evt.SourceKind.Trim();
         next.AuthorizationDependencies = evt.AuthorizationDependencies?.Clone();
         next.CapabilityAdmissionPlan = evt.CapabilityAdmissionPlan?.Clone();
+        next.WorkflowId = evt.WorkflowId ?? string.Empty;
+        next.RevisionId = evt.RevisionId ?? string.Empty;
 
         var compileResult = EvaluateWorkflowCompilation(next.WorkflowYaml);
         next.Compiled = compileResult.Compiled;
         next.CompilationError = compileResult.CompilationError;
         next.Version = current.Version + 1;
         return next;
+    }
+
+    private void EnsureExistingBindingIdentityCanBind(
+        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan,
+        string? workflowId,
+        string? revisionId)
+    {
+        var existingRequiresExplicitIdentity = WorkflowCapabilityAdmissionPlanIntegrity
+            .RequiresExplicitRequestBindingIdentity(State.CapabilityAdmissionPlan);
+        var requestedRequiresExplicitIdentity = WorkflowCapabilityAdmissionPlanIntegrity
+            .RequiresExplicitRequestBindingIdentity(capabilityAdmissionPlan);
+        var hasExistingWorkflowId = !string.IsNullOrWhiteSpace(State.WorkflowId);
+        var hasExistingRevisionId = !string.IsNullOrWhiteSpace(State.RevisionId);
+
+        if (hasExistingWorkflowId)
+        {
+            if (!hasExistingRevisionId)
+                throw new WorkflowCapabilityAdmissionRebindRequiredException();
+
+            if (!requestedRequiresExplicitIdentity ||
+                !string.Equals(State.WorkflowId, workflowId, StringComparison.Ordinal) ||
+                !string.Equals(State.RevisionId, revisionId, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "Workflow definition actor workflow revision identity does not match the binding request.");
+            }
+
+            return;
+        }
+
+        if (existingRequiresExplicitIdentity)
+            throw new WorkflowCapabilityAdmissionRebindRequiredException();
+
+        if (hasExistingRevisionId &&
+            !string.Equals(State.RevisionId, revisionId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Workflow definition actor workflow revision identity does not match the binding request.");
+        }
     }
 
     internal WorkflowAuthorizationDependencies? EvaluateAuthorizationDependencies(string workflowYaml)
@@ -178,7 +228,9 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
         string workflowYaml,
         IReadOnlyDictionary<string, string> inlineWorkflowYamls,
         WorkflowAuthorizationDependencies dependencies,
-        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan)
+        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan,
+        string? workflowId,
+        string? revisionId)
     {
         if (capabilityAdmissionPlan is null)
         {
@@ -192,7 +244,9 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
             workflowYaml,
             inlineWorkflowYamls,
             capabilityAdmissionPlan.ExecutionMode,
-            dependencies.ExternalInvocations);
+            dependencies.ExternalInvocations,
+            workflowId,
+            revisionId);
     }
 
     private WorkflowCompilationResult EvaluateWorkflowCompilation(string yaml)

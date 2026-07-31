@@ -48,7 +48,8 @@ public sealed class DefaultServiceRuntimeActivator : IServiceRuntimeActivator
                     ct),
             ServiceDeploymentPlan.PlanSpecOneofCase.WorkflowPlan =>
                 await ActivateWorkflowAsync(
-                    request.Artifact.DeploymentPlan.WorkflowPlan,
+                    request.Artifact,
+                    request.RevisionId,
                     deploymentId,
                     request.Identity?.TenantId,
                     ct),
@@ -121,11 +122,16 @@ public sealed class DefaultServiceRuntimeActivator : IServiceRuntimeActivator
     }
 
     private async Task<ServiceRuntimeActivationResult> ActivateWorkflowAsync(
-        WorkflowServiceDeploymentPlan plan,
+        PreparedServiceRevisionArtifact artifact,
+        string resolvedRevisionId,
         string deploymentId,
         string? scopeId,
         CancellationToken ct)
     {
+        var plan = artifact.DeploymentPlan.WorkflowPlan;
+        var bindingIdentity = WorkflowServiceDeploymentPlanIntegrity.ResolveBindingIdentity(
+            artifact,
+            resolvedRevisionId);
         var preferredActorId = string.IsNullOrWhiteSpace(plan.DefinitionActorId)
             ? $"gagent-service:workflow-definition:{deploymentId}"
             : $"{plan.DefinitionActorId}:{deploymentId}";
@@ -137,7 +143,9 @@ public sealed class DefaultServiceRuntimeActivator : IServiceRuntimeActivator
                 plan.InlineWorkflowYamls,
                 ScopeId: scopeId?.Trim() ?? string.Empty,
                 SourceKind: "service_revision",
-                CapabilityAdmissionPlan: plan.CapabilityAdmissionPlan?.Clone()),
+                CapabilityAdmissionPlan: plan.CapabilityAdmissionPlan?.Clone(),
+                WorkflowId: bindingIdentity.WorkflowId,
+                RevisionId: bindingIdentity.RevisionId),
             preferredActorId,
             ct);
 

@@ -35,6 +35,28 @@ public static class WorkflowServiceRevisionArtifactBuilder
         };
         authorizationEvidence.ExternalCapabilities.Add(admittedCapabilities);
 
+        var bindingIdentity = WorkflowCapabilityAdmissionPlanIntegrity
+            .RequiresExplicitRequestBindingIdentity(capabilityAdmissionPlan)
+            ? WorkflowServiceDeploymentPlanIntegrity.RequireExplicitBindingIdentity(
+                workflowSpec.WorkflowId,
+                revisionSpec.RevisionId)
+            : (WorkflowServiceBindingIdentity?)null;
+
+        var workflowPlan = new WorkflowServiceDeploymentPlan
+        {
+            WorkflowName = resolvedWorkflowName,
+            WorkflowYaml = workflowSpec.WorkflowYaml,
+            DefinitionActorId = workflowSpec.DefinitionActorId ?? string.Empty,
+            AuthorizationEvidence = authorizationEvidence,
+            CapabilityAdmissionPlan = capabilityAdmissionPlan.Clone(),
+        };
+        workflowPlan.InlineWorkflowYamls.Add(workflowSpec.InlineWorkflowYamls);
+        if (bindingIdentity is { } explicitBindingIdentity)
+        {
+            workflowPlan.WorkflowId = explicitBindingIdentity.WorkflowId;
+            workflowPlan.RevisionId = explicitBindingIdentity.RevisionId;
+        }
+
         return new PreparedServiceRevisionArtifact
         {
             Identity = identity.Clone(),
@@ -54,15 +76,7 @@ public static class WorkflowServiceRevisionArtifactBuilder
             },
             DeploymentPlan = new ServiceDeploymentPlan
             {
-                WorkflowPlan = new WorkflowServiceDeploymentPlan
-                {
-                    WorkflowName = resolvedWorkflowName,
-                    WorkflowYaml = workflowSpec.WorkflowYaml,
-                    DefinitionActorId = workflowSpec.DefinitionActorId ?? string.Empty,
-                    InlineWorkflowYamls = { workflowSpec.InlineWorkflowYamls },
-                    AuthorizationEvidence = authorizationEvidence,
-                    CapabilityAdmissionPlan = capabilityAdmissionPlan.Clone(),
-                },
+                WorkflowPlan = workflowPlan,
             },
         };
     }

@@ -1182,6 +1182,8 @@ public sealed class ServiceImplementationAdaptersTests
             string? scopeId = null,
             string? sourceKind = null,
             WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan = null,
+            string? workflowId = null,
+            string? revisionId = null,
             CancellationToken ct = default) =>
             Task.CompletedTask;
 

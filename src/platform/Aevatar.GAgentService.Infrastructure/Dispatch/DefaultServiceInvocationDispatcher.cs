@@ -3,6 +3,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -134,6 +135,9 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
             ?? throw new InvalidOperationException("Workflow services require ChatRequestEvent payload.");
         var callerCredential = BuildWorkflowCallerCredential(chatRequest, request);
         var plan = target.Artifact.DeploymentPlan.WorkflowPlan;
+        var bindingIdentity = WorkflowServiceDeploymentPlanIntegrity.ResolveBindingIdentity(
+            target.Artifact,
+            target.Service.RevisionId);
         var definitionActorId = ResolveWorkflowServiceDefinitionActorId(target, plan);
         var commandId = ResolveCommandId(request);
         var correlationId = ResolveCorrelationId(request, commandId);
@@ -147,8 +151,10 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
                 ? WorkflowRunOrigins.ServiceInvoke
                 : request.RunOrigin.Trim(),
             request.ScheduleId?.Trim() ?? string.Empty,
-            "service_revision",
-            plan.CapabilityAdmissionPlan?.Clone());
+            SourceKind: "service_revision",
+            CapabilityAdmissionPlan: plan.CapabilityAdmissionPlan?.Clone(),
+            WorkflowId: bindingIdentity.WorkflowId,
+            RevisionId: bindingIdentity.RevisionId);
         var requestedRunId = request.RequestedRunId?.Trim() ?? string.Empty;
         if (!string.IsNullOrWhiteSpace(requestedRunId))
         {

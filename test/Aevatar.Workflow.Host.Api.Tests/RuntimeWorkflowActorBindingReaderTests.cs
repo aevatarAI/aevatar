@@ -10,6 +10,13 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 public sealed class ProjectionWorkflowActorBindingReaderTests
 {
     [Fact]
+    public void WorkflowActorBindingContract_ShouldExposeBoundWorkflowRevisionIdentity()
+    {
+        typeof(WorkflowActorBinding).GetProperty("WorkflowId").Should().NotBeNull();
+        typeof(WorkflowActorBinding).GetProperty("RevisionId").Should().NotBeNull();
+    }
+
+    [Fact]
     public async Task GetAsync_ShouldThrow_WhenActorIdBlank()
     {
         var reader = CreateReader();
@@ -48,6 +55,8 @@ public sealed class ProjectionWorkflowActorBindingReaderTests
                 WorkflowName = "direct",
                 WorkflowYaml = "yaml",
                 SourceKind = "service_revision",
+                WorkflowId = "wf-alpha",
+                RevisionId = "rev-alpha",
                 CapabilityAdmissionPlan = capabilityAdmissionPlan,
                 InlineWorkflowYamls = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
                 {
@@ -66,6 +75,8 @@ public sealed class ProjectionWorkflowActorBindingReaderTests
         result.WorkflowYaml.Should().Be("yaml");
         result.InlineWorkflowYamls.Should().ContainKey("child").WhoseValue.Should().Be("yaml-child");
         result.SourceKind.Should().Be("service_revision");
+        result.WorkflowId.Should().Be("wf-alpha");
+        result.RevisionId.Should().Be("rev-alpha");
         result.CapabilityAdmissionPlan!.AdmissionDigest.Should().Be(capabilityAdmissionPlan.AdmissionDigest);
     }
 

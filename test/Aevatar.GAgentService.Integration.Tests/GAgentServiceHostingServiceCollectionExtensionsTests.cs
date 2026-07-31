@@ -35,6 +35,7 @@ using Aevatar.Workflow.Projection.Projectors;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Extensions.Hosting;
 using Aevatar.Workflow.Infrastructure.DependencyInjection;
+using Aevatar.Workflow.Infrastructure.Workflows;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Application.Responses;
 using Aevatar.GAgentService.Core.Models;
@@ -447,6 +448,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         });
         builder.Services.AddSingleton<ILLMProviderFactory, UnusedLlmProviderFactory>();
         builder.AddGAgentServiceCapabilityBundle();
+        UseRepositoryWorkflowDefinitions(builder.Services);
 
         await using var app = builder.Build();
         app.MapAevatarCapabilities();
@@ -499,6 +501,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         });
         builder.Services.AddSingleton<ILLMProviderFactory, UnusedLlmProviderFactory>();
         builder.AddGAgentServiceCapabilityBundle();
+        UseRepositoryWorkflowDefinitions(builder.Services);
 
         await using var app = builder.Build();
         app.MapAevatarCapabilities();
@@ -779,6 +782,15 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         return serviceType.IsGenericType &&
                serviceType.GenericTypeArguments.Any(argument =>
                    argument.Name.Contains(typeName, StringComparison.Ordinal));
+    }
+
+    private static void UseRepositoryWorkflowDefinitions(IServiceCollection services)
+    {
+        services.Configure<WorkflowDefinitionFileSourceOptions>(options =>
+        {
+            options.WorkflowDirectories.Clear();
+            options.WorkflowDirectories.Add(Path.Combine(Directory.GetCurrentDirectory(), "workflows"));
+        });
     }
 
     private static void AssertNoWorkflowCapabilitiesStartupArtifactServices(IServiceCollection services)

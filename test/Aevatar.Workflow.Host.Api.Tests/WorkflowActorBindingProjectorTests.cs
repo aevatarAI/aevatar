@@ -15,6 +15,13 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 public sealed class WorkflowActorBindingProjectorTests
 {
     [Fact]
+    public void WorkflowActorBindingDocumentContract_ShouldCarryBoundWorkflowRevisionIdentity()
+    {
+        WorkflowActorBindingDocument.Descriptor.FindFieldByName("workflow_id")!.FieldNumber.Should().Be(16);
+        WorkflowActorBindingDocument.Descriptor.FindFieldByName("revision_id")!.FieldNumber.Should().Be(17);
+    }
+
+    [Fact]
     public async Task ProjectAsync_ShouldCaptureDefinitionBinding()
     {
         var dispatcher = new FakeStoreDispatcher();
@@ -41,6 +48,8 @@ public sealed class WorkflowActorBindingProjectorTests
                     WorkflowName = " direct ",
                     WorkflowYaml = "name: direct",
                     SourceKind = "service_revision",
+                    WorkflowId = "wf-alpha",
+                    RevisionId = "rev-alpha",
                     CapabilityAdmissionPlan = capabilityAdmissionPlan,
                     InlineWorkflowYamls =
                     {
@@ -60,6 +69,8 @@ public sealed class WorkflowActorBindingProjectorTests
         document.WorkflowYaml.Should().Be("name: direct");
         document.InlineWorkflowYamls.Should().ContainKey("child").WhoseValue.Should().Be("yaml-child");
         document.SourceKind.Should().Be("service_revision");
+        document.WorkflowId.Should().Be("wf-alpha");
+        document.RevisionId.Should().Be("rev-alpha");
         document.CapabilityAdmissionPlan.AdmissionDigest.Should().Be(capabilityAdmissionPlan.AdmissionDigest);
         document.LastEventId.Should().Be("evt-definition");
     }

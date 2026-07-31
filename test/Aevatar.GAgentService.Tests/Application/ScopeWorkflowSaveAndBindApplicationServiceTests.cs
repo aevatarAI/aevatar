@@ -129,7 +129,8 @@ public sealed class ScopeWorkflowSaveAndBindApplicationServiceTests
             ScopeExplicitRequestAdmissionTestFixture.ScopeId,
             ScopeExplicitRequestAdmissionTestFixture.WorkflowId,
             ScopeExplicitRequestAdmissionTestFixture.WorkflowYaml,
-            ServiceId: ScopeExplicitRequestAdmissionTestFixture.ServiceId)
+            ServiceId: ScopeExplicitRequestAdmissionTestFixture.ServiceId,
+            RevisionId: ScopeExplicitRequestAdmissionTestFixture.RevisionId)
         {
             CapabilityAdmission = ScopeExplicitRequestAdmissionTestFixture.CreateContext(scenario),
         };
@@ -157,7 +158,8 @@ public sealed class ScopeWorkflowSaveAndBindApplicationServiceTests
             ScopeExplicitRequestAdmissionTestFixture.ScopeId,
             ScopeExplicitRequestAdmissionTestFixture.WorkflowId,
             ScopeExplicitRequestAdmissionTestFixture.WorkflowYaml,
-            ServiceId: ScopeExplicitRequestAdmissionTestFixture.ServiceId)
+            ServiceId: ScopeExplicitRequestAdmissionTestFixture.ServiceId,
+            RevisionId: ScopeExplicitRequestAdmissionTestFixture.RevisionId)
         {
             CapabilityAdmission = ScopeExplicitRequestAdmissionTestFixture.CreateContext("matching"),
         });
@@ -190,7 +192,8 @@ public sealed class ScopeWorkflowSaveAndBindApplicationServiceTests
             ScopeExplicitRequestAdmissionTestFixture.ScopeId,
             ScopeExplicitRequestAdmissionTestFixture.WorkflowId,
             ScopeExplicitRequestAdmissionTestFixture.WorkflowYaml,
-            ServiceId: ScopeExplicitRequestAdmissionTestFixture.ServiceId)
+            ServiceId: ScopeExplicitRequestAdmissionTestFixture.ServiceId,
+            RevisionId: ScopeExplicitRequestAdmissionTestFixture.RevisionId)
         {
             CapabilityAdmission = ScopeExplicitRequestAdmissionTestFixture.CreatePersistedContext(existingPlan),
         });

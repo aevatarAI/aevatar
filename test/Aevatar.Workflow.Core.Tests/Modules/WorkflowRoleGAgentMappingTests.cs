@@ -71,6 +71,7 @@ public sealed class WorkflowRoleGAgentMappingTests
             CallerCredential = new WorkflowCallerCredential
             {
                 BearerToken = " raw-token ",
+                Kind = NyxIdCallerCredentialKind.SourceReadableUserBearer,
             },
             WorkflowRuntimeContext = new WorkflowToolRuntimeContextPayload
             {

@@ -23,4 +23,6 @@ message WorkflowActorBindingDocument {
   string scope_id = 13;
   string source_kind = 14;
   aevatar.workflow.WorkflowCapabilityAdmissionPlan capability_admission_plan = 15;
+  string workflow_id = 16;
+  string revision_id = 17;
 }

@@ -1,6 +1,7 @@
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Abstractions.Services;
+using Aevatar.GAgentService.Core.Assemblers;
 using Aevatar.Workflow.Abstractions;
 using FluentAssertions;
 
@@ -15,6 +16,8 @@ public sealed class WorkflowServiceRevisionArtifactBuilderTests
 
         artifact.DeploymentPlan.WorkflowPlan.AuthorizationEvidence.ServiceGrantRequirement.Should()
             .Be(AuthorizationGrantRequirement.Required);
+        artifact.DeploymentPlan.WorkflowPlan.WorkflowId.Should().Be("wf-artifact-alpha");
+        artifact.DeploymentPlan.WorkflowPlan.RevisionId.Should().Be("rev-artifact-alpha");
     }
 
     [Fact]
@@ -30,6 +33,22 @@ public sealed class WorkflowServiceRevisionArtifactBuilderTests
 
         artifact.DeploymentPlan.WorkflowPlan.AuthorizationEvidence.ServiceGrantRequirement.Should()
             .Be(AuthorizationGrantRequirement.Required);
+        artifact.DeploymentPlan.WorkflowPlan.WorkflowId.Should().BeEmpty();
+        artifact.DeploymentPlan.WorkflowPlan.RevisionId.Should().BeEmpty();
+        new PreparedServiceRevisionArtifactAssembler().Assemble(artifact).ArtifactHash.Should()
+            .Be("06F4C6FCF0F518A9F6EC52C8AD8692ED3E8D78DB9CB96E0F9800DEEEB90B960A");
+    }
+
+    [Fact]
+    public void Build_WithExplicitRequestCapabilityAndMissingWorkflowId_ShouldFailClosed()
+    {
+        var action = () => BuildArtifactWithIdentity(
+            workflowId: string.Empty,
+            revisionId: "rev-artifact-alpha",
+            ExplicitRequestCapability("usvc-explicit-alpha"));
+
+        action.Should().Throw<InvalidOperationException>()
+            .WithMessage("*workflow_id*");
     }
 
     [Fact]
@@ -75,15 +94,26 @@ public sealed class WorkflowServiceRevisionArtifactBuilderTests
     }
 
     private static PreparedServiceRevisionArtifact BuildArtifact(
+        params ExternalWorkflowCapabilityRef[] capabilities) =>
+        BuildArtifactWithIdentity("wf-artifact-alpha", "rev-artifact-alpha", capabilities);
+
+    private static PreparedServiceRevisionArtifact BuildArtifactWithIdentity(
+        string workflowId,
+        string revisionId,
         params ExternalWorkflowCapabilityRef[] capabilities)
     {
         var plan = new WorkflowCapabilityAdmissionPlan();
         for (var index = 0; index < capabilities.Length; index++)
         {
+            var capability = capabilities[index];
             plan.InvocationAdmissions.Add(new WorkflowCapabilityInvocationAdmission
             {
                 CallSiteId = $"wf-artifact-alpha/call-{index}",
-                Capability = capabilities[index],
+                Capability = capability,
+                NyxIdExplicitRequestGrant = capability.CapabilityCase ==
+                                            ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest
+                    ? new NyxIdExplicitRequestGrant()
+                    : null,
             });
         }
         return WorkflowServiceRevisionArtifactBuilder.Build(
@@ -96,14 +126,15 @@ public sealed class WorkflowServiceRevisionArtifactBuilderTests
                     Namespace = "namespace-artifact-alpha",
                     ServiceId = "svc-published-runtime-alpha",
                 },
-                RevisionId = "rev-artifact-alpha",
+                RevisionId = revisionId,
                 WorkflowSpec = new WorkflowServiceRevisionSpec
                 {
-                    WorkflowName = "wf-artifact-alpha",
-                    WorkflowYaml = "name: wf-artifact-alpha",
+                    WorkflowName = "artifact-workflow",
+                    WorkflowYaml = "name: artifact-workflow",
+                    WorkflowId = workflowId,
                 },
             },
-            "wf-artifact-alpha",
+            "artifact-workflow",
             new WorkflowAuthorizationDependencies
             {
                 ServiceGrantPolicy = WorkflowServiceGrantPolicy.Required,

@@ -36,6 +36,73 @@ public sealed class ToolCallCredentialPolicyMiddlewareTests
     }
 
     [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task InvokeAsync_WhenSenderBoundCallHasProxyDelegation_ShouldPreserveDelegationAndRunTool(
+        bool isReadOnly)
+    {
+        var middleware = new ToolCallCredentialPolicyMiddleware();
+        var context = NewContext(new StubTool(isReadOnly: isReadOnly), "{}");
+        using var _ = AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
+        {
+            Credentials = new AgentToolCredentials(
+                " proxy-delegation ",
+                "owner-org-token",
+                "sender-token",
+                AgentToolNyxIdCredentialKind.ProxyDelegation),
+            SenderBinding = new AgentToolSenderBindingContext("binding-1"),
+        });
+        AgentToolExecutionContext? observed = null;
+
+        await middleware.InvokeAsync(context, () =>
+        {
+            observed = AgentToolRequestContext.Current;
+            return Task.CompletedTask;
+        });
+
+        observed.Should().NotBeNull();
+        observed!.Credentials.NyxIdAccessToken.Should().Be("proxy-delegation");
+        observed.Credentials.NyxIdOrgToken.Should().BeNull();
+        observed.Credentials.SenderNyxIdAccessToken.Should().BeNull();
+        observed.Credentials.NyxIdCredentialKind.Should().Be(AgentToolNyxIdCredentialKind.ProxyDelegation);
+        context.CredentialSource.Should().Be(AgentToolCredentialSource.ChannelRegistration);
+        context.Terminate.Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task InvokeAsync_WhenProxyDelegationHasNoPrimaryToken_ShouldDenyWithoutCredentialFallback(
+        bool isReadOnly)
+    {
+        var middleware = new ToolCallCredentialPolicyMiddleware();
+        var context = NewContext(new StubTool(isReadOnly: isReadOnly), "{}");
+        using var _ = AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
+        {
+            Credentials = new AgentToolCredentials(
+                " ",
+                "owner-org-token",
+                "sender-token",
+                AgentToolNyxIdCredentialKind.ProxyDelegation),
+            SenderBinding = new AgentToolSenderBindingContext("binding-1"),
+        });
+        var nextCalled = false;
+
+        await middleware.InvokeAsync(context, () =>
+        {
+            nextCalled = true;
+            return Task.CompletedTask;
+        });
+
+        nextCalled.Should().BeFalse();
+        context.CredentialSource.Should().Be(AgentToolCredentialSource.ChannelRegistration);
+        context.Terminate.Should().BeTrue();
+        context.TerminationKind.Should().Be(ToolCallTerminationKind.MiddlewareTerminated);
+        context.Result.Should().Contain("credential_denied");
+        context.Result.Should().Contain("proxy delegation");
+    }
+
+    [Theory]
     [InlineData(false, false, "", null)]
     [InlineData(true, true, "", null)]
     [InlineData(true, false, "external_write", null)]

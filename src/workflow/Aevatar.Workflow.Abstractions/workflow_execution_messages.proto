@@ -318,6 +318,8 @@ message BindWorkflowDefinitionEvent
   string source_kind = 5;
   WorkflowAuthorizationDependencies authorization_dependencies = 6;
   WorkflowCapabilityAdmissionPlan capability_admission_plan = 7;
+  string workflow_id = 8;
+  string revision_id = 9;
 }
 
 enum WorkflowServiceGrantPolicy {

@@ -392,7 +392,9 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
     {
         var workflowBundle = await ParseWorkflowBundleAsync(request.Workflow?.WorkflowYamls, ct);
         var suppliedWorkflowId = ScopeWorkflowCapabilityConventions.NormalizeOptional(request.Workflow?.WorkflowId);
-        var workflowId = ResolveWorkflowBindingWorkflowId(suppliedWorkflowId, identity);
+        var workflowId = string.IsNullOrWhiteSpace(suppliedWorkflowId)
+            ? string.Empty
+            : ScopeWorkflowCapabilityConventions.NormalizeWorkflowId(suppliedWorkflowId);
         var admissionContext = request.CapabilityAdmission;
         var executionMode = admissionContext?.ExecutionMode ?? ExternalCapabilityExecutionMode.Interactive;
         var capabilityAdmissionPlan = admissionContext?.ExistingPlan is { } existingPlan
@@ -608,15 +610,6 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                     GAgent: new ScopeBindingGAgentResult(
                         diagnosticClrTypeName),
                     ExpectedDeploymentId: expectedDeploymentId));
-    }
-
-    private static string ResolveWorkflowBindingWorkflowId(
-        string? suppliedWorkflowId,
-        ServiceIdentity identity)
-    {
-        return string.IsNullOrWhiteSpace(suppliedWorkflowId)
-            ? ScopeWorkflowCapabilityOptions.NormalizeRequired(identity.ServiceId, nameof(identity.ServiceId))
-            : ScopeWorkflowCapabilityConventions.NormalizeWorkflowId(suppliedWorkflowId);
     }
 
     private string NormalizeGAgentKind(ScopeBindingGAgentSpec gagent)
