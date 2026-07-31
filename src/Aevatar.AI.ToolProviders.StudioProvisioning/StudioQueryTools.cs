@@ -9,7 +9,65 @@ using Aevatar.Studio.Application.Studio.Contracts;
 
 namespace Aevatar.AI.ToolProviders.StudioProvisioning;
 
-internal sealed class ListStudioTeamsTool : IAgentTool
+internal interface IStudioReceiptTool : IAgentTool
+{
+    AgentToolReceipt? IAgentTool.CreateResultReceipt(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        string resultJson) =>
+        this switch
+        {
+            IStudioReadOnlyReceiptTool readOnlyTool => StudioQueryToolJson.CreateReadOnlyResultReceipt(
+                Name,
+                callId,
+                toolName,
+                resultJson,
+                readOnlyTool.ResultRequirements),
+            IStudioMutationReceiptTool mutationTool => StudioQueryToolJson.CreateMutationResultReceipt(
+                Name,
+                SideEffectKind,
+                mutationTool.SubjectKind,
+                callId,
+                toolName,
+                resultJson,
+                mutationTool.SuccessStatusPropertyName,
+                mutationTool.SuccessStatusValue,
+                mutationTool.SubjectIdPropertyName,
+                mutationTool.ResultRequirements),
+            IStudioMutationErrorReceiptTool => StudioQueryToolJson.CreateMutationErrorResultReceipt(
+                Name,
+                SideEffectKind,
+                callId,
+                toolName,
+                resultJson),
+            _ => null,
+        };
+}
+
+internal interface IStudioReadOnlyReceiptTool : IStudioReceiptTool
+{
+    IReadOnlyList<StudioQueryToolJson.ResultPropertyRequirement> ResultRequirements { get; }
+}
+
+internal interface IStudioMutationReceiptTool : IStudioReceiptTool
+{
+    string SubjectKind { get; }
+
+    string? SuccessStatusPropertyName => null;
+
+    string? SuccessStatusValue => null;
+
+    string SubjectIdPropertyName { get; }
+
+    IReadOnlyList<StudioQueryToolJson.ResultPropertyRequirement> ResultRequirements { get; }
+}
+
+internal interface IStudioMutationErrorReceiptTool : IStudioReceiptTool
+{
+}
+
+internal sealed class ListStudioTeamsTool : IStudioReadOnlyReceiptTool
 {
     private static readonly JsonSerializerOptions s_jsonOptions = StudioQueryToolJson.Options;
     private readonly IStudioTeamQueryPort _teamQueryPort;
@@ -45,18 +103,11 @@ internal sealed class ListStudioTeamsTool : IAgentTool
     public bool IsReadOnly => true;
     public bool IsDestructive => false;
 
-    public AgentToolReceipt? CreateResultReceipt(
-        string callId,
-        string toolName,
-        string argumentsJson,
-        string resultJson) =>
-        StudioQueryToolJson.CreateReadOnlyResultReceipt(
-            Name,
-            callId,
-            toolName,
-            resultJson,
-            StudioQueryToolJson.StringProperty("scope_id"),
-            StudioQueryToolJson.ArrayProperty("teams"));
+    public IReadOnlyList<StudioQueryToolJson.ResultPropertyRequirement> ResultRequirements { get; } = new[]
+    {
+        StudioQueryToolJson.StringProperty("scope_id"),
+        StudioQueryToolJson.ArrayProperty("teams"),
+    };
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
@@ -119,7 +170,7 @@ internal sealed class ListStudioTeamsTool : IAgentTool
         string? NextPageToken);
 }
 
-internal sealed class GetStudioTeamTool : IAgentTool
+internal sealed class GetStudioTeamTool : IStudioReadOnlyReceiptTool
 {
     private static readonly JsonSerializerOptions s_jsonOptions = StudioQueryToolJson.Options;
     private readonly IStudioTeamQueryPort _teamQueryPort;
@@ -152,21 +203,14 @@ internal sealed class GetStudioTeamTool : IAgentTool
     public bool IsReadOnly => true;
     public bool IsDestructive => false;
 
-    public AgentToolReceipt? CreateResultReceipt(
-        string callId,
-        string toolName,
-        string argumentsJson,
-        string resultJson) =>
-        StudioQueryToolJson.CreateReadOnlyResultReceipt(
-            Name,
-            callId,
-            toolName,
-            resultJson,
-            StudioQueryToolJson.StringProperty("scope_id"),
-            StudioQueryToolJson.StringProperty("team_id"),
-            StudioQueryToolJson.StringProperty("display_name"),
-            StudioQueryToolJson.StringProperty("lifecycle_stage"),
-            StudioQueryToolJson.StringProperty("team_url"));
+    public IReadOnlyList<StudioQueryToolJson.ResultPropertyRequirement> ResultRequirements { get; } = new[]
+    {
+        StudioQueryToolJson.StringProperty("scope_id"),
+        StudioQueryToolJson.StringProperty("team_id"),
+        StudioQueryToolJson.StringProperty("display_name"),
+        StudioQueryToolJson.StringProperty("lifecycle_stage"),
+        StudioQueryToolJson.StringProperty("team_url"),
+    };
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
@@ -222,7 +266,7 @@ internal sealed class GetStudioTeamTool : IAgentTool
         [property: JsonPropertyName("team_id")] string? TeamId);
 }
 
-internal sealed class ListStudioMembersTool : IAgentTool
+internal sealed class ListStudioMembersTool : IStudioReadOnlyReceiptTool
 {
     private static readonly JsonSerializerOptions s_jsonOptions = StudioQueryToolJson.Options;
     private readonly IStudioMemberQueryPort _memberQueryPort;
@@ -262,18 +306,11 @@ internal sealed class ListStudioMembersTool : IAgentTool
     public bool IsReadOnly => true;
     public bool IsDestructive => false;
 
-    public AgentToolReceipt? CreateResultReceipt(
-        string callId,
-        string toolName,
-        string argumentsJson,
-        string resultJson) =>
-        StudioQueryToolJson.CreateReadOnlyResultReceipt(
-            Name,
-            callId,
-            toolName,
-            resultJson,
-            StudioQueryToolJson.StringProperty("scope_id"),
-            StudioQueryToolJson.ArrayProperty("members"));
+    public IReadOnlyList<StudioQueryToolJson.ResultPropertyRequirement> ResultRequirements { get; } = new[]
+    {
+        StudioQueryToolJson.StringProperty("scope_id"),
+        StudioQueryToolJson.ArrayProperty("members"),
+    };
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
@@ -343,7 +380,7 @@ internal sealed class ListStudioMembersTool : IAgentTool
         string? NextPageToken);
 }
 
-internal sealed class GetStudioMemberTool : IAgentTool
+internal sealed class GetStudioMemberTool : IStudioReadOnlyReceiptTool
 {
     private static readonly JsonSerializerOptions s_jsonOptions = StudioQueryToolJson.Options;
     private readonly IStudioMemberQueryPort _memberQueryPort;
@@ -377,22 +414,15 @@ internal sealed class GetStudioMemberTool : IAgentTool
     public bool IsReadOnly => true;
     public bool IsDestructive => false;
 
-    public AgentToolReceipt? CreateResultReceipt(
-        string callId,
-        string toolName,
-        string argumentsJson,
-        string resultJson) =>
-        StudioQueryToolJson.CreateReadOnlyResultReceipt(
-            Name,
-            callId,
-            toolName,
-            resultJson,
-            StudioQueryToolJson.ObjectProperty("summary"),
-            StudioQueryToolJson.StringProperty("summary", "scope_id"),
-            StudioQueryToolJson.StringProperty("summary", "member_id"),
-            StudioQueryToolJson.StringProperty("summary", "display_name"),
-            StudioQueryToolJson.StringProperty("summary", "implementation_kind"),
-            StudioQueryToolJson.StringProperty("summary", "member_url"));
+    public IReadOnlyList<StudioQueryToolJson.ResultPropertyRequirement> ResultRequirements { get; } = new[]
+    {
+        StudioQueryToolJson.ObjectProperty("summary"),
+        StudioQueryToolJson.StringProperty("summary", "scope_id"),
+        StudioQueryToolJson.StringProperty("summary", "member_id"),
+        StudioQueryToolJson.StringProperty("summary", "display_name"),
+        StudioQueryToolJson.StringProperty("summary", "implementation_kind"),
+        StudioQueryToolJson.StringProperty("summary", "member_url"),
+    };
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
@@ -448,7 +478,7 @@ internal sealed class GetStudioMemberTool : IAgentTool
         [property: JsonPropertyName("member_id")] string? MemberId);
 }
 
-internal sealed class ListStudioSchedulesTool : IAgentTool
+internal sealed class ListStudioSchedulesTool : IStudioReadOnlyReceiptTool
 {
     private static readonly JsonSerializerOptions s_jsonOptions = StudioQueryToolJson.Options;
     private readonly IStudioMemberAutomationQueryPort _schedules;
@@ -497,19 +527,12 @@ internal sealed class ListStudioSchedulesTool : IAgentTool
     public bool IsReadOnly => true;
     public bool IsDestructive => false;
 
-    public AgentToolReceipt? CreateResultReceipt(
-        string callId,
-        string toolName,
-        string argumentsJson,
-        string resultJson) =>
-        StudioQueryToolJson.CreateReadOnlyResultReceipt(
-            Name,
-            callId,
-            toolName,
-            resultJson,
-            StudioQueryToolJson.StringProperty("scope_id"),
-            StudioQueryToolJson.StringProperty("team_id"),
-            StudioQueryToolJson.ArrayProperty("schedules"));
+    public IReadOnlyList<StudioQueryToolJson.ResultPropertyRequirement> ResultRequirements { get; } = new[]
+    {
+        StudioQueryToolJson.StringProperty("scope_id"),
+        StudioQueryToolJson.StringProperty("team_id"),
+        StudioQueryToolJson.ArrayProperty("schedules"),
+    };
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
@@ -597,7 +620,7 @@ internal sealed class ListStudioSchedulesTool : IAgentTool
         long? TotalCount);
 }
 
-internal sealed class GetStudioScheduleTool : IAgentTool
+internal sealed class GetStudioScheduleTool : IStudioReadOnlyReceiptTool
 {
     private static readonly JsonSerializerOptions s_jsonOptions = StudioQueryToolJson.Options;
     private readonly IStudioMemberAutomationQueryPort _schedules;
@@ -638,23 +661,16 @@ internal sealed class GetStudioScheduleTool : IAgentTool
     public bool IsReadOnly => true;
     public bool IsDestructive => false;
 
-    public AgentToolReceipt? CreateResultReceipt(
-        string callId,
-        string toolName,
-        string argumentsJson,
-        string resultJson) =>
-        StudioQueryToolJson.CreateReadOnlyResultReceipt(
-            Name,
-            callId,
-            toolName,
-            resultJson,
-            StudioQueryToolJson.StringProperty("scope_id"),
-            StudioQueryToolJson.StringProperty("team_id"),
-            StudioQueryToolJson.StringProperty("member_id"),
-            StudioQueryToolJson.StringProperty("schedule_id"),
-            StudioQueryToolJson.StringProperty("published_service_id"),
-            StudioQueryToolJson.StringProperty("schedule_cron"),
-            StudioQueryToolJson.StringProperty("schedule_timezone"));
+    public IReadOnlyList<StudioQueryToolJson.ResultPropertyRequirement> ResultRequirements { get; } = new[]
+    {
+        StudioQueryToolJson.StringProperty("scope_id"),
+        StudioQueryToolJson.StringProperty("team_id"),
+        StudioQueryToolJson.StringProperty("member_id"),
+        StudioQueryToolJson.StringProperty("schedule_id"),
+        StudioQueryToolJson.StringProperty("published_service_id"),
+        StudioQueryToolJson.StringProperty("schedule_cron"),
+        StudioQueryToolJson.StringProperty("schedule_timezone"),
+    };
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
@@ -768,7 +784,7 @@ internal static class StudioQueryToolJson
         string callId,
         string toolName,
         string resultJson,
-        params ResultPropertyRequirement[] resultRequirements)
+        IReadOnlyCollection<ResultPropertyRequirement> resultRequirements)
     {
         if (!TryParseObject(resultJson, out var document))
             return null;
@@ -843,7 +859,7 @@ internal static class StudioQueryToolJson
         string? successStatusPropertyName,
         string? successStatusValue,
         string subjectIdPropertyName,
-        params ResultPropertyRequirement[] resultRequirements) =>
+        IReadOnlyCollection<ResultPropertyRequirement> resultRequirements) =>
         CreateSuccessfulMutationResultReceipt(
             defaultToolName,
             sideEffectKind,

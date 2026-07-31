@@ -9,7 +9,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.AI.ToolProviders.StudioProvisioning;
 
-internal sealed class ScheduleStudioMemberWorkflowTool : IAgentTool
+internal sealed class ScheduleStudioMemberWorkflowTool : IStudioMutationReceiptTool
 {
     private const string CredentialProvisioningKind = "dedicated_scheduled_invocation_agent_key";
 
@@ -75,27 +75,17 @@ internal sealed class ScheduleStudioMemberWorkflowTool : IAgentTool
     public bool IsReadOnly => false;
     public bool IsDestructive => false;
     public string SideEffectKind => "studio.member.workflow.schedule";
+    public string SubjectKind => "studio_member_workflow_schedule";
+    public string SubjectIdPropertyName => "schedule_id";
 
-    public AgentToolReceipt? CreateResultReceipt(
-        string callId,
-        string toolName,
-        string argumentsJson,
-        string resultJson) =>
-        StudioQueryToolJson.CreateMutationResultReceipt(
-            Name,
-            SideEffectKind,
-            "studio_member_workflow_schedule",
-            callId,
-            toolName,
-            resultJson,
-            null,
-            null,
-            "schedule_id",
-            StudioQueryToolJson.StringProperty("status"),
-            StudioQueryToolJson.StringProperty("scope_id"),
-            StudioQueryToolJson.StringProperty("member_id"),
-            StudioQueryToolJson.StringProperty("published_service_id"),
-            StudioQueryToolJson.StringProperty("observatory_url"));
+    public IReadOnlyList<StudioQueryToolJson.ResultPropertyRequirement> ResultRequirements { get; } = new[]
+    {
+        StudioQueryToolJson.StringProperty("status"),
+        StudioQueryToolJson.StringProperty("scope_id"),
+        StudioQueryToolJson.StringProperty("member_id"),
+        StudioQueryToolJson.StringProperty("published_service_id"),
+        StudioQueryToolJson.StringProperty("observatory_url"),
+    };
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {

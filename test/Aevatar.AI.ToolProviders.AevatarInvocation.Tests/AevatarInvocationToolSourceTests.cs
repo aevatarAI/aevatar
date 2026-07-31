@@ -3197,6 +3197,42 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
+    public async Task ObserveRun_WorkflowCurrentState_ThroughStreamingExecutor_ShouldKeepVerifiedReadResult()
+    {
+        var harness = new Harness();
+        harness.WorkflowQuery.Snapshot = new WorkflowActorSnapshot
+        {
+            ActorId = "workflow-actor",
+            LastCommandId = "workflow-command",
+            CompletionStatus = WorkflowRunCompletionStatus.Completed,
+            StateVersion = 9,
+            LastOutput = "done",
+        };
+        var tool = await harness.DiscoverToolAsync("aevatar_observe_run");
+
+        using var _ = PushContext(callId: "call-observe-workflow-executor");
+        var result = await ExecuteToolThroughExecutorAsync(
+            tool,
+            "call-observe-workflow-executor",
+            "aevatar_observe_run",
+            """
+            {
+              "workflow_current_state": {
+                "actor_id": "workflow-actor",
+                "command_id": "workflow-command"
+              }
+            }
+            """);
+
+        result.Result.Should().Contain("\"run_id\":\"workflow-command\"");
+        result.Result.Should().Contain("\"status\":\"Completed\"");
+        result.Result.Should().NotContain("tool outcome could not be verified");
+        result.Receipt.Should().NotBeNull();
+        result.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        result.Receipt.SubjectId.Should().Be("workflow-command");
+    }
+
+    [Fact]
     public async Task ObserveRun_WorkflowCurrentState_WhenCommandIdIsOmitted_ShouldReturnSnapshotCommandId()
     {
         var harness = new Harness();
@@ -3372,6 +3408,37 @@ public sealed class AevatarInvocationToolSourceTests
         result.GetProperty("status").GetString().Should().Be(nameof(WorkflowRunCompletionStatus.Completed));
         result.GetProperty("final_output").GetString().Should().Be("Dinner is ready.");
         result.GetProperty("summary").GetProperty("completed_steps").GetInt32().Should().Be(2);
+    }
+
+    [Fact]
+    public async Task ReadWorkflowRunArtifact_Report_ThroughStreamingExecutor_ShouldKeepVerifiedReadResult()
+    {
+        var harness = new Harness();
+        harness.WorkflowQuery.Report = new WorkflowRunReport
+        {
+            RootActorId = "workflow-run-actor",
+            WorkflowName = "invoice-pdf-extraction-workflow",
+            CommandId = "run-1",
+            CompletionStatus = WorkflowRunCompletionStatus.Completed,
+            StateVersion = 17,
+            Success = true,
+            FinalOutput = "{\"document_type\":\"receipt\"}",
+        };
+        var tool = await harness.DiscoverToolAsync("aevatar_read_workflow_run_artifact");
+
+        var result = await ExecuteToolThroughExecutorAsync(
+            tool,
+            "call-read-workflow-artifact-executor",
+            "aevatar_read_workflow_run_artifact",
+            """{"workflow_run_id":"run-1"}""");
+
+        result.Result.Should().Contain("\"workflow_run_id\":\"run-1\"");
+        result.Result.Should().Contain("\"artifact\":\"report\"");
+        result.Result.Should().Contain("document_type");
+        result.Result.Should().NotContain("tool outcome could not be verified");
+        result.Receipt.Should().NotBeNull();
+        result.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        result.Receipt.SubjectId.Should().Be("run-1");
     }
 
     [Fact]

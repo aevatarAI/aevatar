@@ -7,7 +7,7 @@ using Aevatar.Studio.Application.Studio.Contracts;
 
 namespace Aevatar.AI.ToolProviders.StudioProvisioning;
 
-internal sealed class ListStudioWorkflowsTool : IAgentTool
+internal sealed class ListStudioWorkflowsTool : IStudioReadOnlyReceiptTool
 {
     private static readonly JsonSerializerOptions s_jsonOptions = StudioQueryToolJson.Options;
     private readonly IStudioMemberQueryPort _memberQueryPort;
@@ -48,18 +48,11 @@ internal sealed class ListStudioWorkflowsTool : IAgentTool
 
     public bool IsDestructive => false;
 
-    public AgentToolReceipt? CreateResultReceipt(
-        string callId,
-        string toolName,
-        string argumentsJson,
-        string resultJson) =>
-        StudioQueryToolJson.CreateReadOnlyResultReceipt(
-            Name,
-            callId,
-            toolName,
-            resultJson,
-            StudioQueryToolJson.StringProperty("scope_id"),
-            StudioQueryToolJson.ArrayProperty("workflows"));
+    public IReadOnlyList<StudioQueryToolJson.ResultPropertyRequirement> ResultRequirements { get; } = new[]
+    {
+        StudioQueryToolJson.StringProperty("scope_id"),
+        StudioQueryToolJson.ArrayProperty("workflows"),
+    };
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {

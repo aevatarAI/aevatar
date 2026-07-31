@@ -10,7 +10,7 @@ namespace Aevatar.AI.ToolProviders.StudioProvisioning;
 /// Local, typed Studio team creation tool. Scope authority comes from
 /// AgentToolRequestContext, not from LLM arguments.
 /// </summary>
-internal sealed class CreateStudioTeamTool : IAgentTool
+internal sealed class CreateStudioTeamTool : IStudioMutationReceiptTool
 {
     private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
@@ -59,26 +59,16 @@ internal sealed class CreateStudioTeamTool : IAgentTool
     public bool IsReadOnly => false;
     public bool IsDestructive => false;
     public string SideEffectKind => "studio.team.create";
+    public string SubjectKind => "studio_team";
+    public string SubjectIdPropertyName => "team_id";
 
-    public AgentToolReceipt? CreateResultReceipt(
-        string callId,
-        string toolName,
-        string argumentsJson,
-        string resultJson) =>
-        StudioQueryToolJson.CreateMutationResultReceipt(
-            Name,
-            SideEffectKind,
-            "studio_team",
-            callId,
-            toolName,
-            resultJson,
-            null,
-            null,
-            "team_id",
-            StudioQueryToolJson.StringProperty("scope_id"),
-            StudioQueryToolJson.StringProperty("display_name"),
-            StudioQueryToolJson.StringProperty("lifecycle_stage"),
-            StudioQueryToolJson.StringProperty("team_url"));
+    public IReadOnlyList<StudioQueryToolJson.ResultPropertyRequirement> ResultRequirements { get; } = new[]
+    {
+        StudioQueryToolJson.StringProperty("scope_id"),
+        StudioQueryToolJson.StringProperty("display_name"),
+        StudioQueryToolJson.StringProperty("lifecycle_stage"),
+        StudioQueryToolJson.StringProperty("team_url"),
+    };
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
