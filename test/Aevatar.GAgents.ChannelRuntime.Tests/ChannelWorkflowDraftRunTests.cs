@@ -263,7 +263,11 @@ public sealed class ChannelWorkflowDraftRunTests
         ingress.Requests[0].Content.ToArray().Should().Equal(1, 2, 3);
         ingress.Requests[0].SourceMessageId.Should().Be("om_123");
         ingress.Requests[0].SourceResourceKey.Should().Be("img_v3_1");
+        ingress.Requests[0].OwnerRunId.Should().BeNull();
+        ingress.Requests[0].OwnerScopeId.Should().Be("scope-1");
         ingress.Requests[1].Content.ToArray().Should().Equal(4, 5, 6, 7);
+        ingress.Requests[1].OwnerRunId.Should().BeNull();
+        ingress.Requests[1].OwnerScopeId.Should().Be("scope-1");
         await lark.Received(1).DownloadMessageResourceAsync(
             "user-token-1",
             Arg.Is<LarkMessageResourceDownloadRequest>(x =>
