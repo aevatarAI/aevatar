@@ -166,6 +166,7 @@ public static class AgentToolExecutionContextMapper
                 AgentToolExecutionContext.Normalize(payload.NyxIdAuthority?.ExternalUserId),
                 AgentToolExecutionContext.Normalize(payload.NyxIdAuthority?.Scope)),
             InvocationSurface = FromInvocationSurfacePayload(payload.InvocationSurface),
+            InputFileRefs = FromInputFileRefsPayload(payload.InputFileRefs),
         };
     }
 
@@ -312,6 +313,9 @@ public static class AgentToolExecutionContextMapper
 
         if (context.ToolVisibility.IsRestricted)
             payload.ToolVisibility = ToToolVisibilityPayload(context.ToolVisibility);
+
+        foreach (var fileRef in ToInputFileRefsPayload(context.InputFileRefs))
+            payload.InputFileRefs.Add(fileRef);
     }
 
     private static AgentToolNyxIdAuthorityContextPayload ToNyxIdAuthorityPayload(
@@ -472,6 +476,58 @@ public static class AgentToolExecutionContextMapper
 
         return payload;
     }
+
+    private static IReadOnlyList<Aevatar.AI.Abstractions.ChatFileRef> FromInputFileRefsPayload(
+        IEnumerable<Aevatar.AI.Abstractions.ChatFileRef>? payloads)
+    {
+        if (payloads is null)
+            return [];
+
+        var refs = new List<Aevatar.AI.Abstractions.ChatFileRef>();
+        foreach (var payload in payloads)
+        {
+            if (!HasFileRefIdentity(payload))
+                continue;
+
+            refs.Add(new Aevatar.AI.Abstractions.ChatFileRef
+            {
+                FileId = AgentToolExecutionContext.Normalize(payload.FileId) ?? string.Empty,
+                ArtifactId = AgentToolExecutionContext.Normalize(payload.ArtifactId) ?? string.Empty,
+                SourceKind = payload.SourceKind,
+                SourceMessageId = AgentToolExecutionContext.Normalize(payload.SourceMessageId) ?? string.Empty,
+                SourceResourceKey = AgentToolExecutionContext.Normalize(payload.SourceResourceKey) ?? string.Empty,
+                FileName = AgentToolExecutionContext.Normalize(payload.FileName) ?? string.Empty,
+                MediaType = AgentToolExecutionContext.Normalize(payload.MediaType) ?? string.Empty,
+                SizeBytes = payload.SizeBytes,
+                Sha256 = AgentToolExecutionContext.Normalize(payload.Sha256) ?? string.Empty,
+                CreatedAtUnixMs = payload.CreatedAtUnixMs,
+                ExpiresAtUnixMs = payload.ExpiresAtUnixMs,
+                OwnerRunId = AgentToolExecutionContext.Normalize(payload.OwnerRunId) ?? string.Empty,
+                OwnerScopeId = AgentToolExecutionContext.Normalize(payload.OwnerScopeId) ?? string.Empty,
+            });
+        }
+
+        return refs;
+    }
+
+    private static IEnumerable<Aevatar.AI.Abstractions.ChatFileRef> ToInputFileRefsPayload(
+        IEnumerable<Aevatar.AI.Abstractions.ChatFileRef>? fileRefs)
+    {
+        if (fileRefs is null)
+            yield break;
+
+        foreach (var fileRef in fileRefs)
+        {
+            if (!HasFileRefIdentity(fileRef))
+                continue;
+
+            yield return fileRef.Clone();
+        }
+    }
+
+    private static bool HasFileRefIdentity(Aevatar.AI.Abstractions.ChatFileRef fileRef) =>
+        !string.IsNullOrWhiteSpace(fileRef.FileId) ||
+        !string.IsNullOrWhiteSpace(fileRef.ArtifactId);
 
     public static IReadOnlyDictionary<string, string> StripOwnedControlKeys(IReadOnlyDictionary<string, string>? metadata)
     {
