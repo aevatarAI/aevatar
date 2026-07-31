@@ -305,6 +305,103 @@ public sealed class AgentRunReplyGenerationExecutorTests
     }
 
     [Fact]
+    public async Task NyxIdChatTurnExecutor_ShouldMergeDirectInputPartFileRefsIntoInitialPlanningToolContext()
+    {
+        var generationExecutor = new RecordingTurnGenerationExecutor();
+        var executor = new NyxIdChatTurnOperationExecutor(generationExecutor);
+        var session = new NyxIdChatTransientExecutionSession();
+        var baseContext = AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity("request-direct", "call-direct"),
+            Caller = new AgentToolCallerContext("scope-direct", "owner-direct", "response-direct"),
+            InputFileRefs =
+            [
+                new Aevatar.AI.Abstractions.ChatFileRef
+                {
+                    FileId = "file-existing",
+                    ArtifactId = "workflow-file://file-existing",
+                    SourceKind = Aevatar.AI.Abstractions.ChatFileSourceKind.Generated,
+                    FileName = "existing.txt",
+                    MediaType = "text/plain",
+                },
+            ],
+        };
+
+        await executor.ExecuteAsync(
+            new NyxIdChatOperationDispatchCommand
+            {
+                Key = BuildOperationKey("step-llm", "operation-llm"),
+                Llm = new NyxIdChatLLMOperationInput
+                {
+                    Request = new ChatRequestEvent
+                    {
+                        Prompt = "summarize files",
+                        ToolContext = baseContext.ToPayload(),
+                        InputParts =
+                        {
+                            new ChatContentPart
+                            {
+                                Kind = ChatContentPartKind.Text,
+                                Text = "see direct file",
+                                FileRef = new Aevatar.AI.Abstractions.ChatFileRef
+                                {
+                                    FileId = "file-direct",
+                                    ArtifactId = "workflow-file://file-direct",
+                                    SourceKind = Aevatar.AI.Abstractions.ChatFileSourceKind.ChatInput,
+                                    SourceMessageId = "om_direct",
+                                    SourceResourceKey = "file_key_direct",
+                                    FileName = "direct.pdf",
+                                    MediaType = "application/pdf",
+                                    SizeBytes = 123,
+                                },
+                            },
+                            new ChatContentPart
+                            {
+                                Kind = ChatContentPartKind.Text,
+                                Text = "duplicate",
+                                FileRef = new Aevatar.AI.Abstractions.ChatFileRef
+                                {
+                                    FileId = "file-direct-copy",
+                                    ArtifactId = "workflow-file://file-direct",
+                                    SourceKind = Aevatar.AI.Abstractions.ChatFileSourceKind.ChatInput,
+                                    FileName = "direct-copy.pdf",
+                                    MediaType = "application/pdf",
+                                },
+                            },
+                            new ChatContentPart
+                            {
+                                Kind = ChatContentPartKind.Text,
+                                Text = "file id only",
+                                FileRef = new Aevatar.AI.Abstractions.ChatFileRef
+                                {
+                                    FileId = "file-only",
+                                    SourceKind = Aevatar.AI.Abstractions.ChatFileSourceKind.ChatInput,
+                                    FileName = "file-only.txt",
+                                    MediaType = "text/plain",
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+            session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        generationExecutor.InitialRequest.Should().NotBeNull();
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(generationExecutor.InitialRequest!.ToolContext);
+        toolContext.Request.RequestId.Should().Be("request-direct");
+        toolContext.Caller.ScopeId.Should().Be("scope-direct");
+        toolContext.InputFileRefs.Select(static fileRef => fileRef.FileId)
+            .Should().Equal("file-existing", "file-direct", "file-only");
+        toolContext.InputFileRefs.Select(static fileRef => fileRef.ArtifactId)
+            .Should().Equal("workflow-file://file-existing", "workflow-file://file-direct", string.Empty);
+        toolContext.InputFileRefs[1].SourceMessageId.Should().Be("om_direct");
+        toolContext.InputFileRefs[1].SourceResourceKey.Should().Be("file_key_direct");
+        toolContext.InputFileRefs[1].SizeBytes.Should().Be(123);
+    }
+
+    [Fact]
     public async Task BuildLlmStepContinuation_WhenMiddlewareRemovesTools_ShouldRejectFabricatedToolCall()
     {
         var tool = new CountingTool("use_skill");
@@ -599,6 +696,53 @@ public sealed class AgentRunReplyGenerationExecutorTests
         }
 
         return workItem with { StepState = stepState };
+    }
+
+    private sealed class RecordingTurnGenerationExecutor : IAgentRunReplyGenerationExecutorPort
+    {
+        public NeedsLlmReplyEvent? InitialRequest { get; private set; }
+
+        public Task<AgentRunReplyStepState> BuildInitialStepStateAsync(
+            AgentRunReplyGenerationExecutionRequest request,
+            CancellationToken ct)
+        {
+            InitialRequest = request.Request.Clone();
+            return Task.FromResult(new AgentRunReplyStepState
+            {
+                RunId = request.RunId,
+                CorrelationId = request.Request.CorrelationId,
+                TargetActorId = request.Request.TargetActorId,
+                Attempt = request.Attempt,
+                NextStepIndex = 1,
+                MaxToolRounds = 1,
+                ToolContext = request.Request.ToolContext?.Clone(),
+                LlmControl = request.Request.LlmControl?.Clone(),
+            });
+        }
+
+        public Task<AgentRunLlmStepExecution> BuildLlmStepExecutionAsync(
+            AgentRunReplyStepExecutionRequest request,
+            CancellationToken ct) =>
+            Task.FromResult(new AgentRunLlmStepExecution(
+                new AgentRunNextLlmStepRequestedEvent
+                {
+                    RunId = request.RunId,
+                    CorrelationId = request.Request.CorrelationId,
+                    TargetActorId = request.Request.TargetActorId,
+                    Attempt = request.Attempt,
+                    StepIndex = request.StepIndex + 1,
+                    LlmStepResult = new AgentRunLlmStepResult
+                    {
+                        FinishReason = "stop",
+                    },
+                },
+                AuthorizedToolStep: null));
+
+        public Task<AgentRunNextToolStepRequestedEvent> BuildToolStepContinuationAsync(
+            AgentRunReplyStepExecutionRequest request,
+            AgentRunAuthorizedToolStep? authorizedToolStep,
+            CancellationToken ct) =>
+            throw new NotSupportedException();
     }
 
     private sealed class RecordingProvider : ILLMProvider

@@ -461,12 +461,56 @@ public sealed class NyxIdChatTurnOperationExecutor
             CorrelationId = command.Key.OperationId,
             TargetActorId = command.Key.ConversationActorId,
             Activity = activity,
-            ToolContext = chat.ToolContext?.Clone(),
+            ToolContext = MergeDirectInputFileRefs(chat.ToolContext, chat.InputParts),
             LlmControl = chat.LlmControl?.Clone(),
         };
         foreach (var pair in chat.Metadata)
             request.Metadata[pair.Key] = pair.Value;
         return request;
+    }
+
+    private static AgentToolExecutionContextPayload? MergeDirectInputFileRefs(
+        AgentToolExecutionContextPayload? toolContext,
+        IReadOnlyList<ChatContentPart> inputParts)
+    {
+        if (inputParts.Count == 0)
+            return toolContext?.Clone();
+
+        var explicitFileRefs = inputParts
+            .Where(static part => part.FileRef is not null && HasFileRefIdentity(part.FileRef))
+            .Select(static part => part.FileRef!)
+            .ToArray();
+        if (explicitFileRefs.Length == 0)
+            return toolContext?.Clone();
+
+        var context = AgentToolExecutionContextMapper.FromPayload(toolContext);
+        var merged = new List<Aevatar.AI.Abstractions.ChatFileRef>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var fileRef in context.InputFileRefs.Concat(explicitFileRefs))
+        {
+            var key = FileRefIdentityKey(fileRef);
+            if (key is null || !seen.Add(key))
+                continue;
+
+            merged.Add(fileRef.Clone());
+        }
+
+        return (context with { InputFileRefs = merged }).ToPayload();
+    }
+
+    private static bool HasFileRefIdentity(Aevatar.AI.Abstractions.ChatFileRef fileRef) =>
+        !string.IsNullOrWhiteSpace(fileRef.FileId) ||
+        !string.IsNullOrWhiteSpace(fileRef.ArtifactId);
+
+    private static string? FileRefIdentityKey(Aevatar.AI.Abstractions.ChatFileRef fileRef)
+    {
+        if (!string.IsNullOrWhiteSpace(fileRef.ArtifactId))
+            return $"artifact:{fileRef.ArtifactId.Trim()}";
+
+        if (!string.IsNullOrWhiteSpace(fileRef.FileId))
+            return $"file:{fileRef.FileId.Trim()}";
+
+        return null;
     }
 
     private static void OverlayDirectInputParts(
