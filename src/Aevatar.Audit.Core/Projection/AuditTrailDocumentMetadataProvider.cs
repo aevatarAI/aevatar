@@ -12,6 +12,14 @@ public sealed class AuditTrailDocumentMetadataProvider
 
     private static IReadOnlyDictionary<string, object?> BuildMappings()
     {
+        var chat = Object(
+            ("surface", Field("keyword")),
+            ("conversation_id", Field("keyword")),
+            ("turn_id", Field("keyword")),
+            ("task_id", Field("keyword")),
+            ("step_id", Field("keyword")),
+            ("action_request_id", Field("keyword")));
+        var provenance = Object(("chat", chat));
         var correlation = Object(
             ("causation_id", TextWithKeyword()),
             ("call_id", TextWithKeyword()),
@@ -21,7 +29,8 @@ public sealed class AuditTrailDocumentMetadataProvider
             ("actor_kind", TextWithKeyword()),
             ("operation_kind", TextWithKeyword()),
             ("capture_plane", TextWithKeyword()),
-            ("correlation", correlation));
+            ("correlation", correlation),
+            ("provenance", provenance));
         var artifact = Object(
             ("occurred_at", Field("date")),
             ("recorded_at", Field("date")),
