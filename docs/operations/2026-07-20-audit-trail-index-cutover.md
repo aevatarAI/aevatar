@@ -25,6 +25,13 @@ Normal rollout requires no manual Elasticsearch write. A failed reconcile is vis
 application log, `/health/ready`, and the `audit-query-index` target in `/api/status`; stop the
 rollout and investigate instead of deleting or recreating an index.
 
+Chat Activity records share this alias and add typed chat-provenance mappings. Before enabling
+their 30-day TTL, wait for fingerprinted copy-forward reconciliation and verify the active alias,
+schema fingerprint, source/target document counts, backup evidence, and enough headroom for both
+physical copies. Then follow the separate
+[Chat Activity Audit Retention](chat-activity-audit-retention.md) procedure. Retention never runs
+inside startup reconciliation.
+
 ## Pre-Deployment Record
 
 Record the intended image commit and current deployment image:
@@ -112,3 +119,7 @@ or recreate either index. Record the deployment image, alias name, sanitized `er
 time; stop or roll back through the normal release pipeline. Any later cleanup of retained legacy
 or physical indices is a separate retention change with explicit approval, backup evidence, and
 document-count verification.
+
+Do not treat a successful Chat Activity delete-by-query as approval to remove a legacy or previous
+physical index. Physical-index cleanup additionally requires rollback-window expiry and a separate
+change record.

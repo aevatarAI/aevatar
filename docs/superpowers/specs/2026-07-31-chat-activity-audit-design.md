@@ -1,6 +1,6 @@
 ---
 title: "Chat Activity Audit"
-status: review-requested
+status: accepted
 owner: eanzhao
 date: 2026-07-31
 ---

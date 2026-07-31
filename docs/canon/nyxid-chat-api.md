@@ -431,6 +431,27 @@ Action JSON rejects secret-shaped field names and bearer/basic credential values
 
 Action names such as `service_account.rotate_secret` describe a NyxID-owned journey; their params carry only the non-secret resource identity. They do not authorize a secret value to cross this boundary.
 
+## Chat Activity audit
+
+NyxID Assistant tool executions and committed browser-action facts are observable through
+`GET /api/audit/chat-activity`. Tool records come from the final typed tool receipt. Action
+records come only from committed action-request and resolution events; a browser-reported
+`completed` disposition is not success until the exact typed postcondition is committed as
+verified.
+
+The audit record may carry safe tool/action names, outcomes, conversation/turn/task/step/action
+request IDs, safe target/correlation fields, and the HMAC-derived audit actor identity. It has no
+field for the raw conversation owner and omits prompts, transcript text, reasoning, tool
+arguments/results, action params/resources, postcondition bodies, and credentials. Historical
+ownerless conversations are not guessed or later claimed, so their browser actions are absent
+from personal Chat Activity rather than attributed by scope or route shape.
+
+Personal reads are fixed to the authenticated subject's current and retained HMAC identities;
+platform-admin all-user access requires explicit `scope=__all__`. The Audit Trail artifact is
+observability evidence only and cannot authorize an action, resume a turn, or define actor state.
+Typed Chat Activity records expire under the scoped 30-day retention operation; unrelated Audit
+Trail records do not share that TTL.
+
 ## Conversation transcript
 
 All turns under one public `conversationId` (the controller `actorId`) share a conversation transcript, including after passivation/reactivation. Transcript/history remains a separate `ChatConversationGAgent` concern and is not the task current-state read model. Accepted registration initializes this authority even with zero turns. Completed, failed, stopped, and blocked terminal turns are delivered through the existing chat-history delivery actor at least once; stable delivery identities make initialization, reservation, and terminal replay idempotent and prevent duplicate transcript turns. Once a reservation is committed, any malformed or conflicting reuse fails without replacing that authoritative delivery state.

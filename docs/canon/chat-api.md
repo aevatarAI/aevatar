@@ -42,6 +42,24 @@ Mainnet also exposes the authenticated Assistant resource family:
 
 Standalone Workflow Host behavior is unchanged: its own `POST /api/chat` remains Workflow JSON/multipart, and `GET /api/ws/chat` remains the Workflow WebSocket surface. Mainnet's WebSocket route is likewise not selected by the Assistant JSON discriminators. New NyxID clients use only the HTTP facade and `/api/chat/conversations/**`; scoped NyxIdChat routes are compatibility adapters, not a second evolving contract.
 
+## Chat Activity audit surface
+
+Mainnet exposes `GET /api/audit/chat-activity` as a sanitized Audit Trail view of tool calls
+from both `POST /api/chat` branches and committed NyxID browser-action facts. It stores and
+returns only typed tool/action identities, safe outcome/correlation fields, and typed chat
+provenance such as surface, conversation, turn, task, step, and action-request IDs.
+
+It does not store or return prompts, assistant text, reasoning, input parts, attachments, tool
+arguments/results, action parameters/resources, raw subjects, or credentials. It does not fetch
+conversation history or transcripts. An authenticated user is fixed to their own scope and every
+HMAC identity retained for the 30-day window. An Aevatar platform admin may explicitly request
+`scope=__all__`; admin reads remain personal by default.
+
+Tool capture reuses the existing tool-execution audit middleware. Browser-action capture consumes
+committed actor facts through the existing unified Projection Pipeline. Neither path creates a
+ChatLog store, Chat Activity actor/read model, or second projection rail. The default 30-day TTL
+applies only to Audit Trail artifacts with typed chat provenance.
+
 ## 1. 端点与职责
 
 | Endpoint | 协议 | 作用 |

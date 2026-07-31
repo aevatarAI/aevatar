@@ -288,6 +288,7 @@ readers, actor state, or event stores directly. Audit artifacts are queried thro
 | `/api/audit/trail` | `GET` | Authenticated caller; platform admin only when `scope` targets another scope | Query materialized audit artifacts. Missing `scope` means caller scope. |
 | `/api/audit/trail/cloudevents` | `GET` | Same as `/api/audit/trail` | Export the selected page as a CloudEvents 1.0 JSON batch. |
 | `/api/audit/actor-resolutions` | `POST` | Platform admin | Resolve an external actor identity to `auditActorId`. |
+| `/api/audit/chat-activity` | `GET` | Authenticated caller; platform admin only for explicit `scope=__all__` | Query only typed chat tool/action artifacts. The default remains the caller's own scope and HMAC identities. |
 
 The resolver accepts raw external identity only in the JSON request body. It must never
 put that identity in path or query parameters, must not log it, and must not return it.
@@ -304,6 +305,13 @@ If `IAuditTrailQueryPort` is not configured, `/api/audit/trail` returns
 state reads, query-time replay, or event-store reconstruction. If platform-admin
 authorization is unavailable for an admin-only path, the endpoint returns
 `503 AUDIT_ADMIN_AUTH_UNAVAILABLE`.
+
+`/api/audit/chat-activity` resolves one unambiguous authenticated scope and subject, derives
+every current/retained HMAC actor identity, requires typed `provenance.chat`, and applies
+surface/conversation/outcome filters before cursor pagination. Ordinary callers cannot select
+`scope`, `auditActorId`, or `identityKeyId`. Platform admins remain personal by default and
+enter a cross-user query only by explicitly requesting `scope=__all__`. The response never
+enriches from chat history, transcript, actor state, or an event replay.
 
 If the configured query store rejects or cannot execute the query, the endpoint returns
 `503 AUDIT_QUERY_UNAVAILABLE` with a stable generic message. The response and server log may
@@ -409,6 +417,15 @@ Operational requirements:
 5. Index lifecycle migration copies forward and retains legacy/previous physical indices;
    operators may remove them only through an approved retention action after independent backup
    and count verification.
+6. Chat Activity uses a scoped 30-day operation over the active alias: both
+   `artifact.recorded_at < now-30d/d` and existence of
+   `artifact.record.provenance.chat.surface` are required. This TTL cannot delete unrelated
+   Audit Trail records. Retained HMAC identity keys must remain queryable for the full unexpired
+   window.
+
+The governed procedure is
+[Chat Activity Audit Retention](../operations/chat-activity-audit-retention.md). It defaults to a
+count-only dry run; execution and previous-physical-index cleanup require separate approval.
 
 ## 9. Validation
 
