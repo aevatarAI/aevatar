@@ -613,6 +613,13 @@ function decodePermissionReview(
           return nodeId.trim();
         },
       );
+      if (
+        (nodeGrantRequirement === "required") !== (nodeIds.length > 0)
+      ) {
+        throw new Error(
+          "Team Automation authorization node grant requirement does not match per-service node grants.",
+        );
+      }
       return {
         grantId: `service:${targetId}`,
         kind: "service" as const,

@@ -401,6 +401,50 @@ describe("teamAutomationApi", () => {
   });
 
   it.each([
+    [
+      "requires nodes but returns none",
+      "AUTHORIZATION_GRANT_REQUIREMENT_REQUIRED",
+      [],
+      "AUTHORIZATION_GRANT_REQUIREMENT_REQUIRED",
+    ],
+    [
+      "does not require nodes but returns one",
+      "AUTHORIZATION_GRANT_REQUIREMENT_NOT_REQUIRED",
+      ["node-alpha"],
+      "AUTHORIZATION_GRANT_REQUIREMENT_NOT_REQUIRED",
+    ],
+  ] as const)(
+    "fails closed when a service grant %s",
+    (
+      _caseName,
+      serviceNodeGrantRequirement,
+      nodeIds,
+      credentialNodeGrantRequirement,
+    ) => {
+      const base = authorizationResult();
+      const result = {
+        ...base,
+        plan: {
+          ...base.plan,
+          nyxIdServiceGrants: base.plan.nyxIdServiceGrants.map((grant) => ({
+            ...grant,
+            nodeGrantRequirement: serviceNodeGrantRequirement,
+            nodeIds,
+          })),
+          credentialPolicy: {
+            ...base.plan.credentialPolicy,
+            nodeGrantRequirement: credentialNodeGrantRequirement,
+          },
+        },
+      };
+
+      expect(() => teamAutomationApiDecoders.permissionReview(result)).toThrow(
+        "Team Automation authorization node grant requirement does not match per-service node grants.",
+      );
+    },
+  );
+
+  it.each([
     ["service policy", () => {
       const base = authorizationResult();
       return {
