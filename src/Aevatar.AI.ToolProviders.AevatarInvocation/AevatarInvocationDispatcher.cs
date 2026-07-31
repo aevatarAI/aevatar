@@ -537,9 +537,8 @@ public sealed class AevatarInvocationDispatcher
                 "Scope workflow lookup failed before workflow start: scopeId={ScopeId} workflowId={WorkflowId}",
                 scopeId,
                 workflowId);
+            return WorkflowStartSourceResolution.Failed(ScopeWorkflowLookupFailedError(scopeId, workflowId));
         }
-
-        return WorkflowStartSourceResolution.NotResolved();
     }
 
     private async Task<ChatRunToolCompletionRequest> DispatchWorkflowForChatRunAsync(
@@ -1448,6 +1447,12 @@ public sealed class AevatarInvocationDispatcher
             $"Current-scope workflow '{workflowId}' in scope '{scopeId}' is {lookup.Status} and cannot be started yet: {lookup.Reason}. List current scope workflows and retry when the descriptor is runnable.",
             "workflow_id");
 
+    private static InvocationToolError ScopeWorkflowLookupFailedError(string scopeId, string workflowId) =>
+        Error(
+            "scope_workflow_lookup_failed",
+            $"Current-scope workflow '{workflowId}' in scope '{scopeId}' could not be verified. List current scope workflows and retry when the descriptor is available.",
+            "workflow_id");
+
     private static InvocationToolError ChannelWorkflowDeliveryUnavailableError() =>
         Error(
             AgentToolFailureCodes.ChannelWorkflowResultDeliveryUnavailable,
@@ -2209,12 +2214,12 @@ public sealed class AevatarInvocationDispatcher
             var responseId = Normalize(context.Caller.ResponseId) ??
                              Normalize(context.Request.RequestId) ??
                              Normalize(context.Request.CallId);
-            if (callerScopeId is null || ownerSubject is null || responseId is null)
+            if (callerScopeId is null || responseId is null)
             {
                 return WorkflowInvocationScopeResolution.Failed(new InvocationToolError
                 {
                     Code = "caller_scope_unavailable",
-                    Message = "scope_id, owner_subject, and response_id/request_id are required in AgentToolRequestContext.",
+                    Message = "scope_id and response_id/request_id are required in AgentToolRequestContext.",
                 });
             }
 
@@ -2227,6 +2232,15 @@ public sealed class AevatarInvocationDispatcher
                     "channel_owner_scope",
                     registrationScopeId,
                     ownerScopeId));
+            }
+
+            if (ownerSubject is null)
+            {
+                return WorkflowInvocationScopeResolution.Failed(new InvocationToolError
+                {
+                    Code = "caller_scope_unavailable",
+                    Message = "owner_subject is required in AgentToolRequestContext for caller-scope workflow invocation.",
+                });
             }
 
             return WorkflowInvocationScopeResolution.Success(new WorkflowInvocationScope(

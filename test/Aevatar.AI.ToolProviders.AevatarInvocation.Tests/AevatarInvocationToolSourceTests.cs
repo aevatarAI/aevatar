@@ -1702,6 +1702,30 @@ public sealed class AevatarInvocationToolSourceTests
         harness.WorkflowDispatch.Command.Should().BeNull();
     }
 
+    [Fact]
+    public async Task StartWorkflow_WhenScopeWorkflowLookupFails_ShouldNotFallbackToCatalog()
+    {
+        var harness = new Harness();
+        harness.ScopeWorkflowQuery.Failure = new InvalidOperationException("lookup unavailable");
+        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
+
+        using var _ = PushContext(callId: "call-scope-workflow-lookup-failed");
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_id": "invoice-pdf-extraction-workflow",
+              "inputs": { "prompt": "process pdf" },
+              "wait": "stream"
+            }
+            """);
+
+        ErrorCode(output).Should().Be("scope_workflow_lookup_failed");
+        ErrorMessage(output).Should().Contain("invoice-pdf-extraction-workflow");
+        ErrorMessage(output).Should().Contain("scope-1");
+        harness.ScopeWorkflowQuery.Lookups.Should().ContainSingle()
+            .Which.Should().Be(("scope-1", "invoice-pdf-extraction-workflow"));
+        harness.WorkflowDispatch.Command.Should().BeNull();
+    }
+
     [Theory]
     [InlineData(ScopeWorkflowLookupStatus.NotReady, "deployment_readmodel_missing")]
     [InlineData(ScopeWorkflowLookupStatus.Stale, "workflow_actor_binding_mismatched")]
@@ -1742,6 +1766,34 @@ public sealed class AevatarInvocationToolSourceTests
         using var _ = PushContext(
             callId: "call-workflow-lark-owner-scope",
             scopeId: "registration-scope-1",
+            ownerScopeId: "owner-scope-1",
+            channelPlatform: "lark",
+            channelRegistrationScopeId: "registration-scope-1");
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_id": "wf-main",
+              "inputs": { "prompt": "run workflow" },
+              "wait": "stream"
+            }
+            """);
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        harness.WorkflowDispatch.Command.Should().NotBeNull();
+        harness.WorkflowDispatch.Command!.ScopeId.Should().Be("owner-scope-1");
+    }
+
+    [Fact]
+    public async Task StartWorkflow_ShouldUseOwnerScope_WhenLarkChannelCarriesOwnerScopeWithoutOwnerSubject()
+    {
+        var harness = new Harness();
+        harness.WorkflowDispatch.Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
+            .Success(new WorkflowChatRunAcceptedReceipt("workflow-actor", "wf-main", "wf-command", "wf-correlation"));
+        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
+
+        using var _ = PushContext(
+            callId: "call-workflow-lark-owner-scope-no-owner-subject",
+            scopeId: "registration-scope-1",
+            ownerSubject: null,
             ownerScopeId: "owner-scope-1",
             channelPlatform: "lark",
             channelRegistrationScopeId: "registration-scope-1");
@@ -3825,6 +3877,7 @@ public sealed class AevatarInvocationToolSourceTests
         string? accessToken = "access-token",
         string? senderNyxUserId = null,
         string? senderBindingId = "binding-1",
+        string? ownerSubject = "owner-1",
         string? ownerScopeId = null,
         string? channelPlatform = "telegram",
         string? channelRegistrationScopeId = "registration-scope-1",
@@ -3837,7 +3890,7 @@ public sealed class AevatarInvocationToolSourceTests
         AgentToolContextScope.Push(new AgentToolExecutionContext(
             new AgentToolRequestIdentity(requestId, callId),
             new AgentToolCredentials(accessToken, "org-token", "sender-token", nyxIdCredentialKind),
-            new AgentToolCallerContext(scopeId, "owner-1", "response-1", ownerScopeId),
+            new AgentToolCallerContext(scopeId, ownerSubject, "response-1", ownerScopeId),
             new AgentToolChannelContext(
                 channelPlatform,
                 "sender-1",
@@ -4237,6 +4290,7 @@ public sealed class AevatarInvocationToolSourceTests
         public Dictionary<string, ScopeWorkflowSummary> Workflows { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, ScopeWorkflowLookupResult> LookupResults { get; } = new(StringComparer.Ordinal);
         public List<(string ScopeId, string WorkflowId)> Lookups { get; } = [];
+        public Exception? Failure { get; set; }
 
         public Task<IReadOnlyList<ScopeWorkflowSummary>> ListAsync(
             string scopeId,
@@ -4251,6 +4305,9 @@ public sealed class AevatarInvocationToolSourceTests
             CancellationToken ct = default)
         {
             Lookups.Add((scopeId, workflowId));
+            if (Failure is not null)
+                throw Failure;
+
             if (LookupResults.TryGetValue(workflowId, out var lookupResult))
                 return Task.FromResult(lookupResult);
 
