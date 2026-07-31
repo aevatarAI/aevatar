@@ -1306,6 +1306,134 @@ public sealed class BackendConsoleStaticAssetEndpointTests
     }
 
     [Fact]
+    public async Task AdminShell_ChatActivity_ShouldEnforceQueryPolicyAndRenderTypedSafeRecords()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        html.Should().Contain("items:['fleet','status','audit','chat-activity']");
+        html.Should().Contain("'chat-activity':{name:'Chat Activity', auth:'login'");
+        html.Should().Contain("/api/audit/chat-activity");
+        html.Should().Contain("data-act=\"chatActivityRow\"");
+        html.Should().Contain("tabindex=\"0\"");
+        html.Should().Contain("ev.key==='Enter'||ev.key===' '");
+        html.Should().Contain(":focus-visible");
+        html.Should().Contain("正在加载 Chat Activity");
+        html.Should().Contain("暂无 Chat Activity");
+        html.Should().Contain("Chat Activity 加载失败");
+        html.Should().Contain("data-act=\"chatActivityMore\"");
+        html.Should().Contain("if(a==='chatActivityCopy'){ copyWithToast");
+        html.Should().NotContain("/api/chat/history");
+        html.Should().NotContain("/api/chat/transcript");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name, nextName) {
+              const markers = ['function ' + name + '(', 'async function ' + name + '('];
+              const nextMarkers = ['\nfunction ' + nextName + '(', '\nasync function ' + nextName + '('];
+              const start = markers.map(marker => html.indexOf(marker)).filter(index => index >= 0).sort((a,b) => a-b)[0] ?? -1;
+              const end = nextMarkers.map(marker => html.indexOf(marker, start)).filter(index => index >= 0).sort((a,b) => a-b)[0] ?? -1;
+              assert.notEqual(start, -1, name + ' must exist');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return html.slice(start, end);
+            }
+
+            const calls = [];
+            const response = {
+              records: [{
+                id:'audit-tool-alpha', occurredAtUtc:'2026-08-01T00:00:00Z',
+                operationName:'request_nyxid_connect', operationKind:'Tool',
+                lifecyclePhase:'terminal', terminalOutcome:'failed',
+                auditActorId:'audit_actor:full-alpha', scopeId:'scope-alpha',
+                target:{kind:'tool',id:'request_nyxid_connect'},
+                correlation:{callId:'call-alpha',correlationId:'correlation-alpha'},
+                failure:{code:'authorization_required',category:'authorization',sanitizedMessage:'Authorization required.'},
+                provenance:{chat:{surface:'nyxid_assistant',conversationId:'conversation-alpha',turnId:'turn-alpha',taskId:'task-alpha',stepId:'step-alpha',actionRequestId:null}}
+              },{
+                id:'audit-action-alpha', occurredAtUtc:'2026-08-01T00:00:01Z',
+                operationName:'chat.action.requested', operationKind:'Authorization',
+                lifecyclePhase:'accepted', terminalOutcome:null,
+                auditActorId:'audit_actor:full-alpha', scopeId:'scope-alpha',
+                target:{kind:'chat_action',id:'request_nyxid_connect'},
+                correlation:{correlationId:'correlation-action'}, failure:null,
+                provenance:{chat:{surface:'nyxid_assistant',conversationId:'conversation-alpha',turnId:'turn-alpha',taskId:'task-alpha',stepId:'step-alpha',actionRequestId:'action-alpha'}}
+              }],
+              coverage:{continuationCursor:'cursor-alpha',ingestionWatermark:'2026-08-01T00:00:02Z'}
+            };
+            const context = {
+              URLSearchParams, encodeURIComponent, ACCOUNT:{admin:false}, calls,
+              CHAT_ACTIVITY_STATE:{scope:'mine',actor:'',surface:'all',conversation:'',outcome:'all',from:'',to:''},
+              CHAT_ACTIVITY_DATA:[], CHAT_ACTIVITY_CURSOR:null, CHAT_ACTIVITY_HAS_MORE:false, CHAT_ACTIVITY_WATERMARK:null,
+              CHAT_ACTIVITY_LOADING:false, CHAT_ACTIVITY_LOADED:false, CHAT_ACTIVITY_ERR:null, CHAT_ACTIVITY_FORBIDDEN:false, CHAT_ACTIVITY_RERENDER:null,
+              async adminJson(url){ calls.push(url); return response; },
+              esc(value){ return String(value == null ? '' : value).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); },
+              auditFmtTime(){ return '2026-08-01 08:00:00'; }, auditAgo(){ return '刚刚'; },
+              auditResult(r){ return r.terminalOutcome||r.lifecyclePhase||'unspecified'; },
+              auditResultTag(o){ return '<span>'+o+'</span>'; },
+              ICON:{empty:'',warn:''}
+            };
+            vm.createContext(context);
+            vm.runInContext(`
+              ${functionSource('chatActivityBuildQuery','chatActivityApplyPage')}
+              ${functionSource('chatActivityApplyPage','loadChatActivity')}
+              ${functionSource('loadChatActivity','loadChatActivityMore')}
+              ${functionSource('chatActivityKind','chatActivityShortId')}
+              ${functionSource('chatActivityShortId','chatActivityTable')}
+              ${functionSource('chatActivityTable','chatActivityInspector')}
+              ${functionSource('chatActivityInspector','chatActivityGate')}
+              ${functionSource('chatActivityFilters','chatActivityRoot')}
+            `, context);
+
+            (async () => {
+              assert.equal(context.chatActivityBuildQuery({take:50}), '?take=50');
+              context.ACCOUNT = {admin:true};
+              assert.equal(context.chatActivityBuildQuery({take:50}), '?take=50');
+              context.CHAT_ACTIVITY_STATE.scope = 'all';
+              context.CHAT_ACTIVITY_STATE.actor = 'audit_actor:exact';
+              const all = context.chatActivityBuildQuery({take:50});
+              assert.match(all, /scope=__all__/);
+              assert.match(all, /auditActorId=audit_actor%3Aexact/);
+              assert.doesNotMatch(all, /identityKeyId/);
+
+              context.CHAT_ACTIVITY_STATE.scope = 'mine';
+              context.CHAT_ACTIVITY_STATE.actor = 'must-not-leak';
+              await context.loadChatActivity();
+              assert.equal(calls.length,1);
+              assert.match(calls[0], /^\/api\/audit\/chat-activity/);
+              assert.doesNotMatch(calls[0], /scope=|auditActorId=|identityKeyId=/);
+              assert.equal(context.CHAT_ACTIVITY_CURSOR,'cursor-alpha');
+              context.CHAT_ACTIVITY_STATE.outcome = 'failed';
+              assert.match(context.chatActivityFilters(), /value="failed" selected/);
+
+              const table = context.chatActivityTable();
+              assert.match(table,/Tool/);
+              assert.match(table,/Action/);
+              assert.match(table,/request_nyxid_connect/);
+              assert.match(table,/failed/);
+              assert.match(table,/accepted/);
+              assert.match(table,/conversation-alpha/);
+              assert.match(table,/turn-alpha/);
+              assert.match(table,/title="conversation-alpha"/);
+              assert.match(table,/tabindex="0"/);
+
+              const inspector = context.chatActivityInspector(response.records[1]);
+              assert.match(inspector,/task-alpha/);
+              assert.match(inspector,/step-alpha/);
+              assert.match(inspector,/action-alpha/);
+              assert.doesNotMatch(inspector,/prompt|arguments|result_json|params/i);
+              assert.equal(calls.every(url => url.startsWith('/api/audit/chat-activity')),true);
+            })().catch(error => { console.error(error); process.exitCode=1; });
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, $"Chat Activity behavior should pass. stdout: {result.Output} stderr: {result.Error}");
+    }
+
+    [Fact]
     public async Task AdminShell_Channels_ShouldEmbedCanonicalSurfaceWithoutDuplicateMutations()
     {
         await using var app = await CreateAppAsync();

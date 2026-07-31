@@ -1008,6 +1008,11 @@ button{font-family:inherit;cursor:pointer;}
 .audit-actor{display:block;font-size:12.5px;color:var(--heading);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .audit-actor-sub{font-size:10.5px;max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .audit-corr{display:block;font-size:11.5px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.chat-activity-table{min-width:900px;}
+.chat-activity-table .col-kind{width:82px;}
+.chat-activity-table .col-name{width:220px;}
+.chat-activity-table .col-chat-id{width:190px;}
+.chat-activity-table tbody tr:focus-visible{outline:2px solid var(--primary);outline-offset:-2px;}
 
 /* ---------------- responsive ---------------- */
 @media (max-width:1024px){
@@ -2326,7 +2331,7 @@ var NAV_ICON={
 };
 
 var NAV=[
-  {group:'总览',   items:['fleet','status','audit']},
+  {group:'总览',   items:['fleet','status','audit','chat-activity']},
   {group:'运行观测', items:['observatory','cqrs']},
   {group:'编排调度', items:['studio','agent-profiles','skills','schedules']},
   {group:'接入',   items:['channels','voice']}
@@ -2342,7 +2347,8 @@ var MODULE_META={
   schedules:{name:'排班调度', auth:'login', icon:NAV_ICON.sched},
   channels:{name:'通道管理', auth:'login', icon:NAV_ICON.channels},
   voice:{name:'语音台', auth:'login', icon:NAV_ICON.voice, live:true},
-  audit:{name:'审计日志', auth:'login', icon:NAV_ICON.audit}
+  audit:{name:'审计日志', auth:'login', icon:NAV_ICON.audit},
+  'chat-activity':{name:'Chat Activity', auth:'login', icon:NAV_ICON.audit}
 };
 /* 当前账号能否访问该模块：public 恒真；admin/platform-admin 需 ACCOUNT.admin；其余需已登录。无权→不在 rail 显示且路由拦截。 */
 function canAccessModule(m){ if(!m) return false; if(m.auth==='public') return true;
@@ -3955,6 +3961,140 @@ function bindAudit(root){
   });
 }
 
+/* ================= Chat Activity —— /api/audit/chat-activity ================= */
+var CHAT_ACTIVITY_DATA=[];
+var CHAT_ACTIVITY_CURSOR=null,CHAT_ACTIVITY_HAS_MORE=false,CHAT_ACTIVITY_WATERMARK=null;
+var CHAT_ACTIVITY_LOADING=false,CHAT_ACTIVITY_LOADED=false,CHAT_ACTIVITY_ERR=null,CHAT_ACTIVITY_FORBIDDEN=false;
+var CHAT_ACTIVITY_RERENDER=null;
+var CHAT_ACTIVITY_STATE={scope:'mine',actor:'',surface:'all',conversation:'',outcome:'all',from:'',to:''};
+function chatActivityBuildQuery(opts){
+  opts=opts||{}; var q=[];
+  if(opts.cursor) q.push('cursor='+encodeURIComponent(opts.cursor));
+  if(ACCOUNT&&ACCOUNT.admin&&CHAT_ACTIVITY_STATE.scope==='all'){
+    q.push('scope='+encodeURIComponent('__all__'));
+    var actor=(CHAT_ACTIVITY_STATE.actor||'').trim();
+    if(actor) q.push('auditActorId='+encodeURIComponent(actor));
+  }
+  if(CHAT_ACTIVITY_STATE.surface&&CHAT_ACTIVITY_STATE.surface!=='all') q.push('surface='+encodeURIComponent(CHAT_ACTIVITY_STATE.surface));
+  var conversation=(CHAT_ACTIVITY_STATE.conversation||'').trim();
+  if(conversation) q.push('conversationId='+encodeURIComponent(conversation));
+  if(CHAT_ACTIVITY_STATE.outcome&&CHAT_ACTIVITY_STATE.outcome!=='all') q.push('outcome='+encodeURIComponent(CHAT_ACTIVITY_STATE.outcome));
+  if(CHAT_ACTIVITY_STATE.from){ var fd=new Date(CHAT_ACTIVITY_STATE.from); if(!isNaN(fd.getTime())) q.push('from='+encodeURIComponent(fd.toISOString())); }
+  if(CHAT_ACTIVITY_STATE.to){ var td=new Date(CHAT_ACTIVITY_STATE.to); if(!isNaN(td.getTime())) q.push('to='+encodeURIComponent(td.toISOString())); }
+  q.push('take='+(opts.take||50));
+  return '?'+q.join('&');
+}
+function chatActivityApplyPage(j,append){
+  var records=(j&&j.records)||[],coverage=(j&&j.coverage)||{};
+  if(append) Array.prototype.push.apply(CHAT_ACTIVITY_DATA,records); else CHAT_ACTIVITY_DATA=records;
+  CHAT_ACTIVITY_CURSOR=coverage.continuationCursor||null;
+  CHAT_ACTIVITY_HAS_MORE=!!CHAT_ACTIVITY_CURSOR;
+  CHAT_ACTIVITY_WATERMARK=coverage.ingestionWatermark||CHAT_ACTIVITY_WATERMARK;
+}
+function chatActivityRerender(){ if(typeof CHAT_ACTIVITY_RERENDER==='function') CHAT_ACTIVITY_RERENDER(); }
+async function loadChatActivity(){
+  CHAT_ACTIVITY_LOADING=true;CHAT_ACTIVITY_ERR=null;CHAT_ACTIVITY_FORBIDDEN=false;CHAT_ACTIVITY_DATA=[];CHAT_ACTIVITY_CURSOR=null;CHAT_ACTIVITY_HAS_MORE=false;
+  chatActivityRerender();
+  try{
+    var j=await adminJson('/api/audit/chat-activity'+chatActivityBuildQuery({take:50}));
+    if(j&&j.forbidden) CHAT_ACTIVITY_FORBIDDEN=true; else chatActivityApplyPage(j,false);
+  }catch(e){
+    if(e&&e.unauthorized){CHAT_ACTIVITY_LOADING=false;return;}
+    CHAT_ACTIVITY_ERR=(e&&(e.body||e.message))||'Chat Activity 加载失败';
+  }
+  CHAT_ACTIVITY_LOADED=true;CHAT_ACTIVITY_LOADING=false;chatActivityRerender();
+}
+async function loadChatActivityMore(){
+  if(!CHAT_ACTIVITY_CURSOR||CHAT_ACTIVITY_LOADING)return;
+  CHAT_ACTIVITY_LOADING=true;chatActivityRerender();
+  try{
+    var j=await adminJson('/api/audit/chat-activity'+chatActivityBuildQuery({take:50,cursor:CHAT_ACTIVITY_CURSOR}));
+    if(j&&j.forbidden) CHAT_ACTIVITY_FORBIDDEN=true; else chatActivityApplyPage(j,true);
+  }catch(e){if(!(e&&e.unauthorized))CHAT_ACTIVITY_ERR=(e&&(e.body||e.message))||'Chat Activity 加载失败';}
+  CHAT_ACTIVITY_LOADING=false;chatActivityRerender();
+}
+function chatActivityKind(r){return String((r&&r.operationName)||'').indexOf('chat.action.')===0?'Action':'Tool';}
+function chatActivityName(r){return chatActivityKind(r)==='Action'?((r.target&&r.target.id)||r.operationName||'—'):(r.operationName||'—');}
+function chatActivityShortId(value){value=String(value||'');return value.length>22?value.slice(0,10)+'…'+value.slice(-7):(value||'—');}
+function chatActivityTable(){
+  if(!CHAT_ACTIVITY_DATA.length)return '<div class="empty">'+ICON.empty+'<div class="et">暂无 Chat Activity</div><div class="es">当前筛选条件下没有工具调用或浏览器 action。</div></div>';
+  var rows=CHAT_ACTIVITY_DATA.map(function(r){
+    var chat=((r.provenance||{}).chat)||{},kind=chatActivityKind(r),name=chatActivityName(r);
+    return '<tr role="button" tabindex="0" data-act="chatActivityRow" data-id="'+esc(r.id)+'" aria-label="查看 '+esc(kind)+' '+esc(name)+'">'+
+      '<td><div class="audit-time"><b class="num">'+esc(auditFmtTime(r.occurredAtUtc))+'</b><span class="audit-ago faint">'+esc(auditAgo(r.occurredAtUtc))+'</span></div></td>'+
+      '<td><span class="chip">'+kind+'</span></td>'+
+      '<td><div class="audit-action"><b>'+esc(name)+'</b></div></td>'+
+      '<td>'+auditResultTag(auditResult(r))+'</td>'+
+      '<td><span class="audit-corr mono" title="'+esc(chat.conversationId||'')+'">'+esc(chatActivityShortId(chat.conversationId))+'</span></td>'+
+      '<td><span class="audit-corr mono" title="'+esc(chat.turnId||'')+'">'+esc(chatActivityShortId(chat.turnId))+'</span></td></tr>';
+  }).join('');
+  return '<div class="protable-wrap audit-table-wrap"><table class="protable audit-table chat-activity-table"><thead><tr>'+
+    '<th class="col-time">时间</th><th class="col-kind">类型</th><th class="col-name">名称</th><th class="col-result">状态</th><th class="col-chat-id">Conversation</th><th class="col-chat-id">Turn</th>'+
+    '</tr></thead><tbody>'+rows+'</tbody></table></div>';
+}
+function chatActivityInspector(r){
+  var chat=((r.provenance||{}).chat)||{},correlation=r.correlation||{},target=r.target||{},failure=r.failure||{};
+  function row(label,value,copy){
+    if(value==null||value==='')return '';var text=String(value);
+    return '<div class="kv-row"><span class="kk">'+esc(label)+'</span><span class="vv">'+esc(text)+(copy?' <button class="ibtn" data-act="chatActivityCopy" data-copy="'+esc(text)+'" style="height:24px">复制</button>':'')+'</span></div>';
+  }
+  return '<div class="kv">'+
+    row('记录 ID',r.id,true)+row('类型',chatActivityKind(r))+row('名称',chatActivityName(r))+row('状态',auditResult(r))+
+    row('Surface',chat.surface)+row('Conversation ID',chat.conversationId,true)+row('Turn ID',chat.turnId,true)+
+    row('Task ID',chat.taskId,true)+row('Step ID',chat.stepId,true)+row('Call ID',correlation.callId,true)+
+    row('Action Request ID',chat.actionRequestId,true)+row('目标类型',target.kind)+row('目标名称',target.id)+
+    row('Failure code',failure.code)+row('Failure category',failure.category)+row('Failure message',failure.sanitizedMessage)+
+    row('Audit actor',r.auditActorId,true)+row('Scope',r.scopeId)+row('Correlation ID',correlation.correlationId,true)+
+    '</div>';
+}
+function chatActivityGate(){
+  if(CHAT_ACTIVITY_FORBIDDEN)return auth403('所有用户的 Chat Activity 仅平台管理员可见。');
+  if(CHAT_ACTIVITY_ERR)return '<div class="alert">'+ICON.warn+'<span class="grow">Chat Activity 加载失败：'+esc(CHAT_ACTIVITY_ERR)+'</span><button class="btn" data-act="chatActivityReload">重试</button></div>';
+  if(!CHAT_ACTIVITY_LOADED||CHAT_ACTIVITY_LOADING&&CHAT_ACTIVITY_DATA.length===0)return '<div class="empty"><span class="spinner"></span><div class="et" style="margin-top:10px">正在加载 Chat Activity…</div></div>';
+  return null;
+}
+function chatActivityFilters(){
+  var scope='<div class="seg-toggle" data-act="chatActivityScope"><button class="'+(CHAT_ACTIVITY_STATE.scope==='mine'?'on':'')+'" data-scope="mine">My activity</button>'+
+    ((ACCOUNT&&ACCOUNT.admin)?'<button class="'+(CHAT_ACTIVITY_STATE.scope==='all'?'on':'')+'" data-scope="all">All users</button>':'')+'</div>';
+  var actor=(ACCOUNT&&ACCOUNT.admin&&CHAT_ACTIVITY_STATE.scope==='all')?'<div class="audit-field"><label>Audit actor</label><input data-act="chatActivityActor" value="'+esc(CHAT_ACTIVITY_STATE.actor)+'" placeholder="HMAC actor ID（精确）"></div>':'';
+  return '<div class="audit-filters">'+scope+actor+
+    '<div class="audit-field"><label>Surface</label><select class="std-select" data-act="chatActivitySurface"><option value="all">全部</option><option value="nyxid_assistant"'+(CHAT_ACTIVITY_STATE.surface==='nyxid_assistant'?' selected':'')+'>NyxID Assistant</option><option value="workflow_chat"'+(CHAT_ACTIVITY_STATE.surface==='workflow_chat'?' selected':'')+'>Workflow Chat</option></select></div>'+
+    '<div class="audit-field"><label>Conversation</label><input data-act="chatActivityConversation" value="'+esc(CHAT_ACTIVITY_STATE.conversation)+'" placeholder="conversation ID"></div>'+
+    '<div class="audit-field"><label>Outcome</label><select class="std-select" data-act="chatActivityOutcome"><option value="all">全部</option><option value="succeeded"'+(CHAT_ACTIVITY_STATE.outcome==='succeeded'?' selected':'')+'>成功</option><option value="failed"'+(CHAT_ACTIVITY_STATE.outcome==='failed'?' selected':'')+'>失败</option><option value="cancelled"'+(CHAT_ACTIVITY_STATE.outcome==='cancelled'?' selected':'')+'>取消</option><option value="timed_out"'+(CHAT_ACTIVITY_STATE.outcome==='timed_out'?' selected':'')+'>超时</option></select></div>'+
+    '<button class="btn btn-primary" data-act="chatActivityReload">查询</button><button class="btn" data-act="chatActivityReset">重置</button></div>';
+}
+function chatActivityRoot(){
+  var gate=chatActivityGate();if(gate)return '<div class="view-scroll">'+gate+'</div>';
+  return '<div class="view-scroll">'+chatActivityFilters()+chatActivityTable()+
+    '<div class="pager"><span class="pg-info">已加载 '+CHAT_ACTIVITY_DATA.length+' 条</span>'+
+    (CHAT_ACTIVITY_LOADING?'<span class="spinner"></span>':'')+(CHAT_ACTIVITY_HAS_MORE&&!CHAT_ACTIVITY_LOADING?'<button class="btn" data-act="chatActivityMore">加载更多</button>':'')+'</div>'+
+    '<p class="chan-note">只展示工具调用和浏览器 action 的安全字段，不读取聊天正文、历史或 transcript。</p></div>';
+}
+function viewChatActivity(){
+  return {html:moduleSubHeader('chat-activity','<span class="inline-refresh">Chat Activity · '+srcBadge('ready')+' · /api/audit/chat-activity</span>')+
+    '<div class="audit-root" id="chat-activity-root">'+chatActivityRoot()+'</div>',mount:bindChatActivity};
+}
+function bindChatActivity(root){
+  var rb=root.querySelector('#chat-activity-root');function re(){if(rb)rb.innerHTML=chatActivityRoot();}CHAT_ACTIVITY_RERENDER=re;
+  if(!CHAT_ACTIVITY_LOADING)loadChatActivity();
+  function selected(id){return CHAT_ACTIVITY_DATA.filter(function(r){return r.id===id;})[0];}
+  function openRow(el){var r=selected(el.getAttribute('data-id'));if(r)openInspector(chatActivityInspector(r),{title:'Chat Activity 详情',sub:r.id,drawerKind:'audit'});}
+  root.addEventListener('click',function(ev){
+    var act=ev.target.closest('[data-act]');if(!act)return;var a=act.getAttribute('data-act');
+    if(a==='chatActivityRow')openRow(act);
+    else if(a==='chatActivityReload'){CHAT_ACTIVITY_LOADED=false;loadChatActivity();}
+    else if(a==='chatActivityMore')loadChatActivityMore();
+    else if(a==='chatActivityReset'){CHAT_ACTIVITY_STATE={scope:'mine',actor:'',surface:'all',conversation:'',outcome:'all',from:'',to:''};CHAT_ACTIVITY_LOADED=false;loadChatActivity();}
+    else if(a==='chatActivityScope'){var b=ev.target.closest('[data-scope]');if(b){CHAT_ACTIVITY_STATE.scope=b.getAttribute('data-scope');CHAT_ACTIVITY_LOADED=false;loadChatActivity();}}
+  });
+  root.addEventListener('change',function(ev){var a=ev.target.getAttribute('data-act');if(a==='chatActivityActor')CHAT_ACTIVITY_STATE.actor=ev.target.value;else if(a==='chatActivitySurface')CHAT_ACTIVITY_STATE.surface=ev.target.value;else if(a==='chatActivityConversation')CHAT_ACTIVITY_STATE.conversation=ev.target.value;else if(a==='chatActivityOutcome')CHAT_ACTIVITY_STATE.outcome=ev.target.value;});
+  root.addEventListener('keydown',function(ev){
+    var row=ev.target.closest&&ev.target.closest('[data-act="chatActivityRow"]');
+    if(row&&(ev.key==='Enter'||ev.key===' ')){ev.preventDefault();openRow(row);return;}
+    if(ev.key==='Enter'){var a=ev.target.getAttribute&&ev.target.getAttribute('data-act');if(a==='chatActivityActor'||a==='chatActivityConversation'){ev.preventDefault();CHAT_ACTIVITY_LOADED=false;loadChatActivity();}}
+  });
+}
+
 function obsNavigate(patch){
   var q=(parseHash().parts[0]==='observatory')?parseHash().q:{},next={};
   ['scope','status','origin','definition','schedule','from','to','run','tab'].forEach(function(key){if(q[key])next[key]=q[key];});
@@ -3973,6 +4113,7 @@ function opsView(module){
     case 'channels': return viewChannels();
     case 'voice': return viewVoice();
     case 'audit': return viewAudit();
+    case 'chat-activity': return viewChatActivity();
     default: return null;
   }
 }
@@ -4191,6 +4332,7 @@ function bindEvents(){
       if(a==='globalSearch'){ return; }
       if(a==='drawer-close'){ closeDrawer(); return; }
       if(a==='drawer-emp'){ closeDrawer(); navigate(['fleet','c',act.getAttribute('data-co'),'e',act.getAttribute('data-emp')],{}); return; }
+      if(a==='chatActivityCopy'){ copyWithToast(act.getAttribute('data-copy'),'已复制完整 ID'); return; }
       if(a==='refresh'){
         act.querySelector('svg')&&act.classList.add('spin-once');
         document.querySelectorAll('[data-stamp]').forEach(function(s){s.textContent=nowStamp();});
@@ -4198,6 +4340,10 @@ function bindEvents(){
           AUDIT_LOADED=false;
           loadAuditTrail();
           toast('正在刷新审计日志');
+        } else if((curParts()[0]||defaultModule())==='chat-activity'){
+          CHAT_ACTIVITY_LOADED=false;
+          loadChatActivity();
+          toast('正在刷新 Chat Activity');
         } else {
           toast('已刷新（最终一致 readmodel）');
         }
