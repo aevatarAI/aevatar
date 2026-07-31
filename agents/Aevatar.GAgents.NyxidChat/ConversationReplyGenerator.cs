@@ -2094,6 +2094,12 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                     continue;
                 }
 
+                if (IsNyxIdChatTurn(toolContext) &&
+                    DeclaresCapability(tool, AgentToolCapabilities.ExcludeFromNyxIdChat))
+                {
+                    continue;
+                }
+
                 // Human-session management tools do not belong on channel relay or NyxID Assistant
                 // chat surfaces. The relay credential cannot call them, and NyxID Assistant owns
                 // service connection through nyxid_require_service + typed browser actions. Keep

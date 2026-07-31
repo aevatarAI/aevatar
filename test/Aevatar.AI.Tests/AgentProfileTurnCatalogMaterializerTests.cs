@@ -4,6 +4,8 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Tools;
+using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.NyxId.Tools;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.GAgents.NyxidChat.AgentProfiles;
@@ -1402,6 +1404,40 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
         catalog.Diagnostics.Should().NotContain(diagnostic =>
             diagnostic.Code == AgentProfileTurnDiagnosticCode.ToolCapabilityRejected);
         fetcher.CallCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task MaterializeAsync_NyxIdChatProfile_ShouldHideRawProxyWithoutLosingTypedTools()
+    {
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.example" };
+        var rawProxy = new NyxIdProxyTool(new NyxIdApiClient(options, new HttpClient()));
+        var requireService = new TestTool("nyxid_require_service");
+        var typedInventory = new TestTool("nyxid_service_inventory");
+        IAgentTool[] tools = [rawProxy, requireService, typedInventory];
+        var profile = BuildProfile(withAlias: true);
+        profile.MaximumToolPolicy.ToolNames.Clear();
+        profile.MaximumToolPolicy.ToolNames.Add(tools.Select(static tool => tool.Name));
+        profile.RecoveryToolPolicy.ToolNames.Clear();
+        profile.RecoveryToolPolicy.ToolNames.Add(requireService.Name);
+        profile.Members[0].TaskToolPolicy.ToolNames.Clear();
+        profile.Members[0].TaskToolPolicy.ToolNames.Add([rawProxy.Name, typedInventory.Name]);
+
+        var catalog = await NewMaterializer(
+                RegistryWithRoute(tools),
+                new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+                new RecordingFetcher(SuccessfulFetch()))
+            .MaterializeAsync(
+                SealProfile(profile),
+                "/alpha",
+                "token",
+                tools,
+                ToolContext(),
+                CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should()
+            .BeEquivalentTo("nyxid_require_service", "nyxid_service_inventory");
+        catalog.RouteOwnedTools.Keys.Should()
+            .BeEquivalentTo("nyxid_require_service", "nyxid_service_inventory");
     }
 
     [Fact]
