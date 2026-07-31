@@ -32,10 +32,11 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
         _client = client;
         _options = options;
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _logger = logger ?? NullLogger<NyxIdExternalWorkflowCapabilitySource>.Instance;
         _durableAuthorizationCatalog = new NyxIdDurableAuthorizationCatalogInspector(
             catalogQueryPort,
-            _timeProvider);
-        _logger = logger ?? NullLogger<NyxIdExternalWorkflowCapabilitySource>.Instance;
+            _timeProvider,
+            _logger);
     }
 
     public ExternalWorkflowCapabilitySelector.SelectorOneofCase SelectorKind =>
@@ -271,7 +272,8 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
         ExternalWorkflowCapabilityAccessContext access,
         CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(access.NyxIdCallerBearerToken) ||
+        var sourceReadableBearerToken = access.NyxIdCallerCredential?.SourceReadableUserBearerToken;
+        if (string.IsNullOrWhiteSpace(sourceReadableBearerToken) ||
             string.IsNullOrWhiteSpace(_options.BaseUrl))
         {
             return ToSnapshot(NyxIdMcpOperationCatalog.Parse(
@@ -282,7 +284,7 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
         }
 
         var response = await _client.GetMcpConfigAsync(
-            access.NyxIdCallerBearerToken, cancellationToken);
+            sourceReadableBearerToken, cancellationToken);
         return ToSnapshot(NyxIdMcpOperationCatalog.Parse(
             response,
             "caller",

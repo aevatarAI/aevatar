@@ -72,17 +72,15 @@ public sealed class WorkflowCapabilityAdmissionHttpContextTests
     }
 
     [Theory]
-    [InlineData("bearer_only", "bearer-token")]
-    [InlineData("delegation_only", "delegation-token")]
-    [InlineData("both_valid", "bearer-token")]
-    [InlineData("malformed_authorization_with_delegation", null)]
-    [InlineData("duplicate_authorization", null)]
-    [InlineData("duplicate_delegation", null)]
-    [InlineData("missing", null)]
-    [InlineData("valid_authorization_with_malformed_delegation", "bearer-token")]
+    [InlineData("bearer_only", "bearer-token", null)]
+    [InlineData("delegation_only", null, "delegation-token")]
+    [InlineData("both_valid", "bearer-token", null)]
+    [InlineData("missing", null, null)]
+    [InlineData("valid_authorization_with_malformed_delegation", "bearer-token", null)]
     public void Create_ShouldApplyCanonicalCallerCredentialSelection(
         string scenario,
-        string? expectedToken)
+        string? expectedSourceReadableToken,
+        string? expectedDelegationToken)
     {
         foreach (var (name, create) in AdmissionFactories)
         {
@@ -91,7 +89,28 @@ public sealed class WorkflowCapabilityAdmissionHttpContextTests
 
             var admission = create(http);
 
-            admission.NyxIdCallerBearerToken.Should().Be(expectedToken, name);
+            admission.NyxIdCallerCredential?.SourceReadableUserBearerToken.Should()
+                .Be(expectedSourceReadableToken, name);
+            admission.NyxIdCallerCredential?.ProxyDelegationToken.Should()
+                .Be(expectedDelegationToken, name);
+        }
+    }
+
+    [Theory]
+    [InlineData("malformed_authorization_with_delegation")]
+    [InlineData("duplicate_authorization")]
+    [InlineData("duplicate_delegation")]
+    public void Create_WithInvalidCallerCredentialSelection_ShouldFailClosed(string scenario)
+    {
+        foreach (var (name, create) in AdmissionFactories)
+        {
+            var http = new DefaultHttpContext();
+            ApplyScenario(http, scenario);
+
+            var action = () => create(http);
+
+            action.Should().Throw<InvalidOperationException>(name)
+                .WithMessage("Caller credential selection is invalid.");
         }
     }
 

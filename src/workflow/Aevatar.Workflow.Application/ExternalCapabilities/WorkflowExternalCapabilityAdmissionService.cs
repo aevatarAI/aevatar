@@ -38,6 +38,7 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
             request.ExecutionMode,
             cancellationToken);
 
+        EnsureConfirmationBindingsMatch(request);
         EnsureConfirmationCallSitesAreExpected(request, definition.Invocations);
 
         var admissions = new List<WorkflowCapabilityInvocationAdmission>();
@@ -103,7 +104,9 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
             BuildDurableAuthorizationOwner(
                 request.Access,
                 request.ExecutionMode,
-                admissions.Select(static admission => admission.Capability)));
+                admissions.Select(static admission => admission.Capability)),
+            request.WorkflowId,
+            request.RevisionId);
     }
 
     private static WorkflowCapabilityInvocationAdmission BuildInvocationAdmission(
@@ -199,6 +202,8 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
             GrantorOwnerKind = ExternalCapabilityAuthorizationOwnerKind.Personal,
             GrantorOwnerSubject = request.Access.CallerId,
             Risk = confirmation.AttestedRisk,
+            WorkflowId = request.WorkflowId!,
+            RevisionId = request.RevisionId!,
         };
         grant.AllowedExecutionModes.Add(ExternalCapabilityExecutionMode.Interactive);
         if (request.ExecutionMode == ExternalCapabilityExecutionMode.Durable)
@@ -250,6 +255,33 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
             request.ExecutionMode,
             "NYXID_EXPLICIT_REQUEST_CONFIRMATION_CALL_SITE_MISMATCH",
             "The explicit request confirmation does not match an explicit request call site in this workflow.");
+    }
+
+    private static void EnsureConfirmationBindingsMatch(
+        WorkflowExternalCapabilityAdmissionRequest request)
+    {
+        var mismatch = request.ExplicitRequestConfirmations.FirstOrDefault(confirmation =>
+            string.IsNullOrWhiteSpace(request.WorkflowId) ||
+            string.IsNullOrWhiteSpace(request.RevisionId) ||
+            string.IsNullOrWhiteSpace(confirmation.WorkflowId) ||
+            !string.Equals(confirmation.WorkflowId, confirmation.WorkflowId.Trim(), StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(confirmation.RevisionId) ||
+            !string.Equals(confirmation.RevisionId, confirmation.RevisionId.Trim(), StringComparison.Ordinal) ||
+            !string.Equals(confirmation.WorkflowId, request.WorkflowId, StringComparison.Ordinal) ||
+            !string.Equals(confirmation.RevisionId, request.RevisionId, StringComparison.Ordinal));
+        if (mismatch is null)
+            return;
+
+        throw ExplicitRequestConfirmationFailure(
+            new ExternalToolInvocationSpec
+            {
+                CallSiteId = mismatch.CallSiteId,
+                Selector = new ExternalWorkflowCapabilitySelector(),
+            },
+            null,
+            request.ExecutionMode,
+            "NYXID_EXPLICIT_REQUEST_CONFIRMATION_BINDING_MISMATCH",
+            "The explicit request confirmation does not match this workflow revision.");
     }
 
     private static bool RequiresInteractiveExplicitRequest(
@@ -310,7 +342,9 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
                 definition.WorkflowYaml,
                 definition.InlineWorkflowYamls,
                 request.ExpectedExecutionMode,
-                definition.Invocations);
+                definition.Invocations,
+                request.WorkflowId,
+                request.RevisionId);
         }
         catch (WorkflowCapabilityAdmissionRebindRequiredException)
         {

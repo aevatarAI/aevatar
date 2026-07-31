@@ -112,7 +112,8 @@ public sealed class StudioProvisioningEndpointsTests
         var context = service.ProvisionRequest!.CapabilityAdmission;
         context.Should().NotBeNull();
         context!.CallerId.Should().Be("caller-alpha");
-        context.NyxIdCallerBearerToken.Should().Be("runtime-caller-credential");
+        context.NyxIdCallerCredential?.SourceReadableUserBearerToken
+            .Should().Be("runtime-caller-credential");
         context.ExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Durable);
         context.ToString().Should().NotContain("runtime-caller-credential");
         service.ProvisionRequest.AuthenticatedOwner.Should().NotBeNull();
@@ -175,6 +176,31 @@ public sealed class StudioProvisioningEndpointsTests
         http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
         body.RootElement.GetProperty("code").GetString().Should()
             .Be("INVALID_EXPLICIT_REQUEST_CONFIRMATION");
+        service.ProvisionInvoked.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task HandleProvisionWorkflowAsync_WithMultipleAuthorizationValues_ShouldRejectWithoutDispatch()
+    {
+        var service = new RecordingProvisioningService();
+        var http = CreateAuthenticatedContext(ScopeId);
+        http.Request.Headers.Authorization =
+            new Microsoft.Extensions.Primitives.StringValues(["Bearer first", "Bearer second"]);
+
+        var result = await InvokeHandle<IResult>(
+            http,
+            ScopeId,
+            new ProvisionWorkflowRequest(
+                DisplayName: "Monitor",
+                WorkflowYaml: "name: monitor\nsteps: []\n",
+                Caller: Caller)
+            {
+                TeamId = TeamId,
+            },
+            service,
+            CancellationToken.None);
+
+        AssertBadRequestResult(result, "INVALID_WORKFLOW_CALLER_CREDENTIAL");
         service.ProvisionInvoked.Should().BeFalse();
     }
 

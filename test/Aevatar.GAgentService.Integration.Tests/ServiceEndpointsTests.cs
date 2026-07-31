@@ -350,7 +350,8 @@ public sealed class ServiceEndpointsTests
         var admissionRequest = host.CapabilityAdmission.Requests.Should().ContainSingle().Which;
         admissionRequest.Access.ScopeId.Should().Be("tenant-claim");
         admissionRequest.Access.CallerId.Should().Be("caller-alpha");
-        admissionRequest.Access.NyxIdCallerBearerToken.Should().Be("runtime-caller-credential");
+        admissionRequest.Access.NyxIdCallerCredential?.SourceReadableUserBearerToken
+            .Should().Be("runtime-caller-credential");
         admissionRequest.WorkflowYaml.Should().Be("name: approval");
         admissionRequest.InlineWorkflowYamls.Should().Contain("child", "name: child");
         admissionRequest.SourceKind.Should().Be("service_revision");
@@ -435,6 +436,40 @@ public sealed class ServiceEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
         (await response.Content.ReadAsStringAsync()).Should()
             .Contain("INVALID_EXPLICIT_REQUEST_CONFIRMATION");
+        host.CapabilityAdmission.Requests.Should().BeEmpty();
+        host.CommandPort.CreateRevisionCommand.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task CreateRevisionAsync_WithMalformedAuthorizationAndDelegation_ShouldRejectBeforeAdmissionOrDispatch()
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/services/svc-alpha/revisions")
+        {
+            Content = JsonContent.Create(new ServiceEndpoints.CreateRevisionHttpRequest(
+                "tenant-alpha",
+                "app-alpha",
+                "ns-alpha",
+                "rev-alpha",
+                "workflow",
+                null,
+                null,
+                new ServiceEndpoints.WorkflowRevisionHttpRequest(
+                    "wf-alpha",
+                    "name: wf-alpha\nsteps: []\n",
+                    "definition-alpha",
+                    null))),
+        };
+        request.Headers.TryAddWithoutValidation("Authorization", "Bearer token with spaces");
+        request.Headers.TryAddWithoutValidation("X-NyxID-Delegation-Token", "delegation-token");
+
+        var response = await host.Client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        body.Should().Contain("INVALID_WORKFLOW_CALLER_CREDENTIAL");
+        body.Should().NotContain("token with spaces");
+        body.Should().NotContain("delegation-token");
         host.CapabilityAdmission.Requests.Should().BeEmpty();
         host.CommandPort.CreateRevisionCommand.Should().BeNull();
     }

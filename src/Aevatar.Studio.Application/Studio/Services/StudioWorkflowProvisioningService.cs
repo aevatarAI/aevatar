@@ -104,10 +104,13 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         var teamId = NormalizeRequired(request.TeamId, "teamId");
         var displayName = NormalizeRequired(request.DisplayName, nameof(request.DisplayName));
         var workflowYaml = NormalizeRequired(request.WorkflowYaml, nameof(request.WorkflowYaml));
+        var provisionKey = BuildProvisionKey(normalizedScopeId, teamId, displayName);
+        var workflowId = $"workflow-{provisionKey}";
+        var revisionId = $"revision-{provisionKey}";
 
         var suppliedAdmission = request.CapabilityAdmission;
         var callerId = suppliedAdmission?.CallerId ?? string.Empty;
-        var callerBearerToken = suppliedAdmission?.NyxIdCallerBearerToken;
+        var nyxIdCallerCredentialSelection = suppliedAdmission?.NyxIdCallerCredential;
         var organizationBearerToken = suppliedAdmission?.NyxIdOrganizationBearerToken;
         var existingPlan = suppliedAdmission?.ExistingPlan?.Clone();
         var explicitRequestConfirmations = suppliedAdmission?.ExplicitRequestConfirmations ?? [];
@@ -121,20 +124,24 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
                     workflowYaml,
                     new Dictionary<string, string>(),
                     "studio_workflow_provisioning",
-                    executionMode),
+                    executionMode,
+                    workflowId,
+                    revisionId),
                 ct)
             : await _capabilityAdmissionService.AdmitAsync(
                 new WorkflowExternalCapabilityAdmissionRequest(
                 new ExternalWorkflowCapabilityAccessContext(
                     normalizedScopeId,
                     callerId,
-                    callerBearerToken,
+                    nyxIdCallerCredentialSelection,
                     organizationBearerToken),
                 workflowYaml,
                 new Dictionary<string, string>(),
                 "studio_workflow_provisioning",
                 executionMode,
-                explicitRequestConfirmations),
+                explicitRequestConfirmations,
+                workflowId,
+                revisionId),
                 ct);
         var trustedAdmission = new WorkflowCapabilityAdmissionContext(
             callerId,
@@ -144,8 +151,6 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         // Provision identity: one (scope, team, display name) tuple owns exactly
         // one member + workflow id + schedule, so retries converge on the same
         // Team-owned resources instead of leaving an orphan pair per attempt.
-        var provisionKey = BuildProvisionKey(normalizedScopeId, teamId, displayName);
-
         // 1. Resolve the member: reuse the existing one for this (scope, display
         //    name), else create it. The deterministic id is the member's identity;
         //    its display name is a mutable label — re-creating after a rename
@@ -160,8 +165,6 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         //    bind contract requires; deriving it from the provision key keeps one
         //    logical workflow identity across re-binds of the same member.
         //    The bind is asynchronous — we do NOT poll it to completion.
-        var workflowId = $"workflow-{provisionKey}";
-        var revisionId = $"revision-{provisionKey}";
         var bindReceipt = await _bindingPort.BindAsync(
             new StudioMemberWorkflowBindingRequest(
                 normalizedScopeId,

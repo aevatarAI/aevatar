@@ -228,7 +228,10 @@ public sealed class WorkflowDefinitionParserExternalCapabilityTests
             new ExternalWorkflowCapabilityReadinessService([new FixtureExplicitRequestSource()]),
             new FixtureTimeProvider());
         var plan = await admissionService.AdmitAsync(new WorkflowExternalCapabilityAdmissionRequest(
-            new ExternalWorkflowCapabilityAccessContext("scope-alpha", "binder-alpha", "fixture-bearer"),
+            new ExternalWorkflowCapabilityAccessContext(
+                "scope-alpha",
+                "binder-alpha",
+                NyxIdCallerCredentialSelection.SourceReadableUserBearer("fixture-bearer")),
             workflowYaml,
             new Dictionary<string, string>(),
             "host_fixture",

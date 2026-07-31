@@ -571,6 +571,29 @@ public sealed class StudioMemberEndpointsTests
     }
 
     [Fact]
+    public async Task HandleBindAsync_WithMalformedAuthorizationAndDelegation_ShouldRejectWithoutDispatch()
+    {
+        var service = new RecordingMemberService();
+        var http = CreateAuthenticatedContext(ScopeId);
+        http.Request.Headers.Authorization = "Bearer token with spaces";
+        http.Request.Headers["X-NyxID-Delegation-Token"] = "delegation-token";
+
+        var result = await InvokeHandle<IResult>(
+            "HandleBindAsync",
+            http,
+            ScopeId,
+            "m-alpha",
+            new UpdateStudioMemberBindingRequest(
+                RevisionId: "rev-alpha",
+                Workflow: new StudioMemberWorkflowBindingSpec("wf-alpha", ["name: wf-alpha\nsteps: []\n"])),
+            service,
+            CancellationToken.None);
+
+        AssertBadRequestResult(result, "INVALID_WORKFLOW_CALLER_CREDENTIAL");
+        service.BindRequest.Should().BeNull();
+    }
+
+    [Fact]
     public async Task HandleBindAsync_ShouldReturnBadRequest_OnDomainError()
     {
         var service = new RecordingMemberService

@@ -25,6 +25,8 @@ public sealed record WorkflowExplicitRequestPreviewItem(
     IReadOnlyList<ExternalCapabilityExecutionMode> AllowedExecutionModes);
 
 public sealed record WorkflowExplicitRequestPreviewResult(
+    string WorkflowId,
+    string RevisionId,
     IReadOnlyList<WorkflowExplicitRequestPreviewItem> Items);
 
 public interface IWorkflowExplicitRequestPreviewService

@@ -45,6 +45,7 @@ public sealed class ScopeWorkflowCommandApplicationService : IScopeWorkflowComma
 
         var normalizedScopeId = ScopeWorkflowCapabilityOptions.NormalizeRequired(request.ScopeId, nameof(request.ScopeId));
         var normalizedWorkflowId = ScopeWorkflowCapabilityConventions.NormalizeWorkflowId(request.WorkflowId);
+        var revisionId = ScopeWorkflowCapabilityConventions.ResolveRevisionId(request.RevisionId);
         var workflowYaml = ScopeWorkflowCapabilityOptions.NormalizeRequired(request.WorkflowYaml, nameof(request.WorkflowYaml));
         var inlineWorkflowYamls = ScopeWorkflowCapabilityConventions.NormalizeInlineWorkflowYamls(request.InlineWorkflowYamls);
         var admissionContext = request.CapabilityAdmission;
@@ -57,20 +58,24 @@ public sealed class ScopeWorkflowCommandApplicationService : IScopeWorkflowComma
                     workflowYaml,
                     inlineWorkflowYamls,
                     "scope_workflow_upsert",
-                    executionMode),
+                    executionMode,
+                    normalizedWorkflowId,
+                    revisionId),
                 ct)
             : await _capabilityAdmissionService.AdmitAsync(
                 new WorkflowExternalCapabilityAdmissionRequest(
                 new ExternalWorkflowCapabilityAccessContext(
                     normalizedScopeId,
                     admissionContext?.CallerId ?? string.Empty,
-                    admissionContext?.NyxIdCallerBearerToken,
+                    admissionContext?.NyxIdCallerCredential,
                     admissionContext?.NyxIdOrganizationBearerToken),
                 workflowYaml,
                 inlineWorkflowYamls,
                 "scope_workflow_upsert",
                 executionMode,
-                explicitRequestConfirmations),
+                explicitRequestConfirmations,
+                normalizedWorkflowId,
+                revisionId),
                 ct);
         var identity = ScopeWorkflowCapabilityConventions.BuildIdentity(_options, normalizedScopeId, normalizedWorkflowId);
         var definitionActorIdPrefix = ScopeWorkflowCapabilityConventions.BuildDefinitionActorIdPrefix(
@@ -121,7 +126,6 @@ public sealed class ScopeWorkflowCommandApplicationService : IScopeWorkflowComma
             _serviceGovernanceQueryPort,
             ct);
 
-        var revisionId = ScopeWorkflowCapabilityConventions.ResolveRevisionId(request.RevisionId);
         var revisionSpec = new ServiceRevisionSpec
         {
             Identity = identity.Clone(),

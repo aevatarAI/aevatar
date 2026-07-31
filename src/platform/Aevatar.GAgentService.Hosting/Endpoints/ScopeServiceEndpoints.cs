@@ -385,6 +385,14 @@ public static class ScopeServiceEndpoints
                 ct);
             return Results.Ok(result);
         }
+        catch (WorkflowCallerCredentialSelectionException)
+        {
+            return Results.BadRequest(new
+            {
+                code = WorkflowCallerCredentialSelectionException.ErrorCode,
+                message = WorkflowCallerCredentialSelectionException.SafeMessage,
+            });
+        }
         catch (InvalidOperationException ex)
         {
             return Results.BadRequest(new

@@ -20,9 +20,13 @@ internal static class StudioWorkflowCapabilityAdmissionHttpContext
         IEnumerable<NyxIdExplicitRequestConfirmationInput>? explicitRequestConfirmations = null)
     {
         ArgumentNullException.ThrowIfNull(http);
+        var extraction = WorkflowCallerCredentialExtractor.Extract(http);
+        if (!extraction.Succeeded)
+            throw new WorkflowCallerCredentialSelectionException();
+
         return new WorkflowCapabilityAdmissionContext(
             ResolveCallerId(http.User),
-            WorkflowCallerCredentialExtractor.Extract(http).Credential?.BearerToken,
+            extraction.NyxIdCredentialSelection,
             executionMode: executionMode,
             explicitRequestConfirmations: NyxIdExplicitRequestConfirmationInputs.ToConfirmations(
                 explicitRequestConfirmations));

@@ -209,7 +209,8 @@ public sealed class ExternalWorkflowCapabilityReadinessServiceTests
         var access = new ExternalWorkflowCapabilityAccessContext(
             "scope-alpha",
             "caller-alpha",
-            "runtime-caller-credential",
+            NyxIdCallerCredentialSelection.SourceReadableUserBearer(
+                "runtime-caller-credential"),
             "runtime-organization-credential");
 
         access.ToString().Should()
@@ -220,7 +221,11 @@ public sealed class ExternalWorkflowCapabilityReadinessServiceTests
     }
 
     private static ExternalWorkflowCapabilityAccessContext Access() =>
-        new("scope-alpha", "caller-alpha", "runtime-caller-credential");
+        new(
+            "scope-alpha",
+            "caller-alpha",
+            NyxIdCallerCredentialSelection.SourceReadableUserBearer(
+                "runtime-caller-credential"));
 
     private static ExternalWorkflowCapabilitySelector NyxIdSelector() =>
         new()

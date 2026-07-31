@@ -100,7 +100,7 @@ public sealed class ScopeWorkflowsUpsertTool : IAgentTool
             {
                 CapabilityAdmission = new WorkflowCapabilityAdmissionContext(
                     access!.CallerId,
-                    access.NyxIdCallerBearerToken,
+                    access.NyxIdCallerCredential,
                     access.NyxIdOrganizationBearerToken),
             }, ct);
 

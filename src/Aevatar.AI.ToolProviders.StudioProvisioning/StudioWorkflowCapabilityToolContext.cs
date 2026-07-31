@@ -15,7 +15,8 @@ internal static class StudioWorkflowCapabilityToolContext
 
         return new WorkflowCapabilityAdmissionContext(
             authority.ExternalUserId!,
-            AgentToolRequestContext.NyxIdAccessToken,
+            NyxIdCallerCredentialSelection.SourceReadableUserBearerOrNull(
+                AgentToolRequestContext.NyxIdAccessToken),
             AgentToolRequestContext.NyxIdOrgToken,
             executionMode);
     }

@@ -38,6 +38,8 @@ public sealed class ScopeWorkflowEndpointsTests
         var previewService = new RecordingWorkflowExplicitRequestPreviewService
         {
             Result = new WorkflowExplicitRequestPreviewResult(
+                "wf-alpha",
+                "rev-alpha",
             [
                 new WorkflowExplicitRequestPreviewItem(
                     "wf-alpha/request-alpha",
@@ -76,11 +78,14 @@ public sealed class ScopeWorkflowEndpointsTests
         previewService.Request.Should().NotBeNull();
         previewService.Request!.Access.ScopeId.Should().Be("user-1");
         previewService.Request.Access.CallerId.Should().Be("caller-alpha");
-        previewService.Request.Access.NyxIdCallerBearerToken.Should().Be(bearer);
+        previewService.Request.Access.NyxIdCallerCredential?.SourceReadableUserBearerToken
+            .Should().Be(bearer);
         previewService.Request.ExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Interactive);
         previewService.Request.WorkflowId.Should().Be("wf-alpha");
         previewService.Request.RevisionId.Should().Be("rev-alpha");
         body.Should().Contain("\"callSiteId\":\"wf-alpha/request-alpha\"");
+        body.Should().Contain("\"workflowId\":\"wf-alpha\"");
+        body.Should().Contain("\"revisionId\":\"rev-alpha\"");
         body.Should().Contain("\"requestContractDigest\":\"digest-alpha\"");
         body.Should().Contain("\"userServiceId\":\"usvc-alpha\"");
         body.Should().Contain("\"method\":\"post\"");
@@ -184,7 +189,8 @@ public sealed class ScopeWorkflowEndpointsTests
         port.Request.ExposureDesired.Should().BeTrue();
         port.Request.CapabilityAdmission.Should().NotBeNull();
         port.Request.CapabilityAdmission!.CallerId.Should().Be("caller-alpha");
-        port.Request.CapabilityAdmission.NyxIdCallerBearerToken.Should().Be("transient-caller-token");
+        port.Request.CapabilityAdmission.NyxIdCallerCredential?.SourceReadableUserBearerToken
+            .Should().Be("transient-caller-token");
         var confirmation = port.Request.CapabilityAdmission.ExplicitRequestConfirmations
             .Should().ContainSingle().Which;
         confirmation.CallSiteId.Should().Be("wf-alpha/request-alpha");
@@ -227,7 +233,8 @@ public sealed class ScopeWorkflowEndpointsTests
         port.Request.RevisionId.Should().Be("rev-alpha");
         port.Request.CapabilityAdmission.Should().NotBeNull();
         port.Request.CapabilityAdmission!.CallerId.Should().Be("caller-alpha");
-        port.Request.CapabilityAdmission.NyxIdCallerBearerToken.Should().Be("transient-upsert-token");
+        port.Request.CapabilityAdmission.NyxIdCallerCredential?.SourceReadableUserBearerToken
+            .Should().Be("transient-upsert-token");
         var confirmation = port.Request.CapabilityAdmission.ExplicitRequestConfirmations
             .Should().ContainSingle().Which;
         confirmation.CallSiteId.Should().Be("wf-alpha/request-alpha");
@@ -276,6 +283,45 @@ public sealed class ScopeWorkflowEndpointsTests
         saveAndBindHttp.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
         saveAndBindBody.Should().Contain("INVALID_EXPLICIT_REQUEST_CONFIRMATION");
         saveAndBindPort.Request.Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData("malformed_with_delegation")]
+    [InlineData("multiple_authorization_values")]
+    public async Task HandleUpsertWorkflowAsync_WithInvalidAuthorization_ShouldReturnTypedBadRequestWithoutDispatch(
+        string scenario)
+    {
+        var http = CreateHttpContext();
+        if (scenario == "malformed_with_delegation")
+        {
+            http.Request.Headers.Authorization = "Bearer token with spaces";
+            http.Request.Headers["X-NyxID-Delegation-Token"] = "delegation-token";
+        }
+        else
+        {
+            http.Request.Headers.Authorization =
+                new Microsoft.Extensions.Primitives.StringValues(["Bearer first", "Bearer second"]);
+        }
+        var port = new RecordingScopeWorkflowCommandPort();
+
+        var result = await ScopeWorkflowEndpoints.HandleUpsertWorkflowAsync(
+            http,
+            "user-1",
+            "wf-alpha",
+            new ScopeWorkflowEndpoints.UpsertScopeWorkflowHttpRequest(
+                "name: wf-alpha\nsteps: []\n",
+                RevisionId: "rev-alpha"),
+            port,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain("INVALID_WORKFLOW_CALLER_CREDENTIAL");
+        body.Should().NotContain("token with spaces");
+        body.Should().NotContain("delegation-token");
+        port.Request.Should().BeNull();
     }
 
     [Fact]
@@ -1545,7 +1591,7 @@ public sealed class ScopeWorkflowEndpointsTests
         public WorkflowExplicitRequestPreviewRequest? Request { get; private set; }
 
         public WorkflowExplicitRequestPreviewResult Result { get; init; } =
-            new WorkflowExplicitRequestPreviewResult([]);
+            new WorkflowExplicitRequestPreviewResult("wf-alpha", "rev-alpha", []);
 
         public Task<WorkflowExplicitRequestPreviewResult> PreviewAsync(
             WorkflowExplicitRequestPreviewRequest request,

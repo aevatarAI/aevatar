@@ -1257,7 +1257,8 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
             new ExternalWorkflowCapabilityAccessContext(
                 "scope-alpha",
                 "caller-alpha",
-                "runtime-caller-credential"),
+                NyxIdCallerCredentialSelection.SourceReadableUserBearer(
+                    "runtime-caller-credential")),
             yaml,
             new Dictionary<string, string>(),
             "scope-workflow",

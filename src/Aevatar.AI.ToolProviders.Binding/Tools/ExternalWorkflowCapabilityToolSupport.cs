@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Google.Protobuf;
 
@@ -35,7 +36,8 @@ internal static class ExternalWorkflowCapabilityToolSupport
         access = new ExternalWorkflowCapabilityAccessContext(
             scopeId,
             callerId,
-            AgentToolRequestContext.NyxIdAccessToken,
+            NyxIdCallerCredentialSelection.SourceReadableUserBearerOrNull(
+                AgentToolRequestContext.NyxIdAccessToken),
             AgentToolRequestContext.NyxIdOrgToken);
         error = null;
         return true;

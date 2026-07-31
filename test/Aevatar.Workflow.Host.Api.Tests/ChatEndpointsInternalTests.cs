@@ -1608,6 +1608,8 @@ public sealed class ChatEndpointsInternalTests
         missing.Credential.Should().BeNull();
         valid.Succeeded.Should().BeTrue();
         valid.Credential!.BearerToken.Should().Be("token-123");
+        valid.NyxIdCredentialSelection!.Kind.Should().Be(
+            NyxIdCallerCredentialKind.SourceReadableUserBearer);
         bareBearer.Succeeded.Should().BeFalse();
         bareBearer.Error.Should().Be(WorkflowChatRunStartError.InvalidCallerCredential);
         bareBearer.Credential.Should().BeNull();
@@ -1621,6 +1623,8 @@ public sealed class ChatEndpointsInternalTests
         unsupportedScheme.Credential.Should().BeNull();
         delegationOnly.Succeeded.Should().BeTrue();
         delegationOnly.Credential!.BearerToken.Should().Be("delegation-token");
+        delegationOnly.NyxIdCredentialSelection!.Kind.Should().Be(
+            NyxIdCallerCredentialKind.ProxyDelegation);
         malformedAuthorizationWithDelegation.Succeeded.Should().BeFalse();
         malformedAuthorizationWithDelegation.Error.Should().Be(
             WorkflowChatRunStartError.InvalidCallerCredential);

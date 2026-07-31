@@ -44,11 +44,13 @@ public sealed class StudioMemberServiceBindingTests
                     [StudioExplicitRequestAdmissionTestKit.WorkflowYaml]))
             {
                 CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(
-                    [StudioExplicitRequestAdmissionTestKit.MatchingConfirmation()]),
+                    [StudioExplicitRequestAdmissionTestKit.MatchingConfirmation(
+                        "wf-alpha",
+                        "rev-alpha")]),
             });
 
         var admissionRequest = admission.Requests.Should().ContainSingle().Which;
-        admissionRequest.Access.NyxIdCallerBearerToken.Should()
+        admissionRequest.Access.NyxIdCallerCredential?.SourceReadableUserBearerToken.Should()
             .Be(StudioExplicitRequestAdmissionTestKit.CallerBearer);
         admissionRequest.Access.NyxIdOrganizationBearerToken.Should()
             .Be(StudioExplicitRequestAdmissionTestKit.OrganizationBearer);
@@ -90,7 +92,9 @@ public sealed class StudioMemberServiceBindingTests
                         [StudioExplicitRequestAdmissionTestKit.WorkflowYaml]))
                 {
                     CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(
-                        [StudioExplicitRequestAdmissionTestKit.MatchingConfirmation()]),
+                        [StudioExplicitRequestAdmissionTestKit.MatchingConfirmation(
+                            "wf-alpha",
+                            revisionId)]),
                 });
         }
 
@@ -135,7 +139,10 @@ public sealed class StudioMemberServiceBindingTests
                     [StudioExplicitRequestAdmissionTestKit.WorkflowYaml]))
             {
                 CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(
-                    StudioExplicitRequestAdmissionTestKit.Confirmations(scenario)),
+                    StudioExplicitRequestAdmissionTestKit.Confirmations(
+                        scenario,
+                        "wf-alpha",
+                        "rev-alpha")),
             });
 
         var exception = await action.Should()
@@ -154,13 +161,16 @@ public sealed class StudioMemberServiceBindingTests
             new ExternalWorkflowCapabilityAccessContext(
                 "scope-studio-alpha",
                 StudioExplicitRequestAdmissionTestKit.CallerId,
-                StudioExplicitRequestAdmissionTestKit.CallerBearer,
+                NyxIdCallerCredentialSelection.SourceReadableUserBearer(
+                    StudioExplicitRequestAdmissionTestKit.CallerBearer),
                 StudioExplicitRequestAdmissionTestKit.OrganizationBearer),
             StudioExplicitRequestAdmissionTestKit.WorkflowYaml,
             new Dictionary<string, string>(),
             "test_prepare_plan",
             ExternalCapabilityExecutionMode.Interactive,
-            [StudioExplicitRequestAdmissionTestKit.MatchingConfirmation()]));
+            [StudioExplicitRequestAdmissionTestKit.MatchingConfirmation("wf-alpha", "rev-alpha")],
+            workflowId: "wf-alpha",
+            revisionId: "rev-alpha"));
         admission.Requests.Clear();
         var commandPort = new RecordingCommandPort();
         var service = NewService(
@@ -240,7 +250,8 @@ public sealed class StudioMemberServiceBindingTests
             {
                 CapabilityAdmission = new WorkflowCapabilityAdmissionContext(
                     "caller-alpha",
-                    "runtime-caller-credential"),
+                    NyxIdCallerCredentialSelection.SourceReadableUserBearer(
+                        "runtime-caller-credential")),
             },
             CancellationToken.None);
 
@@ -250,7 +261,8 @@ public sealed class StudioMemberServiceBindingTests
         request.WorkflowYamls.Should().Equal("name: root-workflow\nsteps: []\n");
         request.Access.ScopeId.Should().Be(ScopeId);
         request.Access.CallerId.Should().Be("caller-alpha");
-        request.Access.NyxIdCallerBearerToken.Should().Be("runtime-caller-credential");
+        request.Access.NyxIdCallerCredential?.SourceReadableUserBearerToken
+            .Should().Be("runtime-caller-credential");
         request.SourceKind.Should().Be("studio_member_binding_run");
         commandPort.StartedRuns.Should().BeEmpty();
     }

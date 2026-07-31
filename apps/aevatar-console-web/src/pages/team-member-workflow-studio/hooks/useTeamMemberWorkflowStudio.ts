@@ -14,7 +14,10 @@ import {
   subscribeToLocationChanges,
 } from "@/shared/navigation/history";
 import { t } from "@/shared/i18n/messages";
-import { confirmInteractiveExplicitRequestPreview } from "@/shared/studio/explicitRequestConfirmation";
+import {
+  confirmInteractiveExplicitRequestPreview,
+  createWorkflowRevisionIdentityCandidate,
+} from "@/shared/studio/explicitRequestConfirmation";
 import {
   buildTeamDetailHref,
   buildTeamMemberAutomationsHref,
@@ -999,12 +1002,11 @@ async function saveAndBindPublishedWorkflowDraft(input: {
   readonly document: StudioWorkflowDocument;
   readonly layout: unknown;
   readonly routeScopeId: string;
-  readonly revisionId?: string | null;
   readonly serviceId?: string | null;
   readonly title: string;
   readonly workflow: StudioWorkflowFile;
 }): Promise<SavedAndBoundWorkflow> {
-  const { document, layout, routeScopeId, revisionId, serviceId, title, workflow } = input;
+  const { document, layout, routeScopeId, serviceId, title, workflow } = input;
   const workflowId = trimOptional(workflow.workflowId);
   if (!workflowId) {
     throw new Error("Resolve a stable workflow id before saving the published workflow.");
@@ -1022,13 +1024,14 @@ async function saveAndBindPublishedWorkflowDraft(input: {
   });
   assertNoBlockingFindings(serialized.findings);
   const workflowYamlForPublication = serialized.yaml;
+  const revisionIdentityCandidate = createWorkflowRevisionIdentityCandidate();
   const explicitRequestPreview = await studioApi.previewExplicitRequests({
     scopeId: routeScopeId,
     workflowId,
     workflowYaml: workflowYamlForPublication,
     executionMode: "interactive",
     inlineWorkflowYamls: {},
-    revisionId: trimOptional(revisionId) || undefined,
+    revisionId: revisionIdentityCandidate,
   });
   const explicitRequestConfirmations = await confirmInteractiveExplicitRequestPreview(
     explicitRequestPreview,
@@ -1050,6 +1053,7 @@ async function saveAndBindPublishedWorkflowDraft(input: {
   const result = await studioApi.saveAndBindWorkflow({
     scopeId: routeScopeId,
     workflowId,
+    revisionId: explicitRequestPreview.revisionId,
     workflowYaml: workflowYamlForPublication,
     workflowName: normalizedTitle,
     displayName: normalizedTitle,
@@ -1730,7 +1734,6 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       const savedAndBound = await saveAndBindPublishedWorkflowDraft({
         ...variables,
         routeScopeId: route.scopeId,
-        revisionId: memberQuery.data?.lastBinding?.revisionId,
         serviceId: memberQuery.data?.summary.publishedServiceId,
       });
       await renameExistingMemberFromTitle(savedAndBound.savedDraft.title);
@@ -2449,13 +2452,14 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       });
       assertNoBlockingFindings(serialized.findings);
       const workflowYamlForPublication = serialized.yaml;
+      const revisionIdentityCandidate = createWorkflowRevisionIdentityCandidate();
       const explicitRequestPreview = await studioApi.previewExplicitRequests({
         scopeId: route.scopeId,
         workflowId: workflowIdForPublish,
         workflowYaml: workflowYamlForPublication,
         executionMode: "interactive",
         inlineWorkflowYamls: {},
-        revisionId: trimOptional(currentMember.lastBinding?.revisionId) || undefined,
+        revisionId: revisionIdentityCandidate,
       });
       const explicitRequestConfirmations = await confirmInteractiveExplicitRequestPreview(
         explicitRequestPreview,
@@ -2472,6 +2476,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         memberId: route.memberId,
         displayName: titleForPublish,
         workflowId: workflowIdForPublish,
+        revisionId: explicitRequestPreview.revisionId,
         workflowYamls: [workflowYamlForPublication],
         ...(explicitRequestConfirmations.length > 0
           ? { explicitRequestConfirmations }

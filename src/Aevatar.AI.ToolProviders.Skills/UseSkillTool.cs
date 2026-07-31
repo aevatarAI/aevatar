@@ -6,6 +6,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions.Tools;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.Workflow.Abstractions;
 
 namespace Aevatar.AI.ToolProviders.Skills;
 
@@ -443,7 +444,8 @@ public sealed class UseSkillTool : IAgentTool
                 {
                     CapabilityAdmission = new WorkflowCapabilityAdmissionContext(
                         callerId,
-                        AgentToolRequestContext.NyxIdAccessToken,
+                        NyxIdCallerCredentialSelection.SourceReadableUserBearerOrNull(
+                            AgentToolRequestContext.NyxIdAccessToken),
                         AgentToolRequestContext.NyxIdOrgToken),
                 },
                 ct);

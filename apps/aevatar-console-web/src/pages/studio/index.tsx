@@ -76,7 +76,10 @@ import {
   buildStudioGraphElements,
   buildStudioWorkflowLayout,
 } from '@/shared/studio/graph';
-import { confirmInteractiveExplicitRequestPreview } from '@/shared/studio/explicitRequestConfirmation';
+import {
+  confirmInteractiveExplicitRequestPreview,
+  createWorkflowRevisionIdentityCandidate,
+} from '@/shared/studio/explicitRequestConfirmation';
 import { isStudioApiStatus, studioApi } from '@/shared/studio/api';
 import { scriptsApi } from '@/shared/studio/scriptsApi';
 import type { ScopedScriptDetail } from '@/shared/studio/scriptsModels';
@@ -5105,14 +5108,14 @@ const StudioPage: React.FC = () => {
         const { workflowYaml, inlineWorkflowYamls } = splitWorkflowYamlBundle(
           workflowYamls,
         );
+        const revisionIdentityCandidate = createWorkflowRevisionIdentityCandidate();
         const explicitRequestPreview = await studioApi.previewExplicitRequests({
           scopeId: resolvedStudioScopeId,
           workflowId: workflowIdForBinding,
           workflowYaml,
           inlineWorkflowYamls,
           executionMode: 'interactive',
-          revisionId:
-            trimOptional(buildPendingMemberSummary?.lastBoundRevisionId) || undefined,
+          revisionId: revisionIdentityCandidate,
         });
         const explicitRequestConfirmations =
           await confirmInteractiveExplicitRequestPreview(explicitRequestPreview);
@@ -5125,6 +5128,7 @@ const StudioPage: React.FC = () => {
           memberId: resolvedBuildMemberId,
           displayName: buildPendingBindCandidate.displayName,
           workflowId: workflowIdForBinding,
+          revisionId: explicitRequestPreview.revisionId,
           workflowYamls,
           ...(explicitRequestConfirmations.length > 0
             ? { explicitRequestConfirmations }

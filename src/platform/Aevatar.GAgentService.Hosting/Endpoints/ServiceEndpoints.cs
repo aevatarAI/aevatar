@@ -9,6 +9,7 @@ using Aevatar.GAgentService.Hosting.Endpoints.Schedules;
 using Aevatar.GAgentService.Hosting.Serialization;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
+using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
@@ -172,14 +173,24 @@ public static partial class ServiceEndpoints
                             new ExternalWorkflowCapabilityAccessContext(
                                 identity.TenantId,
                                 admissionContext.CallerId,
-                                admissionContext.NyxIdCallerBearerToken,
+                                admissionContext.NyxIdCallerCredential,
                                 admissionContext.NyxIdOrganizationBearerToken),
                             spec.WorkflowSpec.WorkflowYaml,
                             spec.WorkflowSpec.InlineWorkflowYamls,
                             "service_revision",
                             admissionContext.ExecutionMode,
-                            admissionContext.ExplicitRequestConfirmations),
+                            admissionContext.ExplicitRequestConfirmations,
+                            workflowRequest?.WorkflowId,
+                            request.RevisionId),
                         ct);
+                }
+                catch (WorkflowCallerCredentialSelectionException)
+                {
+                    return Results.BadRequest(new
+                    {
+                        code = WorkflowCallerCredentialSelectionException.ErrorCode,
+                        message = WorkflowCallerCredentialSelectionException.SafeMessage,
+                    });
                 }
                 catch (WorkflowExternalCapabilityAdmissionException ex)
                 {
@@ -807,7 +818,8 @@ public static partial class ServiceEndpoints
         string WorkflowName,
         string WorkflowYaml,
         string? DefinitionActorId,
-        IReadOnlyDictionary<string, string>? InlineWorkflowYamls);
+        IReadOnlyDictionary<string, string>? InlineWorkflowYamls,
+        string? WorkflowId = null);
 
     public sealed record CreateRevisionHttpRequest(
         string TenantId,

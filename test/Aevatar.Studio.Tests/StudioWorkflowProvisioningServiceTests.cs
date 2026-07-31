@@ -59,6 +59,15 @@ public sealed class StudioWorkflowProvisioningServiceTests
     private static ProvisionWorkflowCallerCredential Caller =>
         new(Platform: "nyxid", ExternalUserId: "user-42", Scope: "proxy", Tenant: "tenant-1");
 
+    private static (string WorkflowId, string RevisionId) ProvisionIdentity(
+        string scopeId,
+        string teamId,
+        string displayName)
+    {
+        var key = StudioWorkflowProvisioningService.BuildProvisionKey(scopeId, teamId, displayName);
+        return ($"workflow-{key}", $"revision-{key}");
+    }
+
     [Fact]
     public async Task ProvisionAsync_WithMatchingExplicitConfirmation_ShouldAdmitBeforeStudioMutation()
     {
@@ -66,6 +75,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
         var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
         var admission = StudioExplicitRequestAdmissionTestKit.CreateAdmissionService();
         var sut = NewService(member, schedule, admission);
+        var identity = ProvisionIdentity(ScopeId, TeamId, "Monitor");
 
         await sut.ProvisionAsync(
             ScopeId,
@@ -74,13 +84,15 @@ public sealed class StudioWorkflowProvisioningServiceTests
             {
                 TeamId = TeamId,
                 CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(
-                    [StudioExplicitRequestAdmissionTestKit.MatchingConfirmation()],
+                    [StudioExplicitRequestAdmissionTestKit.MatchingConfirmation(
+                        identity.WorkflowId,
+                        identity.RevisionId)],
                     ExternalCapabilityExecutionMode.Durable),
             });
 
         var admissionRequest = admission.Requests.Should().ContainSingle().Which;
         admissionRequest.Access.CallerId.Should().Be("caller-alpha");
-        admissionRequest.Access.NyxIdCallerBearerToken.Should()
+        admissionRequest.Access.NyxIdCallerCredential?.SourceReadableUserBearerToken.Should()
             .Be(StudioExplicitRequestAdmissionTestKit.CallerBearer);
         admissionRequest.Access.NyxIdOrganizationBearerToken.Should()
             .Be(StudioExplicitRequestAdmissionTestKit.OrganizationBearer);
@@ -90,7 +102,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
         plan!.InvocationAdmissions.Should().ContainSingle()
             .Which.NyxIdExplicitRequestGrant.GrantorOwnerSubject.Should()
             .Be(StudioExplicitRequestAdmissionTestKit.CallerId);
-        member.BindRequest.CapabilityAdmission!.NyxIdCallerBearerToken.Should().BeNull();
+        member.BindRequest.CapabilityAdmission!.NyxIdCallerCredential.Should().BeNull();
         member.BindRequest.CapabilityAdmission.NyxIdOrganizationBearerToken.Should().BeNull();
         member.BindRequest.CapabilityAdmission.ExplicitRequestConfirmations.Should().BeEmpty();
         plan.ToString().Should().NotContain(StudioExplicitRequestAdmissionTestKit.CallerBearer);
@@ -164,6 +176,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
         var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
         var admission = StudioExplicitRequestAdmissionTestKit.CreateAdmissionService();
         var sut = NewService(member, schedule, admission);
+        var identity = ProvisionIdentity("scope-studio-alpha", "team-alpha", "Monitor");
 
         var action = () => sut.ProvisionAsync(
             "scope-studio-alpha",
@@ -172,7 +185,10 @@ public sealed class StudioWorkflowProvisioningServiceTests
             {
                 TeamId = "team-alpha",
                 CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(
-                    StudioExplicitRequestAdmissionTestKit.Confirmations(scenario),
+                    StudioExplicitRequestAdmissionTestKit.Confirmations(
+                        scenario,
+                        identity.WorkflowId,
+                        identity.RevisionId),
                     ExternalCapabilityExecutionMode.Durable),
             });
 
@@ -192,17 +208,23 @@ public sealed class StudioWorkflowProvisioningServiceTests
     public async Task ProvisionAsync_WithExistingPlan_ShouldOnlyRevalidateWithoutFreshConfirmation()
     {
         var admission = StudioExplicitRequestAdmissionTestKit.CreateAdmissionService();
+        var identity = ProvisionIdentity("scope-studio-alpha", "team-alpha", "Monitor");
         var plan = await admission.AdmitAsync(new WorkflowExternalCapabilityAdmissionRequest(
             new ExternalWorkflowCapabilityAccessContext(
                 "scope-studio-alpha",
                 StudioExplicitRequestAdmissionTestKit.CallerId,
-                StudioExplicitRequestAdmissionTestKit.CallerBearer,
+                NyxIdCallerCredentialSelection.SourceReadableUserBearer(
+                    StudioExplicitRequestAdmissionTestKit.CallerBearer),
                 StudioExplicitRequestAdmissionTestKit.OrganizationBearer),
             StudioExplicitRequestAdmissionTestKit.WorkflowYaml,
             new Dictionary<string, string>(),
             "test_prepare_plan",
             ExternalCapabilityExecutionMode.Durable,
-            [StudioExplicitRequestAdmissionTestKit.MatchingConfirmation()]));
+            [StudioExplicitRequestAdmissionTestKit.MatchingConfirmation(
+                identity.WorkflowId,
+                identity.RevisionId)],
+            workflowId: identity.WorkflowId,
+            revisionId: identity.RevisionId));
         admission.Requests.Clear();
         var member = NewMemberService();
         var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
@@ -288,7 +310,8 @@ public sealed class StudioWorkflowProvisioningServiceTests
                 ProvisioningBearerToken = "runtime-caller-credential",
                 CapabilityAdmission = new WorkflowCapabilityAdmissionContext(
                     "caller-alpha",
-                    "runtime-caller-credential"),
+                    NyxIdCallerCredentialSelection.SourceReadableUserBearer(
+                        "runtime-caller-credential")),
             });
 
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -296,7 +319,8 @@ public sealed class StudioWorkflowProvisioningServiceTests
         var request = admission.Requests.Should().ContainSingle().Which;
         request.Access.ScopeId.Should().Be(ScopeId);
         request.Access.CallerId.Should().Be("caller-alpha");
-        request.Access.NyxIdCallerBearerToken.Should().Be("runtime-caller-credential");
+        request.Access.NyxIdCallerCredential?.SourceReadableUserBearerToken
+            .Should().Be("runtime-caller-credential");
         request.SourceKind.Should().Be("studio_workflow_provisioning");
         request.ExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Durable);
         member.GetCallCount.Should().Be(0);

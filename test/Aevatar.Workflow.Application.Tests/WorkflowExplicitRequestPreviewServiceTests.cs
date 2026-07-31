@@ -30,7 +30,7 @@ public sealed class WorkflowExplicitRequestPreviewServiceTests
         var access = new ExternalWorkflowCapabilityAccessContext(
             "scope-alpha",
             "authenticated-owner-alpha",
-            bearer);
+            NyxIdCallerCredentialSelection.SourceReadableUserBearer(bearer));
 
         var result = await service.PreviewAsync(new WorkflowExplicitRequestPreviewRequest(
             access,
@@ -99,10 +99,13 @@ public sealed class WorkflowExplicitRequestPreviewServiceTests
             new ExternalWorkflowCapabilityAccessContext(
                 "scope-alpha",
                 "authenticated-owner-alpha",
-                "bearer-preview-secret"),
+                NyxIdCallerCredentialSelection.SourceReadableUserBearer(
+                    "bearer-preview-secret")),
             "name: wf-alpha",
             null,
-            ExternalCapabilityExecutionMode.Interactive));
+            ExternalCapabilityExecutionMode.Interactive,
+            WorkflowId: "wf-alpha",
+            RevisionId: "rev-alpha"));
 
         result.Items.Should().ContainSingle().Which.AllowedExecutionModes.Should()
             .Equal(ExternalCapabilityExecutionMode.Interactive);

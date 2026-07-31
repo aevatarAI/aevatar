@@ -12,14 +12,14 @@ public sealed class WorkflowCapabilityAdmissionContext
 
     public WorkflowCapabilityAdmissionContext(
         string callerId,
-        string? nyxIdCallerBearerToken = null,
+        NyxIdCallerCredentialSelection? nyxIdCallerCredential = null,
         string? nyxIdOrganizationBearerToken = null,
         ExternalCapabilityExecutionMode executionMode = ExternalCapabilityExecutionMode.Interactive,
         WorkflowCapabilityAdmissionPlan? existingPlan = null,
         IEnumerable<NyxIdExplicitRequestConfirmation>? explicitRequestConfirmations = null)
     {
         CallerId = Normalize(callerId);
-        NyxIdCallerBearerToken = NormalizeOptional(nyxIdCallerBearerToken);
+        NyxIdCallerCredential = nyxIdCallerCredential;
         NyxIdOrganizationBearerToken = NormalizeOptional(nyxIdOrganizationBearerToken);
         ExecutionMode = executionMode;
         ExistingPlan = existingPlan?.Clone();
@@ -28,7 +28,7 @@ public sealed class WorkflowCapabilityAdmissionContext
 
     public string CallerId { get; }
 
-    public string? NyxIdCallerBearerToken { get; }
+    public NyxIdCallerCredentialSelection? NyxIdCallerCredential { get; }
 
     public string? NyxIdOrganizationBearerToken { get; }
 

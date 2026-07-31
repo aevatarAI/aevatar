@@ -1142,6 +1142,8 @@ describe('studioApi host-session requests', () => {
         ok: true,
         status: 200,
         json: async () => ({
+          workflowId: 'wf-alpha',
+          revisionId: 'rev-alpha',
           items: [
             {
               callSiteId: 'wf-alpha/request-alpha',
@@ -1192,24 +1194,30 @@ describe('studioApi host-session requests', () => {
       revisionId: 'rev-alpha',
     });
 
-    expect(preview).toEqual([
-      {
-        callSiteId: 'wf-alpha/request-alpha',
-        requestContractDigest: 'digest-alpha',
-        userServiceId: 'usvc-alpha',
-        method: 'post',
-        pathTemplate: '/records/{id}',
-        bodyMode: 'json',
-        bodyRequired: true,
-        responseMode: 'text',
-        effectiveRisk: 'write',
-        approvalRequired: true,
-        allowedExecutionModes: ['interactive'],
-      },
-    ]);
+    expect(preview).toEqual({
+      workflowId: 'wf-alpha',
+      revisionId: 'rev-alpha',
+      items: [
+        {
+          callSiteId: 'wf-alpha/request-alpha',
+          requestContractDigest: 'digest-alpha',
+          userServiceId: 'usvc-alpha',
+          method: 'post',
+          pathTemplate: '/records/{id}',
+          bodyMode: 'json',
+          bodyRequired: true,
+          responseMode: 'text',
+          effectiveRisk: 'write',
+          approvalRequired: true,
+          allowedExecutionModes: ['interactive'],
+        },
+      ],
+    });
 
     const confirmations: StudioExplicitRequestConfirmation[] = [
       {
+        workflowId: 'wf-alpha',
+        revisionId: 'rev-alpha',
         callSiteId: 'wf-alpha/request-alpha',
         requestContractDigest: 'digest-alpha',
         attestedRisk: 'write',
@@ -1219,12 +1227,14 @@ describe('studioApi host-session requests', () => {
       scopeId: 'scope-alpha',
       memberId: 'm-alpha',
       workflowId: 'wf-alpha',
+      revisionId: 'rev-alpha',
       workflowYamls: ['name: Workflow Alpha\nsteps: []\n'],
       explicitRequestConfirmations: confirmations,
     });
     await studioApi.saveAndBindWorkflow({
       scopeId: 'scope-alpha',
       workflowId: 'wf-alpha',
+      revisionId: 'rev-alpha',
       workflowYaml: 'name: Workflow Alpha\nsteps: []\n',
       explicitRequestConfirmations: confirmations,
     });
@@ -1241,9 +1251,11 @@ describe('studioApi host-session requests', () => {
       workflow: {
         workflowId: 'wf-alpha',
       },
+      revisionId: 'rev-alpha',
     });
     expect(JSON.parse(String(fetchMock.mock.calls[2]?.[1]?.body))).toEqual({
       workflowId: 'wf-alpha',
+      revisionId: 'rev-alpha',
       workflowYaml: 'name: Workflow Alpha\nsteps: []\n',
       explicitRequestConfirmations: confirmations,
     });
@@ -1288,13 +1300,18 @@ describe('studioApi host-session requests', () => {
     global.fetch = jest.fn().mockResolvedValue({
       ok: true,
       status: 200,
-      json: async () => ({ items: previewItems }),
+      json: async () => ({
+        workflowId: 'wf-alpha',
+        revisionId: 'rev-alpha',
+        items: previewItems,
+      }),
     } as Response) as typeof global.fetch;
 
     await expect(
       studioApi.previewExplicitRequests({
         scopeId: 'scope-alpha',
         workflowId: 'wf-alpha',
+        revisionId: 'rev-alpha',
         workflowYaml: 'name: Workflow Alpha\nsteps: []\n',
         executionMode: 'interactive',
       }),
@@ -1308,6 +1325,7 @@ describe('studioApi host-session requests', () => {
         memberId: 'joker',
         displayName: 'joker',
         workflowId: ' ',
+        revisionId: 'rev-alpha',
         workflowYamls: ['name: joker\nsteps: []\n'],
       }),
     ).toThrow('Workflow member binding requires a stable workflow id.');
@@ -1359,6 +1377,7 @@ describe('studioApi host-session requests', () => {
     const result = await studioApi.saveAndBindWorkflow({
       scopeId: 'scope-1',
       workflowId: 'wf-alpha',
+      revisionId: 'rev-1',
       workflowYaml: 'name: Workflow Alpha\nsteps: []\n',
       workflowName: 'Workflow Alpha',
       displayName: 'Workflow Alpha',
@@ -1386,6 +1405,7 @@ describe('studioApi host-session requests', () => {
     expect(init?.method).toBe('POST');
     expect(JSON.parse(String(init?.body))).toEqual({
       workflowId: 'wf-alpha',
+      revisionId: 'rev-1',
       workflowYaml: 'name: Workflow Alpha\nsteps: []\n',
       workflowName: 'Workflow Alpha',
       displayName: 'Workflow Alpha',

@@ -155,6 +155,7 @@ export interface StudioSaveWorkflowInput {
 export interface StudioSaveAndBindWorkflowInput {
   readonly scopeId: string;
   readonly workflowId?: string | null;
+  readonly revisionId: string;
   readonly workflowYaml: string;
   readonly workflowName?: string | null;
   readonly displayName?: string | null;
@@ -191,7 +192,13 @@ export interface StudioExplicitRequestPreviewInput {
   readonly workflowYaml: string;
   readonly executionMode: "interactive";
   readonly inlineWorkflowYamls?: Record<string, string> | null;
-  readonly revisionId?: string | null;
+  readonly revisionId: string;
+}
+
+export interface StudioExplicitRequestPreview {
+  readonly workflowId: string;
+  readonly revisionId: string;
+  readonly items: readonly StudioExplicitRequestPreviewItem[];
 }
 
 export interface StudioExplicitRequestPreviewItem {
@@ -209,6 +216,8 @@ export interface StudioExplicitRequestPreviewItem {
 }
 
 export interface StudioExplicitRequestConfirmation {
+  readonly workflowId: string;
+  readonly revisionId: string;
   readonly callSiteId: string;
   readonly requestContractDigest: string;
   readonly attestedRisk: StudioExplicitRequestRisk;
@@ -330,7 +339,7 @@ export interface StudioMemberWorkflowBindingInput {
   readonly displayName?: string | null;
   readonly workflowId: string;
   readonly workflowYamls: readonly string[];
-  readonly revisionId?: string | null;
+  readonly revisionId: string;
   readonly explicitRequestConfirmations?: readonly StudioExplicitRequestConfirmation[] | null;
 }
 

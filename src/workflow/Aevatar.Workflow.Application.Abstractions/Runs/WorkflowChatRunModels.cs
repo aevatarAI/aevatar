@@ -67,7 +67,11 @@ public sealed record WorkflowCallerNyxIdAuthority(
 
 public sealed record WorkflowCallerCredential(
     string? BearerToken = null,
-    WorkflowCallerNyxIdAuthority? NyxIdAuthority = null);
+    WorkflowCallerNyxIdAuthority? NyxIdAuthority = null)
+{
+    public override string ToString() =>
+        $"{nameof(WorkflowCallerCredential)} {{ BearerToken = [REDACTED], NyxIdAuthorityPresent = {NyxIdAuthority is not null} }}";
+}
 
 public sealed record WorkflowExternalIngressContext(
     string RouteKey,

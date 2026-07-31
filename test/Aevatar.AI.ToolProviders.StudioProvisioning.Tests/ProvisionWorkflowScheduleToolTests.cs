@@ -863,7 +863,8 @@ public sealed class ProvisionWorkflowScheduleToolTests
         bindingPort.LastRequest.WorkflowId.Should().Be("workflow-alpha");
         bindingPort.LastRequest.CapabilityAdmission.Should().NotBeNull();
         bindingPort.LastRequest.CapabilityAdmission!.CallerId.Should().Be("nyx-user-alpha");
-        bindingPort.LastRequest.CapabilityAdmission.NyxIdCallerBearerToken.Should().Be("access-token-1");
+        bindingPort.LastRequest.CapabilityAdmission.NyxIdCallerCredential?.SourceReadableUserBearerToken
+            .Should().Be("access-token-1");
         bindingPort.LastRequest.CapabilityAdmission.NyxIdOrganizationBearerToken.Should().Be("org-token");
         bindingPort.LastRequest.CapabilityAdmission.ExecutionMode.Should()
             .Be(ExternalCapabilityExecutionMode.Interactive);
@@ -1772,7 +1773,8 @@ public sealed class ProvisionWorkflowScheduleToolTests
         request.CallerSubjectExternalUserId.Should().Be("nyx-user-alpha");
         request.CapabilityAdmission.Should().NotBeNull();
         request.CapabilityAdmission!.CallerId.Should().Be("nyx-user-alpha");
-        request.CapabilityAdmission.NyxIdCallerBearerToken.Should().Be("access-token-1");
+        request.CapabilityAdmission.NyxIdCallerCredential?.SourceReadableUserBearerToken
+            .Should().Be("access-token-1");
         request.CapabilityAdmission.NyxIdOrganizationBearerToken.Should().Be("org-token");
         request.CapabilityAdmission.ExecutionMode.Should()
             .Be(ExternalCapabilityExecutionMode.Durable);

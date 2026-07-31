@@ -815,13 +815,16 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
     }
 
     private static ExternalWorkflowCapabilityAccessContext Access() =>
-        new("scope-owner-alpha", "nyx-caller-alpha", "runtime-caller-credential");
+        new(
+            "scope-owner-alpha",
+            "nyx-caller-alpha",
+            NyxIdCallerCredentialSelection.SourceReadableUserBearer("runtime-caller-credential"));
 
     private static ExternalWorkflowCapabilityAccessContext AccessWithOrganization() =>
         new(
             "scope-owner-alpha",
             "nyx-caller-alpha",
-            "runtime-caller-credential",
+            NyxIdCallerCredentialSelection.SourceReadableUserBearer("runtime-caller-credential"),
             "runtime-organization-credential");
 
     private static ExternalWorkflowCapabilitySelector Selector(

@@ -17,7 +17,7 @@ public sealed class WorkflowScheduleProvisioningPortTests
         var port = new WorkflowScheduleProvisioningPort(service);
         var context = new WorkflowCapabilityAdmissionContext(
             "caller-alpha",
-            "runtime-caller-credential",
+            NyxIdCallerCredentialSelection.SourceReadableUserBearer("runtime-caller-credential"),
             "runtime-organization-credential",
             ExternalCapabilityExecutionMode.Durable);
 

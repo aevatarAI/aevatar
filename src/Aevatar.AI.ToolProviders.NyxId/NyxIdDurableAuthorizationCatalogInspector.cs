@@ -2,12 +2,14 @@ using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.AI.ToolProviders.NyxId;
 
 internal sealed class NyxIdDurableAuthorizationCatalogInspector(
     INyxIdAuthorizationCatalogQueryPort? catalogQueryPort,
-    TimeProvider timeProvider)
+    TimeProvider timeProvider,
+    ILogger logger)
 {
     public async Task<ExternalCapabilitySourceStamp?> InspectAsync(
         ExternalWorkflowCapabilityAccessContext access,
@@ -33,8 +35,13 @@ internal sealed class NyxIdDurableAuthorizationCatalogInspector(
         {
             throw;
         }
-        catch
+        catch (Exception exception)
         {
+            logger.LogWarning(
+                "NyxID durable authorization catalog query failed. ownerAuthority={OwnerAuthority}, ownerKind={OwnerKind}, failureType={FailureType}",
+                owner.Authority,
+                owner.OwnerKind,
+                exception.GetType().Name);
             return null;
         }
 

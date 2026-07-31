@@ -148,6 +148,10 @@ public static class ScopeWorkflowEndpoints
         {
             return ExplicitRequestConfirmationBadRequest(ex);
         }
+        catch (WorkflowCallerCredentialSelectionException)
+        {
+            return CallerCredentialBadRequest();
+        }
         catch (InvalidOperationException ex)
         {
             return Results.BadRequest(new
@@ -180,7 +184,8 @@ public static class ScopeWorkflowEndpoints
                     request.InlineWorkflowYamls,
                     request.AppId,
                     request.ServiceId,
-                    request.ExposureDesired)
+                    request.ExposureDesired,
+                    request.RevisionId)
                 {
                     CapabilityAdmission = WorkflowCapabilityAdmissionHttpContext.Create(
                         http,
@@ -192,6 +197,10 @@ public static class ScopeWorkflowEndpoints
         catch (NyxIdExplicitRequestConfirmationInputException ex)
         {
             return ExplicitRequestConfirmationBadRequest(ex);
+        }
+        catch (WorkflowCallerCredentialSelectionException)
+        {
+            return CallerCredentialBadRequest();
         }
         catch (InvalidOperationException ex)
         {
@@ -209,6 +218,13 @@ public static class ScopeWorkflowEndpoints
         {
             code = NyxIdExplicitRequestConfirmationInputException.ErrorCode,
             message = exception.Message,
+        });
+
+    private static IResult CallerCredentialBadRequest() =>
+        Results.BadRequest(new
+        {
+            code = WorkflowCallerCredentialSelectionException.ErrorCode,
+            message = WorkflowCallerCredentialSelectionException.SafeMessage,
         });
 
     private static async Task<IResult> HandleExplicitRequestPreviewAsyncCore(
@@ -230,7 +246,7 @@ public static class ScopeWorkflowEndpoints
                     new ExternalWorkflowCapabilityAccessContext(
                         scopeId,
                         admissionContext.CallerId,
-                        admissionContext.NyxIdCallerBearerToken,
+                        admissionContext.NyxIdCallerCredential,
                         admissionContext.NyxIdOrganizationBearerToken),
                     request.WorkflowYaml,
                     request.InlineWorkflowYamls,
@@ -240,7 +256,13 @@ public static class ScopeWorkflowEndpoints
                 ct);
 
             return Results.Ok(new ExplicitRequestPreviewHttpResult(
+                result.WorkflowId,
+                result.RevisionId,
                 result.Items.Select(ToExplicitRequestPreviewHttpItem).ToArray()));
+        }
+        catch (WorkflowCallerCredentialSelectionException)
+        {
+            return CallerCredentialBadRequest();
         }
         catch (InvalidOperationException ex)
         {
@@ -950,6 +972,7 @@ public static class ScopeWorkflowEndpoints
         string? AppId = null,
         string? ServiceId = null,
         bool? ExposureDesired = null,
+        string? RevisionId = null,
         IReadOnlyList<NyxIdExplicitRequestConfirmationInput>? ExplicitRequestConfirmations = null);
 
     public sealed record ExplicitRequestPreviewHttpRequest(
@@ -960,6 +983,8 @@ public static class ScopeWorkflowEndpoints
         string? RevisionId = null);
 
     public sealed record ExplicitRequestPreviewHttpResult(
+        string WorkflowId,
+        string RevisionId,
         IReadOnlyList<ExplicitRequestPreviewHttpItem> Items);
 
     public sealed record ExplicitRequestPreviewHttpItem(

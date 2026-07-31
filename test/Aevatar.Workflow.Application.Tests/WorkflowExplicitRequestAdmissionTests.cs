@@ -85,11 +85,28 @@ public sealed class WorkflowExplicitRequestAdmissionTests
         """;
 
     [Fact]
-    public void ConfirmationContract_ShouldExposeOnlyCallerAttestationFields()
+    public void ExplicitRequestConfirmationContracts_ShouldCarryWorkflowRevisionIdentity()
     {
         NyxIdExplicitRequestConfirmation.Descriptor.Fields.InFieldNumberOrder()
             .Select(static field => field.Name)
-            .Should().Equal("call_site_id", "request_contract_digest", "attested_risk");
+            .Should().Equal(
+                "call_site_id",
+                "request_contract_digest",
+                "attested_risk",
+                "workflow_id",
+                "revision_id");
+        NyxIdExplicitRequestGrant.Descriptor.Fields.InFieldNumberOrder()
+            .Select(static field => field.Name)
+            .Should().Equal(
+                "call_site_id",
+                "request_contract_digest",
+                "grantor_authority",
+                "grantor_owner_kind",
+                "grantor_owner_subject",
+                "risk",
+                "allowed_execution_modes",
+                "workflow_id",
+                "revision_id");
     }
 
     [Fact]
@@ -139,6 +156,8 @@ public sealed class WorkflowExplicitRequestAdmissionTests
         grant.GrantorOwnerKind.Should().Be(ExternalCapabilityAuthorizationOwnerKind.Personal);
         grant.GrantorOwnerSubject.Should().Be("binder-alpha");
         grant.Risk.Should().Be(NyxIdOperationRisk.ReadOnly);
+        grant.WorkflowId.Should().Be("wf-alpha");
+        grant.RevisionId.Should().Be("rev-alpha");
         grant.AllowedExecutionModes.Should().Equal(ExternalCapabilityExecutionMode.Interactive);
         admission.Capability.NyxIdUserRequest.ExplicitRequestGrantDigest.Should().Be(
             WorkflowCapabilityAdmissionPlanIntegrity.ComputeNyxIdExplicitRequestGrantDigest(grant));
@@ -147,6 +166,26 @@ public sealed class WorkflowExplicitRequestAdmissionTests
         var bearerDigest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes("transient-bearer")));
         Encoding.UTF8.GetString(plan.ToByteArray()).Should().NotContain(bearerDigest);
         plan.ToString().Should().NotContain(bearerDigest);
+    }
+
+    [Theory]
+    [InlineData("wf-beta", "rev-alpha")]
+    [InlineData("wf-alpha", "rev-beta")]
+    public async Task AdmitAsync_WithConfirmationFromAnotherWorkflowRevision_ShouldRejectReplay(
+        string confirmationWorkflowId,
+        string confirmationRevisionId)
+    {
+        var service = CreateService();
+        var confirmation = MatchingConfirmation();
+        confirmation.WorkflowId = confirmationWorkflowId;
+        confirmation.RevisionId = confirmationRevisionId;
+
+        Func<Task> act = async () => await service.AdmitAsync(Request([confirmation]));
+
+        var exception = await act.Should().ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
+        exception.Which.Readiness.Status.Should().Be(ExternalCapabilityReadinessStatus.ContractDrift);
+        exception.Which.Readiness.Blockers.Should().ContainSingle().Which.Code.Should()
+            .Be("NYXID_EXPLICIT_REQUEST_CONFIRMATION_BINDING_MISMATCH");
     }
 
     [Theory]
@@ -216,6 +255,8 @@ public sealed class WorkflowExplicitRequestAdmissionTests
             RequestContractDigest = WorkflowCapabilityAdmissionPlanIntegrity
                 .ComputeNyxIdRequestContractDigest(MutatingSelector(method)),
             AttestedRisk = risk,
+            WorkflowId = "wf-alpha",
+            RevisionId = "rev-alpha",
         };
 
         Func<Task> act = async () => await service.AdmitAsync(Request(
@@ -244,6 +285,8 @@ public sealed class WorkflowExplicitRequestAdmissionTests
             RequestContractDigest = WorkflowCapabilityAdmissionPlanIntegrity
                 .ComputeNyxIdRequestContractDigest(SafeSelector(method)),
             AttestedRisk = NyxIdOperationRisk.ReadOnly,
+            WorkflowId = "wf-alpha",
+            RevisionId = "rev-alpha",
         };
 
         Func<Task> act = async () => await service.AdmitAsync(Request(
@@ -422,10 +465,15 @@ public sealed class WorkflowExplicitRequestAdmissionTests
             new Dictionary<string, string>(),
             "scope_workflow_save_and_bind",
             executionMode,
-            confirmations);
+            confirmations,
+            workflowId: "wf-alpha",
+            revisionId: "rev-alpha");
 
     private static ExternalWorkflowCapabilityAccessContext Access() =>
-        new("scope-alpha", "  binder-alpha  ", "transient-bearer");
+        new(
+            "scope-alpha",
+            "  binder-alpha  ",
+            NyxIdCallerCredentialSelection.SourceReadableUserBearer("transient-bearer"));
 
     private static NyxIdExplicitRequestConfirmation MatchingConfirmation() =>
         new()
@@ -434,6 +482,8 @@ public sealed class WorkflowExplicitRequestAdmissionTests
             RequestContractDigest = WorkflowCapabilityAdmissionPlanIntegrity
                 .ComputeNyxIdRequestContractDigest(Selector()),
             AttestedRisk = NyxIdOperationRisk.ReadOnly,
+            WorkflowId = "wf-alpha",
+            RevisionId = "rev-alpha",
         };
 
     private static NyxIdAuthorizationCatalogSnapshot ReadyCatalogSnapshot(
@@ -562,6 +612,8 @@ public sealed class WorkflowExplicitRequestAdmissionTests
             RequestContractDigest = WorkflowCapabilityAdmissionPlanIntegrity
                 .ComputeNyxIdRequestContractDigest(SafeSelector(method)),
             AttestedRisk = risk,
+            WorkflowId = "wf-alpha",
+            RevisionId = "rev-alpha",
         };
 
     private sealed class ExplicitRequestSource(

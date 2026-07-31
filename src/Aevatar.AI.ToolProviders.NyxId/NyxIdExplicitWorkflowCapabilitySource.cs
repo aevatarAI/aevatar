@@ -3,6 +3,8 @@ using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.AI.ToolProviders.NyxId;
 
@@ -10,12 +12,16 @@ public sealed class NyxIdExplicitWorkflowCapabilitySource(
     NyxIdApiClient client,
     NyxIdToolOptions options,
     TimeProvider? timeProvider = null,
-    INyxIdAuthorizationCatalogQueryPort? catalogQueryPort = null) : IExternalWorkflowCapabilitySource
+    INyxIdAuthorizationCatalogQueryPort? catalogQueryPort = null,
+    ILogger<NyxIdExplicitWorkflowCapabilitySource>? logger = null) : IExternalWorkflowCapabilitySource
 {
     private static readonly TimeSpan FreshnessWindow = TimeSpan.FromMinutes(5);
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
     private readonly NyxIdDurableAuthorizationCatalogInspector _durableAuthorizationCatalog =
-        new(catalogQueryPort, timeProvider ?? TimeProvider.System);
+        new(
+            catalogQueryPort,
+            timeProvider ?? TimeProvider.System,
+            logger ?? NullLogger<NyxIdExplicitWorkflowCapabilitySource>.Instance);
 
     public ExternalWorkflowCapabilitySelector.SelectorOneofCase SelectorKind =>
         ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdRequest;
@@ -44,11 +50,13 @@ public sealed class NyxIdExplicitWorkflowCapabilitySource(
                 selector, executionMode, ExternalCapabilityReadinessStatus.OperationSelectionRequired,
                 "NYXID_REQUEST_CONTRACT_INVALID", "Provide one valid exact NyxID request contract.");
         }
-        if (string.IsNullOrWhiteSpace(access.NyxIdCallerBearerToken))
+        var sourceReadableBearerToken = access.NyxIdCallerCredential?.SourceReadableUserBearerToken;
+        if (string.IsNullOrWhiteSpace(sourceReadableBearerToken))
         {
             return Failure(
                 selector, executionMode, ExternalCapabilityReadinessStatus.ServiceAccessDenied,
-                "NYXID_CALLER_ACCESS_REQUIRED", "A caller NyxID credential is required.");
+                "NYXID_ADMISSION_SOURCE_CREDENTIAL_REQUIRED",
+                "A source-readable caller NyxID credential is required.");
         }
         if (string.IsNullOrWhiteSpace(options.BaseUrl))
         {
@@ -61,7 +69,7 @@ public sealed class NyxIdExplicitWorkflowCapabilitySource(
         try
         {
             inventory = NyxIdApiAccessResponseParser.ParseUserServices(
-                await client.ListServicesAsync(access.NyxIdCallerBearerToken, cancellationToken));
+                await client.ListServicesAsync(sourceReadableBearerToken, cancellationToken));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

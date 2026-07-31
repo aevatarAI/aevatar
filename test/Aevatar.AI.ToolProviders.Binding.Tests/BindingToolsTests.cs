@@ -133,7 +133,8 @@ public class BindingToolsTests
             listPort.Request.Should().NotBeNull();
             listPort.Request!.Access.ScopeId.Should().Be("owner-scope-alpha");
             listPort.Request.Access.CallerId.Should().Be("caller-subject-alpha");
-            listPort.Request.Access.NyxIdCallerBearerToken.Should().Be(callerBearer);
+            listPort.Request.Access.NyxIdCallerCredential?.SourceReadableUserBearerToken
+                .Should().Be(callerBearer);
             listPort.Request.Access.NyxIdOrganizationBearerToken.Should().Be(organizationBearer);
 
             using var document = JsonDocument.Parse(result);

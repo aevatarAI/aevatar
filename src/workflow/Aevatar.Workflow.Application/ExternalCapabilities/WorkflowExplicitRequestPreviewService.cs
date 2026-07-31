@@ -17,6 +17,8 @@ public sealed class WorkflowExplicitRequestPreviewService(
         ArgumentNullException.ThrowIfNull(request.Access);
         if (request.ExecutionMode == ExternalCapabilityExecutionMode.Unspecified)
             throw new InvalidOperationException("External capability execution mode is required.");
+        var workflowId = NormalizeRequired(request.WorkflowId, nameof(request.WorkflowId));
+        var revisionId = NormalizeRequired(request.RevisionId, nameof(request.RevisionId));
 
         var invocations = await ParseInvocationsAsync(request, cancellationToken);
         var items = new List<WorkflowExplicitRequestPreviewItem>();
@@ -66,7 +68,7 @@ public sealed class WorkflowExplicitRequestPreviewService(
                 allowedExecutionModes));
         }
 
-        return new WorkflowExplicitRequestPreviewResult(items);
+        return new WorkflowExplicitRequestPreviewResult(workflowId, revisionId, items);
     }
 
     private async Task<IReadOnlyList<ExternalToolInvocationSpec>> ParseInvocationsAsync(
@@ -114,5 +116,13 @@ public sealed class WorkflowExplicitRequestPreviewService(
         }
 
         return ordered;
+    }
+
+    private static string NormalizeRequired(string? value, string parameterName)
+    {
+        var normalized = value?.Trim();
+        return string.IsNullOrWhiteSpace(normalized)
+            ? throw new InvalidOperationException($"{parameterName} is required.")
+            : normalized;
     }
 }

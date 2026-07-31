@@ -709,7 +709,7 @@ internal static class ScopeExplicitRequestAdmissionTestFixture
                 new ExternalWorkflowCapabilityAccessContext(
                     ScopeId,
                     CallerId,
-                    BearerToken,
+                    NyxIdCallerCredentialSelection.SourceReadableUserBearer(BearerToken),
                     null),
                 WorkflowYaml,
                 null,
@@ -740,7 +740,7 @@ internal static class ScopeExplicitRequestAdmissionTestFixture
         };
         return new WorkflowCapabilityAdmissionContext(
             CallerId,
-            BearerToken,
+            NyxIdCallerCredentialSelection.SourceReadableUserBearer(BearerToken),
             executionMode: ExternalCapabilityExecutionMode.Interactive,
             explicitRequestConfirmations: confirmations);
     }
@@ -759,7 +759,7 @@ internal static class ScopeExplicitRequestAdmissionTestFixture
         confirmation.MergeFrom(stream.ToArray());
         return new WorkflowCapabilityAdmissionContext(
             CallerId,
-            bearerToken,
+            NyxIdCallerCredentialSelection.SourceReadableUserBearer(bearerToken),
             executionMode: ExternalCapabilityExecutionMode.Interactive,
             explicitRequestConfirmations: [confirmation]);
     }

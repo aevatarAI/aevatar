@@ -52,24 +52,31 @@ internal static class StudioExplicitRequestAdmissionTestKit
         WorkflowCapabilityAdmissionPlan? existingPlan = null) =>
         new(
             CallerId,
-            CallerBearer,
+            NyxIdCallerCredentialSelection.SourceReadableUserBearer(CallerBearer),
             OrganizationBearer,
             executionMode: executionMode,
             existingPlan: existingPlan,
             explicitRequestConfirmations: confirmations);
 
-    public static NyxIdExplicitRequestConfirmation MatchingConfirmation() =>
+    public static NyxIdExplicitRequestConfirmation MatchingConfirmation(
+        string workflowId,
+        string revisionId) =>
         new()
         {
             CallSiteId = "wf-alpha/request-alpha",
             RequestContractDigest = WorkflowCapabilityAdmissionPlanIntegrity
                 .ComputeNyxIdRequestContractDigest(Selector()),
             AttestedRisk = NyxIdOperationRisk.ReadOnly,
+            WorkflowId = workflowId,
+            RevisionId = revisionId,
         };
 
-    public static IReadOnlyList<NyxIdExplicitRequestConfirmation> Confirmations(string scenario)
+    public static IReadOnlyList<NyxIdExplicitRequestConfirmation> Confirmations(
+        string scenario,
+        string workflowId,
+        string revisionId)
     {
-        var confirmation = MatchingConfirmation();
+        var confirmation = MatchingConfirmation(workflowId, revisionId);
         switch (scenario)
         {
             case "missing":

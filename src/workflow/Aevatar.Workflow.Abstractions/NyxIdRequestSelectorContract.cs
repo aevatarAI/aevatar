@@ -4,6 +4,8 @@ public static class NyxIdRequestSelectorContract
 {
     private static readonly string[] EncodedRoutingTokens =
         ["%2e", "%2f", "%5c", "%00", "%25", "%3f", "%23", "%7b", "%7d"];
+    private static readonly HashSet<string> AllowedHeaders =
+        new(StringComparer.OrdinalIgnoreCase) { "Accept", "If-Match", "If-None-Match" };
 
     public static bool TryNormalize(
         NyxIdRequestSelector? selector,
@@ -44,11 +46,9 @@ public static class NyxIdRequestSelectorContract
         {
             return Fail("explicit request query parameters cannot carry credentials or reserved NyxID facts", out error);
         }
-        if (normalized.HeaderParameters.Any(static name =>
-                name.StartsWith("X-NyxID-", StringComparison.OrdinalIgnoreCase) ||
-                IsCredentialName(name) || IsTransportHeader(name)))
+        if (normalized.HeaderParameters.Any(static name => !AllowedHeaders.Contains(name)))
         {
-            return Fail("explicit request headers cannot carry credentials or reserved transport facts", out error);
+            return Fail("explicit request headers must use the workflow-safe header allowlist", out error);
         }
         if (normalized.BodyMode == NyxIdRequestBodyMode.Unspecified || !System.Enum.IsDefined(normalized.BodyMode))
             return Fail("explicit request body_mode must be none or json", out error);
@@ -110,8 +110,8 @@ public static class NyxIdRequestSelectorContract
                 continue;
             var name = segment.Length > 2 ? segment[1..^1] : string.Empty;
             if (segment[0] != '{' || segment[^1] != '}' ||
-                name.Length == 0 || !(char.IsLetter(name[0]) || name[0] == '_') ||
-                name.Any(static character => !char.IsLetterOrDigit(character) && character != '_') ||
+                name.Length == 0 || !(IsAsciiLetter(name[0]) || name[0] == '_') ||
+                name.Any(static character => !IsAsciiLetterOrDigit(character) && character != '_') ||
                 !placeholders.Add(name))
             {
                 return Fail("explicit request path placeholders must be unique named path segments", out error);
@@ -158,6 +158,12 @@ public static class NyxIdRequestSelectorContract
 
     private static bool ContainsTemplate(string value) => value.Contains("${", StringComparison.Ordinal);
 
+    private static bool IsAsciiLetter(char character) =>
+        character is >= 'A' and <= 'Z' or >= 'a' and <= 'z';
+
+    private static bool IsAsciiLetterOrDigit(char character) =>
+        IsAsciiLetter(character) || character is >= '0' and <= '9';
+
     private static bool IsCredentialName(string name)
     {
         var normalized = new string(name.Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
@@ -168,13 +174,6 @@ public static class NyxIdRequestSelectorContract
                normalized.EndsWith("accesstoken", StringComparison.Ordinal) ||
                normalized.EndsWith("authtoken", StringComparison.Ordinal);
     }
-
-    private static bool IsTransportHeader(string name) =>
-        name.Equals("Host", StringComparison.OrdinalIgnoreCase) ||
-        name.Equals("Content-Length", StringComparison.OrdinalIgnoreCase) ||
-        name.Equals("Content-Type", StringComparison.OrdinalIgnoreCase) ||
-        name.Equals("Connection", StringComparison.OrdinalIgnoreCase) ||
-        name.Equals("Transfer-Encoding", StringComparison.OrdinalIgnoreCase);
 
     private static bool Fail(string message, out string error)
     {

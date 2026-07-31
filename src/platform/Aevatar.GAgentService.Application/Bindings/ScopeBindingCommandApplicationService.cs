@@ -76,11 +76,13 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         var identity = string.IsNullOrWhiteSpace(request.ServiceId)
             ? ScopeWorkflowCapabilityConventions.BuildDefaultServiceIdentity(_options, normalizedScopeId, request.AppId)
             : ScopeWorkflowCapabilityConventions.BuildServiceIdentity(_options, normalizedScopeId, request.ServiceId.Trim(), request.AppId);
+        var revisionId = ScopeWorkflowCapabilityConventions.ResolveRevisionId(request.RevisionId);
         var explicitRequestConfirmations = request.CapabilityAdmission?.ExplicitRequestConfirmations;
         var desiredBinding = await ResolveDesiredBindingAsync(
             request,
             normalizedScopeId,
             identity,
+            revisionId,
             explicitRequestConfirmations,
             ct);
         var existingService = await _serviceLifecycleQueryPort.GetServiceAsync(identity, ct);
@@ -109,7 +111,6 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
             _serviceGovernanceQueryPort,
             ct);
 
-        var revisionId = ScopeWorkflowCapabilityConventions.ResolveRevisionId(request.RevisionId);
         var revisionSpec = desiredBinding.BuildRevision(identity, revisionId);
 
         if (await ShouldCreateRevisionAsync(request, revisionSpec, ct))
@@ -359,6 +360,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         ScopeBindingUpsertRequest request,
         string normalizedScopeId,
         ServiceIdentity identity,
+        string revisionId,
         IReadOnlyList<NyxIdExplicitRequestConfirmation>? explicitRequestConfirmations,
         CancellationToken ct)
     {
@@ -369,6 +371,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                     request,
                     normalizedScopeId,
                     identity,
+                    revisionId,
                     explicitRequestConfirmations,
                     ct),
             ScopeBindingImplementationKind.Scripting =>
@@ -383,10 +386,13 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         ScopeBindingUpsertRequest request,
         string normalizedScopeId,
         ServiceIdentity identity,
+        string revisionId,
         IReadOnlyList<NyxIdExplicitRequestConfirmation>? explicitRequestConfirmations,
         CancellationToken ct)
     {
         var workflowBundle = await ParseWorkflowBundleAsync(request.Workflow?.WorkflowYamls, ct);
+        var suppliedWorkflowId = ScopeWorkflowCapabilityConventions.NormalizeOptional(request.Workflow?.WorkflowId);
+        var workflowId = ResolveWorkflowBindingWorkflowId(suppliedWorkflowId, identity);
         var admissionContext = request.CapabilityAdmission;
         var executionMode = admissionContext?.ExecutionMode ?? ExternalCapabilityExecutionMode.Interactive;
         var capabilityAdmissionPlan = admissionContext?.ExistingPlan is { } existingPlan
@@ -396,23 +402,25 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                     workflowBundle.EntryWorkflowYaml,
                     workflowBundle.SubWorkflowYamls,
                     "scope_binding_upsert",
-                    executionMode),
+                    executionMode,
+                    workflowId,
+                    revisionId),
                 ct)
             : await _capabilityAdmissionService.AdmitAsync(
                 new WorkflowExternalCapabilityAdmissionRequest(
                 new ExternalWorkflowCapabilityAccessContext(
                     normalizedScopeId,
                     admissionContext?.CallerId ?? string.Empty,
-                    admissionContext?.NyxIdCallerBearerToken,
+                    admissionContext?.NyxIdCallerCredential,
                     admissionContext?.NyxIdOrganizationBearerToken),
                 workflowBundle.EntryWorkflowYaml,
                 workflowBundle.SubWorkflowYamls,
                 "scope_binding_upsert",
                 executionMode,
-                explicitRequestConfirmations),
+                explicitRequestConfirmations,
+                workflowId,
+                revisionId),
                 ct);
-        var suppliedWorkflowId = ScopeWorkflowCapabilityConventions.NormalizeOptional(request.Workflow?.WorkflowId);
-        var workflowId = ResolveWorkflowBindingWorkflowId(suppliedWorkflowId, identity);
         var definitionActorIdPrefix = string.IsNullOrWhiteSpace(suppliedWorkflowId)
             ? ScopeWorkflowCapabilityConventions.BuildDefaultDefinitionActorIdPrefix(_options, normalizedScopeId)
             : ScopeWorkflowCapabilityConventions.BuildDefinitionActorIdPrefix(

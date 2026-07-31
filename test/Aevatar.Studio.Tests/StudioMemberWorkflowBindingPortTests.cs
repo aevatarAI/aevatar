@@ -34,11 +34,11 @@ public sealed class StudioMemberWorkflowBindingPortTests
             WorkflowId = "wf-alpha",
             RevisionId = "rev-alpha",
             CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(
-                [StudioExplicitRequestAdmissionTestKit.MatchingConfirmation()]),
+                [StudioExplicitRequestAdmissionTestKit.MatchingConfirmation("wf-alpha", "rev-alpha")]),
         });
 
         var admissionRequest = admission.Requests.Should().ContainSingle().Which;
-        admissionRequest.Access.NyxIdCallerBearerToken.Should()
+        admissionRequest.Access.NyxIdCallerCredential?.SourceReadableUserBearerToken.Should()
             .Be(StudioExplicitRequestAdmissionTestKit.CallerBearer);
         admissionRequest.Access.NyxIdOrganizationBearerToken.Should()
             .Be(StudioExplicitRequestAdmissionTestKit.OrganizationBearer);
@@ -49,7 +49,7 @@ public sealed class StudioMemberWorkflowBindingPortTests
         memberService.LastRequest.Workflow.CapabilityAdmissionPlan!.InvocationAdmissions
             .Should().ContainSingle().Which.NyxIdExplicitRequestGrant.GrantorOwnerSubject.Should()
             .Be(StudioExplicitRequestAdmissionTestKit.CallerId);
-        memberService.LastRequest.CapabilityAdmission!.NyxIdCallerBearerToken.Should().BeNull();
+        memberService.LastRequest.CapabilityAdmission!.NyxIdCallerCredential.Should().BeNull();
         memberService.LastRequest.CapabilityAdmission.NyxIdOrganizationBearerToken.Should().BeNull();
         memberService.LastRequest.CapabilityAdmission.ExplicitRequestConfirmations.Should().BeEmpty();
     }
@@ -82,7 +82,10 @@ public sealed class StudioMemberWorkflowBindingPortTests
             WorkflowId = "wf-alpha",
             RevisionId = "rev-alpha",
             CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(
-                StudioExplicitRequestAdmissionTestKit.Confirmations(scenario)),
+                StudioExplicitRequestAdmissionTestKit.Confirmations(
+                    scenario,
+                    "wf-alpha",
+                    "rev-alpha")),
         });
 
         var exception = await action.Should()
@@ -123,11 +126,13 @@ public sealed class StudioMemberWorkflowBindingPortTests
             WorkflowId = "wf-alpha",
             RevisionId = "rev-route-alpha",
             CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(
-                [StudioExplicitRequestAdmissionTestKit.MatchingConfirmation()]),
+                [StudioExplicitRequestAdmissionTestKit.MatchingConfirmation(
+                    "wf-alpha",
+                    "rev-route-alpha")]),
         });
 
         var admissionRequest = admission.Requests.Should().ContainSingle().Which;
-        admissionRequest.Access.NyxIdCallerBearerToken.Should()
+        admissionRequest.Access.NyxIdCallerCredential?.SourceReadableUserBearerToken.Should()
             .Be(StudioExplicitRequestAdmissionTestKit.CallerBearer);
         admissionRequest.Access.NyxIdOrganizationBearerToken.Should()
             .Be(StudioExplicitRequestAdmissionTestKit.OrganizationBearer);
@@ -136,7 +141,7 @@ public sealed class StudioMemberWorkflowBindingPortTests
         saved.ScopeId.Should().Be("scope-studio-alpha");
         saved.WorkflowId.Should().Be("wf-alpha");
         saved.ServiceId.Should().Be("svc-published-alpha");
-        saved.CapabilityAdmission!.NyxIdCallerBearerToken.Should().BeNull();
+        saved.CapabilityAdmission!.NyxIdCallerCredential.Should().BeNull();
         saved.CapabilityAdmission.NyxIdOrganizationBearerToken.Should().BeNull();
         saved.CapabilityAdmission.ExplicitRequestConfirmations.Should().BeEmpty();
         saved.CapabilityAdmission.ExistingPlan!.InvocationAdmissions.Should().ContainSingle()
@@ -160,13 +165,16 @@ public sealed class StudioMemberWorkflowBindingPortTests
             new ExternalWorkflowCapabilityAccessContext(
                 "scope-studio-alpha",
                 StudioExplicitRequestAdmissionTestKit.CallerId,
-                StudioExplicitRequestAdmissionTestKit.CallerBearer,
+                NyxIdCallerCredentialSelection.SourceReadableUserBearer(
+                    StudioExplicitRequestAdmissionTestKit.CallerBearer),
                 StudioExplicitRequestAdmissionTestKit.OrganizationBearer),
             StudioExplicitRequestAdmissionTestKit.WorkflowYaml,
             new Dictionary<string, string>(),
             "test_prepare_plan",
             ExternalCapabilityExecutionMode.Interactive,
-            [StudioExplicitRequestAdmissionTestKit.MatchingConfirmation()]));
+            [StudioExplicitRequestAdmissionTestKit.MatchingConfirmation("wf-alpha", "rev-alpha")],
+            workflowId: "wf-alpha",
+            revisionId: "rev-alpha"));
         admission.Requests.Clear();
         var memberService = new RecordingMemberService { ThrowMemberNotFoundOnGet = true };
         var port = new StudioMemberWorkflowBindingPort(
@@ -236,7 +244,8 @@ public sealed class StudioMemberWorkflowBindingPortTests
         {
             CapabilityAdmission = new WorkflowCapabilityAdmissionContext(
                 "caller-alpha",
-                "runtime-caller-credential"),
+                NyxIdCallerCredentialSelection.SourceReadableUserBearer(
+                    "runtime-caller-credential")),
         });
 
         await action.Should().ThrowAsync<InvalidOperationException>()
@@ -244,7 +253,8 @@ public sealed class StudioMemberWorkflowBindingPortTests
         var request = admission.Requests.Should().ContainSingle().Which;
         request.Access.ScopeId.Should().Be("scope-1");
         request.Access.CallerId.Should().Be("caller-alpha");
-        request.Access.NyxIdCallerBearerToken.Should().Be("runtime-caller-credential");
+        request.Access.NyxIdCallerCredential?.SourceReadableUserBearerToken
+            .Should().Be("runtime-caller-credential");
         request.SourceKind.Should().Be("studio_member_workflow_binding");
         request.ExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Interactive);
         memberService.GetCallCount.Should().Be(0);

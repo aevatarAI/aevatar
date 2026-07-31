@@ -6,6 +6,7 @@ using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -120,6 +121,12 @@ internal static class StudioProvisioningEndpoints
         catch (NyxIdExplicitRequestConfirmationInputException ex)
         {
             return BadRequest(NyxIdExplicitRequestConfirmationInputException.ErrorCode, ex.Message);
+        }
+        catch (WorkflowCallerCredentialSelectionException)
+        {
+            return BadRequest(
+                WorkflowCallerCredentialSelectionException.ErrorCode,
+                WorkflowCallerCredentialSelectionException.SafeMessage);
         }
         catch (StudioMemberAutomationAuthorizationBindingRequiredException)
         {

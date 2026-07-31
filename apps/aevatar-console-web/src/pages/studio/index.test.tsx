@@ -3361,6 +3361,14 @@ describe("StudioPage", () => {
         updatedAt: "2026-04-27T08:15:01Z",
       })
     );
+    (studioApi.previewExplicitRequests as jest.Mock).mockReset();
+    (studioApi.previewExplicitRequests as jest.Mock).mockImplementation(
+      (input: { workflowId: string; revisionId: string }) => ({
+        workflowId: input.workflowId,
+        revisionId: input.revisionId,
+        items: [],
+      }),
+    );
     (scriptsApi.listScripts as jest.Mock).mockReset();
     (scriptsApi.listScripts as jest.Mock).mockResolvedValue([]);
     (scriptsApi.observeSaveScript as jest.Mock).mockReset();
@@ -5606,21 +5614,27 @@ describe("StudioPage", () => {
         ? { ...member, lastBoundRevisionId: "rev-2" }
         : member,
     );
-    (studioApi.previewExplicitRequests as jest.Mock).mockResolvedValue([
-      {
-        callSiteId: "wf-alpha/request-alpha",
-        requestContractDigest: "digest-alpha",
-        userServiceId: "usvc-alpha",
-        method: "post",
-        pathTemplate: "/records/{id}",
-        bodyMode: "json",
-        bodyRequired: true,
-        responseMode: "text",
-        effectiveRisk: "write",
-        approvalRequired: true,
-        allowedExecutionModes: ["interactive"],
-      },
-    ]);
+    (studioApi.previewExplicitRequests as jest.Mock).mockImplementation(
+      (input: { workflowId: string; revisionId: string }) => ({
+        workflowId: input.workflowId,
+        revisionId: input.revisionId,
+        items: [
+          {
+            callSiteId: "wf-alpha/request-alpha",
+            requestContractDigest: "digest-alpha",
+            userServiceId: "usvc-alpha",
+            method: "post",
+            pathTemplate: "/records/{id}",
+            bodyMode: "json",
+            bodyRequired: true,
+            responseMode: "text",
+            effectiveRisk: "write",
+            approvalRequired: true,
+            allowedExecutionModes: ["interactive"],
+          },
+        ],
+      }),
+    );
     mockScopeRuntimeApi.listServices.mockReset();
     mockScopeRuntimeApi.listServices
       .mockResolvedValueOnce([])
@@ -5667,7 +5681,7 @@ describe("StudioPage", () => {
         workflowYaml: expect.stringContaining("name: workspace-demo"),
         inlineWorkflowYamls: {},
         executionMode: "interactive",
-        revisionId: "rev-2",
+        revisionId: expect.stringMatching(/^rev-/),
       });
       expect(Modal.confirm).toHaveBeenCalledTimes(1);
     });
@@ -5696,9 +5710,12 @@ describe("StudioPage", () => {
         memberId: "workspace-demo",
         displayName: "workspace-demo",
         workflowId: "workflow-1",
+        revisionId: previewInput.revisionId,
         workflowYamls: [previewInput.workflowYaml],
         explicitRequestConfirmations: [
           {
+            workflowId: "workflow-1",
+            revisionId: previewInput.revisionId,
             callSiteId: "wf-alpha/request-alpha",
             requestContractDigest: "digest-alpha",
             attestedRisk: "write",
@@ -5706,6 +5723,7 @@ describe("StudioPage", () => {
         ],
       });
     });
+    expect(previewInput.revisionId).not.toBe("rev-2");
   });
 
   it("does not expose post-bind Team entry or Team test actions from Studio bind", async () => {

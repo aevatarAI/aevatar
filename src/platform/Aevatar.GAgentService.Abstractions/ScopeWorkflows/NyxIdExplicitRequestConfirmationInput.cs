@@ -5,7 +5,9 @@ namespace Aevatar.GAgentService.Abstractions;
 public sealed record NyxIdExplicitRequestConfirmationInput(
     string CallSiteId,
     string RequestContractDigest,
-    string AttestedRisk)
+    string AttestedRisk,
+    string WorkflowId = "",
+    string RevisionId = "")
 {
     public NyxIdExplicitRequestConfirmation ToConfirmation() => new()
     {
@@ -18,6 +20,8 @@ public sealed record NyxIdExplicitRequestConfirmationInput(
             "destructive" => NyxIdOperationRisk.Destructive,
             _ => NyxIdOperationRisk.Unspecified,
         },
+        WorkflowId = WorkflowId ?? string.Empty,
+        RevisionId = RevisionId ?? string.Empty,
     };
 }
 

@@ -15,6 +15,7 @@ import type {
   StudioExecutionSummary,
   StudioExplicitRequestBodyMode,
   StudioExplicitRequestMethod,
+  StudioExplicitRequestPreview,
   StudioExplicitRequestPreviewInput,
   StudioExplicitRequestPreviewItem,
   StudioExplicitRequestResponseMode,
@@ -279,7 +280,7 @@ function decodeStudioExplicitRequestPreviewItem(
   };
 }
 
-function decodeStudioExplicitRequestPreview(value: unknown): StudioExplicitRequestPreviewItem[] {
+function decodeStudioExplicitRequestPreview(value: unknown): StudioExplicitRequestPreview {
   const record = expectRecord(value, "StudioExplicitRequestPreview");
   const items = expectArray(
     record.items,
@@ -297,7 +298,19 @@ function decodeStudioExplicitRequestPreview(value: unknown): StudioExplicitReque
     callSiteIds.add(item.callSiteId);
   }
 
-  return items;
+  return {
+    workflowId: readNonBlankExplicitRequestString(
+      record,
+      "workflowId",
+      "StudioExplicitRequestPreview.workflowId",
+    ),
+    revisionId: readNonBlankExplicitRequestString(
+      record,
+      "revisionId",
+      "StudioExplicitRequestPreview.revisionId",
+    ),
+    items,
+  };
 }
 
 function toScopeWorkflowDirectoryId(scopeId: string): string {
@@ -2881,7 +2894,7 @@ export const studioApi = {
 
   previewExplicitRequests(
     input: StudioExplicitRequestPreviewInput,
-  ): Promise<StudioExplicitRequestPreviewItem[]> {
+  ): Promise<StudioExplicitRequestPreview> {
     return requestDecodedJson(
       `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/workflows:explicit-request-preview`,
       decodeStudioExplicitRequestPreview,
@@ -2943,6 +2956,7 @@ export const studioApi = {
         body: JSON.stringify(
           compactObject({
             workflowId: trimOptional(input.workflowId),
+            revisionId: input.revisionId.trim(),
             workflowYaml: input.workflowYaml,
             workflowName: trimOptional(input.workflowName),
             displayName: trimOptional(input.displayName),
@@ -2958,6 +2972,8 @@ export const studioApi = {
               input.explicitRequestConfirmations &&
               input.explicitRequestConfirmations.length > 0
                 ? input.explicitRequestConfirmations.map((confirmation) => ({
+                    workflowId: confirmation.workflowId,
+                    revisionId: confirmation.revisionId,
                     callSiteId: confirmation.callSiteId,
                     requestContractDigest: confirmation.requestContractDigest,
                     attestedRisk: confirmation.attestedRisk,
@@ -3155,6 +3171,8 @@ export const studioApi = {
               input.explicitRequestConfirmations &&
               input.explicitRequestConfirmations.length > 0
                 ? input.explicitRequestConfirmations.map((confirmation) => ({
+                    workflowId: confirmation.workflowId,
+                    revisionId: confirmation.revisionId,
                     callSiteId: confirmation.callSiteId,
                     requestContractDigest: confirmation.requestContractDigest,
                     attestedRisk: confirmation.attestedRisk,

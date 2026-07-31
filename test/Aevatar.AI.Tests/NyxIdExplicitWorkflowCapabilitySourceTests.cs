@@ -6,6 +6,7 @@ using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.AI.Tests;
 
@@ -52,6 +53,24 @@ public sealed class NyxIdExplicitWorkflowCapabilitySourceTests
         result.Sources.Should().ContainSingle().Which.SourceKind.Should()
             .Be(ExternalCapabilitySourceKind.NyxIdUserServices);
         handler.Requests.Should().Equal(new RequestRecord("/api/v1/keys", "caller-credential"));
+    }
+
+    [Fact]
+    public async Task InspectAsync_WithoutSourceReadableCredential_ShouldFailBeforeInventoryRead()
+    {
+        var handler = new InventoryHandler(UserServices(Service()));
+        var source = CreateSource(handler);
+
+        var result = await source.InspectAsync(
+            new ExternalWorkflowCapabilityAccessContext("scope-alpha", "nyx-user-alpha"),
+            Selector(),
+            ExternalCapabilityExecutionMode.Interactive,
+            CancellationToken.None);
+
+        result.Status.Should().Be(ExternalCapabilityReadinessStatus.ServiceAccessDenied);
+        result.Blockers.Should().ContainSingle().Which.Code.Should()
+            .Be("NYXID_ADMISSION_SOURCE_CREDENTIAL_REQUIRED");
+        handler.Requests.Should().BeEmpty();
     }
 
     [Theory]
@@ -114,6 +133,31 @@ public sealed class NyxIdExplicitWorkflowCapabilitySourceTests
         result.Status.Should().Be(ExternalCapabilityReadinessStatus.DurableAuthorizationUnavailable);
         result.Blockers.Should().ContainSingle().Which.Code.Should()
             .Be("DURABLE_AUTHORIZATION_UNAVAILABLE");
+    }
+
+    [Fact]
+    public async Task InspectAsync_WhenDurableCatalogQueryThrows_ShouldFailClosedAndLogSanitizedWarning()
+    {
+        const string sensitiveExceptionMessage = "catalog secret-token-alpha";
+        var logger = new RecordingLogger<NyxIdExplicitWorkflowCapabilitySource>();
+        var source = CreateSource(
+            new InventoryHandler(UserServices(Service())),
+            new ThrowingCatalogQueryPort(new InvalidOperationException(sensitiveExceptionMessage)),
+            logger);
+
+        var result = await source.InspectAsync(
+            Access(), Selector(), ExternalCapabilityExecutionMode.Durable, CancellationToken.None);
+
+        result.Status.Should().Be(ExternalCapabilityReadinessStatus.DurableAuthorizationUnavailable);
+        result.Blockers.Should().ContainSingle().Which.Code.Should()
+            .Be("DURABLE_AUTHORIZATION_UNAVAILABLE");
+        var warning = logger.Entries.Should().ContainSingle(static entry =>
+            entry.Level == LogLevel.Warning).Subject;
+        warning.Exception.Should().BeNull();
+        warning.Message.Should().NotContain(sensitiveExceptionMessage);
+        warning.Properties.Should().Contain("OwnerAuthority", NyxIdAuthorizationAuthorities.NyxId);
+        warning.Properties.Should().Contain("OwnerKind", AuthorizationOwnerKind.Personal);
+        warning.Properties.Should().Contain("FailureType", nameof(InvalidOperationException));
     }
 
     [Theory]
@@ -211,7 +255,8 @@ public sealed class NyxIdExplicitWorkflowCapabilitySourceTests
 
     private static NyxIdExplicitWorkflowCapabilitySource CreateSource(
         InventoryHandler handler,
-        INyxIdAuthorizationCatalogQueryPort? catalog = null)
+        INyxIdAuthorizationCatalogQueryPort? catalog = null,
+        ILogger<NyxIdExplicitWorkflowCapabilitySource>? logger = null)
     {
         var options = new NyxIdToolOptions { BaseUrl = "https://nyxid.invalid" };
         var services = new ServiceCollection()
@@ -220,12 +265,17 @@ public sealed class NyxIdExplicitWorkflowCapabilitySourceTests
             .AddSingleton<TimeProvider>(new FixedTimeProvider());
         if (catalog is not null)
             services.AddSingleton(catalog);
+        if (logger is not null)
+            services.AddSingleton(logger);
         using var provider = services.BuildServiceProvider();
         return ActivatorUtilities.CreateInstance<NyxIdExplicitWorkflowCapabilitySource>(provider);
     }
 
     private static ExternalWorkflowCapabilityAccessContext Access() =>
-        new("scope-alpha", "nyx-user-alpha", "caller-credential");
+        new(
+            "scope-alpha",
+            "nyx-user-alpha",
+            NyxIdCallerCredentialSelection.SourceReadableUserBearer("caller-credential"));
 
     private static ExternalWorkflowCapabilitySelector Selector(
         NyxIdRequestMethod method = NyxIdRequestMethod.Get)
@@ -339,6 +389,45 @@ public sealed class NyxIdExplicitWorkflowCapabilitySourceTests
         {
             Owners.Add(owner.Clone());
             return Task.FromResult(snapshot);
+        }
+    }
+
+    private sealed class ThrowingCatalogQueryPort(Exception exception)
+        : INyxIdAuthorizationCatalogQueryPort
+    {
+        public Task<NyxIdAuthorizationCatalogSnapshot?> GetAsync(
+            AuthorizationOwnerIdentity owner,
+            CancellationToken ct = default) =>
+            Task.FromException<NyxIdAuthorizationCatalogSnapshot?>(exception);
+    }
+
+    private sealed record LogEntry(
+        LogLevel Level,
+        string Message,
+        Exception? Exception,
+        IReadOnlyDictionary<string, object?> Properties);
+
+    private sealed class RecordingLogger<T> : ILogger<T>
+    {
+        public List<LogEntry> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            var properties = state is IEnumerable<KeyValuePair<string, object?>> values
+                ? values
+                    .Where(static value => value.Key != "{OriginalFormat}")
+                    .ToDictionary(static value => value.Key, static value => value.Value)
+                : new Dictionary<string, object?>();
+            Entries.Add(new LogEntry(logLevel, formatter(state, exception), exception, properties));
         }
     }
 

@@ -190,12 +190,16 @@ message NyxIdExplicitRequestGrant {
   string grantor_owner_subject = 5;
   NyxIdOperationRisk risk = 6;
   repeated ExternalCapabilityExecutionMode allowed_execution_modes = 7;
+  string workflow_id = 8;
+  string revision_id = 9;
 }
 
 message NyxIdExplicitRequestConfirmation {
   string call_site_id = 1;
   string request_contract_digest = 2;
   NyxIdOperationRisk attested_risk = 3;
+  string workflow_id = 4;
+  string revision_id = 5;
 }
 
 enum NyxIdOperationParameterLocation {

@@ -3,12 +3,22 @@ import React from 'react';
 import { t } from '@/shared/i18n/messages';
 import type {
   StudioExplicitRequestConfirmation,
-  StudioExplicitRequestPreviewItem,
+  StudioExplicitRequestPreview,
 } from '@/shared/studio/models';
 
+export function createWorkflowRevisionIdentityCandidate(): string {
+  const random = globalThis.crypto?.randomUUID?.();
+  if (random) {
+    return `rev-${random}`;
+  }
+
+  return `rev-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 export async function confirmInteractiveExplicitRequestPreview(
-  previewItems: readonly StudioExplicitRequestPreviewItem[],
+  preview: StudioExplicitRequestPreview,
 ): Promise<readonly StudioExplicitRequestConfirmation[] | null> {
+  const previewItems = preview.items;
   if (previewItems.length === 0) {
     return [];
   }
@@ -115,6 +125,8 @@ export async function confirmInteractiveExplicitRequestPreview(
       onOk: () =>
         resolve(
           previewItems.map((item) => ({
+            workflowId: preview.workflowId,
+            revisionId: preview.revisionId,
             callSiteId: item.callSiteId,
             requestContractDigest: item.requestContractDigest,
             attestedRisk: item.effectiveRisk,
