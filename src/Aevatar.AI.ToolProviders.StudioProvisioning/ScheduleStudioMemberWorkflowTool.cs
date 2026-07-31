@@ -76,6 +76,27 @@ internal sealed class ScheduleStudioMemberWorkflowTool : IAgentTool
     public bool IsDestructive => false;
     public string SideEffectKind => "studio.member.workflow.schedule";
 
+    public AgentToolReceipt? CreateResultReceipt(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        string resultJson) =>
+        StudioQueryToolJson.CreateMutationResultReceipt(
+            Name,
+            SideEffectKind,
+            "studio_member_workflow_schedule",
+            callId,
+            toolName,
+            resultJson,
+            null,
+            null,
+            "schedule_id",
+            StudioQueryToolJson.StringProperty("status"),
+            StudioQueryToolJson.StringProperty("scope_id"),
+            StudioQueryToolJson.StringProperty("member_id"),
+            StudioQueryToolJson.StringProperty("published_service_id"),
+            StudioQueryToolJson.StringProperty("observatory_url"));
+
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
         var scopeId = StudioToolScopeResolver.ResolveOwnerScopeOrCallerScope();
