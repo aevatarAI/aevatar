@@ -608,6 +608,9 @@ public sealed class AgentProfileTurnCatalogMaterializer
                 continue;
             }
 
+            if (DeclaresCapability(tool, AgentToolCapabilities.ExcludeFromNyxIdChat))
+                continue;
+
             if (!IsEligible(tool, toolContext))
             {
                 hadFailure = true;
@@ -694,6 +697,10 @@ public sealed class AgentProfileTurnCatalogMaterializer
                    StringComparer.Ordinal) ||
                !string.IsNullOrWhiteSpace(toolContext.Credentials.NyxIdAccessToken);
     }
+
+    private static bool DeclaresCapability(IAgentTool tool, string capability) =>
+        tool is IAgentToolCapabilityDescriptor descriptor &&
+        descriptor.Capabilities.Contains(capability, StringComparer.Ordinal);
 
     private static AgentProfileTurnAuthorityPreparation CreatePreparation(
         string sessionId,
