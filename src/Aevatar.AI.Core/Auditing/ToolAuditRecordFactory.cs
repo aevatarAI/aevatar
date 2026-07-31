@@ -98,6 +98,7 @@ public sealed class ToolAuditRecordFactory
                 ScopeId = scopeId,
                 RunId = correlation.WorkflowRunId,
                 CorrelationId = correlation.CorrelationId,
+                Chat = ToAuditChatProvenance(executionContext.Chat),
             },
             Redaction = new AuditRedaction
             {
@@ -140,10 +141,10 @@ public sealed class ToolAuditRecordFactory
                 Code = record.ErrorCode,
                 Category = timedOut
                     ? AuditFailureCategory.Timeout
-                    : receipt.Status == AgentToolReceiptStatus.Denied
+                    : receipt.Status is AgentToolReceiptStatus.Denied or AgentToolReceiptStatus.AuthorizationRequired
                         ? AuditFailureCategory.Authorization
                         : AuditFailureCategory.Execution,
-                Retryability = receipt.Status == AgentToolReceiptStatus.Denied
+                Retryability = receipt.Status is AgentToolReceiptStatus.Denied or AgentToolReceiptStatus.AuthorizationRequired
                     ? AuditRetryability.NotRetryable
                     : AuditRetryability.Unknown,
                 FailedPhase = string.IsNullOrWhiteSpace(receipt.ApprovalRequestId)
@@ -303,6 +304,7 @@ public sealed class ToolAuditRecordFactory
             AgentToolReceiptStatus.Success => AuditOutcome.Success,
             AgentToolReceiptStatus.ApprovalRequired => AuditOutcome.Accepted,
             AgentToolReceiptStatus.Denied => AuditOutcome.Denied,
+            AgentToolReceiptStatus.AuthorizationRequired => AuditOutcome.Error,
             AgentToolReceiptStatus.Error => AuditOutcome.Error,
             _ => AuditOutcome.Unspecified,
         };
@@ -366,8 +368,33 @@ public sealed class ToolAuditRecordFactory
         status switch
         {
             AgentToolReceiptStatus.Denied => "tool_denied",
+            AgentToolReceiptStatus.AuthorizationRequired => "authorization_required",
             AgentToolReceiptStatus.Error => "tool_error",
             _ => string.Empty,
+        };
+
+    private static AuditChatProvenance? ToAuditChatProvenance(AgentChatInvocationContext context) =>
+        context.Surface switch
+        {
+            AgentChatInvocationSurface.NyxIdAssistant => new AuditChatProvenance
+            {
+                Surface = AuditChatSurface.NyxidAssistant,
+                ConversationId = Normalize(context.ConversationId) ?? string.Empty,
+                TurnId = Normalize(context.TurnId) ?? string.Empty,
+                TaskId = Normalize(context.TaskId) ?? string.Empty,
+                StepId = Normalize(context.StepId) ?? string.Empty,
+                ActionRequestId = Normalize(context.ActionRequestId) ?? string.Empty,
+            },
+            AgentChatInvocationSurface.WorkflowChat => new AuditChatProvenance
+            {
+                Surface = AuditChatSurface.WorkflowChat,
+                ConversationId = Normalize(context.ConversationId) ?? string.Empty,
+                TurnId = Normalize(context.TurnId) ?? string.Empty,
+                TaskId = Normalize(context.TaskId) ?? string.Empty,
+                StepId = Normalize(context.StepId) ?? string.Empty,
+                ActionRequestId = Normalize(context.ActionRequestId) ?? string.Empty,
+            },
+            _ => null,
         };
 
     private static void AddIfPresent(IDictionary<string, string> annotations, string key, string? value)

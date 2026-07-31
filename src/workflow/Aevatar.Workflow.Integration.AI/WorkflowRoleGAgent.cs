@@ -213,6 +213,13 @@ public class WorkflowRoleGAgent(
             var toolContext = await RefreshCallerTokenAsync(
                 AgentToolExecutionContextMapper.FromPayload(request.ToolContext),
                 CancellationToken.None);
+            toolContext = toolContext with
+            {
+                Chat = WorkflowChatContext(
+                    continuation.RunId,
+                    continuation.SessionId,
+                    continuation.StepId),
+            };
             request.ToolContext = toolContext.ToPayload();
             request.LlmControl = BuildContinuationLlmControl(continuation, toolContext);
             var intent = BuildContinuationIntent(continuation);
@@ -413,6 +420,7 @@ public class WorkflowRoleGAgent(
         toolContext = toolContext with
         {
             InvocationSurface = AgentToolInvocationSurface.WorkflowLlmToolLoop,
+            Chat = WorkflowChatContext(intent.RunId, intent.SessionId, intent.StepId),
         };
 
         var request = new ChatRequestEvent
@@ -437,6 +445,18 @@ public class WorkflowRoleGAgent(
         CopyWorkflowIntentMetadata(intent.Annotations, request.Metadata);
         return request;
     }
+
+    private static AgentChatInvocationContext WorkflowChatContext(
+        string? runId,
+        string? sessionId,
+        string? stepId) =>
+        new(
+            AgentChatInvocationSurface.WorkflowChat,
+            Normalize(runId),
+            Normalize(sessionId),
+            null,
+            Normalize(stepId),
+            null);
 
     private static ChatContentPart ToChatContentPart(WorkflowFileRef fileRef)
     {

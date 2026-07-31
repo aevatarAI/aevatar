@@ -43,6 +43,7 @@ public sealed class WorkflowCallerCredentialToolContextTests
         tool.NyxIdAccessToken.Should().Be("token-alpha");
         tool.NyxIdOrgToken.Should().Be("token-alpha");
         tool.SenderNyxIdAccessToken.Should().Be("token-alpha");
+        tool.OwnerSubject.Should().Be("sender-alpha");
     }
 
     [Fact]
@@ -100,6 +101,8 @@ public sealed class WorkflowCallerCredentialToolContextTests
 
         public string? SenderNyxIdAccessToken { get; private set; }
 
+        public string? OwnerSubject { get; private set; }
+
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
         {
             var senderBinding = AgentToolRequestContext.Current?.SenderBinding;
@@ -109,6 +112,7 @@ public sealed class WorkflowCallerCredentialToolContextTests
             NyxIdAccessToken = AgentToolRequestContext.NyxIdAccessToken;
             NyxIdOrgToken = AgentToolRequestContext.NyxIdOrgToken;
             SenderNyxIdAccessToken = AgentToolRequestContext.SenderNyxIdAccessToken;
+            OwnerSubject = AgentToolRequestContext.OwnerSubject;
             NyxIdCredentialKind = AgentToolRequestContext.NyxIdCredentialKind;
             return Task.FromResult("{}");
         }

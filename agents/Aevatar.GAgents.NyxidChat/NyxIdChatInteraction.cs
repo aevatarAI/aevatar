@@ -541,6 +541,13 @@ internal sealed class NyxIdChatCommandEnvelopeFactory : ICommandEnvelopeFactory<
                 string.Empty,
                 command.OwnerSubject,
                 "proxy"),
+            Chat = new AgentChatInvocationContext(
+                AgentChatInvocationSurface.NyxIdAssistant,
+                command.ActorId.Trim(),
+                command.TurnId.Trim(),
+                CreateTaskId(command.ActorId, command.TurnId),
+                null,
+                null),
         };
         return effectiveControl.ToToolContext(toolContext);
     }

@@ -463,6 +463,51 @@ public sealed class AgentRunReplyGenerationExecutorTests
     }
 
     [Fact]
+    public async Task BuildToolStepContinuation_WithExactChatOperation_ShouldExposeTypedChatContext()
+    {
+        var tool = new ChatContextCapturingTool("use_skill");
+        var executor = CreateToolEnabledExecutor(
+            tool,
+            new ToolCallProvider(tool.Name),
+            toolContext: AgentToolExecutionContext.Empty with
+            {
+                Chat = new AgentChatInvocationContext(
+                    AgentChatInvocationSurface.NyxIdAssistant,
+                    "conversation-alpha",
+                    "turn-alpha",
+                    "task-planning",
+                    null,
+                    null),
+            });
+        var llmWorkItem = BuildToolEnabledWorkItem();
+        var execution = await executor.BuildLlmStepExecutionAsync(llmWorkItem, CancellationToken.None);
+        var toolWorkItem = BuildToolStepWorkItem(llmWorkItem, execution.Continuation);
+
+        await executor.BuildToolStepContinuationAsync(
+            toolWorkItem,
+            execution.AuthorizedToolStep!.WithChatOperation(new NyxIdChatOperationKey
+            {
+                ConversationActorId = "conversation-alpha",
+                TurnId = "turn-alpha",
+                TaskId = "task-alpha",
+                StepId = "step-alpha",
+                OperationId = "operation-alpha",
+                OperationGeneration = 1,
+            }),
+            CancellationToken.None);
+
+        tool.SeenChat.Should().Be(new AgentChatInvocationContext(
+            AgentChatInvocationSurface.NyxIdAssistant,
+            "conversation-alpha",
+            "turn-alpha",
+            "task-alpha",
+            "step-alpha",
+            null));
+        tool.SeenExternalMetadata.Keys.Should().NotContain(
+            ["conversation_id", "turn_id", "task_id", "step_id"]);
+    }
+
+    [Fact]
     public async Task BuildToolStepContinuation_WithoutMatchingAuthorization_ShouldRejectAllPendingCalls()
     {
         var registeredTool = new CountingTool("use_skill");
@@ -851,6 +896,24 @@ public sealed class AgentRunReplyGenerationExecutorTests
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
         {
             ExecuteCount++;
+            return Task.FromResult("{}");
+        }
+    }
+
+    private sealed class ChatContextCapturingTool(string name) : IAgentTool
+    {
+        public string Name => name;
+        public string Description => name;
+        public string ParametersSchema => "{}";
+        public AgentChatInvocationContext SeenChat { get; private set; } = AgentChatInvocationContext.Empty;
+        public IReadOnlyDictionary<string, string> SeenExternalMetadata { get; private set; } =
+            new Dictionary<string, string>(StringComparer.Ordinal);
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        {
+            SeenChat = AgentToolRequestContext.Current?.Chat ?? AgentChatInvocationContext.Empty;
+            SeenExternalMetadata = AgentToolRequestContext.Current?.ExternalMetadata
+                ?? new Dictionary<string, string>(StringComparer.Ordinal);
             return Task.FromResult("{}");
         }
     }

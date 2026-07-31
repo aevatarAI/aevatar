@@ -77,6 +77,13 @@ public sealed class AgentWorkflowToolSourceAdapter(
                 OperationAdmission = WorkflowOperationAdmissionToolContextMapper.Map(
                     request.InvocationAdmission),
                 InvocationSurface = AgentToolInvocationSurface.WorkflowToolCall,
+                Chat = new AgentChatInvocationContext(
+                    AgentChatInvocationSurface.WorkflowChat,
+                    Normalize(request.RunId),
+                    null,
+                    null,
+                    Normalize(request.StepId),
+                    null),
             });
             _logger.LogInformation(
                 "Workflow tool credential context prepared. toolName={ToolName} scopeId={ScopeId} rootRunId={RootRunId} parentRunId={ParentRunId} parentStepId={ParentStepId} hasCallerCredentialBearer={HasCallerCredentialBearer} hasNyxIdAccessToken={HasNyxIdAccessToken} hasNyxIdOrgToken={HasNyxIdOrgToken}",

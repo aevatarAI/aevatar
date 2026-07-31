@@ -25,7 +25,7 @@ public sealed class WorkflowRoleGAgentMappingTests
 
         mapped.Caller.ScopeId.Should().Be("scope-caller-alpha");
         mapped.Caller.OwnerScopeId.Should().Be("scope-owner-alpha");
-        mapped.Caller.OwnerSubject.Should().Be("scope-owner-alpha");
+        mapped.Caller.OwnerSubject.Should().BeNull();
     }
 
     [Fact]
@@ -72,6 +72,10 @@ public sealed class WorkflowRoleGAgentMappingTests
             {
                 BearerToken = " raw-token ",
                 Kind = NyxIdCallerCredentialKind.SourceReadableUserBearer,
+                NyxIdAuthority = new WorkflowCallerNyxIdAuthority
+                {
+                    ExternalUserId = " user-audit-alpha ",
+                },
             },
             WorkflowRuntimeContext = new WorkflowToolRuntimeContextPayload
             {
@@ -92,7 +96,14 @@ public sealed class WorkflowRoleGAgentMappingTests
         provider.LastRequest.ToolContext.Credentials.NyxIdOrgToken.Should().Be("raw-token");
         provider.LastRequest.ToolContext.Caller.ScopeId.Should().Be("scope-owner-alpha");
         provider.LastRequest.ToolContext.Caller.OwnerScopeId.Should().Be("scope-owner-alpha");
-        provider.LastRequest.ToolContext.Caller.OwnerSubject.Should().Be("scope-owner-alpha");
+        provider.LastRequest.ToolContext.Caller.OwnerSubject.Should().Be("user-audit-alpha");
+        provider.LastRequest.ToolContext.Chat.Should().Be(new AgentChatInvocationContext(
+            AgentChatInvocationSurface.WorkflowChat,
+            "run-1",
+            "session-1",
+            null,
+            "reply",
+            null));
         provider.LastRequest.ToolContext.Routing.NyxIdRoutePreference.Should().Be("route-a");
         provider.LastRequest.ToolContext.WorkflowRuntime.ParentActorId.Should().Be("parent-actor");
         provider.LastRequest.ToolContext.WorkflowRuntime.ParentRunId.Should().Be("parent-run");

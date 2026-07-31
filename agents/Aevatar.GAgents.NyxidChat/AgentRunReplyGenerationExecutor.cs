@@ -289,13 +289,14 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 workItem.Attempt,
                 continuation.StepIndex,
                 result.ToolCalls.ToArray(),
-                async token =>
+                capturedToolContext,
+                async (executionContext, token) =>
                 {
                     using var toolScope = TryBeginInteractiveScope(request);
                     var toolResults = await plan.StepExecutor.ExecuteAuthorizedToolStepAsync(
                             capturedToolCalls,
                             capturedTools,
-                            capturedToolContext,
+                            executionContext,
                             token)
                         .ConfigureAwait(false);
                     var toolStepResult = BuildToolStepResult(toolResults);

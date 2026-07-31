@@ -72,6 +72,62 @@ public sealed class ToolExecutionAuditMiddlewareTests
     }
 
     [Fact]
+    public async Task InvokeAsync_WhenChatToolRequiresAuthorization_ShouldAuditTerminalFailureWithoutSecrets()
+    {
+        var appender = new RecordingAuditTrailAppender();
+        var middleware = new ToolExecutionAuditMiddleware(
+            appender,
+            new ToolAuditRecordFactory(new OpaqueAuditActorIdentityHasher()));
+        var context = NewContext(
+            new FakeAgentTool("nyxid_proxy"),
+            AgentToolExecutionContext.Empty with
+            {
+                Request = new AgentToolRequestIdentity("request-chat", "call-chat"),
+                Caller = new AgentToolCallerContext("scope-alpha", "user-audit-alpha", "turn-alpha"),
+                Chat = new AgentChatInvocationContext(
+                    AgentChatInvocationSurface.NyxIdAssistant,
+                    "conversation-alpha",
+                    "turn-alpha",
+                    "task-alpha",
+                    "step-alpha",
+                    null),
+            });
+        context.ArgumentsJson = "argument-secret";
+
+        await middleware.InvokeAsync(context, () =>
+        {
+            context.Result = "result-secret";
+            context.Receipt = new AgentToolReceipt
+            {
+                CallId = "call-chat",
+                ToolName = "nyxid_proxy",
+                Status = AgentToolReceiptStatus.AuthorizationRequired,
+                ErrorMessage = "prompt-secret",
+            };
+            return Task.CompletedTask;
+        });
+
+        var record = appender.Records.Should().ContainSingle().Subject;
+        record.Provenance.Chat.Should().BeEquivalentTo(new AuditChatProvenance
+        {
+            Surface = AuditChatSurface.NyxidAssistant,
+            ConversationId = "conversation-alpha",
+            TurnId = "turn-alpha",
+            TaskId = "task-alpha",
+            StepId = "step-alpha",
+        });
+        record.LifecyclePhase.Should().Be(AuditLifecyclePhase.Terminal);
+        record.TerminalOutcome.Should().Be(AuditTerminalOutcome.Failed);
+        record.Failure.Code.Should().Be("authorization_required");
+        record.Failure.Category.Should().Be(AuditFailureCategory.Authorization);
+        record.Redaction.OmittedFields.Should().Contain(["model.prompt", "tool.arguments", "tool.result"]);
+        AuditText(record).Should().NotContain("prompt-secret")
+            .And.NotContain("argument-secret")
+            .And.NotContain("result-secret")
+            .And.NotContain("user-audit-alpha");
+    }
+
+    [Fact]
     public async Task InvokeAsync_WhenErrorJsonReturnsWithoutReceipt_ShouldAppendUnknownAttemptAuditRecord()
     {
         var appender = new RecordingAuditTrailAppender();
@@ -660,6 +716,16 @@ public sealed class ToolExecutionAuditMiddlewareTests
 
         public bool Verify(string canonicalActorKey, string auditActorId, string identityKeyId) =>
             string.Equals(auditActorId, $"hash:{canonicalActorKey}", StringComparison.Ordinal) &&
+            string.Equals(identityKeyId, "test-key", StringComparison.Ordinal);
+    }
+
+    private sealed class OpaqueAuditActorIdentityHasher : IAuditActorIdentityHasher
+    {
+        public AuditActorIdentity Hash(string canonicalActorKey) =>
+            new("audit_actor:hmac-sha256:opaque", "test-key");
+
+        public bool Verify(string canonicalActorKey, string auditActorId, string identityKeyId) =>
+            string.Equals(auditActorId, "audit_actor:hmac-sha256:opaque", StringComparison.Ordinal) &&
             string.Equals(identityKeyId, "test-key", StringComparison.Ordinal);
     }
 

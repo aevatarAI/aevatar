@@ -216,6 +216,10 @@ public sealed class AgentWorkflowToolSourceAdapterTests
                 {
                     BearerToken = "token-123",
                     Kind = NyxIdCallerCredentialKind.SourceReadableUserBearer,
+                    NyxIdAuthority = new WorkflowCallerNyxIdAuthority
+                    {
+                        ExternalUserId = " user-audit-alpha ",
+                    },
                 },
                 RuntimeContext: WorkflowToolRuntimeContext.Empty,
                 IdempotencyKey: "idem-agent-tool-1",
@@ -229,6 +233,14 @@ public sealed class AgentWorkflowToolSourceAdapterTests
         agentTool.ObservedOrgToken.Should().Be("token-123");
         agentTool.ObservedScopeId.Should().Be("scope-1");
         agentTool.ObservedOwnerScopeId.Should().Be("scope-1");
+        agentTool.ObservedOwnerSubject.Should().Be("user-audit-alpha");
+        agentTool.ObservedChat.Should().Be(new AgentChatInvocationContext(
+            AgentChatInvocationSurface.WorkflowChat,
+            "run-1",
+            null,
+            null,
+            "step-1",
+            null));
         agentTool.ObservedCallId.Should().Be("call-1");
         agentTool.ObservedIdempotencyKey.Should().Be("idem-agent-tool-1");
         agentTool.ObservedScheduleId.Should().Be("schedule-1");
@@ -623,6 +635,11 @@ public sealed class AgentWorkflowToolSourceAdapterTests
 
         public string? ObservedOwnerScopeId { get; private set; }
 
+        public string? ObservedOwnerSubject { get; private set; }
+
+        public AgentChatInvocationContext ObservedChat { get; private set; } =
+            AgentChatInvocationContext.Empty;
+
         public string? ObservedCallId { get; private set; }
 
         public string? ObservedIdempotencyKey { get; private set; }
@@ -660,6 +677,8 @@ public sealed class AgentWorkflowToolSourceAdapterTests
             ObservedOrgToken = AgentToolRequestContext.NyxIdOrgToken;
             ObservedScopeId = AgentToolRequestContext.ScopeId;
             ObservedOwnerScopeId = AgentToolRequestContext.OwnerScopeId;
+            ObservedOwnerSubject = AgentToolRequestContext.OwnerSubject;
+            ObservedChat = AgentToolRequestContext.Current?.Chat ?? AgentChatInvocationContext.Empty;
             ObservedCallId = AgentToolRequestContext.CallId;
             ObservedIdempotencyKey = AgentToolRequestContext.IdempotencyKey;
             ObservedScheduleId = AgentToolRequestContext.Current?.Schedule.ScheduleId;

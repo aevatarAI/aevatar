@@ -39,7 +39,8 @@ public sealed record AgentRunAuthorizedToolCallSafety(
 public sealed class AgentRunAuthorizedToolStep
 {
     private readonly AgentRunToolCall[] _toolCalls;
-    private readonly Func<CancellationToken, Task<AgentRunToolStepResult>> _executeAsync;
+    private readonly AgentToolExecutionContext _toolContext;
+    private readonly Func<AgentToolExecutionContext, CancellationToken, Task<AgentRunToolStepResult>> _executeAsync;
 
     internal AgentRunAuthorizedToolStep(
         string runId,
@@ -48,12 +49,32 @@ public sealed class AgentRunAuthorizedToolStep
         int stepIndex,
         IReadOnlyList<AgentRunToolCall> toolCalls,
         Func<CancellationToken, Task<AgentRunToolStepResult>> executeAsync)
+        : this(
+            runId,
+            correlationId,
+            attempt,
+            stepIndex,
+            toolCalls,
+            AgentToolExecutionContext.Empty,
+            (_, token) => executeAsync(token))
+    {
+    }
+
+    internal AgentRunAuthorizedToolStep(
+        string runId,
+        string correlationId,
+        int attempt,
+        int stepIndex,
+        IReadOnlyList<AgentRunToolCall> toolCalls,
+        AgentToolExecutionContext toolContext,
+        Func<AgentToolExecutionContext, CancellationToken, Task<AgentRunToolStepResult>> executeAsync)
     {
         RunId = runId;
         CorrelationId = correlationId;
         Attempt = attempt;
         StepIndex = stepIndex;
         _toolCalls = toolCalls.Select(static call => call.Clone()).ToArray();
+        _toolContext = toolContext ?? throw new ArgumentNullException(nameof(toolContext));
         _executeAsync = executeAsync ?? throw new ArgumentNullException(nameof(executeAsync));
     }
 
@@ -82,7 +103,31 @@ public sealed class AgentRunAuthorizedToolStep
             string.Equals(pair.First.ArgumentsJson, pair.Second.ArgumentsJson, StringComparison.Ordinal));
     }
 
-    internal Task<AgentRunToolStepResult> ExecuteAsync(CancellationToken ct) => _executeAsync(ct);
+    internal AgentRunAuthorizedToolStep WithChatOperation(NyxIdChatOperationKey key)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        return new AgentRunAuthorizedToolStep(
+            RunId,
+            CorrelationId,
+            Attempt,
+            StepIndex,
+            _toolCalls,
+            _toolContext with
+            {
+                Chat = _toolContext.Chat with
+                {
+                    TaskId = Normalize(key.TaskId),
+                    StepId = Normalize(key.StepId),
+                },
+            },
+            _executeAsync);
+    }
+
+    internal Task<AgentRunToolStepResult> ExecuteAsync(CancellationToken ct) =>
+        _executeAsync(_toolContext, ct);
+
+    private static string? Normalize(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }
 
 public sealed record AgentRunReplyGenerationExecutionRequest(

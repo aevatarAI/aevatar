@@ -21,6 +21,10 @@ internal static class WorkflowCallerCredentialToolContextMapper
         var context = AgentToolExecutionContext.Empty with
         {
             WorkflowRuntime = workflowRuntimeContext,
+            Caller = AgentToolCallerContext.Empty with
+            {
+                OwnerSubject = Normalize(credential?.NyxIdAuthority?.ExternalUserId),
+            },
             NyxIdAuthority = credential?.NyxIdAuthority == null
                 ? AgentToolNyxIdAuthorityContext.Empty
                 : new AgentToolNyxIdAuthorityContext(
@@ -83,7 +87,6 @@ internal static class WorkflowRunScopeToolContextMapper
             {
                 ScopeId = Fill(toolContext.Caller.ScopeId, scopeId),
                 OwnerScopeId = Fill(toolContext.Caller.OwnerScopeId, scopeId),
-                OwnerSubject = Fill(toolContext.Caller.OwnerSubject, scopeId),
             },
         };
     }

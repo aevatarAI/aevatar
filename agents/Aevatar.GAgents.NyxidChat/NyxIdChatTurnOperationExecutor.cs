@@ -355,7 +355,7 @@ public sealed class NyxIdChatTurnOperationExecutor
                 ct)
             .ConfigureAwait(false);
 
-        var capability = session.AuthorizedToolStep;
+        var capability = session.AuthorizedToolStep.WithChatOperation(command.Key);
         ClearAuthorization(session);
         var continuation = await _generationExecutor.BuildToolStepContinuationAsync(
                 workItem,
