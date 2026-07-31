@@ -767,6 +767,8 @@ const zhCNMessages = {
   'teams.automations.authorization.error': '无法继续授权',
   'teams.automations.authorization.exactAccess': '精确权限',
   'teams.automations.authorization.expiry': '凭证有效期',
+  'teams.automations.authorization.noExternalGrants': '无需外部 NyxID 服务或所有者 LLM 模型授权。',
+  'teams.automations.authorization.noOwnerLLMGrant': '此工作流无需所有者 LLM 模型授权。',
   'teams.automations.authorization.preparing': '正在准备授权检查',
   'teams.automations.authorization.review': '检查授权',
   'teams.automations.authorization.reviewAgain': '重新检查',

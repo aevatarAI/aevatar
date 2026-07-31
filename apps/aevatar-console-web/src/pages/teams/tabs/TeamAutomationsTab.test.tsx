@@ -5,6 +5,7 @@ import * as React from "react";
 import TeamAutomationsTab, {
   mutationObservationComplete,
 } from "./TeamAutomationsTab";
+import TeamAutomationAuthorizationReview from "../components/TeamAutomationAuthorizationReview";
 import {
   teamAutomationApi,
   TeamAutomationApiError,
@@ -110,7 +111,6 @@ function renderTab(
 function authorizationReview() {
   return {
     status: "ready",
-    schemaVersion: "scheduled-invocation-authorization/v1",
     permissionDigest: "digest-alpha",
     policyVersion: "scheduled-invocation-auth/v1",
     serviceGrants: [
@@ -130,11 +130,17 @@ function authorizationReview() {
       allowAllServices: false,
       browserReceivesRawKey: false,
       expiresAt: "2026-10-14T00:00:00Z",
+      hostedBy: "Aevatar",
+      mode: "dedicated-per-schedule",
+      nodeGrantRequirement: "required",
+      serviceGrantRequirement: "required",
       scopes: ["read", "proxy"],
     },
     ownerLLMSelection: {
       model: "gpt-5",
+      nyxIdUserServiceId: "us-alpha",
       routeKind: "nyx_id_user_service",
+      routeValue: "us-alpha",
       serviceSlugSnapshot: "connector-alpha",
     },
     disclosures: [
@@ -145,7 +151,37 @@ function authorizationReview() {
       "pause_resume_preserves_credential",
       "node_ids_are_permission_set",
     ],
-  };
+  } satisfies import("@/shared/api/teamAutomationApi").TeamAutomationPermissionReview;
+}
+
+function noServiceAuthorizationReview() {
+  return {
+    status: "ready",
+    permissionDigest: "digest-no-service",
+    policyVersion: "scheduled-invocation-auth/v1",
+    serviceGrants: [],
+    nodeGrants: [],
+    credentialPlan: {
+      allowAllNodes: false,
+      allowAllServices: false,
+      browserReceivesRawKey: false,
+      expiresAt: "2026-10-14T00:00:00Z",
+      hostedBy: "Aevatar",
+      mode: "dedicated-per-schedule",
+      nodeGrantRequirement: "not_required",
+      serviceGrantRequirement: "not_required",
+      scopes: ["read", "proxy"],
+    },
+    ownerLLMSelection: null,
+    disclosures: [
+      "dedicated_credential",
+      "aevatar_secret_custody",
+      "browser_never_receives_secret",
+      "delete_revokes_credential",
+      "pause_resume_preserves_credential",
+      "node_ids_are_permission_set",
+    ],
+  } satisfies import("@/shared/api/teamAutomationApi").TeamAutomationPermissionReview;
 }
 
 function automationView(overrides: Record<string, unknown> = {}) {
@@ -211,6 +247,32 @@ describe("TeamAutomationsTab canonical member authority", () => {
         [],
       ),
     ).toBe(true);
+  });
+
+  it("renders repeated exact grant occurrences without duplicate React keys", () => {
+    const consoleError = jest.spyOn(console, "error").mockImplementation(() => undefined);
+    const review = authorizationReview();
+    const duplicateGrant = {
+      ...review.serviceGrants[0],
+      nodeIds: ["node-alpha", "node-alpha"],
+    };
+
+    render(
+      <TeamAutomationAuthorizationReview
+        review={{
+          ...review,
+          serviceGrants: [duplicateGrant, duplicateGrant],
+        }}
+      />,
+    );
+
+    expect(screen.getAllByText("Connector Alpha")).toHaveLength(2);
+    expect(screen.getAllByText("node-alpha")).toHaveLength(4);
+    expect(
+      consoleError.mock.calls.some((call) =>
+        call.join(" ").includes("Encountered two children with the same key"),
+      ),
+    ).toBe(false);
   });
 
   it("keeps member selection inside the create form when multiple members are eligible", async () => {
@@ -444,6 +506,67 @@ describe("TeamAutomationsTab canonical member authority", () => {
     await waitFor(() => expect(teamAutomationApi.create).toHaveBeenCalledTimes(1));
     expect(await screen.findByText("Authorization request accepted")).toBeInTheDocument();
     expect(screen.queryByText("Automation created")).not.toBeInTheDocument();
+  });
+
+  it("shows a no-service authorization review and requires confirmation before creating", async () => {
+    (teamAutomationApi.preflightCreate as jest.Mock).mockResolvedValue(
+      noServiceAuthorizationReview(),
+    );
+    (teamAutomationApi.create as jest.Mock).mockResolvedValue({
+      accepted: true,
+      status: "accepted",
+      scheduleId: "sch-no-service",
+      operationId: "op-alpha",
+      commandId: "cmd-no-service",
+    });
+    renderTab("m-alpha");
+
+    fireEvent.click(await screen.findByRole("button", { name: "New automation" }));
+    fireEvent.change(screen.getByLabelText("Recurring prompt"), {
+      target: { value: "Summarize open work." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create automation" }));
+
+    await waitFor(() => expect(teamAutomationApi.preflightCreate).toHaveBeenCalledTimes(1));
+    expect(teamAutomationApi.create).not.toHaveBeenCalled();
+
+    const reviewDialog = await screen.findByRole("dialog");
+    expect(reviewDialog).toHaveAttribute(
+      "aria-describedby",
+      "team-automation-authorization-description",
+    );
+    expect(
+      within(reviewDialog).getByText(
+        "No external NyxID service or owner LLM model grant is required.",
+      ),
+    ).toBeInTheDocument();
+    expect(within(reviewDialog).queryByText(/gateway\s*\//)).not.toBeInTheDocument();
+    expect(within(reviewDialog).queryByText("gpt-5")).not.toBeInTheDocument();
+
+    const confirmation = within(reviewDialog).getByRole("button", {
+      name: "Authorize and continue",
+    });
+    const modalFooter = reviewDialog.querySelector(".ant-modal-footer");
+    const modalBody = reviewDialog.querySelector(".ant-modal-body");
+    expect(modalFooter).toContainElement(confirmation);
+    expect(modalBody).not.toContainElement(confirmation);
+    expect(modalBody).toHaveStyle({
+      maxHeight: "min(70vh, 640px)",
+      overflowY: "auto",
+    });
+
+    fireEvent.click(confirmation);
+
+    await waitFor(() => expect(teamAutomationApi.create).toHaveBeenCalledTimes(1));
+    expect(teamAutomationApi.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        memberId: "m-alpha",
+        prompt: "Summarize open work.",
+      }),
+      "digest-no-service",
+      "scheduled-invocation-auth/v1",
+      { idempotencyKey: "idem-alpha", operationId: "op-alpha" },
+    );
   });
 
   it("reports authorization preflight failures through the shared toast without changing the modal layout", async () => {

@@ -808,6 +808,8 @@ const enUSMessages = {
   'teams.automations.authorization.error': 'Authorization could not continue',
   'teams.automations.authorization.exactAccess': 'Exact access',
   'teams.automations.authorization.expiry': 'Credential expiry',
+  'teams.automations.authorization.noExternalGrants': 'No external NyxID service or owner LLM model grant is required.',
+  'teams.automations.authorization.noOwnerLLMGrant': 'No owner LLM model grant is required for this workflow.',
   'teams.automations.authorization.preparing': 'Preparing authorization review',
   'teams.automations.authorization.review': 'Review authorization',
   'teams.automations.authorization.reviewAgain': 'Review again',
