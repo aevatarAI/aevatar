@@ -697,6 +697,12 @@ public sealed class MainnetHostCompositionTests
         nyxIdConnectedServices.Sources.Should().ContainSingle(source => source is NyxIdConnectedServiceToolSource);
         workspace.Sources.Should().NotContain(source => source is NyxIdConnectedServiceToolSource);
 
+        var nyxIdChatProfile = registry.Resolve(AgentProfilePolicies.NyxIdChatRouteToolSet);
+        nyxIdChatProfile.IsSuccess.Should().BeTrue(nyxIdChatProfile.Error?.Message);
+        nyxIdChatProfile.Sources.Should().Contain(source => source is NyxIdAgentToolSource);
+        nyxIdChatProfile.Sources.Should().ContainSingle(source =>
+            source is NyxIdConnectedServiceToolSource);
+
         var voice = registry.Resolve("voice.realtime");
         voice.IsSuccess.Should().BeFalse();
         voice.Error!.Code.Should().Be(ToolSetResolveError.UnknownNameCode);
@@ -925,6 +931,46 @@ public sealed class MainnetHostCompositionTests
         using var app = builder.Build();
         app.Services.GetRequiredService<NyxIdToolOptions>()
             .MaxRequestDurationSeconds.Should().Be(420);
+    }
+
+    [Theory]
+    [InlineData(NyxIdManagedWorkflowAdmissionMode.Shadow)]
+    [InlineData(NyxIdManagedWorkflowAdmissionMode.Enforce)]
+    public void AddAevatarMainnetHost_ShouldBindNyxIdAdmissionMode(
+        NyxIdManagedWorkflowAdmissionMode mode)
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        using var admissionMode = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__NyxId__ManagedWorkflowAdmissionMode",
+            mode.ToString());
+        var builder = CreateBuilder();
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        app.Services.GetRequiredService<NyxIdToolOptions>()
+            .ManagedWorkflowAdmissionMode.Should().Be(mode);
+    }
+
+    [Fact]
+    public void AddAevatarMainnetHost_ShouldEnforceNyxIdAdmissionInDistributedImageConfiguration()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder(environmentName: "Distributed");
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        app.Services.GetRequiredService<NyxIdToolOptions>()
+            .ManagedWorkflowAdmissionMode.Should().Be(NyxIdManagedWorkflowAdmissionMode.Enforce);
     }
 
     [Fact]

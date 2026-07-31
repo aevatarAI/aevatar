@@ -3088,6 +3088,17 @@ public class NyxIdChatGAgentTests
         public string Name => name;
         public string Description => $"{name} test tool";
         public string ParametersSchema => """{"type":"object"}""";
+        public AgentToolReceipt? CreateSuccessReceipt(
+            string callId,
+            string toolName,
+            string resultJson) =>
+            new()
+            {
+                CallId = callId,
+                ToolName = toolName,
+                Status = AgentToolReceiptStatus.Success,
+                ResultJson = resultJson,
+            };
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
             Task.FromResult(execute(argumentsJson));

@@ -2,6 +2,7 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
@@ -58,6 +59,9 @@ public sealed class NyxIdServiceToolsTests
 
         var all = await inventory.ExecuteAsync("{}");
         all.Should().Contain("usvc-alpha").And.Contain("usvc-beta");
+        var allReceipt = inventory.CreateResultReceipt("call-all", inventory.Name, "{}", all);
+        allReceipt.Should().NotBeNull();
+        allReceipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
         var selected = await inventory.ExecuteAsync(
             """{ "user_service_id": "usvc-beta" }""");
         using var selectedDocument = JsonDocument.Parse(selected);
@@ -68,6 +72,11 @@ public sealed class NyxIdServiceToolsTests
         var forged = await inventory.ExecuteAsync(
             """{ "user_service_id": "usvc-forged" }""");
         ErrorCode(forged).Should().Be("identity_not_authorized");
+        var forgedReceipt = inventory.CreateResultReceipt(
+            "call-forged", inventory.Name, "{}", forged);
+        forgedReceipt.Should().NotBeNull();
+        forgedReceipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        forgedReceipt.ErrorCode.Should().Be("NYXID_SERVICE_INVENTORY_FAILED");
         handler.ExactReads.Should().BeEmpty();
     }
 

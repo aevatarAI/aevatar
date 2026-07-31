@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.GAgents.Channel.Runtime;
 
 namespace Aevatar.GAgents.NyxidChat;
@@ -88,7 +89,8 @@ public sealed record AgentRunReplyGenerationExecutionRequest(
     string RunId,
     string RunActorId,
     int Attempt,
-    NeedsLlmReplyEvent Request);
+    NeedsLlmReplyEvent Request,
+    AgentProfileTurnCatalog? TurnCatalog = null);
 
 public sealed record AgentRunReplyStepExecutionRequest(
     string RunId,
@@ -97,4 +99,5 @@ public sealed record AgentRunReplyStepExecutionRequest(
     int StepIndex,
     NeedsLlmReplyEvent Request,
     AgentRunReplyStepState StepState,
-    Func<LLMStreamChunk, CancellationToken, Task>? ReportChunkAsync = null);
+    Func<LLMStreamChunk, CancellationToken, Task>? ReportChunkAsync = null,
+    AgentProfileTurnCatalog? TurnCatalog = null);

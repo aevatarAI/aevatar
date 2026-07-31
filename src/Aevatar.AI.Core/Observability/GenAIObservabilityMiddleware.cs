@@ -8,6 +8,7 @@ using System.Diagnostics;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
+using Aevatar.AI.Core.Auditing;
 
 namespace Aevatar.AI.Core.Observability;
 
@@ -140,6 +141,7 @@ public sealed class GenAIObservabilityMiddleware : IAgentRunMiddleware, IToolCal
         try
         {
             await next();
+            ToolCallReceiptFinalizer.Finalize(context);
             var failed = IsFailedToolCall(context);
             activity?.SetTag("gen_ai.tool.status", context.Terminate ? "terminated" : failed ? "error" : "ok");
             if (failed)
@@ -171,6 +173,7 @@ public sealed class GenAIObservabilityMiddleware : IAgentRunMiddleware, IToolCal
     private static bool IsFailedToolCall(ToolCallContext context) =>
         context.Receipt?.Status is AgentToolReceiptStatus.Error or
             AgentToolReceiptStatus.Denied or
-            AgentToolReceiptStatus.AuthorizationRequired ||
+            AgentToolReceiptStatus.AuthorizationRequired or
+            AgentToolReceiptStatus.Unspecified ||
         context.Terminate && context.TerminationKind != ToolCallTerminationKind.ApprovalPending;
 }

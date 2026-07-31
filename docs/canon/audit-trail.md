@@ -134,6 +134,16 @@ Tool-execution middleware records tool-plane facts around tool invocation. It
 captures the tool identity, execution phase, safe caller and scope identity,
 safe resource target, timing, result class, and redacted diagnostic summary.
 
+`AgentToolReceipt` is the single execution-outcome fact shared by audit,
+workflow artifacts, streaming results, and user-visible completion. A tool that
+returns without throwing but does not provide a receipt has an unverified
+outcome: the finalizer writes back a synthetic `Unspecified` receipt, audit
+records it as running and nonterminal, and consumers must not upgrade it to
+success. Providers must emit typed receipts for outcomes they can classify,
+including HTTP/authentication failures, DNS or TLS failures, and timeouts. Only
+an explicit `Success` receipt confirms completed execution; approval-required
+receipts remain waiting and `Unspecified` receipts remain unknown.
+
 Provider receipts must use the same stable resource target for successful and
 failed calls. Invocation ids are correlation identifiers only and must not
 stand in for the downstream resource. NyxID proxy receipts identify an admitted

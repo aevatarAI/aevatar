@@ -2,6 +2,7 @@ using System.Collections;
 using System.Net.Http;
 using System.Reflection;
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.Voice;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.Foundation.Abstractions;
@@ -812,6 +813,14 @@ public class AIFeatureBootstrapCoverageTests
         public string Name { get; } = name;
         public string Description => "test tool";
         public string ParametersSchema => """{"type":"object"}""";
+
+        public AgentToolReceipt? CreateSuccessReceipt(string callId, string toolName, string result) =>
+            new()
+            {
+                CallId = callId,
+                ToolName = toolName,
+                Status = AgentToolReceiptStatus.Success,
+            };
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
         {

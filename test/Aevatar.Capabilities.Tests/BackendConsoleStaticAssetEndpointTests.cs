@@ -87,8 +87,8 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         await using var app = await CreateAppAsync();
         var html = await app.GetTestClient().GetStringAsync("/admin");
 
-        html.Should().Contain("agentProfiles:{name:'Agent Profile', auth:'login'");
-        html.Should().Contain("items:['studio','agentProfiles','skills','schedules']");
+        html.Should().Contain("'agent-profiles':{name:'Agent Profile', auth:'login'");
+        html.Should().Contain("items:['studio','agent-profiles','skills','schedules']");
         html.Should().Contain("agentProfileField('显示名称','displayName'");
         html.Should().Contain("agentProfileField('Instructions','instructions'");
         html.Should().Contain("agentProfileSelect('Activation mode','activationMode'");
@@ -239,6 +239,369 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             const selectSource = functionSource('agentProfileSelectSkill', 'agentProfileEditorHtml');
             assert.ok(selectSource.indexOf('agentProfileCaptureDraft(root);') >= 0);
             assert.ok(selectSource.indexOf('agentProfileCaptureDraft(root);') < selectSource.indexOf('render();'));
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error);
+    }
+
+    [Fact]
+    public async Task AdminShell_AgentProfiles_ShouldDiscardStaleExactSkillResponses()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name, nextName) {
+              const starts = [
+                html.indexOf('function ' + name + '('),
+                html.indexOf('async function ' + name + '(')
+              ].filter(index => index !== -1);
+              const start = starts.length ? Math.min(...starts) : -1;
+              const ends = [
+                html.indexOf('\nfunction ' + nextName + '(', start),
+                html.indexOf('\nasync function ' + nextName + '(', start)
+              ].filter(index => index !== -1);
+              const end = ends.length ? Math.min(...ends) : -1;
+              assert.notEqual(start, -1, name + ' must exist in the served admin asset');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return html.slice(start, end);
+            }
+
+            const context = {
+              AGENT_PROFILE_STATE:{
+                detail:{draft:{runtimeProfile:{members:[{skillRef:{}}]}}},
+                skillRequest:0, skillMemberIndex:null, skillQuery:'', skillResults:[],
+                skillLoading:false, skillError:null, skillProof:null
+              },
+              root:{},
+              render() {},
+              agentProfileCaptureDraft() {},
+              agentProfileJson() {
+                return new Promise(resolve => { context.resolveExact = resolve; });
+              }
+            };
+            vm.createContext(context);
+            vm.runInContext(`
+              ${functionSource('agentProfileResetSkillSearch', 'agentProfileOwnerEndpoint')}
+              ${functionSource('agentProfileApplyExactSkill', 'agentProfileCaptureDraft')}
+              ${functionSource('agentProfileSelectSkill', 'agentProfilePublicSummaryHtml')}
+            `, context);
+
+            (async function() {
+              const pending = vm.runInContext(
+                "agentProfileSelectSkill('skill-guid', root, '0')", context);
+              vm.runInContext(
+                'agentProfileResetSkillSearch(); AGENT_PROFILE_STATE.detail = null', context);
+              context.resolveExact({body:{
+                guid:'22222222-2222-4222-8222-222222222222', literalVersion:'2.3',
+                name:'new-skill', publisher:'new-publisher'
+              }});
+              await pending;
+
+              assert.equal(context.AGENT_PROFILE_STATE.detail, null);
+              assert.equal(context.AGENT_PROFILE_STATE.skillMemberIndex, null);
+              assert.equal(context.AGENT_PROFILE_STATE.skillLoading, false);
+              assert.equal(context.AGENT_PROFILE_STATE.skillError, null);
+              assert.equal(context.AGENT_PROFILE_STATE.skillProof, null);
+              assert.deepEqual(Array.from(context.AGENT_PROFILE_STATE.skillResults), []);
+            })().catch(error => { console.error(error); process.exitCode = 1; });
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error);
+    }
+
+    [Fact]
+    public async Task AdminShell_AgentProfiles_ShouldRoundTripEveryMember()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name, nextName) {
+              const start = html.indexOf('function ' + name + '(');
+              const ends = [
+                html.indexOf('\nfunction ' + nextName + '(', start),
+                html.indexOf('\nasync function ' + nextName + '(', start)
+              ].filter(index => index !== -1);
+              const end = ends.length ? Math.min(...ends) : -1;
+              assert.notEqual(start, -1, name + ' must exist in the served admin asset');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return html.slice(start, end);
+            }
+
+            const context = {};
+            vm.createContext(context);
+            vm.runInContext(`
+              ${functionSource('agentProfileDraftFromFields', 'agentProfileEmptyDraft')}
+              ${functionSource('agentProfileCollectFields', 'agentProfileLocalDiagnostics')}
+            `, context);
+
+            function field(name, value, member) {
+              return {
+                value,
+                getAttribute(attribute) {
+                  if (attribute === 'data-ap-field') return name;
+                  if (attribute === 'data-ap-member') return member == null ? null : String(member);
+                  return null;
+                }
+              };
+            }
+            const elements = [
+              field('displayName', 'Research team'),
+              field('instructions', 'Use the matching specialist'),
+              field('activationMode', 'ENFORCED'),
+              field('maxPlanSteps', '4'),
+              field('intentId', 'research', 0),
+              field('exactSkillGuid', '11111111-1111-4111-8111-111111111111', 0),
+              field('literalVersion', '1.2', 0),
+              field('expectedSkillName', 'research', 0),
+              field('reviewedPublisherId', 'publisher-a', 0),
+              field('taskTools', 'web_search', 0),
+              field('sideEffectClass', 'READ_ONLY', 0),
+              field('intentId', 'writer', 1),
+              field('exactSkillGuid', '22222222-2222-4222-8222-222222222222', 1),
+              field('literalVersion', '2.3', 1),
+              field('expectedSkillName', 'writer', 1),
+              field('reviewedPublisherId', 'publisher-b', 1),
+              field('taskTools', 'document_write', 1),
+              field('sideEffectClass', 'SERVICE_CALL', 1)
+            ];
+            context.root = { querySelectorAll() { return elements; } };
+            const fields = vm.runInContext('agentProfileCollectFields(root)', context);
+            context.fields = fields;
+            const draft = vm.runInContext('agentProfileDraftFromFields(fields)', context);
+            assert.equal(fields.members.length, 2);
+            assert.equal(draft.runtimeProfile.members.length, 2);
+            assert.equal(draft.runtimeProfile.members[0].intentId, 'research');
+            assert.equal(draft.runtimeProfile.members[1].intentId, 'writer');
+            assert.equal(draft.runtimeProfile.members[1].skillRef.literalVersion, '2.3');
+            assert.deepEqual(
+              Array.from(draft.runtimeProfile.members[1].taskToolPolicy.toolNames),
+              ['document_write']);
+
+            context.AGENT_PROFILE_STATE = {
+              detail:{
+                ownerKind:'scope', profileSlug:'research-team', displayName:'Research team',
+                draft, publishedRevision:1, authorityStateVersion:3
+              },
+              diagnostics:[], rolloutDraft:null, systemBinding:null, pending:null,
+              busy:false, notice:null, error:null, etag:'etag-3', skillMemberIndex:null,
+              skillResults:[], skillLoading:false, skillError:null, skillProof:null
+            };
+            context.ACCOUNT = { admin:false };
+            context.ICON = { search:'search' };
+            context.esc = value => String(value == null ? '' : value);
+            vm.runInContext(`
+              ${functionSource('agentProfileCanWrite', 'agentProfileProblem')}
+              ${functionSource('agentProfileEmptyDraft', 'agentProfileRolloutFromBinding')}
+              ${functionSource('agentProfileRolloutFromBinding', 'agentProfileApplyExactSkill')}
+              ${functionSource('agentProfileStatus', 'agentProfileListHtml')}
+              ${functionSource('agentProfileField', 'agentProfileSelect')}
+              ${functionSource('agentProfileSelect', 'agentProfileRuntime')}
+              ${functionSource('agentProfileRuntime', 'agentProfileMemberHtml')}
+              ${functionSource('agentProfileMemberHtml', 'agentProfileDiagnosticsHtml')}
+              ${functionSource('agentProfileDiagnosticsHtml', 'agentProfileSkillSearchHtml')}
+              ${functionSource('agentProfileSkillSearchHtml', 'agentProfileSearchSkills')}
+              ${functionSource('agentProfileEditorHtml', 'agentProfileCollectFields')}
+              ${functionSource('agentProfileLocalDiagnostics', 'agentProfileMutation')}
+            `, context);
+            const editor = vm.runInContext('agentProfileEditorHtml()', context);
+            assert.match(editor, /data-ap-member-card="0"/);
+            assert.match(editor, /data-ap-member-card="1"/);
+            assert.match(editor, /id="ap-intentId-0"/);
+            assert.match(editor, /id="ap-intentId-1"/);
+            assert.match(editor, /id="ap-maxPlanSteps"[^>]*readonly/);
+
+            const invalid = JSON.parse(JSON.stringify(draft));
+            invalid.runtimeProfile.members[1].expectedSkillName = '';
+            invalid.runtimeProfile.members[1].reviewedPublisherId = '';
+            invalid.runtimeProfile.maxPlanSteps = 3;
+            context.invalid = invalid;
+            const diagnostics = vm.runInContext('agentProfileLocalDiagnostics(invalid)', context);
+            assert.ok(diagnostics.some(d =>
+              d.code === 'EXPECTED_SKILL_NAME_REQUIRED' && d.field === 'members[1].expectedSkillName'));
+            assert.ok(diagnostics.some(d =>
+              d.code === 'PUBLISHER_REQUIRED' && d.field === 'members[1].reviewedPublisherId'));
+            assert.ok(diagnostics.some(d => d.code === 'PROFILE_MAX_PLAN_STEPS_INVALID'));
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error);
+    }
+
+    [Fact]
+    public async Task AdminShell_AgentProfiles_ShouldRenderPublishedSystemSummaryWithoutFakeDraft()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name, nextName) {
+              const start = html.indexOf('function ' + name + '(');
+              const end = html.indexOf('\nfunction ' + nextName + '(', start);
+              assert.notEqual(start, -1, name + ' must exist in the served admin asset');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return html.slice(start, end);
+            }
+
+            const context = {
+              ACCOUNT:{ admin:false },
+              AGENT_PROFILE_STATE:{
+                detail:{
+                  ownerKind:'system', profileSlug:'public-research', displayName:'Public research',
+                  purpose:'Published evidence assistant', publishedRevision:4, available:true
+                },
+                pending:null, busy:false, notice:null, error:null, etag:null, diagnostics:[]
+              },
+              esc(value) { return String(value == null ? '' : value); }
+            };
+            vm.createContext(context);
+            vm.runInContext(`
+              ${functionSource('agentProfileCanWrite', 'agentProfileProblem')}
+              ${functionSource('agentProfileStatus', 'agentProfileListHtml')}
+              ${functionSource('agentProfilePublicSummaryHtml', 'agentProfileEditorHtml')}
+              ${functionSource('agentProfileEditorHtml', 'agentProfileCollectFields')}
+            `, context);
+            const editor = vm.runInContext('agentProfileEditorHtml()', context);
+            assert.match(editor, /Public research/);
+            assert.match(editor, /Published evidence assistant/);
+            assert.match(editor, /system\/public-research/);
+            assert.match(editor, /已发布 r4/);
+            assert.match(editor, /设为我的默认/);
+            assert.doesNotMatch(editor, /data-ap-form/);
+            assert.doesNotMatch(editor, /Instructions/);
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error);
+    }
+
+    [Fact]
+    public async Task AdminShell_AgentProfiles_ShouldNotInventMissingCatalogFacts()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name, nextName) {
+              const start = html.indexOf('function ' + name + '(');
+              const ends = [
+                html.indexOf('\nfunction ' + nextName + '(', start),
+                html.indexOf('\nasync function ' + nextName + '(', start)
+              ].filter(index => index !== -1);
+              const end = ends.length ? Math.min(...ends) : -1;
+              assert.notEqual(start, -1, name + ' must exist in the served admin asset');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return html.slice(start, end);
+            }
+
+            const context = {
+              AGENT_PROFILE_STATE:{
+                search:'', status:'all', selected:'public-research',
+                items:[]
+              },
+              esc(value) { return String(value == null ? '' : value); }
+            };
+            vm.createContext(context);
+            vm.runInContext(`
+              ${functionSource('agentProfileNormalizeItem', 'loadAgentProfileBindings')}
+              ${functionSource('agentProfileRows', 'agentProfileStatus')}
+              ${functionSource('agentProfileStatus', 'agentProfileListHtml')}
+              ${functionSource('agentProfileListHtml', 'agentProfileField')}
+            `, context);
+            context.item = {
+              profileId:'prof-public', profileSlug:'public-research',
+              displayName:'Public research', purpose:'Published evidence assistant',
+              publishedRevision:4, available:true, ownerKind:'system'
+            };
+            context.AGENT_PROFILE_STATE.items = [
+              vm.runInContext("agentProfileNormalizeItem(item, 'system')", context)
+            ];
+            const list = vm.runInContext('agentProfileListHtml()', context);
+            assert.match(list, /Public research/);
+            assert.match(list, /Published evidence assistant/);
+            assert.doesNotMatch(list, /draft r0/);
+            assert.doesNotMatch(list, /undefined/);
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error);
+    }
+
+    [Fact]
+    public async Task AdminShell_AgentProfiles_ShouldNavigateToCanonicalRoute()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name, nextName) {
+              const start = html.indexOf('function ' + name + '(');
+              const end = html.indexOf('\nfunction ' + nextName + '(', start);
+              assert.notEqual(start, -1, name + ' must exist in the served admin asset');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return html.slice(start, end);
+            }
+
+            const navStart = html.indexOf('var NAV=[');
+            const navEnd = html.indexOf('/* 当前账号能否访问该模块', navStart);
+            assert.notEqual(navStart, -1);
+            assert.notEqual(navEnd, -1);
+            const context = {
+              location:{ hash:'' }, ACCOUNT:{ name:'Test user' },
+              NAV_ICON:{ fleet:'', status:'', audit:'', obs:'', cqrs:'', studio:'',
+                agentProfiles:'', skills:'', sched:'', channels:'', voice:'' },
+              esc(value) { return String(value); },
+              viewAgentProfiles() { return 'agent-profile-view'; }
+            };
+            vm.createContext(context);
+            vm.runInContext(`
+              ${html.slice(navStart, navEnd)}
+              ${functionSource('canAccessModule', 'defaultModule')}
+              ${functionSource('renderRail', 'agentProfileOwnerEndpoint')}
+              ${functionSource('buildHash', 'curParts')}
+              ${functionSource('navigate', 'breadcrumb')}
+            `, context);
+            const rail = vm.runInContext("renderRail('agent-profiles')", context);
+            const module = rail.match(/class="rail-item on" data-module="([^"]+)"/)[1];
+            context.module = module;
+            vm.runInContext("navigate([module], {})", context);
+            assert.equal(module, 'agent-profiles');
+            assert.equal(context.location.hash, '#/agent-profiles');
+
+            const opsStart = html.indexOf('function opsView(');
+            const opsEnd = html.indexOf('\n}\n\n</script>', opsStart) + 2;
+            assert.notEqual(opsStart, -1);
+            assert.ok(opsEnd > opsStart);
+            vm.runInContext(html.slice(opsStart, opsEnd), context);
+            assert.equal(vm.runInContext("opsView('agent-profiles')", context), 'agent-profile-view');
             """;
 
         var result = await RunNodeAsync(script, html);

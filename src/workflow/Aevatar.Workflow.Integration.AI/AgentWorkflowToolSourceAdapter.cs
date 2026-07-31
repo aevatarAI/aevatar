@@ -128,9 +128,8 @@ public sealed class AgentWorkflowToolSourceAdapter(
             var resultJson = toolCallContext.Result
                              ?? throw new InvalidOperationException(
                                  $"Tool '{_tool.Name}' returned no result.");
-            return AgentWorkflowToolReceiptOutcomeMapper.Map(
-                ToolCallReceiptFinalizer.Finalize(toolCallContext).Receipt,
-                resultJson);
+            var receipt = toolCallContext.Receipt ?? ToolCallReceiptFinalizer.Finalize(toolCallContext).Receipt;
+            return AgentWorkflowToolReceiptOutcomeMapper.Map(receipt, resultJson);
         }
 
         private static WorkflowToolApprovalPendingOutcome ToWorkflowToolApprovalPendingOutcome(
@@ -181,7 +180,8 @@ file static class AgentWorkflowToolReceiptOutcomeMapper
     private static bool IsFailure(AgentToolReceiptStatus status) =>
         status is AgentToolReceiptStatus.Error or
             AgentToolReceiptStatus.Denied or
-            AgentToolReceiptStatus.AuthorizationRequired;
+            AgentToolReceiptStatus.AuthorizationRequired or
+            AgentToolReceiptStatus.Unspecified;
 
     private static string ResolveFailureCode(AgentToolReceipt receipt)
     {
@@ -192,13 +192,16 @@ file static class AgentWorkflowToolReceiptOutcomeMapper
         {
             AgentToolReceiptStatus.Denied => "tool_denied",
             AgentToolReceiptStatus.AuthorizationRequired => "authorization_required",
+            AgentToolReceiptStatus.Unspecified => ToolCallReceiptFinalizer.UnknownErrorCode,
             _ => "tool_error",
         };
     }
 
     private static string ResolveFailureMessage(AgentToolReceipt receipt) =>
         string.IsNullOrWhiteSpace(receipt.ErrorMessage)
-            ? ResolveFailureCode(receipt)
+            ? receipt.Status == AgentToolReceiptStatus.Unspecified
+                ? ToolCallReceiptFinalizer.UnknownErrorMessage
+                : ResolveFailureCode(receipt)
             : receipt.ErrorMessage.Trim();
 
     private static WorkflowManagedHandoffOutcome? ToWorkflowManagedHandoffOutcome(

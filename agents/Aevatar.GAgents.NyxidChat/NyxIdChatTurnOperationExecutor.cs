@@ -1,8 +1,10 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.GAgents.NyxidChat.AgentProfiles;
 
 namespace Aevatar.GAgents.NyxidChat;
 
@@ -21,6 +23,7 @@ public sealed class NyxIdChatTransientExecutionSession
     internal NeedsLlmReplyEvent? Request { get; set; }
     internal AgentRunAuthorizedToolStep? AuthorizedToolStep { get; set; }
     internal NyxIdChatOperationKey? AuthorizationSourceKey { get; set; }
+    internal AgentProfileTurnCatalog? TurnCatalog { get; set; }
     internal long ProgressSequence { get; set; }
 }
 
@@ -52,20 +55,30 @@ public sealed class NyxIdChatTurnOperationExecutor
 
     private readonly IAgentRunReplyGenerationExecutorPort _generationExecutor;
     private readonly INyxIdActionPostconditionPort _actionPostconditionPort;
+    private readonly AgentProfileTurnCatalogMaterializer? _turnCatalogMaterializer;
 
     public NyxIdChatTurnOperationExecutor(
         IAgentRunReplyGenerationExecutorPort generationExecutor)
-        : this(generationExecutor, new UnavailableNyxIdActionPostconditionPort())
+        : this(generationExecutor, new UnavailableNyxIdActionPostconditionPort(), null)
     {
     }
 
     public NyxIdChatTurnOperationExecutor(
         IAgentRunReplyGenerationExecutorPort generationExecutor,
         INyxIdActionPostconditionPort actionPostconditionPort)
+        : this(generationExecutor, actionPostconditionPort, null)
+    {
+    }
+
+    public NyxIdChatTurnOperationExecutor(
+        IAgentRunReplyGenerationExecutorPort generationExecutor,
+        INyxIdActionPostconditionPort actionPostconditionPort,
+        AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer)
     {
         _generationExecutor = generationExecutor ?? throw new ArgumentNullException(nameof(generationExecutor));
         _actionPostconditionPort = actionPostconditionPort ??
                                    throw new ArgumentNullException(nameof(actionPostconditionPort));
+        _turnCatalogMaterializer = turnCatalogMaterializer;
     }
 
     public async Task<NyxIdChatTurnOperationExecution> ExecuteAsync(
@@ -187,6 +200,14 @@ public sealed class NyxIdChatTurnOperationExecutor
         var request = isContinuation
             ? session.Request!.Clone()
             : BuildReplyRequest(command);
+        if (!isContinuation && session.TurnCatalog is null)
+        {
+            session.TurnCatalog = command.Key.OperationGeneration > 1 &&
+                                  (command.Llm.AgentProfile is not null ||
+                                   command.Llm.AgentProfileTurnAuthority is not null)
+                ? RestrictedEmptyCatalog()
+                : await MaterializeTurnCatalogAsync(command.Llm, ct).ConfigureAwait(false);
+        }
         var runId = isContinuation
             ? session.StepState!.RunId
             : command.Key.TaskId;
@@ -203,7 +224,8 @@ public sealed class NyxIdChatTurnOperationExecutor
                         runId,
                         runActorId,
                         attempt,
-                        request.Clone()),
+                        request.Clone(),
+                        session.TurnCatalog),
                     ct)
                 .ConfigureAwait(false);
         if (!isContinuation)
@@ -224,7 +246,8 @@ public sealed class NyxIdChatTurnOperationExecutor
                         outputParts,
                         session,
                         reportProgressAsync,
-                        token)),
+                        token),
+                    session.TurnCatalog),
                 ct)
             .ConfigureAwait(false);
 
@@ -309,7 +332,8 @@ public sealed class NyxIdChatTurnOperationExecutor
             session.StepState.Attempt,
             session.StepState.NextStepIndex,
             session.Request.Clone(),
-            session.StepState.Clone());
+            session.StepState.Clone(),
+            TurnCatalog: session.TurnCatalog);
         if (!session.AuthorizedToolStep.Matches(workItem))
         {
             return Failure(
@@ -512,6 +536,49 @@ public sealed class NyxIdChatTurnOperationExecutor
 
         return null;
     }
+
+    private async Task<AgentProfileTurnCatalog?> MaterializeTurnCatalogAsync(
+        NyxIdChatLLMOperationInput input,
+        CancellationToken ct)
+    {
+        var profile = input.AgentProfile;
+        var authority = input.AgentProfileTurnAuthority;
+        if (profile is null && authority is null)
+            return null;
+        if (profile is null || authority is null || _turnCatalogMaterializer is null)
+            return RestrictedEmptyCatalog();
+
+        var request = input.Request;
+        var toolContext = LLMControlContextMapper.FromPayload(request?.LlmControl)
+            .ToToolContext(AgentToolExecutionContextMapper.FromPayload(request?.ToolContext));
+        try
+        {
+            return (await _turnCatalogMaterializer.MaterializeCommittedAsync(
+                    profile,
+                    authority,
+                    toolContext.Credentials.NyxIdAccessToken,
+                    registeredTools: [],
+                    toolContext,
+                    ct)
+                .ConfigureAwait(false)).Catalog;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            return RestrictedEmptyCatalog();
+        }
+    }
+
+    private static AgentProfileTurnCatalog RestrictedEmptyCatalog() =>
+        new(
+            [],
+            profilePromptLayer: null,
+            selectedSkillPromptLayer: null,
+            selectedIntentId: null,
+            candidateIntentId: null);
 
     private static void OverlayDirectInputParts(
         AgentRunReplyStepState stepState,

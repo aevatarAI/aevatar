@@ -5,6 +5,7 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Tools;
 using Aevatar.AI.ToolProviders.NyxId;
@@ -238,9 +239,9 @@ public sealed class AgentRunReplyGenerationExecutorTests
     }
 
     [Fact]
-    public async Task NyxIdCatalogTool_ThroughNyxIdChatTurnExecutor_ShouldCompleteReadOnlyWithoutOutcomeReceipt()
+    public async Task NyxIdCatalogTool_ThroughNyxIdChatTurnExecutor_ShouldAcceptCurrentEntriesEnvelope()
     {
-        var handler = new StaticResponseHandler("""{"services":[{"slug":"api-github"}]}""");
+        var handler = new StaticResponseHandler("""{"entries":[{"slug":"api-github"}]}""");
         using var httpClient = new HttpClient(handler);
         using var client = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
@@ -399,6 +400,39 @@ public sealed class AgentRunReplyGenerationExecutorTests
         toolContext.InputFileRefs[1].SourceMessageId.Should().Be("om_direct");
         toolContext.InputFileRefs[1].SourceResourceKey.Should().Be("file_key_direct");
         toolContext.InputFileRefs[1].SizeBytes.Should().Be(123);
+    }
+
+    [Fact]
+    public void NyxIdCatalogTool_HttpErrorEnvelope_ShouldReturnTypedFailureReceipt()
+    {
+        using var client = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example" });
+        var tool = new NyxIdCatalogTool(client);
+
+        var receipt = ((IAgentTool)tool).CreateResultReceipt(
+            "call-1",
+            tool.Name,
+            "{}",
+            "{\"error\":true,\"status\":401,\"body\":\"secret upstream body\"}");
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ErrorCode.Should().Be("NYXID_CATALOG_HTTP_401");
+        receipt.ResultJson.Should().NotContain("secret upstream body");
+    }
+
+    [Fact]
+    public void NyxIdCatalogTool_UnrecognizedJson_ShouldLeaveOutcomeUnverified()
+    {
+        using var client = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example" });
+        var tool = new NyxIdCatalogTool(client);
+
+        var receipt = ((IAgentTool)tool).CreateResultReceipt(
+            "call-1",
+            tool.Name,
+            "{}",
+            "{}");
+
+        receipt.Should().BeNull();
     }
 
     [Fact]
@@ -884,7 +918,8 @@ public sealed class AgentRunReplyGenerationExecutorTests
             IReadOnlyList<ConversationHistoryEntry>? priorHistory,
             ChatAttachmentInputContext? attachmentContext,
             bool forceDisableTools,
-            CancellationToken ct) =>
+            CancellationToken ct,
+            AgentProfileTurnCatalog? turnCatalog = null) =>
             Task.FromResult(plan);
 
         public Task<ConversationReplyResult> GenerateReplyAsync(

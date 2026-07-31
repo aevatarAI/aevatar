@@ -103,7 +103,8 @@ public sealed record NyxIdChatConversationTurnSnapshot(
     string? FailureCode,
     string? SafeMessage,
     DateTimeOffset? CreatedAt,
-    DateTimeOffset? TerminalAt);
+    DateTimeOffset? TerminalAt,
+    string? CommandId = null);
 
 public sealed record NyxIdChatConversationTaskSnapshot(
     string TaskId,

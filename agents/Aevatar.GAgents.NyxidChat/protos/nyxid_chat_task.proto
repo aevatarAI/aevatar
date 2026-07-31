@@ -264,6 +264,13 @@ message NyxIdChatTurnState {
   string safe_message = 8;
   google.protobuf.Timestamp created_at = 9;
   google.protobuf.Timestamp terminal_at = 10;
+  // Request-scoped authority prepared from the conversation's bound profile
+  // before this turn is dispatched. It contains no tool objects, prompt body,
+  // credentials, or other transient runtime capability.
+  aevatar.ai.AgentProfileTurnAuthorityState agent_profile_turn_authority = 11;
+  // Payload-bound request identity used to distinguish exact retries from
+  // conflicting reuse of the same client request id.
+  string command_id = 12;
 }
 
 message NyxIdChatTurnSummary {
@@ -722,6 +729,11 @@ message NyxIdChatLLMOperationInput {
   // Continuations reuse only the turn actor's transient provider session.
   // No credential or authorized-tool capability is persisted in actor state.
   bool continue_session = 2;
+  // The immutable conversation binding and this turn's already committed
+  // authority. The child executor materializes only request-local capabilities
+  // from this typed pair; it never side-reads conversation actor state.
+  aevatar.ai.AgentProfileSnapshot agent_profile = 3;
+  aevatar.ai.AgentProfileTurnAuthorityState agent_profile_turn_authority = 4;
 }
 
 message NyxIdChatToolOperationInput {

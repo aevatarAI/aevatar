@@ -430,9 +430,9 @@ public static class MainnetHostBuilderExtensions
                 "NyxID connected-service operations explicitly marked x-aevatar-tool, registered as individual tools.");
             options.AddToolSet(
                 AgentProfilePolicies.NyxIdChatRouteToolSet,
-                [ToolSetNames.WorkspaceDefault],
+                [ToolSetNames.WorkspaceDefault, ToolSetNames.NyxIdConnectedServices],
                 [],
-                "NyxID chat profile route tool composition with the default workspace tools.");
+                "NyxID chat profile route tool composition with workspace and typed connected-service tools.");
         });
 
         return builder;

@@ -680,7 +680,7 @@ public class StreamingToolExecutorTests
     }
 
     [Fact]
-    public async Task ReceiptWorthyFormula_ShouldIgnoreNonReadOnlyAlone_AndEmitForApprovalDestructiveOrSideEffect()
+    public async Task ProviderSuccessReceipts_ShouldPreserveSafetyFacts()
     {
         var tools = new ToolManager();
         tools.Register(new ConcurrencyTrackingTool("plain-write", isReadOnly: false, _ => """{"ok":true}"""));
@@ -709,24 +709,31 @@ public class StreamingToolExecutorTests
             results.Add(result);
 
         results.Should().HaveCount(4);
-        results[0].Receipt.Should().BeNull("non-read-only alone is not a receipt-worthy side effect");
+        results[0].Receipt.Should().NotBeNull();
+        results[0].Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
         var approvalReceipt = results[1].Receipt;
         approvalReceipt.Should().NotBeNull();
         approvalReceipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
         approvalReceipt.ApprovalMode.Should().Be(AgentToolReceiptApprovalMode.AlwaysRequire);
         var destructiveReceipt = results[2].Receipt;
         destructiveReceipt.Should().NotBeNull();
+        destructiveReceipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
         destructiveReceipt!.IsDestructive.Should().BeTrue();
         var sideEffectReceipt = results[3].Receipt;
         sideEffectReceipt.Should().NotBeNull();
+        sideEffectReceipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
         sideEffectReceipt!.SideEffectKind.Should().Be("example.publish");
     }
 
     [Fact]
-    public async Task ReceiptWorthyReadOnlySearchTool_ShouldNotEmitReceipt()
+    public async Task ErrorJsonWithoutReceipt_ShouldEmitUnknownFailure()
     {
         var tools = new ToolManager();
-        tools.Register(new ConcurrencyTrackingTool("ornn_search_skills", isReadOnly: true, _ => """{"status":"success"}""")
+        tools.Register(new ConcurrencyTrackingTool(
+            "ornn_search_skills",
+            isReadOnly: true,
+            _ => """{"error":true,"status":503}""",
+            emitSuccessReceipt: false)
         {
             SideEffectKind = "",
         });
@@ -740,8 +747,12 @@ public class StreamingToolExecutorTests
             results.Add(result);
 
         results.Should().ContainSingle();
-        results[0].IsError.Should().BeFalse();
-        results[0].Receipt.Should().BeNull();
+        results[0].IsError.Should().BeTrue();
+        results[0].Result.Should().Be(
+            """{"status":"unknown","message":"The tool outcome could not be verified."}""");
+        results[0].Receipt.Should().NotBeNull();
+        results[0].Receipt!.Status.Should().Be(AgentToolReceiptStatus.Unspecified);
+        results[0].Receipt!.ResultJson.Should().Be(results[0].Result);
     }
 
     [Fact]
@@ -834,15 +845,24 @@ public class StreamingToolExecutorTests
     {
         private readonly Func<CancellationToken, Task<string>> _execute;
 
-        public ConcurrencyTrackingTool(string name, bool isReadOnly, Func<CancellationToken, Task<string>> execute)
+        public ConcurrencyTrackingTool(
+            string name,
+            bool isReadOnly,
+            Func<CancellationToken, Task<string>> execute,
+            bool emitSuccessReceipt = true)
         {
             Name = name;
             IsReadOnly = isReadOnly;
             _execute = execute;
+            EmitSuccessReceipt = emitSuccessReceipt;
         }
 
-        public ConcurrencyTrackingTool(string name, bool isReadOnly, Func<CancellationToken, string> execute)
-            : this(name, isReadOnly, ct => Task.FromResult(execute(ct)))
+        public ConcurrencyTrackingTool(
+            string name,
+            bool isReadOnly,
+            Func<CancellationToken, string> execute,
+            bool emitSuccessReceipt = true)
+            : this(name, isReadOnly, ct => Task.FromResult(execute(ct)), emitSuccessReceipt)
         {
         }
 
@@ -853,6 +873,22 @@ public class StreamingToolExecutorTests
         public ToolApprovalMode ApprovalMode { get; init; } = ToolApprovalMode.NeverRequire;
         public bool IsDestructive { get; init; }
         public string SideEffectKind { get; init; } = "";
+        private bool EmitSuccessReceipt { get; }
+
+        public AgentToolReceipt? CreateResultReceipt(
+            string callId,
+            string toolName,
+            string argumentsJson,
+            string resultJson) =>
+            EmitSuccessReceipt
+                ? new AgentToolReceipt
+                {
+                    CallId = callId,
+                    ToolName = toolName,
+                    Status = AgentToolReceiptStatus.Success,
+                    ResultJson = resultJson,
+                }
+                : null;
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) => _execute(ct);
     }
@@ -893,6 +929,18 @@ public class StreamingToolExecutorTests
         public string Name => name;
         public string Description => "delegate";
         public string ParametersSchema => "{}";
+        public AgentToolReceipt? CreateResultReceipt(
+            string callId,
+            string toolName,
+            string argumentsJson,
+            string resultJson) =>
+            new()
+            {
+                CallId = callId,
+                ToolName = toolName,
+                Status = AgentToolReceiptStatus.Success,
+                ResultJson = resultJson,
+            };
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
             Task.FromResult(execute(argumentsJson));
     }

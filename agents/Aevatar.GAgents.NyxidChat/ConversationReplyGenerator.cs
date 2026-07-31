@@ -4,6 +4,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.Prompting;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.Core.Prompting;
@@ -289,6 +290,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 priorHistory,
                 attachmentContext: null,
                 forceDisableTools,
+                turnCatalog: null,
                 ct)
             .ConfigureAwait(false);
     }
@@ -301,7 +303,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         IReadOnlyList<ConversationHistoryEntry>? priorHistory,
         ChatAttachmentInputContext? attachmentContext,
         bool forceDisableTools,
-        CancellationToken ct) =>
+        CancellationToken ct,
+        AgentProfileTurnCatalog? turnCatalog) =>
         await BuildStepPlanCoreAsync(
                 activity,
                 metadata,
@@ -310,6 +313,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 priorHistory,
                 attachmentContext,
                 forceDisableTools,
+                turnCatalog,
                 ct)
             .ConfigureAwait(false);
 
@@ -321,6 +325,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         IReadOnlyList<ConversationHistoryEntry>? priorHistory,
         ChatAttachmentInputContext? attachmentContext,
         bool forceDisableTools,
+        AgentProfileTurnCatalog? turnCatalog,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(activity);
@@ -334,11 +339,13 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             replyPlan.Primary,
             replyPlan.PrimaryControl,
             replyPlan.PrimaryToolContext);
-        var tools = await BuildTurnToolsAsync(
-            disableTools,
-            IsChannelRelayTurn(toolContext),
-            effectiveToolContext,
-            ct);
+        var tools = turnCatalog is null
+            ? await BuildTurnToolsAsync(
+                disableTools,
+                IsChannelRelayTurn(toolContext),
+                effectiveToolContext,
+                ct)
+            : BuildProfileTools(disableTools, turnCatalog);
         var input = await BuildUserInputPartsAsync(
                 activity,
                 provider,
@@ -368,13 +375,14 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 externalMetadata,
                 effectiveToolContext,
                 input.AttachmentVisibilityInstruction,
-                replyPlan.DisableTools ? UnboundSenderToolsDisabledNotice : null)),
+                replyPlan.DisableTools ? UnboundSenderToolsDisabledNotice : null,
+                turnCatalog)),
         };
         initialMessages.AddRange((priorHistory ?? []).Where(IsReplayableHistoryEntry).TakeLast(MaxRecentPriorHistoryMessages).Select(ToChatMessage));
         initialMessages.Add(ChatMessage.User(input.Parts, input.Text));
 
         return new AgentRunReplyStepPlan(
-            runtime.CreateStepExecutor(turnCatalog: null),
+            runtime.CreateStepExecutor(turnCatalog),
             externalMetadata,
             replyPlan.PrimaryControl,
             effectiveToolContext,
@@ -383,6 +391,16 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             disableTools,
             replyPlan.OwnerFallbackControl,
             ownerFallbackToolContext);
+    }
+
+    private static ToolManager BuildProfileTools(
+        bool disableTools,
+        AgentProfileTurnCatalog turnCatalog)
+    {
+        var tools = new ToolManager();
+        if (!disableTools)
+            tools.Register(turnCatalog.RouteOwnedTools.Values);
+        return tools;
     }
 
     // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
@@ -2173,6 +2191,12 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                     continue;
                 }
 
+                if (IsNyxIdChatTurn(toolContext) &&
+                    DeclaresCapability(tool, AgentToolCapabilities.ExcludeFromNyxIdChat))
+                {
+                    continue;
+                }
+
                 // Human-session management tools do not belong on channel relay or NyxID Assistant
                 // chat surfaces. The relay credential cannot call them, and NyxID Assistant owns
                 // service connection through nyxid_require_service + typed browser actions. Keep
@@ -2263,7 +2287,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         IReadOnlyDictionary<string, string> metadata,
         AgentToolExecutionContext toolContext,
         string? attachmentVisibilityInstruction = null,
-        string? runtimeNotice = null)
+        string? runtimeNotice = null,
+        AgentProfileTurnCatalog? turnCatalog = null)
     {
         var runtimeFacts = new StringBuilder();
         AppendRuntimeFact(
@@ -2295,8 +2320,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             NyxIdChatSystemPrompt.Value,
             _builtInPromptFloorProvider.GetFloor(),
             global,
-            profile: null,
-            selectedSkill: null,
+            turnCatalog?.ProfilePromptLayer,
+            turnCatalog?.SelectedSkillPromptLayer,
             runtime,
             conversation: null).Prompt;
     }

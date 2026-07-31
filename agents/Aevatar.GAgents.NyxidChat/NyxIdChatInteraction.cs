@@ -48,6 +48,37 @@ internal static class NyxIdChatPublicIdentity
     public static string CreateTurnId(string actorId, string clientRequestId) =>
         Build("turn", actorId.Trim(), clientRequestId.Trim());
 
+    public static string CreateChatCommandId(
+        string actorId,
+        string scopeId,
+        string ownerSubject,
+        string? clientRequestId,
+        string turnId,
+        string prompt,
+        IEnumerable<Aevatar.AI.Abstractions.ChatContentPart> inputParts,
+        AgentProfileReference? agentProfileReference)
+    {
+        var payload = new NyxIdChatStartTurnCommand
+        {
+            ScopeId = scopeId.Trim(),
+            ConversationActorId = actorId.Trim(),
+            TurnId = turnId.Trim(),
+            ClientRequestId = clientRequestId?.Trim() ?? string.Empty,
+            Prompt = prompt,
+        };
+        payload.InputParts.Add(inputParts.Select(static part => part.Clone()));
+
+        return Build(
+            "command",
+            ownerSubject.Trim(),
+            Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(
+                payload.ToByteArray())),
+            agentProfileReference is null
+                ? string.Empty
+                : Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(
+                    agentProfileReference.ToByteArray())));
+    }
+
     public static string CreateActionContinuationCommandId(
         string actorId,
         string scopeId,
@@ -404,8 +435,14 @@ internal sealed class NyxIdChatObservationLifecycle<TCommand>
         ArgumentNullException.ThrowIfNull(execution);
 
         var target = execution.Target;
-        if (command is NyxIdActionContinuationCommand continuation)
-            target.BindScope(continuation.ScopeId);
+        var scopeId = command switch
+        {
+            NyxIdChatCommand chat => chat.ScopeId,
+            NyxIdActionContinuationCommand continuation => continuation.ScopeId,
+            _ => null,
+        };
+        if (!string.IsNullOrWhiteSpace(scopeId))
+            target.BindScope(scopeId);
         var turnId = _turnIdResolver(command);
         var sink = new EventChannel<AGUIEvent>();
         try
@@ -719,15 +756,10 @@ internal sealed class NyxIdChatDurableCompletionResolver
         }
 
         var state = result.Snapshot;
-        var admission = state?.ContinuationAdmission;
         if (result.Status != NyxIdChatConversationStateQueryStatus.Current ||
             state is null ||
             !string.Equals(state.ActorId, receipt.ActorId, StringComparison.Ordinal) ||
-            !string.Equals(state.ScopeId, receipt.ScopeId, StringComparison.Ordinal) ||
-            admission is null ||
-            !string.Equals(admission.Kind, "action", StringComparison.Ordinal) ||
-            !string.Equals(admission.RequestId, receipt.CommandId, StringComparison.Ordinal) ||
-            !string.Equals(admission.ContinuationTurnId, receipt.TurnId, StringComparison.Ordinal))
+            !string.Equals(state.ScopeId, receipt.ScopeId, StringComparison.Ordinal))
         {
             return CommandDurableCompletionObservation<NyxIdChatCompletionStatus>.Incomplete;
         }
@@ -735,6 +767,7 @@ internal sealed class NyxIdChatDurableCompletionResolver
         var turn = ResolveTurn(state, receipt.TurnId);
         var task = state.ActiveTask;
         if (turn is null || task is null ||
+            !MatchesRequestIdentity(state.ContinuationAdmission, turn, receipt) ||
             !string.Equals(task.TurnId, receipt.TurnId, StringComparison.Ordinal) ||
             !string.Equals(task.TaskId, turn.TaskId, StringComparison.Ordinal))
         {
@@ -750,6 +783,16 @@ internal sealed class NyxIdChatDurableCompletionResolver
                     ? NyxIdChatCompletionStatus.Failed
                     : NyxIdChatCompletionStatus.Completed).WithDurableTerminal(terminal));
     }
+
+    private static bool MatchesRequestIdentity(
+        NyxIdChatContinuationAdmissionSnapshot? admission,
+        NyxIdChatConversationTurnSnapshot turn,
+        NyxIdChatAcceptedReceipt receipt) =>
+        string.Equals(turn.CommandId, receipt.CommandId, StringComparison.Ordinal) ||
+        (admission is not null &&
+         string.Equals(admission.Kind, "action", StringComparison.Ordinal) &&
+         string.Equals(admission.RequestId, receipt.CommandId, StringComparison.Ordinal) &&
+         string.Equals(admission.ContinuationTurnId, receipt.TurnId, StringComparison.Ordinal));
 
     private static NyxIdChatConversationTurnSnapshot? ResolveTurn(
         NyxIdChatConversationStateSnapshot state,

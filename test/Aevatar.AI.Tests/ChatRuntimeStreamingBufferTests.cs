@@ -1703,6 +1703,10 @@ public sealed class ChatRuntimeStreamingBufferTests
         public string Description => "capture context";
         public string ParametersSchema => "{}";
         public AgentToolExecutionContext? CapturedContext { get; private set; }
+        public AgentToolReceipt? CreateSuccessReceipt(
+            string callId,
+            string toolName,
+            string resultJson) => SuccessReceipt(callId, toolName, resultJson);
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
         {
@@ -1824,6 +1828,10 @@ public sealed class ChatRuntimeStreamingBufferTests
         public bool IsReadOnly => isReadOnly;
         public bool IsDestructive => isDestructive;
         public string SideEffectKind => sideEffectKind;
+        public AgentToolReceipt? CreateSuccessReceipt(
+            string callId,
+            string toolName,
+            string resultJson) => SuccessReceipt(callId, toolName, resultJson);
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
         {
@@ -1831,6 +1839,18 @@ public sealed class ChatRuntimeStreamingBufferTests
             return Task.FromResult(execute(argumentsJson));
         }
     }
+
+    private static AgentToolReceipt SuccessReceipt(
+        string callId,
+        string toolName,
+        string resultJson) =>
+        new()
+        {
+            CallId = callId,
+            ToolName = toolName,
+            Status = AgentToolReceiptStatus.Success,
+            ResultJson = resultJson,
+        };
 
     private sealed class ReceiptTool(string name, AgentToolReceiptStatus status) : IAgentTool
     {
