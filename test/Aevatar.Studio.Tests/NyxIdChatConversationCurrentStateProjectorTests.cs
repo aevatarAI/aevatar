@@ -119,7 +119,8 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
         serialized.Should().NotContain("history-terminal-outbox-sentinel");
         serialized.Should().NotContain("credential-outbox-sentinel");
         NyxIdChatConversationCurrentStateDocument.Descriptor.Fields.InFieldNumberOrder()
-            .Should().NotContain(field => field.Name is "state_root" or "owner_subject");
+            .Should().NotContain(field =>
+                field.Name == "state_root" || field.Name == "owner_subject");
     }
 
     [Fact]
