@@ -9,7 +9,6 @@ using Aevatar.AGUI.Contracts;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
-using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Serialization;
@@ -79,8 +78,7 @@ public static partial class NyxIdChatEndpoints
                 http.Response.StatusCode = StatusCodes.Status401Unauthorized;
                 return;
             }
-            ownerSubject = ResolveAuthenticatedOwnerSubject(http) ?? string.Empty;
-            if (string.IsNullOrWhiteSpace(ownerSubject))
+            if (!AevatarPrincipalSubjectResolver.TryResolveNyxIdSubject(http.User, out ownerSubject))
             {
                 http.Response.StatusCode = StatusCodes.Status401Unauthorized;
                 return;
@@ -602,18 +600,6 @@ public static partial class NyxIdChatEndpoints
 
         var headerValue = http.Request.Headers["Idempotency-Key"].ToString();
         return string.IsNullOrWhiteSpace(headerValue) ? null : headerValue.Trim();
-    }
-
-    private static string? ResolveAuthenticatedOwnerSubject(HttpContext http)
-    {
-        foreach (var claimType in new[] { "uid", "sub", ClaimTypes.NameIdentifier, "user_id" })
-        {
-            var value = http.User.FindFirst(claimType)?.Value?.Trim();
-            if (!string.IsNullOrWhiteSpace(value))
-                return value;
-        }
-
-        return null;
     }
 
     private static bool TryMapAgentProfileReference(

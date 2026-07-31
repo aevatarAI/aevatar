@@ -872,6 +872,33 @@ public partial class NyxIdChatEndpointsCoverageTests
     }
 
     [Fact]
+    public async Task HandleStreamMessageAsync_ShouldRejectConflictingAuthenticatedSubjectsBeforeDispatch()
+    {
+        var context = CreateAuthorizedStreamContext();
+        context.User = new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim("uid", "user-audit-alpha"),
+            new Claim("sub", "user-audit-beta"),
+        ], authenticationType: "test"));
+        var interactionService = new StubNyxIdChatInteractionService<NyxIdChatCommand>();
+
+        await InvokeTaskAsync(
+            "HandleStreamMessageAsync",
+            context,
+            "scope-a",
+            "actor-1",
+            new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello", Type: "text"),
+            new StubActorRuntime(),
+            new StubGAgentActorStore(),
+            interactionService,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
+        interactionService.Commands.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task HandleStreamMessageAsync_ShouldRejectWhenNoPromptAndNoInputParts()
     {
         var context = CreateAuthorizedStreamContext();
