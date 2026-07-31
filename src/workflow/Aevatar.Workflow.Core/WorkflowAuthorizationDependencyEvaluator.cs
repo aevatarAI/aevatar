@@ -118,6 +118,12 @@ public static class WorkflowAuthorizationDependencyEvaluator
         var toolName = rawToolName.Trim();
         if (ContainsTemplate(toolName))
             throw Invalid(invocation.Step, "tool name must be static.");
+        if (IsDirectNyxIdConnectedServiceTool(toolName))
+        {
+            throw MigrationInvalid(
+                invocation.Step,
+                "direct NyxID connected-service tool names are no longer supported; select an operation through nyxid_proxy and rebind.");
+        }
 
         if (!RequiresExternalCapabilityAdmission(toolName))
         {
@@ -371,6 +377,10 @@ public static class WorkflowAuthorizationDependencyEvaluator
 
     private static bool ContainsTemplate(string value) =>
         value.Contains("${", StringComparison.Ordinal);
+
+    private static bool IsDirectNyxIdConnectedServiceTool(string toolName) =>
+        toolName.StartsWith("nyxid_", StringComparison.OrdinalIgnoreCase) &&
+        toolName.Contains("__", StringComparison.Ordinal);
 
     private static WorkflowExternalCapabilityValidationException Invalid(
         StepDefinition step,

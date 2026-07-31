@@ -454,6 +454,49 @@ public sealed class WorkflowAuthorizationDependenciesTests
     }
 
     [Fact]
+    public void EvaluateAuthorizationDependencies_DirectNyxIdConnectedServiceTool_ShouldRequireMigration()
+    {
+        const string yaml = """
+            name: legacy-direct-tool
+            roles: []
+            steps:
+              - id: list-records
+                type: tool_call
+                parameters:
+                  tool: nyxid_api-lark-bot-2__bitable_records_list
+            """;
+
+        var act = () => new WorkflowGAgent().EvaluateAuthorizationDependencies(yaml);
+
+        var exception = act.Should().Throw<WorkflowExternalCapabilityValidationException>().Which;
+        exception.Readiness.Should().NotBeNull();
+        exception.Readiness!.Blockers.Should().ContainSingle().Which.Code.Should()
+            .Be("NYXID_OPERATION_AUTHORING_MIGRATION_REQUIRED");
+    }
+
+    [Fact]
+    public void EvaluateAuthorizationDependencies_SynthesizedDirectNyxIdTool_ShouldRequireMigration()
+    {
+        const string yaml = """
+            name: legacy-indirect-tool
+            roles: []
+            steps:
+              - id: list-each
+                type: foreach
+                parameters:
+                  sub_step_type: tool_call
+                  sub_param_tool: nyxid_api-lark-bot-2__bitable_records_list
+            """;
+
+        var act = () => new WorkflowGAgent().EvaluateAuthorizationDependencies(yaml);
+
+        var exception = act.Should().Throw<WorkflowExternalCapabilityValidationException>().Which;
+        exception.Readiness.Should().NotBeNull();
+        exception.Readiness!.Blockers.Should().ContainSingle().Which.Code.Should()
+            .Be("NYXID_OPERATION_AUTHORING_MIGRATION_REQUIRED");
+    }
+
+    [Fact]
     public void BindWorkflowDefinitionScopeId_ShouldTrackPresence()
     {
         var scopeField = BindWorkflowDefinitionEvent.Descriptor.FindFieldByNumber(4);
