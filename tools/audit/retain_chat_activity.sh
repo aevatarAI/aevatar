@@ -38,24 +38,27 @@ JSON
 
 base_url="${AEVATAR_ELASTICSEARCH_URL%/}"
 curl_args=(--fail-with-body --silent --show-error --request POST --header 'Content-Type: application/json')
-if [[ -n "${AEVATAR_ELASTICSEARCH_API_KEY:-}" ]]; then
-  curl_args+=(--header "Authorization: ApiKey ${AEVATAR_ELASTICSEARCH_API_KEY}")
-else
-  curl_args+=(--netrc)
-fi
+run_curl() {
+  if [[ -n "${AEVATAR_ELASTICSEARCH_API_KEY:-}" ]]; then
+    printf 'Authorization: ApiKey %s\n' "${AEVATAR_ELASTICSEARCH_API_KEY}" |
+      env -u AEVATAR_ELASTICSEARCH_API_KEY curl "${curl_args[@]}" --header @- "$@"
+  else
+    curl "${curl_args[@]}" --netrc "$@"
+  fi
+}
 
 SECONDS=0
 trap 'printf "status=failure\n" >&2' ERR
 printf 'mode=%s\nalias=%s\ncutoff=now-30d/d\n' "${mode}" "${alias_name}"
 
 if [[ "${mode}" == dry-run ]]; then
-  response="$(curl "${curl_args[@]}" --data-binary "${query}" "${base_url}/${alias_name}/_count")"
+  response="$(run_curl --data-binary "${query}" "${base_url}/${alias_name}/_count")"
   matched_count="$(jq -er '.count | numbers' <<<"${response}")"
   printf 'matched_count=%s\nduration_seconds=%s\nstatus=success\n' "${matched_count}" "${SECONDS}"
   exit 0
 fi
 
-response="$(curl "${curl_args[@]}" --data-binary "${query}" "${base_url}/${alias_name}/_delete_by_query?conflicts=proceed&wait_for_completion=true&refresh=false")"
+response="$(run_curl --data-binary "${query}" "${base_url}/${alias_name}/_delete_by_query?conflicts=proceed&wait_for_completion=true&refresh=false")"
 jq -e '.timed_out == false and ((.failures // []) | length == 0)' <<<"${response}" >/dev/null
 deleted_count="$(jq -er '.deleted | numbers' <<<"${response}")"
 duration_ms="$(jq -er '.took | numbers' <<<"${response}")"

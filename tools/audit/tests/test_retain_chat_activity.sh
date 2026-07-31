@@ -22,6 +22,7 @@ method=GET
 url=
 body=
 : >"${FAKE_CURL_FLAGS}"
+printf '%s\n' "$@" >"${FAKE_CURL_ARGV}"
 while (( $# )); do
   case "$1" in
     --request|-X) method="$2"; shift 2 ;;
@@ -47,6 +48,7 @@ export FAKE_CURL_METHOD="${TMP_DIR}/method"
 export FAKE_CURL_URL="${TMP_DIR}/url"
 export FAKE_CURL_BODY="${TMP_DIR}/body"
 export FAKE_CURL_FLAGS="${TMP_DIR}/flags"
+export FAKE_CURL_ARGV="${TMP_DIR}/argv"
 export AEVATAR_ELASTICSEARCH_URL=https://elastic.example
 export AEVATAR_ELASTICSEARCH_API_KEY=credential-secret
 
@@ -64,6 +66,7 @@ run_success() {
   assert_lacks "${TMP_DIR}/stderr" 'prompt-secret'
   assert_lacks "${TMP_DIR}/stdout" 'credential-secret'
   assert_lacks "${TMP_DIR}/stderr" 'credential-secret'
+  assert_lacks "${FAKE_CURL_ARGV}" 'credential-secret'
 }
 
 run_success
