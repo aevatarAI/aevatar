@@ -86,6 +86,8 @@ public sealed record AgentToolExecutionContext(
     public AgentToolInvocationSurface InvocationSurface { get; init; } =
         AgentToolInvocationSurface.Unspecified;
 
+    public AgentChatInvocationContext Chat { get; init; } = AgentChatInvocationContext.Empty;
+
     public IReadOnlyList<Aevatar.AI.Abstractions.ChatFileRef> InputFileRefs { get; init; } = [];
 
     public static AgentToolExecutionContext Empty { get; } = new(
@@ -115,6 +117,25 @@ public enum AgentToolInvocationSurface
     HumanSession = 1,
     WorkflowToolCall = 2,
     WorkflowLlmToolLoop = 3,
+}
+
+public enum AgentChatInvocationSurface
+{
+    Unspecified = 0,
+    NyxIdAssistant = 1,
+    WorkflowChat = 2,
+}
+
+public sealed record AgentChatInvocationContext(
+    AgentChatInvocationSurface Surface,
+    string? ConversationId,
+    string? TurnId,
+    string? TaskId,
+    string? StepId,
+    string? ActionRequestId)
+{
+    public static AgentChatInvocationContext Empty { get; } =
+        new(AgentChatInvocationSurface.Unspecified, null, null, null, null, null);
 }
 
 public sealed record AgentToolVisibilityScope(IReadOnlySet<string>? AllowedToolNames)

@@ -150,6 +150,22 @@ message AgentToolExecutionContextPayload {
   AgentToolNyxIdAuthorityContextPayload nyx_id_authority = 14;
   AgentToolInvocationSurfacePayload invocation_surface = 15;
   repeated ChatFileRef input_file_refs = 16;
+  AgentChatInvocationContextPayload chat = 17;
+}
+
+enum AgentChatInvocationSurfacePayload {
+  AGENT_CHAT_INVOCATION_SURFACE_PAYLOAD_UNSPECIFIED = 0;
+  AGENT_CHAT_INVOCATION_SURFACE_PAYLOAD_NYXID_ASSISTANT = 1;
+  AGENT_CHAT_INVOCATION_SURFACE_PAYLOAD_WORKFLOW_CHAT = 2;
+}
+
+message AgentChatInvocationContextPayload {
+  AgentChatInvocationSurfacePayload surface = 1;
+  string conversation_id = 2;
+  string turn_id = 3;
+  string task_id = 4;
+  string step_id = 5;
+  string action_request_id = 6;
 }
 
 enum AgentToolInvocationSurfacePayload {

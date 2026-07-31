@@ -33,6 +33,30 @@ public sealed class AuditRecordProtoTests
     }
 
     [Fact]
+    public void AuditRecord_RoundTripsTypedChatProvenanceWithoutRawIdentity()
+    {
+        var record = CreateRecord();
+        record.Provenance.Chat = new AuditChatProvenance
+        {
+            Surface = AuditChatSurface.NyxidAssistant,
+            ConversationId = "conversation-alpha",
+            TurnId = "turn-alpha",
+            TaskId = "task-alpha",
+            StepId = "step-alpha",
+            ActionRequestId = "action-alpha",
+        };
+
+        var parsed = AuditRecord.Parser.ParseFrom(record.ToByteArray());
+
+        parsed.Provenance.Chat.ShouldBe(record.Provenance.Chat);
+        AuditChatProvenance.Descriptor.Fields.InFieldNumberOrder()
+            .Select(static field => field.Name)
+            .ShouldBe(["surface", "conversation_id", "turn_id", "task_id", "step_id", "action_request_id"]);
+        AuditRecord.Descriptor.Fields.InFieldNumberOrder().Select(static field => field.Name)
+            .ShouldNotContain("owner_subject");
+    }
+
+    [Fact]
     public void AuditRecord_Descriptor_DoesNotExposeRawSecretOrIdentityFields()
     {
         var forbidden = new[]
@@ -44,9 +68,14 @@ public sealed class AuditRecordProtoTests
             "api_key",
             "sender_binding_id",
             "raw_subject",
+            "owner_subject",
             "full_prompt",
+            "prompt",
             "tool_args",
-            "tool_result"
+            "tool_result",
+            "arguments_json",
+            "result_json",
+            "params"
         };
 
         var fieldNames = AuditRecord.Descriptor.Fields.InFieldNumberOrder()

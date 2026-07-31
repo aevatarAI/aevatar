@@ -83,7 +83,16 @@ public sealed record AuditExecutionProvenanceResponse(
     string? CorrelationId,
     string? ActorId,
     long? ActorStateVersion,
-    string? ActorEventId);
+    string? ActorEventId,
+    AuditChatProvenanceResponse? Chat = null);
+
+public sealed record AuditChatProvenanceResponse(
+    string Surface,
+    string? ConversationId,
+    string? TurnId,
+    string? TaskId,
+    string? StepId,
+    string? ActionRequestId);
 
 public sealed record AuditRedactionResponse(
     string Policy,

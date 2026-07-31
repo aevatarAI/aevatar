@@ -162,8 +162,29 @@ internal static class AuditTrailResponseMapper
             FirstOptional(provenance?.CorrelationId, record.Correlation?.CorrelationId),
             FirstOptional(provenance?.ActorId, record.CommittedFactRef?.ActorId),
             ResolveActorStateVersion(provenance, record.CommittedFactRef),
-            FirstOptional(provenance?.ActorEventId, record.CommittedFactRef?.CommittedEventId));
+            FirstOptional(provenance?.ActorEventId, record.CommittedFactRef?.CommittedEventId),
+            ToChatProvenance(provenance?.Chat));
     }
+
+    private static AuditChatProvenanceResponse? ToChatProvenance(AuditChatProvenance? chat) =>
+        chat?.Surface switch
+        {
+            AuditChatSurface.NyxidAssistant => new AuditChatProvenanceResponse(
+                "nyxid_assistant",
+                Optional(chat.ConversationId),
+                Optional(chat.TurnId),
+                Optional(chat.TaskId),
+                Optional(chat.StepId),
+                Optional(chat.ActionRequestId)),
+            AuditChatSurface.WorkflowChat => new AuditChatProvenanceResponse(
+                "workflow_chat",
+                Optional(chat.ConversationId),
+                Optional(chat.TurnId),
+                Optional(chat.TaskId),
+                Optional(chat.StepId),
+                Optional(chat.ActionRequestId)),
+            _ => null,
+        };
 
     private static AuditRedactionResponse? ToRedaction(AuditRedaction? redaction) =>
         redaction is null

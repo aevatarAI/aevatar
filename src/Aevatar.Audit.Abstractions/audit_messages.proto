@@ -93,6 +93,12 @@ enum AuditRetryability {
   AUDIT_RETRYABILITY_NOT_RETRYABLE = 3;
 }
 
+enum AuditChatSurface {
+  AUDIT_CHAT_SURFACE_UNSPECIFIED = 0;
+  AUDIT_CHAT_SURFACE_NYXID_ASSISTANT = 1;
+  AUDIT_CHAT_SURFACE_WORKFLOW_CHAT = 2;
+}
+
 message AuditTarget {
   string kind = 1;
   string id = 2;
@@ -130,6 +136,15 @@ message AuditFailure {
   string sanitized_message = 5;
 }
 
+message AuditChatProvenance {
+  AuditChatSurface surface = 1;
+  string conversation_id = 2;
+  string turn_id = 3;
+  string task_id = 4;
+  string step_id = 5;
+  string action_request_id = 6;
+}
+
 message AuditExecutionProvenance {
   string scope_id = 1;
   string team_id = 2;
@@ -142,6 +157,7 @@ message AuditExecutionProvenance {
   string actor_id = 9;
   int64 actor_state_version = 10;
   string actor_event_id = 11;
+  AuditChatProvenance chat = 12;
 }
 
 message AuditRedaction {

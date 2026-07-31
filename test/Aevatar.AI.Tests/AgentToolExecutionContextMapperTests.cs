@@ -427,6 +427,29 @@ public sealed class AgentToolExecutionContextMapperTests
     }
 
     [Fact]
+    public void PayloadRoundTrip_ShouldPreserveTypedChatInvocationContext()
+    {
+        var context = AgentToolExecutionContext.Empty with
+        {
+            Chat = new AgentChatInvocationContext(
+                AgentChatInvocationSurface.NyxIdAssistant,
+                "conversation-alpha",
+                "turn-alpha",
+                "task-alpha",
+                "step-alpha",
+                "action-alpha"),
+        };
+
+        var payload = AgentToolExecutionContextMapper.ToPayload(context);
+        var mapped = AgentToolExecutionContextMapper.FromPayload(
+            AgentToolExecutionContextPayload.Parser.ParseFrom(payload.ToByteArray()));
+
+        mapped.Chat.Should().Be(context.Chat);
+        payload.ExternalMetadata.Keys.Should().NotContain(
+            ["conversation_id", "turn_id", "task_id", "step_id", "action_request_id"]);
+    }
+
+    [Fact]
     public void PayloadRoundTrip_ShouldPreserveTypedChannelContextAcrossMultipleToolRounds()
     {
         var firstRound = AgentToolExecutionContext.Empty with

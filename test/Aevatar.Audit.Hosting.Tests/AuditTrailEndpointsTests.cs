@@ -57,6 +57,20 @@ public sealed class AuditTrailEndpointsTests
         authorizer.Calls.Should().Be(0);
         body.Should().Contain("coverage").And.Contain("ingestionWatermark").And.Contain("identityKeyId");
         body.Should().Contain("continuationCursor").And.Contain("lifecyclePhase").And.Contain("terminalOutcome");
+        using var json = JsonDocument.Parse(body);
+        var chat = json.RootElement.GetProperty("records")[0]
+            .GetProperty("provenance").GetProperty("chat");
+        chat.GetProperty("surface").GetString().Should().Be("nyxid_assistant");
+        chat.GetProperty("conversationId").GetString().Should().Be("conversation-alpha");
+        chat.GetProperty("turnId").GetString().Should().Be("turn-alpha");
+        chat.GetProperty("taskId").GetString().Should().Be("task-alpha");
+        chat.GetProperty("stepId").GetString().Should().Be("step-alpha");
+        chat.GetProperty("actionRequestId").GetString().Should().Be("action-alpha");
+        body.Should().NotContain("ownerSubject")
+            .And.NotContain("prompt-secret")
+            .And.NotContain("argument-secret")
+            .And.NotContain("result-secret")
+            .And.NotContain("action-params-secret");
     }
 
     [Fact]
@@ -796,6 +810,15 @@ public sealed class AuditTrailEndpointsTests
                     ScopeId = query.ScopeId ?? "scope-from-store",
                     RunId = "run-1",
                     CorrelationId = "correlation-1",
+                    Chat = new AuditChatProvenance
+                    {
+                        Surface = AuditChatSurface.NyxidAssistant,
+                        ConversationId = "conversation-alpha",
+                        TurnId = "turn-alpha",
+                        TaskId = "task-alpha",
+                        StepId = "step-alpha",
+                        ActionRequestId = "action-alpha",
+                    },
                 },
                 Redaction = new AuditRedaction
                 {

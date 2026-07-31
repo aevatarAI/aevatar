@@ -167,6 +167,7 @@ public static class AgentToolExecutionContextMapper
                 AgentToolExecutionContext.Normalize(payload.NyxIdAuthority?.ExternalUserId),
                 AgentToolExecutionContext.Normalize(payload.NyxIdAuthority?.Scope)),
             InvocationSurface = FromInvocationSurfacePayload(payload.InvocationSurface),
+            Chat = FromChatPayload(payload.Chat),
             InputFileRefs = FromInputFileRefsPayload(payload.InputFileRefs),
         };
     }
@@ -338,6 +339,9 @@ public static class AgentToolExecutionContextMapper
         if (context.ToolVisibility.IsRestricted)
             payload.ToolVisibility = ToToolVisibilityPayload(context.ToolVisibility);
 
+        if (context.Chat.Surface != AgentChatInvocationSurface.Unspecified)
+            payload.Chat = ToChatPayload(context.Chat);
+
         foreach (var fileRef in ToInputFileRefsPayload(context.InputFileRefs))
             payload.InputFileRefs.Add(fileRef);
     }
@@ -350,6 +354,44 @@ public static class AgentToolExecutionContextMapper
             Tenant = context.Tenant ?? string.Empty,
             ExternalUserId = context.ExternalUserId ?? string.Empty,
             Scope = context.Scope ?? string.Empty,
+        };
+
+    private static AgentChatInvocationContext FromChatPayload(
+        AgentChatInvocationContextPayload? payload) =>
+        payload is null
+            ? AgentChatInvocationContext.Empty
+            : new AgentChatInvocationContext(
+                payload.Surface switch
+                {
+                    AgentChatInvocationSurfacePayload.NyxidAssistant =>
+                        AgentChatInvocationSurface.NyxIdAssistant,
+                    AgentChatInvocationSurfacePayload.WorkflowChat =>
+                        AgentChatInvocationSurface.WorkflowChat,
+                    _ => AgentChatInvocationSurface.Unspecified,
+                },
+                AgentToolExecutionContext.Normalize(payload.ConversationId),
+                AgentToolExecutionContext.Normalize(payload.TurnId),
+                AgentToolExecutionContext.Normalize(payload.TaskId),
+                AgentToolExecutionContext.Normalize(payload.StepId),
+                AgentToolExecutionContext.Normalize(payload.ActionRequestId));
+
+    private static AgentChatInvocationContextPayload ToChatPayload(
+        AgentChatInvocationContext context) =>
+        new()
+        {
+            Surface = context.Surface switch
+            {
+                AgentChatInvocationSurface.NyxIdAssistant =>
+                    AgentChatInvocationSurfacePayload.NyxidAssistant,
+                AgentChatInvocationSurface.WorkflowChat =>
+                    AgentChatInvocationSurfacePayload.WorkflowChat,
+                _ => AgentChatInvocationSurfacePayload.Unspecified,
+            },
+            ConversationId = context.ConversationId ?? string.Empty,
+            TurnId = context.TurnId ?? string.Empty,
+            TaskId = context.TaskId ?? string.Empty,
+            StepId = context.StepId ?? string.Empty,
+            ActionRequestId = context.ActionRequestId ?? string.Empty,
         };
 
     private static void CopyExternalMetadata(
