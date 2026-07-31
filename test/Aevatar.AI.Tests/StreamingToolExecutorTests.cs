@@ -726,6 +726,35 @@ public class StreamingToolExecutorTests
     }
 
     [Fact]
+    public async Task ProviderExecutionOutcomeReceipt_ShouldFlowWithoutResultReclassification()
+    {
+        var tools = new ToolManager();
+        tools.Register(new ExecutionOutcomeReceiptTool());
+        var executor = new StreamingToolExecutor(tools);
+        using var executionState = executor.CreateExecutionState();
+        executor.AddTool(executionState, new ToolCall
+        {
+            Id = "tc-outcome",
+            Name = "execution_outcome",
+            ArgumentsJson = "{}",
+        });
+
+        var results = new List<ToolExecutionResult>();
+        await foreach (var result in executor.GetRemainingResultsAsync(executionState, CancellationToken.None))
+            results.Add(result);
+
+        var completed = results.Should().ContainSingle().Which;
+        completed.IsError.Should().BeFalse();
+        completed.Result.Should().Be("""{"error":true,"status":503,"body":"domain payload"}""");
+        completed.Receipt.Should().NotBeNull();
+        completed.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        completed.Receipt.ApprovalMode.Should().Be(AgentToolReceiptApprovalMode.Auto);
+        completed.Receipt.IsDestructive.Should().BeTrue();
+        completed.Receipt.SideEffectKind.Should().Be("example.publish");
+        completed.Receipt.SubjectId.Should().Be("usvc-outcome");
+    }
+
+    [Fact]
     public async Task ErrorJsonWithoutReceipt_ShouldEmitUnknownFailure()
     {
         var tools = new ToolManager();
@@ -922,6 +951,35 @@ public class StreamingToolExecutorTests
                 ResultJson = successResultJson,
             };
         }
+    }
+
+    private sealed class ExecutionOutcomeReceiptTool : IAgentTool
+    {
+        public string Name => "execution_outcome";
+        public string Description => "typed outcome fixture";
+        public string ParametersSchema => "{}";
+        public ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
+        public bool IsDestructive => true;
+        public string SideEffectKind => "Example.Publish";
+
+        public Task<AgentToolExecutionOutcome> ExecuteWithOutcomeAsync(
+            string callId,
+            string toolName,
+            string argumentsJson,
+            CancellationToken ct = default) =>
+            Task.FromResult(new AgentToolExecutionOutcome(
+                """{"error":true,"status":503,"body":"domain payload"}""",
+                new AgentToolReceipt
+                {
+                    CallId = callId,
+                    ToolName = toolName,
+                    Status = AgentToolReceiptStatus.Success,
+                    SubjectKind = "nyxid.user-service",
+                    SubjectId = "usvc-outcome",
+                }));
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            throw new InvalidOperationException("The typed execution path must be used.");
     }
 
     private sealed class DelegateAgentTool(string name, Func<string, string> execute) : IAgentTool

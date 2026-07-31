@@ -8,6 +8,10 @@ public sealed record AgentToolCallSafety(
     bool IsReadOnly,
     bool IsDestructive);
 
+public sealed record AgentToolExecutionOutcome(
+    string ResultJson,
+    AgentToolReceipt? Receipt = null);
+
 /// <summary>Agent 可调用工具接口。LLM 通过 tool_call 触发执行。</summary>
 public interface IAgentTool
 {
@@ -51,6 +55,17 @@ public interface IAgentTool
         string toolName,
         string argumentsJson,
         string resultJson) => CreateSuccessReceipt(callId, toolName, resultJson);
+
+    /// <summary>
+    /// Executes one call and optionally returns provider-owned typed outcome evidence produced
+    /// during execution. Tools that do not override this keep the post-execution receipt path.
+    /// </summary>
+    async Task<AgentToolExecutionOutcome> ExecuteWithOutcomeAsync(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        CancellationToken ct = default) =>
+        new(await ExecuteAsync(argumentsJson, ct).ConfigureAwait(false));
 
     /// <summary>
     /// Runtime approval check: given the actual call arguments, does this specific

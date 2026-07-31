@@ -97,7 +97,14 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         html.Should().Contain("<details class=\"ap-disclosure\"");
         html.Should().Contain("AGENT_PROFILE_STATE.skillProofs");
         html.Should().NotContain("agentProfileField('Exact skill GUID','exactSkillGuid'");
-        html.Should().Contain("data-ap-skill-search");
+        html.Should().Contain("data-ap-open-skills");
+        html.Should().Contain("data-ap-replace-skill");
+        html.Should().Contain("agentProfileSkillModalHtml()");
+        html.Should().Contain("data-ap-skill-confirm");
+        html.Should().Contain("agentProfileOpenSkillModal(root,'add'");
+        html.Should().Contain("ev.target.matches('[data-ap-skill-choice]')");
+        html.Should().NotContain("var skillOption=ev.target.closest('[data-ap-skill-option]')");
+        html.Should().NotContain("data-ap-skill-search");
         html.Should().Contain("/api/workflow/skills/'+encodeURIComponent(guid)+'/exact");
         html.Should().Contain("loadAgentProfileBindings()");
         html.Should().Contain("AGENT_PROFILE_STATE.systemBinding&&AGENT_PROFILE_STATE.systemBinding.etag");
@@ -252,12 +259,12 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             assert.equal(updated.runtimeProfile.members[0].skillRef.literalVersion, '2.3');
             assert.equal(updated.runtimeProfile.members[0].expectedSkillName, 'new-skill');
 
-            const searchSource = functionSource('agentProfileSearchSkills', 'agentProfileSelectSkill');
-            assert.ok(searchSource.indexOf('agentProfileCaptureDraft(root);') >= 0);
-            assert.ok(searchSource.indexOf('agentProfileCaptureDraft(root);') < searchSource.indexOf('render();'));
-            const selectSource = functionSource('agentProfileSelectSkill', 'agentProfileEditorHtml');
-            assert.ok(selectSource.indexOf('agentProfileCaptureDraft(root);') >= 0);
-            assert.ok(selectSource.indexOf('agentProfileCaptureDraft(root);') < selectSource.indexOf('render();'));
+            const openSource = functionSource('agentProfileOpenSkillModal', 'agentProfileCloseSkillModal');
+            assert.ok(openSource.indexOf('agentProfileCaptureDraft(root);') >= 0);
+            assert.ok(openSource.indexOf('agentProfileCaptureDraft(root);') < openSource.indexOf('render();'));
+            const confirmSource = functionSource('agentProfileConfirmSkillSelection', 'agentProfilePublicSummaryHtml');
+            assert.ok(confirmSource.indexOf('agentProfileCaptureDraft(root);') >= 0);
+            assert.ok(confirmSource.indexOf('agentProfileCaptureDraft(root);') < confirmSource.indexOf('render();'));
             """;
 
         var result = await RunNodeAsync(script, html);
@@ -294,13 +301,17 @@ public sealed class BackendConsoleStaticAssetEndpointTests
 
             const context = {
               AGENT_PROFILE_STATE:{
-                detail:{draft:{runtimeProfile:{members:[{skillRef:{}}]}}},
-                skillRequest:0, skillMemberIndex:null, skillQuery:'', skillResults:[],
-                skillLoading:false, skillError:null, skillProofs:{}
+                detail:{draft:{runtimeProfile:{maximumToolPolicy:{toolNames:[],toolSetRefs:[]},
+                  members:[{intentId:'old',skillRef:{guid:'old-guid',literalVersion:'1.0'},
+                    taskToolPolicy:{toolNames:[],toolSetRefs:[]}}]}}},
+                skillRequest:0, skillModal:null, skillProofs:{}, skillCardsOpen:{}
               },
-              root:{},
+              root:{querySelector(){return null;}},
               render() {},
               agentProfileCaptureDraft() {},
+              agentProfileWorkingDraft() {
+                return context.AGENT_PROFILE_STATE.detail && context.AGENT_PROFILE_STATE.detail.draft;
+              },
               agentProfileJson() {
                 return new Promise(resolve => { context.resolveExact = resolve; });
               }
@@ -308,27 +319,24 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             vm.createContext(context);
             vm.runInContext(`
               ${functionSource('agentProfileResetSkillSearch', 'agentProfileOwnerEndpoint')}
-              ${functionSource('agentProfileApplyExactSkill', 'agentProfileCaptureDraft')}
-              ${functionSource('agentProfileSelectSkill', 'agentProfilePublicSummaryHtml')}
+              ${functionSource('agentProfileOpenSkillModal', 'agentProfilePublicSummaryHtml')}
             `, context);
 
             (async function() {
-              const pending = vm.runInContext(
-                "agentProfileSelectSkill('skill-guid', root, '0')", context);
+              vm.runInContext("agentProfileOpenSkillModal(root,'replace',0)", context);
+              vm.runInContext("agentProfileToggleSkillSelection('new-guid')", context);
+              const pending = vm.runInContext('agentProfileConfirmSkillSelection(root)', context);
               vm.runInContext(
                 'agentProfileResetSkillSearch(); AGENT_PROFILE_STATE.detail = null', context);
               context.resolveExact({body:{
-                guid:'22222222-2222-4222-8222-222222222222', literalVersion:'2.3',
+                guid:'new-guid', literalVersion:'2.3',
                 name:'new-skill', publisher:'new-publisher'
               }});
               await pending;
 
               assert.equal(context.AGENT_PROFILE_STATE.detail, null);
-              assert.equal(context.AGENT_PROFILE_STATE.skillMemberIndex, null);
-              assert.equal(context.AGENT_PROFILE_STATE.skillLoading, false);
-              assert.equal(context.AGENT_PROFILE_STATE.skillError, null);
+              assert.equal(context.AGENT_PROFILE_STATE.skillModal, null);
               assert.deepEqual(Object.keys(context.AGENT_PROFILE_STATE.skillProofs), []);
-              assert.deepEqual(Array.from(context.AGENT_PROFILE_STATE.skillResults), []);
             })().catch(error => { console.error(error); process.exitCode = 1; });
             """;
 
@@ -433,10 +441,9 @@ public sealed class BackendConsoleStaticAssetEndpointTests
               ${functionSource('agentProfileStatus', 'agentProfileListHtml')}
               ${functionSource('agentProfileField', 'agentProfileSelect')}
               ${functionSource('agentProfileSelect', 'agentProfileRuntime')}
-              ${functionSource('agentProfileRuntime', 'agentProfileMemberHtml')}
-              ${functionSource('agentProfileMemberHtml', 'agentProfileDiagnosticsHtml')}
-              ${functionSource('agentProfileDiagnosticsHtml', 'agentProfileSkillSearchHtml')}
-              ${functionSource('agentProfileSkillSearchHtml', 'agentProfileSearchSkills')}
+              ${functionSource('agentProfileRuntime', 'agentProfileOpenSkillModal')}
+              ${functionSource('agentProfileDiagnosticsHtml', 'agentProfileOpenSkillModal')}
+              ${functionSource('agentProfileLifecycleState', 'agentProfilePublicSummaryHtml')}
               ${functionSource('agentProfileEditorHtml', 'agentProfileCollectFields')}
               ${functionSource('agentProfileLocalDiagnostics', 'agentProfileMutation')}
             `, context);
@@ -486,6 +493,551 @@ public sealed class BackendConsoleStaticAssetEndpointTests
     }
 
     [Fact]
+    public async Task AdminShell_AgentProfiles_ShouldRenderIntentionalEmptyStateAndCollapsibleSkillCards()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name, nextName) {
+              const starts = [
+                html.indexOf('function ' + name + '('),
+                html.indexOf('async function ' + name + '(')
+              ].filter(index => index !== -1);
+              const start = starts.length ? Math.min(...starts) : -1;
+              const ends = [
+                html.indexOf('\nfunction ' + nextName + '(', start),
+                html.indexOf('\nasync function ' + nextName + '(', start)
+              ].filter(index => index !== -1);
+              const end = ends.length ? Math.min(...ends) : -1;
+              assert.notEqual(start, -1, name + ' must exist in the served admin asset');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return html.slice(start, end);
+            }
+
+            const context = {
+              AGENT_PROFILE_STATE:{
+                diagnostics:[], skillCardsOpen:{0:false,1:true}, skillProofs:{}
+              },
+              esc(value) { return String(value == null ? '' : value); },
+              agentProfileField(label, name, value) {
+                return '<label>' + label + '<input data-ap-field="' + name + '" value="' + value + '"></label>';
+              },
+              agentProfileSelect(label, name, value) {
+                return '<label>' + label + '<select data-ap-field="' + name + '"><option>' + value + '</option></select></label>';
+              },
+              agentProfileHidden(name, value, index) {
+                return '<input type="hidden" data-ap-field="' + name + '" data-ap-member="' + index + '" value="' + value + '">';
+              },
+              agentProfileExactEvidenceHtml(member, index) {
+                return '<div data-ap-exact-evidence="' + index + '">' + member.skillRef.guid + '</div>';
+              }
+            };
+            vm.createContext(context);
+            vm.runInContext(`
+              ${functionSource('agentProfileDraftFromFields', 'agentProfileEmptyDraft')}
+              ${functionSource('agentProfileEmptyDraft', 'agentProfileSlugFromName')}
+              ${functionSource('agentProfileSkillCardIsOpen', 'agentProfileSkillCardHtml')}
+              ${functionSource('agentProfileSkillCardHtml', 'agentProfileSkillsSectionHtml')}
+              ${functionSource('agentProfileSkillsSectionHtml', 'agentProfileDiagnosticsHtml')}
+            `, context);
+
+            const emptyDraft = vm.runInContext('agentProfileEmptyDraft()', context);
+            assert.equal(emptyDraft.runtimeProfile.members.length, 0);
+            const empty = vm.runInContext('agentProfileSkillsSectionHtml([], false)', context);
+            assert.match(empty, /还没有添加 Skill/);
+            assert.match(empty, /data-ap-open-skills="add"/);
+
+            context.members = [{
+              intentId:'research', routingDescription:'Find evidence',
+              skillRef:{guid:'11111111-1111-4111-8111-111111111111',literalVersion:'1.2'},
+              explicitTriggerAliases:['research'], taskToolPolicy:{toolNames:['web_search'],toolSetRefs:[]},
+              sideEffectClass:'READ_ONLY', expectedSkillName:'research', reviewedPublisherId:'publisher-a'
+            }, {
+              intentId:'writer', routingDescription:'Write a response',
+              skillRef:{guid:'22222222-2222-4222-8222-222222222222',literalVersion:'2.3'},
+              explicitTriggerAliases:['write'], taskToolPolicy:{toolNames:['document_write'],toolSetRefs:[]},
+              sideEffectClass:'SERVICE_CALL', expectedSkillName:'writer', reviewedPublisherId:'publisher-b'
+            }];
+            const first = vm.runInContext('agentProfileSkillCardHtml(members[0], 0, 2, false)', context);
+            const second = vm.runInContext('agentProfileSkillCardHtml(members[1], 1, 2, false)', context);
+            assert.match(first, /<details class="ap-skill-card"[^>]*data-ap-member-card="0"/);
+            assert.doesNotMatch(first, /<details class="ap-skill-card"[^>]* open/);
+            assert.match(second, /<details class="ap-skill-card"[^>]*data-ap-member-card="1"[^>]* open/);
+            assert.match(second, /writer/);
+            assert.match(second, /2\.3/);
+            assert.match(second, /publisher-b/);
+            assert.match(second, /data-ap-replace-skill="1"/);
+            assert.match(second, /data-ap-remove-member="1"/);
+            assert.match(second, /data-ap-exact-evidence="1"/);
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error);
+    }
+
+    [Fact]
+    public async Task AdminShell_AgentProfiles_ShouldReindexCardEvidenceWhenRemovingSkills()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name, nextName) {
+              const start = html.indexOf('function ' + name + '(');
+              const end = html.indexOf('\nfunction ' + nextName + '(', start);
+              assert.notEqual(start, -1, name + ' must exist in the served admin asset');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return html.slice(start, end);
+            }
+
+            const draft = {runtimeProfile:{members:[
+              {expectedSkillName:'research',skillRef:{guid:'guid-a'}},
+              {expectedSkillName:'writer',skillRef:{guid:'guid-b'}}
+            ]}};
+            const context = {
+              AGENT_PROFILE_STATE:{
+                skillProofs:{0:{skillHash:'hash-a'},1:{skillHash:'hash-b'}},
+                skillCardsOpen:{0:false,1:true},dirty:false,diagnostics:[{field:'members[1].intentId'}]
+              },
+              agentProfileWorkingDraft() { return draft; },
+              confirm() { return true; }
+            };
+            vm.createContext(context);
+            vm.runInContext(functionSource('agentProfileRemoveMember', 'agentProfileDiagnosticsHtml'), context);
+
+            assert.equal(vm.runInContext('agentProfileRemoveMember(0)', context), true);
+            assert.equal(draft.runtimeProfile.members.length, 1);
+            assert.equal(draft.runtimeProfile.members[0].expectedSkillName, 'writer');
+            assert.equal(context.AGENT_PROFILE_STATE.skillProofs[0].skillHash, 'hash-b');
+            assert.equal(context.AGENT_PROFILE_STATE.skillCardsOpen[0], true);
+            assert.deepEqual(Object.keys(context.AGENT_PROFILE_STATE.skillProofs), ['0']);
+            assert.deepEqual(Array.from(context.AGENT_PROFILE_STATE.diagnostics), []);
+            assert.equal(context.AGENT_PROFILE_STATE.dirty, true);
+
+            assert.equal(vm.runInContext('agentProfileRemoveMember(0)', context), true);
+            assert.equal(draft.runtimeProfile.members.length, 0);
+            assert.deepEqual(Object.keys(context.AGENT_PROFILE_STATE.skillProofs), []);
+            assert.deepEqual(Object.keys(context.AGENT_PROFILE_STATE.skillCardsOpen), []);
+            assert.match(html, /root\.addEventListener\('toggle',[\s\S]*data-ap-member-card/);
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error);
+    }
+
+    [Fact]
+    public async Task AdminShell_AgentProfiles_ShouldDiscoverMultipleExactSkillsAndRetryPartialFailures()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name, nextName) {
+              const starts = [html.indexOf('function ' + name + '('),
+                html.indexOf('async function ' + name + '(')].filter(index => index !== -1);
+              const start = starts.length ? Math.min(...starts) : -1;
+              const ends = [html.indexOf('\nfunction ' + nextName + '(', start),
+                html.indexOf('\nasync function ' + nextName + '(', start)].filter(index => index !== -1);
+              const end = ends.length ? Math.min(...ends) : -1;
+              assert.notEqual(start, -1, name + ' must exist in the served admin asset');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return html.slice(start, end);
+            }
+
+            const draft = {displayName:'Operator',instructions:'Operate safely',runtimeProfile:{
+              maximumToolPolicy:{toolNames:['manual'],toolSetRefs:[]},
+              members:[{intentId:'existing',routingDescription:'Existing route',
+                skillRef:{guid:'guid-existing',literalVersion:'1.0'},explicitTriggerAliases:[],
+                sideEffectClass:'READ_ONLY',expectedSkillName:'existing',reviewedPublisherId:'publisher-existing',
+                taskToolPolicy:{toolNames:['manual'],toolSetRefs:[]}}]}};
+            let capturedBeforeRender = false, renderCount = 0, failA = true;
+            const context = {
+              AGENT_PROFILE_STATE:{skillRequest:0,skillModal:null,skillProofs:{},skillCardsOpen:{},
+                dirty:false,diagnostics:[]},
+              root:{querySelector(){return null;}},
+              render(){renderCount += 1;},
+              agentProfileCaptureDraft(){capturedBeforeRender = renderCount === 0;},
+              agentProfileWorkingDraft(){return draft;},
+              agentProfileStoreWorkingDraft(value){assert.equal(value,draft);return value;},
+              esc(value){return String(value == null ? '' : value)
+                .replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('\"','&quot;');},
+              async agentProfileJson(path){
+                const guid = decodeURIComponent(path.split('/').at(-2));
+                if (guid === 'guid-a' && failA) throw {problem:{title:'A unavailable'}};
+                return {body:{guid,literalVersion:guid === 'guid-a'?'2.0':'3.1',name:'research',
+                  publisher:'publisher-' + guid,skillHash:'a'.repeat(64),
+                  declaredToolNames:guid === 'guid-a'?['search']:['fetch',' search ']}};
+              }
+            };
+            vm.createContext(context);
+            vm.runInContext(`
+              ${functionSource('agentProfileUnionNames', 'agentProfileApplyExactSkill')}
+              ${functionSource('agentProfileApplyExactSkill', 'agentProfileCaptureDraft')}
+              ${functionSource('agentProfileSlugFromName', 'agentProfileStartCreate')}
+              ${functionSource('agentProfileOpenSkillModal', 'agentProfilePublicSummaryHtml')}
+            `, context);
+
+            vm.runInContext("agentProfileOpenSkillModal(root,'add',null)", context);
+            assert.equal(context.AGENT_PROFILE_STATE.skillModal.mode, 'add');
+            assert.equal(capturedBeforeRender, true);
+            context.AGENT_PROFILE_STATE.skillModal.results = [{guid:'guid-b',name:'Research B',
+              description:'Fetch evidence',category:'operations',tags:['aevatar'],private:false},
+              {guid:'guid-a',name:'Research A',description:'Search evidence',category:'research',
+                tags:['search'],private:true},
+              {guid:'guid-existing',name:'Existing',description:'Already used',category:'',tags:[],private:false}];
+            context.AGENT_PROFILE_STATE.skillModal.total = 3;
+            const modal = vm.runInContext('agentProfileSkillModalHtml()', context);
+            assert.match(modal, /role="dialog"/);
+            assert.match(modal, /aria-modal="true"/);
+            assert.match(modal, /type="checkbox"/);
+            assert.match(modal, /operations/);
+            assert.match(modal, /aevatar/);
+            assert.match(modal, /私有/);
+            assert.match(modal, /已添加/);
+            assert.doesNotMatch(modal, /publisher-from-nowhere/);
+
+            vm.runInContext("agentProfileToggleSkillSelection('guid-b')", context);
+            vm.runInContext("agentProfileToggleSkillSelection('guid-a')", context);
+            (async function(){
+              await vm.runInContext('agentProfileConfirmSkillSelection(root)', context);
+              assert.deepEqual(draft.runtimeProfile.members.map(member => member.skillRef.guid),
+                ['guid-existing','guid-b']);
+              assert.deepEqual(Array.from(context.AGENT_PROFILE_STATE.skillModal.selected), ['guid-a']);
+              assert.match(context.AGENT_PROFILE_STATE.skillModal.exactErrors['guid-a'], /unavailable/);
+              assert.equal(draft.runtimeProfile.members[1].intentId, 'research');
+              assert.deepEqual(Array.from(draft.runtimeProfile.members[1].taskToolPolicy.toolNames),
+                ['fetch','search']);
+              assert.deepEqual(Array.from(draft.runtimeProfile.maximumToolPolicy.toolNames),
+                ['manual','fetch','search']);
+              assert.equal(context.AGENT_PROFILE_STATE.skillProofs[1].guid, 'guid-b');
+
+              failA = false;
+              await vm.runInContext('agentProfileConfirmSkillSelection(root)', context);
+              assert.deepEqual(draft.runtimeProfile.members.map(member => member.skillRef.guid),
+                ['guid-existing','guid-b','guid-a']);
+              assert.equal(draft.runtimeProfile.members[2].intentId, 'research-2');
+              assert.equal(context.AGENT_PROFILE_STATE.skillModal, null);
+              assert.equal(context.AGENT_PROFILE_STATE.dirty, true);
+            })().catch(error => { console.error(error); process.exitCode = 1; });
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error);
+    }
+
+    [Fact]
+    public async Task AdminShell_AgentProfiles_ShouldReplaceSkillsOnlyAfterExactResolution()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name, nextName) {
+              const starts = [html.indexOf('function ' + name + '('),
+                html.indexOf('async function ' + name + '(')].filter(index => index !== -1);
+              const start = starts.length ? Math.min(...starts) : -1;
+              const ends = [html.indexOf('\nfunction ' + nextName + '(', start),
+                html.indexOf('\nasync function ' + nextName + '(', start)].filter(index => index !== -1);
+              const end = ends.length ? Math.min(...ends) : -1;
+              assert.notEqual(start, -1, name + ' must exist in the served admin asset');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return html.slice(start, end);
+            }
+
+            const member = {intentId:'operate',routingDescription:'Handle Aevatar operations',
+              skillRef:{guid:'guid-old',literalVersion:'1.0'},explicitTriggerAliases:['operate'],
+              sideEffectClass:'SERVICE_CALL',expectedSkillName:'old',reviewedPublisherId:'publisher-old',
+              taskToolPolicy:{toolNames:['manual'],toolSetRefs:['set-a']}};
+            const draft = {runtimeProfile:{maximumToolPolicy:{toolNames:['manual'],toolSetRefs:[]},members:[member]}};
+            let fail = true;
+            const context = {
+              AGENT_PROFILE_STATE:{skillRequest:0,skillModal:null,skillProofs:{},skillCardsOpen:{},dirty:false},
+              root:{querySelector(){return null;}},render(){},agentProfileCaptureDraft(){},
+              agentProfileWorkingDraft(){return draft;},agentProfileStoreWorkingDraft(value){return value;},
+              async agentProfileJson(){if(fail)throw {problem:{title:'Exact unavailable'}};return {body:{
+                guid:'guid-new',literalVersion:'4.2',name:'new',publisher:'publisher-new',
+                skillHash:'b'.repeat(64),declaredToolNames:['service_call']}};},
+              esc(value){return String(value == null ? '' : value);}
+            };
+            vm.createContext(context);
+            vm.runInContext(`
+              ${functionSource('agentProfileUnionNames', 'agentProfileApplyExactSkill')}
+              ${functionSource('agentProfileApplyExactSkill', 'agentProfileCaptureDraft')}
+              ${functionSource('agentProfileSlugFromName', 'agentProfileStartCreate')}
+              ${functionSource('agentProfileOpenSkillModal', 'agentProfilePublicSummaryHtml')}
+            `, context);
+
+            vm.runInContext("agentProfileOpenSkillModal(root,'replace',0)", context);
+            vm.runInContext("agentProfileToggleSkillSelection('guid-new')", context);
+            const before = JSON.stringify(member);
+            (async function(){
+              await vm.runInContext('agentProfileConfirmSkillSelection(root)', context);
+              assert.equal(JSON.stringify(member), before);
+              assert.match(context.AGENT_PROFILE_STATE.skillModal.exactErrors['guid-new'], /unavailable/);
+
+              fail = false;
+              await vm.runInContext('agentProfileConfirmSkillSelection(root)', context);
+              assert.equal(member.intentId, 'operate');
+              assert.equal(member.routingDescription, 'Handle Aevatar operations');
+              assert.deepEqual(Array.from(member.explicitTriggerAliases), ['operate']);
+              assert.equal(member.sideEffectClass, 'SERVICE_CALL');
+              assert.equal(member.skillRef.guid, 'guid-new');
+              assert.equal(member.skillRef.literalVersion, '4.2');
+              assert.equal(member.expectedSkillName, 'new');
+              assert.deepEqual(Array.from(member.taskToolPolicy.toolNames), ['manual','service_call']);
+              assert.deepEqual(Array.from(member.taskToolPolicy.toolSetRefs), ['set-a']);
+              assert.equal(context.AGENT_PROFILE_STATE.skillProofs[0].guid, 'guid-new');
+              assert.equal(context.AGENT_PROFILE_STATE.skillModal, null);
+            })().catch(error => { console.error(error); process.exitCode = 1; });
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error);
+    }
+
+    [Fact]
+    public async Task AdminShell_AgentProfiles_ShouldRenderHonestLifecycleActionBar()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        html.Should().Contain(".ap-action-bar{");
+        html.Should().Contain("position:sticky;bottom:0");
+        html.Should().Contain(".ap-skill-modal{");
+        html.Should().Contain("height:min(92dvh,760px)");
+        html.Should().Contain("@media (prefers-reduced-motion:reduce)");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name, nextName) {
+              const start = html.indexOf('function ' + name + '(');
+              const end = html.indexOf('\nfunction ' + nextName + '(', start);
+              assert.notEqual(start, -1, name + ' must exist in the served admin asset');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return html.slice(start, end);
+            }
+
+            const detail = {ownerKind:'scope', profileSlug:'operator', displayName:'Operator',
+              purpose:'Operate Aevatar', publishedRevision:4, available:true, draft:{
+                displayName:'Operator', purpose:'Operate Aevatar', instructions:'Be careful',
+                runtimeProfile:{members:[],maximumToolPolicy:{},recoveryToolPolicy:{}}}};
+            const context = {
+              detail,
+              ACCOUNT:{admin:false},
+              AGENT_PROFILE_STATE:{detail,createFlow:null,busy:false,pending:null,dirty:false,
+                diagnostics:[],notice:null,error:null,etag:'\"v4\"',rolloutDraft:null,
+                systemBinding:null},
+              esc(value) { return String(value == null ? '' : value); },
+              agentProfileCanWrite() { return true; },
+              agentProfileRuntime(value) { return value.draft.runtimeProfile; },
+              agentProfileEmptyDraft() { return {runtimeProfile:{members:[]}}; },
+              agentProfileRolloutFromBinding() { return {enabled:false,cohortBasisPoints:0}; },
+              agentProfileStatus() { return '<span class="ap-status">draft</span>'; },
+              agentProfileField() { return ''; }, agentProfileSelect() { return ''; },
+              agentProfileSkillsSectionHtml() { return '<div>skills</div>'; },
+              agentProfileDiagnosticsHtml() { return ''; }
+            };
+            vm.createContext(context);
+            vm.runInContext(`
+              ${functionSource('agentProfileLifecycleState', 'agentProfilePublicSummaryHtml')}
+              ${functionSource('agentProfileEditorHtml', 'agentProfileCollectFields')}
+            `, context);
+
+            assert.equal(vm.runInContext('agentProfileLifecycleState(detail).label', context),
+              '已发布 r4');
+            context.AGENT_PROFILE_STATE.dirty = true;
+            assert.equal(vm.runInContext('agentProfileLifecycleState(detail).label', context),
+              '未保存修改');
+            context.actionState = {innerHTML:''};
+            context.actionRoot = {querySelector(selector) {
+              assert.equal(selector, '.ap-action-state');
+              return context.actionState;
+            }};
+            assert.equal(vm.runInContext(
+              'agentProfileRefreshActionState(actionRoot)', context), true);
+            assert.match(context.actionState.innerHTML, /未保存修改/);
+            context.AGENT_PROFILE_STATE.busy = true;
+            assert.equal(vm.runInContext('agentProfileLifecycleState(detail).label', context),
+              '正在保存');
+            context.AGENT_PROFILE_STATE.busy = false;
+            context.AGENT_PROFILE_STATE.pending = {kind:'draft'};
+            assert.equal(vm.runInContext('agentProfileLifecycleState(detail).label', context),
+              '已接受，等待提交/投影');
+            context.AGENT_PROFILE_STATE.pending = null;
+            context.AGENT_PROFILE_STATE.dirty = false;
+            context.AGENT_PROFILE_STATE.diagnostics = [{code:'INVALID'}];
+            assert.equal(vm.runInContext('agentProfileLifecycleState(detail).label', context),
+              '校验失败');
+            context.AGENT_PROFILE_STATE.diagnostics = [];
+            context.AGENT_PROFILE_STATE.notice = '校验通过，可以发布';
+            assert.equal(vm.runInContext('agentProfileLifecycleState(detail).label', context),
+              '校验通过');
+            context.AGENT_PROFILE_STATE.notice = null;
+
+            const writable = vm.runInContext('agentProfileActionBarHtml(detail,true)', context);
+            assert.match(writable, /class="ap-action-bar"/);
+            assert.match(writable, /aria-live="polite"/);
+            assert.match(writable, /data-ap-action="save"/);
+            assert.match(writable, /data-ap-action="validate"/);
+            assert.match(writable, /data-ap-action="publish"/);
+            const readOnly = vm.runInContext('agentProfileActionBarHtml(detail,false)', context);
+            assert.doesNotMatch(readOnly, /data-ap-action="(?:save|validate|publish)"/);
+
+            const editor = vm.runInContext('agentProfileEditorHtml()', context);
+            assert.ok(editor.indexOf('data-ap-action="save"') > editor.indexOf('</form>'),
+              'save/validate/publish belong to the stable bottom action bar, not the header');
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error);
+    }
+
+    [Fact]
+    public async Task AdminShell_AgentProfiles_ShouldKeepSkillModalKeyboardAndFocusContained()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name, nextName) {
+              const start = html.indexOf('function ' + name + '(');
+              const end = html.indexOf('\nfunction ' + nextName + '(', start);
+              assert.notEqual(start, -1, name + ' must exist in the served admin asset');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return html.slice(start, end);
+            }
+
+            const handlers = {}, calls = {render:0,close:0,search:0,trap:0,searchFocus:0,statusRefresh:0};
+            const searchInput = {focus() { calls.searchFocus += 1; }};
+            const root = {
+              addEventListener(name, handler) { handlers[name] = handler; },
+              querySelector(selector) {
+                if (selector === '[data-ap-skill-modal-query]') return searchInput;
+                return null;
+              }
+            };
+            const context = {
+              root,
+              AGENT_PROFILE_STATE:{loaded:true,loading:false,skillRequest:0,skillModal:null,
+                skillFocusReturn:null},
+              agentProfileCaptureDraft() {},
+              render() { calls.render += 1; },
+              requestAnimationFrame(callback) { callback(); },
+              loadAgentProfiles() {}, toast() {}, confirm() { return true; },
+              agentProfileCloseSkillModal() { calls.close += 1; return true; },
+              agentProfileSearchSkillModal() { calls.search += 1; },
+              agentProfileTrapModalFocus() { calls.trap += 1; return true; },
+              agentProfileRefreshActionState() { calls.statusRefresh += 1; return true; }
+            };
+            vm.createContext(context);
+            vm.runInContext(`
+              ${functionSource('agentProfileOpenSkillModal', 'agentProfileSkillModalHtml')}
+            `, context);
+
+            vm.runInContext("agentProfileOpenSkillModal(root,'replace',2)", context);
+            assert.equal(context.AGENT_PROFILE_STATE.skillModal.focusSearch, true);
+            assert.deepEqual({...context.AGENT_PROFILE_STATE.skillModal.returnFocus},
+              {mode:'replace',memberIndex:2});
+            vm.runInContext('agentProfileCloseSkillModal()', context);
+            assert.equal(context.AGENT_PROFILE_STATE.skillModal, null);
+            assert.deepEqual({...context.AGENT_PROFILE_STATE.skillFocusReturn},
+              {mode:'replace',memberIndex:2});
+
+            let restored = 0;
+            context.AGENT_PROFILE_STATE.skillFocusReturn = {mode:'replace',memberIndex:2};
+            context.restoreRoot = {querySelector(selector) {
+              assert.equal(selector, '[data-ap-replace-skill="2"]');
+              return {focus() { restored += 1; }};
+            }};
+            assert.equal(vm.runInContext('agentProfileRestoreModalFocus(restoreRoot)', context), true);
+            assert.equal(restored, 1);
+            assert.equal(context.AGENT_PROFILE_STATE.skillFocusReturn, null);
+
+            const first = {disabled:false,focus() { context.active = first; }};
+            const last = {disabled:false,focus() { context.active = last; }};
+            const dialog = {ownerDocument:{get activeElement() { return context.active; }},
+              querySelectorAll() { return [first,last]; }};
+            context.trapRoot = {querySelector() { return dialog; }};
+            context.active = last;
+            context.tabEvent = {key:'Tab',shiftKey:false,prevented:false,
+              preventDefault() { this.prevented = true; }};
+            assert.equal(vm.runInContext(
+              'agentProfileTrapModalFocus(trapRoot,tabEvent)', context), true);
+            assert.equal(context.active, first);
+            assert.equal(context.tabEvent.prevented, true);
+            context.active = first; context.tabEvent.shiftKey = true; context.tabEvent.prevented = false;
+            vm.runInContext('agentProfileTrapModalFocus(trapRoot,tabEvent)', context);
+            assert.equal(context.active, last);
+            assert.equal(context.tabEvent.prevented, true);
+            context.active = {outside:true}; context.tabEvent.shiftKey = false;
+            context.tabEvent.prevented = false;
+            assert.equal(vm.runInContext(
+              'agentProfileTrapModalFocus(trapRoot,tabEvent)', context), true);
+            assert.equal(context.active, first, 'rerendered dialog recaptures focus on next Tab');
+            assert.equal(context.tabEvent.prevented, true);
+
+            vm.runInContext(`${functionSource('mountAgentProfiles', 'cronFieldMatcher')}`, context);
+            context.agentProfileCloseSkillModal = function() { calls.close += 1; return true; };
+            context.agentProfileTrapModalFocus = function() { calls.trap += 1; return true; };
+            context.AGENT_PROFILE_STATE.skillModal = {focusSearch:true,resolving:false,loading:false};
+            vm.runInContext('mountAgentProfiles(root)', context);
+            assert.equal(calls.searchFocus, 1);
+            assert.equal(context.AGENT_PROFILE_STATE.skillModal.focusSearch, false);
+            handlers.input({target:{value:'Changed',matches(selector) {
+              return selector === '[data-ap-field]';
+            },getAttribute() { return 'instructions'; }}});
+            assert.equal(context.AGENT_PROFILE_STATE.dirty, true);
+            assert.equal(calls.statusRefresh, 1);
+
+            const keyEvent = (key, matches, shiftKey=false) => ({key,shiftKey,
+              target:{matches(selector) { return matches && selector === '[data-ap-skill-modal-query]'; }},
+              preventDefault() { this.prevented = true; }});
+            handlers.keydown(keyEvent('Enter', true));
+            assert.equal(calls.search, 1);
+            handlers.keydown(keyEvent('Tab', false));
+            assert.equal(calls.trap, 1);
+            handlers.keydown(keyEvent('Escape', false));
+            assert.equal(calls.close, 1);
+            context.AGENT_PROFILE_STATE.skillModal.resolving = true;
+            handlers.keydown(keyEvent('Escape', false));
+            assert.equal(calls.close, 1, 'resolving exact facts cannot be interrupted');
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error);
+    }
+
+    [Fact]
     public async Task AdminShell_AgentProfiles_ShouldRenderPublishedSystemSummaryWithoutFakeDraft()
     {
         await using var app = await CreateAppAsync();
@@ -519,6 +1071,7 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             vm.runInContext(`
               ${functionSource('agentProfileCanWrite', 'agentProfileProblem')}
               ${functionSource('agentProfileStatus', 'agentProfileListHtml')}
+              ${functionSource('agentProfileLifecycleState', 'agentProfilePublicSummaryHtml')}
               ${functionSource('agentProfilePublicSummaryHtml', 'agentProfileEditorHtml')}
               ${functionSource('agentProfileEditorHtml', 'agentProfileCollectFields')}
             `, context);
@@ -528,6 +1081,9 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             assert.match(editor, /system\/public-research/);
             assert.match(editor, /已发布 r4/);
             assert.match(editor, /设为我的默认/);
+            assert.match(editor, /class="ap-action-bar"/);
+            assert.ok(editor.indexOf('data-ap-action="personal-default"') >
+              editor.indexOf('Profile 摘要'), 'read-only binding action belongs to the bottom workbench bar');
             assert.doesNotMatch(editor, /data-ap-form/);
             assert.doesNotMatch(editor, /Instructions/);
             """;
@@ -1497,6 +2053,105 @@ public sealed class BackendConsoleStaticAssetEndpointTests
 
         result.ExitCode.Should().Be(0, result.Error);
         html.Should().NotContain("function bindObservatory(");
+    }
+
+    [Fact]
+    public async Task AdminShell_ShouldPersistScrollByRouteAndReuseSameEmbeddedView()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name, nextName) {
+              const start = html.indexOf('function ' + name + '(');
+              const end = html.indexOf('\nfunction ' + nextName + '(', start);
+              assert.notEqual(start, -1, name + ' must exist in the served admin asset');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return html.slice(start, end);
+            }
+
+            const records = new Map();
+            const storage = {getItem(key){return records.get(key)||null;},setItem(key,value){records.set(key,value);}};
+            const context = {};
+            vm.createContext(context);
+            vm.runInContext(`
+              ${functionSource('adminRouteKey', 'readAdminViewState')}
+              ${functionSource('readAdminViewState', 'writeAdminViewState')}
+              ${functionSource('writeAdminViewState', 'canReuseEmbeddedView')}
+              ${functionSource('canReuseEmbeddedView', 'adminPaneScrollTop')}
+              ${functionSource('adminPaneScrollTop', 'captureAdminViewState')}
+              ${functionSource('replaceViewHtml', 'setAdminImmersive')}
+              ${functionSource('setAdminImmersive', 'breadcrumb')}
+            `, context);
+
+            vm.runInContext('writeAdminViewState', context)(storage, 'console:test:admin:view', '#/audit?result=failed', 540);
+            vm.runInContext('writeAdminViewState', context)(storage, 'console:test:admin:view', '#/fleet', 80);
+            assert.equal(vm.runInContext('readAdminViewState', context)(storage, 'console:test:admin:view', '#/audit?result=failed'), 540);
+            assert.equal(vm.runInContext('readAdminViewState', context)(storage, 'console:test:admin:view', '#/fleet'), 80);
+            assert.equal(vm.runInContext('canReuseEmbeddedView', context)('observatory', 'observatory', true), true);
+            assert.equal(vm.runInContext('canReuseEmbeddedView', context)('observatory', 'cqrs', true), false);
+            assert.equal(vm.runInContext('canReuseEmbeddedView', context)('observatory', 'observatory', false), false);
+            assert.equal(vm.runInContext('adminPaneScrollTop', context)({scrollTop:0,scrollHeight:100,clientHeight:100,getAttribute(){return '640';}}), 640);
+            assert.equal(vm.runInContext('adminPaneScrollTop', context)({scrollTop:0,scrollHeight:900,clientHeight:300,getAttribute(){return '640';}}), 0);
+
+            const oldScroll = {scrollTop:420};
+            const nextScroll = {scrollTop:0};
+            let replaced = false;
+            const root = {
+              matches(){ return false; },
+              querySelector(){ return replaced ? nextScroll : oldScroll; },
+              set innerHTML(value){ replaced = true; this.value = value; }
+            };
+            vm.runInContext('replaceViewHtml', context)(root, '<div class="view-scroll"></div>');
+            assert.equal(nextScroll.scrollTop, 420);
+
+            const directRoot = {
+              scrollTop:85,
+              matches(){ return false; },
+              querySelector(){ return null; },
+              set innerHTML(value){ this.scrollTop = 0; this.value = value; }
+            };
+            vm.runInContext('replaceViewHtml', context)(directRoot, '<div>updated</div>');
+            assert.equal(directRoot.scrollTop, 85);
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error);
+        html.Should().Contain("data-persistent-view=\"observatory\"");
+        html.Should().Contain(":root{--topbar-h:0px!important}");
+    }
+
+    [Fact]
+    public async Task AdminShell_ShouldMirrorObservatoryImmersiveState()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+            const start = html.indexOf('function setAdminImmersive(');
+            const end = html.indexOf('\nfunction breadcrumb(', start);
+            assert.notEqual(start, -1); assert.notEqual(end, -1);
+            const changes = [];
+            const context = {document:{body:{classList:{toggle(name,enabled){changes.push([name,enabled]);}}}}};
+            vm.createContext(context);
+            vm.runInContext(html.slice(start,end),context);
+            vm.runInContext('setAdminImmersive',context)(true);
+            assert.deepEqual(changes,[['observatory-immersive',true]]);
+            """;
+
+        var result = await RunNodeAsync(script, html);
+        result.ExitCode.Should().Be(0, result.Error);
+        html.Should().Contain("msg.type==='observatory-immersive'");
+        html.Should().Contain("body.observatory-immersive .rail");
+        html.Should().Contain("body.observatory-immersive .app-header");
+        html.Should().Contain("body.observatory-immersive #acctw");
     }
 
 

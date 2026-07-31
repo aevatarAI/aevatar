@@ -56,9 +56,12 @@ headers, arguments, response bodies, and credential material remain excluded.
 ## Receipt Flow
 
 The current `origin/feature/integrate` implementation has one live proxy
-surface, `NyxIdProxyTool`. It parses `service_id` from the structured tool
-arguments and calls `NyxIdProxyReceiptFactory`. The connected-service proxy
-layer was deleted upstream and this fix does not restore it.
+surface, `NyxIdProxyTool`. Ordinary calls parse `service_id` from structured
+tool arguments and use the post-result factory. Proof-bound calls take the exact
+UserService from committed admission and return a receipt at execution time,
+where HTTP status and completed file ingress remain available. The
+connected-service proxy layer was deleted upstream and this fix does not
+restore it.
 
 The factory performs the following mapping:
 

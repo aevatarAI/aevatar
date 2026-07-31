@@ -46,6 +46,7 @@
 
     --list-w: 320px;
     --topbar-h: 56px;
+    --workspacebar-h: 46px;
     color-scheme: dark;
   }
 
@@ -236,6 +237,29 @@
     padding: 4px 6px; border-radius: var(--r-sm);
   }
   .linkbtn:hover { text-decoration: underline; }
+  .workspacebar {
+    display:flex; align-items:center; gap:10px; height:var(--workspacebar-h); padding:7px 16px;
+    border-bottom:1px solid var(--border); background:var(--panel);
+  }
+  .workspace-context { min-width:0; display:flex; align-items:center; gap:8px; color:var(--muted); font-size:12.5px; }
+  .workspace-context b { max-width:min(48vw,620px); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--fg-strong); font-weight:650; }
+  .workspace-actions { margin-left:auto; display:flex; align-items:center; gap:7px; }
+  .workspace-action {
+    min-height:32px; display:inline-flex; align-items:center; gap:6px; padding:0 10px;
+    border:1px solid var(--border); border-radius:var(--r); background:var(--panel-2); color:var(--fg);
+    font-size:12px; font-weight:600;
+  }
+  .workspace-action:hover { border-color:var(--muted-2); background:var(--panel-3); }
+  .workspace-action:disabled { opacity:.55; cursor:not-allowed; }
+  .admin-tools { position:relative; }
+  .admin-tools > summary { list-style:none; }
+  .admin-tools > summary::-webkit-details-marker { display:none; }
+  .admin-tools[open] > summary { border-color:var(--accent-line); color:var(--accent); }
+  .admin-tools-panel {
+    position:absolute; z-index:20; top:38px; right:0; width:min(680px,calc(100vw - 24px));
+    border:1px solid var(--border); border-radius:var(--r); background:var(--panel); box-shadow:var(--shadow);
+  }
+  .admin-tools-panel .adminbar { border:0; border-radius:inherit; }
 
   /* =========================================================================
      Admin cross-scope bar (06-20-observatory-admin-cross-scope)
@@ -264,6 +288,12 @@
   .adminbar .ab-msg { font-size: 12px; color: var(--err); }
   .adminbar .ab-cands { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 6px; }
   .adminbar .ab-hint { flex-basis: 100%; font-size: 11.5px; color: var(--muted); margin-top: 1px; }
+  body.observatory-immersive { --topbar-h:0px; }
+  body.observatory-immersive .topbar,
+  body.observatory-immersive .list-pane,
+  body.observatory-immersive .admin-tools { display:none !important; }
+  body.observatory-immersive .shell { grid-template-columns:1fr; }
+  body.observatory-immersive .detail-inner { max-width:1400px; }
 
   /* =========================================================================
      Run-list filter bar (06-23-observatory-run-coverage-filter)
@@ -367,10 +397,10 @@
   .shell {
     display: grid;
     grid-template-columns: var(--list-w) 1fr;
-    height: calc(100dvh - var(--topbar-h));
+    height: calc(100dvh - var(--topbar-h) - var(--workspacebar-h));
     min-height: 0;
   }
-  .shell.has-banner { height: auto; min-height: calc(100dvh - var(--topbar-h)); }
+  .shell.has-banner { height: auto; min-height: calc(100dvh - var(--topbar-h) - var(--workspacebar-h)); }
 
   /* ---- Runs list -------------------------------------------------------- */
   .list-pane {
@@ -898,6 +928,10 @@
        (e.g. "已暂停"/"切换账户" stacking one glyph per line); let the brand truncate instead. */
     .topbar { gap: 8px; }
     .brand-name { overflow: hidden; text-overflow: ellipsis; }
+    .workspacebar { padding:7px 10px; }
+    .workspace-context span { display:none; }
+    .workspace-action span { display:none; }
+    .workspace-action { width:34px; padding:0; justify-content:center; }
     /* release the fixed brand width on narrow screens so the nav reclaims the space */
     .brand { flex: 1 1 auto; width: auto; } .brand, .brand > div { min-width: 0; }
     .pill-ro, .live, .iconbtn, .account, .linkbtn { flex-shrink: 0; }
@@ -974,6 +1008,8 @@ const CFG = {
 };
 const TOKEN_KEY = CFG.storageKey + ":token";
 const PKCE_KEY  = CFG.storageKey + ":pkce";
+const OBSERVATORY_VIEW_KEY = CFG.storageKey + ":observatory:view";
+const OBSERVATORY_IMMERSIVE_KEY = CFG.storageKey + ":observatory:immersive";
 
 function b64url(buf){ return btoa(String.fromCharCode.apply(null, new Uint8Array(buf))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,""); }
 async function sha256(text){ return b64url(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text))); }
@@ -1172,7 +1208,9 @@ function readObservatoryRoute(search, hash){
   };
 }
 function writeObservatoryRoute(patch){
+  const previous=readObservatoryRoute(location.search,location.hash);
   const route = Object.assign(readObservatoryRoute(location.search, location.hash), patch || {});
+  if(previous.tab!==route.tab) pendingDetailScrollReset=true;
   const query = new URLSearchParams();
   ["scope","status","origin","definition","schedule","from","to","run","tab"].forEach(key => {
     const value = route[key];
@@ -1181,6 +1219,38 @@ function writeObservatoryRoute(patch){
   history.replaceState(null, "", location.pathname + (query.toString() ? "?" + query : ""));
   if(isEmbeddedInAdmin()) window.parent.postMessage({source:"aevatar-backend-console-suite",type:"observatory-route",query:route},location.origin);
   return route;
+}
+function observatoryRouteKey(route){
+  const r=route||{};
+  return ["scope","status","origin","definition","schedule","from","to","run","tab"]
+    .map(key=>key+"="+encodeURIComponent(r[key]||"")).join("&");
+}
+function readObservatoryViewState(storage,key,route){
+  try {
+    const all=JSON.parse(storage.getItem(key)||"{}");
+    const value=all[observatoryRouteKey(route)]||{};
+    return {list:Math.max(0,Number(value.list)||0),detail:Math.max(0,Number(value.detail)||0)};
+  } catch(e){ return {list:0,detail:0}; }
+}
+function writeObservatoryViewState(storage,key,route,position){
+  try {
+    let all={};
+    try { all=JSON.parse(storage.getItem(key)||"{}")||{}; } catch(e){}
+    const keys=Object.keys(all);
+    if(keys.length>40) keys.slice(0,keys.length-40).forEach(existing=>delete all[existing]);
+    all[observatoryRouteKey(route)]={list:Math.max(0,Number(position&&position.list)||0),detail:Math.max(0,Number(position&&position.detail)||0)};
+    storage.setItem(key,JSON.stringify(all));
+  } catch(e){}
+}
+function paneScrollPosition(pane,saved){
+  const fallback=Math.max(0,Number(saved)||0);
+  if(!pane) return fallback;
+  const live=Math.max(0,Number(pane.scrollTop)||0);
+  return live===0&&Number(pane.scrollHeight)<=Number(pane.clientHeight)?fallback:live;
+}
+function applyPaneScrollState(list,detail,position){
+  if(list) list.scrollTop=Math.max(0,Number(position&&position.list)||0);
+  if(detail) detail.scrollTop=Math.max(0,Number(position&&position.detail)||0);
 }
 const initialRoute = readObservatoryRoute(location.search, location.hash);
 /* list filters seeded from the URL query so a shared/bookmarked link reopens the same view; only
@@ -1441,6 +1511,8 @@ const state = {
   theme: localStorage.getItem("wro-theme") || null, // null = follow system
   selectedNodeId: null, // graph node whose detail drawer is open
   graphView: { zoom: 1, panX: 0, panY: 0, fitted: false }, // pan/zoom transform, survives polling re-renders
+  immersive: sessionStorage.getItem(OBSERVATORY_IMMERSIVE_KEY) === "1",
+  refreshing: false,
 };
 function nowMs(){ return Date.now(); }
 
@@ -1452,6 +1524,39 @@ function applyTheme(){
 function effectiveDark(){
   if(state.theme) return state.theme === "dark";
   return !window.matchMedia || !window.matchMedia("(prefers-color-scheme: light)").matches;
+}
+function setImmersive(enabled){
+  state.immersive=!!enabled;
+  sessionStorage.setItem(OBSERVATORY_IMMERSIVE_KEY,state.immersive?"1":"0");
+  document.body.classList.toggle("observatory-immersive",state.immersive);
+  if(isEmbeddedInAdmin()) window.parent.postMessage({source:"aevatar-backend-console-suite",type:"observatory-immersive",enabled:state.immersive},location.origin);
+}
+function toggleImmersive(){ setImmersive(!state.immersive); render(); }
+async function refreshObservatory(){
+  if(state.refreshing) return;
+  state.refreshing=true;
+  try {
+    await refreshRuns();
+    lastRunsSig=runsSig(cache.runs);
+    if(state.selectedRunId){ await refreshDetail(state.selectedRunId); lastDetailSig=detailSig(cache.details[state.selectedRunId]); }
+  } finally { state.refreshing=false; render(); }
+}
+function renderWorkspaceBar(){
+  const bar=el("div",{class:"workspacebar",role:"region","aria-label":"观测工作区"});
+  const detail=currentDetail(),summary=detail&&detail.summary;
+  const scope=adminState.currentScope===ALL_SCOPES?"全部 scope":(adminState.currentScope||adminState.ownScope||"我的 scope");
+  bar.appendChild(el("div",{class:"workspace-context"},`<span>${esc(scope)}</span><b title="${esc(summary&&summary.runId||"")}">${esc(summary&&summary.workflowName||summary&&summary.runId||"选择运行查看详情")}</b>`));
+  const actions=el("div",{class:"workspace-actions"});
+  const refresh=el("button",{class:"workspace-action",type:"button","aria-label":"刷新数据",title:"刷新数据"},`↻ <span>${state.refreshing?"刷新中…":"刷新数据"}</span>`);
+  refresh.disabled=state.refreshing; refresh.addEventListener("click",refreshObservatory); actions.appendChild(refresh);
+  if(adminState.isAdmin){
+    const tools=el("details",{class:"admin-tools"});
+    tools.appendChild(el("summary",{class:"workspace-action",role:"button"},`${ICON.shield}<span>管理员工具</span>`));
+    const panel=el("div",{class:"admin-tools-panel"}); panel.appendChild(renderAdminBar()); tools.appendChild(panel); actions.appendChild(tools);
+  }
+  const immersive=el("button",{class:"workspace-action",type:"button","aria-label":state.immersive?"退出沉浸观测":"进入沉浸观测",title:state.immersive?"退出沉浸观测（Esc）":"沉浸观测"},`${state.immersive?"×":"⛶"} <span>${state.immersive?"退出沉浸":"沉浸观测"}</span>`);
+  immersive.addEventListener("click",toggleImmersive); actions.appendChild(immersive);
+  bar.appendChild(actions); return bar;
 }
 
 /* ===========================================================================
@@ -2621,13 +2726,25 @@ function renderGraph(detail){
    =========================================================================== */
 // Filter / scope changes opt into a run-list scroll reset; selection and polling preserve the position.
 let pendingListScrollReset = false;
+let pendingDetailScrollReset = false;
+let renderedObservatoryRoute = null;
 
 function render(){
   const app = $("#app");
-  // Preserve the run-list scroll across the wholesale rebuild so selecting a run lower in the list (or a
-  // poll refresh) doesn't snap the list back to the top.
-  const prevListScroll = pendingListScrollReset ? 0 : (app.querySelector(".runlist")?.scrollTop || 0);
+  const oldList=app.querySelector(".runlist"),oldDetail=app.querySelector(".detail-pane");
+  const previousRoute=renderedObservatoryRoute;
+  if((oldList||oldDetail)&&previousRoute){
+    const previousSaved=readObservatoryViewState(sessionStorage,OBSERVATORY_VIEW_KEY,previousRoute);
+    writeObservatoryViewState(sessionStorage,OBSERVATORY_VIEW_KEY,previousRoute,{list:paneScrollPosition(oldList,previousSaved.list),detail:paneScrollPosition(oldDetail,previousSaved.detail)});
+  }
+  const route=readObservatoryRoute(location.search,location.hash);
+  const saved=readObservatoryViewState(sessionStorage,OBSERVATORY_VIEW_KEY,route);
+  const sameRoute=previousRoute&&observatoryRouteKey(previousRoute)===observatoryRouteKey(route);
+  const prevListScroll=pendingListScrollReset?0:(sameRoute?paneScrollPosition(oldList,saved.list):saved.list);
+  const prevDetailScroll=pendingDetailScrollReset?0:(sameRoute?paneScrollPosition(oldDetail,saved.detail):saved.detail);
   pendingListScrollReset = false;
+  pendingDetailScrollReset = false;
+  renderedObservatoryRoute=route;
   app.innerHTML = "";
   app.appendChild(renderTopbar());
 
@@ -2639,21 +2756,22 @@ function render(){
     return;
   }
 
-  if(adminState.isAdmin) app.appendChild(renderAdminBar());
+  app.appendChild(renderWorkspaceBar());
 
   const shell = el("div", { class:"shell"+(showBanner?" has-banner":"") });
   shell.appendChild(renderList());
   shell.appendChild(renderDetail());
   app.appendChild(shell);
 
-  const listEl = app.querySelector(".runlist");
-  if(listEl) listEl.scrollTop = prevListScroll;
+  applyPaneScrollState(app.querySelector(".runlist"),app.querySelector(".detail-pane"),{list:prevListScroll,detail:prevDetailScroll});
+  writeObservatoryViewState(sessionStorage,OBSERVATORY_VIEW_KEY,route,{list:prevListScroll,detail:prevDetailScroll});
 }
 
 /* ===========================================================================
    Selection + data loading (real fetch; near-live via polling)
    =========================================================================== */
 function selectRun(runId){
+  pendingDetailScrollReset = true;
   state.selectedRunId = runId;
   state.scenario = "detailLoading";
   state.activeTab = "timeline";
@@ -2677,6 +2795,7 @@ function setScope(scope){
   adminState.currentScope = scope;       // null = my runs · ALL_SCOPES · or a concrete scope id
   adminState.candidates = null; adminState.message = ""; adminState.inputDraft = "";
   pendingListScrollReset = true;         // new scope → fresh list, start at the top
+  pendingDetailScrollReset = true;
   state.selectedRunId = null;
   cache.runs = []; cache.details = {}; cache.graphs = {};
   lastRunsSig = ""; lastDetailSig = "";
@@ -2849,6 +2968,20 @@ document.addEventListener("visibilitychange", () => { if(!document.hidden) poll(
    Init
    =========================================================================== */
 applyTheme();
+setImmersive(state.immersive);
+document.addEventListener("keydown", event => {
+  if(event.key !== "Escape") return;
+  if(state.selectedNodeId){ closeNodeDetail(); return; }
+  const tools=document.querySelector(".admin-tools[open]");
+  if(tools){ tools.removeAttribute("open"); return; }
+  if(state.immersive){ setImmersive(false); render(); }
+});
+window.addEventListener("pagehide", () => {
+  const list=document.querySelector(".runlist"),detail=document.querySelector(".detail-pane");
+  const route=readObservatoryRoute(location.search,location.hash);
+  const saved=readObservatoryViewState(sessionStorage,OBSERVATORY_VIEW_KEY,route);
+  writeObservatoryViewState(sessionStorage,OBSERVATORY_VIEW_KEY,route,{list:paneScrollPosition(list,saved.list),detail:paneScrollPosition(detail,saved.detail)});
+});
 (async function init(){
   try { await completeLoginIfCallback(); }
   catch(e){ console.warn("observatory: login callback failed", e); }

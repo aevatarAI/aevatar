@@ -434,16 +434,21 @@ public sealed class StreamingToolExecutor
             {
                 if (toolCallContext.Terminate) return;
 
-                var resolvedCall = new ToolCall
+                try
                 {
-                    Id = toolCallContext.ToolCallId,
-                    Name = toolCallContext.ToolName,
-                    ArgumentsJson = toolCallContext.ArgumentsJson,
-                };
-
-                var (result, error) = await _tools.ExecuteToolCallRawAsync(resolvedCall, ct);
-                toolCallContext.Result = result;
-                if (error is not null)
+                    var executionTool = _tools.Get(toolCallContext.ToolName)
+                        ?? throw new InvalidOperationException(
+                            $"Tool '{toolCallContext.ToolName}' not found");
+                    var outcome = await executionTool.ExecuteWithOutcomeAsync(
+                        toolCallContext.ToolCallId,
+                        toolCallContext.ToolName,
+                        toolCallContext.ArgumentsJson,
+                        ct);
+                    toolCallContext.Result = outcome.ResultJson;
+                    if (outcome.Receipt is not null)
+                        toolCallContext.Receipt = outcome.Receipt;
+                }
+                catch (Exception error)
                 {
                     executionFailed = true;
                     var safeFailureResult = BuildSafeFailureResult();
@@ -459,7 +464,7 @@ public sealed class StreamingToolExecutor
                 ?? (toolCallContext.Terminate
                     ? "Tool call terminated by middleware"
                     : $"Tool '{toolCallContext.ToolName}' returned no result");
-            var receipt = toolCallContext.Receipt ?? ToolCallReceiptFinalizer.Finalize(toolCallContext).Receipt;
+            var receipt = ToolCallReceiptFinalizer.Finalize(toolCallContext).Receipt;
             var isErrorReceipt = executionFailed ||
                 receipt?.Status is AgentToolReceiptStatus.Error or
                 AgentToolReceiptStatus.Denied or

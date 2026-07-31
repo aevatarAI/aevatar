@@ -292,6 +292,28 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
             ct);
     }
 
+    internal async Task<NyxIdProxyTextResponse> ProxyRequestResponseAsync(
+        string token,
+        string slug,
+        string userServiceId,
+        string path,
+        string method,
+        string? body,
+        Dictionary<string, string>? extraHeaders,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(userServiceId);
+        using var request = CreateProxyRequest(
+            token,
+            slug,
+            userServiceId.Trim(),
+            path,
+            method,
+            body,
+            extraHeaders);
+        return await SendTextResponseAsync(request, ct);
+    }
+
     private async Task<string> ProxyRequestCoreAsync(
         string token,
         string slug,
@@ -1270,7 +1292,12 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
         return await SendAsync(request, ct);
     }
 
-    private async Task<string> SendAsync(HttpRequestMessage request, CancellationToken ct)
+    private async Task<string> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
+        (await SendTextResponseAsync(request, ct)).Content;
+
+    private async Task<NyxIdProxyTextResponse> SendTextResponseAsync(
+        HttpRequestMessage request,
+        CancellationToken ct)
     {
         try
         {
@@ -1286,10 +1313,17 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
                 var retryAfterJson = retryAfter.HasValue
                     ? $", \"retry_after_seconds\": {(int)Math.Ceiling(retryAfter.Value.TotalSeconds)}"
                     : string.Empty;
-                return $"{{\"error\": true, \"status\": {(int)response.StatusCode}, \"body\": {EscapeJsonString(content)}{retryAfterJson}}}";
+                return new NyxIdProxyTextResponse(
+                    false,
+                    $"{{\"error\": true, \"status\": {(int)response.StatusCode}, \"body\": {EscapeJsonString(content)}{retryAfterJson}}}",
+                    Detail: "http_error",
+                    HttpStatus: (int)response.StatusCode);
             }
 
-            return content;
+            return new NyxIdProxyTextResponse(
+                true,
+                content,
+                HttpStatus: (int)response.StatusCode);
         }
         catch (OperationCanceledException)
         {
@@ -1306,7 +1340,10 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
                 "NyxID API request exception: {Method} exceptionType={ExceptionType}",
                 request.Method,
                 ex.GetType().Name);
-            return """{"error":true,"status":0,"body":""}""";
+            return new NyxIdProxyTextResponse(
+                false,
+                """{"error":true,"status":0,"body":""}""",
+                Detail: "proxy_transport_failure");
         }
     }
 

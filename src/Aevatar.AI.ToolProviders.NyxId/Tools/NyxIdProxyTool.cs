@@ -174,7 +174,14 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
         }
         """;
 
-    public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+    public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+        (await ExecuteWithOutcomeAsync(string.Empty, Name, argumentsJson, ct)).ResultJson;
+
+    public async Task<AgentToolExecutionOutcome> ExecuteWithOutcomeAsync(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        CancellationToken ct = default)
     {
         var context = AgentToolRequestContext.Current;
         var managed = context?.WorkflowRuntime.HasManagedParent == true;
@@ -191,9 +198,16 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
             validPolicy && policy!.Approval == AgentToolOperationApproval.Required,
             wouldBlock);
         if (wouldBlock && _managedWorkflowAdmissionMode == NyxIdManagedWorkflowAdmissionMode.Enforce)
-            return OperationAdmissionRequiredResult;
+            return new AgentToolExecutionOutcome(OperationAdmissionRequiredResult);
 
-        return await ExecuteCoreAsync(context, argumentsJson, ct);
+        return context?.OperationAdmission is { } admission
+            ? await ExecuteAdmittedOperationAsync(
+                admission,
+                callId,
+                toolName,
+                argumentsJson,
+                ct)
+            : new AgentToolExecutionOutcome(await ExecuteCoreAsync(argumentsJson, ct));
     }
 
     private static bool IsValidExecutionPolicy(AgentToolOperationExecutionPolicy? policy)
@@ -222,17 +236,12 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
     }
 
     private async Task<string> ExecuteCoreAsync(
-        AgentToolExecutionContext? context,
         string argumentsJson,
         CancellationToken ct)
     {
         // Refactor (iter25/cluster-025-nyxid-tool-discovery-actor-cache):
         //   Old pattern: NyxIdSpecCatalog + SpecFetchToken + IServiceDiscoveryCache 在仓库内建第二 catalog(NyxID 真实源的影子)
         //   New principle: NyxID 是唯一真实源;删除 in-process catalog 假权威面; routing 和 spec hints 请求时读取 live NyxID surface;保留 typed tools + live nyxid_proxy
-        var admission = context?.OperationAdmission;
-        if (admission is not null)
-            return await ExecuteAdmittedOperationAsync(admission, argumentsJson, ct);
-
         var args = ToolArgs.Parse(argumentsJson);
         if (args.HasParseError)
         {
@@ -339,8 +348,10 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
     /// and schemas, so this path never accepts caller route fields and never issues an HTTP request
     /// before the whole request has been validated against the proof.
     /// </summary>
-    private async Task<string> ExecuteAdmittedOperationAsync(
+    private async Task<AgentToolExecutionOutcome> ExecuteAdmittedOperationAsync(
         AgentToolOperationAdmission admission,
+        string callId,
+        string toolName,
         string argumentsJson,
         CancellationToken ct)
     {
@@ -352,26 +363,26 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
                 "[nyxid_proxy] Admitted request rejected. identity={Identity} code={Code}",
                 FormatAdmissionIdentity(admission.Identity),
                 failure.Code);
-            return JsonSerializer.Serialize(new
+            return new AgentToolExecutionOutcome(JsonSerializer.Serialize(new
             {
                 error = true,
                 error_code = failure.Code,
                 message = failure.Message,
-            });
+            }));
         }
 
         var request = build.Request!;
         var token = AgentToolRequestContext.NyxIdAccessToken;
         if (string.IsNullOrWhiteSpace(token))
         {
-            return request.FileArtifact
+            return new AgentToolExecutionOutcome(request.FileArtifact
                 ? FileArtifactError("missing_nyxid_access_token", "No NyxID access token available. User must be authenticated.")
-                : """{"error":"No NyxID access token available. User must be authenticated."}""";
+                : """{"error":"No NyxID access token available. User must be authenticated."}""");
         }
 
         var revalidationFailure = await RevalidateAdmittedOperationAsync(admission, token, ct);
         if (revalidationFailure is not null)
-            return revalidationFailure;
+            return new AgentToolExecutionOutcome(revalidationFailure);
 
         _logger.LogInformation(
             "[nyxid_proxy] admitted {Method} slug={Slug} identity={Identity}",
@@ -384,13 +395,15 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
             return await ExecuteAdmittedFileArtifactAsync(
                 token,
                 request,
+                callId,
+                toolName,
                 admission.Identity is AgentToolOperationIdentity.AuthoredRequest
                     ? admission.ServiceInstanceId
                     : null,
                 ct);
         }
 
-        var result = await _client.ProxyRequestAsync(
+        var response = await _client.ProxyRequestResponseAsync(
             token,
             request.Slug,
             request.ServiceId,
@@ -399,9 +412,36 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
             request.Body,
             request.Headers,
             ct);
-        return admission.Identity is AgentToolOperationIdentity.AuthoredRequest
-            ? MapAuthoredExactRouteFailure(result, admission.ServiceInstanceId, request.Slug) ?? result
-            : result;
+        var authorityFailure = !response.Succeeded &&
+                               admission.Identity is AgentToolOperationIdentity.AuthoredRequest
+            ? MapAuthoredExactRouteFailure(response.Content, admission.ServiceInstanceId, request.Slug)
+            : null;
+        var result = authorityFailure is { } authorityError
+            ? AdmissionDriftError(authorityError.ErrorCode, authorityError.ErrorMessage)
+            : response.Content;
+        var receipt = response.Succeeded
+            ? NyxIdProxyReceiptFactory.CreateSuccess(
+                callId,
+                toolName,
+                request.ServiceId,
+                result)
+            : authorityFailure is { } exactRouteFailure
+                ? NyxIdProxyReceiptFactory.CreateError(
+                    callId,
+                    toolName,
+                    request.ServiceId,
+                    exactRouteFailure.ErrorCode,
+                    exactRouteFailure.ErrorMessage,
+                    result)
+            : NyxIdProxyReceiptFactory.TryCreate(
+                callId,
+                toolName,
+                request.Slug,
+                request.ServiceId,
+                serviceLabel: null,
+                request.Path,
+                response.Content);
+        return new AgentToolExecutionOutcome(result, receipt);
     }
 
     private async Task<string?> RevalidateAdmittedOperationAsync(
@@ -454,7 +494,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
         return null;
     }
 
-    private static string? MapAuthoredExactRouteFailure(
+    private static (string ErrorCode, string ErrorMessage)? MapAuthoredExactRouteFailure(
         string response,
         string serviceInstanceId,
         string serviceSlug)
@@ -465,7 +505,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
         return MapAuthoredExactRouteError(httpStatus, error, errorCode, message, serviceInstanceId, serviceSlug);
     }
 
-    private static string? MapAuthoredExactRouteFailure(
+    private static (string ErrorCode, string ErrorMessage)? MapAuthoredExactRouteFailure(
         NyxIdProxyBinaryResponse response,
         string serviceInstanceId,
         string serviceSlug)
@@ -479,7 +519,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
         return MapAuthoredExactRouteError(response.HttpStatus, error, errorCode, message, serviceInstanceId, serviceSlug);
     }
 
-    private static string? MapAuthoredExactRouteError(
+    private static (string ErrorCode, string ErrorMessage)? MapAuthoredExactRouteError(
         int httpStatus,
         string error,
         int errorCode,
@@ -492,7 +532,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
             errorCode == 1000 &&
             IsExactSlugMismatch(message, serviceInstanceId, serviceSlug))
         {
-            return AdmissionDriftError(
+            return (
                 "NYXID_OPERATION_AUTHORITY_DRIFT",
                 "NyxID rejected the admitted UserService authority.");
         }
@@ -502,7 +542,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
             errorCode == 1003 &&
             message == $"Not found: UserService '{serviceInstanceId}' not found")
         {
-            return AdmissionDriftError(
+            return (
                 "NYXID_OPERATION_AUTHORITY_DRIFT",
                 "NyxID rejected the admitted UserService authority.");
         }
@@ -512,7 +552,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
             errorCode == 8103 &&
             message == "Organization role insufficient: you do not have proxy access to this service")
         {
-            return AdmissionDriftError(
+            return (
                 "NYXID_OPERATION_AUTHORITY_ACCESS_DENIED",
                 "NyxID denied access to the admitted UserService authority.");
         }
@@ -632,21 +672,23 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
     private static string AdmissionDriftError(string code, string message) =>
         JsonSerializer.Serialize(new { error = true, error_code = code, message });
 
-    private async Task<string> ExecuteAdmittedFileArtifactAsync(
+    private async Task<AgentToolExecutionOutcome> ExecuteAdmittedFileArtifactAsync(
         string effectiveToken,
         NyxIdOperationRequest request,
+        string callId,
+        string toolName,
         string? authoredServiceInstanceId,
         CancellationToken ct)
     {
         if (_fileArtifactIngress == null)
-            return FileArtifactError("file_artifact_ingress_unavailable", "Host has not registered workflow file artifact ingress.");
+            return new AgentToolExecutionOutcome(FileArtifactError("file_artifact_ingress_unavailable", "Host has not registered workflow file artifact ingress."));
 
         var context = AgentToolRequestContext.Current;
         var workflowRuntime = context?.WorkflowRuntime ?? AgentWorkflowRuntimeContext.Empty;
         var callerScopeId = Normalize(context?.Caller.ScopeId);
         var ownerRunId = Normalize(workflowRuntime.ParentRunId);
         if (!workflowRuntime.HasManagedParent || callerScopeId == null || ownerRunId == null)
-            return FileArtifactError("managed_workflow_context_required", "response_mode=file_artifact requires a managed workflow runtime context and caller scope.");
+            return new AgentToolExecutionOutcome(FileArtifactError("managed_workflow_context_required", "response_mode=file_artifact requires a managed workflow runtime context and caller scope."));
 
         var response = await _client.ProxyGetBinaryResponseAsync(
             effectiveToken,
@@ -663,11 +705,22 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
                 response,
                 authoredServiceInstanceId,
                 request.Slug);
-            if (authorityFailure is not null)
-                return authorityFailure;
+            if (authorityFailure is { } failure)
+            {
+                var result = AdmissionDriftError(failure.ErrorCode, failure.ErrorMessage);
+                return new AgentToolExecutionOutcome(
+                    result,
+                    NyxIdProxyReceiptFactory.CreateError(
+                        callId,
+                        toolName,
+                        request.ServiceId,
+                        failure.ErrorCode,
+                        failure.ErrorMessage,
+                        result));
+            }
         }
 
-        return await CompleteFileArtifactAsync(
+        var completion = await CompleteFileArtifactAsync(
             response,
             request.Slug,
             request.ServiceId,
@@ -675,6 +728,15 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
             callerScopeId,
             ownerRunId,
             ct);
+        return new AgentToolExecutionOutcome(
+            completion.ResultJson,
+            completion.Succeeded
+                ? NyxIdProxyReceiptFactory.CreateSuccess(
+                    callId,
+                    toolName,
+                    request.ServiceId,
+                    completion.ResultJson)
+                : null);
     }
 
     private async Task<string> ExecuteFileArtifactAsync(
@@ -721,17 +783,17 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
             _fileArtifactMaxBytes,
             ct);
 
-        return await CompleteFileArtifactAsync(
+        return (await CompleteFileArtifactAsync(
             response,
             slug,
             serviceId,
             path,
             callerScopeId,
             ownerRunId,
-            ct);
+            ct)).ResultJson;
     }
 
-    private async Task<string> CompleteFileArtifactAsync(
+    private async Task<(string ResultJson, bool Succeeded)> CompleteFileArtifactAsync(
         NyxIdProxyBinaryResponse response,
         string slug,
         string serviceId,
@@ -751,15 +813,15 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
             var detail = error == "file_artifact_too_large"
                 ? response.Detail ?? "content_exceeds_max_bytes"
                 : "NyxID binary proxy request failed.";
-            return FileArtifactError(
+            return (FileArtifactError(
                 error,
                 detail,
                 response.HttpStatus,
-                response.ContentType);
+                response.ContentType), false);
         }
 
         if (response.Content.Length == 0)
-            return FileArtifactError("empty_file_artifact", "NyxID binary proxy response was empty.", response.HttpStatus, response.ContentType);
+            return (FileArtifactError("empty_file_artifact", "NyxID binary proxy response was empty.", response.HttpStatus, response.ContentType), false);
 
         FileArtifactIngressResult ingressResult;
         try
@@ -780,10 +842,10 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
                 "[nyxid_proxy] File artifact ingress failed. slug={Slug} exceptionType={ExceptionType}",
                 slug,
                 ex.GetType().Name);
-            return FileArtifactError("artifact_ingress_failed", "Downloaded resource could not be stored.", response.HttpStatus, response.ContentType);
+            return (FileArtifactError("artifact_ingress_failed", "Downloaded resource could not be stored.", response.HttpStatus, response.ContentType), false);
         }
 
-        return JsonSerializer.Serialize(
+        return (JsonSerializer.Serialize(
             new NyxIdProxyFileArtifactSuccess(
                 true,
                 FileArtifactResponseMode,
@@ -793,7 +855,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
                 response.ContentType,
                 response.FileName,
                 ToFileRefProjection(ingressResult.FileRef)),
-            JsonOptions);
+            JsonOptions), true);
     }
 
     // ─── Dual-token exact identity routing ───

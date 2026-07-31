@@ -71,6 +71,17 @@ shell route that embeds that page in a same-origin iframe; it does not retain a 
 poller, or API path. The shell forwards only `scope`, `status`, `origin`, `definition`, `schedule`, `from`, `to`,
 `run`, and `tab`, preserving exact values so standalone and embedded deep links express the same observation
 intent. Typed same-origin messages carry CQRS/audit navigation back to the shell without duplicating data reads.
+The canonical page also owns the compact observation workspace bar, manual refresh, admin lookup tools, and
+immersive observation. Immersive mode is session-local rather than URL state. When embedded, a typed same-origin
+message asks the admin shell to hide its navigation/header/account chrome; `Escape` exits without changing scope,
+filters, selected run, or tab.
+
+The canonical observatory stores run-list and detail-canvas scroll positions in `sessionStorage`, keyed by the
+canonical observation route. Polling and same-route refresh preserve both positions; changing scope or server
+filters resets the list, while changing run or detail tab resets the detail canvas. Browser reload restores only
+the matching route's positions. The admin shell independently stores ordinary module scroll positions per hash
+route. Same-route shell renders reuse an existing embedded suite iframe and update only shell chrome, avoiding an
+unnecessary document reload; a different module or iframe source still creates the correct new view.
 
 The authoritative page defaults every caller, including an administrator, to the caller's own scope.
 `scope=all` is an explicit administrator viewing mode that maps to the backend-only `__all__` sentinel; exact
