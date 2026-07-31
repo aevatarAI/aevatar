@@ -239,9 +239,9 @@ public sealed class AgentRunReplyGenerationExecutorTests
     }
 
     [Fact]
-    public async Task NyxIdCatalogTool_ThroughNyxIdChatTurnExecutor_ShouldCompleteReadOnlyWithoutOutcomeReceipt()
+    public async Task NyxIdCatalogTool_ThroughNyxIdChatTurnExecutor_ShouldAcceptCurrentEntriesEnvelope()
     {
-        var handler = new StaticResponseHandler("""{"services":[{"slug":"api-github"}]}""");
+        var handler = new StaticResponseHandler("""{"entries":[{"slug":"api-github"}]}""");
         using var httpClient = new HttpClient(handler);
         using var client = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example" },

@@ -68,9 +68,10 @@ public sealed class NyxIdCatalogTool : INyxIdBuiltInTool
 
             var requestedSlug = ToolArgs.Parse(argumentsJson).Str("slug");
             var verified = string.IsNullOrWhiteSpace(requestedSlug)
-                ? root.ValueKind == JsonValueKind.Object &&
-                  root.TryGetProperty("services", out var services) &&
-                  services.ValueKind == JsonValueKind.Array
+                ? root.ValueKind == JsonValueKind.Array ||
+                  root.ValueKind == JsonValueKind.Object &&
+                  root.TryGetProperty("entries", out var entries) &&
+                  entries.ValueKind == JsonValueKind.Array
                 : root.ValueKind == JsonValueKind.Object &&
                   root.TryGetProperty("slug", out var slug) &&
                   slug.ValueKind == JsonValueKind.String &&
