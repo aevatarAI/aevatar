@@ -10,6 +10,7 @@ import {
   PlayCircleOutlined,
   PlusOutlined,
   ReloadOutlined,
+  RobotOutlined,
   SaveOutlined,
 } from '@ant-design/icons';
 import type { InputRef, MenuProps } from 'antd';
@@ -25,6 +26,7 @@ type WorkflowStudioHeaderProps = {
   readonly canOpenAutomations: boolean;
   readonly canOpenInvoke: boolean;
   readonly canOpenPublishedRuns: boolean;
+  readonly canAskAi: boolean;
   readonly invokeHref: string;
   readonly invokePlaceholderReason?: string;
   readonly memberPublished: boolean;
@@ -51,6 +53,7 @@ type WorkflowStudioHeaderProps = {
   readonly onOpenAutomations: () => void;
   readonly onOpenInvoke: () => void;
   readonly onOpenPublishedRuns: () => void;
+  readonly onOpenAiProposal: () => void;
   readonly onRefreshPublishStatus: () => void;
   readonly onAddNode: () => void;
   readonly onDeleteConnection: () => void;
@@ -640,6 +643,7 @@ type HeaderActionsProps = {
   readonly canOpenDraftRunPanel: boolean;
   readonly canOpenInvoke: boolean;
   readonly canOpenPublishedRuns: boolean;
+  readonly canAskAi: boolean;
   readonly canSave: boolean;
   readonly canEditYaml: boolean;
   readonly invokeHref: string;
@@ -651,6 +655,7 @@ type HeaderActionsProps = {
   readonly onOpenDraftRunPanel: () => void;
   readonly onOpenInvoke: () => void;
   readonly onOpenPublishedRuns: () => void;
+  readonly onOpenAiProposal: () => void;
   readonly onEditYaml: () => void;
   readonly onPublishMember: () => void;
   readonly onRefreshPublishStatus: () => void;
@@ -677,6 +682,7 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
   canOpenDraftRunPanel,
   canOpenInvoke,
   canOpenPublishedRuns,
+  canAskAi,
   canSave,
   canEditYaml,
   invokeHref,
@@ -689,6 +695,7 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
   onEditYaml,
   onOpenInvoke,
   onOpenPublishedRuns,
+  onOpenAiProposal,
   onPublishMember,
   onRefreshPublishStatus,
   onSave,
@@ -793,6 +800,29 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
         className="workflow-studio-header__action-group workflow-studio-header__action-group--edit"
         data-testid="workflow-header-edit-actions"
       >
+        <Button
+          aria-label={t('teamMemberWorkflowStudio.header.askAi', 'Ask AI')}
+          className="workflow-studio-header__compact-button"
+          disabled={!canAskAi}
+          icon={<RobotOutlined />}
+          onClick={onOpenAiProposal}
+          size="small"
+          title={
+            canAskAi
+              ? t(
+                  'teamMemberWorkflowStudio.header.askAiTitle',
+                  'Generate a reviewable workflow proposal',
+                )
+              : t(
+                  'teamMemberWorkflowStudio.header.askAiUnavailable',
+                  'Load the workflow draft before asking AI.',
+                )
+          }
+        >
+          <span className="workflow-studio-header__action-label">
+            {t('teamMemberWorkflowStudio.header.askAi', 'Ask AI')}
+          </span>
+        </Button>
         <Button
           aria-label={t('teamMemberWorkflowStudio.header.addNode', 'Add node')}
           className="workflow-studio-header__compact-button"
@@ -1022,6 +1052,7 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
   canOpenAutomations,
   canOpenInvoke,
   canOpenPublishedRuns,
+  canAskAi,
   invokeHref,
   invokePlaceholderReason,
   memberPublished,
@@ -1043,6 +1074,7 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
   onOpenAutomations,
   onOpenInvoke,
   onOpenPublishedRuns,
+  onOpenAiProposal,
   onRefreshPublishStatus,
   onAddNode,
   onDeleteConnection,
@@ -1113,6 +1145,7 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
           canOpenDraftRunPanel={canOpenDraftRunPanel}
           canOpenInvoke={canOpenInvoke}
           canOpenPublishedRuns={canOpenPublishedRuns}
+          canAskAi={canAskAi}
           canSave={canSave}
           canEditYaml={canEditYaml}
           invokeHref={invokeHref}
@@ -1125,6 +1158,7 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
           onEditYaml={onEditYaml}
           onOpenInvoke={onOpenInvoke}
           onOpenPublishedRuns={onOpenPublishedRuns}
+          onOpenAiProposal={onOpenAiProposal}
           onPublishMember={onPublishMember}
           onRefreshPublishStatus={onRefreshPublishStatus}
           onSave={onSave}
