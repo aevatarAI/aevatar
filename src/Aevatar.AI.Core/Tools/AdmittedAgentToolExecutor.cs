@@ -291,9 +291,10 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
                 callSafety,
                 resultJson,
                 argumentsJson);
+            var safeResultJson = receipt.ResultJson ?? string.Empty;
             outcome = new AgentToolExecutionOutcome(
                 AgentToolExecutionOutcomeKind.Executed,
-                resultJson ?? string.Empty,
+                safeResultJson,
                 receipt,
                 isMutation,
                 string.Empty,
@@ -725,7 +726,8 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
     private static AuditOutcome MapAuditOutcome(AgentToolExecutionOutcome outcome) =>
         outcome.Kind switch
         {
-            AgentToolExecutionOutcomeKind.Executed => AuditOutcome.Success,
+            AgentToolExecutionOutcomeKind.Executed
+                when outcome.Receipt.Status == AgentToolReceiptStatus.Success => AuditOutcome.Success,
             AgentToolExecutionOutcomeKind.ApprovalRequired => AuditOutcome.Accepted,
             AgentToolExecutionOutcomeKind.Denied => AuditOutcome.Denied,
             _ => AuditOutcome.Error,
@@ -808,9 +810,9 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
                 CodexExecutionFailureKind.TimedOut => "codex_execution_timed_out",
                 CodexExecutionFailureKind.Cancelled => "codex_execution_cancelled",
                 CodexExecutionFailureKind.CleanupFailed => "codex_execution_cleanup_failed",
-                _ => "tool_execution_failed",
+                _ => "tool_execution_exception",
             }
-            : "tool_execution_failed";
+            : "tool_execution_exception";
 
     private static string? NormalizeIdentity(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

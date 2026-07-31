@@ -1312,22 +1312,22 @@ public class ToolCallLoopTests
             }
             catch (Exception ex)
             {
-                var result = ToolManager.BuildErrorJson(ex.Message);
+                var result = ToolManager.BuildErrorJson("The tool request failed.");
                 var receipt = AgentToolReceiptFactory.CreateError(
                     request.Tool,
                     request.ExecutionContext.Request.CallId ?? string.Empty,
                     request.Tool.Name,
                     safety,
                     result,
-                    "tool_execution_error",
-                    ex.Message);
+                    "tool_execution_exception",
+                    ex.GetType().Name);
                 return new AgentToolExecutionOutcome(
                     AgentToolExecutionOutcomeKind.Failed,
                     result,
                     receipt,
                     !safety.IsReadOnly,
-                    "tool_execution_error",
-                    ex.Message,
+                    "tool_execution_exception",
+                    ex.GetType().Name,
                     AgentToolExecutionFailureStage.TerminalExecution,
                     TerminalInvoked: true,
                     Retryable: false,

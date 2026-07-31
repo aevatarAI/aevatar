@@ -161,11 +161,129 @@ public sealed class AdmittedAgentToolExecutorTests
         var outcome = await executor.ExecuteAsync(CreateRequest(tool));
 
         outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Failed);
-        outcome.FailureCode.Should().Be("tool_execution_failed");
+        outcome.FailureCode.Should().Be("tool_execution_exception");
         outcome.FailureStage.Should().Be(AgentToolExecutionFailureStage.TerminalExecution);
         outcome.TerminalInvoked.Should().BeTrue();
         outcome.Retryable.Should().BeFalse();
         outcome.AuditCompleted.Should().BeFalse();
+        tool.ExecutionCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenTerminalThrows_ShouldRecordSafeFailedTerminal()
+    {
+        const string rawException = "terminal failed with bearer-secret";
+        var appender = new RecordingAuditTrailAppender((record, _) =>
+            AuditTrailAppendResult.Appended(record.AuditId));
+        var tool = new RecordingTool(
+            new AgentToolCallSafety(false, true, false),
+            _ => throw new InvalidOperationException(rawException));
+        var executor = CreateExecutor(appender);
+
+        var outcome = await executor.ExecuteAsync(CreateRequest(tool));
+
+        outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Failed);
+        outcome.FailureCode.Should().Be("tool_execution_exception");
+        outcome.SafeMessage.Should().Be(nameof(InvalidOperationException));
+        outcome.FailureStage.Should().Be(AgentToolExecutionFailureStage.TerminalExecution);
+        outcome.TerminalInvoked.Should().BeTrue();
+        outcome.Retryable.Should().BeFalse();
+        outcome.AuditCompleted.Should().BeTrue();
+        outcome.ResultJson.Should().NotContain(rawException).And.NotContain("bearer-secret");
+        outcome.Receipt.Status.Should().Be(AgentToolReceiptStatus.Error);
+        outcome.Receipt.ErrorCode.Should().Be("tool_execution_exception");
+        outcome.Receipt.ErrorMessage.Should().Be(nameof(InvalidOperationException));
+        outcome.Receipt.ResultJson.Should().Be(outcome.ResultJson);
+        tool.ExecutionCalls.Should().Be(1);
+        appender.Records.Select(record => record.Annotations["execution_phase"])
+            .Should().Equal("running", "terminal");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenReceiptCreationThrows_ShouldReturnAuditedSafeUnknown()
+    {
+        const string rawResult = "{\"secret\":\"provider-secret\"}";
+        var appender = new RecordingAuditTrailAppender((record, _) =>
+            AuditTrailAppendResult.Appended(record.AuditId));
+        var tool = new RecordingTool(
+            new AgentToolCallSafety(true, false, false),
+            _ => rawResult,
+            throwOnReceipt: true);
+        var executor = CreateExecutor(appender);
+
+        var outcome = await executor.ExecuteAsync(CreateRequest(tool));
+
+        outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Executed);
+        outcome.ResultJson.Should().Be(
+            "{\"status\":\"unknown\",\"message\":\"The tool outcome could not be verified.\"}");
+        outcome.Receipt.Status.Should().Be(AgentToolReceiptStatus.Unspecified);
+        outcome.Receipt.ErrorCode.Should().Be("tool_outcome_unknown");
+        outcome.Receipt.ErrorMessage.Should().Be("The tool outcome could not be verified.");
+        outcome.Receipt.ResultJson.Should().Be(outcome.ResultJson);
+        outcome.ResultJson.Should().NotContain("provider-secret");
+        outcome.TerminalInvoked.Should().BeTrue();
+        outcome.Retryable.Should().BeFalse();
+        outcome.AuditCompleted.Should().BeTrue();
+        tool.ExecutionCalls.Should().Be(1);
+        appender.Records.Select(record => record.Annotations["execution_phase"])
+            .Should().Equal("running", "terminal");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenProviderReturnsSafeErrorReceipt_ShouldNotExposeRawResult()
+    {
+        const string rawResult = "{\"error\":true,\"body\":\"bearer-secret\"}";
+        const string safeResult = "{\"error\":\"provider_request_failed\"}";
+        var appender = new RecordingAuditTrailAppender((record, _) =>
+            AuditTrailAppendResult.Appended(record.AuditId));
+        var tool = new RecordingTool(
+            new AgentToolCallSafety(true, false, false),
+            _ => rawResult,
+            createReceipt: _ => new AgentToolReceipt
+            {
+                Status = AgentToolReceiptStatus.Error,
+                ErrorCode = "provider_request_failed",
+                ErrorMessage = "The provider request failed.",
+                ResultJson = safeResult,
+            });
+        var executor = CreateExecutor(appender);
+
+        var outcome = await executor.ExecuteAsync(CreateRequest(tool));
+
+        outcome.ResultJson.Should().Be(safeResult);
+        outcome.ResultJson.Should().NotContain("bearer-secret");
+        outcome.Receipt.Status.Should().Be(AgentToolReceiptStatus.Error);
+        outcome.Receipt.ResultJson.Should().Be(safeResult);
+        outcome.TerminalInvoked.Should().BeTrue();
+        outcome.AuditCompleted.Should().BeTrue();
+        tool.ExecutionCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenProviderErrorReceiptHasNoSafeResult_ShouldNotFallBackToRawResult()
+    {
+        const string rawResult = "{\"error\":true,\"body\":\"bearer-secret\"}";
+        var appender = new RecordingAuditTrailAppender((record, _) =>
+            AuditTrailAppendResult.Appended(record.AuditId));
+        var tool = new RecordingTool(
+            new AgentToolCallSafety(true, false, false),
+            _ => rawResult,
+            createReceipt: _ => new AgentToolReceipt
+            {
+                Status = AgentToolReceiptStatus.Error,
+                ErrorCode = "provider_request_failed",
+                ErrorMessage = "The provider request failed.",
+            });
+        var executor = CreateExecutor(appender);
+
+        var outcome = await executor.ExecuteAsync(CreateRequest(tool));
+
+        outcome.ResultJson.Should().BeEmpty();
+        outcome.ResultJson.Should().NotContain("bearer-secret");
+        outcome.Receipt.Status.Should().Be(AgentToolReceiptStatus.Error);
+        outcome.Receipt.ResultJson.Should().BeEmpty();
+        outcome.TerminalInvoked.Should().BeTrue();
+        outcome.AuditCompleted.Should().BeTrue();
         tool.ExecutionCalls.Should().Be(1);
     }
 
@@ -300,7 +418,9 @@ public sealed class AdmittedAgentToolExecutorTests
 
     private sealed class RecordingTool(
         AgentToolCallSafety safety,
-        Func<string, string>? execute = null) : IAgentTool
+        Func<string, string>? execute = null,
+        bool throwOnReceipt = false,
+        Func<string, AgentToolReceipt?>? createReceipt = null) : IAgentTool
     {
         private readonly Func<string, string> _execute = execute ?? (_ => "{}");
 
@@ -318,6 +438,27 @@ public sealed class AdmittedAgentToolExecutorTests
             SafetyCalls++;
             SafetyArguments.Add(argumentsJson);
             return safety;
+        }
+
+        public AgentToolReceipt? CreateResultReceipt(
+            string callId,
+            string toolName,
+            string argumentsJson,
+            string resultJson)
+        {
+            if (throwOnReceipt)
+                throw new InvalidOperationException("receipt failed with provider-secret");
+
+            if (createReceipt is not null)
+                return createReceipt(resultJson);
+
+            return new AgentToolReceipt
+            {
+                CallId = callId,
+                ToolName = toolName,
+                Status = AgentToolReceiptStatus.Success,
+                ResultJson = resultJson,
+            };
         }
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)

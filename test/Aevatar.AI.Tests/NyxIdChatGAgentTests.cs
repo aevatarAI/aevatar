@@ -14,6 +14,10 @@ using Aevatar.AI.Core.Tools;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.Tools;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
+using Aevatar.Audit;
+using Aevatar.Audit.Abstractions.Identity;
+using Aevatar.Audit.Abstractions.Models;
+using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
 using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
@@ -2185,7 +2189,9 @@ public class NyxIdChatGAgentTests
             .AddSingleton(eventStore)
             .AddSingleton<EventSourcingRuntimeOptions>()
             .AddSingleton(callbackScheduler)
-            .AddSingleton<IAgentToolExecutionPort, TestAgentToolExecutionPort>()
+            .AddSingleton<IAuditTrailAppender, AppendedAuditTrail>()
+            .AddSingleton<IAuditActorIdentityHasher, StableIdentityHasher>()
+            .AddSingleton<IAgentToolExecutionPort, AdmittedAgentToolExecutor>()
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
 
         if (registryCommandPort is not null)
@@ -3106,31 +3112,19 @@ public class NyxIdChatGAgentTests
             Task.FromResult(execute(argumentsJson));
     }
 
-    private sealed class TestAgentToolExecutionPort : IAgentToolExecutionPort
+    private sealed class AppendedAuditTrail : IAuditTrailAppender
     {
-        public async Task<AgentToolExecutionOutcome> ExecuteAsync(
-            AgentToolExecutionRequest request,
-            CancellationToken ct = default)
-        {
-            var safety = request.Tool.GetCallSafety(request.ArgumentsJson);
-            var resultJson = await request.Tool.ExecuteAsync(request.ArgumentsJson, ct);
-            return new AgentToolExecutionOutcome(
-                AgentToolExecutionOutcomeKind.Executed,
-                resultJson,
-                AgentToolReceiptFactory.CreateSuccess(
-                    request.Tool,
-                    request.ExecutionContext.Request.CallId ?? string.Empty,
-                    request.Tool.Name,
-                    safety,
-                    resultJson),
-                IsMutation: !safety.IsReadOnly,
-                FailureCode: string.Empty,
-                SafeMessage: string.Empty,
-                AgentToolExecutionFailureStage.None,
-                TerminalInvoked: true,
-                Retryable: false,
-                AuditCompleted: true);
-        }
+        public Task<AuditTrailAppendResult> AppendAsync(
+            AuditRecord record,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(AuditTrailAppendResult.Appended(record.AuditId));
+    }
+
+    private sealed class StableIdentityHasher : IAuditActorIdentityHasher
+    {
+        public AuditActorIdentity Hash(string canonicalActorKey) => new("actor-hash", "key-1");
+
+        public bool Verify(string canonicalActorKey, string auditActorId, string identityKeyId) => true;
     }
 
     private sealed class VerifiedMissingServiceTool : IAgentTool

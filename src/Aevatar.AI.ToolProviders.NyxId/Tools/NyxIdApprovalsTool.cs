@@ -1,4 +1,6 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 
@@ -66,6 +68,22 @@ public sealed class NyxIdApprovalsTool : INyxIdBuiltInTool, IAgentToolCapability
 
     public AgentToolCallSafety GetCallSafety(string argumentsJson) =>
         ActionParser.Classify(argumentsJson);
+
+    public AgentToolReceipt? CreateResultReceipt(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        string resultJson)
+    {
+        var parsed = ActionParser.Parse(argumentsJson);
+        return parsed.IsValid && parsed.Action is NyxIdApprovalsAction.List or NyxIdApprovalsAction.Show
+            ? NyxIdManagedToolReceiptFactory.TryCreate(
+                callId,
+                toolName,
+                resultJson,
+                root => NyxIdApprovalResponseMapper.TryMap(parsed.Action, root))
+            : NyxIdManagedToolReceiptFactory.TryCreate(callId, toolName, resultJson);
+    }
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
@@ -212,4 +230,184 @@ internal sealed class NyxIdClosedActionParser<TAction>
             return default;
         }
     }
+}
+
+internal static class NyxIdManagedToolReceiptFactory
+{
+    private const string InvalidActionCode = "invalid_action";
+    private const string InvalidArgumentsCode = "invalid_arguments";
+    private const string RequestFailedCode = "nyxid_request_failed";
+
+    public static AgentToolReceipt? TryCreate(
+        string callId,
+        string toolName,
+        string resultJson,
+        Func<JsonElement, string?>? mapSuccess = null)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(resultJson);
+            if (document.RootElement.ValueKind is not (JsonValueKind.Object or JsonValueKind.Array))
+                return null;
+
+            if (document.RootElement.ValueKind == JsonValueKind.Object &&
+                document.RootElement.TryGetProperty("error", out var error) &&
+                IsError(error))
+            {
+                return CreateError(callId, toolName, error);
+            }
+
+            var safeResultJson = resultJson;
+            if (mapSuccess is not null)
+            {
+                safeResultJson = mapSuccess(document.RootElement);
+                if (safeResultJson is null)
+                    return null;
+            }
+
+            return new AgentToolReceipt
+            {
+                CallId = callId ?? string.Empty,
+                ToolName = toolName ?? string.Empty,
+                Status = AgentToolReceiptStatus.Success,
+                ResultJson = safeResultJson,
+            };
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static bool IsError(JsonElement error) =>
+        error.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.String => !string.IsNullOrWhiteSpace(error.GetString()),
+            _ => false,
+        };
+
+    private static AgentToolReceipt CreateError(
+        string callId,
+        string toolName,
+        JsonElement error)
+    {
+        var providerCode = error.ValueKind == JsonValueKind.String
+            ? error.GetString()?.Trim()
+            : null;
+        var errorCode = string.Equals(providerCode, InvalidActionCode, StringComparison.Ordinal)
+            ? InvalidActionCode
+            : error.ValueKind == JsonValueKind.True
+                ? RequestFailedCode
+                : InvalidArgumentsCode;
+        var safeMessage = errorCode switch
+        {
+            InvalidActionCode => "The requested NyxID action is invalid.",
+            InvalidArgumentsCode => "The NyxID tool arguments are invalid.",
+            _ => "The NyxID request failed.",
+        };
+        var safeResult = errorCode == InvalidActionCode
+            ? NyxIdClosedActionParser<NyxIdApprovalsAction>.InvalidActionJson
+            : JsonSerializer.Serialize(new { error = errorCode, message = safeMessage });
+        return new AgentToolReceipt
+        {
+            CallId = callId ?? string.Empty,
+            ToolName = toolName ?? string.Empty,
+            Status = AgentToolReceiptStatus.Error,
+            ErrorCode = errorCode,
+            ErrorMessage = safeMessage,
+            ResultJson = safeResult,
+        };
+    }
+}
+
+internal static class NyxIdApprovalResponseMapper
+{
+    private static readonly JsonSerializerOptions SafeResultJsonOptions = new()
+    {
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
+
+    public static string? TryMap(NyxIdApprovalsAction action, JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object)
+            return null;
+
+        return action switch
+        {
+            NyxIdApprovalsAction.List => MapList(root),
+            NyxIdApprovalsAction.Show => MapShow(root),
+            _ => null,
+        };
+    }
+
+    private static string? MapList(JsonElement root)
+    {
+        var response = JsonSerializer.Deserialize<NyxIdApprovalRequestsView>(root.GetRawText());
+        return response?.Requests is null
+            ? null
+            : JsonSerializer.Serialize(response, SafeResultJsonOptions);
+    }
+
+    private static string? MapShow(JsonElement root)
+    {
+        var approval = JsonSerializer.Deserialize<NyxIdApprovalRequestView>(root.GetRawText());
+        return string.IsNullOrWhiteSpace(approval?.Id)
+            ? null
+            : JsonSerializer.Serialize(approval, SafeResultJsonOptions);
+    }
+}
+
+internal sealed class NyxIdApprovalRequestsView
+{
+    [JsonPropertyName("requests")]
+    public List<NyxIdApprovalRequestView>? Requests { get; init; }
+
+    [JsonPropertyName("total")]
+    public ulong Total { get; init; }
+
+    [JsonPropertyName("page")]
+    public ulong Page { get; init; }
+
+    [JsonPropertyName("per_page")]
+    public ulong PerPage { get; init; }
+}
+
+internal sealed class NyxIdApprovalRequestView
+{
+    [JsonPropertyName("id")]
+    public string? Id { get; init; }
+
+    [JsonPropertyName("service_name")]
+    public string? ServiceName { get; init; }
+
+    [JsonPropertyName("service_slug")]
+    public string? ServiceSlug { get; init; }
+
+    [JsonPropertyName("tool_name")]
+    public string? ToolName { get; init; }
+
+    [JsonPropertyName("tool_call_id")]
+    public string? ToolCallId { get; init; }
+
+    [JsonPropertyName("is_destructive")]
+    public bool? IsDestructive { get; init; }
+
+    [JsonPropertyName("approval_mode")]
+    public string? ApprovalMode { get; init; }
+
+    [JsonPropertyName("status")]
+    public string? Status { get; init; }
+
+    [JsonPropertyName("created_at")]
+    public string? CreatedAt { get; init; }
+
+    [JsonPropertyName("decided_at")]
+    public string? DecidedAt { get; init; }
+
+    [JsonPropertyName("from_org_policy")]
+    public bool FromOrgPolicy { get; init; }
+
+    [JsonPropertyName("org_name")]
+    public string? OrgName { get; init; }
 }

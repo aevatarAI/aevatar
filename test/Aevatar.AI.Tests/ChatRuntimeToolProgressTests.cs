@@ -4,6 +4,10 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Tools;
+using Aevatar.Audit;
+using Aevatar.Audit.Abstractions.Identity;
+using Aevatar.Audit.Abstractions.Models;
+using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.Foundation.Abstractions.Tools;
 using FluentAssertions;
 
@@ -21,7 +25,7 @@ public sealed class ChatRuntimeToolProgressTests
         var runtime = new ChatRuntime(
             providerFactory: () => provider,
             history: new ChatHistory(),
-            toolLoop: new ToolCallLoop(tools),
+            toolLoop: CreateToolCallLoop(tools),
             hooks: null,
             requestBuilder: _ => new LLMRequest { Messages = [], Tools = tools.GetAll() });
         var toolContext = AgentToolExecutionContext.Empty with
@@ -59,7 +63,9 @@ public sealed class ChatRuntimeToolProgressTests
             tool.Started.Task.IsCompleted.Should().BeFalse();
 
             var resume = stream.MoveNextAsync().AsTask();
-            await tool.Started.Task;
+            var executionSignal = await Task.WhenAny(tool.Started.Task, resume);
+            executionSignal.Should().BeSameAs(tool.Started.Task,
+                "the admitted terminal must invoke the recovery tool before publishing its result");
             resume.IsCompleted.Should().BeFalse();
             tool.Release("{\"loaded\":true}");
             (await resume).Should().BeTrue();
@@ -85,11 +91,15 @@ public sealed class ChatRuntimeToolProgressTests
         var runtime = new ChatRuntime(
             providerFactory: () => provider,
             history: new ChatHistory(),
-            toolLoop: new ToolCallLoop(tools),
+            toolLoop: CreateToolCallLoop(tools),
             hooks: null,
             requestBuilder: _ => new LLMRequest { Messages = [], Tools = tools.GetAll() });
 
-        await using var stream = runtime.ChatStreamAsync("hello", maxToolRounds: 2, turnCatalog: null)
+        await using var stream = runtime.ChatStreamAsync(
+                "hello",
+                maxToolRounds: 2,
+                requestId: "tool-progress-request",
+                turnCatalog: null)
             .GetAsyncEnumerator();
         LLMStreamChunk? started = null;
         while (await stream.MoveNextAsync())
@@ -109,7 +119,9 @@ public sealed class ChatRuntimeToolProgressTests
             "the caller must commit TOOL_CALL_START before advancing the iterator into execution");
 
         var resume = stream.MoveNextAsync().AsTask();
-        await tool.Started.Task;
+        var executionSignal = await Task.WhenAny(tool.Started.Task, resume);
+        executionSignal.Should().BeSameAs(tool.Started.Task,
+            "the admitted terminal must invoke the tool before publishing its result");
         resume.IsCompleted.Should().BeFalse("the stream is waiting for controlled tool completion");
         tool.Release("{\"ok\":true}");
         (await resume).Should().BeTrue();
@@ -141,11 +153,15 @@ public sealed class ChatRuntimeToolProgressTests
         var runtime = new ChatRuntime(
             providerFactory: () => provider,
             history: new ChatHistory(),
-            toolLoop: new ToolCallLoop(tools),
+            toolLoop: CreateToolCallLoop(tools),
             hooks: null,
             requestBuilder: _ => new LLMRequest { Messages = [], Tools = tools.GetAll() });
 
-        await using var stream = runtime.ChatStreamAsync("hello", maxToolRounds: 2, turnCatalog: null)
+        await using var stream = runtime.ChatStreamAsync(
+                "hello",
+                maxToolRounds: 2,
+                requestId: "text-tool-progress-request",
+                turnCatalog: null)
             .GetAsyncEnumerator();
         while (await stream.MoveNextAsync() && stream.Current.ToolCallStarted == null)
         {
@@ -156,7 +172,9 @@ public sealed class ChatRuntimeToolProgressTests
         tool.Started.Task.IsCompleted.Should().BeFalse();
 
         var resume = stream.MoveNextAsync().AsTask();
-        await tool.Started.Task;
+        var executionSignal = await Task.WhenAny(tool.Started.Task, resume);
+        executionSignal.Should().BeSameAs(tool.Started.Task,
+            "the admitted terminal must invoke the tool before publishing its result");
         resume.IsCompleted.Should().BeFalse();
         tool.Release("{\"source\":\"text\"}");
         (await resume).Should().BeTrue();
@@ -168,6 +186,28 @@ public sealed class ChatRuntimeToolProgressTests
         stream.Current.ToolCallCompleted.Should().NotBeNull();
         stream.Current.ToolCallCompleted!.ToolName.Should().Be("controlled_tool");
         stream.Current.ToolCallCompleted.ResultJson.Should().Be("{\"source\":\"text\"}");
+    }
+
+    private static ToolCallLoop CreateToolCallLoop(ToolManager tools) =>
+        new(
+            tools,
+            toolExecutionPort: new AdmittedAgentToolExecutor(
+                new AppendedAuditTrail(),
+                new StableIdentityHasher()));
+
+    private sealed class AppendedAuditTrail : IAuditTrailAppender
+    {
+        public Task<AuditTrailAppendResult> AppendAsync(
+            AuditRecord record,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(AuditTrailAppendResult.Appended(record.AuditId));
+    }
+
+    private sealed class StableIdentityHasher : IAuditActorIdentityHasher
+    {
+        public AuditActorIdentity Hash(string canonicalActorKey) => new("actor-hash", "key-1");
+
+        public bool Verify(string canonicalActorKey, string auditActorId, string identityKeyId) => true;
     }
 
     private sealed class ControlledTool : IAgentTool

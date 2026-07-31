@@ -587,7 +587,7 @@ public sealed class ToolCallLoop
         public string ParametersSchema => "{}";
         public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
-            Task.FromResult("{}");
+            Task.FromException<string>(new InvalidOperationException($"Tool '{name}' was not found."));
     }
 
     internal static ToolManager CreateRequestToolManager(IReadOnlyList<IAgentTool>? tools)

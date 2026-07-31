@@ -355,6 +355,8 @@ public sealed class AgentWorkflowToolSourceAdapterTests
     public async Task WorkflowTool_WhenResultHasNoReceipt_ShouldFailWithUnknownOutcome()
     {
         const string resultJson = """{"error":true,"status":503,"historical":true}""";
+        const string unknownResultJson =
+            """{"status":"unknown","message":"The tool outcome could not be verified."}""";
         var agentTool = new ResultReceiptAgentTool(resultJson, receipt: null);
         var adapter = new AgentWorkflowToolSourceAdapter(
             [new SingleAgentToolSource(agentTool)],
@@ -373,7 +375,7 @@ public sealed class AgentWorkflowToolSourceAdapterTests
             CancellationToken.None);
 
         result.Failure.Should().NotBeNull();
-        result.ResultJson.Should().Be(resultJson);
+        result.ResultJson.Should().Be(unknownResultJson);
         result.Failure!.ErrorCode.Should().Be("tool_outcome_unknown");
         result.Failure.ErrorMessage.Should().Be("The tool outcome could not be verified.");
     }
@@ -504,12 +506,18 @@ public sealed class AgentWorkflowToolSourceAdapterTests
                     CallId = request.ExecutionContext.Request.CallId ?? string.Empty,
                     ToolName = request.Tool.Name,
                     Status = AgentToolReceiptStatus.Unspecified,
-                    ResultJson = resultJson,
+                    ResultJson =
+                        "{\"status\":\"unknown\",\"message\":\"The tool outcome could not be verified.\"}",
+                    ErrorCode = "tool_outcome_unknown",
+                    ErrorMessage = "The tool outcome could not be verified.",
                 };
+            var safeResultJson = receipt.Status == AgentToolReceiptStatus.Unspecified
+                ? receipt.ResultJson
+                : resultJson;
 
             return new AgentToolExecutionOutcome(
                 AgentToolExecutionOutcomeKind.Executed,
-                resultJson,
+                safeResultJson,
                 receipt,
                 IsMutation: !request.Tool.IsReadOnly,
                 FailureCode: string.Empty,

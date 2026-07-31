@@ -5,8 +5,13 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.AgentProfiles;
+using Aevatar.AI.Core.Tools;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.AGUI.Contracts;
+using Aevatar.Audit;
+using Aevatar.Audit.Abstractions.Identity;
+using Aevatar.Audit.Abstractions.Models;
+using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
@@ -425,7 +430,10 @@ public sealed class NyxIdChatConversationGAgentTests
         var provider = new ServiceConnectToolCallProvider();
         var generationExecutor = new AgentRunReplyGenerationExecutor(
             new RecordingActorDispatchPort([], static (_, _) => Task.CompletedTask),
-            new NyxIdConversationReplyGenerator(provider, new BuiltInPromptFloorProvider()),
+            new NyxIdConversationReplyGenerator(
+                provider,
+                new BuiltInPromptFloorProvider(),
+                toolExecutionPort: services.GetRequiredService<IAgentToolExecutionPort>()),
             interactiveReplyCollector: null,
             relayOptions: null,
             logger: NullLogger<AgentRunReplyGenerationExecutor>.Instance);
@@ -3389,6 +3397,9 @@ public sealed class NyxIdChatConversationGAgentTests
             .AddSingleton<EventSourcingRuntimeOptions>()
             .AddSingleton<IActorRuntimeCallbackScheduler>(
                 callbackScheduler ?? new NoopRuntimeCallbackScheduler())
+            .AddSingleton<IAuditTrailAppender, AppendedAuditTrail>()
+            .AddSingleton<IAuditActorIdentityHasher, StableIdentityHasher>()
+            .AddSingleton<IAgentToolExecutionPort, AdmittedAgentToolExecutor>()
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
         if (historyCommandPort is not null)
             services.AddSingleton(historyCommandPort);
@@ -3412,6 +3423,21 @@ public sealed class NyxIdChatConversationGAgentTests
             Task.FromResult(new GAgentActorRegistryCommandReceipt(
                 registration,
                 GAgentActorRegistryCommandStage.AdmissionRemoved));
+    }
+
+    private sealed class AppendedAuditTrail : IAuditTrailAppender
+    {
+        public Task<AuditTrailAppendResult> AppendAsync(
+            AuditRecord record,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(AuditTrailAppendResult.Appended(record.AuditId));
+    }
+
+    private sealed class StableIdentityHasher : IAuditActorIdentityHasher
+    {
+        public AuditActorIdentity Hash(string canonicalActorKey) => new("actor-hash", "key-1");
+
+        public bool Verify(string canonicalActorKey, string auditActorId, string identityKeyId) => true;
     }
 
     private sealed class FixedProfileClassifier(string intentId) : IAgentProfileTurnClassifier

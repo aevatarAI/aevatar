@@ -69,9 +69,42 @@ public sealed class NyxIdToolAdmissionTests
 
             executed.Kind.Should().Be(AgentToolExecutionOutcomeKind.Executed);
             executed.ResultJson.Should().Contain("invalid_action");
+            executed.Receipt.Status.Should().Be(AgentToolReceiptStatus.Error);
+            executed.Receipt.ErrorCode.Should().Be("invalid_action");
+            executed.Receipt.ResultJson.Should().Be(executed.ResultJson);
             executed.TerminalInvoked.Should().BeTrue();
             http.Requests.Should().BeEmpty();
         }
+    }
+
+    [Fact]
+    public async Task ServicesTool_WhenInvalidActionContainsCredential_ShouldNotExposeCredential()
+    {
+        const string argumentsJson =
+            "{\"action\":\"unknown\",\"credential\":\"bearer-secret\"}";
+        var tool = new NyxIdServicesTool(CreateClient(new RecordingHttpHandler()));
+        var executor = CreateExecutor();
+        var waiting = await executor.ExecuteAsync(Request(
+            tool,
+            argumentsJson,
+            AgentToolApprovalContinuationMode.ActorOwned));
+        var grant = new AgentToolApprovalGrant(
+            waiting.Receipt.ApprovalRequestId,
+            "request-nyx",
+            tool.Name,
+            "call-nyx",
+            AgentToolArgumentsDigest.ComputeSha256(argumentsJson));
+
+        var outcome = await executor.ExecuteAsync(Request(
+            tool,
+            argumentsJson,
+            AgentToolApprovalContinuationMode.ActorOwned,
+            grant));
+
+        outcome.ResultJson.Should().Be("{\"error\":\"invalid_action\"}");
+        outcome.Receipt.Status.Should().Be(AgentToolReceiptStatus.Error);
+        outcome.Receipt.ErrorCode.Should().Be("invalid_action");
+        outcome.ToString().Should().NotContain("bearer-secret");
     }
 
     [Theory]

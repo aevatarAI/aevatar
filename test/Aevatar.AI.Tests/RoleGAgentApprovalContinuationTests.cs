@@ -1,4 +1,7 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.Audit;
+using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.Foundation.Abstractions.Persistence;
 using FluentAssertions;
 using Google.Protobuf;
@@ -104,5 +107,142 @@ public sealed partial class RoleGAgentStateCoverageTests
             .Unpack<RoleChatSessionCompletedEvent>();
         completed.RoleId.Should().Be("approval-role");
         completed.Content.Should().Contain("approval_denied: user denied");
+    }
+
+    [Fact]
+    public async Task HandleToolApprovalDecision_WhenRunningAuditIsRetryable_ShouldKeepExactContinuationForRetry()
+    {
+        var auditTrail = new ScriptedRunningAuditTrail(
+            AuditTrailAppendStatus.StoreUnavailable,
+            AuditTrailAppendStatus.Appended);
+        using var provider = BuildServiceProvider(auditTrail);
+        var terminalCalls = 0;
+        var tool = new DelegateTool("dangerous_tool", argumentsJson =>
+        {
+            terminalCalls++;
+            return $"RESULT:{argumentsJson}";
+        });
+        var actorId = "role-approval-running-audit-retry";
+        var agent = CreateRoleAgent(
+            provider,
+            actorId,
+            toolSources: [new StaticToolSource([tool])]);
+        var publisher = new RecordingEventPublisher();
+        agent.EventPublisher = publisher;
+        await agent.ActivateAsync();
+        agent.State.PendingApproval = await CreatePendingApprovalAsync(
+            provider,
+            tool,
+            AgentToolExecutionContext.Empty with
+            {
+                Request = new AgentToolRequestIdentity("request-retry", "call-retry"),
+                Caller = new AgentToolCallerContext("scope-retry", "owner-retry", "response-retry"),
+            },
+            "{\"value\":1}");
+        var exactPending = agent.State.PendingApproval.Clone();
+        var decision = new ToolApprovalDecisionEvent
+        {
+            RequestId = exactPending.RequestId,
+            ContinuationTurnId = "turn-approval-retry",
+            Approved = true,
+        };
+
+        await FluentActions.Invoking(() => agent.HandleToolApprovalDecision(decision))
+            .Should()
+            .ThrowAsync<InvalidOperationException>()
+            .WithMessage("The durable tool audit store is unavailable.");
+
+        terminalCalls.Should().Be(0);
+        auditTrail.RunningAttempts.Should().Be(1);
+        agent.State.PendingApproval.Should().BeEquivalentTo(exactPending);
+        agent.State.Sessions.Should().NotContainKey("turn-approval-retry");
+        var store = provider.GetRequiredService<IEventStore>();
+        (await store.GetEventsAsync(actorId)).Should()
+            .NotContain(x => x.EventData.Is(ClearPendingApprovalEvent.Descriptor));
+
+        await agent.HandleToolApprovalDecision(decision);
+
+        terminalCalls.Should().Be(1);
+        auditTrail.RunningAttempts.Should().Be(2);
+        agent.State.PendingApproval.Should().BeNull();
+        publisher.Published.OfType<ChatRequestEvent>().Should().ContainSingle(x =>
+            x.SessionId == "turn-approval-retry" &&
+            x.Prompt.Contains("RESULT:{\"value\":1}"));
+        (await store.GetEventsAsync(actorId)).Count(x =>
+            x.EventData.Is(ClearPendingApprovalEvent.Descriptor)).Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData(AuditTrailAppendStatus.Duplicate)]
+    [InlineData(AuditTrailAppendStatus.Conflict)]
+    public async Task HandleToolApprovalDecision_WhenRunningAuditForbidsReplay_ShouldConsumeContinuation(
+        AuditTrailAppendStatus runningStatus)
+    {
+        var auditTrail = new ScriptedRunningAuditTrail(runningStatus);
+        using var provider = BuildServiceProvider(auditTrail);
+        var terminalCalls = 0;
+        var tool = new DelegateTool("dangerous_tool", _ =>
+        {
+            terminalCalls++;
+            return "{\"ok\":true}";
+        });
+        var agent = CreateRoleAgent(
+            provider,
+            $"role-approval-running-audit-{runningStatus}",
+            toolSources: [new StaticToolSource([tool])]);
+        await agent.ActivateAsync();
+        agent.State.PendingApproval = await CreatePendingApprovalAsync(
+            provider,
+            tool,
+            AgentToolExecutionContext.Empty with
+            {
+                Request = new AgentToolRequestIdentity("request-no-replay", "call-no-replay"),
+            });
+        var decision = new ToolApprovalDecisionEvent
+        {
+            RequestId = agent.State.PendingApproval.RequestId,
+            ContinuationTurnId = $"turn-no-replay-{runningStatus}",
+            Approved = true,
+        };
+
+        await FluentActions.Invoking(() => agent.HandleToolApprovalDecision(decision))
+            .Should()
+            .ThrowAsync<InvalidOperationException>();
+
+        agent.State.PendingApproval.Should().BeNull();
+        terminalCalls.Should().Be(0);
+        auditTrail.RunningAttempts.Should().Be(1);
+        await agent.HandleToolApprovalDecision(decision);
+        terminalCalls.Should().Be(0);
+        auditTrail.RunningAttempts.Should().Be(1);
+    }
+
+    private sealed class ScriptedRunningAuditTrail(params AuditTrailAppendStatus[] runningStatuses)
+        : IAuditTrailAppender
+    {
+        private int _runningAttempts;
+
+        public int RunningAttempts => _runningAttempts;
+
+        public Task<AuditTrailAppendResult> AppendAsync(
+            AuditRecord record,
+            CancellationToken cancellationToken = default)
+        {
+            if (!record.Annotations.TryGetValue("execution_phase", out var phase) || phase != "running")
+                return Task.FromResult(AuditTrailAppendResult.Appended(record.AuditId));
+
+            var index = _runningAttempts++;
+            var status = index < runningStatuses.Length
+                ? runningStatuses[index]
+                : runningStatuses[^1];
+            var result = status switch
+            {
+                AuditTrailAppendStatus.Appended => AuditTrailAppendResult.Appended(record.AuditId),
+                AuditTrailAppendStatus.Duplicate => AuditTrailAppendResult.Duplicate(record.AuditId),
+                AuditTrailAppendStatus.Conflict => AuditTrailAppendResult.Conflict(record.AuditId, "conflict"),
+                _ => AuditTrailAppendResult.StoreUnavailable(record.AuditId, "offline"),
+            };
+            return Task.FromResult(result);
+        }
     }
 }

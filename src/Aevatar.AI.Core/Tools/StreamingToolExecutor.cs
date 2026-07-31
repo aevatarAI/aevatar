@@ -487,7 +487,7 @@ public sealed class StreamingToolExecutor
         public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
-            Task.FromResult($"Tool '{name}' not found");
+            Task.FromException<string>(new InvalidOperationException($"Tool '{name}' was not found."));
     }
 
     internal enum ToolStatus { Queued, Executing, Completed, Yielded }

@@ -5,6 +5,11 @@ namespace Aevatar.AI.Core.Tools;
 
 internal static class AgentToolReceiptFactory
 {
+    internal const string UnknownErrorCode = "tool_outcome_unknown";
+    internal const string UnknownErrorMessage = "The tool outcome could not be verified.";
+    internal const string UnknownResultJson =
+        "{\"status\":\"unknown\",\"message\":\"The tool outcome could not be verified.\"}";
+
     public static AgentToolReceipt CreateRunning(
         IAgentTool tool,
         string callId,
@@ -20,22 +25,24 @@ internal static class AgentToolReceiptFactory
         string resultJson,
         string argumentsJson = "")
     {
-        var providerReceipt = tool.CreateResultReceipt(
-            callId,
-            toolName,
-            argumentsJson ?? string.Empty,
-            resultJson ?? string.Empty);
+        AgentToolReceipt? providerReceipt;
+        try
+        {
+            providerReceipt = tool.CreateResultReceipt(
+                callId,
+                toolName,
+                argumentsJson ?? string.Empty,
+                resultJson ?? string.Empty);
+        }
+        catch
+        {
+            return CreateUnknown(tool, callId, toolName, callSafety);
+        }
+
         if (providerReceipt is not null)
             return NormalizeProviderResultReceipt(tool, callId, toolName, callSafety, resultJson, providerReceipt);
 
-        var unverifiedReceipt = CreateBase(
-            tool,
-            callId,
-            toolName,
-            callSafety,
-            AgentToolReceiptStatus.Unspecified);
-        unverifiedReceipt.ResultJson = resultJson ?? string.Empty;
-        return unverifiedReceipt;
+        return CreateUnknown(tool, callId, toolName, callSafety);
     }
 
     public static AgentToolReceipt CreateSuccess(
@@ -157,6 +164,24 @@ internal static class AgentToolReceiptFactory
     private static string NormalizeSideEffectKind(string? sideEffectKind) =>
         string.IsNullOrWhiteSpace(sideEffectKind) ? string.Empty : sideEffectKind.Trim().ToLowerInvariant();
 
+    private static AgentToolReceipt CreateUnknown(
+        IAgentTool tool,
+        string callId,
+        string toolName,
+        AgentToolCallSafety callSafety)
+    {
+        var receipt = CreateBase(
+            tool,
+            callId,
+            toolName,
+            callSafety,
+            AgentToolReceiptStatus.Unspecified);
+        receipt.ResultJson = UnknownResultJson;
+        receipt.ErrorCode = UnknownErrorCode;
+        receipt.ErrorMessage = UnknownErrorMessage;
+        return receipt;
+    }
+
     private static AgentToolReceipt NormalizeProviderResultReceipt(
         IAgentTool tool,
         string callId,
@@ -176,6 +201,13 @@ internal static class AgentToolReceiptFactory
         normalized.SideEffectKind = string.IsNullOrWhiteSpace(normalized.SideEffectKind)
             ? NormalizeSideEffectKind(tool.SideEffectKind)
             : NormalizeSideEffectKind(normalized.SideEffectKind);
+        if (normalized.Status == AgentToolReceiptStatus.Unspecified)
+        {
+            normalized.ResultJson = UnknownResultJson;
+            normalized.ErrorCode = UnknownErrorCode;
+            normalized.ErrorMessage = UnknownErrorMessage;
+            return normalized;
+        }
         if (normalized.Status == AgentToolReceiptStatus.Success &&
             string.IsNullOrWhiteSpace(normalized.ResultJson))
         {

@@ -39,12 +39,11 @@ public sealed class NyxIdToolOptions
     public string SandboxServiceSlug { get; set; } = DefaultSandboxServiceSlug;
 
     /// <summary>
-    /// When <c>true</c>, expose the <c>ssh_exec</c> tool to the LLM. Off by default
-    /// because <c>ssh_exec</c> can run arbitrary commands on a remote host: hosts
-    /// without an approval middleware in their tool execution pipeline would let
-    /// the model run shell commands directly. Hosts that have wired the approval
-    /// middleware (or that explicitly accept the risk for an internal-only deploy
-    /// like the share-ops Lark bot) opt in by setting this to <c>true</c>.
+    /// When <c>true</c>, expose the <c>ssh_exec</c> tool to the LLM. This option is
+    /// off by default. Explicit opt-in only exposes the tool; every invocation must
+    /// still pass through the unified admitted execution port with an exact durable
+    /// approval grant owned by the calling actor. There is no middleware or accepted-risk
+    /// bypass for SSH execution.
     /// </summary>
     public bool EnableSshExecTool { get; set; }
 

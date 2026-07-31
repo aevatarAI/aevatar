@@ -361,7 +361,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
         rejected.Content.Should().Be("{\"error\":\"The tool request failed.\"}");
         var receipt = continuation.ToolStepResult.ToolReceipts.Should().ContainSingle().Which;
         receipt.Status.Should().Be(AgentToolReceiptStatus.Error);
-        receipt.ErrorCode.Should().Be("tool_execution_exception");
+        receipt.ErrorCode.Should().Be("tool_execution_error");
         tool.ExecuteCount.Should().Be(0);
     }
 

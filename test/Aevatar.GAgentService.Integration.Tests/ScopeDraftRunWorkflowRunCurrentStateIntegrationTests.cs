@@ -19,6 +19,7 @@ using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Extensions.Hosting;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
+using Aevatar.Workflow.Infrastructure.Workflows;
 using Aevatar.Workflow.Projection;
 using Aevatar.Workflow.Projection.Orchestration;
 using FluentAssertions;
@@ -201,6 +202,8 @@ public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
                 options.EnableScriptingCapability = false;
             });
             builder.AddGAgentServiceCapabilityBundle();
+            builder.Services.Configure<WorkflowDefinitionFileSourceOptions>(options =>
+                options.WorkflowDirectories.Clear());
             builder.Services.AddSingleton<IAuditTrailAppender, AppendedAuditTrail>();
             builder.Services.AddSingleton<IAuditActorIdentityHasher, StableAuditActorIdentityHasher>();
             builder.Services.AddSingleton<InMemoryGAgentActorStore>();

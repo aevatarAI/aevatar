@@ -2289,7 +2289,9 @@ public sealed class ConversationReplyGeneratorTests
             executionEvents);
         var inventoryHandler = new RecordingNyxIdInventoryHandler(executionEvents);
         var nyxIdOptions = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
+        var toolExecutionPort = new ChannelConversationTurnRunnerTests.TestAgentToolExecutionPort();
         var inventorySource = new ChannelNyxIdConnectedServiceInventoryToolSource(
+            toolExecutionPort,
             nyxIdOptions,
             new FixedNyxIdApiClientFactory(new NyxIdApiClient(
                 nyxIdOptions,
@@ -2308,7 +2310,8 @@ public sealed class ConversationReplyGeneratorTests
             },
             remoteSkillAccessTokenResolver: new ChannelRemoteSkillAccessTokenResolver(
                 skillCapabilityIssuer,
-                NullLogger<ChannelRemoteSkillAccessTokenResolver>.Instance));
+                NullLogger<ChannelRemoteSkillAccessTokenResolver>.Instance),
+            toolExecutionPort: toolExecutionPort);
         var sink = new RecordingStreamingSink();
         var toolContext = AgentToolExecutionContext.Empty with
         {
@@ -2468,7 +2471,8 @@ public sealed class ConversationReplyGeneratorTests
             relayOptions: new global::Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
             {
                 StreamingPlaceholderText = "…",
-            });
+            },
+            toolExecutionPort: new ChannelConversationTurnRunnerTests.TestAgentToolExecutionPort());
         var skillRecovery = new AgentSkillRecoveryContext(
             RequireInitialOrnnSearch: true,
             RequireOrnnSearchOnBlocker: true,

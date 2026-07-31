@@ -36,6 +36,7 @@ using Aevatar.Workflow.Projection.Projectors;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Extensions.Hosting;
 using Aevatar.Workflow.Infrastructure.DependencyInjection;
+using Aevatar.Workflow.Infrastructure.Workflows;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Application.Responses;
 using Aevatar.GAgentService.Core.Models;
@@ -449,6 +450,8 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         builder.Services.AddSingleton<ILLMProviderFactory, UnusedLlmProviderFactory>();
         builder.Services.AddSingleton<IAgentToolExecutionPort, UnusedAgentToolExecutionPort>();
         builder.AddGAgentServiceCapabilityBundle();
+        builder.Services.Configure<WorkflowDefinitionFileSourceOptions>(options =>
+            options.WorkflowDirectories.Clear());
 
         await using var app = builder.Build();
         app.MapAevatarCapabilities();
@@ -502,6 +505,8 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         builder.Services.AddSingleton<ILLMProviderFactory, UnusedLlmProviderFactory>();
         builder.Services.AddSingleton<IAgentToolExecutionPort, UnusedAgentToolExecutionPort>();
         builder.AddGAgentServiceCapabilityBundle();
+        builder.Services.Configure<WorkflowDefinitionFileSourceOptions>(options =>
+            options.WorkflowDirectories.Clear());
 
         await using var app = builder.Build();
         app.MapAevatarCapabilities();

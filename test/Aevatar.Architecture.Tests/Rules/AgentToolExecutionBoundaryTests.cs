@@ -22,7 +22,7 @@ public sealed class AgentToolExecutionBoundaryTests
     private const string ToolCallLoopTypeName = "Aevatar.AI.Core.Tools.ToolCallLoop";
     private const string InventoryReaderTypeName =
         "Aevatar.AI.ToolProviders.NyxId.ConnectedServices.NyxIdConnectedServiceInventoryReader";
-    private const int ExpectedExecutionSurfaceCount = 11;
+    private const int ExpectedExecutionSurfaceCount = 12;
 
     private static readonly string[] DirectPortSurfaces =
     [
@@ -35,6 +35,7 @@ public sealed class AgentToolExecutionBoundaryTests
         "Aevatar.AI.LLMProviders.MEAI.AgentToolAIFunction",
         "Aevatar.AI.ToolProviders.MCP.MCPConnector",
         "Aevatar.GAgents.NyxidChat.ChannelConversationTurnRunner",
+        "Aevatar.GAgents.NyxidChat.ChannelNyxIdConnectedServiceInventoryToolSource",
     ];
 
     private static readonly string[] InventoryReaderSurfaces =

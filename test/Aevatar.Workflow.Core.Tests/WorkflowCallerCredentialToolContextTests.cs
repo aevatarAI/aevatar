@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Modules;
@@ -13,7 +14,7 @@ public sealed class WorkflowCallerCredentialToolContextTests
     {
         var tool = new RecordingAgentTool();
         var source = new SingleToolSource(tool);
-        var adapter = new AgentWorkflowToolSourceAdapter([source]);
+        var adapter = new AgentWorkflowToolSourceAdapter([source], new PassThroughExecutionPort());
         var workflowTool = (await adapter.GetToolsAsync()).Should().ContainSingle().Subject;
 
         await workflowTool.ExecuteAsync(new WorkflowToolExecutionRequest(
@@ -68,6 +69,35 @@ public sealed class WorkflowCallerCredentialToolContextTests
             NyxUserId = senderBinding?.NyxUserId;
             SenderTenant = senderBinding?.SenderTenant;
             return Task.FromResult("{}");
+        }
+    }
+
+    private sealed class PassThroughExecutionPort : IAgentToolExecutionPort
+    {
+        public async Task<AgentToolExecutionOutcome> ExecuteAsync(
+            AgentToolExecutionRequest request,
+            CancellationToken ct = default)
+        {
+            string resultJson;
+            using (AgentToolContextScope.Push(request.ExecutionContext))
+                resultJson = await request.Tool.ExecuteAsync(request.ArgumentsJson, ct);
+            return new AgentToolExecutionOutcome(
+                AgentToolExecutionOutcomeKind.Executed,
+                resultJson,
+                new AgentToolReceipt
+                {
+                    CallId = request.ExecutionContext.Request.CallId ?? string.Empty,
+                    ToolName = request.Tool.Name,
+                    Status = AgentToolReceiptStatus.Success,
+                    ResultJson = resultJson,
+                },
+                IsMutation: false,
+                FailureCode: string.Empty,
+                SafeMessage: string.Empty,
+                AgentToolExecutionFailureStage.None,
+                TerminalInvoked: true,
+                Retryable: false,
+                AuditCompleted: true);
         }
     }
 }

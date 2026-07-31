@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 
@@ -83,6 +84,13 @@ public sealed class NyxIdServicesTool : INyxIdBuiltInTool, IAgentToolCapabilityD
 
     public AgentToolCallSafety GetCallSafety(string argumentsJson) =>
         ActionParser.Classify(argumentsJson);
+
+    public AgentToolReceipt? CreateResultReceipt(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        string resultJson) =>
+        NyxIdManagedToolReceiptFactory.TryCreate(callId, toolName, resultJson);
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {

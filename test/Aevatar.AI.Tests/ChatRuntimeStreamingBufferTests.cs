@@ -1752,12 +1752,13 @@ public sealed class ChatRuntimeStreamingBufferTests
                 return new AgentToolExecutionOutcome(
                     AgentToolExecutionOutcomeKind.Executed,
                     resultJson,
-                    AgentToolReceiptFactory.CreateSuccess(
+                    AgentToolReceiptFactory.CreateResult(
                         request.Tool,
                         request.ExecutionContext.Request.CallId ?? string.Empty,
                         request.Tool.Name,
                         safety,
-                        resultJson),
+                        resultJson,
+                        request.ArgumentsJson),
                     IsMutation: !safety.IsReadOnly,
                     FailureCode: string.Empty,
                     SafeMessage: string.Empty,
@@ -1768,7 +1769,7 @@ public sealed class ChatRuntimeStreamingBufferTests
             }
             catch (Exception ex)
             {
-                var resultJson = ToolManager.BuildErrorJson(ex.GetType().Name);
+                var resultJson = ToolManager.BuildErrorJson("The tool request failed.");
                 return new AgentToolExecutionOutcome(
                     AgentToolExecutionOutcomeKind.Failed,
                     resultJson,
@@ -1778,10 +1779,10 @@ public sealed class ChatRuntimeStreamingBufferTests
                         request.Tool.Name,
                         safety,
                         resultJson,
-                        "tool_execution_failed",
+                        "tool_execution_exception",
                         ex.GetType().Name),
                     IsMutation: !safety.IsReadOnly,
-                    FailureCode: "tool_execution_failed",
+                    FailureCode: "tool_execution_exception",
                     SafeMessage: ex.GetType().Name,
                     AgentToolExecutionFailureStage.TerminalExecution,
                     TerminalInvoked: true,

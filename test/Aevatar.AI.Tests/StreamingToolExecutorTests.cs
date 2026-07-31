@@ -4,6 +4,10 @@ using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.Tools;
+using Aevatar.Audit;
+using Aevatar.Audit.Abstractions.Identity;
+using Aevatar.Audit.Abstractions.Models;
+using Aevatar.Audit.Abstractions.Ports;
 using FluentAssertions;
 
 namespace Aevatar.AI.Tests;
@@ -733,10 +737,14 @@ public class StreamingToolExecutorTests
 
         results.Should().ContainSingle();
         results[0].IsError.Should().BeTrue();
-        results[0].Result.Should().Be("""{"error":true,"status":503}""");
-        results[0].Receipt.Should().NotBeNull();
-        results[0].Receipt!.Status.Should().Be(AgentToolReceiptStatus.Unspecified);
-        results[0].Receipt!.ResultJson.Should().Be(results[0].Result);
+        results[0].Result.Should().Be(
+            """{"status":"unknown","message":"The tool outcome could not be verified."}""");
+        var receipt = results[0].Receipt;
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Unspecified);
+        receipt.ResultJson.Should().Be(results[0].Result);
+        receipt.ErrorCode.Should().Be("tool_outcome_unknown");
+        receipt.ErrorMessage.Should().Be("The tool outcome could not be verified.");
     }
 
     [Fact]
@@ -756,8 +764,8 @@ public class StreamingToolExecutorTests
         });
 
         var results = new List<ToolExecutionResult>();
-        await foreach (var result in executor.GetRemainingResultsAsync(executionState, CancellationToken.None))
-            results.Add(result);
+        await foreach (var completion in executor.GetRemainingResultsAsync(executionState, CancellationToken.None))
+            results.Add(completion);
 
         results.Should().ContainSingle();
         var receipt = results[0].Receipt;
@@ -792,17 +800,59 @@ public class StreamingToolExecutorTests
         var receipt = results[0].Receipt;
         receipt.Should().NotBeNull();
         receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
-        receipt.ErrorCode.Should().Be("tool_execution_error");
-        receipt.ErrorMessage.Should().Be("The tool request failed.");
+        receipt.ErrorCode.Should().Be("tool_execution_exception");
+        receipt.ErrorMessage.Should().Be(nameof(InvalidOperationException));
         receipt.ResultJson.Should().NotContain("boom");
+    }
+
+    [Fact]
+    public async Task MissingTool_ShouldProduceAuditedTerminalFailureWithoutRawException()
+    {
+        var tools = new ToolManager();
+        var executionPort = new RecordingAdmittedExecutionPort();
+        var executor = NewStreamingToolExecutor(
+            tools,
+            toolContext: AgentToolExecutionContext.Empty with
+            {
+                Request = new AgentToolRequestIdentity("request-missing", null),
+            },
+            toolExecutionPort: executionPort);
+        using var executionState = executor.CreateExecutionState();
+        executor.AddTool(executionState, new ToolCall
+        {
+            Id = "tc-missing",
+            Name = "missing_tool",
+            ArgumentsJson = "{}",
+        });
+
+        var results = new List<ToolExecutionResult>();
+        await foreach (var completion in executor.GetRemainingResultsAsync(executionState, CancellationToken.None))
+            results.Add(completion);
+
+        var result = results.Should().ContainSingle().Which;
+        result.IsError.Should().BeTrue();
+        var outcome = executionPort.Outcomes.Should().ContainSingle().Which;
+        outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Failed);
+        outcome.FailureCode.Should().Be("tool_execution_exception");
+        outcome.SafeMessage.Should().Be(nameof(InvalidOperationException));
+        outcome.FailureStage.Should().Be(AgentToolExecutionFailureStage.TerminalExecution);
+        outcome.TerminalInvoked.Should().BeTrue();
+        outcome.Retryable.Should().BeFalse();
+        outcome.AuditCompleted.Should().BeTrue();
+        outcome.ResultJson.Should().NotContain("was not found");
+        outcome.Receipt.ResultJson.Should().Be(outcome.ResultJson);
+        executionPort.Records.Select(record => record.Annotations["execution_phase"])
+            .Should().Equal("running", "terminal");
     }
 
     [Fact]
     public async Task ProviderFailureReceipt_ShouldReplaceRawToolResultWithSafeResult()
     {
         var tools = new ToolManager();
-        tools.Register(new SafeFailureReceiptTool());
-        var executor = new StreamingToolExecutor(tools);
+        var tool = new SafeFailureReceiptTool();
+        var executionPort = new TestExecutionPort();
+        tools.Register(tool);
+        var executor = NewStreamingToolExecutor(tools, toolExecutionPort: executionPort);
         using var executionState = executor.CreateExecutionState();
         executor.AddTool(executionState, new ToolCall
         {
@@ -821,6 +871,8 @@ public class StreamingToolExecutorTests
         failure.ToString().Should().NotContain("bearer-secret").And.NotContain("credential");
         failure.Receipt.Should().NotBeNull();
         failure.Receipt!.ResultJson.Should().Be(failure.Result);
+        executionPort.ExecutionCount.Should().Be(1);
+        tool.ExecutionCount.Should().Be(1);
     }
 
     // ─── Test helpers ───
@@ -951,8 +1003,13 @@ public class StreamingToolExecutorTests
         public string ParametersSchema => "{}";
         public ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
 
-        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
-            Task.FromResult("""{"error":"forbidden","message":"credential bearer-secret rejected"}""");
+        public int ExecutionCount { get; private set; }
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        {
+            ExecutionCount++;
+            return Task.FromResult("""{"error":"forbidden","message":"credential bearer-secret rejected"}""");
+        }
 
         public AgentToolReceipt? CreateResultReceipt(
             string callId,
@@ -972,21 +1029,25 @@ public class StreamingToolExecutorTests
 
     private sealed class TestExecutionPort : IAgentToolExecutionPort
     {
+        public int ExecutionCount { get; private set; }
+
         public async Task<AgentToolExecutionOutcome> ExecuteAsync(
             AgentToolExecutionRequest request,
             CancellationToken ct = default)
         {
+            ExecutionCount++;
             var safety = request.Tool.GetCallSafety(request.ArgumentsJson)
                 ?? new AgentToolCallSafety(true, false, true);
             try
             {
                 var result = await request.Tool.ExecuteAsync(request.ArgumentsJson, ct);
-                var receipt = AgentToolReceiptFactory.CreateSuccess(
+                var receipt = AgentToolReceiptFactory.CreateResult(
                     request.Tool,
                     request.ExecutionContext.Request.CallId ?? string.Empty,
                     request.Tool.Name,
                     safety,
-                    result);
+                    result,
+                    request.ArgumentsJson);
                 return new AgentToolExecutionOutcome(
                     AgentToolExecutionOutcomeKind.Executed,
                     result,
@@ -1001,28 +1062,71 @@ public class StreamingToolExecutorTests
             }
             catch (Exception ex)
             {
-                var result = ToolManager.BuildErrorJson(ex.Message);
+                var result = ToolManager.BuildErrorJson("The tool request failed.");
                 var receipt = AgentToolReceiptFactory.CreateError(
                     request.Tool,
                     request.ExecutionContext.Request.CallId ?? string.Empty,
                     request.Tool.Name,
                     safety,
                     result,
-                    "tool_execution_error",
-                    ex.Message);
+                    "tool_execution_exception",
+                    ex.GetType().Name);
                 return new AgentToolExecutionOutcome(
                     AgentToolExecutionOutcomeKind.Failed,
                     result,
                     receipt,
                     !safety.IsReadOnly,
-                    "tool_execution_error",
-                    ex.Message,
+                    "tool_execution_exception",
+                    ex.GetType().Name,
                     AgentToolExecutionFailureStage.TerminalExecution,
                     TerminalInvoked: true,
                     Retryable: false,
                     AuditCompleted: true);
             }
         }
+    }
+
+    private sealed class RecordingAdmittedExecutionPort : IAgentToolExecutionPort
+    {
+        private readonly RecordingAuditTrailAppender _appender = new();
+        private readonly AdmittedAgentToolExecutor _inner;
+
+        public RecordingAdmittedExecutionPort()
+        {
+            _inner = new AdmittedAgentToolExecutor(_appender, new StableIdentityHasher());
+        }
+
+        public List<AgentToolExecutionOutcome> Outcomes { get; } = [];
+        public IReadOnlyList<AuditRecord> Records => _appender.Records;
+
+        public async Task<AgentToolExecutionOutcome> ExecuteAsync(
+            AgentToolExecutionRequest request,
+            CancellationToken ct = default)
+        {
+            var outcome = await _inner.ExecuteAsync(request, ct);
+            Outcomes.Add(outcome);
+            return outcome;
+        }
+    }
+
+    private sealed class RecordingAuditTrailAppender : IAuditTrailAppender
+    {
+        public List<AuditRecord> Records { get; } = [];
+
+        public Task<AuditTrailAppendResult> AppendAsync(
+            AuditRecord record,
+            CancellationToken cancellationToken = default)
+        {
+            Records.Add(record);
+            return Task.FromResult(AuditTrailAppendResult.Appended(record.AuditId));
+        }
+    }
+
+    private sealed class StableIdentityHasher : IAuditActorIdentityHasher
+    {
+        public AuditActorIdentity Hash(string canonicalActorKey) => new("actor-hash", "key-1");
+
+        public bool Verify(string canonicalActorKey, string auditActorId, string identityKeyId) => true;
     }
 
     private sealed class ThrowingExecutionPort : IAgentToolExecutionPort

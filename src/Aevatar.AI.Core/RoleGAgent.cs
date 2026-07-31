@@ -211,6 +211,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             // Refactor (issue1414/cluster-004):
             //   Old pattern: pending approval state could rehydrate stable tool/caller context from metadata.
             //   New principle: typed ToolContext/LlmControl are the only tool control authority.
+            AgentToolExecutionOutcome? toolOutcome = null;
             try
             {
                 // Refactor (issue1253-first):
@@ -222,11 +223,10 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                     pendingToolContext,
                     CancellationToken.None);
                 pendingToolContext = approvedExecution.ExecutionContext;
-                await PersistDomainEventAsync(new ClearPendingApprovalEvent { RequestId = pending.RequestId });
                 using (AgentToolContextScope.Push(pendingToolContext))
                 {
                     var executionPort = Services.GetRequiredService<IAgentToolExecutionPort>();
-                    var toolOutcome = await executionPort.ExecuteAsync(
+                    toolOutcome = await executionPort.ExecuteAsync(
                         new AgentToolExecutionRequest(
                             approvedExecution.Tool,
                             pending.ArgumentsJson,
@@ -239,6 +239,11 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                                 pending.ToolCallId,
                                 AgentToolArgumentsDigest.ComputeSha256(pending.ArgumentsJson))),
                         CancellationToken.None);
+                    if (toolOutcome.TerminalInvoked || !toolOutcome.Retryable)
+                    {
+                        await PersistDomainEventAsync(new ClearPendingApprovalEvent
+                            { RequestId = pending.RequestId });
+                    }
                     if (toolOutcome.Kind is not (AgentToolExecutionOutcomeKind.Executed or
                         AgentToolExecutionOutcomeKind.ExecutedAuditIncomplete))
                     {
@@ -281,6 +286,17 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             }
             catch (Exception ex)
             {
+                if (toolOutcome is { TerminalInvoked: false, Retryable: true })
+                {
+                    Logger.LogWarning(
+                        ex,
+                        "[{Role}] Approval continuation remains pending after retryable pre-terminal failure. request={RequestId} failureCode={FailureCode}",
+                        RoleName,
+                        pending.RequestId,
+                        toolOutcome.FailureCode);
+                    throw;
+                }
+
                 Logger.LogError(ex,
                     "[{Role}] Approval continuation FAILED. request={RequestId}",
                     RoleName, pending.RequestId);

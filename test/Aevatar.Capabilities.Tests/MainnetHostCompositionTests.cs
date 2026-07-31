@@ -25,6 +25,7 @@ using Aevatar.Audit.Abstractions.Identity;
 using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.AI.ToolProviders.Workflow;
 using Aevatar.Audit.Core.Identity;
+using Aevatar.Audit.Core.DependencyInjection;
 using Aevatar.Bootstrap.Extensions.AI;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.ChatRouting.Abstractions;
@@ -133,6 +134,7 @@ public sealed class MainnetHostCompositionTests
         builder.AddMainnetDistributedOrleansHost();
         builder.AddAevatarPlatform(options => options.EnableMakerExtensions = true);
         builder.AddGAgentServiceCapabilityBundle();
+        builder.Services.AddAuditTrailCore(builder.Configuration);
         builder.Services.AddMainnetAgentProjectionDocumentStores(builder.Configuration);
         builder.Services.AddSingleton(Substitute.For<IScheduledAgentCredentialLifecycle>());
         builder.Services.AddSingleton(Substitute.For<INyxIdApiClientFactory>());
