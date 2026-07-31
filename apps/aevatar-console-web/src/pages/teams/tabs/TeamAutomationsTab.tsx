@@ -755,6 +755,18 @@ const TeamAutomationsTab: React.FC<Props> = ({
   const [previewTimes, setPreviewTimes] = React.useState<readonly string[]>([]);
   const pollingStartedAtRef = React.useRef<number | null>(null);
   const recoveredRouteRef = React.useRef("");
+  const modalPanelRef = React.useRef<HTMLDivElement | null>(null);
+  const flowBusy = authorizationFlow.state === "preflighting" || authorizationFlow.state === "submitting";
+  const review = authorizationFlow.state === "reviewing" || authorizationFlow.state === "submitting"
+    ? authorizationFlow.review
+    : null;
+  const modalDescriptionId = review
+    ? "team-automation-authorization-description"
+    : "team-automation-form-description";
+
+  React.useEffect(() => {
+    modalPanelRef.current?.setAttribute("aria-describedby", modalDescriptionId);
+  }, [formOpen, modalDescriptionId]);
 
   const automationsQuery = useQuery({
     enabled: canQuery,
@@ -1507,10 +1519,6 @@ const TeamAutomationsTab: React.FC<Props> = ({
     );
   }
 
-  const flowBusy = authorizationFlow.state === "preflighting" || authorizationFlow.state === "submitting";
-  const review = authorizationFlow.state === "reviewing" || authorizationFlow.state === "submitting"
-    ? authorizationFlow.review
-    : null;
   const upcomingAutomations = (automationsQuery.data?.items ?? [])
     .filter((automation) => automation.enabled && automation.nextFireAt)
     .slice(0, 3);
@@ -1779,10 +1787,19 @@ const TeamAutomationsTab: React.FC<Props> = ({
       </section>
 
       {formOpen ? <Modal
-        aria-describedby="team-automation-form-description"
+        aria-describedby={modalDescriptionId}
         confirmLoading={flowBusy || Boolean(busyScheduleId)}
         destroyOnHidden
-        footer={review ? null : undefined}
+        footer={review ? (
+          <Space>
+            <Button disabled={flowBusy} onClick={() => setAuthorizationFlow({ state: "idle" })}>
+              {copy("teams.automations.authorization.back", "Back")}
+            </Button>
+            <Button loading={flowBusy} onClick={() => void submitAuthorization()} type="primary">
+              {copy("teams.automations.authorization.confirm", "Authorize and continue")}
+            </Button>
+          </Space>
+        ) : undefined}
         onCancel={() => {
           setFormOpen(false);
           setAuthorizationFlow({ state: "idle" });
@@ -1795,18 +1812,17 @@ const TeamAutomationsTab: React.FC<Props> = ({
           ? copy("teams.automations.form.save", "Save changes")
           : copy("teams.automations.form.create", "Create automation")}
         open={formOpen}
+        panelRef={modalPanelRef}
+        styles={review ? {
+          body: { maxHeight: "min(70vh, 640px)", overflowY: "auto" },
+        } : undefined}
         title={formMode === "edit"
           ? copy("teams.automations.form.editTitle", "Edit automation")
           : copy("teams.automations.form.title", "New member automation")}
         width={720}
       >
         {review ? (
-          <TeamAutomationAuthorizationReview
-            busy={flowBusy}
-            onCancel={() => setAuthorizationFlow({ state: "idle" })}
-            onConfirm={() => void submitAuthorization()}
-            review={review}
-          />
+          <TeamAutomationAuthorizationReview review={review} />
         ) : (
           <div style={{ display: "grid", gap: 16 }}>
             <div

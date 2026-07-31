@@ -1,42 +1,46 @@
 import { CheckCircleOutlined, SafetyCertificateOutlined } from "@ant-design/icons";
-import { Alert, Button, Space, Tag, Typography } from "antd";
+import { Alert, Space, Tag, Typography } from "antd";
 import { useIntl } from "@umijs/max";
 import React from "react";
 import type { TeamAutomationPermissionReview } from "@/shared/api/teamAutomationApi";
 
 type Props = {
-  readonly busy: boolean;
-  readonly onCancel: () => void;
-  readonly onConfirm: () => void;
   readonly review: TeamAutomationPermissionReview;
 };
 
 export default function TeamAutomationAuthorizationReview({
-  busy,
-  onCancel,
-  onConfirm,
   review,
 }: Props) {
   const intl = useIntl();
   const selection = review.ownerLLMSelection;
+  const exactAccessOccurrences = new Map<string, number>();
+  const exactAccessKey = (semanticKey: string) => {
+    const occurrence = exactAccessOccurrences.get(semanticKey) ?? 0;
+    exactAccessOccurrences.set(semanticKey, occurrence + 1);
+    return `${semanticKey}:${occurrence}`;
+  };
   const disclosureLabel = (disclosure: string) =>
     intl.formatMessage({
       id: `teams.automations.authorization.disclosure.${disclosure}`,
       defaultMessage: disclosure.replaceAll("_", " "),
     });
   return (
-    <div aria-describedby="team-automation-authorization-description">
+    <div>
       <Alert
         icon={<SafetyCertificateOutlined />}
         message={intl.formatMessage({
           id: "teams.automations.authorization.title",
           defaultMessage: "Dedicated Agent Key",
         })}
-        description={intl.formatMessage({
-          id: "teams.automations.authorization.description",
-          defaultMessage:
-            "Aevatar keeps this schedule's restricted key in its Vault. The browser never receives the key. Pausing preserves it; deleting revokes it.",
-        })}
+        description={(
+          <span id="team-automation-authorization-description">
+            {intl.formatMessage({
+              id: "teams.automations.authorization.description",
+              defaultMessage:
+                "Aevatar keeps this schedule's restricted key in its Vault. The browser never receives the key. Pausing preserves it; deleting revokes it.",
+            })}
+          </span>
+        )}
         showIcon
         type="info"
       />
@@ -49,7 +53,18 @@ export default function TeamAutomationAuthorizationReview({
             })}
           </Typography.Text>
           <Typography.Paragraph strong style={{ margin: "4px 0 0" }}>
-            {selection.serviceSlugSnapshot || selection.routeKind} / {selection.model}
+            {selection
+              ? `${selection.serviceSlugSnapshot || selection.routeKind} / ${selection.model}`
+              : review.serviceGrants.length === 0
+                ? intl.formatMessage({
+                    id: "teams.automations.authorization.noExternalGrants",
+                    defaultMessage:
+                      "No external NyxID service or owner LLM model grant is required.",
+                  })
+                : intl.formatMessage({
+                    id: "teams.automations.authorization.noOwnerLLMGrant",
+                    defaultMessage: "No owner LLM model grant is required for this workflow.",
+                  })}
           </Typography.Paragraph>
         </div>
         <div>
@@ -60,9 +75,18 @@ export default function TeamAutomationAuthorizationReview({
             })}
           </Typography.Text>
           <Space size={[6, 6]} wrap style={{ display: "flex", marginTop: 6 }}>
-            {review.credentialPlan.scopes.map((scope) => <Tag key={scope}>{scope}</Tag>)}
+            {review.credentialPlan.scopes.map((scope) => (
+              <Tag key={exactAccessKey(`scope:${scope}`)}>{scope}</Tag>
+            ))}
+            {review.serviceGrants.map((grant) => (
+              <Tag key={exactAccessKey(`service:${grant.grantId}`)}>{grant.displayName}</Tag>
+            ))}
             {review.serviceGrants.flatMap((grant) =>
-              grant.nodeIds.map((nodeId) => <Tag key={`${grant.targetId}:${nodeId}`}>{nodeId}</Tag>),
+              grant.nodeIds.map((nodeId) => (
+                <Tag key={exactAccessKey(`node:${grant.grantId}:${nodeId}`)}>
+                  {nodeId}
+                </Tag>
+              )),
             )}
           </Space>
         </div>
@@ -77,7 +101,7 @@ export default function TeamAutomationAuthorizationReview({
             {new Date(review.credentialPlan.expiresAt).toLocaleString()}
           </Typography.Paragraph>
         </div>
-        <div id="team-automation-authorization-description">
+        <div>
           {review.disclosures.map((disclosure) => (
             <div key={disclosure} style={{ alignItems: "center", display: "flex", gap: 8, marginTop: 6 }}>
               <CheckCircleOutlined style={{ color: "var(--ant-color-success)" }} />
@@ -97,20 +121,6 @@ export default function TeamAutomationAuthorizationReview({
           </Typography.Paragraph>
         </details>
       </div>
-      <Space style={{ display: "flex", justifyContent: "flex-end", marginTop: 20 }}>
-        <Button disabled={busy} onClick={onCancel}>
-          {intl.formatMessage({
-            id: "teams.automations.authorization.back",
-            defaultMessage: "Back",
-          })}
-        </Button>
-        <Button loading={busy} onClick={onConfirm} type="primary">
-          {intl.formatMessage({
-            id: "teams.automations.authorization.confirm",
-            defaultMessage: "Authorize and continue",
-          })}
-        </Button>
-      </Space>
     </div>
   );
 }
