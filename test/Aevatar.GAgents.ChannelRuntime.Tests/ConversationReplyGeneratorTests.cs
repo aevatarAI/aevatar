@@ -733,6 +733,15 @@ public sealed class ConversationReplyGeneratorTests
         documentPart.FileRef.SourceResourceKey.Should().Be("pdf_recent");
         documentPart.MediaType.Should().Be("application/pdf");
         documentPart.Name.Should().Be("recent.pdf");
+        var systemPrompt = plan.InitialMessages.Single(message => message.Role == "system").Content;
+        systemPrompt.Should().Contain("Current input files");
+        systemPrompt.Should().Contain("input_parts[].file_ref");
+        systemPrompt.Should().Contain("workflow-file://wf-file-1");
+        systemPrompt.Should().Contain("\"source_kind\": 1");
+        systemPrompt.Should().NotContain("source_message_id");
+        systemPrompt.Should().NotContain("source_resource_key");
+        systemPrompt.Should().NotContain("recent.pdf");
+        systemPrompt.Should().NotContain("attachment_ref");
         userMessage.ContentParts!.Should().NotContain(part =>
             part.Text != null &&
             part.Text.Contains("confidential extracted document text", StringComparison.Ordinal));
