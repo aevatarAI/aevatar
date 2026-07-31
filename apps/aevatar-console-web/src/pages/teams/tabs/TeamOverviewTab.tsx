@@ -1,8 +1,5 @@
 import {
-  ClockCircleOutlined,
-  EyeOutlined,
   HistoryOutlined,
-  InfoCircleOutlined,
   PlayCircleOutlined,
   ToolOutlined,
 } from "@ant-design/icons";
@@ -10,10 +7,10 @@ import { Button, Space, Tooltip, Typography, theme } from "antd";
 import { useIntl } from "@umijs/max";
 import React from "react";
 import { AevatarInspectorEmpty } from "@/shared/ui/aevatarPageShells";
-import {
-  DetailPill,
-  FactLine,
-} from "../components/TeamDetailPrimitives";
+import TeamRecentRunsList, {
+  type TeamActivityRunRow,
+} from "../components/TeamRecentRunsList";
+import { DetailPill } from "../components/TeamDetailPrimitives";
 
 type OverviewCompositionRow = {
   readonly canConfigure?: boolean;
@@ -42,23 +39,6 @@ type OverviewConfigurationRow = {
   readonly value: string;
 };
 
-type OverviewRunRow = {
-  readonly detailsHref?: string;
-  readonly detailItems: readonly {
-    readonly label: string;
-    readonly value: string;
-  }[];
-  readonly detailTooltipLabel: string;
-  readonly memberLabel: string;
-  readonly outputPreview: string;
-  readonly runId: string;
-  readonly statusLabel: string;
-  readonly statusStyle: React.CSSProperties;
-  readonly updatedLabel: string;
-  readonly workflowLabel: string;
-  readonly workflowMetaLabel: string;
-};
-
 type TeamOverviewTabProps = {
   readonly configurationDetailRows: readonly OverviewConfigurationRow[];
   readonly compositionRows: readonly OverviewCompositionRow[];
@@ -79,7 +59,7 @@ type TeamOverviewTabProps = {
   readonly entryMemberId?: string | null;
   readonly entryMemberLabel?: string;
   readonly entryMemberUpdating?: boolean;
-  readonly latestRuns?: readonly OverviewRunRow[];
+  readonly latestRuns?: readonly TeamActivityRunRow[];
   readonly latestVisibleUpdateLabel: string;
   readonly latestVisibleUpdateNote: string;
   readonly onClearEntryMember?: () => void;
@@ -502,103 +482,16 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
             })}
           </Typography.Text>
         </div>
-        {latestRuns.length > 0 ? (
-          <div style={{ display: "grid", gap: 10 }}>
-            {latestRuns.map((run) => (
-              <div
-                key={run.runId}
-                style={{
-                  alignItems: "start",
-                  border: `1px solid ${token.colorBorderSecondary}`,
-                  borderRadius: 8,
-                  display: "grid",
-                  gap: 12,
-                  gridTemplateColumns: "minmax(0, 1fr) max-content",
-                  padding: 12,
-                }}
-              >
-                <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
-                  <Space size={6} wrap>
-                    <DetailPill
-                      compact
-                      style={run.statusStyle}
-                      text={run.statusLabel}
-                    />
-                    <Typography.Text style={{ fontSize: 12 }} type="secondary">
-                      <ClockCircleOutlined /> {run.updatedLabel}
-                    </Typography.Text>
-                    <Tooltip
-                      title={
-                        <div style={{ display: "grid", gap: 4 }}>
-                          {run.detailItems.map((item) => (
-                            <span key={item.label}>
-                              {item.label}: {item.value}
-                            </span>
-                          ))}
-                        </div>
-                      }
-                    >
-                      <span
-                        aria-label={run.detailTooltipLabel}
-                        role="img"
-                        style={{ color: token.colorTextTertiary, cursor: "help" }}
-                        tabIndex={0}
-                      >
-                        <InfoCircleOutlined />
-                      </span>
-                    </Tooltip>
-                  </Space>
-                  <Typography.Text strong>{run.memberLabel}</Typography.Text>
-                  <Typography.Text style={{ fontSize: 12 }} type="secondary">
-                    {run.workflowMetaLabel}
-                  </Typography.Text>
-                  <FactLine rows={2} secondary text={run.outputPreview} />
-                </div>
-                {run.detailsHref ? (
-                  <Tooltip
-                    title={intl.formatMessage({
-                      id: "teams.detail.overview.history.actions.view",
-                    })}
-                  >
-                    <Button
-                      aria-label={intl.formatMessage({
-                        id: "teams.detail.overview.history.actions.view",
-                      })}
-                      href={run.detailsHref}
-                      icon={<EyeOutlined />}
-                      onClick={handleNavigate(run.detailsHref)}
-                      size="small"
-                    />
-                  </Tooltip>
-                ) : null}
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div
-            style={{
-              alignItems: "center",
-              background: token.colorFillQuaternary,
-              border: `1px dashed ${token.colorBorderSecondary}`,
-              borderRadius: 8,
-              display: "flex",
-              gap: 10,
-              justifyContent: "center",
-              padding: "18px 16px",
-              textAlign: "center",
-            }}
-          >
-            <AevatarInspectorEmpty
-              compact
-              title={intl.formatMessage({
-                id: "teams.detail.overview.history.empty.title",
-              })}
-              description={intl.formatMessage({
-                id: "teams.detail.overview.history.empty.description",
-              })}
-            />
-          </div>
-        )}
+        <TeamRecentRunsList
+          emptyDescription={intl.formatMessage({
+            id: "teams.detail.overview.history.empty.description",
+          })}
+          emptyTitle={intl.formatMessage({
+            id: "teams.detail.overview.history.empty.title",
+          })}
+          onNavigate={onNavigate}
+          runs={latestRuns}
+        />
       </section>
     </div>
   );
