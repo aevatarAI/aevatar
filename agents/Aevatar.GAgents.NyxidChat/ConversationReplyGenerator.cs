@@ -1,5 +1,6 @@
 using System.Text;
 using Aevatar.AI.Abstractions;
+using Google.Protobuf;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.Prompting;
@@ -2343,67 +2344,37 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             : null;
     }
 
+    private static readonly JsonFormatter InputFileRefJsonFormatter = new(
+        JsonFormatter.Settings.Default
+            .WithFormatDefaultValues(false)
+            .WithPreserveProtoFieldNames(true)
+            .WithFormatEnumsAsIntegers(true));
+
     private static string? BuildCurrentInputFileRefsSection(IReadOnlyList<Aevatar.AI.Abstractions.ChatFileRef> fileRefs)
     {
-        var visibleRefs = fileRefs.Where(HasFileRefIdentity).ToArray();
-        if (visibleRefs.Length == 0)
+        var handles = fileRefs
+            .Where(HasFileRefIdentity)
+            .Select(ToPromptFileHandle)
+            .ToArray();
+        if (handles.Length == 0)
             return null;
 
         var builder = new StringBuilder();
         builder.AppendLine("## Current input files");
-        builder.AppendLine("The current turn includes runtime-owned typed file references. When a tool accepts file input, pass the exact file handle under `input_parts[].file_ref`; do not invent attachment identifiers or report that no file reference exists.");
-        foreach (var fileRef in visibleRefs)
-        {
-            var hasField = false;
-            builder.Append("- file_ref: {");
-            AppendJsonStringField(builder, "file_id", fileRef.FileId, ref hasField);
-            AppendJsonStringField(builder, "artifact_id", fileRef.ArtifactId, ref hasField);
-            AppendJsonStringField(builder, "source_kind", fileRef.SourceKind.ToString(), ref hasField);
-            AppendJsonStringField(builder, "source_message_id", fileRef.SourceMessageId, ref hasField);
-            AppendJsonStringField(builder, "source_resource_key", fileRef.SourceResourceKey, ref hasField);
-            AppendJsonStringField(builder, "file_name", fileRef.FileName, ref hasField);
-            AppendJsonStringField(builder, "media_type", fileRef.MediaType, ref hasField);
-            if (fileRef.SizeBytes > 0)
-                AppendJsonNumberField(builder, "size_bytes", fileRef.SizeBytes, ref hasField);
-            AppendJsonStringField(builder, "sha256", fileRef.Sha256, ref hasField);
-            if (fileRef.CreatedAtUnixMs > 0)
-                AppendJsonNumberField(builder, "created_at_unix_ms", fileRef.CreatedAtUnixMs, ref hasField);
-            if (fileRef.ExpiresAtUnixMs > 0)
-                AppendJsonNumberField(builder, "expires_at_unix_ms", fileRef.ExpiresAtUnixMs, ref hasField);
-            AppendJsonStringField(builder, "owner_run_id", fileRef.OwnerRunId, ref hasField);
-            AppendJsonStringField(builder, "owner_scope_id", fileRef.OwnerScopeId, ref hasField);
-            builder.AppendLine("}");
-        }
+        builder.AppendLine("The current turn includes runtime-owned typed file references. When a tool accepts file input, pass one exact handle under `input_parts[].file_ref`; do not invent attachment identifiers or report that no file reference exists.");
+        foreach (var handle in handles)
+            builder.AppendLine($"- file_ref: {InputFileRefJsonFormatter.Format(handle)}");
 
         return builder.ToString();
     }
 
-    private static void AppendJsonStringField(StringBuilder builder, string name, string? value, ref bool hasField)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-            return;
-
-        AppendJsonFieldPrefix(builder, name, ref hasField);
-        builder.Append('"');
-        builder.Append(value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal));
-        builder.Append('"');
-    }
-
-    private static void AppendJsonNumberField(StringBuilder builder, string name, long value, ref bool hasField)
-    {
-        AppendJsonFieldPrefix(builder, name, ref hasField);
-        builder.Append(value.ToString(System.Globalization.CultureInfo.InvariantCulture));
-    }
-
-    private static void AppendJsonFieldPrefix(StringBuilder builder, string name, ref bool hasField)
-    {
-        if (hasField)
-            builder.Append(", ");
-        hasField = true;
-        builder.Append('"');
-        builder.Append(name);
-        builder.Append("\": ");
-    }
+    private static Aevatar.AI.Abstractions.ChatFileRef ToPromptFileHandle(Aevatar.AI.Abstractions.ChatFileRef fileRef) =>
+        new()
+        {
+            FileId = fileRef.FileId,
+            ArtifactId = fileRef.ArtifactId,
+            SourceKind = fileRef.SourceKind,
+        };
 
     private static void AppendRuntimeFact(StringBuilder builder, string? content)
     {

@@ -737,8 +737,10 @@ public sealed class ConversationReplyGeneratorTests
         systemPrompt.Should().Contain("Current input files");
         systemPrompt.Should().Contain("input_parts[].file_ref");
         systemPrompt.Should().Contain("workflow-file://wf-file-1");
-        systemPrompt.Should().Contain("\"source_message_id\": \"om_recent_pdf\"");
-        systemPrompt.Should().Contain("\"source_resource_key\": \"pdf_recent\"");
+        systemPrompt.Should().Contain("\"source_kind\": 1");
+        systemPrompt.Should().NotContain("source_message_id");
+        systemPrompt.Should().NotContain("source_resource_key");
+        systemPrompt.Should().NotContain("recent.pdf");
         systemPrompt.Should().NotContain("attachment_ref");
         userMessage.ContentParts!.Should().NotContain(part =>
             part.Text != null &&
