@@ -25,12 +25,13 @@ namespace Aevatar.GAgents.ChatbotClassifier;
 public sealed class ChatbotClassifierGAgent : RoleGAgent
 {
     public ChatbotClassifierGAgent(
+        IAgentToolExecutionPort toolExecutionPort,
         ILLMProviderFactory? llmProviderFactory = null,
         IEnumerable<IAIGAgentExecutionHook>? additionalHooks = null,
         IEnumerable<IAgentRunMiddleware>? agentMiddlewares = null,
         IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
         IEnumerable<IAgentToolSource>? toolSources = null)
-        : base(llmProviderFactory, additionalHooks, agentMiddlewares, llmMiddlewares, toolSources)
+        : base(toolExecutionPort, llmProviderFactory, additionalHooks, agentMiddlewares, llmMiddlewares, toolSources)
     {
     }
 

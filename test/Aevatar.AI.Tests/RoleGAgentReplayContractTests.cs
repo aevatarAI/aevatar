@@ -1737,6 +1737,7 @@ public class RoleGAgentReplayContractTests
             .AddSingleton<EventSourcingRuntimeOptions>()
             .AddSingleton<IAuditTrailAppender, AppendedAuditTrail>()
             .AddSingleton<IAuditActorIdentityHasher, StableIdentityHasher>()
+            .AddSingleton<IAgentToolAdmissionLedger>(AlwaysStartingAgentToolAdmissionLedger.Instance)
             .AddSingleton<IAgentToolExecutionPort, AdmittedAgentToolExecutor>()
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
         configure?.Invoke(services);
@@ -1763,7 +1764,10 @@ public class RoleGAgentReplayContractTests
         string actorId,
         ILLMProviderFactory? providerFactory = null)
     {
-        var agent = new RoleGAgent(providerFactory, toolSources: services.GetServices<IAgentToolSource>())
+        var agent = new RoleGAgent(
+            services.GetRequiredService<IAgentToolExecutionPort>(),
+            providerFactory,
+            toolSources: services.GetServices<IAgentToolSource>())
         {
             Services = services,
             EventSourcingBehaviorFactory = services.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),
@@ -2242,7 +2246,7 @@ public class RoleGAgentReplayContractTests
         List<string>? operationLog,
         ReconcileProposalMutation reconcileProposalMutation,
         InitialAuthorityMutation initialAuthorityMutation)
-        : RoleGAgent(providerFactory)
+        : RoleGAgent(TestAgentToolExecutionPort.Instance, providerFactory)
     {
         public int PrepareCallCount { get; private set; }
         public int MaterializeCallCount { get; private set; }

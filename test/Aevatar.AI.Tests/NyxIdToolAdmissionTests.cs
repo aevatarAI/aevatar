@@ -235,7 +235,10 @@ public sealed class NyxIdToolAdmissionTests
     }
 
     private static AdmittedAgentToolExecutor CreateExecutor() =>
-        new(new AppendedAuditTrail(), new StableIdentityHasher());
+        new(
+            AlwaysStartingAgentToolAdmissionLedger.Instance,
+            new AppendedAuditTrail(),
+            new StableIdentityHasher());
 
     private static AgentToolExecutionRequest Request(
         IAgentTool tool,

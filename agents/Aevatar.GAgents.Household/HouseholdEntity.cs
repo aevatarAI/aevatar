@@ -25,12 +25,13 @@ namespace Aevatar.GAgents.Household;
 public class HouseholdEntity : AIGAgentBase<HouseholdEntityState>
 {
     public HouseholdEntity(
+        IAgentToolExecutionPort toolExecutionPort,
         ILLMProviderFactory? llmProviderFactory = null,
         IEnumerable<IAIGAgentExecutionHook>? additionalHooks = null,
         IEnumerable<IAgentRunMiddleware>? agentMiddlewares = null,
         IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
         IEnumerable<IAgentToolSource>? toolSources = null)
-        : base(llmProviderFactory, additionalHooks, agentMiddlewares, llmMiddlewares, toolSources)
+        : base(toolExecutionPort, llmProviderFactory, additionalHooks, agentMiddlewares, llmMiddlewares, toolSources)
     {
     }
 

@@ -137,6 +137,35 @@ public sealed class ProjectionAuditTrailAppenderTests
         store.Documents.Should().BeEmpty();
     }
 
+    [Theory]
+    [InlineData("waiting_approval")]
+    [InlineData("running")]
+    [InlineData("terminal")]
+    public async Task AppendAsync_WhenSamePhaseFactIsRecreatedAtLaterClock_ShouldRemainDuplicate(
+        string executionPhase)
+    {
+        var original = CreateRecord($"audit-{executionPhase}");
+        original.Annotations.Add("execution_phase", executionPhase);
+        var retry = original.Clone();
+        retry.OccurredAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-03T08:10:10+00:00"));
+        retry.RecordedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-03T08:10:11+00:00"));
+        var store = new RecordingAuditTrailArtifactStore
+        {
+            Existing = new AuditTrailDocument
+            {
+                AuditId = original.AuditId,
+                ContentHash = ComputeContentHash(original),
+                Record = original,
+            },
+        };
+        var appender = new ProjectionAuditTrailAppender([store]);
+
+        var result = await appender.AppendAsync(retry);
+
+        result.Status.Should().Be(AuditTrailAppendStatus.Duplicate);
+        store.Documents.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task AppendAsync_WhenExistingContentHashDiffers_ShouldReturnConflictWithoutWriting()
     {
@@ -279,6 +308,7 @@ public sealed class ProjectionAuditTrailAppenderTests
     private static string ComputeContentHash(AuditRecord record)
     {
         var semanticRecord = record.Clone();
+        semanticRecord.OccurredAt = null;
         semanticRecord.RecordedAt = null;
         return Convert.ToHexString(SHA256.HashData(semanticRecord.ToByteArray())).ToLowerInvariant();
     }

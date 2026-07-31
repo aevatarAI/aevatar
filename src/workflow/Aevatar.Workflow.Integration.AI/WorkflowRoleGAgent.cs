@@ -19,6 +19,7 @@ namespace Aevatar.Workflow.Integration.AI;
 
 [GAgent(WorkflowRoleConventions.DefaultAgentKind)]
 public class WorkflowRoleGAgent(
+    IAgentToolExecutionPort toolExecutionPort,
     ILLMProviderFactory? llmProviderFactory = null,
     IEnumerable<IAIGAgentExecutionHook>? additionalHooks = null,
     IEnumerable<IAgentRunMiddleware>? agentMiddlewares = null,
@@ -28,6 +29,7 @@ public class WorkflowRoleGAgent(
     IToolSetRegistry? toolSetRegistry = null,
     IWorkflowCallerAccessTokenProvider? callerAccessTokenProvider = null)
     : RoleGAgent(
+        toolExecutionPort,
         llmProviderFactory,
         additionalHooks,
         agentMiddlewares,

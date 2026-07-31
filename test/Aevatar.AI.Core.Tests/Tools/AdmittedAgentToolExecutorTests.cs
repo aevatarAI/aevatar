@@ -23,6 +23,125 @@ public sealed class AdmittedAgentToolExecutorTests
             .Should().NotBe(AgentToolArgumentsDigest.ComputeSha256("{ \"a\": 1 }"));
     }
 
+    [Theory]
+    [InlineData(null, null, true, true)]
+    [InlineData(null, null, false, false)]
+    [InlineData("binding-1", null, true, true)]
+    [InlineData("binding-1", null, false, false)]
+    [InlineData("binding-1", "sender-token", true, true)]
+    [InlineData("binding-1", "sender-token", false, true)]
+    public async Task ExecuteAsync_ChannelSenderCredentialMatrix_ShouldEnforceMutationIsolation(
+        string? bindingId,
+        string? senderToken,
+        bool isReadOnly,
+        bool expectedExecution)
+    {
+        var appender = new RecordingAuditTrailAppender((record, _) =>
+            AuditTrailAppendResult.Appended(record.AuditId));
+        var tool = new RecordingTool(new AgentToolCallSafety(false, isReadOnly, false));
+        var executor = CreateExecutor(appender);
+        var context = AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity("request-1", "call-1"),
+            Credentials = new AgentToolCredentials("owner-token", "org-token", senderToken),
+            Channel = new AgentToolChannelContext(
+                "lark",
+                "sender-1",
+                "registration-1",
+                "message-1",
+                "platform-message-1"),
+            SenderBinding = new AgentToolSenderBindingContext(bindingId),
+        };
+
+        var outcome = await executor.ExecuteAsync(CreateRequest(tool) with { ExecutionContext = context });
+
+        if (expectedExecution)
+        {
+            outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Executed);
+            outcome.FailureCode.Should().BeEmpty();
+            tool.ExecutionCalls.Should().Be(1);
+            return;
+        }
+
+        outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Denied);
+        outcome.FailureCode.Should().Be("credential_denied");
+        outcome.FailureStage.Should().Be(AgentToolExecutionFailureStage.CredentialPolicy);
+        outcome.TerminalInvoked.Should().BeFalse();
+        tool.ExecutionCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenSenderTokenExists_ShouldReplaceOwnerCredentialsInsideTerminal()
+    {
+        var appender = new RecordingAuditTrailAppender((record, _) =>
+            AuditTrailAppendResult.Appended(record.AuditId));
+        var tool = new RecordingTool(new AgentToolCallSafety(false, false, false));
+        var executor = CreateExecutor(appender);
+        var context = AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity("request-1", "call-1"),
+            Credentials = new AgentToolCredentials("owner-token", "org-token", " sender-token "),
+            Channel = new AgentToolChannelContext(
+                "lark",
+                "sender-1",
+                "registration-1",
+                "message-1",
+                "platform-message-1"),
+            SenderBinding = new AgentToolSenderBindingContext("binding-1"),
+        };
+
+        var outcome = await executor.ExecuteAsync(CreateRequest(tool) with { ExecutionContext = context });
+
+        outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Executed);
+        var executedContext = tool.ExecutionContexts.Should().ContainSingle().Subject;
+        executedContext.Credentials.NyxIdAccessToken.Should().Be("sender-token");
+        executedContext.Credentials.NyxIdOrgToken.Should().Be("sender-token");
+        executedContext.Credentials.SenderNyxIdAccessToken.Should().Be("sender-token");
+        appender.Records.Single(record => record.Annotations["execution_phase"] == "terminal")
+            .CredentialSource.Should().Be(AuditCredentialSource.ChannelRegistration);
+    }
+
+    [Theory]
+    [InlineData("direct", AuditCredentialSource.BearerToken)]
+    [InlineData("system", AuditCredentialSource.System)]
+    [InlineData("scheduled", AuditCredentialSource.ScheduledRun)]
+    [InlineData("explicit", AuditCredentialSource.ServiceAccount)]
+    public async Task ExecuteAsync_CredentialSourceRoutes_ShouldAuditTypedSource(
+        string route,
+        AuditCredentialSource expectedSource)
+    {
+        var appender = new RecordingAuditTrailAppender((record, _) =>
+            AuditTrailAppendResult.Appended(record.AuditId));
+        var tool = new RecordingTool(new AgentToolCallSafety(false, true, false));
+        var executor = CreateExecutor(appender);
+        var context = AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity("request-1", "call-1"),
+        };
+        context = route switch
+        {
+            "direct" => context with
+            {
+                Credentials = new AgentToolCredentials("owner-token", null, null),
+            },
+            "scheduled" => context with
+            {
+                Schedule = new AgentToolScheduleContext("schedule-1"),
+            },
+            "explicit" => context with
+            {
+                CredentialSource = AgentToolCredentialSource.ServiceAccount,
+            },
+            _ => context,
+        };
+
+        var outcome = await executor.ExecuteAsync(CreateRequest(tool) with { ExecutionContext = context });
+
+        outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Executed);
+        appender.Records.Single(record => record.Annotations["execution_phase"] == "terminal")
+            .CredentialSource.Should().Be(expectedSource);
+    }
+
     [Fact]
     public async Task ExecuteAsync_ShouldFreezeOneExactArgumentString()
     {
@@ -69,7 +188,7 @@ public sealed class AdmittedAgentToolExecutorTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenRunningAuditIsDuplicate_ShouldNotReplayTerminal()
+    public async Task ExecuteAsync_WhenRunningAuditIsDuplicate_ShouldExecuteAfterAdmissionStarts()
     {
         var appender = new RecordingAuditTrailAppender((record, _) =>
             record.Annotations["execution_phase"] == "running"
@@ -80,22 +199,20 @@ public sealed class AdmittedAgentToolExecutorTests
 
         var outcome = await executor.ExecuteAsync(CreateRequest(tool));
 
-        outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Failed);
-        outcome.FailureCode.Should().Be("tool_execution_already_started");
-        outcome.FailureStage.Should().Be(AgentToolExecutionFailureStage.AuditIntent);
-        outcome.TerminalInvoked.Should().BeFalse();
+        outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Executed);
+        outcome.FailureCode.Should().BeEmpty();
+        outcome.TerminalInvoked.Should().BeTrue();
         outcome.Retryable.Should().BeFalse();
         outcome.AuditCompleted.Should().BeTrue();
-        tool.ExecutionCalls.Should().Be(0);
+        tool.ExecutionCalls.Should().Be(1);
     }
 
     [Theory]
-    [InlineData(AuditTrailAppendStatus.Conflict, "audit_intent_conflict", false)]
-    [InlineData(AuditTrailAppendStatus.StoreUnavailable, "audit_unavailable", true)]
-    public async Task ExecuteAsync_WhenRunningAuditDoesNotAppend_ShouldFailBeforeTerminal(
+    [InlineData(AuditTrailAppendStatus.Conflict, "audit_intent_conflict")]
+    [InlineData(AuditTrailAppendStatus.StoreUnavailable, "audit_unavailable")]
+    public async Task ExecuteAsync_WhenRunningAuditDoesNotAppend_ShouldPreserveExecution(
         AuditTrailAppendStatus appendStatus,
-        string failureCode,
-        bool retryable)
+        string failureCode)
     {
         var appender = new RecordingAuditTrailAppender((record, _) =>
             record.Annotations["execution_phase"] == "running"
@@ -106,13 +223,66 @@ public sealed class AdmittedAgentToolExecutorTests
 
         var outcome = await executor.ExecuteAsync(CreateRequest(tool));
 
+        outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.ExecutedAuditIncomplete);
+        outcome.FailureCode.Should().Be(failureCode);
+        outcome.FailureStage.Should().Be(AgentToolExecutionFailureStage.TerminalAudit);
+        outcome.TerminalInvoked.Should().BeTrue();
+        outcome.Retryable.Should().BeFalse();
+        outcome.AuditCompleted.Should().BeFalse();
+        tool.ExecutionCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenRunningAuditIsUnavailable_ShouldNotMakeAuditTheAdmissionAuthority()
+    {
+        var appender = new RecordingAuditTrailAppender((record, _) =>
+            record.Annotations["execution_phase"] == "running"
+                ? AuditTrailAppendResult.StoreUnavailable(record.AuditId, "offline")
+                : AuditTrailAppendResult.Appended(record.AuditId));
+        var tool = new RecordingTool(new AgentToolCallSafety(false, true, false));
+        var executor = CreateExecutor(appender);
+
+        var outcome = await executor.ExecuteAsync(CreateRequest(tool));
+
+        outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.ExecutedAuditIncomplete);
+        outcome.TerminalInvoked.Should().BeTrue();
+        outcome.Retryable.Should().BeFalse();
+        outcome.AuditCompleted.Should().BeFalse();
+        tool.ExecutionCalls.Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData(AgentToolAdmissionStatus.Duplicate, "tool_execution_already_started", false)]
+    [InlineData(AgentToolAdmissionStatus.Conflict, "tool_admission_conflict", false)]
+    [InlineData(AgentToolAdmissionStatus.StoreUnavailable, "tool_admission_unavailable", true)]
+    public async Task ExecuteAsync_WhenAdmissionDoesNotStart_ShouldFailBeforeAuditAndTerminal(
+        AgentToolAdmissionStatus admissionStatus,
+        string failureCode,
+        bool retryable)
+    {
+        var appender = new RecordingAuditTrailAppender((record, _) =>
+            AuditTrailAppendResult.Appended(record.AuditId));
+        var ledger = new RecordingAdmissionLedger(admissionStatus);
+        var tool = new RecordingTool(new AgentToolCallSafety(false, true, false));
+        var executor = CreateExecutor(appender, ledger);
+
+        var outcome = await executor.ExecuteAsync(CreateRequest(tool));
+
         outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Failed);
         outcome.FailureCode.Should().Be(failureCode);
-        outcome.FailureStage.Should().Be(AgentToolExecutionFailureStage.AuditIntent);
+        outcome.FailureStage.Should().Be(AgentToolExecutionFailureStage.Admission);
         outcome.TerminalInvoked.Should().BeFalse();
         outcome.Retryable.Should().Be(retryable);
-        outcome.AuditCompleted.Should().BeFalse();
         tool.ExecutionCalls.Should().Be(0);
+        appender.Records.Should().BeEmpty();
+        ledger.Facts.Should().ContainSingle().Which.Should().BeEquivalentTo(new AgentToolAdmissionFact
+        {
+            AdmissionId = ledger.Facts[0].AdmissionId,
+            RequestId = "request-1",
+            ToolCallId = "call-1",
+            ToolName = "test_tool",
+            ArgumentsSha256 = AgentToolArgumentsDigest.ComputeSha256("{}"),
+        });
     }
 
     [Fact]
@@ -314,12 +484,10 @@ public sealed class AdmittedAgentToolExecutorTests
     }
 
     [Theory]
-    [InlineData(AuditTrailAppendStatus.Conflict, "audit_intent_conflict", false)]
-    [InlineData(AuditTrailAppendStatus.StoreUnavailable, "audit_unavailable", true)]
-    public async Task ExecuteAsync_WhenWaitingApprovalAuditDoesNotAppend_ShouldFailWithoutExecuting(
-        AuditTrailAppendStatus appendStatus,
-        string failureCode,
-        bool retryable)
+    [InlineData(AuditTrailAppendStatus.Conflict)]
+    [InlineData(AuditTrailAppendStatus.StoreUnavailable)]
+    public async Task ExecuteAsync_WhenWaitingApprovalAuditDoesNotAppend_ShouldPreserveApprovalContinuation(
+        AuditTrailAppendStatus appendStatus)
     {
         var appender = new RecordingAuditTrailAppender((record, _) =>
             record.Annotations["execution_phase"] == "waiting_approval"
@@ -336,11 +504,11 @@ public sealed class AdmittedAgentToolExecutorTests
             ApprovalContinuationMode = AgentToolApprovalContinuationMode.ActorOwned,
         });
 
-        outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Failed);
-        outcome.FailureCode.Should().Be(failureCode);
-        outcome.FailureStage.Should().Be(AgentToolExecutionFailureStage.AuditIntent);
+        outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.ApprovalRequired);
+        outcome.FailureCode.Should().BeEmpty();
+        outcome.FailureStage.Should().Be(AgentToolExecutionFailureStage.Approval);
         outcome.TerminalInvoked.Should().BeFalse();
-        outcome.Retryable.Should().Be(retryable);
+        outcome.Retryable.Should().BeFalse();
         outcome.AuditCompleted.Should().BeFalse();
         tool.ExecutionCalls.Should().Be(0);
     }
@@ -393,8 +561,13 @@ public sealed class AdmittedAgentToolExecutorTests
         tool.ExecutionCalls.Should().Be(0);
     }
 
-    private static AdmittedAgentToolExecutor CreateExecutor(IAuditTrailAppender appender) =>
-        new(appender, new StableIdentityHasher());
+    private static AdmittedAgentToolExecutor CreateExecutor(
+        IAuditTrailAppender appender,
+        IAgentToolAdmissionLedger? admissionLedger = null) =>
+        new(
+            admissionLedger ?? new RecordingAdmissionLedger(AgentToolAdmissionStatus.Started),
+            appender,
+            new StableIdentityHasher());
 
     private static AuditTrailAppendResult CreateAppendResult(
         AuditTrailAppendStatus status,
@@ -432,6 +605,7 @@ public sealed class AdmittedAgentToolExecutorTests
         public int ExecutionCalls { get; private set; }
         public List<string> SafetyArguments { get; } = [];
         public List<string> ExecutionArguments { get; } = [];
+        public List<AgentToolExecutionContext> ExecutionContexts { get; } = [];
 
         public AgentToolCallSafety GetCallSafety(string argumentsJson)
         {
@@ -465,6 +639,8 @@ public sealed class AdmittedAgentToolExecutorTests
         {
             ExecutionCalls++;
             ExecutionArguments.Add(argumentsJson);
+            ExecutionContexts.Add(AgentToolRequestContext.Current
+                                  ?? throw new InvalidOperationException("Tool execution context is required."));
             return Task.FromResult(_execute(argumentsJson));
         }
     }
@@ -480,6 +656,20 @@ public sealed class AdmittedAgentToolExecutorTests
         {
             Records.Add(record);
             return Task.FromResult(append(record, Records.Count));
+        }
+    }
+
+    private sealed class RecordingAdmissionLedger(AgentToolAdmissionStatus status) : IAgentToolAdmissionLedger
+    {
+        public List<AgentToolAdmissionFact> Facts { get; } = [];
+
+        public Task<AgentToolAdmissionResult> TryStartAsync(
+            AgentToolAdmissionFact fact,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Facts.Add(fact.Clone());
+            return Task.FromResult(new AgentToolAdmissionResult(status));
         }
     }
 

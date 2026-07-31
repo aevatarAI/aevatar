@@ -113,17 +113,24 @@ public sealed partial class RoleGAgentStateCoverageTests
     }
 
     [Fact]
-    public async Task HandleToolApprovalDecision_WhenRunningAuditIsRetryable_ShouldRecoverExactContinuationAcrossReactivation()
+    public async Task HandleToolApprovalDecision_WhenAdmissionStoreIsRetryable_ShouldRecoverExactContinuationAcrossReactivation()
     {
         var timeline = new List<string>();
         var eventStore = new TimelineEventStore(new InMemoryEventStoreForTests(), timeline);
-        var auditTrail = new ScriptedAuditTrail(
-            [AuditTrailAppendStatus.StoreUnavailable, AuditTrailAppendStatus.Appended],
-            AuditTrailAppendStatus.Appended,
+        var auditTrail = new ScriptedAuditTrail(timeline: timeline);
+        var admissionLedger = new ScriptedAdmissionLedger(
+            [AgentToolAdmissionStatus.StoreUnavailable, AgentToolAdmissionStatus.Started],
             timeline);
         var recordingPort = new RecordingExecutionPort(
-            new AdmittedAgentToolExecutor(auditTrail, new StableIdentityHasher()));
-        using var provider = BuildServiceProvider(auditTrail, eventStore, recordingPort);
+            new AdmittedAgentToolExecutor(
+                admissionLedger,
+                auditTrail,
+                new StableIdentityHasher()));
+        using var provider = BuildServiceProvider(
+            auditTrail,
+            eventStore,
+            recordingPort,
+            admissionLedger);
         var terminalCalls = 0;
         var tool = new DelegateTool("dangerous_tool", argumentsJson =>
         {
@@ -142,6 +149,7 @@ public sealed partial class RoleGAgentStateCoverageTests
             "{\"value\":1}");
         await PersistPendingApprovalAsync(eventStore, actorId, pending);
         recordingPort.Requests.Clear();
+        auditTrail.Records.Clear();
         timeline.Clear();
 
         var agent = CreateRoleAgent(provider, actorId, toolSources: [new StaticToolSource([tool])]);
@@ -159,11 +167,13 @@ public sealed partial class RoleGAgentStateCoverageTests
         await FluentActions.Invoking(() => agent.HandleToolApprovalDecision(decision))
             .Should()
             .ThrowAsync<InvalidOperationException>()
-            .WithMessage("The durable tool audit store is unavailable.");
+            .WithMessage("The durable tool admission ledger is unavailable.");
 
         terminalCalls.Should().Be(0);
-        auditTrail.RunningAttempts.Should().Be(1);
+        admissionLedger.Attempts.Should().Be(1);
+        auditTrail.RunningAttempts.Should().Be(0);
         auditTrail.TerminalAttempts.Should().Be(0);
+        auditTrail.Records.Should().BeEmpty();
         agent.State.PendingApproval.Should().BeEquivalentTo(exactPending);
         agent.State.Sessions.Should().NotContainKey("turn-approval-retry");
         AssertExactApprovalGrant(recordingPort.Requests.Should().ContainSingle().Which, exactPending);
@@ -189,7 +199,8 @@ public sealed partial class RoleGAgentStateCoverageTests
         await reactivated.HandleToolApprovalDecision(decision);
 
         terminalCalls.Should().Be(1);
-        auditTrail.RunningAttempts.Should().Be(2);
+        admissionLedger.Attempts.Should().Be(2);
+        auditTrail.RunningAttempts.Should().Be(1);
         auditTrail.TerminalAttempts.Should().Be(1);
         reactivated.State.PendingApproval.Should().BeNull();
         AssertExactApprovalGrant(recordingPort.Requests.Should().ContainSingle().Which, exactPending);
@@ -199,6 +210,7 @@ public sealed partial class RoleGAgentStateCoverageTests
         (await eventStore.GetEventsAsync(actorId)).Count(x =>
             x.EventData.Is(ClearPendingApprovalEvent.Descriptor)).Should().Be(1);
         timeline.Should().Equal(
+            "admission:Started",
             "audit:running:Appended",
             "audit:terminal:Appended",
             "event:ClearPendingApprovalEvent");
@@ -209,24 +221,26 @@ public sealed partial class RoleGAgentStateCoverageTests
         finalActivation.State.PendingApproval.Should().BeNull();
         await finalActivation.HandleToolApprovalDecision(decision);
         terminalCalls.Should().Be(1);
-        auditTrail.RunningAttempts.Should().Be(2);
+        admissionLedger.Attempts.Should().Be(2);
+        auditTrail.RunningAttempts.Should().Be(1);
     }
 
     [Theory]
-    [InlineData(AuditTrailAppendStatus.Duplicate)]
-    [InlineData(AuditTrailAppendStatus.Conflict)]
-    public async Task HandleToolApprovalDecision_WhenRunningAuditForbidsReplay_ShouldPersistFailureThenClearOnce(
-        AuditTrailAppendStatus runningStatus)
+    [InlineData(AgentToolAdmissionStatus.Duplicate)]
+    [InlineData(AgentToolAdmissionStatus.Conflict)]
+    public async Task HandleToolApprovalDecision_WhenAdmissionForbidsReplay_ShouldPersistFailureThenClearOnce(
+        AgentToolAdmissionStatus admissionStatus)
     {
-        var auditTrail = new ScriptedAuditTrail([runningStatus]);
-        using var provider = BuildServiceProvider(auditTrail);
+        var auditTrail = new ScriptedAuditTrail();
+        var admissionLedger = new ScriptedAdmissionLedger([admissionStatus]);
+        using var provider = BuildServiceProvider(auditTrail, admissionLedger: admissionLedger);
         var terminalCalls = 0;
         var tool = new DelegateTool("dangerous_tool", _ =>
         {
             terminalCalls++;
             return "{\"ok\":true}";
         });
-        var actorId = $"role-approval-running-audit-{runningStatus}";
+        var actorId = $"role-approval-admission-{admissionStatus}";
         var pending = await CreatePendingApprovalAsync(
             provider,
             tool,
@@ -236,12 +250,13 @@ public sealed partial class RoleGAgentStateCoverageTests
             });
         var eventStore = provider.GetRequiredService<IEventStore>();
         await PersistPendingApprovalAsync(eventStore, actorId, pending);
+        auditTrail.Records.Clear();
         var agent = CreateRoleAgent(provider, actorId, toolSources: [new StaticToolSource([tool])]);
         await agent.ActivateAsync();
         var decision = new ToolApprovalDecisionEvent
         {
             RequestId = agent.State.PendingApproval.RequestId,
-            ContinuationTurnId = $"turn-no-replay-{runningStatus}",
+            ContinuationTurnId = $"turn-no-replay-{admissionStatus}",
             Approved = true,
         };
 
@@ -251,7 +266,10 @@ public sealed partial class RoleGAgentStateCoverageTests
 
         agent.State.PendingApproval.Should().BeNull();
         terminalCalls.Should().Be(0);
-        auditTrail.RunningAttempts.Should().Be(1);
+        admissionLedger.Attempts.Should().Be(1);
+        auditTrail.RunningAttempts.Should().Be(0);
+        auditTrail.TerminalAttempts.Should().Be(0);
+        auditTrail.Records.Should().BeEmpty();
         await AssertFailureThenSingleClearAsync(eventStore, actorId);
 
         var reactivated = CreateRoleAgent(provider, actorId, toolSources: [new StaticToolSource([tool])]);
@@ -259,7 +277,8 @@ public sealed partial class RoleGAgentStateCoverageTests
         reactivated.State.PendingApproval.Should().BeNull();
         await reactivated.HandleToolApprovalDecision(decision);
         terminalCalls.Should().Be(0);
-        auditTrail.RunningAttempts.Should().Be(1);
+        admissionLedger.Attempts.Should().Be(1);
+        auditTrail.RunningAttempts.Should().Be(0);
     }
 
     [Fact]
@@ -554,6 +573,27 @@ public sealed partial class RoleGAgentStateCoverageTests
         {
             Requests.Add(request);
             return inner.ExecuteAsync(request, ct);
+        }
+    }
+
+    private sealed class ScriptedAdmissionLedger(
+        AgentToolAdmissionStatus[] statuses,
+        List<string>? timeline = null) : IAgentToolAdmissionLedger
+    {
+        private int _attempts;
+
+        public int Attempts => _attempts;
+
+        public Task<AgentToolAdmissionResult> TryStartAsync(
+            AgentToolAdmissionFact fact,
+            CancellationToken ct = default)
+        {
+            ArgumentNullException.ThrowIfNull(fact);
+            ct.ThrowIfCancellationRequested();
+            var index = _attempts++;
+            var admissionStatus = index < statuses.Length ? statuses[index] : statuses[^1];
+            timeline?.Add($"admission:{admissionStatus}");
+            return Task.FromResult(new AgentToolAdmissionResult(admissionStatus));
         }
     }
 

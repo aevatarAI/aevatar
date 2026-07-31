@@ -98,7 +98,10 @@ public sealed class ToolAuditRecordFactory
         record.Annotations.Add("approval_mode", receipt.ApprovalMode.ToString());
         record.Annotations.Add("is_mutation", isMutation ? "true" : "false");
         record.Annotations.Add("is_destructive", callSafety.IsDestructive ? "true" : "false");
-        AddIfPresent(record.Annotations, "side_effect_kind", receipt.SideEffectKind ?? tool.SideEffectKind);
+        AddIfPresent(
+            record.Annotations,
+            "side_effect_kind",
+            Normalize(receipt.SideEffectKind) ?? tool.SideEffectKind);
         AddIfPresent(record.Annotations, "subject_kind", receipt.SubjectKind);
         AddIfPresent(record.Annotations, "subject_version", receipt.SubjectVersion);
         AddIfPresent(record.Annotations, "subject_hash", receipt.SubjectHash);

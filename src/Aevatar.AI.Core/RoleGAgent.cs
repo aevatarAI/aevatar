@@ -28,7 +28,6 @@ using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 namespace Aevatar.AI.Core;
 
@@ -47,6 +46,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
     private string _appliedEventRoutes = string.Empty;
     private IServiceProvider? _appliedModuleServices;
     private readonly TimeProvider _timeProvider;
+    private readonly IAgentToolExecutionPort _toolExecutionPort;
     // Per-turn NyxID token, stashed before ChatStreamAsync so chartered direct-chat subclasses can
     // hand it to per-turn context consumers (DecorateSystemPrompt has no context param). The base
     // role agent itself never resolves capability overlays — see CurrentTurnNyxIdAccessToken.
@@ -65,6 +65,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         AgentToolApprovalContinuationMode.ActorOwned;
 
     public RoleGAgent(
+        IAgentToolExecutionPort toolExecutionPort,
         ILLMProviderFactory? llmProviderFactory = null,
         IEnumerable<IAIGAgentExecutionHook>? additionalHooks = null,
         IEnumerable<IAgentRunMiddleware>? agentMiddlewares = null,
@@ -74,12 +75,14 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         IRemoteToolApprovalNotificationPort? remoteToolApprovalNotificationPort = null,
         TimeProvider? timeProvider = null)
         : base(
+            toolExecutionPort,
             llmProviderFactory,
             additionalHooks,
             agentMiddlewares,
             llmMiddlewares,
             toolSources)
     {
+        _toolExecutionPort = toolExecutionPort ?? throw new ArgumentNullException(nameof(toolExecutionPort));
         RemoteToolApprovalPort = remoteToolApprovalPort;
         RemoteToolApprovalNotificationPort = remoteToolApprovalNotificationPort;
         _timeProvider = timeProvider ?? TimeProvider.System;
@@ -225,8 +228,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 pendingToolContext = approvedExecution.ExecutionContext;
                 using (AgentToolContextScope.Push(pendingToolContext))
                 {
-                    var executionPort = Services.GetRequiredService<IAgentToolExecutionPort>();
-                    toolOutcome = await executionPort.ExecuteAsync(
+                    toolOutcome = await _toolExecutionPort.ExecuteAsync(
                         new AgentToolExecutionRequest(
                             approvedExecution.Tool,
                             pending.ArgumentsJson,

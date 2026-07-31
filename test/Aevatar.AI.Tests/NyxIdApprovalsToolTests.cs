@@ -66,6 +66,7 @@ public sealed class NyxIdApprovalsToolTests
             new HttpClient(handler),
             NullLogger<NyxIdApiClient>.Instance));
         var executor = new AdmittedAgentToolExecutor(
+            AlwaysStartingAgentToolAdmissionLedger.Instance,
             new AppendedAuditTrail(),
             new StableIdentityHasher());
         var argumentsJson = action == "list"
@@ -135,6 +136,7 @@ public sealed class NyxIdApprovalsToolTests
             new HttpClient(handler),
             NullLogger<NyxIdApiClient>.Instance));
         var executor = new AdmittedAgentToolExecutor(
+            AlwaysStartingAgentToolAdmissionLedger.Instance,
             new AppendedAuditTrail(),
             new StableIdentityHasher());
         var argumentsJson = action == "list"

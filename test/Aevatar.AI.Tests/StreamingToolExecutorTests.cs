@@ -1093,7 +1093,10 @@ public class StreamingToolExecutorTests
 
         public RecordingAdmittedExecutionPort()
         {
-            _inner = new AdmittedAgentToolExecutor(_appender, new StableIdentityHasher());
+            _inner = new AdmittedAgentToolExecutor(
+                AlwaysStartingAgentToolAdmissionLedger.Instance,
+                _appender,
+                new StableIdentityHasher());
         }
 
         public List<AgentToolExecutionOutcome> Outcomes { get; } = [];

@@ -140,19 +140,29 @@ its SHA-256 digest, and calls `GetCallSafety` once. Credential policy,
 actor-owned approval, audit artifacts, receipt construction, and terminal
 execution all use that exact payload and classification.
 
-The durable phase protocol is:
+Execution admission and audit observation have separate fact owners.
+`IAgentToolAdmissionLedger` is the authoritative start-once ledger. It atomically
+creates a strongly typed `AgentToolAdmissionFact` containing the stable admission,
+request, call, tool, and argument-digest identities. Only `Started` permits entry
+to the raw terminal. `Duplicate` and `Conflict` fail closed without replay;
+`StoreUnavailable` fails closed before invocation and may be retried. Mainnet uses
+a distributed compare-and-set implementation. In-memory implementations are
+limited to development and tests, while the default unconfigured implementation
+fails closed.
 
-| Phase | Meaning | Append rule |
+Audit append status never grants execution. The audit phases are observational:
+
+| Phase | Meaning | Audit rule |
 |---|---|---|
-| `WAITING_APPROVAL` | The owning actor must persist and later reconcile an exact pending call. | `Appended` or same-fact `Duplicate` may return `ApprovalRequired`; `Conflict` or unavailable fails closed. |
-| `RUNNING` | Durable permission to enter the raw terminal. | Only `Appended` may execute. `Duplicate` means the call already started; `Conflict` also fails closed. Neither is replayed. |
+| `WAITING_APPROVAL` | The owning actor must persist and later reconcile an exact pending call. | Append the sanitized waiting fact. Append failure changes only `AuditCompleted`; actor-owned approval state remains authoritative. |
+| `RUNNING` | The admission ledger already accepted the exact call for start-once execution. | Append the sanitized start observation before invoking the raw terminal. `Appended`, `Duplicate`, `Conflict`, or store availability never changes the ledger decision. |
 | `TERMINAL` | The actual executed, denied, or failed outcome. | `Appended` or same-fact `Duplicate` completes audit. Failure after terminal invocation preserves the actual result and never makes the tool retryable. |
 
 A required approval is valid only in `ActorOwned` continuation mode and only
 when its durable grant matches `ApprovalRequestId`, `RequestId`, `ToolName`,
 `ToolCallId`, and `ArgumentsSha256`. Credential policy runs before grant
-validation. An unavailable pre-terminal `RUNNING` append may be retryable because
-the terminal was not invoked; a successful execution whose terminal audit is
+validation. An unavailable admission ledger is retryable because the terminal
+was not invoked; a successful execution whose running or terminal audit is
 incomplete returns `ExecutedAuditIncomplete` with its real result and
 `Retryable=false`.
 
@@ -298,8 +308,8 @@ Do not implement platform audit trail as:
 7. A governance decision source for command execution.
 8. Per-caller tool middleware, wrappers, receipt finalizers, or optional audit
    wiring that can reach a raw `IAgentTool` terminal.
-9. Replaying a tool after `RUNNING` returned `Duplicate` or `Conflict`, or after
-   the raw terminal ran but terminal audit append failed.
+9. Replaying a tool after the admission ledger returned `Duplicate` or
+   `Conflict`, or after the raw terminal ran but terminal audit append failed.
 
 ## 7. Query Semantics
 
@@ -465,8 +475,8 @@ Changes to audit trail contracts or implementation must verify:
 7. Solution-graph checks find exactly one raw `IAgentTool.ExecuteAsync` caller,
    and every known server-owned execution surface invokes
    `IAgentToolExecutionPort`.
-8. Credential or approval denial, `RUNNING` duplicate/conflict, and invalid
-   closed NyxID actions produce zero downstream side effects.
+8. Credential or approval denial, admission-ledger duplicate/conflict, and
+   invalid closed NyxID actions produce zero downstream side effects.
 9. Terminal audit failure preserves the actual terminal result and cannot make
    the tool call retryable.
 

@@ -52,7 +52,7 @@ public sealed class WorkflowRoleGAgentMappingTests
     {
         var provider = new RecordingLlmProvider();
         var publisher = new RecordingEventPublisher();
-        var agent = new WorkflowRoleGAgent(provider)
+        var agent = new WorkflowRoleGAgent(UnexpectedAgentToolExecutionPort.Instance, provider)
         {
             EventPublisher = publisher,
         };
@@ -129,7 +129,7 @@ public sealed class WorkflowRoleGAgentMappingTests
             },
         };
         var publisher = new RecordingEventPublisher();
-        var agent = new WorkflowRoleGAgent(provider)
+        var agent = new WorkflowRoleGAgent(UnexpectedAgentToolExecutionPort.Instance, provider)
         {
             EventPublisher = publisher,
         };
@@ -156,7 +156,7 @@ public sealed class WorkflowRoleGAgentMappingTests
     {
         var provider = new RecordingLlmProvider();
         var publisher = new RecordingEventPublisher();
-        var agent = new WorkflowRoleGAgent(provider)
+        var agent = new WorkflowRoleGAgent(UnexpectedAgentToolExecutionPort.Instance, provider)
         {
             EventPublisher = publisher,
         };
@@ -202,7 +202,7 @@ public sealed class WorkflowRoleGAgentMappingTests
     {
         var provider = new RecordingLlmProvider();
         var publisher = new RecordingEventPublisher();
-        var agent = new WorkflowRoleGAgent(provider)
+        var agent = new WorkflowRoleGAgent(UnexpectedAgentToolExecutionPort.Instance, provider)
         {
             EventPublisher = publisher,
         };
@@ -421,7 +421,10 @@ public sealed class WorkflowRoleGAgentMappingTests
     private sealed class TestWorkflowRoleGAgent(
         ILLMProviderFactory provider,
         IToolSetRegistry registry)
-        : WorkflowRoleGAgent(provider, toolSetRegistry: registry)
+        : WorkflowRoleGAgent(
+            UnexpectedAgentToolExecutionPort.Instance,
+            provider,
+            toolSetRegistry: registry)
     {
         public void AddTool(IAgentTool tool) => RegisterTool(tool);
     }
@@ -464,4 +467,15 @@ public sealed class WorkflowRoleGAgentMappingTests
             CreatedAtUnixMs = 1710000000000,
             ExpiresAtUnixMs = 1710003600000,
         };
+
+    private sealed class UnexpectedAgentToolExecutionPort : IAgentToolExecutionPort
+    {
+        public static UnexpectedAgentToolExecutionPort Instance { get; } = new();
+
+        public Task<AgentToolExecutionOutcome> ExecuteAsync(
+            AgentToolExecutionRequest request,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException(
+                $"Tool '{request.Tool.Name}' must not execute in workflow request-mapping tests.");
+    }
 }

@@ -16,35 +16,103 @@ public sealed class CodexExecutionFailureAuditTests
 {
     [Theory]
     [InlineData(
-        CodexExecutionFailureKind.MalformedOutput,
-        "managed_response_invalid",
-        "codex_execution_malformed_output",
+        CodexExecutionFailureKind.TargetNotConfigured,
+        "provider_detail_01",
+        "codex_execution_target_not_configured",
         AuditTerminalOutcome.Failed,
+        AuditOutcome.Error,
+        AuditFailureCategory.Execution)]
+    [InlineData(
+        CodexExecutionFailureKind.AdmissionDenied,
+        "provider_detail_02",
+        "codex_execution_admission_denied",
+        AuditTerminalOutcome.Failed,
+        AuditOutcome.Error,
+        AuditFailureCategory.Execution)]
+    [InlineData(
+        CodexExecutionFailureKind.LlmProviderNotConnected,
+        "provider_detail_03",
+        "codex_execution_llm_provider_not_connected",
+        AuditTerminalOutcome.Failed,
+        AuditOutcome.Error,
+        AuditFailureCategory.Execution)]
+    [InlineData(
+        CodexExecutionFailureKind.CapacityUnavailable,
+        "provider_detail_04",
+        "codex_execution_capacity_unavailable",
+        AuditTerminalOutcome.Failed,
+        AuditOutcome.Error,
         AuditFailureCategory.Execution)]
     [InlineData(
         CodexExecutionFailureKind.ProvisioningFailed,
-        "managed_credential_commit_timeout",
+        "provider_detail_05",
         "codex_execution_provisioning_failed",
         AuditTerminalOutcome.Failed,
+        AuditOutcome.Error,
+        AuditFailureCategory.Execution)]
+    [InlineData(
+        CodexExecutionFailureKind.ReadinessFailed,
+        "provider_detail_06",
+        "codex_execution_readiness_failed",
+        AuditTerminalOutcome.Failed,
+        AuditOutcome.Error,
+        AuditFailureCategory.Execution)]
+    [InlineData(
+        CodexExecutionFailureKind.IsolationUnavailable,
+        "provider_detail_07",
+        "codex_execution_isolation_unavailable",
+        AuditTerminalOutcome.Failed,
+        AuditOutcome.Error,
+        AuditFailureCategory.Execution)]
+    [InlineData(
+        CodexExecutionFailureKind.MalformedOutput,
+        "provider_detail_08",
+        "codex_execution_malformed_output",
+        AuditTerminalOutcome.Failed,
+        AuditOutcome.Error,
+        AuditFailureCategory.Execution)]
+    [InlineData(
+        CodexExecutionFailureKind.TerminalFailure,
+        "provider_detail_09",
+        "codex_execution_terminal_failure",
+        AuditTerminalOutcome.Failed,
+        AuditOutcome.Error,
         AuditFailureCategory.Execution)]
     [InlineData(
         CodexExecutionFailureKind.TimedOut,
-        "managed_proxy_timeout",
+        "provider_detail_10",
         "codex_execution_timed_out",
         AuditTerminalOutcome.TimedOut,
+        AuditOutcome.Error,
         AuditFailureCategory.Timeout)]
     [InlineData(
-        CodexExecutionFailureKind.CapacityUnavailable,
-        "managed_proxy_unavailable",
-        "codex_execution_capacity_unavailable",
+        CodexExecutionFailureKind.Cancelled,
+        "provider_detail_11",
+        "codex_execution_cancelled",
+        AuditTerminalOutcome.Cancelled,
+        AuditOutcome.Cancelled,
+        null)]
+    [InlineData(
+        CodexExecutionFailureKind.CleanupFailed,
+        "provider_detail_12",
+        "codex_execution_cleanup_failed",
         AuditTerminalOutcome.Failed,
+        AuditOutcome.Error,
+        AuditFailureCategory.Execution)]
+    [InlineData(
+        (CodexExecutionFailureKind)999,
+        "provider_detail_999",
+        "tool_execution_exception",
+        AuditTerminalOutcome.Failed,
+        AuditOutcome.Error,
         AuditFailureCategory.Execution)]
     public async Task StreamingExecution_WhenManagedPortFails_ShouldPreserveClosedFailureClassInAudit(
         CodexExecutionFailureKind failureKind,
         string providerCode,
         string expectedAuditCode,
         AuditTerminalOutcome expectedTerminalOutcome,
-        AuditFailureCategory expectedCategory)
+        AuditOutcome expectedOutcome,
+        AuditFailureCategory? expectedCategory)
     {
         var failure = new CodexExecutionFailure(
             failureKind,
@@ -56,6 +124,7 @@ public sealed class CodexExecutionFailureAuditTests
             new NyxIdToolOptions()));
         var appender = new RecordingAuditTrailAppender();
         var executor = new AdmittedAgentToolExecutor(
+            AlwaysStartingAgentToolAdmissionLedger.Instance,
             appender,
             new StableAuditIdentityHasher());
         const string argumentsJson = """
@@ -80,11 +149,19 @@ public sealed class CodexExecutionFailureAuditTests
         var audit = appender.Records.Should().ContainSingle(record =>
             record.LifecyclePhase == AuditLifecyclePhase.Terminal).Which;
         audit.ErrorCode.Should().Be(expectedAuditCode);
+        audit.Outcome.Should().Be(expectedOutcome);
         audit.TerminalOutcome.Should().Be(expectedTerminalOutcome);
-        audit.Failure.Should().NotBeNull();
-        audit.Failure!.Code.Should().Be(expectedAuditCode);
-        audit.Failure.Category.Should().Be(expectedCategory);
-        audit.Failure.SanitizedMessage.Should().Be(expectedAuditCode);
+        if (expectedCategory is null)
+        {
+            audit.Failure.Should().BeNull();
+        }
+        else
+        {
+            audit.Failure.Should().NotBeNull();
+            audit.Failure!.Code.Should().Be(expectedAuditCode);
+            audit.Failure.Category.Should().Be(expectedCategory.Value);
+            audit.Failure.SanitizedMessage.Should().Be(expectedAuditCode);
+        }
         audit.ToString().Should().NotContain(providerCode);
     }
 

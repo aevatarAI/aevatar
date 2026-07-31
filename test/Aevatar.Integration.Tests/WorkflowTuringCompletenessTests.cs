@@ -142,6 +142,7 @@ public sealed class WorkflowTuringCompletenessTests : WorkflowGAgentTestBase
         var adapter = new AgentWorkflowToolSourceAdapter(
             [new SingleAgentToolSource(nyxIdTool)],
             new AdmittedAgentToolExecutor(
+                AlwaysStartingAgentToolAdmissionLedger.Instance,
                 new AlwaysAppendingAuditTrailAppender(),
                 new StableAuditActorIdentityHasher()));
         var toolCallModule = new ToolCallModule([adapter], NullLogger<ToolCallModule>.Instance);

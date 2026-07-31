@@ -1403,7 +1403,8 @@ public sealed partial class RoleGAgentStateCoverageTests
     private static ServiceProvider BuildServiceProvider(
         IAuditTrailAppender? auditTrailAppender = null,
         IEventStore? eventStore = null,
-        IAgentToolExecutionPort? executionPort = null)
+        IAgentToolExecutionPort? executionPort = null,
+        IAgentToolAdmissionLedger? admissionLedger = null)
     {
         var services = new ServiceCollection()
             .AddSingleton<IEventStore>(eventStore ?? new InMemoryEventStoreForTests())
@@ -1411,6 +1412,8 @@ public sealed partial class RoleGAgentStateCoverageTests
             .AddSingleton<IActorRuntimeCallbackScheduler, RecordingRuntimeCallbackScheduler>()
             .AddSingleton<IAuditTrailAppender>(auditTrailAppender ?? new AppendedAuditTrail())
             .AddSingleton<IAuditActorIdentityHasher, StableIdentityHasher>()
+            .AddSingleton<IAgentToolAdmissionLedger>(
+                admissionLedger ?? AlwaysStartingAgentToolAdmissionLedger.Instance)
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
         if (executionPort is null)
             services.AddSingleton<IAgentToolExecutionPort, AdmittedAgentToolExecutor>();
@@ -1427,6 +1430,7 @@ public sealed partial class RoleGAgentStateCoverageTests
         ILLMProviderFactory? llmProviderFactory = null)
     {
         var agent = new TestRoleGAgent(
+            provider.GetRequiredService<IAgentToolExecutionPort>(),
             llmProviderFactory,
             remoteToolApprovalPort,
             remoteToolApprovalNotificationPort,
@@ -1500,11 +1504,13 @@ public sealed partial class RoleGAgentStateCoverageTests
             .GetValue(instance);
     }
     private sealed class TestRoleGAgent(
+        IAgentToolExecutionPort toolExecutionPort,
         ILLMProviderFactory? llmProviderFactory,
         IRemoteToolApprovalPort? remoteToolApprovalPort,
         IRemoteToolApprovalNotificationPort? remoteToolApprovalNotificationPort,
         IEnumerable<IAgentToolSource> toolSources)
         : RoleGAgent(
+            toolExecutionPort: toolExecutionPort,
             llmProviderFactory: llmProviderFactory,
             toolSources: toolSources,
             remoteToolApprovalPort: remoteToolApprovalPort,

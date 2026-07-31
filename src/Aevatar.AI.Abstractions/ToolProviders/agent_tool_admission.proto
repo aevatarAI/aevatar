@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package aevatar.ai.tool_providers;
+
+option csharp_namespace = "Aevatar.AI.Abstractions.ToolProviders";
+
+message AgentToolAdmissionFact {
+  string admission_id = 1;
+  string request_id = 2;
+  string tool_call_id = 3;
+  string tool_name = 4;
+  string arguments_sha256 = 5;
+}

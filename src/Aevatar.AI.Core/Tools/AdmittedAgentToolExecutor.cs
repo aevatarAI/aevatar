@@ -16,14 +16,17 @@ namespace Aevatar.AI.Core.Tools;
 
 public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
 {
+    private readonly IAgentToolAdmissionLedger _admissionLedger;
     private readonly IAuditTrailAppender _auditTrailAppender;
     private readonly ToolAuditRecordFactory _auditRecordFactory;
 
     public AdmittedAgentToolExecutor(
+        IAgentToolAdmissionLedger admissionLedger,
         IAuditTrailAppender auditTrailAppender,
         IAuditActorIdentityHasher identityHasher,
         TimeProvider? timeProvider = null)
     {
+        _admissionLedger = admissionLedger ?? throw new ArgumentNullException(nameof(admissionLedger));
         _auditTrailAppender = auditTrailAppender ?? throw new ArgumentNullException(nameof(auditTrailAppender));
         _auditRecordFactory = new ToolAuditRecordFactory(
             identityHasher ?? throw new ArgumentNullException(nameof(identityHasher)),
@@ -196,6 +199,49 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
                 ct).ConfigureAwait(false);
         }
 
+        var admission = await TryStartAsync(
+            new AgentToolAdmissionFact
+            {
+                AdmissionId = CreateAdmissionId(requestId, toolCallId),
+                RequestId = requestId,
+                ToolCallId = toolCallId,
+                ToolName = toolName,
+                ArgumentsSha256 = argumentsSha256,
+            },
+            ct).ConfigureAwait(false);
+        if (admission.Status != AgentToolAdmissionStatus.Started)
+        {
+            var (failureCode, safeMessage, retryable) = admission.Status switch
+            {
+                AgentToolAdmissionStatus.Duplicate => (
+                    "tool_execution_already_started",
+                    "This exact tool call already started and will not be replayed.",
+                    false),
+                AgentToolAdmissionStatus.Conflict => (
+                    "tool_admission_conflict",
+                    "The tool call identity conflicts with an existing admission fact.",
+                    false),
+                _ => (
+                    "tool_admission_unavailable",
+                    string.IsNullOrWhiteSpace(admission.SafeMessage)
+                        ? "The durable tool admission ledger is unavailable."
+                        : admission.SafeMessage,
+                    true),
+            };
+            return CreateFailure(
+                tool,
+                toolName,
+                toolCallId,
+                callSafety,
+                isMutation,
+                failureCode,
+                safeMessage,
+                AgentToolExecutionFailureStage.Admission,
+                terminalInvoked: false,
+                retryable,
+                auditCompleted: false);
+        }
+
         var runningReceipt = AgentToolReceiptFactory.CreateRunning(
             tool,
             toolCallId,
@@ -215,43 +261,6 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
             AuditOutcome.Accepted,
             isMutation,
             ct).ConfigureAwait(false);
-        if (runningAppend.Status != AuditTrailAppendStatus.Appended)
-        {
-            return runningAppend.Status switch
-            {
-                AuditTrailAppendStatus.Duplicate => CreateFailure(
-                    tool,
-                    toolName,
-                    toolCallId,
-                    callSafety,
-                    isMutation,
-                    "tool_execution_already_started",
-                    "This exact tool call already obtained execution permission and will not be replayed.",
-                    AgentToolExecutionFailureStage.AuditIntent,
-                    terminalInvoked: false,
-                    retryable: false,
-                    auditCompleted: true),
-                AuditTrailAppendStatus.Conflict => CreateAuditFailure(
-                    tool,
-                    toolName,
-                    toolCallId,
-                    callSafety,
-                    isMutation,
-                    "audit_intent_conflict",
-                    retryable: false,
-                    AgentToolExecutionFailureStage.AuditIntent),
-                _ => CreateAuditFailure(
-                    tool,
-                    toolName,
-                    toolCallId,
-                    callSafety,
-                    isMutation,
-                    "audit_unavailable",
-                    retryable: true,
-                    AgentToolExecutionFailureStage.AuditIntent),
-            };
-        }
-
         return await ExecuteTerminalAsync(
             tool,
             toolName,
@@ -262,6 +271,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
             callSafety,
             isMutation,
             credentialDecision,
+            runningAppend,
             ct).ConfigureAwait(false);
     }
 
@@ -275,6 +285,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
         AgentToolCallSafety callSafety,
         bool isMutation,
         CredentialDecision credentialDecision,
+        AuditTrailAppendResult runningAppend,
         CancellationToken ct)
     {
         using var activity = GenAIActivitySource.StartExecuteTool(toolName, toolCallId);
@@ -344,15 +355,18 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
             MapAuditOutcome(outcome),
             isMutation,
             ct).ConfigureAwait(false);
-        if (terminalAppend.Status is AuditTrailAppendStatus.Appended or AuditTrailAppendStatus.Duplicate)
+        var auditCompleted = IsAuditRecorded(runningAppend) && IsAuditRecorded(terminalAppend);
+        if (auditCompleted)
             return outcome with { AuditCompleted = true };
 
         if (outcome.Kind == AgentToolExecutionOutcomeKind.Executed)
         {
+            var hasConflict = runningAppend.Status == AuditTrailAppendStatus.Conflict ||
+                              terminalAppend.Status == AuditTrailAppendStatus.Conflict;
             return outcome with
             {
                 Kind = AgentToolExecutionOutcomeKind.ExecutedAuditIncomplete,
-                FailureCode = terminalAppend.Status == AuditTrailAppendStatus.Conflict
+                FailureCode = hasConflict
                     ? "audit_intent_conflict"
                     : "audit_unavailable",
                 SafeMessage = "Tool execution completed, but the terminal audit fact was not durably recorded.",
@@ -416,28 +430,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
             AuditOutcome.Accepted,
             isMutation,
             ct).ConfigureAwait(false);
-        return append.Status switch
-        {
-            AuditTrailAppendStatus.Appended or AuditTrailAppendStatus.Duplicate => outcome with { AuditCompleted = true },
-            AuditTrailAppendStatus.Conflict => CreateAuditFailure(
-                tool,
-                toolName,
-                toolCallId,
-                callSafety,
-                isMutation,
-                "audit_intent_conflict",
-                retryable: false,
-                AgentToolExecutionFailureStage.AuditIntent),
-            _ => CreateAuditFailure(
-                tool,
-                toolName,
-                toolCallId,
-                callSafety,
-                isMutation,
-                "audit_unavailable",
-                retryable: true,
-                AgentToolExecutionFailureStage.AuditIntent),
-        };
+        return outcome with { AuditCompleted = IsAuditRecorded(append) };
     }
 
     private async Task<AgentToolExecutionOutcome> CompleteBeforeTerminalAsync(
@@ -467,28 +460,27 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
             outcome.IsMutation,
             ct).ConfigureAwait(false);
 
-        return append.Status switch
+        return outcome with { AuditCompleted = IsAuditRecorded(append) };
+    }
+
+    private async Task<AgentToolAdmissionResult> TryStartAsync(
+        AgentToolAdmissionFact fact,
+        CancellationToken ct)
+    {
+        try
         {
-            AuditTrailAppendStatus.Appended or AuditTrailAppendStatus.Duplicate => outcome with { AuditCompleted = true },
-            AuditTrailAppendStatus.Conflict => CreateAuditFailure(
-                tool,
-                toolName,
-                toolCallId,
-                callSafety,
-                outcome.IsMutation,
-                "audit_intent_conflict",
-                retryable: false,
-                AgentToolExecutionFailureStage.TerminalAudit),
-            _ => CreateAuditFailure(
-                tool,
-                toolName,
-                toolCallId,
-                callSafety,
-                outcome.IsMutation,
-                "audit_unavailable",
-                retryable: true,
-                AgentToolExecutionFailureStage.TerminalAudit),
-        };
+            return await _admissionLedger.TryStartAsync(fact, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return new AgentToolAdmissionResult(
+                AgentToolAdmissionStatus.StoreUnavailable,
+                SafeExceptionClass(ex));
+        }
     }
 
     private async Task<AuditTrailAppendResult> AppendAsync(
@@ -678,30 +670,6 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
             auditCompleted);
     }
 
-    private static AgentToolExecutionOutcome CreateAuditFailure(
-        IAgentTool tool,
-        string toolName,
-        string toolCallId,
-        AgentToolCallSafety callSafety,
-        bool isMutation,
-        string failureCode,
-        bool retryable,
-        AgentToolExecutionFailureStage failureStage) =>
-        CreateFailure(
-            tool,
-            toolName,
-            toolCallId,
-            callSafety,
-            isMutation,
-            failureCode,
-            failureCode == "audit_unavailable"
-                ? "The durable tool audit store is unavailable."
-                : "The durable tool audit intent conflicts with an existing fact.",
-            failureStage,
-            terminalInvoked: false,
-            retryable,
-            auditCompleted: false);
-
     private static AgentToolExecutionOutcome CreateUnauditedFailure(
         IAgentTool tool,
         string toolName,
@@ -762,6 +730,9 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
         string argumentsSha256) =>
         "tool-approval:v1:" + HashLengthPrefixed(requestId, toolName, toolCallId, argumentsSha256);
 
+    private static string CreateAdmissionId(string requestId, string toolCallId) =>
+        "tool:v1:admission:" + HashLengthPrefixed(requestId, toolCallId);
+
     private static string CreateWaitingApprovalAuditId(
         string requestId,
         string toolCallId,
@@ -793,6 +764,9 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
         JsonSerializer.Serialize(new { error = code, code, message, tool_name = toolName });
 
     private static string SafeExceptionClass(Exception ex) => ex.GetType().Name;
+
+    private static bool IsAuditRecorded(AuditTrailAppendResult append) =>
+        append.Status is AuditTrailAppendStatus.Appended or AuditTrailAppendStatus.Duplicate;
 
     private static string ResolveExceptionErrorCode(Exception exception) =>
         exception is CodexExecutionException codexException

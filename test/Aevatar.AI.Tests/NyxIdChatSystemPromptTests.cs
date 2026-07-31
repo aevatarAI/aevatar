@@ -170,7 +170,9 @@ public class NyxIdChatSystemPromptTests
     [Fact]
     public void DecorateSystemPrompt_ShouldUseCatalogSlotsWithoutShadowCandidateBody()
     {
-        var agent = new NyxIdChatGAgent(new SystemSkillOverlayPromptInjectionTests.StubBuiltInPromptFloorProvider());
+        var agent = new NyxIdChatGAgent(
+            new SystemSkillOverlayPromptInjectionTests.StubBuiltInPromptFloorProvider(),
+            TestAgentToolExecutionPort.Instance);
         var profileLayer = new ProfileRoutingPromptLayer(
             "profile routing layer",
             new ProfileRoutingPromptProvenance("profile-test"),

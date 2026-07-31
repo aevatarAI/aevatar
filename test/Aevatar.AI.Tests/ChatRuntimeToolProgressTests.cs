@@ -192,6 +192,7 @@ public sealed class ChatRuntimeToolProgressTests
         new(
             tools,
             toolExecutionPort: new AdmittedAgentToolExecutor(
+                AlwaysStartingAgentToolAdmissionLedger.Instance,
                 new AppendedAuditTrail(),
                 new StableIdentityHasher()));
 

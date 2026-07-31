@@ -110,6 +110,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         NyxIdRelayOutboundPort relayOutboundPort,
         IInteractiveReplyDispatcher? interactiveReplyDispatcher,
         ILogger<ChannelConversationTurnRunner> logger,
+        IAgentToolExecutionPort toolExecutionPort,
         IOwnerLlmConfigSource? ownerLlmConfigSource = null,
         IExternalIdentityBindingQueryPort? identityBindingQueryPort = null,
         ChannelSlashCommandRegistry? slashCommandRegistry = null,
@@ -126,11 +127,10 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ILarkBotIdentityResolver? botIdentityResolver = null,
         INyxIdCurrentUserResolver? nyxIdCurrentUserResolver = null,
         IChannelRelayTailTextSender? relayTailTextSender = null,
-        IChannelRelayProxyResponseClassifier? relayProxyResponseClassifier = null,
-        IAgentToolExecutionPort? toolExecutionPort = null)
+        IChannelRelayProxyResponseClassifier? relayProxyResponseClassifier = null)
     {
         _toolServiceProvider = services ?? throw new ArgumentNullException(nameof(services));
-        _toolExecutionPort = toolExecutionPort ?? services.GetRequiredService<IAgentToolExecutionPort>();
+        _toolExecutionPort = toolExecutionPort ?? throw new ArgumentNullException(nameof(toolExecutionPort));
         _registrationQueryPort = registrationQueryPort ?? throw new ArgumentNullException(nameof(registrationQueryPort));
         _registrationQueryByNyxIdentityPort = registrationQueryByNyxIdentityPort;
         _platformAdapters = platformAdapters ?? throw new ArgumentNullException(nameof(platformAdapters));

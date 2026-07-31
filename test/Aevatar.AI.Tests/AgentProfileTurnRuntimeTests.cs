@@ -601,7 +601,10 @@ public sealed class AgentProfileTurnRuntimeTests
         new(tools, toolExecutionPort: CreateExecutionPort());
 
     private static IAgentToolExecutionPort CreateExecutionPort() =>
-        new AdmittedAgentToolExecutor(new AppendedAuditTrail(), new StableIdentityHasher());
+        new AdmittedAgentToolExecutor(
+            AlwaysStartingAgentToolAdmissionLedger.Instance,
+            new AppendedAuditTrail(),
+            new StableIdentityHasher());
 
     private static AgentToolExecutionContext TestToolContext(string requestId) =>
         AgentToolExecutionContext.Empty with

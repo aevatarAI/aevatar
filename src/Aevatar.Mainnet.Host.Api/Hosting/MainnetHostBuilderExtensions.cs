@@ -146,6 +146,19 @@ public static class MainnetHostBuilderExtensions
             options.MapWorkflowChatPost = false;
             options.ConfigureAIFeatures = ConfigureMainnetAIFeatures;
         });
+        if (builder.Environment.IsDevelopment() || builder.Environment.IsEnvironment("Testing"))
+        {
+            builder.Services.Replace(ServiceDescriptor.Singleton<
+                IAgentToolAdmissionLedger,
+                InMemoryAgentToolAdmissionLedger>());
+        }
+        else
+        {
+            builder.Services.TryAddSingleton<IAgentToolAdmissionFactStore, GarnetAgentToolAdmissionFactStore>();
+            builder.Services.Replace(ServiceDescriptor.Singleton<
+                IAgentToolAdmissionLedger,
+                DistributedAgentToolAdmissionLedger>());
+        }
         // Hosted services start in registration order. Register the provider-local index
         // reconcile before capability modules can add startup readers so schema drift is
         // migrated before any read-model query executes.

@@ -11,6 +11,7 @@ public static class AgentToolExecutionServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
+        services.TryAddSingleton<IAgentToolAdmissionLedger, UnavailableAgentToolAdmissionLedger>();
         services.TryAddSingleton<IAgentToolExecutionPort, AdmittedAgentToolExecutor>();
         return services;
     }

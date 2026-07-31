@@ -9,6 +9,25 @@ public interface IAgentToolExecutionPort
         CancellationToken ct = default);
 }
 
+public interface IAgentToolAdmissionLedger
+{
+    Task<AgentToolAdmissionResult> TryStartAsync(
+        AgentToolAdmissionFact fact,
+        CancellationToken ct = default);
+}
+
+public enum AgentToolAdmissionStatus
+{
+    Started = 0,
+    Duplicate = 1,
+    Conflict = 2,
+    StoreUnavailable = 3,
+}
+
+public sealed record AgentToolAdmissionResult(
+    AgentToolAdmissionStatus Status,
+    string SafeMessage = "");
+
 public sealed record AgentToolExecutionRequest(
     IAgentTool Tool,
     string ArgumentsJson,
@@ -45,7 +64,7 @@ public enum AgentToolExecutionFailureStage
     Classification = 2,
     CredentialPolicy = 3,
     Approval = 4,
-    AuditIntent = 5,
+    Admission = 5,
     TerminalExecution = 6,
     TerminalAudit = 7,
 }

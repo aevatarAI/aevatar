@@ -652,6 +652,7 @@ public sealed class SkillRecoveryPlannerTests
             tools,
             toolContext: toolContext,
             toolExecutionPort: new AdmittedAgentToolExecutor(
+                AlwaysStartingAgentToolAdmissionLedger.Instance,
                 new AppendedAuditTrail(),
                 new StableIdentityHasher()));
 

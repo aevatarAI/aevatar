@@ -79,10 +79,14 @@ public class AIGAgentBaseToolRefreshTests
         services.AddSingleton<EventSourcingRuntimeOptions>();
         services.AddSingleton<IAuditTrailAppender, AppendedAuditTrail>();
         services.AddSingleton<IAuditActorIdentityHasher, StableIdentityHasher>();
+        services.AddSingleton<IAgentToolAdmissionLedger>(AlwaysStartingAgentToolAdmissionLedger.Instance);
         services.AddSingleton<IAgentToolExecutionPort, AdmittedAgentToolExecutor>();
         services.AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
         using var provider = services.BuildServiceProvider();
-        var agent = new TestAIGAgent([], providerFactory)
+        var agent = new TestAIGAgent(
+            [],
+            providerFactory,
+            provider.GetRequiredService<IAgentToolExecutionPort>())
         {
             Services = provider,
             EventSourcingBehaviorFactory = provider.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),
@@ -118,8 +122,10 @@ public class AIGAgentBaseToolRefreshTests
     {
         public TestAIGAgent(
             IEnumerable<IAgentToolSource> toolSources,
-            ILLMProviderFactory? llmProviderFactory = null)
+            ILLMProviderFactory? llmProviderFactory = null,
+            IAgentToolExecutionPort? toolExecutionPort = null)
             : base(
+                toolExecutionPort ?? TestAgentToolExecutionPort.Instance,
                 llmProviderFactory ?? new StubLLMProviderFactory(),
                 Array.Empty<IAIGAgentExecutionHook>(),
                 Array.Empty<IAgentRunMiddleware>(),
@@ -351,4 +357,18 @@ internal sealed class TestAgentToolExecutionPort : IAgentToolExecutionPort
             TerminalInvoked: true,
             Retryable: false,
             AuditCompleted: true);
+}
+
+internal sealed class AlwaysStartingAgentToolAdmissionLedger : IAgentToolAdmissionLedger
+{
+    public static AlwaysStartingAgentToolAdmissionLedger Instance { get; } = new();
+
+    public Task<AgentToolAdmissionResult> TryStartAsync(
+        AgentToolAdmissionFact fact,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(fact);
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(new AgentToolAdmissionResult(AgentToolAdmissionStatus.Started));
+    }
 }

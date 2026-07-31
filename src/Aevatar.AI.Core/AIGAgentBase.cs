@@ -13,7 +13,6 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Google.Protobuf;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.AI.Core;
@@ -61,6 +60,7 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
     where TState : class, IMessage<TState>, new()
 {
     private readonly ILLMProviderFactory _llmProviderFactory;
+    private readonly IAgentToolExecutionPort _toolExecutionPort;
     private readonly IReadOnlyList<IAIGAgentExecutionHook> _additionalHooks;
     private readonly IReadOnlyList<IAgentRunMiddleware> _agentMiddlewares;
     private readonly IReadOnlyList<ILLMCallMiddleware> _llmMiddlewares;
@@ -83,12 +83,14 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
     private ChatRuntime? _chat;
 
     protected AIGAgentBase(
+        IAgentToolExecutionPort toolExecutionPort,
         ILLMProviderFactory? llmProviderFactory = null,
         IEnumerable<IAIGAgentExecutionHook>? additionalHooks = null,
         IEnumerable<IAgentRunMiddleware>? agentMiddlewares = null,
         IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
         IEnumerable<IAgentToolSource>? toolSources = null)
     {
+        _toolExecutionPort = toolExecutionPort ?? throw new ArgumentNullException(nameof(toolExecutionPort));
         _llmProviderFactory = llmProviderFactory ?? NullLLMProviderFactory.Instance;
         _additionalHooks = (additionalHooks ?? []).ToArray();
         _agentMiddlewares = (agentMiddlewares ?? []).ToArray();
@@ -339,7 +341,7 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
             _hooks,
             _llmMiddlewares,
             History.Budget,
-            Services.GetService<IAgentToolExecutionPort>(),
+            _toolExecutionPort,
             ToolApprovalContinuationMode);
         var compressionConfig = new Chat.ContextCompressionConfig(
             MaxPromptTokenBudget: EffectiveConfig.MaxPromptTokenBudget,

@@ -2191,6 +2191,7 @@ public class NyxIdChatGAgentTests
             .AddSingleton(callbackScheduler)
             .AddSingleton<IAuditTrailAppender, AppendedAuditTrail>()
             .AddSingleton<IAuditActorIdentityHasher, StableIdentityHasher>()
+            .AddSingleton<IAgentToolAdmissionLedger>(AlwaysStartingAgentToolAdmissionLedger.Instance)
             .AddSingleton<IAgentToolExecutionPort, AdmittedAgentToolExecutor>()
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
 
@@ -2217,6 +2218,7 @@ public class NyxIdChatGAgentTests
     {
         var agent = new NyxIdChatGAgent(
             new SystemSkillOverlayPromptInjectionTests.StubBuiltInPromptFloorProvider(),
+            provider.GetRequiredService<IAgentToolExecutionPort>(),
             llmProviderFactory: llmProviderFactory,
             toolSources: toolSources,
             relayOptions: relayOptions,

@@ -13,7 +13,10 @@ public sealed class AgentToolExecutionBoundaryTests
     private const string PortTypeName = "Aevatar.AI.Abstractions.ToolProviders.IAgentToolExecutionPort";
     private const string GrantTypeName = "Aevatar.AI.Abstractions.ToolProviders.AgentToolApprovalGrant";
     private const string ExecutorTypeName = "Aevatar.AI.Core.Tools.AdmittedAgentToolExecutor";
+    private const string AgentBaseTypeName = "Aevatar.AI.Core.AIGAgentBase<TState>";
     private const string RoleTypeName = "Aevatar.AI.Core.RoleGAgent";
+    private const string ChannelTurnRunnerTypeName =
+        "Aevatar.GAgents.NyxidChat.ChannelConversationTurnRunner";
     private const string WorkflowRoleTypeName = "Aevatar.Workflow.Integration.AI.WorkflowRoleGAgent";
     private const string WorkflowAdapterTypeName =
         "Aevatar.Workflow.Integration.AI.AgentWorkflowToolSourceAdapter.AgentWorkflowToolAdapter";
@@ -129,6 +132,9 @@ public sealed class AgentToolExecutionBoundaryTests
         Assert.Equal(ExecutorTypeName, rawTerminals[0].EnclosingType);
 
         var typeIndex = await BuildTypeIndexAsync(productionProjects);
+        AssertRequiredExecutionPortConstructor(RequireType(typeIndex, AgentBaseTypeName).Symbol);
+        AssertRequiredExecutionPortConstructor(RequireType(typeIndex, RoleTypeName).Symbol);
+        AssertRequiredExecutionPortConstructor(RequireType(typeIndex, ChannelTurnRunnerTypeName).Symbol);
         foreach (var typeName in DirectPortSurfaces)
         {
             var type = RequireType(typeIndex, typeName);
@@ -319,6 +325,18 @@ public sealed class AgentToolExecutionBoundaryTests
         candidate is not null &&
         (SymbolEqualityComparer.Default.Equals(candidate, interfaceType) ||
          candidate.AllInterfaces.Any(item => SymbolEqualityComparer.Default.Equals(item, interfaceType)));
+
+    private static void AssertRequiredExecutionPortConstructor(INamedTypeSymbol type)
+    {
+        var constructors = type.InstanceConstructors
+            .Where(static constructor => !constructor.IsImplicitlyDeclared)
+            .ToArray();
+        Assert.NotEmpty(constructors);
+        Assert.All(constructors, constructor => Assert.Contains(
+            constructor.Parameters,
+            parameter => parameter.Type.ToDisplayString() == PortTypeName &&
+                         !parameter.HasExplicitDefaultValue));
+    }
 
     private static string EnclosingTypeName(SemanticModel model, SyntaxNode node) =>
         model.GetEnclosingSymbol(node.SpanStart)?.ContainingType?.ToDisplayString() ?? "<unknown>";
