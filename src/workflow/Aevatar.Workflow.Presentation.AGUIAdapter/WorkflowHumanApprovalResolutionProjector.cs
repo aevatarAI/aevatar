@@ -46,6 +46,7 @@ public sealed class WorkflowHumanApprovalResolutionProjector
                 ActorId = context.RootActorId,
                 RunId = evt.RunId,
                 StepId = evt.StepId,
+                IssuedAtUnixMs = AGUIEventEnvelopeMappingHelpers.ToUnixMs(sourceEnvelope.Timestamp) ?? 0,
                 Approved = evt.Approved,
                 UserInput = string.IsNullOrWhiteSpace(evt.UserInput) ? null : evt.UserInput,
                 EditedContent = string.IsNullOrWhiteSpace(evt.EditedContent) ? null : evt.EditedContent,

@@ -16,6 +16,8 @@ namespace Aevatar.Integration.Tests;
 [Trait("Feature", "SkillBackedHumanInteractionPort")]
 public sealed class SkillBackedHumanInteractionPortTests
 {
+    private const long StableIssuedAtUnixMs = 1_800_000_000_000;
+
     [Fact]
     public void AddSkillBackedHumanInteractionDelivery_ShouldNotRegisterHumanInteractionChannelToolSource()
     {
@@ -72,6 +74,7 @@ public sealed class SkillBackedHumanInteractionPortTests
                 ActorId = "workflow-actor",
                 RunId = "run-1",
                 StepId = "approval",
+                IssuedAtUnixMs = StableIssuedAtUnixMs,
                 SuspensionType = "human_approval",
                 Prompt = "Approve?",
             },
@@ -96,6 +99,7 @@ public sealed class SkillBackedHumanInteractionPortTests
                 ActorId = "workflow-actor",
                 RunId = "run-1",
                 StepId = "approval",
+                IssuedAtUnixMs = StableIssuedAtUnixMs,
                 SuspensionType = "human_approval",
                 Prompt = "Approve?",
                 Options = ["approve", "reject"],
@@ -131,6 +135,7 @@ public sealed class SkillBackedHumanInteractionPortTests
                 ActorId = "workflow-actor",
                 RunId = "run-1",
                 StepId = "approval",
+                IssuedAtUnixMs = StableIssuedAtUnixMs,
                 SuspensionType = "human_approval",
                 Prompt = "Approve?",
                 Options = ["approve", "reject"],
@@ -175,6 +180,7 @@ public sealed class SkillBackedHumanInteractionPortTests
                 ActorId = "workflow-actor",
                 RunId = "run-1",
                 StepId = "approval",
+                IssuedAtUnixMs = StableIssuedAtUnixMs,
                 SuspensionType = "human_approval",
                 Prompt = "Approve?",
             },
@@ -199,6 +205,7 @@ public sealed class SkillBackedHumanInteractionPortTests
                 ActorId = "workflow-actor",
                 RunId = "run-2",
                 StepId = "approval",
+                IssuedAtUnixMs = StableIssuedAtUnixMs,
                 Approved = false,
             },
             "delivery-target-2",
@@ -228,6 +235,7 @@ public sealed class SkillBackedHumanInteractionPortTests
                 ActorId = "workflow-actor",
                 RunId = "run-2",
                 StepId = "approval",
+                IssuedAtUnixMs = StableIssuedAtUnixMs,
                 Approved = false,
                 TimedOut = true,
             },
@@ -243,6 +251,84 @@ public sealed class SkillBackedHumanInteractionPortTests
         root.GetProperty("resolution").GetProperty("timedOut").GetBoolean().Should().BeTrue();
     }
 
+    [Fact]
+    public async Task DeliveryRedelivery_ShouldReuseActorRunStepKindAndTargetIdentity()
+    {
+        var tool = new RecordingTool(
+            "human-delivery",
+            "generic delivery",
+            ["human_interaction.delivery", "human_interaction.resolution_update"]);
+        var executionPort = new PassThroughExecutionPort();
+        var port = new SkillBackedHumanInteractionPort(
+            [new RecordingToolSource(tool)],
+            executionPort);
+        var suspension = new HumanInteractionRequest
+        {
+            ActorId = "actor-alpha",
+            RunId = "run-alpha",
+            StepId = "step-alpha",
+            IssuedAtUnixMs = StableIssuedAtUnixMs,
+            SuspensionType = "human_input",
+            Prompt = "Continue?",
+        };
+        var resolution = new HumanApprovalResolution
+        {
+            ActorId = suspension.ActorId,
+            RunId = suspension.RunId,
+            StepId = suspension.StepId,
+            IssuedAtUnixMs = suspension.IssuedAtUnixMs,
+            Approved = true,
+        };
+
+        await port.DeliverSuspensionAsync(suspension, "target-alpha");
+        await port.DeliverSuspensionAsync(suspension, "target-alpha");
+        await port.DeliverApprovalResolutionAsync(resolution, "target-alpha");
+        await port.DeliverApprovalResolutionAsync(resolution, "target-alpha");
+
+        executionPort.Requests.Should().HaveCount(4);
+        executionPort.Requests[0].ExecutionContext.Request
+            .Should().BeEquivalentTo(executionPort.Requests[1].ExecutionContext.Request);
+        executionPort.Requests[2].ExecutionContext.Request
+            .Should().BeEquivalentTo(executionPort.Requests[3].ExecutionContext.Request);
+        executionPort.Requests[0].ExecutionContext.Request.RequestId
+            .Should().Be(executionPort.Requests[2].ExecutionContext.Request.RequestId);
+        executionPort.Requests[0].ExecutionContext.Request.CallId
+            .Should().NotBe(executionPort.Requests[2].ExecutionContext.Request.CallId);
+    }
+
+    [Theory]
+    [InlineData("actor")]
+    [InlineData("run")]
+    [InlineData("step")]
+    [InlineData("target")]
+    [InlineData("issued")]
+    public async Task DeliverSuspensionAsync_WhenStableDeliveryIdentityIsMissing_ShouldFailBeforeExecution(
+        string missingIdentity)
+    {
+        var executionPort = new PassThroughExecutionPort();
+        var port = new SkillBackedHumanInteractionPort(
+            [new RecordingToolSource(new RecordingTool(
+                "human-delivery",
+                "generic delivery",
+                ["human_interaction.delivery"]))],
+            executionPort);
+
+        var action = () => port.DeliverSuspensionAsync(
+            new HumanInteractionRequest
+            {
+                ActorId = missingIdentity == "actor" ? " " : "actor-alpha",
+                RunId = missingIdentity == "run" ? " " : "run-alpha",
+                StepId = missingIdentity == "step" ? " " : "step-alpha",
+                IssuedAtUnixMs = missingIdentity == "issued" ? 0 : StableIssuedAtUnixMs,
+                SuspensionType = "human_input",
+                Prompt = "Continue?",
+            },
+            missingIdentity == "target" ? " " : "target-alpha");
+
+        await action.Should().ThrowAsync<ArgumentException>();
+        executionPort.Requests.Should().BeEmpty();
+    }
+
     private sealed class RecordingToolSource(params IAgentTool[] tools) : IAgentToolSource
     {
         public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
@@ -251,10 +337,13 @@ public sealed class SkillBackedHumanInteractionPortTests
 
     private sealed class PassThroughExecutionPort : IAgentToolExecutionPort
     {
+        public List<AgentToolExecutionRequest> Requests { get; } = [];
+
         public async Task<AgentToolExecutionOutcome> ExecuteAsync(
             AgentToolExecutionRequest request,
             CancellationToken ct = default)
         {
+            Requests.Add(request);
             var resultJson = await request.Tool.ExecuteAsync(request.ArgumentsJson, ct);
             return new AgentToolExecutionOutcome(
                 AgentToolExecutionOutcomeKind.Executed,

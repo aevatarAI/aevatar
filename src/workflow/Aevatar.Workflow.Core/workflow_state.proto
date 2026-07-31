@@ -633,6 +633,7 @@ message PendingConnectorCallState
   string idempotency_key = 17;
   string approval_action_id = 18;
   bool request_dispatched = 19;
+  int64 issued_at_unix_ms = 20;
 }
 
 message ConnectorCallProtectedParameter

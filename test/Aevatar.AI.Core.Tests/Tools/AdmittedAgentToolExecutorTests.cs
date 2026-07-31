@@ -485,6 +485,32 @@ public sealed class AdmittedAgentToolExecutorTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WhenLogicalCallIsRedelivered_ShouldStartAndInvokeTerminalOnce()
+    {
+        var appender = new RecordingAuditTrailAppender((record, _) =>
+            AuditTrailAppendResult.Appended(record.AuditId));
+        var ledger = new DeduplicatingAdmissionLedger();
+        var tool = new RecordingTool(new AgentToolCallSafety(false, true, false));
+        var executor = CreateExecutor(appender, ledger);
+        var request = CreateRequest(tool);
+
+        var first = await executor.ExecuteAsync(request);
+        var replay = await executor.ExecuteAsync(request);
+
+        first.Kind.Should().Be(AgentToolExecutionOutcomeKind.Executed);
+        replay.Kind.Should().Be(AgentToolExecutionOutcomeKind.Failed);
+        replay.FailureCode.Should().Be("tool_execution_already_started");
+        replay.TerminalInvoked.Should().BeFalse();
+        ledger.Decisions.Should().Equal(
+            AgentToolAdmissionStatus.Started,
+            AgentToolAdmissionStatus.Duplicate);
+        ledger.Facts.Select(fact => fact.AdmissionId).Should().OnlyContain(id => id == ledger.Facts[0].AdmissionId);
+        tool.ExecutionCalls.Should().Be(1);
+        appender.Records.Select(record => record.ToolExecution.ExecutionPhase)
+            .Should().Equal(AuditToolExecutionPhase.Running, AuditToolExecutionPhase.Terminal);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_DifferentActorsWithSameCallIdentity_ShouldNotShareAdmissionOrAuditIds()
     {
         var appender = new RecordingAuditTrailAppender((record, _) =>
@@ -975,6 +1001,7 @@ public sealed class AdmittedAgentToolExecutorTests
         private readonly HashSet<string> _admissionIds = new(StringComparer.Ordinal);
 
         public List<AgentToolAdmissionFact> Facts { get; } = [];
+        public List<AgentToolAdmissionStatus> Decisions { get; } = [];
 
         public Task<AgentToolAdmissionResult> TryStartAsync(
             AgentToolAdmissionFact fact,
@@ -985,6 +1012,7 @@ public sealed class AdmittedAgentToolExecutorTests
             var status = _admissionIds.Add(fact.AdmissionId)
                 ? AgentToolAdmissionStatus.Started
                 : AgentToolAdmissionStatus.Duplicate;
+            Decisions.Add(status);
             return Task.FromResult(new AgentToolAdmissionResult(status));
         }
     }

@@ -10,6 +10,8 @@ namespace Aevatar.AI.Core.Tests.Voice;
 
 public class AgentToolVoiceInvokerTests
 {
+    private const long IssuedAtUnixMs = 1_800_000_000_000;
+
     [Fact]
     public async Task ExecuteAsync_ShouldResolveToolFromSources()
     {
@@ -17,7 +19,11 @@ public class AgentToolVoiceInvokerTests
             new StubToolSource(new FakeAgentTool("door.open", """{"ok":true}""")),
         ], new PassThroughExecutionPort());
 
-        var result = await invoker.ExecuteAsync("door.open", """{"target":"front"}""");
+        var result = await invoker.ExecuteAsync(
+            "voice-call-resolve",
+            IssuedAtUnixMs,
+            "door.open",
+            """{"target":"front"}""");
 
         result.Should().Be("""{"ok":true}""");
     }
@@ -27,7 +33,11 @@ public class AgentToolVoiceInvokerTests
     {
         var invoker = new AgentToolVoiceInvoker([], new PassThroughExecutionPort());
 
-        var act = () => invoker.ExecuteAsync("missing", "{}");
+        var act = () => invoker.ExecuteAsync(
+            "voice-call-missing",
+            IssuedAtUnixMs,
+            "missing",
+            "{}");
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("Tool 'missing' not found");
@@ -39,8 +49,8 @@ public class AgentToolVoiceInvokerTests
         var source = new CountingToolSource(new FakeAgentTool("door.open", """{"ok":true}"""));
         var invoker = new AgentToolVoiceInvoker([source], new PassThroughExecutionPort());
 
-        await invoker.ExecuteAsync("door.open", "{}");
-        await invoker.ExecuteAsync("door.open", "{}");
+        await invoker.ExecuteAsync("voice-call-cache-1", IssuedAtUnixMs, "door.open", "{}");
+        await invoker.ExecuteAsync("voice-call-cache-2", IssuedAtUnixMs, "door.open", "{}");
 
         source.DiscoverCalls.Should().Be(1);
     }
@@ -61,7 +71,11 @@ public class AgentToolVoiceInvokerTests
                     ready.TrySetResult(true);
 
                 await start.Task;
-                return await invoker.ExecuteAsync("door.open", "{}");
+                return await invoker.ExecuteAsync(
+                    $"voice-call-concurrent-{_}",
+                    IssuedAtUnixMs,
+                    "door.open",
+                    "{}");
             }))
             .ToArray();
 
@@ -91,7 +105,12 @@ public class AgentToolVoiceInvokerTests
             ExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5)),
         };
 
-        await invoker.ExecuteAsync("nyxid_proxy", "{}", toolContext);
+        await invoker.ExecuteAsync(
+            "voice-call-credential",
+            IssuedAtUnixMs,
+            "nyxid_proxy",
+            "{}",
+            toolContext);
 
         credentials.RequestedRefs.Should().ContainSingle().Which.Should().Be("voice-tool:ref-1");
         captured.CapturedNyxIdAccessToken.Should().Be("caller-token-123");
@@ -109,8 +128,18 @@ public class AgentToolVoiceInvokerTests
             credentials);
         var toolContext = CreateFullToolContext("voice-tool:ref-2");
 
-        await invoker.ExecuteAsync("door.open", "{}", toolContext);
-        var hiddenAct = () => invoker.ExecuteAsync("lights.toggle", "{}", toolContext);
+        await invoker.ExecuteAsync(
+            "voice-call-visible",
+            IssuedAtUnixMs,
+            "door.open",
+            "{}",
+            toolContext);
+        var hiddenAct = () => invoker.ExecuteAsync(
+            "voice-call-hidden",
+            IssuedAtUnixMs,
+            "lights.toggle",
+            "{}",
+            toolContext);
 
         allowed.CapturedContext.Should().NotBeNull();
         var captured = allowed.CapturedContext!;
@@ -143,9 +172,34 @@ public class AgentToolVoiceInvokerTests
             [new StubToolSource(captured)],
             new PassThroughExecutionPort());
 
-        await invoker.ExecuteAsync("nyxid_proxy", "{}");
+        await invoker.ExecuteAsync(
+            "voice-call-no-scope",
+            IssuedAtUnixMs,
+            "nyxid_proxy",
+            "{}");
 
         captured.CapturedNyxIdAccessToken.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenLogicalCallIsRedelivered_ShouldReuseProviderCallIdentity()
+    {
+        var executionPort = new PassThroughExecutionPort();
+        var invoker = new AgentToolVoiceInvoker([
+            new StubToolSource(new FakeAgentTool("door.open", "{}")),
+        ], executionPort);
+        var toolContext = CreateFullToolContext("voice-tool:ref-3");
+
+        await invoker.ExecuteAsync("provider-call-1", IssuedAtUnixMs, "door.open", "{}", toolContext);
+        await invoker.ExecuteAsync("provider-call-1", IssuedAtUnixMs, "door.open", "{}", toolContext);
+        await invoker.ExecuteAsync("provider-call-2", IssuedAtUnixMs + 1, "door.open", "{}", toolContext);
+
+        executionPort.Requests.Should().HaveCount(3);
+        executionPort.Requests[0].ExecutionContext.Request
+            .Should().BeEquivalentTo(executionPort.Requests[1].ExecutionContext.Request);
+        executionPort.Requests[0].ExecutionContext.Request.CallId.Should().Be("provider-call-1");
+        executionPort.Requests[0].ExecutionContext.Request.IssuedAtUnixMs.Should().Be(IssuedAtUnixMs);
+        executionPort.Requests[2].ExecutionContext.Request.CallId.Should().Be("provider-call-2");
     }
 
     private static VoiceToolExecutionContext CreateFullToolContext(string credentialRef)
@@ -200,10 +254,13 @@ public class AgentToolVoiceInvokerTests
 
     private sealed class PassThroughExecutionPort : IAgentToolExecutionPort
     {
+        public List<AgentToolExecutionRequest> Requests { get; } = [];
+
         public async Task<AgentToolExecutionOutcome> ExecuteAsync(
             AgentToolExecutionRequest request,
             CancellationToken ct = default)
         {
+            Requests.Add(request);
             string resultJson;
             using (AgentToolContextScope.Push(request.ExecutionContext))
                 resultJson = await request.Tool.ExecuteAsync(request.ArgumentsJson, ct);

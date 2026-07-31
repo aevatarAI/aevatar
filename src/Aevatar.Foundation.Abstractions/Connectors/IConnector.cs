@@ -42,6 +42,9 @@ public sealed class ConnectorRequest
     /// <summary>Advisory idempotency key for the logical workflow side effect.</summary>
     public string IdempotencyKey { get; init; } = "";
 
+    /// <summary>Unix timestamp when the logical connector request was first issued.</summary>
+    public long IssuedAtUnixMs { get; init; }
+
     /// <summary>Connector name selected by workflow.</summary>
     public string Connector { get; init; } = "";
 

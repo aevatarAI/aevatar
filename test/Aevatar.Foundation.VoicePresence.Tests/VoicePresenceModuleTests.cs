@@ -862,6 +862,8 @@ public class VoicePresenceModuleTests
         }), ctx, CancellationToken.None);
 
         invoker.Calls.ShouldBe(1);
+        invoker.LastCallId.ShouldBe("call-1");
+        invoker.LastIssuedAtUnixMs.ShouldBeGreaterThan(0);
         invoker.LastToolName.ShouldBe("doorbell.open");
         invoker.LastArgumentsJson.ShouldBe("""{"force":true}""");
         provider.ToolResults.ShouldHaveSingleItem();
@@ -3954,11 +3956,15 @@ public class VoicePresenceModuleTests
     private sealed class RecordingVoiceToolInvoker(string resultJson) : IVoiceToolInvoker
     {
         public int Calls { get; private set; }
+        public string? LastCallId { get; private set; }
+        public long LastIssuedAtUnixMs { get; private set; }
         public string? LastToolName { get; private set; }
         public string? LastArgumentsJson { get; private set; }
         public VoiceToolExecutionContext? LastToolContext { get; private set; }
 
         public Task<string> ExecuteAsync(
+            string callId,
+            long issuedAtUnixMs,
             string toolName,
             string argumentsJson,
             VoiceToolExecutionContext? toolContext = null,
@@ -3966,6 +3972,8 @@ public class VoicePresenceModuleTests
         {
             _ = ct;
             Calls++;
+            LastCallId = callId;
+            LastIssuedAtUnixMs = issuedAtUnixMs;
             LastToolName = toolName;
             LastArgumentsJson = argumentsJson;
             LastToolContext = toolContext?.Clone();
@@ -3976,11 +3984,15 @@ public class VoicePresenceModuleTests
     private sealed class BlockingVoiceToolInvoker : IVoiceToolInvoker
     {
         public async Task<string> ExecuteAsync(
+            string callId,
+            long issuedAtUnixMs,
             string toolName,
             string argumentsJson,
             VoiceToolExecutionContext? toolContext = null,
             CancellationToken ct = default)
         {
+            _ = callId;
+            _ = issuedAtUnixMs;
             _ = toolName;
             _ = argumentsJson;
             _ = toolContext;
@@ -3994,11 +4006,15 @@ public class VoicePresenceModuleTests
     private sealed class ThrowingVoiceToolInvoker(string message) : IVoiceToolInvoker
     {
         public Task<string> ExecuteAsync(
+            string callId,
+            long issuedAtUnixMs,
             string toolName,
             string argumentsJson,
             VoiceToolExecutionContext? toolContext = null,
             CancellationToken ct = default)
         {
+            _ = callId;
+            _ = issuedAtUnixMs;
             _ = toolName;
             _ = argumentsJson;
             _ = toolContext;

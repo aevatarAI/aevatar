@@ -14,6 +14,8 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 
 public sealed class WorkflowHumanInteractionProjectorTests
 {
+    private const long CommittedIssuedAtUnixMs = 1_700_000_000_000;
+
     [Fact]
     public async Task ProjectAsync_ShouldDeliverSuspension_WhenDeliveryTargetIsPresent()
     {
@@ -27,6 +29,8 @@ public sealed class WorkflowHumanInteractionProjectorTests
             new EventEnvelope
             {
                 Id = "evt-human-1",
+                Timestamp = Timestamp.FromDateTimeOffset(
+                    DateTimeOffset.FromUnixTimeMilliseconds(CommittedIssuedAtUnixMs)),
                 Route = EnvelopeRouteSemantics.CreateObserverPublication("workflow-human-interaction-test"),
                 Payload = Any.Pack(new WorkflowSuspendedEvent
                 {
@@ -63,6 +67,7 @@ public sealed class WorkflowHumanInteractionProjectorTests
         call.request.ActorId.Should().Be("workflow-actor-1");
         call.request.RunId.Should().Be("run-1");
         call.request.StepId.Should().Be("approval-1");
+        call.request.IssuedAtUnixMs.Should().Be(CommittedIssuedAtUnixMs);
         call.request.SuspensionType.Should().Be("human_approval");
         call.request.Content.Should().Be("Please review the summary.");
         call.request.Options.Should().Equal("approve", "reject");
@@ -159,6 +164,7 @@ public sealed class WorkflowHumanInteractionProjectorTests
         call.deliveryTargetId.Should().Be("agent-delivery-committed");
         call.request.RunId.Should().Be("run-committed");
         call.request.StepId.Should().Be("approval-committed");
+        call.request.IssuedAtUnixMs.Should().Be(CommittedIssuedAtUnixMs);
         call.request.Options.Should().Equal("approve", "reject");
     }
 
@@ -304,6 +310,8 @@ public sealed class WorkflowHumanInteractionProjectorTests
             new EventEnvelope
             {
                 Id = "evt-human-resolution-1",
+                Timestamp = Timestamp.FromDateTimeOffset(
+                    DateTimeOffset.FromUnixTimeMilliseconds(CommittedIssuedAtUnixMs)),
                 Route = EnvelopeRouteSemantics.CreateObserverPublication("workflow-human-resolution-test"),
                 Payload = Any.Pack(new WorkflowHumanApprovalResolvedEvent
                 {
@@ -326,6 +334,7 @@ public sealed class WorkflowHumanInteractionProjectorTests
         call.resolution.ActorId.Should().Be("workflow-actor-1");
         call.resolution.RunId.Should().Be("run-4");
         call.resolution.StepId.Should().Be("approval-4");
+        call.resolution.IssuedAtUnixMs.Should().Be(CommittedIssuedAtUnixMs);
         call.resolution.Approved.Should().BeFalse();
         call.resolution.UserInput.Should().Be("Need stronger CTA");
         call.resolution.EditedContent.Should().Be("Edited but rejected");
@@ -360,6 +369,7 @@ public sealed class WorkflowHumanInteractionProjectorTests
         call.deliveryTargetId.Should().Be("agent-delivery-resolution-committed");
         call.resolution.RunId.Should().Be("run-resolution-committed");
         call.resolution.StepId.Should().Be("approval-resolution-committed");
+        call.resolution.IssuedAtUnixMs.Should().Be(CommittedIssuedAtUnixMs);
         call.resolution.Approved.Should().BeTrue();
         call.resolution.ResolvedContent.Should().Be("Approved content");
     }
@@ -401,6 +411,8 @@ public sealed class WorkflowHumanInteractionProjectorTests
         IMessage payload) => new()
     {
         Id = envelopeId,
+        Timestamp = Timestamp.FromDateTimeOffset(
+            DateTimeOffset.FromUnixTimeMilliseconds(CommittedIssuedAtUnixMs + 1)),
         Route = EnvelopeRouteSemantics.CreateObserverPublication("workflow-human-interaction-test"),
         Payload = Any.Pack(new CommittedStateEventPublished
         {
@@ -408,6 +420,8 @@ public sealed class WorkflowHumanInteractionProjectorTests
             {
                 EventId = eventId,
                 Version = 12,
+                Timestamp = Timestamp.FromDateTimeOffset(
+                    DateTimeOffset.FromUnixTimeMilliseconds(CommittedIssuedAtUnixMs)),
                 EventData = Any.Pack(payload),
             },
         }),

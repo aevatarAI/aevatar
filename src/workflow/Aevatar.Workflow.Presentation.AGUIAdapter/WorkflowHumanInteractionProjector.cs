@@ -75,6 +75,7 @@ public sealed class WorkflowHumanInteractionProjector
             ActorId = context.RootActorId,
             RunId = evt.RunId,
             StepId = evt.StepId,
+            IssuedAtUnixMs = AGUIEventEnvelopeMappingHelpers.ToUnixMs(sourceEnvelope.Timestamp) ?? 0,
             SuspensionType = evt.SuspensionType,
             Prompt = ResolvePrompt(evt),
             Content = string.IsNullOrWhiteSpace(evt.Content) ? null : evt.Content,

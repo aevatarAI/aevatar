@@ -208,6 +208,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             timeoutMs,
             string.Equals(onError, "continue", StringComparison.OrdinalIgnoreCase),
             isSecureStep,
+            ResolveIssuedAtUnixMs(envelope),
             ctx,
             ct);
     }
@@ -346,6 +347,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
                 pending.TimeoutMs,
                 pending.OnErrorContinue,
                 pending.SecureStep,
+                pending.IssuedAtUnixMs,
                 ctx,
                 ct);
             return;
@@ -374,6 +376,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         int timeoutMs,
         bool onErrorContinue,
         bool isSecureStep,
+        long issuedAtUnixMs,
         IWorkflowExecutionContext ctx,
         CancellationToken ct,
         string approvalActionId = "")
@@ -390,6 +393,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             timeoutMs,
             onErrorContinue,
             isSecureStep,
+            issuedAtUnixMs,
             ctx,
             ct,
             approvalActionId);
@@ -405,6 +409,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             Payload = await ResolvePayloadAsync(request, isSecureStep, ctx, ct) ?? string.Empty,
             Parameters = request.Parameters.ToDictionary(kv => kv.Key, kv => kv.Value),
             IdempotencyKey = request.IdempotencyKey ?? string.Empty,
+            IssuedAtUnixMs = pending.IssuedAtUnixMs,
         };
         _ = ExecuteConnectorAndSignalAsync(ctx, connector, connectorRequest, pending);
     }
@@ -455,6 +460,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         int timeoutMs,
         bool onErrorContinue,
         bool isSecureStep,
+        long issuedAtUnixMs,
         IWorkflowExecutionContext ctx,
         CancellationToken ct,
         string approvalActionId = "")
@@ -485,6 +491,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             IdempotencyKey = request.IdempotencyKey ?? string.Empty,
             ApprovalActionId = approvalActionId,
             RequestDispatched = false,
+            IssuedAtUnixMs = issuedAtUnixMs,
         };
         if (string.IsNullOrWhiteSpace(approvalActionId))
         {
@@ -585,6 +592,9 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         string.IsNullOrWhiteSpace(envelope.Id)
             ? Guid.NewGuid().ToString("N")
             : envelope.Id;
+
+    private static long ResolveIssuedAtUnixMs(EventEnvelope envelope) =>
+        envelope.Timestamp?.ToDateTimeOffset().ToUnixTimeMilliseconds() ?? 0;
 
     private static string BuildOperationId(
         string runId,

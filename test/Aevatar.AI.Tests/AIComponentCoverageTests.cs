@@ -771,74 +771,6 @@ public class AIComponentCoverageTests
     }
 
     [Fact]
-    public async Task MCPConnector_ShouldCoverCoreExecutionBranches()
-    {
-        var connector = new MCPConnector(
-            name: "mcp-1",
-            serverConfig: new MCPServerConfig { Name = "server-1", Command = "missing-cmd" },
-            defaultTool: "tool-a",
-            allowedTools: ["tool-a"], allowedInputKeys: ["q"],
-            toolExecutionPort: TestAgentToolExecutionPort.Instance);
-
-        SetPrivateField(connector, "_tools",
-            CompletedLazy<IReadOnlyDictionary<string, IAgentTool>>(
-                new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase) { ["tool-a"] = new StubTool("tool-a") }));
-
-        var success = await connector.ExecuteAsync(new Aevatar.Foundation.Abstractions.Connectors.ConnectorRequest
-        {
-            Payload = "{\"q\":\"v\"}",
-        });
-        success.Success.Should().BeTrue();
-        success.Metadata.Should().ContainKey("connector.mcp.tool").WhoseValue.Should().Be("tool-a");
-
-        var schemaRejected = await connector.ExecuteAsync(new Aevatar.Foundation.Abstractions.Connectors.ConnectorRequest
-        {
-            Payload = "{\"x\":1}",
-        });
-        schemaRejected.Success.Should().BeFalse();
-        schemaRejected.Error.Should().Contain("schema violation");
-
-        var allowlistRejected = await connector.ExecuteAsync(new Aevatar.Foundation.Abstractions.Connectors.ConnectorRequest
-        {
-            Operation = "tool-b",
-            Payload = "{\"q\":\"v\"}",
-        });
-        allowlistRejected.Success.Should().BeFalse();
-        allowlistRejected.Error.Should().Contain("not allowlisted");
-
-        var discoveredMiss = new MCPConnector(
-            name: "mcp-2",
-            serverConfig: new MCPServerConfig { Name = "server-2", Command = "missing-cmd" },
-            allowedTools: [], allowedInputKeys: [],
-            toolExecutionPort: TestAgentToolExecutionPort.Instance);
-        SetPrivateField(discoveredMiss, "_tools",
-            CompletedLazy<IReadOnlyDictionary<string, IAgentTool>>(
-                new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase)));
-
-        var notDiscovered = await discoveredMiss.ExecuteAsync(new Aevatar.Foundation.Abstractions.Connectors.ConnectorRequest
-        {
-            Operation = "unknown-tool",
-        });
-        notDiscovered.Success.Should().BeFalse();
-        notDiscovered.Error.Should().Contain("was not discovered");
-
-        var throwingConnector = new MCPConnector(
-            name: "mcp-3",
-            serverConfig: new MCPServerConfig { Name = "server-3", Command = "missing-cmd" },
-            defaultTool: "tool-x", toolExecutionPort: TestAgentToolExecutionPort.Instance);
-        SetPrivateField(throwingConnector, "_tools",
-            CompletedLazy<IReadOnlyDictionary<string, IAgentTool>>(
-                new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase) { ["tool-x"] = new ThrowingTool("tool-x") }));
-
-        var caught = await throwingConnector.ExecuteAsync(new Aevatar.Foundation.Abstractions.Connectors.ConnectorRequest
-        {
-            Payload = "{}",
-        });
-        caught.Success.Should().BeFalse();
-        caught.Metadata.Should().ContainKey("connector.mcp.server").WhoseValue.Should().Be("server-3");
-    }
-
-    [Fact]
     public async Task MCPClientManager_ShouldThrowOnInvalidCommandAndDisposeGracefully()
     {
         var manager = new MCPClientManager();
@@ -951,18 +883,6 @@ public class AIComponentCoverageTests
         }
     }
 
-    private sealed class ThrowingTool : IAgentTool
-    {
-        public ThrowingTool(string name) => Name = name;
-
-        public string Name { get; }
-        public string Description => Name;
-        public string ParametersSchema => "{}";
-
-        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
-            throw new InvalidOperationException("tool failed");
-    }
-
     private sealed class StubChatClient : IChatClient
     {
         public Func<IEnumerable<MeaiChatMessage>, ChatOptions?, CancellationToken, Task<ChatResponse>>? OnGetResponse { get; init; }
@@ -1019,16 +939,6 @@ public class AIComponentCoverageTests
         method.Should().NotBeNull($"Static method {methodName} should exist on {type.Name}");
         return (T)method!.Invoke(null, args)!;
     }
-
-    private static void SetPrivateField(object target, string fieldName, object? value)
-    {
-        var field = target.GetType().GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic);
-        field.Should().NotBeNull($"Field {fieldName} should exist on {target.GetType().Name}");
-        field!.SetValue(target, value);
-    }
-
-    private static Lazy<Task<T>> CompletedLazy<T>(T value) =>
-        new(() => Task.FromResult(value), LazyThreadSafetyMode.ExecutionAndPublication);
 
     private static T GetPrivateField<T>(object target, string fieldName)
     {

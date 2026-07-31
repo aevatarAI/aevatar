@@ -395,7 +395,9 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         Metadata = null,
         ToolContext = AgentToolExecutionContext.Empty with
         {
-            ExecutionOwner = AgentToolExecutionOwners.Actor(Id),
+            ExecutionOwner = string.IsNullOrWhiteSpace(Id)
+                ? new AgentToolExecutionOwner()
+                : AgentToolExecutionOwners.Actor(Id),
         },
         Tools = BuildValidTools(),
         Model = EffectiveConfig.Model,

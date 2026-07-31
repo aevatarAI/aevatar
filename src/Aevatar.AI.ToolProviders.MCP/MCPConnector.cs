@@ -1,5 +1,8 @@
+using System.Buffers.Binary;
 using System.Collections.Frozen;
 using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions.Connectors;
@@ -58,9 +61,19 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
     /// <inheritdoc />
     public async Task<ConnectorResponse> ExecuteAsync(ConnectorRequest request, CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(request);
         var sw = Stopwatch.StartNew();
         try
         {
+            if (!TryCreateRequestIdentity(request, out var requestIdentity))
+            {
+                return new ConnectorResponse
+                {
+                    Success = false,
+                    Error = "mcp connector requires stable run, step, idempotency, and issued-time identities",
+                };
+            }
+
             var tools = await GetOrConnectAsync(ct);
 
             var toolName = ResolveToolName(request);
@@ -100,14 +113,13 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
                 };
             }
 
-            var requestId = Guid.NewGuid().ToString("N");
             var outcome = await _toolExecutionPort.ExecuteAsync(
                 new AgentToolExecutionRequest(
                     tool,
                     request.Payload ?? string.Empty,
                     AgentToolExecutionContext.Empty with
                     {
-                        Request = new AgentToolRequestIdentity(requestId, $"{requestId}:mcp"),
+                        Request = requestIdentity,
                         ExecutionOwner = AgentToolExecutionOwners.Connector(Name),
                     },
                     AgentToolApprovalContinuationMode.None,
@@ -161,6 +173,46 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
             return toolFromParams;
         return _defaultTool ?? "";
     }
+
+    private static bool TryCreateRequestIdentity(
+        ConnectorRequest request,
+        out AgentToolRequestIdentity identity)
+    {
+        var runId = Normalize(request.RunId);
+        var stepId = Normalize(request.StepId);
+        var idempotencyKey = Normalize(request.IdempotencyKey);
+        if (runId is null || stepId is null || idempotencyKey is null || request.IssuedAtUnixMs <= 0)
+        {
+            identity = AgentToolRequestIdentity.Empty;
+            return false;
+        }
+
+        identity = new AgentToolRequestIdentity(
+            "workflow-connector:v1:" + HashLengthPrefixed(runId, stepId),
+            idempotencyKey,
+            idempotencyKey,
+            request.IssuedAtUnixMs);
+        return true;
+    }
+
+    private static string HashLengthPrefixed(params string[] values)
+    {
+        using var stream = new MemoryStream();
+        Span<byte> length = stackalloc byte[sizeof(uint)];
+        foreach (var value in values)
+        {
+            var bytes = Encoding.UTF8.GetBytes(value);
+            BinaryPrimitives.WriteUInt32BigEndian(length, checked((uint)bytes.Length));
+            stream.Write(length);
+            stream.Write(bytes);
+        }
+
+        return Convert.ToHexStringLower(
+            SHA256.HashData(stream.GetBuffer().AsSpan(0, checked((int)stream.Length))));
+    }
+
+    private static string? Normalize(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private Task<IReadOnlyDictionary<string, IAgentTool>> GetOrConnectAsync(CancellationToken ct)
     {

@@ -44,13 +44,21 @@ public sealed class AgentToolVoiceInvoker : IVoiceToolInvoker
     }
 
     public async Task<string> ExecuteAsync(
+        string callId,
+        long issuedAtUnixMs,
         string toolName,
         string argumentsJson,
         VoiceToolExecutionContext? toolContext = null,
         CancellationToken ct = default)
     {
+        if (string.IsNullOrWhiteSpace(callId))
+            throw new ArgumentException("Provider call id is required.", nameof(callId));
+        if (issuedAtUnixMs <= 0)
+            throw new ArgumentOutOfRangeException(nameof(issuedAtUnixMs));
         if (string.IsNullOrWhiteSpace(toolName))
             throw new ArgumentException("Tool name is required.", nameof(toolName));
+
+        var normalizedCallId = callId.Trim();
 
         var toolIndex = await GetOrDiscoverAsync(ct);
         if (!toolIndex.TryGetValue(toolName, out var tool))
@@ -60,25 +68,44 @@ public sealed class AgentToolVoiceInvoker : IVoiceToolInvoker
 
         if (toolContext is null ||
             !VoiceToolExecutionContextMapper.IsUsableCredentialRef(toolContext, DateTimeOffset.UtcNow))
-            return await ExecuteAdmittedAsync(tool, arguments, AgentToolExecutionContext.Empty, ct);
+            return await ExecuteAdmittedAsync(
+                tool,
+                arguments,
+                normalizedCallId,
+                issuedAtUnixMs,
+                AgentToolExecutionContext.Empty,
+                ct);
 
         var agentToolContext = await ResolveToolContextAsync(toolContext, ct);
         if (agentToolContext is null)
-            return await ExecuteAdmittedAsync(tool, arguments, AgentToolExecutionContext.Empty, ct);
+            return await ExecuteAdmittedAsync(
+                tool,
+                arguments,
+                normalizedCallId,
+                issuedAtUnixMs,
+                AgentToolExecutionContext.Empty,
+                ct);
         if (!agentToolContext.ToolVisibility.Allows(toolName))
             throw new InvalidOperationException($"Tool '{toolName}' not found");
 
-        return await ExecuteAdmittedAsync(tool, arguments, agentToolContext, ct);
+        return await ExecuteAdmittedAsync(
+            tool,
+            arguments,
+            normalizedCallId,
+            issuedAtUnixMs,
+            agentToolContext,
+            ct);
     }
 
     private async Task<string> ExecuteAdmittedAsync(
         IAgentTool tool,
         string argumentsJson,
+        string callId,
+        long issuedAtUnixMs,
         AgentToolExecutionContext executionContext,
         CancellationToken ct)
     {
-        var requestId = executionContext.Caller.ResponseId ?? Guid.NewGuid().ToString("N");
-        var callId = $"{requestId}:voice:{Guid.NewGuid():N}";
+        var requestId = $"voice:v1:{callId}";
         var executionOwner = executionContext.ExecutionOwner.Kind != AgentToolExecutionOwnerKind.Unspecified &&
                              !string.IsNullOrWhiteSpace(executionContext.ExecutionOwner.OwnerId)
             ? executionContext.ExecutionOwner.Clone()
@@ -89,7 +116,11 @@ public sealed class AgentToolVoiceInvoker : IVoiceToolInvoker
                 argumentsJson,
                 executionContext with
                 {
-                    Request = new AgentToolRequestIdentity(requestId, callId),
+                    Request = new AgentToolRequestIdentity(
+                        requestId,
+                        callId,
+                        callId,
+                        issuedAtUnixMs),
                     ExecutionOwner = executionOwner,
                 },
                 AgentToolApprovalContinuationMode.None,

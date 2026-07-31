@@ -5,12 +5,54 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Tools;
 using Aevatar.AI.Infrastructure.ToolExecution;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 using StackExchange.Redis;
 
 namespace Aevatar.Capabilities.Tests;
 
 public sealed class AgentToolAdmissionLedgerTests
 {
+    public static TheoryData<TimeSpan, TimeSpan, string> InvalidAdmissionPolicies => new()
+    {
+        { TimeSpan.Zero, TimeSpan.Zero, "MaximumReplayWindow" },
+        { TimeSpan.FromTicks(-1), TimeSpan.Zero, "MaximumReplayWindow" },
+        { TimeSpan.FromDays(30).Add(TimeSpan.FromTicks(1)), TimeSpan.Zero, "MaximumReplayWindow" },
+        { TimeSpan.FromHours(1), TimeSpan.FromTicks(-1), "MaximumFutureClockSkew" },
+        { TimeSpan.FromHours(1), TimeSpan.FromHours(1).Add(TimeSpan.FromTicks(1)), "MaximumFutureClockSkew" },
+    };
+
+    [Theory]
+    [MemberData(nameof(InvalidAdmissionPolicies))]
+    public void AddInMemoryLedger_WhenPolicyIsOutsideSupportedRange_ShouldRejectAtRegistration(
+        TimeSpan maximumReplayWindow,
+        TimeSpan maximumFutureClockSkew,
+        string parameterName)
+    {
+        var services = new ServiceCollection();
+        var policy = new AgentToolAdmissionPolicy(
+            maximumReplayWindow,
+            maximumFutureClockSkew);
+
+        var action = () => services.AddInMemoryAgentToolAdmissionLedger(policy);
+
+        action.Should().ThrowExactly<ArgumentOutOfRangeException>()
+            .WithParameterName(parameterName);
+    }
+
+    [Fact]
+    public void AddInMemoryLedger_WhenPolicyIsAtInclusiveMaximumBoundaries_ShouldRegisterExactPolicy()
+    {
+        var services = new ServiceCollection();
+        var policy = new AgentToolAdmissionPolicy(
+            TimeSpan.FromDays(30),
+            TimeSpan.FromDays(30));
+
+        services.AddInMemoryAgentToolAdmissionLedger(policy);
+
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<AgentToolAdmissionPolicy>().Should().BeSameAs(policy);
+    }
+
     [Fact]
     public async Task TryStartAsync_ShouldDistinguishFirstDuplicateAndConflict()
     {

@@ -9,6 +9,8 @@ public interface IVoiceToolInvoker
     /// Executes one named tool and returns the result JSON that should be sent back to the provider.
     /// </summary>
     Task<string> ExecuteAsync(
+        string callId,
+        long issuedAtUnixMs,
         string toolName,
         string argumentsJson,
         VoiceToolExecutionContext? toolContext = null,
