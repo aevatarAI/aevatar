@@ -508,7 +508,7 @@ bash tools/ci/test_stability_guards.sh
 
 Expected: pass with no allowlist entry; tests use deterministic Node stubs and no Task.Delay.
 
-- [ ] **Step 9: Commit guided creation**
+- [x] **Step 9: Commit guided creation**
 
 ~~~bash
 git add src/Aevatar.Mainnet.Host.Api/BackendConsole/admin.html test/Aevatar.Capabilities.Tests/BackendConsoleStaticAssetEndpointTests.cs
@@ -528,7 +528,7 @@ git commit -m "Guide Agent Profile creation"
 - Consumes: completed exact API and Admin behavior.
 - Produces: fast-forward push to origin/feature/integrate, production operation/readback evidence, and published personal aevatar-operator without default binding mutation.
 
-- [ ] **Step 1: Run focused suites**
+- [x] **Step 1: Run focused suites**
 
 ~~~bash
 dotnet test test/Aevatar.AI.ToolProviders.Ornn.Tests/Aevatar.AI.ToolProviders.Ornn.Tests.csproj --nologo --filter FullyQualifiedName~OrnnExactAgentProfileSkillResolverTests
@@ -537,7 +537,7 @@ dotnet test test/Aevatar.Capabilities.Tests/Aevatar.Capabilities.Tests.csproj --
 
 Expected: zero failures.
 
-- [ ] **Step 2: Run guards and docs lint**
+- [x] **Step 2: Run guards and docs lint**
 
 ~~~bash
 bash tools/ci/test_stability_guards.sh
@@ -549,7 +549,7 @@ bash tools/docs/lint.sh
 
 Expected: all exit 0; query guard proves exact reads do not prime Profile projection.
 
-- [ ] **Step 3: Run full build and tests**
+- [x] **Step 3: Run full build and tests**
 
 ~~~bash
 dotnet build aevatar.slnx --nologo
@@ -558,7 +558,7 @@ dotnet test aevatar.slnx --nologo
 
 Expected: build and tests exit 0 with zero failures.
 
-- [ ] **Step 4: Inspect final change set**
+- [x] **Step 4: Inspect final change set**
 
 ~~~bash
 git status --short --branch
