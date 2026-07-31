@@ -92,8 +92,11 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         html.Should().Contain("agentProfileField('显示名称','displayName'");
         html.Should().Contain("agentProfileField('Instructions','instructions'");
         html.Should().Contain("agentProfileSelect('Activation mode','activationMode'");
-        html.Should().Contain("agentProfileField('Exact skill GUID','exactSkillGuid'");
-        html.Should().Contain("agentProfileField('Literal version','literalVersion'");
+        html.Should().Contain("data-ap-exact-evidence");
+        html.Should().Contain("data-ap-tool-chip");
+        html.Should().Contain("<details class=\"ap-disclosure\"");
+        html.Should().Contain("AGENT_PROFILE_STATE.skillProofs");
+        html.Should().NotContain("agentProfileField('Exact skill GUID','exactSkillGuid'");
         html.Should().Contain("data-ap-skill-search");
         html.Should().Contain("/api/workflow/skills/'+encodeURIComponent(guid)+'/exact");
         html.Should().Contain("loadAgentProfileBindings()");
@@ -219,17 +222,24 @@ public sealed class BackendConsoleStaticAssetEndpointTests
               displayName:'Unsaved name', instructions:'Unsaved instructions',
               exactSkillGuid:'11111111-1111-1111-1111-111111111111', literalVersion:'1.0',
               expectedSkillName:'old-skill', reviewedPublisherId:'old-publisher',
-              maximumTools:'web_search', intentId:'primary'
+              maximumTools:'web_search', taskTools:'manual_task', intentId:'primary'
             })`, context);
             context.draft = draft;
             context.exact = {
               guid:'22222222-2222-4222-8222-222222222222', literalVersion:'2.3',
-              name:'new-skill', publisher:'new-publisher'
+              name:'new-skill', publisher:'new-publisher',
+              skillHash:'000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f',
+              declaredToolNames:['lookup',' search ','lookup']
             };
             const updated = vm.runInContext('agentProfileApplyExactSkill(draft, exact)', context);
             assert.equal(updated.displayName, 'Unsaved name');
             assert.equal(updated.instructions, 'Unsaved instructions');
-            assert.equal(updated.runtimeProfile.maximumToolPolicy.toolNames.join(','), 'web_search');
+            assert.deepEqual(
+              Array.from(updated.runtimeProfile.maximumToolPolicy.toolNames),
+              ['web_search','lookup','search']);
+            assert.deepEqual(
+              Array.from(updated.runtimeProfile.members[0].taskToolPolicy.toolNames),
+              ['manual_task','lookup','search']);
             assert.equal(updated.runtimeProfile.members[0].skillRef.literalVersion, '2.3');
             assert.equal(updated.runtimeProfile.members[0].expectedSkillName, 'new-skill');
 
@@ -277,7 +287,7 @@ public sealed class BackendConsoleStaticAssetEndpointTests
               AGENT_PROFILE_STATE:{
                 detail:{draft:{runtimeProfile:{members:[{skillRef:{}}]}}},
                 skillRequest:0, skillMemberIndex:null, skillQuery:'', skillResults:[],
-                skillLoading:false, skillError:null, skillProof:null
+                skillLoading:false, skillError:null, skillProofs:{}
               },
               root:{},
               render() {},
@@ -308,7 +318,7 @@ public sealed class BackendConsoleStaticAssetEndpointTests
               assert.equal(context.AGENT_PROFILE_STATE.skillMemberIndex, null);
               assert.equal(context.AGENT_PROFILE_STATE.skillLoading, false);
               assert.equal(context.AGENT_PROFILE_STATE.skillError, null);
-              assert.equal(context.AGENT_PROFILE_STATE.skillProof, null);
+              assert.deepEqual(Object.keys(context.AGENT_PROFILE_STATE.skillProofs), []);
               assert.deepEqual(Array.from(context.AGENT_PROFILE_STATE.skillResults), []);
             })().catch(error => { console.error(error); process.exitCode = 1; });
             """;
@@ -398,7 +408,11 @@ public sealed class BackendConsoleStaticAssetEndpointTests
               },
               diagnostics:[], rolloutDraft:null, systemBinding:null, pending:null,
               busy:false, notice:null, error:null, etag:'etag-3', skillMemberIndex:null,
-              skillResults:[], skillLoading:false, skillError:null, skillProof:null
+              skillResults:[], skillLoading:false, skillError:null,
+              skillProofs:{
+                0:{skillHash:'aaaaaaaaaaaa0000',declaredToolNames:['web_search']},
+                1:{skillHash:'bbbbbbbbbbbb0000',declaredToolNames:['document_write']}
+              }
             };
             context.ACCOUNT = { admin:false };
             context.ICON = { search:'search' };
@@ -422,6 +436,16 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             assert.match(editor, /data-ap-member-card="1"/);
             assert.match(editor, /id="ap-intentId-0"/);
             assert.match(editor, /id="ap-intentId-1"/);
+            assert.match(editor, /data-ap-exact-evidence="0"/);
+            assert.match(editor, /data-ap-exact-evidence="1"/);
+            assert.match(editor, /type="hidden" data-ap-field="exactSkillGuid" data-ap-member="0"/);
+            assert.match(editor, /type="hidden" data-ap-field="literalVersion" data-ap-member="1"/);
+            assert.match(editor, /data-ap-tool-chip="web_search"/);
+            assert.match(editor, /data-ap-tool-chip="document_write"/);
+            assert.match(editor, /aaaaaaaaaaaa/);
+            assert.match(editor, /bbbbbbbbbbbb/);
+            assert.match(editor, /<details class="ap-disclosure"/);
+            assert.doesNotMatch(editor, /id="ap-exactSkillGuid-0" type="text"/);
             assert.match(editor, /id="ap-maxPlanSteps"[^>]*readonly/);
 
             const invalid = JSON.parse(JSON.stringify(draft));

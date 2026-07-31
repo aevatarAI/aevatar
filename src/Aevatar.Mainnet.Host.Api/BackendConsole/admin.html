@@ -872,12 +872,22 @@ button{font-family:inherit;cursor:pointer;}
 .ap-skill-result{width:100%;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 10px;border:0;border-bottom:1px solid var(--border);background:transparent;text-align:left;}
 .ap-skill-result:last-child{border-bottom:0;}.ap-skill-result:hover{background:var(--surface-3);}
 .ap-skill-result span{min-width:0;overflow-wrap:anywhere;}.ap-skill-result small{color:var(--faint);}
-.ap-skill-proof{grid-column:1/-1;font-size:11.5px;color:var(--success);overflow-wrap:anywhere;}
+.ap-exact-evidence{grid-column:1/-1;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);padding:11px;display:flex;flex-direction:column;gap:9px;}
+.ap-evidence-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px 14px;font-size:11.5px;}
+.ap-evidence-grid span{min-width:0;color:var(--muted);overflow-wrap:anywhere;}.ap-evidence-grid b{color:var(--heading);font-weight:600;}
+.ap-tool-row{display:flex;align-items:flex-start;gap:9px;flex-wrap:wrap}.ap-tool-label{font-size:11px;color:var(--faint);padding-top:3px;}
+.ap-tool-chips{display:flex;gap:6px;flex-wrap:wrap;min-width:0}.ap-tool-chip{font:11px var(--mono);color:var(--primary-strong);background:var(--primary-weak);border:1px solid #c4d6ff;border-radius:999px;padding:2px 7px;overflow-wrap:anywhere;}
+.ap-tool-empty{font-size:11.5px;color:var(--faint);}
+.ap-disclosure{border:1px solid var(--border);border-radius:6px;background:var(--surface);margin-top:10px;overflow:hidden;}
+.ap-disclosure>summary{cursor:pointer;padding:10px 12px;color:var(--heading);font-size:12.5px;font-weight:600;list-style-position:inside;}
+.ap-disclosure>summary:hover{background:var(--surface-3);}.ap-disclosure>summary:focus-visible{outline:2px solid var(--primary);outline-offset:-2px;}
+.ap-disclosure>.ap-grid,.ap-disclosure>.ap-disclosure-body{padding:4px 12px 12px;}
 @media (max-width:900px){.ap-layout{grid-template-columns:minmax(240px,300px) minmax(0,1fr)}.ap-grid.three{grid-template-columns:repeat(2,minmax(0,1fr));}}
 @media (max-width:768px){
   .ap-toolbar{align-items:stretch}.ap-toolbar .search{width:100%}.ap-create{width:100%;margin-left:0}.ap-create input{flex:1 1 auto;width:auto}
   .ap-layout{display:block;overflow:auto}.ap-list-pane{max-height:36vh;border-right:0;border-bottom:1px solid var(--border)}.ap-workspace{overflow:visible;padding:14px}
-  .ap-grid,.ap-grid.three{grid-template-columns:1fr}.ap-actions{width:100%;margin-left:0;justify-content:flex-start}.ap-field.wide{grid-column:auto}
+  .ap-grid,.ap-grid.three,.ap-evidence-grid{grid-template-columns:1fr}.ap-actions{width:100%;margin-left:0;justify-content:flex-start}.ap-field.wide{grid-column:auto}
+  .ap-member-head{align-items:flex-start;flex-wrap:wrap}.ap-skill-search{align-items:stretch;flex-direction:column}.ap-skill-search .btn{align-self:flex-start}.ap-disclosure{max-width:100%}
 }
 .sc-cron{font-size:11.5px;background:var(--surface-3);border:1px solid var(--border);padding:1px 7px;border-radius:4px;color:var(--muted);}
 .sc-state{margin-left:auto;font-size:11px;font-weight:600;padding:2px 9px;border-radius:999px;}
@@ -2374,12 +2384,12 @@ function renderRail(active){
 /* ---------------- Agent Profile ---------------- */
 var AGENT_PROFILE_STATE={owner:'mine',status:'all',search:'',items:[],selected:null,detail:null,
   loaded:false,loading:false,error:null,forbidden:false,dirty:false,busy:false,notice:null,diagnostics:[],etag:null,
-  binding:null,systemBinding:null,rolloutDraft:null,skillRequest:0,skillMemberIndex:null,skillQuery:'',skillResults:[],skillLoading:false,skillError:null,skillProof:null,
+  binding:null,systemBinding:null,rolloutDraft:null,skillRequest:0,skillMemberIndex:null,skillQuery:'',skillResults:[],skillLoading:false,skillError:null,skillProofs:{},
   pending:null,pollTimer:null};
 
 function agentProfileResetSkillSearch(){
   AGENT_PROFILE_STATE.skillRequest=Number(AGENT_PROFILE_STATE.skillRequest||0)+1;AGENT_PROFILE_STATE.skillMemberIndex=null;
-  AGENT_PROFILE_STATE.skillQuery='';AGENT_PROFILE_STATE.skillResults=[];AGENT_PROFILE_STATE.skillLoading=false;AGENT_PROFILE_STATE.skillError=null;AGENT_PROFILE_STATE.skillProof=null;
+  AGENT_PROFILE_STATE.skillQuery='';AGENT_PROFILE_STATE.skillResults=[];AGENT_PROFILE_STATE.skillLoading=false;AGENT_PROFILE_STATE.skillError=null;AGENT_PROFILE_STATE.skillProofs={};
 }
 function agentProfileOwnerEndpoint(owner,scope){
   return owner==='system'?'/api/agent-profiles/system':'/api/scopes/'+encodeURIComponent(scope)+'/agent-profiles';
@@ -2420,10 +2430,22 @@ function agentProfileEmptyDraft(){
 function agentProfileRolloutFromBinding(binding){
   return {enabled:!!(binding&&binding.enabled),cohortBasisPoints:Number(binding&&binding.cohortBasisPoints||0)};
 }
+function agentProfileUnionNames(existing,additions){
+  var seen=Object.create(null),out=[];
+  (existing||[]).concat(additions||[]).forEach(function(value){
+    var name=String(value||'').trim();if(name&&!seen[name]){seen[name]=true;out.push(name);}
+  });
+  return out;
+}
 function agentProfileApplyExactSkill(draft,detail,memberIndex){
   var runtime=draft.runtimeProfile,member=runtime.members[Number(memberIndex||0)];if(!member)return draft;member.skillRef=member.skillRef||{};
   member.skillRef.guid=detail.guid||'';member.skillRef.literalVersion=detail.literalVersion||'';
-  member.expectedSkillName=detail.name||'';member.reviewedPublisherId=detail.publisher||'';return draft;
+  member.expectedSkillName=detail.name||'';member.reviewedPublisherId=detail.publisher||'';
+  var tools=Array.isArray(detail.declaredToolNames)?detail.declaredToolNames:[];
+  member.taskToolPolicy=member.taskToolPolicy||{toolNames:[],toolSetRefs:[]};runtime.maximumToolPolicy=runtime.maximumToolPolicy||{toolNames:[],toolSetRefs:[]};
+  member.taskToolPolicy.toolNames=agentProfileUnionNames(member.taskToolPolicy.toolNames,tools);
+  runtime.maximumToolPolicy.toolNames=agentProfileUnionNames(runtime.maximumToolPolicy.toolNames,tools);
+  return draft;
 }
 function agentProfileCaptureDraft(root){
   if(!root||!AGENT_PROFILE_STATE.detail)return;
@@ -2537,17 +2559,31 @@ function agentProfileSelect(label,name,value,options,disabled,memberIndex){
   return '<div class="ap-field"><label for="'+id+'">'+esc(label)+'</label><select id="'+id+'" data-ap-field="'+name+'"'+memberAttr+(disabled?' disabled':'')+'>'+options.map(function(o){
     return '<option value="'+esc(o.value)+'"'+(o.value===value?' selected':'')+'>'+esc(o.label)+'</option>';}).join('')+'</select></div>';
 }
+function agentProfileHidden(name,value,memberIndex){
+  return '<input type="hidden" data-ap-field="'+name+'" data-ap-member="'+memberIndex+'" value="'+esc(value||'')+'">';
+}
+function agentProfileToolChipsHtml(names){
+  var tools=agentProfileUnionNames([],names||[]);
+  return tools.length?'<div class="ap-tool-chips">'+tools.map(function(name){return '<span class="ap-tool-chip" data-ap-tool-chip="'+esc(name)+'">'+esc(name)+'</span>';}).join('')+'</div>':'<span class="ap-tool-empty">未声明工具</span>';
+}
+function agentProfileExactEvidenceHtml(member,index){
+  var ref=member.skillRef||{},proof=AGENT_PROFILE_STATE.skillProofs&&AGENT_PROFILE_STATE.skillProofs[index],hash=proof&&proof.skillHash?String(proof.skillHash).slice(0,12):'';
+  return '<div class="ap-exact-evidence" data-ap-exact-evidence="'+index+'">'+
+    '<div class="ap-evidence-grid"><span>Skill <b>'+esc(member.expectedSkillName||'未选择')+'</b></span><span>Publisher <b>'+esc(member.reviewedPublisherId||'待确认')+'</b></span>'+
+      '<span>Version <b>'+esc(ref.literalVersion||'—')+'</b></span><span>GUID <b>'+esc(ref.guid||'—')+'</b></span>'+(hash?'<span>SHA-256 <b>'+esc(hash)+'…</b></span>':'')+'</div>'+
+    '<div class="ap-tool-row"><span class="ap-tool-label">Task tools</span>'+agentProfileToolChipsHtml((member.taskToolPolicy||{}).toolNames)+'</div></div>';
+}
 function agentProfileRuntime(detail){return detail&&detail.draft&&detail.draft.runtimeProfile?detail.draft.runtimeProfile:(detail&&detail.runtimeProfile)||agentProfileEmptyDraft().runtimeProfile;}
 function agentProfileMemberHtml(member,index,count,disabled){
   var ref=member.skillRef||{},task=member.taskToolPolicy||{},opts={memberIndex:index,disabled:disabled};
   return '<div class="ap-member" data-ap-member-card="'+index+'"><div class="ap-member-head"><b>Member '+(index+1)+' · '+esc(member.intentId||'未命名 intent')+'</b>'+
     (!disabled&&count>1?'<button type="button" class="btn" data-ap-remove-member="'+index+'">删除</button>':'')+'</div><div class="ap-grid three">'+agentProfileSkillSearchHtml(disabled,index)+
-    agentProfileField('Intent ID','intentId',member.intentId,Object.assign({required:true},opts))+agentProfileField('Exact skill GUID','exactSkillGuid',ref.guid,Object.assign({required:true},opts))+
-    agentProfileField('Literal version','literalVersion',ref.literalVersion,Object.assign({required:true},opts))+agentProfileField('Expected name','expectedSkillName',member.expectedSkillName,Object.assign({required:true},opts))+
-    agentProfileField('Publisher','reviewedPublisherId',member.reviewedPublisherId,Object.assign({required:true},opts))+agentProfileSelect('Side-effect class','sideEffectClass',String(member.sideEffectClass||'READ_ONLY').replace(/^AGENT_PROFILE_SIDE_EFFECT_CLASS_/,''),[
+    agentProfileField('Intent ID','intentId',member.intentId,Object.assign({required:true},opts))+agentProfileSelect('Side-effect class','sideEffectClass',String(member.sideEffectClass||'READ_ONLY').replace(/^AGENT_PROFILE_SIDE_EFFECT_CLASS_/,''),[
       {value:'READ_ONLY',label:'Read only'},{value:'EXTERNAL_HANDOFF',label:'External handoff'},{value:'SERVICE_CALL',label:'Service call'},{value:'MAINTENANCE',label:'Maintenance'}],disabled,index)+
     agentProfileField('Routing description','routingDescription',member.routingDescription,Object.assign({wide:true},opts))+agentProfileField('Trigger aliases','triggerAliases',(member.explicitTriggerAliases||[]).join(', '),Object.assign({wide:true,help:'逗号分隔；路由只使用发布后 sealed aliases。'},opts))+
-    agentProfileField('Task tools','taskTools',(task.toolNames||[]).join(', '),opts)+agentProfileField('Task tool sets','taskToolSets',(task.toolSetRefs||[]).join(', '),opts)+'</div></div>';
+    agentProfileHidden('exactSkillGuid',ref.guid,index)+agentProfileHidden('literalVersion',ref.literalVersion,index)+agentProfileHidden('expectedSkillName',member.expectedSkillName,index)+agentProfileHidden('reviewedPublisherId',member.reviewedPublisherId,index)+
+    agentProfileExactEvidenceHtml(member,index)+'</div><details class="ap-disclosure"><summary>手工 Task policy</summary><div class="ap-grid">'+
+      agentProfileField('Task tools','taskTools',(task.toolNames||[]).join(', '),opts)+agentProfileField('Task tool sets','taskToolSets',(task.toolSetRefs||[]).join(', '),opts)+'</div></details></div>';
 }
 function agentProfileDiagnosticsHtml(){
   if(!AGENT_PROFILE_STATE.diagnostics.length)return '';
@@ -2559,12 +2595,11 @@ function agentProfileSkillSearchHtml(disabled,memberIndex){
   var active=Number(AGENT_PROFILE_STATE.skillMemberIndex)===memberIndex,results=active?(AGENT_PROFILE_STATE.skillResults||[]):[];
   var list=results.length?'<div class="ap-skill-results">'+results.map(function(item){return '<button type="button" class="ap-skill-result" data-ap-skill="'+esc(item.guid||'')+'" data-ap-member="'+memberIndex+'"><span><b>'+esc(item.name||item.guid)+'</b><br><small>'+esc(item.description||'')+'</small></span><small>'+esc(item.guid||'')+'</small></button>';}).join('')+'</div>':'';
   var problem=active&&AGENT_PROFILE_STATE.skillError?'<div class="ap-diagnostic">'+esc(AGENT_PROFILE_STATE.skillError)+'</div>':'';
-  var proof=active&&AGENT_PROFILE_STATE.skillProof?'<div class="ap-skill-proof">已固定 '+esc(AGENT_PROFILE_STATE.skillProof.literalVersion)+' · '+esc(AGENT_PROFILE_STATE.skillProof.publisher)+' · SHA-256 '+esc(AGENT_PROFILE_STATE.skillProof.skillHash)+'</div>':'';
-  return '<div class="ap-skill-search">'+agentProfileField('搜索可用 Ornn skill','skillQuery',active?AGENT_PROFILE_STATE.skillQuery:'',{memberIndex:memberIndex})+'<button type="button" class="btn" data-ap-skill-search="'+memberIndex+'"'+(AGENT_PROFILE_STATE.skillLoading?' disabled':'')+'>'+ICON.search+' 搜索</button></div>'+list+problem+proof;
+  return '<div class="ap-skill-search">'+agentProfileField('搜索可用 Ornn skill','skillQuery',active?AGENT_PROFILE_STATE.skillQuery:'',{memberIndex:memberIndex})+'<button type="button" class="btn" data-ap-skill-search="'+memberIndex+'"'+(AGENT_PROFILE_STATE.skillLoading?' disabled':'')+'>'+ICON.search+' 搜索</button></div>'+list+problem;
 }
 async function agentProfileSearchSkills(root,memberIndex){
   var input=root.querySelector('[data-ap-field="skillQuery"][data-ap-member="'+memberIndex+'"]'),query=String(input&&input.value||'').trim();
-  agentProfileCaptureDraft(root);var request=Number(AGENT_PROFILE_STATE.skillRequest||0)+1;AGENT_PROFILE_STATE.skillRequest=request;AGENT_PROFILE_STATE.skillMemberIndex=Number(memberIndex);AGENT_PROFILE_STATE.skillQuery=query;AGENT_PROFILE_STATE.skillResults=[];AGENT_PROFILE_STATE.skillLoading=true;AGENT_PROFILE_STATE.skillError=null;AGENT_PROFILE_STATE.skillProof=null;render();
+  agentProfileCaptureDraft(root);var request=Number(AGENT_PROFILE_STATE.skillRequest||0)+1;AGENT_PROFILE_STATE.skillRequest=request;AGENT_PROFILE_STATE.skillMemberIndex=Number(memberIndex);AGENT_PROFILE_STATE.skillQuery=query;AGENT_PROFILE_STATE.skillResults=[];AGENT_PROFILE_STATE.skillLoading=true;AGENT_PROFILE_STATE.skillError=null;render();
   try{
     var result=await agentProfileJson('/api/workflow/skills?query='+encodeURIComponent(query)+'&page=1&pageSize=20');
     if(request!==AGENT_PROFILE_STATE.skillRequest)return;
@@ -2573,12 +2608,12 @@ async function agentProfileSearchSkills(root,memberIndex){
   AGENT_PROFILE_STATE.skillLoading=false;render();
 }
 async function agentProfileSelectSkill(guid,root,memberIndex){
-  agentProfileCaptureDraft(root);var request=Number(AGENT_PROFILE_STATE.skillRequest||0)+1;AGENT_PROFILE_STATE.skillRequest=request;AGENT_PROFILE_STATE.skillMemberIndex=Number(memberIndex);AGENT_PROFILE_STATE.skillResults=[];AGENT_PROFILE_STATE.skillLoading=true;AGENT_PROFILE_STATE.skillError=null;AGENT_PROFILE_STATE.skillProof=null;render();
+  agentProfileCaptureDraft(root);var request=Number(AGENT_PROFILE_STATE.skillRequest||0)+1;AGENT_PROFILE_STATE.skillRequest=request;AGENT_PROFILE_STATE.skillMemberIndex=Number(memberIndex);AGENT_PROFILE_STATE.skillResults=[];AGENT_PROFILE_STATE.skillLoading=true;AGENT_PROFILE_STATE.skillError=null;render();
   try{
     var result=await agentProfileJson('/api/workflow/skills/'+encodeURIComponent(guid)+'/exact');
     if(request!==AGENT_PROFILE_STATE.skillRequest)return;
     var detail=result.body||{};AGENT_PROFILE_STATE.detail.draft=agentProfileApplyExactSkill(AGENT_PROFILE_STATE.detail.draft,detail,memberIndex);
-    AGENT_PROFILE_STATE.skillProof=detail;AGENT_PROFILE_STATE.skillResults=[];AGENT_PROFILE_STATE.dirty=true;
+    AGENT_PROFILE_STATE.skillProofs=AGENT_PROFILE_STATE.skillProofs||{};AGENT_PROFILE_STATE.skillProofs[Number(memberIndex)]=detail;AGENT_PROFILE_STATE.skillResults=[];AGENT_PROFILE_STATE.dirty=true;
   }catch(e){if(request!==AGENT_PROFILE_STATE.skillRequest)return;AGENT_PROFILE_STATE.skillError=e&&e.problem?e.problem.title:'无法固定 exact skill';}
   AGENT_PROFILE_STATE.skillLoading=false;render();
 }
@@ -2616,15 +2651,15 @@ function agentProfileEditorHtml(){
     '<section class="ap-section"><div class="ap-member-head"><div><h3>Exact Ornn members</h3><span class="ap-help">每个 intent 绑定一个 exact skill，最多 32 个。</span></div>'+
       (!dis?'<button type="button" class="btn" data-ap-add-member'+(members.length>=32?' disabled':'')+'>添加 member · '+members.length+'/32</button>':'')+'</div>'+
       members.map(function(member,index){return agentProfileMemberHtml(member,index,members.length,dis);}).join('')+'</section>'+
-    '<section class="ap-section"><h3>Tool policy ceiling</h3><div class="ap-grid">'+
+    '<section class="ap-section"><details class="ap-disclosure"><summary>高级工具策略</summary><div class="ap-grid">'+
       agentProfileField('Maximum tools','maximumTools',(max.toolNames||[]).join(', '),{disabled:dis})+agentProfileField('Maximum tool sets','maximumToolSets',(max.toolSetRefs||[]).join(', '),{disabled:dis})+
-      agentProfileField('Recovery tools','recoveryTools',(recovery.toolNames||[]).join(', '),{disabled:dis})+agentProfileField('Recovery tool sets','recoveryToolSets',(recovery.toolSetRefs||[]).join(', '),{disabled:dis})+'</div></section>'+
-    '<section class="ap-section"><h3>高级运行参数</h3><div class="ap-grid three">'+
+      agentProfileField('Recovery tools','recoveryTools',(recovery.toolNames||[]).join(', '),{disabled:dis})+agentProfileField('Recovery tool sets','recoveryToolSets',(recovery.toolSetRefs||[]).join(', '),{disabled:dis})+'</div></details>'+
+    '<details class="ap-disclosure"><summary>固定运行参数</summary><div class="ap-grid three">'+
       agentProfileField('Max plan steps','maxPlanSteps',rt.maxPlanSteps||4,{type:'number',readonly:true,disabled:dis})+
       agentProfileField('Handoff TTL (s)','handoffTtlSeconds',rt.handoffTtlSeconds||900,{type:'number',readonly:true,disabled:dis})+
       agentProfileField('Classifier timeout (ms)','classifierTimeoutMs',rt.classifierTimeoutMs||600,{type:'number',readonly:true,disabled:dis})+
       agentProfileField('Exact fetch timeout (ms)','exactSkillFetchTimeoutMs',rt.exactSkillFetchTimeoutMs||1500,{type:'number',readonly:true,disabled:dis})+
-      agentProfileField('Max selected skill bytes','maxSelectedSkillBytes',rt.maxSelectedSkillBytes||24576,{type:'number',readonly:true,disabled:dis})+'</div><span class="ap-help">当前 nyxid.chat runtime 固定参数；由服务端 editor options 定义。</span></section>'+agentProfileDiagnosticsHtml()+'</form>'+
+      agentProfileField('Max selected skill bytes','maxSelectedSkillBytes',rt.maxSelectedSkillBytes||24576,{type:'number',readonly:true,disabled:dis})+'</div><div class="ap-disclosure-body"><span class="ap-help">当前 nyxid.chat runtime 固定参数；由服务端 editor options 定义。</span></div></details></section>'+agentProfileDiagnosticsHtml()+'</form>'+
     ((d.ownerKind==='system'&&ACCOUNT&&ACCOUNT.admin)?'<section class="ap-section"><h3>System default rollout</h3><div class="ap-rollout">'+
       agentProfileSelect('Enabled','rolloutEnabled',String(rollout.enabled),[{value:'true',label:'启用'},{value:'false',label:'停用'}],false)+
       agentProfileField('Cohort basis points','cohortBasisPoints',rollout.cohortBasisPoints,{type:'number',min:0,max:10000})+
