@@ -283,7 +283,7 @@ internal sealed class StartWorkflowTool : IAevatarInvocationTool
         WorkflowRunBackgroundDeliveryReceipt? WorkflowRunDelivery);
 }
 
-internal sealed class ObserveRunTool : IAevatarInvocationTool
+internal sealed class ObserveRunTool : IAevatarInvocationReadOnlyTool
 {
     private readonly AevatarInvocationDispatcher _dispatcher;
 
@@ -301,11 +301,19 @@ internal sealed class ObserveRunTool : IAevatarInvocationTool
 
     public bool IsReadOnly => true;
 
+    public string ReadOnlySubjectIdPropertyName => "run_id";
+
+    public IReadOnlyList<AevatarInvocationReceiptJson.ResultPropertyRequirement> ReadOnlyResultRequirements { get; } = new[]
+    {
+        AevatarInvocationReceiptJson.StringProperty("run_id"),
+        AevatarInvocationReceiptJson.StringProperty("status"),
+    };
+
     public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
         _dispatcher.ObserveRunAsync(argumentsJson, ct);
 }
 
-internal sealed class ReadWorkflowRunArtifactTool : IAevatarInvocationTool
+internal sealed class ReadWorkflowRunArtifactTool : IAevatarInvocationReadOnlyTool
 {
     private const int DefaultTimelineTake = 50;
     private const int DefaultGraphTake = 200;
@@ -376,6 +384,14 @@ internal sealed class ReadWorkflowRunArtifactTool : IAevatarInvocationTool
         """;
 
     public bool IsReadOnly => true;
+
+    public string ReadOnlySubjectIdPropertyName => "workflow_run_id";
+
+    public IReadOnlyList<AevatarInvocationReceiptJson.ResultPropertyRequirement> ReadOnlyResultRequirements { get; } = new[]
+    {
+        AevatarInvocationReceiptJson.StringProperty("workflow_run_id"),
+        AevatarInvocationReceiptJson.StringProperty("artifact"),
+    };
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {

@@ -6,7 +6,7 @@ using Aevatar.Studio.Application.Provisioning;
 
 namespace Aevatar.AI.ToolProviders.StudioProvisioning;
 
-internal sealed class CreateStudioMemberWorkflowDraftTool : IAgentTool
+internal sealed class CreateStudioMemberWorkflowDraftTool : IStudioMutationErrorReceiptTool
 {
     private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
@@ -66,18 +66,6 @@ internal sealed class CreateStudioMemberWorkflowDraftTool : IAgentTool
     public bool IsReadOnly => false;
     public bool IsDestructive => false;
     public string SideEffectKind => "studio.workflow_draft.create";
-
-    public AgentToolReceipt? CreateResultReceipt(
-        string callId,
-        string toolName,
-        string argumentsJson,
-        string resultJson) =>
-        StudioQueryToolJson.CreateMutationErrorResultReceipt(
-            Name,
-            SideEffectKind,
-            callId,
-            toolName,
-            resultJson);
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
