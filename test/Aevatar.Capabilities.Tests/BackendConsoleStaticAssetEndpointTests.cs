@@ -1927,6 +1927,105 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         html.Should().NotContain("function bindObservatory(");
     }
 
+    [Fact]
+    public async Task AdminShell_ShouldPersistScrollByRouteAndReuseSameEmbeddedView()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name, nextName) {
+              const start = html.indexOf('function ' + name + '(');
+              const end = html.indexOf('\nfunction ' + nextName + '(', start);
+              assert.notEqual(start, -1, name + ' must exist in the served admin asset');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return html.slice(start, end);
+            }
+
+            const records = new Map();
+            const storage = {getItem(key){return records.get(key)||null;},setItem(key,value){records.set(key,value);}};
+            const context = {};
+            vm.createContext(context);
+            vm.runInContext(`
+              ${functionSource('adminRouteKey', 'readAdminViewState')}
+              ${functionSource('readAdminViewState', 'writeAdminViewState')}
+              ${functionSource('writeAdminViewState', 'canReuseEmbeddedView')}
+              ${functionSource('canReuseEmbeddedView', 'adminPaneScrollTop')}
+              ${functionSource('adminPaneScrollTop', 'captureAdminViewState')}
+              ${functionSource('replaceViewHtml', 'setAdminImmersive')}
+              ${functionSource('setAdminImmersive', 'breadcrumb')}
+            `, context);
+
+            vm.runInContext('writeAdminViewState', context)(storage, 'console:test:admin:view', '#/audit?result=failed', 540);
+            vm.runInContext('writeAdminViewState', context)(storage, 'console:test:admin:view', '#/fleet', 80);
+            assert.equal(vm.runInContext('readAdminViewState', context)(storage, 'console:test:admin:view', '#/audit?result=failed'), 540);
+            assert.equal(vm.runInContext('readAdminViewState', context)(storage, 'console:test:admin:view', '#/fleet'), 80);
+            assert.equal(vm.runInContext('canReuseEmbeddedView', context)('observatory', 'observatory', true), true);
+            assert.equal(vm.runInContext('canReuseEmbeddedView', context)('observatory', 'cqrs', true), false);
+            assert.equal(vm.runInContext('canReuseEmbeddedView', context)('observatory', 'observatory', false), false);
+            assert.equal(vm.runInContext('adminPaneScrollTop', context)({scrollTop:0,scrollHeight:100,clientHeight:100,getAttribute(){return '640';}}), 640);
+            assert.equal(vm.runInContext('adminPaneScrollTop', context)({scrollTop:0,scrollHeight:900,clientHeight:300,getAttribute(){return '640';}}), 0);
+
+            const oldScroll = {scrollTop:420};
+            const nextScroll = {scrollTop:0};
+            let replaced = false;
+            const root = {
+              matches(){ return false; },
+              querySelector(){ return replaced ? nextScroll : oldScroll; },
+              set innerHTML(value){ replaced = true; this.value = value; }
+            };
+            vm.runInContext('replaceViewHtml', context)(root, '<div class="view-scroll"></div>');
+            assert.equal(nextScroll.scrollTop, 420);
+
+            const directRoot = {
+              scrollTop:85,
+              matches(){ return false; },
+              querySelector(){ return null; },
+              set innerHTML(value){ this.scrollTop = 0; this.value = value; }
+            };
+            vm.runInContext('replaceViewHtml', context)(directRoot, '<div>updated</div>');
+            assert.equal(directRoot.scrollTop, 85);
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error);
+        html.Should().Contain("data-persistent-view=\"observatory\"");
+        html.Should().Contain(":root{--topbar-h:0px!important}");
+    }
+
+    [Fact]
+    public async Task AdminShell_ShouldMirrorObservatoryImmersiveState()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+            const start = html.indexOf('function setAdminImmersive(');
+            const end = html.indexOf('\nfunction breadcrumb(', start);
+            assert.notEqual(start, -1); assert.notEqual(end, -1);
+            const changes = [];
+            const context = {document:{body:{classList:{toggle(name,enabled){changes.push([name,enabled]);}}}}};
+            vm.createContext(context);
+            vm.runInContext(html.slice(start,end),context);
+            vm.runInContext('setAdminImmersive',context)(true);
+            assert.deepEqual(changes,[['observatory-immersive',true]]);
+            """;
+
+        var result = await RunNodeAsync(script, html);
+        result.ExitCode.Should().Be(0, result.Error);
+        html.Should().Contain("msg.type==='observatory-immersive'");
+        html.Should().Contain("body.observatory-immersive .rail");
+        html.Should().Contain("body.observatory-immersive .app-header");
+        html.Should().Contain("body.observatory-immersive #acctw");
+    }
+
 
     [Fact]
     public async Task AdminShell_CrossLinks_ShouldBridgeObservatoryCqrsAndAudit()

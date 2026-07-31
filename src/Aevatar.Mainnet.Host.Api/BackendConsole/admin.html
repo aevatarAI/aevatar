@@ -123,6 +123,12 @@ button{font-family:inherit;cursor:pointer;}
 /* ============================ View region ============================ */
 .view{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;overflow:hidden;}
 .suite-embed{flex:1 1 auto;width:100%;min-height:0;border:0;display:block;background:var(--surface);}
+body.observatory-immersive .rail,
+body.observatory-immersive .app-header,
+body.observatory-immersive #acctw{display:none!important;}
+body.observatory-immersive .console,
+body.observatory-immersive .main,
+body.observatory-immersive .view{height:100vh;}
 .view-scroll{flex:1 1 auto;min-height:0;overflow:auto;padding:var(--pad);}
 .sub-header{
   flex:0 0 auto;display:flex;align-items:center;gap:14px;flex-wrap:wrap;
@@ -1960,7 +1966,7 @@ function viewL0(){
 function fleetSkeleton(){ return '<div class="sk-bar" style="height:90px;border-radius:8px"></div>'+
   '<div class="card-wall" style="margin-top:16px">'+[0,0,0,0,0,0].map(function(){return '<div class="sk-card" style="height:200px"></div>';}).join('')+'</div>'; }
 function _fleetRemount(){ var slot=document.getElementById('app'); if(!slot) return; var sc=slot.querySelector('.view'); if(!sc) return;
-  var v=viewL0(); sc.innerHTML=v.html; if(v.mount) v.mount(sc); }
+  var v=viewL0(); replaceViewHtml(sc,v.html); if(v.mount) v.mount(sc); }
 function bindFleet(root){
   if(ACCOUNT&&ACCOUNT.admin&&!FLEET_LOADED&&!FLEET_LOADING){ loadFleet(_fleetRemount); }
   /* 看板内的下钻/排序/筛选导航统一由 foundation bindEvents（data-co / data-chip / l0sort）处理；
@@ -3160,7 +3166,7 @@ function statusBody(){
   return hero+toolbar+'<div class="st-groups">'+groups+'</div>';
 }
 function bindStatus(root){
-  function re(){ var b=root.querySelector('#status-root'); if(b) b.innerHTML=statusBody(); }
+  function re(){ var b=root.querySelector('#status-root'); if(b) replaceViewHtml(b,statusBody()); }
   function tickStamp(){ STATUS_STATE.stamp=nowStamp(); var s=root.querySelector('[data-status-stamp]'); if(s) s.textContent=STATUS_STATE.stamp; }
   function startAuto(){ if(STATUS_TIMER){clearInterval(STATUS_TIMER);} STATUS_TIMER=setInterval(function(){ loadStatus(function(){ STATUS_STATE.stamp=nowStamp(); re(); }); },5000); }
   if(STATUS_TIMER){ clearInterval(STATUS_TIMER); STATUS_TIMER=null; }
@@ -3265,7 +3271,7 @@ function viewCqrs(){
   return {html:moduleSubHeader('cqrs','')+body, mount:bindCqrs};
 }
 function _cqrsRemount(){ var slot=document.getElementById('app'); if(!slot) return; var sc=slot.querySelector('.view-scroll'); var host=sc?sc.parentNode:slot; if(!host) return;
-  var v=viewCqrs(); host.innerHTML=v.html; if(v.mount) v.mount(host); }
+  var v=viewCqrs(); replaceViewHtml(host,v.html); if(v.mount) v.mount(host); }
 function bindCqrs(root){
   if(ACCOUNT&&ACCOUNT.admin&&!CQRS_LOADED){ loadCqrs(_cqrsRemount); }
   root.addEventListener('click',function(ev){
@@ -3510,8 +3516,8 @@ function bindSchedEditor(root){
   recompute();
 }
 function bindSkills(root){
-  function reList(){ var l=root.querySelector('#skill-list'); if(l) l.innerHTML=skillList(); }
-  function reDetail(){ var d=root.querySelector('#skill-detail'); if(d){ d.innerHTML=skillDetail(); bindSchedEditor(root); }
+  function reList(){ var l=root.querySelector('#skill-list'); if(l) replaceViewHtml(l,skillList()); }
+  function reDetail(){ var d=root.querySelector('#skill-detail'); if(d){ replaceViewHtml(d,skillDetail()); bindSchedEditor(root); }
     var p=root.querySelector('#skills-pane'); if(p) p.classList.toggle('show-detail', !!SKILL_STATE.mobileDetail); }
   function capture(){
     var pr=root.querySelector('#sk-prompt'); if(pr) SKILL_STATE.invoke.prompt=pr.value;
@@ -3640,7 +3646,7 @@ function viewSchedules(){
       /* re() 同时承担轮询自停职责：SPA 的 render() 切视图时只替换 #app.innerHTML，不做全局 timer
          拆除，所以一旦本视图的 #schedules-root 不在文档里（已离开排班页），就停掉 3s 轮询，避免后台泄漏。 */
       function re(){ var b=document.getElementById('schedules-root');
-        if(!b){ schedStopPoll(); return; } b.innerHTML=schedulesBody(); }
+        if(!b){ schedStopPoll(); return; } replaceViewHtml(b,schedulesBody()); }
       loadSchedules(re);
       schedStartPoll(re);                 /* 3s 轮询：对齐真实只读 /schedules 页 */
       root.addEventListener('click',function(ev){ var act=ev.target.closest('[data-act]'); if(!act||act.hasAttribute('disabled'))return; var a=act.getAttribute('data-act');
@@ -3687,30 +3693,38 @@ function viewVoice(){
 
 /* ---------------- 模块分发 ---------------- */
 /* 内嵌真页(同源共享 token);onload 注入 CSS 隐藏真页自带 .topbar(brand+suite-nav),消除与 /admin 左栏的双层导航。 */
-function embedTrim(f){ try{ var d=f.contentDocument; if(d&&d.head){ var s=d.createElement('style'); s.textContent='.topbar{display:none!important}'; d.head.appendChild(s); } }catch(e){} }
-function suiteFrame(src,title){ return '<iframe class="suite-embed" src="'+src+'" title="'+title+'" data-console-frame="1" onload="embedTrim(this)"></iframe>'; }
+function embedTrim(f){ try{ var d=f.contentDocument; if(d&&d.head){ var s=d.createElement('style'); s.textContent=':root{--topbar-h:0px!important}.topbar{display:none!important}'; d.head.appendChild(s); } }catch(e){} }
+function suiteFrame(src,title){
+  var path=src.split('?')[0],key=path==='/workflow/observatory'?'observatory':path.replace(/^\/+|\/+$/g,'').replace(/\//g,'-');
+  return '<iframe class="suite-embed" src="'+src+'" title="'+title+'" data-console-frame="1" data-persistent-view="'+key+'" data-frame-source="'+src+'" onload="embedTrim(this)"></iframe>';
+}
 function observatoryFrameSource(){
   var q=parseHash().q||{},p=new URLSearchParams();
   ['scope','status','origin','definition','schedule','from','to','run','tab'].forEach(function(key){if(q[key])p.set(key,q[key]);});
   return '/workflow/observatory'+(p.toString()?'?'+p.toString():'');
 }
-function viewObservatoryFrame(){ return {html:suiteFrame(observatoryFrameSource(),'运行观测台')}; }
+function viewObservatoryFrame(){ var src=observatoryFrameSource(); return {html:suiteFrame(src,'运行观测台'),persistentKey:'observatory',frameSource:src}; }
 function observatoryHash(query){
   var p=new URLSearchParams(); ['scope','status','origin','definition','schedule','from','to','run','tab'].forEach(function(key){var value=query&&query[key];if(value&&!(key==='scope'&&value==='mine')&&!(key==='tab'&&value==='timeline'))p.set(key,value);});
   return '#/observatory'+(p.toString()?'?'+p.toString():'');
 }
-function syncObservatoryHash(query){ history.replaceState(null,'',location.pathname+location.search+observatoryHash(query)); }
+function syncObservatoryHash(query){
+  history.replaceState(null,'',location.pathname+location.search+observatoryHash(query));
+  var frame=document.querySelector('[data-persistent-view="observatory"]');
+  if(frame) frame.setAttribute('data-frame-source',observatoryFrameSource());
+  _renderedRouteKey=adminRouteKey(location.hash);
+}
 function viewCqrs(){
   if(!(ACCOUNT&&ACCOUNT.admin)) return {html:moduleSubHeader('cqrs','')+'<div class="view-scroll">'+auth403('CQRS 投影管道仅平台管理员可见。')+'</div>'};
   var q=parseHash().q||{},p=new URLSearchParams();
   if(q.owner) p.set('owner',q.owner);
   if(q.family||q.fam) p.set('family',q.family||q.fam);
   var src='/cqrs'+(p.toString()?'?'+p.toString():'');
-  return {html:suiteFrame(src,'投影管道 CQRS')};
+  return {html:suiteFrame(src,'投影管道 CQRS'),persistentKey:'cqrs',frameSource:src};
 }
-function viewStudio(){ return {html:suiteFrame('/workflow/studio','编排工作台')}; }
-function viewChannels(){ return {html:suiteFrame('/channels','通道接入')}; }
-function viewVoice(){ return {html:suiteFrame('/voice','语音台')}; }
+function viewStudio(){ return {html:suiteFrame('/workflow/studio','编排工作台'),persistentKey:'workflow-studio',frameSource:'/workflow/studio'}; }
+function viewChannels(){ return {html:suiteFrame('/channels','通道接入'),persistentKey:'channels',frameSource:'/channels'}; }
+function viewVoice(){ return {html:suiteFrame('/voice','语音台'),persistentKey:'voice',frameSource:'/voice'}; }
 
 /* ================= ⑩ 审计日志 Audit Trail —— /api/audit/trail =================
    真实接口（最新优先的 cursor 分页，无 totalCount）：scope 三态 —— mine（调用者自身 scope，默认）、
@@ -3979,7 +3993,7 @@ function viewAudit(){
 }
 function bindAudit(root){
   var rb=root.querySelector('#audit-root');
-  function re(){ if(rb) rb.innerHTML=auditRoot(); }
+  function re(){ if(rb) replaceViewHtml(rb,auditRoot()); }
   AUDIT_RERENDER=re;
   if(!AUDIT_LOADING) loadAuditTrail();
   function detailFor(id){
@@ -4096,6 +4110,7 @@ function opsView(module){
    ========================================================================= */
 var STATE={l0Sort:'health',l0Filter:null,l0Range:'today',l1Sub:'roster',l1Status:null,l2Mode:'emp',search:'',collapsed:{},railCollapsed:false};
 var _focusSearch=false;
+var ADMIN_VIEW_KEY=OIDC.storageKey+':admin:view',_renderedRouteKey='',_renderedModule='';
 
 /* ---------- hash parsing / building ---------- */
 function parseHash(){
@@ -4118,6 +4133,52 @@ function setQuery(patch){
   location.hash=buildHash(s.parts,q);
 }
 function navigate(parts,q){ location.hash=buildHash(parts,q||{}); }
+function adminRouteKey(hash){ return String(hash||'#/').replace(/^#?/, '#'); }
+function readAdminViewState(storage,key,route){
+  try{ var all=JSON.parse(storage.getItem(key)||'{}'); return Math.max(0,Number(all[adminRouteKey(route)])||0); }catch(e){ return 0; }
+}
+function writeAdminViewState(storage,key,route,scrollTop){
+  try{ var all={}; try{ all=JSON.parse(storage.getItem(key)||'{}')||{}; }catch(e){}
+    var keys=Object.keys(all); if(keys.length>60) keys.slice(0,keys.length-60).forEach(function(k){delete all[k];});
+    all[adminRouteKey(route)]=Math.max(0,Number(scrollTop)||0); storage.setItem(key,JSON.stringify(all));
+  }catch(e){}
+}
+function canReuseEmbeddedView(currentKey,nextKey,persistent){ return !!persistent&&!!currentKey&&currentKey===nextKey; }
+function adminPaneScrollTop(pane){
+  if(!pane) return 0;
+  var live=Math.max(0,Number(pane.scrollTop)||0);
+  var restored=Math.max(0,Number(pane.getAttribute&&pane.getAttribute('data-restored-scroll'))||0);
+  return live===0&&Number(pane.scrollHeight)<=Number(pane.clientHeight)?restored:live;
+}
+function captureAdminViewState(route){
+  var scroll=document.querySelector('#app .view-scroll');
+  if(scroll){
+    var position=adminPaneScrollTop(scroll);
+    if(scroll.setAttribute) scroll.setAttribute('data-restored-scroll',String(position));
+    writeAdminViewState(sessionStorage,ADMIN_VIEW_KEY,route,position);
+  }
+}
+function restoreAdminViewState(route){
+  var scroll=document.querySelector('#app .view-scroll');
+  if(scroll){
+    var position=readAdminViewState(sessionStorage,ADMIN_VIEW_KEY,route);
+    scroll.scrollTop=position;
+    if(scroll.setAttribute) scroll.setAttribute('data-restored-scroll',String(position));
+  }
+}
+function replaceViewHtml(root,html){
+  if(!root) return;
+  var oldScroll=root.matches&&root.matches('.view-scroll')?root:(root.querySelector('.view-scroll')||(('scrollTop' in root)?root:null));
+  var scrollTop=adminPaneScrollTop(oldScroll);
+  if(oldScroll&&oldScroll.setAttribute) oldScroll.setAttribute('data-restored-scroll',String(scrollTop));
+  root.innerHTML=html;
+  var nextScroll=root.matches&&root.matches('.view-scroll')?root:(root.querySelector('.view-scroll')||(('scrollTop' in root)?root:null));
+  if(nextScroll){
+    nextScroll.scrollTop=scrollTop;
+    if(nextScroll.setAttribute) nextScroll.setAttribute('data-restored-scroll',String(scrollTop));
+  }
+}
+function setAdminImmersive(enabled){ document.body.classList.toggle('observatory-immersive',!!enabled); }
 
 /* ---------- breadcrumb（模块名 / 模块内路径） ---------- */
 function breadcrumb(module, rest){
@@ -4159,9 +4220,24 @@ function renderShell(module, rest, body){
     '</div>'+
   '</div>';
 }
+function renderShellHeader(module,rest){
+  return '<header class="app-header">'+
+    '<button class="hamburger" data-act="railOpen" aria-label="菜单">≡</button>'+
+    breadcrumb(module,rest)+
+    '<div class="header-right">'+
+      '<div class="search" role="search"><span>'+ICON.search+'</span><input placeholder="搜索 run / 技能 / 通道…" data-act="globalSearch"></div>'+
+      '<span class="live-badge" data-tip="活数据：随 AGUI SSE 跳动"><i class="live-dot"></i>live · AGUI</span>'+
+      '<span class="stamp" data-tip="readmodel：最终一致快照">更新于 <span class="num" data-stamp>'+nowStamp()+'</span></span>'+
+      '<button class="ibtn" data-act="srcLegend" aria-label="数据来源说明">ⓘ 来源</button>'+
+      '<button class="ibtn" data-act="refresh" aria-label="刷新">'+ICON.refresh+'</button>'+
+    '</div>'+
+  '</header>';
+}
 
 /* ---------- render ---------- */
 function render(){
+  var nextRouteKey=adminRouteKey(location.hash);
+  if(_renderedRouteKey) captureAdminViewState(_renderedRouteKey);
   var s=parseHash(), parts=s.parts, q=s.q;
   /* derive URL-backed state */
   STATE.l0Sort=q.sort||'health'; STATE.l0Filter=q.filter||null; STATE.l0Range=q.range||'today';
@@ -4183,8 +4259,19 @@ function render(){
 
   var app=document.getElementById('app');
   app.setAttribute('aria-busy','false');
-  app.innerHTML=renderShell(module, rest, v.html);
-  if(v.mount) v.mount(app.querySelector('.view')||app);
+  var persistent=app.querySelector('[data-persistent-view]');
+  if(canReuseEmbeddedView(persistent&&persistent.getAttribute('data-persistent-view'),v.persistentKey,_renderedModule===module)){
+    var shell=app.querySelector('#console-shell'),header=app.querySelector('.app-header'),rail=app.querySelector('.rail');
+    if(shell) shell.classList.toggle('rail-collapsed',STATE.railCollapsed);
+    if(header) header.outerHTML=renderShellHeader(module,rest);
+    if(rail) rail.outerHTML=renderRail(module);
+    if(persistent.getAttribute('data-frame-source')!==v.frameSource){ persistent.src=v.frameSource; persistent.setAttribute('data-frame-source',v.frameSource); }
+  }else{
+    app.innerHTML=renderShell(module, rest, v.html);
+    if(v.mount) v.mount(app.querySelector('.view')||app);
+  }
+  _renderedRouteKey=nextRouteKey; _renderedModule=module;
+  restoreAdminViewState(nextRouteKey);
 
   if(_focusSearch){ var si=app.querySelector('[data-act="l1search"]'); if(si){ si.focus(); var val=si.value; si.value=''; si.value=val; } _focusSearch=false; }
 }
@@ -4272,6 +4359,7 @@ function bindEvents(){
     if(msg.type==='auth-required'){ showLoginGate(msg.reason||'登录已过期，请重新使用 NyxID 登录。'); return; }
     if(msg.type==='login-request'){ beginLogin(msg.resources,msg.tokenPurpose); }
     if(msg.type==='observatory-route'){ syncObservatoryHash(msg.query||{}); }
+    if(msg.type==='observatory-immersive'){ setAdminImmersive(msg.enabled); }
     if(msg.type==='navigate'&&['cqrs','audit'].indexOf(msg.module)>=0){ navigate([msg.module],msg.query||{}); }
   });
   document.addEventListener('click',function(ev){
@@ -4355,7 +4443,7 @@ function bindEvents(){
     if(_srcPopEl){ closeSrcPop(); return; }
   });
 
-  window.addEventListener('hashchange',function(){ if(_drawerCtx) closeDrawer(); if(_srcPopEl) closeSrcPop(); render(); });
+  window.addEventListener('hashchange',function(){ if(_drawerCtx) closeDrawer(); if(_srcPopEl) closeSrcPop(); setAdminImmersive(false); render(); });
 }
 
 /* ---------- live stamp tick (simulated AGUI SSE heartbeat) ---------- */
@@ -4406,6 +4494,7 @@ function renderAcctW(){
   render(); renderAcctW();
   refreshAccount().then(function(){ if(ACCOUNT) render(); renderAcctW(); });
 })();
+window.addEventListener('pagehide',function(){ captureAdminViewState(_renderedRouteKey||adminRouteKey(location.hash)); });
 
 </script>
 </body>
