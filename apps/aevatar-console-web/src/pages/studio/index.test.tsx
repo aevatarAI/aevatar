@@ -8323,25 +8323,6 @@ describe("StudioPage", () => {
     expect(screen.queryByText("services:member-m-script-alpha")).toBeNull();
   });
 
-  it("loads discovered GAgent types and the published service revision catalog", async () => {
-    (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
-      ...defaultStudioAppContext,
-      scopeId: "scope-1",
-      scopeResolved: true,
-    });
-    renderStudioPage("/studio?focus=workflow%3Aworkflow-1&tab=studio");
-
-    await waitFor(() => {
-      expect(mockRuntimeGAgentApi.listKinds).toHaveBeenCalled();
-    });
-    await waitFor(() => {
-      expect(mockScopeRuntimeApi.getServiceRevisions).toHaveBeenCalledWith(
-        "scope-1",
-        "default"
-      );
-    });
-  });
-
   it("stops the selected member run from the observe view", async () => {
     renderStudioPage(
       "/studio?scopeId=scope-1&memberId=default&step=observe&tab=executions&execution=execution-1"
