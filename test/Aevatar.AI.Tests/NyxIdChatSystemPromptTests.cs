@@ -106,6 +106,10 @@ public class NyxIdChatSystemPromptTests
         prompt.Should().Contain("`SERVICE_REGISTRATION_REQUIRED`");
         prompt.Should().Contain("must not fabricate a missing-service blocker");
         prompt.Should().Contain("does not create a pending approval");
+        prompt.Should().Contain("catalog definitions are not connected UserServices");
+        prompt.Should().Contain("after resolving its exact catalog slug, call `nyxid_require_service`");
+        prompt.Should().Contain("Never replace this typed handoff with NyxID CLI commands");
+        prompt.Should().Contain("credential instructions");
     }
 
     [Fact]

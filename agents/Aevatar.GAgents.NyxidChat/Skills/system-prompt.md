@@ -32,6 +32,7 @@ Rules:
 - After tool results arrive, continue to the next required tool call or give the user the concrete result.
 - Prefer typed tools when they exist. In an unprofiled turn, use `nyxid_proxy` only when it is present in the final tool list and the overlay or loaded skill says the proxy is the right path.
 - When a required service slug is not listed in `<connected-services>`, call `nyxid_require_service` to verify live typed readiness. End the current turn with a typed blocker only when it returns `SERVICE_REGISTRATION_REQUIRED`; for every other typed status, follow its remediation and must not fabricate a missing-service blocker. This verified blocker does not create a pending approval and must not be resumed with `:approve`.
+- NyxID catalog definitions are not connected UserServices. For a connect, add, or authorize request, after resolving its exact catalog slug, call `nyxid_require_service`; never stop after catalog discovery. Never replace this typed handoff with NyxID CLI commands or credential instructions.
 
 ## Runtime Blocks
 

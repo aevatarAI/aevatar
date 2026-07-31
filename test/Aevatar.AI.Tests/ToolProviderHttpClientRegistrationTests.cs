@@ -1,7 +1,9 @@
 using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.CodexExecution;
+using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.Auditing;
 using Aevatar.AI.ToolProviders.ChronoStorage;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
@@ -185,7 +187,7 @@ public sealed class ToolProviderHttpClientRegistrationTests
     }
 
     [Fact]
-    public async Task NyxIdRequireServiceTool_ShouldNotBlock_WhenServiceIsAlreadyVisible()
+    public async Task NyxIdRequireServiceTool_ShouldCreateSuccessReceipt_WhenServiceIsAlreadyVisible()
     {
         var handler = new StubUserServiceListHandler("""{ "keys": [{ "id": "us-github-alpha", "slug": "api-github" }] }""");
         var tool = CreateRequireServiceTool(handler);
@@ -196,9 +198,46 @@ public sealed class ToolProviderHttpClientRegistrationTests
         try
         {
             var result = await tool.ExecuteAsync(arguments);
+            var receipt = tool.CreateResultReceipt("call-1", tool.Name, arguments, result);
 
             result.Should().Contain("\"blocked\":false");
-            tool.CreateResultReceipt("call-1", tool.Name, arguments, result).Should().BeNull();
+            receipt.Should().NotBeNull();
+            receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+            receipt.ResultJson.Should().Be(result);
+            receipt.AuthorizationRequired.Should().BeNull();
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = previous;
+        }
+    }
+
+    [Fact]
+    public async Task NyxIdRequireServiceTool_ShouldFinalizeReadyServiceAsVerifiedSuccess()
+    {
+        var handler = new StubUserServiceListHandler("""{ "keys": [{ "id": "us-github-alpha", "slug": "api-github" }] }""");
+        var tool = CreateRequireServiceTool(handler);
+        const string arguments = """{"service_slug":"api-github"}""";
+
+        var previous = AgentToolRequestContext.Current;
+        AgentToolRequestContext.Current = CapabilityContext();
+        try
+        {
+            var result = await tool.ExecuteAsync(arguments);
+            var finalized = ToolCallReceiptFinalizer.Finalize(new ToolCallContext
+            {
+                Tool = tool,
+                ToolName = tool.Name,
+                ToolCallId = "call-1",
+                ArgumentsJson = arguments,
+                Result = result,
+            });
+
+            finalized.IsSynthetic.Should().BeFalse();
+            finalized.Receipt.Status.Should().Be(AgentToolReceiptStatus.Success);
+            finalized.Receipt.ErrorCode.Should().NotBe(ToolCallReceiptFinalizer.UnknownErrorCode);
+            finalized.Receipt.ResultJson.Should().Be(result);
+            finalized.Receipt.AuthorizationRequired.Should().BeNull();
         }
         finally
         {

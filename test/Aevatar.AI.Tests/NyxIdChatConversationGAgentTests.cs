@@ -382,7 +382,7 @@ public sealed class NyxIdChatConversationGAgentTests
     }
 
     [Fact]
-    public async Task CanonicalProfiledServiceConnect_ShouldCommitOneRichCardAndBlockedTerminal()
+    public async Task NaturalProfiledServiceConnect_ShouldCommitOneRichCardAndBlockedTerminal()
     {
         const string conversationActorId = "conversation-profiled-connect";
         const string selectedSkillPrompt =
@@ -396,7 +396,9 @@ public sealed class NyxIdChatConversationGAgentTests
             new CanonicalProfileTool("nyxid_catalog"),
             requireService,
         ];
-        var classifier = new FixedProfileClassifier("service_connect");
+        var classifierProvider = new NaturalServiceConnectClassifierProvider();
+        var classifier = new StreamingAgentProfileTurnClassifier(
+            new FixedLlmProviderFactory(classifierProvider));
         var materializer = new AgentProfileTurnCatalogMaterializer(
             new FixedToolSetRegistry("profile.route", new FixedToolSource(routeTools)),
             classifier,
@@ -456,7 +458,7 @@ public sealed class NyxIdChatConversationGAgentTests
         await agent.ActivateAsync();
         var start = CreateStartTurnCommand();
         start.ConversationActorId = conversationActorId;
-        start.Prompt = "我要连一下 github";
+        start.Prompt = "我要连接 AWS Cost Explorer";
         await agent.HandleEventAsync(CreateEnvelope(
             conversationActorId,
             new NyxIdChatConversationCreateCommand
@@ -498,8 +500,19 @@ public sealed class NyxIdChatConversationGAgentTests
             CancellationToken.None);
         await agent.HandleEventAsync(CreateEnvelope(conversationActorId, toolExecution.Result));
 
-        classifier.Requests.Should().ContainSingle().Which.UserMessage
-            .Should().Be("我要连一下 github");
+        var classifierRequest = classifierProvider.Requests.Should().ContainSingle().Which;
+        classifierRequest.Messages.Single(static message => message.Role == "system").Content.Should()
+            .Contain("final requested outcome")
+            .And.Contain("external_handoff")
+            .And.Contain("read_only");
+        var classificationInput = classifierRequest.Messages
+            .Single(static message => message.Role == "user").Content;
+        using var classificationDocument = JsonDocument.Parse(classificationInput!);
+        classificationDocument.RootElement.GetProperty("user_message").GetString()
+            .Should().Be("我要连接 AWS Cost Explorer");
+        classificationDocument.RootElement.GetProperty("intents").GetArrayLength().Should().Be(1);
+        classificationDocument.RootElement.GetProperty("intents")[0]
+            .GetProperty("side_effect_class").GetString().Should().Be("external_handoff");
         var llmRequest = provider.Requests.Should().ContainSingle().Which;
         llmRequest.Tools.Should().HaveCount(routeTools.Length);
         foreach (var tool in routeTools)
@@ -516,7 +529,7 @@ public sealed class NyxIdChatConversationGAgentTests
             .Should().ContainSingle().Which.EventData.Unpack<NyxIdChatActionRequestedEvent>();
         action.Request.SchemaVersion.Should().Be(4);
         action.Request.Action.Should().Be(NyxIdAssistantActionKind.ServiceConnect);
-        action.Request.Params.CatalogServiceConnect.ServiceSlug.Should().Be("api-github");
+        action.Request.Params.CatalogServiceConnect.ServiceSlug.Should().Be("aws-cost-explorer");
         action.OriginTurn.Status.Should().Be(NyxIdChatTurnStatus.Blocked);
         action.OriginTurn.FailureCode.Should().Be(NyxIdChatBrowserActions.ActionRequested);
         action.Task.Status.Should().Be(NyxIdChatTaskStatus.Blocked);
@@ -537,7 +550,7 @@ public sealed class NyxIdChatConversationGAgentTests
             .Unpack<NyxIdAssistantActionRequestWirePayload>();
         wirePayload.SchemaVersion.Should().Be(4);
         wirePayload.Action.Should().Be("service.connect");
-        wirePayload.Params.CatalogService.ServiceSlug.Should().Be("api-github");
+        wirePayload.Params.CatalogService.ServiceSlug.Should().Be("aws-cost-explorer");
         var finishedFrames = frames.Where(static frame => frame.RunFinished is not null).ToArray();
         finishedFrames.Should().ContainSingle().Which.RunFinished.Status
             .Should().Be(RunCompletionStatus.Blocked);
@@ -3492,17 +3505,30 @@ public sealed class NyxIdChatConversationGAgentTests
                 GAgentActorRegistryCommandStage.AdmissionRemoved));
     }
 
-    private sealed class FixedProfileClassifier(string intentId) : IAgentProfileTurnClassifier
+    private sealed class FixedLlmProviderFactory(ILLMProvider provider) : ILLMProviderFactory
     {
-        public List<AgentProfileTurnClassificationRequest> Requests { get; } = [];
+        public ILLMProvider GetProvider(string name) => provider;
+        public ILLMProvider GetDefault() => provider;
+        public IReadOnlyList<string> GetAvailableProviders() => [provider.Name];
+    }
 
-        public Task<AgentProfileTurnClassificationResult> ClassifyAsync(
-            AgentProfileTurnClassificationRequest request,
-            CancellationToken ct = default)
+    private sealed class NaturalServiceConnectClassifierProvider : ILLMProvider
+    {
+        public string Name => "natural-service-connect-classifier-test";
+        public List<LLMRequest> Requests { get; } = [];
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             Requests.Add(request);
-            return Task.FromResult(AgentProfileTurnClassificationResult.Matched(intentId));
+            yield return new LLMStreamChunk
+            {
+                DeltaContent = "{\"status\":\"matched\",\"intent_id\":\"service_connect\"}",
+                IsLast = true,
+            };
+            await Task.CompletedTask;
         }
     }
 
@@ -3580,7 +3606,7 @@ public sealed class NyxIdChatConversationGAgentTests
             ct.ThrowIfCancellationRequested();
             ExecutionCount++;
             return Task.FromResult(
-                "{\"blocked\":true,\"service_slug\":\"api-github\",\"reason_code\":\"NYXID_SERVICE_REGISTRATION_REQUIRED\"}");
+                "{\"blocked\":true,\"service_slug\":\"aws-cost-explorer\",\"reason_code\":\"NYXID_SERVICE_REGISTRATION_REQUIRED\"}");
         }
 
         public AgentToolReceipt? CreateResultReceipt(
@@ -3597,9 +3623,9 @@ public sealed class NyxIdChatConversationGAgentTests
                 ErrorMessage = "Connect GitHub to continue.",
                 AuthorizationRequired = new NyxIdAuthorizationRequiredEvent
                 {
-                    ServiceSlug = "api-github",
+                    ServiceSlug = "aws-cost-explorer",
                     ReasonCode = "NYXID_SERVICE_REGISTRATION_REQUIRED",
-                    SafeMessage = "Connect GitHub to continue.",
+                    SafeMessage = "Connect AWS Cost Explorer to continue.",
                 },
             };
     }
@@ -3623,9 +3649,9 @@ public sealed class NyxIdChatConversationGAgentTests
             {
                 DeltaToolCall = new ToolCall
                 {
-                    Id = "call-require-github",
+                    Id = "call-require-aws-cost-explorer",
                     Name = "nyxid_require_service",
-                    ArgumentsJson = "{\"service_slug\":\"api-github\"}",
+                    ArgumentsJson = "{\"service_slug\":\"aws-cost-explorer\"}",
                 },
             };
             await Task.CompletedTask;
