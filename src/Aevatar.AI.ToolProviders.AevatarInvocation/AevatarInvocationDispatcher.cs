@@ -87,6 +87,7 @@ public sealed class AevatarInvocationDispatcher
     private readonly IGAgentRunTerminalQueryPort _terminalQueryPort;
     private readonly IWorkflowExecutionQueryApplicationService _workflowQueryService;
     private readonly IWorkflowRunBackgroundDeliveryRegistrationPort? _workflowRunDeliveryRegistrationPort;
+    private readonly IScopeWorkflowQueryPort? _scopeWorkflowQueryPort;
     private readonly ILogger<AevatarInvocationDispatcher> _logger;
 
     public AevatarInvocationDispatcher(
@@ -103,7 +104,8 @@ public sealed class AevatarInvocationDispatcher
         IGAgentRunTerminalQueryPort terminalQueryPort,
         IWorkflowExecutionQueryApplicationService workflowQueryService,
         IWorkflowRunBackgroundDeliveryRegistrationPort? workflowRunDeliveryRegistrationPort = null,
-        ILogger<AevatarInvocationDispatcher>? logger = null)
+        ILogger<AevatarInvocationDispatcher>? logger = null,
+        IScopeWorkflowQueryPort? scopeWorkflowQueryPort = null)
     {
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
         _actorRegistryQueryPort = actorRegistryQueryPort ?? throw new ArgumentNullException(nameof(actorRegistryQueryPort));
@@ -118,6 +120,7 @@ public sealed class AevatarInvocationDispatcher
         _terminalQueryPort = terminalQueryPort ?? throw new ArgumentNullException(nameof(terminalQueryPort));
         _workflowQueryService = workflowQueryService ?? throw new ArgumentNullException(nameof(workflowQueryService));
         _workflowRunDeliveryRegistrationPort = workflowRunDeliveryRegistrationPort;
+        _scopeWorkflowQueryPort = scopeWorkflowQueryPort;
         _logger = logger ?? NullLogger<AevatarInvocationDispatcher>.Instance;
     }
 
@@ -446,11 +449,13 @@ public sealed class AevatarInvocationDispatcher
             return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(callerCredential.Error), callerCredential.Error);
 
         var metadata = BuildPayloadHeaders(request.Inputs.Headers);
-        var source = workflowYamls is { Length: > 0 }
-            ? WorkflowChatSource.InlineYamlBundle(workflowYamls, workflowName, actorId)
-            : string.IsNullOrWhiteSpace(actorId)
-                ? WorkflowChatSource.CatalogWorkflow(workflowName)
-                : WorkflowChatSource.DefinitionActor(actorId, workflowName);
+        var source = await ResolveWorkflowStartSourceAsync(
+                scope.Value!.ScopeId,
+                workflowName,
+                actorId,
+                workflowYamls,
+                ct)
+            .ConfigureAwait(false);
         var command = new WorkflowChatRunRequest(
             Prompt: request.Inputs.Prompt,
             Source: source,
@@ -468,6 +473,58 @@ public sealed class AevatarInvocationDispatcher
             scope.Value!.ScopeId,
             backgroundDelivery,
             ct);
+    }
+
+    private async ValueTask<WorkflowChatSource> ResolveWorkflowStartSourceAsync(
+        string scopeId,
+        string workflowName,
+        string? actorId,
+        string[]? workflowYamls,
+        CancellationToken ct)
+    {
+        if (workflowYamls is { Length: > 0 })
+            return WorkflowChatSource.InlineYamlBundle(workflowYamls, workflowName, actorId);
+
+        if (!string.IsNullOrWhiteSpace(actorId))
+            return WorkflowChatSource.DefinitionActor(actorId, workflowName);
+
+        var scopeWorkflow = await TryResolveScopeWorkflowAsync(scopeId, workflowName, ct).ConfigureAwait(false);
+        if (scopeWorkflow is not null)
+        {
+            var resolvedWorkflowName = string.IsNullOrWhiteSpace(scopeWorkflow.WorkflowName)
+                ? null
+                : scopeWorkflow.WorkflowName.Trim();
+            return WorkflowChatSource.DefinitionActor(scopeWorkflow.ActorId.Trim(), resolvedWorkflowName);
+        }
+
+        return WorkflowChatSource.CatalogWorkflow(workflowName);
+    }
+
+    private async ValueTask<ScopeWorkflowSummary?> TryResolveScopeWorkflowAsync(
+        string scopeId,
+        string workflowId,
+        CancellationToken ct)
+    {
+        if (_scopeWorkflowQueryPort is null)
+            return null;
+
+        try
+        {
+            var lookup = await _scopeWorkflowQueryPort.LookupByWorkflowIdAsync(scopeId, workflowId, ct)
+                .ConfigureAwait(false);
+            if (lookup.IsRunnable && !string.IsNullOrWhiteSpace(lookup.Workflow!.ActorId))
+                return lookup.Workflow;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                ex,
+                "Scope workflow lookup failed before workflow start: scopeId={ScopeId} workflowId={WorkflowId}",
+                scopeId,
+                workflowId);
+        }
+
+        return null;
     }
 
     private async Task<ChatRunToolCompletionRequest> DispatchWorkflowForChatRunAsync(

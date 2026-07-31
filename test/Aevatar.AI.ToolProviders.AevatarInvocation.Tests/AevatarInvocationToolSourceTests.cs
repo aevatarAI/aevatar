@@ -1544,6 +1544,44 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
+    public async Task StartWorkflow_ShouldResolveScopeWorkflowIdToDefinitionActorSource()
+    {
+        var harness = new Harness();
+        harness.ScopeWorkflowQuery.Workflows["98a81d707d4f4294b9b06f61a9fa8ac0"] = new ScopeWorkflowSummary(
+            "scope-1",
+            "98a81d707d4f4294b9b06f61a9fa8ac0",
+            "Invoice PDF Workflow",
+            "scope-1:aevatar:workflows:98a81d707d4f4294b9b06f61a9fa8ac0",
+            "invoice_pdf_workflow",
+            "workflow-definition-actor-98a81d707d4f4294b9b06f61a9fa8ac0",
+            "revision-1",
+            "deployment-1",
+            "Active",
+            DateTimeOffset.UtcNow);
+        harness.WorkflowDispatch.Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
+            .Success(new WorkflowChatRunAcceptedReceipt("workflow-run-actor", "invoice_pdf_workflow", "wf-command", "wf-correlation"));
+        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
+
+        using var _ = PushContext(callId: "call-scope-workflow");
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_id": "98a81d707d4f4294b9b06f61a9fa8ac0",
+              "inputs": { "prompt": "process pdf" },
+              "wait": "stream"
+            }
+            """);
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        harness.ScopeWorkflowQuery.Lookups.Should().ContainSingle()
+            .Which.Should().Be(("scope-1", "98a81d707d4f4294b9b06f61a9fa8ac0"));
+        harness.WorkflowDispatch.Command.Should().NotBeNull();
+        harness.WorkflowDispatch.Command!.Source.Kind.Should().Be(WorkflowChatSourceKind.DefinitionActor);
+        harness.WorkflowDispatch.Command.Source.ActorId.Should()
+            .Be("workflow-definition-actor-98a81d707d4f4294b9b06f61a9fa8ac0");
+        harness.WorkflowDispatch.Command.Source.WorkflowName.Should().Be("invoice_pdf_workflow");
+    }
+
+    [Fact]
     public async Task StartWorkflow_ShouldUseOwnerScope_WhenLarkChannelCarriesOwnerScope()
     {
         var harness = new Harness();
@@ -3644,6 +3682,7 @@ public sealed class AevatarInvocationToolSourceTests
         public RecordingServiceRunQueryPort ServiceRunQuery { get; } = new();
         public RecordingTerminalQueryPort TerminalQuery { get; } = new();
         public StubWorkflowExecutionQueryService WorkflowQuery { get; } = new();
+        public RecordingScopeWorkflowQueryPort ScopeWorkflowQuery { get; } = new();
         public RecordingWorkflowRunBindingReader RunBindingReader { get; } = new();
 
         public Harness()
@@ -3669,7 +3708,8 @@ public sealed class AevatarInvocationToolSourceTests
                 ServiceRunQuery,
                 TerminalQuery,
                 WorkflowQuery,
-                withWorkflowRunDeliveryRegistrationPort ? WorkflowRunDelivery : null);
+                withWorkflowRunDeliveryRegistrationPort ? WorkflowRunDelivery : null,
+                scopeWorkflowQueryPort: ScopeWorkflowQuery);
 
         public void ConfigureServiceTarget(
             ServiceImplementationKind implementationKind,
@@ -3757,6 +3797,7 @@ public sealed class AevatarInvocationToolSourceTests
             services.AddSingleton<IServiceRunQueryPort>(ServiceRunQuery);
             services.AddSingleton<IGAgentRunTerminalQueryPort>(TerminalQuery);
             services.AddSingleton<IWorkflowExecutionQueryApplicationService>(WorkflowQuery);
+            services.AddSingleton<IScopeWorkflowQueryPort>(ScopeWorkflowQuery);
             services.AddSingleton<IWorkflowRunBindingReader>(RunBindingReader);
             services.AddSingleton<IWorkflowRunBackgroundDeliveryRegistrationPort>(WorkflowRunDelivery);
         }
@@ -3902,6 +3943,48 @@ public sealed class AevatarInvocationToolSourceTests
                 GAgentDraftRunCompletionStatus.RunFinished,
                 true);
         }
+    }
+
+    private sealed class RecordingScopeWorkflowQueryPort : IScopeWorkflowQueryPort
+    {
+        public Dictionary<string, ScopeWorkflowSummary> Workflows { get; } = new(StringComparer.Ordinal);
+        public List<(string ScopeId, string WorkflowId)> Lookups { get; } = [];
+
+        public Task<IReadOnlyList<ScopeWorkflowSummary>> ListAsync(
+            string scopeId,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<ScopeWorkflowSummary>>(Workflows.Values
+                .Where(workflow => string.Equals(workflow.ScopeId, scopeId, StringComparison.Ordinal))
+                .ToArray());
+
+        public Task<ScopeWorkflowLookupResult> LookupByWorkflowIdAsync(
+            string scopeId,
+            string workflowId,
+            CancellationToken ct = default)
+        {
+            Lookups.Add((scopeId, workflowId));
+            return Task.FromResult(Workflows.TryGetValue(workflowId, out var workflow) &&
+                                   string.Equals(workflow.ScopeId, scopeId, StringComparison.Ordinal)
+                ? new ScopeWorkflowLookupResult(ScopeWorkflowLookupStatus.Runnable, workflow, "runnable")
+                : new ScopeWorkflowLookupResult(ScopeWorkflowLookupStatus.NotFound, null, "service_catalog_missing"));
+        }
+
+        public Task<ScopeWorkflowSummary?> GetByWorkflowIdAsync(
+            string scopeId,
+            string workflowId,
+            CancellationToken ct = default) =>
+            Task.FromResult(Workflows.TryGetValue(workflowId, out var workflow) &&
+                            string.Equals(workflow.ScopeId, scopeId, StringComparison.Ordinal)
+                ? workflow
+                : null);
+
+        public Task<ScopeWorkflowSummary?> GetByActorIdAsync(
+            string scopeId,
+            string actorId,
+            CancellationToken ct = default) =>
+            Task.FromResult<ScopeWorkflowSummary?>(Workflows.Values.FirstOrDefault(workflow =>
+                string.Equals(workflow.ScopeId, scopeId, StringComparison.Ordinal) &&
+                string.Equals(workflow.ActorId, actorId, StringComparison.Ordinal)));
     }
 
     private sealed class RecordingWorkflowDispatchService
