@@ -1034,6 +1034,10 @@ const enUSMessages = {
     'This member is the Team entry member. Deleting it removes the member authority and clears it from the Team roster; published service artifacts, revisions, and historical runs stay intact.',
   'teams.members.delete.failed': 'Failed to delete member.',
   'teams.members.delete.keep': 'Keep member',
+  'teams.members.delete.notConfirmed':
+    'Deletion was not confirmed. The member remains in the list; refresh and retry.',
+  'teams.members.delete.submitted':
+    'Deletion submitted. Waiting for confirmation.',
   'teams.members.delete.success': 'Deleted member {member}.',
   'teams.members.delete.title': 'Delete member',
   'teams.members.delete.warning':
