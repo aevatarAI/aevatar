@@ -75,6 +75,12 @@ internal sealed class NyxIdManagedCodexChronoTransport(
             timeout_secs = request.TimeoutSeconds,
             workspace = "empty_git",
         });
+        using var lifecycleTimeout = new CancellationTokenSource(
+            TimeSpan.FromSeconds(
+                request.TimeoutSeconds + _options.ExecutionLifecycleGraceSeconds),
+            _timeProvider);
+        using var requestDeadline =
+            CancellationTokenSource.CreateLinkedTokenSource(ct, lifecycleTimeout.Token);
         var response = await secret.UseAsync(rawKey => _clientFactory.CreateClient().ProxyRequestBoundedAsync(
                 rawKey,
                 ManagedCodexOptions.ChronoSandboxServiceSlug,
@@ -84,7 +90,7 @@ internal sealed class NyxIdManagedCodexChronoTransport(
                 body,
                 extraHeaders: null,
                 _options.MaxResponseBytes,
-                ct))
+                requestDeadline.Token))
             .ConfigureAwait(false);
         if (!response.Succeeded)
         {

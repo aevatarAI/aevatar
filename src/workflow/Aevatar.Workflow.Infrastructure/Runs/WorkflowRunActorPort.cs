@@ -99,7 +99,8 @@ internal sealed class WorkflowRunActorPort :
                     definition.InlineWorkflowYamls,
                     definition.ScopeId,
                     definition.RunOrigin,
-                    definition.ScheduleId),
+                    definition.ScheduleId,
+                    definitionResolution.CapabilityAdmissionPlan),
                 ct);
 
             return new WorkflowRunCreationReceipt(
@@ -185,6 +186,7 @@ internal sealed class WorkflowRunActorPort :
                     definition.ScopeId,
                     definition.RunOrigin,
                     definition.ScheduleId,
+                    definitionResolution.CapabilityAdmissionPlan,
                     executionRequest,
                     commandId,
                     correlationId),
@@ -305,7 +307,10 @@ internal sealed class WorkflowRunActorPort :
                 $"Workflow definition actor '{existingActor.Id}' payload does not match the requested Run definition.");
         }
 
-        return new DefinitionActorResolutionResult(existingActor.Id, CreatedNow: false);
+        return new DefinitionActorResolutionResult(
+            existingActor.Id,
+            CreatedNow: false,
+            binding.CapabilityAdmissionPlan?.Clone());
     }
 
     private async Task<DefinitionActorResolutionResult> EnsureDefinitionActorAsync(
@@ -338,7 +343,10 @@ internal sealed class WorkflowRunActorPort :
                         definition.SourceKind,
                         definition.CapabilityAdmissionPlan,
                         ct);
-                    return new DefinitionActorResolutionResult(existingActor.Id, CreatedNow: false);
+                    return new DefinitionActorResolutionResult(
+                        existingActor.Id,
+                        CreatedNow: false,
+                        definition.CapabilityAdmissionPlan?.Clone());
                 }
 
                 throw new InvalidOperationException(
@@ -361,7 +369,10 @@ internal sealed class WorkflowRunActorPort :
                     ct);
             }
 
-            return new DefinitionActorResolutionResult(existingActor.Id, CreatedNow: false);
+            return new DefinitionActorResolutionResult(
+                existingActor.Id,
+                CreatedNow: false,
+                definition.CapabilityAdmissionPlan?.Clone() ?? binding.CapabilityAdmissionPlan?.Clone());
         }
 
         return await CreateBoundDefinitionActorAsync(definition, preferredActorId: null, ct);
@@ -381,7 +392,12 @@ internal sealed class WorkflowRunActorPort :
         {
             var racedActor = await TryResolveRacedDefinitionActorAsync(definition, preferredActorId!, ct);
             if (racedActor != null)
-                return new DefinitionActorResolutionResult(racedActor.Id, CreatedNow: false);
+            {
+                return new DefinitionActorResolutionResult(
+                    racedActor.Id,
+                    CreatedNow: false,
+                    definition.CapabilityAdmissionPlan?.Clone());
+            }
 
             throw;
         }
@@ -397,7 +413,10 @@ internal sealed class WorkflowRunActorPort :
                 definition.SourceKind,
                 definition.CapabilityAdmissionPlan,
                 ct);
-            return new DefinitionActorResolutionResult(definitionActor.Id, CreatedNow: true);
+            return new DefinitionActorResolutionResult(
+                definitionActor.Id,
+                CreatedNow: true,
+                definition.CapabilityAdmissionPlan?.Clone());
         }
         catch
         {
@@ -585,12 +604,22 @@ internal sealed class WorkflowRunActorPort :
         IReadOnlyDictionary<string, string> inlineWorkflowYamls,
         string? scopeId,
         string? runOrigin,
-        string? scheduleId) =>
+        string? scheduleId,
+        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan) =>
         new()
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(BuildBindWorkflowRunDefinitionEvent(definitionActorId, runId, workflowYaml, workflowName, inlineWorkflowYamls, scopeId, runOrigin, scheduleId)),
+            Payload = Any.Pack(BuildBindWorkflowRunDefinitionEvent(
+                definitionActorId,
+                runId,
+                workflowYaml,
+                workflowName,
+                inlineWorkflowYamls,
+                scopeId,
+                runOrigin,
+                scheduleId,
+                capabilityAdmissionPlan)),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication(WorkflowRunActorPortPublisherId, TopologyAudience.Self),
             Propagation = new EnvelopePropagation
             {
@@ -607,6 +636,7 @@ internal sealed class WorkflowRunActorPort :
         string? scopeId,
         string? runOrigin,
         string? scheduleId,
+        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan,
         WorkflowChatRequestEvent? executionRequest = null,
         string? commandId = null,
         string? correlationId = null)
@@ -624,7 +654,8 @@ internal sealed class WorkflowRunActorPort :
                 inlineWorkflowYamls,
                 scopeId,
                 runOrigin,
-                scheduleId),
+                scheduleId,
+                capabilityAdmissionPlan),
         };
         if (executionRequest != null)
             ensure.ExecutionRequest = executionRequest.Clone();
@@ -702,7 +733,8 @@ internal sealed class WorkflowRunActorPort :
         IReadOnlyDictionary<string, string> inlineWorkflowYamls,
         string? scopeId,
         string? runOrigin,
-        string? scheduleId)
+        string? scheduleId,
+        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan)
     {
         var bind = new BindWorkflowRunDefinitionEvent
         {
@@ -713,6 +745,7 @@ internal sealed class WorkflowRunActorPort :
             ScopeId = scopeId?.Trim() ?? string.Empty,
             RunOrigin = runOrigin?.Trim() ?? string.Empty,
             ScheduleId = scheduleId?.Trim() ?? string.Empty,
+            CapabilityAdmissionPlan = capabilityAdmissionPlan?.Clone(),
         };
 
         foreach (var (key, value) in inlineWorkflowYamls)
@@ -731,5 +764,6 @@ internal sealed class WorkflowRunActorPort :
 
     private readonly record struct DefinitionActorResolutionResult(
         string ActorId,
-        bool CreatedNow);
+        bool CreatedNow,
+        WorkflowCapabilityAdmissionPlan? CapabilityAdmissionPlan = null);
 }

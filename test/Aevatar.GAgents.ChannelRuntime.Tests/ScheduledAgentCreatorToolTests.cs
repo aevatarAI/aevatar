@@ -344,9 +344,9 @@ public sealed class ScheduledAgentCreatorToolTests
             var result = await harness.Tool.ExecuteAsync(BaseArgs);
 
             using var document = JsonDocument.Parse(result);
-            document.RootElement.GetProperty("error").GetString().Should().Be("ServiceNotFound");
+            document.RootElement.GetProperty("error").GetString().Should().Be("SnapshotStale");
             document.RootElement.GetProperty("detail").GetString()
-                .Should().Be("nyxid_service_not_found:svc-lark-failure");
+                .Should().Be("nyxid_catalog_snapshot_stale");
             harness.Handler.Requests.Should().BeEmpty();
         });
     }
@@ -366,9 +366,9 @@ public sealed class ScheduledAgentCreatorToolTests
             var result = await harness.Tool.ExecuteAsync(BaseArgs);
 
             using var document = JsonDocument.Parse(result);
-            document.RootElement.GetProperty("error").GetString().Should().Be("ServiceNotFound");
+            document.RootElement.GetProperty("error").GetString().Should().Be("SnapshotStale");
             document.RootElement.GetProperty("detail").GetString()
-                .Should().Be("nyxid_service_not_found:svc-ornn");
+                .Should().Be("nyxid_catalog_snapshot_stale");
             harness.Handler.Requests.Should().BeEmpty();
         });
     }
@@ -541,9 +541,9 @@ public sealed class ScheduledAgentCreatorToolTests
                 """);
 
             using var document = JsonDocument.Parse(result);
-            document.RootElement.GetProperty("error").GetString().Should().Be("ServiceNotFound");
+            document.RootElement.GetProperty("error").GetString().Should().Be("SnapshotStale");
             document.RootElement.GetProperty("detail").GetString()
-                .Should().Be("nyxid_service_not_found:svc-tavily");
+                .Should().Be("nyxid_catalog_snapshot_stale");
             handler.Requests.Should().BeEmpty();
             handler.Requests.Should().NotContain(request => request.Method == HttpMethod.Post);
         });
@@ -1120,9 +1120,9 @@ public sealed class ScheduledAgentCreatorToolTests
                 """);
 
             using var document = JsonDocument.Parse(result);
-            document.RootElement.GetProperty("error").GetString().Should().Be("ServiceNotFound");
+            document.RootElement.GetProperty("error").GetString().Should().Be("SnapshotStale");
             document.RootElement.GetProperty("detail").GetString()
-                .Should().Be("nyxid_service_not_found:svc-lark");
+                .Should().Be("nyxid_catalog_snapshot_stale");
             handler.Requests.Should().BeEmpty();
         });
     }
@@ -1430,20 +1430,26 @@ public sealed class ScheduledAgentCreatorToolTests
             Activated: true);
     }
 
-    private static NyxIdAuthorizationServiceEvidence ServiceEvidence(string id, string slug) => new()
+    private static NyxIdAuthorizationServiceEvidence ServiceEvidence(string id, string slug)
     {
-        UserServiceId = id,
-        ServiceSlug = slug,
-        DisplayName = slug,
-        Access = NyxIdAuthorizationAccess.Permitted,
-        NodeGrantRequirement = AuthorizationGrantRequirement.NotRequired,
-        ResourceOwner = new AuthorizationOwnerIdentity
+        var now = DateTimeOffset.UtcNow;
+        return new NyxIdAuthorizationServiceEvidence
         {
-            Authority = NyxIdAuthorizationAuthorities.NyxId,
-            OwnerKind = AuthorizationOwnerKind.Personal,
-            OwnerSubject = "nyx-user-1",
-        },
-    };
+            UserServiceId = id,
+            ServiceSlug = slug,
+            DisplayName = slug,
+            Access = NyxIdAuthorizationAccess.Permitted,
+            NodeGrantRequirement = AuthorizationGrantRequirement.NotRequired,
+            ResourceOwner = new AuthorizationOwnerIdentity
+            {
+                Authority = NyxIdAuthorizationAuthorities.NyxId,
+                OwnerKind = AuthorizationOwnerKind.Personal,
+                OwnerSubject = "nyx-user-1",
+            },
+            ObservedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(now.AddMinutes(-1)),
+            FreshUntil = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(now.AddMinutes(10)),
+        };
+    }
 
     private sealed record CreatorHarness(
         ScheduledAgentCreatorTool Tool,

@@ -232,6 +232,7 @@ public sealed class WorkflowExecutionReadModelMapper
             AssignedValue = source.AssignedValue,
             SuspensionType = source.SuspensionType,
             SuspensionPrompt = source.SuspensionPrompt,
+            SuspensionContent = source.SuspensionContent,
             SuspensionTimeoutSeconds = source.SuspensionTimeoutSecondsValue == 0 ? null : source.SuspensionTimeoutSecondsValue,
             RequestedVariableName = source.RequestedVariableName,
             Usage = MapUsage(source.Usage),

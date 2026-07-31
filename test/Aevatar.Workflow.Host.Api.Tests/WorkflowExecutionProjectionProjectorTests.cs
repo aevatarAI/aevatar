@@ -4,6 +4,8 @@ using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Abstractions.Security;
+using Aevatar.Workflow.Application.Abstractions.Security;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Projection;
 using Aevatar.Workflow.Projection.Projectors;
@@ -756,6 +758,52 @@ public sealed class WorkflowExecutionProjectionProjectorTests
     }
 
     [Fact]
+    public void ApplyObservedPayloadToReport_ShouldPreserveSanitizedApprovalContent_AndHideSecureContent()
+    {
+        const string secret = "suspension-secret";
+        var document = new WorkflowRunInsightReportDocument();
+
+        WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(
+            document,
+            PackStateEvent(
+                new WorkflowSuspendedEvent
+                {
+                    StepId = "review",
+                    SuspensionType = "human_approval",
+                    Prompt = "Review the draft",
+                    Content = $$"""{"draft":"ready","access_token":"{{secret}}"}""",
+                    TimeoutSeconds = 3600,
+                },
+                1,
+                "evt-review"),
+            DateTimeOffset.UnixEpoch);
+        WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(
+            document,
+            PackStateEvent(
+                new WorkflowSuspendedEvent
+                {
+                    StepId = "secret",
+                    SuspensionType = "secure_input",
+                    Content = "must-not-materialize",
+                    Secure = true,
+                },
+                2,
+                "evt-secret"),
+            DateTimeOffset.UnixEpoch.AddSeconds(1));
+
+        var report = new WorkflowExecutionReadModelMapper().ToRunReport(document);
+        var sanitized = WorkflowAuditReportSanitizer.Sanitize(report);
+
+        var review = sanitized.Steps.Single(step => step.StepId == "review");
+        review.SuspensionContent.Should().Contain("\"draft\":\"ready\"");
+        review.SuspensionContent.Should().Contain(WorkflowAuditTextSanitizer.RedactedValue);
+        review.SuspensionContent.Should().NotContain(secret);
+        review.SuspensionTimeoutSeconds.Should().Be(3600);
+        sanitized.Steps.Single(step => step.StepId == "secret")
+            .SuspensionContent.Should().BeEmpty();
+    }
+
+    [Fact]
     public void ReportArtifact_ShouldOwnTimelineAndGraphMaterializationInputs()
     {
         var report = new WorkflowRunInsightReportDocument
@@ -905,6 +953,11 @@ public sealed class WorkflowExecutionProjectionProjectorTests
                     DeadLetterFailedCompensationStepId = "refund_payment",
                     DeadLetterRemainingUncompensated = 2,
                     DeadLetterError = "refund failed",
+                    CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+                    {
+                        SchemaVersion = WorkflowCapabilityAdmissionPlanIntegrity.SchemaVersion,
+                        AdmissionDigest = "admission-v3",
+                    },
                     ExecutionStates =
                     {
                         ["workflow_execution_kernel"] = Any.Pack(new WorkflowExecutionKernelState
@@ -929,6 +982,9 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         document.DeadLetterFailedCompensationStepId.Should().Be("refund_payment");
         document.DeadLetterRemainingUncompensated.Should().Be(2);
         document.DeadLetterError.Should().Be("refund failed");
+        document.CapabilityAdmissionPlan.Should().NotBeNull();
+        document.CapabilityAdmissionPlan.SchemaVersion.Should().Be(WorkflowCapabilityAdmissionPlanIntegrity.SchemaVersion);
+        document.CapabilityAdmissionPlan.AdmissionDigest.Should().Be("admission-v3");
         document.StateVersion.Should().Be(1);
         document.Compiled.Should().BeTrue();
         document.ExecutionStateCount.Should().Be(1);

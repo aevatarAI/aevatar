@@ -109,6 +109,8 @@ public sealed class NyxIdServiceInstanceClient
             body["label"] = request.Label;
         if (request.HasEndpointUrl)
             body["endpoint_url"] = request.EndpointUrl;
+        if (request.HasOpenapiSpecUrl)
+            body["openapi_spec_url"] = request.OpenapiSpecUrl;
         if (request.HasIsActive)
             body["is_active"] = request.IsActive;
         var response = await _client.UpdateServiceAsync(

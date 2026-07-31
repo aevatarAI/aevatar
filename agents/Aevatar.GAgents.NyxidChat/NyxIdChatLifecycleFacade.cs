@@ -214,7 +214,9 @@ internal sealed class NyxIdChatConversationCreateCommandTargetResolver
             return CommandTargetResolution<NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandStartError>.Failure(
                 NyxIdChatLifecycleCommandStartError.RouteRejected);
 
-        var actorId = NyxIdChatServiceDefaults.GenerateActorId();
+        var actorId = string.IsNullOrWhiteSpace(command.RequestedActorId)
+            ? NyxIdChatServiceDefaults.GenerateActorId()
+            : command.RequestedActorId.Trim();
         var agentProfile = _agentProfileSnapshotSource.GetSnapshotForNewConversation(actorId);
         if (agentProfile is not null)
         {

@@ -138,6 +138,27 @@ describe("NyxIDAuthClient", () => {
     );
   });
 
+  it("forces consent while preserving a canonical workflow return URL", async () => {
+    const assign = installLocationAssignSpy();
+
+    await new NyxIDAuthClient(runtimeConfig).loginWithRedirect({
+      prompt: "consent",
+      returnTo: "/scopes/scope-1/teams/team-1/members/m-alpha/automations",
+    });
+
+    const authorizeUrl = new URL(assign.mock.calls[0][0]);
+    expect(authorizeUrl.searchParams.get("prompt")).toBe("consent");
+    const pending = JSON.parse(
+      window.localStorage.getItem(
+        "aevatar-console:nyxid:pending:console-client-1",
+      ) ?? "{}",
+    );
+    expect(pending.returnTo).toBe(
+      "/scopes/scope-1/teams/team-1/members/m-alpha/automations",
+    );
+    expect(pending.flow).toBe("signIn");
+  });
+
   it("finalizes callback through the backend without a browser token exchange", async () => {
     const pendingKey = "aevatar-console:nyxid:pending:broker-client-1";
     window.localStorage.setItem(
@@ -271,7 +292,7 @@ describe("NyxIDAuthClient", () => {
 
   it.each<[number, string, NyxIDAuthCallbackErrorReason]>([
     [409, "required_service_access_missing", "requiredServiceAccessMissing"],
-    [502, "issued_binding_invalid", "issuedBindingInvalid"],
+    [503, "issued_binding_invalid", "issuedBindingInvalid"],
     [503, "issued_binding_probe_failed", "issuedBindingProbeFailed"],
     [503, "binding_probe_failed", "bindingProbeFailed"],
   ])("preserves review retry state for backend error %s %s", async (status, code, reason) => {

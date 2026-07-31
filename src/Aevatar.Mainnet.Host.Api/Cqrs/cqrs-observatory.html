@@ -123,6 +123,33 @@
   .body { max-width:1320px; margin:0 auto; padding:20px 24px 70px; }
   .page-h { font-size:21px; font-weight:740; letter-spacing:-.02em; color:var(--fg-strong); margin:0; }
   .page-sub { color:var(--muted); font-size:13.5px; margin:8px 0 0; line-height:1.6; max-width:84ch; }
+  .purpose-banner { margin:0 0 16px; padding:12px 14px; border:1px solid var(--border); border-radius:var(--r); background:var(--panel-2); }
+  .purpose-banner .pb-q { font-size:12.5px; font-weight:650; color:var(--fg-strong); margin:0 0 6px; }
+  .purpose-banner .pb-a { font-size:12.5px; color:var(--muted); line-height:1.55; margin:0; }
+  .purpose-banner .pb-a b { color:var(--fg); font-weight:600; }
+  .purpose-banner .pb-not { margin-top:8px; font-size:11.5px; color:var(--muted-2); }
+  .health-chip { display:inline-flex; align-items:center; gap:5px; font-size:10.5px; font-weight:700; padding:2px 8px; border-radius:var(--r-pill); border:1px solid transparent; white-space:nowrap; }
+  .health-chip.sync { color:var(--ok); background:var(--ok-soft); border-color:color-mix(in oklab,var(--ok) 30%,transparent); }
+  .health-chip.lagging { color:var(--warn); background:var(--warn-soft); border-color:color-mix(in oklab,var(--warn) 30%,transparent); }
+  .health-chip.failing { color:var(--err); background:var(--err-soft); border-color:color-mix(in oklab,var(--err) 30%,transparent); }
+  .health-chip.inactive { color:var(--muted); background:var(--neutral-soft); border-color:var(--border); }
+  .scope-meaning { margin:0 0 12px; padding:12px 14px; border:1px solid var(--border); border-radius:var(--r); background:var(--panel); }
+  .scope-meaning h3 { margin:0 0 8px; font-size:12.5px; font-weight:650; color:var(--fg-strong); }
+  .scope-meaning .sm-line { font-size:12.5px; color:var(--muted); line-height:1.5; margin:0 0 6px; }
+  .scope-meaning .sm-line b { color:var(--fg); }
+  .scope-meaning .sm-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+  .scope-meaning a.sm-btn, .scope-meaning button.sm-btn {
+    display:inline-flex; align-items:center; gap:6px; font-size:12px; font-weight:600; padding:6px 11px;
+    border-radius:var(--r-sm); border:1px solid var(--border); background:var(--panel-2); color:var(--fg-strong); text-decoration:none;
+  }
+  .scope-meaning a.sm-btn:hover, .scope-meaning button.sm-btn:hover { border-color:var(--accent); color:var(--accent); }
+  .planned-fold { margin-top:8px; border:1px dashed var(--border); border-radius:var(--r); background:color-mix(in oklab,var(--panel-2) 70%,transparent); }
+  .planned-fold > summary { cursor:pointer; list-style:none; padding:10px 12px; font-size:12.5px; font-weight:650; color:var(--muted); display:flex; align-items:center; gap:8px; }
+  .planned-fold > summary::-webkit-details-marker { display:none; }
+  .planned-fold[open] > summary { border-bottom:1px solid var(--border-soft); color:var(--fg-strong); }
+  .planned-fold .pf-body { padding:12px; }
+  .hl .hl-l .unit { font-weight:500; color:var(--muted-2); text-transform:none; letter-spacing:0; margin-left:4px; }
+
   .page-sub b { color:var(--fg); font-weight:600; }
 
   .panel { border:1px solid var(--border); border-radius:var(--r-lg); background:var(--panel); overflow:hidden; }
@@ -517,12 +544,22 @@ function suiteNavHtml(active){return '<nav class="suite-nav" aria-label="控制�
 /* ===========================================================================
    state
    =========================================================================== */
+function readDeepLinkFilters(){
+  try {
+    const q = new URLSearchParams(location.search || "");
+    const h = String(location.hash||"");
+    const hq = h.indexOf("?")>=0 ? new URLSearchParams(h.slice(h.indexOf("?")+1)) : new URLSearchParams();
+    const get = (k) => (q.get(k) || hq.get(k) || "").trim() || null;
+    return { famFilter: get("family") || get("fam"), ownerFilter: get("owner") || get("scopeOwner") };
+  } catch(e){ return { famFilter:null, ownerFilter:null }; }
+}
+const _deep = readDeepLinkFilters();
 const state = {
   signedIn:false,
   theme: localStorage.getItem("cqrs-theme") || null,
   scopeId:null, scopeResolved:false, scopeSource:null,
   sort:"lag", selectedScope:null, selectedEvent:0,
-  famFilter:null, ownerFilter:null,   // Panel B facet filters (scope family / nyxid owner id)
+  famFilter:_deep.famFilter, ownerFilter:_deep.ownerFilter,   // Panel B facet filters (scope family / nyxid owner id)
   scopePage:1, invPages:{},      // client-side display paging (Panel B list / Panel C per-shape group)
   // scopes panel B: status one of loading | ok | empty | forbidden | error
   scopes:{ status:"loading", rows:[], detail:null },
@@ -535,6 +572,31 @@ function curTheme(){ const h=document.documentElement; return h.classList.contai
 function effDark(){ const t=curTheme(); if(t)return t==="dark"; return !window.matchMedia||!window.matchMedia("(prefers-color-scheme: light)").matches; }
 function applyTheme(){ const t=state.theme; document.documentElement.classList.remove("theme-light","theme-dark"); if(t)document.documentElement.classList.add("theme-"+t); }
 function lagOf(s){ return (s.observed||0) - (s.successful||0); }
+/* Health buckets: based on active + version lag + failures. lag is StateVersion delta, NOT milliseconds. */
+function healthOf(s){
+  if(!s || !s.active) return "inactive";
+  if((s.failures||0) > 0) return "failing";
+  if(lagOf(s) > 0) return "lagging";
+  return "sync";
+}
+const HEALTH_LABEL = { sync:"同步", lagging:"滞后", failing:"失败", inactive:"未激活" };
+function healthChip(s){
+  const h=healthOf(s);
+  return '<span class="health-chip '+h+'" title="'+esc(HEALTH_LABEL[h])+'：基于 active / 版本滞后(observed−successful) / failures">'+esc(HEALTH_LABEL[h])+'</span>';
+}
+function lagTitle(){
+  return "版本滞后 = last_observed_version − last_successful_version（StateVersion 差，不是毫秒）";
+}
+function openAdminObservatory(scopeId){
+  const hash = "#/observatory"+(scopeId ? ("?scope="+encodeURIComponent(scopeId)) : "");
+  try {
+    if(window.parent && window.parent !== window && window.frameElement && window.frameElement.getAttribute("data-console-frame")==="1"){
+      window.parent.location.hash = hash;
+      return;
+    }
+  } catch(e){ /* cross-origin: fall through */ }
+  location.href = "/admin"+hash;
+}
 
 /* scope id structure: "projection.durable.scope:<family>:<rest…>". Surface the family
    (the human bit) and a compact tail so each row reads as <family> · <owner> · <tail>. */
@@ -816,12 +878,17 @@ function renderScopeRail(){
     const totalFail=rows.reduce((s,x)=>s+(x.failures||0),0);
     const hl=el("div",{class:"panel-body",style:"padding-bottom:0"});
     const hb=el("div",{class:"headline"});
+    const failing=rows.filter(x=>(x.failures||0)>0).length;
+    const inactive=rows.filter(x=>!x.active).length;
+    const sync=rows.filter(x=>healthOf(x)==="sync").length;
     hb.innerHTML=
-      '<div class="hl '+(totalLag>0?"warn":"")+'"><div class="hl-l">总投影滞后 Σ lag</div><div class="hl-v">'+totalLag+'</div></div>'+
-      '<div class="hl '+(lagging>0?"warn":"")+'"><div class="hl-l">滞后的 scope</div><div class="hl-v">'+lagging+' / '+rows.length+'</div></div>'+
-      '<div class="hl '+(totalFail>0?"bad":"")+'"><div class="hl-l">失败计数 Σ failures</div><div class="hl-v">'+totalFail+'</div></div>';
+      '<div class="hl '+(totalLag>0?"warn":"")+'"><div class="hl-l" title="'+esc(lagTitle())+'">Σ 版本滞后<span class="unit">versions</span></div><div class="hl-v">'+totalLag+'</div></div>'+
+      '<div class="hl '+(lagging>0?"warn":"")+'"><div class="hl-l">滞后 / 同步</div><div class="hl-v">'+lagging+' / '+sync+'</div></div>'+
+      '<div class="hl '+(totalFail>0?"bad":"")+'"><div class="hl-l">失败 scope</div><div class="hl-v">'+failing+(inactive?(' · 未激活 '+inactive):'')+'</div></div>';
     hl.appendChild(hb);
-    hl.appendChild(el("div",{style:"font-size:11.5px;color:var(--muted-2);margin-top:8px"},'<b style="color:var(--muted)">lag + failures = 头条指标。</b> last_observed_version（已见）− last_successful_version（已物化）= 投影滞后。'));
+    hl.appendChild(el("div",{style:"font-size:11.5px;color:var(--muted-2);margin-top:8px"},
+      '<b style="color:var(--muted)">版本滞后 + failures = 头条。</b> observed（已见）− successful（已物化）= <b title="'+esc(lagTitle())+'">版本差</b>，不是毫秒。'+
+      ' 全 0 失败不代表业务 run 成功——只说明投影 scope 状态未报告异常。'));
     card.appendChild(hl);
 
     /* family / owner facet bar — resolves opaque scope ids into navigable groups + people */
@@ -832,7 +899,7 @@ function renderScopeRail(){
     const sortBtn=(key,label)=>'<button data-sort="'+key+'" '+(state.sort===key?'aria-sort="descending"':"")+'>'+label+' '+(state.sort===key?ICON.sort:"")+'</button>';
     sh.innerHTML='<span><button data-sort="id" '+(state.sort==="id"?'aria-sort="ascending"':"")+'>scope · 归属人</button></span>'+
       '<span class="col-gauge">observed → materialized</span>'+
-      '<span style="text-align:right">'+sortBtn("lag","lag")+'</span>'+
+      '<span style="text-align:right" title="'+esc(lagTitle())+'">'+sortBtn("lag","版本滞后")+'</span>'+
       '<span style="text-align:right">'+sortBtn("fail","fails")+'</span>';
     sh.querySelectorAll("button").forEach(b=>b.addEventListener("click",()=>{ state.sort=b.getAttribute("data-sort"); state.scopePage=1; render(); }));
     card.appendChild(sh);
@@ -852,12 +919,14 @@ function renderScopeRail(){
         else ownerHtml='<span class="sc-owner unresolved" title="nyxid '+esc(oid)+'（解析中或未知）"><span class="av">·</span>'+esc(oid.slice(0,8))+'</span>';
       }
       const row=el("button",{class:"scope-row",role:"listitem","aria-current":String(state.selectedScope===s.id)});
+      const human=esc(fam)+(oname?(' · '+esc(oname)):'')+(lag?(' · lag '+lag+' versions'):' · 同步');
       row.innerHTML=
         '<span class="sc-id"><span class="dot s-'+dotCls+'"></span>'+
-          '<span class="sc-main"><span class="sc-top"><span class="sc-fam" title="'+esc(s.id)+'">'+esc(fam)+'</span>'+ownerHtml+'</span>'+
-          (tail?'<span class="sc-tail" title="'+esc(s.id)+'">'+esc(tail)+'</span>':'')+'</span></span>'+
+          '<span class="sc-main"><span class="sc-top"><span class="sc-fam" title="'+esc(s.id)+'">'+esc(fam)+'</span>'+ownerHtml+healthChip(s)+'</span>'+
+          (tail?'<span class="sc-tail" title="'+esc(s.id)+'">'+esc(tail)+'</span>':'')+
+          '<span class="sc-tail" style="opacity:.85">'+human+'</span></span></span>'+
         '<span class="cell-gauge"><div class="gauge '+gcls+'"><i style="width:'+pct+'%"></i></div><div class="gauge-cap">'+fmt(s.successful)+' / '+fmt(s.observed)+'</div></span>'+
-        '<span class="lagcell '+(lag>0?(lag>15?"bad":"pos"):"")+'">'+(lag>0?"+"+lag:"0")+'</span>'+
+        '<span class="lagcell '+(lag>0?(lag>15?"bad":"pos"):"")+'" title="'+esc(lagTitle())+'">'+(lag>0?"+"+lag:"0")+'</span>'+
         '<span class="failcell '+(s.failures>0?"pos":"")+'">'+(s.failures||0)+'</span>';
       row.addEventListener("click",()=>{ state.selectedScope=s.id; render(); });
       list.appendChild(row);
@@ -882,7 +951,7 @@ function renderScopeRail(){
   if(st==="empty"){
     card.appendChild(el("div",{class:"pstate"},
       '<div class="ps-ic lock">'+ICON.info+'</div><div class="ps-t">暂无投影 scope</div>'+
-      '<div class="ps-b">平台当前没有任何已物化的投影 scope 状态记录。一旦有投影管道开始消费已提交事件，scope 行会在此出现。</div>'));
+      '<div class="ps-b">平台当前没有任何已物化的投影 scope 状态记录。一旦投影管道消费已提交事件，scope 行会在此出现。<b style="color:var(--fg)">空列表不等于业务 run 成功</b>——只表示尚未观察到投影健康事实。</div>'));
     return card;
   }
   if(st==="forbidden"){
@@ -999,48 +1068,106 @@ function renderInventory(){
 /* ===========================================================================
    D) envelope inspector — list is unbacked (pending); state_root SHAPE kept
    =========================================================================== */
+function renderScopeMeaning(){
+  const card=el("section",{class:"panel",id:"scope-meaning"});
+  card.appendChild(el("div",{class:"panel-head"},'<h2>Scope 含义</h2><div class="ph-r"><span class="srctag live"><span class="dot"></span>选中即解释</span></div>'));
+  const body=el("div",{class:"panel-body"});
+  const id=state.selectedScope;
+  if(!id){
+    body.appendChild(el("div",{class:"inv-empty"},"在左侧 Scope Rail 点选一行，这里用人话说明它的健康状态，并提供跳转到该 owner 最近 runs 的深链。"));
+    card.appendChild(body);
+    return card;
+  }
+  const s=(state.scopes.rows||[]).find(x=>x.id===id);
+  if(!s){
+    body.appendChild(el("div",{class:"inv-empty"},"选中的 scope 不在当前筛选结果中。"));
+    card.appendChild(body);
+    return card;
+  }
+  const lag=lagOf(s), fam=scopeFamily(s.id), oid=scopeOwnerId(s.id), oname=oid?ownerCache[oid]:null;
+  const h=healthOf(s);
+  const meaning=el("div",{class:"scope-meaning"});
+  let explain="";
+  if(h==="sync") explain="投影已跟上已观察版本：读模型副本与最近成功物化水位一致。";
+  else if(h==="lagging") explain="读模型落后于已观察版本 "+lag+" 个 StateVersion。查询可能读到较旧事实；通常随物化追平，不必立刻判定业务失败。";
+  else if(h==="failing") explain="该 scope 记录了 "+(s.failures||0)+" 次投影失败。应优先查 projector/sink 错误，而不是业务 run 本身。";
+  else explain="scope 未处于 active。可能尚未被 activation 唤醒，或已空闲。";
+  meaning.innerHTML=
+    '<h3>'+healthChip(s)+' <span class="mono" style="font-size:11px;color:var(--muted-2)">'+esc(fam)+'</span></h3>'+
+    '<p class="sm-line"><b>人话：</b>'+esc(fam)+(oname?(' · owner '+esc(oname)):(oid?(' · owner '+esc(oid.slice(0,8))):''))+
+    (lag?(' · 版本滞后 '+lag):' · 同步')+(s.active?' · 活跃':' · 未激活')+'</p>'+
+    '<p class="sm-line"><b>含义：</b>'+esc(explain)+'</p>'+
+    '<p class="sm-line" title="'+esc(lagTitle())+'"><b>水位：</b>successful '+fmt(s.successful)+' / observed '+fmt(s.observed)+
+    ' · failures '+(s.failures||0)+'</p>'+
+    '<p class="sm-line mono" style="font-size:11px;word-break:break-all;color:var(--muted-2)">'+esc(s.id)+'</p>';
+  const actions=el("div",{class:"sm-actions"});
+  if(oid){
+    const a=el("button",{class:"sm-btn",type:"button"},"查看该 owner 的最近 runs");
+    a.addEventListener("click",()=>openAdminObservatory(oid));
+    actions.appendChild(a);
+  } else {
+    const a=el("button",{class:"sm-btn",type:"button"},"打开运行观测台");
+    a.addEventListener("click",()=>openAdminObservatory(null));
+    actions.appendChild(a);
+  }
+  meaning.appendChild(actions);
+  body.appendChild(meaning);
+  card.appendChild(body);
+  return card;
+}
 function renderInspector(){
   const card=el("section",{class:"panel",id:"inspector"});
-  card.appendChild(el("div",{class:"panel-head"},'<h2>Envelope Inspector</h2><div class="ph-r"><span class="pending">'+ICON.warn+' 待后端</span></div>'));
+  card.appendChild(el("div",{class:"panel-head"},'<h2>结构参考</h2><div class="ph-r"><span class="srctag live" style="color:var(--accent);background:var(--accent-soft);border-color:var(--accent-line)"><span class="dot" style="background:var(--accent)"></span>永真形状</span></div>'));
   const body=el("div",{class:"panel-body"});
 
-  /* recent-envelope list: unbacked (event-stream browse is a gap) → pending placeholder, no fake data */
-  body.appendChild(el("div",{style:"font-size:11.5px;color:var(--muted-2);margin-bottom:9px"},"最近已提交信封"));
-  body.appendChild(el("div",{class:"inv-empty",style:"margin-bottom:14px"},
-    "最近信封列表（按版本浏览已提交事件元数据）尚未由后端暴露。上线后此处列出最近 committed envelope 并可点选查看其相关键。"));
-
-  /* state_root snapshot SHAPE — structural (field names + types), always-true */
-  body.appendChild(el("div",{style:"font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted-2);margin:4px 0 4px"},"state_root 快照形状"));
+  body.appendChild(el("div",{style:"font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted-2);margin:0 0 6px"},"state_root 快照形状（结构）"));
   const tree=el("div",{class:"shape-tree"});
   tree.innerHTML="{\n"+STATE_ROOT_SHAPE.map(([k,t])=>'  <span class="key">'+esc(k)+'</span>: <span class="typ">'+esc(t)+'</span>').join("\n")+"\n}";
   body.appendChild(tree);
-  body.appendChild(el("div",{style:"font-size:11px;color:var(--muted-2);margin-top:6px"},"仅展示形状（字段+类型）。完整 payload 值为待后端。"));
+  body.appendChild(el("div",{style:"font-size:11px;color:var(--muted-2);margin-top:6px;margin-bottom:12px"},"仅展示字段+类型。完整 envelope 列表与 payload 值未由后端暴露，不在此伪造。"));
 
-  /* pending-backend stubs (kept verbatim in intent) */
+  const fold=el("details",{class:"planned-fold"});
+  fold.innerHTML='<summary>'+ICON.warn+' 规划中能力（不阻塞主路径）</summary>';
+  const pf=el("div",{class:"pf-body"});
+  pf.appendChild(el("div",{class:"inv-empty",style:"margin-bottom:10px"},
+    "最近 committed envelope 元数据列表尚未暴露。落地后可在此按版本浏览 eventId / typeUrl / StateVersion。"));
   const stub1=el("div",{class:"stub"});
-  stub1.innerHTML='<div class="st-h">'+ICON.lock+' 原始事件流 · browse / replay <span class="pending">'+ICON.warn+' 待后端</span></div>'+
-    '<div class="st-b">浏览/回放底层事件流尚未由后端暴露。上线后可在此按版本区间回放，并把某个 scope 的投影重建。</div>';
+  stub1.innerHTML='<div class="st-h">'+ICON.lock+' 原始事件流 browse / replay</div>'+
+    '<div class="st-b">不提供 query-time rebuild。仅在独立只读契约上线后展示元数据浏览。</div>';
   stub1.appendChild(el("button",{class:"stub-btn",disabled:"true","aria-disabled":"true"},ICON.lock+'<span>浏览原始事件流</span>'));
-  body.appendChild(stub1);
+  pf.appendChild(stub1);
   const stub2=el("div",{class:"stub"});
-  stub2.innerHTML='<div class="st-h">'+ICON.lock+' 投影会话自省 · 每索引健康 <span class="pending">'+ICON.warn+' 待后端</span></div>'+
-    '<div class="st-b">projection-session 自省、以及每个 ES / Neo4j 索引的健康，尚未暴露。当前可用：scope 级 active / observed vs successful / failures（见左侧 Scope Rail）。</div>';
-  body.appendChild(stub2);
+  stub2.innerHTML='<div class="st-h">'+ICON.lock+' 投影会话自省 · 每索引健康</div>'+
+    '<div class="st-b">当前可用：左侧 Scope Rail 的 active / observed vs successful / failures。</div>';
+  pf.appendChild(stub2);
+  fold.appendChild(pf);
+  body.appendChild(fold);
 
   card.appendChild(body);
   return card;
 }
 
+
 /* ===========================================================================
    compose
    =========================================================================== */
+function renderPurposeBanner(){
+  const box=el("section",{class:"purpose-banner","aria-label":"本页用途"});
+  box.innerHTML=
+    '<p class="pb-q">本页回答：读侧投影是否健康、是否滞后于权威 actor 的已提交 StateVersion？</p>'+
+    '<p class="pb-a">数据来源是已物化的 <b>projection scope 状态</b> 与 <b>read-model 清单</b>（只读）。'+
+    ' <b>lag</b> 是版本差（observed − successful），<b>不是</b> wall-clock 毫秒。</p>'+
+    '<p class="pb-not">不回答：业务 workflow 逐步执行细节（请去「运行观测台」）。不提供 rebuild / replay / query-time 补投影。</p>';
+  return box;
+}
 function render(){
   const app=$("#app"); app.innerHTML="";
   app.appendChild(renderTopbar());
   if(!state.signedIn){ app.appendChild(renderLogin()); return; }
   const body=el("div",{class:"body"});
-  body.appendChild(el("h1",{class:"page-h"},"投影观测台 · 让数据流可读"));
-  body.appendChild(el("p",{class:"page-sub"},'一个命令如何变更 actor、成为不可变的已提交事件（带单调版本的<b>单一真相源</b>），流经投影管道，物化成可查询的读模型副本——以及哪里健康、哪里滞后。读模型更新与实时 UI 流走<b>同一条管道</b>，不是两套系统。'));
+  body.appendChild(el("h1",{class:"page-h"},"投影观测台 · 读模型健康"));
+  body.appendChild(el("p",{class:"page-sub"},'命令如何成为已提交事件、流经投影管道、物化成可查询读模型——以及哪里健康、哪里版本滞后。读模型与实时 UI 流走<b>同一条管道</b>。'));
+  body.appendChild(renderPurposeBanner());
   body.appendChild(renderCanvas());
 
   const grid=el("div",{class:"grid"});
@@ -1049,6 +1176,7 @@ function render(){
   main.appendChild(renderInventory());
   grid.appendChild(main);
   const side=el("div",{class:"col-side"});
+  side.appendChild(renderScopeMeaning());
   side.appendChild(renderInspector());
   grid.appendChild(side);
   body.appendChild(grid);

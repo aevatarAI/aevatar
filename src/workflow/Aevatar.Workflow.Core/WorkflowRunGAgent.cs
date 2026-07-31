@@ -159,6 +159,9 @@ public sealed partial class WorkflowRunGAgent
     WorkflowRunExecutionContextState IWorkflowExecutionStateHost.ExecutionContextSnapshot =>
         State.ExecutionContext?.Clone() ?? new WorkflowRunExecutionContextState();
 
+    WorkflowCapabilityAdmissionPlan IWorkflowExecutionStateHost.CapabilityAdmissionPlanSnapshot =>
+        State.CapabilityAdmissionPlan?.Clone() ?? new WorkflowCapabilityAdmissionPlan();
+
     Task IWorkflowExecutionStateHost.UpdateExecutionContextAsync(
         WorkflowRunExecutionContextDelta delta,
         CancellationToken ct)
@@ -403,6 +406,7 @@ public sealed partial class WorkflowRunGAgent
         string? scopeId = null,
         string? runOrigin = null,
         string? scheduleId = null,
+        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan = null,
         CancellationToken ct = default)
     {
         EnsureWorkflowNameCanBind(workflowName);
@@ -417,6 +421,7 @@ public sealed partial class WorkflowRunGAgent
             ScopeId = scopeId?.Trim() ?? string.Empty,
             RunOrigin = runOrigin?.Trim() ?? string.Empty,
             ScheduleId = scheduleId?.Trim() ?? string.Empty,
+            CapabilityAdmissionPlan = capabilityAdmissionPlan?.Clone(),
         };
         if (inlineWorkflowYamls != null)
         {
@@ -441,7 +446,8 @@ public sealed partial class WorkflowRunGAgent
             request.RunId,
             request.ScopeId,
             request.RunOrigin,
-            request.ScheduleId);
+            request.ScheduleId,
+            request.CapabilityAdmissionPlan);
 
     public override Task<string> GetDescriptionAsync()
     {
@@ -1533,6 +1539,7 @@ public sealed partial class WorkflowRunGAgent
         next.ScheduleId = string.IsNullOrWhiteSpace(evt.ScheduleId)
             ? current.ScheduleId
             : evt.ScheduleId.Trim();
+        next.CapabilityAdmissionPlan = evt.CapabilityAdmissionPlan?.Clone();
         next.Status = "bound";
         next.Input = string.Empty;
         next.FinalOutput = string.Empty;
@@ -2861,6 +2868,7 @@ public sealed partial class WorkflowRunGAgent
             ScopeId = State.ScopeId ?? string.Empty,
             RunOrigin = State.RunOrigin ?? string.Empty,
             ScheduleId = State.ScheduleId ?? string.Empty,
+            CapabilityAdmissionPlan = State.CapabilityAdmissionPlan?.Clone(),
             InlineWorkflowYamls = { State.InlineWorkflowYamls },
         }, ct);
         await _subWorkflowOrchestrator.CancelPendingDefinitionResolutionTimeoutsAsync(stateBeforeBind, CancellationToken.None);

@@ -40,8 +40,7 @@ public class NyxIdAgentToolSourceHumanSessionGatingTests
     {
         var source = new NyxIdAgentToolSource(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
-            new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example" }, new HttpClient()),
-            externalCapabilityReadinessPort: new UnusedReadinessPort());
+            new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example" }, new HttpClient()));
 
         var tools = await source.DiscoverToolsAsync();
 
@@ -63,16 +62,4 @@ public class NyxIdAgentToolSourceHumanSessionGatingTests
     private static bool DeclaresHumanSession(IAgentTool tool) =>
         tool is IAgentToolCapabilityDescriptor descriptor &&
         descriptor.Capabilities.Contains(AgentToolCapabilities.RequiresHumanSession);
-
-    private sealed class UnusedReadinessPort : IExternalWorkflowCapabilityReadinessPort
-    {
-        public Task<ExternalCapabilityReadiness> InspectAsync(
-            InspectExternalWorkflowCapabilityReadinessRequest request,
-            CancellationToken cancellationToken = default) =>
-            Task.FromResult(new ExternalCapabilityReadiness
-            {
-                ExecutionMode = request.ExecutionMode,
-                Status = ExternalCapabilityReadinessStatus.SourceStale,
-            });
-    }
 }

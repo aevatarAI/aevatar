@@ -45,7 +45,7 @@ public sealed record ListExternalWorkflowCapabilitiesRequest(
 
 public sealed record InspectExternalWorkflowCapabilityReadinessRequest(
     ExternalWorkflowCapabilityAccessContext Access,
-    ExternalWorkflowCapabilityRef Capability,
+    ExternalWorkflowCapabilitySelector Selector,
     ExternalCapabilityExecutionMode ExecutionMode);
 
 public sealed class WorkflowExternalCapabilityAdmissionRequest
@@ -159,22 +159,22 @@ public sealed class PersistedWorkflowCapabilityAdmissionRequest
 
 public interface IExternalWorkflowCapabilitySource
 {
-    ExternalWorkflowCapabilityRef.CapabilityOneofCase CapabilityKind { get; }
+    ExternalWorkflowCapabilitySelector.SelectorOneofCase SelectorKind { get; }
 
-    Task<IReadOnlyList<ExternalWorkflowCapabilityDescriptor>> ListAsync(
+    Task<ExternalWorkflowCapabilityDiscoveryResult> ListAsync(
         ExternalWorkflowCapabilityAccessContext access,
         CancellationToken cancellationToken = default);
 
     Task<ExternalCapabilityReadiness> InspectAsync(
         ExternalWorkflowCapabilityAccessContext access,
-        ExternalWorkflowCapabilityRef capability,
+        ExternalWorkflowCapabilitySelector selector,
         ExternalCapabilityExecutionMode executionMode,
         CancellationToken cancellationToken = default);
 }
 
 public interface IExternalWorkflowCapabilityListPort
 {
-    Task<IReadOnlyList<ExternalWorkflowCapabilityDescriptor>> ListAsync(
+    Task<ExternalWorkflowCapabilityDiscoveryResult> ListAsync(
         ListExternalWorkflowCapabilitiesRequest request,
         CancellationToken cancellationToken = default);
 }

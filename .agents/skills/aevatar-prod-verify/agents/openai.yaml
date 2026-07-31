@@ -1,0 +1,4 @@
+interface:
+  display_name: "Aevatar Production Verification"
+  short_description: "Verify Aevatar production through the NyxID CLI"
+  default_prompt: "Use $aevatar-prod-verify to run an authenticated Aevatar production check through the NyxID CLI."

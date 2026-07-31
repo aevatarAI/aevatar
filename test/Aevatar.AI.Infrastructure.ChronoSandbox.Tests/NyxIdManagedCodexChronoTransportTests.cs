@@ -243,8 +243,55 @@ public sealed class NyxIdManagedCodexChronoTransportTests
         exception.Message.Should().NotContain("command failed");
     }
 
+    [Fact]
+    public async Task ExecuteAsync_StopsAtCompleteLifecycleDeadline()
+    {
+        var timeProvider = new FakeTimeProvider(Now);
+        var options = ManagedCodexOptionsValidatorTests.ValidOptions();
+        options.ExecutionLifecycleGraceSeconds = 120;
+        var handler = new UnansweredHandler(() => timeProvider.Advance(TimeSpan.FromSeconds(301)));
+        var (transport, _) = CreateTransport(handler, options, timeProvider);
+
+        var act = () => transport.ExecuteAsync(Request(timeoutSeconds: 180), Descriptor());
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        handler.ObservedToken.IsCancellationRequested.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_KeepsWaitingBeforeCompleteLifecycleDeadline()
+    {
+        var timeProvider = new FakeTimeProvider(Now);
+        var options = ManagedCodexOptionsValidatorTests.ValidOptions();
+        options.ExecutionLifecycleGraceSeconds = 120;
+        var handler = new UnansweredHandler(() => timeProvider.Advance(TimeSpan.FromSeconds(299)));
+        var (transport, _) = CreateTransport(handler, options, timeProvider);
+
+        var pending = transport.ExecuteAsync(Request(timeoutSeconds: 180), Descriptor());
+
+        pending.IsCompleted.Should().BeFalse();
+        handler.ObservedToken.IsCancellationRequested.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_StillHonoursCallerCancellation_WhenItsOwnDeadlineHasNotElapsed()
+    {
+        using var caller = new CancellationTokenSource();
+        var handler = new UnansweredHandler(caller.Cancel);
+        var options = ManagedCodexOptionsValidatorTests.ValidOptions();
+        options.ExecutionLifecycleGraceSeconds = 120;
+        var (transport, _) = CreateTransport(handler, options);
+
+        var act = () => transport.ExecuteAsync(Request(timeoutSeconds: 180), Descriptor(), caller.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        handler.ObservedToken.IsCancellationRequested.Should().BeTrue();
+    }
+
     private static (NyxIdManagedCodexChronoTransport Transport, ISecretVault Vault) CreateTransport(
-        HttpMessageHandler handler)
+        HttpMessageHandler handler,
+        ManagedCodexOptions? options = null,
+        FakeTimeProvider? timeProvider = null)
     {
         var vault = Substitute.For<ISecretVault>();
         var reference = Descriptor().SecretReference.Clone();
@@ -255,10 +302,10 @@ public sealed class NyxIdManagedCodexChronoTransportTests
             new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
         return (
             new NyxIdManagedCodexChronoTransport(
-                Options.Create(ManagedCodexOptionsValidatorTests.ValidOptions()),
+                Options.Create(options ?? ManagedCodexOptionsValidatorTests.ValidOptions()),
                 new TestNyxIdApiClientFactory(nyxClient),
                 vault,
-                new FakeTimeProvider(Now)),
+                timeProvider ?? new FakeTimeProvider(Now)),
             vault);
     }
 
@@ -287,11 +334,11 @@ public sealed class NyxIdManagedCodexChronoTransportTests
         Status = ManagedCodexCredentialStatus.Active,
     };
 
-    private static CodexExecutionRequest Request(string userId = "user-a") => new(
+    private static CodexExecutionRequest Request(string userId = "user-a", int timeoutSeconds = 180) => new(
         new CodexExecutionTarget { ManagedSandbox = new CodexManagedSandboxTarget() },
         new CodexExecutionWorkspace { EmptyGit = new CodexEmptyGitWorkspace() },
         "Reply with exactly CODEX_EXEC_READY",
-        180,
+        timeoutSeconds,
         new CodexExecutionCallerContext(
             InteractiveBearer,
             new CodexExecutionNyxIdAuthority("nyxid", string.Empty, userId),
@@ -303,6 +350,26 @@ public sealed class NyxIdManagedCodexChronoTransportTests
     private sealed class TestNyxIdApiClientFactory(NyxIdApiClient client) : INyxIdApiClientFactory
     {
         public NyxIdApiClient CreateClient() => client;
+    }
+
+    // Answers nothing, so the only way out is cancellation. Completion is driven by a
+    // TaskCompletionSource wired to the token rather than by elapsed time.
+    private sealed class UnansweredHandler(Action? onSend = null) : HttpMessageHandler
+    {
+        public CancellationToken ObservedToken { get; private set; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            ObservedToken = cancellationToken;
+            onSend?.Invoke();
+            var unanswered = new TaskCompletionSource<HttpResponseMessage>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            await using var registration = cancellationToken.Register(
+                () => unanswered.TrySetCanceled(cancellationToken));
+            return await unanswered.Task;
+        }
     }
 
     private sealed class RecordingHandler(string response) : HttpMessageHandler

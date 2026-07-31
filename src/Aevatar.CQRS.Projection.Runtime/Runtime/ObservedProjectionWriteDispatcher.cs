@@ -57,4 +57,29 @@ public sealed class ObservedProjectionWriteDispatcher<TReadModel>
             throw;
         }
     }
+
+    public async Task<ProjectionWriteResult> DeleteAsync(
+        ProjectionDocumentDeleteMarker marker,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(marker);
+        ArgumentException.ThrowIfNullOrWhiteSpace(marker.Id);
+        ct.ThrowIfCancellationRequested();
+
+        using var activity = AevatarActivitySource.StartReadmodelDelete(
+            typeof(TReadModel).Name,
+            marker.Id);
+
+        try
+        {
+            var result = await _inner.DeleteAsync(marker, ct);
+            AevatarActivitySource.SafeSetStatus(activity, ActivityStatusCode.Ok);
+            return result;
+        }
+        catch (Exception ex)
+        {
+            AevatarActivitySource.SafeSetStatus(activity, ActivityStatusCode.Error, ex.Message);
+            throw;
+        }
+    }
 }

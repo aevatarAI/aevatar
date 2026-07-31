@@ -3,7 +3,7 @@ using System.Text;
 
 namespace Aevatar.GAgents.ChatHistory;
 
-internal static class ChatTurnHistoryDeliveryActorIds
+public static class ChatTurnHistoryDeliveryActorIds
 {
     public static string FromDeliveryId(string deliveryId)
     {

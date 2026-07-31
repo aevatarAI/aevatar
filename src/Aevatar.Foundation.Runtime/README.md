@@ -66,7 +66,7 @@ Runtime 维护一棵 **Agent 树**（父/子关系）。每个事件带一个**�
 - **快照存储**：默认 `InMemoryEventSourcingSnapshotStore<TState>`；启用 `AddFileEventStore(...)` 后切换为 `FileEventSourcingSnapshotStore<TState>`。
 - **路由层级**：父子关系。
 
-Event Sourcing 默认启用自动快照与事件裁剪（快照成功后清理历史事件）：
+Event Sourcing 默认启用自动快照与事件裁剪（每次领域提交后检查增量阈值，快照成功后在同一 actor turn 清理历史事件）：
 
 - `EnableSnapshots`（默认 `true`）
 - `SnapshotInterval`（默认 `200`）

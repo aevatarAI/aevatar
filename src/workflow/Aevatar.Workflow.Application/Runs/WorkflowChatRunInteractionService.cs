@@ -33,7 +33,7 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
         _chatHistoryCreateRecoveryReadPort = chatHistoryCreateRecoveryReadPort;
     }
 
-    public async Task<CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>> ExecuteAsync(
+    public async Task<WorkflowChatRunInteractionResult> ExecuteAsync(
         WorkflowChatRunRequest request,
         Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask> emitAsync,
         Func<WorkflowChatInteractionAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,
@@ -57,7 +57,9 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
 
         var preflight = ValidatePreActorResolution(currentRequest);
         if (preflight != WorkflowChatRunStartError.None)
-            return CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>.Failure(preflight);
+            return WorkflowChatRunInteractionResult.Failure(
+                preflight,
+                WorkflowChatRunStartFailureDetail.Create(preflight));
 
         var recoveredCreate = await TryRecoverCreateAsync(currentRequest, ct).ConfigureAwait(false);
         if (recoveredCreate != null)
@@ -67,7 +69,7 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
         {
             var attempt = await StartAttemptAsync(currentRequest, ct).ConfigureAwait(false);
             if (!attempt.Succeeded)
-                return CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>.Failure(attempt.Error);
+                return WorkflowChatRunInteractionResult.Failure(attempt.Error, attempt.FailureDetail);
 
             try
             {
@@ -103,16 +105,22 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
         CancellationToken ct)
     {
         if (!_projectionPort.ProjectionEnabled)
-            return AttemptStartResult.Failure(WorkflowChatRunStartError.ProjectionDisabled);
+            return AttemptStartResult.Failure(
+                WorkflowChatRunStartError.ProjectionDisabled,
+                WorkflowChatRunStartFailureDetail.Create(WorkflowChatRunStartError.ProjectionDisabled));
 
         if (Aevatar.Workflow.Abstractions.WorkflowCallerCredentialTokens
             .ParseOptional(request.CallerCredential?.BearerToken)
             .IsInvalid)
-            return AttemptStartResult.Failure(WorkflowChatRunStartError.InvalidCallerCredential);
+            return AttemptStartResult.Failure(
+                WorkflowChatRunStartError.InvalidCallerCredential,
+                WorkflowChatRunStartFailureDetail.Create(WorkflowChatRunStartError.InvalidCallerCredential));
 
         var actorResolution = await _actorResolver.ResolveOrCreateAsync(request, ct).ConfigureAwait(false);
         if (actorResolution.Error != WorkflowChatRunStartError.None || actorResolution.Target == null)
-            return AttemptStartResult.Failure(actorResolution.Error);
+            return AttemptStartResult.Failure(
+                actorResolution.Error,
+                actorResolution.FailureDetail ?? WorkflowChatRunStartFailureDetail.Create(actorResolution.Error));
 
         var seededRequest = request with
         {
@@ -128,7 +136,7 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
             actorResolution.Target.CreatedActorIds));
     }
 
-    private async Task<CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>> ExecuteAttemptAsync(
+    private async Task<WorkflowChatRunInteractionResult> ExecuteAttemptAsync(
         WorkflowChatRunInteractionAttempt attempt,
         Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask> emitAsync,
         Func<WorkflowChatInteractionAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync,
@@ -138,15 +146,18 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
         if (chatHistoryDelivery is { Succeeded: false })
         {
             await CleanupAttemptAsync(attempt, CancellationToken.None).ConfigureAwait(false);
-            return CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
-                .Failure(MapReservationFailure(chatHistoryDelivery.Failure));
+            var error = MapReservationFailure(chatHistoryDelivery.Failure);
+            return WorkflowChatRunInteractionResult.Failure(
+                error,
+                WorkflowChatRunStartFailureDetail.Create(error));
         }
         if (chatHistoryDelivery is { Reservation.ExistingReservation: true } &&
             attempt.Request.ChatConversation?.Intent == WorkflowChatConversationIntentKind.Create)
         {
             await CleanupAttemptAsync(attempt, CancellationToken.None).ConfigureAwait(false);
-            return CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
-                .Failure(WorkflowChatRunStartError.ChatHistoryReservationUnavailable);
+            return WorkflowChatRunInteractionResult.Failure(
+                WorkflowChatRunStartError.ChatHistoryReservationUnavailable,
+                WorkflowChatRunStartFailureDetail.Create(WorkflowChatRunStartError.ChatHistoryReservationUnavailable));
         }
 
         async ValueTask OnAcceptedAsync(WorkflowChatRunAcceptedReceipt receipt, CancellationToken token)
@@ -189,15 +200,15 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
             await CleanupAttemptAsync(attempt, CancellationToken.None, chatHistoryDelivery?.Reservation).ConfigureAwait(false);
 
         if (!result.Succeeded || result.Receipt == null)
-            return CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
-                .Failure(result.Error);
+            return WorkflowChatRunInteractionResult.Failure(
+                result.Error,
+                WorkflowChatRunStartFailureDetail.Create(result.Error));
 
-        return CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
-            .Success(
-                new WorkflowChatInteractionAcceptedReceipt(result.Receipt, chatHistoryDelivery?.ChatContext),
-                result.FinalizeResult ?? new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(
-                    result.Completion,
-                    result.Completed));
+        return WorkflowChatRunInteractionResult.Success(
+            new WorkflowChatInteractionAcceptedReceipt(result.Receipt, chatHistoryDelivery?.ChatContext),
+            result.FinalizeResult ?? new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(
+                result.Completion,
+                result.Completed));
     }
 
     private async Task<WorkflowChatHistoryTerminalDeliveryReservationResult?> ReserveChatHistoryDeliveryAsync(
@@ -244,7 +255,7 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
             .ConfigureAwait(false);
     }
 
-    private async Task<CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>?> TryRecoverCreateAsync(
+    private async Task<WorkflowChatRunInteractionResult?> TryRecoverCreateAsync(
         WorkflowChatRunRequest request,
         CancellationToken ct)
     {
@@ -275,16 +286,18 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
         if (!string.IsNullOrWhiteSpace(recovery.RequestFingerprint) &&
             !string.Equals(recovery.RequestFingerprint, requestFingerprint, StringComparison.Ordinal))
         {
-            return CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
-                .Failure(WorkflowChatRunStartError.IdempotencyConflict);
+            return WorkflowChatRunInteractionResult.Failure(
+                WorkflowChatRunStartError.IdempotencyConflict,
+                WorkflowChatRunStartFailureDetail.Create(WorkflowChatRunStartError.IdempotencyConflict));
         }
 
         if (string.IsNullOrWhiteSpace(recovery.ConversationId) ||
             string.IsNullOrWhiteSpace(recovery.TurnId) ||
             string.IsNullOrWhiteSpace(recovery.WorkflowActorId))
         {
-            return CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
-                .Failure(WorkflowChatRunStartError.ChatHistoryReservationUnavailable);
+            return WorkflowChatRunInteractionResult.Failure(
+                WorkflowChatRunStartError.ChatHistoryReservationUnavailable,
+                WorkflowChatRunStartFailureDetail.Create(WorkflowChatRunStartError.ChatHistoryReservationUnavailable));
         }
 
         var receipt = new WorkflowChatInteractionAcceptedReceipt(
@@ -303,12 +316,11 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
                 recovery.TurnId.Trim(),
                 recovery.StateVersion));
 
-        return CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
-            .Success(
-                receipt,
-                new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(
-                    WorkflowProjectionCompletionStatus.Completed,
-                    false));
+        return WorkflowChatRunInteractionResult.Success(
+            receipt,
+            new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(
+                WorkflowProjectionCompletionStatus.Completed,
+                false));
     }
 
     private static WorkflowChatConversationIntent? NormalizeConversationIntent(WorkflowChatRunRequest request)
@@ -420,14 +432,17 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
 
     private sealed record AttemptStartResult(
         WorkflowChatRunInteractionAttempt? Value,
-        WorkflowChatRunStartError Error)
+        WorkflowChatRunStartError Error,
+        WorkflowChatRunStartFailureDetail? FailureDetail = null)
     {
         public bool Succeeded => Error == WorkflowChatRunStartError.None && Value != null;
 
         public static AttemptStartResult Success(WorkflowChatRunInteractionAttempt attempt) =>
             new(attempt, WorkflowChatRunStartError.None);
 
-        public static AttemptStartResult Failure(WorkflowChatRunStartError error) =>
-            new(null, error);
+        public static AttemptStartResult Failure(
+            WorkflowChatRunStartError error,
+            WorkflowChatRunStartFailureDetail? failureDetail = null) =>
+            new(null, error, failureDetail);
     }
 }

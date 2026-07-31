@@ -102,7 +102,7 @@ public sealed class ChannelWorkflowResultDeliveryContractTests
                 AccessToken: "user-token",
                 AppId: "cli_a1b2c3",
                 AppSecret: "secret-xyz",
-                VerificationToken: string.Empty,
+                VerificationToken: "verify-123",
                 WebhookBaseUrl: "https://aevatar.example.com",
                 ScopeId: "scope-1",
                 Label: "Ops Bot",

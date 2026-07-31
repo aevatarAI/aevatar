@@ -1,8 +1,3 @@
-using Aevatar.CQRS.Projection.Core.Abstractions;
-using Aevatar.CQRS.Projection.Core.DependencyInjection;
-using Aevatar.CQRS.Projection.Core.Orchestration;
-using Aevatar.CQRS.Projection.Stores.Abstractions;
-using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.GAgents.StatusDashboard.Configuration;
 using Aevatar.GAgents.StatusDashboard.Executors;
@@ -15,8 +10,8 @@ namespace Aevatar.GAgents.StatusDashboard.DependencyInjection;
 public static class StatusDashboardServiceCollectionExtensions
 {
     /// <summary>
-    /// Registers the status dashboard projection pipeline (per-target actor,
-    /// current-state projector, query port, default executors, startup service),
+    /// Registers the status dashboard actor, operational snapshot query port,
+    /// default executors, and startup service,
     /// and binds the probe manifest from the <c>Aevatar:Status</c> configuration
     /// section.
     /// </summary>
@@ -41,31 +36,9 @@ public static class StatusDashboardServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHealthProbeExecutor, HttpStatusProbeExecutor>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHealthProbeExecutor, ReadmodelFreshnessProbeExecutor>());
         services.TryAddSingleton<IHealthProbeExecutorRegistry, HealthProbeExecutorRegistry>();
+        services.TryAddSingleton<IHealthProbeOperationalSnapshotStore, InMemoryHealthProbeOperationalSnapshotStore>();
 
-        // Projection pipeline (per-actor current-state replica)
-        services.AddProjectionMaterializationRuntimeCore<
-            HealthProbeMaterializationContext,
-            HealthProbeMaterializationRuntimeLease,
-            ProjectionMaterializationScopeGAgent<HealthProbeMaterializationContext>>(
-            static scopeKey => new HealthProbeMaterializationContext
-            {
-                RootActorId = scopeKey.RootActorId,
-                ProjectionKind = scopeKey.ProjectionKind,
-            },
-            static context => new HealthProbeMaterializationRuntimeLease(context));
-        services.AddCurrentStateProjectionMaterializer<
-            HealthProbeMaterializationContext,
-            HealthProbeTargetProjector>();
-        services.TryAddSingleton<IProjectionDocumentMetadataProvider<HealthProbeTargetDocument>,
-            HealthProbeTargetDocumentMetadataProvider>();
         services.TryAddSingleton<IHealthStatusQueryPort, HealthStatusQueryPort>();
-        services.TryAddSingleton<ProjectionActivationPlanDispatcher>();
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            ICommittedStatePublicationHook,
-            CommittedStateProjectionActivationHook>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IProjectionActivationPlanProvider,
-            HealthProbeCommittedStateProjectionActivationPlanProvider>());
         services.AddHostedService<HealthProbeStartupService>();
 
         return services;

@@ -154,6 +154,10 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
         // New: DI registers this as an AddHttpClient<T> typed client; only manual construction owns this fallback.
         _http = httpClient ?? new HttpClient();
         _ownsHttpClient = httpClient is null;
+        // Only a self-created client may be configured here: mutating Timeout on a caller-supplied
+        // HttpClient throws once it has started a request, and its owner sets its own policy.
+        if (_ownsHttpClient)
+            _http.Timeout = _options.EffectiveMaxRequestDuration;
         _logger = logger ?? NullLogger<NyxIdApiClient>.Instance;
     }
 
@@ -714,6 +718,9 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
     public Task<string> DiscoverProxyServicesAsync(string token, CancellationToken ct) =>
         GetAsync(token, NyxIdLlmCatalogRoutes.ProxyServicesPath, ct);
 
+    public Task<string> GetMcpConfigAsync(string token, CancellationToken ct) =>
+        GetAsync(token, "/api/v1/mcp/config", ct);
+
     /// <summary>
     /// Fetches the NyxID proxy-aware OpenAPI document for a connected service
     /// (<c>GET /api/v1/proxy/services/{service_id}/openapi.json</c>). NyxID rewrites
@@ -1220,7 +1227,7 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
         return callerSpecifiedUserAgent;
     }
 
-    private static string NormalizeExactProxyPath(string relativePath)
+    internal static string NormalizeExactProxyPath(string relativePath)
     {
         var candidate = relativePath.Trim();
         var withoutLeadingSlash = candidate.TrimStart('/');

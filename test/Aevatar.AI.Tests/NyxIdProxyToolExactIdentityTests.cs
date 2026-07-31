@@ -13,14 +13,17 @@ namespace Aevatar.AI.Tests;
 public sealed class NyxIdProxyToolExactIdentityTests
 {
     [Fact]
-    public void ParametersSchema_ShouldRequireAdmittedExactOperationTuple()
+    public void ParametersSchema_ShouldDescribeExactIdentityWithoutForcingItOnProofBoundCalls()
     {
         var tool = CreateTool(new CountingHandler());
 
         using var schema = JsonDocument.Parse(tool.ParametersSchema);
-        schema.RootElement.GetProperty("required").EnumerateArray()
-            .Select(static item => item.GetString())
-            .Should().BeEquivalentTo("service_id", "slug", "path");
+        var root = schema.RootElement;
+        var properties = root.GetProperty("properties");
+        properties.TryGetProperty("service_id", out _).Should().BeTrue();
+        properties.TryGetProperty("slug", out _).Should().BeTrue();
+        properties.TryGetProperty("path", out _).Should().BeTrue();
+        root.TryGetProperty("required", out _).Should().BeFalse();
     }
 
     [Fact]

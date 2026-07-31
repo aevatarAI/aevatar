@@ -2024,11 +2024,9 @@ const TeamDetailPage: React.FC = () => {
           routeState.routeMemberId,
         ])}
         members={teamRosterRows.map((row) => ({
-          automationsHref: row.automationsHref,
           canAutomateMember: row.canAutomateMember,
           disabledReason: row.automationDisabledReason,
           implementationKind: row.implementationKind,
-          isSelectedMember: row.isSelectedMember,
           key: row.key,
           lifecycleLabel: row.lifecycleLabel,
           lifecycleStyle: row.lifecycleStyle,

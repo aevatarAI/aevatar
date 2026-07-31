@@ -29,6 +29,7 @@ import type { ScopeServiceRunSummary } from "@/shared/models/runtime/scopeServic
 import type { ServiceCatalogSnapshot } from "@/shared/models/services";
 import {
   formatStudioMemberLifecycleStage,
+  normalizeStudioTeamLifecycleStage,
   type StudioMemberSummary,
   type StudioTeamSummary,
 } from "@/shared/studio/models";
@@ -835,15 +836,11 @@ function buildTeamRosterPreview(input: {
     teamId: input.team.teamId,
   });
 
-  let attention: TeamOperationalAttention =
+  const attention: TeamOperationalAttention =
     runtimeSignalPreview?.attention ?? "draft";
-  let attentionDetail = t("pages.teams.home.team", "This team has no members yet. Next: add an entry member, then test the team.");
-  if (input.team.lifecycleStage === "archived") {
-    attention = "draft";
-    attentionDetail = t("pages.teams.home.team.roster", "This team has been archived; the list keeps only its backend roster fact.");
-  } else if (runtimeSignalPreview) {
-    attentionDetail = runtimeSignalPreview.attentionDetail;
-  }
+  const attentionDetail =
+    runtimeSignalPreview?.attentionDetail ??
+    t("pages.teams.home.team", "This team has no members yet. Next: add an entry member, then test the team.");
 
   return {
     attention,
@@ -1285,6 +1282,14 @@ const TeamsHomePage: React.FC = () => {
       ].sort(compareTeams),
     [scopeId, teamsQuery.data?.teams],
   );
+  const visibleStudioTeams = React.useMemo(
+    () =>
+      studioTeams.filter(
+        (team) =>
+          normalizeStudioTeamLifecycleStage(team.lifecycleStage) !== "archived",
+      ),
+    [studioTeams],
+  );
   const membersByTeamId = React.useMemo(
     () => groupMembersByTeamId(studioMembers),
     [studioMembers],
@@ -1300,7 +1305,7 @@ const TeamsHomePage: React.FC = () => {
       readonly serviceId: string;
     }> = [];
 
-    studioTeams.forEach((team) => {
+    visibleStudioTeams.forEach((team) => {
       const entryMemberId = trimOptional(team.entryMemberId);
       if (!entryMemberId) {
         return;
@@ -1319,7 +1324,7 @@ const TeamsHomePage: React.FC = () => {
     });
 
     return result;
-  }, [studioMembers, studioTeams]);
+  }, [studioMembers, visibleStudioTeams]);
   const runtimeTrackableServiceIds = React.useMemo(
     () =>
       Array.from(
@@ -1364,7 +1369,7 @@ const TeamsHomePage: React.FC = () => {
   );
   const teamPreviews = React.useMemo(
     () =>
-      studioTeams.map((team) =>
+      visibleStudioTeams.map((team) =>
         buildTeamRosterPreview({
           members: membersByTeamId.get(team.teamId) ?? [],
           runsByMemberId,
@@ -1379,7 +1384,7 @@ const TeamsHomePage: React.FC = () => {
       queryScopeId,
       scopeId,
       servicesQuery.data,
-      studioTeams,
+      visibleStudioTeams,
     ],
   );
   const visibleTeamCount = teamPreviews.length;

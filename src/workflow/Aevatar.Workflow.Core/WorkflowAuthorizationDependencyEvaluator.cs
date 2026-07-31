@@ -8,119 +8,227 @@ public static class WorkflowAuthorizationDependencyEvaluator
 {
     internal const string DefaultConnectorOperationId = "__default__";
 
-    private static readonly HashSet<string> HttpMethods = new(StringComparer.OrdinalIgnoreCase)
+    /// <summary>The workflow tool whose every call site must carry a committed admission proof.</summary>
+    public const string NyxIdProxyToolName = "nyxid_proxy";
+
+    private static readonly HashSet<string> NyxIdRuntimeArgumentNames = new(StringComparer.Ordinal)
     {
-        "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS",
+        "path_params",
+        "query",
+        "headers",
+        "body",
+        "response_mode",
     };
+
+    private static readonly HashSet<string> NyxIdServerDerivedArgumentNames = new(StringComparer.Ordinal)
+    {
+        "service",
+        "service_id",
+        "user_service_id",
+        "slug",
+        "service_slug_snapshot",
+        "operation_id",
+        "endpoint_id",
+        "method",
+        "http_method",
+        "path",
+        "path_template",
+        "schema",
+        "contract_digest",
+        "source_stamp",
+    };
+
+    /// <summary>True when a dispatched tool may only run against a committed call-site proof.</summary>
+    public static bool RequiresExternalCapabilityAdmission(string? toolName) =>
+        string.Equals(toolName?.Trim(), NyxIdProxyToolName, StringComparison.OrdinalIgnoreCase);
 
     public static WorkflowAuthorizationDependencies Evaluate(WorkflowDefinition workflow)
     {
         ArgumentNullException.ThrowIfNull(workflow);
 
-        var externalCapabilities = EnumerateSteps(workflow.Steps)
-            .Select(TryEvaluateExternalCapability)
-            .Where(static capability => capability is not null)
-            .Select(static capability => capability!)
+        var invocations = EnumerateInvocationSteps(workflow)
+            .Select(TryCompileExternalInvocation)
+            .Where(static invocation => invocation is not null)
+            .Select(static invocation => invocation!)
+            .OrderBy(static invocation => invocation.CallSiteId, StringComparer.Ordinal)
             .ToArray();
-        var hasNyxIdCapability = externalCapabilities.Any(static capability =>
-            capability.CapabilityCase == ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService);
+        EnsureUniqueCallSites(invocations);
 
+        var hasNyxIdInvocation = invocations.Any(static invocation =>
+            RequiresExternalCapabilityAdmission(invocation.ToolName));
         var dependencies = new WorkflowAuthorizationDependencies
         {
             OwnerLlmRouteRequired = WorkflowLlmRuntimePolicy.RequiresLlmProvider(workflow),
-            ServiceGrantPolicy = hasNyxIdCapability
+            ServiceGrantPolicy = hasNyxIdInvocation
                 ? WorkflowServiceGrantPolicy.Required
                 : WorkflowServiceGrantPolicy.NotRequiredNoExternalService,
         };
-        dependencies.ExternalCapabilities.Add(externalCapabilities);
+        dependencies.ExternalInvocations.Add(invocations.Select(static invocation => invocation.Clone()));
         return dependencies;
     }
 
-    private static ExternalWorkflowCapabilityRef? TryEvaluateExternalCapability(StepDefinition step)
+    /// <summary>
+    /// Compiles the external invocation for a step dispatched directly by the execution kernel.
+    /// Runtime and admission must derive the same call-site identity, so both go through here.
+    /// </summary>
+    public static ExternalToolInvocationSpec? TryCompileDirectInvocation(
+        string workflowName,
+        StepDefinition step)
     {
-        var canonicalType = WorkflowPrimitiveCatalog.ToCanonicalType(step.Type);
-        if (string.Equals(canonicalType, "connector_call", StringComparison.OrdinalIgnoreCase))
-            return EvaluateConnectorCapability(step);
+        ArgumentNullException.ThrowIfNull(step);
+        return TryCompileExternalInvocation(
+            new InvocationStep(step, BuildCallSiteId(workflowName, step.Id), IsSynthesized: false));
+    }
 
-        if (!string.Equals(canonicalType, "tool_call", StringComparison.OrdinalIgnoreCase) ||
-            !step.Parameters.TryGetValue("tool", out var toolName) ||
-            !string.Equals(toolName.Trim(), "nyxid_proxy", StringComparison.OrdinalIgnoreCase))
+    /// <summary>
+    /// Compiles the external invocation for the sub-step a looping primitive synthesizes at runtime.
+    /// The call-site identity is the owner step's, never the dynamic per-item or per-iteration id.
+    /// </summary>
+    public static ExternalToolInvocationSpec? TryCompileSynthesizedSubStepInvocation(
+        string workflowName,
+        StepDefinition ownerStep)
+    {
+        ArgumentNullException.ThrowIfNull(ownerStep);
+        var synthesized = TryBuildSynthesizedSubStep(ownerStep);
+        return synthesized is null
+            ? null
+            : TryCompileExternalInvocation(new InvocationStep(
+                synthesized,
+                BuildSynthesizedCallSiteId(workflowName, ownerStep.Id),
+                IsSynthesized: true));
+    }
+
+    private static ExternalToolInvocationSpec? TryCompileExternalInvocation(InvocationStep invocation)
+    {
+        var canonicalType = WorkflowPrimitiveCatalog.ToCanonicalType(invocation.Step.Type);
+        if (string.Equals(canonicalType, "connector_call", StringComparison.OrdinalIgnoreCase))
+            return CompileConnectorInvocation(invocation);
+
+        if (!string.Equals(canonicalType, "tool_call", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        if (!invocation.Step.Parameters.TryGetValue("tool", out var rawToolName) ||
+            string.IsNullOrWhiteSpace(rawToolName))
         {
+            if (invocation.IsSynthesized)
+                throw Invalid(invocation.Step, "indirect tool_call requires one static tool name.");
             return null;
         }
 
-        return EvaluateNyxIdCapability(step);
+        var toolName = rawToolName.Trim();
+        if (ContainsTemplate(toolName))
+            throw Invalid(invocation.Step, "tool name must be static.");
+
+        if (!RequiresExternalCapabilityAdmission(toolName))
+        {
+            if (invocation.Step.Capability is not null)
+                throw Invalid(invocation.Step, "step capability is only valid for its matching external tool invocation.");
+            return null;
+        }
+
+        ValidateNyxIdRuntimeArguments(invocation.Step);
+        var selector = invocation.Step.Capability?.Clone() ?? new ExternalWorkflowCapabilitySelector();
+        if (selector.SelectorCase is not (
+                ExternalWorkflowCapabilitySelector.SelectorOneofCase.None or
+                ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdOperation))
+        {
+            throw SelectionInvalid(invocation.Step, "nyxid_proxy requires a NyxID operation selector.");
+        }
+
+        if (selector.SelectorCase == ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdOperation)
+            ValidateNyxIdSelector(invocation.Step, selector.NyxIdOperation);
+
+        return new ExternalToolInvocationSpec
+        {
+            CallSiteId = invocation.CallSiteId,
+            ToolName = NyxIdProxyToolName,
+            Selector = selector,
+        };
     }
 
-    private static ExternalWorkflowCapabilityRef EvaluateConnectorCapability(StepDefinition step)
+    private static ExternalToolInvocationSpec CompileConnectorInvocation(InvocationStep invocation)
     {
-        var connectorRef = ReadStaticStepParameter(step, "connector", required: true);
-        var operationId = ReadFirstStaticStepParameter(step, ["operation", "action"])
+        var connectorRef = ReadStaticStepParameter(invocation.Step, "connector", required: true);
+        var operationId = ReadFirstStaticStepParameter(invocation.Step, ["operation", "action"])
                           ?? DefaultConnectorOperationId;
-        var contractDigest = ReadStaticStepParameter(step, "contract_digest", required: false) ?? string.Empty;
-
-        return new ExternalWorkflowCapabilityRef
+        var contractDigest = ReadStaticStepParameter(invocation.Step, "contract_digest", required: false)
+                             ?? string.Empty;
+        return new ExternalToolInvocationSpec
         {
-            HostConnector = new HostConnectorCapabilityRef
+            CallSiteId = invocation.CallSiteId,
+            ToolName = "connector_call",
+            Selector = new ExternalWorkflowCapabilitySelector
             {
-                ConnectorCapabilityRef = connectorRef!,
-                OperationId = operationId,
-                ContractDigest = contractDigest,
+                HostConnector = new HostConnectorCapabilityRef
+                {
+                    ConnectorCapabilityRef = connectorRef!,
+                    OperationId = operationId,
+                    ContractDigest = contractDigest,
+                },
             },
         };
     }
 
-    private static ExternalWorkflowCapabilityRef EvaluateNyxIdCapability(StepDefinition step)
+    private static void ValidateNyxIdSelector(StepDefinition step, NyxIdOperationSelector selector)
+    {
+        if (string.IsNullOrWhiteSpace(selector.UserServiceId) ||
+            string.IsNullOrWhiteSpace(selector.EndpointId))
+        {
+            throw SelectionInvalid(step, "NyxID capability must select an exact connected service and operation.");
+        }
+
+        if (ContainsTemplate(selector.UserServiceId) || ContainsTemplate(selector.EndpointId))
+            throw SelectionInvalid(step, "NyxID service and operation selectors must be static.");
+    }
+
+    private static void ValidateNyxIdRuntimeArguments(StepDefinition step)
     {
         if (!step.Parameters.TryGetValue("arguments", out var arguments) ||
             string.IsNullOrWhiteSpace(arguments))
         {
-            throw Invalid(step, "nyxid_proxy arguments must be a static JSON object.");
+            return;
         }
 
         try
         {
             using var document = JsonDocument.Parse(arguments);
-            var root = document.RootElement;
-            if (root.ValueKind != JsonValueKind.Object)
-                throw Invalid(step, "nyxid_proxy arguments must be a static JSON object.");
-            if (root.TryGetProperty("service", out _))
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+                throw ArgumentInvalid(step, "nyxid_proxy arguments must be a JSON object.");
+
+            foreach (var property in document.RootElement.EnumerateObject())
             {
-                throw Invalid(
-                    step,
-                    "nyxid_proxy service aliases are not identities; exact service_id is required.");
+                if (NyxIdServerDerivedArgumentNames.Contains(property.Name))
+                {
+                    throw MigrationInvalid(
+                        step,
+                        $"nyxid_proxy derived field '{property.Name}' cannot be authored; select a connected-service operation and rebind.");
+                }
+
+                if (!NyxIdRuntimeArgumentNames.Contains(property.Name))
+                    throw ArgumentInvalid(step, $"nyxid_proxy runtime argument '{property.Name}' is not supported.");
             }
 
-            var serviceId = ReadRequiredStaticString(step, root, "service_id");
-            var slug = ReadRequiredStaticString(step, root, "slug");
-            var operationId = ReadRequiredStaticString(step, root, "operation_id");
-            var method = ReadRequiredStaticString(step, root, "method").ToUpperInvariant();
-            var path = ReadRequiredStaticString(step, root, "path");
-            var contractDigest = ReadRequiredStaticString(step, root, "contract_digest");
-            if (!HttpMethods.Contains(method))
-                throw Invalid(step, $"nyxid_proxy method '{method}' is not supported.");
-
-            ValidateHeaders(step, root);
-            return new ExternalWorkflowCapabilityRef
+            ValidateObjectSlot(step, document.RootElement, "path_params");
+            ValidateObjectSlot(step, document.RootElement, "query");
+            ValidateHeaders(step, document.RootElement);
+            if (document.RootElement.TryGetProperty("response_mode", out var responseMode) &&
+                responseMode.ValueKind != JsonValueKind.String)
             {
-                NyxIdUserService = new NyxIdUserServiceCapabilityRef
-                {
-                    UserServiceId = serviceId,
-                    ServiceSlugSnapshot = slug,
-                    OperationId = operationId,
-                    HttpMethod = method,
-                    PathTemplate = path,
-                    ContractDigest = contractDigest,
-                },
-            };
-        }
-        catch (WorkflowExternalCapabilityValidationException)
-        {
-            throw;
+                throw ArgumentInvalid(step, "nyxid_proxy response_mode must be a string.");
+            }
         }
         catch (JsonException)
         {
-            throw Invalid(step, "nyxid_proxy arguments must be valid static JSON.");
+            throw ArgumentInvalid(step, "nyxid_proxy arguments must be valid JSON.");
+        }
+    }
+
+    private static void ValidateObjectSlot(StepDefinition step, JsonElement arguments, string propertyName)
+    {
+        if (arguments.TryGetProperty(propertyName, out var value) &&
+            value.ValueKind != JsonValueKind.Object)
+        {
+            throw ArgumentInvalid(step, $"nyxid_proxy {propertyName} must be a JSON object.");
         }
     }
 
@@ -129,13 +237,13 @@ public static class WorkflowAuthorizationDependencyEvaluator
         if (!arguments.TryGetProperty("headers", out var headers))
             return;
         if (headers.ValueKind != JsonValueKind.Object)
-            throw Invalid(step, "nyxid_proxy headers must be a JSON object.");
+            throw ArgumentInvalid(step, "nyxid_proxy headers must be a JSON object.");
 
         foreach (var header in headers.EnumerateObject())
         {
             if (IsSensitiveHeader(header.Name))
             {
-                throw Invalid(
+                throw ArgumentInvalid(
                     step,
                     $"nyxid_proxy sensitive header '{header.Name}' cannot be supplied by Workflow YAML.");
             }
@@ -156,18 +264,73 @@ public static class WorkflowAuthorizationDependencyEvaluator
                normalized.EndsWith("authtoken", StringComparison.Ordinal);
     }
 
-    private static string ReadRequiredStaticString(
-        StepDefinition step,
-        JsonElement owner,
-        string propertyName)
+    private static IEnumerable<InvocationStep> EnumerateInvocationSteps(WorkflowDefinition workflow)
     {
-        if (!owner.TryGetProperty(propertyName, out var value) || value.ValueKind != JsonValueKind.String)
-            throw Invalid(step, $"nyxid_proxy exact {propertyName} is required.");
+        foreach (var step in EnumerateSteps(workflow.Steps))
+        {
+            yield return new InvocationStep(
+                step,
+                BuildCallSiteId(workflow.Name, step.Id),
+                IsSynthesized: false);
 
-        var normalized = value.GetString()?.Trim();
-        if (string.IsNullOrWhiteSpace(normalized) || ContainsTemplate(normalized))
-            throw Invalid(step, $"nyxid_proxy exact static {propertyName} is required.");
-        return normalized;
+            var synthesized = TryBuildSynthesizedSubStep(step);
+            if (synthesized is not null)
+            {
+                yield return new InvocationStep(
+                    synthesized,
+                    BuildSynthesizedCallSiteId(workflow.Name, step.Id),
+                    IsSynthesized: true);
+            }
+        }
+    }
+
+    private static StepDefinition? TryBuildSynthesizedSubStep(StepDefinition owner)
+    {
+        var ownerType = WorkflowPrimitiveCatalog.ToCanonicalType(owner.Type);
+        if (ownerType is not ("foreach" or "while"))
+            return null;
+
+        var subStepTypeKey = ownerType == "foreach" ? "sub_step_type" : "step";
+        var defaultSubStepType = ownerType == "foreach" ? "parallel" : "llm_call";
+        var subStepType = owner.Parameters.GetValueOrDefault(subStepTypeKey, defaultSubStepType);
+        var canonicalSubStepType = WorkflowPrimitiveCatalog.ToCanonicalType(subStepType);
+        var subParameters = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (key, value) in owner.Parameters)
+        {
+            if (key.StartsWith("sub_param_", StringComparison.OrdinalIgnoreCase))
+                subParameters[key["sub_param_".Length..]] = value;
+        }
+
+        return new StepDefinition
+        {
+            Id = $"{owner.Id}/sub-step",
+            Type = canonicalSubStepType,
+            TargetRole = owner.Parameters.GetValueOrDefault("sub_target_role"),
+            Parameters = subParameters,
+            Capability = owner.Capability?.Clone(),
+        };
+    }
+
+    private static string BuildSynthesizedCallSiteId(string workflowName, string ownerStepId) =>
+        $"{BuildCallSiteId(workflowName, ownerStepId)}/sub-step";
+
+    private static string BuildCallSiteId(string workflowName, string stepId)
+    {
+        var normalizedWorkflow = workflowName?.Trim() ?? string.Empty;
+        var normalizedStep = stepId?.Trim() ?? string.Empty;
+        return string.IsNullOrWhiteSpace(normalizedWorkflow)
+            ? normalizedStep
+            : $"{normalizedWorkflow}/{normalizedStep}";
+    }
+
+    private static void EnsureUniqueCallSites(IEnumerable<ExternalToolInvocationSpec> invocations)
+    {
+        var duplicate = invocations
+            .GroupBy(static invocation => invocation.CallSiteId, StringComparer.Ordinal)
+            .FirstOrDefault(static group => group.Count() > 1);
+        if (duplicate is not null)
+            throw new WorkflowExternalCapabilityValidationException(
+                $"Workflow external capability call site '{duplicate.Key}' is duplicated.");
     }
 
     private static string? ReadFirstStaticStepParameter(StepDefinition step, IReadOnlyList<string> names)
@@ -203,7 +366,96 @@ public static class WorkflowAuthorizationDependencyEvaluator
     private static WorkflowExternalCapabilityValidationException Invalid(
         StepDefinition step,
         string detail) =>
-        new($"Workflow step '{step.Id}' external capability is invalid: {detail}");
+        TypedInvalid(
+            step,
+            detail,
+            ExternalCapabilityReadinessStatus.ContractDrift,
+            "WORKFLOW_EXTERNAL_CAPABILITY_DECLARATION_INVALID",
+            "The workflow external capability declaration is invalid.",
+            ExternalCapabilityRemediationActionKind.RebindWorkflow);
+
+    private static WorkflowExternalCapabilityValidationException SelectionInvalid(
+        StepDefinition step,
+        string detail) =>
+        TypedInvalid(
+            step,
+            detail,
+            ExternalCapabilityReadinessStatus.OperationSelectionRequired,
+            "NYXID_OPERATION_SELECTION_REQUIRED",
+            "Select an exact connected service operation.",
+            ExternalCapabilityRemediationActionKind.SelectOperation);
+
+    private static WorkflowExternalCapabilityValidationException MigrationInvalid(
+        StepDefinition step,
+        string detail) =>
+        TypedInvalid(
+            step,
+            detail,
+            ExternalCapabilityReadinessStatus.ContractDrift,
+            "NYXID_OPERATION_AUTHORING_MIGRATION_REQUIRED",
+            "The workflow contains legacy NyxID operation proof fields.",
+            ExternalCapabilityRemediationActionKind.RebindWorkflow);
+
+    private static WorkflowExternalCapabilityValidationException ArgumentInvalid(
+        StepDefinition step,
+        string detail) =>
+        TypedInvalid(
+            step,
+            detail,
+            ExternalCapabilityReadinessStatus.ContractDrift,
+            "NYXID_OPERATION_ARGUMENT_INVALID",
+            "The NyxID operation runtime arguments are invalid.",
+            ExternalCapabilityRemediationActionKind.RebindWorkflow);
+
+    private static WorkflowExternalCapabilityValidationException TypedInvalid(
+        StepDefinition step,
+        string detail,
+        ExternalCapabilityReadinessStatus status,
+        string code,
+        string safeMessage,
+        ExternalCapabilityRemediationActionKind remediationKind)
+    {
+        var readiness = new ExternalCapabilityReadiness
+        {
+            Status = status,
+            SelectedSelector = SafeSelector(step.Capability),
+        };
+        readiness.Blockers.Add(new ExternalCapabilityBlocker
+        {
+            Status = status,
+            Code = code,
+            SafeMessage = safeMessage,
+        });
+        readiness.Remediations.Add(new ExternalCapabilityRemediation
+        {
+            ActionKind = remediationKind,
+            Label = remediationKind == ExternalCapabilityRemediationActionKind.SelectOperation
+                ? "Select operation"
+                : "Update and rebind workflow",
+        });
+        return new WorkflowExternalCapabilityValidationException(
+            $"Workflow step '{step.Id}' external capability is invalid: {detail}",
+            readiness);
+    }
+
+    private static ExternalWorkflowCapabilitySelector? SafeSelector(
+        ExternalWorkflowCapabilitySelector? selector)
+    {
+        if (selector?.SelectorCase !=
+            ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdOperation)
+        {
+            return null;
+        }
+
+        var userServiceId = selector.NyxIdOperation.UserServiceId;
+        var endpointId = selector.NyxIdOperation.EndpointId;
+        return string.IsNullOrWhiteSpace(userServiceId) ||
+               string.IsNullOrWhiteSpace(endpointId) ||
+               ContainsTemplate(userServiceId) ||
+               ContainsTemplate(endpointId)
+            ? null
+            : selector.Clone();
+    }
 
     private static IEnumerable<StepDefinition> EnumerateSteps(IEnumerable<StepDefinition> steps)
     {
@@ -214,4 +466,9 @@ public static class WorkflowAuthorizationDependencyEvaluator
                 yield return child;
         }
     }
+
+    private sealed record InvocationStep(
+        StepDefinition Step,
+        string CallSiteId,
+        bool IsSynthesized);
 }

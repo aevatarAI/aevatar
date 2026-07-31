@@ -38,9 +38,9 @@ public static class NyxIdLoginFinalizationEndpoints
                 captureUnauthenticated: true)
             .AllowAnonymous()
             .Produces<NyxIdLoginFinalizationResponse>(StatusCodes.Status200OK)
-            .Produces(StatusCodes.Status400BadRequest)
-            .Produces(StatusCodes.Status409Conflict)
-            .Produces(StatusCodes.Status503ServiceUnavailable);
+            .ProducesProblem(StatusCodes.Status400BadRequest)
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         app.MapPost("/api/auth/nyxid/authorization-catalog:refresh", HandleAuthorizationCatalogRefreshAsync)
             .WithTags("Auth")
@@ -183,11 +183,11 @@ public static class NyxIdLoginFinalizationEndpoints
         var logger = loggerFactory.CreateLogger("Aevatar.Studio.NyxIdLoginFinalization");
 
         if (string.IsNullOrWhiteSpace(request.Code))
-            return Results.BadRequest(new { error = "code_missing" });
+            return LoginFinalizationProblem(StatusCodes.Status400BadRequest, "code_missing", "The NyxID authorization code is required.");
         if (string.IsNullOrWhiteSpace(request.CodeVerifier))
-            return Results.BadRequest(new { error = "code_verifier_missing" });
+            return LoginFinalizationProblem(StatusCodes.Status400BadRequest, "code_verifier_missing", "The PKCE code verifier is required.");
         if (string.IsNullOrWhiteSpace(request.RedirectUri))
-            return Results.BadRequest(new { error = "redirect_uri_missing" });
+            return LoginFinalizationProblem(StatusCodes.Status400BadRequest, "redirect_uri_missing", "The login redirect URI is required.");
 
         BrokerAuthorizationCodeResult exchange;
         try
@@ -199,49 +199,67 @@ public static class NyxIdLoginFinalizationEndpoints
         catch (NyxIdRequiredServiceAccessException ex)
         {
             logger.LogInformation(ex, "NyxID login did not grant every required service resource.");
-            return Results.Json(new
-            {
-                error = "required_service_access_missing",
-                detail = "Return to login and allow access to the Aevatar and default LLM services in NyxID.",
-            }, statusCode: StatusCodes.Status409Conflict);
+            return LoginFinalizationProblem(
+                StatusCodes.Status409Conflict,
+                "required_service_access_missing",
+                "Return to login and allow access to the Aevatar and default LLM services in NyxID.");
+        }
+        catch (AevatarOAuthClientNotProvisionedException ex)
+        {
+            logger.LogError(ex, "NyxID login finalization failed: the Aevatar OAuth client is not provisioned.");
+            return LoginFinalizationProblem(
+                StatusCodes.Status503ServiceUnavailable,
+                "oauth_client_not_provisioned",
+                "Aevatar OAuth client has not been provisioned at NyxID yet.");
+        }
+        // RFC 6749 §5.2: the token endpoint answers 400 for a bad grant
+        // (expired/replayed code), while 401 means the OAuth client itself is
+        // rejected — a service-side provisioning fault, not a user-recoverable one.
+        catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.BadRequest)
+        {
+            logger.LogWarning(ex, "NyxID rejected the login authorization code.");
+            return LoginFinalizationProblem(
+                StatusCodes.Status400BadRequest,
+                "authorization_code_rejected",
+                "NyxID rejected the authorization code; restart login to obtain a fresh code.");
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "NyxID login finalization authorization-code exchange failed.");
-            return Results.Json(new
-            {
-                error = "token_exchange_failed",
-                detail = "NyxID login finalization failed during authorization-code exchange.",
-            }, statusCode: StatusCodes.Status502BadGateway);
+            return LoginFinalizationProblem(
+                StatusCodes.Status503ServiceUnavailable,
+                "token_exchange_failed",
+                "NyxID login finalization failed during authorization-code exchange.");
         }
 
         if (string.IsNullOrWhiteSpace(exchange.BindingId))
         {
-            return Results.Json(new
-            {
-                error = "broker_capability_disabled",
-                detail = "NyxID did not return a broker binding id for this login.",
-            }, statusCode: StatusCodes.Status409Conflict);
+            return LoginFinalizationProblem(
+                StatusCodes.Status409Conflict,
+                "broker_capability_disabled",
+                "NyxID did not return a broker binding id for this login.");
         }
 
         if (string.IsNullOrWhiteSpace(exchange.AccessToken))
         {
-            return Results.Json(new
-            {
-                error = "access_token_missing",
-                detail = "NyxID did not return an access token for this login.",
-            }, statusCode: StatusCodes.Status502BadGateway);
+            return LoginFinalizationProblem(
+                StatusCodes.Status503ServiceUnavailable,
+                "access_token_missing",
+                "NyxID did not return an access token for this login.");
         }
 
         var user = ResolveUserInfo(exchange.IdToken);
         if (string.IsNullOrWhiteSpace(user.Sub))
         {
             await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
-            return Results.Json(new
-            {
-                error = "subject_missing",
-                detail = "NyxID login finalization could not resolve a stable user subject.",
-            }, statusCode: StatusCodes.Status502BadGateway);
+            return LoginFinalizationProblem(
+                StatusCodes.Status503ServiceUnavailable,
+                "subject_missing",
+                "NyxID login finalization could not resolve a stable user subject.");
         }
 
         var subject = new ExternalSubjectRef
@@ -296,11 +314,10 @@ public static class NyxIdLoginFinalizationEndpoints
                 if (probeResult == ExistingBindingProbeResult.Unavailable)
                 {
                     await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
-                    return Results.Json(new
-                    {
-                        error = "binding_probe_failed",
-                        detail = "NyxID owner binding could not be verified; retry login finalization later.",
-                    }, statusCode: StatusCodes.Status503ServiceUnavailable);
+                    return LoginFinalizationProblem(
+                        StatusCodes.Status503ServiceUnavailable,
+                        "binding_probe_failed",
+                        "NyxID owner binding could not be verified; retry login finalization later.");
                 }
 
                 replacementReason = "nyxid_login_recovery";
@@ -330,11 +347,10 @@ public static class NyxIdLoginFinalizationEndpoints
             if (replaceResult != BindingDispatchOutcome.Accepted)
             {
                 await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
-                return Results.Json(new
-                {
-                    error = replaceResult == BindingDispatchOutcome.Rejected ? "actor_dispatch_rejected" : "actor_dispatch_failed",
-                    detail = "NyxID owner binding replacement could not be queued.",
-                }, statusCode: StatusCodes.Status503ServiceUnavailable);
+                return LoginFinalizationProblem(
+                    StatusCodes.Status503ServiceUnavailable,
+                    replaceResult == BindingDispatchOutcome.Rejected ? "actor_dispatch_rejected" : "actor_dispatch_failed",
+                    "NyxID owner binding replacement could not be queued.");
             }
 
             return await CompleteLoginAsync(
@@ -369,11 +385,10 @@ public static class NyxIdLoginFinalizationEndpoints
         if (commitResult != BindingDispatchOutcome.Accepted)
         {
             await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
-            return Results.Json(new
-            {
-                error = commitResult == BindingDispatchOutcome.Rejected ? "actor_dispatch_rejected" : "actor_dispatch_failed",
-                detail = "NyxID owner binding could not be queued for local persistence.",
-            }, statusCode: StatusCodes.Status503ServiceUnavailable);
+            return LoginFinalizationProblem(
+                StatusCodes.Status503ServiceUnavailable,
+                commitResult == BindingDispatchOutcome.Rejected ? "actor_dispatch_rejected" : "actor_dispatch_failed",
+                "NyxID owner binding could not be queued for local persistence.");
         }
 
         return await CompleteLoginAsync(
@@ -592,22 +607,29 @@ public static class NyxIdLoginFinalizationEndpoints
     private static IResult BuildIssuedBindingProbeError(IssuedBindingProbeResult probeResult) =>
         probeResult switch
         {
-            IssuedBindingProbeResult.MissingRequiredAccess => Results.Json(new
-            {
-                error = "required_service_access_missing",
-                detail = "Return to NyxID and keep every service marked as required by Aevatar selected.",
-            }, statusCode: StatusCodes.Status409Conflict),
-            IssuedBindingProbeResult.Invalid => Results.Json(new
-            {
-                error = "issued_binding_invalid",
-                detail = "NyxID issued a binding that was unavailable before Aevatar could adopt it.",
-            }, statusCode: StatusCodes.Status502BadGateway),
-            _ => Results.Json(new
-            {
-                error = "issued_binding_probe_failed",
-                detail = "The new NyxID service grant could not be verified; retry later.",
-            }, statusCode: StatusCodes.Status503ServiceUnavailable),
+            IssuedBindingProbeResult.MissingRequiredAccess => LoginFinalizationProblem(
+                StatusCodes.Status409Conflict,
+                "required_service_access_missing",
+                "Return to NyxID and keep every service marked as required by Aevatar selected."),
+            IssuedBindingProbeResult.Invalid => LoginFinalizationProblem(
+                StatusCodes.Status503ServiceUnavailable,
+                "issued_binding_invalid",
+                "NyxID issued a binding that was unavailable before Aevatar could adopt it."),
+            _ => LoginFinalizationProblem(
+                StatusCodes.Status503ServiceUnavailable,
+                "issued_binding_probe_failed",
+                "The new NyxID service grant could not be verified; retry later."),
         };
+
+    // Login failure branches must never answer with 502/504: Cloudflare replaces
+    // origin-generated 502/504 responses with its own opaque error page, which
+    // strips this structured body before it reaches the client (2026-07-28 login
+    // incident). Upstream faults are reported as 503 with a stable error code.
+    private static IResult LoginFinalizationProblem(int statusCode, string errorCode, string detail) =>
+        Results.Problem(
+            detail: detail,
+            statusCode: statusCode,
+            extensions: new Dictionary<string, object?> { ["error"] = errorCode });
 
     private static async Task<BindingDispatchOutcome> DispatchCommitBindingAsync(
         ICommandDispatchService<CommitBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> bindingDispatch,

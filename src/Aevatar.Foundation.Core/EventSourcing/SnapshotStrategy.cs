@@ -7,8 +7,8 @@ namespace Aevatar.Foundation.Core.EventSourcing;
 /// <summary>Strategy for when to create snapshots.</summary>
 public interface ISnapshotStrategy
 {
-    /// <summary>Whether a snapshot should be created at the given version.</summary>
-    bool ShouldCreateSnapshot(long version);
+    /// <summary>Whether a snapshot should be created after the given number of newly committed events.</summary>
+    bool ShouldCreateSnapshot(long eventsSinceLastSnapshot);
 }
 
 /// <summary>Create a snapshot every N events.</summary>
@@ -20,8 +20,8 @@ public sealed class IntervalSnapshotStrategy : ISnapshotStrategy
         _interval = interval > 0 ? interval : 100;
 
     /// <inheritdoc />
-    public bool ShouldCreateSnapshot(long version) =>
-        version > 0 && version % _interval == 0;
+    public bool ShouldCreateSnapshot(long eventsSinceLastSnapshot) =>
+        eventsSinceLastSnapshot >= _interval;
 }
 
 /// <summary>Never create snapshots.</summary>
@@ -31,5 +31,5 @@ public sealed class NeverSnapshotStrategy : ISnapshotStrategy
     public static readonly NeverSnapshotStrategy Instance = new();
 
     /// <inheritdoc />
-    public bool ShouldCreateSnapshot(long version) => false;
+    public bool ShouldCreateSnapshot(long eventsSinceLastSnapshot) => false;
 }

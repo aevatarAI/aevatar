@@ -1,0 +1,231 @@
+syntax = "proto3";
+
+package aevatar.content_artifacts;
+option csharp_namespace = "Aevatar.ContentArtifacts.Abstractions";
+
+import "google/protobuf/timestamp.proto";
+
+enum ContentArtifactKind {
+  CONTENT_ARTIFACT_KIND_UNSPECIFIED = 0;
+  CONTENT_ARTIFACT_KIND_TEXT = 1;
+  CONTENT_ARTIFACT_KIND_MARKDOWN = 2;
+  CONTENT_ARTIFACT_KIND_STRUCTURED_DOCUMENT = 3;
+  CONTENT_ARTIFACT_KIND_OTHER_CONTENT = 4;
+}
+
+enum ContentArtifactLifecycleStatus {
+  CONTENT_ARTIFACT_LIFECYCLE_STATUS_UNSPECIFIED = 0;
+  CONTENT_ARTIFACT_LIFECYCLE_STATUS_ACTIVE = 1;
+  CONTENT_ARTIFACT_LIFECYCLE_STATUS_TOMBSTONED = 2;
+}
+
+enum ContentArtifactRevisionAvailability {
+  CONTENT_ARTIFACT_REVISION_AVAILABILITY_UNSPECIFIED = 0;
+  CONTENT_ARTIFACT_REVISION_AVAILABILITY_AVAILABLE = 1;
+  CONTENT_ARTIFACT_REVISION_AVAILABILITY_REDACTED = 2;
+  CONTENT_ARTIFACT_REVISION_AVAILABILITY_RETENTION_EXPIRED = 3;
+}
+
+message ContentArtifactPrincipal {
+  string principal_id = 1;
+  string principal_kind = 2;
+}
+
+message ContentArtifactReference {
+  string artifact_id = 1;
+  string revision_id = 2;
+  string content_hash = 3;
+  string media_type = 4;
+}
+
+message ContentArtifactAccessPolicy {
+  ContentArtifactPrincipal owner = 1;
+  repeated string reader_principal_ids = 2;
+  repeated string writer_principal_ids = 3;
+}
+
+message ContentArtifactRetentionPolicy {
+  string policy_id = 1;
+  google.protobuf.Timestamp expires_at_utc = 2;
+}
+
+message ContentArtifactBackingObjectReference {
+  string provider = 1;
+  string object_key = 2;
+}
+
+message ContentArtifactRevisionContent {
+  oneof location {
+    bytes inline_content = 1;
+    ContentArtifactBackingObjectReference backing_object = 2;
+  }
+}
+
+message ContentArtifactExecutionProvenance {
+  string scope_id = 1;
+  string team_id = 2;
+  string member_id = 3;
+  string workflow_id = 4;
+  string published_service_id = 5;
+  string run_id = 6;
+  string work_order_id = 7;
+}
+
+message ContentArtifactCitationLocator {
+  string section = 1;
+  int64 start_offset = 2;
+  int64 end_offset = 3;
+  string selector = 4;
+}
+
+message ContentArtifactRevisionCitationSource {
+  ContentArtifactReference reference = 1;
+}
+
+message ContentArtifactExternalCitationSource {
+  string source_uri = 1;
+  string stable_external_id = 2;
+  string document_revision = 3;
+  string content_hash = 4;
+  google.protobuf.Timestamp published_at_utc = 5;
+  google.protobuf.Timestamp fetched_at_utc = 6;
+}
+
+message ContentArtifactCitation {
+  string citation_id = 1;
+  string label = 2;
+  ContentArtifactCitationLocator locator = 3;
+  oneof source {
+    ContentArtifactRevisionCitationSource artifact_revision = 4;
+    ContentArtifactExternalCitationSource external_source = 5;
+  }
+}
+
+message ContentArtifactRevision {
+  string revision_id = 1;
+  int64 revision_number = 2;
+  string dedup_key = 3;
+  string parent_revision_id = 4;
+  string media_type = 5;
+  int64 byte_length = 6;
+  string content_hash = 7;
+  ContentArtifactRevisionContent content = 8;
+  ContentArtifactExecutionProvenance provenance = 9;
+  repeated ContentArtifactCitation citations = 10;
+  google.protobuf.Timestamp created_at_utc = 11;
+  ContentArtifactRevisionAvailability availability = 12;
+  string redaction_reason = 13;
+  google.protobuf.Timestamp redacted_at_utc = 14;
+  google.protobuf.Timestamp retention_expired_at_utc = 15;
+  string supersession_reason = 16;
+}
+
+message ContentArtifactState {
+  string artifact_id = 1;
+  string dedup_key = 2;
+  string scope_id = 3;
+  string team_id = 4;
+  ContentArtifactKind kind = 5;
+  string title = 6;
+  string classification = 7;
+  ContentArtifactAccessPolicy access_policy = 8;
+  ContentArtifactRetentionPolicy retention_policy = 9;
+  string work_order_id = 10;
+  map<string, ContentArtifactRevision> revisions = 11;
+  string current_revision_id = 12;
+  int64 concurrency_version = 13;
+  ContentArtifactLifecycleStatus lifecycle_status = 14;
+  google.protobuf.Timestamp created_at_utc = 15;
+  google.protobuf.Timestamp updated_at_utc = 16;
+  string tombstone_reason = 17;
+  google.protobuf.Timestamp tombstoned_at_utc = 18;
+  string creation_request_hash = 19;
+}
+
+message CreateContentArtifact {
+  string artifact_id = 1;
+  string dedup_key = 2;
+  string scope_id = 3;
+  string team_id = 4;
+  ContentArtifactKind kind = 5;
+  string title = 6;
+  string classification = 7;
+  ContentArtifactAccessPolicy access_policy = 8;
+  ContentArtifactRetentionPolicy retention_policy = 9;
+  string work_order_id = 10;
+  ContentArtifactRevision first_revision = 11;
+  int64 expected_concurrency_version = 12;
+  google.protobuf.Timestamp requested_at_utc = 13;
+}
+
+message AppendContentArtifactRevision {
+  string artifact_id = 1;
+  reserved 2;
+  ContentArtifactPrincipal requested_by = 3;
+  ContentArtifactRevision revision = 4;
+  google.protobuf.Timestamp requested_at_utc = 5;
+}
+
+message AdvanceContentArtifactCurrentRevision {
+  string artifact_id = 1;
+  int64 expected_concurrency_version = 2;
+  ContentArtifactPrincipal requested_by = 3;
+  string revision_id = 4;
+  google.protobuf.Timestamp requested_at_utc = 5;
+}
+
+message RedactContentArtifactRevision {
+  string artifact_id = 1;
+  int64 expected_concurrency_version = 2;
+  ContentArtifactPrincipal requested_by = 3;
+  string revision_id = 4;
+  string reason = 5;
+  google.protobuf.Timestamp requested_at_utc = 6;
+}
+
+message ExpireContentArtifactRevision {
+  string artifact_id = 1;
+  int64 expected_concurrency_version = 2;
+  ContentArtifactPrincipal requested_by = 3;
+  string revision_id = 4;
+  google.protobuf.Timestamp requested_at_utc = 5;
+}
+
+message TombstoneContentArtifact {
+  string artifact_id = 1;
+  int64 expected_concurrency_version = 2;
+  ContentArtifactPrincipal requested_by = 3;
+  string reason = 4;
+  google.protobuf.Timestamp requested_at_utc = 5;
+}
+
+message ContentArtifactCreatedEvent {
+  CreateContentArtifact request = 1;
+  google.protobuf.Timestamp created_at_utc = 2;
+}
+
+message ContentArtifactRevisionAppendedEvent {
+  ContentArtifactRevision revision = 1;
+  google.protobuf.Timestamp appended_at_utc = 2;
+}
+
+message ContentArtifactCurrentRevisionAdvancedEvent {
+  string revision_id = 1;
+  google.protobuf.Timestamp advanced_at_utc = 2;
+}
+
+message ContentArtifactRevisionRedactedEvent {
+  string revision_id = 1;
+  string reason = 2;
+  google.protobuf.Timestamp redacted_at_utc = 3;
+}
+
+message ContentArtifactRevisionExpiredEvent {
+  string revision_id = 1;
+  google.protobuf.Timestamp expired_at_utc = 2;
+}
+
+message ContentArtifactTombstonedEvent {
+  string reason = 1;
+  google.protobuf.Timestamp tombstoned_at_utc = 2;
+}

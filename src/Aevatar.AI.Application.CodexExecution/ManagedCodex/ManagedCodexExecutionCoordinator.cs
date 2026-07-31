@@ -2,19 +2,27 @@ using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions.CodexExecution;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.AI.Application.CodexExecution;
 
 public sealed class ManagedCodexExecutionCoordinator(
-    IManagedCodexCredentialLifecycle lifecycle,
+    IOptions<ManagedCodexOptions> options,
+    IManagedCodexCredentialQueryPort queryPort,
     IManagedCodexChronoTransport transport,
+    TimeProvider timeProvider,
     ILogger<ManagedCodexExecutionCoordinator> logger) : ICodexExecutionPort
 {
-    private readonly IManagedCodexCredentialLifecycle _lifecycle =
-        lifecycle ?? throw new ArgumentNullException(nameof(lifecycle));
+    private readonly ManagedCodexOptions _options =
+        options?.Value ?? throw new ArgumentNullException(nameof(options));
+    private readonly IManagedCodexCredentialQueryPort _queryPort =
+        queryPort ?? throw new ArgumentNullException(nameof(queryPort));
     private readonly IManagedCodexChronoTransport _transport =
         transport ?? throw new ArgumentNullException(nameof(transport));
+    private readonly TimeProvider _timeProvider =
+        timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
     private readonly ILogger<ManagedCodexExecutionCoordinator> _logger =
         logger ?? throw new ArgumentNullException(nameof(logger));
 
@@ -37,41 +45,39 @@ public sealed class ManagedCodexExecutionCoordinator(
         {
             ct.ThrowIfCancellationRequested();
             var owner = ValidateRequestAndResolveOwner(request);
-            var bearerToken = request.Caller.NyxIdAccessToken;
-            var credential = await _lifecycle.EnsureReadyAsync(
-                    owner,
-                    bearerToken,
-                    ManagedCodexCredentialReadinessMode.Normal,
+            var now = _timeProvider.GetUtcNow();
+            var policy = ManagedCodexCredentialReadiness.Assess(
+                _options,
+                owner,
+                snapshot: null,
+                now);
+            if (policy.Reason is
+                "managed_target_disabled" or
+                "managed_feature_not_enabled")
+            {
+                return ReadinessFailed(policy, stateVersion: 0);
+            }
+
+            var snapshot = await _queryPort.ResolveAsync(owner, ct)
+                .ConfigureAwait(false);
+            var readiness = ManagedCodexCredentialReadiness.Assess(
+                _options,
+                owner,
+                snapshot,
+                now);
+            if (!readiness.ExecutionReady)
+            {
+                return ReadinessFailed(
+                    readiness,
+                    snapshot?.StateVersion ?? 0);
+            }
+
+            var result = await _transport.ExecuteAsync(
+                    request,
+                    snapshot!.Credential.Clone(),
                     ct)
                 .ConfigureAwait(false);
-
-            try
-            {
-                var result = await _transport.ExecuteAsync(request, credential, ct)
-                    .ConfigureAwait(false);
-                return CodexExecutionEvent.Completed(result);
-            }
-            catch (ManagedCodexTransportException exception)
-                when (CanRepair(exception.Failure, bearerToken))
-            {
-                var repaired = await _lifecycle.EnsureReadyAsync(
-                        owner,
-                        bearerToken,
-                        ManagedCodexCredentialReadinessMode.ForceRemoteValidation,
-                        ct)
-                    .ConfigureAwait(false);
-                var result = await _transport.ExecuteAsync(request, repaired, ct)
-                    .ConfigureAwait(false);
-                return CodexExecutionEvent.Completed(result);
-            }
-        }
-        catch (ManagedCodexCredentialLifecycleException exception)
-        {
-            var failure = MapLifecycleFailure(exception);
-            _logger.LogWarning(
-                "Managed Codex credential readiness failed with code {FailureCode}",
-                failure.Code);
-            return CodexExecutionEvent.Failed(failure);
+            return CodexExecutionEvent.Completed(result);
         }
         catch (ManagedCodexTransportException exception)
         {
@@ -148,27 +154,26 @@ public sealed class ManagedCodexExecutionCoordinator(
         };
     }
 
-    private static bool CanRepair(
-        CodexExecutionFailure failure,
-        string? bearerToken) =>
-        !string.IsNullOrWhiteSpace(bearerToken) &&
-        failure.Code is
-            "managed_proxy_authorization_denied" or
-            "managed_credential_unavailable";
-
-    private static CodexExecutionFailure MapLifecycleFailure(
-        ManagedCodexCredentialLifecycleException exception)
+    private CodexExecutionEvent ReadinessFailed(
+        ManagedCodexCredentialReadinessAssessment readiness,
+        long stateVersion)
     {
-        var kind = exception.Code switch
+        var kind = readiness.Reason switch
         {
             "managed_target_disabled" =>
                 CodexExecutionFailureKind.TargetNotConfigured,
-            "managed_feature_not_enabled" or
-            "nyxid_identity_mismatch" =>
+            "managed_feature_not_enabled" =>
                 CodexExecutionFailureKind.AdmissionDenied,
             _ => CodexExecutionFailureKind.ProvisioningFailed,
         };
-        return new CodexExecutionFailure(kind, exception.Code, exception.Message);
+        _logger.LogWarning(
+            "Managed Codex credential is not execution-ready with code {FailureCode} at state version {StateVersion}",
+            readiness.Reason,
+            stateVersion);
+        return CodexExecutionEvent.Failed(new CodexExecutionFailure(
+            kind,
+            readiness.Reason,
+            readiness.Message));
     }
 
     private static ManagedCodexRequestException RequestFailure(

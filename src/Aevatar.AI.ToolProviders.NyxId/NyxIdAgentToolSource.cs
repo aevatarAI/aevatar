@@ -19,7 +19,6 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
     private readonly bool _toolApprovalHandlerAvailable;
     private readonly INyxIdProxyFileArtifactIngress? _fileArtifactIngress;
     private readonly IReadOnlyList<ICodexExecutionPort> _codexExecutionPorts;
-    private readonly IExternalWorkflowCapabilityReadinessPort? _externalCapabilityReadinessPort;
 
     public NyxIdAgentToolSource(
         NyxIdToolOptions options,
@@ -27,7 +26,6 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
         IToolApprovalHandler? approvalHandler = null,
         INyxIdProxyFileArtifactIngress? fileArtifactIngress = null,
         IEnumerable<ICodexExecutionPort>? codexExecutionPorts = null,
-        IExternalWorkflowCapabilityReadinessPort? externalCapabilityReadinessPort = null,
         ILogger<NyxIdAgentToolSource>? logger = null)
     {
         _options = options;
@@ -35,7 +33,6 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
         _toolApprovalHandlerAvailable = approvalHandler is not null;
         _fileArtifactIngress = fileArtifactIngress;
         _codexExecutionPorts = codexExecutionPorts?.ToArray() ?? [];
-        _externalCapabilityReadinessPort = externalCapabilityReadinessPort;
         _logger = logger ?? NullLogger<NyxIdAgentToolSource>.Instance;
     }
 
@@ -59,7 +56,12 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
             new NyxIdSessionsTool(_client),
             new NyxIdCatalogTool(_client),
             new NyxIdServicesTool(_client),
-            new NyxIdProxyTool(_client, _logger, _fileArtifactIngress, _options.EffectiveProxyFileArtifactMaxBytes),
+            new NyxIdProxyTool(
+                _client,
+                _logger,
+                _fileArtifactIngress,
+                _options.EffectiveProxyFileArtifactMaxBytes,
+                _options.ManagedWorkflowAdmissionMode),
             new NyxIdCodeExecuteTool(_client, _logger, _options.SandboxServiceSlug),
             new NyxIdApiKeysTool(_client),
             new NyxIdNodesTool(_client),
@@ -73,9 +75,8 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
             new NyxIdOrgTool(_client),
             new NyxIdChannelEventsTool(_client),
             new NyxIdAdminTool(_client),
+            new NyxIdRequireServiceTool(_client),
         };
-        if (_externalCapabilityReadinessPort is not null)
-            tools.Add(new NyxIdRequireServiceTool(_externalCapabilityReadinessPort));
 
         // Refactor (iter23/cluster-001-nyxid-tool-approval-polling):
         //   Old pattern: NyxID remote fallback registration could be mistaken for local execution gating.

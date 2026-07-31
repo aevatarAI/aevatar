@@ -527,6 +527,17 @@ public sealed class DefaultServiceRuntimeActivatorTests
         public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(string workflowYaml, CancellationToken ct = default) =>
             Task.FromResult(WorkflowYamlParseResult.Success("workflow"));
 
+        public Task<WorkflowInlineYamlBundleParseResult> ParseInlineWorkflowBundleAsync(
+            IReadOnlyList<WorkflowChatInlineYamlDocument> inlineWorkflowDocuments,
+            CancellationToken ct = default) =>
+            Task.FromResult(WorkflowInlineYamlBundleParseResult.Success(
+                "workflow",
+                inlineWorkflowDocuments.FirstOrDefault()?.Yaml ?? string.Empty,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["workflow"] = inlineWorkflowDocuments.FirstOrDefault()?.Yaml ?? string.Empty,
+                }));
+
         private static void RecordBind(
             string actorId,
             string workflowYaml,

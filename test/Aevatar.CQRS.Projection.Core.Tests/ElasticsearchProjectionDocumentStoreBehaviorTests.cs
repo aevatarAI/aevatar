@@ -1174,6 +1174,58 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
     }
 
     [Fact]
+    public async Task UpsertAsync_WhenDelayedWriteFollowsVersionedDelete_ShouldRemainTombstoned()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """{"_seq_no":7,"_primary_term":3,"_source":{"id":"actor-tombstone","actor_id":"actor-tombstone","state_version":"7","last_event_id":"evt-7","updated_at_utc_value":"2026-07-29T00:00:07Z","value":"live"}}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """{"result":"updated"}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """{"_seq_no":8,"_primary_term":3,"_source":{"__projection_tombstone":true,"id":"actor-tombstone","actor_id":"actor-tombstone","state_version":"8","last_event_id":"evt-8-delete","updated_at_utc_value":"2026-07-29T00:00:08Z","__projection_deleted_at_utc":"2026-07-29T00:00:08Z","ProjectionDocumentId":"actor-tombstone"}}"""));
+
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions
+            {
+                AutoCreateIndex = false,
+            },
+            handler);
+
+        var deleted = await store.DeleteAsync(new ProjectionDocumentDeleteMarker(
+            "actor-tombstone",
+            "actor-tombstone",
+            8,
+            "evt-8-delete",
+            DateTimeOffset.Parse("2026-07-29T00:00:08Z")));
+        var delayed = await store.UpsertAsync(new TestStoreReadModel
+        {
+            Id = "actor-tombstone",
+            ActorId = "actor-tombstone",
+            StateVersion = 7,
+            LastEventId = "evt-7",
+            UpdatedAt = DateTimeOffset.Parse("2026-07-29T00:00:07Z"),
+            Value = "delayed",
+        });
+
+        deleted.Disposition.Should().Be(ProjectionWriteDisposition.Applied);
+        delayed.Disposition.Should().Be(ProjectionWriteDisposition.Stale);
+        handler.CapturedRequests.Should().HaveCount(3);
+        handler.CapturedRequests[1].Method.Should().Be("PUT");
+        handler.CapturedRequests[1].PathAndQuery.Should().Contain("if_seq_no=7");
+        var tombstonePayload = ParseJson(handler.CapturedRequests[1].Body);
+        tombstonePayload.GetProperty("__projection_tombstone").GetBoolean().Should().BeTrue();
+        tombstonePayload.GetProperty("state_version").GetString().Should().Be("8");
+        tombstonePayload.GetProperty("last_event_id").GetString().Should().Be("evt-8-delete");
+        var tombstoneRequests = handler.CapturedRequests
+            .Where(r => r.Method == "PUT" && HasTombstonePayload(r.Body))
+            .ToList();
+        tombstoneRequests.Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task UpsertAsync_WhenReadModelUsesDynamicIndexScope_ShouldTargetScopeSpecificIndices()
     {
         var handler = new ScriptedHttpMessageHandler();
@@ -1414,6 +1466,37 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
 
         // 2xx with unparseable body: treat as Applied (conservative default vs dropping the delete).
         result.IsApplied.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task GetAndQueryAsync_ShouldHideProviderOwnedTombstones()
+    {
+        var getHandler = new ScriptedHttpMessageHandler();
+        getHandler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """{"_seq_no":8,"_primary_term":3,"_source":{"__projection_tombstone":true,"id":"actor-tombstone","actor_id":"actor-tombstone","state_version":"8","last_event_id":"evt-8-delete","updated_at_utc_value":"2026-07-29T00:00:08Z","__projection_deleted_at_utc":"2026-07-29T00:00:08Z","ProjectionDocumentId":"actor-tombstone"}}"""));
+        using var getStore = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = false },
+            getHandler);
+
+        var hidden = await getStore.GetAsync("actor-tombstone");
+
+        hidden.Should().BeNull();
+
+        var queryHandler = new ScriptedHttpMessageHandler();
+        queryHandler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """{"hits":{"hits":[{"_source":{"__projection_tombstone":true,"id":"actor-tombstone","actor_id":"actor-tombstone","state_version":"8","last_event_id":"evt-8-delete","updated_at_utc_value":"2026-07-29T00:00:08Z"}}]}}"""));
+        using var queryStore = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = false },
+            queryHandler);
+
+        var query = await queryStore.QueryAsync(new ProjectionDocumentQuery { Take = 10 });
+
+        query.Items.Should().BeEmpty();
+        queryHandler.CapturedRequests.Should().ContainSingle()
+            .Which.Body.Should().Contain("\"must_not\"");
+        queryHandler.CapturedRequests[0].Body.Should().Contain("\"__projection_tombstone\":true");
     }
 
     [Fact]
@@ -2046,6 +2129,13 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
     {
         using var document = System.Text.Json.JsonDocument.Parse(json);
         return document.RootElement.Clone();
+    }
+
+    private static bool HasTombstonePayload(string json)
+    {
+        var payload = ParseJson(json);
+        return payload.TryGetProperty("__projection_tombstone", out var tombstone) &&
+               tombstone.ValueKind == JsonValueKind.True;
     }
 
     private static IReadOnlyDictionary<string, JsonElement> GetProperties(JsonElement indexPayload)

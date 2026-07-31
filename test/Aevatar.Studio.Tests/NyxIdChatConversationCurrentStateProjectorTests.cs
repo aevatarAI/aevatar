@@ -110,6 +110,10 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
         serialized.Should().NotContain("https://user:password@example.com");
         serialized.Should().NotContain("owner-subject-alpha");
         serialized.Should().NotContain("access-token-alpha");
+        serialized.Should().NotContain("history-initialization-outbox-sentinel");
+        serialized.Should().NotContain("history-reservation-outbox-sentinel");
+        serialized.Should().NotContain("history-terminal-outbox-sentinel");
+        serialized.Should().NotContain("credential-outbox-sentinel");
         NyxIdChatConversationCurrentStateDocument.Descriptor.Fields.InFieldNumberOrder()
             .Should().NotContain(field => field.Name == "state_root");
     }
@@ -303,6 +307,46 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
                 SafeMessage = "Continuation accepted for later.",
                 CommittedAt = now.Clone(),
                 Instruction = "owner-subject-alpha access-token-alpha",
+            },
+            PendingHistoryInitialization = new NyxIdChatHistoryInitializationOutbox
+            {
+                OperationId = "history-initialization-outbox-sentinel",
+                ScopeId = "scope-alpha",
+                ConversationId = ActorId,
+                ServiceId = ActorId,
+                ServiceKind = "nyxid.chat",
+                InitialTitle = "credential-outbox-sentinel",
+                CreatedAt = now.Clone(),
+                Attempt = 3,
+            },
+            HistoryInitializationOperationId =
+                "history-initialization-outbox-sentinel",
+            HistoryDeliveryReservation = new NyxIdChatHistoryDeliveryReservationState
+            {
+                DeliveryId = "history-reservation-outbox-sentinel",
+                ScopeId = "scope-alpha",
+                ConversationId = ActorId,
+                TurnId = "turn-alpha",
+                UserText = "credential-outbox-sentinel",
+                SourceActorId = ActorId,
+                SourceCommandId = "command-history-alpha",
+                SourceCorrelationId = "correlation-history-alpha",
+                RequestFingerprint = "fingerprint-history-alpha",
+                CreateConversationIfMissing = true,
+                Dispatched = true,
+                DispatchedAt = now.Clone(),
+            },
+            PendingHistoryTerminal = new NyxIdChatHistoryTerminalOutbox
+            {
+                DeliveryId = "history-reservation-outbox-sentinel",
+                TurnId = "turn-alpha",
+                SourceActorId = ActorId,
+                SourceCommandId = "command-history-alpha",
+                Status = NyxIdChatTurnStatus.Blocked,
+                Text = "history-terminal-outbox-sentinel credential-outbox-sentinel",
+                ErrorCode = "SAFE_BLOCKED",
+                ObservedAt = now.Clone(),
+                Attempt = 2,
             },
         };
         state.RecentTerminalTurns.Add(new NyxIdChatTurnSummary

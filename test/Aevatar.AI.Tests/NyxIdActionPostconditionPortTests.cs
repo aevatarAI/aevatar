@@ -29,6 +29,21 @@ public sealed class NyxIdActionPostconditionPortTests
     }
 
     [Fact]
+    public async Task VerifyAsync_StateChangeWake_ShouldDeriveCompletionOnlyFromTypedReadModel()
+    {
+        var input = CatalogInput();
+        input.ReportedDisposition = NyxIdChatActionDisposition.Unspecified;
+        input.ResourceHint = null;
+        var port = CreatePort(new StubCatalogQueryPort(ReadySnapshot()));
+
+        var result = await port.VerifyAsync(input);
+
+        result.Verified.Should().BeTrue();
+        result.Disposition.Should().Be(NyxIdChatActionDisposition.Completed);
+        result.Resource.UserService.UserServiceId.Should().Be("service-alpha");
+    }
+
+    [Fact]
     public async Task VerifyAsync_MissingSnapshotWithoutResourceHint_ShouldFailClosedWithoutThrowing()
     {
         var input = CatalogInput();

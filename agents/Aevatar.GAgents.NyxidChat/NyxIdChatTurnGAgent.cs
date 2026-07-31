@@ -55,7 +55,7 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
 
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
-        await base.OnActivateAsync(ct).ConfigureAwait(false);
+        await base.OnActivateAsync(ct);
         if (State.AdmittedOperation is null || State.ResultDelivered)
             return;
 
@@ -79,7 +79,7 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
                 CorrelationId = State.AdmittedOperation.OperationId,
             },
         };
-        await _actorDispatchPort.DispatchAsync(Id, envelope, ct).ConfigureAwait(false);
+        await _actorDispatchPort.DispatchAsync(Id, envelope, ct);
     }
 
     [EventHandler]
@@ -97,7 +97,7 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
             OperationKind = kind,
             MayChangeExternalState = command.Tool?.MayChangeExternalState == true,
             AdmittedAt = admittedAt,
-        }, CancellationToken.None).ConfigureAwait(false);
+        }, CancellationToken.None);
 
         NyxIdChatOperationResultSignal result;
         try
@@ -106,8 +106,7 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
                     command,
                     _executionSession,
                     (progress, token) => DispatchProgressAsync(command.Key, progress, token),
-                    CancellationToken.None)
-                .ConfigureAwait(false);
+                    CancellationToken.None);
             result = NormalizeResult(command, execution.Result);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
@@ -140,15 +139,15 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
             SafeMessage = completion.SafeMessage,
             ExternalEffect = completion.ExternalEffect,
             CompletedAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
-        }, CancellationToken.None).ConfigureAwait(false);
+        }, CancellationToken.None);
 
-        await DispatchResultAsync(command.Key.ConversationActorId, result).ConfigureAwait(false);
+        await DispatchResultAsync(command.Key.ConversationActorId, result);
 
         await PersistDomainEventAsync(new NyxIdChatTurnOperationDeliveredEvent
         {
             Key = command.Key.Clone(),
             DeliveredAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
-        }, CancellationToken.None).ConfigureAwait(false);
+        }, CancellationToken.None);
     }
 
     [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
@@ -202,13 +201,13 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
             SafeMessage = completion.SafeMessage,
             ExternalEffect = completion.ExternalEffect,
             CompletedAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
-        }, CancellationToken.None).ConfigureAwait(false);
-        await DispatchResultAsync(signal.Key.ConversationActorId, result).ConfigureAwait(false);
+        }, CancellationToken.None);
+        await DispatchResultAsync(signal.Key.ConversationActorId, result);
         await PersistDomainEventAsync(new NyxIdChatTurnOperationDeliveredEvent
         {
             Key = signal.Key.Clone(),
             DeliveredAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
-        }, CancellationToken.None).ConfigureAwait(false);
+        }, CancellationToken.None);
     }
 
     private bool IsDuplicateOrUnavailable(NyxIdChatOperationKey key)
@@ -242,8 +241,7 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
             $"{admittedKey.OperationId}:progress:{progress.Sequence}",
             progress);
         await _actorDispatchPort
-            .DispatchAsync(admittedKey.ConversationActorId, envelope, ct)
-            .ConfigureAwait(false);
+            .DispatchAsync(admittedKey.ConversationActorId, envelope, ct);
     }
 
     private async Task DispatchResultAsync(
@@ -255,8 +253,7 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
             $"{result.Key.OperationId}:result",
             result);
         await _actorDispatchPort
-            .DispatchAsync(conversationActorId, envelope, CancellationToken.None)
-            .ConfigureAwait(false);
+            .DispatchAsync(conversationActorId, envelope, CancellationToken.None);
     }
 
     private EventEnvelope CreateDirectEnvelope(string actorId, string envelopeId, IMessage payload) =>

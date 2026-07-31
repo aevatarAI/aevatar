@@ -10,6 +10,25 @@ namespace Aevatar.AI.Tests;
 
 public sealed class AIAbstractionsProtoCoverageTests
 {
+    [Theory]
+    [InlineData(AgentToolInvocationSurface.Unspecified)]
+    [InlineData(AgentToolInvocationSurface.HumanSession)]
+    [InlineData(AgentToolInvocationSurface.WorkflowToolCall)]
+    [InlineData(AgentToolInvocationSurface.WorkflowLlmToolLoop)]
+    public void AgentToolExecutionContext_ShouldRoundTripInvocationSurface(
+        AgentToolInvocationSurface invocationSurface)
+    {
+        var payload = (AgentToolExecutionContext.Empty with
+        {
+            InvocationSurface = invocationSurface,
+        }).ToPayload();
+
+        var copy = AgentToolExecutionContextMapper.FromPayload(
+            AgentToolExecutionContextPayload.Parser.ParseFrom(payload.ToByteArray()));
+
+        copy.InvocationSurface.Should().Be(invocationSurface);
+    }
+
     [Fact]
     public void LLMControlContext_ShouldMergeIntoTypedContexts_AndRoundTripPayload()
     {

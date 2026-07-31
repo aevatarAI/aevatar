@@ -10,6 +10,7 @@ import "llm_sessions.proto";
 import "service_definition.proto";
 import "service_invocation_catalog.proto";
 import "service_revision.proto";
+import "content_artifact_messages.proto";
 
 // --- ServiceCatalogReadModel ---
 
@@ -253,6 +254,7 @@ message ServiceRunCurrentStateReadModel {
   string last_output = 22;
   string last_error = 23;
   string schedule_id = 24;
+  repeated aevatar.content_artifacts.ContentArtifactReference result_artifacts = 25;
 }
 // --- GAgentRunTerminalReadModel ---
 

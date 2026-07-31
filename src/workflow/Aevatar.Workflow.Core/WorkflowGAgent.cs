@@ -151,21 +151,27 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
             all.Add(WorkflowAuthorizationDependencyEvaluator.Evaluate(compilation.Workflow!));
         }
 
-        var capabilities = all
-            .SelectMany(static dependencies => dependencies.ExternalCapabilities)
-            .GroupBy(WorkflowCapabilityAdmissionPlanIntegrity.CapabilityKey, StringComparer.Ordinal)
-            .Select(static group => group.First().Clone())
-            .OrderBy(WorkflowCapabilityAdmissionPlanIntegrity.CapabilityKey, StringComparer.Ordinal)
+        var invocations = all
+            .SelectMany(static dependencies => dependencies.ExternalInvocations)
+            .Select(static invocation => invocation.Clone())
+            .OrderBy(static invocation => invocation.CallSiteId, StringComparer.Ordinal)
             .ToArray();
+        var duplicate = invocations
+            .GroupBy(static invocation => invocation.CallSiteId, StringComparer.Ordinal)
+            .FirstOrDefault(static group => group.Count() > 1);
+        if (duplicate is not null)
+            throw new InvalidOperationException(
+                $"Workflow external capability call site '{duplicate.Key}' is duplicated.");
         var result = new WorkflowAuthorizationDependencies
         {
             OwnerLlmRouteRequired = all.Any(static dependencies => dependencies.OwnerLlmRouteRequired),
-            ServiceGrantPolicy = capabilities.Any(static capability =>
-                capability.CapabilityCase == ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService)
+            ServiceGrantPolicy = invocations.Any(static invocation =>
+                invocation.Selector?.SelectorCase ==
+                ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdOperation)
                 ? WorkflowServiceGrantPolicy.Required
                 : WorkflowServiceGrantPolicy.NotRequiredNoExternalService,
         };
-        result.ExternalCapabilities.Add(capabilities);
+        result.ExternalInvocations.Add(invocations);
         return result;
     }
 
@@ -177,7 +183,7 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
     {
         if (capabilityAdmissionPlan is null)
         {
-            if (dependencies.ExternalCapabilities.Count > 0)
+            if (dependencies.ExternalInvocations.Count > 0)
                 throw new InvalidOperationException("Workflow external capabilities require an admission plan.");
             return;
         }
@@ -187,7 +193,7 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
             workflowYaml,
             inlineWorkflowYamls,
             capabilityAdmissionPlan.ExecutionMode,
-            dependencies.ExternalCapabilities);
+            dependencies.ExternalInvocations);
     }
 
     private WorkflowCompilationResult EvaluateWorkflowCompilation(string yaml)

@@ -1,6 +1,9 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
+using Aevatar.GAgentService.Abstractions.Services;
+using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Application.Studio.Services;
@@ -14,9 +17,9 @@ namespace Aevatar.Studio.Tests;
 /// <summary>
 /// Unit tests for the one-call workflow provisioning service (C1, v2 async). The
 /// service is a pure composition over
-/// <see cref="Aevatar.Studio.Application.Studio.Abstractions.IStudioMemberService"/>
-/// (create + bind) and <see cref="IScheduledDispatchApplicationService"/> (ensure
-/// the scheduled-dispatch that produces the run). These tests pin the
+/// <see cref="Aevatar.Studio.Application.Studio.Abstractions.IStudioMemberService"/>,
+/// <see cref="IStudioMemberWorkflowBindingPort"/> and
+/// <see cref="IStudioMemberWorkflowSchedulePort"/>. These tests pin the
 /// orchestration contract for the NON-BLOCKING design:
 /// <list type="bullet">
 ///   <item>the workflow YAML is validated synchronously through the binding
@@ -113,6 +116,8 @@ public sealed class StudioWorkflowProvisioningServiceTests
             new ProvisionWorkflowRequest("Monitor", "name: monitor")
             {
                 TeamId = TeamId,
+                AuthenticatedOwner = TestAuthenticatedOwner(),
+                ProvisioningBearerToken = "runtime-caller-credential",
                 CapabilityAdmission = new WorkflowCapabilityAdmissionContext(
                     "caller-alpha",
                     "runtime-caller-credential"),
@@ -153,6 +158,8 @@ public sealed class StudioWorkflowProvisioningServiceTests
             new ProvisionWorkflowRequest("Monitor", workflowYaml)
             {
                 TeamId = TeamId,
+                AuthenticatedOwner = TestAuthenticatedOwner(),
+                ProvisioningBearerToken = "runtime-caller-credential",
                 CapabilityAdmission = new WorkflowCapabilityAdmissionContext(
                     "caller-alpha",
                     existingPlan: persistedPlan),
@@ -197,6 +204,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
         member.BindScopeId.Should().Be(ScopeId);
         member.BindRequest!.Workflow!.WorkflowYamls.Should().ContainSingle().Which.Should().Be("name: monitor");
         member.BindRequest.Workflow.WorkflowId.Should().NotBeNullOrWhiteSpace();
+        member.BindRequest.RevisionId.Should().NotBeNullOrWhiteSpace();
 
         // The bind is asynchronous; the service must NOT poll it to completion.
         member.GetBindingRunCallCount.Should().Be(0);
@@ -212,7 +220,14 @@ public sealed class StudioWorkflowProvisioningServiceTests
         var chat = invocation.Payload.Unpack<ChatRequestEvent>();
         chat.Prompt.Should().Be("go");
         chat.ScopeId.Should().Be(ScopeId);
-        schedule.MutationContext.Should().BeNull();
+        var owner = schedule.MutationContext!.TeamAutomationOwner;
+        owner.Should().NotBeNull();
+        owner!.ScopeId.Should().Be(ScopeId);
+        owner.TeamId.Should().Be(TeamId);
+        owner.MemberId.Should().Be(MemberId);
+        var acceptedBinding = schedule.LastCreateRequest!.AcceptedBinding;
+        acceptedBinding.Should().NotBeNull();
+        acceptedBinding!.WorkflowRevisionId.Should().Be(member.BindRequest.RevisionId);
     }
 
     [Fact]
@@ -260,13 +275,19 @@ public sealed class StudioWorkflowProvisioningServiceTests
             new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "p")
             {
                 TeamId = TeamId,
+                AuthenticatedOwner = TestAuthenticatedOwner(),
+                ProvisioningBearerToken = "runtime-caller-credential",
             });
 
         var auth = schedule.Configuration!.Target.ServiceInvocation!.Auth!;
         auth.SenderNyxId!.Subject.Should().BeEquivalentTo(
-            new ScheduledServiceInvocationNyxIdSubjectRef("nyxid-body", "body-tenant", "body-user-42"));
-        auth.SenderNyxId.Scope.Should().Be("sender-proxy");
-        schedule.MutationContext.Should().BeNull();
+            new ScheduledServiceInvocationNyxIdSubjectRef("nyxid", string.Empty, "owner-alpha"));
+        auth.SenderNyxId.Scope.Should().Be("proxy");
+        var owner = schedule.MutationContext!.TeamAutomationOwner;
+        owner.Should().NotBeNull();
+        owner!.ScopeId.Should().Be(ScopeId);
+        owner.TeamId.Should().Be(TeamId);
+        owner.MemberId.Should().Be(MemberId);
     }
 
     [Fact]
@@ -760,7 +781,8 @@ public sealed class StudioWorkflowProvisioningServiceTests
         time = new FakeTimeProvider();
         return new StudioWorkflowProvisioningService(
             member,
-            schedule,
+            new RecordingBindingPort(member),
+            new RecordingWorkflowSchedulePort(schedule),
             admission,
             time);
     }
@@ -772,6 +794,200 @@ public sealed class StudioWorkflowProvisioningServiceTests
             PublishedServiceId = PublishedServiceId,
             BindingRunId = BindingRunId,
         };
+
+    private static AuthenticatedAuthorizationOwnerContext TestAuthenticatedOwner() =>
+        new(
+            new AuthorizationOwnerIdentity
+            {
+                Authority = NyxIdAuthorizationAuthorities.NyxId,
+                OwnerKind = AuthorizationOwnerKind.Personal,
+                OwnerSubject = "owner-alpha",
+            },
+            "nyxid",
+            string.Empty,
+            "owner-alpha",
+            "binding-alpha");
+
+    private sealed class RecordingBindingPort : IStudioMemberWorkflowBindingPort
+    {
+        private readonly RecordingMemberService _member;
+
+        public RecordingBindingPort(RecordingMemberService member)
+        {
+            _member = member;
+        }
+
+        public async Task<StudioMemberWorkflowBindingResult> BindAsync(
+            StudioMemberWorkflowBindingRequest request,
+            CancellationToken ct = default)
+        {
+            var receipt = await _member.BindAsync(
+                request.ScopeId,
+                request.MemberId,
+                new UpdateStudioMemberBindingRequest(
+                    RevisionId: request.RevisionId,
+                    Workflow: new StudioMemberWorkflowBindingSpec(
+                        request.WorkflowId ?? "workflow-test",
+                        [request.WorkflowYaml])
+                    {
+                        CapabilityAdmissionPlan = request.CapabilityAdmission?.ExistingPlan,
+                    })
+                {
+                    CapabilityAdmission = request.CapabilityAdmission,
+                },
+                ct);
+            return new StudioMemberWorkflowBindingResult(
+                true,
+                receipt.ScopeId,
+                receipt.MemberId,
+                StudioMemberWorkflowBindingOperationNames.Bind,
+                receipt.Status,
+                receipt.BindingRunId,
+                receipt.AckStage,
+                receipt.BindingRunRole,
+                request.WorkflowId);
+        }
+    }
+
+    private sealed class RecordingWorkflowSchedulePort : IStudioMemberWorkflowSchedulePort
+    {
+        private readonly RecordingScheduleService _schedule;
+
+        public RecordingWorkflowSchedulePort(RecordingScheduleService schedule)
+        {
+            _schedule = schedule;
+        }
+
+        public Task<StudioMemberWorkflowAuthorizationResult> PreflightAsync(
+            StudioMemberWorkflowScheduleRequest request,
+            CancellationToken ct = default) =>
+            PreflightForWriteAsync(request, ct);
+
+        public Task<StudioMemberWorkflowAuthorizationResult> PreflightForWriteAsync(
+            StudioMemberWorkflowScheduleRequest request,
+            CancellationToken ct = default) =>
+            Task.FromResult(new StudioMemberWorkflowAuthorizationResult(
+                true,
+                new ScheduledInvocationAuthorizationPlan
+                {
+                    PermissionDigest = "permission-digest-alpha",
+                    CredentialPolicy = new ScheduledInvocationCredentialPolicy
+                    {
+                        PolicyVersion = "policy-v1",
+                    },
+                },
+                ScheduledInvocationAuthorizationFailureCode.Unspecified,
+                string.Empty));
+
+        public async Task<StudioMemberWorkflowScheduleResult> CreateAsync(
+            StudioMemberWorkflowScheduleRequest request,
+            string confirmedPermissionDigest,
+            CancellationToken ct = default)
+        {
+            _schedule.LastCreateRequest = request;
+            var scheduleId = request.ScheduleId ?? "schedule-test";
+            var owner = new TeamMemberAutomationOwner(request.ScopeId, request.MemberId, request.TeamId ?? TeamId);
+            var receipt = await _schedule.EnsureAsync(
+                new ScheduledDispatchConfiguration(
+                    ScheduleId: scheduleId,
+                    DisplayName: request.DisplayName ?? $"provision-{PublishedServiceId}",
+                    Target: new ScheduledDispatchTargetDescriptor(
+                        ScheduledDispatchTargetKind.ServiceInvocation,
+                        ServiceInvocation: new ScheduledServiceInvocationTargetDescriptor(
+                            Identity: new ServiceIdentity
+                            {
+                                TenantId = request.ScopeId,
+                                AppId = ScopeServiceIdentityDefaults.ServiceAppId,
+                                Namespace = ScopeServiceIdentityDefaults.ServiceNamespace,
+                                ServiceId = PublishedServiceId,
+                            },
+                            EndpointId: "chat",
+                            Payload: Any.Pack(new ChatRequestEvent
+                            {
+                                Prompt = request.Prompt ?? string.Empty,
+                                ScopeId = request.ScopeId,
+                            }),
+                            Auth: new ScheduledServiceInvocationAuth(
+                                new ScheduledServiceInvocationNyxIdCredentialSource(
+                                    new ScheduledServiceInvocationNyxIdSubjectRef(
+                                        request.AuthenticatedOwner.SubjectPlatform,
+                                        request.AuthenticatedOwner.SubjectTenant,
+                                        request.AuthenticatedOwner.SubjectExternalUserId),
+                                    "proxy")
+                                {
+                                    Role = ScheduledServiceInvocationNyxIdCredentialRole.Sender,
+                                }))),
+                    CronExpression: request.ScheduleCron,
+                    Timezone: request.ScheduleTimezone,
+                    Enabled: request.Enabled,
+                    Headers: new Dictionary<string, string>(StringComparer.Ordinal),
+                    ScheduleKind: ScheduledDispatchScheduleKind.Workflow,
+                    ScheduleMode: request.ScheduleMode,
+                    OneShotFireAt: request.OneShotFireAt)
+                {
+                    TeamAutomationOwner = owner,
+                },
+                new ScheduledDispatchMutationContext(TeamAutomationOwner: owner),
+                ct);
+            return new StudioMemberWorkflowScheduleResult(
+                true,
+                request.ScopeId,
+                request.MemberId,
+                receipt.ScheduleId,
+                PublishedServiceId,
+                "/workflow/observatory",
+                "pending");
+        }
+
+        public Task<StudioMemberWorkflowScheduleResult> ReauthorizeAsync(
+            StudioMemberWorkflowScheduleRequest request,
+            string confirmedPermissionDigest,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<StudioMemberAutomationListResponse> ListAsync(
+            string scopeId,
+            string teamId,
+            string memberId,
+            int take = 50,
+            string? cursor = null,
+            bool includeTotalCount = false,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<StudioMemberAutomationView?> GetAsync(
+            string scopeId,
+            string teamId,
+            string memberId,
+            string scheduleId,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<StudioMemberAutomationMutationReceipt> UpdateAsync(
+            StudioMemberAutomationUpdateCommand command,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<StudioMemberAutomationMutationReceipt> PauseAsync(
+            StudioMemberAutomationActionCommand command,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<StudioMemberAutomationMutationReceipt> ResumeAsync(
+            StudioMemberAutomationActionCommand command,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<StudioMemberAutomationMutationReceipt> RunNowAsync(
+            StudioMemberAutomationActionCommand command,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<StudioMemberAutomationMutationReceipt> DeleteAsync(
+            StudioMemberAutomationActionCommand command,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+    }
 
     /// <summary>
     /// Hand-rolled spy implementing only the members the provisioning service
@@ -895,6 +1111,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
         public string ScheduleId { get; set; } = "schedule-xyz";
         public Exception? ThrowOnEnsure { get; set; }
         public bool Ensured { get; private set; }
+        public StudioMemberWorkflowScheduleRequest? LastCreateRequest { get; set; }
         public ScheduledDispatchConfiguration? Configuration { get; private set; }
         public ScheduledDispatchMutationContext? MutationContext { get; private set; }
 

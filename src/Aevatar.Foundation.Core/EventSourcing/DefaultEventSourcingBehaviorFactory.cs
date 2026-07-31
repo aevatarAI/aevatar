@@ -14,20 +14,17 @@ public sealed class DefaultEventSourcingBehaviorFactory<TState>
     private readonly IEventStore _eventStore;
     private readonly EventSourcingRuntimeOptions _options;
     private readonly IEventSourcingSnapshotStore<TState>? _snapshotStore;
-    private readonly IEventStoreCompactionScheduler? _compactionScheduler;
     private readonly ILogger<EventSourcingBehavior<TState>>? _logger;
 
     public DefaultEventSourcingBehaviorFactory(
         IEventStore eventStore,
         EventSourcingRuntimeOptions? options = null,
         IEventSourcingSnapshotStore<TState>? snapshotStore = null,
-        IEventStoreCompactionScheduler? compactionScheduler = null,
         ILogger<EventSourcingBehavior<TState>>? logger = null)
     {
         _eventStore = eventStore;
         _options = options ?? new EventSourcingRuntimeOptions();
         _snapshotStore = snapshotStore;
-        _compactionScheduler = compactionScheduler;
         _logger = logger;
     }
 
@@ -59,7 +56,6 @@ public sealed class DefaultEventSourcingBehaviorFactory<TState>
             _logger,
             _options.EnableEventCompaction,
             _options.RetainedEventsAfterSnapshot,
-            _compactionScheduler,
             recoverFromVersionDrift);
     }
 
@@ -76,7 +72,6 @@ public sealed class DefaultEventSourcingBehaviorFactory<TState>
             ILogger<EventSourcingBehavior<TState>>? logger,
             bool enableEventCompaction,
             int retainedEventsAfterSnapshot,
-            IEventStoreCompactionScheduler? compactionScheduler,
             bool recoverFromVersionDriftOnReplay)
             : base(
                 eventStore,
@@ -86,7 +81,6 @@ public sealed class DefaultEventSourcingBehaviorFactory<TState>
                 logger,
                 enableEventCompaction,
                 retainedEventsAfterSnapshot,
-                compactionScheduler,
                 recoverFromVersionDriftOnReplay)
         {
             _transitionState = transitionState;

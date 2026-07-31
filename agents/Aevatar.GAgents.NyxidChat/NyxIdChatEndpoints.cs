@@ -330,6 +330,24 @@ public static partial class NyxIdChatEndpoints
 
     private static string? ExtractNyxIdAccessToken(HttpContext http)
     {
+        if (http.Request.Headers.TryGetValue("Authorization", out var authorizationValues))
+        {
+            if (authorizationValues.Count != 1)
+                return null;
+
+            var authorization = authorizationValues[0]?.Trim();
+            if (string.IsNullOrWhiteSpace(authorization) ||
+                !authorization.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+
+            var bearerToken = authorization["Bearer ".Length..].Trim();
+            return string.IsNullOrWhiteSpace(bearerToken) || bearerToken.Any(char.IsWhiteSpace)
+                ? null
+                : bearerToken;
+        }
+
         if (http.Request.Headers.TryGetValue(NyxIdDelegationTokenHeader, out var delegationValues))
         {
             if (delegationValues.Count != 1)
@@ -340,13 +358,6 @@ public static partial class NyxIdChatEndpoints
                 ? null
                 : delegationToken;
         }
-
-        var authHeader = http.Request.Headers.Authorization.FirstOrDefault();
-        if (string.IsNullOrWhiteSpace(authHeader))
-            return null;
-
-        if (authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
-            return authHeader["Bearer ".Length..].Trim();
 
         return null;
     }

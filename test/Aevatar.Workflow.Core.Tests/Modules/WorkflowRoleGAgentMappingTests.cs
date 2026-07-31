@@ -1,6 +1,9 @@
 using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.ToolSetRegistry;
+using Aevatar.ChatRouting.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Integration.AI;
@@ -11,6 +14,40 @@ namespace Aevatar.Workflow.Core.Tests.Modules;
 
 public sealed class WorkflowRoleGAgentMappingTests
 {
+    [Fact]
+    public void WorkflowRunScopeMapper_ShouldFillMissingOwnerScopeWhenCallerScopeAlreadyExists()
+    {
+        var context = AgentToolExecutionContext.Empty with
+        {
+            Caller = new AgentToolCallerContext("scope-caller-alpha", null, null),
+        };
+
+        var mapped = WorkflowRunScopeToolContextMapper.Apply(" scope-owner-alpha ", context);
+
+        mapped.Caller.ScopeId.Should().Be("scope-caller-alpha");
+        mapped.Caller.OwnerScopeId.Should().Be("scope-owner-alpha");
+        mapped.Caller.OwnerSubject.Should().Be("scope-owner-alpha");
+    }
+
+    [Fact]
+    public void WorkflowRunScopeMapper_ShouldPreserveExistingIndependentOwnerScope()
+    {
+        var context = AgentToolExecutionContext.Empty with
+        {
+            Caller = new AgentToolCallerContext(
+                "scope-caller-alpha",
+                "owner-subject-alpha",
+                null,
+                "scope-owner-beta"),
+        };
+
+        var mapped = WorkflowRunScopeToolContextMapper.Apply("scope-owner-alpha", context);
+
+        mapped.Caller.ScopeId.Should().Be("scope-caller-alpha");
+        mapped.Caller.OwnerScopeId.Should().Be("scope-owner-beta");
+        mapped.Caller.OwnerSubject.Should().Be("owner-subject-alpha");
+    }
+
     [Fact]
     public async Task WorkflowRoleGAgent_ShouldMapWorkflowCredentialAndRouteAtAiBoundary()
     {
@@ -27,6 +64,7 @@ public sealed class WorkflowRoleGAgentMappingTests
             StepId = "reply",
             SessionId = "session-1",
             Prompt = "hello",
+            ScopeId = " scope-owner-alpha ",
             ScheduleId = " schedule-1 ",
             Model = "model-a",
             UserMemoryPrompt = "memory",
@@ -52,6 +90,9 @@ public sealed class WorkflowRoleGAgentMappingTests
         provider.LastRequest.ToolContext.Should().NotBeNull();
         provider.LastRequest.ToolContext!.Credentials.NyxIdAccessToken.Should().Be("raw-token");
         provider.LastRequest.ToolContext.Credentials.NyxIdOrgToken.Should().Be("raw-token");
+        provider.LastRequest.ToolContext.Caller.ScopeId.Should().Be("scope-owner-alpha");
+        provider.LastRequest.ToolContext.Caller.OwnerScopeId.Should().Be("scope-owner-alpha");
+        provider.LastRequest.ToolContext.Caller.OwnerSubject.Should().Be("scope-owner-alpha");
         provider.LastRequest.ToolContext.Routing.NyxIdRoutePreference.Should().Be("route-a");
         provider.LastRequest.ToolContext.WorkflowRuntime.ParentActorId.Should().Be("parent-actor");
         provider.LastRequest.ToolContext.WorkflowRuntime.ParentRunId.Should().Be("parent-run");
@@ -173,6 +214,106 @@ public sealed class WorkflowRoleGAgentMappingTests
         provider.LastRequest.ToolContext.ToolVisibility.Allows("calendar").Should().BeFalse();
     }
 
+    [Fact]
+    public async Task WorkflowRoleGAgent_ShouldDiscoverConnectedServiceToolsPerCallerRequest()
+    {
+        var provider = new RecordingLlmProvider();
+        var publisher = new RecordingEventPublisher();
+        var source = new RecordingToolSource(new StaticAgentTool("nyxid_calendar_create_event"));
+        var registry = new RecordingToolSetRegistry(source);
+        var agent = new TestWorkflowRoleGAgent(provider, registry)
+        {
+            EventPublisher = publisher,
+        };
+        agent.AddTool(new StaticAgentTool("nyxid_proxy"));
+
+        await agent.HandleWorkflowLlmExecutionIntent(BuildConnectedServiceIntent("token-a", "session-a"));
+
+        provider.LastRequest.Should().NotBeNull();
+        provider.LastRequest!.Tools.Should().ContainSingle(tool => tool.Name == "nyxid_calendar_create_event");
+        provider.LastRequest.Tools.Should().NotContain(tool => tool.Name == "nyxid_proxy");
+        provider.LastRequest.ToolContext!.InvocationSurface.Should().Be(AgentToolInvocationSurface.WorkflowLlmToolLoop);
+
+        await agent.HandleWorkflowLlmExecutionIntent(BuildConnectedServiceIntent("token-b", "session-b"));
+
+        source.AccessTokens.Should().Equal("token-a", "token-b");
+        source.InvocationSurfaces.Should().OnlyContain(surface => surface == AgentToolInvocationSurface.WorkflowLlmToolLoop);
+        registry.ResolvedNames.Should().Equal("nyxid.connected_services", "nyxid.connected_services");
+    }
+
+    [Fact]
+    public async Task WorkflowRoleGAgent_WithOnlyToolSetRestriction_ShouldKeepRegisteredStaticTools()
+    {
+        var provider = new RecordingLlmProvider();
+        var source = new RecordingToolSource(new StaticAgentTool("nyxid_calendar_create_event"));
+        var agent = new TestWorkflowRoleGAgent(provider, new RecordingToolSetRegistry(source));
+        agent.AddTool(new StaticAgentTool("search"));
+
+        await agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
+        {
+            RunId = "run-tool-set-only",
+            StepId = "reply",
+            SessionId = "session-tool-set-only",
+            Prompt = "find and schedule",
+            AgentToolScope = new WorkflowAgentToolScope
+            {
+                ToolSetRefs = { "nyxid.connected_services" },
+            },
+        });
+
+        provider.LastRequest.Should().NotBeNull();
+        provider.LastRequest!.Tools.Should().Contain(tool => tool.Name == "search");
+        provider.LastRequest.Tools.Should().Contain(tool => tool.Name == "nyxid_calendar_create_event");
+    }
+
+    [Fact]
+    public async Task WorkflowRoleGAgent_WithExplicitEmptyStaticRestriction_ShouldExposeOnlyRequestTools()
+    {
+        var provider = new RecordingLlmProvider();
+        var source = new RecordingToolSource(new StaticAgentTool("nyxid_calendar_create_event"));
+        var agent = new TestWorkflowRoleGAgent(provider, new RecordingToolSetRegistry(source));
+        agent.AddTool(new StaticAgentTool("search"));
+
+        await agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
+        {
+            RunId = "run-empty-static",
+            StepId = "reply",
+            SessionId = "session-empty-static",
+            Prompt = "schedule only",
+            AgentToolScope = new WorkflowAgentToolScope
+            {
+                RestrictAllowedToolNames = true,
+                RestrictToolSets = true,
+                ToolSetRefs = { "nyxid.connected_services" },
+            },
+        });
+
+        provider.LastRequest.Should().NotBeNull();
+        provider.LastRequest!.Tools.Should().NotContain(tool => tool.Name == "search");
+        provider.LastRequest.Tools.Should().ContainSingle(tool => tool.Name == "nyxid_calendar_create_event");
+    }
+
+    private static WorkflowLlmExecutionIntent BuildConnectedServiceIntent(string token, string sessionId) =>
+        new()
+        {
+            RunId = $"run-{sessionId}",
+            StepId = "reply",
+            SessionId = sessionId,
+            Prompt = "create an event",
+            CallerCredential = new WorkflowCallerCredential { BearerToken = token },
+            WorkflowRuntimeContext = new WorkflowToolRuntimeContextPayload
+            {
+                ParentActorId = "parent-actor",
+                ParentRunId = $"parent-{sessionId}",
+                ParentStepId = "reply",
+            },
+            AgentToolScope = new WorkflowAgentToolScope
+            {
+                AllowedToolNames = { "search" },
+                ToolSetRefs = { "nyxid.connected_services" },
+            },
+        };
+
     private sealed class RecordingLlmProvider : ILLMProviderFactory, ILLMProvider
     {
         public LLMRequest? LastRequest { get; private set; }
@@ -249,6 +390,51 @@ public sealed class WorkflowRoleGAgentMappingTests
             _ = targetActorId;
             return PublishAsync(evt, TopologyAudience.Children, ct, sourceEnvelope, options);
         }
+    }
+
+    private sealed class RecordingToolSetRegistry(IAgentToolSource source) : IToolSetRegistry
+    {
+        public List<string> ResolvedNames { get; } = [];
+
+        public IReadOnlyList<string> GetRegisteredNames() => ["nyxid.connected_services"];
+
+        public ToolSetResolveResult Resolve(ChatRouteToolSetRef? toolSetRef)
+        {
+            var name = toolSetRef?.Name ?? string.Empty;
+            ResolvedNames.Add(name);
+            return ToolSetResolveResult.Success(name, [source]);
+        }
+    }
+
+    private sealed class TestWorkflowRoleGAgent(
+        ILLMProviderFactory provider,
+        IToolSetRegistry registry)
+        : WorkflowRoleGAgent(provider, toolSetRegistry: registry)
+    {
+        public void AddTool(IAgentTool tool) => RegisterTool(tool);
+    }
+
+    private sealed class RecordingToolSource(IAgentTool tool) : IAgentToolSource
+    {
+        public List<string?> AccessTokens { get; } = [];
+        public List<AgentToolInvocationSurface> InvocationSurfaces { get; } = [];
+
+        public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            AccessTokens.Add(AgentToolRequestContext.NyxIdAccessToken);
+            InvocationSurfaces.Add(AgentToolRequestContext.Current?.InvocationSurface ?? AgentToolInvocationSurface.Unspecified);
+            return Task.FromResult<IReadOnlyList<IAgentTool>>([tool]);
+        }
+    }
+
+    private sealed class StaticAgentTool(string name) : IAgentTool
+    {
+        public string Name => name;
+        public string Description => "Connected service operation";
+        public string ParametersSchema => "{\"type\":\"object\"}";
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult("{}");
     }
 
     private static WorkflowFileRef BuildWorkflowFileRef(string fileId) =>

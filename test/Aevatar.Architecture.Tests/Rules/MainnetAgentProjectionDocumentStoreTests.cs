@@ -51,7 +51,8 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
         AssertProviderStore<DeviceRegistrationDocument, InMemoryProjectionDocumentStore<DeviceRegistrationDocument, string>>(provider);
         AssertProviderStore<UserAgentCatalogDocument, InMemoryProjectionDocumentStore<UserAgentCatalogDocument, string>>(provider);
         AssertProviderStore<UserAgentCatalogNyxCredentialDocument, InMemoryProjectionDocumentStore<UserAgentCatalogNyxCredentialDocument, string>>(provider);
-        AssertProviderStore<HealthProbeTargetDocument, InMemoryProjectionDocumentStore<HealthProbeTargetDocument, string>>(provider);
+        Assert.IsType<InMemoryHealthProbeOperationalSnapshotStore>(
+            provider.GetRequiredService<IHealthProbeOperationalSnapshotStore>());
         AssertProviderStore<StreamingProxyChatSessionTerminalSnapshot, InMemoryProjectionDocumentStore<StreamingProxyChatSessionTerminalSnapshot, string>>(provider);
         AssertProviderStore<StreamingProxyRoomParticipantsSnapshot, InMemoryProjectionDocumentStore<StreamingProxyRoomParticipantsSnapshot, string>>(provider);
         Assert.DoesNotContain(services, descriptor =>
@@ -82,7 +83,12 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
         AssertProviderStore<DeviceRegistrationDocument, ElasticsearchProjectionDocumentStore<DeviceRegistrationDocument, string>>(provider);
         AssertProviderStore<UserAgentCatalogDocument, ElasticsearchProjectionDocumentStore<UserAgentCatalogDocument, string>>(provider);
         AssertProviderStore<UserAgentCatalogNyxCredentialDocument, ElasticsearchProjectionDocumentStore<UserAgentCatalogNyxCredentialDocument, string>>(provider);
-        AssertProviderStore<HealthProbeTargetDocument, ElasticsearchProjectionDocumentStore<HealthProbeTargetDocument, string>>(provider);
+        Assert.Equal(
+            "ElasticsearchHealthProbeOperationalSnapshotStore",
+            provider.GetRequiredService<IHealthProbeOperationalSnapshotStore>().GetType().Name);
+        Assert.DoesNotContain(
+            provider.GetServices<IProjectionReadModelDescriptor>(),
+            static descriptor => descriptor.Name.Contains("health-probe", StringComparison.OrdinalIgnoreCase));
         AssertProviderStore<StreamingProxyChatSessionTerminalSnapshot, ElasticsearchProjectionDocumentStore<StreamingProxyChatSessionTerminalSnapshot, string>>(provider);
         AssertProviderStore<StreamingProxyRoomParticipantsSnapshot, ElasticsearchProjectionDocumentStore<StreamingProxyRoomParticipantsSnapshot, string>>(provider);
         Assert.IsType<ElasticsearchProjectionDocumentStore<AevatarOAuthClientDocument, string>>(

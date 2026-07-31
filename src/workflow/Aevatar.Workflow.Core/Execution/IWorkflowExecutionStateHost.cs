@@ -38,6 +38,12 @@ internal interface IWorkflowExecutionStateHost
 
     WorkflowRunExecutionContextState ExecutionContextSnapshot { get; }
 
+    /// <summary>
+    /// Committed call-site admission proof this Run received at bind time. The Run actor owns
+    /// this copy; runtime never re-reads the Definition actor, a read model, or an event store.
+    /// </summary>
+    WorkflowCapabilityAdmissionPlan CapabilityAdmissionPlanSnapshot => new();
+
     Task UpdateExecutionContextAsync(
         WorkflowRunExecutionContextDelta delta,
         CancellationToken ct = default);

@@ -740,8 +740,45 @@ const zhCNMessages = {
   'teams.automations.actions.delete': '删除',
   'teams.automations.actions.edit': '编辑',
   'teams.automations.actions.pause': '暂停',
+  'teams.automations.actions.reauthorize': '检查并重新授权',
+  'teams.automations.actions.refresh': '刷新',
+  'teams.automations.actions.retryRevocation': '重试撤销',
   'teams.automations.actions.resume': '恢复',
   'teams.automations.actions.runNow': '立即运行',
+  'teams.automations.actions.runHistory': '查看成员运行记录',
+  'teams.automations.actions.tryAgain': '重试',
+  'teams.automations.authorization.back': '返回',
+  'teams.automations.authorization.confirm': '授权并继续',
+  'teams.automations.authorization.description':
+    'Aevatar 将该计划的受限密钥保存在 Vault 中。浏览器永远不会收到密钥；暂停会保留密钥，删除会撤销密钥。',
+  'teams.automations.authorization.diagnostics': '授权诊断信息',
+  'teams.automations.authorization.disclosure.aevatar_secret_custody':
+    '密钥由 Aevatar 保管',
+  'teams.automations.authorization.disclosure.browser_never_receives_secret':
+    '浏览器永远不会收到密钥',
+  'teams.automations.authorization.disclosure.dedicated_credential':
+    '该计划使用独立凭证',
+  'teams.automations.authorization.disclosure.delete_revokes_credential':
+    '删除会撤销凭证',
+  'teams.automations.authorization.disclosure.node_ids_are_permission_set':
+    '节点 ID 定义权限范围',
+  'teams.automations.authorization.disclosure.pause_resume_preserves_credential':
+    '暂停和恢复不会更换凭证',
+  'teams.automations.authorization.error': '无法继续授权',
+  'teams.automations.authorization.exactAccess': '精确权限',
+  'teams.automations.authorization.expiry': '凭证有效期',
+  'teams.automations.authorization.preparing': '正在准备授权检查',
+  'teams.automations.authorization.review': '检查授权',
+  'teams.automations.authorization.reviewAgain': '重新检查',
+  'teams.automations.authorization.serviceModel': '服务与模型',
+  'teams.automations.authorization.title': '专用 Agent Key',
+  'teams.automations.authorizationStatus.active': '凭证有效',
+  'teams.automations.authorizationStatus.deleting': '正在删除',
+  'teams.automations.authorizationStatus.failed': '授权失败',
+  'teams.automations.authorizationStatus.needs_authorization': '需要重新授权',
+  'teams.automations.authorizationStatus.provisioning_pending': '正在准备授权',
+  'teams.automations.authorizationStatus.replacement_pending': '正在更换授权',
+  'teams.automations.authorizationStatus.revocation_pending': '正在撤销凭证',
   'teams.automations.columns.actions': '操作',
   'teams.automations.columns.automation': '自动化',
   'teams.automations.columns.member': '成员',
@@ -766,9 +803,14 @@ const zhCNMessages = {
   'teams.automations.empty.publishHint':
     '先发布一个 Workflow 成员，再安排周期任务。',
   'teams.automations.empty.title': '还没有周期任务',
+  'teams.automations.empty.member': '这个成员还没有自动化',
   'teams.automations.error.description':
     '刷新页面，或等定时任务服务可用后再试。',
   'teams.automations.error.title': '自动化加载失败',
+  'teams.automations.error.stateLoad': '无法加载自动化状态',
+  'teams.automations.expiry.soon': '凭证将在 14 天内过期',
+  'teams.automations.firing.enabled': '触发已启用',
+  'teams.automations.firing.paused': '触发已暂停',
   'teams.automations.form.cadence': '节奏',
   'teams.automations.form.cadenceAria': '自动化节奏',
   'teams.automations.form.create': '创建自动化',
@@ -784,6 +826,10 @@ const zhCNMessages = {
     '选填：留空也可以保存为无周期 Prompt。',
   'teams.automations.form.editTitle': '编辑自动化',
   'teams.automations.form.enabled': '启用',
+  'teams.automations.form.enableAfterAuthorization': '授权后启用触发',
+  'teams.automations.form.firingEnabled': '触发已启用',
+  'teams.automations.form.description':
+    '为 {memberName} 配置周期任务。创建或更换凭证前需要单独检查授权。',
   'teams.automations.form.identityMissing':
     '正在等待这个成员的已发布服务身份。',
   'teams.automations.form.identityReady': '目标为该成员的已发布服务。',
@@ -816,13 +862,27 @@ const zhCNMessages = {
   'teams.automations.form.timezone': '时区',
   'teams.automations.form.timezoneAria': '时区',
   'teams.automations.form.title': '新建成员自动化',
+  'teams.automations.loading': '正在加载自动化',
   'teams.automations.member.publishFirst': '先发布这个成员，再添加周期任务。',
   'teams.automations.member.publishedServiceReady': '已发布服务可用',
   'teams.automations.member.unknown': '未知成员',
+  'teams.automations.memberDescription':
+    '每个计划单独授权 Agent Key，并由 Aevatar 保管。',
+  'teams.automations.memberSelector.description':
+    '每个自动化只归属于一个已发布成员。请选择成员并打开其规范资源。',
+  'teams.automations.memberSelector.title': '选择团队成员',
+  'teams.automations.memberTitle': '{memberName} 的自动化',
+  'teams.automations.memberUnavailable.description':
+    '该成员不属于当前团队，请选择其他成员。',
+  'teams.automations.memberUnavailable.title': '该成员无法配置自动化',
   'teams.automations.member.workflowOnly':
     '只有 Workflow 成员可以添加周期任务。',
+  'teams.automations.schedule.next': '下次 {time}',
+  'teams.automations.schedule.notScheduled': '尚未安排',
   'teams.automations.messages.createFailed': '自动化未创建：{message}',
   'teams.automations.messages.createSuccess': '自动化已创建。',
+  'teams.automations.messages.authorizationAccepted': '授权请求已受理',
+  'teams.automations.messages.deleteAccepted': '删除请求已受理',
   'teams.automations.messages.cronRequired': '请先填写 Cron 表达式。',
   'teams.automations.messages.deleteSuccess': '自动化已删除。',
   'teams.automations.messages.disableSuccess': '自动化已暂停。',
@@ -832,6 +892,11 @@ const zhCNMessages = {
     '周期 Prompt 最多 {maxLength} 个字符。',
   'teams.automations.messages.runNowFailed': '立即运行请求失败：{message}',
   'teams.automations.messages.runNowSuccess': '已请求立即运行。',
+  'teams.automations.messages.pauseAccepted': '暂停请求已受理',
+  'teams.automations.messages.resumeAccepted': '恢复请求已受理',
+  'teams.automations.messages.revocationRetryAccepted': '撤销重试已受理',
+  'teams.automations.messages.runAccepted': '运行请求已受理',
+  'teams.automations.messages.updateAccepted': '更新请求已受理',
   'teams.automations.messages.serviceIdentityLoading': '服务身份仍在加载中。',
   'teams.automations.messages.serviceIdentityMissing':
     '所选成员还没有服务身份。',
@@ -840,6 +905,18 @@ const zhCNMessages = {
   'teams.automations.noPublishedMember.description':
     '自动化需要成员拥有已发布的服务身份后才能运行。',
   'teams.automations.noPublishedMember.title': '先发布一个成员',
+  'teams.automations.pending.description':
+    '自动刷新已停止，请点击刷新读取权威状态。',
+  'teams.automations.pending.title': '仍在处理中',
+  'teams.automations.planChanged.description':
+    '旧的摘要和操作身份已丢弃，请重新执行预检并确认授权。',
+  'teams.automations.planChanged.title': '授权计划已变化',
+  'teams.automations.delete.description':
+    '在 NyxID 与 Vault 撤销全部完成前，该行会继续显示。',
+  'teams.automations.delete.title': '删除自动化？',
+  'teams.automations.revocation.nyxId': 'NyxID：{status}',
+  'teams.automations.revocation.vault': 'Vault：{status}',
+  'teams.automations.row.noPrompt': '未配置周期 Prompt',
   'teams.automations.preview.daily.cadence': '每个工作日 · 09:00',
   'teams.automations.preview.daily.member': 'Support Analyst',
   'teams.automations.preview.daily.nextRun': '今天下一次运行',

@@ -108,9 +108,9 @@ Runtime semantics:
 
 External operation 先按 authority owner 选 primitive，而不是按“是否需要认证”判断：部署配置并 allowlist 的 operation 使用 `connector_call`，即使它的 Connector 使用 `client_credentials` 或 `secret_ref_header`；用户/org credential、OAuth connection、NyxID UserService 或 local Node 拥有的 operation 使用 `tool_call -> nyxid_proxy`。任意未发现 URL 不允许 authoring。
 
-Chat authoring 先调用只读 `list_external_workflow_capabilities`，再把完整 candidate 原样交给 `inspect_external_workflow_capability_readiness` 并指定 `interactive` 或 `durable`。只有每个 external capability 的 typed readiness status 都是 `READY` 才尝试 Workflow write；其他 status 只展示 typed blocker 和 trusted remediation。Readiness 是 point-in-time decision，不是 Workflow lifecycle，也不会创建连接、approval 或 projection。
+Chat authoring 先调用只读 `list_external_workflow_capabilities`，从 structured descriptor 中选择一个 exact operation，再把 descriptor 的 typed `selector` 原样交给 `inspect_external_workflow_capability_readiness` 并指定 `interactive` 或 `durable`。UI、CLI 与 LLM 都只复制选择结果；不得生成、猜测或要求人类键入 `user_service_id`、NyxID `endpoint_id`、Connector `operation_id` 或 proof 字段。只有每个 external capability 的 typed readiness status 都是 `READY` 才尝试 Workflow write；其他 status 只展示 typed blocker 和 trusted remediation。Readiness 是 point-in-time decision，不是 Workflow lifecycle，也不会创建连接、approval 或 projection。
 
-NyxID 的 `durable` readiness 不会永久返回 unavailable。它在 live `/keys` 与 exact OpenAPI 校验之外，只读一次 verified caller 对应的 owner-scoped authorization catalog current-state read model；查询不得触发 refresh、activation、lease、polling、replay 或 projection priming。只有 catalog 已 activated、未 invalidated/cleaned、仍在 freshness window 内，且 exact `user_service_id` 的 slug snapshot、`PERMITTED` access、normalized resource owner、node-grant requirement 与 canonical Node ids 全部一致时才返回 `READY`。该结果必须携带 `DURABLE_AUTHORIZATION_CATALOG` source stamp；统一 admission 还会校验 execution mode、exact capability identity 与 stamp，已有 durable plan 缺少该证据同样 fail closed。Catalog snapshot 本身还必须具有正 authoritative version、完整 lifecycle facts，以及与 typed owner/services 一致的 canonical content digest；非 exact ordinal `nyxid` resource owner authority 一律拒绝。
+NyxID 的 `durable` readiness 不会永久返回 unavailable。它在 live `/api/v1/mcp/config` endpoint contract 校验之外，只读一次 verified caller 对应的 owner-scoped authorization catalog current-state read model；查询不得触发 refresh、activation、lease、polling、replay 或 projection priming。只有 catalog 已 activated、未 invalidated/cleaned、仍在 freshness window 内，且 exact `user_service_id` 的 slug snapshot、`PERMITTED` access、normalized resource owner、node-grant requirement 与 canonical Node ids 全部一致时才返回 `READY`。该结果必须携带 `DURABLE_AUTHORIZATION_CATALOG` source stamp；统一 admission 还会校验 execution mode、exact capability identity 与 stamp，已有 durable plan 缺少该证据同样 fail closed。Catalog snapshot 本身还必须具有正 authoritative version、完整 lifecycle facts，以及与 typed owner/services 一致的 canonical content digest；非 exact ordinal `nyxid` resource owner authority 一律拒绝。
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
@@ -118,13 +118,13 @@ flowchart LR
     A["Chat intent"] --> B["Typed capability listing"]
     B --> C{"Authority owner"}
     C -->|"Host-owned"| D["Connector catalog"]
-    C -->|"User or org-owned"| E["NyxID /keys + OpenAPI"]
+    C -->|"User or org-owned"| E["NyxID /api/v1/mcp/config"]
     D --> F["Typed readiness"]
     E --> F
     F --> G{"READY"}
     G -->|"No"| H["Typed blocker and remediation; no write"]
     G -->|"Yes"| I["Unified server-side admission"]
-    I --> J["Commit definition + admission digest"]
+    I --> J["Commit definition + v4 call-site proof"]
     J --> K{"Runtime capability owner"}
     K -->|"Host Connector"| L["Host connector credential edge"]
     K -->|"NyxID"| M{"Execution mode"}
@@ -134,15 +134,19 @@ flowchart LR
     O --> P
 ```
 
-所有普通 write entry（Scope upsert、Studio draft/provision/bind、skill mount、prepare、publish、startup file materialization）统一调用 `IWorkflowExternalCapabilityAdmissionService`，但契约明确区分两条路径。首次 live admission 在 mutation 前重新 parse YAML，以 authenticated caller 的 transient authority/credential 读取 live sources，并生成 `external-capability-admission.v2` plan。Actor 已持有 plan 的后续 prepare、publish、replay 或 Studio handoff 只调用 credential-free persisted revalidation；每个调用点必须按当前业务契约独立提供 expected execution mode，并与 plan 精确匹配，禁止从待验证 plan 自身回读 mode。该路径不伪造 caller、不使用 `appId`/`serviceId` 替代 owner，也不重复外部 readiness read。
+所有普通 write entry（Scope upsert、Studio draft/provision/bind、skill mount、prepare、publish、startup file materialization）统一调用 `IWorkflowExternalCapabilityAdmissionService`，但契约明确区分两条路径。首次 live admission 在 mutation 前重新 parse YAML，以 authenticated caller 的 transient authority/credential 读取 live sources，并生成 `external-capability-admission.v4` plan。Actor 已持有 v4 plan 的后续 prepare、publish 或 Studio handoff 只调用 credential-free persisted revalidation；每个调用点必须按当前业务契约独立提供 expected execution mode，并与 plan 精确匹配，禁止从待验证 plan 自身回读 mode。该路径不伪造 caller、不使用 `appId`/`serviceId` 替代 owner，也不重复外部 readiness read。
 
-V2 plan 固化 definition digest、exact capability refs、operation contract digests 和 source stamps。Durable NyxID plan 还必须携带 typed `durable_authorization_owner = nyxid/personal/<subject>`，该 owner 参与 `admission_digest`，并且必须能确定唯一、完全相等的 owner-scoped catalog source id。即使篡改者重新计算未加密 digest，owner/source mismatch 仍 fail closed；不需要 durable NyxID catalog 的 plan 则禁止携带该 owner。Definition actor 再次独立 parse，并在一个 actor transition 中提交 definition 与 admission fact；caller-supplied evidence 不能覆盖 actor 解析结果。仓库 `workflows/` 是无租户 caller authority 的 startup definition source，因此不得内嵌租户专属 NyxID `user_service_id`；这类 workflow 必须由 scope/user authoring 路径基于 live candidate 创建。
+其中 Aevatar 所有权上下文与 NyxID authority 是两个独立 contract：`scope_id`、`owner_scope_id`、`owner_subject` 不得填入 NyxID caller；live admission 只接受认证入口提供的 typed NyxID user identity，缺失即返回 typed blocker。
+
+V4 plan 以 call-site scoped `invocation_admissions` 作为唯一当前事实，固化 definition digest、服务端生成的 exact capability proof、endpoint contract digests 和 source stamps；deprecated field 4 `external_capabilities` 只保留为 v2 反序列化槽，v4 创建必须为空，验证遇到非空必须拒绝。Durable NyxID plan 还必须携带 typed `durable_authorization_owner = nyxid/personal/<subject>`，该 owner 参与 `admission_digest`，并且必须能确定唯一、完全相等的 owner-scoped catalog source id。即使篡改者重新计算未加密 digest，owner/source mismatch 仍 fail closed；不需要 durable NyxID catalog 的 plan 则禁止携带该 owner。Definition actor 再次独立 parse，并在一个 actor transition 中提交 definition 与 admission fact；caller-supplied evidence 不能覆盖 actor 解析结果。仓库 `workflows/` 是无租户 caller authority 的 startup definition source，因此不得内嵌租户专属 NyxID `user_service_id`；这类 workflow 必须由 scope/user authoring 路径基于 live candidate 创建。持久化 v2/v3 plan 重新 prepare/publish/bind 时返回 typed `CAPABILITY_ADMISSION_REBIND_REQUIRED`，不在 runtime 保留 raw-path fallback。
 
 YAML 的 exact capability 规则：
 
 - `connector_call` 使用静态 `connector + operation + contract_digest`，对应 `HostConnectorCapabilityRef`。
-- `nyxid_proxy` 使用静态 `service_id + slug + operation_id + method + path + contract_digest`；其中 `service_id` 必须等于 selected candidate 的 `user_service_id`，slug 只是 `service_slug_snapshot`。
-- Dynamic identity、slug-only、`service` alias、incomplete operation tuple、changed method/path/digest 和 secret-bearing header 都 fail closed。
+- `nyxid_proxy` 只在 step 级 typed `capability.nyxid_operation` 保存静态 `user_service_id + endpoint_id` selector；`parameters.arguments` 只允许 `path_params`、`query`、`headers`、`body`、`response_mode`。
+- service slug、method、path template、schema、source stamp 与 contract digest 全部由 `/api/v1/mcp/config` 的 typed adapter 生成。Dynamic selector、缺失 selector、caller-authored proof 字段和 secret-bearing header 都 fail closed，并返回 typed migration/remediation。
+- ordinary、nested、`foreach`/`for_each`/`foreach_llm` 与 `while`/`loop` 共享同一 invocation compiler。循环 primitive 的 selector 写在 owner step 的 `capability` 上，编译器为其 synthesized tool sub-step 生成稳定 `<workflow>/<step>/sub-step` call-site；每个 item/iteration 只能改变 runtime arguments，不能改变服务或 endpoint。
+- `sub_param_` 仍是通用的 synthesized sub-step 参数前缀；`sub_param_prompt`、`sub_param_workflow`、`sub_param_prompt_prefix` 与其他非工具用法保持原语义，不承载 capability proof。
 - API key、bearer、OAuth secret、cookie 和 downstream credential 不得进入 Chat、YAML、actor state、read model、receipt 或 log。Credential setup 只在 NyxID 或 Host Connector trusted boundary 完成。
 
 ## 2. Data 原语
@@ -442,17 +446,40 @@ steps:
       tool: "web_search"
 ```
 
-NyxID external operation 必须从 typed listing/readiness 复制完整 exact tuple。下例中的 id、slug、operation 和 digest 只是彼此不同的文档 fixture；实际 authoring 必须用同一个 `READY` candidate 原子替换，不能从 slug 推导 id：
+NyxID external operation 从 typed listing/readiness 复制 selector；raw YAML 的 canonical representation 只保存 step 级 `capability.nyxid_operation.{user_service_id, endpoint_id}`。下例中的运行参数只表达本次调用值：
 
 ```yaml
 steps:
   - id: read_home_state
     type: tool_call
+    capability:
+      nyxid_operation:
+        user_service_id: us-home-alpha
+        endpoint_id: list-states
     parameters:
       tool: nyxid_proxy
       arguments: >-
-        {"service_id":"us-home-alpha","slug":"home-assistant","operation_id":"list-states","method":"GET","path":"/api/states","contract_digest":"fixture-replace-from-ready-capability"}
+        {"query":{},"headers":{},"response_mode":"text"}
 ```
+
+循环中合成的 `nyxid_proxy` 子步骤把同一个 selector 声明在 owner step 上，仍通过通用 `sub_param_` 提供运行参数：
+
+```yaml
+steps:
+  - id: fetch_each_object
+    type: foreach
+    capability:
+      nyxid_operation:
+        user_service_id: us-files-alpha
+        endpoint_id: get-object
+    parameters:
+      sub_step_type: tool_call
+      sub_param_tool: nyxid_proxy
+      sub_param_arguments: >-
+        {"path_params":{"object_id":"${input}"},"response_mode":"text"}
+```
+
+`while`/`loop` 使用 `step: tool_call` 时遵循同一规则。编译期缺少静态 selector 就直接产生 typed admission blocker，不能以空 capability plan 进入运行时。当前 MCP config 不发布可验证的 binary media-type contract，因此 v4 proof 为 text-only，`response_mode=file_artifact` 会在 dispatch 前拒绝。
 
 #### NyxID `codex_exec` 工具
 
