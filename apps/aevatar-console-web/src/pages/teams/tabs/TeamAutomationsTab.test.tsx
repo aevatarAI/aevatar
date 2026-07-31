@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { message } from "antd";
 import * as React from "react";
 import TeamAutomationsTab, {
@@ -242,6 +242,7 @@ describe("TeamAutomationsTab canonical member authority", () => {
         {
           kind: "retryRevocation",
           scheduleId: "sch-alpha",
+          acceptedAt: 0,
           baselineStateVersion: 4,
         },
         [],
@@ -643,6 +644,136 @@ describe("TeamAutomationsTab canonical member authority", () => {
     ).toBeInTheDocument();
     expect(teamAutomationApi.listAll).toHaveBeenCalledTimes(3);
     expect(screen.queryByText("Still pending")).not.toBeInTheDocument();
+  });
+
+  it("shows an accepted create while the authoritative row is unavailable", async () => {
+    (teamAutomationApi.preflightCreate as jest.Mock).mockResolvedValue(
+      authorizationReview(),
+    );
+    (teamAutomationApi.create as jest.Mock).mockResolvedValue({
+      accepted: true,
+      status: "accepted",
+      scheduleId: "sch-pending",
+      operationId: "op-alpha",
+      commandId: "cmd-alpha",
+    });
+    renderTab("m-alpha");
+
+    fireEvent.click(await screen.findByRole("button", { name: "New automation" }));
+    fireEvent.change(screen.getByLabelText("Automation name"), {
+      target: { value: "Daily review" },
+    });
+    fireEvent.change(screen.getByLabelText("Recurring prompt"), {
+      target: { value: "Summarize open work." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create automation" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Authorize and continue" }));
+
+    const acceptedRow = await screen.findByRole("article", { name: "Daily review" });
+    expect(
+      within(acceptedRow).getByRole("status", {
+        name: "Waiting for schedule sync",
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("offers an explicit one-shot list refresh", async () => {
+    renderTab("m-alpha");
+
+    await screen.findByText("No automations for this member");
+    expect(teamAutomationApi.listAll).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+
+    await waitFor(() => expect(teamAutomationApi.listAll).toHaveBeenCalledTimes(2));
+  });
+
+  it("does not poll for an existing pending automation", async () => {
+    jest.useFakeTimers({ now: 0 });
+    try {
+      (teamAutomationApi.listAll as jest.Mock).mockResolvedValue({
+        items: [automationView({ authorizationStatus: "provisioning_pending" })],
+        nextCursor: null,
+        totalCount: 1,
+      });
+      renderTab("m-alpha");
+
+      await act(async () => {
+        await Promise.resolve();
+        await jest.advanceTimersByTimeAsync(0);
+      });
+      expect(teamAutomationApi.listAll).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(20_000);
+      });
+
+      expect(teamAutomationApi.listAll).toHaveBeenCalledTimes(1);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it("stops create polling after six seconds and manual refresh stays one-shot", async () => {
+    (teamAutomationApi.preflightCreate as jest.Mock).mockResolvedValue(
+      authorizationReview(),
+    );
+    (teamAutomationApi.create as jest.Mock).mockResolvedValue({
+      accepted: true,
+      status: "accepted",
+      scheduleId: "sch-pending",
+      operationId: "op-alpha",
+      commandId: "cmd-alpha",
+    });
+    renderTab("m-alpha");
+
+    fireEvent.click(await screen.findByRole("button", { name: "New automation" }));
+    fireEvent.change(screen.getByLabelText("Automation name"), {
+      target: { value: "Daily review" },
+    });
+    fireEvent.change(screen.getByLabelText("Recurring prompt"), {
+      target: { value: "Summarize open work." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create automation" }));
+    const authorizeButton = await screen.findByRole("button", {
+      name: "Authorize and continue",
+    });
+    jest.useFakeTimers({ now: Date.now() });
+    try {
+      fireEvent.click(authorizeButton);
+      await act(async () => {
+        await Promise.resolve();
+        await jest.advanceTimersByTimeAsync(0);
+      });
+      expect(screen.getByRole("article", { name: "Daily review" })).toBeInTheDocument();
+
+      const callsAtAcceptance = (teamAutomationApi.listAll as jest.Mock).mock.calls.length;
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(6_000);
+      });
+      const callsAtDeadline = (teamAutomationApi.listAll as jest.Mock).mock.calls.length;
+      expect(callsAtDeadline).toBeGreaterThan(callsAtAcceptance);
+      expect(screen.getByText("Still pending")).toBeInTheDocument();
+
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(20_000);
+      });
+      expect(teamAutomationApi.listAll).toHaveBeenCalledTimes(callsAtDeadline);
+
+      const refreshButton = screen.getByRole("button", { name: "Refresh" });
+      fireEvent.click(refreshButton);
+      await act(async () => {
+        await Promise.resolve();
+        await jest.advanceTimersByTimeAsync(0);
+      });
+      expect(teamAutomationApi.listAll).toHaveBeenCalledTimes(callsAtDeadline + 1);
+
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(20_000);
+      });
+      expect(teamAutomationApi.listAll).toHaveBeenCalledTimes(callsAtDeadline + 1);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it("recovers a confirmed create when the fresh binding is missing", async () => {

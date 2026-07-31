@@ -192,6 +192,28 @@ describe("teamAutomationApi", () => {
     },
   );
 
+  it("decodes canonical no-owner LLM runtime evidence", () => {
+    expect(
+      teamAutomationApiDecoders.view(
+        automationView({
+          ownerLlmRouteKind: "unspecified",
+          ownerLlmRoute: "",
+          ownerLlmUserServiceId: "",
+          ownerLlmServiceSlug: "",
+          ownerLlmModel: "",
+        }),
+      ),
+    ).toEqual(
+      expect.objectContaining({
+        ownerLLMRouteKind: "unspecified",
+        ownerLLMRoute: "",
+        ownerLLMUserServiceId: "",
+        ownerLLMServiceSlug: "",
+        ownerLLMModel: "",
+      }),
+    );
+  });
+
   it.each([
     ["NeedsAuthorization", "needs_authorization"],
     [
