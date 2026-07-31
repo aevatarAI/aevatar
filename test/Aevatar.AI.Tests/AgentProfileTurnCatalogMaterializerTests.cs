@@ -4,6 +4,8 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Tools;
+using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.NyxId.Tools;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.GAgents.NyxidChat.AgentProfiles;
@@ -162,6 +164,41 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
             invalidCatalog,
             preparation.Authority);
         create.Should().Throw<InvalidOperationException>().WithMessage("*ceiling*");
+    }
+
+    [Fact]
+    public async Task PrepareAndMaterializeCommittedAsync_ShouldScopeRequestContextDuringToolDiscovery()
+    {
+        var tools = NewTools("recovery", "task");
+        var source = new TokenBoundToolSource("turn-token", tools);
+        var registry = new RecordingToolSetRegistry();
+        registry.Add("profile.route", source);
+        var profile = SealProfile(BuildProfile(withAlias: true));
+        var materializer = NewMaterializer(
+            registry,
+            new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+            new RecordingFetcher(SuccessfulFetch()));
+        var toolContext = ToolContext("turn-token");
+
+        var preparation = await materializer.PrepareAsync(
+            profile,
+            "session-context",
+            "/alpha run",
+            registeredTools: [],
+            toolContext,
+            CancellationToken.None);
+        var materialization = await materializer.MaterializeCommittedAsync(
+            profile,
+            preparation.Authority,
+            "turn-token",
+            registeredTools: [],
+            toolContext,
+            CancellationToken.None);
+
+        source.ObservedTokens.Should().Equal("turn-token", "turn-token");
+        preparation.Authority.AuthorityCeilingToolNames.Should().Equal("recovery", "task");
+        materialization.Catalog.RouteOwnedTools["recovery"].Should().BeSameAs(tools[0]);
+        materialization.Catalog.RouteOwnedTools["task"].Should().BeSameAs(tools[1]);
     }
 
     [Fact]
@@ -1370,6 +1407,40 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
     }
 
     [Fact]
+    public async Task MaterializeAsync_NyxIdChatProfile_ShouldHideRawProxyWithoutLosingTypedTools()
+    {
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.example" };
+        var rawProxy = new NyxIdProxyTool(new NyxIdApiClient(options, new HttpClient()));
+        var requireService = new TestTool("nyxid_require_service");
+        var typedInventory = new TestTool("nyxid_service_inventory");
+        IAgentTool[] tools = [rawProxy, requireService, typedInventory];
+        var profile = BuildProfile(withAlias: true);
+        profile.MaximumToolPolicy.ToolNames.Clear();
+        profile.MaximumToolPolicy.ToolNames.Add(tools.Select(static tool => tool.Name));
+        profile.RecoveryToolPolicy.ToolNames.Clear();
+        profile.RecoveryToolPolicy.ToolNames.Add(requireService.Name);
+        profile.Members[0].TaskToolPolicy.ToolNames.Clear();
+        profile.Members[0].TaskToolPolicy.ToolNames.Add([rawProxy.Name, typedInventory.Name]);
+
+        var catalog = await NewMaterializer(
+                RegistryWithRoute(tools),
+                new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+                new RecordingFetcher(SuccessfulFetch()))
+            .MaterializeAsync(
+                SealProfile(profile),
+                "/alpha",
+                "token",
+                tools,
+                ToolContext(),
+                CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should()
+            .BeEquivalentTo("nyxid_require_service", "nyxid_service_inventory");
+        catalog.RouteOwnedTools.Keys.Should()
+            .BeEquivalentTo("nyxid_require_service", "nyxid_service_inventory");
+    }
+
+    [Fact]
     public async Task MaterializeAsync_TaskToolSetFailure_ShouldKeepRecoveryCeilingAndAllowRequestLocalBody()
     {
         var tools = NewTools("recovery", "task", "extra");
@@ -1597,6 +1668,22 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
     {
         public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
             Task.FromResult(tools);
+    }
+
+    private sealed class TokenBoundToolSource(
+        string requiredToken,
+        IReadOnlyList<IAgentTool> tools) : IAgentToolSource
+    {
+        public List<string?> ObservedTokens { get; } = [];
+
+        public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
+        {
+            ObservedTokens.Add(AgentToolRequestContext.NyxIdAccessToken);
+            return Task.FromResult<IReadOnlyList<IAgentTool>>(
+                string.Equals(AgentToolRequestContext.NyxIdAccessToken, requiredToken, StringComparison.Ordinal)
+                    ? tools
+                    : []);
+        }
     }
 
     private sealed class ThrowingToolSource : IAgentToolSource

@@ -1,9 +1,11 @@
 using System.Text;
 using Aevatar.AI.Abstractions;
+using Google.Protobuf;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.Prompting;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.Core.Prompting;
@@ -289,6 +291,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 priorHistory,
                 attachmentContext: null,
                 forceDisableTools,
+                turnCatalog: null,
                 ct)
             .ConfigureAwait(false);
     }
@@ -301,7 +304,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         IReadOnlyList<ConversationHistoryEntry>? priorHistory,
         ChatAttachmentInputContext? attachmentContext,
         bool forceDisableTools,
-        CancellationToken ct) =>
+        CancellationToken ct,
+        AgentProfileTurnCatalog? turnCatalog) =>
         await BuildStepPlanCoreAsync(
                 activity,
                 metadata,
@@ -310,6 +314,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 priorHistory,
                 attachmentContext,
                 forceDisableTools,
+                turnCatalog,
                 ct)
             .ConfigureAwait(false);
 
@@ -321,6 +326,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         IReadOnlyList<ConversationHistoryEntry>? priorHistory,
         ChatAttachmentInputContext? attachmentContext,
         bool forceDisableTools,
+        AgentProfileTurnCatalog? turnCatalog,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(activity);
@@ -334,17 +340,22 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             replyPlan.Primary,
             replyPlan.PrimaryControl,
             replyPlan.PrimaryToolContext);
-        var tools = await BuildTurnToolsAsync(
-            disableTools,
-            IsChannelRelayTurn(toolContext),
-            effectiveToolContext,
-            ct);
+        var tools = turnCatalog is null
+            ? await BuildTurnToolsAsync(
+                disableTools,
+                IsChannelRelayTurn(toolContext),
+                effectiveToolContext,
+                ct)
+            : BuildProfileTools(disableTools, turnCatalog);
         var input = await BuildUserInputPartsAsync(
                 activity,
                 provider,
                 attachmentContext,
                 ct)
             .ConfigureAwait(false);
+        var inputFileRefs = CollectInputFileRefs(input.Parts);
+        effectiveToolContext = WithInputFileRefs(effectiveToolContext, inputFileRefs);
+        var ownerFallbackToolContext = WithInputFileRefs(replyPlan.OwnerFallbackToolContext, inputFileRefs);
 
         var runtime = BuildRuntime(
             activity,
@@ -365,13 +376,14 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 externalMetadata,
                 effectiveToolContext,
                 input.AttachmentVisibilityInstruction,
-                replyPlan.DisableTools ? UnboundSenderToolsDisabledNotice : null)),
+                replyPlan.DisableTools ? UnboundSenderToolsDisabledNotice : null,
+                turnCatalog)),
         };
         initialMessages.AddRange((priorHistory ?? []).Where(IsReplayableHistoryEntry).TakeLast(MaxRecentPriorHistoryMessages).Select(ToChatMessage));
         initialMessages.Add(ChatMessage.User(input.Parts, input.Text));
 
         return new AgentRunReplyStepPlan(
-            runtime.CreateStepExecutor(turnCatalog: null),
+            runtime.CreateStepExecutor(turnCatalog),
             externalMetadata,
             replyPlan.PrimaryControl,
             effectiveToolContext,
@@ -379,7 +391,17 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             ResolveMaxToolRounds(replyPlan.PrimaryControl),
             disableTools,
             replyPlan.OwnerFallbackControl,
-            replyPlan.OwnerFallbackToolContext);
+            ownerFallbackToolContext);
+    }
+
+    private static ToolManager BuildProfileTools(
+        bool disableTools,
+        AgentProfileTurnCatalog turnCatalog)
+    {
+        var tools = new ToolManager();
+        if (!disableTools)
+            tools.Register(turnCatalog.RouteOwnedTools.Values);
+        return tools;
     }
 
     // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
@@ -455,6 +477,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 ct)
             .ConfigureAwait(false);
         input = await MaterializeUserInputPartsAsync(input, ct).ConfigureAwait(false);
+        toolContext = WithInputFileRefs(toolContext, CollectInputFileRefs(input.Parts));
 
         // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
         //   Old pattern: NyxID reply construction passed stream_buffer_capacity into ChatRuntime after the stream loop moved to Task.Run + Channel.
@@ -564,6 +587,99 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         string Text,
         IReadOnlyList<ContentPart> Parts,
         string? AttachmentVisibilityInstruction = null);
+
+    private static AgentToolExecutionContext? WithInputFileRefs(
+        AgentToolExecutionContext? context,
+        IReadOnlyList<Aevatar.AI.Abstractions.ChatFileRef> inputFileRefs)
+    {
+        if (context is null || inputFileRefs.Count == 0)
+            return context;
+
+        var merged = new List<Aevatar.AI.Abstractions.ChatFileRef>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var fileRef in context.InputFileRefs.Concat(inputFileRefs))
+        {
+            var key = FileRefIdentityKey(fileRef);
+            if (key is null || !seen.Add(key))
+                continue;
+
+            merged.Add(fileRef.Clone());
+        }
+
+        return context with { InputFileRefs = merged };
+    }
+
+    private static IReadOnlyList<Aevatar.AI.Abstractions.ChatFileRef> CollectInputFileRefs(
+        IReadOnlyList<ContentPart> parts)
+    {
+        var refs = new List<Aevatar.AI.Abstractions.ChatFileRef>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var part in parts)
+        {
+            if (part.FileRef is null || !HasFileRefIdentity(part.FileRef))
+                continue;
+
+            var key = FileRefIdentityKey(part.FileRef);
+            if (key is null || !seen.Add(key))
+                continue;
+
+            refs.Add(ToProtoChatFileRef(part.FileRef));
+        }
+
+        return refs;
+    }
+
+    private static Aevatar.AI.Abstractions.ChatFileRef ToProtoChatFileRef(LlmChatFileRef fileRef) =>
+        new()
+        {
+            FileId = fileRef.FileId ?? string.Empty,
+            ArtifactId = fileRef.ArtifactId ?? string.Empty,
+            SourceKind = fileRef.SourceKind switch
+            {
+                LlmChatFileSourceKind.ChatInput => Aevatar.AI.Abstractions.ChatFileSourceKind.ChatInput,
+                LlmChatFileSourceKind.FormUpload => Aevatar.AI.Abstractions.ChatFileSourceKind.FormUpload,
+                LlmChatFileSourceKind.ConnectedServiceResource => Aevatar.AI.Abstractions.ChatFileSourceKind.ConnectedServiceResource,
+                LlmChatFileSourceKind.ExternalResource => Aevatar.AI.Abstractions.ChatFileSourceKind.ExternalResource,
+                LlmChatFileSourceKind.Generated => Aevatar.AI.Abstractions.ChatFileSourceKind.Generated,
+                _ => Aevatar.AI.Abstractions.ChatFileSourceKind.Unspecified,
+            },
+            SourceMessageId = fileRef.SourceMessageId ?? string.Empty,
+            SourceResourceKey = fileRef.SourceResourceKey ?? string.Empty,
+            FileName = fileRef.FileName ?? string.Empty,
+            MediaType = fileRef.MediaType ?? string.Empty,
+            SizeBytes = fileRef.SizeBytes,
+            Sha256 = fileRef.Sha256 ?? string.Empty,
+            CreatedAtUnixMs = fileRef.CreatedAtUnixMs,
+            ExpiresAtUnixMs = fileRef.ExpiresAtUnixMs,
+            OwnerRunId = fileRef.OwnerRunId ?? string.Empty,
+            OwnerScopeId = fileRef.OwnerScopeId ?? string.Empty,
+        };
+
+    private static bool HasFileRefIdentity(LlmChatFileRef fileRef) =>
+        !string.IsNullOrWhiteSpace(fileRef.FileId) ||
+        !string.IsNullOrWhiteSpace(fileRef.ArtifactId);
+
+    private static string? FileRefIdentityKey(LlmChatFileRef fileRef)
+    {
+        if (!string.IsNullOrWhiteSpace(fileRef.ArtifactId))
+            return $"artifact:{fileRef.ArtifactId.Trim()}";
+
+        if (!string.IsNullOrWhiteSpace(fileRef.FileId))
+            return $"file:{fileRef.FileId.Trim()}";
+
+        return null;
+    }
+
+    private static string? FileRefIdentityKey(Aevatar.AI.Abstractions.ChatFileRef fileRef)
+    {
+        if (!string.IsNullOrWhiteSpace(fileRef.ArtifactId))
+            return $"artifact:{fileRef.ArtifactId.Trim()}";
+
+        if (!string.IsNullOrWhiteSpace(fileRef.FileId))
+            return $"file:{fileRef.FileId.Trim()}";
+
+        return null;
+    }
 
     private async Task<UserInputParts> BuildUserInputPartsAsync(
         ChatActivity activity,
@@ -2076,6 +2192,12 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                     continue;
                 }
 
+                if (IsNyxIdChatTurn(toolContext) &&
+                    DeclaresCapability(tool, AgentToolCapabilities.ExcludeFromNyxIdChat))
+                {
+                    continue;
+                }
+
                 // Human-session management tools do not belong on channel relay or NyxID Assistant
                 // chat surfaces. The relay credential cannot call them, and NyxID Assistant owns
                 // service connection through nyxid_require_service + typed browser actions. Keep
@@ -2166,7 +2288,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         IReadOnlyDictionary<string, string> metadata,
         AgentToolExecutionContext toolContext,
         string? attachmentVisibilityInstruction = null,
-        string? runtimeNotice = null)
+        string? runtimeNotice = null,
+        AgentProfileTurnCatalog? turnCatalog = null)
     {
         var runtimeFacts = new StringBuilder();
         AppendRuntimeFact(
@@ -2184,6 +2307,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         }
 
         AppendRuntimeFact(runtimeFacts, attachmentVisibilityInstruction);
+        AppendRuntimeFact(runtimeFacts, BuildCurrentInputFileRefsSection(toolContext.InputFileRefs));
         AppendRuntimeFact(runtimeFacts, runtimeNotice);
 
         var global = _overlayProvider?.GetCurrent(new SystemSkillOverlayRequest(
@@ -2198,8 +2322,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             NyxIdChatSystemPrompt.Value,
             _builtInPromptFloorProvider.GetFloor(),
             global,
-            profile: null,
-            selectedSkill: null,
+            turnCatalog?.ProfilePromptLayer,
+            turnCatalog?.SelectedSkillPromptLayer,
             runtime,
             conversation: null).Prompt;
     }
@@ -2219,6 +2343,38 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             ? platform
             : null;
     }
+
+    private static readonly JsonFormatter InputFileRefJsonFormatter = new(
+        JsonFormatter.Settings.Default
+            .WithFormatDefaultValues(false)
+            .WithPreserveProtoFieldNames(true)
+            .WithFormatEnumsAsIntegers(true));
+
+    private static string? BuildCurrentInputFileRefsSection(IReadOnlyList<Aevatar.AI.Abstractions.ChatFileRef> fileRefs)
+    {
+        var handles = fileRefs
+            .Where(HasFileRefIdentity)
+            .Select(ToPromptFileHandle)
+            .ToArray();
+        if (handles.Length == 0)
+            return null;
+
+        var builder = new StringBuilder();
+        builder.AppendLine("## Current input files");
+        builder.AppendLine("The current turn includes runtime-owned typed file references. When a tool accepts file input, pass one exact handle under `input_parts[].file_ref`; do not invent attachment identifiers or report that no file reference exists.");
+        foreach (var handle in handles)
+            builder.AppendLine($"- file_ref: {InputFileRefJsonFormatter.Format(handle)}");
+
+        return builder.ToString();
+    }
+
+    private static Aevatar.AI.Abstractions.ChatFileRef ToPromptFileHandle(Aevatar.AI.Abstractions.ChatFileRef fileRef) =>
+        new()
+        {
+            FileId = fileRef.FileId,
+            ArtifactId = fileRef.ArtifactId,
+            SourceKind = fileRef.SourceKind,
+        };
 
     private static void AppendRuntimeFact(StringBuilder builder, string? content)
     {

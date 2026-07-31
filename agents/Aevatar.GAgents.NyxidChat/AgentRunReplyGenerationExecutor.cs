@@ -93,7 +93,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 replyRequest.PriorHistory.ToArray(),
                 BuildAttachmentInputContext(replyRequest, generationContext.LlmControl),
                 forceDisableTools: false,
-                metadataCts.Token)
+                metadataCts.Token,
+                request.TurnCatalog)
                 .ConfigureAwait(false);
             var ownerFallbackControl = ResolveInitialOwnerFallbackControl(
                 generationContext.OwnerFallbackLlmControl,
@@ -168,7 +169,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 priorHistory: null,
                 attachmentContext: null,
                 forceDisableTools: workItem.StepState.FinalNoToolsStep,
-                ct: ct)
+                ct: ct,
+                turnCatalog: workItem.TurnCatalog)
             .ConfigureAwait(false);
         var messages = workItem.StepState.Messages.Select(AgentRunReplyStepMappers.FromProto).ToList();
         var llmRequest = plan.StepExecutor.BuildLlmStepRequest(

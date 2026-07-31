@@ -66,6 +66,7 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
         var execution = prepared.Target;
         var target = execution.Target;
         var accepted = false;
+        var interactionCleanupStarted = false;
         ICommandObservationScopeLeasePreparationHandle? preparedObservationScope = null;
 
         try
@@ -90,7 +91,6 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
                 : _receiptFactory.Create(target, execution.Context);
             var observedCompleted = false;
             var observedCompletion = _completionPolicy.IncompleteCompletion;
-            var liveTerminalBuffered = false;
             var durableCompletion = CommandDurableCompletionObservation<TCompletion>.Incomplete;
             var durableCompletionAttempted = false;
             Exception? executionException = null;
@@ -104,8 +104,6 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
             async ValueTask BufferFrameAsync(TFrame frame, CancellationToken frameCt)
             {
                 await bufferedFrames.Writer.WriteAsync(frame, frameCt).ConfigureAwait(false);
-                if (observedCompleted)
-                    liveTerminalBuffered = true;
             }
 
             var liveEvents = ObserveCompletionBeforeEmissionAsync(
@@ -126,9 +124,59 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
                 shouldStop: null,
                 pumpCancellation.Token);
 
+            if (_probeDurableCompletionWhileLive)
+            {
+                try
+                {
+                    durableCompletion = await _durableCompletionResolver.ResolveAsync(receipt, ct).ConfigureAwait(false);
+                    durableCompletionAttempted = durableCompletion.HasTerminalCompletion;
+                    if (durableCompletion.HasTerminalCompletion)
+                    {
+                        observedCompleted = true;
+                        observedCompletion = durableCompletion.Completion;
+                        await CancelAndObservePumpAsync(
+                            pumpTask,
+                            pumpCancellation,
+                            expectedCancellation: true).ConfigureAwait(false);
+                        bufferedFrames.Writer.TryComplete();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    executionException = ex;
+                    interactionCleanupStarted = true;
+                    await CancelAndObservePumpAsync(
+                        pumpTask,
+                        pumpCancellation).ConfigureAwait(false);
+                    try
+                    {
+                        await target.ReleaseAfterInteractionAsync(
+                            receipt,
+                            new CommandInteractionCleanupContext<TCompletion>(
+                                false,
+                                _completionPolicy.IncompleteCompletion,
+                                CommandDurableCompletionObservation<TCompletion>.Incomplete),
+                            CancellationToken.None).ConfigureAwait(false);
+                    }
+                    catch (Exception cleanupException)
+                    {
+                        _logger.LogWarning(
+                            cleanupException,
+                            "Command interaction cleanup failed after durable completion probe failure. command={CommandType}, target={TargetType}",
+                            typeof(TCommand).FullName,
+                            typeof(TTarget).FullName);
+                    }
+                    throw;
+                }
+            }
+
             try
             {
-                _ = await _dispatchPipeline.DispatchPreparedAsync(execution, ct).ConfigureAwait(false);
+                if (!durableCompletion.HasTerminalCompletion)
+                {
+                    _ = await _dispatchPipeline.DispatchPreparedAsync(execution, ct).ConfigureAwait(false);
+                    accepted = true;
+                }
             }
             catch
             {
@@ -138,32 +186,11 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
 
             try
             {
-                accepted = true;
+                interactionCleanupStarted = true;
                 if (onAcceptedAsync != null)
                     await onAcceptedAsync(receipt, ct).ConfigureAwait(false);
 
-                if (_probeDurableCompletionWhileLive)
-                {
-                    durableCompletion = await PumpFlushAndProbeDurableCompletionAsync(
-                        pumpTask,
-                        pumpCancellation,
-                        bufferedFrames,
-                        receipt,
-                        emitAsync,
-                        ct).ConfigureAwait(false);
-                    durableCompletionAttempted = durableCompletion.HasTerminalCompletion;
-                    if (!liveTerminalBuffered && durableCompletion.HasTerminalCompletion)
-                    {
-                        observedCompleted = true;
-                        observedCompletion = durableCompletion.Completion;
-                    }
-                    else if (!liveTerminalBuffered)
-                    {
-                        observedCompleted = false;
-                        observedCompletion = _completionPolicy.IncompleteCompletion;
-                    }
-                }
-                else
+                if (!durableCompletion.HasTerminalCompletion)
                 {
                     await PumpAndFlushAcceptedFramesAsync(
                         pumpTask,
@@ -238,7 +265,7 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
         }
         catch
         {
-            if (!accepted)
+            if (!accepted && !interactionCleanupStarted)
                 await ReleasePreparedObservationScopeAsync(preparedObservationScope).ConfigureAwait(false);
 
             throw;
@@ -289,67 +316,6 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
             await CancelAndObservePumpAsync(pumpTask, pumpCancellation).ConfigureAwait(false);
             await ObserveFlushFailureAsync(flushTask).ConfigureAwait(false);
             throw;
-        }
-    }
-
-    private async Task<CommandDurableCompletionObservation<TCompletion>> PumpFlushAndProbeDurableCompletionAsync(
-        Task pumpTask,
-        CancellationTokenSource pumpCancellation,
-        Channel<TFrame> frames,
-        TReceipt receipt,
-        Func<TFrame, CancellationToken, ValueTask> emitAsync,
-        CancellationToken ct)
-    {
-        var flushTask = FlushBufferedFramesAsync(frames.Reader, emitAsync, ct);
-        using var durableCancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        var durableTask = _durableCompletionResolver.ResolveAsync(
-            receipt,
-            durableCancellation.Token);
-
-        try
-        {
-            var first = await Task.WhenAny(pumpTask, durableTask).ConfigureAwait(false);
-            if (first == durableTask)
-            {
-                var durableCompletion = await durableTask.ConfigureAwait(false);
-                if (durableCompletion.HasTerminalCompletion)
-                {
-                    await CancelAndObservePumpAsync(
-                        pumpTask,
-                        pumpCancellation,
-                        expectedCancellation: true).ConfigureAwait(false);
-                    frames.Writer.TryComplete();
-                    await flushTask.ConfigureAwait(false);
-                    return durableCompletion;
-                }
-            }
-
-            await pumpTask.ConfigureAwait(false);
-            frames.Writer.TryComplete();
-            await flushTask.ConfigureAwait(false);
-            await durableCancellation.CancelAsync().ConfigureAwait(false);
-            await ObserveDurableProbeAsync(durableTask, durableCancellation.Token).ConfigureAwait(false);
-            return CommandDurableCompletionObservation<TCompletion>.Incomplete;
-        }
-        catch (Exception ex)
-        {
-            frames.Writer.TryComplete(ex);
-            await CancelAndObservePumpAsync(pumpTask, pumpCancellation).ConfigureAwait(false);
-            await ObserveFlushFailureAsync(flushTask).ConfigureAwait(false);
-            throw;
-        }
-    }
-
-    private static async Task ObserveDurableProbeAsync(
-        Task durableTask,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            await durableTask.ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
         }
     }
 

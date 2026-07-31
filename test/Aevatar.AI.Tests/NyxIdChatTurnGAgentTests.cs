@@ -2,6 +2,8 @@ using System.Reflection;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.AgentProfiles;
+using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
@@ -10,6 +12,7 @@ using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat;
+using Aevatar.GAgents.NyxidChat.AgentProfiles;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -321,6 +324,71 @@ public sealed class NyxIdChatTurnGAgentTests
         toolCall.Safety.IsDestructive.Should().BeFalse();
         toolCall.Safety.SideEffectKind.Should().Be("tool-alpha.update");
         toolCall.Safety.MayChangeExternalState.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task OperationExecutor_ProfiledRetryWithFreshSession_ShouldNotRematerializeCapability()
+    {
+        var registry = new CountingProfileToolSetRegistry();
+        var generationExecutor = new CapabilityGeneratingReplyExecutor();
+        var executor = new NyxIdChatTurnOperationExecutor(
+            generationExecutor,
+            new UnavailableNyxIdActionPostconditionPort(),
+            new AgentProfileTurnCatalogMaterializer(
+                registry,
+                new NoMatchProfileClassifier()));
+        var profile = AgentProfileSnapshotCodec.Seal(new AgentProfileSnapshot
+        {
+            ProfileId = "profile-alpha",
+            ProfileVersion = "profile-v1",
+            AgentKind = NyxIdChatServiceDefaults.GAgentKind,
+            PolicyRevision = "policy-v1",
+            RouteToolSetRef = "profile.route",
+            MaximumToolPolicy = new AgentProfileToolPolicy
+            {
+                ToolNames = { "tool-alpha" },
+            },
+            RecoveryToolPolicy = new AgentProfileToolPolicy
+            {
+                ToolNames = { "tool-alpha" },
+            },
+            ActivationMode = AgentProfileActivationMode.Enforced,
+        });
+        var authority = new AgentProfileTurnAuthorityState
+        {
+            ReconciliationKey = new AgentProfileTurnReconciliationKey
+            {
+                SessionId = "turn-alpha",
+                Attempt = 1,
+            },
+            AuthorityKind = AgentProfileTurnAuthorityKind.Recovery,
+            AuthorityCeilingToolNames = { "tool-alpha" },
+        };
+        var command = new NyxIdChatOperationDispatchCommand
+        {
+            Key = CreateKey(generation: 2),
+            Llm = new NyxIdChatLLMOperationInput
+            {
+                AgentProfile = profile,
+                AgentProfileTurnAuthority = authority,
+                Request = new ChatRequestEvent
+                {
+                    Prompt = "retry safely",
+                    SessionId = "turn-alpha",
+                },
+            },
+        };
+
+        await executor.ExecuteAsync(
+            command,
+            new NyxIdChatTransientExecutionSession(),
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        registry.ResolveCount.Should().Be(0);
+        generationExecutor.LastTurnCatalog.Should().NotBeNull();
+        generationExecutor.LastTurnCatalog!.FinalAllowedToolNames.Should().BeEmpty();
+        generationExecutor.LastTurnCatalog.RouteOwnedTools.Should().BeEmpty();
     }
 
     [Fact]
@@ -688,11 +756,14 @@ public sealed class NyxIdChatTurnGAgentTests
 
         public int ToolExecutions { get; private set; }
 
+        public AgentProfileTurnCatalog? LastTurnCatalog { get; private set; }
+
         public Task<AgentRunReplyStepState> BuildInitialStepStateAsync(
             AgentRunReplyGenerationExecutionRequest request,
             CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
+            LastTurnCatalog = request.TurnCatalog;
             return Task.FromResult(new AgentRunReplyStepState
             {
                 RunId = request.RunId,
@@ -761,6 +832,44 @@ public sealed class NyxIdChatTurnGAgentTests
                 ToolStepResult = result,
             };
         }
+    }
+
+    private sealed class CountingProfileToolSetRegistry : IToolSetRegistry
+    {
+        public int ResolveCount { get; private set; }
+
+        public IReadOnlyList<string> GetRegisteredNames() => ["profile.route"];
+
+        public ToolSetResolveResult Resolve(string? name)
+        {
+            ResolveCount++;
+            return ToolSetResolveResult.Success(
+                "profile.route",
+                [new SingleToolSource(new ProfileTool())]);
+        }
+    }
+
+    private sealed class SingleToolSource(IAgentTool tool) : IAgentToolSource
+    {
+        public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<IAgentTool>>([tool]);
+    }
+
+    private sealed class ProfileTool : IAgentTool
+    {
+        public string Name => "tool-alpha";
+        public string Description => Name;
+        public string ParametersSchema => "{}";
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult("{}");
+    }
+
+    private sealed class NoMatchProfileClassifier : IAgentProfileTurnClassifier
+    {
+        public Task<AgentProfileTurnClassificationResult> ClassifyAsync(
+            AgentProfileTurnClassificationRequest request,
+            CancellationToken ct = default) =>
+            Task.FromResult(AgentProfileTurnClassificationResult.NoMatch());
     }
 
     private sealed class StreamingCapabilityReplyExecutor

@@ -42,10 +42,10 @@ public interface IAgentTool
     /// <summary>Stable side-effect kind for receipt-worthy tool calls; empty means no declared side effect.</summary>
     string SideEffectKind => "";
 
-    /// <summary>Optional provider-owned typed success receipt; return null to use the generic receipt.</summary>
+    /// <summary>Legacy provider-owned typed success receipt; null leaves the outcome unverified.</summary>
     AgentToolReceipt? CreateSuccessReceipt(string callId, string toolName, string resultJson) => null;
 
-    /// <summary>Optional provider-owned typed result receipt; may classify a returned result as non-success.</summary>
+    /// <summary>Provider-owned typed result receipt; null leaves the outcome unverified.</summary>
     AgentToolReceipt? CreateResultReceipt(
         string callId,
         string toolName,

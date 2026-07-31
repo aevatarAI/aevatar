@@ -138,7 +138,8 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
                 NullIfEmpty(turn.FailureCode),
                 NullIfEmpty(turn.SafeMessage),
                 ToDateTimeOffset(turn.CreatedAt),
-                ToDateTimeOffset(turn.TerminalAt));
+                ToDateTimeOffset(turn.TerminalAt),
+                NullIfEmpty(turn.CommandId));
 
     private static NyxIdChatConversationTaskSnapshot? ToTask(
         NyxIdChatConversationTaskDocument? task) =>

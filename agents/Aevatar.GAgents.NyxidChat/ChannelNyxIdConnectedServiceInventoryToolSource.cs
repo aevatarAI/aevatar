@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
@@ -217,6 +218,13 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         public string ParametersSchema => Schema;
         public bool IsReadOnly => true;
         public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
+
+        public AgentToolReceipt? CreateResultReceipt(
+            string callId,
+            string toolName,
+            string argumentsJson,
+            string resultJson) =>
+            NyxIdServiceInventoryReceiptFactory.Create(callId, toolName, resultJson);
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
             source.ExecuteInventoryAsync(argumentsJson, ct);

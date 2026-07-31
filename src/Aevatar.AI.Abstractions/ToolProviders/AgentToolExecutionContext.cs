@@ -86,6 +86,8 @@ public sealed record AgentToolExecutionContext(
     public AgentToolInvocationSurface InvocationSurface { get; init; } =
         AgentToolInvocationSurface.Unspecified;
 
+    public IReadOnlyList<Aevatar.AI.Abstractions.ChatFileRef> InputFileRefs { get; init; } = [];
+
     public static AgentToolExecutionContext Empty { get; } = new(
         AgentToolRequestIdentity.Empty,
         AgentToolCredentials.Empty,

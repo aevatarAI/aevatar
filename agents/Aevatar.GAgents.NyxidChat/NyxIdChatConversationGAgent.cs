@@ -1,5 +1,8 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Core.AgentProfiles;
+using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.GAgents.NyxidChat.AgentProfiles;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.TypeSystem;
@@ -28,15 +31,26 @@ public sealed class NyxIdChatConversationGAgent
     private readonly IActorRuntime _actorRuntime;
     private readonly IActorDispatchPort _actorDispatchPort;
     private readonly TimeProvider _timeProvider;
+    private readonly AgentProfileTurnCatalogMaterializer? _turnCatalogMaterializer;
 
     public NyxIdChatConversationGAgent(
         IActorRuntime actorRuntime,
         IActorDispatchPort actorDispatchPort,
         TimeProvider timeProvider)
+        : this(actorRuntime, actorDispatchPort, timeProvider, null)
+    {
+    }
+
+    public NyxIdChatConversationGAgent(
+        IActorRuntime actorRuntime,
+        IActorDispatchPort actorDispatchPort,
+        TimeProvider timeProvider,
+        AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer)
     {
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
+        _turnCatalogMaterializer = turnCatalogMaterializer;
     }
 
     protected override NyxIdChatConversationGAgentState TransitionState(
@@ -598,6 +612,7 @@ public sealed class NyxIdChatConversationGAgent
         }
 
         var now = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow());
+        var turnAuthority = await PrepareAgentProfileTurnAuthorityAsync(command);
         var operationKey = new NyxIdChatOperationKey
         {
             ConversationActorId = Id,
@@ -607,7 +622,7 @@ public sealed class NyxIdChatConversationGAgent
             OperationId = BuildStableIdentity("operation", Id, command.TurnId, command.TaskId, "llm", "1"),
             OperationGeneration = 1,
         };
-        var next = BuildStartedState(command, operationKey, now);
+        var next = BuildStartedState(command, operationKey, turnAuthority, now);
         next.HistoryDeliveryReservation = BuildHistoryDeliveryReservation(command);
 
         await PersistDomainEventAsync(new NyxIdChatTurnStartedEvent
@@ -647,6 +662,8 @@ public sealed class NyxIdChatConversationGAgent
             Llm = new NyxIdChatLLMOperationInput
             {
                 Request = BuildTransientChatRequest(command),
+                AgentProfile = turnAuthority is null ? null : State.AgentProfile?.Clone(),
+                AgentProfileTurnAuthority = turnAuthority?.Clone(),
             },
         };
         await DispatchFirstOperationAsync(
@@ -1208,6 +1225,7 @@ public sealed class NyxIdChatConversationGAgent
     private NyxIdChatConversationGAgentState BuildStartedState(
         NyxIdChatStartTurnCommand command,
         NyxIdChatOperationKey operationKey,
+        AgentProfileTurnAuthorityState? turnAuthority,
         Timestamp now)
     {
         var turn = new NyxIdChatTurnState
@@ -1215,9 +1233,11 @@ public sealed class NyxIdChatConversationGAgent
             TurnId = command.TurnId.Trim(),
             TaskId = command.TaskId.Trim(),
             ClientRequestId = command.ClientRequestId.Trim(),
+            CommandId = command.CommandId.Trim(),
             Status = NyxIdChatTurnStatus.Active,
             Prompt = command.Prompt,
             CreatedAt = now.Clone(),
+            AgentProfileTurnAuthority = turnAuthority?.Clone(),
         };
         turn.InputParts.AddRange(command.InputParts.Select(SanitizeInputPart));
 
@@ -1320,6 +1340,57 @@ public sealed class NyxIdChatConversationGAgent
         request.InputParts.AddRange(command.InputParts.Select(static part => part.Clone()));
         return request;
     }
+
+    private async Task<AgentProfileTurnAuthorityState?> PrepareAgentProfileTurnAuthorityAsync(
+        NyxIdChatStartTurnCommand command)
+    {
+        var profile = State.AgentProfile;
+        if (profile is null || profile.ActivationMode == AgentProfileActivationMode.Shadow)
+            return null;
+
+        if (_turnCatalogMaterializer is null)
+            return RestrictedEmptyAuthority(
+                command.TurnId,
+                AgentProfileTurnDegradationReason.MaterializerUnavailable);
+
+        try
+        {
+            var toolContext = LLMControlContextMapper.FromPayload(command.LlmControl)
+                .ToToolContext(AgentToolExecutionContextMapper.FromPayload(command.ToolContext));
+            return (await _turnCatalogMaterializer.PrepareAsync(
+                    profile,
+                    command.TurnId.Trim(),
+                    command.Prompt ?? string.Empty,
+                    registeredTools: [],
+                    toolContext,
+                    CancellationToken.None))
+                .Authority;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            Logger.LogWarning(
+                exception,
+                "Agent profile turn authority preparation failed closed. turn={TurnId}",
+                command.TurnId);
+            return RestrictedEmptyAuthority(
+                command.TurnId,
+                AgentProfileTurnDegradationReason.MaterializationFailed);
+        }
+    }
+
+    private static AgentProfileTurnAuthorityState RestrictedEmptyAuthority(
+        string sessionId,
+        AgentProfileTurnDegradationReason reason) =>
+        new()
+        {
+            ReconciliationKey = new AgentProfileTurnReconciliationKey
+            {
+                SessionId = sessionId.Trim(),
+                Attempt = 1,
+            },
+            AuthorityKind = AgentProfileTurnAuthorityKind.RestrictedEmpty,
+            DegradationReasons = { reason },
+        };
 
     private static NyxIdChatConversationGAgentState ApplyTurnStarted(
         NyxIdChatConversationGAgentState current,
@@ -2324,6 +2395,7 @@ public sealed class NyxIdChatConversationGAgent
         string.Equals(state.ActiveTurn?.TurnId, command.TurnId.Trim(), StringComparison.Ordinal) &&
         string.Equals(state.ActiveTurn?.TaskId, command.TaskId.Trim(), StringComparison.Ordinal) &&
         string.Equals(state.ActiveTurn?.ClientRequestId, command.ClientRequestId.Trim(), StringComparison.Ordinal) &&
+        string.Equals(state.ActiveTurn?.CommandId, command.CommandId.Trim(), StringComparison.Ordinal) &&
         string.Equals(state.ActiveTurn?.Prompt, command.Prompt, StringComparison.Ordinal) &&
         string.Equals(
             state.HistoryDeliveryReservation?.RequestFingerprint,

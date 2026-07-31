@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Microsoft.Extensions.Logging;
@@ -43,6 +44,68 @@ public sealed class NyxIdCodeExecuteTool : INyxIdBuiltInTool
     // boundary, so a host-side approval gate adds nothing here. Contrast
     // NyxIdSshExecTool, which targets a real host and so keeps ApprovalMode.Auto.
     public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
+
+    public AgentToolReceipt? CreateResultReceipt(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        string resultJson)
+    {
+        var proxyReceipt = NyxIdProxyReceiptFactory.TryCreate(
+            callId,
+            toolName,
+            _sandboxServiceSlug ?? NyxIdToolOptions.DefaultSandboxServiceSlug,
+            userServiceId: null,
+            serviceLabel: null,
+            resourceUri: "/execute",
+            resultJson);
+        if (proxyReceipt != null)
+            return proxyReceipt;
+
+        try
+        {
+            using var document = JsonDocument.Parse(resultJson);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                return null;
+
+            var hasError = root.TryGetProperty("error", out _);
+            var exitCodeValue = 0;
+            var hasExitCode = root.TryGetProperty("exit_code", out var exitCode) &&
+                              exitCode.TryGetInt32(out exitCodeValue);
+            var nonZeroExit = hasExitCode && exitCodeValue != 0;
+            if (hasError || nonZeroExit)
+            {
+                const string errorCode = "CODE_EXECUTE_FAILED";
+                const string errorMessage = "Code execution failed.";
+                return new AgentToolReceipt
+                {
+                    CallId = callId ?? string.Empty,
+                    ToolName = string.IsNullOrWhiteSpace(toolName) ? Name : toolName,
+                    Status = AgentToolReceiptStatus.Error,
+                    ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
+                    ErrorCode = errorCode,
+                    ErrorMessage = errorMessage,
+                    ResultJson = "{\"error\":\"CODE_EXECUTE_FAILED\",\"message\":\"Code execution failed.\"}",
+                };
+            }
+
+            if (!hasExitCode)
+                return null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+
+        return new AgentToolReceipt
+        {
+            CallId = callId ?? string.Empty,
+            ToolName = string.IsNullOrWhiteSpace(toolName) ? Name : toolName,
+            Status = AgentToolReceiptStatus.Success,
+            ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
+        };
+    }
 
     public string ParametersSchema => """
         {

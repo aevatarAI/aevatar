@@ -318,6 +318,7 @@ message NyxIdChatConversationTurnDocument {
   string safe_message = 5;
   google.protobuf.Timestamp created_at = 6;
   google.protobuf.Timestamp terminal_at = 7;
+  string command_id = 8;
 }
 
 message NyxIdChatConversationAvailableActionsDocument {

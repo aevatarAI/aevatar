@@ -21,6 +21,13 @@ public static class AgentToolCapabilities
     public const string ExcludeFromDirectChannelChat = "surface.exclude_from_direct_channel_chat";
 
     /// <summary>
+    /// Surface signal: a tool carrying this capability is not offered by the NyxID Assistant.
+    /// The tool remains available to workflows, direct channels, and other consumers that own
+    /// their own admission contract.
+    /// </summary>
+    public const string ExcludeFromNyxIdChat = "surface.exclude_from_nyxid_chat";
+
+    /// <summary>
     /// Surface signal: a tool carrying this capability targets a broker surface that only accepts a
     /// human-session credential. In a channel-relay turn the effective credential is a bot-class
     /// relay/API-key token, which the broker rejects (403) on those surfaces — so the tool can only

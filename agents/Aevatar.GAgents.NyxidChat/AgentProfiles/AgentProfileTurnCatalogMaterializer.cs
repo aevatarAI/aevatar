@@ -562,6 +562,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
         }
 
         var discovered = new List<IAgentTool>();
+        using var toolContextScope = AgentToolContextScope.Push(toolContext);
         foreach (var source in resolved.Sources)
         {
             try
@@ -606,6 +607,9 @@ public sealed class AgentProfileTurnCatalogMaterializer
                     group.Key));
                 continue;
             }
+
+            if (DeclaresCapability(tool, AgentToolCapabilities.ExcludeFromNyxIdChat))
+                continue;
 
             if (!IsEligible(tool, toolContext))
             {
@@ -693,6 +697,10 @@ public sealed class AgentProfileTurnCatalogMaterializer
                    StringComparer.Ordinal) ||
                !string.IsNullOrWhiteSpace(toolContext.Credentials.NyxIdAccessToken);
     }
+
+    private static bool DeclaresCapability(IAgentTool tool, string capability) =>
+        tool is IAgentToolCapabilityDescriptor descriptor &&
+        descriptor.Capabilities.Contains(capability, StringComparer.Ordinal);
 
     private static AgentProfileTurnAuthorityPreparation CreatePreparation(
         string sessionId,

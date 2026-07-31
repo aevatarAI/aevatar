@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Chat;
@@ -181,6 +182,17 @@ public sealed class ChatRuntimeToolProgressTests
         public string Description => "A controlled test tool.";
         public string ParametersSchema => "{}";
         public bool IsReadOnly => true;
+        public AgentToolReceipt? CreateSuccessReceipt(
+            string callId,
+            string toolName,
+            string resultJson) =>
+            new()
+            {
+                CallId = callId,
+                ToolName = toolName,
+                Status = AgentToolReceiptStatus.Success,
+                ResultJson = resultJson,
+            };
 
         public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
         {
@@ -203,6 +215,17 @@ public sealed class ChatRuntimeToolProgressTests
         public string Description => "Loads one recovery skill.";
         public string ParametersSchema => "{}";
         public bool IsReadOnly => true;
+        public AgentToolReceipt? CreateSuccessReceipt(
+            string callId,
+            string toolName,
+            string resultJson) =>
+            new()
+            {
+                CallId = callId,
+                ToolName = toolName,
+                Status = AgentToolReceiptStatus.Success,
+                ResultJson = resultJson,
+            };
         public ToolPresentationDescriptor Presentation =>
             ToolPresentationDescriptors.Skill(Name, "Use skill", Description, string.Empty, "test");
 
