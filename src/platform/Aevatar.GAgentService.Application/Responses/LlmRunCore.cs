@@ -65,7 +65,10 @@ public sealed class LlmRunCore(
     {
         var command = request.Command;
         var provider = providerFactory.GetDefault();
-        var toolContext = BuildToolContext(command);
+        var toolContext = BuildToolContext(command) with
+        {
+            ExecutionOwner = AgentToolExecutionOwners.WorkflowRun(request.RunId),
+        };
         var tools = await BuildEffectiveToolsAsync(command, toolContext, request.OriginPlatform, ct).ConfigureAwait(false);
         var ownershipPlan = LlmToolOwnershipPlan.From(command.ToolSelection, tools);
         var messages = command.Messages.Select(ToChatMessage).ToList();

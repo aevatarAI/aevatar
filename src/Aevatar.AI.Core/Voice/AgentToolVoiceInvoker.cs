@@ -79,6 +79,10 @@ public sealed class AgentToolVoiceInvoker : IVoiceToolInvoker
     {
         var requestId = executionContext.Caller.ResponseId ?? Guid.NewGuid().ToString("N");
         var callId = $"{requestId}:voice:{Guid.NewGuid():N}";
+        var executionOwner = executionContext.ExecutionOwner.Kind != AgentToolExecutionOwnerKind.Unspecified &&
+                             !string.IsNullOrWhiteSpace(executionContext.ExecutionOwner.OwnerId)
+            ? executionContext.ExecutionOwner.Clone()
+            : AgentToolExecutionOwners.HostService(nameof(AgentToolVoiceInvoker));
         var outcome = await _toolExecutionPort.ExecuteAsync(
             new AgentToolExecutionRequest(
                 tool,
@@ -86,6 +90,7 @@ public sealed class AgentToolVoiceInvoker : IVoiceToolInvoker
                 executionContext with
                 {
                     Request = new AgentToolRequestIdentity(requestId, callId),
+                    ExecutionOwner = executionOwner,
                 },
                 AgentToolApprovalContinuationMode.None,
                 null),

@@ -26,6 +26,7 @@ public sealed class AdmittedAgentToolExecutorTests
     }
 
     [Theory]
+    [InlineData("owner")]
     [InlineData("request")]
     [InlineData("call")]
     [InlineData("tool")]
@@ -41,8 +42,11 @@ public sealed class AdmittedAgentToolExecutorTests
         var executor = CreateExecutor(appender, ledger);
         var request = CreateRequest(tool) with
         {
-            ExecutionContext = AgentToolExecutionContext.Empty with
+            ExecutionContext = CreateTestExecutionContext() with
             {
+                ExecutionOwner = missingIdentity == "owner"
+                    ? new AgentToolExecutionOwner()
+                    : AgentToolExecutionOwners.Actor("actor-test"),
                 Request = new AgentToolRequestIdentity(
                     missingIdentity == "request" ? " " : "request-1",
                     missingIdentity == "call" ? " " : "call-1"),
@@ -98,7 +102,7 @@ public sealed class AdmittedAgentToolExecutorTests
         var request = CreateRequest(tool) with
         {
             ArgumentsJson = $"{{\"token\":\"{secret}\"}}",
-            ExecutionContext = AgentToolExecutionContext.Empty with
+            ExecutionContext = CreateTestExecutionContext() with
             {
                 Request = new AgentToolRequestIdentity("request-observable-success", "call-observable-success"),
             },
@@ -157,7 +161,7 @@ public sealed class AdmittedAgentToolExecutorTests
         var request = CreateRequest(tool) with
         {
             ArgumentsJson = $"{{\"token\":\"{secret}\"}}",
-            ExecutionContext = AgentToolExecutionContext.Empty with
+            ExecutionContext = CreateTestExecutionContext() with
             {
                 Request = new AgentToolRequestIdentity("request-observable-error", "call-observable-error"),
             },
@@ -199,7 +203,7 @@ public sealed class AdmittedAgentToolExecutorTests
             AuditTrailAppendResult.Appended(record.AuditId));
         var tool = new RecordingTool(new AgentToolCallSafety(false, isReadOnly, false));
         var executor = CreateExecutor(appender);
-        var context = AgentToolExecutionContext.Empty with
+        var context = CreateTestExecutionContext() with
         {
             Request = new AgentToolRequestIdentity("request-1", "call-1"),
             Credentials = new AgentToolCredentials("owner-token", "org-token", senderToken),
@@ -236,7 +240,7 @@ public sealed class AdmittedAgentToolExecutorTests
             AuditTrailAppendResult.Appended(record.AuditId));
         var tool = new RecordingTool(new AgentToolCallSafety(false, false, false));
         var executor = CreateExecutor(appender);
-        var context = AgentToolExecutionContext.Empty with
+        var context = CreateTestExecutionContext() with
         {
             Request = new AgentToolRequestIdentity("request-1", "call-1"),
             Credentials = new AgentToolCredentials("owner-token", "org-token", " sender-token "),
@@ -273,7 +277,7 @@ public sealed class AdmittedAgentToolExecutorTests
             AuditTrailAppendResult.Appended(record.AuditId));
         var tool = new RecordingTool(new AgentToolCallSafety(false, true, false));
         var executor = CreateExecutor(appender);
-        var context = AgentToolExecutionContext.Empty with
+        var context = CreateTestExecutionContext() with
         {
             Request = new AgentToolRequestIdentity("request-1", "call-1"),
         };
@@ -416,9 +420,13 @@ public sealed class AdmittedAgentToolExecutorTests
     }
 
     [Theory]
+    [InlineData((AgentToolAdmissionStatus)0, "tool_admission_invalid_status", false)]
     [InlineData(AgentToolAdmissionStatus.Duplicate, "tool_execution_already_started", false)]
     [InlineData(AgentToolAdmissionStatus.Conflict, "tool_admission_conflict", false)]
     [InlineData(AgentToolAdmissionStatus.StoreUnavailable, "tool_admission_unavailable", true)]
+    [InlineData(AgentToolAdmissionStatus.InvalidFact, "tool_admission_invalid_fact", false)]
+    [InlineData(AgentToolAdmissionStatus.Expired, "tool_admission_expired", false)]
+    [InlineData((AgentToolAdmissionStatus)999, "tool_admission_invalid_status", false)]
     public async Task ExecuteAsync_WhenAdmissionDoesNotStart_ShouldFailBeforeAuditAndTerminal(
         AgentToolAdmissionStatus admissionStatus,
         string failureCode,
@@ -429,8 +437,9 @@ public sealed class AdmittedAgentToolExecutorTests
         var ledger = new RecordingAdmissionLedger(admissionStatus);
         var tool = new RecordingTool(new AgentToolCallSafety(false, true, false));
         var executor = CreateExecutor(appender, ledger);
+        var request = CreateRequest(tool);
 
-        var outcome = await executor.ExecuteAsync(CreateRequest(tool));
+        var outcome = await executor.ExecuteAsync(request);
 
         outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Failed);
         outcome.FailureCode.Should().Be(failureCode);
@@ -446,6 +455,8 @@ public sealed class AdmittedAgentToolExecutorTests
             ToolCallId = "call-1",
             ToolName = "test_tool",
             ArgumentsSha256 = AgentToolArgumentsDigest.ComputeSha256("{}"),
+            ExecutionOwner = AgentToolExecutionOwners.Actor("actor-test"),
+            IssuedAtUnixMs = request.ExecutionContext.Request.IssuedAtUnixMs,
         });
     }
 
@@ -471,6 +482,43 @@ public sealed class AdmittedAgentToolExecutorTests
         outcome.ResultJson.Should().NotContain("ledger-secret");
         tool.ExecutionCalls.Should().Be(0);
         appender.Records.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_DifferentActorsWithSameCallIdentity_ShouldNotShareAdmissionOrAuditIds()
+    {
+        var appender = new RecordingAuditTrailAppender((record, _) =>
+            AuditTrailAppendResult.Appended(record.AuditId));
+        var ledger = new DeduplicatingAdmissionLedger();
+        var executor = CreateExecutor(appender, ledger);
+        var firstTool = new RecordingTool(new AgentToolCallSafety(false, true, false));
+        var secondTool = new RecordingTool(new AgentToolCallSafety(false, true, false));
+
+        var first = await executor.ExecuteAsync(CreateRequest(firstTool) with
+        {
+            ExecutionContext = CreateTestExecutionContext() with
+            {
+                Request = new AgentToolRequestIdentity("shared-request", "shared-call"),
+                Caller = new AgentToolCallerContext("scope-alpha", "actor-alpha", null),
+                ExecutionOwner = AgentToolExecutionOwners.Actor("actor-alpha"),
+            },
+        });
+        var second = await executor.ExecuteAsync(CreateRequest(secondTool) with
+        {
+            ExecutionContext = CreateTestExecutionContext() with
+            {
+                Request = new AgentToolRequestIdentity("shared-request", "shared-call"),
+                Caller = new AgentToolCallerContext("scope-beta", "actor-beta", null),
+                ExecutionOwner = AgentToolExecutionOwners.Actor("actor-beta"),
+            },
+        });
+
+        first.Kind.Should().Be(AgentToolExecutionOutcomeKind.Executed);
+        second.Kind.Should().Be(AgentToolExecutionOutcomeKind.Executed);
+        firstTool.ExecutionCalls.Should().Be(1);
+        secondTool.ExecutionCalls.Should().Be(1);
+        ledger.Facts.Select(fact => fact.AdmissionId).Should().OnlyHaveUniqueItems();
+        appender.Records.Select(record => record.AuditId).Should().OnlyHaveUniqueItems();
     }
 
     [Fact]
@@ -752,6 +800,7 @@ public sealed class AdmittedAgentToolExecutorTests
     }
 
     [Theory]
+    [InlineData("owner")]
     [InlineData("approval-request-id")]
     [InlineData("request-id")]
     [InlineData("tool-name")]
@@ -772,6 +821,7 @@ public sealed class AdmittedAgentToolExecutorTests
         });
         var digest = AgentToolArgumentsDigest.ComputeSha256("{}");
         var grant = new AgentToolApprovalGrant(
+            AgentToolExecutionOwners.Actor("actor-test"),
             initial.Receipt.ApprovalRequestId,
             "request-1",
             tool.Name,
@@ -779,6 +829,7 @@ public sealed class AdmittedAgentToolExecutorTests
             digest);
         grant = mismatchedField switch
         {
+            "owner" => grant with { ExecutionOwner = AgentToolExecutionOwners.Actor("actor-other") },
             "approval-request-id" => grant with { ApprovalRequestId = "wrong" },
             "request-id" => grant with { RequestId = "wrong" },
             "tool-name" => grant with { ToolName = "wrong" },
@@ -820,12 +871,19 @@ public sealed class AdmittedAgentToolExecutorTests
         new(
             tool,
             "{}",
-            AgentToolExecutionContext.Empty with
+            CreateTestExecutionContext() with
             {
                 Request = new AgentToolRequestIdentity("request-1", "call-1"),
+                ExecutionOwner = AgentToolExecutionOwners.Actor("actor-test"),
             },
             AgentToolApprovalContinuationMode.None,
             null);
+
+    private static AgentToolExecutionContext CreateTestExecutionContext() =>
+        AgentToolExecutionContext.Empty with
+        {
+            ExecutionOwner = AgentToolExecutionOwners.Actor("actor-test"),
+        };
 
     private sealed class RecordingTool(
         AgentToolCallSafety safety,
@@ -908,6 +966,25 @@ public sealed class AdmittedAgentToolExecutorTests
         {
             ct.ThrowIfCancellationRequested();
             Facts.Add(fact.Clone());
+            return Task.FromResult(new AgentToolAdmissionResult(status));
+        }
+    }
+
+    private sealed class DeduplicatingAdmissionLedger : IAgentToolAdmissionLedger
+    {
+        private readonly HashSet<string> _admissionIds = new(StringComparer.Ordinal);
+
+        public List<AgentToolAdmissionFact> Facts { get; } = [];
+
+        public Task<AgentToolAdmissionResult> TryStartAsync(
+            AgentToolAdmissionFact fact,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Facts.Add(fact.Clone());
+            var status = _admissionIds.Add(fact.AdmissionId)
+                ? AgentToolAdmissionStatus.Started
+                : AgentToolAdmissionStatus.Duplicate;
             return Task.FromResult(new AgentToolAdmissionResult(status));
         }
     }

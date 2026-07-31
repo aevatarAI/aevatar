@@ -55,6 +55,12 @@ internal sealed class AgentToolAIFunction : AIFunction
             throw new InvalidOperationException(
                 "MEAI function invocation requires stable request and function-call identities.");
         }
+        if (ambientContext.ExecutionOwner.Kind == AgentToolExecutionOwnerKind.Unspecified ||
+            string.IsNullOrWhiteSpace(ambientContext.ExecutionOwner.OwnerId))
+        {
+            throw new InvalidOperationException(
+                "MEAI function invocation requires a stable execution owner.");
+        }
 
         var outcome = await _toolExecutionPort.ExecuteAsync(
             new AgentToolExecutionRequest(

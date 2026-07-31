@@ -1325,7 +1325,7 @@ public sealed class NyxIdChatConversationGAgent
         return safe;
     }
 
-    private static Aevatar.AI.Abstractions.ChatRequestEvent BuildTransientChatRequest(
+    private Aevatar.AI.Abstractions.ChatRequestEvent BuildTransientChatRequest(
         NyxIdChatStartTurnCommand command)
     {
         var request = new Aevatar.AI.Abstractions.ChatRequestEvent
@@ -1334,7 +1334,7 @@ public sealed class NyxIdChatConversationGAgent
             SessionId = command.TurnId.Trim(),
             ScopeId = command.ScopeId.Trim(),
             CommandAttemptId = command.CommandId.Trim(),
-            ToolContext = command.ToolContext?.Clone(),
+            ToolContext = BuildActorOwnedToolContext(command.ToolContext).ToPayload(),
             LlmControl = command.LlmControl?.Clone(),
         };
         request.InputParts.AddRange(command.InputParts.Select(static part => part.Clone()));
@@ -1356,7 +1356,7 @@ public sealed class NyxIdChatConversationGAgent
         try
         {
             var toolContext = LLMControlContextMapper.FromPayload(command.LlmControl)
-                .ToToolContext(AgentToolExecutionContextMapper.FromPayload(command.ToolContext));
+                .ToToolContext(BuildActorOwnedToolContext(command.ToolContext));
             return (await _turnCatalogMaterializer.PrepareAsync(
                     profile,
                     command.TurnId.Trim(),
@@ -1377,6 +1377,13 @@ public sealed class NyxIdChatConversationGAgent
                 AgentProfileTurnDegradationReason.MaterializationFailed);
         }
     }
+
+    private AgentToolExecutionContext BuildActorOwnedToolContext(
+        AgentToolExecutionContextPayload? payload) =>
+        AgentToolExecutionContextMapper.FromPayload(payload) with
+        {
+            ExecutionOwner = AgentToolExecutionOwners.Actor(Id),
+        };
 
     private static AgentProfileTurnAuthorityState RestrictedEmptyAuthority(
         string sessionId,

@@ -660,6 +660,7 @@ public sealed class SkillRecoveryPlannerTests
         AgentToolExecutionContext.Empty with
         {
             Request = new AgentToolRequestIdentity(requestId, null),
+            ExecutionOwner = AgentToolExecutionOwners.HostService(nameof(SkillRecoveryPlannerTests)),
         };
 
     private static ChatMessage AssistantToolCall(string id, string name, string argumentsJson) =>

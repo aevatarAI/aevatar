@@ -489,7 +489,10 @@ public sealed partial class RoleGAgentStateCoverageTests
                 new Dictionary<string, string>(StringComparer.Ordinal)
                 {
                     ["trace-id"] = "trace-1",
-                });
+                })
+            {
+                ExecutionOwner = AgentToolExecutionOwners.Actor("role-approval-approved"),
+            };
         agent.State.PendingApproval = await CreatePendingApprovalAsync(
             provider, tool, toolContext, "{\"value\":1}");
         var approvalRequestId = agent.State.PendingApproval.RequestId;
@@ -554,6 +557,7 @@ public sealed partial class RoleGAgentStateCoverageTests
             AgentToolExecutionContext.Empty with
             {
                 Request = new AgentToolRequestIdentity("req-1", "call-1"),
+                ExecutionOwner = AgentToolExecutionOwners.Actor("role-approval-dispatch-fails"),
             });
         var approvalRequestId = agent.State.PendingApproval.RequestId;
         await FluentActions.Invoking(() => agent.HandleToolApprovalDecision(new ToolApprovalDecisionEvent
@@ -947,6 +951,7 @@ public sealed partial class RoleGAgentStateCoverageTests
             AgentToolExecutionContext.Empty with
             {
                 Request = new AgentToolRequestIdentity("req-1", "call-1"),
+                ExecutionOwner = AgentToolExecutionOwners.Actor("role-status-approved"),
             });
         pending.RemoteApprovalId = "remote-1";
         pending.RemoteStatusCheckAttempt = 1;

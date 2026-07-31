@@ -135,7 +135,8 @@ public static class AgentToolExecutionContextMapper
             new AgentToolRequestIdentity(
                 AgentToolExecutionContext.Normalize(payload.Request?.RequestId),
                 AgentToolExecutionContext.Normalize(payload.Request?.CallId),
-                AgentToolExecutionContext.Normalize(payload.Request?.IdempotencyKey)),
+                AgentToolExecutionContext.Normalize(payload.Request?.IdempotencyKey),
+                payload.Request?.IssuedAtUnixMs ?? 0),
             new AgentToolCredentials(
                 AgentToolExecutionContext.Normalize(payload.Credentials?.NyxIdAccessToken),
                 AgentToolExecutionContext.Normalize(payload.Credentials?.NyxIdOrgToken),
@@ -167,6 +168,7 @@ public static class AgentToolExecutionContextMapper
                 AgentToolExecutionContext.Normalize(payload.NyxIdAuthority?.Scope)),
             InvocationSurface = FromInvocationSurfacePayload(payload.InvocationSurface),
             InputFileRefs = FromInputFileRefsPayload(payload.InputFileRefs),
+            ExecutionOwner = payload.ExecutionOwner?.Clone() ?? new AgentToolExecutionOwner(),
         };
     }
 
@@ -181,6 +183,7 @@ public static class AgentToolExecutionContextMapper
                 RequestId = context.Request.RequestId ?? string.Empty,
                 CallId = context.Request.CallId ?? string.Empty,
                 IdempotencyKey = context.Request.IdempotencyKey ?? string.Empty,
+                IssuedAtUnixMs = context.Request.IssuedAtUnixMs,
             },
             Credentials = new AgentToolCredentialsPayload
             {
@@ -216,6 +219,7 @@ public static class AgentToolExecutionContextMapper
             CredentialSource = ToCredentialSourcePayload(context.CredentialSource),
             InvocationSurface = ToInvocationSurfacePayload(context.InvocationSurface),
             SkillRecovery = ToSkillRecoveryPayload(context.SkillRecovery),
+            ExecutionOwner = context.ExecutionOwner?.Clone() ?? new AgentToolExecutionOwner(),
         };
 
         ApplyOptionalPayloads(context, payload);

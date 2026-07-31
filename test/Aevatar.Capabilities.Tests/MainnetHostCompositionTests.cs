@@ -1247,6 +1247,30 @@ public sealed class MainnetHostCompositionTests
         descriptor.ImplementationType.Should().Be(expectedLedgerType);
     }
 
+    [Fact]
+    public void AddAevatarMainnetHost_ShouldOwnConfiguredAdmissionReplayLifetime()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder(environmentName: Environments.Production);
+        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            [MainnetHostBuilderExtensions.AgentToolAdmissionMaximumRequestLifetimeKey] = "06:00:00",
+            [MainnetHostBuilderExtensions.AgentToolAdmissionFutureClockSkewKey] = "00:02:00",
+        });
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        var descriptor = builder.Services.Last(service =>
+            service.ServiceType == typeof(AgentToolAdmissionPolicy));
+        descriptor.ImplementationInstance.Should().Be(new AgentToolAdmissionPolicy(
+            TimeSpan.FromHours(6),
+            TimeSpan.FromMinutes(2)));
+    }
+
     [Theory]
     [InlineData(null, true, "http://+:8080")]
     [InlineData("", true, "http://+:8080")]

@@ -127,7 +127,7 @@ public sealed class AgentProfileTurnRuntimeTests
         await executor.ExecuteToolStepAsync(
             [new ToolCall { Id = "route-call", Name = "route-only", ArgumentsJson = "{}" }],
             requestMetadata: null,
-            toolContext: null,
+            toolContext: TestToolContext("route-only-step"),
             CancellationToken.None);
 
         request.Tools.Should().ContainSingle().Which.Should().BeSameAs(routeOnlyExactTool);
@@ -171,7 +171,7 @@ public sealed class AgentProfileTurnRuntimeTests
                 new ToolCall { Id = "visible-call", Name = "visible", ArgumentsJson = "{}" },
             ],
             requestMetadata: null,
-            toolContext: null,
+            toolContext: TestToolContext("catalog-admission-step"),
             CancellationToken.None);
 
         request.Tools.Should().ContainSingle().Which.Name.Should().Be("visible");
@@ -610,6 +610,7 @@ public sealed class AgentProfileTurnRuntimeTests
         AgentToolExecutionContext.Empty with
         {
             Request = new AgentToolRequestIdentity(requestId, null),
+            ExecutionOwner = AgentToolExecutionOwners.HostService(nameof(AgentProfileTurnRuntimeTests)),
         };
 
     private sealed class CountingTool(string name, bool isReadOnly = false) : IAgentTool

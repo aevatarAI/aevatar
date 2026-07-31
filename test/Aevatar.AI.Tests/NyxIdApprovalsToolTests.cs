@@ -80,6 +80,7 @@ public sealed class NyxIdApprovalsToolTests
             {
                 Credentials = AgentToolCredentials.Empty with { NyxIdAccessToken = "token-1" },
                 Request = new AgentToolRequestIdentity("request-1", "call-1"),
+                ExecutionOwner = AgentToolExecutionOwners.Actor("actor-approvals"),
             },
             AgentToolApprovalContinuationMode.None,
             null));
@@ -153,6 +154,7 @@ public sealed class NyxIdApprovalsToolTests
                     NyxIdAccessToken = "credential-secret-sentinel",
                 },
                 Request = new AgentToolRequestIdentity("request-malformed", "call-malformed"),
+                ExecutionOwner = AgentToolExecutionOwners.Actor("actor-approvals"),
             },
             AgentToolApprovalContinuationMode.None,
             null));

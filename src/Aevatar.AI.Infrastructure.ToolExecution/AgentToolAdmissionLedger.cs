@@ -11,6 +11,7 @@ internal interface IAgentToolAdmissionFactStore
     Task<bool> SetIfAbsentAsync(
         string key,
         ReadOnlyMemory<byte> value,
+        TimeSpan retention,
         CancellationToken ct = default);
 
     Task<byte[]?> GetAsync(string key, CancellationToken ct = default);
@@ -29,13 +30,16 @@ internal sealed class GarnetAgentToolAdmissionFactStore : IAgentToolAdmissionFac
     public async Task<bool> SetIfAbsentAsync(
         string key,
         ReadOnlyMemory<byte> value,
+        TimeSpan retention,
         CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
+        if (retention <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(retention));
         var added = await _database.StringSetAsync(
             key,
             value.ToArray(),
-            expiry: null,
+            expiry: retention,
             When.NotExists).ConfigureAwait(false);
         ct.ThrowIfCancellationRequested();
         return added;
@@ -50,23 +54,47 @@ internal sealed class GarnetAgentToolAdmissionFactStore : IAgentToolAdmissionFac
     }
 }
 
-internal sealed class DistributedAgentToolAdmissionLedger(
-    IAgentToolAdmissionFactStore store) : IAgentToolAdmissionLedger
+internal sealed class DistributedAgentToolAdmissionLedger : IAgentToolAdmissionLedger
 {
     private const string KeyPrefix = "aevatar:mainnet:agent-tool-admission:v1:";
-    private readonly IAgentToolAdmissionFactStore _store =
-        store ?? throw new ArgumentNullException(nameof(store));
+    private readonly IAgentToolAdmissionFactStore _store;
+    private readonly AgentToolAdmissionPolicy _policy;
+    private readonly TimeProvider _timeProvider;
+
+    public DistributedAgentToolAdmissionLedger(IAgentToolAdmissionFactStore store)
+        : this(store, AgentToolAdmissionPolicy.Default, null)
+    {
+    }
+
+    public DistributedAgentToolAdmissionLedger(
+        IAgentToolAdmissionFactStore store,
+        AgentToolAdmissionPolicy policy,
+        TimeProvider? timeProvider = null)
+    {
+        _store = store ?? throw new ArgumentNullException(nameof(store));
+        _policy = policy ?? throw new ArgumentNullException(nameof(policy));
+        _policy.Validate();
+        _timeProvider = timeProvider ?? TimeProvider.System;
+    }
 
     public async Task<AgentToolAdmissionResult> TryStartAsync(
         AgentToolAdmissionFact fact,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(fact);
+        var lifetime = EvaluateLifetime(fact, _policy, _timeProvider.GetUtcNow());
+        if (lifetime.Rejection is not null)
+            return lifetime.Rejection;
+
         var key = BuildKey(fact.AdmissionId);
         var fingerprint = ComputeFingerprint(fact);
         try
         {
-            if (await _store.SetIfAbsentAsync(key, fingerprint, ct).ConfigureAwait(false))
+            if (await _store.SetIfAbsentAsync(
+                    key,
+                    fingerprint,
+                    lifetime.Retention,
+                    ct).ConfigureAwait(false))
                 return new AgentToolAdmissionResult(AgentToolAdmissionStatus.Started);
 
             var existing = await _store.GetAsync(key, ct).ConfigureAwait(false);
@@ -106,12 +134,80 @@ internal sealed class DistributedAgentToolAdmissionLedger(
         ArgumentNullException.ThrowIfNull(fact);
         return SHA256.HashData(fact.ToByteArray());
     }
+
+    internal static AgentToolAdmissionLifetime EvaluateLifetime(
+        AgentToolAdmissionFact fact,
+        AgentToolAdmissionPolicy policy,
+        DateTimeOffset now)
+    {
+        if (fact.IssuedAtUnixMs <= 0)
+        {
+            return AgentToolAdmissionLifetime.Reject(
+                AgentToolAdmissionStatus.InvalidFact,
+                "The tool admission fact is missing its issued time.");
+        }
+
+        DateTimeOffset issuedAt;
+        try
+        {
+            issuedAt = DateTimeOffset.FromUnixTimeMilliseconds(fact.IssuedAtUnixMs);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return AgentToolAdmissionLifetime.Reject(
+                AgentToolAdmissionStatus.InvalidFact,
+                "The tool admission fact has an invalid issued time.");
+        }
+
+        if (issuedAt > now + policy.MaximumFutureClockSkew)
+        {
+            return AgentToolAdmissionLifetime.Reject(
+                AgentToolAdmissionStatus.InvalidFact,
+                "The tool admission fact is outside the allowed future clock skew.");
+        }
+
+        var expiresAt = issuedAt + policy.MaximumReplayWindow;
+        if (expiresAt <= now)
+        {
+            return AgentToolAdmissionLifetime.Reject(
+                AgentToolAdmissionStatus.Expired,
+                "The tool admission fact is outside the configured replay window.");
+        }
+
+        return new AgentToolAdmissionLifetime(expiresAt - now, null);
+    }
+}
+
+internal readonly record struct AgentToolAdmissionLifetime(
+    TimeSpan Retention,
+    AgentToolAdmissionResult? Rejection)
+{
+    public static AgentToolAdmissionLifetime Reject(
+        AgentToolAdmissionStatus status,
+        string safeMessage) =>
+        new(TimeSpan.Zero, new AgentToolAdmissionResult(status, safeMessage));
 }
 
 internal sealed class InMemoryAgentToolAdmissionLedger : IAgentToolAdmissionLedger
 {
     private readonly object _gate = new();
-    private readonly Dictionary<string, byte[]> _fingerprints = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Entry> _entries = new(StringComparer.Ordinal);
+    private readonly AgentToolAdmissionPolicy _policy;
+    private readonly TimeProvider _timeProvider;
+
+    public InMemoryAgentToolAdmissionLedger()
+        : this(AgentToolAdmissionPolicy.Default, null)
+    {
+    }
+
+    public InMemoryAgentToolAdmissionLedger(
+        AgentToolAdmissionPolicy policy,
+        TimeProvider? timeProvider = null)
+    {
+        _policy = policy ?? throw new ArgumentNullException(nameof(policy));
+        _policy.Validate();
+        _timeProvider = timeProvider ?? TimeProvider.System;
+    }
 
     public Task<AgentToolAdmissionResult> TryStartAsync(
         AgentToolAdmissionFact fact,
@@ -119,20 +215,33 @@ internal sealed class InMemoryAgentToolAdmissionLedger : IAgentToolAdmissionLedg
     {
         ArgumentNullException.ThrowIfNull(fact);
         ct.ThrowIfCancellationRequested();
+        var now = _timeProvider.GetUtcNow();
+        var lifetime = DistributedAgentToolAdmissionLedger.EvaluateLifetime(fact, _policy, now);
+        if (lifetime.Rejection is not null)
+            return Task.FromResult(lifetime.Rejection);
+
         var key = DistributedAgentToolAdmissionLedger.BuildKey(fact.AdmissionId);
         var fingerprint = DistributedAgentToolAdmissionLedger.ComputeFingerprint(fact);
         lock (_gate)
         {
-            if (!_fingerprints.TryGetValue(key, out var existing))
+            if (_entries.TryGetValue(key, out var existing) && existing.ExpiresAt <= now)
             {
-                _fingerprints.Add(key, fingerprint);
+                _entries.Remove(key);
+                existing = null;
+            }
+
+            if (existing is null)
+            {
+                _entries.Add(key, new Entry(fingerprint, now + lifetime.Retention));
                 return Task.FromResult(new AgentToolAdmissionResult(AgentToolAdmissionStatus.Started));
             }
 
             return Task.FromResult(new AgentToolAdmissionResult(
-                CryptographicOperations.FixedTimeEquals(existing, fingerprint)
+                CryptographicOperations.FixedTimeEquals(existing.Fingerprint, fingerprint)
                     ? AgentToolAdmissionStatus.Duplicate
                     : AgentToolAdmissionStatus.Conflict));
         }
     }
+
+    private sealed record Entry(byte[] Fingerprint, DateTimeOffset ExpiresAt);
 }

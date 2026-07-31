@@ -140,6 +140,7 @@ public sealed class CodexExecutionFailureAuditTests
             AgentToolExecutionContext.Empty with
             {
                 Request = new AgentToolRequestIdentity("request-codex", "call-codex"),
+                ExecutionOwner = AgentToolExecutionOwners.Actor("actor-codex"),
             },
             AgentToolApprovalContinuationMode.None,
             null));

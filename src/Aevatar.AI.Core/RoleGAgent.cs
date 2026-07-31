@@ -220,7 +220,10 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 // Refactor (issue1253-first):
                 //   Old pattern: Approval resume rebuilt control context from a durable annotation bag.
                 //   New principle: Use typed pending.ToolContext only; metadata is never a control source.
-                var pendingToolContext = ResolvePendingToolContext(pending);
+                var pendingToolContext = ResolvePendingToolContext(pending) with
+                {
+                    ExecutionOwner = AgentToolExecutionOwners.Actor(Id),
+                };
                 var approvedExecution = await ResolveApprovedToolExecutionAsync(
                     pending,
                     pendingToolContext,
@@ -235,6 +238,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                             pendingToolContext.WithCallId(pending.ToolCallId),
                             AgentToolApprovalContinuationMode.ActorOwned,
                             new AgentToolApprovalGrant(
+                                pendingToolContext.ExecutionOwner.Clone(),
                                 pending.RequestId,
                                 pendingToolContext.Request.RequestId ?? string.Empty,
                                 pending.ToolName,
@@ -736,7 +740,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         IReadOnlyDictionary<string, string>? metadata) =>
         AgentToolExecutionContextMapper.StripOwnedControlKeys(metadata);
 
-    private static AgentToolExecutionContext ResolveToolContext(
+    private AgentToolExecutionContext ResolveToolContext(
         ChatRequestEvent request,
         string requestId,
         string toolCallId)
@@ -749,11 +753,14 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         context = LLMControlContextMapper.FromPayload(request.LlmControl).ToToolContext(context);
         context = context with
         {
-            Request = new AgentToolRequestIdentity(
-                NormalizeToolContextValue(requestId) ?? context.Request.RequestId,
-                NormalizeToolContextValue(toolCallId) ?? context.Request.CallId),
+            Request = context.Request with
+            {
+                RequestId = NormalizeToolContextValue(requestId) ?? context.Request.RequestId,
+                CallId = NormalizeToolContextValue(toolCallId) ?? context.Request.CallId,
+            },
             Credentials = AgentToolCredentials.Empty,
             ExternalMetadata = ScrubPendingApprovalMetadata(context.ExternalMetadata),
+            ExecutionOwner = AgentToolExecutionOwners.Actor(Id),
         };
 
         return context;

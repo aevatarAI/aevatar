@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.LLMProviders.MEAI;
@@ -140,6 +141,139 @@ public sealed class AgentToolAIFunctionSchemaSanitizationTests
         executionPort.Calls.Should().Be(0);
     }
 
+    [Fact]
+    public async Task InvokeAsync_WithoutExecutionOwner_ShouldNotEnterExecutionPort()
+    {
+        var executionPort = new RecordingExecutionPort();
+        var functionType = typeof(MEAILLMProvider).Assembly.GetType(
+            "Aevatar.AI.LLMProviders.MEAI.AgentToolAIFunction",
+            throwOnError: true)!;
+        var function = (AIFunction)Activator.CreateInstance(
+            functionType,
+            System.Reflection.BindingFlags.Instance |
+            System.Reflection.BindingFlags.Public |
+            System.Reflection.BindingFlags.NonPublic,
+            binder: null,
+            args: [new SchemaStubTool("test_tool", "{}"), executionPort],
+            culture: null)!;
+        using var _ = AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity("request-alpha", "call-alpha"),
+        });
+
+        var act = async () => await function.InvokeAsync(new AIFunctionArguments());
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*stable execution owner*");
+        executionPort.Calls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task InvokeAsync_WithStableContext_ShouldDelegateExactRequestAndReturnPortResult()
+    {
+        const string safeResult = "{\"ok\":true}";
+        var tool = new SchemaStubTool("test_tool", "{}");
+        var executionPort = new RecordingExecutionPort(CreateOutcome(
+            AgentToolExecutionOutcomeKind.Executed,
+            AgentToolReceiptStatus.Success,
+            safeResult));
+        var function = CreateFunction(tool, executionPort);
+        var context = AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity("request-alpha", "call-alpha"),
+            ExecutionOwner = AgentToolExecutionOwners.Actor("actor-alpha"),
+        };
+        using var scope = AgentToolContextScope.Push(context);
+        using var cancellation = new CancellationTokenSource();
+        var arguments = new AIFunctionArguments
+        {
+            ["city"] = "Paris",
+        };
+
+        var result = await function.InvokeAsync(arguments, cancellation.Token);
+
+        result.Should().Be(safeResult);
+        var request = executionPort.Requests.Should().ContainSingle().Subject;
+        request.Tool.Should().BeSameAs(tool);
+        request.ArgumentsJson.Should().Be("{\"city\":\"Paris\"}");
+        request.ExecutionContext.Should().BeSameAs(context);
+        request.ExecutionOwner.Kind.Should().Be(AgentToolExecutionOwnerKind.Actor);
+        request.ExecutionOwner.OwnerId.Should().Be("actor-alpha");
+        request.ExecutionContext.Request.RequestId.Should().Be("request-alpha");
+        request.ExecutionContext.Request.CallId.Should().Be("call-alpha");
+        request.ApprovalContinuationMode.Should().Be(AgentToolApprovalContinuationMode.None);
+        request.ApprovalGrant.Should().BeNull();
+        executionPort.CancellationTokens.Should().ContainSingle().Which.Should().Be(cancellation.Token);
+        tool.ExecutionCalls.Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData(AgentToolExecutionOutcomeKind.Denied, AgentToolReceiptStatus.Denied)]
+    [InlineData(AgentToolExecutionOutcomeKind.Failed, AgentToolReceiptStatus.Error)]
+    public async Task InvokeAsync_WhenPortRejectsExecution_ShouldReturnOnlyPortSafeResult(
+        AgentToolExecutionOutcomeKind kind,
+        AgentToolReceiptStatus receiptStatus)
+    {
+        const string safeResult = "{\"error\":\"safe_failure\"}";
+        var tool = new SchemaStubTool("test_tool", "{}");
+        var executionPort = new RecordingExecutionPort(CreateOutcome(kind, receiptStatus, safeResult));
+        var function = CreateFunction(tool, executionPort);
+        using var _ = AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity("request-alpha", "call-alpha"),
+            ExecutionOwner = AgentToolExecutionOwners.Actor("actor-alpha"),
+        });
+
+        var result = await function.InvokeAsync(new AIFunctionArguments());
+
+        result.Should().Be(safeResult);
+        executionPort.Requests.Should().ContainSingle();
+        tool.ExecutionCalls.Should().Be(0);
+    }
+
+    private static AIFunction CreateFunction(
+        IAgentTool tool,
+        IAgentToolExecutionPort executionPort)
+    {
+        var functionType = typeof(MEAILLMProvider).Assembly.GetType(
+            "Aevatar.AI.LLMProviders.MEAI.AgentToolAIFunction",
+            throwOnError: true)!;
+        return (AIFunction)Activator.CreateInstance(
+            functionType,
+            System.Reflection.BindingFlags.Instance |
+            System.Reflection.BindingFlags.Public |
+            System.Reflection.BindingFlags.NonPublic,
+            binder: null,
+            args: [tool, executionPort],
+            culture: null)!;
+    }
+
+    private static AgentToolExecutionOutcome CreateOutcome(
+        AgentToolExecutionOutcomeKind kind,
+        AgentToolReceiptStatus receiptStatus,
+        string resultJson) =>
+        new(
+            kind,
+            resultJson,
+            new AgentToolReceipt
+            {
+                CallId = "call-alpha",
+                ToolName = "test_tool",
+                Status = receiptStatus,
+                ResultJson = resultJson,
+            },
+            IsMutation: false,
+            FailureCode: kind == AgentToolExecutionOutcomeKind.Executed ? string.Empty : "safe_failure",
+            SafeMessage: kind == AgentToolExecutionOutcomeKind.Executed ? string.Empty : "The tool was not executed.",
+            kind == AgentToolExecutionOutcomeKind.Denied
+                ? AgentToolExecutionFailureStage.Approval
+                : kind == AgentToolExecutionOutcomeKind.Failed
+                    ? AgentToolExecutionFailureStage.TerminalExecution
+                    : AgentToolExecutionFailureStage.None,
+            TerminalInvoked: kind == AgentToolExecutionOutcomeKind.Executed,
+            Retryable: false,
+            AuditCompleted: true);
+
     private static void AssertNoObjectAdditionalProperties(System.Text.Json.JsonElement element)
     {
         switch (element.ValueKind)
@@ -167,24 +301,32 @@ public sealed class AgentToolAIFunctionSchemaSanitizationTests
         public string Name { get; } = name;
         public string Description => Name;
         public string ParametersSchema { get; } = parametersSchema;
+        public int ExecutionCalls { get; private set; }
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            ExecutionCalls++;
             return Task.FromResult("{}");
         }
     }
 
-    private sealed class RecordingExecutionPort : IAgentToolExecutionPort
+    private sealed class RecordingExecutionPort(AgentToolExecutionOutcome? outcome = null) : IAgentToolExecutionPort
     {
-        public int Calls { get; private set; }
+        public int Calls => Requests.Count;
+        public List<AgentToolExecutionRequest> Requests { get; } = [];
+        public List<CancellationToken> CancellationTokens { get; } = [];
 
         public Task<AgentToolExecutionOutcome> ExecuteAsync(
             AgentToolExecutionRequest request,
             CancellationToken ct = default)
         {
-            Calls++;
-            throw new InvalidOperationException("The execution port should not be called by this test.");
+            Requests.Add(request);
+            CancellationTokens.Add(ct);
+            return outcome is null
+                ? Task.FromException<AgentToolExecutionOutcome>(
+                    new InvalidOperationException("The execution port should not be called by this test."))
+                : Task.FromResult(outcome);
         }
     }
 

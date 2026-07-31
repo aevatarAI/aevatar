@@ -18,10 +18,13 @@ public interface IAgentToolAdmissionLedger
 
 public enum AgentToolAdmissionStatus
 {
-    Started = 0,
-    Duplicate = 1,
-    Conflict = 2,
-    StoreUnavailable = 3,
+    Unspecified = 0,
+    Started = 1,
+    Duplicate = 2,
+    Conflict = 3,
+    StoreUnavailable = 4,
+    InvalidFact = 5,
+    Expired = 6,
 }
 
 public sealed record AgentToolAdmissionResult(
@@ -33,7 +36,43 @@ public sealed record AgentToolExecutionRequest(
     string ArgumentsJson,
     AgentToolExecutionContext ExecutionContext,
     AgentToolApprovalContinuationMode ApprovalContinuationMode,
-    AgentToolApprovalGrant? ApprovalGrant);
+    AgentToolApprovalGrant? ApprovalGrant)
+{
+    public AgentToolExecutionOwner ExecutionOwner => ExecutionContext.ExecutionOwner;
+}
+
+public static class AgentToolExecutionOwners
+{
+    public static AgentToolExecutionOwner Actor(string actorId) =>
+        Create(AgentToolExecutionOwnerKind.Actor, actorId);
+
+    public static AgentToolExecutionOwner Scope(string scopeId) =>
+        Create(AgentToolExecutionOwnerKind.Scope, scopeId);
+
+    public static AgentToolExecutionOwner WorkflowRun(string runId) =>
+        Create(AgentToolExecutionOwnerKind.WorkflowRun, runId);
+
+    public static AgentToolExecutionOwner ChannelRegistration(string registrationId) =>
+        Create(AgentToolExecutionOwnerKind.ChannelRegistration, registrationId);
+
+    public static AgentToolExecutionOwner Connector(string connectorName) =>
+        Create(AgentToolExecutionOwnerKind.Connector, connectorName);
+
+    public static AgentToolExecutionOwner HostService(string serviceName) =>
+        Create(AgentToolExecutionOwnerKind.HostService, serviceName);
+
+    private static AgentToolExecutionOwner Create(
+        AgentToolExecutionOwnerKind kind,
+        string ownerId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(ownerId);
+        return new AgentToolExecutionOwner
+        {
+            Kind = kind,
+            OwnerId = ownerId.Trim(),
+        };
+    }
+}
 
 public enum AgentToolApprovalContinuationMode
 {
@@ -42,6 +81,7 @@ public enum AgentToolApprovalContinuationMode
 }
 
 public sealed record AgentToolApprovalGrant(
+    AgentToolExecutionOwner ExecutionOwner,
     string ApprovalRequestId,
     string RequestId,
     string ToolName,

@@ -77,6 +77,8 @@ public sealed class SkillBackedHumanInteractionPort : IHumanInteractionPort
                 AgentToolExecutionContext.Empty with
                 {
                     Request = new AgentToolRequestIdentity(requestId, $"{requestId}:delivery"),
+                    ExecutionOwner = AgentToolExecutionOwners.HostService(
+                        nameof(SkillBackedHumanInteractionPort)),
                 },
                 AgentToolApprovalContinuationMode.None,
                 null),

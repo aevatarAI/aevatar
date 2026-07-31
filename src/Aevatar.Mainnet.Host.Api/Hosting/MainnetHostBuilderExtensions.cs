@@ -91,6 +91,10 @@ public static class MainnetHostBuilderExtensions
     internal const int ContainerHttpPort = 8080;
     internal const string ContainerListenUrl = "http://+:8080";
     internal const string LocalDevelopmentListenUrl = "http://127.0.0.1:5080";
+    internal const string AgentToolAdmissionMaximumRequestLifetimeKey =
+        "AgentToolAdmission:MaximumRequestLifetime";
+    internal const string AgentToolAdmissionFutureClockSkewKey =
+        "AgentToolAdmission:MaximumFutureClockSkew";
     private const string DeviceInboundDirectExternalEventTypeUrl =
         "type.googleapis.com/aevatar.gagents.household.DeviceInbound";
 
@@ -147,13 +151,14 @@ public static class MainnetHostBuilderExtensions
             options.MapWorkflowChatPost = false;
             options.ConfigureAIFeatures = ConfigureMainnetAIFeatures;
         });
+        var agentToolAdmissionPolicy = ResolveAgentToolAdmissionPolicy(builder.Configuration);
         if (builder.Environment.IsDevelopment() || builder.Environment.IsEnvironment("Testing"))
         {
-            builder.Services.AddInMemoryAgentToolAdmissionLedger();
+            builder.Services.AddInMemoryAgentToolAdmissionLedger(agentToolAdmissionPolicy);
         }
         else
         {
-            builder.Services.AddGarnetAgentToolAdmissionLedger();
+            builder.Services.AddGarnetAgentToolAdmissionLedger(agentToolAdmissionPolicy);
         }
         // Hosted services start in registration order. Register the provider-local index
         // reconcile before capability modules can add startup readers so schema drift is
@@ -508,6 +513,17 @@ public static class MainnetHostBuilderExtensions
             IsRunningInContainer());
         if (!string.Equals(configuredUrls, resolvedUrls, StringComparison.Ordinal))
             builder.WebHost.UseUrls(resolvedUrls);
+    }
+
+    private static AgentToolAdmissionPolicy ResolveAgentToolAdmissionPolicy(
+        IConfiguration configuration)
+    {
+        var defaults = AgentToolAdmissionPolicy.Default;
+        return new AgentToolAdmissionPolicy(
+            configuration.GetValue<TimeSpan?>(AgentToolAdmissionMaximumRequestLifetimeKey) ??
+            AgentToolAdmissionPolicy.DefaultMaximumRequestLifetime,
+            configuration.GetValue<TimeSpan?>(AgentToolAdmissionFutureClockSkewKey) ??
+            defaults.MaximumFutureClockSkew);
     }
 
     internal static string ResolveMainnetListenUrls(string? configuredUrls, bool runningInContainer)

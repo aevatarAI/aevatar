@@ -1504,7 +1504,10 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                     senderBinding,
                     channelContext.Metadata,
                     channelContext.IdentityHints)
-                .WithCallId($"{inboundEvent.MessageId}:agent-builder");
+                .WithCallId($"{inboundEvent.MessageId}:agent-builder") with
+            {
+                ExecutionOwner = AgentToolExecutionOwners.ChannelRegistration(registration.Id),
+            };
             var tool = ActivatorUtilities.CreateInstance<AgentBuilderTool>(_toolServiceProvider);
             var outcome = await _toolExecutionPort.ExecuteAsync(
                 new AgentToolExecutionRequest(

@@ -88,6 +88,8 @@ public sealed record AgentToolExecutionContext(
 
     public IReadOnlyList<Aevatar.AI.Abstractions.ChatFileRef> InputFileRefs { get; init; } = [];
 
+    public AgentToolExecutionOwner ExecutionOwner { get; init; } = new();
+
     public static AgentToolExecutionContext Empty { get; } = new(
         AgentToolRequestIdentity.Empty,
         AgentToolCredentials.Empty,
@@ -153,9 +155,25 @@ public sealed record AgentToolVisibilityScope(IReadOnlySet<string>? AllowedToolN
     }
 }
 
-public sealed record AgentToolRequestIdentity(string? RequestId, string? CallId, string? IdempotencyKey = null)
+public sealed record AgentToolRequestIdentity(
+    string? RequestId,
+    string? CallId,
+    string? IdempotencyKey,
+    long IssuedAtUnixMs)
 {
-    public static AgentToolRequestIdentity Empty { get; } = new(null, null, null);
+    public AgentToolRequestIdentity(
+        string? requestId,
+        string? callId,
+        string? idempotencyKey = null)
+        : this(
+            requestId,
+            callId,
+            idempotencyKey,
+            TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds())
+    {
+    }
+
+    public static AgentToolRequestIdentity Empty { get; } = new(null, null, null, 0);
 }
 
 public sealed record AgentToolCredentials(

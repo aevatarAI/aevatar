@@ -208,6 +208,27 @@ public sealed class AgentToolExecutionContextMapperTests
     }
 
     [Fact]
+    public void ToPayloadAndFromPayload_ShouldPreserveRequestIssuedTime()
+    {
+        const long issuedAtUnixMs = 1_785_484_800_000;
+        var context = AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity(
+                "request-1",
+                "call-1",
+                "idempotency-1",
+                issuedAtUnixMs),
+        };
+
+        var payload = context.ToPayload();
+        var restored = AgentToolExecutionContextMapper.FromPayload(
+            AgentToolExecutionContextPayload.Parser.ParseFrom(payload.ToByteArray()));
+
+        payload.Request.IssuedAtUnixMs.Should().Be(issuedAtUnixMs);
+        restored.Request.IssuedAtUnixMs.Should().Be(issuedAtUnixMs);
+    }
+
+    [Fact]
     public void ToPayload_WhenToolVisibilityUnrestricted_ShouldOmitVisibilityPayload()
     {
         var payload = AgentToolExecutionContextMapper.ToPayload(AgentToolExecutionContext.Empty);

@@ -142,13 +142,27 @@ execution all use that exact payload and classification.
 
 Execution admission and audit observation have separate fact owners.
 `IAgentToolAdmissionLedger` is the authoritative start-once ledger. It atomically
-creates a strongly typed `AgentToolAdmissionFact` containing the stable admission,
-request, call, tool, and argument-digest identities. Only `Started` permits entry
-to the raw terminal. `Duplicate` and `Conflict` fail closed without replay;
+creates a strongly typed `AgentToolAdmissionFact` containing the authoritative typed
+execution owner plus the stable admission, request, call, tool, and argument-digest
+identities and the request's immutable issued time. The owner is supplied at the actor, workflow-run, channel-registration,
+connector, or host-service boundary; request and call ids remain correlation identities
+and never stand in for ownership. Only `Started` permits entry to the raw terminal.
+`Duplicate` and `Conflict` fail closed without replay;
+invalid or expired replay lifetimes also fail closed without invoking the terminal, while
 `StoreUnavailable` fails closed before invocation and may be retried. Mainnet uses
 a distributed compare-and-set implementation. In-memory implementations are
 limited to development and tests, while the default unconfigured implementation
 fails closed.
+
+Mainnet is the retention owner for tool admission records. It configures
+`AgentToolAdmission:MaximumRequestLifetime` and
+`AgentToolAdmission:MaximumFutureClockSkew`, defaulting to 24 hours and 5 minutes;
+the request lifetime is the maximum legal replay window and is capped at 30 days. The request-issued time is a typed
+protobuf field preserved across actor continuation. The ledger validates that immutable
+time before admission and gives each distributed compare-and-set key a TTL equal to the
+remaining legal replay window. Redis/Garnet expiration is the cleanup mechanism. Deleting
+the key does not renew authority: replaying the original fact after its deadline is rejected
+as expired before another atomic insert can occur.
 
 Audit append status never grants execution. The audit phases are observational:
 
@@ -159,8 +173,10 @@ Audit append status never grants execution. The audit phases are observational:
 | `TERMINAL` | The actual executed, denied, or failed outcome. | `Appended` or same-fact `Duplicate` completes audit. Failure after terminal invocation preserves the actual result and never makes the tool retryable. |
 
 A required approval is valid only in `ActorOwned` continuation mode and only
-when its durable grant matches `ApprovalRequestId`, `RequestId`, `ToolName`,
-`ToolCallId`, and `ArgumentsSha256`. Credential policy runs before grant
+when its durable grant matches `ExecutionOwner`, `ApprovalRequestId`, `RequestId`,
+`ToolName`, `ToolCallId`, and `ArgumentsSha256`. Approval, admission, running-audit,
+and terminal-audit ids all include the owner kind and owner id, so identical correlation
+ids in two owner namespaces cannot collide. Credential policy runs before grant
 validation. An unavailable admission ledger is retryable because the terminal
 was not invoked; a successful execution whose running or terminal audit is
 incomplete returns `ExecutedAuditIncomplete` with its real result and
@@ -462,6 +478,9 @@ Operational requirements:
 5. Index lifecycle migration copies forward and retains legacy/previous physical indices;
    operators may remove them only through an approved retention action after independent backup
    and count verification.
+6. Agent-tool admission keys are a separate authorization ledger, not audit artifacts. Mainnet
+   owns their bounded replay-window configuration, and Redis/Garnet TTL expiration performs
+   compaction only after the immutable request deadline has elapsed.
 
 ## 9. Validation
 
@@ -484,6 +503,10 @@ Changes to audit trail contracts or implementation must verify:
    invalid closed NyxID actions produce zero downstream side effects.
 9. Terminal audit failure preserves the actual terminal result and cannot make
    the tool call retryable.
+10. Two distinct execution owners using identical request, call, tool, and argument
+    values produce distinct admission and audit identities.
+11. Real Redis/Garnet adapter tests prove binary round-trip, atomic duplicate/conflict behavior,
+    cancellation, bounded TTL, and rejection of a stale fact after retention cleanup.
 
 Related references:
 

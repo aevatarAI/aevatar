@@ -45,11 +45,12 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
         var toolName = NormalizeIdentity(tool.Name);
         var requestId = NormalizeIdentity(request.ExecutionContext.Request.RequestId);
         var toolCallId = NormalizeIdentity(request.ExecutionContext.Request.CallId);
+        var executionOwner = NormalizeExecutionOwner(request.ExecutionOwner);
         var argumentsJson = AgentToolArgumentsDigest.Freeze(request.ArgumentsJson);
         var argumentsSha256 = AgentToolArgumentsDigest.ComputeSha256(argumentsJson);
         var fallbackSafety = new AgentToolCallSafety(true, false, true);
 
-        if (toolName is null || requestId is null || toolCallId is null)
+        if (toolName is null || requestId is null || toolCallId is null || executionOwner is null)
         {
             return CreateUnauditedFailure(
                 tool,
@@ -57,7 +58,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
                 toolCallId ?? string.Empty,
                 fallbackSafety,
                 "invalid_tool_execution_identity",
-                "Tool execution requires non-empty request, call, and tool identities.",
+                "Tool execution requires non-empty owner, request, call, and tool identities.",
                 AgentToolExecutionFailureStage.RequestValidation);
         }
 
@@ -86,6 +87,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
                 failed,
                 request.ExecutionContext,
                 AgentToolCredentialSource.System,
+                executionOwner,
                 requestId,
                 toolName,
                 toolCallId,
@@ -112,6 +114,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
                 denied,
                 request.ExecutionContext,
                 credentialDecision.CredentialSource,
+                executionOwner,
                 requestId,
                 toolName,
                 toolCallId,
@@ -121,6 +124,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
         }
 
         var approvalRequestId = CreateApprovalRequestId(
+            executionOwner,
             requestId,
             toolName,
             toolCallId,
@@ -131,6 +135,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
                 request.ApprovalGrant,
                 request.ApprovalContinuationMode,
                 approvalRequestId,
+                executionOwner,
                 requestId,
                 toolName,
                 toolCallId,
@@ -151,6 +156,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
                 denied,
                 credentialDecision.ExecutionContext,
                 credentialDecision.CredentialSource,
+                executionOwner,
                 requestId,
                 toolName,
                 toolCallId,
@@ -178,6 +184,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
                     denied,
                     credentialDecision.ExecutionContext,
                     credentialDecision.CredentialSource,
+                    executionOwner,
                     requestId,
                     toolName,
                     toolCallId,
@@ -193,6 +200,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
                 callSafety,
                 isMutation,
                 approvalRequestId,
+                executionOwner,
                 requestId,
                 argumentsSha256,
                 credentialDecision,
@@ -202,11 +210,13 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
         var admission = await TryStartAsync(
             new AgentToolAdmissionFact
             {
-                AdmissionId = CreateAdmissionId(requestId, toolCallId),
+                AdmissionId = CreateAdmissionId(executionOwner, requestId, toolCallId),
                 RequestId = requestId,
                 ToolCallId = toolCallId,
                 ToolName = toolName,
                 ArgumentsSha256 = argumentsSha256,
+                ExecutionOwner = ToProto(executionOwner),
+                IssuedAtUnixMs = request.ExecutionContext.Request.IssuedAtUnixMs,
             },
             ct).ConfigureAwait(false);
         if (admission.Status != AgentToolAdmissionStatus.Started)
@@ -221,12 +231,26 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
                     "tool_admission_conflict",
                     "The tool call identity conflicts with an existing admission fact.",
                     false),
-                _ => (
+                AgentToolAdmissionStatus.StoreUnavailable => (
                     "tool_admission_unavailable",
                     string.IsNullOrWhiteSpace(admission.SafeMessage)
                         ? "The durable tool admission ledger is unavailable."
                         : admission.SafeMessage,
                     true),
+                AgentToolAdmissionStatus.InvalidFact => (
+                    "tool_admission_invalid_fact",
+                    string.IsNullOrWhiteSpace(admission.SafeMessage)
+                        ? "The tool admission fact has an invalid replay lifetime."
+                        : admission.SafeMessage,
+                    false),
+                AgentToolAdmissionStatus.Expired => (
+                    "tool_admission_expired",
+                    "The tool call is outside the configured replay window.",
+                    false),
+                _ => (
+                    "tool_admission_invalid_status",
+                    "The durable tool admission ledger returned an invalid status.",
+                    false),
             };
             return CreateFailure(
                 tool,
@@ -248,7 +272,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
             toolName,
             callSafety);
         var runningAppend = await AppendAsync(
-            CreateRunningAuditId(requestId, toolCallId),
+            CreateRunningAuditId(executionOwner, requestId, toolCallId),
             AuditToolExecutionPhase.Running,
             tool,
             toolName,
@@ -268,6 +292,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
             argumentsJson,
             argumentsSha256,
             requestId,
+            executionOwner,
             callSafety,
             isMutation,
             credentialDecision,
@@ -282,6 +307,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
         string argumentsJson,
         string argumentsSha256,
         string requestId,
+        ExecutionOwnerIdentity executionOwner,
         AgentToolCallSafety callSafety,
         bool isMutation,
         CredentialDecision credentialDecision,
@@ -342,7 +368,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
         }
 
         var terminalAppend = await AppendAsync(
-            CreateTerminalAuditId(requestId, toolCallId),
+            CreateTerminalAuditId(executionOwner, requestId, toolCallId),
             AuditToolExecutionPhase.Terminal,
             tool,
             toolName,
@@ -385,6 +411,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
         AgentToolCallSafety callSafety,
         bool isMutation,
         string approvalRequestId,
+        ExecutionOwnerIdentity executionOwner,
         string requestId,
         string argumentsSha256,
         CredentialDecision credentialDecision,
@@ -417,7 +444,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
             Retryable: false,
             AuditCompleted: false);
         var append = await AppendAsync(
-            CreateWaitingApprovalAuditId(requestId, toolCallId, approvalRequestId),
+            CreateWaitingApprovalAuditId(executionOwner, requestId, toolCallId, approvalRequestId),
             AuditToolExecutionPhase.WaitingApproval,
             tool,
             toolName,
@@ -438,6 +465,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
         AgentToolExecutionOutcome outcome,
         AgentToolExecutionContext executionContext,
         AgentToolCredentialSource credentialSource,
+        ExecutionOwnerIdentity executionOwner,
         string requestId,
         string toolName,
         string toolCallId,
@@ -446,7 +474,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
         CancellationToken ct)
     {
         var append = await AppendAsync(
-            CreateTerminalAuditId(requestId, toolCallId),
+            CreateTerminalAuditId(executionOwner, requestId, toolCallId),
             AuditToolExecutionPhase.Terminal,
             tool,
             toolName,
@@ -590,11 +618,13 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
         AgentToolApprovalGrant grant,
         AgentToolApprovalContinuationMode continuationMode,
         string approvalRequestId,
+        ExecutionOwnerIdentity executionOwner,
         string requestId,
         string toolName,
         string toolCallId,
         string argumentsSha256) =>
         continuationMode == AgentToolApprovalContinuationMode.ActorOwned &&
+        MatchesExecutionOwner(grant.ExecutionOwner, executionOwner) &&
         string.Equals(NormalizeIdentity(grant.ApprovalRequestId), approvalRequestId, StringComparison.Ordinal) &&
         string.Equals(NormalizeIdentity(grant.RequestId), requestId, StringComparison.Ordinal) &&
         string.Equals(NormalizeIdentity(grant.ToolName), toolName, StringComparison.Ordinal) &&
@@ -724,26 +754,47 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
     }
 
     private static string CreateApprovalRequestId(
+        ExecutionOwnerIdentity executionOwner,
         string requestId,
         string toolName,
         string toolCallId,
         string argumentsSha256) =>
-        "tool-approval:v1:" + HashLengthPrefixed(requestId, toolName, toolCallId, argumentsSha256);
+        "tool-approval:v1:" + HashLengthPrefixed(
+            OwnerKindValue(executionOwner),
+            executionOwner.OwnerId,
+            requestId,
+            toolName,
+            toolCallId,
+            argumentsSha256);
 
-    private static string CreateAdmissionId(string requestId, string toolCallId) =>
-        "tool:v1:admission:" + HashLengthPrefixed(requestId, toolCallId);
+    private static string CreateAdmissionId(
+        ExecutionOwnerIdentity executionOwner,
+        string requestId,
+        string toolCallId) =>
+        "tool:v1:admission:" + HashLengthPrefixed(
+            OwnerKindValue(executionOwner), executionOwner.OwnerId, requestId, toolCallId);
 
     private static string CreateWaitingApprovalAuditId(
+        ExecutionOwnerIdentity executionOwner,
         string requestId,
         string toolCallId,
         string approvalRequestId) =>
-        "tool:v1:waiting-approval:" + HashLengthPrefixed(requestId, toolCallId, approvalRequestId);
+        "tool:v1:waiting-approval:" + HashLengthPrefixed(
+            OwnerKindValue(executionOwner), executionOwner.OwnerId, requestId, toolCallId, approvalRequestId);
 
-    private static string CreateRunningAuditId(string requestId, string toolCallId) =>
-        "tool:v1:running:" + HashLengthPrefixed(requestId, toolCallId);
+    private static string CreateRunningAuditId(
+        ExecutionOwnerIdentity executionOwner,
+        string requestId,
+        string toolCallId) =>
+        "tool:v1:running:" + HashLengthPrefixed(
+            OwnerKindValue(executionOwner), executionOwner.OwnerId, requestId, toolCallId);
 
-    private static string CreateTerminalAuditId(string requestId, string toolCallId) =>
-        "tool:v1:terminal:" + HashLengthPrefixed(requestId, toolCallId);
+    private static string CreateTerminalAuditId(
+        ExecutionOwnerIdentity executionOwner,
+        string requestId,
+        string toolCallId) =>
+        "tool:v1:terminal:" + HashLengthPrefixed(
+            OwnerKindValue(executionOwner), executionOwner.OwnerId, requestId, toolCallId);
 
     private static string HashLengthPrefixed(params string[] values)
     {
@@ -791,9 +842,36 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
     private static string? NormalizeIdentity(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
+    private static ExecutionOwnerIdentity? NormalizeExecutionOwner(AgentToolExecutionOwner? owner)
+    {
+        var ownerId = NormalizeIdentity(owner?.OwnerId);
+        return owner is null || owner.Kind == AgentToolExecutionOwnerKind.Unspecified || ownerId is null
+            ? null
+            : new ExecutionOwnerIdentity(owner.Kind, ownerId);
+    }
+
+    private static bool MatchesExecutionOwner(
+        AgentToolExecutionOwner? candidate,
+        ExecutionOwnerIdentity expected) =>
+        NormalizeExecutionOwner(candidate) is { } normalized && normalized == expected;
+
+    private static AgentToolExecutionOwner ToProto(ExecutionOwnerIdentity owner) =>
+        new()
+        {
+            Kind = owner.Kind,
+            OwnerId = owner.OwnerId,
+        };
+
+    private static string OwnerKindValue(ExecutionOwnerIdentity owner) =>
+        ((int)owner.Kind).ToString(System.Globalization.CultureInfo.InvariantCulture);
+
     private sealed record CredentialDecision(
         bool Allowed,
         AgentToolExecutionContext ExecutionContext,
         AgentToolCredentialSource CredentialSource,
         string Message);
+
+    private sealed record ExecutionOwnerIdentity(
+        AgentToolExecutionOwnerKind Kind,
+        string OwnerId);
 }

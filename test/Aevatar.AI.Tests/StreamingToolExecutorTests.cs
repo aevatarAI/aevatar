@@ -815,6 +815,7 @@ public class StreamingToolExecutorTests
             toolContext: AgentToolExecutionContext.Empty with
             {
                 Request = new AgentToolRequestIdentity("request-missing", null),
+                ExecutionOwner = AgentToolExecutionOwners.HostService(nameof(StreamingToolExecutorTests)),
             },
             toolExecutionPort: executionPort);
         using var executionState = executor.CreateExecutionState();

@@ -108,6 +108,7 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
                     AgentToolExecutionContext.Empty with
                     {
                         Request = new AgentToolRequestIdentity(requestId, $"{requestId}:mcp"),
+                        ExecutionOwner = AgentToolExecutionOwners.Connector(Name),
                     },
                     AgentToolApprovalContinuationMode.None,
                     null),

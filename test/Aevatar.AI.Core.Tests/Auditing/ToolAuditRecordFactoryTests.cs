@@ -239,6 +239,49 @@ public sealed class ToolAuditRecordFactoryTests
         record.ToString().Should().NotContain(providerError);
     }
 
+    [Theory]
+    [InlineData("NYXID_PROXY_HTTP_502")]
+    [InlineData("NYXID_PROXY_UNAUTHORIZED")]
+    [InlineData("NYXID_PROXY_FORBIDDEN")]
+    [InlineData("WEB_FETCH_HTTP_503")]
+    [InlineData("WEB_FETCH_DNS_FAILURE")]
+    [InlineData("WEB_FETCH_TLS_FAILURE")]
+    [InlineData("WEB_FETCH_TIMEOUT")]
+    public void Create_OwnedProviderFailureCode_ShouldPreserveExactCode(string failureCode)
+    {
+        var record = CreateProviderFailureRecord(failureCode);
+
+        record.ErrorCode.Should().Be(failureCode);
+        record.ErrorSummary.Should().Be(failureCode);
+        record.Failure.Code.Should().Be(failureCode);
+        record.Failure.SanitizedMessage.Should().Be(failureCode);
+        record.TerminalOutcome.Should().Be(
+            failureCode == "WEB_FETCH_TIMEOUT"
+                ? AuditTerminalOutcome.TimedOut
+                : AuditTerminalOutcome.Failed);
+        record.ToString().Should().NotContain("provider-secret-must-not-appear");
+    }
+
+    [Theory]
+    [InlineData("NYXID_PROXY_HTTP_502_suffix")]
+    [InlineData("NYXID_PROXY_HTTP_50")]
+    [InlineData("NYXID_PROXY_UNAUTHORIZED_suffix")]
+    [InlineData("WEB_FETCH_HTTP_503_suffix")]
+    [InlineData("WEB_FETCH_HTTP_50")]
+    [InlineData("WEB_FETCH_TIMEOUT_suffix")]
+    public void Create_AdjacentProviderFailureCode_ShouldUseGenericFailureWithoutLeakingValue(
+        string suppliedCode)
+    {
+        var record = CreateProviderFailureRecord(suppliedCode);
+
+        record.ErrorCode.Should().Be("tool_error");
+        record.ErrorSummary.Should().Be("tool_error");
+        record.Failure.Code.Should().Be("tool_error");
+        record.Failure.SanitizedMessage.Should().Be("tool_error");
+        record.TerminalOutcome.Should().Be(AuditTerminalOutcome.Failed);
+        record.ToString().Should().NotContain(suppliedCode);
+    }
+
     [Fact]
     public void Create_WithUnspecifiedExecutionPhase_ShouldRejectInvalidInternalContract()
     {
@@ -262,6 +305,32 @@ public sealed class ToolAuditRecordFactoryTests
 
     private static ToolAuditRecordFactory CreateFactory() =>
         new(new StableIdentityHasher(), new FixedTimeProvider(Now));
+
+    private static AuditRecord CreateProviderFailureRecord(string failureCode)
+    {
+        var receipt = new AgentToolReceipt
+        {
+            CallId = "call-provider",
+            ToolName = "provider_tool",
+            Status = AgentToolReceiptStatus.Error,
+            ErrorCode = failureCode,
+            ErrorMessage = "provider-secret-must-not-appear",
+        };
+
+        return CreateFactory().Create(
+            "audit-provider-failure",
+            AuditToolExecutionPhase.Terminal,
+            new TestTool("provider_tool"),
+            "provider_tool",
+            "call-provider",
+            "arguments-hash",
+            new AgentToolCallSafety(false, true, false),
+            BaseContext(),
+            AgentToolCredentialSource.System,
+            receipt,
+            AuditOutcome.Error,
+            isMutation: false);
+    }
 
     private static AgentToolExecutionContext BaseContext() =>
         AgentToolExecutionContext.Empty with

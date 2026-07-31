@@ -27,9 +27,15 @@ public sealed class ChatRuntimeToolProgressTests
             history: new ChatHistory(),
             toolLoop: CreateToolCallLoop(tools),
             hooks: null,
-            requestBuilder: _ => new LLMRequest { Messages = [], Tools = tools.GetAll() });
+            requestBuilder: _ => new LLMRequest
+            {
+                Messages = [],
+                Tools = tools.GetAll(),
+                ToolContext = TestToolContext,
+            });
         var toolContext = AgentToolExecutionContext.Empty with
         {
+            ExecutionOwner = AgentToolExecutionOwners.HostService(nameof(ChatRuntimeToolProgressTests)),
             SkillRecovery = new AgentSkillRecoveryContext(
                 RequireInitialOrnnSearch: true,
                 RequireOrnnSearchOnBlocker: false,
@@ -93,7 +99,12 @@ public sealed class ChatRuntimeToolProgressTests
             history: new ChatHistory(),
             toolLoop: CreateToolCallLoop(tools),
             hooks: null,
-            requestBuilder: _ => new LLMRequest { Messages = [], Tools = tools.GetAll() });
+            requestBuilder: _ => new LLMRequest
+            {
+                Messages = [],
+                Tools = tools.GetAll(),
+                ToolContext = TestToolContext,
+            });
 
         await using var stream = runtime.ChatStreamAsync(
                 "hello",
@@ -155,7 +166,12 @@ public sealed class ChatRuntimeToolProgressTests
             history: new ChatHistory(),
             toolLoop: CreateToolCallLoop(tools),
             hooks: null,
-            requestBuilder: _ => new LLMRequest { Messages = [], Tools = tools.GetAll() });
+            requestBuilder: _ => new LLMRequest
+            {
+                Messages = [],
+                Tools = tools.GetAll(),
+                ToolContext = TestToolContext,
+            });
 
         await using var stream = runtime.ChatStreamAsync(
                 "hello",
@@ -195,6 +211,12 @@ public sealed class ChatRuntimeToolProgressTests
                 AlwaysStartingAgentToolAdmissionLedger.Instance,
                 new AppendedAuditTrail(),
                 new StableIdentityHasher()));
+
+    private static AgentToolExecutionContext TestToolContext =>
+        AgentToolExecutionContext.Empty with
+        {
+            ExecutionOwner = AgentToolExecutionOwners.HostService(nameof(ChatRuntimeToolProgressTests)),
+        };
 
     private sealed class AppendedAuditTrail : IAuditTrailAppender
     {

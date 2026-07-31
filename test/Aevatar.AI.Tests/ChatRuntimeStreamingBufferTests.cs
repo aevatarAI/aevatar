@@ -146,6 +146,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         tools.Register(tool);
         var baseToolContext = AgentToolExecutionContext.Empty with
         {
+            Request = new AgentToolRequestIdentity(null, null, null, 1_785_484_800_000),
             Caller = new AgentToolCallerContext("scope-base", "owner-base", "resp-base"),
             ExternalMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
             {

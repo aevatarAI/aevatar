@@ -393,6 +393,10 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         Messages = History.BuildMessages(DecorateSystemPrompt(EffectiveConfig.SystemPrompt, turnCatalog)),
         RequestId = null,
         Metadata = null,
+        ToolContext = AgentToolExecutionContext.Empty with
+        {
+            ExecutionOwner = AgentToolExecutionOwners.Actor(Id),
+        },
         Tools = BuildValidTools(),
         Model = EffectiveConfig.Model,
         Temperature = EffectiveConfig.Temperature,

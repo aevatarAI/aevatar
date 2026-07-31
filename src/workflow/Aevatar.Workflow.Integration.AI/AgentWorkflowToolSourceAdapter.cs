@@ -69,6 +69,7 @@ public sealed class AgentWorkflowToolSourceAdapter(
                 OperationAdmission = WorkflowOperationAdmissionToolContextMapper.Map(
                     request.InvocationAdmission),
                 InvocationSurface = AgentToolInvocationSurface.WorkflowToolCall,
+                ExecutionOwner = AgentToolExecutionOwners.WorkflowRun(request.RunId),
             });
             _logger.LogInformation(
                 "Workflow tool credential context prepared. toolName={ToolName} scopeId={ScopeId} rootRunId={RootRunId} parentRunId={ParentRunId} parentStepId={ParentStepId} hasCallerCredentialBearer={HasCallerCredentialBearer} hasNyxIdAccessToken={HasNyxIdAccessToken} hasNyxIdOrgToken={HasNyxIdOrgToken}",
@@ -89,6 +90,7 @@ public sealed class AgentWorkflowToolSourceAdapter(
                     request.ApprovalGrant == null
                         ? null
                         : new AgentToolApprovalGrant(
+                            toolContext.ExecutionOwner.Clone(),
                             request.ApprovalGrant.ApprovalRequestId,
                             request.RunId,
                             request.ApprovalGrant.ToolName,

@@ -145,6 +145,7 @@ public sealed partial class RoleGAgentStateCoverageTests
             {
                 Request = new AgentToolRequestIdentity("request-retry", "call-retry"),
                 Caller = new AgentToolCallerContext("scope-retry", "owner-retry", "response-retry"),
+                ExecutionOwner = AgentToolExecutionOwners.Actor(actorId),
             },
             "{\"value\":1}");
         await PersistPendingApprovalAsync(eventStore, actorId, pending);
@@ -247,6 +248,7 @@ public sealed partial class RoleGAgentStateCoverageTests
             AgentToolExecutionContext.Empty with
             {
                 Request = new AgentToolRequestIdentity("request-no-replay", "call-no-replay"),
+                ExecutionOwner = AgentToolExecutionOwners.Actor(actorId),
             });
         var eventStore = provider.GetRequiredService<IEventStore>();
         await PersistPendingApprovalAsync(eventStore, actorId, pending);
@@ -294,6 +296,7 @@ public sealed partial class RoleGAgentStateCoverageTests
             AgentToolExecutionContext.Empty with
             {
                 Request = new AgentToolRequestIdentity("request-non-retryable", "call-non-retryable"),
+                ExecutionOwner = AgentToolExecutionOwners.Actor(actorId),
             });
         var eventStore = provider.GetRequiredService<IEventStore>();
         await PersistPendingApprovalAsync(eventStore, actorId, pending);
@@ -331,6 +334,7 @@ public sealed partial class RoleGAgentStateCoverageTests
             AgentToolExecutionContext.Empty with
             {
                 Request = new AgentToolRequestIdentity("request-terminal-failure", "call-terminal-failure"),
+                ExecutionOwner = AgentToolExecutionOwners.Actor(actorId),
             });
         var eventStore = provider.GetRequiredService<IEventStore>();
         await PersistPendingApprovalAsync(eventStore, actorId, pending);
@@ -375,6 +379,7 @@ public sealed partial class RoleGAgentStateCoverageTests
             AgentToolExecutionContext.Empty with
             {
                 Request = new AgentToolRequestIdentity($"request-{scenario}", $"call-{scenario}"),
+                ExecutionOwner = AgentToolExecutionOwners.Actor(actorId),
             });
         await PersistPendingApprovalAsync(eventStore, actorId, pending);
         timeline.Clear();
@@ -420,6 +425,7 @@ public sealed partial class RoleGAgentStateCoverageTests
             AgentToolExecutionContext.Empty with
             {
                 Request = new AgentToolRequestIdentity("request-terminal-started", "call-terminal-started"),
+                ExecutionOwner = AgentToolExecutionOwners.Actor(actorId),
             });
         await PersistPendingApprovalAsync(eventStore, actorId, pending);
         timeline.Clear();
@@ -474,12 +480,13 @@ public sealed partial class RoleGAgentStateCoverageTests
         AgentToolExecutionRequest request,
         PendingToolApprovalState pending)
     {
+        var pendingContext = AgentToolExecutionContextMapper.FromPayload(pending.ToolContext);
         request.ArgumentsJson.Should().Be(pending.ArgumentsJson);
         request.ApprovalContinuationMode.Should().Be(AgentToolApprovalContinuationMode.ActorOwned);
         request.ApprovalGrant.Should().NotBeNull();
+        request.ApprovalGrant!.ExecutionOwner.Should().BeEquivalentTo(pendingContext.ExecutionOwner);
         request.ApprovalGrant!.ApprovalRequestId.Should().Be(pending.RequestId);
-        request.ApprovalGrant.RequestId.Should().Be(
-            AgentToolExecutionContextMapper.FromPayload(pending.ToolContext).Request.RequestId);
+        request.ApprovalGrant.RequestId.Should().Be(pendingContext.Request.RequestId);
         request.ApprovalGrant.ToolName.Should().Be(pending.ToolName);
         request.ApprovalGrant.ToolCallId.Should().Be(pending.ToolCallId);
         request.ApprovalGrant.ArgumentsSha256.Should().Be(

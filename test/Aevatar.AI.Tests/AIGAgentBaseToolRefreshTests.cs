@@ -132,6 +132,7 @@ public class AIGAgentBaseToolRefreshTests
                 Array.Empty<ILLMCallMiddleware>(),
                 toolSources)
         {
+            InitializeId();
         }
 
         public IReadOnlyList<string> GetRegisteredToolNames() => Tools.GetAll()
