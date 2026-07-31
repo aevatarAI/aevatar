@@ -6,6 +6,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Abstractions.CodexExecution;
 using Aevatar.AI.Application.CodexExecution;
 using Aevatar.AI.Infrastructure.ChronoSandbox;
+using Aevatar.AI.Infrastructure.ToolExecution;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.ToolProviders.AgentCatalog;
 using Aevatar.AI.ToolProviders.AevatarInvocation;
@@ -1222,6 +1223,28 @@ public sealed class MainnetHostCompositionTests
         var descriptor = builder.Services.Last(service =>
             service.ServiceType == typeof(IIdentityAssertionReplayGuard));
         descriptor.ImplementationType.Should().Be(typeof(DistributedIdentityAssertionReplayGuard));
+    }
+
+    [Theory]
+    [InlineData("Development", typeof(InMemoryAgentToolAdmissionLedger))]
+    [InlineData("Testing", typeof(InMemoryAgentToolAdmissionLedger))]
+    [InlineData("Production", typeof(DistributedAgentToolAdmissionLedger))]
+    public void AddAevatarMainnetHost_ShouldSelectAdmissionLedgerByEnvironment(
+        string environmentName,
+        System.Type expectedLedgerType)
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder(environmentName: environmentName);
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        var descriptor = builder.Services.Last(service =>
+            service.ServiceType == typeof(IAgentToolAdmissionLedger));
+        descriptor.ImplementationType.Should().Be(expectedLedgerType);
     }
 
     [Theory]

@@ -73,9 +73,11 @@ as approval-required destructive calls and return `invalid_action` without downs
 Every mutation requires approval. In particular, a denied credential rotation performs
 neither its preparatory read nor its update.
 
-`ssh_exec` and `codex_exec` are disabled by default and require explicit host opt-in. Even
-when exposed, both always require a matching durable actor-owned grant. There is no SSH
-approval bypass.
+`ssh_exec` and `codex_exec` are disabled by default and require explicit host opt-in. When
+exposed, `ssh_exec` and the `codex_exec` `private_ssh` target always require a matching durable
+actor-owned grant. The operator-managed, isolated `managed_sandbox` target is read-only with
+respect to caller infrastructure and follows its argument-level policy without a durable grant.
+There is no private SSH approval bypass.
 
 The former next-style tool-call middleware, synchronous approval handlers, audit middleware
 and receipt finalizer, Responses execution wrapper, silent null adapter, legacy audit wiring,

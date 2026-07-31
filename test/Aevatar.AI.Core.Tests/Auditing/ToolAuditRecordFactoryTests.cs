@@ -37,7 +37,7 @@ public sealed class ToolAuditRecordFactoryTests
 
         var record = factory.Create(
             "audit-1",
-            "terminal",
+            AuditToolExecutionPhase.Terminal,
             new TestTool("channel_write", "channel.message"),
             "channel_write",
             "call-1",
@@ -101,7 +101,7 @@ public sealed class ToolAuditRecordFactoryTests
 
         var record = CreateFactory().Create(
             "audit-2",
-            "terminal",
+            AuditToolExecutionPhase.Terminal,
             new TestTool("workflow_tool"),
             "workflow_tool",
             "call-1",
@@ -144,7 +144,7 @@ public sealed class ToolAuditRecordFactoryTests
 
         var record = CreateFactory().Create(
             "audit-3",
-            "terminal",
+            AuditToolExecutionPhase.Terminal,
             new TestTool("scheduled_tool"),
             "scheduled_tool",
             "call-1",
@@ -179,7 +179,7 @@ public sealed class ToolAuditRecordFactoryTests
 
         var record = CreateFactory().Create(
             "audit-4",
-            "terminal",
+            AuditToolExecutionPhase.Terminal,
             new TestTool("dangerous_tool"),
             "dangerous_tool",
             "call-1",
@@ -220,7 +220,7 @@ public sealed class ToolAuditRecordFactoryTests
 
         var record = CreateFactory().Create(
             "audit-unknown-provider-error",
-            "terminal",
+            AuditToolExecutionPhase.Terminal,
             new TestTool("provider_tool"),
             "provider_tool",
             "call-1",
@@ -237,6 +237,27 @@ public sealed class ToolAuditRecordFactoryTests
         record.Failure.Code.Should().Be("tool_error");
         record.Failure.SanitizedMessage.Should().Be("tool_error");
         record.ToString().Should().NotContain(providerError);
+    }
+
+    [Fact]
+    public void Create_WithUnspecifiedExecutionPhase_ShouldRejectInvalidInternalContract()
+    {
+        var action = () => CreateFactory().Create(
+            "audit-invalid-phase",
+            AuditToolExecutionPhase.Unspecified,
+            new TestTool("provider_tool"),
+            "provider_tool",
+            "call-1",
+            "arguments-hash",
+            new AgentToolCallSafety(false, true, false),
+            BaseContext(),
+            AgentToolCredentialSource.System,
+            SuccessReceipt(),
+            AuditOutcome.Success,
+            isMutation: false);
+
+        action.Should().Throw<ArgumentOutOfRangeException>()
+            .WithParameterName("executionPhase");
     }
 
     private static ToolAuditRecordFactory CreateFactory() =>

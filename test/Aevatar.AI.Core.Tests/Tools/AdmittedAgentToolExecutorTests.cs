@@ -127,6 +127,7 @@ public sealed class AdmittedAgentToolExecutorTests
     {
         const string secret = "telemetry-secret";
         var activities = new List<Activity>();
+        var measurements = new List<(double Value, KeyValuePair<string, object?>[] Tags)>();
         using var activityListener = new ActivityListener
         {
             ShouldListenTo = source => source.Name == "Aevatar.GenAI",
@@ -135,6 +136,18 @@ public sealed class AdmittedAgentToolExecutorTests
             ActivityStopped = activity => activities.Add(activity),
         };
         ActivitySource.AddActivityListener(activityListener);
+        using var meterListener = new MeterListener();
+        meterListener.InstrumentPublished = (instrument, listener) =>
+        {
+            if (instrument.Meter.Name == "Aevatar.GenAI" &&
+                instrument.Name == "aevatar.tool.invocation.duration")
+            {
+                listener.EnableMeasurementEvents(instrument);
+            }
+        };
+        meterListener.SetMeasurementEventCallback<double>((_, value, tags, _) =>
+            measurements.Add((value, tags.ToArray())));
+        meterListener.Start();
         var appender = new RecordingAuditTrailAppender((record, _) =>
             AuditTrailAppendResult.Appended(record.AuditId));
         var tool = new RecordingTool(
@@ -163,6 +176,10 @@ public sealed class AdmittedAgentToolExecutorTests
         activity.Status.Should().Be(ActivityStatusCode.Error);
         activity.StatusDescription.Should().Be(nameof(InvalidOperationException));
         activity.ToString().Should().NotContain(secret);
+        measurements.Should().Contain(item =>
+            item.Value >= 0 &&
+            item.Tags.Any(tag =>
+                tag.Key == "gen_ai.tool.name" && Equals(tag.Value, "test_tool")));
     }
 
     [Theory]
@@ -430,6 +447,79 @@ public sealed class AdmittedAgentToolExecutorTests
             ToolName = "test_tool",
             ArgumentsSha256 = AgentToolArgumentsDigest.ComputeSha256("{}"),
         });
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenAdmissionLedgerThrows_ShouldFailClosedBeforeAuditAndTerminal()
+    {
+        var appender = new RecordingAuditTrailAppender((record, _) =>
+            AuditTrailAppendResult.Appended(record.AuditId));
+        var tool = new RecordingTool(new AgentToolCallSafety(false, true, false));
+        var executor = CreateExecutor(
+            appender,
+            new ThrowingAdmissionLedger(new InvalidOperationException("ledger-secret")));
+
+        var outcome = await executor.ExecuteAsync(CreateRequest(tool));
+
+        outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Failed);
+        outcome.FailureCode.Should().Be("tool_admission_unavailable");
+        outcome.SafeMessage.Should().Be(nameof(InvalidOperationException));
+        outcome.FailureStage.Should().Be(AgentToolExecutionFailureStage.Admission);
+        outcome.TerminalInvoked.Should().BeFalse();
+        outcome.Retryable.Should().BeTrue();
+        outcome.AuditCompleted.Should().BeFalse();
+        outcome.ResultJson.Should().NotContain("ledger-secret");
+        tool.ExecutionCalls.Should().Be(0);
+        appender.Records.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenAdmissionLedgerObservesCallerCancellation_ShouldPropagate()
+    {
+        var appender = new RecordingAuditTrailAppender((record, _) =>
+            AuditTrailAppendResult.Appended(record.AuditId));
+        var tool = new RecordingTool(new AgentToolCallSafety(false, true, false));
+        var executor = CreateExecutor(
+            appender,
+            new ThrowingAdmissionLedger(new InvalidOperationException("must not be thrown")));
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        var action = () => executor.ExecuteAsync(CreateRequest(tool), cancellation.Token);
+
+        await action.Should().ThrowAsync<OperationCanceledException>();
+        tool.ExecutionCalls.Should().Be(0);
+        appender.Records.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(AuditToolExecutionPhase.Running)]
+    [InlineData(AuditToolExecutionPhase.Terminal)]
+    public async Task ExecuteAsync_WhenAuditAppenderThrows_ShouldPreserveExecutionWithoutRetry(
+        AuditToolExecutionPhase failingPhase)
+    {
+        var appender = new RecordingAuditTrailAppender((record, _) =>
+            record.ToolExecution.ExecutionPhase == failingPhase
+                ? throw new InvalidOperationException("audit-secret")
+                : AuditTrailAppendResult.Appended(record.AuditId));
+        var tool = new RecordingTool(
+            new AgentToolCallSafety(false, true, false),
+            _ => "{\"changed\":true}");
+        var executor = CreateExecutor(appender);
+
+        var outcome = await executor.ExecuteAsync(CreateRequest(tool));
+
+        outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.ExecutedAuditIncomplete);
+        outcome.ResultJson.Should().Be("{\"changed\":true}");
+        outcome.FailureCode.Should().Be("audit_unavailable");
+        outcome.SafeMessage.Should().NotContain("audit-secret");
+        outcome.FailureStage.Should().Be(AgentToolExecutionFailureStage.TerminalAudit);
+        outcome.TerminalInvoked.Should().BeTrue();
+        outcome.Retryable.Should().BeFalse();
+        outcome.AuditCompleted.Should().BeFalse();
+        tool.ExecutionCalls.Should().Be(1);
+        appender.Records.Select(record => record.ToolExecution.ExecutionPhase)
+            .Should().Equal(AuditToolExecutionPhase.Running, AuditToolExecutionPhase.Terminal);
     }
 
     [Fact]
@@ -819,6 +909,17 @@ public sealed class AdmittedAgentToolExecutorTests
             ct.ThrowIfCancellationRequested();
             Facts.Add(fact.Clone());
             return Task.FromResult(new AgentToolAdmissionResult(status));
+        }
+    }
+
+    private sealed class ThrowingAdmissionLedger(Exception exception) : IAgentToolAdmissionLedger
+    {
+        public Task<AgentToolAdmissionResult> TryStartAsync(
+            AgentToolAdmissionFact fact,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromException<AgentToolAdmissionResult>(exception);
         }
     }
 

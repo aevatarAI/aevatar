@@ -26,7 +26,7 @@ public sealed class ToolAuditRecordFactory
 
     public AuditRecord Create(
         string auditId,
-        string executionPhase,
+        AuditToolExecutionPhase executionPhase,
         IAgentTool tool,
         string toolName,
         string toolCallId,
@@ -38,6 +38,9 @@ public sealed class ToolAuditRecordFactory
         AuditOutcome outcome,
         bool isMutation)
     {
+        if (executionPhase == AuditToolExecutionPhase.Unspecified)
+            throw new ArgumentOutOfRangeException(nameof(executionPhase), executionPhase, null);
+
         var actor = ResolveActor(executionContext);
         var identity = _identityHasher.Hash(actor.CanonicalKey);
         var recordedAt = _timeProvider.GetUtcNow();
@@ -89,7 +92,7 @@ public sealed class ToolAuditRecordFactory
             ToolExecution = new AuditToolExecution
             {
                 ArgumentsSha256 = argumentsSha256,
-                ExecutionPhase = MapExecutionPhase(executionPhase),
+                ExecutionPhase = executionPhase,
                 IsMutation = isMutation,
             },
             ErrorCode = errorCode,
@@ -172,29 +175,20 @@ public sealed class ToolAuditRecordFactory
                     : outcome;
 
     private static AuditLifecyclePhase MapLifecyclePhase(
-        string executionPhase,
+        AuditToolExecutionPhase executionPhase,
         AgentToolReceiptStatus status)
     {
         if (status == AgentToolReceiptStatus.ApprovalRequired ||
-            string.Equals(executionPhase, "waiting_approval", StringComparison.Ordinal))
+            executionPhase == AuditToolExecutionPhase.WaitingApproval)
         {
             return AuditLifecyclePhase.WaitingApproval;
         }
 
-        return string.Equals(executionPhase, "terminal", StringComparison.Ordinal) &&
+        return executionPhase == AuditToolExecutionPhase.Terminal &&
                status != AgentToolReceiptStatus.Unspecified
             ? AuditLifecyclePhase.Terminal
             : AuditLifecyclePhase.Running;
     }
-
-    private static AuditToolExecutionPhase MapExecutionPhase(string executionPhase) =>
-        executionPhase switch
-        {
-            "running" => AuditToolExecutionPhase.Running,
-            "waiting_approval" => AuditToolExecutionPhase.WaitingApproval,
-            "terminal" => AuditToolExecutionPhase.Terminal,
-            _ => AuditToolExecutionPhase.Unspecified,
-        };
 
     private static AuditTerminalOutcome MapTerminalOutcome(
         AuditLifecyclePhase lifecyclePhase,

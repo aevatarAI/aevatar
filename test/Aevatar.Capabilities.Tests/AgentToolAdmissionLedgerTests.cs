@@ -62,6 +62,29 @@ public sealed class AgentToolAdmissionLedgerTests
     }
 
     [Fact]
+    public async Task UnavailableLedger_WhenFactIsNull_ShouldRejectInvalidCall()
+    {
+        var ledger = new UnavailableAgentToolAdmissionLedger();
+
+        var action = () => ledger.TryStartAsync(null!);
+
+        await action.Should().ThrowAsync<ArgumentNullException>()
+            .WithParameterName("fact");
+    }
+
+    [Fact]
+    public async Task UnavailableLedger_WhenCallerCancels_ShouldPropagateCancellation()
+    {
+        var ledger = new UnavailableAgentToolAdmissionLedger();
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        var action = () => ledger.TryStartAsync(CreateFact(), cancellation.Token);
+
+        await action.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Fact]
     public async Task InMemoryLedger_ShouldApplyTheSameFactSemantics()
     {
         var ledger = new InMemoryAgentToolAdmissionLedger();

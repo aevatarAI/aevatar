@@ -249,7 +249,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
             callSafety);
         var runningAppend = await AppendAsync(
             CreateRunningAuditId(requestId, toolCallId),
-            "running",
+            AuditToolExecutionPhase.Running,
             tool,
             toolName,
             toolCallId,
@@ -343,7 +343,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
 
         var terminalAppend = await AppendAsync(
             CreateTerminalAuditId(requestId, toolCallId),
-            "terminal",
+            AuditToolExecutionPhase.Terminal,
             tool,
             toolName,
             toolCallId,
@@ -418,7 +418,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
             AuditCompleted: false);
         var append = await AppendAsync(
             CreateWaitingApprovalAuditId(requestId, toolCallId, approvalRequestId),
-            "waiting_approval",
+            AuditToolExecutionPhase.WaitingApproval,
             tool,
             toolName,
             toolCallId,
@@ -447,7 +447,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
     {
         var append = await AppendAsync(
             CreateTerminalAuditId(requestId, toolCallId),
-            "terminal",
+            AuditToolExecutionPhase.Terminal,
             tool,
             toolName,
             toolCallId,
@@ -485,7 +485,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
 
     private async Task<AuditTrailAppendResult> AppendAsync(
         string auditId,
-        string executionPhase,
+        AuditToolExecutionPhase executionPhase,
         IAgentTool tool,
         string toolName,
         string toolCallId,
