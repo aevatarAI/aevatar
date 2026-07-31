@@ -185,6 +185,8 @@ internal sealed class StartWorkflowTool : IAevatarInvocationTool
             Status = AgentToolReceiptStatus.Success,
             ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
             SideEffectKind = SideEffectKind,
+            SubjectKind = AevatarInvocationReceiptJson.InvocationRunSubjectKind,
+            SubjectId = invocation.RunId,
             ResultJson = resultJson ?? string.Empty,
         };
         if (workflowRuntime.HasManagedParent && IsAcceptedManagedWorkflowStart(invocation))
