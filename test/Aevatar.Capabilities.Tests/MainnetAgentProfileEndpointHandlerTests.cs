@@ -262,6 +262,43 @@ public sealed class MainnetAgentProfileEndpointHandlerTests
         detailPayload.RootElement.GetProperty("executionAvailable").GetBoolean().Should().BeFalse();
     }
 
+    [Fact]
+    public async Task GetDetail_ShouldSerializeMultiwordEnumsAsCanonicalSnakeCase()
+    {
+        var owner = AgentProfileOwners.ForScope("scope-alpha");
+        var mutation = Mutation("op-profile-alpha", "DRAFT_UNCHANGED", authorityVersion: 9);
+        mutation.Status = AgentProfileMutationStatus.NoChange;
+        var snapshot = Management(owner, "prof-research", "research", authorityVersion: 9, mutation);
+        snapshot.Draft!.RuntimeProfile!.Members.Add(new AgentProfileSkillMember
+        {
+            IntentId = "operate",
+            SideEffectClass = AgentProfileSideEffectClass.ServiceCall,
+        });
+        var catalog = new RecordingCatalogQuery
+        {
+            Resolve = _ => Catalog(
+                owner,
+                9,
+                Entry("prof-research", "research", AgentProfileProvisioningStatus.Active)),
+        };
+        var management = new RecordingManagementQuery { Snapshot = snapshot };
+        await using var host = await AgentProfileTestHost.StartAsync(catalog, management);
+
+        var response = await host.Client.SendAsync(Request(
+            HttpMethod.Get,
+            "/api/scopes/scope-alpha/agent-profiles/research",
+            "scope-alpha",
+            "user-alpha"));
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var payload = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        payload.RootElement.GetProperty("draft").GetProperty("runtimeProfile")
+            .GetProperty("members")[0].GetProperty("sideEffectClass").GetString()
+            .Should().Be("SERVICE_CALL");
+        payload.RootElement.GetProperty("lastMutation").GetProperty("status").GetString()
+            .Should().Be("NO_CHANGE");
+    }
+
     [Theory]
     [InlineData(null, HttpStatusCode.PreconditionRequired)]
     [InlineData("not-an-etag", HttpStatusCode.BadRequest)]

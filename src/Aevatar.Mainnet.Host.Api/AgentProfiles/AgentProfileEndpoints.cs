@@ -369,7 +369,7 @@ internal static class AgentProfileEndpoints
     private static string AdminProfileUrl(string profileSlug) => $"/api/admin/agent-profiles/{Uri.EscapeDataString(profileSlug)}";
     private static string AdminBindingUrl(string agentKind) => $"/api/admin/agent-profile-bindings/{Uri.EscapeDataString(agentKind)}";
     private static string OwnerKind(AgentProfileOwner? owner) => owner?.OwnerCase == AgentProfileOwner.OwnerOneofCase.System ? "system" : "scope";
-    private static string Short<T>(T value) where T : struct, Enum => value.ToString().Replace("AgentProfileActivationMode", string.Empty, StringComparison.Ordinal).Replace("AgentProfileSideEffectClass", string.Empty, StringComparison.Ordinal).Replace("AgentProfileProvisioningStatus", string.Empty, StringComparison.Ordinal).Trim('_').ToUpperInvariant();
+    private static string Short<T>(T value) where T : struct, Enum => JsonNamingPolicy.SnakeCaseUpper.ConvertName(value.ToString().Replace("AgentProfileActivationMode", string.Empty, StringComparison.Ordinal).Replace("AgentProfileSideEffectClass", string.Empty, StringComparison.Ordinal).Replace("AgentProfileProvisioningStatus", string.Empty, StringComparison.Ordinal).Trim('_'));
     private static string BearerToken(HttpContext http) { var value = http.Request.Headers.Authorization.ToString(); return value.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ? value[7..].Trim() : string.Empty; }
     private static string Idempotency(HttpContext http, string? bodyValue)
     {
