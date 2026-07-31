@@ -41,6 +41,9 @@ public class ChatRunStartErrorMapperTests
         mapped.Code.Should().Be("WORKFLOW_NOT_FOUND");
         mapped.Message.Should().Be(WorkflowChatRunStartErrorGuidance.WorkflowNotFound);
         mapped.Message.Should().Contain("current scope catalog");
+        mapped.Message.Should().Contain("list the current scope workflows");
+        mapped.Message.Should().Contain("actor_id");
+        mapped.Message.Should().Contain("stale opaque ids");
         mapped.Message.Should().Contain("list_external_workflow_capabilities");
         mapped.Message.Should().Contain("exact typed selector");
         mapped.Message.Should().Contain("structured descriptor");
