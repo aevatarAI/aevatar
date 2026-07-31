@@ -597,7 +597,7 @@ nyxid proxy request aevatar '/api/workflow/skills?query=operations&page=1&pageSi
 nyxid proxy request aevatar '/api/workflow/skills?query=mainnet&page=1&pageSize=100' --method GET --output json
 ~~~
 
-For each unique candidate GUID call its /api/workflow/skills/{guid}/exact endpoint without a guessed version. Retain only publisher exactly aevatar-platform. Record GUID, literalVersion, name, publisher, skillHash, and declaredToolNames. Never infer publisher from list names/tags.
+Read one fixed `aevatar-platform` skillset revision and its closure from Ornn. For each closure member, call `/api/workflow/skills/{guid}/exact?literalVersion={version}`. Require exact GUID, name, literalVersion, and skillHash to match the closure, and record the exact endpoint's stable publisher ID and declaredToolNames. Never use the skillset name as a publisher ID or infer membership from list names/tags.
 
 - [ ] **Step 8: Create and save personal Profile with readback**
 

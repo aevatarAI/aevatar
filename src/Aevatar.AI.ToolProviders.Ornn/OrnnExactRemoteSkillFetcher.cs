@@ -74,7 +74,10 @@ public sealed partial class OrnnExactRemoteSkillFetcher : IExactRemoteSkillFetch
             }
 
             var skillMarkdownEntries = (skillJson.Files ?? [])
-                .Where(static entry => string.Equals(entry.Key, "SKILL.md", StringComparison.OrdinalIgnoreCase))
+                .Where(static entry => string.Equals(
+                    Path.GetFileName(entry.Key),
+                    "SKILL.md",
+                    StringComparison.OrdinalIgnoreCase))
                 .ToArray();
             if (skillMarkdownEntries.Length != 1 || string.IsNullOrWhiteSpace(skillMarkdownEntries[0].Value))
             {
