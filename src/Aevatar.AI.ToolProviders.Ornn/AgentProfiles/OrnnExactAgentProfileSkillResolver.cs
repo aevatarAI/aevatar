@@ -67,7 +67,7 @@ public sealed partial class OrnnExactAgentProfileSkillResolver : IExactOrnnSkill
         where T : class =>
         read.ProxyStatus switch
         {
-            403 => ExactOrnnSkillResolutionResult.Failure("ORNN_DEPENDENCY_UNAVAILABLE"),
+            403 => ExactOrnnSkillResolutionResult.Failure("ORNN_SKILL_ACCESS_DENIED"),
             404 => ExactOrnnSkillResolutionResult.Failure("ORNN_SKILL_NOT_FOUND"),
             null => null,
             _ => ExactOrnnSkillResolutionResult.Failure("ORNN_DEPENDENCY_UNAVAILABLE"),
