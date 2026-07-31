@@ -72,24 +72,12 @@ internal sealed class CreateStudioMemberWorkflowDraftTool : IAgentTool
         string toolName,
         string argumentsJson,
         string resultJson) =>
-        StudioQueryToolJson.CreateMutationResultReceipt(
+        StudioQueryToolJson.CreateMutationErrorResultReceipt(
             Name,
             SideEffectKind,
-            "studio_member_workflow_draft",
             callId,
             toolName,
-            resultJson,
-            "status",
-            StudioMemberWorkflowDraftStatusNames.SaveAccepted,
-            "workflow_id",
-            StudioQueryToolJson.StringProperty("scope_id"),
-            StudioQueryToolJson.StringProperty("team_id"),
-            StudioQueryToolJson.StringProperty("member_id"),
-            StudioQueryToolJson.StringProperty("studio_url"),
-            StudioQueryToolJson.StringProperty("command_id"),
-            StudioQueryToolJson.StringProperty("ack_stage"),
-            StudioQueryToolJson.StringProperty("actor_id"),
-            StudioQueryToolJson.StringProperty("workspace_id"));
+            resultJson);
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {

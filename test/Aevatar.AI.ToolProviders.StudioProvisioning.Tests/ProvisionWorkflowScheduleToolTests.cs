@@ -567,29 +567,35 @@ public sealed class ProvisionWorkflowScheduleToolTests
     }
 
     [Fact]
-    public async Task CreateMemberWorkflowDraft_ThroughStreamingExecutor_ShouldKeepVerifiedMutationSuccess()
+    public async Task CreateMemberWorkflowDraft_CreateResultReceipt_WithAcceptedDraftAck_ShouldReturnNull()
     {
-        var draftPort = new RecordingMemberWorkflowDraftProvisioningPort();
-        var tool = await DiscoverCreateMemberWorkflowDraftToolAsync(draftPort);
+        var tool = await DiscoverCreateMemberWorkflowDraftToolAsync(new RecordingMemberWorkflowDraftProvisioningPort());
 
-        using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
-        var toolResult = await ExecuteToolThroughExecutorAsync(
-            tool,
-            "tc-create-draft",
+        var receipt = tool.CreateResultReceipt(
+            "call-1",
             CreateMemberWorkflowDraftToolName,
-            """{"team_id":"team-alpha","display_name":"Draft Workflow","workflow_yaml":"name: draft\nsteps: []\n","member_id":"member-alpha","workflow_id":"workflow-alpha"}""");
+            "{}",
+            """{"status":"draft_save_accepted","runnable":false,"binding_status":"not_bound","scope_id":"scope-current","team_id":"team-alpha","member_id":"member-alpha","workflow_id":"workflow-alpha","studio_url":"/studio/workflows/workflow-alpha","command_id":"command-alpha","ack_stage":"dispatch_accepted","actor_id":"actor-alpha","workspace_id":"workspace-alpha","acked_at_utc":"2026-07-01T00:00:00Z","readiness":{"readable":true,"stage":"draft_saved","message":"Draft saved."},"blockers":[]}""");
 
-        toolResult.IsError.Should().BeFalse();
-        toolResult.Result.Should().Contain("\"workflow_id\":\"workflow-alpha\"");
-        toolResult.Result.Should().NotBe("""{"status":"unknown","message":"The tool outcome could not be verified."}""");
-        var receipt = toolResult.Receipt;
+        receipt.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task CreateMemberWorkflowDraft_CreateResultReceipt_WithStructuredError_ShouldReturnErrorReceipt()
+    {
+        var tool = await DiscoverCreateMemberWorkflowDraftToolAsync(new RecordingMemberWorkflowDraftProvisioningPort());
+
+        var receipt = tool.CreateResultReceipt(
+            "call-1",
+            CreateMemberWorkflowDraftToolName,
+            "{}",
+            """{"error":{"code":"invalid_arguments","message":"workflow_yaml is required."}}""");
+
         receipt.Should().NotBeNull();
-        receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
         receipt.SideEffectKind.Should().Be("studio.workflow_draft.create");
-        receipt.SubjectKind.Should().Be("studio_member_workflow_draft");
-        receipt.SubjectId.Should().Be("workflow-alpha");
-        receipt.ResultJson.Should().Be(toolResult.Result);
-        draftPort.LastRequest.Should().NotBeNull();
+        receipt.ErrorCode.Should().Be("invalid_arguments");
+        receipt.ResultJson.Should().Contain("workflow_yaml is required");
     }
 
     [Fact]

@@ -804,6 +804,35 @@ internal static class StudioQueryToolJson
         }
     }
 
+    public static AgentToolReceipt? CreateMutationErrorResultReceipt(
+        string defaultToolName,
+        string sideEffectKind,
+        string callId,
+        string toolName,
+        string resultJson)
+    {
+        if (!TryParseObject(resultJson, out var document))
+            return null;
+
+        using (document)
+        {
+            if (!TryReadError(document.RootElement, out var errorCode, out var errorMessage))
+                return null;
+
+            return new AgentToolReceipt
+            {
+                CallId = callId ?? string.Empty,
+                ToolName = ResolveToolName(defaultToolName, toolName),
+                Status = AgentToolReceiptStatus.Error,
+                ApprovalMode = AgentToolReceiptApprovalMode.Unspecified,
+                SideEffectKind = sideEffectKind,
+                ErrorCode = errorCode,
+                ErrorMessage = errorMessage,
+                ResultJson = resultJson ?? string.Empty,
+            };
+        }
+    }
+
     public static AgentToolReceipt? CreateMutationResultReceipt(
         string defaultToolName,
         string sideEffectKind,
@@ -814,7 +843,30 @@ internal static class StudioQueryToolJson
         string? successStatusPropertyName,
         string? successStatusValue,
         string subjectIdPropertyName,
-        params ResultPropertyRequirement[] resultRequirements)
+        params ResultPropertyRequirement[] resultRequirements) =>
+        CreateSuccessfulMutationResultReceipt(
+            defaultToolName,
+            sideEffectKind,
+            subjectKind,
+            callId,
+            toolName,
+            resultJson,
+            successStatusPropertyName,
+            successStatusValue,
+            subjectIdPropertyName,
+            resultRequirements);
+
+    private static AgentToolReceipt? CreateSuccessfulMutationResultReceipt(
+        string defaultToolName,
+        string sideEffectKind,
+        string subjectKind,
+        string callId,
+        string toolName,
+        string resultJson,
+        string? successStatusPropertyName,
+        string? successStatusValue,
+        string subjectIdPropertyName,
+        IReadOnlyCollection<ResultPropertyRequirement> resultRequirements)
     {
         if (!TryParseObject(resultJson, out var document))
             return null;
