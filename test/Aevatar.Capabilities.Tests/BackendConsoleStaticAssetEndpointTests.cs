@@ -486,6 +486,150 @@ public sealed class BackendConsoleStaticAssetEndpointTests
     }
 
     [Fact]
+    public async Task AdminShell_AgentProfiles_ShouldRenderIntentionalEmptyStateAndCollapsibleSkillCards()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name, nextName) {
+              const starts = [
+                html.indexOf('function ' + name + '('),
+                html.indexOf('async function ' + name + '(')
+              ].filter(index => index !== -1);
+              const start = starts.length ? Math.min(...starts) : -1;
+              const ends = [
+                html.indexOf('\nfunction ' + nextName + '(', start),
+                html.indexOf('\nasync function ' + nextName + '(', start)
+              ].filter(index => index !== -1);
+              const end = ends.length ? Math.min(...ends) : -1;
+              assert.notEqual(start, -1, name + ' must exist in the served admin asset');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return html.slice(start, end);
+            }
+
+            const context = {
+              AGENT_PROFILE_STATE:{
+                diagnostics:[], skillCardsOpen:{0:false,1:true}, skillProofs:{}
+              },
+              esc(value) { return String(value == null ? '' : value); },
+              agentProfileField(label, name, value) {
+                return '<label>' + label + '<input data-ap-field="' + name + '" value="' + value + '"></label>';
+              },
+              agentProfileSelect(label, name, value) {
+                return '<label>' + label + '<select data-ap-field="' + name + '"><option>' + value + '</option></select></label>';
+              },
+              agentProfileHidden(name, value, index) {
+                return '<input type="hidden" data-ap-field="' + name + '" data-ap-member="' + index + '" value="' + value + '">';
+              },
+              agentProfileExactEvidenceHtml(member, index) {
+                return '<div data-ap-exact-evidence="' + index + '">' + member.skillRef.guid + '</div>';
+              }
+            };
+            vm.createContext(context);
+            vm.runInContext(`
+              ${functionSource('agentProfileDraftFromFields', 'agentProfileEmptyDraft')}
+              ${functionSource('agentProfileEmptyDraft', 'agentProfileSlugFromName')}
+              ${functionSource('agentProfileSkillCardIsOpen', 'agentProfileSkillCardHtml')}
+              ${functionSource('agentProfileSkillCardHtml', 'agentProfileSkillsSectionHtml')}
+              ${functionSource('agentProfileSkillsSectionHtml', 'agentProfileDiagnosticsHtml')}
+            `, context);
+
+            const emptyDraft = vm.runInContext('agentProfileEmptyDraft()', context);
+            assert.equal(emptyDraft.runtimeProfile.members.length, 0);
+            const empty = vm.runInContext('agentProfileSkillsSectionHtml([], false)', context);
+            assert.match(empty, /还没有添加 Skill/);
+            assert.match(empty, /data-ap-open-skills="add"/);
+
+            context.members = [{
+              intentId:'research', routingDescription:'Find evidence',
+              skillRef:{guid:'11111111-1111-4111-8111-111111111111',literalVersion:'1.2'},
+              explicitTriggerAliases:['research'], taskToolPolicy:{toolNames:['web_search'],toolSetRefs:[]},
+              sideEffectClass:'READ_ONLY', expectedSkillName:'research', reviewedPublisherId:'publisher-a'
+            }, {
+              intentId:'writer', routingDescription:'Write a response',
+              skillRef:{guid:'22222222-2222-4222-8222-222222222222',literalVersion:'2.3'},
+              explicitTriggerAliases:['write'], taskToolPolicy:{toolNames:['document_write'],toolSetRefs:[]},
+              sideEffectClass:'SERVICE_CALL', expectedSkillName:'writer', reviewedPublisherId:'publisher-b'
+            }];
+            const first = vm.runInContext('agentProfileSkillCardHtml(members[0], 0, 2, false)', context);
+            const second = vm.runInContext('agentProfileSkillCardHtml(members[1], 1, 2, false)', context);
+            assert.match(first, /<details class="ap-skill-card"[^>]*data-ap-member-card="0"/);
+            assert.doesNotMatch(first, /<details class="ap-skill-card"[^>]* open/);
+            assert.match(second, /<details class="ap-skill-card"[^>]*data-ap-member-card="1"[^>]* open/);
+            assert.match(second, /writer/);
+            assert.match(second, /2\.3/);
+            assert.match(second, /publisher-b/);
+            assert.match(second, /data-ap-replace-skill="1"/);
+            assert.match(second, /data-ap-remove-member="1"/);
+            assert.match(second, /data-ap-exact-evidence="1"/);
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error);
+    }
+
+    [Fact]
+    public async Task AdminShell_AgentProfiles_ShouldReindexCardEvidenceWhenRemovingSkills()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name, nextName) {
+              const start = html.indexOf('function ' + name + '(');
+              const end = html.indexOf('\nfunction ' + nextName + '(', start);
+              assert.notEqual(start, -1, name + ' must exist in the served admin asset');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return html.slice(start, end);
+            }
+
+            const draft = {runtimeProfile:{members:[
+              {expectedSkillName:'research',skillRef:{guid:'guid-a'}},
+              {expectedSkillName:'writer',skillRef:{guid:'guid-b'}}
+            ]}};
+            const context = {
+              AGENT_PROFILE_STATE:{
+                skillProofs:{0:{skillHash:'hash-a'},1:{skillHash:'hash-b'}},
+                skillCardsOpen:{0:false,1:true},dirty:false,diagnostics:[{field:'members[1].intentId'}]
+              },
+              agentProfileWorkingDraft() { return draft; },
+              confirm() { return true; }
+            };
+            vm.createContext(context);
+            vm.runInContext(functionSource('agentProfileRemoveMember', 'agentProfileDiagnosticsHtml'), context);
+
+            assert.equal(vm.runInContext('agentProfileRemoveMember(0)', context), true);
+            assert.equal(draft.runtimeProfile.members.length, 1);
+            assert.equal(draft.runtimeProfile.members[0].expectedSkillName, 'writer');
+            assert.equal(context.AGENT_PROFILE_STATE.skillProofs[0].skillHash, 'hash-b');
+            assert.equal(context.AGENT_PROFILE_STATE.skillCardsOpen[0], true);
+            assert.deepEqual(Object.keys(context.AGENT_PROFILE_STATE.skillProofs), ['0']);
+            assert.deepEqual(Array.from(context.AGENT_PROFILE_STATE.diagnostics), []);
+            assert.equal(context.AGENT_PROFILE_STATE.dirty, true);
+
+            assert.equal(vm.runInContext('agentProfileRemoveMember(0)', context), true);
+            assert.equal(draft.runtimeProfile.members.length, 0);
+            assert.deepEqual(Object.keys(context.AGENT_PROFILE_STATE.skillProofs), []);
+            assert.deepEqual(Object.keys(context.AGENT_PROFILE_STATE.skillCardsOpen), []);
+            assert.match(html, /root\.addEventListener\('toggle',[\s\S]*data-ap-member-card/);
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error);
+    }
+
+    [Fact]
     public async Task AdminShell_AgentProfiles_ShouldRenderPublishedSystemSummaryWithoutFakeDraft()
     {
         await using var app = await CreateAppAsync();

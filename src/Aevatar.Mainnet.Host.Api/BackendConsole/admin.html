@@ -857,7 +857,6 @@ button{font-family:inherit;cursor:pointer;}
 .ap-field input:focus,.ap-field textarea:focus,.ap-field select:focus{outline:0;border-color:var(--primary);box-shadow:0 0 0 2px var(--primary-weak);}
 .ap-field input[disabled],.ap-field textarea[disabled],.ap-field select[disabled]{background:var(--surface-3);color:var(--subtle);cursor:not-allowed;}
 .ap-help{font-size:11px;color:var(--faint);}
-.ap-member{border:1px solid var(--border);border-radius:6px;padding:13px;margin-bottom:10px;background:var(--surface);}
 .ap-member-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:11px;}
 .ap-diagnostics{display:flex;flex-direction:column;gap:6px;}
 .ap-diagnostic{border-left:3px solid var(--failed);background:var(--failed-bg);padding:7px 9px;font-size:12px;color:var(--failed);}
@@ -865,6 +864,21 @@ button{font-family:inherit;cursor:pointer;}
 .ap-create{display:flex;align-items:center;gap:7px;margin-left:auto;}
 .ap-rollout{display:flex;align-items:end;gap:10px;flex-wrap:wrap;padding:11px;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);}
 .ap-rollout .ap-field{width:170px;}
+.ap-skills-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:12px;}
+.ap-skills-head h3{margin:0 0 3px;}
+.ap-skills-count{display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:22px;padding:0 7px;border-radius:999px;background:var(--surface-3);border:1px solid var(--border);font:600 11px var(--mono);color:var(--muted);}
+.ap-skills-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;min-height:180px;padding:28px;border:1px dashed var(--border);border-radius:10px;background:var(--surface-2);text-align:center;}
+.ap-skills-empty b{color:var(--heading);font-size:13.5px}.ap-skills-empty p{max-width:430px;color:var(--faint);font-size:12px;line-height:1.55}.ap-skills-empty .btn{margin-top:5px;}
+.ap-skill-list{display:flex;flex-direction:column;gap:10px;}
+.ap-skill-card{border:1px solid var(--border);border-radius:9px;background:var(--surface);overflow:hidden;box-shadow:0 1px 2px rgba(17,24,39,.02);}
+.ap-skill-card[open]{border-color:#c9d4e5;box-shadow:var(--shadow-card);}
+.ap-skill-summary{display:grid;grid-template-columns:minmax(190px,1.35fr) minmax(120px,.8fr) minmax(120px,.8fr) auto;align-items:center;gap:12px;padding:13px 14px;cursor:pointer;list-style:none;}
+.ap-skill-summary::-webkit-details-marker{display:none}.ap-skill-summary:hover{background:var(--surface-2)}.ap-skill-summary:focus-visible{outline:2px solid var(--primary);outline-offset:-2px;}
+.ap-skill-primary,.ap-skill-meta{display:flex;flex-direction:column;gap:3px;min-width:0}.ap-skill-name{font-size:13.5px;font-weight:650;color:var(--heading);overflow-wrap:anywhere}.ap-skill-version{font:11px var(--mono);color:var(--faint);}
+.ap-skill-meta small{font-size:10.5px;color:var(--faint)}.ap-skill-meta span{font-size:12px;color:var(--muted);overflow-wrap:anywhere;}
+.ap-skill-badges{display:flex;align-items:center;justify-content:flex-end;gap:6px;flex-wrap:wrap}.ap-skill-badge{display:inline-flex;align-items:center;min-height:22px;padding:2px 7px;border-radius:999px;border:1px solid var(--border);background:var(--surface-3);font-size:10.5px;font-weight:600;color:var(--muted);white-space:nowrap}.ap-skill-badge.exact{border-color:var(--success-bd);background:var(--success-bg);color:var(--success)}.ap-skill-badge.issue{border-color:var(--failed-bd);background:var(--failed-bg);color:var(--failed)}
+.ap-skill-caret{width:18px;color:var(--faint);font-size:12px;transition:transform .16s ease}.ap-skill-card[open] .ap-skill-caret{transform:rotate(90deg);}
+.ap-skill-body{padding:15px;border-top:1px solid var(--border);background:var(--surface-2);}.ap-skill-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:12px 0 0}.ap-skill-danger{display:flex;justify-content:flex-end;margin-top:12px;padding-top:12px;border-top:1px dashed var(--border);}
 .ap-skill-search{display:flex;align-items:end;gap:8px;grid-column:1/-1;}
 .ap-skill-search .ap-field{flex:1 1 auto;}
 .ap-skill-results{grid-column:1/-1;border:1px solid var(--border);border-radius:6px;overflow:hidden;background:var(--surface);}
@@ -899,7 +913,7 @@ button{font-family:inherit;cursor:pointer;}
   .ap-toolbar{align-items:stretch}.ap-toolbar .search{width:100%}.ap-create{width:100%;margin-left:0}
   .ap-layout{display:block;overflow:auto}.ap-list-pane{max-height:36vh;border-right:0;border-bottom:1px solid var(--border)}.ap-workspace{overflow:visible;padding:14px}
   .ap-grid,.ap-grid.three,.ap-evidence-grid,.ap-review-grid,.ap-create-progress{grid-template-columns:1fr}.ap-actions{width:100%;margin-left:0;justify-content:flex-start}.ap-field.wide{grid-column:auto}
-  .ap-member-head{align-items:flex-start;flex-wrap:wrap}.ap-skill-search{align-items:stretch;flex-direction:column}.ap-skill-search .btn{align-self:flex-start}.ap-disclosure{max-width:100%}
+  .ap-member-head,.ap-skills-head{align-items:flex-start;flex-wrap:wrap}.ap-skill-summary{grid-template-columns:minmax(0,1fr) auto}.ap-skill-meta{grid-column:1/-1;display:grid;grid-template-columns:90px 1fr}.ap-skill-badges{justify-content:flex-start}.ap-skill-caret{grid-column:2;grid-row:1}.ap-skill-search{align-items:stretch;flex-direction:column}.ap-skill-search .btn{align-self:flex-start}.ap-disclosure{max-width:100%}
   .ap-step{padding:13px}.ap-create-actions{justify-content:stretch}.ap-create-actions .btn{flex:1 1 auto;justify-content:center}
 }
 .sc-cron{font-size:11.5px;background:var(--surface-3);border:1px solid var(--border);padding:1px 7px;border-radius:4px;color:var(--muted);}
@@ -2398,7 +2412,7 @@ function renderRail(active){
 var AGENT_PROFILE_STATE={owner:'mine',status:'all',search:'',items:[],selected:null,detail:null,
   loaded:false,loading:false,error:null,forbidden:false,dirty:false,busy:false,notice:null,diagnostics:[],etag:null,
   binding:null,systemBinding:null,rolloutDraft:null,skillRequest:0,skillMemberIndex:null,skillQuery:'',skillResults:[],skillLoading:false,skillError:null,skillProofs:{},
-  pending:null,completedPending:null,pollTimer:null,createFlow:null};
+  skillCardsOpen:{},pending:null,completedPending:null,pollTimer:null,createFlow:null};
 
 function agentProfileResetSkillSearch(){
   AGENT_PROFILE_STATE.skillRequest=Number(AGENT_PROFILE_STATE.skillRequest||0)+1;AGENT_PROFILE_STATE.skillMemberIndex=null;
@@ -2428,7 +2442,7 @@ function agentProfileDraftFromFields(fields){
     expectedSkillName:String(value.expectedSkillName||'').trim(),reviewedPublisherId:String(value.reviewedPublisherId||'').trim(),
     taskToolPolicy:{toolNames:csv(value.taskTools),toolSetRefs:csv(value.taskToolSets)}
   };}
-  var memberFields=Array.isArray(fields.members)&&fields.members.length?fields.members:[fields];
+  var memberFields=Array.isArray(fields.members)?fields.members:[fields];
   return {displayName:String(fields.displayName||'').trim(),purpose:String(fields.purpose||'').trim(),instructions:String(fields.instructions||''),runtimeProfile:{
     agentKind:'nyxid.chat',routeToolSetRef:'agent-profile.nyxid-chat',activationMode:fields.activationMode||'SHADOW',
     maximumToolPolicy:{toolNames:csv(fields.maximumTools),toolSetRefs:csv(fields.maximumToolSets)},
@@ -2439,7 +2453,7 @@ function agentProfileDraftFromFields(fields){
 }
 function agentProfileEmptyDraft(){
   return agentProfileDraftFromFields({activationMode:'SHADOW',maxPlanSteps:4,handoffTtlSeconds:900,classifierTimeoutMs:600,
-    exactSkillFetchTimeoutMs:1500,maxSelectedSkillBytes:24576,sideEffectClass:'READ_ONLY'});
+    exactSkillFetchTimeoutMs:1500,maxSelectedSkillBytes:24576,sideEffectClass:'READ_ONLY',members:[]});
 }
 function agentProfileSlugFromName(value){
   return String(value||'').normalize('NFKD').toLowerCase().replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').replace(/-+/g,'-');
@@ -2614,16 +2628,41 @@ function agentProfileExactEvidenceHtml(member,index){
     '<div class="ap-tool-row"><span class="ap-tool-label">Task tools</span>'+agentProfileToolChipsHtml((member.taskToolPolicy||{}).toolNames)+'</div></div>';
 }
 function agentProfileRuntime(detail){return detail&&detail.draft&&detail.draft.runtimeProfile?detail.draft.runtimeProfile:(detail&&detail.runtimeProfile)||agentProfileEmptyDraft().runtimeProfile;}
-function agentProfileMemberHtml(member,index,count,disabled){
-  var ref=member.skillRef||{},task=member.taskToolPolicy||{},opts={memberIndex:index,disabled:disabled};
-  return '<div class="ap-member" data-ap-member-card="'+index+'"><div class="ap-member-head"><b>Member '+(index+1)+' · '+esc(member.intentId||'未命名 intent')+'</b>'+
-    (!disabled&&count>1?'<button type="button" class="btn" data-ap-remove-member="'+index+'">删除</button>':'')+'</div><div class="ap-grid three">'+agentProfileSkillSearchHtml(disabled,index)+
-    agentProfileField('Intent ID','intentId',member.intentId,Object.assign({required:true},opts))+agentProfileSelect('Side-effect class','sideEffectClass',String(member.sideEffectClass||'READ_ONLY').replace(/^AGENT_PROFILE_SIDE_EFFECT_CLASS_/,''),[
-      {value:'READ_ONLY',label:'Read only'},{value:'EXTERNAL_HANDOFF',label:'External handoff'},{value:'SERVICE_CALL',label:'Service call'},{value:'MAINTENANCE',label:'Maintenance'}],disabled,index)+
-    agentProfileField('Routing description','routingDescription',member.routingDescription,Object.assign({wide:true},opts))+agentProfileField('Trigger aliases','triggerAliases',(member.explicitTriggerAliases||[]).join(', '),Object.assign({wide:true,help:'逗号分隔；路由只使用发布后 sealed aliases。'},opts))+
-    agentProfileHidden('exactSkillGuid',ref.guid,index)+agentProfileHidden('literalVersion',ref.literalVersion,index)+agentProfileHidden('expectedSkillName',member.expectedSkillName,index)+agentProfileHidden('reviewedPublisherId',member.reviewedPublisherId,index)+
-    agentProfileExactEvidenceHtml(member,index)+'</div><details class="ap-disclosure"><summary>手工 Task policy</summary><div class="ap-grid">'+
-      agentProfileField('Task tools','taskTools',(task.toolNames||[]).join(', '),opts)+agentProfileField('Task tool sets','taskToolSets',(task.toolSetRefs||[]).join(', '),opts)+'</div></details></div>';
+function agentProfileSkillCardIsOpen(member,index){
+  var explicit=AGENT_PROFILE_STATE.skillCardsOpen&&AGENT_PROFILE_STATE.skillCardsOpen[index];if(explicit!=null)return !!explicit;
+  var ref=member&&member.skillRef||{},field='members['+index+'].';
+  return !ref.guid||!ref.literalVersion||!member.expectedSkillName||!member.reviewedPublisherId||(AGENT_PROFILE_STATE.diagnostics||[]).some(function(d){return String(d.field||'').indexOf(field)>=0;});
+}
+function agentProfileSkillCardHtml(member,index,count,disabled){
+  var ref=member.skillRef||{},task=member.taskToolPolicy||{},opts={memberIndex:index,disabled:disabled},open=agentProfileSkillCardIsOpen(member,index)?' open':'',exact=!!(ref.guid&&ref.literalVersion&&member.expectedSkillName&&member.reviewedPublisherId);
+  var side=String(member.sideEffectClass||'READ_ONLY').replace(/^AGENT_PROFILE_SIDE_EFFECT_CLASS_/,'');
+  return '<details class="ap-skill-card" data-ap-member-card="'+index+'"'+open+'><summary class="ap-skill-summary">'+
+    '<span class="ap-skill-primary"><span class="ap-skill-name">'+esc(member.expectedSkillName||'待选择 Ornn Skill')+'</span><span class="ap-skill-version">'+esc(ref.literalVersion?'v'+ref.literalVersion:'尚未固定版本')+'</span></span>'+
+    '<span class="ap-skill-meta"><small>Intent</small><span>'+esc(member.intentId||'未命名')+'</span></span><span class="ap-skill-meta"><small>Publisher</small><span>'+esc(member.reviewedPublisherId||'待确认')+'</span></span>'+
+    '<span class="ap-skill-badges"><span class="ap-skill-badge">'+esc(side.replace(/_/g,' '))+'</span><span class="ap-skill-badge '+(exact?'exact':'issue')+'">'+(exact?'Exact 已固定':'待选择')+'</span><span class="ap-skill-caret">›</span></span></summary>'+
+    '<div class="ap-skill-body"><div class="ap-grid three">'+
+      agentProfileField('Intent ID','intentId',member.intentId,Object.assign({required:true},opts))+agentProfileSelect('Side-effect class','sideEffectClass',side,[
+        {value:'READ_ONLY',label:'Read only'},{value:'EXTERNAL_HANDOFF',label:'External handoff'},{value:'SERVICE_CALL',label:'Service call'},{value:'MAINTENANCE',label:'Maintenance'}],disabled,index)+
+      agentProfileField('Routing description','routingDescription',member.routingDescription,Object.assign({wide:true},opts))+agentProfileField('Trigger aliases','triggerAliases',(member.explicitTriggerAliases||[]).join(', '),Object.assign({wide:true,help:'逗号分隔；路由只使用发布后 sealed aliases。'},opts))+
+      agentProfileHidden('exactSkillGuid',ref.guid,index)+agentProfileHidden('literalVersion',ref.literalVersion,index)+agentProfileHidden('expectedSkillName',member.expectedSkillName,index)+agentProfileHidden('reviewedPublisherId',member.reviewedPublisherId,index)+agentProfileExactEvidenceHtml(member,index)+'</div>'+
+      (!disabled?'<div class="ap-skill-actions"><button type="button" class="btn" data-ap-replace-skill="'+index+'">替换 Skill</button></div>':'')+
+      '<details class="ap-disclosure"><summary>手工 Task policy</summary><div class="ap-grid">'+agentProfileField('Task tools','taskTools',(task.toolNames||[]).join(', '),opts)+agentProfileField('Task tool sets','taskToolSets',(task.toolSetRefs||[]).join(', '),opts)+'</div></details>'+
+      (!disabled?'<div class="ap-skill-danger"><button type="button" class="btn btn-danger" data-ap-remove-member="'+index+'">移除 Skill</button></div>':'')+'</div></details>';
+}
+function agentProfileSkillsSectionHtml(members,disabled){
+  members=members||[];var add=disabled?'':'<button type="button" class="btn btn-primary" data-ap-open-skills="add"'+(members.length>=32?' disabled':'')+'>添加 Ornn Skills</button>';
+  if(!members.length)return '<div class="ap-skills-head"><div><h3>Skills <span class="ap-skills-count">0</span></h3><span class="ap-help">每个 intent 固定一个 exact Ornn Skill，最多 32 个。</span></div></div><div class="ap-skills-empty"><b>还没有添加 Skill</b><p>从 Ornn 搜索并固定 exact 版本、Publisher 与工具证据。</p>'+add+'</div>';
+  return '<div class="ap-skills-head"><div><h3>Skills <span class="ap-skills-count">'+members.length+'</span></h3><span class="ap-help">折叠浏览，展开配置路由与策略。</span></div>'+add+'</div><div class="ap-skill-list">'+members.map(function(member,index){return agentProfileSkillCardHtml(member,index,members.length,disabled);}).join('')+'</div>';
+}
+function agentProfileMemberHtml(member,index,count,disabled){return agentProfileSkillCardHtml(member,index,count,disabled);}
+function agentProfileRemoveMember(index){
+  var draft=agentProfileWorkingDraft(),members=draft&&draft.runtimeProfile&&draft.runtimeProfile.members,indexNumber=Number(index);
+  if(!members||!members[indexNumber])return false;
+  var member=members[indexNumber],ref=member.skillRef||{};if(ref.guid&&!confirm('移除 '+(member.expectedSkillName||'这个 Skill')+'？'))return false;
+  members.splice(indexNumber,1);
+  function reindex(source){var next={};Object.keys(source||{}).forEach(function(key){var old=Number(key);if(old<indexNumber)next[old]=source[key];else if(old>indexNumber)next[old-1]=source[key];});return next;}
+  AGENT_PROFILE_STATE.skillProofs=reindex(AGENT_PROFILE_STATE.skillProofs);AGENT_PROFILE_STATE.skillCardsOpen=reindex(AGENT_PROFILE_STATE.skillCardsOpen);
+  AGENT_PROFILE_STATE.diagnostics=[];AGENT_PROFILE_STATE.dirty=true;return true;
 }
 function agentProfileDiagnosticsHtml(){
   if(!AGENT_PROFILE_STATE.diagnostics.length)return '';
@@ -2686,9 +2725,7 @@ function agentProfileCreateHtml(){
       agentProfileHiddenValue('recoveryTools',((rt.recoveryToolPolicy||{}).toolNames||[]).join(', '))+agentProfileHiddenValue('recoveryToolSets',((rt.recoveryToolPolicy||{}).toolSetRefs||[]).join(', '))+
       agentProfileHiddenValue('maxPlanSteps',rt.maxPlanSteps||4)+agentProfileHiddenValue('handoffTtlSeconds',rt.handoffTtlSeconds||900)+agentProfileHiddenValue('classifierTimeoutMs',rt.classifierTimeoutMs||600)+
       agentProfileHiddenValue('exactSkillFetchTimeoutMs',rt.exactSkillFetchTimeoutMs||1500)+agentProfileHiddenValue('maxSelectedSkillBytes',rt.maxSelectedSkillBytes||24576)+'</div></section>'+
-    '<section class="ap-step"><div class="ap-step-head"><span class="ap-step-number">02</span><div><h3>选择能力</h3><p>每个 intent 固定一个 exact Ornn skill，并审阅发布方、版本与工具。</p></div></div>'+
-      '<div class="ap-member-head"><span class="ap-help">最多 32 个 member</span>'+(!pending?'<button type="button" class="btn" data-ap-add-member'+(members.length>=32?' disabled':'')+'>添加 member · '+members.length+'/32</button>':'')+'</div>'+
-      members.map(function(member,index){return agentProfileMemberHtml(member,index,members.length,pending);}).join('')+'</section>'+
+    '<section class="ap-step"><div class="ap-step-head"><span class="ap-step-number">02</span><div><h3>选择能力</h3><p>每个 intent 固定一个 exact Ornn skill，并审阅发布方、版本与工具。</p></div></div>'+agentProfileSkillsSectionHtml(members,pending)+'</section>'+
     '<section class="ap-step"><div class="ap-step-head"><span class="ap-step-number">03</span><div><h3>检查并创建</h3><p>创建资源和保存草稿是两个可观察步骤；不会自动发布或设为默认。</p></div></div>'+
       '<div class="ap-review"><div class="ap-review-grid"><div class="ap-review-item"><small>Owner / slug</small>'+esc(owner+(flow.slug||'待填写'))+'</div>'+
         '<div class="ap-review-item"><small>Activation</small>'+esc(String(rt.activationMode||'SHADOW').replace(/^AGENT_PROFILE_ACTIVATION_MODE_/,''))+'</div>'+
@@ -2717,9 +2754,7 @@ function agentProfileEditorHtml(){
       agentProfileField('Instructions','instructions',draft.instructions,{textarea:true,wide:true,required:true,disabled:dis})+
       agentProfileSelect('Activation mode','activationMode',String(rt.activationMode||'SHADOW').replace(/^AGENT_PROFILE_ACTIVATION_MODE_/,''),[
         {value:'SHADOW',label:'Shadow'},{value:'ENFORCED',label:'Enforced'}],dis)+'</div></section>'+
-    '<section class="ap-section"><div class="ap-member-head"><div><h3>Exact Ornn members</h3><span class="ap-help">每个 intent 绑定一个 exact skill，最多 32 个。</span></div>'+
-      (!dis?'<button type="button" class="btn" data-ap-add-member'+(members.length>=32?' disabled':'')+'>添加 member · '+members.length+'/32</button>':'')+'</div>'+
-      members.map(function(member,index){return agentProfileMemberHtml(member,index,members.length,dis);}).join('')+'</section>'+
+    '<section class="ap-section">'+agentProfileSkillsSectionHtml(members,dis)+'</section>'+
     '<section class="ap-section"><details class="ap-disclosure"><summary>高级工具策略</summary><div class="ap-grid">'+
       agentProfileField('Maximum tools','maximumTools',(max.toolNames||[]).join(', '),{disabled:dis})+agentProfileField('Maximum tool sets','maximumToolSets',(max.toolSetRefs||[]).join(', '),{disabled:dis})+
       agentProfileField('Recovery tools','recoveryTools',(recovery.toolNames||[]).join(', '),{disabled:dis})+agentProfileField('Recovery tool sets','recoveryToolSets',(recovery.toolSetRefs||[]).join(', '),{disabled:dis})+'</div></details>'+
@@ -2913,8 +2948,7 @@ function mountAgentProfiles(root){
     if(ev.target.closest('[data-ap-start-create]')){if(AGENT_PROFILE_STATE.pending){toast('当前操作仍在等待投影');return;}if(AGENT_PROFILE_STATE.dirty&&!confirm('有未保存修改，确定开始新建？'))return;agentProfileStartCreate();return;}
     if(ev.target.closest('[data-ap-create-cancel]')){if(!agentProfileCancelCreate())return;if(AGENT_PROFILE_STATE.items.length)loadAgentProfileDetail(AGENT_PROFILE_STATE.items[0].profileSlug);else render();return;}
     if(ev.target.closest('[data-ap-create-submit]')){agentProfileSubmitCreate(root);return;}
-    var addMember=ev.target.closest('[data-ap-add-member]');if(addMember){agentProfileCaptureDraft(root);var draft=agentProfileWorkingDraft(),members=draft.runtimeProfile.members;if(members.length<32)members.push(agentProfileEmptyDraft().runtimeProfile.members[0]);AGENT_PROFILE_STATE.dirty=true;render();return;}
-    var removeMember=ev.target.closest('[data-ap-remove-member]');if(removeMember){agentProfileCaptureDraft(root);var removeIndex=Number(removeMember.getAttribute('data-ap-remove-member')),current=agentProfileWorkingDraft().runtimeProfile.members;if(current.length>1)current.splice(removeIndex,1);agentProfileResetSkillSearch();AGENT_PROFILE_STATE.dirty=true;render();return;}
+    var removeMember=ev.target.closest('[data-ap-remove-member]');if(removeMember){agentProfileCaptureDraft(root);if(agentProfileRemoveMember(removeMember.getAttribute('data-ap-remove-member')))render();return;}
     var skillSearch=ev.target.closest('[data-ap-skill-search]');if(skillSearch){agentProfileSearchSkills(root,skillSearch.getAttribute('data-ap-skill-search'));return;}
     var skill=ev.target.closest('[data-ap-skill]');if(skill){agentProfileSelectSkill(skill.getAttribute('data-ap-skill'),root,skill.getAttribute('data-ap-member'));return;}
     var action=ev.target.closest('[data-ap-action]');if(action){agentProfileHandleAction(action.getAttribute('data-ap-action'),root);}
@@ -2928,6 +2962,7 @@ function mountAgentProfiles(root){
     }
   });
   root.addEventListener('change',function(ev){if(ev.target.matches('[data-ap-status]')){AGENT_PROFILE_STATE.status=ev.target.value;var pane=root.querySelector('.ap-list-pane');if(pane)pane.innerHTML=agentProfileListHtml();}});
+  root.addEventListener('toggle',function(ev){if(!ev.target.matches||!ev.target.matches('[data-ap-member-card]'))return;var index=Number(ev.target.getAttribute('data-ap-member-card'));AGENT_PROFILE_STATE.skillCardsOpen=AGENT_PROFILE_STATE.skillCardsOpen||{};AGENT_PROFILE_STATE.skillCardsOpen[index]=ev.target.open;},true);
 }
 
 /* ---------------- cron 控件（Skills / Schedules 共用） ---------------- */
