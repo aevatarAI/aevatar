@@ -364,8 +364,8 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
         // workflow whose llm_call step dispatches a WorkflowLlmExecutionIntent carrying the run's
         // scope. No inbound channel stamps the caller scope on this path, so without threading the
         // run scope into the tool caller, scope-scoped tools (aevatar_*) see no scope and fail with
-        // caller_scope_unavailable. Assert the role actor fills Caller.ScopeId + OwnerSubject from
-        // the intent scope (mirrors the channel inbound path that sets both from the registration scope).
+        // caller_scope_unavailable. Assert the role actor fills Caller.ScopeId from the intent scope
+        // without inventing a NyxID OwnerSubject from a resource-scope identity.
         [Fact]
         public async Task WorkflowRoleGAgent_WhenWorkflowIntentCarriesScope_ShouldPopulateToolCallerScope()
         {
@@ -389,7 +389,7 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
             var toolContext = llm.Requests[0].ToolContext;
             toolContext.Should().NotBeNull();
             toolContext!.Caller.ScopeId.Should().Be("scope-studio-1");
-            toolContext.Caller.OwnerSubject.Should().Be("scope-studio-1");
+            toolContext.Caller.OwnerSubject.Should().BeNullOrEmpty();
         }
 
         // No-op guards: the role actor must not fabricate a scope when the run has none (scope-less
