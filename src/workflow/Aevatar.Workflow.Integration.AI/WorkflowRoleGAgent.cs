@@ -292,7 +292,11 @@ public class WorkflowRoleGAgent(
         }, ct);
         return context with
         {
-            Credentials = new AgentToolCredentials(token, token, token),
+            Credentials = new AgentToolCredentials(
+                token,
+                null,
+                null,
+                AgentToolNyxIdCredentialKind.ProxyDelegation),
         };
     }
 

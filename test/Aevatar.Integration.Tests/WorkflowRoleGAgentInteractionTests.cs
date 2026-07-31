@@ -2,6 +2,8 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.NyxId.Tools;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
@@ -307,6 +309,7 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
                 CallerCredential = new WorkflowCallerCredential
                 {
                     BearerToken = "token-123",
+                    Kind = NyxIdCallerCredentialKind.SourceReadableUserBearer,
                 },
                 Headers = { ["trace-id"] = "trace-1" },
                 Annotations = { ["annotation"] = "value" },
@@ -322,6 +325,9 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
             request.ToolContext.Should().NotBeNull();
             request.ToolContext!.Credentials.NyxIdAccessToken.Should().Be("token-123");
             request.ToolContext.Credentials.NyxIdOrgToken.Should().Be("token-123");
+            request.ToolContext.Credentials.SenderNyxIdAccessToken.Should().Be("token-123");
+            request.ToolContext.Credentials.NyxIdCredentialKind.Should()
+                .Be(AgentToolNyxIdCredentialKind.SourceReadableUserBearer);
             request.Metadata.Should().NotBeNull();
             request.Metadata!.Should().ContainKey("trace-id").WhoseValue.Should().Be("trace-1");
             request.Metadata.Should().ContainKey("annotation").WhoseValue.Should().Be("value");
@@ -545,6 +551,10 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
         {
             var eventStore = new InMemoryEventStore();
             var tool = new ApprovalRequiredWorkflowTool();
+            var handler = new RecordingNyxIdHandler();
+            var requireServiceTool = new NyxIdRequireServiceTool(new NyxIdApiClient(
+                new NyxIdToolOptions { BaseUrl = "https://nyx.test" },
+                new HttpClient(handler)));
             var tokenProvider = new RotatingWorkflowCallerAccessTokenProvider();
             var registry = new FixedToolSetRegistry(
                 "studio.write",
@@ -592,6 +602,19 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
 
             tool.ExecuteCount.Should().Be(1);
             tool.AccessTokens.Should().Equal("fresh-token-1");
+            tool.ExecutionContext.Should().NotBeNull();
+            tool.ExecutionContext!.Credentials.NyxIdAccessToken.Should().NotBeNullOrWhiteSpace();
+            tool.ExecutionContext.Credentials.NyxIdCredentialKind.Should()
+                .Be(AgentToolNyxIdCredentialKind.ProxyDelegation);
+            tool.ExecutionContext.Credentials.NyxIdOrgToken.Should().BeNull();
+            tool.ExecutionContext.Credentials.SenderNyxIdAccessToken.Should().BeNull();
+            using (AgentToolContextScope.Push(tool.ExecutionContext))
+            {
+                var result = await requireServiceTool.ExecuteAsync(
+                    """{"service_slug":"api-github"}""");
+                result.Should().Contain("NYXID_SOURCE_UNAVAILABLE");
+            }
+            handler.Requests.Should().Be(0);
             tokenProvider.Authorities.Should().HaveCount(2);
             tokenProvider.Authorities.Should().OnlyContain(authority =>
                 authority.Platform == "lark" &&
@@ -695,6 +718,7 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
             CallerCredential = new WorkflowCallerCredential
             {
                 BearerToken = "original-bearer",
+                Kind = NyxIdCallerCredentialKind.SourceReadableUserBearer,
                 NyxIdAuthority = new WorkflowCallerNyxIdAuthority
                 {
                     Platform = "lark",
@@ -913,6 +937,7 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
         {
             public int ExecuteCount { get; private set; }
             public List<string?> AccessTokens { get; } = [];
+            public AgentToolExecutionContext? ExecutionContext { get; private set; }
             public string Name => "nyxid_service_update";
             public string Description => "Updates a connected service.";
             public string ParametersSchema => "{}";
@@ -923,6 +948,7 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
                 ct.ThrowIfCancellationRequested();
                 ExecuteCount++;
                 AccessTokens.Add(AgentToolRequestContext.NyxIdAccessToken);
+                ExecutionContext = AgentToolRequestContext.Current;
                 return Task.FromResult("""{"updated":true}""");
             }
         }
@@ -939,6 +965,23 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
                 ct.ThrowIfCancellationRequested();
                 Authorities.Add(authority.Clone());
                 return Task.FromResult($"fresh-token-{Authorities.Count}");
+            }
+        }
+
+        private sealed class RecordingNyxIdHandler : HttpMessageHandler
+        {
+            public int Requests { get; private set; }
+
+            protected override Task<HttpResponseMessage> SendAsync(
+                HttpRequestMessage request,
+                CancellationToken cancellationToken)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                Requests++;
+                return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+                {
+                    Content = new StringContent("""{ "keys": [] }"""),
+                });
             }
         }
 
