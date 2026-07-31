@@ -61,7 +61,7 @@ The normal editor uses the same hierarchy: primary identity and status, compact 
 
 ## Production Acceptance
 
-After deployment, use signed-in `nyxid proxy request aevatar` only to create personal `aevatar-operator` (`Aevatar Operator`, `nyxid.chat`, `ENFORCED`). Search bounded Aevatar terms and include only exact candidates whose returned publisher equals `aevatar-platform`. Instructions require explicit confirmation before destructive, authorization-changing, or externally visible operations and treat typed receipts/read models—not prose or 202—as completion evidence.
+After deployment, use signed-in `nyxid proxy request aevatar` only to create personal `aevatar-operator` (`Aevatar Operator`, `nyxid.chat`, `ENFORCED`). Read one fixed `aevatar-platform` skillset revision and its closure, then resolve every closure member by its exact GUID and literal version. Require the closure and exact API to agree on GUID, name, version, and hash; persist the stable publisher ID returned by the exact API. The skillset name is not a publisher identity. Instructions require explicit confirmation before destructive, authorization-changing, or externally visible operations and treat typed receipts/read models—not prose or 202—as completion evidence.
 
 Create, save, validate, publish, and read back each terminal outcome. Do not bind as personal default. Browser acceptance uses canonical `#/agent-profiles` for desktop/mobile, keyboard, pending, errors, and published state; browser credentials never perform API mutations.
 

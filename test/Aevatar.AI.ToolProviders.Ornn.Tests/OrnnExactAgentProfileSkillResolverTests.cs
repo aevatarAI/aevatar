@@ -42,6 +42,21 @@ public sealed class OrnnExactAgentProfileSkillResolverTests
     }
 
     [Fact]
+    public async Task ResolveAsync_ShouldAcceptSkillMarkdownInsideSinglePackageDirectory()
+    {
+        var skillJson = SkillJson(skillMarkdownPath: "skill-alpha/SKILL.md");
+        var handler = new OrnnTestHttpMessageHandler(
+            _ => OrnnTestHttpMessageHandler.JsonResponse(DetailJson()),
+            _ => OrnnTestHttpMessageHandler.JsonResponse(skillJson));
+
+        var result = await new OrnnExactAgentProfileSkillResolver(CreateClient(handler))
+            .ResolveAsync("token", ExactRef());
+
+        result.IsSuccess.Should().BeTrue();
+        result.Package!.DeclaredToolNames.Should().Equal("lookup", "search");
+    }
+
+    [Fact]
     public async Task ResolveAsync_ShouldRejectNonCanonicalReferenceOrMissingTokenBeforeHttp()
     {
         var handler = SuccessHandler();
@@ -212,8 +227,9 @@ public sealed class OrnnExactAgentProfileSkillResolverTests
 
     private static string SkillJson(
         string version = LiteralVersion,
-        string name = "skill-alpha") =>
+        string name = "skill-alpha",
+        string skillMarkdownPath = "SKILL.md") =>
         "{\"data\":{\"name\":\"" + name + "\",\"version\":\"" + version +
-        "\",\"files\":{\"SKILL.md\":\"---\\nname: skill-alpha\\n---\\nbody\"}," +
+        "\",\"files\":{\"" + skillMarkdownPath + "\":\"---\\nname: skill-alpha\\n---\\nbody\"}," +
         "\"metadata\":{\"tools\":[{\"tool\":\"search\"},{\"tool\":\"lookup\"}]}}}";
 }
