@@ -41,7 +41,8 @@ const zhCNMessages = {
   'nav.items.topology': '拓扑',
   'pages.gagents.index.platformBreadcrumb': '平台',
   'pages.chat.index.chatStopped': 'Chat 已停止。',
-  'pages.chat.index.composerPlaceholder': '描述你想要的 workflow，或询问当前配置...',
+  'pages.chat.index.composerPlaceholder':
+    '描述你想要的 workflow，或询问当前配置...',
   'pages.chat.index.confirmAndCreate': '确认并创建',
   'pages.chat.index.confirmPrompt': '确认，请现在创建。',
   'pages.chat.index.continuationContextMissing':
@@ -53,7 +54,8 @@ const zhCNMessages = {
     '永久删除“{title}”？此会话无法恢复。',
   'pages.chat.index.deleteChatFailed': '无法删除会话',
   'pages.chat.index.deleteChatTitle': '删除会话？',
-  'pages.chat.index.emptyDescription': '描述你想创建的 Team、Member 或 Workflow。',
+  'pages.chat.index.emptyDescription':
+    '描述你想创建的 Team、Member 或 Workflow。',
   'pages.chat.index.failedToLoadConversation': '无法加载会话',
   'pages.chat.index.failedToLoadHistory': '无法加载会话历史',
   'pages.chat.index.historyStoredInWorkspace': '历史记录会保存到当前工作区。',
@@ -63,7 +65,8 @@ const zhCNMessages = {
   'pages.chat.index.loadingConversation': '正在加载会话',
   'pages.chat.index.loadingHistory': '正在加载会话历史',
   'pages.chat.index.historySynchronizing': '会话历史仍在同步，请稍后重试。',
-  'pages.chat.index.missingChatHistoryContext': 'Chat 已完成，但未返回会话上下文。',
+  'pages.chat.index.missingChatHistoryContext':
+    'Chat 已完成，但未返回会话上下文。',
   'pages.chat.index.newChat': '新会话',
   'pages.chat.index.newChatAction': '新建会话',
   'pages.chat.index.noChatHistory': '暂无会话历史',
@@ -84,7 +87,38 @@ const zhCNMessages = {
   'pages.chat.index.status.error': '错误',
   'pages.chat.index.status.needsConfirmation': '待确认',
   'pages.chat.index.status.streaming': '生成中',
+  'pages.chat.index.status.stopped': '已停止',
   'pages.chat.index.status.studioReady': 'Studio 已就绪',
+  'pages.chat.index.approvalContextMissing':
+    '运行上下文不可用。请重新加载会话后再重试审批。',
+  'pages.chat.index.interventionContextMissing':
+    '运行上下文不完整。请打开运行详情或重新加载后再重试。',
+  'pages.chat.runLifecycle.completed': '运行已完成',
+  'pages.chat.runLifecycle.contextMissing': '运行上下文不可用',
+  'pages.chat.runLifecycle.contextUnavailable':
+    '此历史记录没有持久化运行标识。请开始新一轮对话或打开运行页面恢复上下文。',
+  'pages.chat.runLifecycle.currentStep': '当前步骤：{step}',
+  'pages.chat.runLifecycle.failed': '运行失败',
+  'pages.chat.runLifecycle.label': '运行生命周期',
+  'pages.chat.runLifecycle.needsYou': '运行需要你的操作',
+  'pages.chat.runLifecycle.openRun': '打开运行详情',
+  'pages.chat.runLifecycle.pending': '运行等待中',
+  'pages.chat.runLifecycle.permissionRequired': '需要权限',
+  'pages.chat.runLifecycle.refreshFailed':
+    '无法刷新持久化运行状态。请打开运行详情或重试会话以恢复。',
+  'pages.chat.runLifecycle.refreshFailedTitle': '运行状态不可用',
+  'pages.chat.runLifecycle.reviewAccess': '检查访问权限',
+  'pages.chat.runLifecycle.run': '运行 {runId}',
+  'pages.chat.runLifecycle.running': '运行中',
+  'pages.chat.runLifecycle.runningTool': '正在运行工具：{tool}',
+  'pages.chat.runLifecycle.state.completed': '已完成',
+  'pages.chat.runLifecycle.state.failed': '失败',
+  'pages.chat.runLifecycle.state.needsYou': '需要操作',
+  'pages.chat.runLifecycle.state.pending': '等待中',
+  'pages.chat.runLifecycle.state.recovery': '恢复',
+  'pages.chat.runLifecycle.state.running': '运行中',
+  'pages.chat.runLifecycle.state.stopped': '已停止',
+  'pages.chat.runLifecycle.stopped': '运行已停止',
   'pages.chat.index.time.daysAgo': '{count} 天前',
   'pages.chat.index.time.hoursAgo': '{count} 小时前',
   'pages.chat.index.time.justNow': '刚刚',
@@ -112,8 +146,7 @@ const zhCNMessages = {
   'pages.missionwall.latencySeconds': '{latency}s',
   'pages.missionwall.liveState.connected':
     '已连接到已发布 workflow run read models。',
-  'pages.missionwall.liveState.empty':
-    '暂无可见的已发布 workflow runs。',
+  'pages.missionwall.liveState.empty': '暂无可见的已发布 workflow runs。',
   'pages.missionwall.liveState.loading': '正在加载已发布 workflow runs。',
   'pages.missionwall.liveState.partialRunError':
     '部分已发布 service runs 无法加载。',
@@ -165,8 +198,7 @@ const zhCNMessages = {
   'pages.missionwall.status.unknown': '未知',
   'pages.missionwall.status.waiting': '等待',
   'pages.missionwall.state.auditLoading': '正在加载选中 run',
-  'pages.missionwall.state.auditPendingTitle':
-    '这个 run 暂无步骤流',
+  'pages.missionwall.state.auditPendingTitle': '这个 run 暂无步骤流',
   'pages.missionwall.state.emptyKicker': '等待运行记录',
   'pages.missionwall.state.emptyTitle': '暂无可见的已发布 workflow',
   'pages.missionwall.state.loadingKicker': '加载运行态',
@@ -767,8 +799,10 @@ const zhCNMessages = {
   'teams.automations.authorization.error': '无法继续授权',
   'teams.automations.authorization.exactAccess': '精确权限',
   'teams.automations.authorization.expiry': '凭证有效期',
-  'teams.automations.authorization.noExternalGrants': '无需外部 NyxID 服务或所有者 LLM 模型授权。',
-  'teams.automations.authorization.noOwnerLLMGrant': '此工作流无需所有者 LLM 模型授权。',
+  'teams.automations.authorization.noExternalGrants':
+    '无需外部 NyxID 服务或所有者 LLM 模型授权。',
+  'teams.automations.authorization.noOwnerLLMGrant':
+    '此工作流无需所有者 LLM 模型授权。',
   'teams.automations.authorization.preparing': '正在准备授权检查',
   'teams.automations.authorization.review': '检查授权',
   'teams.automations.authorization.reviewAgain': '重新检查',
@@ -1133,10 +1167,8 @@ const zhCNMessages = {
     '当前 Workflow 成员还没有可安全归属的执行记录。',
   'teamMemberWorkflowStudio.executionsPanel.fallbackName': 'Workflow 执行',
   'teamMemberWorkflowStudio.executionsPanel.inspect': '查看',
-  'teamMemberWorkflowStudio.executionsPanel.sectionAria':
-    'Workflow 执行记录',
-  'teamMemberWorkflowStudio.executionsPanel.serviceMeta':
-    '服务已就绪',
+  'teamMemberWorkflowStudio.executionsPanel.sectionAria': 'Workflow 执行记录',
+  'teamMemberWorkflowStudio.executionsPanel.serviceMeta': '服务已就绪',
   'teamMemberWorkflowStudio.executionsPanel.title': '执行记录',
   'teamMemberWorkflowStudio.executionsPanel.unknownStatus': '未知',
   'teamMemberWorkflowStudio.graph.branchCount.one': '1 个分支',
@@ -1167,8 +1199,7 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.header.identityAria': 'Workflow 身份信息',
   'teamMemberWorkflowStudio.header.inputSet': '已设置输入',
   'teamMemberWorkflowStudio.header.invoke': '调用',
-  'teamMemberWorkflowStudio.header.invoke.open':
-    '打开已发布成员的调用工作台。',
+  'teamMemberWorkflowStudio.header.invoke.open': '打开已发布成员的调用工作台。',
   'teamMemberWorkflowStudio.header.invoke.publishFirst':
     '先发布这个成员，再调用它。',
   'teamMemberWorkflowStudio.header.invoke.saveFirst':
@@ -1367,24 +1398,37 @@ const zhCNMessages = {
   'pages.governance.columns.service.endpoint.target': 'Service endpoint target',
   'pages.governance.columns.service.target': 'Service target',
   'pages.governance.governanceinspectordrawer.version.ready': 'Version ready',
-  'pages.governance.governanceworkbench.binding.accepted.for.creation': 'Binding was accepted for governance creation.',
-  'pages.governance.governanceworkbench.binding.accepted.for.retirement': 'Binding was accepted for retirement.',
-  'pages.governance.governanceworkbench.binding.accepted.for.update': 'Binding was accepted for update.',
-  'pages.governance.governanceworkbench.endpoint.accepted.for.creation': 'Endpoint was accepted for governance creation.',
-  'pages.governance.governanceworkbench.endpoint.accepted.for.exposure': 'Endpoint was accepted for {value1} exposure.',
-  'pages.governance.governanceworkbench.endpoint.accepted.for.update': 'Endpoint was accepted for update.',
+  'pages.governance.governanceworkbench.binding.accepted.for.creation':
+    'Binding was accepted for governance creation.',
+  'pages.governance.governanceworkbench.binding.accepted.for.retirement':
+    'Binding was accepted for retirement.',
+  'pages.governance.governanceworkbench.binding.accepted.for.update':
+    'Binding was accepted for update.',
+  'pages.governance.governanceworkbench.endpoint.accepted.for.creation':
+    'Endpoint was accepted for governance creation.',
+  'pages.governance.governanceworkbench.endpoint.accepted.for.exposure':
+    'Endpoint was accepted for {value1} exposure.',
+  'pages.governance.governanceworkbench.endpoint.accepted.for.update':
+    'Endpoint was accepted for update.',
   'pages.governance.governanceworkbench.policy': 'Policy',
-  'pages.governance.governanceworkbench.policy.accepted.for.creation': 'Policy was accepted for governance creation.',
-  'pages.governance.governanceworkbench.policy.accepted.for.retirement': 'Policy was accepted for retirement.',
-  'pages.governance.governanceworkbench.policy.accepted.for.update': 'Policy was accepted for update.',
+  'pages.governance.governanceworkbench.policy.accepted.for.creation':
+    'Policy was accepted for governance creation.',
+  'pages.governance.governanceworkbench.policy.accepted.for.retirement':
+    'Policy was accepted for retirement.',
+  'pages.governance.governanceworkbench.policy.accepted.for.update':
+    'Policy was accepted for update.',
   'pages.governance.governanceworkbench.service': 'Service',
-  'pages.governance.governanceworkbench.service.endpoint.target': 'Service endpoint target',
+  'pages.governance.governanceworkbench.service.endpoint.target':
+    'Service endpoint target',
   'pages.governance.governanceworkbench.service.target': 'Service target',
   'pages.governance.governanceworkbench.version.pending': 'Version pending',
   'pages.governance.governanceworkbench.version.ready': 'Version ready',
-  'pages.governance.governanceworkbench.revision.was.published.for.governance.evaluation': 'Revision was published for governance evaluation.',
-  'pages.governance.governanceworkbench.revision.is.prepared.and.waiting.for': 'Revision is prepared and waiting for promotion decisions.',
-  'pages.governance.governanceworkbench.revision.missing.policies': 'Revision is missing {value1} required policies.',
+  'pages.governance.governanceworkbench.revision.was.published.for.governance.evaluation':
+    'Revision was published for governance evaluation.',
+  'pages.governance.governanceworkbench.revision.is.prepared.and.waiting.for':
+    'Revision is prepared and waiting for promotion decisions.',
+  'pages.governance.governanceworkbench.revision.missing.policies':
+    'Revision is missing {value1} required policies.',
   'pages.runs.memberPublishedRuns.event': 'Event',
   'pages.runs.memberPublishedRuns.member': 'Team member',
   'pages.runs.memberPublishedRuns.step': 'Step',
@@ -1396,7 +1440,8 @@ const zhCNMessages = {
   'pages.runs.runsinspectorpane.current.run.2': 'Current run',
   'pages.runs.runsinspectorpane.current.run.ready': 'Current run ready',
   'pages.runs.runsinspectorpane.event.recorded': 'Event recorded',
-  'pages.runs.runsinspectorpane.no.user.visible.payload': 'No user-visible payload fields.',
+  'pages.runs.runsinspectorpane.no.user.visible.payload':
+    'No user-visible payload fields.',
   'pages.runs.runsinspectorpane.runtime.actor.ready': 'Runtime actor ready',
   'pages.runs.runsinspectorpane.runtime.actor.ready.2': 'Runtime actor ready',
   'pages.runs.runsinspectorpane.runtime.actor.ready.3': 'Runtime actor ready',
@@ -1420,19 +1465,25 @@ const zhCNMessages = {
   'pages.scopes.invoke.selected.service': 'the selected service',
   'pages.scopes.invoke.service': 'Service',
   'pages.scopes.invoke.version.ready': 'Version ready',
-  'pages.scopes.scopeserviceruntimeworkbench.actor.available': 'Actor available',
+  'pages.scopes.scopeserviceruntimeworkbench.actor.available':
+    'Actor available',
   'pages.scopes.scopeserviceruntimeworkbench.binding': 'Binding',
-  'pages.scopes.scopeserviceruntimeworkbench.binding.accepted.for.retirement': 'Binding was accepted for retirement.',
-  'pages.scopes.scopeserviceruntimeworkbench.binding.created': 'Binding was created.',
-  'pages.scopes.scopeserviceruntimeworkbench.binding.updated': 'Binding was updated.',
+  'pages.scopes.scopeserviceruntimeworkbench.binding.accepted.for.retirement':
+    'Binding was accepted for retirement.',
+  'pages.scopes.scopeserviceruntimeworkbench.binding.created':
+    'Binding was created.',
+  'pages.scopes.scopeserviceruntimeworkbench.binding.updated':
+    'Binding was updated.',
   'pages.scopes.scopeserviceruntimeworkbench.endpoint': 'Endpoint',
   'pages.scopes.scopeserviceruntimeworkbench.endpoints': 'endpoints',
   'pages.scopes.scopeserviceruntimeworkbench.policy.count': '{value1} policies',
   'pages.scopes.scopeserviceruntimeworkbench.ready': 'Ready',
-  'pages.scopes.scopeserviceruntimeworkbench.revision.accepted.for.retirement': 'Revision was accepted for retirement.',
+  'pages.scopes.scopeserviceruntimeworkbench.revision.accepted.for.retirement':
+    'Revision was accepted for retirement.',
   'pages.scopes.scopeserviceruntimeworkbench.service': 'Service',
   'pages.scopes.scopeserviceruntimeworkbench.service.target': 'Service target',
-  'pages.scopes.scopeserviceruntimeworkbench.serving.version.ready': 'serving version ready',
+  'pages.scopes.scopeserviceruntimeworkbench.serving.version.ready':
+    'serving version ready',
   'pages.scopes.scopeserviceruntimeworkbench.version': 'Version',
   'pages.services.index.artifact.attached': 'Artifact attached',
   'pages.services.index.endpoint': 'Endpoint',
@@ -1453,14 +1504,17 @@ const zhCNMessages = {
   'pages.studio.studiobuildpanels.current.run.ready': 'current run: ready',
   'pages.studio.studiobuildpanels.events.count': 'events: {count}',
   'pages.studio.studiobuildpanels.runtime.actor.ready': 'runtime actor: ready',
-  'pages.studio.studiobuildpanels.save.accepted.checking.again': 'Save accepted. Waiting for catalog; checking again in {value1}s.',
-  'pages.studio.studiobuildpanels.save.accepted.waiting.for.catalog': 'Save accepted. Still waiting for catalog; use Refresh catalog to check again.',
+  'pages.studio.studiobuildpanels.save.accepted.checking.again':
+    'Save accepted. Waiting for catalog; checking again in {value1}s.',
+  'pages.studio.studiobuildpanels.save.accepted.waiting.for.catalog':
+    'Save accepted. Still waiting for catalog; use Refresh catalog to check again.',
   'pages.studio.studiobuildpanels.save.applied': 'Save applied.',
   'pages.studio.studiobuildpanels.save.rejected': 'Save rejected.',
   'pages.studio.studiobuildpanels.script': 'Script',
   'pages.studio.studiobuildpanels.script.applied': 'Applied script',
   'pages.studio.studiobuildpanels.script.draft': 'Script draft',
-  'pages.studio.studiobuildpanels.script.promotion.version.summary': 'Script promotion version summary',
+  'pages.studio.studiobuildpanels.script.promotion.version.summary':
+    'Script promotion version summary',
   'pages.studio.studiobuildpanels.version.ready': 'version ready',
   'pages.studio.studiofilesdetailpane.chat.author.assistant': '助手',
   'pages.studio.studiofilesdetailpane.chat.author.unknown': '未知作者',
@@ -1494,10 +1548,14 @@ const zhCNMessages = {
   'pages.studio.studiomemberinvokeinspector.service.ready': 'Service ready',
   'pages.studio.studiomemberinvokeinspector.version.ready': 'Version ready',
   'pages.studio.studioworkbenchsections.runtime.available': 'Runtime available',
-  'pages.studio.studioworkbenchsections.runtime.available.2': 'Runtime available',
-  'pages.studio.studioworkbenchsections.runtime.available.3': 'Runtime available',
-  'pages.studio.studioworkbenchsections.runtime.available.4': 'Runtime available',
-  'pages.studio.studioworkbenchsections.runtime.facts.available': 'Runtime facts available',
+  'pages.studio.studioworkbenchsections.runtime.available.2':
+    'Runtime available',
+  'pages.studio.studioworkbenchsections.runtime.available.3':
+    'Runtime available',
+  'pages.studio.studioworkbenchsections.runtime.available.4':
+    'Runtime available',
+  'pages.studio.studioworkbenchsections.runtime.facts.available':
+    'Runtime facts available',
 };
 
 export default zhCNMessages;
