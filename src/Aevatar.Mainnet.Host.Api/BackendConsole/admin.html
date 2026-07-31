@@ -863,7 +863,6 @@ button{font-family:inherit;cursor:pointer;}
 .ap-diagnostic{border-left:3px solid var(--failed);background:var(--failed-bg);padding:7px 9px;font-size:12px;color:var(--failed);}
 .ap-empty{padding:34px 18px;text-align:center;color:var(--faint);font-size:12.5px;}
 .ap-create{display:flex;align-items:center;gap:7px;margin-left:auto;}
-.ap-create input{height:30px;width:190px;border:1px solid var(--border);border-radius:6px;padding:0 9px;font:12.5px var(--sans);}
 .ap-rollout{display:flex;align-items:end;gap:10px;flex-wrap:wrap;padding:11px;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);}
 .ap-rollout .ap-field{width:170px;}
 .ap-skill-search{display:flex;align-items:end;gap:8px;grid-column:1/-1;}
@@ -882,12 +881,26 @@ button{font-family:inherit;cursor:pointer;}
 .ap-disclosure>summary{cursor:pointer;padding:10px 12px;color:var(--heading);font-size:12.5px;font-weight:600;list-style-position:inside;}
 .ap-disclosure>summary:hover{background:var(--surface-3);}.ap-disclosure>summary:focus-visible{outline:2px solid var(--primary);outline-offset:-2px;}
 .ap-disclosure>.ap-grid,.ap-disclosure>.ap-disclosure-body{padding:4px 12px 12px;}
+.ap-create-progress{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:4px 0 14px;}
+.ap-create-phase{display:flex;align-items:center;gap:8px;min-width:0;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);font-size:11.5px;color:var(--faint);}
+.ap-create-phase b{width:20px;height:20px;flex:0 0 auto;display:grid;place-items:center;border-radius:50%;background:var(--surface-3);color:var(--muted);font:600 10px var(--mono);}
+.ap-create-phase.on{border-color:var(--waiting-bd);background:var(--waiting-bg);color:#8a5309}.ap-create-phase.on b{background:var(--waiting);color:#fff;}
+.ap-create-phase.done{border-color:var(--success-bd);background:var(--success-bg);color:var(--success)}.ap-create-phase.done b{background:var(--success);color:#fff;}
+.ap-step{border:1px solid var(--border);border-radius:8px;background:var(--surface);padding:16px;margin-bottom:12px;}
+.ap-step-head{display:flex;align-items:flex-start;gap:10px;margin-bottom:13px}.ap-step-head h3{margin:0}.ap-step-head p{font-size:11.5px;color:var(--faint);margin-top:2px;}
+.ap-step-number{width:24px;height:24px;flex:0 0 auto;display:grid;place-items:center;border-radius:6px;background:var(--heading);color:#fff;font:600 11px var(--mono);}
+.ap-owner-badge{display:inline-flex;align-items:center;border:1px solid var(--border);border-radius:999px;background:var(--surface-3);padding:3px 8px;font:11px var(--mono);color:var(--muted);}
+.ap-review{border:1px solid var(--border);border-radius:6px;background:var(--surface-2);padding:12px;}
+.ap-review-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px 14px}.ap-review-item{display:flex;flex-direction:column;gap:2px;min-width:0;font-size:12px;color:var(--heading);overflow-wrap:anywhere}.ap-review-item small{color:var(--faint);}
+.ap-create-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap;margin-top:14px;}
+.ap-slug-error{font-size:11px;color:var(--failed);min-height:16px;}
 @media (max-width:900px){.ap-layout{grid-template-columns:minmax(240px,300px) minmax(0,1fr)}.ap-grid.three{grid-template-columns:repeat(2,minmax(0,1fr));}}
 @media (max-width:768px){
-  .ap-toolbar{align-items:stretch}.ap-toolbar .search{width:100%}.ap-create{width:100%;margin-left:0}.ap-create input{flex:1 1 auto;width:auto}
+  .ap-toolbar{align-items:stretch}.ap-toolbar .search{width:100%}.ap-create{width:100%;margin-left:0}
   .ap-layout{display:block;overflow:auto}.ap-list-pane{max-height:36vh;border-right:0;border-bottom:1px solid var(--border)}.ap-workspace{overflow:visible;padding:14px}
-  .ap-grid,.ap-grid.three,.ap-evidence-grid{grid-template-columns:1fr}.ap-actions{width:100%;margin-left:0;justify-content:flex-start}.ap-field.wide{grid-column:auto}
+  .ap-grid,.ap-grid.three,.ap-evidence-grid,.ap-review-grid,.ap-create-progress{grid-template-columns:1fr}.ap-actions{width:100%;margin-left:0;justify-content:flex-start}.ap-field.wide{grid-column:auto}
   .ap-member-head{align-items:flex-start;flex-wrap:wrap}.ap-skill-search{align-items:stretch;flex-direction:column}.ap-skill-search .btn{align-self:flex-start}.ap-disclosure{max-width:100%}
+  .ap-step{padding:13px}.ap-create-actions{justify-content:stretch}.ap-create-actions .btn{flex:1 1 auto;justify-content:center}
 }
 .sc-cron{font-size:11.5px;background:var(--surface-3);border:1px solid var(--border);padding:1px 7px;border-radius:4px;color:var(--muted);}
 .sc-state{margin-left:auto;font-size:11px;font-weight:600;padding:2px 9px;border-radius:999px;}
@@ -2385,7 +2398,7 @@ function renderRail(active){
 var AGENT_PROFILE_STATE={owner:'mine',status:'all',search:'',items:[],selected:null,detail:null,
   loaded:false,loading:false,error:null,forbidden:false,dirty:false,busy:false,notice:null,diagnostics:[],etag:null,
   binding:null,systemBinding:null,rolloutDraft:null,skillRequest:0,skillMemberIndex:null,skillQuery:'',skillResults:[],skillLoading:false,skillError:null,skillProofs:{},
-  pending:null,pollTimer:null};
+  pending:null,completedPending:null,pollTimer:null,createFlow:null};
 
 function agentProfileResetSkillSearch(){
   AGENT_PROFILE_STATE.skillRequest=Number(AGENT_PROFILE_STATE.skillRequest||0)+1;AGENT_PROFILE_STATE.skillMemberIndex=null;
@@ -2399,6 +2412,7 @@ function agentProfileCanWrite(profile,account){
 }
 function agentProfileProblem(status){
   if(status===403)return {kind:'forbidden',title:'没有权限执行此操作'};
+  if(status===409)return {kind:'conflict',title:'Profile slug 已存在'};
   if(status===412)return {kind:'stale',title:'其他人已修改此 Profile'};
   if(status===422)return {kind:'validation',title:'Profile 校验未通过'};
   if(status===428)return {kind:'precondition',title:'缺少并发控制版本'};
@@ -2427,6 +2441,27 @@ function agentProfileEmptyDraft(){
   return agentProfileDraftFromFields({activationMode:'SHADOW',maxPlanSteps:4,handoffTtlSeconds:900,classifierTimeoutMs:600,
     exactSkillFetchTimeoutMs:1500,maxSelectedSkillBytes:24576,sideEffectClass:'READ_ONLY'});
 }
+function agentProfileSlugFromName(value){
+  return String(value||'').normalize('NFKD').toLowerCase().replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').replace(/-+/g,'-');
+}
+function agentProfileStartCreate(){
+  agentProfileResetSkillSearch();AGENT_PROFILE_STATE.createFlow={owner:AGENT_PROFILE_STATE.owner,slug:'',slugTouched:false,draft:agentProfileEmptyDraft(),stage:'editing',catalogOperationId:null,draftOperationId:null};
+  AGENT_PROFILE_STATE.selected=null;AGENT_PROFILE_STATE.detail=null;AGENT_PROFILE_STATE.etag=null;AGENT_PROFILE_STATE.completedPending=null;
+  AGENT_PROFILE_STATE.error=null;AGENT_PROFILE_STATE.notice=null;AGENT_PROFILE_STATE.diagnostics=[];AGENT_PROFILE_STATE.dirty=false;render();
+}
+function agentProfileCancelCreate(){
+  if(!AGENT_PROFILE_STATE.createFlow)return true;
+  if(AGENT_PROFILE_STATE.dirty&&!confirm('有未保存修改，确定取消新建？'))return false;
+  AGENT_PROFILE_STATE.createFlow=null;AGENT_PROFILE_STATE.completedPending=null;AGENT_PROFILE_STATE.dirty=false;agentProfileResetSkillSearch();return true;
+}
+function agentProfileWorkingDraft(){
+  return AGENT_PROFILE_STATE.createFlow?AGENT_PROFILE_STATE.createFlow.draft:(AGENT_PROFILE_STATE.detail&&AGENT_PROFILE_STATE.detail.draft);
+}
+function agentProfileStoreWorkingDraft(draft){
+  if(AGENT_PROFILE_STATE.createFlow)AGENT_PROFILE_STATE.createFlow.draft=draft;
+  else if(AGENT_PROFILE_STATE.detail)AGENT_PROFILE_STATE.detail.draft=draft;
+  return draft;
+}
 function agentProfileRolloutFromBinding(binding){
   return {enabled:!!(binding&&binding.enabled),cohortBasisPoints:Number(binding&&binding.cohortBasisPoints||0)};
 }
@@ -2448,8 +2483,8 @@ function agentProfileApplyExactSkill(draft,detail,memberIndex){
   return draft;
 }
 function agentProfileCaptureDraft(root){
-  if(!root||!AGENT_PROFILE_STATE.detail)return;
-  var fields=agentProfileCollectFields(root);AGENT_PROFILE_STATE.detail.draft=agentProfileDraftFromFields(fields);
+  if(!root||!agentProfileWorkingDraft())return;
+  var fields=agentProfileCollectFields(root);agentProfileStoreWorkingDraft(agentProfileDraftFromFields(fields));
   if(Object.prototype.hasOwnProperty.call(fields,'rolloutEnabled'))AGENT_PROFILE_STATE.rolloutDraft={
     enabled:fields.rolloutEnabled!=='false',cohortBasisPoints:Number(fields.cohortBasisPoints||0)};
 }
@@ -2510,19 +2545,21 @@ async function loadAgentProfiles(){
     await loadAgentProfileBindings();agentProfileApplyBinding(AGENT_PROFILE_STATE.items);
     AGENT_PROFILE_STATE.loaded=true;
     if(AGENT_PROFILE_STATE.selected&&!AGENT_PROFILE_STATE.items.some(function(x){return x.profileSlug===AGENT_PROFILE_STATE.selected;}))AGENT_PROFILE_STATE.selected=null;
-    if(!AGENT_PROFILE_STATE.selected&&AGENT_PROFILE_STATE.items.length)AGENT_PROFILE_STATE.selected=AGENT_PROFILE_STATE.items[0].profileSlug;
+    if(!AGENT_PROFILE_STATE.createFlow&&!AGENT_PROFILE_STATE.selected&&AGENT_PROFILE_STATE.items.length)AGENT_PROFILE_STATE.selected=AGENT_PROFILE_STATE.items[0].profileSlug;
     if(AGENT_PROFILE_STATE.selected)await loadAgentProfileDetail(AGENT_PROFILE_STATE.selected,false);
+    await agentProfileAdvanceCreate();
   }catch(e){AGENT_PROFILE_STATE.loaded=true;AGENT_PROFILE_STATE.forbidden=e&&e.status===403;AGENT_PROFILE_STATE.error=e&&e.problem?e.problem:agentProfileProblem(e&&e.status);}
   AGENT_PROFILE_STATE.loading=false;render();
 }
 async function loadAgentProfileDetail(slug,rerender){
   var item=AGENT_PROFILE_STATE.items.filter(function(x){return x.profileSlug===slug;})[0];if(!item)return;
-  agentProfileResetSkillSearch();AGENT_PROFILE_STATE.selected=slug;AGENT_PROFILE_STATE.diagnostics=[];
+  var createProofs=AGENT_PROFILE_STATE.createFlow?AGENT_PROFILE_STATE.skillProofs:null;
+  agentProfileResetSkillSearch();if(createProofs)AGENT_PROFILE_STATE.skillProofs=createProofs;AGENT_PROFILE_STATE.selected=slug;AGENT_PROFILE_STATE.detail=null;AGENT_PROFILE_STATE.etag=null;AGENT_PROFILE_STATE.diagnostics=[];
   try{
     var result=await agentProfileJson(agentProfileItemEndpoint(item));
     AGENT_PROFILE_STATE.detail=Object.assign({},item,result.body||{});
     AGENT_PROFILE_STATE.etag=result.etag||(result.body&&result.body.etag)||item.etag||null;
-    AGENT_PROFILE_STATE.rolloutDraft=null;AGENT_PROFILE_STATE.dirty=false;
+    AGENT_PROFILE_STATE.rolloutDraft=null;AGENT_PROFILE_STATE.dirty=!!AGENT_PROFILE_STATE.createFlow;
     if(result.body&&result.body.lastMutation)agentProfileReconcilePending(Object.assign({},result.body.lastMutation,{executionAvailable:result.body.executionAvailable===true}));
   }catch(e){AGENT_PROFILE_STATE.error=e&&e.problem?e.problem:agentProfileProblem(e&&e.status);}
   if(rerender!==false)render();
@@ -2561,6 +2598,9 @@ function agentProfileSelect(label,name,value,options,disabled,memberIndex){
 }
 function agentProfileHidden(name,value,memberIndex){
   return '<input type="hidden" data-ap-field="'+name+'" data-ap-member="'+memberIndex+'" value="'+esc(value||'')+'">';
+}
+function agentProfileHiddenValue(name,value){
+  return '<input type="hidden" data-ap-field="'+name+'" value="'+esc(value==null?'':value)+'">';
 }
 function agentProfileToolChipsHtml(names){
   var tools=agentProfileUnionNames([],names||[]);
@@ -2612,7 +2652,7 @@ async function agentProfileSelectSkill(guid,root,memberIndex){
   try{
     var result=await agentProfileJson('/api/workflow/skills/'+encodeURIComponent(guid)+'/exact');
     if(request!==AGENT_PROFILE_STATE.skillRequest)return;
-    var detail=result.body||{};AGENT_PROFILE_STATE.detail.draft=agentProfileApplyExactSkill(AGENT_PROFILE_STATE.detail.draft,detail,memberIndex);
+    var detail=result.body||{};agentProfileStoreWorkingDraft(agentProfileApplyExactSkill(agentProfileWorkingDraft(),detail,memberIndex));
     AGENT_PROFILE_STATE.skillProofs=AGENT_PROFILE_STATE.skillProofs||{};AGENT_PROFILE_STATE.skillProofs[Number(memberIndex)]=detail;AGENT_PROFILE_STATE.skillResults=[];AGENT_PROFILE_STATE.dirty=true;
   }catch(e){if(request!==AGENT_PROFILE_STATE.skillRequest)return;AGENT_PROFILE_STATE.skillError=e&&e.problem?e.problem.title:'无法固定 exact skill';}
   AGENT_PROFILE_STATE.skillLoading=false;render();
@@ -2628,7 +2668,36 @@ function agentProfilePublicSummaryHtml(d){
     '<div class="kv-row"><span class="kk">Published revision</span><span class="vv">r'+esc(d.publishedRevision||0)+'</span></div>'+
     '<div class="kv-row"><span class="kk">可用状态</span><span class="vv sans">'+esc(d.available===false?'暂不可用于新实例':'可用于新实例')+'</span></div></div></section></div>';
 }
+function agentProfileCreateHtml(){
+  var flow=AGENT_PROFILE_STATE.createFlow,draft=flow.draft,rt=draft.runtimeProfile,members=rt.members&&rt.members.length?rt.members:agentProfileEmptyDraft().runtimeProfile.members;
+  var pending=flow.stage!=='editing',actionPending=AGENT_PROFILE_STATE.busy||!!AGENT_PROFILE_STATE.pending,slugOk=/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(flow.slug),owner=flow.owner==='system'?'system/':'mine/';
+  var tools=(rt.maximumToolPolicy&&rt.maximumToolPolicy.toolNames)||[],publishers=agentProfileUnionNames([],members.map(function(member){return member.reviewedPublisherId;}));
+  var notice=AGENT_PROFILE_STATE.notice?'<div class="ap-banner pending" role="status" aria-live="polite">'+esc(AGENT_PROFILE_STATE.notice)+'</div>':'';
+  var error=AGENT_PROFILE_STATE.error?'<div class="ap-banner error" role="alert">'+esc(AGENT_PROFILE_STATE.error.title)+'</div>':'';
+  function phase(label,stage,index){var order={editing:0,catalog:1,draft:2},current=order[flow.stage],cls=current>index?' done':current===index?' on':'';return '<div class="ap-create-phase'+cls+'"><b>'+(index+1)+'</b><span>'+label+'</span></div>';}
+  return '<div class="ap-workspace-inner"><div class="ap-head"><div><div class="ap-title">新建 Agent Profile</div><div class="ap-sub">先组装完整草稿，最后一步才创建资源。</div></div><span class="ap-owner-badge">'+esc(owner)+'</span></div>'+
+    '<div class="ap-create-progress">'+phase('本地编辑','editing',0)+phase('创建资源','catalog',1)+phase('保存草稿','draft',2)+'</div>'+notice+error+
+    '<form data-ap-form data-ap-create-form novalidate><section class="ap-step"><div class="ap-step-head"><span class="ap-step-number">01</span><div><h3>定义职责</h3><p>先说明它是谁、做什么；slug 是稳定地址。</p></div></div><div class="ap-grid">'+
+      agentProfileField('显示名称','displayName',draft.displayName,{required:true,disabled:pending})+agentProfileField('Profile slug','profileSlug',flow.slug,{required:true,disabled:pending,help:'小写字母、数字和单连字符。'})+
+      agentProfileField('用途','purpose',draft.purpose,{disabled:pending})+agentProfileSelect('Activation mode','activationMode',String(rt.activationMode||'SHADOW').replace(/^AGENT_PROFILE_ACTIVATION_MODE_/,''),[{value:'SHADOW',label:'Shadow'},{value:'ENFORCED',label:'Enforced'}],pending)+
+      agentProfileField('Instructions','instructions',draft.instructions,{textarea:true,wide:true,required:true,disabled:pending})+
+      '<div class="ap-slug-error" data-ap-slug-error>'+(flow.slug&&!slugOk?'slug 只能使用小写字母、数字和单连字符':'')+'</div>'+
+      agentProfileHiddenValue('maximumTools',tools.join(', '))+agentProfileHiddenValue('maximumToolSets',((rt.maximumToolPolicy||{}).toolSetRefs||[]).join(', '))+
+      agentProfileHiddenValue('recoveryTools',((rt.recoveryToolPolicy||{}).toolNames||[]).join(', '))+agentProfileHiddenValue('recoveryToolSets',((rt.recoveryToolPolicy||{}).toolSetRefs||[]).join(', '))+
+      agentProfileHiddenValue('maxPlanSteps',rt.maxPlanSteps||4)+agentProfileHiddenValue('handoffTtlSeconds',rt.handoffTtlSeconds||900)+agentProfileHiddenValue('classifierTimeoutMs',rt.classifierTimeoutMs||600)+
+      agentProfileHiddenValue('exactSkillFetchTimeoutMs',rt.exactSkillFetchTimeoutMs||1500)+agentProfileHiddenValue('maxSelectedSkillBytes',rt.maxSelectedSkillBytes||24576)+'</div></section>'+
+    '<section class="ap-step"><div class="ap-step-head"><span class="ap-step-number">02</span><div><h3>选择能力</h3><p>每个 intent 固定一个 exact Ornn skill，并审阅发布方、版本与工具。</p></div></div>'+
+      '<div class="ap-member-head"><span class="ap-help">最多 32 个 member</span>'+(!pending?'<button type="button" class="btn" data-ap-add-member'+(members.length>=32?' disabled':'')+'>添加 member · '+members.length+'/32</button>':'')+'</div>'+
+      members.map(function(member,index){return agentProfileMemberHtml(member,index,members.length,pending);}).join('')+'</section>'+
+    '<section class="ap-step"><div class="ap-step-head"><span class="ap-step-number">03</span><div><h3>检查并创建</h3><p>创建资源和保存草稿是两个可观察步骤；不会自动发布或设为默认。</p></div></div>'+
+      '<div class="ap-review"><div class="ap-review-grid"><div class="ap-review-item"><small>Owner / slug</small>'+esc(owner+(flow.slug||'待填写'))+'</div>'+
+        '<div class="ap-review-item"><small>Activation</small>'+esc(String(rt.activationMode||'SHADOW').replace(/^AGENT_PROFILE_ACTIVATION_MODE_/,''))+'</div>'+
+        '<div class="ap-review-item"><small>Members</small>'+members.length+'</div><div class="ap-review-item"><small>Publishers</small>'+esc(publishers.join(', ')||'待选择')+'</div>'+
+        '<div class="ap-review-item"><small>Maximum tools</small>'+agentProfileToolChipsHtml(tools)+'</div><div class="ap-review-item"><small>下一步</small>创建草稿后继续校验与发布</div></div></div>'+
+      '<div class="ap-create-actions"><button type="button" class="btn" data-ap-create-cancel'+(actionPending?' disabled':'')+'>取消</button><button type="button" class="btn btn-primary" data-ap-create-submit'+(pending||actionPending?' disabled':'')+'>创建草稿</button></div></section></form></div>';
+}
 function agentProfileEditorHtml(){
+  if(AGENT_PROFILE_STATE.createFlow)return agentProfileCreateHtml();
   var d=AGENT_PROFILE_STATE.detail;if(!d)return '<div class="ap-empty">从左侧选择一个 Profile，或创建新 Profile。</div>';
   if(d.ownerKind==='system'&&!agentProfileCanWrite(d,ACCOUNT))return agentProfilePublicSummaryHtml(d);
   var writable=agentProfileCanWrite(d,ACCOUNT),draft=d.draft||d,rt=agentProfileRuntime(d);
@@ -2697,6 +2766,7 @@ function agentProfileTrackAccepted(result,kind){
   var operationId=result&&result.status===202&&result.body&&result.body.operationId;
   if(!operationId)return false;
   if(AGENT_PROFILE_STATE.pollTimer){clearTimeout(AGENT_PROFILE_STATE.pollTimer);AGENT_PROFILE_STATE.pollTimer=null;}
+  AGENT_PROFILE_STATE.completedPending=null;
   AGENT_PROFILE_STATE.pending={operationId:operationId,kind:kind,attempts:0};
   AGENT_PROFILE_STATE.notice='已接受，等待提交/投影';AGENT_PROFILE_STATE.error=null;return true;
 }
@@ -2712,6 +2782,7 @@ function agentProfileReconcilePending(outcome){
   if(!pending||!outcome||outcome.operationId!==pending.operationId||!agentProfileOutcomeIsTerminal(pending,outcome))return false;
   if(AGENT_PROFILE_STATE.pollTimer){clearTimeout(AGENT_PROFILE_STATE.pollTimer);AGENT_PROFILE_STATE.pollTimer=null;}
   var failed=outcome.status==='REJECTED'||outcome.code==='PROFILE_PROVISIONING_FAILED'||outcome.code==='PROFILE_PROVISIONING_TIMED_OUT';
+  AGENT_PROFILE_STATE.completedPending={kind:pending.kind,operationId:pending.operationId,outcome:outcome};
   AGENT_PROFILE_STATE.pending=null;
   if(failed){AGENT_PROFILE_STATE.notice=null;AGENT_PROFILE_STATE.error={kind:'mutation',title:outcome.code||'AGENT_PROFILE_MUTATION_REJECTED'};}
   else{AGENT_PROFILE_STATE.error=null;AGENT_PROFILE_STATE.notice=(outcome.code||'操作完成')+'，完成投影';}
@@ -2727,6 +2798,64 @@ function agentProfileScheduleRefresh(){
     AGENT_PROFILE_STATE.pending.attempts+=1;await loadAgentProfiles();
     if(AGENT_PROFILE_STATE.pending)agentProfileScheduleRefresh();
   },750);
+}
+function agentProfileFindCreateItem(items,flow){
+  var ownerKind=flow.owner==='system'?'system':'scope';
+  return (items||[]).filter(function(item){return item.ownerKind===ownerKind&&item.profileSlug===flow.slug;})[0]||null;
+}
+async function agentProfileSaveCreatedDraft(flow,item){
+  try{
+    var proofs=AGENT_PROFILE_STATE.skillProofs;AGENT_PROFILE_STATE.selected=item.profileSlug;await loadAgentProfileDetail(item.profileSlug,false);AGENT_PROFILE_STATE.skillProofs=proofs;
+    if(!AGENT_PROFILE_STATE.detail||!AGENT_PROFILE_STATE.etag)throw {problem:AGENT_PROFILE_STATE.error||{kind:'unavailable',title:'无法读取 Profile 详情和并发版本'}};
+    agentProfileStoreWorkingDraft(flow.draft);flow.stage='draft';
+    var saved=await agentProfileMutation(agentProfileItemEndpoint(item)+'/draft','PUT',{draft:flow.draft},AGENT_PROFILE_STATE.etag);
+    if(!agentProfileTrackAccepted(saved,'draft'))throw {problem:{kind:'error',title:'保存草稿未返回 operationId'}};
+    flow.draftOperationId=AGENT_PROFILE_STATE.pending.operationId;agentProfileScheduleRefresh();render();return true;
+  }catch(e){
+    AGENT_PROFILE_STATE.createFlow=null;AGENT_PROFILE_STATE.detail=AGENT_PROFILE_STATE.detail||item;AGENT_PROFILE_STATE.detail.draft=flow.draft;
+    AGENT_PROFILE_STATE.dirty=true;AGENT_PROFILE_STATE.error=e&&e.problem?e.problem:agentProfileProblem(e&&e.status);AGENT_PROFILE_STATE.notice=null;render();return false;
+  }
+}
+async function agentProfileReadBackCreate(flow){
+  try{
+    var result=await agentProfileJson(agentProfileCollectionEndpoint()+'?take=100'),items=(result.body&&result.body.items||[]).map(function(item){return agentProfileNormalizeItem(item,flow.owner);});
+    AGENT_PROFILE_STATE.items=items;var item=agentProfileFindCreateItem(items,flow);if(!item)return false;
+    await agentProfileSaveCreatedDraft(flow,item);return true;
+  }catch(_){return false;}
+}
+async function agentProfileSubmitCreate(root){
+  var flow=AGENT_PROFILE_STATE.createFlow;if(!flow||flow.stage!=='editing'||AGENT_PROFILE_STATE.busy||AGENT_PROFILE_STATE.pending)return false;
+  agentProfileCaptureDraft(root);flow=AGENT_PROFILE_STATE.createFlow;flow.slug=String(flow.slug||'').trim();
+  AGENT_PROFILE_STATE.diagnostics=agentProfileLocalDiagnostics(flow.draft);
+  if(!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(flow.slug)){AGENT_PROFILE_STATE.error={kind:'validation',title:'slug 只能使用小写字母、数字和单连字符'};render();return false;}
+  if(AGENT_PROFILE_STATE.diagnostics.length){AGENT_PROFILE_STATE.error={kind:'validation',title:'请先完成必填信息和 exact skill'};render();return false;}
+  AGENT_PROFILE_STATE.busy=true;AGENT_PROFILE_STATE.error=null;
+  try{
+    var created=await agentProfileMutation(agentProfileCollectionEndpoint(),'POST',{profileSlug:flow.slug},null);
+    if(!agentProfileTrackAccepted(created,'catalog'))throw {problem:{kind:'error',title:'创建资源未返回 operationId'}};
+    flow.stage='catalog';flow.catalogOperationId=AGENT_PROFILE_STATE.pending.operationId;AGENT_PROFILE_STATE.notice='创建资源 · 等待投影';agentProfileScheduleRefresh();render();return true;
+  }catch(e){
+    if(e&&e.status>=400&&e.status<500){AGENT_PROFILE_STATE.error=e.problem||agentProfileProblem(e.status);flow.stage='editing';render();return false;}
+    var found=await agentProfileReadBackCreate(flow);if(!found){AGENT_PROFILE_STATE.error=e&&e.problem?e.problem:agentProfileProblem(e&&e.status);flow.stage='editing';render();}return found;
+  }finally{AGENT_PROFILE_STATE.busy=false;render();}
+}
+async function agentProfileAdvanceCreate(){
+  var flow=AGENT_PROFILE_STATE.createFlow,completed=AGENT_PROFILE_STATE.completedPending;if(!flow||!completed)return false;
+  if(flow.stage==='catalog'){
+    if(completed.kind!=='catalog'||completed.operationId!==flow.catalogOperationId)return false;
+    AGENT_PROFILE_STATE.completedPending=null;if(completed.outcome.code!=='PROFILE_ACTIVE'){flow.stage='editing';return true;}
+    var item=agentProfileFindCreateItem(AGENT_PROFILE_STATE.items,flow);if(!item){AGENT_PROFILE_STATE.error={kind:'projection',title:'Profile 已提交但目录项尚未可见'};return false;}
+    return agentProfileSaveCreatedDraft(flow,item);
+  }
+  if(flow.stage==='draft'){
+    if(completed.kind!=='draft'||completed.operationId!==flow.draftOperationId)return false;
+    AGENT_PROFILE_STATE.completedPending=null;if(completed.outcome.status!=='SUCCEEDED'&&completed.outcome.status!=='NO_CHANGE'){
+      AGENT_PROFILE_STATE.createFlow=null;AGENT_PROFILE_STATE.detail=AGENT_PROFILE_STATE.detail||{};AGENT_PROFILE_STATE.detail.draft=flow.draft;AGENT_PROFILE_STATE.dirty=true;return true;
+    }
+    var slug=flow.slug,proofs=AGENT_PROFILE_STATE.skillProofs;AGENT_PROFILE_STATE.createFlow=null;AGENT_PROFILE_STATE.selected=slug;AGENT_PROFILE_STATE.dirty=false;AGENT_PROFILE_STATE.notice='草稿已创建，可继续校验和发布';
+    await loadAgentProfileDetail(slug,false);AGENT_PROFILE_STATE.skillProofs=proofs;return true;
+  }
+  return false;
 }
 async function agentProfileHandleAction(action,root){
   var d=AGENT_PROFILE_STATE.detail;if(!d||AGENT_PROFILE_STATE.busy||AGENT_PROFILE_STATE.pending)return;
@@ -2770,7 +2899,7 @@ function viewAgentProfiles(){
       '<button role="tab" data-ap-owner="mine" class="'+(mine?'on':'')+'">我的 Profile</button><button role="tab" data-ap-owner="system" class="'+(!mine?'on':'')+'">system/</button></div>'+
       '<div class="search" role="search">'+ICON.search+'<input aria-label="搜索 Profile" data-ap-search value="'+esc(AGENT_PROFILE_STATE.search)+'" placeholder="搜索 slug / 名称"></div>'+
       '<select class="std-select" style="width:120px" aria-label="发布状态" data-ap-status><option value="all">全部状态</option><option value="published"'+(AGENT_PROFILE_STATE.status==='published'?' selected':'')+'>已发布</option><option value="draft"'+(AGENT_PROFILE_STATE.status==='draft'?' selected':'')+'>未发布</option></select>'+
-      (canCreate?'<div class="ap-create"><label class="sr-only" for="ap-new-slug">Profile slug</label><input id="ap-new-slug" data-ap-new-slug placeholder="new-profile-slug" pattern="[a-z0-9]+(?:-[a-z0-9]+)*"><button class="btn btn-primary" data-ap-create>新建</button></div>':'')+'</div>'+
+      (canCreate?'<div class="ap-create"><button type="button" class="btn btn-primary" data-ap-start-create>新建 Profile</button></div>':'')+'</div>'+
     '<div class="ap-layout"><aside class="ap-list-pane" aria-label="Profile 列表">'+(AGENT_PROFILE_STATE.loading&&!AGENT_PROFILE_STATE.loaded?'<div class="ap-empty">正在加载 Profile…</div>':
       AGENT_PROFILE_STATE.forbidden?auth403('当前账号不能读取该 Profile 管理面。'):AGENT_PROFILE_STATE.error&&!AGENT_PROFILE_STATE.detail?'<div class="ap-empty">'+esc(AGENT_PROFILE_STATE.error.title)+'</div>':agentProfileListHtml())+'</aside>'+
       '<main class="ap-workspace">'+agentProfileEditorHtml()+'</main></div></div>';
@@ -2779,19 +2908,24 @@ function viewAgentProfiles(){
 function mountAgentProfiles(root){
   if(!AGENT_PROFILE_STATE.loaded&&!AGENT_PROFILE_STATE.loading){loadAgentProfiles();return;}
   root.addEventListener('click',function(ev){
-    var owner=ev.target.closest('[data-ap-owner]');if(owner){if(AGENT_PROFILE_STATE.pending){toast('当前操作仍在等待投影');return;}if(AGENT_PROFILE_STATE.dirty&&!confirm('有未保存修改，确定离开？'))return;agentProfileResetSkillSearch();AGENT_PROFILE_STATE.owner=owner.getAttribute('data-ap-owner');AGENT_PROFILE_STATE.loaded=false;AGENT_PROFILE_STATE.detail=null;AGENT_PROFILE_STATE.selected=null;loadAgentProfiles();return;}
-    var row=ev.target.closest('[data-ap-select]');if(row){if(AGENT_PROFILE_STATE.pending){toast('当前操作仍在等待投影');return;}if(AGENT_PROFILE_STATE.dirty&&!confirm('有未保存修改，确定离开？'))return;AGENT_PROFILE_STATE.error=null;loadAgentProfileDetail(row.getAttribute('data-ap-select'));return;}
-    var create=ev.target.closest('[data-ap-create]');if(create){if(AGENT_PROFILE_STATE.pending){toast('当前操作仍在等待投影');return;}var slug=(root.querySelector('[data-ap-new-slug]')||{}).value||'';slug=slug.trim();if(!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)){toast('slug 只能使用小写字母、数字和单连字符');return;}
-      var path=agentProfileCollectionEndpoint();agentProfileMutation(path,'POST',{profileSlug:slug},null).then(function(result){agentProfileTrackAccepted(result,'catalog');AGENT_PROFILE_STATE.notice='已接受，等待提交/投影';AGENT_PROFILE_STATE.loaded=false;agentProfileScheduleRefresh();render();}).catch(function(e){AGENT_PROFILE_STATE.error=e.problem||agentProfileProblem(e.status);render();});return;}
-    var addMember=ev.target.closest('[data-ap-add-member]');if(addMember){agentProfileCaptureDraft(root);var members=AGENT_PROFILE_STATE.detail.draft.runtimeProfile.members;if(members.length<32)members.push(agentProfileEmptyDraft().runtimeProfile.members[0]);AGENT_PROFILE_STATE.dirty=true;render();return;}
-    var removeMember=ev.target.closest('[data-ap-remove-member]');if(removeMember){agentProfileCaptureDraft(root);var removeIndex=Number(removeMember.getAttribute('data-ap-remove-member')),current=AGENT_PROFILE_STATE.detail.draft.runtimeProfile.members;if(current.length>1)current.splice(removeIndex,1);agentProfileResetSkillSearch();AGENT_PROFILE_STATE.dirty=true;render();return;}
+    var owner=ev.target.closest('[data-ap-owner]');if(owner){if(AGENT_PROFILE_STATE.pending){toast('当前操作仍在等待投影');return;}if(AGENT_PROFILE_STATE.dirty&&!confirm('有未保存修改，确定离开？'))return;agentProfileResetSkillSearch();AGENT_PROFILE_STATE.createFlow=null;AGENT_PROFILE_STATE.owner=owner.getAttribute('data-ap-owner');AGENT_PROFILE_STATE.loaded=false;AGENT_PROFILE_STATE.detail=null;AGENT_PROFILE_STATE.selected=null;loadAgentProfiles();return;}
+    var row=ev.target.closest('[data-ap-select]');if(row){if(AGENT_PROFILE_STATE.pending){toast('当前操作仍在等待投影');return;}if(AGENT_PROFILE_STATE.dirty&&!confirm('有未保存修改，确定离开？'))return;AGENT_PROFILE_STATE.createFlow=null;AGENT_PROFILE_STATE.error=null;loadAgentProfileDetail(row.getAttribute('data-ap-select'));return;}
+    if(ev.target.closest('[data-ap-start-create]')){if(AGENT_PROFILE_STATE.pending){toast('当前操作仍在等待投影');return;}if(AGENT_PROFILE_STATE.dirty&&!confirm('有未保存修改，确定开始新建？'))return;agentProfileStartCreate();return;}
+    if(ev.target.closest('[data-ap-create-cancel]')){if(!agentProfileCancelCreate())return;if(AGENT_PROFILE_STATE.items.length)loadAgentProfileDetail(AGENT_PROFILE_STATE.items[0].profileSlug);else render();return;}
+    if(ev.target.closest('[data-ap-create-submit]')){agentProfileSubmitCreate(root);return;}
+    var addMember=ev.target.closest('[data-ap-add-member]');if(addMember){agentProfileCaptureDraft(root);var draft=agentProfileWorkingDraft(),members=draft.runtimeProfile.members;if(members.length<32)members.push(agentProfileEmptyDraft().runtimeProfile.members[0]);AGENT_PROFILE_STATE.dirty=true;render();return;}
+    var removeMember=ev.target.closest('[data-ap-remove-member]');if(removeMember){agentProfileCaptureDraft(root);var removeIndex=Number(removeMember.getAttribute('data-ap-remove-member')),current=agentProfileWorkingDraft().runtimeProfile.members;if(current.length>1)current.splice(removeIndex,1);agentProfileResetSkillSearch();AGENT_PROFILE_STATE.dirty=true;render();return;}
     var skillSearch=ev.target.closest('[data-ap-skill-search]');if(skillSearch){agentProfileSearchSkills(root,skillSearch.getAttribute('data-ap-skill-search'));return;}
     var skill=ev.target.closest('[data-ap-skill]');if(skill){agentProfileSelectSkill(skill.getAttribute('data-ap-skill'),root,skill.getAttribute('data-ap-member'));return;}
     var action=ev.target.closest('[data-ap-action]');if(action){agentProfileHandleAction(action.getAttribute('data-ap-action'),root);}
   });
   root.addEventListener('input',function(ev){
     if(ev.target.matches('[data-ap-search]')){AGENT_PROFILE_STATE.search=ev.target.value;var pane=root.querySelector('.ap-list-pane');if(pane)pane.innerHTML=agentProfileListHtml();return;}
-    if(ev.target.matches('[data-ap-field]'))AGENT_PROFILE_STATE.dirty=true;
+    if(ev.target.matches('[data-ap-field]')){
+      AGENT_PROFILE_STATE.dirty=true;var flow=AGENT_PROFILE_STATE.createFlow;if(!flow)return;
+      if(ev.target.getAttribute('data-ap-field')==='displayName'&&!flow.slugTouched){flow.slug=agentProfileSlugFromName(ev.target.value);var slugInput=root.querySelector('[data-ap-field="profileSlug"]');if(slugInput)slugInput.value=flow.slug;}
+      if(ev.target.getAttribute('data-ap-field')==='profileSlug'){flow.slug=ev.target.value;flow.slugTouched=true;}
+    }
   });
   root.addEventListener('change',function(ev){if(ev.target.matches('[data-ap-status]')){AGENT_PROFILE_STATE.status=ev.target.value;var pane=root.querySelector('.ap-list-pane');if(pane)pane.innerHTML=agentProfileListHtml();}});
 }

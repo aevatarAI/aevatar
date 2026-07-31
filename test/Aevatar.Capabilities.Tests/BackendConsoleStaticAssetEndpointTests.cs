@@ -107,6 +107,13 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         html.Should().Contain("其他人已修改此 Profile");
         html.Should().Contain("投影暂时不可用");
         html.Should().Contain("window.addEventListener('beforeunload',agentProfileBeforeUnload)");
+        html.Should().Contain("data-ap-start-create");
+        html.Should().Contain("data-ap-create-submit");
+        html.Should().Contain("data-ap-create-cancel");
+        html.Should().Contain("定义职责");
+        html.Should().Contain("选择能力");
+        html.Should().Contain("检查并创建");
+        html.Should().NotContain("data-ap-new-slug");
         html.Should().Contain("@media (max-width:768px)");
         html.Should().NotContain("data-ap-field=\"rawJson\"");
     }
@@ -155,6 +162,8 @@ public sealed class BackendConsoleStaticAssetEndpointTests
               vm.runInContext("agentProfileCanWrite({ownerKind:'scope'},{admin:false})", context),
               true);
             assert.equal(vm.runInContext('agentProfileProblem(412)', context).kind, 'stale');
+            assert.equal(vm.runInContext('agentProfileProblem(409)', context).kind, 'conflict');
+            assert.match(vm.runInContext('agentProfileProblem(409)', context).title, /slug/);
             assert.equal(vm.runInContext('agentProfileProblem(422)', context).kind, 'validation');
             assert.equal(vm.runInContext('agentProfileProblem(503)', context).kind, 'unavailable');
 
@@ -448,6 +457,16 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             assert.doesNotMatch(editor, /id="ap-exactSkillGuid-0" type="text"/);
             assert.match(editor, /id="ap-maxPlanSteps"[^>]*readonly/);
 
+            context.AGENT_PROFILE_STATE.createFlow = {
+              owner:'mine',slug:'research-team',slugTouched:true,draft,stage:'catalog'
+            };
+            context.AGENT_PROFILE_STATE.pending = null;
+            vm.runInContext(
+              `${functionSource('agentProfileCreateHtml', 'agentProfileEditorHtml')}`, context);
+            const timedOutCreate = vm.runInContext('agentProfileCreateHtml()', context);
+            assert.match(timedOutCreate, /data-ap-create-cancel(?! disabled)/);
+            assert.match(timedOutCreate, /data-ap-create-submit disabled/);
+
             const invalid = JSON.parse(JSON.stringify(draft));
             invalid.runtimeProfile.members[1].expectedSkillName = '';
             invalid.runtimeProfile.members[1].reviewedPublisherId = '';
@@ -691,6 +710,459 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             context.outcome = {operationId:'op-binding-alpha',status:'REJECTED',code:'AUTHORITY_VERSION_CONFLICT'};
             assert.equal(vm.runInContext('agentProfileReconcilePending(outcome)', context), true);
             assert.equal(context.AGENT_PROFILE_STATE.error.title, 'AUTHORITY_VERSION_CONFLICT');
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error);
+    }
+
+    [Fact]
+    public async Task AdminShell_AgentProfiles_ShouldStartGuidedCreationLocallyAndSuggestAsciiSlug()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name, nextName) {
+              const starts = [
+                html.indexOf('function ' + name + '('),
+                html.indexOf('async function ' + name + '(')
+              ].filter(index => index !== -1);
+              const start = starts.length ? Math.min(...starts) : -1;
+              const ends = [
+                html.indexOf('\nfunction ' + nextName + '(', start),
+                html.indexOf('\nasync function ' + nextName + '(', start)
+              ].filter(index => index !== -1);
+              const end = ends.length ? Math.min(...ends) : -1;
+              assert.notEqual(start, -1, name + ' must exist in the served admin asset');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return html.slice(start, end);
+            }
+
+            const mutations = [];
+            const context = {
+              AGENT_PROFILE_STATE:{
+                owner:'mine', selected:'existing-profile', detail:{profileSlug:'existing-profile'},
+                createFlow:null, completedPending:null, dirty:false, error:{title:'old'},
+                notice:'old', diagnostics:[{code:'old'}], skillRequest:0
+              },
+              agentProfileMutation() { mutations.push(Array.from(arguments)); },
+              render() {}
+            };
+            vm.createContext(context);
+            vm.runInContext(`
+              ${functionSource('agentProfileResetSkillSearch', 'agentProfileOwnerEndpoint')}
+              ${functionSource('agentProfileDraftFromFields', 'agentProfileEmptyDraft')}
+              ${functionSource('agentProfileEmptyDraft', 'agentProfileSlugFromName')}
+              ${functionSource('agentProfileSlugFromName', 'agentProfileStartCreate')}
+              ${functionSource('agentProfileStartCreate', 'agentProfileCancelCreate')}
+              ${functionSource('agentProfileCancelCreate', 'agentProfileWorkingDraft')}
+            `, context);
+
+            vm.runInContext('agentProfileStartCreate()', context);
+            assert.equal(context.AGENT_PROFILE_STATE.createFlow.stage, 'editing');
+            assert.equal(context.AGENT_PROFILE_STATE.createFlow.owner, 'mine');
+            assert.equal(context.AGENT_PROFILE_STATE.createFlow.draft.runtimeProfile.agentKind, 'nyxid.chat');
+            assert.equal(context.AGENT_PROFILE_STATE.detail, null);
+            assert.equal(context.AGENT_PROFILE_STATE.completedPending, null);
+            assert.equal(mutations.length, 0);
+            assert.equal(
+              vm.runInContext("agentProfileSlugFromName('Aevatar Operator')", context),
+              'aevatar-operator');
+            assert.equal(
+              vm.runInContext("agentProfileSlugFromName('Crème Ops')", context),
+              'creme-ops');
+            assert.equal(vm.runInContext("agentProfileSlugFromName('运维助手')", context), '');
+
+            context.AGENT_PROFILE_STATE.dirty = true;
+            context.confirm = () => false;
+            assert.equal(vm.runInContext('agentProfileCancelCreate()', context), false);
+            assert.notEqual(context.AGENT_PROFILE_STATE.createFlow, null);
+            context.confirm = () => true;
+            assert.equal(vm.runInContext('agentProfileCancelCreate()', context), true);
+            assert.equal(context.AGENT_PROFILE_STATE.createFlow, null);
+            assert.equal(context.AGENT_PROFILE_STATE.dirty, false);
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error);
+    }
+
+    [Fact]
+    public async Task AdminShell_AgentProfiles_ShouldKeepExactProofsDuringCreateReadback()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name, nextName) {
+              const starts = [html.indexOf('function ' + name + '('),
+                html.indexOf('async function ' + name + '(')].filter(index => index !== -1);
+              const start = starts.length ? Math.min(...starts) : -1;
+              const ends = [html.indexOf('\nfunction ' + nextName + '(', start),
+                html.indexOf('\nasync function ' + nextName + '(', start)].filter(index => index !== -1);
+              const end = ends.length ? Math.min(...ends) : -1;
+              assert.notEqual(start, -1, name + ' must exist');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return html.slice(start, end);
+            }
+
+            const context = {
+              AGENT_PROFILE_STATE:{
+                items:[{ownerKind:'scope',profileSlug:'aevatar-operator'}],
+                createFlow:{owner:'mine',slug:'aevatar-operator',stage:'catalog'},
+                skillProofs:{0:{skillHash:'0123456789abcdef'}},skillRequest:0,
+                diagnostics:[],selected:null,detail:null,etag:null,rolloutDraft:null,dirty:true
+              },
+              agentProfileItemEndpoint() { return '/profiles/aevatar-operator'; },
+              async agentProfileJson() {
+                return {etag:'"agent-profile-v3"',body:{ownerKind:'scope',
+                  profileSlug:'aevatar-operator',draft:null}};
+              },
+              agentProfileReconcilePending() {}, render() {}
+            };
+            vm.createContext(context);
+            vm.runInContext(`
+              ${functionSource('agentProfileResetSkillSearch', 'agentProfileOwnerEndpoint')}
+              ${functionSource('loadAgentProfileDetail', 'agentProfileRows')}
+            `, context);
+
+            (async function() {
+              await vm.runInContext("loadAgentProfileDetail('aevatar-operator', false)", context);
+              assert.equal(context.AGENT_PROFILE_STATE.skillProofs[0].skillHash,
+                '0123456789abcdef');
+              assert.equal(context.AGENT_PROFILE_STATE.dirty, true);
+            })().catch(error => { console.error(error); process.exitCode = 1; });
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error);
+    }
+
+    [Fact]
+    public async Task AdminShell_AgentProfiles_ShouldAdvanceGuidedCreationOnlyFromMatchingTerminalOutcomes()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name, nextName) {
+              const starts = [
+                html.indexOf('function ' + name + '('),
+                html.indexOf('async function ' + name + '(')
+              ].filter(index => index !== -1);
+              const start = starts.length ? Math.min(...starts) : -1;
+              const ends = [
+                html.indexOf('\nfunction ' + nextName + '(', start),
+                html.indexOf('\nasync function ' + nextName + '(', start)
+              ].filter(index => index !== -1);
+              const end = ends.length ? Math.min(...ends) : -1;
+              assert.notEqual(start, -1, name + ' must exist in the served admin asset');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return html.slice(start, end);
+            }
+
+            const draft = {
+              displayName:'Aevatar Operator', purpose:'Operate Aevatar',
+              instructions:'Require confirmation',
+              runtimeProfile:{agentKind:'nyxid.chat',activationMode:'ENFORCED',
+                maximumToolPolicy:{toolNames:['aevatar_read'],toolSetRefs:[]},
+                recoveryToolPolicy:{toolNames:[],toolSetRefs:[]},members:[]}
+            };
+            const mutations = [];
+            const context = {
+              AGENT_PROFILE_STATE:{
+                owner:'mine', createFlow:{owner:'mine',slug:'aevatar-operator',slugTouched:true,
+                  draft,stage:'editing',catalogOperationId:null,draftOperationId:null},
+                items:[],selected:null,detail:null,etag:null,pending:null,completedPending:null,
+                pollTimer:null,busy:false,dirty:true,notice:null,error:null,diagnostics:[],skillProofs:{}
+              },
+              scheduled:0, render() {},
+              agentProfileCaptureDraft() {},
+              agentProfileWorkingDraft() { return context.AGENT_PROFILE_STATE.createFlow.draft; },
+              agentProfileStoreWorkingDraft(value) {
+                context.AGENT_PROFILE_STATE.createFlow.draft = value;
+                return value;
+              },
+              agentProfileLocalDiagnostics() { return []; },
+              agentProfileCollectionEndpoint() { return '/api/scopes/scope-alpha/agent-profiles'; },
+              agentProfileItemEndpoint(item) {
+                return '/api/scopes/scope-alpha/agent-profiles/' + item.profileSlug;
+              },
+              agentProfileProblem() { return {kind:'error',title:'Request failed'}; },
+              agentProfileNormalizeItem(item) { return item; },
+              agentProfileJson() { throw new Error('unexpected collection read'); },
+              async agentProfileMutation(path, method, body, etag) {
+                mutations.push({path,method,body,etag});
+                if (method === 'POST') {
+                  return {status:202,body:{operationId:'op-catalog-alpha'}};
+                }
+                return {status:202,body:{operationId:'op-draft-alpha'}};
+              },
+              async loadAgentProfileDetail(slug) {
+                context.AGENT_PROFILE_STATE.selected = slug;
+                context.AGENT_PROFILE_STATE.detail = {
+                  ownerKind:'scope',profileId:'profile-aevatar-operator',profileSlug:slug,draft:null
+                };
+                context.AGENT_PROFILE_STATE.etag = '"agent-profile-v3"';
+              }
+            };
+            vm.createContext(context);
+            vm.runInContext(`
+              ${functionSource('agentProfileTrackAccepted', 'agentProfileOutcomeIsTerminal')}
+              ${functionSource('agentProfileOutcomeIsTerminal', 'agentProfileReconcilePending')}
+              ${functionSource('agentProfileReconcilePending', 'agentProfileScheduleRefresh')}
+              ${functionSource('agentProfileScheduleRefresh', 'agentProfileFindCreateItem')}
+              ${functionSource('agentProfileFindCreateItem', 'agentProfileHandleAction')}
+              agentProfileScheduleRefresh=function(){scheduled+=1;};
+            `, context);
+
+            (async function() {
+              await vm.runInContext('agentProfileSubmitCreate({})', context);
+              assert.equal(mutations.length, 1);
+              assert.equal(mutations[0].method, 'POST');
+              assert.equal(mutations[0].path, '/api/scopes/scope-alpha/agent-profiles');
+              assert.deepEqual(JSON.parse(JSON.stringify(mutations[0].body)),
+                {profileSlug:'aevatar-operator'});
+              assert.equal(context.AGENT_PROFILE_STATE.createFlow.stage, 'catalog');
+              assert.equal(context.AGENT_PROFILE_STATE.pending.operationId, 'op-catalog-alpha');
+              assert.equal(context.AGENT_PROFILE_STATE.pending.kind, 'catalog');
+
+              const pending = context.AGENT_PROFILE_STATE.pending;
+              context.AGENT_PROFILE_STATE.pending = null;
+              assert.equal(await vm.runInContext('agentProfileAdvanceCreate()', context), false);
+              assert.equal(mutations.length, 1, 'missing pending is not completion');
+              context.AGENT_PROFILE_STATE.pending = pending;
+
+              context.outcome = {operationId:'op-catalog-alpha',status:'SUCCEEDED',
+                code:'PROFILE_PROVISIONING_STARTED'};
+              assert.equal(vm.runInContext('agentProfileReconcilePending(outcome)', context), false);
+              assert.equal(await vm.runInContext('agentProfileAdvanceCreate()', context), false);
+
+              context.outcome = {operationId:'op-other',status:'SUCCEEDED',code:'PROFILE_ACTIVE'};
+              assert.equal(vm.runInContext('agentProfileReconcilePending(outcome)', context), false);
+              assert.equal(await vm.runInContext('agentProfileAdvanceCreate()', context), false);
+
+              context.AGENT_PROFILE_STATE.items = [{
+                ownerKind:'scope',profileId:'profile-aevatar-operator',
+                profileSlug:'aevatar-operator',available:true
+              }];
+              context.outcome = {operationId:'op-catalog-alpha',status:'SUCCEEDED',code:'PROFILE_ACTIVE'};
+              assert.equal(vm.runInContext('agentProfileReconcilePending(outcome)', context), true);
+              assert.equal(await vm.runInContext('agentProfileAdvanceCreate()', context), true);
+              assert.equal(mutations.length, 2);
+              assert.equal(mutations[1].method, 'PUT');
+              assert.equal(mutations[1].path,
+                '/api/scopes/scope-alpha/agent-profiles/aevatar-operator/draft');
+              assert.equal(mutations[1].etag, '"agent-profile-v3"');
+              assert.equal(mutations[1].body.draft, draft);
+              assert.equal(context.AGENT_PROFILE_STATE.pending.operationId, 'op-draft-alpha');
+              assert.equal(context.AGENT_PROFILE_STATE.createFlow.stage, 'draft');
+
+              context.outcome = {operationId:'op-other',status:'SUCCEEDED',code:'PROFILE_DRAFT_UPDATED'};
+              assert.equal(vm.runInContext('agentProfileReconcilePending(outcome)', context), false);
+              assert.equal(await vm.runInContext('agentProfileAdvanceCreate()', context), false);
+              assert.notEqual(context.AGENT_PROFILE_STATE.createFlow, null);
+
+              context.outcome = {operationId:'op-draft-alpha',status:'NO_CHANGE',code:'PROFILE_DRAFT_UNCHANGED'};
+              assert.equal(vm.runInContext('agentProfileReconcilePending(outcome)', context), true);
+              assert.equal(await vm.runInContext('agentProfileAdvanceCreate()', context), true);
+              assert.equal(context.AGENT_PROFILE_STATE.createFlow, null);
+              assert.equal(context.AGENT_PROFILE_STATE.selected, 'aevatar-operator');
+              assert.equal(context.AGENT_PROFILE_STATE.dirty, false);
+              assert.match(context.AGENT_PROFILE_STATE.notice, /草稿已创建/);
+              assert.equal(mutations.filter(call => call.method === 'POST').length, 1);
+              assert.equal(mutations.filter(call => call.method === 'PUT').length, 1);
+
+              context.AGENT_PROFILE_STATE.createFlow = {owner:'mine',slug:'failed-profile',
+                slugTouched:true,draft,stage:'catalog',catalogOperationId:'op-catalog-failed',
+                draftOperationId:null};
+              context.AGENT_PROFILE_STATE.pending = {operationId:'op-catalog-failed',
+                kind:'catalog',attempts:1};
+              context.outcome = {operationId:'op-catalog-failed',status:'REJECTED',
+                code:'PROFILE_PROVISIONING_FAILED'};
+              assert.equal(vm.runInContext('agentProfileReconcilePending(outcome)', context), true);
+              assert.equal(await vm.runInContext('agentProfileAdvanceCreate()', context), true);
+              assert.equal(context.AGENT_PROFILE_STATE.createFlow.stage, 'editing');
+              assert.equal(context.AGENT_PROFILE_STATE.error.title, 'PROFILE_PROVISIONING_FAILED');
+
+              context.AGENT_PROFILE_STATE.createFlow = {owner:'mine',slug:'aevatar-operator',
+                slugTouched:true,draft,stage:'draft',catalogOperationId:'op-catalog-alpha',
+                draftOperationId:'op-draft-failed'};
+              context.AGENT_PROFILE_STATE.detail = {ownerKind:'scope',profileId:'profile-aevatar-operator',
+                profileSlug:'aevatar-operator',draft:null};
+              context.AGENT_PROFILE_STATE.pending = {operationId:'op-draft-failed',
+                kind:'draft',attempts:1};
+              context.outcome = {operationId:'op-draft-failed',status:'REJECTED',
+                code:'AUTHORITY_VERSION_CONFLICT'};
+              assert.equal(vm.runInContext('agentProfileReconcilePending(outcome)', context), true);
+              assert.equal(await vm.runInContext('agentProfileAdvanceCreate()', context), true);
+              assert.equal(context.AGENT_PROFILE_STATE.createFlow, null);
+              assert.equal(context.AGENT_PROFILE_STATE.detail.draft, draft);
+              assert.equal(context.AGENT_PROFILE_STATE.dirty, true);
+              assert.equal(context.AGENT_PROFILE_STATE.error.title, 'AUTHORITY_VERSION_CONFLICT');
+            })().catch(error => { console.error(error); process.exitCode = 1; });
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error);
+    }
+
+    [Fact]
+    public async Task AdminShell_AgentProfiles_ShouldReadBackAmbiguousCreateAndPreserveDraftWhenSaveFails()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name, nextName) {
+              const starts = [html.indexOf('function ' + name + '('),
+                html.indexOf('async function ' + name + '(')].filter(index => index !== -1);
+              const start = starts.length ? Math.min(...starts) : -1;
+              const ends = [html.indexOf('\nfunction ' + nextName + '(', start),
+                html.indexOf('\nasync function ' + nextName + '(', start)].filter(index => index !== -1);
+              const end = ends.length ? Math.min(...ends) : -1;
+              assert.notEqual(start, -1, name + ' must exist in the served admin asset');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return html.slice(start, end);
+            }
+
+            const draft = {displayName:'Aevatar Operator',instructions:'Confirm risky work',
+              runtimeProfile:{agentKind:'nyxid.chat',members:[]}};
+            const mutations = [], reads = [], renderedBusy = [];
+            let postFailure = {problem:{title:'Connection lost'}}, detailFailure = false;
+            const context = {
+              AGENT_PROFILE_STATE:{owner:'mine',createFlow:{owner:'mine',slug:'aevatar-operator',
+                slugTouched:true,draft,stage:'editing'},items:[],selected:null,detail:null,etag:null,
+                pending:null,completedPending:null,pollTimer:null,busy:false,dirty:true,notice:null,
+                error:null,diagnostics:[],skillProofs:{0:{skillHash:'abc'}}},
+              render() { renderedBusy.push(context.AGENT_PROFILE_STATE.busy); },
+              agentProfileCaptureDraft() {},
+              agentProfileWorkingDraft() { return context.AGENT_PROFILE_STATE.createFlow.draft; },
+              agentProfileStoreWorkingDraft(value) {
+                context.AGENT_PROFILE_STATE.createFlow.draft = value;
+                return value;
+              },
+              agentProfileLocalDiagnostics() { return []; },
+              agentProfileCollectionEndpoint() { return '/api/scopes/scope-alpha/agent-profiles'; },
+              agentProfileItemEndpoint(item) {
+                return '/api/scopes/scope-alpha/agent-profiles/' + item.profileSlug;
+              },
+              agentProfileProblem(status) { return {kind:'error',title:'HTTP ' + status}; },
+              agentProfileNormalizeItem(item) { return item; },
+              async agentProfileMutation(path, method, body, etag) {
+                mutations.push({path,method,body,etag});
+                if (method === 'POST') throw postFailure;
+                throw {status:412,problem:{kind:'stale',title:'Other writer changed it'}};
+              },
+              async agentProfileJson(path) {
+                reads.push(path);
+                return {body:{items:[{ownerKind:'scope',profileId:'profile-aevatar-operator',
+                  profileSlug:'aevatar-operator',available:true}]}};
+              },
+              async loadAgentProfileDetail(slug) {
+                context.AGENT_PROFILE_STATE.selected = slug;
+                if (detailFailure) {
+                  context.AGENT_PROFILE_STATE.detail = null;
+                  context.AGENT_PROFILE_STATE.etag = null;
+                  context.AGENT_PROFILE_STATE.error = {kind:'unavailable',title:'Detail unavailable'};
+                  return;
+                }
+                context.AGENT_PROFILE_STATE.detail = {ownerKind:'scope',
+                  profileId:'profile-aevatar-operator',profileSlug:slug,draft:null};
+                context.AGENT_PROFILE_STATE.etag = '"agent-profile-v3"';
+              }
+            };
+            vm.createContext(context);
+            vm.runInContext(`
+              ${functionSource('agentProfileTrackAccepted', 'agentProfileOutcomeIsTerminal')}
+              ${functionSource('agentProfileOutcomeIsTerminal', 'agentProfileReconcilePending')}
+              ${functionSource('agentProfileReconcilePending', 'agentProfileScheduleRefresh')}
+              ${functionSource('agentProfileScheduleRefresh', 'agentProfileFindCreateItem')}
+              ${functionSource('agentProfileFindCreateItem', 'agentProfileHandleAction')}
+              agentProfileScheduleRefresh=function(){};
+            `, context);
+
+            (async function() {
+              await vm.runInContext('agentProfileSubmitCreate({})', context);
+              assert.equal(mutations.filter(call => call.method === 'POST').length, 1);
+              assert.equal(mutations.filter(call => call.method === 'PUT').length, 1);
+              assert.equal(reads.length, 1, 'ambiguous POST must be read back once');
+              assert.match(reads[0], /\?take=100$/);
+              assert.equal(context.AGENT_PROFILE_STATE.createFlow, null);
+              assert.equal(context.AGENT_PROFILE_STATE.detail.draft, draft);
+              assert.equal(context.AGENT_PROFILE_STATE.dirty, true);
+              assert.equal(context.AGENT_PROFILE_STATE.error.title, 'Other writer changed it');
+              assert.equal(context.AGENT_PROFILE_STATE.skillProofs[0].skillHash, 'abc');
+
+              postFailure = {status:409,problem:{kind:'conflict',title:'Slug already exists'}};
+              context.AGENT_PROFILE_STATE.createFlow = {owner:'mine',slug:'aevatar-operator',
+                slugTouched:true,draft,stage:'editing'};
+              context.AGENT_PROFILE_STATE.detail = null;
+              context.AGENT_PROFILE_STATE.pending = null;
+              context.AGENT_PROFILE_STATE.busy = false;
+              context.AGENT_PROFILE_STATE.error = null;
+              const readsBefore = reads.length, putsBefore = mutations.filter(call =>
+                call.method === 'PUT').length;
+              assert.equal(await vm.runInContext('agentProfileSubmitCreate({})', context), false);
+              assert.equal(reads.length, readsBefore, 'explicit 4xx must not use ambiguous readback');
+              assert.equal(mutations.filter(call => call.method === 'PUT').length, putsBefore);
+              assert.equal(context.AGENT_PROFILE_STATE.createFlow.stage, 'editing');
+              assert.equal(context.AGENT_PROFILE_STATE.detail, null);
+              assert.equal(context.AGENT_PROFILE_STATE.error.title, 'Slug already exists');
+              assert.equal(renderedBusy[renderedBusy.length - 1], false);
+
+              postFailure = {status:503,problem:{kind:'unavailable',title:'Gateway unavailable'}};
+              context.AGENT_PROFILE_STATE.createFlow = {owner:'mine',slug:'aevatar-operator',
+                slugTouched:true,draft,stage:'editing'};
+              context.AGENT_PROFILE_STATE.pending = null;
+              context.AGENT_PROFILE_STATE.busy = false;
+              const gatewayReads = reads.length, gatewayPuts = mutations.filter(call =>
+                call.method === 'PUT').length;
+              assert.equal(await vm.runInContext('agentProfileSubmitCreate({})', context), true);
+              assert.equal(reads.length, gatewayReads + 1, '5xx may be an ambiguous mutation');
+              assert.equal(mutations.filter(call => call.method === 'PUT').length, gatewayPuts + 1);
+              assert.equal(context.AGENT_PROFILE_STATE.detail.draft, draft);
+
+              detailFailure = true;
+              context.AGENT_PROFILE_STATE.createFlow = {owner:'mine',slug:'aevatar-operator',
+                slugTouched:true,draft,stage:'editing'};
+              context.AGENT_PROFILE_STATE.detail = null;
+              context.AGENT_PROFILE_STATE.etag = null;
+              context.AGENT_PROFILE_STATE.pending = null;
+              context.AGENT_PROFILE_STATE.busy = false;
+              context.AGENT_PROFILE_STATE.error = null;
+              const detailReads = reads.length, detailPuts = mutations.filter(call =>
+                call.method === 'PUT').length;
+              await vm.runInContext('agentProfileSubmitCreate({})', context);
+              assert.equal(reads.length, detailReads + 1);
+              assert.equal(mutations.filter(call => call.method === 'PUT').length, detailPuts,
+                'draft PUT requires a successful detail read and strong ETag');
+              assert.equal(context.AGENT_PROFILE_STATE.createFlow, null);
+              assert.equal(context.AGENT_PROFILE_STATE.detail.draft, draft);
+              assert.equal(context.AGENT_PROFILE_STATE.dirty, true);
+              assert.equal(context.AGENT_PROFILE_STATE.error.title, 'Detail unavailable');
+            })().catch(error => { console.error(error); process.exitCode = 1; });
             """;
 
         var result = await RunNodeAsync(script, html);

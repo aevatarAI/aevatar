@@ -40,7 +40,7 @@
 - Produces: UserExactSkillDetail(string Guid, string Name, string LiteralVersion, string Publisher, string SkillHash, IReadOnlyList<string> DeclaredToolNames).
 - Produces: resolver diagnostic ORNN_SKILL_ACCESS_DENIED for exact Ornn 403; Host maps it back to HTTP 403 without putting HTTP status in the Application contract.
 
-- [ ] **Step 1: Write failing resolver and Host contract tests**
+- [x] **Step 1: Write failing resolver and Host contract tests**
 
 Change the resolver failure theory so exact 403 has a distinct typed meaning:
 
@@ -133,7 +133,7 @@ private sealed class RejectingHandler : HttpMessageHandler
 }
 ~~~
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 ~~~bash
 dotnet test test/Aevatar.AI.ToolProviders.Ornn.Tests/Aevatar.AI.ToolProviders.Ornn.Tests.csproj --nologo --filter FullyQualifiedName~OrnnExactAgentProfileSkillResolverTests
@@ -142,7 +142,7 @@ dotnet test test/Aevatar.Capabilities.Tests/Aevatar.Capabilities.Tests.csproj --
 
 Expected: resolver assertion fails because 403 is still ORNN_DEPENDENCY_UNAVAILABLE; Capabilities compilation fails because the DTO lacks DeclaredToolNames and the query service lacks the resolver constructor parameter.
 
-- [ ] **Step 3: Implement the minimum authoritative mapping**
+- [x] **Step 3: Implement the minimum authoritative mapping**
 
 Map only exact 403 differently in OrnnExactAgentProfileSkillResolver.MapReadFailure:
 
@@ -215,11 +215,11 @@ return new UserExactSkillReadResult(
 
 Do not change WorkflowSkillsEndpoints.GetExactSkill; its existing UpstreamStatus 403 branch remains the HTTP boundary.
 
-- [ ] **Step 4: Run focused tests and verify GREEN**
+- [x] **Step 4: Run focused tests and verify GREEN**
 
 Run both Step 2 commands. Expected: all selected tests pass with zero failures.
 
-- [ ] **Step 5: Commit exact contract**
+- [x] **Step 5: Commit exact contract**
 
 ~~~bash
 git add src/Aevatar.AI.ToolProviders.Ornn/AgentProfiles/OrnnExactAgentProfileSkillResolver.cs src/Aevatar.Mainnet.Host.Api/Skills/UserSkillCatalogModels.cs src/Aevatar.Mainnet.Host.Api/Skills/UserSkillCatalogQueryService.cs test/Aevatar.AI.ToolProviders.Ornn.Tests/OrnnExactAgentProfileSkillResolverTests.cs test/Aevatar.Capabilities.Tests/UserSkillCatalogQueryServiceTests.cs test/Aevatar.Capabilities.Tests/WorkflowSkillsExactDetailEndpointTests.cs
@@ -239,7 +239,7 @@ git commit -m "Expose exact Agent Profile skill tools"
 - Produces: agentProfileUnionNames, agentProfileApplyExactSkill, agentProfileToolChipsHtml, and agentProfileExactEvidenceHtml.
 - Produces: transient AGENT_PROFILE_STATE.skillProofs keyed by member index; it is visual review evidence and is never serialized into a draft.
 
-- [ ] **Step 1: Write failing policy-union and layout tests**
+- [x] **Step 1: Write failing policy-union and layout tests**
 
 Add a Node vm test against a draft containing manual policy entries:
 
@@ -286,7 +286,7 @@ html.Should().NotContain("agentProfileField('Exact skill GUID'");
 
 Update the multi-member test to expect hidden exact fields plus visible evidence instead of editable GUID/version/name/publisher text fields.
 
-- [ ] **Step 2: Run Admin Agent Profile tests and verify RED**
+- [x] **Step 2: Run Admin Agent Profile tests and verify RED**
 
 ~~~bash
 dotnet test test/Aevatar.Capabilities.Tests/Aevatar.Capabilities.Tests.csproj --nologo --filter 'FullyQualifiedName~BackendConsoleStaticAssetEndpointTests.AdminShell_AgentProfiles'
@@ -294,7 +294,7 @@ dotnet test test/Aevatar.Capabilities.Tests/Aevatar.Capabilities.Tests.csproj --
 
 Expected: new functions/evidence/disclosures are absent and declared tools are not added to either policy.
 
-- [ ] **Step 3: Add minimum policy and evidence helpers**
+- [x] **Step 3: Add minimum policy and evidence helpers**
 
 ~~~javascript
 function agentProfileUnionNames(existing,additions){
@@ -332,7 +332,7 @@ function agentProfileHidden(name,value,memberIndex){
 
 agentProfileExactEvidenceHtml shows name, publisher, literal version, GUID, and the first 12 hash characters when a transient proof exists. agentProfileToolChipsHtml renders allowed names with data-ap-tool-chip and an explicit 未声明工具 empty state.
 
-- [ ] **Step 4: Collapse advanced controls with native HTML**
+- [x] **Step 4: Collapse advanced controls with native HTML**
 
 Keep identity, purpose, instructions, activation, skill search, routing, aliases, side-effect class, evidence, and task-tool chips in the primary flow. Wrap manual maximum/recovery policies and fixed runtime parameters in two disclosures:
 
@@ -365,11 +365,11 @@ Keep identity, purpose, instructions, activation, skill search, routing, aliases
 
 Add only scoped .ap-* styles using existing CSS variables. Evidence and chips wrap; summary has visible focus; at 768px disclosure content, member actions, and editor actions fit without horizontal overflow.
 
-- [ ] **Step 5: Run focused tests and verify GREEN**
+- [x] **Step 5: Run focused tests and verify GREEN**
 
 Run Step 2 command. Expected: all Agent Profile static-asset tests pass.
 
-- [ ] **Step 6: Commit editor policy UX**
+- [x] **Step 6: Commit editor policy UX**
 
 ~~~bash
 git add src/Aevatar.Mainnet.Host.Api/BackendConsole/admin.html test/Aevatar.Capabilities.Tests/BackendConsoleStaticAssetEndpointTests.cs
@@ -390,7 +390,7 @@ git commit -m "Improve Agent Profile skill editing"
 - Produces transient createFlow {owner, slug, slugTouched, draft, stage}; stage is editing, catalog, or draft. This browser state is not business authority.
 - Extends pending state with completedPending, a terminal outcome copied by agentProfileReconcilePending and consumed once by agentProfileAdvanceCreate. Absence of pending is not success.
 
-- [ ] **Step 1: Write failing guided-workspace tests**
+- [x] **Step 1: Write failing guided-workspace tests**
 
 Add served-asset assertions:
 
@@ -426,7 +426,7 @@ Add an orchestration test using slug aevatar-operator, profile ID profile-aevata
 5. matching draft SUCCEEDED/NO_CHANGE exits creation and selects the Profile.
 6. draft PUT failure after shell readback retains detail.draft, sets dirty, and never repeats POST.
 
-- [ ] **Step 2: Run Agent Profile tests and verify RED**
+- [x] **Step 2: Run Agent Profile tests and verify RED**
 
 ~~~bash
 dotnet test test/Aevatar.Capabilities.Tests/Aevatar.Capabilities.Tests.csproj --nologo --filter 'FullyQualifiedName~BackendConsoleStaticAssetEndpointTests.AdminShell_AgentProfiles'
@@ -434,7 +434,7 @@ dotnet test test/Aevatar.Capabilities.Tests/Aevatar.Capabilities.Tests.csproj --
 
 Expected: guided controls/functions are absent and the toolbar POSTs from data-ap-new-slug.
 
-- [ ] **Step 3: Add local create state and one-shot terminal evidence**
+- [x] **Step 3: Add local create state and one-shot terminal evidence**
 
 Extend state with createFlow:null and completedPending:null. Implement ASCII slug suggestion:
 
@@ -462,7 +462,7 @@ AGENT_PROFILE_STATE.completedPending={
 
 Then clear pending as today. agentProfileAdvanceCreate consumes completedPending only when kind and operation ID match; null pending or exhausted polling is never success. Name input suggests slug until direct slug editing sets slugTouched.
 
-- [ ] **Step 4: Render the three-section create workspace**
+- [x] **Step 4: Render the three-section create workspace**
 
 Replace toolbar inline creation with:
 
@@ -474,7 +474,7 @@ agentProfileEditorHtml returns agentProfileCreateHtml during creation. Reuse nor
 
 Only render start-create for mine/ or Admin-owned system/. Owner switch/cancel prompt only for dirty local draft and never mutate server.
 
-- [ ] **Step 5: Orchestrate existing create and draft mutations**
+- [x] **Step 5: Orchestrate existing create and draft mutations**
 
 Submit captures draft, validates slug and local diagnostics, then POSTs:
 
@@ -492,15 +492,15 @@ At the end of loadAgentProfiles call await agentProfileAdvanceCreate(). Advance 
 
 After matching draft SUCCEEDED/NO_CHANGE, load detail, clear createFlow/completedPending, retain selected slug, and show 草稿已创建，可继续校验和发布. On draft PUT failure, clear createFlow, retain detail.draft, set dirty, and surface typed error. Do not validate, publish, or bind here.
 
-- [ ] **Step 6: Finish responsive and keyboard behavior**
+- [x] **Step 6: Finish responsive and keyboard behavior**
 
 Add scoped step, badge, review, and wrapping action styles. At 768px stack sections and actions. Use button type=button, label for, native controls, focus-visible, role=alert, and aria-live.
 
-- [ ] **Step 7: Run focused tests and verify GREEN**
+- [x] **Step 7: Run focused tests and verify GREEN**
 
 Run Step 2 command. Expected: all Agent Profile tests pass, including existing multi-member, canonical-route, system-summary, stale-response, and receipt-reconciliation cases.
 
-- [ ] **Step 8: Run modified-test guard**
+- [x] **Step 8: Run modified-test guard**
 
 ~~~bash
 bash tools/ci/test_stability_guards.sh
