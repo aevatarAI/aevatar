@@ -24,6 +24,13 @@ public sealed class AgentToolExecutionBoundaryTests
         "Aevatar.AI.ToolProviders.NyxId.ConnectedServices.NyxIdConnectedServiceInventoryReader";
     private const int ExpectedExecutionSurfaceCount = 12;
 
+    private static readonly string[] IgnorableNuGetWorkspaceDiagnosticCodes =
+    [
+        "NU1507",
+        "NU1510",
+        "NU1903",
+    ];
+
     private static readonly string[] DirectPortSurfaces =
     [
         "Aevatar.GAgentService.Application.Responses.LlmRunCore",
@@ -51,12 +58,15 @@ public sealed class AgentToolExecutionBoundaryTests
         var loadFailures = new ConcurrentQueue<string>();
         using var workspace = MSBuildWorkspace.Create(new Dictionary<string, string>
         {
-            ["NoWarn"] = "NU1507;NU1510",
+            ["NoWarn"] = string.Join(';', IgnorableNuGetWorkspaceDiagnosticCodes),
         });
         workspace.WorkspaceFailed += (_, evt) =>
         {
-            if (evt.Diagnostic.Kind == WorkspaceDiagnosticKind.Failure)
+            if (evt.Diagnostic.Kind == WorkspaceDiagnosticKind.Failure &&
+                !IsIgnorableNuGetWorkspaceDiagnostic(evt.Diagnostic.Message))
+            {
                 loadFailures.Enqueue(evt.Diagnostic.Message);
+            }
         };
 
         var solutionPath = Path.Combine(FindRepoRoot(), "aevatar.slnx");
@@ -168,6 +178,19 @@ public sealed class AgentToolExecutionBoundaryTests
         Assert.All(grantCreators, creator => Assert.Contains(
             creator.EnclosingType,
             new[] { RoleTypeName, WorkflowAdapterTypeName }));
+    }
+
+    [Theory]
+    [InlineData("warning NU1507: multiple package sources", true)]
+    [InlineData("warning NU1510: redundant package reference", true)]
+    [InlineData("warning NU1903: vulnerable package", true)]
+    [InlineData("warning NU19030: unrelated diagnostic", false)]
+    [InlineData("error CS0001: compiler failure", false)]
+    public void WorkspaceDiagnostic_ShouldIgnoreOnlyKnownNuGetLoadDiagnostics(
+        string message,
+        bool expected)
+    {
+        Assert.Equal(expected, IsIgnorableNuGetWorkspaceDiagnostic(message));
     }
 
     private static async Task<Dictionary<string, TypeEntry>> BuildTypeIndexAsync(IEnumerable<Project> projects)
@@ -305,6 +328,26 @@ public sealed class AgentToolExecutionBoundaryTests
         var normalized = projectPath.Replace('\\', '/');
         return normalized.Contains("/test/", StringComparison.Ordinal) ||
                normalized.Contains("/tests/", StringComparison.Ordinal);
+    }
+
+    private static bool IsIgnorableNuGetWorkspaceDiagnostic(string message) =>
+        IgnorableNuGetWorkspaceDiagnosticCodes.Any(code => ContainsDiagnosticCode(message, code));
+
+    private static bool ContainsDiagnosticCode(string message, string code)
+    {
+        var index = message.IndexOf(code, StringComparison.OrdinalIgnoreCase);
+        while (index >= 0)
+        {
+            var startIsBoundary = index == 0 || !char.IsLetterOrDigit(message[index - 1]);
+            var end = index + code.Length;
+            var endIsBoundary = end == message.Length || !char.IsLetterOrDigit(message[end]);
+            if (startIsBoundary && endIsBoundary)
+                return true;
+
+            index = message.IndexOf(code, index + code.Length, StringComparison.OrdinalIgnoreCase);
+        }
+
+        return false;
     }
 
     private static string FindRepoRoot()

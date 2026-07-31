@@ -1400,17 +1400,23 @@ public sealed partial class RoleGAgentStateCoverageTests
         mutate(authority);
         return authority;
     }
-    private static ServiceProvider BuildServiceProvider(IAuditTrailAppender? auditTrailAppender = null)
+    private static ServiceProvider BuildServiceProvider(
+        IAuditTrailAppender? auditTrailAppender = null,
+        IEventStore? eventStore = null,
+        IAgentToolExecutionPort? executionPort = null)
     {
-        return new ServiceCollection()
-            .AddSingleton<IEventStore, InMemoryEventStoreForTests>()
+        var services = new ServiceCollection()
+            .AddSingleton<IEventStore>(eventStore ?? new InMemoryEventStoreForTests())
             .AddSingleton<EventSourcingRuntimeOptions>()
             .AddSingleton<IActorRuntimeCallbackScheduler, RecordingRuntimeCallbackScheduler>()
             .AddSingleton<IAuditTrailAppender>(auditTrailAppender ?? new AppendedAuditTrail())
             .AddSingleton<IAuditActorIdentityHasher, StableIdentityHasher>()
-            .AddSingleton<IAgentToolExecutionPort, AdmittedAgentToolExecutor>()
-            .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
-            .BuildServiceProvider();
+            .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
+        if (executionPort is null)
+            services.AddSingleton<IAgentToolExecutionPort, AdmittedAgentToolExecutor>();
+        else
+            services.AddSingleton(executionPort);
+        return services.BuildServiceProvider();
     }
     private static RoleGAgent CreateRoleAgent(
         IServiceProvider provider,

@@ -239,11 +239,6 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                                 pending.ToolCallId,
                                 AgentToolArgumentsDigest.ComputeSha256(pending.ArgumentsJson))),
                         CancellationToken.None);
-                    if (toolOutcome.TerminalInvoked || !toolOutcome.Retryable)
-                    {
-                        await PersistDomainEventAsync(new ClearPendingApprovalEvent
-                            { RequestId = pending.RequestId });
-                    }
                     if (toolOutcome.Kind is not (AgentToolExecutionOutcomeKind.Executed or
                         AgentToolExecutionOutcomeKind.ExecutedAuditIncomplete))
                     {
@@ -309,6 +304,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
 
                 throw; // Re-throw so the SSE endpoint sees the error
             }
+
+            await PersistDomainEventAsync(new ClearPendingApprovalEvent
+                { RequestId = pending.RequestId });
         }
         else
         {

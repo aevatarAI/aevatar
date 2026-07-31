@@ -344,7 +344,11 @@ internal static class NyxIdApprovalResponseMapper
     private static string? MapList(JsonElement root)
     {
         var response = JsonSerializer.Deserialize<NyxIdApprovalRequestsView>(root.GetRawText());
-        return response?.Requests is null
+        return response?.Requests is null ||
+               !response.Total.HasValue ||
+               !response.Page.HasValue ||
+               !response.PerPage.HasValue ||
+               response.Requests.Any(static request => request?.IsValid != true)
             ? null
             : JsonSerializer.Serialize(response, SafeResultJsonOptions);
     }
@@ -352,7 +356,7 @@ internal static class NyxIdApprovalResponseMapper
     private static string? MapShow(JsonElement root)
     {
         var approval = JsonSerializer.Deserialize<NyxIdApprovalRequestView>(root.GetRawText());
-        return string.IsNullOrWhiteSpace(approval?.Id)
+        return approval?.IsValid != true
             ? null
             : JsonSerializer.Serialize(approval, SafeResultJsonOptions);
     }
@@ -361,16 +365,16 @@ internal static class NyxIdApprovalResponseMapper
 internal sealed class NyxIdApprovalRequestsView
 {
     [JsonPropertyName("requests")]
-    public List<NyxIdApprovalRequestView>? Requests { get; init; }
+    public List<NyxIdApprovalRequestView?>? Requests { get; init; }
 
     [JsonPropertyName("total")]
-    public ulong Total { get; init; }
+    public ulong? Total { get; init; }
 
     [JsonPropertyName("page")]
-    public ulong Page { get; init; }
+    public ulong? Page { get; init; }
 
     [JsonPropertyName("per_page")]
-    public ulong PerPage { get; init; }
+    public ulong? PerPage { get; init; }
 }
 
 internal sealed class NyxIdApprovalRequestView
@@ -406,8 +410,18 @@ internal sealed class NyxIdApprovalRequestView
     public string? DecidedAt { get; init; }
 
     [JsonPropertyName("from_org_policy")]
-    public bool FromOrgPolicy { get; init; }
+    public bool? FromOrgPolicy { get; init; }
 
     [JsonPropertyName("org_name")]
     public string? OrgName { get; init; }
+
+    [JsonIgnore]
+    public bool IsValid =>
+        !string.IsNullOrWhiteSpace(Id) &&
+        !string.IsNullOrWhiteSpace(ServiceName) &&
+        !string.IsNullOrWhiteSpace(ServiceSlug) &&
+        !string.IsNullOrWhiteSpace(ApprovalMode) &&
+        !string.IsNullOrWhiteSpace(Status) &&
+        !string.IsNullOrWhiteSpace(CreatedAt) &&
+        FromOrgPolicy.HasValue;
 }
