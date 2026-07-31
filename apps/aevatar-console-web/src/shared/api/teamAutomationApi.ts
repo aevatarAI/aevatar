@@ -44,9 +44,11 @@ type TeamAutomationGrantBase = {
 
 export type TeamAutomationNodeRole = "primary" | "fallback";
 
+export type TeamAutomationGrantRequirement = "required" | "not_required";
+
 export type TeamAutomationServiceGrant = TeamAutomationGrantBase & {
   readonly kind: "service";
-  readonly nodeGrantRequirement: "required" | "not_required";
+  readonly nodeGrantRequirement: TeamAutomationGrantRequirement;
   readonly nodeIds: readonly string[];
   readonly serviceSlug: string | null;
 };
@@ -81,6 +83,8 @@ export type TeamAutomationCredentialPlan = {
   readonly allowAllServices: false;
   readonly allowAllNodes: false;
   readonly expiresAt: string;
+  readonly serviceGrantRequirement: TeamAutomationGrantRequirement;
+  readonly nodeGrantRequirement: TeamAutomationGrantRequirement;
 };
 
 export type TeamAutomationPermissionReview = {
@@ -90,13 +94,15 @@ export type TeamAutomationPermissionReview = {
   readonly credentialPlan: TeamAutomationCredentialPlan;
   readonly serviceGrants: readonly TeamAutomationServiceGrant[];
   readonly nodeGrants: readonly TeamAutomationNodeGrant[];
-  readonly ownerLLMSelection: {
-    readonly model: string;
-    readonly nyxIdUserServiceId: string;
-    readonly routeKind: "gateway" | "nyx_id_user_service";
-    readonly routeValue: string;
-    readonly serviceSlugSnapshot: string;
-  };
+  readonly ownerLLMSelection:
+    | {
+        readonly model: string;
+        readonly nyxIdUserServiceId: string;
+        readonly routeKind: "gateway" | "nyx_id_user_service";
+        readonly routeValue: string;
+        readonly serviceSlugSnapshot: string;
+      }
+    | null;
   readonly disclosures: readonly TeamAutomationDisclosure[];
   readonly warning?: string;
 };
@@ -380,23 +386,23 @@ function normalizeDisclosure(value: unknown): TeamAutomationDisclosure {
   }
 }
 
-function normalizeNodeGrantRequirement(
+function normalizeGrantRequirement(
   value: unknown,
-): TeamAutomationServiceGrant["nodeGrantRequirement"] {
-  const normalized = String(value ?? "").trim().toLowerCase();
+  label: string,
+): TeamAutomationGrantRequirement {
   if (
-    normalized === "1" ||
-    normalized === "authorization_grant_requirement_required"
+    value === 1 ||
+    value === "AUTHORIZATION_GRANT_REQUIREMENT_REQUIRED"
   ) {
     return "required";
   }
   if (
-    normalized === "2" ||
-    normalized === "authorization_grant_requirement_not_required"
+    value === 2 ||
+    value === "AUTHORIZATION_GRANT_REQUIREMENT_NOT_REQUIRED"
   ) {
     return "not_required";
   }
-  throw new Error(`Unknown NyxID node grant requirement: ${String(value)}.`);
+  throw new Error(`Unknown ${label} grant requirement: ${String(value)}.`);
 }
 
 function normalizeOwnerLLMRouteKind(value: unknown): "gateway" | "nyx_id_user_service" {
@@ -517,16 +523,12 @@ function decodePermissionReview(
           allowAllServices: false,
           allowAllNodes: false,
           expiresAt: "",
+          serviceGrantRequirement: "not_required",
+          nodeGrantRequirement: "not_required",
         },
         serviceGrants: [],
         nodeGrants: [],
-        ownerLLMSelection: {
-          model: "",
-          nyxIdUserServiceId: "",
-          routeKind: "gateway",
-          routeValue: "",
-          serviceSlugSnapshot: "",
-        },
+        ownerLLMSelection: null,
         disclosures: [],
         warning: detail || failureCode,
       };
@@ -568,6 +570,22 @@ function decodePermissionReview(
     field(plan, "credentialPolicy", "CredentialPolicy"),
     `${label}.plan.credentialPolicy`,
   );
+  const serviceGrantRequirement = normalizeGrantRequirement(
+    field(
+      credentialPolicy,
+      "serviceGrantRequirement",
+      "ServiceGrantRequirement",
+    ),
+    "Team automation service",
+  );
+  const nodeGrantRequirement = normalizeGrantRequirement(
+    field(
+      credentialPolicy,
+      "nodeGrantRequirement",
+      "NodeGrantRequirement",
+    ),
+    "Team automation node",
+  );
   const serviceGrants = readOptionalArray(
     plan,
     ["nyxIdServiceGrants", "NyxIdServiceGrants"],
@@ -580,8 +598,9 @@ function decodePermissionReview(
         `${grantLabel}.userServiceId`,
       );
       const serviceSlug = optionalString(grant, ["serviceSlug", "ServiceSlug"]);
-      const nodeGrantRequirement = normalizeNodeGrantRequirement(
+      const nodeGrantRequirement = normalizeGrantRequirement(
         field(grant, "nodeGrantRequirement", "NodeGrantRequirement"),
+        "NyxID node",
       );
       const nodeIds = readOptionalArray(
         grant,
@@ -615,18 +634,63 @@ function decodePermissionReview(
       userServiceId: grant.targetId,
     })),
   );
-  const ownerLLM = expectRecord(
-    field(plan, "ownerLlmSelection", "OwnerLlmSelection", "ownerLLMSelection", "OwnerLLMSelection"),
-    `${label}.plan.ownerLlmSelection`,
+  if (
+    (serviceGrantRequirement === "required") !== (serviceGrants.length > 0)
+  ) {
+    throw new Error(
+      "Team Automation authorization service grant requirement does not match exact service grants.",
+    );
+  }
+  if (
+    (nodeGrantRequirement === "required") !==
+      serviceGrants.some(
+        (grant) => grant.nodeGrantRequirement === "required",
+      )
+  ) {
+    throw new Error(
+      "Team Automation authorization node grant requirement does not match exact service grants.",
+    );
+  }
+  const ownerLLMValue = field(
+    plan,
+    "ownerLlmSelection",
+    "OwnerLlmSelection",
+    "ownerLLMSelection",
+    "OwnerLLMSelection",
   );
-  const ownerLLMSelection = {
-    routeKind: normalizeOwnerLLMRouteKind(field(ownerLLM, "routeKind", "RouteKind")),
-    routeValue: requiredString(ownerLLM, ["routeValue", "RouteValue"], `${label}.plan.ownerLlmSelection.routeValue`),
-    nyxIdUserServiceId: optionalString(ownerLLM, ["nyxIdUserServiceId", "NyxIdUserServiceId"]),
-    serviceSlugSnapshot: optionalString(ownerLLM, ["serviceSlugSnapshot", "ServiceSlugSnapshot"]),
-    model: requiredString(ownerLLM, ["model", "Model"], `${label}.plan.ownerLlmSelection.model`),
-  };
-  if (ownerLLMSelection.routeKind === "nyx_id_user_service") {
+  const ownerLLMSelection: TeamAutomationPermissionReview["ownerLLMSelection"] =
+    ownerLLMValue === undefined || ownerLLMValue === null
+      ? null
+      : (() => {
+          const ownerLLM = expectRecord(
+            ownerLLMValue,
+            `${label}.plan.ownerLlmSelection`,
+          );
+          return {
+            routeKind: normalizeOwnerLLMRouteKind(
+              field(ownerLLM, "routeKind", "RouteKind"),
+            ),
+            routeValue: requiredString(
+              ownerLLM,
+              ["routeValue", "RouteValue"],
+              `${label}.plan.ownerLlmSelection.routeValue`,
+            ),
+            nyxIdUserServiceId: optionalString(
+              ownerLLM,
+              ["nyxIdUserServiceId", "NyxIdUserServiceId"],
+            ),
+            serviceSlugSnapshot: optionalString(
+              ownerLLM,
+              ["serviceSlugSnapshot", "ServiceSlugSnapshot"],
+            ),
+            model: requiredString(
+              ownerLLM,
+              ["model", "Model"],
+              `${label}.plan.ownerLlmSelection.model`,
+            ),
+          };
+        })();
+  if (ownerLLMSelection?.routeKind === "nyx_id_user_service") {
     const matchingGrant = serviceGrants.find(
       (grant) => grant.targetId === ownerLLMSelection.nyxIdUserServiceId,
     );
@@ -702,6 +766,8 @@ function decodePermissionReview(
         field(credentialPolicy, "expiresAt", "ExpiresAt"),
         `${label}.plan.credentialPolicy.expiresAt`,
       ),
+      serviceGrantRequirement,
+      nodeGrantRequirement,
     },
     serviceGrants,
     nodeGrants,
