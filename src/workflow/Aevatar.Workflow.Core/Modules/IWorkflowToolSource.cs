@@ -108,7 +108,8 @@ public sealed record WorkflowToolExecutionRequest
         IReadOnlyList<WorkflowFileRef>? InputFileRefs = null,
         string IdempotencyKey = "",
         string ScheduleId = "",
-        WorkflowCapabilityInvocationAdmission? InvocationAdmission = null)
+        WorkflowCapabilityInvocationAdmission? InvocationAdmission = null,
+        WorkflowLlmControlContext? LlmControl = null)
     {
         this.ArgumentsJson = ArgumentsJson;
         this.RunId = RunId;
@@ -123,6 +124,7 @@ public sealed record WorkflowToolExecutionRequest
         this.IdempotencyKey = IdempotencyKey ?? string.Empty;
         this.ScheduleId = ScheduleId ?? string.Empty;
         this.InvocationAdmission = InvocationAdmission?.Clone();
+        this.LlmControl = LlmControl?.Clone();
     }
 
     public string ArgumentsJson { get; init; }
@@ -154,6 +156,8 @@ public sealed record WorkflowToolExecutionRequest
     /// Null when the compiled step is not an admitted external tool invocation.
     /// </summary>
     public WorkflowCapabilityInvocationAdmission? InvocationAdmission { get; init; }
+
+    public WorkflowLlmControlContext? LlmControl { get; init; }
 
     private static IReadOnlyList<WorkflowFileRef> CopyInputFileRefs(
         IReadOnlyList<WorkflowFileRef>? inputFileRefs) =>

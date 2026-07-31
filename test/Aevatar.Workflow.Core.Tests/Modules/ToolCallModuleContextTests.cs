@@ -293,6 +293,14 @@ public sealed class ToolCallModuleContextTests
             RootRunId = "root-run",
             Depth = 2,
         };
+        ctx.ExecutionContextState.Llm = new WorkflowLlmExecutionContextState
+        {
+            ModelOverride = " model-alpha ",
+            RoutePreference = " route-alpha ",
+            UserMemoryPrompt = " remember-alpha ",
+            MaxToolRoundsOverride = 4,
+        };
+        ctx.RuntimeContext.ApplySenderNyxIdAccessToken(" sender-alpha ");
         ctx.RuntimeContext.ApplyRequestMetadata(new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["connector.http.authorization"] = "Bearer metadata-token",
@@ -321,6 +329,12 @@ public sealed class ToolCallModuleContextTests
         tool.LastRequest.RuntimeContext.ParentStepId.Should().Be("call_proxy");
         tool.LastRequest.RuntimeContext.RootRunId.Should().Be("root-run");
         tool.LastRequest.RuntimeContext.Depth.Should().Be(2);
+        tool.LastRequest.LlmControl.Should().NotBeNull();
+        tool.LastRequest.LlmControl!.ModelOverride.Should().Be("model-alpha");
+        tool.LastRequest.LlmControl.RoutePreference.Should().Be("route-alpha");
+        tool.LastRequest.LlmControl.UserMemoryPrompt.Should().Be("remember-alpha");
+        tool.LastRequest.LlmControl.MaxToolRoundsOverride.Should().Be(4);
+        tool.LastRequest.LlmControl.SenderNyxIdAccessToken.Should().Be("sender-alpha");
         LastCompleted(ctx).Success.Should().BeTrue();
     }
 

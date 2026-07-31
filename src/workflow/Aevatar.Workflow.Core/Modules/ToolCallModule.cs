@@ -192,8 +192,30 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
                 InputFileRefs: request.InputFileRefs,
                 IdempotencyKey: request.IdempotencyKey ?? string.Empty,
                 ScheduleId: ctx.ScheduleId ?? string.Empty,
-                InvocationAdmission: admission),
+                InvocationAdmission: admission,
+                LlmControl: GetLlmControl(ctx)),
             ct);
+    }
+
+    private static WorkflowLlmControlContext? GetLlmControl(IWorkflowExecutionContext ctx)
+    {
+        var hasLlm = WorkflowRunExecutionContextStateAccess.TryGetLlm(ctx, out var llm);
+        var senderToken = ctx is IWorkflowExecutionRuntimeContextAccessor runtimeAccessor
+            ? Normalize(runtimeAccessor.RuntimeContext.SenderNyxIdAccessToken)
+            : null;
+        if (!hasLlm && senderToken is null)
+            return null;
+
+        var control = new WorkflowLlmControlContext
+        {
+            ModelOverride = hasLlm ? Normalize(llm.ModelOverride) ?? string.Empty : string.Empty,
+            RoutePreference = hasLlm ? Normalize(llm.RoutePreference) ?? string.Empty : string.Empty,
+            UserMemoryPrompt = hasLlm ? Normalize(llm.UserMemoryPrompt) ?? string.Empty : string.Empty,
+            SenderNyxIdAccessToken = senderToken ?? string.Empty,
+        };
+        if (hasLlm && llm.HasMaxToolRoundsOverride)
+            control.MaxToolRoundsOverride = llm.MaxToolRoundsOverride;
+        return control;
     }
 
     private async Task HandleResumeAsync(
