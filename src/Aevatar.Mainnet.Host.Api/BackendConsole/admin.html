@@ -879,12 +879,14 @@ button{font-family:inherit;cursor:pointer;}
 .ap-skill-badges{display:flex;align-items:center;justify-content:flex-end;gap:6px;flex-wrap:wrap}.ap-skill-badge{display:inline-flex;align-items:center;min-height:22px;padding:2px 7px;border-radius:999px;border:1px solid var(--border);background:var(--surface-3);font-size:10.5px;font-weight:600;color:var(--muted);white-space:nowrap}.ap-skill-badge.exact{border-color:var(--success-bd);background:var(--success-bg);color:var(--success)}.ap-skill-badge.issue{border-color:var(--failed-bd);background:var(--failed-bg);color:var(--failed)}
 .ap-skill-caret{width:18px;color:var(--faint);font-size:12px;transition:transform .16s ease}.ap-skill-card[open] .ap-skill-caret{transform:rotate(90deg);}
 .ap-skill-body{padding:15px;border-top:1px solid var(--border);background:var(--surface-2);}.ap-skill-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:12px 0 0}.ap-skill-danger{display:flex;justify-content:flex-end;margin-top:12px;padding-top:12px;border-top:1px dashed var(--border);}
-.ap-skill-search{display:flex;align-items:end;gap:8px;grid-column:1/-1;}
-.ap-skill-search .ap-field{flex:1 1 auto;}
-.ap-skill-results{grid-column:1/-1;border:1px solid var(--border);border-radius:6px;overflow:hidden;background:var(--surface);}
-.ap-skill-result{width:100%;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 10px;border:0;border-bottom:1px solid var(--border);background:transparent;text-align:left;}
-.ap-skill-result:last-child{border-bottom:0;}.ap-skill-result:hover{background:var(--surface-3);}
-.ap-skill-result span{min-width:0;overflow-wrap:anywhere;}.ap-skill-result small{color:var(--faint);}
+.ap-skill-modal-back{position:fixed;inset:0;z-index:78;background:rgba(17,24,39,.42);backdrop-filter:blur(2px);}
+.ap-skill-modal{position:fixed;z-index:79;left:50%;top:50%;transform:translate(-50%,-50%);width:min(820px,calc(100vw - 40px));max-height:min(760px,calc(100vh - 48px));display:flex;flex-direction:column;border:1px solid var(--border);border-radius:14px;background:var(--surface);box-shadow:0 24px 60px rgba(17,24,39,.24);overflow:hidden;}
+.ap-skill-modal-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:18px 20px 14px;border-bottom:1px solid var(--border);}.ap-skill-modal-title{font-size:16px;font-weight:650;color:var(--heading)}.ap-skill-modal-sub{margin-top:3px;font-size:11.5px;color:var(--faint)}.ap-skill-modal-close{width:30px;height:30px;display:grid;place-items:center;border:1px solid var(--border);border-radius:7px;background:var(--surface);color:var(--muted);font-size:18px;line-height:1}.ap-skill-modal-close:hover{background:var(--surface-3);color:var(--heading)}
+.ap-skill-modal-search{display:flex;gap:8px;padding:14px 20px;border-bottom:1px solid var(--border);background:var(--surface-2)}.ap-skill-modal-search .search{flex:1 1 auto;width:auto;height:36px}.ap-skill-modal-search .search input{width:100%}
+.ap-skill-modal-body{min-height:280px;overflow:auto;padding:12px 20px 18px}.ap-skill-result-list{display:flex;flex-direction:column;gap:8px}.ap-skill-option{position:relative;display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:12px;align-items:flex-start;padding:12px 13px;border:1px solid var(--border);border-radius:9px;background:var(--surface);cursor:pointer}.ap-skill-option:hover{border-color:#b8c7dd;background:var(--surface-2)}.ap-skill-option.selected{border-color:var(--primary);box-shadow:0 0 0 2px var(--primary-weak)}.ap-skill-option.disabled{cursor:not-allowed;opacity:.62;background:var(--surface-3)}.ap-skill-option input{margin-top:3px;accent-color:var(--primary)}
+.ap-skill-result-main{display:flex;flex-direction:column;gap:5px;min-width:0}.ap-skill-result-name{font-size:13.5px;font-weight:650;color:var(--heading);overflow-wrap:anywhere}.ap-skill-result-description{font-size:12px;line-height:1.5;color:var(--muted);overflow-wrap:anywhere}.ap-skill-result-facts{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.ap-skill-result-fact{display:inline-flex;align-items:center;min-height:20px;padding:1px 6px;border-radius:999px;background:var(--surface-3);border:1px solid var(--border);font-size:10.5px;color:var(--muted)}.ap-skill-result-guid{font:10.5px var(--mono);color:var(--faint);white-space:nowrap}.ap-skill-result-error{grid-column:2/-1;padding:7px 9px;border-radius:6px;background:var(--failed-bg);color:var(--failed);font-size:11.5px}
+.ap-skill-modal-empty{min-height:250px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;text-align:center;color:var(--faint);font-size:12px}.ap-skill-modal-empty b{color:var(--heading);font-size:13.5px}.ap-skill-modal-progress{display:flex;align-items:center;gap:8px;padding:9px 12px;border-radius:7px;background:var(--waiting-bg);color:#8a5309;font-size:12px;margin-bottom:10px}
+.ap-skill-modal-foot{display:flex;align-items:center;gap:10px;padding:13px 20px;border-top:1px solid var(--border);background:var(--surface-2)}.ap-skill-pager{display:flex;align-items:center;gap:7px;margin-right:auto}.ap-skill-pager span{font-size:11.5px;color:var(--faint)}.ap-skill-modal-count{font-size:11.5px;color:var(--muted)}
 .ap-exact-evidence{grid-column:1/-1;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);padding:11px;display:flex;flex-direction:column;gap:9px;}
 .ap-evidence-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px 14px;font-size:11.5px;}
 .ap-evidence-grid span{min-width:0;color:var(--muted);overflow-wrap:anywhere;}.ap-evidence-grid b{color:var(--heading);font-weight:600;}
@@ -913,7 +915,7 @@ button{font-family:inherit;cursor:pointer;}
   .ap-toolbar{align-items:stretch}.ap-toolbar .search{width:100%}.ap-create{width:100%;margin-left:0}
   .ap-layout{display:block;overflow:auto}.ap-list-pane{max-height:36vh;border-right:0;border-bottom:1px solid var(--border)}.ap-workspace{overflow:visible;padding:14px}
   .ap-grid,.ap-grid.three,.ap-evidence-grid,.ap-review-grid,.ap-create-progress{grid-template-columns:1fr}.ap-actions{width:100%;margin-left:0;justify-content:flex-start}.ap-field.wide{grid-column:auto}
-  .ap-member-head,.ap-skills-head{align-items:flex-start;flex-wrap:wrap}.ap-skill-summary{grid-template-columns:minmax(0,1fr) auto}.ap-skill-meta{grid-column:1/-1;display:grid;grid-template-columns:90px 1fr}.ap-skill-badges{justify-content:flex-start}.ap-skill-caret{grid-column:2;grid-row:1}.ap-skill-search{align-items:stretch;flex-direction:column}.ap-skill-search .btn{align-self:flex-start}.ap-disclosure{max-width:100%}
+  .ap-member-head,.ap-skills-head{align-items:flex-start;flex-wrap:wrap}.ap-skill-summary{grid-template-columns:minmax(0,1fr) auto}.ap-skill-meta{grid-column:1/-1;display:grid;grid-template-columns:90px 1fr}.ap-skill-badges{justify-content:flex-start}.ap-skill-caret{grid-column:2;grid-row:1}.ap-disclosure{max-width:100%}
   .ap-step{padding:13px}.ap-create-actions{justify-content:stretch}.ap-create-actions .btn{flex:1 1 auto;justify-content:center}
 }
 .sc-cron{font-size:11.5px;background:var(--surface-3);border:1px solid var(--border);padding:1px 7px;border-radius:4px;color:var(--muted);}
@@ -2412,11 +2414,11 @@ function renderRail(active){
 var AGENT_PROFILE_STATE={owner:'mine',status:'all',search:'',items:[],selected:null,detail:null,
   loaded:false,loading:false,error:null,forbidden:false,dirty:false,busy:false,notice:null,diagnostics:[],etag:null,
   binding:null,systemBinding:null,rolloutDraft:null,skillRequest:0,skillMemberIndex:null,skillQuery:'',skillResults:[],skillLoading:false,skillError:null,skillProofs:{},
-  skillCardsOpen:{},pending:null,completedPending:null,pollTimer:null,createFlow:null};
+  skillCardsOpen:{},skillModal:null,pending:null,completedPending:null,pollTimer:null,createFlow:null};
 
 function agentProfileResetSkillSearch(){
   AGENT_PROFILE_STATE.skillRequest=Number(AGENT_PROFILE_STATE.skillRequest||0)+1;AGENT_PROFILE_STATE.skillMemberIndex=null;
-  AGENT_PROFILE_STATE.skillQuery='';AGENT_PROFILE_STATE.skillResults=[];AGENT_PROFILE_STATE.skillLoading=false;AGENT_PROFILE_STATE.skillError=null;AGENT_PROFILE_STATE.skillProofs={};
+  AGENT_PROFILE_STATE.skillQuery='';AGENT_PROFILE_STATE.skillResults=[];AGENT_PROFILE_STATE.skillLoading=false;AGENT_PROFILE_STATE.skillError=null;AGENT_PROFILE_STATE.skillProofs={};AGENT_PROFILE_STATE.skillCardsOpen={};AGENT_PROFILE_STATE.skillModal=null;
 }
 function agentProfileOwnerEndpoint(owner,scope){
   return owner==='system'?'/api/agent-profiles/system':'/api/scopes/'+encodeURIComponent(scope)+'/agent-profiles';
@@ -2669,32 +2671,54 @@ function agentProfileDiagnosticsHtml(){
   return '<section class="ap-section" aria-live="polite"><h3>校验结果</h3><div class="ap-diagnostics">'+AGENT_PROFILE_STATE.diagnostics.map(function(d){
     return '<div class="ap-diagnostic" data-ap-diagnostic="'+esc(d.field||'profile')+'"><b>'+esc(d.code||'INVALID_PROFILE')+'</b> · '+esc(d.message||d.field||'请检查字段')+'</div>';}).join('')+'</div></section>';
 }
-function agentProfileSkillSearchHtml(disabled,memberIndex){
-  if(disabled)return '';
-  var active=Number(AGENT_PROFILE_STATE.skillMemberIndex)===memberIndex,results=active?(AGENT_PROFILE_STATE.skillResults||[]):[];
-  var list=results.length?'<div class="ap-skill-results">'+results.map(function(item){return '<button type="button" class="ap-skill-result" data-ap-skill="'+esc(item.guid||'')+'" data-ap-member="'+memberIndex+'"><span><b>'+esc(item.name||item.guid)+'</b><br><small>'+esc(item.description||'')+'</small></span><small>'+esc(item.guid||'')+'</small></button>';}).join('')+'</div>':'';
-  var problem=active&&AGENT_PROFILE_STATE.skillError?'<div class="ap-diagnostic">'+esc(AGENT_PROFILE_STATE.skillError)+'</div>':'';
-  return '<div class="ap-skill-search">'+agentProfileField('搜索可用 Ornn skill','skillQuery',active?AGENT_PROFILE_STATE.skillQuery:'',{memberIndex:memberIndex})+'<button type="button" class="btn" data-ap-skill-search="'+memberIndex+'"'+(AGENT_PROFILE_STATE.skillLoading?' disabled':'')+'>'+ICON.search+' 搜索</button></div>'+list+problem;
+function agentProfileOpenSkillModal(root,mode,memberIndex){
+  agentProfileCaptureDraft(root);AGENT_PROFILE_STATE.skillRequest=Number(AGENT_PROFILE_STATE.skillRequest||0)+1;
+  AGENT_PROFILE_STATE.skillModal={mode:mode==='replace'?'replace':'add',memberIndex:memberIndex==null?null:Number(memberIndex),query:'',page:1,pageSize:20,total:0,results:[],selected:[],loading:false,resolving:false,error:null,exactErrors:{}};render();return true;
 }
-async function agentProfileSearchSkills(root,memberIndex){
-  var input=root.querySelector('[data-ap-field="skillQuery"][data-ap-member="'+memberIndex+'"]'),query=String(input&&input.value||'').trim();
-  agentProfileCaptureDraft(root);var request=Number(AGENT_PROFILE_STATE.skillRequest||0)+1;AGENT_PROFILE_STATE.skillRequest=request;AGENT_PROFILE_STATE.skillMemberIndex=Number(memberIndex);AGENT_PROFILE_STATE.skillQuery=query;AGENT_PROFILE_STATE.skillResults=[];AGENT_PROFILE_STATE.skillLoading=true;AGENT_PROFILE_STATE.skillError=null;render();
-  try{
-    var result=await agentProfileJson('/api/workflow/skills?query='+encodeURIComponent(query)+'&page=1&pageSize=20');
-    if(request!==AGENT_PROFILE_STATE.skillRequest)return;
-    AGENT_PROFILE_STATE.skillResults=result.body&&result.body.items||[];
-  }catch(e){if(request!==AGENT_PROFILE_STATE.skillRequest)return;AGENT_PROFILE_STATE.skillResults=[];AGENT_PROFILE_STATE.skillError=e&&e.problem?e.problem.title:'无法读取 Ornn skills';}
-  AGENT_PROFILE_STATE.skillLoading=false;render();
+function agentProfileCloseSkillModal(){
+  if(!AGENT_PROFILE_STATE.skillModal||AGENT_PROFILE_STATE.skillModal.resolving)return false;
+  AGENT_PROFILE_STATE.skillRequest=Number(AGENT_PROFILE_STATE.skillRequest||0)+1;AGENT_PROFILE_STATE.skillModal=null;render();return true;
 }
-async function agentProfileSelectSkill(guid,root,memberIndex){
-  agentProfileCaptureDraft(root);var request=Number(AGENT_PROFILE_STATE.skillRequest||0)+1;AGENT_PROFILE_STATE.skillRequest=request;AGENT_PROFILE_STATE.skillMemberIndex=Number(memberIndex);AGENT_PROFILE_STATE.skillResults=[];AGENT_PROFILE_STATE.skillLoading=true;AGENT_PROFILE_STATE.skillError=null;render();
-  try{
-    var result=await agentProfileJson('/api/workflow/skills/'+encodeURIComponent(guid)+'/exact');
-    if(request!==AGENT_PROFILE_STATE.skillRequest)return;
-    var detail=result.body||{};agentProfileStoreWorkingDraft(agentProfileApplyExactSkill(agentProfileWorkingDraft(),detail,memberIndex));
-    AGENT_PROFILE_STATE.skillProofs=AGENT_PROFILE_STATE.skillProofs||{};AGENT_PROFILE_STATE.skillProofs[Number(memberIndex)]=detail;AGENT_PROFILE_STATE.skillResults=[];AGENT_PROFILE_STATE.dirty=true;
-  }catch(e){if(request!==AGENT_PROFILE_STATE.skillRequest)return;AGENT_PROFILE_STATE.skillError=e&&e.problem?e.problem.title:'无法固定 exact skill';}
-  AGENT_PROFILE_STATE.skillLoading=false;render();
+function agentProfileSkillModalHtml(){
+  var modal=AGENT_PROFILE_STATE.skillModal;if(!modal)return '';
+  var draft=agentProfileWorkingDraft(),members=draft&&draft.runtimeProfile&&draft.runtimeProfile.members||[],existing={};members.forEach(function(member){var guid=member.skillRef&&member.skillRef.guid;if(guid)existing[guid]=true;});
+  var selected={};(modal.selected||[]).forEach(function(guid){selected[guid]=true;});var pages=Math.max(1,Math.ceil(Number(modal.total||0)/Number(modal.pageSize||20)));
+  var results=(modal.results||[]).map(function(item){
+    var guid=String(item.guid||''),added=!!existing[guid],chosen=!!selected[guid],error=modal.exactErrors&&modal.exactErrors[guid],tags=Array.isArray(item.tags)?item.tags:[];
+    var facts=[];if(item.category)facts.push('<span class="ap-skill-result-fact">'+esc(item.category)+'</span>');tags.forEach(function(tag){facts.push('<span class="ap-skill-result-fact">'+esc(tag)+'</span>');});facts.push('<span class="ap-skill-result-fact">'+(item.private?'私有':'公开')+'</span>');if(added)facts.push('<span class="ap-skill-result-fact">已添加</span>');
+    return '<label class="ap-skill-option'+(chosen?' selected':'')+(added?' disabled':'')+'" data-ap-skill-option="'+esc(guid)+'">'+
+      '<input type="'+(modal.mode==='replace'?'radio':'checkbox')+'" name="ap-skill-choice" value="'+esc(guid)+'" data-ap-skill-choice'+(chosen?' checked':'')+(added||modal.resolving?' disabled':'')+'><span class="ap-skill-result-main"><span class="ap-skill-result-name">'+esc(item.name||guid)+'</span><span class="ap-skill-result-description">'+esc(item.description||'暂无描述')+'</span><span class="ap-skill-result-facts">'+facts.join('')+'</span></span><span class="ap-skill-result-guid">'+esc(guid.length>18?guid.slice(0,8)+'…'+guid.slice(-6):guid)+'</span>'+(error?'<span class="ap-skill-result-error">'+esc(error)+'</span>':'')+'</label>';
+  }).join('');
+  var body=modal.loading?'<div class="ap-skill-modal-empty"><span class="spinner"></span><b>正在搜索 Ornn Skills</b></div>':modal.error?'<div class="ap-skill-modal-empty"><b>无法读取 Ornn Skills</b><span>'+esc(modal.error)+'</span><button type="button" class="btn" data-ap-skill-modal-search>重试</button></div>':results?'<div class="ap-skill-result-list">'+results+'</div>':'<div class="ap-skill-modal-empty"><b>'+(modal.query?'没有匹配的 Skill':'搜索你的 Ornn Skills')+'</b><span>'+(modal.query?'换一个关键词再试。':'输入关键词，或直接搜索浏览所有可用 Skills。')+'</span></div>';
+  var count=(modal.selected||[]).length,label=modal.mode==='replace'?'替换 Skill':'添加 '+count+' 个 Skills';
+  return '<div class="ap-skill-modal-back" data-ap-skill-modal-close></div><section class="ap-skill-modal" role="dialog" aria-modal="true" aria-labelledby="ap-skill-modal-title">'+
+    '<header class="ap-skill-modal-head"><div><div class="ap-skill-modal-title" id="ap-skill-modal-title">'+(modal.mode==='replace'?'替换 Ornn Skill':'添加 Ornn Skills')+'</div><div class="ap-skill-modal-sub">搜索结果只展示目录事实；加入前会固定 exact 版本、Publisher 与哈希。</div></div><button type="button" class="ap-skill-modal-close" data-ap-skill-modal-close aria-label="关闭"'+(modal.resolving?' disabled':'')+'>×</button></header>'+
+    '<div class="ap-skill-modal-search"><div class="search" role="search"><span aria-hidden="true">⌕</span><input data-ap-skill-modal-query aria-label="搜索 Ornn Skills" value="'+esc(modal.query||'')+'" placeholder="名称、描述、分类或标签"></div><button type="button" class="btn btn-primary" data-ap-skill-modal-search'+(modal.loading||modal.resolving?' disabled':'')+'>搜索</button></div>'+
+    '<div class="ap-skill-modal-body" aria-live="polite">'+(modal.resolving?'<div class="ap-skill-modal-progress"><span class="spinner"></span>正在固定 '+count+' 个 exact Skills…</div>':'')+body+'</div>'+
+    '<footer class="ap-skill-modal-foot"><div class="ap-skill-pager"><button type="button" class="btn" data-ap-skill-page="'+(modal.page-1)+'"'+(modal.page<=1||modal.loading||modal.resolving?' disabled':'')+'>上一页</button><span>'+modal.page+' / '+pages+' · '+Number(modal.total||0)+' 项</span><button type="button" class="btn" data-ap-skill-page="'+(modal.page+1)+'"'+(modal.page>=pages||modal.loading||modal.resolving?' disabled':'')+'>下一页</button></div><span class="ap-skill-modal-count">已选择 '+count+' 项</span><button type="button" class="btn" data-ap-skill-modal-close'+(modal.resolving?' disabled':'')+'>取消</button><button type="button" class="btn btn-primary" data-ap-skill-confirm'+(!count||modal.loading||modal.resolving?' disabled':'')+'>'+label+'</button></footer></section>';
+}
+async function agentProfileSearchSkillModal(root,page){
+  var modal=AGENT_PROFILE_STATE.skillModal;if(!modal||modal.resolving)return false;agentProfileCaptureDraft(root);
+  var input=root&&root.querySelector&&root.querySelector('[data-ap-skill-modal-query]');if(input)modal.query=String(input.value||'').trim();modal.page=Math.max(1,Number(page||1));modal.loading=true;modal.error=null;modal.exactErrors={};var request=Number(AGENT_PROFILE_STATE.skillRequest||0)+1;AGENT_PROFILE_STATE.skillRequest=request;render();
+  try{var result=await agentProfileJson('/api/workflow/skills?query='+encodeURIComponent(modal.query)+'&page='+modal.page+'&pageSize='+modal.pageSize);if(request!==AGENT_PROFILE_STATE.skillRequest||AGENT_PROFILE_STATE.skillModal!==modal)return false;modal.results=result.body&&result.body.items||[];modal.total=Number(result.body&&result.body.total||modal.results.length);}
+  catch(e){if(request!==AGENT_PROFILE_STATE.skillRequest||AGENT_PROFILE_STATE.skillModal!==modal)return false;modal.results=[];modal.total=0;modal.error=e&&e.problem?e.problem.title:'无法读取 Ornn Skills';}
+  modal.loading=false;render();return !modal.error;
+}
+function agentProfileToggleSkillSelection(guid){
+  var modal=AGENT_PROFILE_STATE.skillModal;if(!modal||modal.loading||modal.resolving)return false;guid=String(guid||'');var draft=agentProfileWorkingDraft(),members=draft&&draft.runtimeProfile&&draft.runtimeProfile.members||[];if(members.some(function(member){return member.skillRef&&member.skillRef.guid===guid;}))return false;
+  var index=modal.selected.indexOf(guid);if(modal.mode==='replace')modal.selected=index>=0?[]:[guid];else if(index>=0)modal.selected.splice(index,1);else if(members.length+modal.selected.length<32)modal.selected.push(guid);delete modal.exactErrors[guid];render();return true;
+}
+function agentProfileMemberFromExactSkill(draft,detail){
+  var runtime=draft.runtimeProfile,members=runtime.members||[],base=agentProfileSlugFromName(detail.name)||'skill',intent=base,suffix=2,used={};members.forEach(function(member){used[member.intentId]=true;});while(used[intent])intent=base+'-'+suffix++;
+  var tools=agentProfileUnionNames([],detail.declaredToolNames||[]);runtime.maximumToolPolicy=runtime.maximumToolPolicy||{toolNames:[],toolSetRefs:[]};runtime.maximumToolPolicy.toolNames=agentProfileUnionNames(runtime.maximumToolPolicy.toolNames,tools);
+  return {intentId:intent,routingDescription:'',skillRef:{guid:detail.guid||'',literalVersion:detail.literalVersion||''},explicitTriggerAliases:[],sideEffectClass:'READ_ONLY',expectedSkillName:detail.name||'',reviewedPublisherId:detail.publisher||'',taskToolPolicy:{toolNames:tools,toolSetRefs:[]}};
+}
+async function agentProfileConfirmSkillSelection(root){
+  var modal=AGENT_PROFILE_STATE.skillModal;if(!modal||modal.resolving||!modal.selected.length)return false;agentProfileCaptureDraft(root);var selected=modal.selected.slice(),request=Number(AGENT_PROFILE_STATE.skillRequest||0)+1;AGENT_PROFILE_STATE.skillRequest=request;modal.resolving=true;modal.error=null;modal.exactErrors={};render();
+  var settled=await Promise.allSettled(selected.map(async function(guid){var result=await agentProfileJson('/api/workflow/skills/'+encodeURIComponent(guid)+'/exact');return {guid:guid,detail:result.body||{}};}));
+  if(request!==AGENT_PROFILE_STATE.skillRequest||AGENT_PROFILE_STATE.skillModal!==modal)return false;var draft=agentProfileWorkingDraft(),runtime=draft.runtimeProfile,failed=[];
+  settled.forEach(function(result,index){var guid=selected[index];if(result.status==='rejected'){failed.push(guid);modal.exactErrors[guid]=result.reason&&result.reason.problem?result.reason.problem.title:'无法固定 exact Skill';return;}var detail=result.value.detail;if(modal.mode==='replace'){var target=runtime.members[modal.memberIndex];if(target){agentProfileApplyExactSkill(draft,detail,modal.memberIndex);AGENT_PROFILE_STATE.skillProofs[modal.memberIndex]=detail;AGENT_PROFILE_STATE.skillCardsOpen[modal.memberIndex]=true;}}else if(!runtime.members.some(function(member){return member.skillRef&&member.skillRef.guid===guid;})){var member=agentProfileMemberFromExactSkill(draft,detail),newIndex=runtime.members.length;runtime.members.push(member);AGENT_PROFILE_STATE.skillProofs[newIndex]=detail;AGENT_PROFILE_STATE.skillCardsOpen[newIndex]=true;}});
+  AGENT_PROFILE_STATE.diagnostics=[];AGENT_PROFILE_STATE.dirty=true;modal.resolving=false;modal.selected=failed;if(!failed.length)AGENT_PROFILE_STATE.skillModal=null;render();return !failed.length;
 }
 function agentProfilePublicSummaryHtml(d){
   var actionDisabled=AGENT_PROFILE_STATE.busy||!!AGENT_PROFILE_STATE.pending;
@@ -2937,7 +2961,7 @@ function viewAgentProfiles(){
       (canCreate?'<div class="ap-create"><button type="button" class="btn btn-primary" data-ap-start-create>新建 Profile</button></div>':'')+'</div>'+
     '<div class="ap-layout"><aside class="ap-list-pane" aria-label="Profile 列表">'+(AGENT_PROFILE_STATE.loading&&!AGENT_PROFILE_STATE.loaded?'<div class="ap-empty">正在加载 Profile…</div>':
       AGENT_PROFILE_STATE.forbidden?auth403('当前账号不能读取该 Profile 管理面。'):AGENT_PROFILE_STATE.error&&!AGENT_PROFILE_STATE.detail?'<div class="ap-empty">'+esc(AGENT_PROFILE_STATE.error.title)+'</div>':agentProfileListHtml())+'</aside>'+
-      '<main class="ap-workspace">'+agentProfileEditorHtml()+'</main></div></div>';
+      '<main class="ap-workspace">'+agentProfileEditorHtml()+'</main></div>'+agentProfileSkillModalHtml()+'</div>';
   return {html:body,mount:mountAgentProfiles};
 }
 function mountAgentProfiles(root){
@@ -2948,9 +2972,13 @@ function mountAgentProfiles(root){
     if(ev.target.closest('[data-ap-start-create]')){if(AGENT_PROFILE_STATE.pending){toast('当前操作仍在等待投影');return;}if(AGENT_PROFILE_STATE.dirty&&!confirm('有未保存修改，确定开始新建？'))return;agentProfileStartCreate();return;}
     if(ev.target.closest('[data-ap-create-cancel]')){if(!agentProfileCancelCreate())return;if(AGENT_PROFILE_STATE.items.length)loadAgentProfileDetail(AGENT_PROFILE_STATE.items[0].profileSlug);else render();return;}
     if(ev.target.closest('[data-ap-create-submit]')){agentProfileSubmitCreate(root);return;}
+    if(ev.target.closest('[data-ap-open-skills]')){agentProfileOpenSkillModal(root,'add',null);return;}
+    var replaceSkill=ev.target.closest('[data-ap-replace-skill]');if(replaceSkill){agentProfileOpenSkillModal(root,'replace',replaceSkill.getAttribute('data-ap-replace-skill'));return;}
     var removeMember=ev.target.closest('[data-ap-remove-member]');if(removeMember){agentProfileCaptureDraft(root);if(agentProfileRemoveMember(removeMember.getAttribute('data-ap-remove-member')))render();return;}
-    var skillSearch=ev.target.closest('[data-ap-skill-search]');if(skillSearch){agentProfileSearchSkills(root,skillSearch.getAttribute('data-ap-skill-search'));return;}
-    var skill=ev.target.closest('[data-ap-skill]');if(skill){agentProfileSelectSkill(skill.getAttribute('data-ap-skill'),root,skill.getAttribute('data-ap-member'));return;}
+    if(ev.target.closest('[data-ap-skill-modal-close]')){agentProfileCloseSkillModal();return;}
+    if(ev.target.closest('[data-ap-skill-modal-search]')){agentProfileSearchSkillModal(root,1);return;}
+    var skillPage=ev.target.closest('[data-ap-skill-page]');if(skillPage){agentProfileSearchSkillModal(root,skillPage.getAttribute('data-ap-skill-page'));return;}
+    if(ev.target.closest('[data-ap-skill-confirm]')){agentProfileConfirmSkillSelection(root);return;}
     var action=ev.target.closest('[data-ap-action]');if(action){agentProfileHandleAction(action.getAttribute('data-ap-action'),root);}
   });
   root.addEventListener('input',function(ev){
@@ -2961,7 +2989,10 @@ function mountAgentProfiles(root){
       if(ev.target.getAttribute('data-ap-field')==='profileSlug'){flow.slug=ev.target.value;flow.slugTouched=true;}
     }
   });
-  root.addEventListener('change',function(ev){if(ev.target.matches('[data-ap-status]')){AGENT_PROFILE_STATE.status=ev.target.value;var pane=root.querySelector('.ap-list-pane');if(pane)pane.innerHTML=agentProfileListHtml();}});
+  root.addEventListener('change',function(ev){
+    if(ev.target.matches('[data-ap-skill-choice]')){agentProfileToggleSkillSelection(ev.target.value);return;}
+    if(ev.target.matches('[data-ap-status]')){AGENT_PROFILE_STATE.status=ev.target.value;var pane=root.querySelector('.ap-list-pane');if(pane)pane.innerHTML=agentProfileListHtml();}
+  });
   root.addEventListener('toggle',function(ev){if(!ev.target.matches||!ev.target.matches('[data-ap-member-card]'))return;var index=Number(ev.target.getAttribute('data-ap-member-card'));AGENT_PROFILE_STATE.skillCardsOpen=AGENT_PROFILE_STATE.skillCardsOpen||{};AGENT_PROFILE_STATE.skillCardsOpen[index]=ev.target.open;},true);
 }
 
