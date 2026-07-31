@@ -26,6 +26,7 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
             dispatcher,
             new FixedProjectionClock(DateTimeOffset.Parse("2026-07-25T06:30:00Z")));
         var state = BuildState();
+        state.OwnerSubject = "owner-alpha";
 
         await projector.ProjectAsync(
             NewContext(),
@@ -111,13 +112,14 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
         serialized.Should().NotContain("prompt-secret-alpha");
         serialized.Should().NotContain("https://user:password@example.com");
         serialized.Should().NotContain("owner-subject-alpha");
+        serialized.Should().NotContain("owner-alpha");
         serialized.Should().NotContain("access-token-alpha");
         serialized.Should().NotContain("history-initialization-outbox-sentinel");
         serialized.Should().NotContain("history-reservation-outbox-sentinel");
         serialized.Should().NotContain("history-terminal-outbox-sentinel");
         serialized.Should().NotContain("credential-outbox-sentinel");
         NyxIdChatConversationCurrentStateDocument.Descriptor.Fields.InFieldNumberOrder()
-            .Should().NotContain(field => field.Name == "state_root");
+            .Should().NotContain(field => field.Name is "state_root" or "owner_subject");
     }
 
     [Fact]

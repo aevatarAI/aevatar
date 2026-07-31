@@ -773,6 +773,7 @@ message NyxIdChatConversationCreationStartedEvent {
   bool created_locally = 3;
   string command_id = 4;
   string correlation_id = 5;
+  string owner_subject = 6;
 }
 
 message NyxIdChatConversationRegistrationAcceptedEvent {

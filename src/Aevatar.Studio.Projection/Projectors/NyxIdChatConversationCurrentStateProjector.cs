@@ -58,6 +58,7 @@ public sealed class NyxIdChatConversationCurrentStateProjector
                 "NyxIdChat conversation projection actor identity does not match the committed state root.");
         }
 
+        // OwnerSubject is actor-only authority and must never enter this public document.
         var document = new NyxIdChatConversationCurrentStateDocument
         {
             Id = context.RootActorId,

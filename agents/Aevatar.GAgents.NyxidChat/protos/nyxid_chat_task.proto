@@ -575,6 +575,9 @@ message NyxIdChatConversationGAgentState {
   // Bounded at-least-once delivery transport state. Public projections must
   // not expose this field; ChatConversationGAgent remains transcript owner.
   NyxIdChatHistoryTerminalOutbox pending_history_terminal = 22;
+  // Actor-owned identity fact. It is deliberately excluded from public
+  // projections, AGUI frames, transcripts, and error text.
+  string owner_subject = 23;
 }
 
 message NyxIdChatHistoryInitializationOutbox {

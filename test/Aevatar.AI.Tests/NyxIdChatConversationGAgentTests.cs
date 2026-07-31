@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
@@ -39,6 +40,171 @@ public sealed class NyxIdChatConversationGAgentTests
         field.Should().NotBeNull();
         field!.MessageType.FullName.Should().Be(
             NyxIdChatStartTurnCommand.Descriptor.FullName);
+    }
+
+    [Fact]
+    public async Task CreateConversation_WithFirstTurn_ShouldCommitOwnerOnceAndRecoverIt()
+    {
+        const string actorId = "conversation-owner-alpha";
+        var eventStore = new InMemoryEventStoreForTests();
+        var dispatch = new RecordingActorDispatchPort([], static (_, _) => Task.CompletedTask);
+        using var services = BuildEventSourcingServices(eventStore);
+        var first = CreateController(services, actorId, dispatch);
+        await first.ActivateAsync();
+        var firstTurn = CreateStartTurnCommand();
+        firstTurn.ConversationActorId = actorId;
+        SetOwner(firstTurn, " owner-alpha ");
+        var create = new NyxIdChatConversationCreateCommand
+        {
+            ScopeId = "scope-alpha",
+            CreatedLocally = true,
+            RequestedActorId = actorId,
+            FirstTurn = firstTurn,
+        };
+
+        await first.HandleEventAsync(CreateEnvelope(actorId, create));
+
+        var committed = await eventStore.GetEventsAsync(actorId);
+        committed.First(static item =>
+                item.EventData.Is(NyxIdChatConversationCreationStartedEvent.Descriptor))
+            .EventData.Unpack<NyxIdChatConversationCreationStartedEvent>()
+            .OwnerSubject.Should().Be("owner-alpha");
+        first.State.OwnerSubject.Should().Be("owner-alpha");
+        var countAfterFirst = committed.Count;
+        var dispatchCountAfterFirst = dispatch.OperationCalls.Count;
+
+        await first.HandleEventAsync(CreateEnvelope(actorId, create.Clone()));
+
+        (await eventStore.GetEventsAsync(actorId)).Should().HaveCount(countAfterFirst);
+        dispatch.OperationCalls.Should().HaveCount(dispatchCountAfterFirst);
+
+        var recovered = CreateController(services, actorId);
+        await recovered.ActivateAsync();
+        recovered.State.OwnerSubject.Should().Be("owner-alpha");
+    }
+
+    [Fact]
+    public async Task StartTurn_WithConflictingOwner_ShouldCommitSafeRejectionWithoutDispatch()
+    {
+        const string actorId = "conversation-owner-conflict";
+        var eventStore = new InMemoryEventStoreForTests();
+        var dispatch = new RecordingActorDispatchPort([], static (_, _) => Task.CompletedTask);
+        using var services = BuildEventSourcingServices(eventStore);
+        var agent = CreateController(services, actorId, dispatch);
+        await agent.ActivateAsync();
+        var firstTurn = CreateStartTurnCommand();
+        firstTurn.ConversationActorId = actorId;
+        SetOwner(firstTurn, "owner-alpha");
+        await agent.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatConversationCreateCommand
+        {
+            ScopeId = "scope-alpha",
+            CreatedLocally = true,
+            RequestedActorId = actorId,
+            FirstTurn = firstTurn,
+        }));
+        var dispatchCount = dispatch.OperationCalls.Count;
+        var conflicting = firstTurn.Clone();
+        conflicting.TurnId = "turn-beta";
+        conflicting.TaskId = "task-beta";
+        conflicting.ClientRequestId = "client-beta";
+        conflicting.CommandId = "command-beta";
+        SetOwner(conflicting, "owner-beta");
+
+        await agent.HandleEventAsync(CreateEnvelope(actorId, conflicting));
+
+        var rejection = (await eventStore.GetEventsAsync(actorId))[^1].EventData
+            .Unpack<NyxIdChatTurnAdmissionRejectedEvent>();
+        rejection.ReasonCode.Should().Be("NYXID_CHAT_OWNER_MISMATCH");
+        rejection.ToString().Should().NotContain("owner-alpha").And.NotContain("owner-beta");
+        agent.State.OwnerSubject.Should().Be("owner-alpha");
+        dispatch.OperationCalls.Should().HaveCount(dispatchCount);
+    }
+
+    [Fact]
+    public async Task StartTurn_OnOwnerlessConversation_ShouldRejectOwnerClaim()
+    {
+        const string actorId = "conversation-ownerless";
+        var eventStore = new InMemoryEventStoreForTests();
+        var dispatch = new RecordingActorDispatchPort([], static (_, _) => Task.CompletedTask);
+        using var services = BuildEventSourcingServices(eventStore);
+        var agent = CreateController(services, actorId, dispatch);
+        await agent.ActivateAsync();
+        await agent.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatConversationCreateCommand
+        {
+            ScopeId = "scope-alpha",
+            CreatedLocally = true,
+            RequestedActorId = actorId,
+        }));
+        var turn = CreateStartTurnCommand();
+        turn.ConversationActorId = actorId;
+        SetOwner(turn, "owner-alpha");
+
+        await agent.HandleEventAsync(CreateEnvelope(actorId, turn));
+
+        var rejection = (await eventStore.GetEventsAsync(actorId))[^1].EventData
+            .Unpack<NyxIdChatTurnAdmissionRejectedEvent>();
+        rejection.ReasonCode.Should().Be("NYXID_CHAT_OWNER_MISMATCH");
+        agent.State.OwnerSubject.Should().BeEmpty();
+        dispatch.OperationCalls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CreateConversation_WithOwnerlessFirstTurn_ShouldRejectBeforeCommit()
+    {
+        const string actorId = "conversation-owner-required";
+        var eventStore = new InMemoryEventStoreForTests();
+        using var services = BuildEventSourcingServices(eventStore);
+        var agent = CreateController(services, actorId);
+        await agent.ActivateAsync();
+        var firstTurn = CreateStartTurnCommand();
+        firstTurn.ConversationActorId = actorId;
+
+        var act = () => agent.HandleEventAsync(CreateEnvelope(actorId,
+            new NyxIdChatConversationCreateCommand
+            {
+                ScopeId = "scope-alpha",
+                CreatedLocally = true,
+                RequestedActorId = actorId,
+                FirstTurn = firstTurn,
+            }));
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*owner_subject is required*");
+        (await eventStore.GetEventsAsync(actorId)).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ActionRequestedAguiFrames_ShouldOmitConversationOwner()
+    {
+        var evt = new NyxIdChatActionRequestedEvent
+        {
+            Request = new NyxIdChatActionRequestState
+            {
+                ActionRequestId = "action-alpha",
+                OriginTurnId = "turn-alpha",
+                TaskId = "task-alpha",
+                StepId = "step-alpha",
+                Action = NyxIdAssistantActionKind.ServiceConnect,
+            },
+            State = new NyxIdChatConversationGAgentState
+            {
+                ConversationActorId = "conversation-alpha",
+                ScopeId = "scope-alpha",
+                OwnerSubject = "owner-alpha",
+            },
+        };
+
+        var frames = NyxIdChatConversationAguiFrameBuilder.BuildActionRequested(
+            "conversation-alpha",
+            "turn-alpha",
+            evt,
+            1);
+
+        string.Join('\n', frames.Select(static frame =>
+                Encoding.UTF8.GetString(frame.ToByteArray())))
+            .Should().NotContain("owner-alpha");
+        NyxIdAssistantActionRequestWirePayload.Descriptor.Fields.InFieldNumberOrder()
+            .Should().NotContain(field => field.Name == "owner_subject");
     }
 
     [Fact]
@@ -323,7 +489,7 @@ public sealed class NyxIdChatConversationGAgentTests
                 CreatedLocally = true,
                 RequestedActorId = conversationActorId,
                 AgentProfile = profile,
-                FirstTurn = CreateStartTurnCommand(),
+                FirstTurn = WithOwner(CreateStartTurnCommand(), "owner-alpha"),
             }));
 
         agent.State.ActiveTurn.AgentProfileTurnAuthority.Should().NotBeNull();
@@ -361,6 +527,7 @@ public sealed class NyxIdChatConversationGAgentTests
         });
         var start = CreateStartTurnCommand();
         start.ConversationActorId = conversationActorId;
+        SetOwner(start, "owner-alpha");
 
         await agent.HandleEventAsync(CreateEnvelope(
             conversationActorId,
@@ -459,6 +626,7 @@ public sealed class NyxIdChatConversationGAgentTests
         var start = CreateStartTurnCommand();
         start.ConversationActorId = conversationActorId;
         start.Prompt = "我要连接 AWS Cost Explorer";
+        SetOwner(start, "owner-alpha");
         await agent.HandleEventAsync(CreateEnvelope(
             conversationActorId,
             new NyxIdChatConversationCreateCommand
@@ -3149,6 +3317,23 @@ public sealed class NyxIdChatConversationGAgentTests
             },
         },
     };
+
+    private static void SetOwner(NyxIdChatStartTurnCommand command, string ownerSubject)
+    {
+        command.ToolContext ??= new Aevatar.AI.Abstractions.AgentToolExecutionContextPayload();
+        command.ToolContext.Caller = new Aevatar.AI.Abstractions.AgentToolCallerContextPayload
+        {
+            OwnerSubject = ownerSubject,
+        };
+    }
+
+    private static NyxIdChatStartTurnCommand WithOwner(
+        NyxIdChatStartTurnCommand command,
+        string ownerSubject)
+    {
+        SetOwner(command, ownerSubject);
+        return command;
+    }
 
     private static NyxIdChatStopCommand CreateStopCommand(long expectedStateVersion) => new()
     {

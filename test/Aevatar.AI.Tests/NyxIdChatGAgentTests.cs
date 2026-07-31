@@ -330,6 +330,13 @@ public class NyxIdChatGAgentTests
             CommandId = "command-first",
             CorrelationId = "correlation-first",
             Prompt = "hello",
+            ToolContext = new Aevatar.AI.Abstractions.AgentToolExecutionContextPayload
+            {
+                Caller = new Aevatar.AI.Abstractions.AgentToolCallerContextPayload
+                {
+                    OwnerSubject = "owner-alpha",
+                },
+            },
         };
 
         await agent.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatConversationCreateCommand
@@ -425,6 +432,13 @@ public class NyxIdChatGAgentTests
                 CommandId = "command-retry",
                 CorrelationId = "correlation-retry",
                 Prompt = "retry",
+                ToolContext = new Aevatar.AI.Abstractions.AgentToolExecutionContextPayload
+                {
+                    Caller = new Aevatar.AI.Abstractions.AgentToolCallerContextPayload
+                    {
+                        OwnerSubject = "owner-alpha",
+                    },
+                },
             },
         };
 

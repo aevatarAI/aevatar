@@ -161,6 +161,21 @@ public sealed class NyxIdChatConversationGAgent
     {
         ArgumentNullException.ThrowIfNull(command);
         var scopeId = NormalizeRequired(command.ScopeId, nameof(command.ScopeId));
+        var ownerSubject = command.FirstTurn is null
+            ? null
+            : NormalizeRequired(
+                command.FirstTurn.ToolContext?.Caller?.OwnerSubject,
+                "owner_subject");
+        if (command.FirstTurn is not null &&
+            !string.IsNullOrWhiteSpace(State.ConversationActorId) &&
+            !OwnerMatches(State.OwnerSubject, ownerSubject))
+        {
+            await PersistTurnAdmissionRejectionAsync(
+                command.FirstTurn,
+                "NYXID_CHAT_OWNER_MISMATCH",
+                "The chat turn owner does not match the conversation owner.");
+            return;
+        }
         if (command.FirstTurn is not null &&
             string.Equals(State.ScopeId, scopeId, StringComparison.Ordinal) &&
             string.Equals(State.ConversationActorId, Id, StringComparison.Ordinal) &&
@@ -180,6 +195,7 @@ public sealed class NyxIdChatConversationGAgent
             CreatedLocally = command.CreatedLocally,
             CommandId = commandId,
             CorrelationId = correlationId,
+            OwnerSubject = ownerSubject ?? string.Empty,
         }, CancellationToken.None);
 
         try
@@ -586,6 +602,16 @@ public sealed class NyxIdChatConversationGAgent
     {
         ArgumentNullException.ThrowIfNull(command);
         ValidateStartCommand(command);
+        if (!OwnerMatches(
+                State.OwnerSubject,
+                NormalizeOptional(command.ToolContext?.Caller?.OwnerSubject)))
+        {
+            await PersistTurnAdmissionRejectionAsync(
+                command,
+                "NYXID_CHAT_OWNER_MISMATCH",
+                "The chat turn owner does not match the conversation owner.");
+            return;
+        }
 
         if (State.ActiveTurn is not null)
         {
@@ -1285,6 +1311,7 @@ public sealed class NyxIdChatConversationGAgent
         {
             ConversationActorId = Id,
             ScopeId = command.ScopeId.Trim(),
+            OwnerSubject = State.OwnerSubject,
             RoleConfiguration = State.RoleConfiguration?.Clone(),
             AgentProfile = State.AgentProfile?.Clone(),
             ActiveTurn = turn,
@@ -1422,8 +1449,17 @@ public sealed class NyxIdChatConversationGAgent
         NyxIdChatConversationCreationStartedEvent evt)
     {
         var next = current.Clone();
+        var currentOwner = NormalizeOptional(current.OwnerSubject);
+        var eventOwner = NormalizeOptional(evt.OwnerSubject);
+        if (!string.IsNullOrWhiteSpace(current.ConversationActorId) &&
+            !string.Equals(currentOwner, eventOwner, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "A NyxIdChat conversation owner cannot be replaced or claimed after creation.");
+        }
         next.ConversationActorId = evt.ActorId;
         next.ScopeId = evt.ScopeId;
+        next.OwnerSubject = eventOwner ?? string.Empty;
         return next;
     }
 
@@ -2496,4 +2532,10 @@ public sealed class NyxIdChatConversationGAgent
         var normalized = value?.Trim();
         return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
     }
+
+    private static bool OwnerMatches(string? persistedOwner, string? requestedOwner) =>
+        string.Equals(
+            NormalizeOptional(persistedOwner),
+            NormalizeOptional(requestedOwner),
+            StringComparison.Ordinal);
 }
