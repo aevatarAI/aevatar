@@ -36,6 +36,8 @@ import {
   teamAutomationApi,
   TeamAutomationApiError,
   type TeamAutomationCreateDraft,
+  type TeamAutomationListRoute,
+  type TeamAutomationMutationReceipt,
   type TeamAutomationOperationIdentity,
   type TeamAutomationPermissionReview,
   type TeamAutomationRoute,
@@ -45,7 +47,6 @@ import { previewScheduledDispatch } from "@/shared/api/scheduledDispatchApi";
 import { NyxIDAuthClient } from "@/shared/auth/client";
 import { getNyxIDRuntimeConfig } from "@/shared/auth/config";
 import { formatCompactDateTime } from "@/shared/datetime/dateTime";
-import { history } from "@/shared/navigation/history";
 import {
   buildTeamMemberAutomationsHref,
 } from "@/shared/navigation/teamRoutes";
@@ -65,11 +66,9 @@ import {
 } from "../teamAutomationAuthorizationDraftSession";
 
 export type TeamAutomationMemberRow = {
-  readonly automationsHref: string;
   readonly canAutomateMember: boolean;
   readonly disabledReason: string;
   readonly implementationKind: string;
-  readonly isSelectedMember?: boolean;
   readonly key: string;
   readonly lifecycleLabel: string;
   readonly lifecycleStyle: React.CSSProperties;
@@ -632,17 +631,25 @@ function credentialLabel(view: TeamAutomationView): string {
 }
 
 function authorizationDraft(
-  route: TeamAutomationRoute,
+  route: TeamAutomationListRoute,
   draft: Draft,
 ): TeamAutomationCreateDraft {
   return {
     ...route,
-    memberId: trim(draft.memberId) || route.memberId,
+    memberId: trim(draft.memberId) || route.memberId || "",
     displayName: trim(draft.displayName),
     prompt: trim(draft.prompt),
     cronExpression: trim(draft.cronExpression),
     timezone: trim(draft.timezone) || "UTC",
     enabled: draft.enabled,
+  };
+}
+
+function exactAutomationRoute(route: TeamAutomationRoute): TeamAutomationRoute {
+  return {
+    scopeId: route.scopeId,
+    teamId: route.teamId,
+    memberId: route.memberId,
   };
 }
 
@@ -702,25 +709,34 @@ const TeamAutomationsTab: React.FC<Props> = ({
   const queryClient = useQueryClient();
   const { token } = theme.useToken();
   const routeMemberId = trim(routeMemberIdInput);
-  const route = React.useMemo<TeamAutomationRoute>(
-    () => ({ scopeId: trim(scopeId), teamId: trim(teamId), memberId: routeMemberId }),
+  const route = React.useMemo<TeamAutomationListRoute>(
+    () => ({
+      scopeId: trim(scopeId),
+      teamId: trim(teamId),
+      ...(routeMemberId ? { memberId: routeMemberId } : {}),
+    }),
     [routeMemberId, scopeId, teamId],
+  );
+  const membersById = React.useMemo(
+    () => new Map(members.map((member) => [trim(member.memberId), member])),
+    [members],
   );
   const eligibleMembers = React.useMemo(
     () => members.filter((member) => member.canAutomateMember),
     [members],
   );
-  const routeMember = members.find((member) => trim(member.memberId) === routeMemberId);
-  const selectedTeamMembers = eligibleMembers.filter((member) => member.isSelectedMember);
-  const selectedTeamMember = selectedTeamMembers.length === 1
-    ? selectedTeamMembers[0]
-    : undefined;
-  const canonicalMember = routeMember?.canAutomateMember
-    ? routeMember
-    : !routeMemberId
-      ? selectedTeamMember ?? (eligibleMembers.length === 1 ? eligibleMembers[0] : undefined)
-      : undefined;
-  const canQuery = Boolean(route.scopeId && route.teamId && route.memberId && routeMember?.canAutomateMember);
+  const routeMember = membersById.get(routeMemberId);
+  const routeMemberAuthority = React.useMemo<TeamAutomationRoute | null>(
+    () => route.memberId
+      ? { scopeId: route.scopeId, teamId: route.teamId, memberId: route.memberId }
+      : null,
+    [route],
+  );
+  const canQuery = Boolean(
+    route.scopeId &&
+    route.teamId &&
+    (!route.memberId || routeMember?.canAutomateMember),
+  );
   const queryKey = React.useMemo(
     () => ["team-automations", route.scopeId, route.teamId, route.memberId] as const,
     [route],
@@ -739,13 +755,6 @@ const TeamAutomationsTab: React.FC<Props> = ({
   const [previewTimes, setPreviewTimes] = React.useState<readonly string[]>([]);
   const pollingStartedAtRef = React.useRef<number | null>(null);
   const recoveredRouteRef = React.useRef("");
-
-  React.useEffect(() => {
-    if (routeMemberId || !canonicalMember) {
-      return;
-    }
-    history.replace(canonicalMember.automationsHref);
-  }, [canonicalMember?.automationsHref, routeMemberId]);
 
   const automationsQuery = useQuery({
     enabled: canQuery,
@@ -800,26 +809,32 @@ const TeamAutomationsTab: React.FC<Props> = ({
   );
 
   const redirectToBindingRecovery = React.useCallback(
-    async (input?: {
-      readonly draft: TeamAutomationCreateDraft;
-      readonly mode: AuthorizationMode;
-      readonly scheduleId?: string;
-    }) => {
+    async (
+      target:
+        | {
+            readonly draft: TeamAutomationCreateDraft;
+            readonly mode: AuthorizationMode;
+            readonly scheduleId?: string;
+          }
+        | { readonly route: TeamAutomationRoute },
+    ) => {
       if (typeof window === "undefined") {
         throw new Error("NyxID authorization recovery requires a browser environment.");
       }
-      if (input) {
+      if ("draft" in target) {
         saveTeamAutomationAuthorizationDraft(
           window.sessionStorage,
-          recoveryDraft(input.draft, input.mode, input.scheduleId),
+          recoveryDraft(target.draft, target.mode, target.scheduleId),
         );
       }
       await new NyxIDAuthClient(getNyxIDRuntimeConfig()).loginWithRedirect({
-        returnTo: buildTeamMemberAutomationsHref(input?.draft ?? route),
+        returnTo: buildTeamMemberAutomationsHref(
+          "draft" in target ? target.draft : target.route,
+        ),
         prompt: "consent",
       });
     },
-    [route],
+    [],
   );
 
   const beginPreflight = React.useCallback(
@@ -861,11 +876,14 @@ const TeamAutomationsTab: React.FC<Props> = ({
   );
 
   React.useEffect(() => {
-    if (!canQuery || typeof window === "undefined") return;
+    if (!canQuery || !routeMemberAuthority || typeof window === "undefined") return;
     const routeKey = JSON.stringify(route);
     if (recoveredRouteRef.current === routeKey) return;
     recoveredRouteRef.current = routeKey;
-    const recovered = consumeTeamAutomationAuthorizationDraft(window.sessionStorage, route);
+    const recovered = consumeTeamAutomationAuthorizationDraft(
+      window.sessionStorage,
+      routeMemberAuthority,
+    );
     if (!recovered) return;
     const recoveredDraft: Draft = {
       memberId: recovered.memberId,
@@ -884,12 +902,12 @@ const TeamAutomationsTab: React.FC<Props> = ({
       recovered.mode,
       recovered.scheduleId,
     );
-  }, [beginPreflight, canQuery, route]);
+  }, [beginPreflight, canQuery, route, routeMemberAuthority]);
 
   const openCreate = () => {
     setDraft({
       ...initialDraft,
-      memberId: canonicalMember?.memberId ?? "",
+      memberId: routeMember?.memberId ?? "",
       timezone: defaultTimezone(),
     });
     setEditing(null);
@@ -897,11 +915,6 @@ const TeamAutomationsTab: React.FC<Props> = ({
     setAuthorizationFlow({ state: "idle" });
     setPreviewTimes([]);
     setFormOpen(true);
-  };
-
-  const openSelectedMember = () => {
-    if (!canonicalMember) return;
-    openCreate();
   };
 
   const openEdit = (view: TeamAutomationView) => {
@@ -937,7 +950,7 @@ const TeamAutomationsTab: React.FC<Props> = ({
     setEditing(view);
     setFormMode("edit");
     setFormOpen(true);
-    void beginPreflight(authorizationDraft(route, nextDraft), "reauthorize", view.scheduleId);
+    void beginPreflight(authorizationDraft(view, nextDraft), "reauthorize", view.scheduleId);
   };
 
   const submitAuthorization = async () => {
@@ -961,7 +974,7 @@ const TeamAutomationsTab: React.FC<Props> = ({
             identity,
           )
         : await teamAutomationApi.reauthorize(
-            route,
+            exactAutomationRoute(confirmedDraft),
             scheduleId ?? "",
             confirmedDraft,
             review.permissionDigest,
@@ -985,9 +998,6 @@ const TeamAutomationsTab: React.FC<Props> = ({
         "Authorization request accepted",
       ));
       setFormOpen(false);
-      if (!route.memberId && mode === "create") {
-        history.push(buildTeamMemberAutomationsHref(confirmedDraft));
-      }
       await invalidate();
     } catch (error) {
       if (requiresBindingRecovery(error)) {
@@ -1034,7 +1044,7 @@ const TeamAutomationsTab: React.FC<Props> = ({
     const identity = createTeamAutomationOperationIdentity();
     setBusyScheduleId(editing.scheduleId);
     try {
-      const receipt = await teamAutomationApi.update(route, editing.scheduleId, {
+      const receipt = await teamAutomationApi.update(exactAutomationRoute(editing), editing.scheduleId, {
         displayName: next.displayName,
         prompt: next.prompt,
         cronExpression: next.cronExpression,
@@ -1088,16 +1098,23 @@ const TeamAutomationsTab: React.FC<Props> = ({
   ) => {
     setBusyScheduleId(view.scheduleId);
     try {
-      let receipt;
+      let receipt: TeamAutomationMutationReceipt;
       if (action === "retryRevocation") {
-        receipt = await teamAutomationApi.retryRevocation(route, view.scheduleId);
+        receipt = await teamAutomationApi.retryRevocation(
+          exactAutomationRoute(view),
+          view.scheduleId,
+        );
         void message.info(copy(
           "teams.automations.messages.revocationRetryAccepted",
           "Revocation retry accepted",
         ));
       } else {
         const identity = createTeamAutomationOperationIdentity();
-        receipt = await teamAutomationApi[action](route, view.scheduleId, identity);
+        receipt = await teamAutomationApi[action](
+          exactAutomationRoute(view),
+          view.scheduleId,
+          identity,
+        );
         void message.info(
           action === "runNow"
             ? copy("teams.automations.messages.runAccepted", "Run request accepted")
@@ -1119,7 +1136,7 @@ const TeamAutomationsTab: React.FC<Props> = ({
     } catch (error) {
       if (requiresBindingRecovery(error)) {
         try {
-          await redirectToBindingRecovery();
+          await redirectToBindingRecovery({ route: exactAutomationRoute(view) });
           return;
         } catch (redirectError) {
           void message.error(
@@ -1397,6 +1414,7 @@ const TeamAutomationsTab: React.FC<Props> = ({
 
   const renderRow = (view: TeamAutomationView) => {
     const cadence = describeDraftCadence(view.cronExpression, view.timezone, copy);
+    const ownerMember = membersById.get(trim(view.memberId));
     const status = automationStatus(view);
     const rowBorderColor =
       status === "error"
@@ -1450,7 +1468,7 @@ const TeamAutomationsTab: React.FC<Props> = ({
           ) : null}
         </div>
         <div className="team-automation-row__member" style={{ display: "grid", gap: 5, minWidth: 0 }}>
-          <Typography.Text ellipsis strong>{routeMember?.name ?? canonicalMember?.name ?? "--"}</Typography.Text>
+          <Typography.Text ellipsis strong>{ownerMember?.name ?? "--"}</Typography.Text>
           <FactLine
             rows={2}
             secondary
@@ -1493,13 +1511,10 @@ const TeamAutomationsTab: React.FC<Props> = ({
   const review = authorizationFlow.state === "reviewing" || authorizationFlow.state === "submitting"
     ? authorizationFlow.review
     : null;
-  const upcomingAutomations = routeMember
-    ? (automationsQuery.data?.items ?? [])
-        .filter((automation) => automation.enabled && automation.nextFireAt)
-        .slice(0, 3)
-    : [];
-  const activeFormMember =
-    members.find((member) => member.memberId === draft.memberId) ?? canonicalMember;
+  const upcomingAutomations = (automationsQuery.data?.items ?? [])
+    .filter((automation) => automation.enabled && automation.nextFireAt)
+    .slice(0, 3);
+  const activeFormMember = membersById.get(trim(draft.memberId));
   const cronPresets = [
     { label: copy("teams.automations.form.preset.weekdaysMorning", "Weekdays · 09:00"), value: "weekdays-0900", cronExpression: "0 9 * * 1-5" },
     { label: copy("teams.automations.form.preset.dailyMorning", "Daily · 09:00"), value: "daily-0900", cronExpression: "0 9 * * *" },
@@ -1536,7 +1551,7 @@ const TeamAutomationsTab: React.FC<Props> = ({
   return (
     <>
       <style>{responsiveStyle}</style>
-      <div
+      <section
         aria-labelledby="team-automations-title"
         className="team-automations-layout"
         style={pageGridStyle}
@@ -1556,9 +1571,9 @@ const TeamAutomationsTab: React.FC<Props> = ({
             </div>
             <Button
               className="team-automations-create-button"
-              disabled={!canonicalMember}
+              disabled={eligibleMembers.length === 0}
               icon={<PlusOutlined />}
-              onClick={openSelectedMember}
+              onClick={openCreate}
               style={primaryHeaderButtonStyle}
               type="primary"
             >
@@ -1567,35 +1582,10 @@ const TeamAutomationsTab: React.FC<Props> = ({
           </div>
 
           <div aria-live="polite" style={{ display: "grid", gap: 12, marginTop: 16 }}>
-            {!routeMember && !canonicalMember && eligibleMembers.length > 1 ? (
-              <Select
-                aria-label={copy("teams.automations.form.memberAria", "Automation member")}
-                onChange={(memberId) => {
-                  const member = eligibleMembers.find(
-                    (candidate) => candidate.memberId === memberId,
-                  );
-                  if (member) {
-                    history.push(member.automationsHref);
-                  }
-                }}
-                options={eligibleMembers.map((member) => ({
-                  label: member.name,
-                  value: member.memberId,
-                }))}
-                placeholder={copy("teams.automations.member.select", "Select a member")}
-                style={{ maxWidth: 360, width: "100%" }}
-              />
-            ) : !routeMember ? (
-              <Empty
-                description={copy(
-                  "teams.automations.empty.member",
-                  "No automations for this member",
-                )}
-              />
-            ) : null}
-            {routeMember && automationsQuery.isLoading ? (
+            {automationsQuery.isLoading ? (
               <div
                 aria-label={copy("teams.automations.loading", "Loading automations")}
+                role="status"
                 style={{ display: "grid", gap: 12 }}
               >
                 {[0, 1, 2].map((placeholder) => (
@@ -1608,7 +1598,7 @@ const TeamAutomationsTab: React.FC<Props> = ({
                 ))}
               </div>
             ) : null}
-            {routeMember && automationsQuery.isError ? (
+            {automationsQuery.isError ? (
               <AevatarInspectorEmpty
                 compact
                 title={copy("teams.automations.error.title", "Automations could not load")}
@@ -1618,10 +1608,14 @@ const TeamAutomationsTab: React.FC<Props> = ({
                 )}
               />
             ) : null}
-            {routeMember && !automationsQuery.isLoading && !automationsQuery.isError && !automationsQuery.data?.items.length ? (
-              <Empty description={copy("teams.automations.empty.member", "No automations for this member")} />
+            {!automationsQuery.isLoading && !automationsQuery.isError && !automationItems.length ? (
+              <Empty
+                description={routeMember
+                  ? copy("teams.automations.empty.member", "No automations for this member")
+                  : copy("teams.automations.empty.title", "No recurring work yet")}
+              />
             ) : null}
-            {routeMember && automationItems.length ? (
+            {automationItems.length ? (
               <div style={commitmentGridStyle}>
                 <div className="team-automation-summary" style={automationSummaryGridStyle}>
                   {renderSummaryTile({
@@ -1677,7 +1671,7 @@ const TeamAutomationsTab: React.FC<Props> = ({
                   )}
                 </Typography.Text>
               </div>
-              {canonicalMember ? (
+              {routeMember ? (
                 <div
                   style={{
                     background: token.colorFillQuaternary,
@@ -1688,11 +1682,11 @@ const TeamAutomationsTab: React.FC<Props> = ({
                     padding: 14,
                   }}
                 >
-                  <Typography.Text ellipsis strong>{canonicalMember.name}</Typography.Text>
+                  <Typography.Text ellipsis strong>{routeMember.name}</Typography.Text>
                   <FactLine secondary text={copy("teams.automations.member.publishedServiceReady", "Published service ready")} />
-                  <DetailPill compact style={canonicalMember.lifecycleStyle} text={canonicalMember.lifecycleLabel} />
+                  <DetailPill compact style={routeMember.lifecycleStyle} text={routeMember.lifecycleLabel} />
                 </div>
-              ) : (
+              ) : eligibleMembers.length === 0 ? (
                 <AevatarInspectorEmpty
                   compact
                   title={copy("teams.automations.noPublishedMember.title", "Publish a member first")}
@@ -1701,12 +1695,12 @@ const TeamAutomationsTab: React.FC<Props> = ({
                     "Automations need a member with a published service identity before they can run.",
                   )}
                 />
-              )}
+              ) : null}
               <Button
                 block
-                disabled={!canonicalMember}
+                disabled={eligibleMembers.length === 0}
                 icon={<ClockCircleOutlined />}
-                onClick={openSelectedMember}
+                onClick={openCreate}
                 style={inspectorActionButtonStyle}
                 type="primary"
               >
@@ -1748,8 +1742,7 @@ const TeamAutomationsTab: React.FC<Props> = ({
                           "{memberName} recurring work",
                           {
                             memberName:
-                              routeMember?.name ??
-                              canonicalMember?.name ??
+                              membersById.get(trim(automation.memberId))?.name ??
                               copy("teams.automations.columns.member", "Member"),
                           },
                         )}
@@ -1783,9 +1776,9 @@ const TeamAutomationsTab: React.FC<Props> = ({
             </AevatarPanel>
           ) : null}
         </div>
-      </div>
+      </section>
 
-      {activeFormMember ? <Modal
+      {formOpen ? <Modal
         aria-describedby="team-automation-form-description"
         confirmLoading={flowBusy || Boolean(busyScheduleId)}
         destroyOnHidden
@@ -1843,7 +1836,7 @@ const TeamAutomationsTab: React.FC<Props> = ({
                   options={members
                     .filter((member) => member.canAutomateMember)
                     .map((member) => ({ label: member.name, value: member.memberId }))}
-                  value={activeFormMember.memberId}
+                  value={activeFormMember?.memberId}
                 />
                 <Typography.Text style={{ fontSize: 12 }} type="secondary">
                   {copy("teams.automations.form.identityReady", "Targets the member's published service.")}

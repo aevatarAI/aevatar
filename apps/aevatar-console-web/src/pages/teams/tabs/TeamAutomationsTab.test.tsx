@@ -76,7 +76,6 @@ jest.mock("@/shared/auth/config", () => ({
 }));
 
 const member = {
-  automationsHref: "/scopes/scope-alpha/teams/team-alpha/members/m-alpha/automations",
   canAutomateMember: true,
   disabledReason: "",
   implementationKind: "Workflow",
@@ -214,40 +213,9 @@ describe("TeamAutomationsTab canonical member authority", () => {
     ).toBe(true);
   });
 
-  it("canonicalizes the sole eligible member from the Team shell", async () => {
-    renderTab();
-
-    expect(await screen.findByRole("heading", { name: "Automations" })).toBeInTheDocument();
-    await waitFor(() =>
-      expect(history.replace).toHaveBeenCalledWith(member.automationsHref),
-    );
-    expect(teamAutomationApi.listAll).not.toHaveBeenCalled();
-    expect(scheduledDispatchApi.listAll).not.toHaveBeenCalled();
-  });
-
-  it("canonicalizes the explicitly selected eligible member", async () => {
-    const selectedMember = {
-      ...member,
-      automationsHref: "/scopes/scope-alpha/teams/team-alpha/members/m-beta/automations",
-      isSelectedMember: true,
-      key: "m-beta",
-      memberId: "m-beta",
-      name: "Reviewer",
-      serviceId: "svc-beta",
-    };
-
-    renderTab("", [member, selectedMember]);
-
-    await waitFor(() =>
-      expect(history.replace).toHaveBeenCalledWith(selectedMember.automationsHref),
-    );
-    expect(teamAutomationApi.listAll).not.toHaveBeenCalled();
-  });
-
-  it("requires an explicit choice when multiple eligible members are unresolved", async () => {
+  it("keeps member selection inside the create form when multiple members are eligible", async () => {
     const otherMember = {
       ...member,
-      automationsHref: "/scopes/scope-alpha/teams/team-alpha/members/m-beta/automations",
       key: "m-beta",
       memberId: "m-beta",
       name: "Reviewer",
@@ -256,14 +224,132 @@ describe("TeamAutomationsTab canonical member authority", () => {
 
     renderTab("", [member, otherMember]);
 
-    expect(await screen.findByRole("combobox", { name: "Automation member" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Automations" })).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Automation member" })).not.toBeInTheDocument();
     expect(history.replace).not.toHaveBeenCalled();
-    expect(teamAutomationApi.listAll).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(teamAutomationApi.listAll).toHaveBeenCalledWith(
+        { scopeId: "scope-alpha", teamId: "team-alpha" },
+        { take: 200 },
+      ),
+    );
 
-    fireEvent.mouseDown(screen.getByRole("combobox", { name: "Automation member" }));
+    fireEvent.click(screen.getByRole("button", { name: "New automation" }));
+
+    const form = await screen.findByRole("dialog");
+    expect(within(form).getByRole("combobox", { name: "Automation member" })).toBeEnabled();
+    expect(within(form).queryByText("Planner")).not.toBeInTheDocument();
+    expect(within(form).queryByText("Reviewer")).not.toBeInTheDocument();
+    expect(history.push).not.toHaveBeenCalled();
+  });
+
+  it("stays on the Team collection after creating for an explicitly selected member", async () => {
+    const otherMember = {
+      ...member,
+      key: "m-beta",
+      memberId: "m-beta",
+      name: "Reviewer",
+      serviceId: "svc-beta",
+    };
+    (teamAutomationApi.preflightCreate as jest.Mock).mockResolvedValue(
+      authorizationReview(),
+    );
+    (teamAutomationApi.create as jest.Mock).mockResolvedValue({
+      accepted: true,
+      commandId: "cmd-beta",
+      operationId: "op-beta",
+      scheduleId: "sch-beta",
+      status: "accepted",
+    });
+
+    renderTab("", [member, otherMember]);
+
+    fireEvent.click(await screen.findByRole("button", { name: "New automation" }));
+    const form = await screen.findByRole("dialog");
+    fireEvent.mouseDown(within(form).getByRole("combobox", { name: "Automation member" }));
     fireEvent.click(await screen.findByText("Reviewer"));
+    fireEvent.click(within(form).getByRole("button", { name: "Create automation" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Authorize and continue" }));
 
-    expect(history.push).toHaveBeenCalledWith(otherMember.automationsHref);
+    await waitFor(() => expect(teamAutomationApi.create).toHaveBeenCalledTimes(1));
+    expect(teamAutomationApi.create).toHaveBeenCalledWith(
+      expect.objectContaining({ memberId: "m-beta" }),
+      "digest-alpha",
+      "scheduled-invocation-auth/v1",
+      { idempotencyKey: "idem-alpha", operationId: "op-alpha" },
+    );
+    expect(history.push).not.toHaveBeenCalled();
+  });
+
+  it("attributes Team collection rows to each automation member", async () => {
+    const otherMember = {
+      ...member,
+      key: "m-beta",
+      memberId: "m-beta",
+      name: "Reviewer",
+      serviceId: "svc-beta",
+    };
+    (teamAutomationApi.listAll as jest.Mock).mockResolvedValue({
+      items: [
+        automationView({ displayName: "Planner review" }),
+        automationView({
+          displayName: "Reviewer review",
+          memberId: "m-beta",
+          publishedServiceId: "svc-beta",
+          scheduleId: "sch-beta",
+        }),
+      ],
+      nextCursor: null,
+      totalCount: 2,
+    });
+
+    renderTab("", [member, otherMember]);
+
+    const plannerRow = await screen.findByRole("article", { name: "Planner review" });
+    const reviewerRow = await screen.findByRole("article", { name: "Reviewer review" });
+    expect(within(plannerRow).getByText("Planner")).toBeInTheDocument();
+    expect(within(reviewerRow).getByText("Reviewer")).toBeInTheDocument();
+  });
+
+  it("uses the row member authority for Team collection actions", async () => {
+    const otherMember = {
+      ...member,
+      key: "m-beta",
+      memberId: "m-beta",
+      name: "Reviewer",
+      serviceId: "svc-beta",
+    };
+    const reviewerAutomation = automationView({
+      displayName: "Reviewer review",
+      memberId: "m-beta",
+      publishedServiceId: "svc-beta",
+      scheduleId: "sch-beta",
+    });
+    (teamAutomationApi.listAll as jest.Mock).mockResolvedValue({
+      items: [reviewerAutomation],
+      nextCursor: null,
+      totalCount: 1,
+    });
+    (teamAutomationApi.runNow as jest.Mock).mockResolvedValue({
+      accepted: true,
+      commandId: "cmd-beta",
+      operationId: "op-beta",
+      scheduleId: "sch-beta",
+      status: "accepted",
+    });
+
+    renderTab("", [member, otherMember]);
+
+    const reviewerRow = await screen.findByRole("article", { name: "Reviewer review" });
+    fireEvent.click(within(reviewerRow).getByRole("button", { name: "Run now" }));
+
+    await waitFor(() =>
+      expect(teamAutomationApi.runNow).toHaveBeenCalledWith(
+        { scopeId: "scope-alpha", teamId: "team-alpha", memberId: "m-beta" },
+        "sch-beta",
+        { idempotencyKey: "idem-alpha", operationId: "op-alpha" },
+      ),
+    );
   });
 
   it("opens the complete dev form directly from the Team shell", async () => {
@@ -280,7 +366,10 @@ describe("TeamAutomationsTab canonical member authority", () => {
     expect(screen.getByRole("button", { name: "Create automation" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Review authorization" })).not.toBeInTheDocument();
     expect(history.push).not.toHaveBeenCalled();
-    expect(teamAutomationApi.listAll).not.toHaveBeenCalled();
+    expect(teamAutomationApi.listAll).toHaveBeenCalledWith(
+      { scopeId: "scope-alpha", teamId: "team-alpha" },
+      { take: 200 },
+    );
   });
 
   it("loads only the exact canonical member collection", async () => {
