@@ -40,6 +40,20 @@ public sealed class OrnnExactRemoteSkillFetcherTests
     }
 
     [Fact]
+    public async Task FetchAsync_ShouldReadSkillMarkdownInsideSinglePackageDirectory()
+    {
+        var handler = new OrnnTestHttpMessageHandler(
+            _ => OrnnTestHttpMessageHandler.JsonResponse(DetailJson()),
+            _ => OrnnTestHttpMessageHandler.JsonResponse(SkillJson(
+                filesJson: "{\"skill-alpha/SKILL.md\":\"# Skill Alpha\\n\\nInstructions.\"}")));
+
+        var result = await CreateFetcher(handler).FetchAsync("token", ExactRef());
+
+        result.IsSuccess.Should().BeTrue();
+        result.SkillMarkdown.Should().Be("# Skill Alpha\n\nInstructions.");
+    }
+
+    [Fact]
     public async Task FetchAsync_InvalidReferenceOrMissingToken_ShouldFailBeforeHttp()
     {
         var handler = SuccessHandler();

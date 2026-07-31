@@ -1,5 +1,7 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.ToolProviders.Ornn;
 using Aevatar.AI.ToolProviders.Skills;
+using Aevatar.GAgentService.Abstractions.AgentProfiles;
 
 namespace Aevatar.Mainnet.Host.Api.Skills;
 
@@ -9,11 +11,16 @@ internal sealed class UserSkillCatalogQueryService : IUserSkillCatalogQueryServi
 {
     private readonly OrnnSkillClient _ornnClient;
     private readonly IRemoteSkillFetcher _remoteSkillFetcher;
+    private readonly IExactOrnnSkillResolver _exactSkillResolver;
 
-    public UserSkillCatalogQueryService(OrnnSkillClient ornnClient, IRemoteSkillFetcher remoteSkillFetcher)
+    public UserSkillCatalogQueryService(
+        OrnnSkillClient ornnClient,
+        IRemoteSkillFetcher remoteSkillFetcher,
+        IExactOrnnSkillResolver exactSkillResolver)
     {
         _ornnClient = ornnClient ?? throw new ArgumentNullException(nameof(ornnClient));
         _remoteSkillFetcher = remoteSkillFetcher ?? throw new ArgumentNullException(nameof(remoteSkillFetcher));
+        _exactSkillResolver = exactSkillResolver ?? throw new ArgumentNullException(nameof(exactSkillResolver));
     }
 
     public async Task<UserSkillDetail?> GetSkillAsync(
@@ -58,33 +65,45 @@ internal sealed class UserSkillCatalogQueryService : IUserSkillCatalogQueryServi
             }
             var exactVersion = resolvedVersion!;
 
-            var read = await _ornnClient.GetExactSkillDetailAsync(
+            var resolution = await _exactSkillResolver.ResolveAsync(
                 accessToken,
-                guid,
-                exactVersion,
+                new ExactRemoteSkillRef
+                {
+                    Guid = guid,
+                    LiteralVersion = exactVersion,
+                },
                 ct);
-            if (read.ProxyStatus is not null)
-                return new UserExactSkillReadResult(null, "exact_skill_upstream_failure", read.ProxyStatus);
-
-            var detail = read.Value;
-            if (detail is null)
-                return new UserExactSkillReadResult(null, "exact_skill_not_found");
-            if (!string.Equals(detail.Guid, guid, StringComparison.Ordinal) ||
-                string.IsNullOrWhiteSpace(detail.Name) ||
-                string.IsNullOrWhiteSpace(detail.CreatedBy) ||
-                string.IsNullOrWhiteSpace(detail.SkillHash))
+            if (!resolution.IsSuccess)
             {
-                return new UserExactSkillReadResult(null, "exact_skill_integrity_failure");
+                return resolution.DiagnosticCode switch
+                {
+                    "ORNN_SKILL_ACCESS_DENIED" =>
+                        new UserExactSkillReadResult(null, "exact_skill_upstream_failure", 403),
+                    "ORNN_SKILL_NOT_FOUND" =>
+                        new UserExactSkillReadResult(null, "exact_skill_not_found"),
+                    "ORNN_SKILL_IDENTITY_MISMATCH" or
+                        "ORNN_SKILL_INTEGRITY_EVIDENCE_MISSING" or
+                        "INVALID_SKILL_PACKAGE" =>
+                        new UserExactSkillReadResult(null, "exact_skill_integrity_failure"),
+                    _ => new UserExactSkillReadResult(null, "exact_skill_upstream_failure"),
+                };
             }
-            var exactGuid = detail.Guid!;
+
+            var package = resolution.Package!;
 
             return new UserExactSkillReadResult(
                 new UserExactSkillDetail(
-                    exactGuid,
-                    detail.Name,
-                    exactVersion,
-                    detail.CreatedBy,
-                    detail.SkillHash),
+                    package.SkillGuid,
+                    package.CanonicalName,
+                    package.LiteralVersion,
+                    package.PublisherId,
+                    Convert.ToHexString(package.SkillSha256.Span).ToLowerInvariant(),
+                    package.DeclaredToolNames
+                        .Select(static name => name.Trim())
+                        .Where(static name => name.Length > 0)
+                        .Distinct(StringComparer.Ordinal)
+                        .Order(StringComparer.Ordinal)
+                        .ToArray()),
                 null);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
