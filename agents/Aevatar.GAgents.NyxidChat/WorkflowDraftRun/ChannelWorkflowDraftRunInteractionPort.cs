@@ -299,7 +299,6 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
                             SourceResourceKey: resourceKey,
                             FileName: NormalizeOptional(download.FileName) ?? NormalizeOptional(attachment.Name),
                             MediaType: NormalizeOptional(download.ContentType) ?? NormalizeOptional(attachment.ContentType),
-                            OwnerRunId: NormalizeOptional(request.RunId),
                             OwnerScopeId: NormalizeOptional(request.WorkflowSource?.ScopeId)),
                         ct)
                     .ConfigureAwait(false);

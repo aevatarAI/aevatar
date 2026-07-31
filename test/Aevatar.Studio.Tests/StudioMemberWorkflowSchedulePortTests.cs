@@ -495,6 +495,39 @@ public sealed class StudioMemberWorkflowSchedulePortTests
     }
 
     [Fact]
+    public async Task PreflightForWriteAsync_WhenCatalogRefreshIsUnstable_ShouldThrowTypedRefreshUnavailable()
+    {
+        var planner = new RecordingAuthorizationPlanner();
+        planner.Results.Enqueue(ScheduledInvocationAuthorizationPlanResult.Failed(
+            ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+            "nyxid_catalog_snapshot_invalidated",
+            requiredNyxIdServices: [new NyxIdUserServiceCapabilityRef { UserServiceId = "nyx-service-alpha" }]));
+        var refresh = new RecordingCatalogRefreshPort
+        {
+            Result = new NyxIdAuthorizationCatalogRefreshResult(
+                NyxIdAuthorizationCatalogRefreshStatus.CatalogUnstable,
+                "api_key_scope_plan_route_unresolved"),
+        };
+        var materializer = new RecordingCredentialMaterializer();
+        var scheduleService = new RecordingScheduleService();
+        var port = NewPort(
+            scheduleService,
+            planner: planner,
+            materializer: materializer,
+            catalogRefresh: refresh);
+
+        var act = () => port.PreflightForWriteAsync(Request("scope-1", "member-1"));
+
+        await act.Should().ThrowAsync<StudioMemberAutomationCatalogRefreshUnavailableException>()
+            .WithMessage("The authorization catalog could not be refreshed. Retry this request.");
+        planner.Requests.Should().ContainSingle();
+        refresh.RefreshCallCount.Should().Be(1);
+        materializer.MaterializeCallCount.Should().Be(0);
+        scheduleService.BeginCallCount.Should().Be(0);
+        scheduleService.EnsureCallCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task PreflightForWriteAsync_WhenCatalogSnapshotUnavailableWithoutRequiredServices_ShouldNotRefresh()
     {
         var planner = new RecordingAuthorizationPlanner();
