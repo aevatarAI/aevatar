@@ -524,8 +524,10 @@ public sealed class AevatarInvocationDispatcher
             if (lookup.IsRunnable && !string.IsNullOrWhiteSpace(lookup.Workflow!.ActorId))
                 return WorkflowStartSourceResolution.Resolved(lookup.Workflow);
 
-            if (lookup.Status != ScopeWorkflowLookupStatus.NotFound)
-                return WorkflowStartSourceResolution.Failed(ScopeWorkflowUnavailableError(scopeId, workflowId, lookup));
+            if (lookup.Status == ScopeWorkflowLookupStatus.NotFound)
+                return WorkflowStartSourceResolution.Failed(ScopeWorkflowNotFoundError(scopeId, workflowId, lookup));
+
+            return WorkflowStartSourceResolution.Failed(ScopeWorkflowUnavailableError(scopeId, workflowId, lookup));
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -1426,6 +1428,15 @@ public sealed class AevatarInvocationDispatcher
                 DeliveryId = deliveryReservation.Receipt.DeliveryId,
                 ExpiresAtUnixMs = deliveryReservation.Reservation.ExpiresAtUnixMs,
             };
+
+    private static InvocationToolError ScopeWorkflowNotFoundError(
+        string scopeId,
+        string workflowId,
+        ScopeWorkflowLookupResult lookup) =>
+        Error(
+            "scope_workflow_not_found",
+            $"Current-scope workflow '{workflowId}' was not found in scope '{scopeId}': {lookup.Reason}. List current scope workflows, choose one runnable descriptor, and retry with its exact workflow_id.",
+            "workflow_id");
 
     private static InvocationToolError ScopeWorkflowUnavailableError(
         string scopeId,
