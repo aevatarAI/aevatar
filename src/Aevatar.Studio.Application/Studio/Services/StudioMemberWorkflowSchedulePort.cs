@@ -904,7 +904,8 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         }
 
         if (refresh.Status is NyxIdAuthorizationCatalogRefreshStatus.Failed or
-            NyxIdAuthorizationCatalogRefreshStatus.ObservationTimedOut)
+            NyxIdAuthorizationCatalogRefreshStatus.ObservationTimedOut or
+            NyxIdAuthorizationCatalogRefreshStatus.CatalogUnstable)
         {
             throw new StudioMemberAutomationCatalogRefreshUnavailableException();
         }
