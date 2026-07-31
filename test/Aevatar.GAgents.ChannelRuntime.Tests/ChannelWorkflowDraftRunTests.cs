@@ -50,6 +50,20 @@ public sealed class ChannelWorkflowDraftRunTests
     }
 
     [Theory]
+    [InlineData("让 workflow 处理一下这个 PDF")]
+    [InlineData("use workflow to process this attachment")]
+    public void IntentParser_ShouldMatchImplicitWorkflowFileRequest(string text)
+    {
+        var parser = new ChannelWorkflowDraftRunIntentParser(BuildWorkflowSlashRegistry());
+
+        var matched = parser.TryParse(text, out var intent);
+
+        matched.Should().BeTrue();
+        intent.WorkflowId.Should().BeEmpty();
+        intent.Prompt.Should().Be(text);
+    }
+
+    [Theory]
     [InlineData("missing-scope", null, "user-token-1", true, true, "scope")]
     [InlineData("missing-token", "scope-1", null, true, true, "授权")]
     [InlineData("missing-query-port", "scope-1", "user-token-1", false, true, "查询服务")]
@@ -130,6 +144,68 @@ public sealed class ChannelWorkflowDraftRunTests
         result.Request.WorkflowSource.DefinitionActorId.Should().Be("scope-workflow-definition-actor-1");
         result.Request.Headers.Should().Contain("workflow_id", "daily-greeting");
         result.Request.NyxUserAccessToken.Should().Be("user-token-1");
+    }
+
+    [Fact]
+    public async Task Admission_ShouldUseSingleRunnableWorkflow_ForImplicitWorkflowFileRequest()
+    {
+        var workflow = BuildWorkflowSummary(
+            "scope-1",
+            "invoice-review",
+            actorId: "scope-workflow-definition-actor-1");
+        var admission = new ChannelWorkflowDraftRunAdmission(
+            new ChannelWorkflowDraftRunIntentParser(BuildWorkflowSlashRegistry()),
+            new StubScopeWorkflowQueryPort(workflow));
+
+        var result = await admission.TryAdmitAsync(
+            BuildWorkflowActivity("scope-1", "user-token-1", "让 workflow 处理一下这个 PDF"),
+            new ChannelBotRegistrationEntry { Id = "reg-1", ScopeId = "scope-1" },
+            new ChannelInboundEvent
+            {
+                Text = "让 workflow 处理一下这个 PDF",
+                Platform = "lark",
+                MessageId = "msg-1",
+                ConversationId = "oc_group_chat_1",
+            },
+            new ConversationTurnRuntimeContext(null, "user-token-1"),
+            CancellationToken.None);
+
+        result.Matched.Should().BeTrue();
+        result.Rejection.Should().BeNull();
+        result.Request.Should().NotBeNull();
+        result.Request!.WorkflowSource.WorkflowId.Should().Be("invoice-review");
+        result.Request.WorkflowSource.DefinitionActorId.Should().Be("scope-workflow-definition-actor-1");
+        result.Request.Prompt.Should().Be("让 workflow 处理一下这个 PDF");
+    }
+
+    [Fact]
+    public async Task Admission_ShouldRejectImplicitWorkflowFileRequest_WhenMultipleRunnableWorkflowsExist()
+    {
+        var admission = new ChannelWorkflowDraftRunAdmission(
+            new ChannelWorkflowDraftRunIntentParser(BuildWorkflowSlashRegistry()),
+            new StubScopeWorkflowQueryPort(
+                BuildWorkflowSummary("scope-1", "invoice-review"),
+                BuildWorkflowSummary("scope-1", "receipt-review")));
+
+        var result = await admission.TryAdmitAsync(
+            BuildWorkflowActivity("scope-1", "user-token-1", "让 workflow 处理一下这个 PDF"),
+            new ChannelBotRegistrationEntry { Id = "reg-1", ScopeId = "scope-1" },
+            new ChannelInboundEvent
+            {
+                Text = "让 workflow 处理一下这个 PDF",
+                Platform = "lark",
+                MessageId = "msg-1",
+                ConversationId = "oc_group_chat_1",
+            },
+            new ConversationTurnRuntimeContext(null, "user-token-1"),
+            CancellationToken.None);
+
+        result.Matched.Should().BeTrue();
+        result.Request.Should().BeNull();
+        result.Rejection.Should().NotBeNull();
+        result.Rejection!.Text.Should().Contain("/workflow run <workflow_id>");
+        result.Rejection.Text.Should().Contain("invoice-review");
+        result.Rejection.Text.Should().Contain("receipt-review");
     }
 
     [Fact]
@@ -1013,11 +1089,14 @@ public sealed class ChannelWorkflowDraftRunTests
         return request;
     }
 
-    private static ChatActivity BuildWorkflowActivity(string? scopeId, string? userToken) =>
+    private static ChatActivity BuildWorkflowActivity(
+        string? scopeId,
+        string? userToken,
+        string text = "/workflow run daily-greeting") =>
         new()
         {
             Id = "msg-1",
-            Content = new MessageContent { Text = "/workflow run daily-greeting" },
+            Content = new MessageContent { Text = text },
             TransportExtras = new TransportExtras
             {
                 NyxRegistrationScopeId = scopeId ?? string.Empty,
@@ -1195,21 +1274,27 @@ public sealed class ChannelWorkflowDraftRunTests
         }
     }
 
-    private sealed class StubScopeWorkflowQueryPort(ScopeWorkflowSummary? workflow) : Aevatar.GAgentService.Abstractions.Ports.IScopeWorkflowQueryPort
+    private sealed class StubScopeWorkflowQueryPort : Aevatar.GAgentService.Abstractions.Ports.IScopeWorkflowQueryPort
     {
+        private readonly IReadOnlyList<ScopeWorkflowSummary> _workflows;
+
+        public StubScopeWorkflowQueryPort(params ScopeWorkflowSummary?[] workflows)
+        {
+            _workflows = workflows.Where(static workflow => workflow is not null).Cast<ScopeWorkflowSummary>().ToArray();
+        }
+
         public Task<IReadOnlyList<ScopeWorkflowSummary>> ListAsync(string scopeId, CancellationToken ct = default) =>
-            Task.FromResult<IReadOnlyList<ScopeWorkflowSummary>>(workflow is null ? [] : [workflow]);
+            Task.FromResult<IReadOnlyList<ScopeWorkflowSummary>>(
+                _workflows.Where(workflow => string.Equals(workflow.ScopeId, scopeId, StringComparison.Ordinal)).ToArray());
 
         public Task<ScopeWorkflowLookupResult> LookupByWorkflowIdAsync(
             string scopeId,
             string workflowId,
             CancellationToken ct = default)
         {
-            var summary = workflow is not null &&
-                          string.Equals(workflow.ScopeId, scopeId, StringComparison.Ordinal) &&
-                          string.Equals(workflow.WorkflowId, workflowId, StringComparison.Ordinal)
-                ? workflow
-                : null;
+            var summary = _workflows.FirstOrDefault(workflow =>
+                string.Equals(workflow.ScopeId, scopeId, StringComparison.Ordinal) &&
+                string.Equals(workflow.WorkflowId, workflowId, StringComparison.Ordinal));
             return Task.FromResult(summary switch
             {
                 null => new ScopeWorkflowLookupResult(ScopeWorkflowLookupStatus.NotFound, null, "test_not_found"),
@@ -1222,21 +1307,17 @@ public sealed class ChannelWorkflowDraftRunTests
             string scopeId,
             string workflowId,
             CancellationToken ct = default) =>
-            Task.FromResult(workflow is not null &&
-                            string.Equals(workflow.ScopeId, scopeId, StringComparison.Ordinal) &&
-                            string.Equals(workflow.WorkflowId, workflowId, StringComparison.Ordinal)
-                ? workflow
-                : null);
+            Task.FromResult(_workflows.FirstOrDefault(workflow =>
+                string.Equals(workflow.ScopeId, scopeId, StringComparison.Ordinal) &&
+                string.Equals(workflow.WorkflowId, workflowId, StringComparison.Ordinal)));
 
         public Task<ScopeWorkflowSummary?> GetByActorIdAsync(
             string scopeId,
             string actorId,
             CancellationToken ct = default) =>
-            Task.FromResult(workflow is not null &&
-                            string.Equals(workflow.ScopeId, scopeId, StringComparison.Ordinal) &&
-                            string.Equals(workflow.ActorId, actorId, StringComparison.Ordinal)
-                ? workflow
-                : null);
+            Task.FromResult(_workflows.FirstOrDefault(workflow =>
+                string.Equals(workflow.ScopeId, scopeId, StringComparison.Ordinal) &&
+                string.Equals(workflow.ActorId, actorId, StringComparison.Ordinal)));
     }
 
     private sealed class RecordingActorRuntime : IActorRuntime

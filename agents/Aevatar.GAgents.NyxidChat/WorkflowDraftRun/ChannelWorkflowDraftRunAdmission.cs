@@ -59,13 +59,23 @@ public sealed class ChannelWorkflowDraftRunAdmission
         if (_workflowQueryPort is null)
             return ChannelWorkflowDraftRunAdmissionResult.Rejected("Workflow 查询服务暂不可用,请稍后重试。");
 
-        var lookup = await _workflowQueryPort.LookupByWorkflowIdAsync(scopeId, intent.WorkflowId, ct)
-            .ConfigureAwait(false);
+        var lookup = string.IsNullOrWhiteSpace(intent.WorkflowId)
+            ? await ResolveSingleRunnableWorkflowAsync(scopeId, ct).ConfigureAwait(false)
+            : await _workflowQueryPort.LookupByWorkflowIdAsync(scopeId, intent.WorkflowId, ct).ConfigureAwait(false);
         if (lookup.Status == ScopeWorkflowLookupStatus.NotFound)
-            return ChannelWorkflowDraftRunAdmissionResult.Rejected($"未找到 workflow `{intent.WorkflowId}`。");
+            return ChannelWorkflowDraftRunAdmissionResult.Rejected(string.IsNullOrWhiteSpace(intent.WorkflowId)
+                ? "当前 scope 没有可运行 workflow,请先创建并绑定 workflow。"
+                : $"未找到 workflow `{intent.WorkflowId}`。");
+
+        if (lookup.Status == ScopeWorkflowLookupStatus.Stale)
+            return ChannelWorkflowDraftRunAdmissionResult.Rejected(lookup.Reason);
 
         if (!lookup.IsRunnable)
-            return ChannelWorkflowDraftRunAdmissionResult.Rejected($"Workflow `{intent.WorkflowId}` 暂未绑定可运行的 actor,请稍后重试。");
+            return ChannelWorkflowDraftRunAdmissionResult.Rejected(string.IsNullOrWhiteSpace(intent.WorkflowId)
+                ? string.IsNullOrWhiteSpace(lookup.Reason)
+                    ? "当前 scope 没有唯一可运行 workflow,请用 `/workflow run <workflow_id>` 指定。"
+                    : lookup.Reason
+                : $"Workflow `{intent.WorkflowId}` 暂未绑定可运行的 actor,请稍后重试。");
 
         var workflow = lookup.Workflow!;
 
@@ -98,6 +108,35 @@ public sealed class ChannelWorkflowDraftRunAdmission
 
         return ChannelWorkflowDraftRunAdmissionResult.Accepted(request);
     }
+
+    private async Task<ScopeWorkflowLookupResult> ResolveSingleRunnableWorkflowAsync(
+        string scopeId,
+        CancellationToken ct)
+    {
+        var workflows = await _workflowQueryPort!.ListAsync(scopeId, ct).ConfigureAwait(false);
+        var runnable = new List<ScopeWorkflowSummary>();
+        foreach (var workflow in workflows)
+        {
+            if (string.IsNullOrWhiteSpace(workflow.WorkflowId))
+                continue;
+
+            var lookup = await _workflowQueryPort.LookupByWorkflowIdAsync(scopeId, workflow.WorkflowId, ct)
+                .ConfigureAwait(false);
+            if (lookup.IsRunnable)
+                runnable.Add(lookup.Workflow!);
+        }
+
+        return runnable.Count switch
+        {
+            0 => new ScopeWorkflowLookupResult(ScopeWorkflowLookupStatus.NotFound, null, "no_runnable_scope_workflow"),
+            1 => new ScopeWorkflowLookupResult(ScopeWorkflowLookupStatus.Runnable, runnable[0], "single_runnable_scope_workflow"),
+            _ => new ScopeWorkflowLookupResult(ScopeWorkflowLookupStatus.NotReady, null, FormatAmbiguousWorkflowMessage(runnable)),
+        };
+    }
+
+    private static string FormatAmbiguousWorkflowMessage(IReadOnlyList<ScopeWorkflowSummary> workflows) =>
+        "当前 scope 有多个可运行 workflow,请用 `/workflow run <workflow_id>` 指定: " +
+        string.Join(", ", workflows.Select(static workflow => workflow.WorkflowId));
 
     private static string? NormalizeOptional(string? value)
     {

@@ -21,7 +21,13 @@ public sealed class ChannelWorkflowDraftRunIntentParser
 
         var normalized = text.Trim();
         if (!TryParseSlashCommand(normalized, out var commandName, out var argumentText))
-            return false;
+        {
+            if (!IsImplicitWorkflowFileRequest(normalized))
+                return false;
+
+            intent = new ChannelWorkflowDraftRunIntent(string.Empty, normalized);
+            return true;
+        }
 
         var handler = _slashCommandRegistry?.Find(commandName);
         if (handler is not IChannelWorkflowDraftRunCommand workflowCommand)
@@ -33,6 +39,21 @@ public sealed class ChannelWorkflowDraftRunIntentParser
         intent = new ChannelWorkflowDraftRunIntent(workflowId, normalized);
         return true;
     }
+
+    private static bool IsImplicitWorkflowFileRequest(string text) =>
+        Contains(text, "workflow") &&
+        (Contains(text, "pdf") ||
+         Contains(text, "file") ||
+         Contains(text, "document") ||
+         Contains(text, "attachment") ||
+         Contains(text, "invoice") ||
+         Contains(text, "文件") ||
+         Contains(text, "文档") ||
+         Contains(text, "附件") ||
+         Contains(text, "发票"));
+
+    private static bool Contains(string text, string value) =>
+        text.Contains(value, StringComparison.OrdinalIgnoreCase);
 
     private static bool TryParseSlashCommand(string text, out string commandName, out string argumentText)
     {
