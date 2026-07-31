@@ -1,8 +1,11 @@
+using Aevatar.AI.Abstractions;
+
 namespace Aevatar.AI.Core.AgentProfiles;
 
 public sealed record AgentProfileTurnClassificationCandidate(
     string IntentId,
-    string RoutingDescription);
+    string RoutingDescription,
+    AgentProfileSideEffectClass SideEffectClass);
 
 public sealed record AgentProfileTurnClassificationRequest(
     string UserMessage,

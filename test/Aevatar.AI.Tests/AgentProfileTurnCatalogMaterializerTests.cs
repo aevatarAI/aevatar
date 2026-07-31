@@ -722,10 +722,12 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
         var tools = NewTools("recovery", "task", "extra");
         var classifier = new RecordingClassifier(AgentProfileTurnClassificationResult.Matched("intent-alpha"));
         var fetcher = new RecordingFetcher(SuccessfulFetch());
+        var profile = BuildProfile();
+        profile.Members.Single().SideEffectClass = AgentProfileSideEffectClass.ExternalHandoff;
 
         var result = await NewMaterializer(RegistryWithRoute(tools), classifier, fetcher)
             .MaterializeWithPreparationAsync(
-                SealProfile(BuildProfile()),
+                SealProfile(profile),
                 "classify me",
                 "token",
                 tools,
@@ -739,7 +741,9 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
             diagnostic.Detail == "intent-alpha");
         classifier.CallCount.Should().Be(1);
         classifier.LastRequest!.Candidates.Should().ContainSingle(candidate =>
-            candidate.IntentId == "intent-alpha" && candidate.RoutingDescription == "Route alpha requests.");
+            candidate.IntentId == "intent-alpha" &&
+            candidate.RoutingDescription == "Route alpha requests." &&
+            candidate.SideEffectClass == AgentProfileSideEffectClass.ExternalHandoff);
     }
 
     [Fact]

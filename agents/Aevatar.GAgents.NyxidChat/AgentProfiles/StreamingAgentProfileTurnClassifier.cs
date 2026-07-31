@@ -43,6 +43,10 @@ public sealed class StreamingAgentProfileTurnClassifier : IAgentProfileTurnClass
             [
                 ChatMessage.System(
                     "Classify the user message against the supplied intent catalog. " +
+                    "Select the intent that directly produces the user's final requested outcome, " +
+                    "not an intermediate prerequisite or discovery step. " +
+                    "When an external_handoff intent directly fulfills that outcome and a read_only " +
+                    "intent only discovers a prerequisite, select the external_handoff intent. " +
                     "Return only JSON with status 'matched' and intent_id, or status 'no_match'."),
                 ChatMessage.User(input),
             ],
@@ -98,6 +102,8 @@ public sealed class StreamingAgentProfileTurnClassifier : IAgentProfileTurnClass
             {
                 intent_id = candidate.IntentId,
                 routing_description = candidate.RoutingDescription,
+                side_effect_class = JsonNamingPolicy.SnakeCaseLower.ConvertName(
+                    candidate.SideEffectClass.ToString()),
             }),
         });
 
