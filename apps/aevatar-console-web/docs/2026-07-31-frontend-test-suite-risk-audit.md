@@ -12,21 +12,29 @@ repeated setup, mock and collaborator-call assertions, observable assertions,
 and overlap with adjacent test files. Line count and mock count were used only
 as review triggers, not as deletion criteria.
 
-This pull request performs one bounded migration in the Studio bootstrap and
-catalog-discovery behavior domain. It removes the route-level case named
-`loads discovered GAgent types and the published service revision catalog`.
-That case asserted only that two mocked collaborators were called:
+This pull request performs one bounded migration in the Studio GAgent catalog
+discovery and published-revision identity domain. The old route-level case
+`loads discovered GAgent types and the published service revision catalog`
+asserted only that two mocked collaborators were called. It would fail after an
+internal data-loading refactor even when the product behavior was unchanged,
+while still passing if the returned catalog data never reached the operator.
 
-- GAgent discovery is already exercised by `shows the standalone GAgent
-  definition fields inside Build`, which opens the owning surface and checks
-  both discovery and the operator-visible definition fields.
-- Revision loading and its product consequences are already exercised by the
-  rail, published-contract, failed-revision, and selected-member cases.
+The migration replaces that weak evidence with three observable contracts:
 
-The removed case did not protect an independent business behavior, would fail
-after an internal data-loading refactor with unchanged product behavior, and
-duplicated existing regression protection. No replacement test is warranted.
-No production code changes are made.
+- The Studio route now renders the real `StudioGAgentBuildPanel` while mocking
+  only the heavy script-editor boundary. A discovered `Orders Assistant` kind
+  must reach the GAgent selector and the real definition fields must render.
+- A focused component integration case selects `Billing Assistant` through the
+  real selector, continues to Bind, and observes that the handoff retains
+  `Tests.BillingGAgent` rather than the previously selected kind.
+- The initial Team member rail must render the published workflow name and the
+  exact service/revision identity for `billing-api · rev-billing-7`, rather
+  than merely proving that a revision API was invoked.
+
+The workflow, Script, and GAgent service-revision fixtures are consolidated in
+`tests/studioServiceCatalogFixtures.ts` so future behavior-domain extraction
+does not duplicate the oversized route fixture block. No production code
+changes are made.
 
 ## Priority Behavior and Risk Inventory
 
@@ -34,7 +42,7 @@ No production code changes are made.
 
 | Behavior domain | Concrete risk | Highest-value evidence | Review outcome |
 | --- | --- | --- | --- |
-| Route and identity canonicalization | A service, member, workflow, or legacy query identity is sent to the wrong authority or survives in a canonical URL | Component or route integration | Retain the distinct initial-load, route-change, and missing-target cases; remove the duplicate bootstrap call-only case |
+| Route and identity canonicalization | A service, member, workflow, or legacy query identity is sent to the wrong authority or survives in a canonical URL | Component or route integration | Retain the distinct initial-load, route-change, and missing-target cases; replace the duplicate bootstrap call-only case with visible service/revision identity evidence |
 | Team member inventory and entry selection | Cross-Team members leak into the rail or the wrong member becomes the Team entry | Component or route integration | Retain; assertions act through the rendered rail and entry action |
 | Workflow, Script, and GAgent authoring handoffs | The selected implementation or unsaved draft is lost across Build and Bind | Component or route integration | Split later by implementation behavior when shared setup can be extracted without recreating the mock graph |
 | Bind observation and published contract selection | A pending or stale binding is presented as callable, or the scope default replaces the selected member | Component or route integration | Retain; these are high-risk identity and eventual-consistency rules |
@@ -101,6 +109,7 @@ observable transport contracts rather than incidental call forwarding.
 | Workflow prompt and node editing | User instructions are written to the wrong runtime parameter or omitted from save/run | Component integration | Retain; pure mapping overlap belongs in document-helper tests |
 | Diagnostics and mutation locks | Invalid JSON or in-flight mutations allow Apply, Save, or Run | Component integration | Retain |
 | Draft-run output | Metadata or intermediate frames replace the final product output | Component integration | Retain |
+| GAgent discovery and handoff | A discovered kind never reaches Build, or selecting a different kind still hands the stale kind to Bind | Route plus component integration | Cover discovery through the real route-owned panel and selection through the real selector |
 | GAgent draft-run recovery | Provider failure escapes Build without a retry path | Component integration | Retain |
 
 The outcome is **split by behavior domain**. The legacy-surface deletion guard
@@ -111,7 +120,7 @@ not expanded. Real provider routing remains a browser or deployed smoke gap.
 
 | File | Lines | Recorded outcome and rationale |
 | --- | ---: | --- |
-| `src/pages/studio/index.test.tsx` | 8,617 | **Split by behavior domain.** Remove duplicate bootstrap call-only coverage now; later isolate route identity, inventory, authoring, Bind, Invoke, and Observe around a shared render kit. |
+| `src/pages/studio/index.test.tsx` | 8,617 | **Split by behavior domain.** Replace duplicate bootstrap call-only coverage with observable catalog/revision behavior now; later isolate route identity, inventory, authoring, Bind, Invoke, and Observe around a shared render kit. |
 | `src/pages/team-member-workflow-studio/index.test.tsx` | 7,559 | **Split by behavior domain.** Route identity, editor synchronization, draft execution, and publish observation have independent fixtures and risks. |
 | `src/pages/teams/detail.test.tsx` | 3,219 | **Split by behavior domain.** Roster mutation, Team Test, handoffs, and Team administration are distinct route behaviors. |
 | `src/shared/studio/api.test.ts` | 2,997 | **Split by behavior domain.** Keep module/adapter integration and separate workflow, binding, Team, member, and board contracts. |
