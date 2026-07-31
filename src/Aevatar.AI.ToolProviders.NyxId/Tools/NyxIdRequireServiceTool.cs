@@ -181,7 +181,15 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
         }
 
         if (status == ExternalCapabilityReadinessStatus.Ready && !blocked)
-            return null;
+        {
+            return new AgentToolReceipt
+            {
+                CallId = callId ?? string.Empty,
+                ToolName = string.IsNullOrWhiteSpace(toolName) ? Name : toolName,
+                Status = AgentToolReceiptStatus.Success,
+                ResultJson = resultJson,
+            };
+        }
 
         if (status != ExternalCapabilityReadinessStatus.ServiceRegistrationRequired ||
             !blocked ||

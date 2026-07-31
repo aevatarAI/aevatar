@@ -357,7 +357,8 @@ public sealed class AgentProfileTurnCatalogMaterializer
                     profile.Members.Take(32)
                         .Select(static member => new AgentProfileTurnClassificationCandidate(
                             member.IntentId,
-                            member.RoutingDescription))
+                            member.RoutingDescription,
+                            member.SideEffectClass))
                         .ToArray(),
                     TimeSpan.FromMilliseconds(profile.ClassifierTimeoutMs)),
                 ct);
