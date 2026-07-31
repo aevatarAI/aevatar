@@ -32,7 +32,7 @@ public sealed class MainnetAgentProfileEndpointHandlerTests
         await using var host = await AgentProfileTestHost.StartAsync(actorPort: actors);
         using var request = Request(HttpMethod.Post, "/api/scopes/scope-alpha/agent-profiles", "scope-alpha", "user-alpha");
         request.Headers.Add("Idempotency-Key", "create-alpha");
-        request.Content = JsonContent.Create(new { profileSlug = "research" });
+        request.Content = JsonContent.Create(new { profileSlug = "research", idempotencyKey = "create-alpha" });
 
         var response = await host.Client.SendAsync(request);
 
@@ -42,6 +42,27 @@ public sealed class MainnetAgentProfileEndpointHandlerTests
             .Should().Be("/api/scopes/scope-alpha/agent-profiles/research");
         actors.CreateCommands.Should().ContainSingle(command =>
             command.Owner.Scope.ScopeId == "scope-alpha" && command.ProfileSlug == "research");
+    }
+
+    [Fact]
+    public async Task CreateScopeProfile_ShouldAcceptBodyIdempotencyKey()
+    {
+        var actors = new RecordingActorPort();
+        await using var host = await AgentProfileTestHost.StartAsync(actorPort: actors);
+        using var request = Request(HttpMethod.Post, "/api/scopes/scope-alpha/agent-profiles", "scope-alpha", "user-alpha");
+        request.Content = JsonContent.Create(new { profileSlug = "research", idempotencyKey = "create-body" });
+
+        var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        actors.CreateCommands.Should().ContainSingle();
+        actors.CreateCommands[0].ProfileId.Should().Be(
+            AgentProfileDeterminism.CreateProfileId(
+                AgentProfileOwners.ForScope("scope-alpha"),
+                "create-body"));
+        using var payload = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        payload.RootElement.GetProperty("operationId").GetString().Should().Be(
+            actors.CreateCommands[0].Operation.OperationId);
     }
 
     [Theory]
@@ -62,6 +83,26 @@ public sealed class MainnetAgentProfileEndpointHandlerTests
         var response = await host.Client.SendAsync(request);
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        actors.CreateCommands.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("body-key", "Idempotency-Key header and idempotencyKey body values must agree.")]
+    [InlineData(" ", "idempotencyKey body value must not be blank.")]
+    public async Task CreateScopeProfile_ShouldRejectInvalidBodyIdempotencyKeyBeforeDispatch(
+        string bodyIdempotencyKey,
+        string expectedMessage)
+    {
+        var actors = new RecordingActorPort();
+        await using var host = await AgentProfileTestHost.StartAsync(actorPort: actors);
+        using var request = Request(HttpMethod.Post, "/api/scopes/scope-alpha/agent-profiles", "scope-alpha", "user-alpha");
+        request.Headers.Add("Idempotency-Key", "header-key");
+        request.Content = JsonContent.Create(new { profileSlug = "research", idempotencyKey = bodyIdempotencyKey });
+
+        var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await ErrorMessageAsync(response)).Should().Be(expectedMessage);
         actors.CreateCommands.Should().BeEmpty();
     }
 
@@ -251,6 +292,215 @@ public sealed class MainnetAgentProfileEndpointHandlerTests
         actors.DraftCommands.Should().BeEmpty();
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task UpdateDraft_ShouldAcceptBodyMutationPreconditions(bool includeMatchingHeaders)
+    {
+        var owner = AgentProfileOwners.ForScope("scope-alpha");
+        var catalog = new RecordingCatalogQuery
+        {
+            Resolve = _ => Catalog(owner, 9, Entry("prof-research", "research", AgentProfileProvisioningStatus.Active)),
+        };
+        var management = new RecordingManagementQuery
+        {
+            Snapshot = Management(owner, "prof-research", "research", authorityVersion: 9),
+        };
+        var actors = new RecordingActorPort();
+        await using var host = await AgentProfileTestHost.StartAsync(catalog, management, actors);
+        using var request = Request(HttpMethod.Put, "/api/scopes/scope-alpha/agent-profiles/research/draft", "scope-alpha", "user-alpha");
+        if (includeMatchingHeaders)
+        {
+            request.Headers.Add("Idempotency-Key", "update-body");
+            request.Headers.TryAddWithoutValidation("If-Match", "\"agent-profile-v9\"");
+        }
+        request.Content = JsonContent.Create(new
+        {
+            draft = DraftInput(),
+            expectedVersion = 9,
+            idempotencyKey = "update-body",
+        });
+
+        var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        actors.DraftCommands.Should().ContainSingle();
+        actors.DraftCommands[0].ExpectedAuthorityStateVersion.Should().Be(9);
+        using var payload = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        payload.RootElement.GetProperty("operationId").GetString().Should().Be(
+            actors.DraftCommands[0].Operation.OperationId);
+    }
+
+    [Fact]
+    public async Task UpdateDraft_ShouldRejectConflictingExpectedVersionsBeforeDispatch()
+    {
+        var owner = AgentProfileOwners.ForScope("scope-alpha");
+        var catalog = new RecordingCatalogQuery
+        {
+            Resolve = _ => Catalog(owner, 9, Entry("prof-research", "research", AgentProfileProvisioningStatus.Active)),
+        };
+        var management = new RecordingManagementQuery
+        {
+            Snapshot = Management(owner, "prof-research", "research", authorityVersion: 9),
+        };
+        var actors = new RecordingActorPort();
+        await using var host = await AgentProfileTestHost.StartAsync(catalog, management, actors);
+        using var request = Request(HttpMethod.Put, "/api/scopes/scope-alpha/agent-profiles/research/draft", "scope-alpha", "user-alpha");
+        request.Headers.Add("Idempotency-Key", "update-body");
+        request.Headers.TryAddWithoutValidation("If-Match", "\"agent-profile-v9\"");
+        request.Content = JsonContent.Create(new { draft = DraftInput(), expectedVersion = 8 });
+
+        var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await ErrorMessageAsync(response)).Should().Be(
+            "If-Match header and expectedVersion body values must agree.");
+        actors.DraftCommands.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(7, HttpStatusCode.PreconditionFailed)]
+    [InlineData(-1, HttpStatusCode.BadRequest)]
+    public async Task UpdateDraft_ShouldRejectInvalidBodyExpectedVersionBeforeDispatch(
+        long expectedVersion,
+        HttpStatusCode expectedStatus)
+    {
+        var owner = AgentProfileOwners.ForScope("scope-alpha");
+        var catalog = new RecordingCatalogQuery
+        {
+            Resolve = _ => Catalog(owner, 9, Entry("prof-research", "research", AgentProfileProvisioningStatus.Active)),
+        };
+        var management = new RecordingManagementQuery
+        {
+            Snapshot = Management(owner, "prof-research", "research", authorityVersion: 9),
+        };
+        var actors = new RecordingActorPort();
+        await using var host = await AgentProfileTestHost.StartAsync(catalog, management, actors);
+        using var request = Request(HttpMethod.Put, "/api/scopes/scope-alpha/agent-profiles/research/draft", "scope-alpha", "user-alpha");
+        request.Content = JsonContent.Create(new
+        {
+            draft = DraftInput(),
+            expectedVersion,
+            idempotencyKey = "update-body",
+        });
+
+        var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(expectedStatus);
+        (await ErrorMessageAsync(response)).Should().Be(expectedVersion < 0
+            ? "expectedVersion must be non-negative."
+            : "If-Match or expectedVersion does not match the current resource version.");
+        actors.DraftCommands.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Publish_ShouldAcceptBodyMutationPreconditions()
+    {
+        var owner = AgentProfileOwners.ForScope("scope-alpha");
+        var catalog = new RecordingCatalogQuery
+        {
+            Resolve = _ => Catalog(owner, 9, Entry("prof-research", "research", AgentProfileProvisioningStatus.Active)),
+        };
+        var management = new RecordingManagementQuery
+        {
+            Snapshot = Management(owner, "prof-research", "research", authorityVersion: 9),
+        };
+        var actors = new RecordingActorPort();
+        await using var host = await AgentProfileTestHost.StartAsync(catalog, management, actors);
+        using var request = Request(HttpMethod.Post, "/api/scopes/scope-alpha/agent-profiles/research:publish", "scope-alpha", "user-alpha");
+        request.Content = JsonContent.Create(new { expectedVersion = 9, idempotencyKey = "publish-body" });
+
+        var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        actors.PublishCommands.Should().ContainSingle();
+        actors.PublishCommands[0].ExpectedAuthorityStateVersion.Should().Be(9);
+    }
+
+    [Fact]
+    public async Task Publish_ShouldPreserveHeaderOnlyEmptyBodyContract()
+    {
+        var owner = AgentProfileOwners.ForScope("scope-alpha");
+        var catalog = new RecordingCatalogQuery
+        {
+            Resolve = _ => Catalog(owner, 9, Entry("prof-research", "research", AgentProfileProvisioningStatus.Active)),
+        };
+        var management = new RecordingManagementQuery
+        {
+            Snapshot = Management(owner, "prof-research", "research", authorityVersion: 9),
+        };
+        var actors = new RecordingActorPort();
+        await using var host = await AgentProfileTestHost.StartAsync(catalog, management, actors);
+        using var request = Request(HttpMethod.Post, "/api/scopes/scope-alpha/agent-profiles/research:publish", "scope-alpha", "user-alpha");
+        request.Headers.Add("Idempotency-Key", "publish-header");
+        request.Headers.TryAddWithoutValidation("If-Match", "\"agent-profile-v9\"");
+
+        var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        actors.PublishCommands.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ClearBinding_ShouldAcceptBodyMutationPreconditions()
+    {
+        var actors = new RecordingActorPort();
+        await using var host = await AgentProfileTestHost.StartAsync(actorPort: actors);
+        using var request = Request(HttpMethod.Delete, "/api/scopes/scope-alpha/agent-profile-bindings/nyxid.chat", "scope-alpha", "user-alpha");
+        request.Content = JsonContent.Create(new { expectedVersion = 0, idempotencyKey = "clear-body" });
+
+        var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        actors.ClearBindingCommands.Should().ContainSingle();
+        actors.ClearBindingCommands[0].ExpectedAuthorityStateVersion.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ClearBinding_ShouldPreserveHeaderOnlyEmptyBodyContract()
+    {
+        var actors = new RecordingActorPort();
+        await using var host = await AgentProfileTestHost.StartAsync(actorPort: actors);
+        using var request = Request(HttpMethod.Delete, "/api/scopes/scope-alpha/agent-profile-bindings/nyxid.chat", "scope-alpha", "user-alpha");
+        request.Headers.Add("Idempotency-Key", "clear-header");
+        request.Headers.TryAddWithoutValidation("If-Match", "\"agent-profile-binding-v0\"");
+
+        var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        actors.ClearBindingCommands.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task SetBinding_ShouldRejectConflictingExpectedVersionsBeforeDispatch()
+    {
+        var actors = new RecordingActorPort();
+        await using var host = await AgentProfileTestHost.StartAsync(actorPort: actors);
+        using var request = Request(HttpMethod.Put, "/api/scopes/scope-alpha/agent-profile-bindings/nyxid.chat", "scope-alpha", "user-alpha");
+        request.Headers.TryAddWithoutValidation("If-Match", "\"agent-profile-binding-v0\"");
+        request.Content = JsonContent.Create(new
+        {
+            agentProfile = new { ownerKind = "caller", profileSlug = "research" },
+            expectedVersion = 1,
+            idempotencyKey = "set-body",
+        });
+
+        var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await ErrorMessageAsync(response)).Should().Be(
+            "If-Match header and expectedVersion body values must agree.");
+        actors.BindingCommands.Should().BeEmpty();
+    }
+
+    private static async Task<string?> ErrorMessageAsync(HttpResponseMessage response)
+    {
+        using var payload = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        return payload.RootElement.TryGetProperty("message", out var message)
+            ? message.GetString()
+            : null;
+    }
+
     private static HttpRequestMessage Request(HttpMethod method, string path, string scopeId, string? subject)
     {
         var request = new HttpRequestMessage(method, path);
@@ -326,23 +576,25 @@ public sealed class MainnetAgentProfileEndpointHandlerTests
         string profileId,
         string slug,
         long authorityVersion,
-        AgentProfileMutationOutcome? mutation = null) =>
-        new(
+        AgentProfileMutationOutcome? mutation = null)
+    {
+        var draft = new AgentProfileDraft
+        {
+            DisplayName = "Research",
+            Instructions = "Use reviewed skills.",
+            RuntimeProfile = new AgentProfileSnapshot
+            {
+                AgentKind = AgentProfilePolicies.NyxIdChatAgentKind,
+                RouteToolSetRef = AgentProfilePolicies.NyxIdChatRouteToolSet,
+            },
+        };
+        return new(
             $"actor-{profileId}",
             authorityVersion,
             new AgentProfileIdentity { Owner = owner.Clone(), ProfileId = profileId, ProfileSlug = slug },
-            new AgentProfileDraft
-            {
-                DisplayName = "Research",
-                Instructions = "Use reviewed skills.",
-                RuntimeProfile = new AgentProfileSnapshot
-                {
-                    AgentKind = AgentProfilePolicies.NyxIdChatAgentKind,
-                    RouteToolSetRef = AgentProfilePolicies.NyxIdChatRouteToolSet,
-                },
-            },
+            draft,
             1,
-            ByteString.CopyFrom(Enumerable.Repeat((byte)1, 32).ToArray()),
+            AgentProfileDeterminism.ComputeDraftDigest(draft),
             "",
             "",
             0,
@@ -350,6 +602,7 @@ public sealed class MainnetAgentProfileEndpointHandlerTests
             null,
             mutation?.Clone(),
             DateTimeOffset.UtcNow);
+    }
 
     private static AgentProfileMutationOutcome Mutation(
         string operationId,
@@ -452,17 +705,26 @@ public sealed class MainnetAgentProfileEndpointHandlerTests
     {
         public List<CreateAgentProfileCommand> CreateCommands { get; } = [];
         public List<UpdateAgentProfileDraftCommand> DraftCommands { get; } = [];
+        public List<PublishAgentProfileCommand> PublishCommands { get; } = [];
+        public List<SetAgentProfileDefaultBindingCommand> BindingCommands { get; } = [];
+        public List<ClearAgentProfileDefaultBindingCommand> ClearBindingCommands { get; } = [];
         public Task<DispatchAdmission> DispatchCreateAsync(CreateAgentProfileCommand command, CancellationToken ct = default) { CreateCommands.Add(command.Clone()); return Admission(command.Operation); }
         public Task<DispatchAdmission> DispatchInitializeAsync(string profileActorId, InitializeAgentProfileCommand command, CancellationToken ct = default) => Admission(command.Operation);
         public Task<DispatchAdmission> DispatchUpdateDraftAsync(string profileActorId, UpdateAgentProfileDraftCommand command, CancellationToken ct = default) { DraftCommands.Add(command.Clone()); return Admission(command.Operation); }
-        public Task<DispatchAdmission> DispatchPublishAsync(string profileActorId, PublishAgentProfileCommand command, CancellationToken ct = default) => Admission(command.Operation);
-        public Task<DispatchAdmission> DispatchSetDefaultBindingAsync(SetAgentProfileDefaultBindingCommand command, CancellationToken ct = default) => Admission(command.Operation);
-        public Task<DispatchAdmission> DispatchClearDefaultBindingAsync(ClearAgentProfileDefaultBindingCommand command, CancellationToken ct = default) => Admission(command.Operation);
+        public Task<DispatchAdmission> DispatchPublishAsync(string profileActorId, PublishAgentProfileCommand command, CancellationToken ct = default) { PublishCommands.Add(command.Clone()); return Admission(command.Operation); }
+        public Task<DispatchAdmission> DispatchSetDefaultBindingAsync(SetAgentProfileDefaultBindingCommand command, CancellationToken ct = default) { BindingCommands.Add(command.Clone()); return Admission(command.Operation); }
+        public Task<DispatchAdmission> DispatchClearDefaultBindingAsync(ClearAgentProfileDefaultBindingCommand command, CancellationToken ct = default) { ClearBindingCommands.Add(command.Clone()); return Admission(command.Operation); }
         private static Task<DispatchAdmission> Admission(AgentProfileOperationFact operation) => Task.FromResult(new DispatchAdmission(true, operation.CommandId, DateTimeOffset.UtcNow, "test-actor", operation.CorrelationId));
     }
 
     private sealed class StaticSkillSealer : IAgentProfileSkillSealer
     {
-        public Task<AgentProfileSealingResult> ResolveAndSealAsync(AgentProfileIdentity identity, AgentProfileDraft draft, AgentProfileSealingContext context, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<AgentProfileSealingResult> ResolveAndSealAsync(AgentProfileIdentity identity, AgentProfileDraft draft, AgentProfileSealingContext context, CancellationToken ct = default) =>
+            Task.FromResult(AgentProfileSealingResult.Success(AgentProfileDeterminism.BuildPublishedSnapshot(
+                identity,
+                draft,
+                context.CurrentDraftRevision,
+                context.NextPublishedRevision,
+                context.PublishedAt)));
     }
 }

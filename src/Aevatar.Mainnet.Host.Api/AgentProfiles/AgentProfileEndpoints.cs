@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aevatar.AI.Abstractions;
 using Aevatar.Audit;
@@ -11,6 +12,7 @@ using Aevatar.GAgentService.Application.AgentProfiles;
 using Google.Protobuf;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 
@@ -96,6 +98,7 @@ internal static class AgentProfileEndpoints
             service,
             ScopeOwner(scopeId),
             input?.ProfileSlug,
+            input?.IdempotencyKey,
             subject,
             slug => ScopeProfileUrl(scopeId, slug),
             ct);
@@ -179,6 +182,7 @@ internal static class AgentProfileEndpoints
             service,
             AgentProfileOwners.ForSystem(),
             input?.ProfileSlug,
+            input?.IdempotencyKey,
             admin.Caller!.UserId,
             AdminProfileUrl,
             ct);
@@ -250,12 +254,13 @@ internal static class AgentProfileEndpoints
         AgentProfileApplicationService service,
         AgentProfileOwner owner,
         string? profileSlug,
+        string? bodyIdempotencyKey,
         string subject,
         Func<string, string> resourceUrl,
         CancellationToken ct) => await ExecuteAsync(async () =>
     {
         var normalizedSlug = Required(profileSlug, "profileSlug");
-        var key = Idempotency(http);
+        var key = Idempotency(http, bodyIdempotencyKey);
         var receipt = await service.CreateAsync(new(owner, normalizedSlug, key, subject), ct);
         return Accepted(receipt, resourceUrl(normalizedSlug));
     });
@@ -270,14 +275,15 @@ internal static class AgentProfileEndpoints
     private static async Task<IResult> UpdateDraftAsync(HttpContext http, AgentProfileApplicationService service, AgentProfileOwner owner, string slug, AgentProfileDraftUpdateInput? input, string subject, string resourceUrl, CancellationToken ct) => await ExecuteAsync(async () =>
     {
         var current = await service.GetAsync(owner, slug, ct) ?? throw new AgentProfileNotFoundException("Agent Profile was not found.");
-        var receipt = await service.UpdateDraftAsync(new(owner, slug, ToDraft(input?.Draft), ExpectedVersion(http, false, current.StrongETag), Idempotency(http), subject), ct);
+        var receipt = await service.UpdateDraftAsync(new(owner, slug, ToDraft(input?.Draft), ExpectedVersion(http, input?.ExpectedVersion, false, current.StrongETag), Idempotency(http, input?.IdempotencyKey), subject), ct);
         return Accepted(receipt, resourceUrl);
     });
 
     private static async Task<IResult> PublishAsync(HttpContext http, AgentProfileApplicationService service, AgentProfileOwner owner, string slug, string subject, string token, string resourceUrl, CancellationToken ct) => await ExecuteAsync(async () =>
     {
+        var input = await OptionalBodyAsync<AgentProfilePublishInput>(http, ct);
         var current = await service.GetAsync(owner, slug, ct) ?? throw new AgentProfileNotFoundException("Agent Profile was not found.");
-        var receipt = await service.PublishAsync(new(owner, slug, ExpectedVersion(http, false, current.StrongETag), Idempotency(http), subject, token), ct);
+        var receipt = await service.PublishAsync(new(owner, slug, ExpectedVersion(http, input?.ExpectedVersion, false, current.StrongETag), Idempotency(http, input?.IdempotencyKey), subject, token), ct);
         return Accepted(receipt, resourceUrl);
     });
 
@@ -297,14 +303,15 @@ internal static class AgentProfileEndpoints
     {
         var reference = input?.AgentProfile ?? throw new ArgumentException("agentProfile is required.");
         var current = await service.GetBindingAsync(owner, agentKind, ct);
-        var receipt = await service.SetBindingAsync(new(owner, agentKind, new AgentProfileReference { OwnerKind = ReferenceOwner(reference.OwnerKind), ProfileSlug = Required(reference.ProfileSlug, "agentProfile.profileSlug") }, ExpectedVersion(http, true, current.StrongETag), Idempotency(http), subject, input?.Enabled ?? true, input?.CohortBasisPoints ?? AgentProfilePolicies.FullCohortBasisPoints), ct);
+        var receipt = await service.SetBindingAsync(new(owner, agentKind, new AgentProfileReference { OwnerKind = ReferenceOwner(reference.OwnerKind), ProfileSlug = Required(reference.ProfileSlug, "agentProfile.profileSlug") }, ExpectedVersion(http, input?.ExpectedVersion, true, current.StrongETag), Idempotency(http, input?.IdempotencyKey), subject, input?.Enabled ?? true, input?.CohortBasisPoints ?? AgentProfilePolicies.FullCohortBasisPoints), ct);
         return Accepted(receipt, resourceUrl);
     });
 
     private static async Task<IResult> ClearBindingAsync(HttpContext http, AgentProfileApplicationService service, AgentProfileOwner owner, string agentKind, string subject, string resourceUrl, CancellationToken ct) => await ExecuteAsync(async () =>
     {
+        var input = await OptionalBodyAsync<AgentProfileBindingClearInput>(http, ct);
         var current = await service.GetBindingAsync(owner, agentKind, ct);
-        var receipt = await service.ClearBindingAsync(new(owner, agentKind, ExpectedVersion(http, true, current.StrongETag), Idempotency(http), subject), ct);
+        var receipt = await service.ClearBindingAsync(new(owner, agentKind, ExpectedVersion(http, input?.ExpectedVersion, true, current.StrongETag), Idempotency(http, input?.IdempotencyKey), subject), ct);
         return Accepted(receipt, resourceUrl);
     });
 
@@ -328,6 +335,14 @@ internal static class AgentProfileEndpoints
     }
     private static AgentProfileSkillMember Member(AgentProfileSkillMemberInput input) => new() { IntentId = input.IntentId?.Trim() ?? string.Empty, RoutingDescription = input.RoutingDescription?.Trim() ?? string.Empty, SkillRef = new ExactRemoteSkillRef { Guid = input.SkillRef?.Guid?.Trim() ?? string.Empty, LiteralVersion = input.SkillRef?.LiteralVersion?.Trim() ?? string.Empty }, ExplicitTriggerAliases = { input.ExplicitTriggerAliases ?? [] }, TaskToolPolicy = Policy(input.TaskToolPolicy), SideEffectClass = SideEffect(input.SideEffectClass), ExpectedSkillName = input.ExpectedSkillName?.Trim() ?? string.Empty, ReviewedPublisherId = input.ReviewedPublisherId?.Trim() ?? string.Empty };
     private static AgentProfileToolPolicy Policy(AgentProfileToolPolicyInput? input) => new() { ToolNames = { input?.ToolNames ?? [] }, ToolSetRefs = { input?.ToolSetRefs ?? [] } };
+
+    private static async Task<T?> OptionalBodyAsync<T>(HttpContext http, CancellationToken ct) where T : class
+    {
+        if (http.Features.Get<IHttpRequestBodyDetectionFeature>()?.CanHaveBody != true) return null;
+        try { return await http.Request.ReadFromJsonAsync<T>(cancellationToken: ct); }
+        catch (JsonException ex) { throw new ArgumentException("Request body is invalid.", ex); }
+        catch (InvalidOperationException ex) { throw new ArgumentException("Request body must use application/json.", ex); }
+    }
 
     private static Task<IResult> ExecuteAsync(Func<Task<IResult>> action) => ExecuteCoreAsync(action);
     private static async Task<IResult> ExecuteCoreAsync(Func<Task<IResult>> action)
@@ -356,9 +371,46 @@ internal static class AgentProfileEndpoints
     private static string OwnerKind(AgentProfileOwner? owner) => owner?.OwnerCase == AgentProfileOwner.OwnerOneofCase.System ? "system" : "scope";
     private static string Short<T>(T value) where T : struct, Enum => value.ToString().Replace("AgentProfileActivationMode", string.Empty, StringComparison.Ordinal).Replace("AgentProfileSideEffectClass", string.Empty, StringComparison.Ordinal).Replace("AgentProfileProvisioningStatus", string.Empty, StringComparison.Ordinal).Trim('_').ToUpperInvariant();
     private static string BearerToken(HttpContext http) { var value = http.Request.Headers.Authorization.ToString(); return value.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ? value[7..].Trim() : string.Empty; }
-    private static string Idempotency(HttpContext http) => RequiredHeader(http.Request.Headers[IdempotencyKeyHeader].ToString(), null);
-    private static string RequiredHeader(string? header, string? unused) { if (string.IsNullOrWhiteSpace(header)) throw new ArgumentException($"{IdempotencyKeyHeader} header is required."); return header.Trim(); }
-    private static long ExpectedVersion(HttpContext http, bool binding, string currentEtag) { var header = http.Request.Headers[IfMatchHeader].ToString(); if (string.IsNullOrWhiteSpace(header)) throw new PreconditionRequiredException($"{IfMatchHeader} header is required."); var prefix = binding ? "\"agent-profile-binding-v" : "\"agent-profile-v"; if (!header.StartsWith(prefix, StringComparison.Ordinal) || !header.EndsWith('"') || !long.TryParse(header[prefix.Length..^1], NumberStyles.None, CultureInfo.InvariantCulture, out var version) || version < 0) throw new ArgumentException($"{IfMatchHeader} is not a valid Agent Profile ETag."); if (!string.Equals(header, currentEtag, StringComparison.Ordinal)) throw new PreconditionFailedException($"{IfMatchHeader} does not match the current resource version."); return version; }
+    private static string Idempotency(HttpContext http, string? bodyValue)
+    {
+        var header = http.Request.Headers[IdempotencyKeyHeader].ToString().Trim();
+        if (bodyValue is not null && string.IsNullOrWhiteSpace(bodyValue))
+            throw new ArgumentException("idempotencyKey body value must not be blank.");
+        var body = bodyValue?.Trim() ?? string.Empty;
+        if (header.Length > 0 && body.Length > 0 && !string.Equals(header, body, StringComparison.Ordinal))
+            throw new ArgumentException($"{IdempotencyKeyHeader} header and idempotencyKey body values must agree.");
+        if (header.Length == 0 && body.Length == 0)
+            throw new ArgumentException($"{IdempotencyKeyHeader} header or idempotencyKey body value is required.");
+        return header.Length > 0 ? header : body;
+    }
+
+    private static long ExpectedVersion(HttpContext http, long? bodyVersion, bool binding, string currentEtag)
+    {
+        var header = http.Request.Headers[IfMatchHeader].ToString().Trim();
+        if (bodyVersion < 0) throw new ArgumentException("expectedVersion must be non-negative.");
+        if (header.Length == 0 && bodyVersion is null)
+            throw new PreconditionRequiredException($"{IfMatchHeader} header or expectedVersion body value is required.");
+
+        var prefix = binding ? "\"agent-profile-binding-v" : "\"agent-profile-v";
+        long? headerVersion = null;
+        if (header.Length > 0)
+        {
+            if (!header.StartsWith(prefix, StringComparison.Ordinal) || !header.EndsWith('"') ||
+                !long.TryParse(header[prefix.Length..^1], NumberStyles.None, CultureInfo.InvariantCulture, out var parsedVersion) ||
+                parsedVersion < 0)
+                throw new ArgumentException($"{IfMatchHeader} is not a valid Agent Profile ETag.");
+            headerVersion = parsedVersion;
+        }
+
+        if (headerVersion is not null && bodyVersion is not null && headerVersion != bodyVersion)
+            throw new ArgumentException($"{IfMatchHeader} header and expectedVersion body values must agree.");
+
+        var version = headerVersion ?? bodyVersion!.Value;
+        var suppliedEtag = $"{prefix}{version.ToString(CultureInfo.InvariantCulture)}\"";
+        if (!string.Equals(suppliedEtag, currentEtag, StringComparison.Ordinal))
+            throw new PreconditionFailedException($"{IfMatchHeader} or expectedVersion does not match the current resource version.");
+        return version;
+    }
     private static string Required(string? value, string name) => string.IsNullOrWhiteSpace(value) ? throw new ArgumentException($"{name} is required.") : value.Trim();
     private static AgentProfileReferenceOwnerKind ReferenceOwner(string? value) => value?.Trim().ToLowerInvariant() switch { "caller" => AgentProfileReferenceOwnerKind.Caller, "system" => AgentProfileReferenceOwnerKind.System, _ => throw new ArgumentException("agentProfile.ownerKind must be caller or system.") };
     private static AgentProfileActivationMode Activation(string? value) => value?.Trim().ToUpperInvariant() switch { "SHADOW" => AgentProfileActivationMode.Shadow, "ENFORCED" => AgentProfileActivationMode.Enforced, _ => throw new ArgumentException("activationMode is invalid.") };
@@ -366,11 +418,15 @@ internal static class AgentProfileEndpoints
     private static void Audit(RouteHandlerBuilder builder, string operation, params string[] routes) => builder.WithEndpointAudit($"agent-profile.{operation}", AuditSensitivityLevel.Confidential, "agent-profile", routes.Length == 1 ? EndpointAuditTargetResolvers.FromRouteValue("agent-profile", routes[0]) : EndpointAuditTargetResolvers.FromRouteValues("agent-profile", routes));
 
     [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
-    internal sealed record AgentProfileCreateInput(string? ProfileSlug);
+    internal sealed record AgentProfileCreateInput(string? ProfileSlug, string? IdempotencyKey);
     [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
-    internal sealed record AgentProfileDraftUpdateInput(AgentProfileDraftInput? Draft);
+    internal sealed record AgentProfileDraftUpdateInput(AgentProfileDraftInput? Draft, long? ExpectedVersion, string? IdempotencyKey);
     [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
-    internal sealed record AgentProfileBindingInput(AgentProfileReferenceInput? AgentProfile, bool? Enabled, int? CohortBasisPoints);
+    internal sealed record AgentProfilePublishInput(long? ExpectedVersion, string? IdempotencyKey);
+    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+    internal sealed record AgentProfileBindingInput(AgentProfileReferenceInput? AgentProfile, bool? Enabled, int? CohortBasisPoints, long? ExpectedVersion, string? IdempotencyKey);
+    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+    internal sealed record AgentProfileBindingClearInput(long? ExpectedVersion, string? IdempotencyKey);
     [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
     internal sealed record AgentProfileReferenceInput(string? OwnerKind, string? ProfileSlug);
     [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
