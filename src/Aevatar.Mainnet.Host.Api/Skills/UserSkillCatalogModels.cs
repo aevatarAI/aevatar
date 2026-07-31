@@ -35,7 +35,8 @@ public sealed record UserExactSkillDetail(
     string Name,
     string LiteralVersion,
     string Publisher,
-    string SkillHash);
+    string SkillHash,
+    IReadOnlyList<string> DeclaredToolNames);
 
 public sealed record UserExactSkillReadResult(
     UserExactSkillDetail? Detail,

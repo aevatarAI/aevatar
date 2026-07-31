@@ -19,7 +19,8 @@ public sealed class WorkflowSkillsExactDetailEndpointTests
                     "research",
                     "1.2",
                     "publisher-alpha",
-                    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
+                    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                    ["lookup", "search"]),
                 null),
         };
         var http = Context("Bearer nyx-token");
@@ -35,6 +36,7 @@ public sealed class WorkflowSkillsExactDetailEndpointTests
         json.Value!.LiteralVersion.Should().Be("1.2");
         json.Value.Publisher.Should().Be("publisher-alpha");
         json.Value.SkillHash.Should().HaveLength(64);
+        json.Value.DeclaredToolNames.Should().Equal("lookup", "search");
         catalog.Requests.Should().Equal(("nyx-token", "11111111-2222-3333-4444-555555555555", "1.2"));
     }
 

@@ -103,7 +103,8 @@ public sealed class OrnnExactAgentProfileSkillResolverTests
     }
 
     [Theory]
-    [InlineData(true, HttpStatusCode.Forbidden, "ORNN_DEPENDENCY_UNAVAILABLE")]
+    [InlineData(true, HttpStatusCode.Forbidden, "ORNN_SKILL_ACCESS_DENIED")]
+    [InlineData(false, HttpStatusCode.Forbidden, "ORNN_SKILL_ACCESS_DENIED")]
     [InlineData(false, HttpStatusCode.NotFound, "ORNN_SKILL_NOT_FOUND")]
     [InlineData(true, HttpStatusCode.InternalServerError, "ORNN_DEPENDENCY_UNAVAILABLE")]
     [InlineData(false, HttpStatusCode.ServiceUnavailable, "ORNN_DEPENDENCY_UNAVAILABLE")]
