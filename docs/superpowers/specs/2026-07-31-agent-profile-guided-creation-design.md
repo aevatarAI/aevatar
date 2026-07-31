@@ -55,6 +55,15 @@ The UI shows `创建资源`, `等待投影`, and `保存草稿`, and disables du
 
 Creating or publishing never changes the caller's `nyxid.chat` default binding; binding remains explicit.
 
+### NyxID-safe mutation transport
+
+Production API verification and automation use `nyxid proxy request aevatar`. NyxID currently forwards neither the standard `Idempotency-Key` nor `If-Match` request header, so Agent Profile mutations also accept the same values as typed body fields without weakening the Actor contract:
+
+- `idempotencyKey` is optional in the create, draft, publish, set-binding, and clear-binding request bodies. The standard header remains supported and preferred for direct/browser clients.
+- `expectedVersion` is an optional non-negative authority-state version in draft, publish, set-binding, and clear-binding request bodies. The standard strong `If-Match` header remains supported and preferred for direct/browser clients.
+- At least one representation is required. If header and body are both supplied, their normalized values must agree exactly. Missing values retain the existing `400`/`428` behavior; malformed, negative, conflicting, or stale values are rejected before Actor dispatch.
+- The body fallback is a Host transport adaptation only. Application requests and Actor commands still receive one resolved idempotency key and one resolved expected authority version.
+
 ## Editor And Accessibility
 
 The normal editor uses the same hierarchy: primary identity and status, compact exact-member cards, then collapsed advanced policy/runtime controls. Save/validate/publish share a stable action area; system rollout appears only for editable `system/`. Status uses text plus color and `aria-live`; controls are keyboard reachable. At the existing mobile breakpoint, list/workspace stack and evidence/actions wrap. Reuse existing Console tokens and add no UI dependency.
@@ -72,6 +81,7 @@ Focused tests prove exact normalized tools and identity mismatch handling; tool-
 ## Non-Goals
 
 - No composite backend mutation or second state machine.
+- No global NyxID proxy-header workaround and no reuse of unrelated `X-Request-Id`/`X-Correlation-Id` semantics.
 - No publisher guessing or raw Ornn package exposure.
 - No old hash-route compatibility entry.
 - No auto-publish, auto-bind, runtime hot update, or redesign of #3077 actor/projection architecture.
