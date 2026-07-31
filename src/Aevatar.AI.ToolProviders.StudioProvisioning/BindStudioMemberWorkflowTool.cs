@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Workflow.Abstractions;
@@ -56,6 +57,26 @@ internal sealed class BindStudioMemberWorkflowTool : IAgentTool
     public bool IsReadOnly => false;
     public bool IsDestructive => false;
     public string SideEffectKind => "studio.member.workflow.bind";
+
+    public AgentToolReceipt? CreateResultReceipt(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        string resultJson) =>
+        StudioQueryToolJson.CreateMutationResultReceipt(
+            Name,
+            SideEffectKind,
+            "studio_member_workflow_binding",
+            callId,
+            toolName,
+            resultJson,
+            null,
+            null,
+            "member_id",
+            StudioQueryToolJson.StringProperty("scope_id"),
+            StudioQueryToolJson.StringProperty("operation"),
+            StudioQueryToolJson.StringProperty("status"),
+            StudioQueryToolJson.StringProperty("member_workflow_url"));
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Studio.Application.Provisioning;
 
@@ -65,6 +66,30 @@ internal sealed class CreateStudioMemberWorkflowDraftTool : IAgentTool
     public bool IsReadOnly => false;
     public bool IsDestructive => false;
     public string SideEffectKind => "studio.workflow_draft.create";
+
+    public AgentToolReceipt? CreateResultReceipt(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        string resultJson) =>
+        StudioQueryToolJson.CreateMutationResultReceipt(
+            Name,
+            SideEffectKind,
+            "studio_member_workflow_draft",
+            callId,
+            toolName,
+            resultJson,
+            "status",
+            StudioMemberWorkflowDraftStatusNames.SaveAccepted,
+            "workflow_id",
+            StudioQueryToolJson.StringProperty("scope_id"),
+            StudioQueryToolJson.StringProperty("team_id"),
+            StudioQueryToolJson.StringProperty("member_id"),
+            StudioQueryToolJson.StringProperty("studio_url"),
+            StudioQueryToolJson.StringProperty("command_id"),
+            StudioQueryToolJson.StringProperty("ack_stage"),
+            StudioQueryToolJson.StringProperty("actor_id"),
+            StudioQueryToolJson.StringProperty("workspace_id"));
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {

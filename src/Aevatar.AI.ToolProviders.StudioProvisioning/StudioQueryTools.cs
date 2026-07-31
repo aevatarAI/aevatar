@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.Studio.Application.Provisioning;
@@ -43,6 +44,19 @@ internal sealed class ListStudioTeamsTool : IAgentTool
 
     public bool IsReadOnly => true;
     public bool IsDestructive => false;
+
+    public AgentToolReceipt? CreateResultReceipt(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        string resultJson) =>
+        StudioQueryToolJson.CreateReadOnlyResultReceipt(
+            Name,
+            callId,
+            toolName,
+            resultJson,
+            StudioQueryToolJson.StringProperty("scope_id"),
+            StudioQueryToolJson.ArrayProperty("teams"));
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
@@ -138,6 +152,22 @@ internal sealed class GetStudioTeamTool : IAgentTool
     public bool IsReadOnly => true;
     public bool IsDestructive => false;
 
+    public AgentToolReceipt? CreateResultReceipt(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        string resultJson) =>
+        StudioQueryToolJson.CreateReadOnlyResultReceipt(
+            Name,
+            callId,
+            toolName,
+            resultJson,
+            StudioQueryToolJson.StringProperty("scope_id"),
+            StudioQueryToolJson.StringProperty("team_id"),
+            StudioQueryToolJson.StringProperty("display_name"),
+            StudioQueryToolJson.StringProperty("lifecycle_stage"),
+            StudioQueryToolJson.StringProperty("team_url"));
+
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
         var scopeId = StudioToolScopeResolver.ResolveOwnerScopeOrCallerScope();
@@ -231,6 +261,19 @@ internal sealed class ListStudioMembersTool : IAgentTool
 
     public bool IsReadOnly => true;
     public bool IsDestructive => false;
+
+    public AgentToolReceipt? CreateResultReceipt(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        string resultJson) =>
+        StudioQueryToolJson.CreateReadOnlyResultReceipt(
+            Name,
+            callId,
+            toolName,
+            resultJson,
+            StudioQueryToolJson.StringProperty("scope_id"),
+            StudioQueryToolJson.ArrayProperty("members"));
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
@@ -334,6 +377,23 @@ internal sealed class GetStudioMemberTool : IAgentTool
     public bool IsReadOnly => true;
     public bool IsDestructive => false;
 
+    public AgentToolReceipt? CreateResultReceipt(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        string resultJson) =>
+        StudioQueryToolJson.CreateReadOnlyResultReceipt(
+            Name,
+            callId,
+            toolName,
+            resultJson,
+            StudioQueryToolJson.ObjectProperty("summary"),
+            StudioQueryToolJson.StringProperty("summary", "scope_id"),
+            StudioQueryToolJson.StringProperty("summary", "member_id"),
+            StudioQueryToolJson.StringProperty("summary", "display_name"),
+            StudioQueryToolJson.StringProperty("summary", "implementation_kind"),
+            StudioQueryToolJson.StringProperty("summary", "member_url"));
+
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
         var scopeId = StudioToolScopeResolver.ResolveOwnerScopeOrCallerScope();
@@ -436,6 +496,20 @@ internal sealed class ListStudioSchedulesTool : IAgentTool
 
     public bool IsReadOnly => true;
     public bool IsDestructive => false;
+
+    public AgentToolReceipt? CreateResultReceipt(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        string resultJson) =>
+        StudioQueryToolJson.CreateReadOnlyResultReceipt(
+            Name,
+            callId,
+            toolName,
+            resultJson,
+            StudioQueryToolJson.StringProperty("scope_id"),
+            StudioQueryToolJson.StringProperty("team_id"),
+            StudioQueryToolJson.ArrayProperty("schedules"));
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
@@ -564,6 +638,24 @@ internal sealed class GetStudioScheduleTool : IAgentTool
     public bool IsReadOnly => true;
     public bool IsDestructive => false;
 
+    public AgentToolReceipt? CreateResultReceipt(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        string resultJson) =>
+        StudioQueryToolJson.CreateReadOnlyResultReceipt(
+            Name,
+            callId,
+            toolName,
+            resultJson,
+            StudioQueryToolJson.StringProperty("scope_id"),
+            StudioQueryToolJson.StringProperty("team_id"),
+            StudioQueryToolJson.StringProperty("member_id"),
+            StudioQueryToolJson.StringProperty("schedule_id"),
+            StudioQueryToolJson.StringProperty("published_service_id"),
+            StudioQueryToolJson.StringProperty("schedule_cron"),
+            StudioQueryToolJson.StringProperty("schedule_timezone"));
+
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
         var scopeId = StudioToolScopeResolver.ResolveOwnerScopeOrCallerScope();
@@ -671,11 +763,226 @@ internal static class StudioQueryToolJson
                 new StudioQueryToolErrorBody(code, message)),
             Options);
 
+    public static AgentToolReceipt? CreateReadOnlyResultReceipt(
+        string defaultToolName,
+        string callId,
+        string toolName,
+        string resultJson,
+        params ResultPropertyRequirement[] resultRequirements)
+    {
+        if (!TryParseObject(resultJson, out var document))
+            return null;
+
+        using (document)
+        {
+            var root = document.RootElement;
+            if (TryReadError(root, out var errorCode, out var errorMessage))
+            {
+                return new AgentToolReceipt
+                {
+                    CallId = callId ?? string.Empty,
+                    ToolName = ResolveToolName(defaultToolName, toolName),
+                    Status = AgentToolReceiptStatus.Error,
+                    ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
+                    ErrorCode = errorCode,
+                    ErrorMessage = errorMessage,
+                    ResultJson = resultJson ?? string.Empty,
+                };
+            }
+
+            if (!HasRequiredProperties(root, resultRequirements))
+                return null;
+
+            return new AgentToolReceipt
+            {
+                CallId = callId ?? string.Empty,
+                ToolName = ResolveToolName(defaultToolName, toolName),
+                Status = AgentToolReceiptStatus.Success,
+                ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
+                ResultJson = resultJson ?? string.Empty,
+            };
+        }
+    }
+
+    public static AgentToolReceipt? CreateMutationResultReceipt(
+        string defaultToolName,
+        string sideEffectKind,
+        string subjectKind,
+        string callId,
+        string toolName,
+        string resultJson,
+        string? successStatusPropertyName,
+        string? successStatusValue,
+        string subjectIdPropertyName,
+        params ResultPropertyRequirement[] resultRequirements)
+    {
+        if (!TryParseObject(resultJson, out var document))
+            return null;
+
+        using (document)
+        {
+            var root = document.RootElement;
+            if (TryReadError(root, out var errorCode, out var errorMessage))
+            {
+                return new AgentToolReceipt
+                {
+                    CallId = callId ?? string.Empty,
+                    ToolName = ResolveToolName(defaultToolName, toolName),
+                    Status = AgentToolReceiptStatus.Error,
+                    ApprovalMode = AgentToolReceiptApprovalMode.Unspecified,
+                    SideEffectKind = sideEffectKind,
+                    ErrorCode = errorCode,
+                    ErrorMessage = errorMessage,
+                    ResultJson = resultJson ?? string.Empty,
+                };
+            }
+
+            if (!IsVerifiedMutationSuccess(root, successStatusPropertyName, successStatusValue) ||
+                !HasRequiredProperties(root, resultRequirements))
+            {
+                return null;
+            }
+
+            var subjectId = TryGetString(root, subjectIdPropertyName);
+            if (string.IsNullOrWhiteSpace(subjectId))
+                return null;
+
+            return new AgentToolReceipt
+            {
+                CallId = callId ?? string.Empty,
+                ToolName = ResolveToolName(defaultToolName, toolName),
+                Status = AgentToolReceiptStatus.Success,
+                ApprovalMode = AgentToolReceiptApprovalMode.Unspecified,
+                SideEffectKind = sideEffectKind,
+                SubjectKind = subjectKind,
+                SubjectId = subjectId,
+                ResultJson = resultJson ?? string.Empty,
+            };
+        }
+    }
+
+    public static ResultPropertyRequirement StringProperty(params string[] path) =>
+        new(path, JsonValueKind.String);
+
+    public static ResultPropertyRequirement ArrayProperty(params string[] path) =>
+        new(path, JsonValueKind.Array);
+
+    public static ResultPropertyRequirement ObjectProperty(params string[] path) =>
+        new(path, JsonValueKind.Object);
+
     public static string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private static string NormalizeArgumentsJson(string argumentsJson) =>
         string.IsNullOrWhiteSpace(argumentsJson) ? "{}" : argumentsJson;
+
+    private static bool TryParseObject(string? resultJson, out JsonDocument document)
+    {
+        document = null!;
+        if (string.IsNullOrWhiteSpace(resultJson))
+            return false;
+
+        try
+        {
+            document = JsonDocument.Parse(resultJson);
+            if (document.RootElement.ValueKind == JsonValueKind.Object)
+                return true;
+
+            document.Dispose();
+            document = null!;
+            return false;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryReadError(JsonElement root, out string errorCode, out string errorMessage)
+    {
+        errorCode = string.Empty;
+        errorMessage = string.Empty;
+
+        if (!root.TryGetProperty("error", out var error) || error.ValueKind != JsonValueKind.Object)
+            return false;
+
+        errorCode = TryGetString(error, "code") ?? string.Empty;
+        errorMessage = TryGetString(error, "message") ?? string.Empty;
+        return !string.IsNullOrWhiteSpace(errorCode) || !string.IsNullOrWhiteSpace(errorMessage);
+    }
+
+    private static string? TryGetString(JsonElement element, string propertyName) =>
+        element.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : null;
+
+    private static bool HasRequiredProperties(
+        JsonElement element,
+        IReadOnlyCollection<ResultPropertyRequirement> resultRequirements)
+    {
+        foreach (var resultRequirement in resultRequirements)
+        {
+            if (!TryGetProperty(element, resultRequirement.Path, out var property) ||
+                property.ValueKind != resultRequirement.ValueKind)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool TryGetProperty(
+        JsonElement element,
+        IReadOnlyList<string> path,
+        out JsonElement property)
+    {
+        property = element;
+        foreach (var segment in path)
+        {
+            if (property.ValueKind != JsonValueKind.Object || !property.TryGetProperty(segment, out property))
+                return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsVerifiedMutationSuccess(
+        JsonElement root,
+        string? successStatusPropertyName,
+        string? successStatusValue)
+    {
+        if (!string.IsNullOrWhiteSpace(successStatusPropertyName) &&
+            !string.IsNullOrWhiteSpace(successStatusValue))
+        {
+            return string.Equals(
+                TryGetString(root, successStatusPropertyName),
+                successStatusValue,
+                StringComparison.Ordinal);
+        }
+
+        return TryGetBoolean(root, "success", out var success) && success;
+    }
+
+    private static bool TryGetBoolean(JsonElement element, string propertyName, out bool result)
+    {
+        result = false;
+        if (!element.TryGetProperty(propertyName, out var value) ||
+            (value.ValueKind != JsonValueKind.True && value.ValueKind != JsonValueKind.False))
+        {
+            return false;
+        }
+
+        result = value.GetBoolean();
+        return true;
+    }
+
+    private static string ResolveToolName(string defaultToolName, string toolName) =>
+        string.IsNullOrWhiteSpace(toolName) ? defaultToolName : toolName;
+
+    public sealed record ResultPropertyRequirement(
+        IReadOnlyList<string> Path,
+        JsonValueKind ValueKind);
 
     private sealed record StudioQueryToolErrorJson(StudioQueryToolErrorBody Error);
 
