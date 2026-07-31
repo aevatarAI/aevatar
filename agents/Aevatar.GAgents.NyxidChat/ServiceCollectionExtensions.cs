@@ -312,7 +312,8 @@ public static class ServiceCollectionExtensions
                 sp.GetService<ILogger<DefaultCommandInteractionService<NyxIdChatCommand, NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, AGUIEvent, NyxIdChatCompletionStatus>>>(),
                 sp.GetRequiredService<ICommandObservationLifecycle<NyxIdChatCommand, NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt, NyxIdChatStartError>>(),
                 sp.GetRequiredService<ICommandReceiptFactory<NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt>>(),
-                sp.GetRequiredService<ICommandObservationScopeLeasePreparation<NyxIdChatCommand, NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt, NyxIdChatStartError>>()));
+                sp.GetRequiredService<ICommandObservationScopeLeasePreparation<NyxIdChatCommand, NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt, NyxIdChatStartError>>(),
+                probeDurableCompletionWhileLive: true));
         services.TryAddSingleton<IRealtimeSession<NyxIdChatCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>(sp =>
             sp.GetRequiredService<ICommandInteractionService<NyxIdChatCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>());
         services.TryAddSingleton<ICommandInteractionService<NyxIdApprovalCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>(sp =>

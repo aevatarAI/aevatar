@@ -129,6 +129,8 @@ proxy request 只接受 relative path，拒绝 absolute URL、fragment、query-i
 
 完整管理工具集位于 `nyxid.connected_services`（`ToolSetNames.NyxIdConnectedServices`）。Studio 每个 LLM turn 都在当前 caller token 与 typed context 下重新 resolve；结果只进入该请求的 `AgentProfileTurnCatalog` 与最终 `LLMRequest.Tools`。unknown set、discovery failure 或 duplicate name 对本请求 fail closed，不写 actor/global catalog，也不跨 caller 缓存。Workflow operation authoring 使用独立的 structured capability list/readiness tools。
 
+Mainnet 的 `agent-profile.nyxid-chat` route 同时包含 `workspace.default` 与 `nyxid.connected_services`，再由已提交的 profile policy 收窄最终工具目录。raw `nyxid_proxy` 自声明不适用于 NyxID Assistant，因此 profiled 与 unprofiled NyxID Chat 都不会把它提供给模型；`nyxid_require_service` 与已连接服务的 typed 工具不受影响。该 surface 限制不删除 shared proxy，也不改变 workflow、Lark 或其他拥有独立 admission contract 的调用方。
+
 只读 `nyxid_service_inventory` 也可由 `ChannelNyxIdConnectedServiceInventoryToolSource` 显式挂入 channel reply generator。该 wrapper 在模型真正调用时才以 current sender authority 读取 `/api/v1/keys`；不得替换为 bot-owner token、sandbox CLI login 或进程级 cache。自然语言 inventory 走 `AgentRun -> ChatStreamAsync -> use_skill("nyxid") -> nyxid_service_inventory -> sender /keys -> streamed answer`，不引入 phrase matcher、direct query adapter 或 `code_execute`。
 
 ## 7. 审计与架构边界

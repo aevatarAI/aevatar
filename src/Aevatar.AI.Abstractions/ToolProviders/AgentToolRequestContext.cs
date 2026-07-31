@@ -44,6 +44,9 @@ public static class AgentToolRequestContext
     public static AgentToolVisibilityScope ToolVisibility =>
         s_context.Value?.ToolVisibility ?? AgentToolVisibilityScope.Unrestricted;
 
+    public static IReadOnlyList<Aevatar.AI.Abstractions.ChatFileRef> InputFileRefs =>
+        s_context.Value?.InputFileRefs ?? [];
+
     public static string? TryGetExternalMetadata(string key)
     {
         var metadata = s_context.Value?.ExternalMetadata;

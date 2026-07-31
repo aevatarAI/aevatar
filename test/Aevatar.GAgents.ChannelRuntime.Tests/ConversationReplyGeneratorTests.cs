@@ -8,6 +8,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.NyxId.Tools;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.GAgentService.Abstractions;
@@ -732,6 +733,15 @@ public sealed class ConversationReplyGeneratorTests
         documentPart.FileRef.SourceResourceKey.Should().Be("pdf_recent");
         documentPart.MediaType.Should().Be("application/pdf");
         documentPart.Name.Should().Be("recent.pdf");
+        var systemPrompt = plan.InitialMessages.Single(message => message.Role == "system").Content;
+        systemPrompt.Should().Contain("Current input files");
+        systemPrompt.Should().Contain("input_parts[].file_ref");
+        systemPrompt.Should().Contain("workflow-file://wf-file-1");
+        systemPrompt.Should().Contain("\"source_kind\": 1");
+        systemPrompt.Should().NotContain("source_message_id");
+        systemPrompt.Should().NotContain("source_resource_key");
+        systemPrompt.Should().NotContain("recent.pdf");
+        systemPrompt.Should().NotContain("attachment_ref");
         userMessage.ContentParts!.Should().NotContain(part =>
             part.Text != null &&
             part.Text.Contains("confidential extracted document text", StringComparison.Ordinal));
@@ -925,6 +935,63 @@ public sealed class ConversationReplyGeneratorTests
         var toolNames = OfferedToolNames(plan);
         toolNames.Should().Contain("nyxid_require_service");
         toolNames.Should().NotContain(["nyxid_services", "nyxid_api_keys"]);
+    }
+
+    [Fact]
+    public async Task BuildStepPlanAsync_InNyxIdChatTurn_HidesRawProxyOnlyOnThatSurface()
+    {
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.example" };
+        var rawProxy = new NyxIdProxyTool(new NyxIdApiClient(options, new HttpClient()));
+        var requireService = new StubTool("nyxid_require_service");
+        var typedInventory = new StubTool("nyxid_service_inventory");
+        IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
+            new RecordingProviderFactory { Capabilities = MultimodalCapabilities },
+            BuiltInPromptFloorProvider,
+            toolSources: [new StubToolSource(rawProxy, requireService, typedInventory)]);
+        var nyxIdChatContext = AgentToolExecutionContext.Empty with
+        {
+            Channel = new AgentToolChannelContext(
+                NyxIdChatServiceDefaults.ServiceId,
+                null,
+                "scope-alpha",
+                null,
+                null),
+        };
+
+        var nyxIdChatPlan = await generator.BuildStepPlanAsync(
+            new ChatActivity
+            {
+                Id = "turn-nyxid-chat",
+                Conversation = new ConversationReference { CanonicalKey = "nyxid-chat-alpha" },
+                Content = new MessageContent { Text = "我要连接 github" },
+            },
+            new Dictionary<string, string>(),
+            Control(token: "runtime-token"),
+            nyxIdChatContext,
+            priorHistory: null,
+            attachmentContext: null,
+            forceDisableTools: false,
+            CancellationToken.None);
+
+        OfferedToolNames(nyxIdChatPlan).Should()
+            .BeEquivalentTo("nyxid_require_service", "nyxid_service_inventory");
+
+        var larkPlan = await generator.BuildStepPlanAsync(
+            CreateLarkActivity("turn-lark", "读取 github", "om_lark", token: "runtime-token"),
+            new Dictionary<string, string>
+            {
+                [ChannelMetadataKeys.Platform] = "lark",
+                [ChannelMetadataKeys.SenderId] = "ou_user_1",
+                [ChannelMetadataKeys.MessageId] = "turn-lark",
+            },
+            Control(token: "runtime-token"),
+            RelayToolContext("bnd-user-1", "turn-lark"),
+            priorHistory: null,
+            attachmentContext: null,
+            forceDisableTools: false,
+            CancellationToken.None);
+
+        OfferedToolNames(larkPlan).Should().Contain("nyxid_proxy");
     }
 
     [Fact]

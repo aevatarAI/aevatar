@@ -694,6 +694,12 @@ public sealed class MainnetHostCompositionTests
         nyxIdConnectedServices.Sources.Should().ContainSingle(source => source is NyxIdConnectedServiceToolSource);
         workspace.Sources.Should().NotContain(source => source is NyxIdConnectedServiceToolSource);
 
+        var nyxIdChatProfile = registry.Resolve(AgentProfilePolicies.NyxIdChatRouteToolSet);
+        nyxIdChatProfile.IsSuccess.Should().BeTrue(nyxIdChatProfile.Error?.Message);
+        nyxIdChatProfile.Sources.Should().Contain(source => source is NyxIdAgentToolSource);
+        nyxIdChatProfile.Sources.Should().ContainSingle(source =>
+            source is NyxIdConnectedServiceToolSource);
+
         var voice = registry.Resolve("voice.realtime");
         voice.IsSuccess.Should().BeFalse();
         voice.Error!.Code.Should().Be(ToolSetResolveError.UnknownNameCode);

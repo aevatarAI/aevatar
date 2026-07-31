@@ -12,7 +12,7 @@ using System.Text.Json.Serialization;
 namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 
 /// <summary>Tool to make proxied requests to downstream services through NyxID.</summary>
-public sealed class NyxIdProxyTool : INyxIdBuiltInTool
+public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDescriptor
 {
     private const string TextResponseMode = "text";
     private const string FileArtifactResponseMode = "file_artifact";
@@ -53,6 +53,9 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool
     }
 
     public string Name => "nyxid_proxy";
+
+    public IReadOnlyCollection<string> Capabilities =>
+        [AgentToolCapabilities.ExcludeFromNyxIdChat];
 
     public string Description =>
         "Make HTTP requests to downstream services through NyxID's credential-injecting proxy. " +
