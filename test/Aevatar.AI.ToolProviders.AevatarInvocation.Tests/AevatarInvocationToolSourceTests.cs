@@ -2,6 +2,7 @@ using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.Tools;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
@@ -1504,6 +1505,102 @@ public sealed class AevatarInvocationToolSourceTests
         result.GetProperty("run_id").GetString().Should().Be("call-workflow");
         result.GetProperty("actor_id").GetString().Should().Be("workflow-actor");
         result.GetProperty("stream_topic").GetString().Should().Be("aevatar://actors/workflow-actor/runs/call-workflow");
+    }
+
+    [Fact]
+    public async Task StartWorkflow_CreateResultReceipt_WithAcceptedStreamAck_ShouldReturnVerifiedReceipt()
+    {
+        var harness = new Harness();
+        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
+
+        var receipt = tool.CreateResultReceipt(
+            "call-workflow",
+            "aevatar_start_workflow",
+            "{}",
+            """{"run_id":"call-workflow","status":"streaming","stream_topic":"aevatar://actors/workflow-actor/runs/call-workflow","actor_id":"workflow-actor","command_id":"call-workflow","correlation_id":"call-workflow","wait":"stream"}""");
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        receipt.SideEffectKind.Should().Be("workflow.managed-child-start");
+        receipt.SubjectKind.Should().Be("aevatar.invocation_run");
+        receipt.SubjectId.Should().Be("call-workflow");
+        receipt.ResultJson.Should().Contain("workflow-actor");
+    }
+
+    [Fact]
+    public async Task StartWorkflow_ThroughStreamingExecutor_ShouldKeepVerifiedAcceptedStreamAck()
+    {
+        var harness = new Harness();
+        harness.WorkflowDispatch.Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
+            .Success(new WorkflowChatRunAcceptedReceipt("workflow-actor", "wf-main", "wf-command", "wf-correlation"));
+        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
+
+        using var _ = PushContext(callId: "call-workflow-executor");
+        var result = await ExecuteToolThroughExecutorAsync(
+            tool,
+            "call-workflow-executor",
+            "aevatar_start_workflow",
+            """
+            {
+              "workflow_id": "wf-main",
+              "inputs": { "prompt": "run workflow" },
+              "wait": "stream"
+            }
+            """);
+
+        result.Result.Should().Contain("\"run_id\":\"call-workflow-executor\"");
+        result.Result.Should().Contain("\"status\":\"streaming\"");
+        result.Result.Should().NotContain("tool outcome could not be verified");
+        result.Receipt.Should().NotBeNull();
+        result.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        result.Receipt.SubjectId.Should().Be("call-workflow-executor");
+    }
+
+    [Fact]
+    public async Task InvokeMemberWorkflowService_ThroughStreamingExecutor_ShouldKeepVerifiedAcceptedAck()
+    {
+        var harness = new Harness();
+        harness.MemberResolver.Resolution = new MemberPublishedServiceResolution(
+            "scope-1",
+            "member-workflow",
+            "workflow-service");
+        harness.ConfigureServiceTarget(
+            ServiceImplementationKind.Workflow,
+            serviceId: "workflow-service",
+            endpointId: "chat",
+            primaryActorId: "workflow-definition-actor");
+        harness.ServiceInvocationDispatcher.Receipt = new ServiceInvocationAcceptedReceipt
+        {
+            RequestId = "call-member-workflow",
+            ServiceKey = "tenant:aevatar-service:default:workflow-service",
+            DeploymentId = "deployment-workflow-service",
+            RunId = "workflow-service-run",
+            CommandId = "workflow-command",
+            CorrelationId = "workflow-correlation",
+            TargetActorId = "workflow-actor",
+            EndpointId = "chat",
+        };
+        var tool = await harness.DiscoverToolAsync("aevatar_invoke_member");
+
+        using var _ = PushContext(callId: "call-member-workflow");
+        var result = await ExecuteToolThroughExecutorAsync(
+            tool,
+            "call-member-workflow",
+            "aevatar_invoke_member",
+            """
+            {
+              "member_id": "member-workflow",
+              "payload": { "prompt": "process pdf" },
+              "wait": "stream"
+            }
+            """);
+
+        result.Result.Should().Contain("\"run_id\":\"workflow-service-run\"");
+        result.Result.Should().Contain("\"service_id\":\"workflow-service\"");
+        result.Result.Should().NotContain("tool outcome could not be verified");
+        result.Receipt.Should().NotBeNull();
+        result.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        result.Receipt.SubjectId.Should().Be("workflow-service-run");
     }
 
     [Fact]
@@ -3519,6 +3616,30 @@ public sealed class AevatarInvocationToolSourceTests
     {
         var tools = await source.DiscoverToolsAsync();
         return tools.Should().ContainSingle().Subject;
+    }
+
+    private static async Task<ToolExecutionResult> ExecuteToolThroughExecutorAsync(
+        IAgentTool tool,
+        string toolCallId,
+        string toolName,
+        string argumentsJson)
+    {
+        var tools = new ToolManager();
+        tools.Register(tool);
+        var executor = new StreamingToolExecutor(tools);
+        using var executionState = executor.CreateExecutionState();
+        executor.AddTool(executionState, new ToolCall
+        {
+            Id = toolCallId,
+            Name = toolName,
+            ArgumentsJson = argumentsJson,
+        });
+
+        var results = new List<ToolExecutionResult>();
+        await foreach (var result in executor.GetRemainingResultsAsync(executionState, CancellationToken.None))
+            results.Add(result);
+
+        return results.Should().ContainSingle().Subject;
     }
 
     private static JsonElement Read(string json)
