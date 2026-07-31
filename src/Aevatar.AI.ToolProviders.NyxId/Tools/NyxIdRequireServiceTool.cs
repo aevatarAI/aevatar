@@ -278,7 +278,8 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
             scopeId,
             callerId,
             NyxIdCallerCredentialSelection.SourceReadableUserBearerOrNull(
-                AgentToolRequestContext.NyxIdAccessToken),
+                AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(
+                    AgentToolRequestContext.Current?.Credentials)),
             AgentToolRequestContext.NyxIdOrgToken);
         error = null;
         return true;

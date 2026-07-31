@@ -2611,6 +2611,40 @@ public sealed class AevatarInvocationToolSourceTests
         harness.WorkflowDispatch.Command.CallerCredential!.BearerToken.Should().Be("access-token");
     }
 
+    [Theory]
+    [InlineData(
+        AgentToolNyxIdCredentialKind.SourceReadableUserBearer,
+        NyxIdCallerCredentialKind.SourceReadableUserBearer)]
+    [InlineData(
+        AgentToolNyxIdCredentialKind.ProxyDelegation,
+        NyxIdCallerCredentialKind.ProxyDelegation)]
+    public async Task StartWorkflow_ShouldPreserveCallerCredentialKind(
+        AgentToolNyxIdCredentialKind toolCredentialKind,
+        NyxIdCallerCredentialKind expectedWorkflowCredentialKind)
+    {
+        var harness = new Harness();
+        harness.WorkflowDispatch.Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
+            .Success(new WorkflowChatRunAcceptedReceipt("workflow-actor", "wf-main", "wf-command", "wf-correlation"));
+        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
+
+        using var _ = PushContext(
+            callId: "call-workflow-credential-kind",
+            nyxIdCredentialKind: toolCredentialKind);
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_id": "wf-main",
+              "inputs": { "prompt": "run workflow" },
+              "wait": "stream"
+            }
+            """);
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        harness.WorkflowDispatch.Command.Should().NotBeNull();
+        harness.WorkflowDispatch.Command!.CallerCredential.Should().NotBeNull();
+        harness.WorkflowDispatch.Command.CallerCredential!.BearerToken.Should().Be("access-token");
+        harness.WorkflowDispatch.Command.CallerCredential.Kind.Should().Be(expectedWorkflowCredentialKind);
+    }
+
     [Fact]
     public async Task StartWorkflow_ShouldKeepTrustedControlInTypedFields_NotMetadataBag()
     {
@@ -3586,10 +3620,11 @@ public sealed class AevatarInvocationToolSourceTests
         string? durableReplyCredentialRef = "secrets://nyx/default-reply",
         long durableReplyCredentialExpiresAtUnixMs = 0,
         IReadOnlyDictionary<string, string>? externalMetadata = null,
-        IReadOnlyList<Aevatar.AI.Abstractions.ChatFileRef>? inputFileRefs = null) =>
+        IReadOnlyList<Aevatar.AI.Abstractions.ChatFileRef>? inputFileRefs = null,
+        AgentToolNyxIdCredentialKind nyxIdCredentialKind = AgentToolNyxIdCredentialKind.Unspecified) =>
         AgentToolContextScope.Push(new AgentToolExecutionContext(
             new AgentToolRequestIdentity(requestId, callId),
-            new AgentToolCredentials(accessToken, "org-token", "sender-token"),
+            new AgentToolCredentials(accessToken, "org-token", "sender-token", nyxIdCredentialKind),
             new AgentToolCallerContext(scopeId, "owner-1", "response-1", ownerScopeId),
             new AgentToolChannelContext(
                 channelPlatform,

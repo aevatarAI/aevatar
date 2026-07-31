@@ -26,6 +26,7 @@ public sealed class WorkflowCallerCredentialToolContextTests
             new WorkflowCallerCredential
             {
                 BearerToken = "token-alpha",
+                Kind = NyxIdCallerCredentialKind.SourceReadableUserBearer,
                 NyxIdAuthority = new WorkflowCallerNyxIdAuthority
                 {
                     Platform = " lark ",
@@ -39,6 +40,9 @@ public sealed class WorkflowCallerCredentialToolContextTests
         tool.BindingId.Should().Be("bnd-owner-alpha");
         tool.NyxUserId.Should().Be("sender-alpha");
         tool.SenderTenant.Should().Be("tenant-alpha");
+        tool.NyxIdAccessToken.Should().Be("token-alpha");
+        tool.NyxIdOrgToken.Should().Be("token-alpha");
+        tool.SenderNyxIdAccessToken.Should().Be("token-alpha");
     }
 
     [Fact]
@@ -62,6 +66,9 @@ public sealed class WorkflowCallerCredentialToolContextTests
                 Kind = NyxIdCallerCredentialKind.ProxyDelegation,
             }));
 
+        tool.NyxIdAccessToken.Should().Be("delegation-alpha");
+        tool.NyxIdOrgToken.Should().BeNull();
+        tool.SenderNyxIdAccessToken.Should().BeNull();
         tool.NyxIdCredentialKind.Should().Be(AgentToolNyxIdCredentialKind.ProxyDelegation);
     }
 
@@ -87,12 +94,21 @@ public sealed class WorkflowCallerCredentialToolContextTests
 
         public AgentToolNyxIdCredentialKind NyxIdCredentialKind { get; private set; }
 
+        public string? NyxIdAccessToken { get; private set; }
+
+        public string? NyxIdOrgToken { get; private set; }
+
+        public string? SenderNyxIdAccessToken { get; private set; }
+
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
         {
             var senderBinding = AgentToolRequestContext.Current?.SenderBinding;
             BindingId = senderBinding?.BindingId;
             NyxUserId = senderBinding?.NyxUserId;
             SenderTenant = senderBinding?.SenderTenant;
+            NyxIdAccessToken = AgentToolRequestContext.NyxIdAccessToken;
+            NyxIdOrgToken = AgentToolRequestContext.NyxIdOrgToken;
+            SenderNyxIdAccessToken = AgentToolRequestContext.SenderNyxIdAccessToken;
             NyxIdCredentialKind = AgentToolRequestContext.NyxIdCredentialKind;
             return Task.FromResult("{}");
         }

@@ -275,6 +275,37 @@ public sealed class ToolProviderHttpClientRegistrationTests
         }
     }
 
+    [Theory]
+    [InlineData(AgentToolNyxIdCredentialKind.ProxyDelegation)]
+    [InlineData(AgentToolNyxIdCredentialKind.Unspecified)]
+    public async Task NyxIdRequireServiceTool_WhenCredentialIsNotSourceReadable_ShouldNotReadNyxIdSource(
+        AgentToolNyxIdCredentialKind credentialKind)
+    {
+        var handler = new StubUserServiceListHandler("""{ "keys": [] }""");
+        var tool = CreateRequireServiceTool(handler);
+        var previous = AgentToolRequestContext.Current;
+        AgentToolRequestContext.Current = CapabilityContext() with
+        {
+            Credentials = new AgentToolCredentials(
+                "runtime-caller-credential",
+                null,
+                null,
+                credentialKind),
+        };
+
+        try
+        {
+            var result = await tool.ExecuteAsync("""{"service_slug":"api-github"}""");
+
+            result.Should().Contain("NYXID_SOURCE_UNAVAILABLE");
+            handler.Requests.Should().BeEmpty();
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = previous;
+        }
+    }
+
     [Fact]
     public async Task NyxIdRequireServiceTool_ShouldReturnTypedFailure_WhenOwnerScopeIsMissing()
     {
@@ -409,7 +440,8 @@ public sealed class ToolProviderHttpClientRegistrationTests
             Credentials = new AgentToolCredentials(
                 "runtime-caller-credential",
                 "runtime-organization-credential",
-                null),
+                null,
+                AgentToolNyxIdCredentialKind.SourceReadableUserBearer),
             NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
                 "nyxid",
                 string.Empty,

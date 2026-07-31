@@ -1898,9 +1898,21 @@ public sealed class AevatarInvocationDispatcher
                 "Caller credential is invalid."));
         }
 
-        return WorkflowCallerCredentialResolution.Success(parsed.IsMissing
-            ? null
-            : new WorkflowRunCallerCredential(parsed.NormalizedBearerToken));
+        if (parsed.IsMissing)
+            return WorkflowCallerCredentialResolution.Success(null);
+
+        var credentialKind = context?.Credentials.NyxIdCredentialKind switch
+        {
+            AgentToolNyxIdCredentialKind.SourceReadableUserBearer =>
+                NyxIdCallerCredentialKind.SourceReadableUserBearer,
+            AgentToolNyxIdCredentialKind.ProxyDelegation =>
+                NyxIdCallerCredentialKind.ProxyDelegation,
+            _ => NyxIdCallerCredentialKind.Unspecified,
+        };
+        return WorkflowCallerCredentialResolution.Success(
+            new WorkflowRunCallerCredential(
+                parsed.NormalizedBearerToken,
+                Kind: credentialKind));
     }
 
     private static bool TryGetManagedWorkflowRuntimeContext(

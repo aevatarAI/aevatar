@@ -1797,6 +1797,38 @@ public sealed class ProvisionWorkflowScheduleToolTests
         root.GetProperty("observatory_url").GetString().Should().Be("/workflow/observatory");
     }
 
+    [Theory]
+    [InlineData(AgentToolNyxIdCredentialKind.ProxyDelegation)]
+    [InlineData(AgentToolNyxIdCredentialKind.Unspecified)]
+    public async Task Execute_WhenCredentialIsNotSourceReadable_ShouldOmitCapabilityCallerCredential(
+        AgentToolNyxIdCredentialKind credentialKind)
+    {
+        var port = new RecordingProvisioningPort();
+        var tool = await DiscoverToolAsync(port);
+
+        using var _ = PushContext(
+            scopeId: "scope-alpha",
+            ownerSubject: "owner-alpha",
+            accessToken: "caller-token",
+            nyxIdAuthority: new AgentToolNyxIdAuthorityContext("nyxid", "tenant-alpha", "nyx-user-alpha"),
+            nyxIdCredentialKind: credentialKind);
+        await tool.ExecuteAsync("""
+            {
+              "team_id": "team-alpha",
+              "workflow_yaml": "name: daily-tech-news\nroles: []\n",
+              "display_name": "Daily Tech News",
+              "prompt": "summarize today's tech news",
+              "schedule_cron": "0 9 * * *",
+              "schedule_timezone": "Asia/Shanghai",
+              "run_immediately": false
+            }
+            """);
+
+        port.LastRequest.Should().NotBeNull();
+        port.LastRequest!.CapabilityAdmission.Should().NotBeNull();
+        port.LastRequest.CapabilityAdmission!.NyxIdCallerCredential.Should().BeNull();
+    }
+
     [Fact]
     public async Task Execute_WhenOwnerScopePresent_ShouldCallPortWithOwnerScope()
     {
@@ -2137,11 +2169,12 @@ public sealed class ProvisionWorkflowScheduleToolTests
         string? senderTenant = null,
         string? channelPlatform = null,
         string? channelSenderId = null,
-        string? channelRegistrationScopeId = null)
+        string? channelRegistrationScopeId = null,
+        AgentToolNyxIdCredentialKind nyxIdCredentialKind = AgentToolNyxIdCredentialKind.SourceReadableUserBearer)
     {
         return AgentToolContextScope.Push(new AgentToolExecutionContext(
             new AgentToolRequestIdentity(requestId, callId, idempotencyKey),
-            new AgentToolCredentials(accessToken, "org-token", "sender-token"),
+            new AgentToolCredentials(accessToken, "org-token", "sender-token", nyxIdCredentialKind),
             new AgentToolCallerContext(scopeId, ownerSubject, "response-1", ownerScopeId),
             new AgentToolChannelContext(channelPlatform, channelSenderId, channelRegistrationScopeId, null, null),
             new AgentToolSenderBindingContext(senderBindingId, senderNyxUserId, senderTenant),

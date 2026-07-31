@@ -39,21 +39,26 @@ internal static class WorkflowCallerCredentialToolContextMapper
         if (token.IsMissing)
             return context;
 
+        var credentialKind = credential!.Kind switch
+        {
+            NyxIdCallerCredentialKind.SourceReadableUserBearer =>
+                AgentToolNyxIdCredentialKind.SourceReadableUserBearer,
+            NyxIdCallerCredentialKind.ProxyDelegation =>
+                AgentToolNyxIdCredentialKind.ProxyDelegation,
+            _ => AgentToolNyxIdCredentialKind.Unspecified,
+        };
+        var sourceReadableToken = credentialKind == AgentToolNyxIdCredentialKind.SourceReadableUserBearer
+            ? token.NormalizedBearerToken
+            : null;
+
         return context with
         {
             Credentials = context.Credentials with
             {
                 NyxIdAccessToken = token.NormalizedBearerToken,
-                NyxIdOrgToken = token.NormalizedBearerToken,
-                SenderNyxIdAccessToken = token.NormalizedBearerToken,
-                NyxIdCredentialKind = credential!.Kind switch
-                {
-                    NyxIdCallerCredentialKind.SourceReadableUserBearer =>
-                        AgentToolNyxIdCredentialKind.SourceReadableUserBearer,
-                    NyxIdCallerCredentialKind.ProxyDelegation =>
-                        AgentToolNyxIdCredentialKind.ProxyDelegation,
-                    _ => AgentToolNyxIdCredentialKind.Unspecified,
-                },
+                NyxIdOrgToken = sourceReadableToken,
+                SenderNyxIdAccessToken = sourceReadableToken,
+                NyxIdCredentialKind = credentialKind,
             },
         };
     }

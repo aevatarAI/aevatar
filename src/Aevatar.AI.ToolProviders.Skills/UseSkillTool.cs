@@ -445,7 +445,8 @@ public sealed class UseSkillTool : IAgentTool
                     CapabilityAdmission = new WorkflowCapabilityAdmissionContext(
                         callerId,
                         NyxIdCallerCredentialSelection.SourceReadableUserBearerOrNull(
-                            AgentToolRequestContext.NyxIdAccessToken),
+                            AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(
+                                AgentToolRequestContext.Current?.Credentials)),
                         AgentToolRequestContext.NyxIdOrgToken),
                 },
                 ct);
