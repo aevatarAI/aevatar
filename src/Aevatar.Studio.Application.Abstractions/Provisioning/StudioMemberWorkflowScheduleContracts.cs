@@ -108,6 +108,17 @@ public sealed record StudioMemberAutomationActionCommand(
     public AuthenticatedAuthorizationOwnerContext? AuthenticatedOwner { get; init; }
 }
 
+public sealed record StudioMemberAutomationRetryRevocationCommand(
+    string ScopeId,
+    string TeamId,
+    string MemberId,
+    string ScheduleId)
+{
+    public string? ProvisioningBearerToken { get; init; }
+
+    public AuthenticatedAuthorizationOwnerContext? AuthenticatedOwner { get; init; }
+}
+
 public sealed record StudioMemberAutomationView(
     string ScopeId,
     string TeamId,

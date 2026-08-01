@@ -367,7 +367,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         ApplyActionAsync(command, TeamAutomationAction.Delete, ct);
 
     public async Task<StudioMemberAutomationMutationReceipt> RetryRevocationAsync(
-        StudioMemberAutomationActionCommand command,
+        StudioMemberAutomationRetryRevocationCommand command,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -378,12 +378,9 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         var bearerToken = NormalizeRequired(
             command.ProvisioningBearerToken,
             nameof(command.ProvisioningBearerToken));
-        var operationId = NormalizeRequired(command.OperationId, nameof(command.OperationId));
         var retry = await _scheduleService.RetryTeamAutomationRevocationAsync(
             NormalizeRequired(command.ScheduleId, nameof(command.ScheduleId)),
             scheduleOwner,
-            operationId,
-            NormalizeRequired(command.IdempotencyKey, nameof(command.IdempotencyKey)),
             ToAuthorizationOwner(authenticatedOwner),
             ct);
         _ = await ExecutePendingRevocationAsync(
@@ -393,7 +390,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             scheduleOwner,
             resolved.TeamId,
             CancellationToken.None);
-        return ToMutationReceipt(retry.Admission, operationId, "pending");
+        return ToMutationReceipt(retry.Admission, retry.Outcome.OperationId, "pending");
     }
 
     private async Task<StudioMemberAutomationMutationReceipt> ApplyActionAsync(
@@ -580,8 +577,6 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             var retry = await _scheduleService.RetryTeamAutomationRevocationAsync(
                 scheduleId,
                 teamOwner,
-                operationId,
-                idempotencyKey,
                 ToAuthorizationOwner(request.AuthenticatedOwner),
                 ct);
             _ = await ExecutePendingRevocationAsync(
