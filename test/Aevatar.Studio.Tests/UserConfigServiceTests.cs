@@ -380,7 +380,13 @@ public sealed class UserConfigServiceTests
         await preferencePort.SaveAsync(
             "binding-alpha",
             "bearer",
-            new SaveUserLlmPreferenceCommand(UserServiceId: "us-alpha", Model: "gpt-5.5"),
+            new SelectUserServiceUserLlmPreferenceIntent(
+                "us-alpha",
+                new LLMModelSelection
+                {
+                    Kind = LLMModelSelectionKind.ExplicitModel,
+                    ModelId = "gpt-5.5",
+                }),
             CancellationToken.None);
 
         var update = commands.Updates.Should().ContainSingle().Which;
