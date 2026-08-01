@@ -3,6 +3,10 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Tools;
+using Aevatar.Audit;
+using Aevatar.Audit.Abstractions.Identity;
+using Aevatar.Audit.Abstractions.Models;
+using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
@@ -3535,6 +3539,7 @@ public sealed class AevatarInvocationToolSourceTests
         };
         var tool = await harness.DiscoverToolAsync("aevatar_read_workflow_run_artifact");
 
+        using var _ = PushContext(callId: "call-read-workflow-artifact-executor");
         var result = await ExecuteToolThroughExecutorAsync(
             tool,
             "call-read-workflow-artifact-executor",
@@ -3802,7 +3807,9 @@ public sealed class AevatarInvocationToolSourceTests
     {
         var tools = new ToolManager();
         tools.Register(tool);
-        var executor = new StreamingToolExecutor(tools);
+        var executor = new StreamingToolExecutor(
+            tools,
+            toolExecutionPort: CreateToolExecutionPort());
         using var executionState = executor.CreateExecutionState();
         executor.AddTool(executionState, new ToolCall
         {
@@ -3817,6 +3824,12 @@ public sealed class AevatarInvocationToolSourceTests
 
         return results.Should().ContainSingle().Subject;
     }
+
+    private static IAgentToolExecutionPort CreateToolExecutionPort() =>
+        new AdmittedAgentToolExecutor(
+            new StartingAdmissionLedger(),
+            new AppendedAuditTrail(),
+            new StableAuditIdentityHasher());
 
     private static JsonElement Read(string json)
     {
@@ -3949,7 +3962,31 @@ public sealed class AevatarInvocationToolSourceTests
             BuildExternalMetadata(externalMetadata)) with
         {
             InputFileRefs = inputFileRefs ?? [],
+            ExecutionOwner = AgentToolExecutionOwners.HostService(nameof(AevatarInvocationToolSourceTests)),
         });
+
+    private sealed class StartingAdmissionLedger : IAgentToolAdmissionLedger
+    {
+        public Task<AgentToolAdmissionResult> TryStartAsync(
+            AgentToolAdmissionFact fact,
+            CancellationToken ct = default) =>
+            Task.FromResult(new AgentToolAdmissionResult(AgentToolAdmissionStatus.Started));
+    }
+
+    private sealed class AppendedAuditTrail : IAuditTrailAppender
+    {
+        public Task<AuditTrailAppendResult> AppendAsync(
+            AuditRecord record,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(AuditTrailAppendResult.Appended(record.AuditId));
+    }
+
+    private sealed class StableAuditIdentityHasher : IAuditActorIdentityHasher
+    {
+        public AuditActorIdentity Hash(string canonicalActorKey) => new("actor-hash", "key-1");
+
+        public bool Verify(string canonicalActorKey, string auditActorId, string identityKeyId) => true;
+    }
 
     private static ChannelWorkflowResultDeliveryCredential? ToDeliveryCredential(
         string? secretRef,

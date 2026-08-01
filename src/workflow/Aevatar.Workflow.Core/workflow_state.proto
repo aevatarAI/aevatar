@@ -456,6 +456,7 @@ message PendingToolCallApprovalState
   repeated WorkflowFileRef input_file_refs = 9;
   string idempotency_key = 10;
   ExternalToolInvocationSpec external_invocation = 11;
+  int64 issued_at_unix_ms = 12;
 }
 
 message ToolCallModuleState
@@ -638,6 +639,7 @@ message PendingConnectorCallState
   string idempotency_key = 17;
   string approval_action_id = 18;
   bool request_dispatched = 19;
+  int64 issued_at_unix_ms = 20;
 }
 
 message ConnectorCallProtectedParameter

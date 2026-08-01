@@ -60,12 +60,14 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
     where TState : class, IMessage<TState>, new()
 {
     private readonly ILLMProviderFactory _llmProviderFactory;
+    private readonly IAgentToolExecutionPort _toolExecutionPort;
     private readonly IReadOnlyList<IAIGAgentExecutionHook> _additionalHooks;
     private readonly IReadOnlyList<IAgentRunMiddleware> _agentMiddlewares;
-    private readonly IReadOnlyList<IToolCallMiddleware> _toolMiddlewares;
     private readonly IReadOnlyList<ILLMCallMiddleware> _llmMiddlewares;
     private readonly IReadOnlyList<IAgentToolSource> _toolSources;
-    private readonly IToolApprovalHandler? _approvalHandler;
+
+    protected virtual AgentToolApprovalContinuationMode ToolApprovalContinuationMode =>
+        AgentToolApprovalContinuationMode.None;
 
     // ─── 组合的组件（各做一件事） ───
     /// <summary>工具管理器。</summary>
@@ -81,21 +83,19 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
     private ChatRuntime? _chat;
 
     protected AIGAgentBase(
+        IAgentToolExecutionPort toolExecutionPort,
         ILLMProviderFactory? llmProviderFactory = null,
         IEnumerable<IAIGAgentExecutionHook>? additionalHooks = null,
         IEnumerable<IAgentRunMiddleware>? agentMiddlewares = null,
-        IEnumerable<IToolCallMiddleware>? toolMiddlewares = null,
         IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
-        IEnumerable<IAgentToolSource>? toolSources = null,
-        IToolApprovalHandler? approvalHandler = null)
+        IEnumerable<IAgentToolSource>? toolSources = null)
     {
+        _toolExecutionPort = toolExecutionPort ?? throw new ArgumentNullException(nameof(toolExecutionPort));
         _llmProviderFactory = llmProviderFactory ?? NullLLMProviderFactory.Instance;
         _additionalHooks = (additionalHooks ?? []).ToArray();
         _agentMiddlewares = (agentMiddlewares ?? []).ToArray();
-        _toolMiddlewares = (toolMiddlewares ?? []).ToArray();
         _llmMiddlewares = (llmMiddlewares ?? []).ToArray();
         _toolSources = (toolSources ?? []).ToArray();
-        _approvalHandler = approvalHandler;
     }
 
     // ─── 初始化 ───
@@ -335,14 +335,14 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
             _foundationHooksRegistered = true;
         }
 
-        // 构建 Tool Call Middleware 链（审批中间件在最前面，不可绕过）
-        var effectiveToolMiddlewares = ToolCallMiddlewareChainFactory.ForAgentRuntime(
-            _toolMiddlewares,
-            _approvalHandler,
-            _hooks);
-
         // 构建 Chat Runtime
-        var toolLoop = new ToolCallLoop(Tools, _hooks, effectiveToolMiddlewares, _llmMiddlewares, History.Budget);
+        var toolLoop = new ToolCallLoop(
+            Tools,
+            _hooks,
+            _llmMiddlewares,
+            History.Budget,
+            _toolExecutionPort,
+            ToolApprovalContinuationMode);
         var compressionConfig = new Chat.ContextCompressionConfig(
             MaxPromptTokenBudget: EffectiveConfig.MaxPromptTokenBudget,
             CompressionThreshold: EffectiveConfig.CompressionThreshold,
@@ -393,6 +393,12 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         Messages = History.BuildMessages(DecorateSystemPrompt(EffectiveConfig.SystemPrompt, turnCatalog)),
         RequestId = null,
         Metadata = null,
+        ToolContext = AgentToolExecutionContext.Empty with
+        {
+            ExecutionOwner = string.IsNullOrWhiteSpace(Id)
+                ? new AgentToolExecutionOwner()
+                : AgentToolExecutionOwners.Actor(Id),
+        },
         Tools = BuildValidTools(),
         Model = EffectiveConfig.Model,
         Temperature = EffectiveConfig.Temperature,

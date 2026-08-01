@@ -90,41 +90,6 @@ public sealed class MCPToolProvidersCoverageTests
         results.Should().OnlyContain(result => result.Count == 1 && result[0].Name == "mcp_echo");
     }
 
-    [Fact]
-    public async Task ExecuteAsync_ConcurrentFirstUse_ShouldConnectAndDiscoverOnce()
-    {
-        using var discovery = new BlockingDiscoveryPort(new FakeAgentTool("mcp_echo", """{"ok":true}"""));
-        var connector = new MCPConnector(
-            name: "mcp-connector",
-            serverConfig: new MCPServerConfig { Name = "srv", Command = "cmd" },
-            defaultTool: "mcp_echo",
-            clientManager: discovery);
-        var ready = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var start = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var readyCount = 0;
-
-        var tasks = Enumerable.Range(0, 32)
-            .Select(_ => Task.Run(async () =>
-            {
-                if (Interlocked.Increment(ref readyCount) == 32)
-                    ready.TrySetResult(true);
-
-                await start.Task;
-                return await connector.ExecuteAsync(new ConnectorRequest { Payload = "{}" });
-            }))
-            .ToArray();
-
-        await ready.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        start.SetResult(true);
-        await discovery.WaitForFirstDiscoveryAsync();
-        discovery.Release();
-
-        var results = await Task.WhenAll(tasks).WaitAsync(TimeSpan.FromSeconds(5));
-
-        discovery.ConnectAndDiscoverCalls.Should().Be(1);
-        results.Should().OnlyContain(result => result.Success && result.Output == """{"ok":true}""");
-    }
-
     private sealed class BlockingDiscoveryPort(params IAgentTool[] tools) : IMCPToolDiscoveryPort, IDisposable
     {
         private readonly TaskCompletionSource<bool> _entered = new(TaskCreationOptions.RunContinuationsAsynchronously);

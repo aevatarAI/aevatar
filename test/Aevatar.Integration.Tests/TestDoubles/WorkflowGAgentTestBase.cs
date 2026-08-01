@@ -2,7 +2,12 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.Tools;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
+using Aevatar.Audit;
+using Aevatar.Audit.Abstractions.Identity;
+using Aevatar.Audit.Abstractions.Models;
+using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.Credentials.Testing;
@@ -76,10 +81,15 @@ public abstract class WorkflowGAgentTestBase
                 .AddSingleton<IEventStore>(eventStore)
                 .AddSingleton(eventStore)
                 .AddSingleton<EventSourcingRuntimeOptions>()
+                .AddSingleton<IAuditTrailAppender, AppendedAuditTrail>()
+                .AddSingleton<IAuditActorIdentityHasher, StableIdentityHasher>()
+                .AddSingleton<IAgentToolAdmissionLedger>(AlwaysStartingAgentToolAdmissionLedger.Instance)
+                .AddSingleton<IAgentToolExecutionPort, AdmittedAgentToolExecutor>()
                 .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
                 .BuildServiceProvider();
             var publisher = new RecordingEventPublisher();
             var agent = new TestWorkflowRoleGAgent(
+                services.GetRequiredService<IAgentToolExecutionPort>(),
                 llmProviderFactory,
                 toolSetRegistry,
                 callerAccessTokenProvider)
@@ -102,6 +112,21 @@ public abstract class WorkflowGAgentTestBase
             return (agent, publisher);
         }
 
+        private sealed class AppendedAuditTrail : IAuditTrailAppender
+        {
+            public Task<AuditTrailAppendResult> AppendAsync(
+                AuditRecord record,
+                CancellationToken cancellationToken = default) =>
+                Task.FromResult(AuditTrailAppendResult.Appended(record.AuditId));
+        }
+
+        private sealed class StableIdentityHasher : IAuditActorIdentityHasher
+        {
+            public AuditActorIdentity Hash(string canonicalActorKey) => new("actor-hash", "key-1");
+
+            public bool Verify(string canonicalActorKey, string auditActorId, string identityKeyId) => true;
+        }
+
         internal sealed class SuccessfulWorkflowTool(string name) : IAgentTool
         {
             public string Name => name;
@@ -113,15 +138,42 @@ public abstract class WorkflowGAgentTestBase
         }
 
         private sealed class TestWorkflowRoleGAgent(
+            IAgentToolExecutionPort toolExecutionPort,
             ILLMProviderFactory llmProviderFactory,
             IToolSetRegistry? toolSetRegistry,
             IWorkflowCallerAccessTokenProvider? callerAccessTokenProvider)
             : WorkflowRoleGAgent(
+                toolExecutionPort,
                 llmProviderFactory,
                 toolSetRegistry: toolSetRegistry,
                 callerAccessTokenProvider: callerAccessTokenProvider)
         {
             public void RegisterToolForTest(IAgentTool tool) => RegisterTool(tool);
+        }
+
+        internal sealed class AlwaysStartingAgentToolAdmissionLedger : IAgentToolAdmissionLedger
+        {
+            public static AlwaysStartingAgentToolAdmissionLedger Instance { get; } = new();
+
+            public Task<AgentToolAdmissionResult> TryStartAsync(
+                AgentToolAdmissionFact fact,
+                CancellationToken ct = default)
+            {
+                ArgumentNullException.ThrowIfNull(fact);
+                ct.ThrowIfCancellationRequested();
+                return Task.FromResult(new AgentToolAdmissionResult(AgentToolAdmissionStatus.Started));
+            }
+        }
+
+        internal sealed class UnexpectedAgentToolExecutionPort : IAgentToolExecutionPort
+        {
+            public static UnexpectedAgentToolExecutionPort Instance { get; } = new();
+
+            public Task<AgentToolExecutionOutcome> ExecuteAsync(
+                AgentToolExecutionRequest request,
+                CancellationToken ct = default) =>
+                throw new InvalidOperationException(
+                    $"Tool '{request.Tool.Name}' must not execute in workflow mapping tests.");
         }
 
         internal static WorkflowRunGAgent CreateRunAgent(
@@ -162,6 +214,7 @@ public abstract class WorkflowGAgentTestBase
                 .AddSingleton<IActorRuntimeCallbackScheduler>(sp =>
                     sp.GetRequiredService<InMemoryActorRuntimeCallbackScheduler>())
                 .AddSingleton<EventSourcingRuntimeOptions>()
+                .AddSingleton<IAgentToolExecutionPort>(UnexpectedAgentToolExecutionPort.Instance)
                 .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
                 .AddAevatarWorkflow();
 

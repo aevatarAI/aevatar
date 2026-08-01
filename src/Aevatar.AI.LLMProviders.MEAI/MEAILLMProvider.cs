@@ -25,6 +25,7 @@ namespace Aevatar.AI.LLMProviders.MEAI;
 /// </summary>
 public sealed class MEAILLMProvider : ILLMProvider
 {
+    private IAgentToolExecutionPort? _toolExecutionPort;
     private static readonly LLMProviderCapabilities ProviderCapabilities = new()
     {
         SupportedInputModalities = new HashSet<ContentPartKind>
@@ -60,10 +61,15 @@ public sealed class MEAILLMProvider : ILLMProvider
     /// <param name="name">Provider name (for example "openai", "deepseek").</param>
     /// <param name="client">MEAI IChatClient instance.</param>
     /// <param name="logger">Logger.</param>
-    public MEAILLMProvider(string name, IChatClient client, ILogger? logger = null)
+    public MEAILLMProvider(
+        string name,
+        IChatClient client,
+        ILogger? logger = null,
+        IAgentToolExecutionPort? toolExecutionPort = null)
     {
         Name = name;
         _client = client;
+        _toolExecutionPort = toolExecutionPort;
         _logger = logger ?? NullLogger.Instance;
     }
 
@@ -583,7 +589,7 @@ public sealed class MEAILLMProvider : ILLMProvider
         };
     }
 
-    private static ChatOptions? BuildOptions(LLMRequest request, bool includeStreamUsage = false)
+    private ChatOptions? BuildOptions(LLMRequest request, bool includeStreamUsage = false)
     {
         var options = new ChatOptions();
         var hasOptions = false;
@@ -625,10 +631,13 @@ public sealed class MEAILLMProvider : ILLMProvider
         // Register tools — use each tool's own ParametersSchema so the LLM sees the real parameter structure
         if (request.Tools is { Count: > 0 })
         {
+            var executionPort = _toolExecutionPort
+                ?? throw new InvalidOperationException(
+                    "IAgentToolExecutionPort is required when MEAI exposes server-owned tools.");
             options.Tools = [];
             foreach (var tool in request.Tools)
             {
-                options.Tools.Add(new AgentToolAIFunction(tool));
+                options.Tools.Add(new AgentToolAIFunction(tool, executionPort));
             }
             hasOptions = true;
         }

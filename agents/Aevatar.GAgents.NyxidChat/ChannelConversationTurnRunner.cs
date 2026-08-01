@@ -75,6 +75,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         IReadOnlyList<AgentToolChannelIdentityHint> IdentityHints);
 
     private readonly IServiceProvider _toolServiceProvider;
+    private readonly IAgentToolExecutionPort _toolExecutionPort;
     private readonly IChannelBotRegistrationQueryPort _registrationQueryPort;
     private readonly IChannelBotRegistrationQueryByNyxIdentityPort? _registrationQueryByNyxIdentityPort;
     private readonly IEnumerable<IPlatformAdapter> _platformAdapters;
@@ -109,6 +110,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         NyxIdRelayOutboundPort relayOutboundPort,
         IInteractiveReplyDispatcher? interactiveReplyDispatcher,
         ILogger<ChannelConversationTurnRunner> logger,
+        IAgentToolExecutionPort toolExecutionPort,
         IOwnerLlmConfigSource? ownerLlmConfigSource = null,
         IExternalIdentityBindingQueryPort? identityBindingQueryPort = null,
         ChannelSlashCommandRegistry? slashCommandRegistry = null,
@@ -128,6 +130,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         IChannelRelayProxyResponseClassifier? relayProxyResponseClassifier = null)
     {
         _toolServiceProvider = services ?? throw new ArgumentNullException(nameof(services));
+        _toolExecutionPort = toolExecutionPort ?? throw new ArgumentNullException(nameof(toolExecutionPort));
         _registrationQueryPort = registrationQueryPort ?? throw new ArgumentNullException(nameof(registrationQueryPort));
         _registrationQueryByNyxIdentityPort = registrationQueryByNyxIdentityPort;
         _platformAdapters = platformAdapters ?? throw new ArgumentNullException(nameof(platformAdapters));
@@ -1493,19 +1496,28 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                     inboundEvent,
                     runtimeContext,
                     ct);
-            using (AgentToolContextScope.Push(BuildAgentBuilderToolContext(
-                       inboundEvent,
-                       activity,
-                       registration,
-                       ResolveUserAccessToken(activity, runtimeContext),
-                       senderBinding,
-                       channelContext.Metadata,
-                       channelContext.IdentityHints)))
+            var executionContext = BuildAgentBuilderToolContext(
+                    inboundEvent,
+                    activity,
+                    registration,
+                    ResolveUserAccessToken(activity, runtimeContext),
+                    senderBinding,
+                    channelContext.Metadata,
+                    channelContext.IdentityHints)
+                .WithCallId($"{inboundEvent.MessageId}:agent-builder") with
             {
-                var tool = ActivatorUtilities.CreateInstance<AgentBuilderTool>(_toolServiceProvider);
-                var toolResult = await tool.ExecuteAsync(decision.ToolArgumentsJson!, ct);
-                replyContent = AgentBuilderCardFlow.FormatToolResult(decision, toolResult);
-            }
+                ExecutionOwner = AgentToolExecutionOwners.ChannelRegistration(registration.Id),
+            };
+            var tool = ActivatorUtilities.CreateInstance<AgentBuilderTool>(_toolServiceProvider);
+            var outcome = await _toolExecutionPort.ExecuteAsync(
+                new AgentToolExecutionRequest(
+                    tool,
+                    decision.ToolArgumentsJson!,
+                    executionContext,
+                    AgentToolApprovalContinuationMode.None,
+                    null),
+                ct).ConfigureAwait(false);
+            replyContent = AgentBuilderCardFlow.FormatToolResult(decision, outcome.ResultJson);
         }
 
         var inbound = ToInboundMessage(activity);

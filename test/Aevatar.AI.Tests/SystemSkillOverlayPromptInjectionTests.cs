@@ -80,7 +80,7 @@ public sealed class SystemSkillOverlayPromptInjectionTests
         // no ~19KB channel/Lark how-to appended to every classification turn.
         var provider = new StubSystemSkillOverlayProvider(OverlayMarkdown);
         var services = BuildServices(new InMemoryEventStoreForTests(), provider);
-        var agent = new ChatbotClassifierGAgent
+        var agent = new ChatbotClassifierGAgent(TestAgentToolExecutionPort.Instance)
         {
             Services = services,
             EventSourcingBehaviorFactory = services.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),
@@ -132,6 +132,7 @@ public sealed class SystemSkillOverlayPromptInjectionTests
         var services = BuildServices(new InMemoryEventStoreForTests(), overlayProvider);
         var agent = new NyxIdChatGAgent(
             new StubBuiltInPromptFloorProvider(),
+            TestAgentToolExecutionPort.Instance,
             overlayProvider)
         {
             Services = services,
@@ -200,6 +201,11 @@ public sealed class SystemSkillOverlayPromptInjectionTests
 
     private sealed class TestRoleGAgent : RoleGAgent
     {
+        public TestRoleGAgent()
+            : base(TestAgentToolExecutionPort.Instance)
+        {
+        }
+
         public Task PersistLegacyMaterializedEventAsync(string overlayMarkdown) =>
             PersistDomainEventAsync(new SystemSkillOverlayMaterializedEvent
             {

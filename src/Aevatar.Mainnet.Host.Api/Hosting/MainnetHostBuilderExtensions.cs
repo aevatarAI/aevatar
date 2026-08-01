@@ -3,6 +3,7 @@ using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Application.CodexExecution;
 using Aevatar.AI.Infrastructure.ChronoSandbox;
+using Aevatar.AI.Infrastructure.ToolExecution;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.ToolProviders.AgentCatalog;
 using Aevatar.AI.ToolProviders.AevatarInvocation;
@@ -90,6 +91,14 @@ public static class MainnetHostBuilderExtensions
     internal const int ContainerHttpPort = 8080;
     internal const string ContainerListenUrl = "http://+:8080";
     internal const string LocalDevelopmentListenUrl = "http://127.0.0.1:5080";
+    internal const string AgentToolAdmissionMaximumRequestLifetimeKey =
+        "AgentToolAdmission:MaximumRequestLifetime";
+    internal const string AgentToolAdmissionFutureClockSkewKey =
+        "AgentToolAdmission:MaximumFutureClockSkew";
+    internal const string AgentToolAdmissionKeyPrefixKey =
+        "AgentToolAdmission:KeyPrefix";
+    internal const string DefaultAgentToolAdmissionKeyPrefix =
+        "aevatar:mainnet:agent-tool-admission:v1:";
     private const string DeviceInboundDirectExternalEventTypeUrl =
         "type.googleapis.com/aevatar.gagents.household.DeviceInbound";
 
@@ -146,6 +155,17 @@ public static class MainnetHostBuilderExtensions
             options.MapWorkflowChatPost = false;
             options.ConfigureAIFeatures = ConfigureMainnetAIFeatures;
         });
+        var agentToolAdmissionPolicy = ResolveAgentToolAdmissionPolicy(builder.Configuration);
+        if (builder.Environment.IsDevelopment() || builder.Environment.IsEnvironment("Testing"))
+        {
+            builder.Services.AddInMemoryAgentToolAdmissionLedger(agentToolAdmissionPolicy);
+        }
+        else
+        {
+            builder.Services.AddGarnetAgentToolAdmissionLedger(
+                ResolveAgentToolAdmissionLedgerOptions(builder.Configuration),
+                agentToolAdmissionPolicy);
+        }
         // Hosted services start in registration order. Register the provider-local index
         // reconcile before capability modules can add startup readers so schema drift is
         // migrated before any read-model query executes.
@@ -329,17 +349,10 @@ public static class MainnetHostBuilderExtensions
             if (!string.IsNullOrWhiteSpace(nyxAuthority))
                 o.BaseUrl = nyxAuthority;
             o.SandboxServiceSlug = sandboxServiceSlug;
-            // Opt-in: only the mainnet host (which runs the channel relay's approval-aware
-            // tool execution pipeline) advertises ssh_exec to the LLM. Other hosts that pull
-            // in NyxId tools (CLI, workflow runner) leave this off so a generic agent can't
-            // shell into a remote without an approval gate. Defaults to false in
-            // NyxIdToolOptions; flip via Aevatar:NyxId:EnableSshExecTool=true if a
-            // deployment opts in.
+            // SSH-backed tools are disabled unless the deployment opts in explicitly.
+            // Even when exposed, their contract always requires a durable actor-owned grant.
             if (bool.TryParse(builder.Configuration["Aevatar:NyxId:EnableSshExecTool"], out var enableSsh))
                 o.EnableSshExecTool = enableSsh;
-            else
-                o.EnableSshExecTool = true; // mainnet default: enabled (Lark bot needs it)
-            o.BypassSshExecApproval = true; // mainnet Lark bot internal-only
             o.EnableManagedCodexExecTool = builder.Configuration.GetValue<bool>(
                 $"{ManagedCodexOptions.SectionName}:Enabled");
             o.MaxRequestDurationSeconds = builder.Configuration.GetValue(
@@ -507,6 +520,21 @@ public static class MainnetHostBuilderExtensions
         if (!string.Equals(configuredUrls, resolvedUrls, StringComparison.Ordinal))
             builder.WebHost.UseUrls(resolvedUrls);
     }
+
+    private static AgentToolAdmissionPolicy ResolveAgentToolAdmissionPolicy(
+        IConfiguration configuration)
+    {
+        var defaults = AgentToolAdmissionPolicy.Default;
+        return new AgentToolAdmissionPolicy(
+            configuration.GetValue<TimeSpan?>(AgentToolAdmissionMaximumRequestLifetimeKey) ??
+            AgentToolAdmissionPolicy.DefaultMaximumRequestLifetime,
+            configuration.GetValue<TimeSpan?>(AgentToolAdmissionFutureClockSkewKey) ??
+            defaults.MaximumFutureClockSkew);
+    }
+
+    private static AgentToolAdmissionLedgerOptions ResolveAgentToolAdmissionLedgerOptions(
+        IConfiguration configuration) =>
+        new(configuration[AgentToolAdmissionKeyPrefixKey]?.Trim() ?? DefaultAgentToolAdmissionKeyPrefix);
 
     internal static string ResolveMainnetListenUrls(string? configuredUrls, bool runningInContainer)
     {

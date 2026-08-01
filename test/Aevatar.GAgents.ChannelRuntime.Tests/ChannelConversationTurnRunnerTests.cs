@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
@@ -2434,6 +2435,7 @@ public sealed class ChannelConversationTurnRunnerTests
         var nyxHandler = new RecordingJsonHandler(
             """{"code":0,"data":{"user":{"user_id":"lark-user-direct","employee_id":"emp-direct"}}}""");
         var callerScopeResolver = new CapturingCallerScopeResolver();
+        var toolExecutionPort = new TestAgentToolExecutionPort();
         var services = new ServiceCollection()
             .AddSingleton(Substitute.For<IUserAgentCatalogQueryPort>())
             .AddSingleton(Substitute.For<IScheduledDispatchApplicationService>())
@@ -2451,6 +2453,7 @@ public sealed class ChannelConversationTurnRunnerTests
                 {
                     BaseAddress = new Uri("https://example.com"),
                 })))
+            .AddSingleton<IAgentToolExecutionPort>(toolExecutionPort)
             .BuildServiceProvider();
         var runner = CreateRunner(
             registrationQueryPort,
@@ -2505,6 +2508,9 @@ public sealed class ChannelConversationTurnRunnerTests
         nyxHandler.Requests[0].Path.Should().Be(
             "/api/v1/proxy/s/api-lark-bot/open-apis/contact/v3/users/on_union_direct?user_id_type=union_id");
         nyxHandler.Requests[0].Authorization.Should().Be("Bearer runtime-user-token-1");
+        var executionRequest = toolExecutionPort.Requests.Should().ContainSingle().Subject;
+        executionRequest.ExecutionOwner.Kind.Should().Be(AgentToolExecutionOwnerKind.ChannelRegistration);
+        executionRequest.ExecutionOwner.OwnerId.Should().Be("reg-1");
         AgentToolRequestContext.Current.Should().BeNull();
     }
 
@@ -4763,7 +4769,41 @@ public sealed class ChannelConversationTurnRunnerTests
             relayTailTextSender: relayTailTextSender ?? new LarkChannelRelayTailTextSender(
                 new LarkOutboundDispatcher(nyxClient, NullLogger.Instance),
                 NullLogger<LarkChannelRelayTailTextSender>.Instance),
-            relayProxyResponseClassifier: relayProxyResponseClassifier ?? new LarkRelayProxyResponseClassifier());
+            relayProxyResponseClassifier: relayProxyResponseClassifier ?? new LarkRelayProxyResponseClassifier(),
+            toolExecutionPort: services.GetService<IAgentToolExecutionPort>() ?? new TestAgentToolExecutionPort());
+    }
+
+    internal sealed class TestAgentToolExecutionPort : IAgentToolExecutionPort
+    {
+        public List<AgentToolExecutionRequest> Requests { get; } = [];
+
+        public async Task<AgentToolExecutionOutcome> ExecuteAsync(
+            AgentToolExecutionRequest request,
+            CancellationToken ct = default)
+        {
+            Requests.Add(request);
+            var safety = request.Tool.GetCallSafety(request.ArgumentsJson);
+            using var contextScope = AgentToolContextScope.Push(request.ExecutionContext);
+            var resultJson = await request.Tool.ExecuteAsync(request.ArgumentsJson, ct);
+            return new AgentToolExecutionOutcome(
+                AgentToolExecutionOutcomeKind.Executed,
+                resultJson,
+                new AgentToolReceipt
+                {
+                    CallId = request.ExecutionContext.Request.CallId ?? string.Empty,
+                    ToolName = request.Tool.Name,
+                    Status = AgentToolReceiptStatus.Success,
+                    ResultJson = resultJson,
+                    IsDestructive = safety.IsDestructive,
+                },
+                IsMutation: !safety.IsReadOnly,
+                FailureCode: string.Empty,
+                SafeMessage: string.Empty,
+                AgentToolExecutionFailureStage.None,
+                TerminalInvoked: true,
+                Retryable: false,
+                AuditCompleted: true);
+        }
     }
 
     private static IServiceProvider BuildAgentBuilderToolServices(IScopeWorkflowQueryPort? workflowQueryPort = null)

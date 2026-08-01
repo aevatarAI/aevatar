@@ -111,7 +111,7 @@ public class ChatbotClassifierGAgentTests
         string actorId,
         ILLMProviderFactory? llmProviderFactory = null)
     {
-        var agent = new ChatbotClassifierGAgent(llmProviderFactory)
+        var agent = new ChatbotClassifierGAgent(TestAgentToolExecutionPort.Instance, llmProviderFactory)
         {
             Services = provider,
             EventSourcingBehaviorFactory = provider.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),

@@ -8,7 +8,7 @@ public sealed record AgentToolCallSafety(
     bool IsReadOnly,
     bool IsDestructive);
 
-public sealed record AgentToolExecutionOutcome(
+public sealed record AgentToolTerminalOutcome(
     string ResultJson,
     AgentToolReceipt? Receipt = null);
 
@@ -60,7 +60,7 @@ public interface IAgentTool
     /// Executes one call and optionally returns provider-owned typed outcome evidence produced
     /// during execution. Tools that do not override this keep the post-execution receipt path.
     /// </summary>
-    async Task<AgentToolExecutionOutcome> ExecuteWithOutcomeAsync(
+    async Task<AgentToolTerminalOutcome> ExecuteWithOutcomeAsync(
         string callId,
         string toolName,
         string argumentsJson,

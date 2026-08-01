@@ -341,6 +341,62 @@ public class NyxIdConnectedServiceToolSourceTests
         document.RootElement.GetProperty("instances").EnumerateArray().Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task InventorySource_WithArguments_ShouldRejectWithoutBackendRead()
+    {
+        var handler = new FakeNyxIdHandler();
+        var source = CreateInventorySource(handler);
+
+        using var scope = PushContext("user-token");
+        var inventory = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
+        var result = await inventory.ExecuteAsync("""{"unexpected":true}""");
+
+        using var document = JsonDocument.Parse(result);
+        document.RootElement.GetProperty("error").GetString().Should().Be("invalid_arguments");
+        handler.DiscoveryRequests.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task InventorySource_WhenBackendThrows_ShouldReturnSafeUnavailableError()
+    {
+        const string secret = "inventory-provider-secret";
+        var handler = new FakeNyxIdHandler
+        {
+            DiscoveryException = new HttpRequestException(secret),
+        };
+        var logger = new RecordingLogger<NyxIdConnectedServiceInventoryToolSource>();
+        var source = CreateInventorySource(handler, logger);
+
+        using var scope = PushContext("user-token");
+        var inventory = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
+        var result = await inventory.ExecuteAsync("{}");
+
+        using var document = JsonDocument.Parse(result);
+        document.RootElement.GetProperty("error").GetString()
+            .Should().Be("inventory_query_unavailable");
+        result.Should().NotContain(secret);
+        handler.DiscoveryRequests.Should().Be(1);
+        logger.Entries.Should().ContainSingle()
+            .Which.Exception.Should().BeOfType<InvalidOperationException>()
+            .Which.Message.Should().Be("connected_service_inventory_unavailable");
+    }
+
+    [Fact]
+    public async Task InventorySource_WhenCallerCancelsBackendRead_ShouldPropagateCancellation()
+    {
+        var handler = new FakeNyxIdHandler();
+        using var cancellation = new CancellationTokenSource();
+        handler.CancelDiscoveryWith = cancellation;
+        var source = CreateInventorySource(handler);
+
+        using var scope = PushContext("user-token");
+        var inventory = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
+        var action = () => inventory.ExecuteAsync("{}", cancellation.Token);
+
+        await action.Should().ThrowAsync<OperationCanceledException>();
+        handler.DiscoveryRequests.Should().Be(1);
+    }
+
     private static NyxIdConnectedServiceToolSource CreateSource(
         FakeNyxIdHandler handler,
         string? baseUrl = "https://nyx.test",
@@ -358,13 +414,15 @@ public class NyxIdConnectedServiceToolSourceTests
     }
 
     private static NyxIdConnectedServiceInventoryToolSource CreateInventorySource(
-        FakeNyxIdHandler handler)
+        FakeNyxIdHandler handler,
+        ILogger<NyxIdConnectedServiceInventoryToolSource>? logger = null)
     {
         var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
         var client = new NyxIdApiClient(options, new HttpClient(handler));
         return new NyxIdConnectedServiceInventoryToolSource(
             options,
-            new NyxIdServiceInstanceClient(client));
+            new NyxIdServiceInstanceClient(client),
+            logger);
     }
 
     private static AgentToolContextScope PushContext(
@@ -467,6 +525,8 @@ public class NyxIdConnectedServiceToolSourceTests
         public int DiscoveryRequests { get; private set; }
         public int McpConfigRequests { get; private set; }
         public bool FailMcpConfig { get; init; }
+        public Exception? DiscoveryException { get; init; }
+        public CancellationTokenSource? CancelDiscoveryWith { get; set; }
         public CancellationTokenSource? CancelMcpConfigWith { get; set; }
 
         protected override Task<HttpResponseMessage> SendAsync(
@@ -478,6 +538,13 @@ public class NyxIdConnectedServiceToolSourceTests
             if (path == "/api/v1/keys")
             {
                 DiscoveryRequests++;
+                if (CancelDiscoveryWith is not null)
+                {
+                    CancelDiscoveryWith.Cancel();
+                    ct.ThrowIfCancellationRequested();
+                }
+                if (DiscoveryException is not null)
+                    throw DiscoveryException;
                 return Task.FromResult(Json(KeysByToken.GetValueOrDefault(token, "[]")));
             }
 

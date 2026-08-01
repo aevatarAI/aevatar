@@ -4,6 +4,7 @@ option csharp_namespace = "Aevatar.AI.Abstractions";
 
 import "Credentials/credential_secret_references.proto";
 import "Protos/voice_presence.proto";
+import "ToolProviders/agent_tool_admission.proto";
 import "Tools/tool_presentation.proto";
 import "google/protobuf/timestamp.proto";
 
@@ -153,6 +154,7 @@ message AgentToolExecutionContextPayload {
   AgentToolInvocationSurfacePayload invocation_surface = 15;
   repeated ChatFileRef input_file_refs = 16;
   AgentChatInvocationContextPayload chat = 17;
+  aevatar.ai.tool_providers.AgentToolExecutionOwner execution_owner = 18;
 }
 
 enum AgentChatInvocationSurfacePayload {
@@ -206,6 +208,7 @@ message AgentToolRequestIdentityPayload {
   string request_id = 1;
   string call_id = 2;
   string idempotency_key = 3;
+  int64 issued_at_unix_ms = 4;
 }
 
 enum AgentToolNyxIdCredentialKindPayload {

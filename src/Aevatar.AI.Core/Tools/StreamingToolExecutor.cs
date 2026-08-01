@@ -5,14 +5,10 @@
 // 结果按调用顺序 yield，保持对话流一致性。
 // ─────────────────────────────────────────────────────────────
 
-using Aevatar.AI.Abstractions.CodexExecution;
 using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Abstractions;
-using Aevatar.AI.Core.Auditing;
 using Aevatar.AI.Core.Hooks;
-using Aevatar.AI.Core.Middleware;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using System.Diagnostics;
@@ -54,24 +50,27 @@ public sealed class StreamingToolExecutor
     private const string SafeToolFailureMessage = "The tool request failed.";
     private readonly ToolManager _tools;
     private readonly AgentHookPipeline? _hooks;
-    private readonly IReadOnlyList<IToolCallMiddleware> _toolMiddlewares;
     private readonly AgentToolExecutionContext? _toolContext;
+    private readonly IAgentToolExecutionPort? _toolExecutionPort;
+    private readonly AgentToolApprovalContinuationMode _approvalContinuationMode;
     private readonly ILogger _logger;
 
     public StreamingToolExecutor(
         ToolManager tools,
         AgentHookPipeline? hooks = null,
-        IReadOnlyList<IToolCallMiddleware>? toolMiddlewares = null,
         IReadOnlyDictionary<string, string>? requestMetadata = null,
         AgentToolExecutionContext? toolContext = null,
+        IAgentToolExecutionPort? toolExecutionPort = null,
+        AgentToolApprovalContinuationMode approvalContinuationMode = AgentToolApprovalContinuationMode.None,
         ILogger? logger = null)
     {
         // Refactor (issue1574): Old pattern: streaming tool execution promoted request Metadata into tool control.
         // New principle: streaming tool control is typed; request Metadata remains external annotations only.
         _tools = tools;
         _hooks = hooks;
+        _toolExecutionPort = toolExecutionPort;
+        _approvalContinuationMode = approvalContinuationMode;
         _logger = logger ?? NullLogger.Instance;
-        _toolMiddlewares = toolMiddlewares ?? [];
         _toolContext = toolContext
             ?? AgentToolRequestContext.Current
             ?? (requestMetadata == null
@@ -325,25 +324,6 @@ public sealed class StreamingToolExecutor
     private static string BuildSafeFailureResult() =>
         ToolManager.BuildErrorJson(SafeToolFailureMessage);
 
-    private static AgentToolReceipt CreateExecutionErrorReceipt(
-        ToolCallContext context,
-        Exception exception,
-        string resultJson)
-    {
-        if (exception is CodexExecutionException)
-            return ToolCallReceiptFinalizer.Finalize(context, exception).Receipt;
-
-        return AgentToolReceiptFactory.CreateError(
-                   context.Tool,
-                   context.ToolCallId,
-                   context.ToolName,
-                   context.Tool.GetCallSafety(context.ArgumentsJson),
-                   resultJson,
-                   errorCode: "tool_execution_error",
-                   errorMessage: SafeToolFailureMessage) ??
-               ToolCallReceiptFinalizer.Finalize(context, exception).Receipt;
-    }
-
     private static void CompletePendingToolsAsDiscarded(ExecutionState state)
     {
         foreach (var tracked in state.Tools)
@@ -420,53 +400,19 @@ public sealed class StreamingToolExecutor
                         SchedulerFault: true);
             }
 
-            var toolCallContext = new ToolCallContext
-            {
-                Tool = effectiveTool,
-                ToolName = effectiveToolName,
-                ToolCallId = call.Id,
-                ArgumentsJson = toolCtx.ToolArguments ?? call.ArgumentsJson,
-                CancellationToken = ct, ExecutionContext = executionContext,
-            };
-
-            var executionFailed = false;
-            await MiddlewarePipeline.RunToolCallAsync(_toolMiddlewares, toolCallContext, async () =>
-            {
-                if (toolCallContext.Terminate) return;
-
-                try
-                {
-                    var executionTool = _tools.Get(toolCallContext.ToolName)
-                        ?? throw new InvalidOperationException(
-                            $"Tool '{toolCallContext.ToolName}' not found");
-                    var outcome = await executionTool.ExecuteWithOutcomeAsync(
-                        toolCallContext.ToolCallId,
-                        toolCallContext.ToolName,
-                        toolCallContext.ArgumentsJson,
-                        ct);
-                    toolCallContext.Result = outcome.ResultJson;
-                    if (outcome.Receipt is not null)
-                        toolCallContext.Receipt = outcome.Receipt;
-                }
-                catch (Exception error)
-                {
-                    executionFailed = true;
-                    var safeFailureResult = BuildSafeFailureResult();
-                    toolCallContext.Result = safeFailureResult;
-                    toolCallContext.Receipt = CreateExecutionErrorReceipt(
-                        toolCallContext,
-                        error,
-                        safeFailureResult);
-                }
-            });
-
-            var toolResult = toolCallContext.Result
-                ?? (toolCallContext.Terminate
-                    ? "Tool call terminated by middleware"
-                    : $"Tool '{toolCallContext.ToolName}' returned no result");
-            var receipt = ToolCallReceiptFinalizer.Finalize(toolCallContext).Receipt;
-            var isErrorReceipt = executionFailed ||
-                receipt?.Status is AgentToolReceiptStatus.Error or
+            var executionPort = _toolExecutionPort
+                ?? throw new InvalidOperationException("IAgentToolExecutionPort is required for server-owned tool execution.");
+            var outcome = await executionPort.ExecuteAsync(
+                new AgentToolExecutionRequest(
+                    effectiveTool,
+                    toolCtx.ToolArguments ?? call.ArgumentsJson,
+                    executionContext ?? AgentToolExecutionContext.Empty.WithCallId(call.Id),
+                    _approvalContinuationMode,
+                    null),
+                ct).ConfigureAwait(false);
+            var toolResult = outcome.ResultJson;
+            var receipt = outcome.Receipt;
+            var isErrorReceipt = receipt?.Status is AgentToolReceiptStatus.Error or
                 AgentToolReceiptStatus.Denied or
                 AgentToolReceiptStatus.AuthorizationRequired or
                 AgentToolReceiptStatus.Unspecified;
@@ -482,8 +428,8 @@ public sealed class StreamingToolExecutor
                 _logger.LogWarning(
                     ex,
                     "Tool execution end hook failed for tool {ToolName} and call {CallId}",
-                    toolCallContext.ToolName,
-                    toolCallContext.ToolCallId);
+                    effectiveToolName,
+                    call.Id);
             }
 
             if (ct.IsCancellationRequested)
@@ -547,7 +493,7 @@ public sealed class StreamingToolExecutor
         public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
-            Task.FromResult($"Tool '{name}' not found");
+            Task.FromException<string>(new InvalidOperationException($"Tool '{name}' was not found."));
     }
 
     internal enum ToolStatus { Queued, Executing, Completed, Yielded }

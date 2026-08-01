@@ -20,7 +20,9 @@ public sealed class NyxIdWorkflowReceiptIntegrationTests
                 new NyxIdToolOptions { BaseUrl = "https://nyx.test" },
                 new HttpClient(handler)),
             managedWorkflowAdmissionMode: NyxIdManagedWorkflowAdmissionMode.Enforce);
-        var adapter = new AgentWorkflowToolSourceAdapter([new SingleToolSource(proxy)]);
+        var adapter = new AgentWorkflowToolSourceAdapter(
+            [new SingleToolSource(proxy)],
+            new PassThroughExecutionPort());
         var tool = (await adapter.GetToolsAsync()).Single(candidate => candidate.Name == "nyxid_proxy");
 
         var result = await tool.ExecuteAsync(new WorkflowToolExecutionRequest(
@@ -104,6 +106,43 @@ public sealed class NyxIdWorkflowReceiptIntegrationTests
     {
         public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<IAgentTool>>([tool]);
+    }
+
+    private sealed class PassThroughExecutionPort : IAgentToolExecutionPort
+    {
+        public async Task<AgentToolExecutionOutcome> ExecuteAsync(
+            AgentToolExecutionRequest request,
+            CancellationToken ct = default)
+        {
+            AgentToolTerminalOutcome terminalOutcome;
+            using (AgentToolContextScope.Push(request.ExecutionContext))
+            {
+                terminalOutcome = await request.Tool.ExecuteWithOutcomeAsync(
+                    request.ExecutionContext.Request.CallId ?? string.Empty,
+                    request.Tool.Name,
+                    request.ArgumentsJson,
+                    ct);
+            }
+
+            var receipt = terminalOutcome.Receipt ?? new AgentToolReceipt
+            {
+                CallId = request.ExecutionContext.Request.CallId ?? string.Empty,
+                ToolName = request.Tool.Name,
+                Status = AgentToolReceiptStatus.Unspecified,
+                ResultJson = terminalOutcome.ResultJson,
+            };
+            return new AgentToolExecutionOutcome(
+                AgentToolExecutionOutcomeKind.Executed,
+                terminalOutcome.ResultJson,
+                receipt,
+                IsMutation: !request.Tool.IsReadOnly,
+                FailureCode: string.Empty,
+                SafeMessage: string.Empty,
+                AgentToolExecutionFailureStage.None,
+                TerminalInvoked: true,
+                Retryable: false,
+                AuditCompleted: true);
+        }
     }
 
     private sealed class SuccessHandler : HttpMessageHandler

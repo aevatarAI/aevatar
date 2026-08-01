@@ -35,7 +35,9 @@ public class HouseholdEntityDeviceInboundTests : IAsyncLifetime
         _serviceProvider = services.BuildServiceProvider();
 
         _llmProvider = new RecordingLLMProvider("default");
-        _entity = new HouseholdEntity(new StubLLMProviderFactory(_llmProvider))
+        _entity = new HouseholdEntity(
+            UnexpectedAgentToolExecutionPort.Instance,
+            new StubLLMProviderFactory(_llmProvider))
         {
             Services = _serviceProvider,
             EventSourcingBehaviorFactory =
@@ -301,4 +303,15 @@ public class HouseholdEntityDeviceInboundTests : IAsyncLifetime
             yield return new LLMStreamChunk { IsLast = true, FinishReason = "stop" };
         }
     }
+}
+
+internal sealed class UnexpectedAgentToolExecutionPort : IAgentToolExecutionPort
+{
+    public static UnexpectedAgentToolExecutionPort Instance { get; } = new();
+
+    public Task<AgentToolExecutionOutcome> ExecuteAsync(
+        AgentToolExecutionRequest request,
+        CancellationToken ct = default) =>
+        throw new InvalidOperationException(
+            $"Tool '{request.Tool.Name}' must not execute in household state tests.");
 }

@@ -133,7 +133,8 @@ public static class ServiceCollectionExtensions
                     providerFactory,
                     sp.GetServices<IResponsesToolProvider>(),
                     sp.GetRequiredService<IToolSetRegistry>(),
-                    sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<LlmRunCore>>());
+                    sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<LlmRunCore>>(),
+                    sp.GetRequiredService<Aevatar.AI.Abstractions.ToolProviders.IAgentToolExecutionPort>());
         });
         services.TryAddSingleton<LlmRunExecutor>();
         services.TryAddSingleton<ILlmRunExecutor>(sp => sp.GetRequiredService<LlmRunExecutor>());

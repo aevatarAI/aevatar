@@ -21,11 +21,13 @@ namespace Aevatar.AI.LLMProviders.MEAI;
 internal sealed class AgentToolAIFunction : AIFunction
 {
     private readonly IAgentTool _tool;
+    private readonly IAgentToolExecutionPort _toolExecutionPort;
     private readonly JsonElement _jsonSchema;
 
-    public AgentToolAIFunction(IAgentTool tool)
+    public AgentToolAIFunction(IAgentTool tool, IAgentToolExecutionPort toolExecutionPort)
     {
-        _tool = tool;
+        _tool = tool ?? throw new ArgumentNullException(nameof(tool));
+        _toolExecutionPort = toolExecutionPort ?? throw new ArgumentNullException(nameof(toolExecutionPort));
         _jsonSchema = ParseSchema(tool.ParametersSchema);
     }
 
@@ -44,7 +46,31 @@ internal sealed class AgentToolAIFunction : AIFunction
                 kvp => kvp.Value))
             : "{}";
 
-        return await _tool.ExecuteAsync(argsJson, cancellationToken);
+        var ambientContext = AgentToolRequestContext.Current
+            ?? throw new InvalidOperationException(
+                "MEAI function invocation requires a stable tool execution context.");
+        if (string.IsNullOrWhiteSpace(ambientContext.Request.RequestId) ||
+            string.IsNullOrWhiteSpace(ambientContext.Request.CallId))
+        {
+            throw new InvalidOperationException(
+                "MEAI function invocation requires stable request and function-call identities.");
+        }
+        if (ambientContext.ExecutionOwner.Kind == AgentToolExecutionOwnerKind.Unspecified ||
+            string.IsNullOrWhiteSpace(ambientContext.ExecutionOwner.OwnerId))
+        {
+            throw new InvalidOperationException(
+                "MEAI function invocation requires a stable execution owner.");
+        }
+
+        var outcome = await _toolExecutionPort.ExecuteAsync(
+            new AgentToolExecutionRequest(
+                _tool,
+                argsJson,
+                ambientContext,
+                AgentToolApprovalContinuationMode.None,
+                null),
+            cancellationToken).ConfigureAwait(false);
+        return outcome.ResultJson;
     }
 
     private static JsonElement ParseSchema(string? schema)

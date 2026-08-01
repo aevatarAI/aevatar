@@ -96,7 +96,9 @@ public sealed class AgentRunToolStepInteractiveReplyTests
         var runtime = new ChatRuntime(
             providerFactory: () => provider,
             history: new Aevatar.AI.Core.Chat.ChatHistory(),
-            toolLoop: new ToolCallLoop(tools),
+            toolLoop: new ToolCallLoop(
+                tools,
+                toolExecutionPort: new ChannelConversationTurnRunnerTests.TestAgentToolExecutionPort()),
             hooks: null,
             requestBuilder: _ => new LLMRequest { Messages = [], Tools = tools.GetAll() });
         return runtime.CreateStepExecutor(turnCatalog: null);

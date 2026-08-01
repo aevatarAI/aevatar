@@ -45,6 +45,7 @@ public sealed record AuditTrailRecordResponse(
     AuditFailureResponse? Failure,
     AuditExecutionProvenanceResponse? Provenance,
     AuditRedactionResponse? Redaction,
+    AuditToolExecutionResponse? ToolExecution,
     AuditCommittedFactReferenceResponse? CommittedFact,
     string? RequestSummary,
     string? ResultSummary);
@@ -98,6 +99,11 @@ public sealed record AuditRedactionResponse(
     string Policy,
     IReadOnlyList<string> OmittedFields,
     bool ValuesSanitized);
+
+public sealed record AuditToolExecutionResponse(
+    string ArgumentsSha256,
+    string ExecutionPhase,
+    bool IsMutation);
 
 public sealed record AuditCommittedFactReferenceResponse(
     string? CommittedEventId,

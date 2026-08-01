@@ -21,7 +21,7 @@ public sealed class LlmRunExecutorTests
     public async Task StartAsync_ShouldDispatchRunStartedCommand_AndReturnBeforeStreamingLoopDispatchesRecordCommands()
     {
         var provider = new GateControlledLlmProviderFactory();
-        var core = new LlmRunCore(provider, [], TestToolSetRegistry.Empty, NullLogger<LlmRunCore>.Instance);
+        var core = new LlmRunCore(provider, [], TestToolSetRegistry.Empty, NullLogger<LlmRunCore>.Instance, new RecordingAgentToolExecutionPort());
         var observation = new RecordingLlmRunObservation();
         var dispatch = new RecordingDispatchPort(observation);
         var executor = CreateExecutor(core, dispatch);
@@ -167,7 +167,7 @@ public sealed class LlmRunExecutorTests
                 },
             ],
         ]);
-        var core = new LlmRunCore(provider, [], TestToolSetRegistry.Empty, NullLogger<LlmRunCore>.Instance);
+        var core = new LlmRunCore(provider, [], TestToolSetRegistry.Empty, NullLogger<LlmRunCore>.Instance, new RecordingAgentToolExecutionPort());
         var observation = new RecordingLlmRunObservation();
         var dispatch = new RecordingDispatchPort(observation);
         var executor = CreateExecutor(core, dispatch);
@@ -229,7 +229,13 @@ public sealed class LlmRunExecutorTests
                 },
             ],
         ]);
-        var core = new LlmRunCore(provider, [toolProvider], TestToolSetRegistry.Empty, NullLogger<LlmRunCore>.Instance);
+        var toolExecutionPort = new RecordingAgentToolExecutionPort();
+        var core = new LlmRunCore(
+            provider,
+            [toolProvider],
+            TestToolSetRegistry.Empty,
+            NullLogger<LlmRunCore>.Instance,
+            toolExecutionPort);
         var observation = new RecordingLlmRunObservation();
         var dispatch = new RecordingDispatchPort(observation);
         var executor = CreateExecutor(core, dispatch);
@@ -248,6 +254,8 @@ public sealed class LlmRunExecutorTests
         await dispatch.WaitForCallsAsync(4, cts.Token);
         await executeTask;
 
+        toolExecutionPort.Requests.Should().ContainSingle()
+            .Which.ExecutionContext.Request.CallId.Should().Be("call_local");
         tool.Executions.Should().ContainSingle().Which.Should().Be("""{"city":"Singapore"}""");
         var localResult = dispatch.Calls[1].Envelope.Payload!.Unpack<RecordLlmToolCallObserved>();
         localResult.RecordId.Should().Be("run_local:tool:2");
@@ -264,7 +272,7 @@ public sealed class LlmRunExecutorTests
     public async Task StartAsync_WhenProviderFails_ShouldDispatchRunFailedRecordCommand()
     {
         var provider = new ThrowingLlmProviderFactory(new NyxIdAuthenticationRequiredException("nyxid"));
-        var core = new LlmRunCore(provider, [], TestToolSetRegistry.Empty, NullLogger<LlmRunCore>.Instance);
+        var core = new LlmRunCore(provider, [], TestToolSetRegistry.Empty, NullLogger<LlmRunCore>.Instance, new RecordingAgentToolExecutionPort());
         var observation = new RecordingLlmRunObservation();
         var dispatch = new RecordingDispatchPort(observation);
         var executor = CreateExecutor(core, dispatch);
@@ -293,7 +301,7 @@ public sealed class LlmRunExecutorTests
     public async Task StartAsync_WhenProviderCancels_ShouldDispatchRunCancelledRecordCommand()
     {
         var provider = new ThrowingLlmProviderFactory(new OperationCanceledException());
-        var core = new LlmRunCore(provider, [], TestToolSetRegistry.Empty, NullLogger<LlmRunCore>.Instance);
+        var core = new LlmRunCore(provider, [], TestToolSetRegistry.Empty, NullLogger<LlmRunCore>.Instance, new RecordingAgentToolExecutionPort());
         var observation = new RecordingLlmRunObservation();
         var dispatch = new RecordingDispatchPort(observation);
         var executor = CreateExecutor(core, dispatch);
@@ -329,7 +337,7 @@ public sealed class LlmRunExecutorTests
                 },
             ],
         ]);
-        var core = new LlmRunCore(provider, [], TestToolSetRegistry.Empty, NullLogger<LlmRunCore>.Instance);
+        var core = new LlmRunCore(provider, [], TestToolSetRegistry.Empty, NullLogger<LlmRunCore>.Instance, new RecordingAgentToolExecutionPort());
         var observation = new RecordingLlmRunObservation();
         var dispatch = new FailingThenRecordingDispatchPort(observation, failuresBeforeSuccess: 2);
         var executor = CreateExecutor(core, dispatch);

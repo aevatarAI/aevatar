@@ -402,8 +402,10 @@ public sealed class ChatRuntime
 
             var authorizedToolContext = AgentToolExecutionContextMapper.FromRequest(baseRequest);
             var streamingExecutor = new StreamingToolExecutor(
-                authorizedTools, _hooks, _toolLoop.ToolMiddlewares,
+                authorizedTools, _hooks,
                 toolContext: authorizedToolContext,
+                toolExecutionPort: _toolLoop.ToolExecutionPort,
+                approvalContinuationMode: _toolLoop.ApprovalContinuationMode,
                 logger: _logger);
             using var streamingToolState = streamingExecutor.CreateExecutionState();
 
@@ -412,8 +414,10 @@ public sealed class ChatRuntime
                 authorizedToolContext = AgentToolExecutionContextMapper.FromRequest(authorizedRequest);
                 authorizedTools = ToolCallLoop.CreateRequestToolManager(authorizedRequest.Tools);
                 streamingExecutor = new StreamingToolExecutor(
-                    authorizedTools, _hooks, _toolLoop.ToolMiddlewares,
+                    authorizedTools, _hooks,
                     toolContext: authorizedToolContext,
+                    toolExecutionPort: _toolLoop.ToolExecutionPort,
+                    approvalContinuationMode: _toolLoop.ApprovalContinuationMode,
                     logger: _logger);
             }
 
@@ -590,8 +594,10 @@ public sealed class ChatRuntime
                             parsed.ToolCalls)!;
 
                         var textToolExecutor = new StreamingToolExecutor(
-                            authorizedTools, _hooks, _toolLoop.ToolMiddlewares,
+                            authorizedTools, _hooks,
                             toolContext: authorizedToolContext,
+                            toolExecutionPort: _toolLoop.ToolExecutionPort,
+                            approvalContinuationMode: _toolLoop.ApprovalContinuationMode,
                             logger: _logger);
                         using var textToolState = textToolExecutor.CreateExecutionState();
                         foreach (var tc in parsed.ToolCalls)
@@ -784,8 +790,10 @@ public sealed class ChatRuntime
                     finalParsed.ToolCalls)!;
 
                 var finalToolExecutor = new StreamingToolExecutor(
-                    authorizedTools, _hooks, _toolLoop.ToolMiddlewares,
+                    authorizedTools, _hooks,
                     toolContext: finalRequest.ToolContext,
+                    toolExecutionPort: _toolLoop.ToolExecutionPort,
+                    approvalContinuationMode: _toolLoop.ApprovalContinuationMode,
                     logger: _logger);
                 using var finalToolState = finalToolExecutor.CreateExecutionState();
                 foreach (var tc in finalParsed.ToolCalls)
@@ -869,9 +877,10 @@ public sealed class ChatRuntime
             toolContext => new StreamingToolExecutor(
                 authorizedTools(),
                 _hooks,
-                _toolLoop.ToolMiddlewares,
                 requestMetadata: baseRequest.Metadata,
                 toolContext: toolContext ?? AgentToolExecutionContextMapper.FromRequest(baseRequest),
+                toolExecutionPort: _toolLoop.ToolExecutionPort,
+                approvalContinuationMode: _toolLoop.ApprovalContinuationMode,
                 logger: _logger));
 
     private List<ChatMessage> BuildFinalNoToolsMessages(
@@ -1186,8 +1195,9 @@ public sealed class ChatRuntime
         var executor = new StreamingToolExecutor(
             ToolCallLoop.CreateRequestToolManager(tools),
             _hooks,
-            _toolLoop.ToolMiddlewares,
             toolContext: toolContext,
+            toolExecutionPort: _toolLoop.ToolExecutionPort,
+            approvalContinuationMode: _toolLoop.ApprovalContinuationMode,
             logger: _logger);
         using var toolState = executor.CreateExecutionState();
         foreach (var toolCall in toolCalls)
