@@ -21,45 +21,53 @@ namespace Aevatar.GAgents.UserMemory;
 [GAgent("user.memory")]
 public sealed class UserMemoryGAgent : GAgentBase<UserMemoryState>, IProjectedActor
 {
+    private static readonly long MaxUnixTimeMilliseconds =
+        DateTimeOffset.MaxValue.ToUnixTimeMilliseconds();
+
     public static string ProjectionKind => "user-memory";
 
     internal const int MaxEntries = 50;
 
     [EventHandler(EndpointName = "addMemoryEntry")]
-    public async Task HandleMemoryEntryAdded(MemoryEntryAddedEvent evt)
+    public async Task HandleAddUserMemoryEntry(AddUserMemoryEntryCommand command)
     {
-        if (evt.Entry is null
-            || string.IsNullOrWhiteSpace(evt.Entry.Id)
-            || string.IsNullOrWhiteSpace(evt.Entry.Content))
-            return;
+        ArgumentNullException.ThrowIfNull(command);
+        ValidateEntry(command.Entry);
 
         // Idempotent: skip if an entry with this ID already exists
-        if (State.Entries.Any(e => string.Equals(e.Id, evt.Entry.Id, StringComparison.Ordinal)))
+        if (State.Entries.Any(e => string.Equals(e.Id, command.Entry.Id, StringComparison.Ordinal)))
             return;
 
-        await PersistDomainEventAsync(evt);
+        await PersistDomainEventAsync(new MemoryEntryAddedEvent
+        {
+            Entry = command.Entry.Clone(),
+        });
     }
 
     [EventHandler(EndpointName = "removeMemoryEntry")]
-    public async Task HandleMemoryEntryRemoved(MemoryEntryRemovedEvent evt)
+    public async Task HandleRemoveUserMemoryEntry(RemoveUserMemoryEntryCommand command)
     {
-        if (string.IsNullOrWhiteSpace(evt.EntryId))
-            return;
+        ArgumentNullException.ThrowIfNull(command);
+        ValidateCanonicalText(command.EntryId, "entry_id");
 
         // Idempotent: skip if not present
-        if (!State.Entries.Any(e => string.Equals(e.Id, evt.EntryId, StringComparison.Ordinal)))
+        if (!State.Entries.Any(e => string.Equals(e.Id, command.EntryId, StringComparison.Ordinal)))
             return;
 
-        await PersistDomainEventAsync(evt);
+        await PersistDomainEventAsync(new MemoryEntryRemovedEvent
+        {
+            EntryId = command.EntryId,
+        });
     }
 
     [EventHandler(EndpointName = "clearMemoryEntries")]
-    public async Task HandleMemoryEntriesCleared(MemoryEntriesClearedEvent evt)
+    public async Task HandleClearUserMemoryEntries(ClearUserMemoryEntriesCommand command)
     {
+        ArgumentNullException.ThrowIfNull(command);
         if (State.Entries.Count == 0)
             return;
 
-        await PersistDomainEventAsync(evt);
+        await PersistDomainEventAsync(new MemoryEntriesClearedEvent());
     }
 
     protected override async Task OnActivateAsync(CancellationToken ct)
@@ -90,9 +98,9 @@ public sealed class UserMemoryGAgent : GAgentBase<UserMemoryState>, IProjectedAc
         {
             var category = evt.Entry.Category;
             var oldestSameCategory = next.Entries
-                .Where(e => string.Equals(e.Category, category, StringComparison.Ordinal)
+                .Where(e => e.Category == category
                             && !string.Equals(e.Id, evt.Entry.Id, StringComparison.Ordinal))
-                .OrderBy(e => e.CreatedAt)
+                .OrderBy(e => e.CreatedAtMs)
                 .FirstOrDefault();
 
             if (oldestSameCategory is not null)
@@ -103,7 +111,7 @@ public sealed class UserMemoryGAgent : GAgentBase<UserMemoryState>, IProjectedAc
             {
                 var globallyOldest = next.Entries
                     .Where(e => !string.Equals(e.Id, evt.Entry.Id, StringComparison.Ordinal))
-                    .OrderBy(e => e.CreatedAt)
+                    .OrderBy(e => e.CreatedAtMs)
                     .FirstOrDefault();
 
                 if (globallyOldest is not null)
@@ -135,6 +143,29 @@ public sealed class UserMemoryGAgent : GAgentBase<UserMemoryState>, IProjectedAc
         var next = state.Clone();
         next.Entries.Clear();
         return next;
+    }
+
+    private static void ValidateEntry(UserMemoryEntryProto? entry)
+    {
+        if (entry is null)
+            throw new InvalidOperationException("user_memory_entry_required");
+
+        ValidateCanonicalText(entry.Id, "entry_id");
+        ValidateCanonicalText(entry.Content, "content");
+        if (!Enum.IsDefined(entry.Category) || entry.Category == UserMemoryCategory.Unspecified)
+            throw new InvalidOperationException("user_memory_category_invalid");
+        if (!Enum.IsDefined(entry.Source) || entry.Source == UserMemorySource.Unspecified)
+            throw new InvalidOperationException("user_memory_source_invalid");
+        if (entry.CreatedAtMs < 0 ||
+            entry.UpdatedAtMs < entry.CreatedAtMs ||
+            entry.UpdatedAtMs > MaxUnixTimeMilliseconds)
+            throw new InvalidOperationException("user_memory_timestamp_invalid");
+    }
+
+    private static void ValidateCanonicalText(string? value, string field)
+    {
+        if (string.IsNullOrWhiteSpace(value) || !string.Equals(value, value.Trim(), StringComparison.Ordinal))
+            throw new InvalidOperationException($"user_memory_{field}_invalid");
     }
 
 }

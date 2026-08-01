@@ -257,6 +257,7 @@ public static class ServiceCollectionExtensions
 
         // Query ports (read side)
         services.TryAddSingleton<IUserConfigQueryPort, ProjectionUserConfigQueryPort>();
+        services.TryAddSingleton<IUserMemoryQueryPort, ProjectionUserMemoryQueryPort>();
         services.TryAddSingleton<IStudioMemberQueryPort, ProjectionStudioMemberQueryPort>();
         services.TryAddSingleton<IContentArtifactQueryPort, ProjectionContentArtifactQueryPort>();
         services.TryAddSingleton<IWorkOrderQueryPort, ProjectionWorkOrderQueryPort>();

@@ -33,6 +33,7 @@ using Aevatar.AGUI.Contracts;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
+using Aevatar.Studio.Application.Studio.Abstractions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -152,6 +153,10 @@ public static class ServiceCollectionExtensions
         }
         services.TryAddSingleton<BuiltInPromptFloorProvider>();
         services.TryAddSingleton<IBuiltInPromptFloorProvider>(sp => sp.GetRequiredService<BuiltInPromptFloorProvider>());
+        services.TryAddSingleton<IUserMemoryPromptContextProvider>(sp =>
+            new UserMemoryPromptContextProvider(
+                sp.GetService<IUserMemoryQueryPort>(),
+                sp.GetRequiredService<ILogger<UserMemoryPromptContextProvider>>()));
         services.TryAddSingleton<ChannelRemoteSkillAccessTokenResolver>(sp =>
             new ChannelRemoteSkillAccessTokenResolver(
                 sp.GetService<INyxIdSkillCapabilityIssuer>(),
@@ -170,7 +175,7 @@ public static class ServiceCollectionExtensions
                 sp.GetService<IRemoteSkillFetcher>(),
                 sp.GetService<NyxIdRelayOptions>(),
                 sp.GetService<INyxIdUserLlmPreferencesStore>(),
-                sp.GetService<IUserMemoryStore>(),
+                sp.GetService<IUserMemoryPromptContextProvider>(),
                 larkClient: sp.GetService<ILarkNyxClient>(),
                 fileIngressPort: sp.GetService<Aevatar.Workflow.Application.Abstractions.Runs.IFileArtifactIngressPort>(),
                 fileArtifactReadPort: sp.GetService<Aevatar.Workflow.Application.Abstractions.Runs.IFileArtifactReadPort>(),

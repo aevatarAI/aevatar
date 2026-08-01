@@ -8,6 +8,10 @@ owner: eanzhao
 
 This document is the canonical Aevatar contract for NyxID Assistant Chat v1. It covers conversation and turn identity, actor-owned task execution, live AGUI observation, stop and steering controls, browser-action handoff, conditional current-state reads, recovery, and the secret boundary.
 
+The ownership and retention distinction between execution state, derived prompt context,
+conversation transcript, and cross-conversation user memory is canonical in
+[conversation-context-and-memory.md](conversation-context-and-memory.md).
+
 The canonical client surface is Mainnet `POST /api/chat` plus `/api/chat/conversations/**`. Assistant commands are selected only by one of the seven explicit `type` discriminators: `text`, `action.continue`, `approval.resolve`, `task.stop`, `task.steer`, `step.retry`, and `step.skip`. The public routes never accept `scopeId`; they derive one unambiguous scope from the authenticated principal and fail closed otherwise.
 
 The authoritative runtime is one durable conversation-controller actor plus a run-scoped turn actor that executes one authorized operation at a time. The controller's committed protobuf state is the task authority. AGUI and the current-state query are two consumers of the same committed Projection Pipeline; neither endpoint nor projector reconstructs task truth.

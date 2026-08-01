@@ -308,23 +308,13 @@ public static partial class NyxIdChatEndpoints
             }
         }
 
-        var memoryStore = http.RequestServices.GetService<IUserMemoryStore>();
-        if (memoryStore == null)
+        var promptContextProvider = http.RequestServices.GetService<IUserMemoryPromptContextProvider>();
+        if (promptContextProvider == null)
             return control;
 
-        var memoryLogger = http.RequestServices.GetService<ILoggerFactory>()
-            ?.CreateLogger("Aevatar.NyxId.Chat.UserMemory");
-
-        try
-        {
-            var section = await memoryStore.BuildPromptSectionAsync(2000, ct);
-            if (!string.IsNullOrWhiteSpace(section))
-                control = control with { UserMemoryPrompt = section };
-        }
-        catch (Exception ex)
-        {
-            memoryLogger?.LogWarning(ex, "Failed to load user memory from chrono-storage — continuing without memory context");
-        }
+        var section = await promptContextProvider.BuildAsync(2000, ct);
+        if (!string.IsNullOrWhiteSpace(section))
+            control = control with { UserMemoryPrompt = section };
 
         return control;
     }

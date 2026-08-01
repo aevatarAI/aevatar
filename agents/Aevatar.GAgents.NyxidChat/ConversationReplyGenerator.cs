@@ -82,7 +82,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
     private readonly IRemoteSkillAccessTokenResolver? _remoteSkillAccessTokenResolver;
     private readonly global::Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? _relayOptions;
     private readonly INyxIdUserLlmPreferencesStore? _preferencesStore;
-    private readonly IUserMemoryStore? _userMemoryStore;
+    private readonly IUserMemoryPromptContextProvider? _userMemoryPromptContextProvider;
     private readonly ILarkNyxClient? _larkClient;
     private readonly IFileArtifactIngressPort? _fileIngressPort;
     private readonly IFileArtifactReadPort? _fileArtifactReadPort;
@@ -125,7 +125,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         IRemoteSkillFetcher? remoteSkillFetcher = null,
         global::Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? relayOptions = null,
         INyxIdUserLlmPreferencesStore? preferencesStore = null,
-        IUserMemoryStore? userMemoryStore = null,
+        IUserMemoryPromptContextProvider? userMemoryPromptContextProvider = null,
         ILarkNyxClient? larkClient = null,
         IFileArtifactIngressPort? fileIngressPort = null,
         IFileArtifactReadPort? fileArtifactReadPort = null,
@@ -146,7 +146,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         _remoteSkillAccessTokenResolver = remoteSkillAccessTokenResolver;
         _relayOptions = relayOptions;
         _preferencesStore = preferencesStore;
-        _userMemoryStore = userMemoryStore;
+        _userMemoryPromptContextProvider = userMemoryPromptContextProvider;
         _larkClient = larkClient;
         _fileIngressPort = fileIngressPort;
         _fileArtifactReadPort = fileArtifactReadPort;
@@ -1798,7 +1798,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
     private static string? NormalizeOptional(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
-    // Reasoning content is per-turn working memory, never conversation input: replaying a
+    // Reasoning content is ephemeral provider output, never conversation input: replaying a
     // prior turn's reasoning_content to the provider violates the reasoning-model contract
     // (DeepSeek documents it as a request error; through the NyxID proxy it instead silently
     // derails generation — the 2026-06-12 prod incident where every turn in a
@@ -2047,28 +2047,17 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             }
         }
 
-        if (_userMemoryStore is not null)
+        if (_userMemoryPromptContextProvider is not null)
         {
-            try
+            var promptSection = await _userMemoryPromptContextProvider.BuildAsync(2000, ct);
+            if (!string.IsNullOrWhiteSpace(promptSection))
             {
-                var promptSection = await _userMemoryStore.BuildPromptSectionAsync(2000, ct);
-                if (!string.IsNullOrWhiteSpace(promptSection))
-                {
-                    effectiveControl = effectiveControl with { UserMemoryPrompt = promptSection };
-                    if (ownerFallback is not null)
-                        ownerFallbackControl = (ownerFallbackControl ?? effectiveControl) with
-                        {
-                            UserMemoryPrompt = promptSection,
-                        };
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "User memory prompt context is unavailable; continuing reply generation without user memory.");
+                effectiveControl = effectiveControl with { UserMemoryPrompt = promptSection };
+                if (ownerFallback is not null)
+                    ownerFallbackControl = (ownerFallbackControl ?? effectiveControl) with
+                    {
+                        UserMemoryPrompt = promptSection,
+                    };
             }
         }
 

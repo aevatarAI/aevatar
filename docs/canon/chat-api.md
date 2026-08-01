@@ -9,6 +9,9 @@ owner: eanzhao
 > 单一事实源（Single Source of Truth）：Mainnet `/api/chat` 的组合与 Workflow Chat 能力说明以本文为准；NyxID Assistant 的 actor/task 细节见 `docs/canon/nyxid-chat-api.md`。
 > Host 侧入口文档：`src/workflow/Aevatar.Workflow.Host.Api/README.md`、`src/workflow/Aevatar.Workflow.Host.Api/CHAT_API_CAPABILITIES.md`。
 
+Transcript、execution state、prompt context 与 user memory 的跨能力语义以
+[conversation-context-and-memory.md](conversation-context-and-memory.md) 为准。
+
 本文档面向框架使用者，说明当前 `POST /api/chat` 与 `GET /api/ws/chat` 可以做什么，尤其是：
 
 - 根据 `prompt` 自动判断是否要生成 workflow

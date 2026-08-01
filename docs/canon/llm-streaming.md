@@ -15,6 +15,10 @@ owner: eanzhao
 3. 统一投影链路中的分支协作（读模型分支 + workflow run-event 实时分支）。
 4. 当前支持的流类型、多模态输入输出与后续演进路径。
 
+Execution state、derived prompt context、conversation transcript 与 user memory 的 owner、
+retention 和 recovery 边界统一见
+[conversation-context-and-memory.md](conversation-context-and-memory.md)。
+
 不包含内容：
 
 1. Workflow YAML 业务编排语义细节（由 Workflow Core 文档负责）。
