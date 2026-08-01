@@ -105,7 +105,9 @@ public sealed class ServiceRunGAgent : GAgentBase<ServiceRunState>
         var status = terminal.Outcome switch
         {
             RoleChatSessionOutcome.Completed => ServiceRunStatus.Completed,
-            RoleChatSessionOutcome.Failed or RoleChatSessionOutcome.Blocked => ServiceRunStatus.Failed,
+            RoleChatSessionOutcome.Failed or
+            RoleChatSessionOutcome.Blocked or
+            RoleChatSessionOutcome.OutcomeUncertain => ServiceRunStatus.Failed,
             _ => throw new InvalidOperationException("Role chat terminal outcome is required."),
         };
         EnsureTerminalStatusDoesNotConflict(status);

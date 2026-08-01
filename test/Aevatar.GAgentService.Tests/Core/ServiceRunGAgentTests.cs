@@ -1041,6 +1041,27 @@ public sealed class ServiceRunGAgentTests
     }
 
     [Fact]
+    public async Task HandleRoleChatCompletedAsync_ShouldMapOutcomeUncertainToFailedRun()
+    {
+        var actor = GAgentServiceTestKit.CreateStatefulAgent<ServiceRunGAgent, ServiceRunState>(
+            new InMemoryEventStore(),
+            "service-run:tenant-1:svc-1:run-1",
+            static () => new ServiceRunGAgent());
+        var record = BuildRecord("run-1");
+        record.TargetActorId = "role-actor-1";
+        await actor.HandleRegisterAsync(new RegisterServiceRunRequested { Record = record });
+        var terminal = BuildTerminalEvent(actor.Id);
+        terminal.Outcome = RoleChatSessionOutcome.OutcomeUncertain;
+        terminal.FailureCode = "SESSION_OUTCOME_UNCERTAIN";
+        terminal.SafeMessage = "The chat outcome could not be confirmed.";
+
+        await actor.HandleRoleChatCompletedAsync(terminal);
+
+        actor.State.Record!.Status.Should().Be(ServiceRunStatus.Failed);
+        actor.State.Record.LastError.Should().Be("The chat outcome could not be confirmed.");
+    }
+
+    [Fact]
     public async Task HandleRoleChatCompletedAsync_ShouldRejectDifferentEnvelopePublisher()
     {
         var actor = GAgentServiceTestKit.CreateStatefulAgent<ServiceRunGAgent, ServiceRunState>(

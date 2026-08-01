@@ -495,16 +495,19 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         var assistantStatus = completedSession.Outcome switch
         {
             RoleChatSessionOutcome.Blocked => "blocked",
-            RoleChatSessionOutcome.Failed => "error",
+            RoleChatSessionOutcome.Failed or RoleChatSessionOutcome.OutcomeUncertain => "error",
             _ => "completed",
         };
         var safeError = completedSession.Outcome switch
         {
             RoleChatSessionOutcome.Blocked => completedSession.AuthorizationRequired?.SafeMessage,
-            RoleChatSessionOutcome.Failed => completedSession.SafeMessage,
+            RoleChatSessionOutcome.Failed or RoleChatSessionOutcome.OutcomeUncertain => completedSession.SafeMessage,
             _ => null,
         };
-        var archivedCompletion = completedSession.Outcome is RoleChatSessionOutcome.Blocked or RoleChatSessionOutcome.Failed
+        var archivedCompletion = completedSession.Outcome is
+            RoleChatSessionOutcome.Blocked or
+            RoleChatSessionOutcome.Failed or
+            RoleChatSessionOutcome.OutcomeUncertain
             ? string.IsNullOrWhiteSpace(safeError)
                 ? "The chat request failed. Please try again."
                 : safeError

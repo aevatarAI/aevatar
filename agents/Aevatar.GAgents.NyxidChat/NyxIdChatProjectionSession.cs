@@ -705,7 +705,9 @@ public sealed class NyxIdChatSessionEventProjector
         NyxIdChatSessionProjectionContext context,
         RoleChatTerminalProgress terminal)
     {
-        if (terminal.Outcome == RoleChatSessionOutcome.Failed)
+        if (terminal.Outcome is
+            RoleChatSessionOutcome.Failed or
+            RoleChatSessionOutcome.OutcomeUncertain)
         {
             return new AGUIEvent
             {

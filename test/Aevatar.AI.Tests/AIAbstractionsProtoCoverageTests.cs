@@ -280,6 +280,13 @@ public sealed class AIAbstractionsProtoCoverageTests
         }, RoleChatSessionStartedEvent.Parser);
         sessionStarted.Prompt.Should().Be("hello");
         sessionStarted.InputParts.Should().ContainSingle();
+        var incompleteFinalization = RoundTrip(new RoleChatIncompleteSessionFinalizationRequested
+        {
+            SessionId = "session-1",
+            ExpectedLastProgressSequence = 7,
+        }, RoleChatIncompleteSessionFinalizationRequested.Parser);
+        incompleteFinalization.SessionId.Should().Be("session-1");
+        incompleteFinalization.ExpectedLastProgressSequence.Should().Be(7);
         var sessionCompleted = RoundTrip(new RoleChatSessionCompletedEvent
         {
             SessionId = "session-1",
@@ -566,6 +573,8 @@ public sealed class AIAbstractionsProtoCoverageTests
         AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(ToolCallEvent));
         AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(ToolResultEvent));
         AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(RoleChatSessionStartedEvent));
+        AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x =>
+            x.Name == nameof(RoleChatIncompleteSessionFinalizationRequested));
         AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(RoleChatSessionCompletedEvent));
         AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(InitializeRoleAgentEvent));
         AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(AIAgentConfigOverrides));

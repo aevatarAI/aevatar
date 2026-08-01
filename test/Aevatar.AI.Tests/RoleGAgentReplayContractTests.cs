@@ -594,7 +594,7 @@ public class RoleGAgentReplayContractTests
     }
 
     [Fact]
-    public async Task RetryStartedAppendFailure_ShouldNotDuplicateFenceOnNextCommandOrReplay()
+    public async Task IncompleteProfiledSession_ShouldNotCreateRetryAuthorityFence()
     {
         var inner = new InMemoryEventStoreForTests();
         const string actorId = "role-profiled-retry-fail";
@@ -621,8 +621,7 @@ public class RoleGAgentReplayContractTests
         agent.State.AgentProfile = new AgentProfileSnapshot { ProfileId = "profile-a" };
         var request = new ChatRequestEvent { SessionId = "session-a", Prompt = "hello" };
 
-        await FluentActions.Awaiting(() => agent.HandleChatRequest(request))
-            .Should().ThrowAsync<InvalidOperationException>().WithMessage("*retry started*");
+        await agent.HandleChatRequest(request);
         agent.State.AgentProfileTurnAuthority.ReconciliationKey.Attempt.Should().Be(1);
 
         await agent.HandleChatRequest(request.Clone());
@@ -632,23 +631,22 @@ public class RoleGAgentReplayContractTests
             .Select(stateEvent => stateEvent.EventData.Unpack<AgentProfileTurnAuthorityCommittedEvent>())
             .Where(authorityEvent => authorityEvent.CommitKind == AgentProfileTurnAuthorityCommitKind.RetryStarted)
             .ToArray();
-        retryEvents.Should().ContainSingle(authorityEvent =>
-            authorityEvent.Authority.ReconciliationKey.Attempt == 2);
+        retryEvents.Should().BeEmpty();
         committedPublisher.Published
             .Where(published => published.StateEvent.EventData.Is(
                 AgentProfileTurnAuthorityCommittedEvent.Descriptor))
             .Select(published => published.StateEvent.EventData.Unpack<AgentProfileTurnAuthorityCommittedEvent>())
-            .Should().ContainSingle(authorityEvent =>
-                authorityEvent.CommitKind == AgentProfileTurnAuthorityCommitKind.RetryStarted &&
-                authorityEvent.Authority.ReconciliationKey.Attempt == 2);
+            .Should().BeEmpty();
+        agent.State.Sessions["session-a"].Completed.Should().BeTrue();
+        agent.State.Sessions["session-a"].FailureCode.Should().Be("SESSION_ORPHANED");
 
         var replayed = CreateProfiledAgent(services, actorId);
         await replayed.ActivateAsync();
-        replayed.State.AgentProfileTurnAuthority.ReconciliationKey.Attempt.Should().Be(2);
+        replayed.State.AgentProfileTurnAuthority.ReconciliationKey.Attempt.Should().Be(1);
     }
 
     [Fact]
-    public async Task StartedAuthorityReplay_ShouldRespectFrozenExactRefRetryBoundaryWithoutReclassification()
+    public async Task StartedAuthorityReplay_ShouldFinalizeWithoutMaterializationOrReclassification()
     {
         var store = new InMemoryEventStoreForTests();
         const string actorId = "role-profiled-replay";
@@ -679,11 +677,9 @@ public class RoleGAgentReplayContractTests
         });
 
         agent.PrepareCallCount.Should().Be(0);
-        agent.MaterializeCallCount.Should().Be(1);
-        agent.MaterializedAuthorities.Should().ContainSingle(authority =>
-            authority.ReconciliationKey.Attempt == 2 &&
-            authority.CandidateRoute.IntentId == "intent-frozen" &&
-            authority.SelectedExactSkillRef.Guid == "skill-frozen");
+        agent.MaterializeCallCount.Should().Be(0);
+        agent.MaterializedAuthorities.Should().BeEmpty();
+        agent.State.Sessions["session-a"].FailureCode.Should().Be("SESSION_ORPHANED");
 
         const string recoveryActorId = "role-profiled-replay-recovery";
         var recoveryAuthority = TurnAuthority("session-recovery", 1, "intent-recovery", "skill-unused");
@@ -713,10 +709,8 @@ public class RoleGAgentReplayContractTests
             Prompt = "recover",
         });
         recoveryAgent.PrepareCallCount.Should().Be(0);
-        recoveryAgent.MaterializedAuthorities.Should().ContainSingle(authority =>
-            authority.ReconciliationKey.SessionId == "session-recovery" &&
-            authority.ReconciliationKey.Attempt == 1 &&
-            authority.SelectedExactSkillRef == null);
+        recoveryAgent.MaterializedAuthorities.Should().BeEmpty();
+        recoveryAgent.State.Sessions["session-recovery"].FailureCode.Should().Be("SESSION_ORPHANED");
         (await store.GetEventsAsync(recoveryActorId))
             .Where(stateEvent => stateEvent.EventData.Is(AgentProfileTurnAuthorityCommittedEvent.Descriptor))
             .Select(stateEvent => stateEvent.EventData.Unpack<AgentProfileTurnAuthorityCommittedEvent>().CommitKind)
@@ -724,7 +718,7 @@ public class RoleGAgentReplayContractTests
     }
 
     [Fact]
-    public async Task RetryReplay_ShouldCommitNextAttemptBeforeExactIoAndRejectLateResult()
+    public async Task RetryReplay_ShouldFinalizeWithoutExactIoAndRejectLateResult()
     {
         var inner = new InMemoryEventStoreForTests();
         var operationLog = new List<string>();
@@ -756,15 +750,13 @@ public class RoleGAgentReplayContractTests
             Prompt = "hello",
         });
 
-        agent.MaterializedAuthorities.Should().ContainSingle(authority =>
-            authority.ReconciliationKey.Attempt == 2);
+        agent.MaterializedAuthorities.Should().BeEmpty();
         store.Batches.SelectMany(static batch => batch)
             .Where(stateEvent => stateEvent.EventData.Is(AgentProfileTurnAuthorityCommittedEvent.Descriptor))
             .Select(stateEvent => stateEvent.EventData.Unpack<AgentProfileTurnAuthorityCommittedEvent>())
-            .Should().Contain(authorityEvent =>
-                authorityEvent.CommitKind == AgentProfileTurnAuthorityCommitKind.RetryStarted &&
-                authorityEvent.Authority.ReconciliationKey.Attempt == 2);
-        operationLog.Should().ContainInOrder("commit:RETRY_STARTED:2", "materialize:2");
+            .Should().NotContain(authorityEvent =>
+                authorityEvent.CommitKind == AgentProfileTurnAuthorityCommitKind.RetryStarted);
+        operationLog.Should().NotContain(entry => entry.Contains("materialize", StringComparison.Ordinal));
 
         var stateBeforeLateResult = agent.State;
         var late = new AgentProfileTurnAuthorityCommittedEvent
@@ -776,7 +768,7 @@ public class RoleGAgentReplayContractTests
     }
 
     [Fact]
-    public async Task LegacyIncompleteSessionWithoutAuthority_ShouldCommitRestrictedEmptyOnce()
+    public async Task LegacyIncompleteSessionWithoutAuthority_ShouldFinalizeWithoutInventingAuthority()
     {
         var store = new InMemoryEventStoreForTests();
         const string actorId = "role-profiled-legacy";
@@ -803,17 +795,13 @@ public class RoleGAgentReplayContractTests
             .Select(stateEvent => stateEvent.EventData.Unpack<AgentProfileTurnAuthorityCommittedEvent>())
             .Where(authorityEvent => authorityEvent.CommitKind == AgentProfileTurnAuthorityCommitKind.Initial)
             .ToArray();
-        legacyEvents.Should().ContainSingle();
-        legacyEvents[0].Authority.AuthorityKind.Should().Be(AgentProfileTurnAuthorityKind.RestrictedEmpty);
-        legacyEvents[0].Authority.AuthorityCeilingToolNames.Should().BeEmpty();
-        legacyEvents[0].Authority.CandidateRoute.Should().BeNull();
-        legacyEvents[0].Authority.SelectedExactSkillRef.Should().BeNull();
-        legacyEvents[0].Authority.DegradationReasons.Should().Equal(
-            AgentProfileTurnDegradationReason.LegacyAuthorityMissing);
+        legacyEvents.Should().BeEmpty();
+        agent.State.Sessions["session-legacy"].Completed.Should().BeTrue();
+        agent.State.Sessions["session-legacy"].FailureCode.Should().Be("SESSION_ORPHANED");
     }
 
     [Fact]
-    public async Task LegacyIncompleteSessionWithActiveAuthority_ShouldReplaceItInSessionOrderAndReplay()
+    public async Task LegacyIncompleteSessionWithActiveAuthority_ShouldFinalizeWithoutReplacingAuthority()
     {
         var store = new InMemoryEventStoreForTests();
         const string actorId = "role-profiled-legacy-replacement";
@@ -850,29 +838,12 @@ public class RoleGAgentReplayContractTests
 
         agent.PrepareCallCount.Should().Be(0);
         var persisted = await store.GetEventsAsync(actorId);
-        var legacyStarted = persisted.Single(stateEvent =>
-            stateEvent.EventData.Is(RoleChatSessionStartedEvent.Descriptor) &&
-            stateEvent.EventData.Unpack<RoleChatSessionStartedEvent>().SessionId == "session-legacy");
-        var legacyInitial = persisted.Single(stateEvent =>
-            stateEvent.EventData.Is(AgentProfileTurnAuthorityCommittedEvent.Descriptor) &&
-            stateEvent.EventData.Unpack<AgentProfileTurnAuthorityCommittedEvent>() is
-            {
-                CommitKind: AgentProfileTurnAuthorityCommitKind.Initial,
-                Authority.ReconciliationKey.SessionId: "session-legacy",
-            });
-        legacyInitial.Version.Should().Be(legacyStarted.Version + 1);
-        var legacyAuthority = legacyInitial.EventData
-            .Unpack<AgentProfileTurnAuthorityCommittedEvent>()
-            .Authority;
-        legacyAuthority.AuthorityKind.Should().Be(AgentProfileTurnAuthorityKind.RestrictedEmpty);
-        legacyAuthority.AuthorityCeilingToolNames.Should().BeEmpty();
-        legacyAuthority.DegradationReasons.Should().Equal(
-            AgentProfileTurnDegradationReason.LegacyAuthorityMissing);
         persisted
             .Where(stateEvent => stateEvent.EventData.Is(AgentProfileTurnAuthorityCommittedEvent.Descriptor))
             .Select(stateEvent => stateEvent.EventData.Unpack<AgentProfileTurnAuthorityCommittedEvent>())
-            .Should().NotContain(authorityEvent =>
-                authorityEvent.CommitKind == AgentProfileTurnAuthorityCommitKind.RetryStarted);
+            .Should().ContainSingle(authorityEvent =>
+                authorityEvent.CommitKind == AgentProfileTurnAuthorityCommitKind.Initial &&
+                authorityEvent.Authority.ReconciliationKey.SessionId == "session-active");
 
         var replayed = CreateProfiledAgent(services, actorId);
         await replayed.ActivateAsync();
@@ -880,7 +851,7 @@ public class RoleGAgentReplayContractTests
         replayed.State.Sessions["session-active"].Completed.Should().BeFalse();
         replayed.State.Sessions["session-legacy"].Sequence.Should().Be(2);
         replayed.State.Sessions["session-legacy"].Completed.Should().BeTrue();
-        replayed.State.AgentProfileTurnAuthority.Should().BeEquivalentTo(legacyAuthority);
+        replayed.State.AgentProfileTurnAuthority.ReconciliationKey.SessionId.Should().Be("session-active");
     }
 
     [Fact]
@@ -1439,61 +1410,266 @@ public class RoleGAgentReplayContractTests
     }
 
     [Fact]
-    public async Task StartedSessionReplay_ShouldResumeProviderCallAndPersistCompletion()
+    public async Task ActivationSignal_StartedOnlySession_ShouldCommitObservableOrphanedFailure()
     {
         var store = new InMemoryEventStoreForTests();
-        var provider = new CountingLlmProviderFactory("resumed answer");
+        var provider = new CountingLlmProviderFactory("must not run");
         var services = BuildServices(store);
-
-        var agent1 = CreateAgent(services, "role-session-resume", provider);
-        await agent1.ActivateAsync();
-        await agent1.HandleInitializeRoleAgent(new InitializeRoleAgentEvent
-        {
-            RoleName = "assistant",
-            ProviderName = provider.Name,
-            SystemPrompt = "system",
-        });
-        await agent1.DeactivateAsync();
-
+        const string actorId = "role-session-orphaned";
         await store.AppendAsync(
-            "role-session-resume",
+            actorId,
             [
                 StateEventFor(
-                    "role-session-resume",
-                    2,
+                    actorId,
+                    1,
                     new RoleChatSessionStartedEvent
                     {
                         SessionId = "session-2",
                         Prompt = "hello again",
+                        RunContext = new RoleChatRunContext
+                        {
+                            RunId = "run-2",
+                            CommandId = "command-2",
+                            CorrelationId = "correlation-2",
+                            CompletionNotificationActorId = "service-run:scope:service:run-2",
+                        },
                     }),
             ],
-            expectedVersion: 1);
+            expectedVersion: 0);
 
-        var replayPublisher = new RecordingEventPublisher();
-        var agent2 = CreateAgent(services, "role-session-resume", provider);
-        agent2.EventPublisher = replayPublisher;
-        await agent2.ActivateAsync();
+        var publisher = new RecordingEventPublisher();
+        var agent = CreateAgent(services, actorId, provider);
+        agent.EventPublisher = publisher;
+        var committedPublisher = AttachCommittedPublisher(agent);
+        await agent.ActivateAsync();
 
-        await agent2.HandleChatRequest(new ChatRequestEvent
+        var signalPublication = publisher.Publications.Should().ContainSingle(publication =>
+                publication.Event is RoleChatIncompleteSessionFinalizationRequested)
+            .Which;
+        signalPublication.Audience.Should().Be(TopologyAudience.Self);
+        var signal = signalPublication.Event
+            .Should().BeOfType<RoleChatIncompleteSessionFinalizationRequested>().Which;
+        signal.SessionId.Should().Be("session-2");
+        signal.ExpectedLastProgressSequence.Should().Be(0);
+        agent.State.Sessions["session-2"].Completed.Should().BeFalse(
+            "activation only dispatches an actor continuation");
+        (await store.GetEventsAsync(actorId)).Should().NotContain(stateEvent =>
+            stateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor));
+
+        await agent.HandleIncompleteSessionFinalizationRequestedAsync(signal);
+
+        provider.StreamCallCount.Should().Be(0);
+        var terminalState = agent.State.Sessions["session-2"];
+        terminalState.Completed.Should().BeTrue();
+        terminalState.Outcome.Should().Be(RoleChatSessionOutcome.Failed);
+        terminalState.FailureCode.Should().Be("SESSION_ORPHANED");
+        var completion = (await store.GetEventsAsync(actorId))
+            .Where(stateEvent => stateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
+            .Select(stateEvent => stateEvent.EventData.Unpack<RoleChatSessionCompletedEvent>())
+            .Should().ContainSingle().Which;
+        completion.TerminalProgress.Should().ContainSingle(progress =>
+            progress.PayloadCase == RoleChatSessionProgressedEvent.PayloadOneofCase.Terminal &&
+            progress.Terminal.Outcome == RoleChatSessionOutcome.Failed &&
+            progress.Terminal.FailureCode == "SESSION_ORPHANED");
+        committedPublisher.Published.Should().Contain(published =>
+            published.StateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor));
+        var notification = publisher.Sends.Should().ContainSingle().Which.Event
+            .Should().BeOfType<RoleChatSessionCompletedEvent>().Which;
+        notification.Outcome.Should().Be(RoleChatSessionOutcome.Failed);
+        notification.FailureCode.Should().Be("SESSION_ORPHANED");
+    }
+
+    [Theory]
+    [InlineData("model-streaming")]
+    [InlineData("tool-started")]
+    [InlineData("tool-completed")]
+    public async Task ActivationSignal_ProgressedSession_ShouldCommitOutcomeUncertainWithoutExecution(
+        string progressStage)
+    {
+        var store = new InMemoryEventStoreForTests();
+        var provider = new CountingLlmProviderFactory("must not run");
+        var services = BuildServices(store);
+        var actorId = $"role-session-uncertain-{progressStage}";
+        var progress = new RoleChatSessionProgressedEvent
         {
-            Prompt = "hello again",
-            SessionId = "session-2",
+            SessionId = "session-1",
+            Sequence = 1,
+        };
+        switch (progressStage)
+        {
+            case "model-streaming":
+                progress.TextDelta = new RoleChatTextDeltaProgress { Delta = "partial" };
+                break;
+            case "tool-started":
+                progress.ToolStarted = new RoleChatToolStartedProgress
+                {
+                    CallId = "call-1",
+                    ToolName = "side_effecting_tool",
+                };
+                break;
+            case "tool-completed":
+                progress.ToolCompleted = new RoleChatToolCompletedProgress
+                {
+                    ToolName = "side_effecting_tool",
+                    Result = new ToolResultEvent
+                    {
+                        CallId = "call-1",
+                        ResultJson = "{\"ok\":true}",
+                        Success = true,
+                    },
+                };
+                break;
+            default:
+                throw new InvalidOperationException($"Unsupported progress stage: {progressStage}");
+        }
+        await store.AppendAsync(
+            actorId,
+            [
+                StateEventFor(actorId, 1, new RoleChatSessionStartedEvent
+                {
+                    SessionId = "session-1",
+                    Prompt = "perform work",
+                }),
+                StateEventFor(actorId, 2, progress),
+            ],
+            expectedVersion: 0);
+        var publisher = new RecordingEventPublisher();
+        var agent = CreateAgent(services, actorId, provider);
+        agent.EventPublisher = publisher;
+        await agent.ActivateAsync();
+        var signal = publisher.Published
+            .OfType<RoleChatIncompleteSessionFinalizationRequested>()
+            .Should().ContainSingle().Which;
+
+        await agent.HandleIncompleteSessionFinalizationRequestedAsync(signal);
+
+        provider.StreamCallCount.Should().Be(0);
+        agent.State.Sessions["session-1"].Outcome.Should().Be(RoleChatSessionOutcome.OutcomeUncertain);
+        agent.State.Sessions["session-1"].FailureCode.Should().Be("SESSION_OUTCOME_UNCERTAIN");
+        var completion = (await store.GetEventsAsync(actorId))
+            .Where(stateEvent => stateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
+            .Select(stateEvent => stateEvent.EventData.Unpack<RoleChatSessionCompletedEvent>())
+            .Should().ContainSingle().Which;
+        completion.Outcome.Should().Be(RoleChatSessionOutcome.OutcomeUncertain);
+        completion.SafeMessage.Should().Contain("outcome could not be confirmed");
+        completion.TerminalProgress.Should().ContainSingle(progress =>
+            progress.PayloadCase == RoleChatSessionProgressedEvent.PayloadOneofCase.Terminal &&
+            progress.Terminal.Outcome == RoleChatSessionOutcome.OutcomeUncertain);
+    }
+
+    [Fact]
+    public async Task IncompleteSessionSignal_ShouldIgnoreStaleAndDuplicateDelivery()
+    {
+        var store = new InMemoryEventStoreForTests();
+        var services = BuildServices(store);
+        const string actorId = "role-session-signal-fence";
+        await store.AppendAsync(
+            actorId,
+            [
+                StateEventFor(actorId, 1, new RoleChatSessionStartedEvent
+                {
+                    SessionId = "session-1",
+                    Prompt = "hello",
+                }),
+                StateEventFor(actorId, 2, new RoleChatSessionProgressedEvent
+                {
+                    SessionId = "session-1",
+                    Sequence = 1,
+                    TextStarted = new RoleChatTextStartedProgress { AgentId = actorId },
+                }),
+            ],
+            expectedVersion: 0);
+        var agent = CreateAgent(services, actorId, new CountingLlmProviderFactory("must not run"));
+        await agent.ActivateAsync();
+
+        await agent.HandleIncompleteSessionFinalizationRequestedAsync(
+            new RoleChatIncompleteSessionFinalizationRequested
+            {
+                SessionId = "session-1",
+                ExpectedLastProgressSequence = 0,
+            });
+        agent.State.Sessions["session-1"].Completed.Should().BeFalse();
+
+        var current = new RoleChatIncompleteSessionFinalizationRequested
+        {
+            SessionId = "session-1",
+            ExpectedLastProgressSequence = 1,
+        };
+        await agent.HandleIncompleteSessionFinalizationRequestedAsync(current);
+        await agent.HandleIncompleteSessionFinalizationRequestedAsync(current.Clone());
+
+        (await store.GetEventsAsync(actorId))
+            .Count(stateEvent => stateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
+            .Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Activation_ShouldNotFinalizeSessionWaitingForApprovalContinuation()
+    {
+        var store = new InMemoryEventStoreForTests();
+        var services = BuildServices(store);
+        const string actorId = "role-session-pending-approval";
+        await store.AppendAsync(
+            actorId,
+            [
+                StateEventFor(actorId, 1, new RoleChatSessionStartedEvent
+                {
+                    SessionId = "session-1",
+                    Prompt = "perform approved work",
+                }),
+                StateEventFor(actorId, 2, new PendingToolApprovalPersistedEvent
+                {
+                    Pending = new PendingToolApprovalState
+                    {
+                        RequestId = "approval-1",
+                        SessionId = "session-1",
+                        ToolName = "destructive_tool",
+                        ToolCallId = "call-1",
+                        ArgumentsJson = "{}",
+                    },
+                }),
+            ],
+            expectedVersion: 0);
+        var publisher = new RecordingEventPublisher();
+        var agent = CreateAgent(services, actorId);
+        agent.EventPublisher = publisher;
+
+        await agent.ActivateAsync();
+
+        agent.State.Sessions["session-1"].Completed.Should().BeFalse();
+        publisher.Published.Should().NotContain(message =>
+            message is RoleChatIncompleteSessionFinalizationRequested);
+        (await store.GetEventsAsync(actorId)).Should().NotContain(stateEvent =>
+            stateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor));
+    }
+
+    [Fact]
+    public async Task CallerRetry_IncompleteSession_ShouldFinalizeWithoutResumingProvider()
+    {
+        var store = new InMemoryEventStoreForTests();
+        var provider = new CountingLlmProviderFactory("must not run");
+        var services = BuildServices(store);
+        const string actorId = "role-session-caller-retry";
+        await store.AppendAsync(
+            actorId,
+            [StateEventFor(actorId, 1, new RoleChatSessionStartedEvent
+            {
+                SessionId = "session-1",
+                Prompt = "hello",
+            })],
+            expectedVersion: 0);
+        var agent = CreateAgent(services, actorId, provider);
+        await agent.ActivateAsync();
+
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            SessionId = "session-1",
+            Prompt = "hello",
         });
 
-        provider.StreamCallCount.Should().Be(1);
-        provider.StreamRequests.Should().ContainSingle();
-        provider.StreamRequests[0].RequestId.Should().Be("session-2");
-        replayPublisher.Published
-            .OfType<TextMessageStartEvent>()
-            .Should()
-            .Contain(x => x.SessionId == "session-2");
-        replayPublisher.Published
-            .OfType<TextMessageEndEvent>()
-            .Should()
-            .Contain(x => x.Content == "resumed answer");
-
-        var persisted = await store.GetEventsAsync("role-session-resume");
-        persisted.Should().Contain(x => x.EventType.Contains(nameof(RoleChatSessionCompletedEvent), StringComparison.Ordinal));
+        provider.StreamCallCount.Should().Be(0);
+        agent.State.Sessions["session-1"].Completed.Should().BeTrue();
+        agent.State.Sessions["session-1"].FailureCode.Should().Be("SESSION_ORPHANED");
     }
 
     [Fact]
@@ -1563,6 +1739,32 @@ public class RoleGAgentReplayContractTests
         agent.State.Sessions.ContainsKey("session-1").Should().BeFalse();
         agent.State.Sessions.ContainsKey("session-2").Should().BeFalse();
         agent.State.Sessions.ContainsKey("session-130").Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task RoleChatSessions_ShouldRetainEveryIncompleteSessionBeyondCacheLimit()
+    {
+        var store = new InMemoryEventStoreForTests();
+        var services = BuildServices(store);
+        const string actorId = "role-incomplete-session-retention";
+        var startedEvents = Enumerable.Range(1, 130)
+            .Select(index => StateEventFor(actorId, index, new RoleChatSessionStartedEvent
+            {
+                SessionId = $"session-{index}",
+                Prompt = $"prompt-{index}",
+            }))
+            .ToArray();
+        await store.AppendAsync(actorId, startedEvents, expectedVersion: 0);
+        var publisher = new RecordingEventPublisher();
+        var agent = CreateAgent(services, actorId);
+        agent.EventPublisher = publisher;
+
+        await agent.ActivateAsync();
+
+        agent.State.Sessions.Should().HaveCount(130);
+        agent.State.Sessions.Values.Should().OnlyContain(session => !session.Completed);
+        publisher.Published.OfType<RoleChatIncompleteSessionFinalizationRequested>()
+            .Should().HaveCount(130);
     }
 
     [Fact]
@@ -2458,6 +2660,8 @@ public class RoleGAgentReplayContractTests
 
         public List<IMessage> Published { get; } = [];
 
+        public List<(IMessage Event, TopologyAudience Audience)> Publications { get; } = [];
+
         public List<(string TargetActorId, IMessage Event, EventEnvelopePublishOptions? Options)> Sends { get; } = [];
 
         public async Task PublishAsync<TEvent>(
@@ -2468,13 +2672,13 @@ public class RoleGAgentReplayContractTests
             EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage
         {
-            _ = direction;
             _ = sourceEnvelope;
             _ = options;
             if (BeforePublishAsync is not null)
                 await BeforePublishAsync(evt, ct);
             ct.ThrowIfCancellationRequested();
             Published.Add(evt);
+            Publications.Add((evt, direction));
             if (evt is TextMessageEndEvent textMessageEnd)
                 operationLog?.Add($"publish:TextMessageEndEvent:{textMessageEnd.SessionId}");
         }
