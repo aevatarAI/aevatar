@@ -16,6 +16,10 @@ public interface IChatHistoryCommandPort
         string scopeId,
         string conversationId,
         CancellationToken ct = default);
+
+    Task<ChatHistoryDeleteResult> DeleteConversationAsync(
+        ChatHistoryConversationDeletionRequest request,
+        CancellationToken ct = default);
 }
 
 public enum ChatHistoryDeleteResultStatus

@@ -35,6 +35,25 @@ creation. A successful new conversation commits its complete immutable binding;
 later turns, restart recovery, and replay use that conversation-owned fact with
 zero Profile queries and zero Ornn reads.
 
+## Canonical Controller-To-Turn Flow
+
+For canonical direct chat,
+`NyxIdChatConversationGAgentState.agent_profile_binding` owns the persisted
+binding. On each profiled attempt the conversation controller verifies that
+binding, selects and narrows the route, commits the typed turn authority, and
+only then dispatches the turn command. The command transports both the typed
+`AgentProfileExecutionBinding` and the committed
+`AgentProfileTurnAuthorityState`; the turn Actor never reconstructs either from
+an ID, route, bag, or remote read.
+
+The turn executor materializes one exact `AgentProfileTurnCatalog` for a fresh
+attempt and retains it only in the transient execution session. The initial
+request, later provider rounds, and same-attempt continuations reuse that exact
+catalog object. Binding, authority, or reconciliation-key drift fails before
+model or tool invocation. A fresh retry with newly committed authority clears
+the old transient catalog and rematerializes from the same immutable
+conversation binding.
+
 ## Mainnet Configuration
 
 The only Mainnet configuration surface is
@@ -155,3 +174,11 @@ outcome, and size-kind dimensions. Traces may carry safe authority, selection,
 degradation, effective-tool-count, size, and latency facts. User content,
 classifier prose, raw arguments, tokens, headers, credentials, sealed bodies,
 and secrets are forbidden.
+
+Canonical direct chat records `route` and `materialize` around controller-owned
+authority commitment, records `first_stream_output` once per transient execution
+session across all continuation rounds, and records `plan_handoff` only after
+the final `NyxIdChatOperationReconciledEvent` is committed with no successor
+command. Plan/handoff outcomes are the closed lifecycle values `completed`,
+`handoff_pending`, `failed`, `stopped`, and `blocked`; browser-action
+authorization is not treated as the legacy approval handoff seam.

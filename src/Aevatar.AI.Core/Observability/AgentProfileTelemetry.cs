@@ -39,6 +39,30 @@ public static class AgentProfileTelemetry
         return activity;
     }
 
+    public static Activity? StartExecutionRound(AgentProfileTelemetryContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        var activity = GenAIActivitySource.Source.StartActivity(
+            "agent_profile execution round",
+            ActivityKind.Internal);
+        if (activity is null)
+            return null;
+        SetProfileTags(activity, context);
+        return activity;
+    }
+
+    public static Activity? StartLifecycleReconciliation(AgentProfileTelemetryContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        var activity = GenAIActivitySource.Source.StartActivity(
+            "agent_profile lifecycle reconciliation",
+            ActivityKind.Internal);
+        if (activity is null)
+            return null;
+        SetProfileTags(activity, context);
+        return activity;
+    }
+
     public static void RecordRouteDecision(
         AgentProfileTelemetryContext context,
         string routingMode,
@@ -101,6 +125,10 @@ public static class AgentProfileTelemetry
         double durationMs)
     {
         SetProfileTags(Activity.Current, context);
+        Activity.Current?.SetTag("aevatar.agent_profile.first_stream_output.outcome", outcome);
+        Activity.Current?.SetTag(
+            "aevatar.agent_profile.first_stream_output.duration_ms",
+            Math.Max(0, durationMs));
         RecordSeam("first_stream_output", context.ActivationMode, outcome, durationMs);
     }
 

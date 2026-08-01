@@ -35,6 +35,7 @@
     <Protobuf Include="Protos/service_revision.proto" GrpcServices="None" ProtoRoot="Protos" AdditionalImportDirs="$(MSBuildProjectDirectory)/../../workflow/Aevatar.Workflow.Abstractions" />
     <Protobuf Include="Protos/service_deployment.proto" GrpcServices="None" ProtoRoot="Protos" />
     <Protobuf Include="Protos/service_serving.proto" GrpcServices="None" ProtoRoot="Protos" />
+    <Protobuf Include="Protos/gagent_registry_lifecycle.proto" GrpcServices="None" ProtoRoot="Protos" />
     <Protobuf Include="Protos/service_invocation_catalog.proto" GrpcServices="None" ProtoRoot="Protos" AdditionalImportDirs="$(MSBuildProjectDirectory)/../../workflow/Aevatar.Workflow.Abstractions" />
     <Protobuf Include="Protos/service_runs.proto" GrpcServices="None" ProtoRoot="Protos" AdditionalImportDirs="$(MSBuildProjectDirectory)/../../workflow/Aevatar.Workflow.Abstractions" />
     <Protobuf Include="Protos/llm_sessions.proto" GrpcServices="None" ProtoRoot="Protos" AdditionalImportDirs="..\..\Aevatar.AI.Abstractions;..\..\Aevatar.Foundation.VoicePresence.Abstractions;..\..\Aevatar.Foundation.Abstractions" />

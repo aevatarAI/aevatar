@@ -50,6 +50,43 @@ public sealed class NyxIdProxyToolExactIdentityTests
         handler.RequestCount.Should().Be(0);
     }
 
+    [Fact]
+    public async Task CreateResultReceipt_WithSlugButNoServiceId_ShouldReturnTypedFailure()
+    {
+        var handler = new CountingHandler();
+        var tool = CreateTool(handler);
+        const string arguments =
+            """{"slug":"home-assistant-q1000","path":"/q1000","method":"GET"}""";
+        using var _scope = PushContext();
+
+        var result = await tool.ExecuteAsync(arguments);
+        var receipt = tool.CreateResultReceipt("call-1", tool.Name, arguments, result);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ErrorCode.Should().Be("NYXID_PROXY_SERVICE_ID_REQUIRED");
+        receipt.ErrorMessage.Should().Be("'service_id' is required when 'slug' is provided");
+        receipt.ResultJson.Should().Be(result);
+        handler.RequestCount.Should().Be(0);
+    }
+
+    [Fact]
+    public void CreateResultReceipt_WithValidExactIdentity_ShouldKeepDomainJsonSuccessful()
+    {
+        var tool = CreateTool(new CountingHandler());
+        const string arguments =
+            """{"service_id":"us-home-alpha","slug":"home-assistant-q1000","path":"/q1000","method":"GET"}""";
+        const string domainResult =
+            """{"error":"'service_id' is required when 'slug' is provided"}""";
+
+        var receipt = tool.CreateResultReceipt("call-1", tool.Name, arguments, domainResult);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        receipt.ErrorCode.Should().BeEmpty();
+        receipt.SubjectId.Should().Be("us-home-alpha");
+    }
+
     [Theory]
     [InlineData("Authorization")]
     [InlineData("Cookie")]

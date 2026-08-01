@@ -145,7 +145,82 @@ internal static class NyxIdChatAguiSseEventWriter
                 GetInt32(fields, "timeoutSeconds"),
                 sequence,
                 ct);
+            return;
         }
+
+        if (TryResolveTypedNyxIdCustomPayload(customEvent, out var typedPayload))
+            await writer.WriteTypedCustomEventAsync(customEvent.Name, typedPayload, sequence, ct);
+    }
+
+    private static bool TryResolveTypedNyxIdCustomPayload(
+        CustomEvent customEvent,
+        out Google.Protobuf.IMessage payload)
+    {
+        payload = null!;
+        if (customEvent.Payload is null)
+            return false;
+
+        if (string.Equals(
+                customEvent.Name,
+                NyxIdChatConversationAguiFrameBuilder.TaskSnapshotEventName,
+                StringComparison.Ordinal) &&
+            customEvent.Payload.Is(NyxIdChatTaskState.Descriptor))
+        {
+            payload = customEvent.Payload.Unpack<NyxIdChatTaskState>();
+            return true;
+        }
+
+        if (string.Equals(
+                customEvent.Name,
+                NyxIdChatConversationAguiFrameBuilder.TaskStepChangedEventName,
+                StringComparison.Ordinal) &&
+            customEvent.Payload.Is(NyxIdChatTaskStepState.Descriptor))
+        {
+            payload = customEvent.Payload.Unpack<NyxIdChatTaskStepState>();
+            return true;
+        }
+
+        if (string.Equals(
+                customEvent.Name,
+                NyxIdChatConversationAguiFrameBuilder.ControlChangedEventName,
+                StringComparison.Ordinal) &&
+            customEvent.Payload.Is(NyxIdChatControlFenceState.Descriptor))
+        {
+            payload = customEvent.Payload.Unpack<NyxIdChatControlFenceState>();
+            return true;
+        }
+
+        if (string.Equals(
+                customEvent.Name,
+                NyxIdChatConversationAguiFrameBuilder.ActionRequestEventName,
+                StringComparison.Ordinal) &&
+            customEvent.Payload.Is(NyxIdAssistantActionRequestWirePayload.Descriptor))
+        {
+            payload = customEvent.Payload.Unpack<NyxIdAssistantActionRequestWirePayload>();
+            return true;
+        }
+
+        if (string.Equals(
+                customEvent.Name,
+                NyxIdChatConversationAguiFrameBuilder.ContinuationChangedEventName,
+                StringComparison.Ordinal) &&
+            customEvent.Payload.Is(NyxIdChatContinuationAdmissionState.Descriptor))
+        {
+            payload = customEvent.Payload.Unpack<NyxIdChatContinuationAdmissionState>();
+            return true;
+        }
+
+        if (string.Equals(
+                customEvent.Name,
+                NyxIdChatConversationAguiFrameBuilder.StepControlChangedEventName,
+                StringComparison.Ordinal) &&
+            customEvent.Payload.Is(NyxIdChatStepControlResultState.Descriptor))
+        {
+            payload = customEvent.Payload.Unpack<NyxIdChatStepControlResultState>();
+            return true;
+        }
+
+        return false;
     }
 
     private static string GetString(IDictionary<string, Value> fields, string key) =>

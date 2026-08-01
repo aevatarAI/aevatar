@@ -1,3 +1,4 @@
+using System.Net;
 using System.Reflection;
 using Aevatar.AI.Abstractions.CodexExecution;
 using Aevatar.AI.Abstractions.LLMProviders;
@@ -44,6 +45,7 @@ using Aevatar.GAgents.Channel.Identity.Broker;
 using Aevatar.GAgents.Channel.NyxIdRelay.Outbound;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Device;
+using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgents.NyxidChat.AgentProfiles;
 using Aevatar.GAgents.Scheduled;
 using Aevatar.GAgents.StatusDashboard.Executors;
@@ -56,7 +58,9 @@ using Aevatar.Mainnet.Host.Api.Profiles;
 using Aevatar.Mainnet.Host.Api.Responses;
 using Aevatar.Scripting.Projection.ReadModels;
 using Aevatar.Studio.Application.Provisioning;
+using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Hosting;
+using Aevatar.Studio.Projection.ReadModels;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Extensions.Hosting;
 using Aevatar.Workflow.Infrastructure.Runs;
@@ -112,6 +116,10 @@ public sealed class MainnetHostCompositionTests
             .Should()
             .BeOfType<StudioScheduledCredentialMaterializer>();
         app.Services.GetRequiredService<INyxIdAuthorizationCatalogRefreshPort>().Should().NotBeNull();
+        app.Services.GetRequiredService<INyxIdChatConversationStateQueryPort>().Should().NotBeNull();
+        app.Services.GetRequiredService<IProjectionDocumentReader<
+            NyxIdChatConversationCurrentStateDocument,
+            string>>().Should().NotBeNull();
         app.Services.GetRequiredService<TimeProvider>().Should().BeSameAs(customTimeProvider);
     }
 
@@ -222,6 +230,10 @@ public sealed class MainnetHostCompositionTests
             options.EnableConnectorBootstrap = false;
             options.EnableCors = false;
         });
+        builder.Services
+            .AddHttpClient("NyxIdAssistantActionRegistry")
+            .ConfigurePrimaryHttpMessageHandler(static () =>
+                new NyxIdAssistantActionRegistryHandler());
 
         await using var app = builder.Build();
         app.MapAevatarMainnetHost();
@@ -281,10 +293,12 @@ public sealed class MainnetHostCompositionTests
             .Should()
             .NotBeNull();
         app.Services.GetRequiredService<IManagedCodexCredentialLifecycle>().Should().NotBeNull();
-        app.Services.GetServices<ICodexExecutionPort>()
+        var managedCodexPort = app.Services.GetServices<ICodexExecutionPort>()
             .Should()
             .ContainSingle(static port =>
-                port.TargetKind == CodexExecutionTarget.TargetOneofCase.ManagedSandbox);
+                port.TargetKind == CodexExecutionTarget.TargetOneofCase.ManagedSandbox)
+            .Which;
+        managedCodexPort.Should().BeOfType<ManagedCodexExecutionCoordinator>();
         app.Services.GetServices<IHealthProbeExecutor>()
             .Select(static executor => executor.Kind)
             .Should()
@@ -333,6 +347,68 @@ public sealed class MainnetHostCompositionTests
         app.Services.GetServices<IToolCallMiddleware>()
             .Should()
             .NotContain(middleware => middleware is ToolApprovalMiddleware);
+
+        await app.StopAsync();
+    }
+
+    [Fact]
+    public async Task AddAevatarMainnetHost_WithAssistantActionsEnabled_ShouldFetchPinnedRegistryAtStartup()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        using var runtimeProvider = new EnvironmentVariableScope(
+            "AEVATAR_ActorRuntime__Provider", "InMemory");
+        using var documentProvider = new EnvironmentVariableScope(
+            "AEVATAR_Projection__Document__Providers__InMemory__Enabled", "true");
+        using var documentElasticsearch = new EnvironmentVariableScope(
+            "AEVATAR_Projection__Document__Providers__Elasticsearch__Enabled", "false");
+        using var graphProvider = new EnvironmentVariableScope(
+            "AEVATAR_Projection__Graph__Providers__InMemory__Enabled", "true");
+        using var graphNeo4j = new EnvironmentVariableScope(
+            "AEVATAR_Projection__Graph__Providers__Neo4j__Enabled", "false");
+        using var projectionEnvironment = new EnvironmentVariableScope(
+            "Projection__Policies__Environment", "Development");
+        using var denyInMemoryDocument = new EnvironmentVariableScope(
+            "Projection__Policies__DenyInMemoryDocumentReadStore", "false");
+        using var denyInMemoryGraph = new EnvironmentVariableScope(
+            "Projection__Policies__DenyInMemoryGraphFactStore", "false");
+        using var assistantActionsEnabled = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__NyxId__AssistantActions__Enabled", "true");
+        using var nyxIdApiBaseUrl = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__NyxId__ApiBaseUrl", "https://nyxid.example.test/pinned-api");
+        var handler = new NyxIdAssistantActionRegistryHandler();
+        var builder = CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+        builder.Configuration["Aevatar:NyxId:AssistantActions:Enabled"].Should().Be("true");
+        builder.Configuration["Aevatar:NyxId:ApiBaseUrl"]
+            .Should().Be("https://nyxid.example.test/pinned-api");
+        builder.Services.Should().ContainSingle(descriptor =>
+            descriptor.ServiceType == typeof(NyxIdAssistantActionRegistry) &&
+            descriptor.ImplementationFactory != null);
+        builder.Services.Should().ContainSingle(descriptor =>
+            descriptor.ServiceType == typeof(IHostedService) &&
+            descriptor.ImplementationType != null &&
+            descriptor.ImplementationType.Name == "NyxIdAssistantActionRegistryStartupService");
+        builder.Services
+            .AddHttpClient("NyxIdAssistantActionRegistry")
+            .ConfigurePrimaryHttpMessageHandler(() => handler);
+
+        await using var app = builder.Build();
+        app.MapAevatarMainnetHost();
+        await app.StartAsync();
+
+        var registry = app.Services.GetRequiredService<NyxIdAssistantActionRegistry>();
+        registry.TryGetDefinition("service.connect", out var definition).Should().BeTrue();
+        definition.Action.Should().Be(NyxIdAssistantActionKind.ServiceConnect);
+        definition.WireAction.Should().Be("service.connect");
+        handler.Requests.Should().ContainSingle().Which.Should().Be(new RegistryRequestSnapshot(
+            HttpMethod.Get,
+            new Uri("https://nyxid.example.test/pinned-api/api/v1/assistant/actions"),
+            Authorization: null));
 
         await app.StopAsync();
     }
@@ -1270,6 +1346,99 @@ public sealed class MainnetHostCompositionTests
     {
         public override DateTimeOffset GetUtcNow() => utcNow;
     }
+
+    private sealed class NyxIdAssistantActionRegistryHandler : HttpMessageHandler
+    {
+        private const string RegistryJson = """
+            {
+              "schema_version": 4,
+              "revision": "nyxid-assistant-actions.v4",
+              "actions": [
+                {
+                  "action": "service.connect",
+                  "description": "Connect a service through the NyxID browser journey.",
+                  "params_schema": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["catalogService"],
+                        "properties": {
+                          "catalogService": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["serviceSlug"],
+                            "properties": {
+                              "serviceSlug": {"type": "string"},
+                              "requestedScopes": {
+                                "type": "array",
+                                "items": {"type": "string"}
+                              },
+                              "viaNodeId": {"type": "string"},
+                              "targetOrgId": {"type": "string"}
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["customService"],
+                        "properties": {
+                          "customService": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["name", "endpointUrl", "authMethod"],
+                            "properties": {
+                              "name": {"type": "string"},
+                              "endpointUrl": {"type": "string"},
+                              "authMethod": {"type": "string"},
+                              "authKeyName": {"type": "string"},
+                              "viaNodeId": {"type": "string"},
+                              "targetOrgId": {"type": "string"}
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  "risk": "grant",
+                  "tier": "v1",
+                  "remember_eligible": true
+                }
+              ]
+            }
+            """;
+
+        public List<RegistryRequestSnapshot> Requests { get; } = [];
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Requests.Add(new RegistryRequestSnapshot(
+                request.Method,
+                request.RequestUri,
+                request.Headers.Authorization?.ToString()));
+            if (request.Method != HttpMethod.Get ||
+                request.RequestUri?.AbsolutePath != "/pinned-api/api/v1/assistant/actions" ||
+                request.Headers.Authorization is not null)
+            {
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.BadRequest));
+            }
+
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(RegistryJson),
+            });
+        }
+    }
+
+    private sealed record RegistryRequestSnapshot(
+        HttpMethod Method,
+        Uri? Uri,
+        string? Authorization);
 
     private sealed class TemporaryAevatarHomeScope : IDisposable
     {

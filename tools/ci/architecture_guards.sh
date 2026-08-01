@@ -930,6 +930,7 @@ END {
 fi
 
 bash "${SCRIPT_DIR}/query_projection_priming_guard.sh"
+bash "${SCRIPT_DIR}/nyxid_chat_semantics_guard.sh"
 bash "${SCRIPT_DIR}/workflow_call_context_guard.sh"
 bash "${SCRIPT_DIR}/command_observation_attach_only_guard.sh"
 bash "${SCRIPT_DIR}/projection_attach_existing_side_read_guard.sh"

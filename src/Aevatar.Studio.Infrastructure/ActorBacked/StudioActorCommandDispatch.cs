@@ -121,6 +121,9 @@ internal sealed class StudioActorCommandDispatch
                 result.Error?.Message ?? "Studio actor command dispatch failed.");
         }
 
+        if (result.Admission is not { Accepted: true })
+            throw new InvalidOperationException("Studio actor command dispatch admission was not accepted.");
+
         return result.Receipt;
     }
 }

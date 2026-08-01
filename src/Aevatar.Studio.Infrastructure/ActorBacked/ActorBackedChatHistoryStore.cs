@@ -136,10 +136,66 @@ internal sealed class ActorBackedChatHistoryStore :
             return ChatHistoryDeleteResult.NotFound();
 
         var conversationActor = await EnsureConversationActorAsync(resolved.Value.ActorId, ct);
+        return await DispatchConversationDeletionAsync(
+                conversationActor,
+                resolved.Value.Document.ScopeId,
+                resolved.Value.Document.ConversationId,
+                Guid.NewGuid().ToString("N"),
+                string.Empty,
+                ct)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<ChatHistoryDeleteResult> DeleteConversationAsync(
+        ChatHistoryConversationDeletionRequest request,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var operationId = NormalizeOptional(request.OperationId) ?? throw new ArgumentException(
+            "A history deletion operation ID is required.",
+            nameof(request));
+        var scopeId = NormalizeOptional(request.ScopeId) ?? throw new ArgumentException(
+            "A history deletion scope ID is required.",
+            nameof(request));
+        var conversationId = NormalizeOptional(request.ConversationId) ?? throw new ArgumentException(
+            "A history deletion conversation ID is required.",
+            nameof(request));
+        var completionActorId = NormalizeOptional(request.CompletionActorId) ?? string.Empty;
+        var ownerActorIds = new[]
+        {
+            ChatHistoryConversationActorIds.Canonical(scopeId, conversationId),
+            ChatHistoryConversationActorIds.Legacy(scopeId, conversationId),
+        };
+        foreach (var ownerActorId in ownerActorIds)
+        {
+            var conversationActor = await EnsureConversationActorAsync(ownerActorId, ct);
+            await DispatchConversationDeletionAsync(
+                    conversationActor,
+                    scopeId,
+                    conversationId,
+                    operationId,
+                    completionActorId,
+                    ct)
+                .ConfigureAwait(false);
+        }
+
+        return ChatHistoryDeleteResult.Accepted();
+    }
+
+    private async Task<ChatHistoryDeleteResult> DispatchConversationDeletionAsync(
+        IActor conversationActor,
+        string scopeId,
+        string conversationId,
+        string operationId,
+        string completionActorId,
+        CancellationToken ct)
+    {
         var deleteEvt = new ConversationDeletedEvent
         {
-            ConversationId = resolved.Value.Document.ConversationId,
-            ScopeId = resolved.Value.Document.ScopeId,
+            ConversationId = conversationId,
+            ScopeId = scopeId,
+            OperationId = operationId,
+            CompletionActorId = completionActorId,
         };
         await _commandDispatch.DispatchAsync(conversationActor, deleteEvt, PublisherId, ct);
         return ChatHistoryDeleteResult.Accepted();

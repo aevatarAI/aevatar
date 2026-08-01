@@ -217,6 +217,11 @@ public sealed class ChatHistoryEndpointsTests
             Calls.Add($"HandleDeleteConversation:{scopeId}:{conversationId}");
             return Task.FromResult(new ChatHistoryDeleteResult(ChatHistoryDeleteResultStatus.Accepted));
         }
+
+        public Task<ChatHistoryDeleteResult> DeleteConversationAsync(
+            ChatHistoryConversationDeletionRequest request,
+            CancellationToken ct = default) =>
+            DeleteConversationAsync(request.ScopeId, request.ConversationId, ct);
     }
 
     private sealed class TestHostEnvironment : IHostEnvironment

@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Chat;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
@@ -38,6 +39,26 @@ internal interface IAgentRunStepConversationReplyGenerator : ITypedConversationR
         ChatAttachmentInputContext? attachmentContext,
         bool forceDisableTools,
         CancellationToken ct);
+
+    Task<AgentRunReplyStepPlan> BuildStepPlanAsync(
+        ChatActivity activity,
+        IReadOnlyDictionary<string, string> metadata,
+        LLMControlContext? llmControl,
+        AgentToolExecutionContext? toolContext,
+        IReadOnlyList<ConversationHistoryEntry>? priorHistory,
+        ChatAttachmentInputContext? attachmentContext,
+        AgentProfileTurnCatalog? turnCatalog,
+        bool forceDisableTools,
+        CancellationToken ct) =>
+        BuildStepPlanAsync(
+            activity,
+            metadata,
+            llmControl,
+            toolContext,
+            priorHistory,
+            attachmentContext,
+            forceDisableTools,
+            ct);
 
     MessageContent? TryTakeOutboundIntent() => null;
 }

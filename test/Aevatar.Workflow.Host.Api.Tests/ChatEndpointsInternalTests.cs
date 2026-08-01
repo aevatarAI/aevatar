@@ -751,9 +751,9 @@ public sealed class ChatEndpointsInternalTests
         http.Request.Headers["X-NyxID-Identity-Token"] = "identity-assertion-must-not-be-forwarded";
         http.User = new ClaimsPrincipal(new ClaimsIdentity(
         [
-            new Claim("scope_id", "caller-scope"),
-            new Claim("uid", "different-uid"),
-            new Claim("sub", "caller-scope"),
+            new Claim("scope_id", "scope-alpha"),
+            new Claim("uid", "nyx-user-alpha"),
+            new Claim("sub", "nyx-user-from-sub"),
         ], "NyxIdIdentityAssertion"));
 
         await WorkflowCapabilityEndpoints.HandleChat(
@@ -763,13 +763,13 @@ public sealed class ChatEndpointsInternalTests
             CancellationToken.None);
 
         capturedCommand.Should().NotBeNull();
-        capturedCommand!.ScopeId.Should().Be("caller-scope");
+        capturedCommand!.ScopeId.Should().Be("scope-alpha");
         capturedCommand.CallerCredential!.BearerToken.Should().Be("delegation-token");
         capturedCommand.CallerCredential.NyxIdAuthority.Should().BeEquivalentTo(
             new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerNyxIdAuthority(
                 "nyxid",
                 string.Empty,
-                "caller-scope",
+                "nyx-user-alpha",
                 "proxy"));
     }
 
@@ -974,7 +974,7 @@ public sealed class ChatEndpointsInternalTests
         var bindingQueryPort = new RecordingBindingQueryPort("bnd_sender");
         var http = CreateHttpContext("Bearer trusted-token");
         http.RequestServices = CreateRequestServices(bindingQueryPort: bindingQueryPort);
-        http.User = AuthenticatedScopePrincipal("trusted-scope");
+        http.User = AuthenticatedScopeAndNyxIdPrincipal("scope-alpha", "nyx-user-alpha");
         http.Request.ContentType = "application/json";
         http.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(
             """
@@ -991,14 +991,58 @@ public sealed class ChatEndpointsInternalTests
             CancellationToken.None);
 
         capturedCommand.Should().NotBeNull();
-        capturedCommand!.ScopeId.Should().Be("trusted-scope");
+        capturedCommand!.ScopeId.Should().Be("scope-alpha");
+        capturedCommand.CallerCredential!.NyxIdAuthority!.ExternalUserId.Should()
+            .Be("nyx-user-alpha");
         capturedCommand.CallerCredential!.NyxIdAuthority!.BindingId.Should().Be("bnd_sender");
         bindingQueryPort.Subject.Should().BeEquivalentTo(new ExternalSubjectRef
         {
             Platform = "nyxid",
             Tenant = string.Empty,
-            ExternalUserId = "trusted-scope",
+            ExternalUserId = "nyx-user-alpha",
         });
+    }
+
+    [Fact]
+    public async Task HandleChatPost_ScopeOnlyPrincipal_ShouldNotManufactureNyxIdAuthority()
+    {
+        WorkflowChatRunRequest? capturedCommand = null;
+        var interactionService = new FakeCommandInteractionService
+        {
+            ResultFactory = (command, _, _, _) =>
+            {
+                capturedCommand = command;
+                return Task.FromResult(
+                    CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                        .Failure(WorkflowChatRunStartError.WorkflowBindingMismatch));
+            },
+        };
+        var parser = new WorkflowMultipartChatRequestParser(
+            new RecordingWorkflowFileIngressPort(),
+            Options.Create(new WorkflowMultipartFileIngressOptions()));
+        var bindingQueryPort = new RecordingBindingQueryPort("bnd-must-not-resolve");
+        var http = CreateHttpContext("Bearer trusted-token");
+        http.RequestServices = CreateRequestServices(bindingQueryPort: bindingQueryPort);
+        http.User = AuthenticatedScopePrincipal("scope-alpha");
+        http.Request.ContentType = "application/json";
+        http.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(
+            """
+            {
+              "prompt": "describe the release plan",
+              "workflow": "direct"
+            }
+            """));
+
+        await WorkflowCapabilityEndpoints.HandleChatPost(
+            http,
+            interactionService,
+            parser,
+            CancellationToken.None);
+
+        capturedCommand.Should().NotBeNull();
+        capturedCommand!.ScopeId.Should().Be("scope-alpha");
+        capturedCommand.CallerCredential!.NyxIdAuthority.Should().BeNull();
+        bindingQueryPort.Subject.Should().BeNull();
     }
 
     [Fact]
@@ -1550,30 +1594,45 @@ public sealed class ChatEndpointsInternalTests
         bareBearerHttp.Request.Headers.Authorization = "Bearer";
         var invalidHttp = CreateHttpContext();
         invalidHttp.Request.Headers.Authorization = "Bearer token 123";
-        var delegationHttp = CreateHttpContext();
-        delegationHttp.Request.Headers.Authorization = "Bearer forwarded-token";
-        delegationHttp.Request.Headers["X-NyxID-Delegation-Token"] = "delegation-token";
+        var bothValidHttp = CreateHttpContext();
+        bothValidHttp.Request.Headers.Authorization = "Bearer forwarded-token";
+        bothValidHttp.Request.Headers["X-NyxID-Delegation-Token"] = "delegation-token";
+        var delegationOnlyHttp = CreateHttpContext();
+        delegationOnlyHttp.Request.Headers["X-NyxID-Delegation-Token"] = "delegation-token";
+        var malformedAuthorizationWithDelegationHttp = CreateHttpContext();
+        malformedAuthorizationWithDelegationHttp.Request.Headers.Authorization = "Bearer token with spaces";
+        malformedAuthorizationWithDelegationHttp.Request.Headers["X-NyxID-Delegation-Token"] =
+            "delegation-token";
         var identityOnlyHttp = CreateHttpContext();
         identityOnlyHttp.Request.Headers["X-NyxID-Identity-Token"] = "identity-assertion";
-        var invalidDelegationHttp = CreateHttpContext();
-        invalidDelegationHttp.Request.Headers.Authorization = "Bearer fallback-token";
-        invalidDelegationHttp.Request.Headers["X-NyxID-Delegation-Token"] = "token with spaces";
+        var validAuthorizationWithMalformedDelegationHttp = CreateHttpContext();
+        validAuthorizationWithMalformedDelegationHttp.Request.Headers.Authorization =
+            "Bearer forwarded-token";
+        validAuthorizationWithMalformedDelegationHttp.Request.Headers["X-NyxID-Delegation-Token"] =
+            "token with spaces";
+        var malformedDelegationOnlyHttp = CreateHttpContext();
+        malformedDelegationOnlyHttp.Request.Headers["X-NyxID-Delegation-Token"] =
+            "token with spaces";
 
         var missing = WorkflowCallerCredentialExtractor.Extract(missingHttp);
         var unsupportedScheme = WorkflowCallerCredentialExtractor.Extract(unsupportedSchemeHttp);
         var valid = WorkflowCallerCredentialExtractor.Extract(validHttp);
         var bareBearer = WorkflowCallerCredentialExtractor.Extract(bareBearerHttp);
         var invalid = WorkflowCallerCredentialExtractor.Extract(invalidHttp);
-        var delegation = WorkflowCallerCredentialExtractor.Extract(delegationHttp);
+        var bothValid = WorkflowCallerCredentialExtractor.Extract(bothValidHttp);
+        var delegationOnly = WorkflowCallerCredentialExtractor.Extract(delegationOnlyHttp);
+        var malformedAuthorizationWithDelegation =
+            WorkflowCallerCredentialExtractor.Extract(malformedAuthorizationWithDelegationHttp);
         var identityOnly = WorkflowCallerCredentialExtractor.Extract(identityOnlyHttp);
-        var invalidDelegation = WorkflowCallerCredentialExtractor.Extract(invalidDelegationHttp);
+        var validAuthorizationWithMalformedDelegation =
+            WorkflowCallerCredentialExtractor.Extract(validAuthorizationWithMalformedDelegationHttp);
+        var malformedDelegationOnly =
+            WorkflowCallerCredentialExtractor.Extract(malformedDelegationOnlyHttp);
 
         missingHttpContext.Succeeded.Should().BeTrue();
         missingHttpContext.Credential.Should().BeNull();
         missing.Succeeded.Should().BeTrue();
         missing.Credential.Should().BeNull();
-        unsupportedScheme.Succeeded.Should().BeTrue();
-        unsupportedScheme.Credential.Should().BeNull();
         valid.Succeeded.Should().BeTrue();
         valid.Credential!.BearerToken.Should().Be("token-123");
         bareBearer.Succeeded.Should().BeFalse();
@@ -1582,12 +1641,24 @@ public sealed class ChatEndpointsInternalTests
         invalid.Succeeded.Should().BeFalse();
         invalid.Error.Should().Be(WorkflowChatRunStartError.InvalidCallerCredential);
         invalid.Credential.Should().BeNull();
-        delegation.Succeeded.Should().BeTrue();
-        delegation.Credential!.BearerToken.Should().Be("delegation-token");
+        bothValid.Succeeded.Should().BeTrue();
+        bothValid.Credential!.BearerToken.Should().Be("forwarded-token");
+        unsupportedScheme.Succeeded.Should().BeFalse();
+        unsupportedScheme.Error.Should().Be(WorkflowChatRunStartError.InvalidCallerCredential);
+        unsupportedScheme.Credential.Should().BeNull();
+        delegationOnly.Succeeded.Should().BeTrue();
+        delegationOnly.Credential!.BearerToken.Should().Be("delegation-token");
+        malformedAuthorizationWithDelegation.Succeeded.Should().BeFalse();
+        malformedAuthorizationWithDelegation.Error.Should().Be(
+            WorkflowChatRunStartError.InvalidCallerCredential);
+        validAuthorizationWithMalformedDelegation.Succeeded.Should().BeTrue();
+        validAuthorizationWithMalformedDelegation.Credential!.BearerToken.Should().Be(
+            "forwarded-token");
         identityOnly.Succeeded.Should().BeTrue();
         identityOnly.Credential.Should().BeNull();
-        invalidDelegation.Succeeded.Should().BeFalse();
-        invalidDelegation.Error.Should().Be(WorkflowChatRunStartError.InvalidCallerCredential);
+        malformedDelegationOnly.Succeeded.Should().BeFalse();
+        malformedDelegationOnly.Error.Should().Be(
+            WorkflowChatRunStartError.InvalidCallerCredential);
     }
 
     [Fact]
@@ -2580,6 +2651,15 @@ public sealed class ChatEndpointsInternalTests
 
     private static ClaimsPrincipal AuthenticatedScopePrincipal(string scopeId) =>
         new(new ClaimsIdentity([new Claim("scope_id", scopeId)], "test"));
+
+    private static ClaimsPrincipal AuthenticatedScopeAndNyxIdPrincipal(
+        string scopeId,
+        string externalUserId) =>
+        new(new ClaimsIdentity(
+        [
+            new Claim("scope_id", scopeId),
+            new Claim("uid", externalUserId),
+        ], "test"));
 
     private sealed class StubHostEnvironment : IHostEnvironment
     {

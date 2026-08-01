@@ -1,0 +1,37 @@
+syntax = "proto3";
+
+package aevatar.studio.application.chat_history;
+option csharp_namespace = "Aevatar.Studio.Application.Studio.Abstractions";
+
+import "google/protobuf/timestamp.proto";
+
+enum ChatHistoryConversationOwnerKind {
+  CHAT_HISTORY_CONVERSATION_OWNER_KIND_UNSPECIFIED = 0;
+  CHAT_HISTORY_CONVERSATION_OWNER_KIND_CANONICAL = 1;
+  CHAT_HISTORY_CONVERSATION_OWNER_KIND_LEGACY = 2;
+}
+
+enum ChatHistoryConversationDeletionOutcome {
+  CHAT_HISTORY_CONVERSATION_DELETION_OUTCOME_UNSPECIFIED = 0;
+  CHAT_HISTORY_CONVERSATION_DELETION_OUTCOME_COMMITTED_DELETED = 1;
+  CHAT_HISTORY_CONVERSATION_DELETION_OUTCOME_ALREADY_DELETED = 2;
+  CHAT_HISTORY_CONVERSATION_DELETION_OUTCOME_AUTHORITATIVE_ABSENT = 3;
+}
+
+message ChatHistoryConversationDeletionRequest {
+  string operation_id = 1;
+  string scope_id = 2;
+  string conversation_id = 3;
+  string completion_actor_id = 4;
+}
+
+message ChatHistoryConversationDeletionCommitted {
+  string operation_id = 1;
+  string scope_id = 2;
+  string conversation_id = 3;
+  google.protobuf.Timestamp committed_at = 4;
+  string owner_actor_id = 5;
+  ChatHistoryConversationOwnerKind owner_kind = 6;
+  ChatHistoryConversationDeletionOutcome outcome = 7;
+  string completion_actor_id = 8;
+}

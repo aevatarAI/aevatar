@@ -250,7 +250,7 @@ internal sealed class NyxIdChatConversationCreateCommandTargetResolver
         // Refactor (issue1321-first): ForwardToModel.tool_choice_hint is tool prefill only,
         // so conversation creation never treats hint arguments as actor addressing.
 
-        var createdActor = await _actorRuntime.CreateAsync<NyxIdChatGAgent>(actorId, ct);
+        var createdActor = await _actorRuntime.CreateAsync<NyxIdChatConversationGAgent>(actorId, ct);
         command.CreatedLocally = true;
         return CommandTargetResolution<NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandStartError>.Success(
             new NyxIdChatConversationCreateCommandTarget(

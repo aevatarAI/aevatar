@@ -800,6 +800,7 @@ message NyxIdChatConversationUnregisteredEvent {
   string actor_id = 2;
   string command_id = 3;
   string correlation_id = 4;
+  string history_deletion_operation_id = 5;
 }
 
 message NyxIdChatConversationHistoryDeletedEvent {
@@ -807,6 +808,7 @@ message NyxIdChatConversationHistoryDeletedEvent {
   string actor_id = 2;
   string command_id = 3;
   string correlation_id = 4;
+  string history_deletion_operation_id = 5;
 }
 
 message NyxIdChatConversationDeletionCompensationStartedEvent {

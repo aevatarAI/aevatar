@@ -11,10 +11,10 @@ namespace Aevatar.Studio.Infrastructure.ActorBacked;
 
 internal sealed class ActorBackedGAgentRegistryPorts :
     IGAgentActorRegistryCommandPort,
+    IGAgentActorRegistryUnregistrationPort,
     IGAgentActorRegistryQueryPort,
     IScopeResourceAdmissionPort
 {
-    private const string WriteActorIdPrefix = "gagent-registry-";
     private const string PublisherId = "aevatar.studio.infrastructure.gagent-registry";
 
     private readonly IStudioActorBootstrap _bootstrap;
@@ -74,7 +74,58 @@ internal sealed class ActorBackedGAgentRegistryPorts :
         }, PublisherId, cancellationToken);
         return new GAgentActorRegistryCommandReceipt(
             normalized,
-            GAgentActorRegistryCommandStage.AdmissionRemoved);
+            GAgentActorRegistryCommandStage.AcceptedForDispatch);
+    }
+
+    public async Task<GAgentActorRegistryCommandReceipt> RequestUnregistrationAsync(
+        GAgentRegistryUnregistrationRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var normalizedRegistration = NormalizeRegistration(new GAgentActorRegistration(
+            request.ScopeId,
+            request.AgentKind,
+            request.ActorId));
+        var normalized = request.Clone();
+        normalized.OperationId = NormalizeRequired(request.OperationId, nameof(request.OperationId));
+        normalized.RegistryActorId = NormalizeRequired(
+            request.RegistryActorId,
+            nameof(request.RegistryActorId));
+        normalized.ScopeId = normalizedRegistration.ScopeId;
+        normalized.AgentKind = normalizedRegistration.AgentKind;
+        normalized.ActorId = normalizedRegistration.ActorId;
+        normalized.CompletionActorId = NormalizeRequired(
+            request.CompletionActorId,
+            nameof(request.CompletionActorId));
+        if (!string.Equals(
+                normalized.CompletionActorId,
+                normalized.ActorId,
+                StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "CompletionActorId must match the unregistration target ActorId.",
+                nameof(request.CompletionActorId));
+        }
+
+        var expectedRegistryActorId = ResolveWriteActorId(normalized.ScopeId);
+        if (!string.Equals(
+                normalized.RegistryActorId,
+                expectedRegistryActorId,
+                StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "RegistryActorId must match the deterministic scope registry Actor address.",
+                nameof(request.RegistryActorId));
+        }
+
+        var actor = await EnsureWriteActorAsync(normalized.ScopeId, cancellationToken);
+        if (!string.Equals(actor.Id, expectedRegistryActorId, StringComparison.Ordinal))
+            throw new InvalidOperationException("The registry bootstrap returned an unexpected Actor address.");
+
+        await _commandDispatch.DispatchAsync(actor, normalized, PublisherId, cancellationToken);
+        return new GAgentActorRegistryCommandReceipt(
+            normalizedRegistration,
+            GAgentActorRegistryCommandStage.AcceptedForDispatch);
     }
 
     public async Task<GAgentActorRegistrySnapshot> ListActorsAsync(
@@ -191,7 +242,7 @@ internal sealed class ActorBackedGAgentRegistryPorts :
     }
 
     private static string ResolveWriteActorId(string? scopeId) =>
-        WriteActorIdPrefix + NormalizeScopeId(scopeId);
+        GAgentRegistryActorIds.ForScope(NormalizeScopeId(scopeId));
 
     private Task<IActor> EnsureWriteActorAsync(string? scopeId, CancellationToken ct) =>
         _bootstrap.EnsureAsync<GAgentRegistryGAgent>(ResolveWriteActorId(scopeId), ct);
@@ -273,6 +324,7 @@ internal sealed class ActorBackedGAgentRegistryPorts :
             ScopeResourceOperation.Join => GAgentRegistryOperation.Join,
             ScopeResourceOperation.ListParticipants => GAgentRegistryOperation.ListParticipants,
             ScopeResourceOperation.DraftRunReuse => GAgentRegistryOperation.DraftRunReuse,
+            ScopeResourceOperation.Control => GAgentRegistryOperation.Control,
             _ => GAgentRegistryOperation.Unknown,
         };
 

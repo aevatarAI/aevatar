@@ -59,6 +59,7 @@ public static class ServiceCollectionExtensions
         // ── Actor-backed stores (replacing ChronoStorage* implementations) ──
         services.AddSingleton<ActorBackedGAgentRegistryPorts>();
         services.AddSingleton<IGAgentActorRegistryCommandPort>(sp => sp.GetRequiredService<ActorBackedGAgentRegistryPorts>());
+        services.AddSingleton<IGAgentActorRegistryUnregistrationPort>(sp => sp.GetRequiredService<ActorBackedGAgentRegistryPorts>());
         services.AddSingleton<IGAgentActorRegistryQueryPort>(sp => sp.GetRequiredService<ActorBackedGAgentRegistryPorts>());
         services.AddSingleton<IScopeResourceAdmissionPort>(sp => sp.GetRequiredService<ActorBackedGAgentRegistryPorts>());
         services.AddSingleton<INyxIdUserLlmPreferencesStore, ActorBackedNyxIdUserLlmPreferencesStore>();
@@ -73,6 +74,9 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IChatHistoryQueryPort>(sp => sp.GetRequiredService<ActorBackedChatHistoryStore>());
         services.AddSingleton<IChatHistoryCommandPort>(sp => sp.GetRequiredService<ActorBackedChatHistoryStore>());
         services.AddSingleton<IWorkflowChatHistoryCreateRecoveryReadPort>(sp => sp.GetRequiredService<ActorBackedChatHistoryStore>());
+        services.AddSingleton<
+            INyxIdChatConversationStateQueryPort,
+            ProjectionNyxIdChatConversationStateQueryPort>();
         // Script runtime activity reads the scripting capability's native-document read model;
         // hosts composed without scripting have no reader, and consumers of this port already
         // treat it as optional (resolved via GetService).

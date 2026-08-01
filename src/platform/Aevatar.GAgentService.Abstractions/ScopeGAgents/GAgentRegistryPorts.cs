@@ -11,6 +11,13 @@ public interface IGAgentActorRegistryCommandPort
         CancellationToken cancellationToken = default);
 }
 
+public interface IGAgentActorRegistryUnregistrationPort
+{
+    Task<GAgentActorRegistryCommandReceipt> RequestUnregistrationAsync(
+        GAgentRegistryUnregistrationRequest request,
+        CancellationToken cancellationToken = default);
+}
+
 public interface IGAgentActorRegistryQueryPort
 {
     Task<GAgentActorRegistrySnapshot> ListActorsAsync(
@@ -29,6 +36,18 @@ public sealed record GAgentActorRegistration(
     string ScopeId,
     string AgentKind,
     string ActorId);
+
+public static class GAgentRegistryActorIds
+{
+    private const string Prefix = "gagent-registry-";
+
+    public static string ForScope(string scopeId)
+    {
+        if (string.IsNullOrWhiteSpace(scopeId))
+            throw new ArgumentException("Scope ID is required.", nameof(scopeId));
+        return Prefix + scopeId.Trim();
+    }
+}
 
 public sealed record GAgentActorRegistryCommandReceipt(
     GAgentActorRegistration Registration,
@@ -75,6 +94,7 @@ public enum ScopeResourceOperation
     Join = 5,
     ListParticipants = 6,
     DraftRunReuse = 7,
+    Control = 8,
 }
 
 public sealed record ScopeResourceAdmissionResult(

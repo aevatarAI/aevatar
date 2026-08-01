@@ -739,6 +739,11 @@ message AgentProfileTurnCandidateRouteIdentity {
   string intent_id = 6;
 }
 
+message AgentProfileTurnBindingIdentity {
+  AgentProfileExecutionSourceProvenance source = 1;
+  bytes execution_binding_sha256 = 2;
+}
+
 message AgentProfileTurnAuthorityState {
   AgentProfileTurnReconciliationKey reconciliation_key = 1;
   AgentProfileTurnCandidateRouteIdentity candidate_route = 2;
@@ -746,6 +751,7 @@ message AgentProfileTurnAuthorityState {
   AgentProfileTurnAuthorityKind authority_kind = 4;
   repeated AgentProfileTurnDegradationReason degradation_reasons = 5;
   repeated string authority_ceiling_tool_names = 6;
+  AgentProfileTurnBindingIdentity binding_identity = 7;
 }
 
 message AgentProfileTurnAuthorityCommittedEvent {

@@ -44,6 +44,30 @@ enum ChatTurnAppendRejectionReason {
   CHAT_TURN_APPEND_REJECTION_REASON_INVALID = 3;
 }
 
+enum ConversationDeletionOwnerKind {
+  CONVERSATION_DELETION_OWNER_KIND_UNSPECIFIED = 0;
+  CONVERSATION_DELETION_OWNER_KIND_CANONICAL = 1;
+  CONVERSATION_DELETION_OWNER_KIND_LEGACY = 2;
+}
+
+enum ConversationDeletionAcknowledgementOutcome {
+  CONVERSATION_DELETION_ACKNOWLEDGEMENT_OUTCOME_UNSPECIFIED = 0;
+  CONVERSATION_DELETION_ACKNOWLEDGEMENT_OUTCOME_COMMITTED_DELETED = 1;
+  CONVERSATION_DELETION_ACKNOWLEDGEMENT_OUTCOME_ALREADY_DELETED = 2;
+  CONVERSATION_DELETION_ACKNOWLEDGEMENT_OUTCOME_AUTHORITATIVE_ABSENT = 3;
+}
+
+message ConversationDeletionAcknowledgement {
+  string operation_id = 1;
+  string scope_id = 2;
+  string conversation_id = 3;
+  string completion_actor_id = 4;
+  string owner_actor_id = 5;
+  ConversationDeletionOwnerKind owner_kind = 6;
+  ConversationDeletionAcknowledgementOutcome outcome = 7;
+  google.protobuf.Timestamp committed_at = 8;
+}
+
 message ChatTurn {
   string turn_id = 1;
   int32 sequence = 2;
@@ -77,6 +101,10 @@ message ChatConversationState {
   repeated ChatTurn turns = 10;
   bool deleted = 11;
   ChatTurnAppendRejection last_rejected_append = 12;
+  string deletion_operation_id = 13;
+  string deletion_completion_actor_id = 14;
+  google.protobuf.Timestamp deletion_committed_at = 15;
+  map<string, ConversationDeletionAcknowledgement> deletion_acknowledgements = 16;
 }
 
 // ─── ChatConversationGAgent Events ───
@@ -111,6 +139,22 @@ message ChatTurnAppendRejectedEvent {
 message ConversationDeletedEvent {
   string conversation_id = 1;
   string scope_id = 2;
+  string operation_id = 3;
+  string completion_actor_id = 4;
+  google.protobuf.Timestamp committed_at = 5;
+  string owner_actor_id = 6;
+  ConversationDeletionOwnerKind owner_kind = 7;
+}
+
+message ConversationDeletionAcknowledgedEvent {
+  string operation_id = 1;
+  string scope_id = 2;
+  string conversation_id = 3;
+  string completion_actor_id = 4;
+  string owner_actor_id = 5;
+  ConversationDeletionOwnerKind owner_kind = 6;
+  ConversationDeletionAcknowledgementOutcome outcome = 7;
+  google.protobuf.Timestamp committed_at = 8;
 }
 
 // ─── ChatTurnHistoryDeliveryGAgent State ───

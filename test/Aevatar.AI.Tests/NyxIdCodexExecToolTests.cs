@@ -30,6 +30,15 @@ public sealed class NyxIdCodexExecToolTests
         tool.ParametersSchema.Should().Contain("\"empty_git\"");
         tool.ParametersSchema.Should().Contain("\"prompt\"");
         tool.ParametersSchema.Should().NotContain("\"model\"");
+        using var schema = JsonDocument.Parse(tool.ParametersSchema);
+        schema.RootElement.GetProperty("properties")
+            .EnumerateObject()
+            .Select(static property => property.Name)
+            .Should()
+            .Equal("target", "workspace", "prompt", "timeout_secs");
+        tool.ParametersSchema.Should()
+            .NotContain("\"credential\"")
+            .And.NotContain("\"provision\"");
     }
 
     [Fact]
@@ -160,7 +169,15 @@ public sealed class NyxIdCodexExecToolTests
     {
         var port = new RecordingManagedPort();
         var tool = new NyxIdCodexExecTool([port], new NyxIdToolOptions());
-        SetToken("caller-token");
+        AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
+        {
+            Credentials = new AgentToolCredentials("caller-token", null, null),
+            Caller = new AgentToolCallerContext("scope-alpha", null, null, null),
+            NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                "nyxid",
+                string.Empty,
+                "nyx-user-alpha"),
+        };
         try
         {
             const string arguments = """
@@ -184,6 +201,9 @@ public sealed class NyxIdCodexExecToolTests
             port.Request.Workspace!.WorkspaceCase.Should().Be(
                 CodexExecutionWorkspace.WorkspaceOneofCase.EmptyGit);
             port.Request.Caller.NyxIdAccessToken.Should().Be("caller-token");
+            port.Request.Caller.ScopeId.Should().Be("scope-alpha");
+            port.Request.Caller.NyxIdAuthority.Should().NotBeNull();
+            port.Request.Caller.NyxIdAuthority!.ExternalUserId.Should().Be("nyx-user-alpha");
             port.Request.TimeoutSeconds.Should().Be(180);
         }
         finally

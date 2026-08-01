@@ -121,6 +121,118 @@ public sealed class ActorBackedGAgentRegistryPortsTests
         result.Status.Should().Be(ScopeResourceAdmissionStatus.NotFound);
     }
 
+    [Fact]
+    public async Task AuthorizeTargetAsync_ShouldMapControlAsTypedRegistryOperation()
+    {
+        var actor = new StubActor("gagent-registry-scope-a");
+        var dispatch = new RecordingCommandDispatchService();
+        var ports = NewPorts(
+            dispatch,
+            new RecordingActorRuntime { ExistingActor = actor },
+            new RecordingBootstrap(actor),
+            new RecordingDocumentReader());
+        var control = System.Enum.Parse<ScopeResourceOperation>("Control");
+
+        var admission = await ports.AuthorizeTargetAsync(new ScopeResourceTarget(
+            "scope-a",
+            ScopeResourceKind.GAgentActor,
+            CanonicalKind,
+            "actor-1",
+            control));
+
+        admission.Status.Should().Be(ScopeResourceAdmissionStatus.Allowed);
+        var requested = dispatch.Payloads.Should()
+            .ContainSingle()
+            .Which.Should()
+            .BeOfType<ScopeResourceAdmissionRequested>()
+            .Which;
+        requested.Operation.ToString().Should().Be("Control");
+    }
+
+    [Fact]
+    public async Task UnregisterActorAsync_ShouldReportOnlyAcceptedForDispatch()
+    {
+        var actor = new StubActor("gagent-registry-scope-a");
+        var dispatch = new RecordingCommandDispatchService();
+        var ports = NewPorts(
+            dispatch,
+            new RecordingActorRuntime { ExistingActor = actor },
+            new RecordingBootstrap(actor),
+            new RecordingDocumentReader());
+
+        var receipt = await ports.UnregisterActorAsync(new GAgentActorRegistration(
+            "scope-a",
+            CanonicalKind,
+            "actor-1"));
+
+        receipt.Stage.Should().Be(GAgentActorRegistryCommandStage.AcceptedForDispatch);
+        dispatch.Payloads.Should().ContainSingle().Which.Should().BeOfType<ActorUnregisteredEvent>();
+    }
+
+    [Fact]
+    public async Task RequestUnregistrationAsync_ShouldDispatchTypedOperationAndReportAcceptedForDispatch()
+    {
+        var actor = new StubActor("gagent-registry-scope-a");
+        var dispatch = new RecordingCommandDispatchService();
+        var ports = NewPorts(
+            dispatch,
+            new RecordingActorRuntime { ExistingActor = actor },
+            new RecordingBootstrap(actor),
+            new RecordingDocumentReader());
+
+        var receipt = await ports.RequestUnregistrationAsync(new GAgentRegistryUnregistrationRequest
+        {
+            OperationId = " registry-operation-alpha ",
+            RegistryActorId = " gagent-registry-scope-a ",
+            ScopeId = " scope-a ",
+            AgentKind = $" {CanonicalKind} ",
+            ActorId = " actor-1 ",
+            CompletionActorId = " actor-1 ",
+        });
+
+        receipt.Stage.Should().Be(GAgentActorRegistryCommandStage.AcceptedForDispatch);
+        receipt.Registration.Should().Be(new GAgentActorRegistration(
+            "scope-a",
+            CanonicalKind,
+            "actor-1"));
+        dispatch.Payloads.Should().ContainSingle().Which
+            .Should().BeEquivalentTo(new GAgentRegistryUnregistrationRequest
+            {
+                OperationId = "registry-operation-alpha",
+                RegistryActorId = "gagent-registry-scope-a",
+                ScopeId = "scope-a",
+                AgentKind = CanonicalKind,
+                ActorId = "actor-1",
+                CompletionActorId = "actor-1",
+            });
+    }
+
+    [Fact]
+    public async Task RequestUnregistrationAsync_ShouldRejectForeignCompletionActor()
+    {
+        var actor = new StubActor("gagent-registry-scope-a");
+        var dispatch = new RecordingCommandDispatchService();
+        var ports = NewPorts(
+            dispatch,
+            new RecordingActorRuntime { ExistingActor = actor },
+            new RecordingBootstrap(actor),
+            new RecordingDocumentReader());
+
+        var act = () => ports.RequestUnregistrationAsync(new GAgentRegistryUnregistrationRequest
+        {
+            OperationId = "registry-operation-alpha",
+            RegistryActorId = "gagent-registry-scope-a",
+            ScopeId = "scope-a",
+            AgentKind = CanonicalKind,
+            ActorId = "actor-1",
+            CompletionActorId = "actor-foreign",
+        });
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*CompletionActorId*");
+        dispatch.Payloads.Should().BeEmpty();
+    }
+
     private static ActorBackedGAgentRegistryPorts NewPorts(
         RecordingCommandDispatchService dispatch,
         RecordingActorRuntime runtime,
@@ -152,7 +264,13 @@ public sealed class ActorBackedGAgentRegistryPortsTests
         {
             Payloads.Add(command.Payload);
             return Task.FromResult(CommandDispatchResult<StudioActorCommandReceipt, StudioActorCommandStartError>.Success(
-                new StudioActorCommandReceipt(command.Actor.Id, "cmd-1", "corr-1")));
+                new StudioActorCommandReceipt(command.Actor.Id, "cmd-1", "corr-1"),
+                new DispatchAdmission(
+                    true,
+                    "cmd-1",
+                    DateTimeOffset.Parse("2026-07-27T00:00:00Z"),
+                    command.Actor.Id,
+                    "corr-1")));
         }
     }
 

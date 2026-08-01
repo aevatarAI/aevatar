@@ -638,6 +638,17 @@ public sealed class AIAbstractionsProtoCoverageTests
         var authority = new AgentProfileTurnAuthorityState
         {
             ReconciliationKey = new AgentProfileTurnReconciliationKey { SessionId = "session-authority", Attempt = 2 },
+            BindingIdentity = new AgentProfileTurnBindingIdentity
+            {
+                Source = new AgentProfileExecutionSourceProvenance
+                {
+                    ProfileId = "profile-a",
+                    StateVersion = 7,
+                    PublishedRevision = 3,
+                    PublishedSnapshotSha256 = ByteString.CopyFrom(new byte[32]),
+                },
+                ExecutionBindingSha256 = ByteString.CopyFrom(Enumerable.Repeat((byte)1, 32).ToArray()),
+            },
             CandidateRoute = new AgentProfileTurnCandidateRouteIdentity
             {
                 SourceProfileId = "profile-a",
@@ -671,7 +682,13 @@ public sealed class AIAbstractionsProtoCoverageTests
             .Should().Equal((1, "commit_kind"), (2, "authority"));
         AgentProfileTurnAuthorityState.Descriptor.Fields.InFieldNumberOrder().Select(field => (field.FieldNumber, field.Name))
             .Should().Equal((1, "reconciliation_key"), (2, "candidate_route"), (3, "selected_exact_skill_ref"),
-                (4, "authority_kind"), (5, "degradation_reasons"), (6, "authority_ceiling_tool_names"));
+                (4, "authority_kind"), (5, "degradation_reasons"), (6, "authority_ceiling_tool_names"),
+                (7, "binding_identity"));
+        AiMessagesReflection.Descriptor.MessageTypes.Select(static message => message.Name)
+            .Should().Contain("AgentProfileTurnBindingIdentity");
+        AgentProfileTurnBindingIdentity.Descriptor.Fields.InFieldNumberOrder()
+            .Select(field => (field.FieldNumber, field.Name))
+            .Should().Equal((1, "source"), (2, "execution_binding_sha256"));
         var forbiddenFragments = new[] { "body", "prompt", "tool_object", "token", "credential", "header", "model_argument", "diagnostic", "metadata", "adapter", "runtime_instance" };
         new[] { AgentProfileTurnAuthorityState.Descriptor, AgentProfileTurnAuthorityCommittedEvent.Descriptor }
             .SelectMany(descriptor => descriptor.Fields.InDeclarationOrder()).Select(field => field.Name)

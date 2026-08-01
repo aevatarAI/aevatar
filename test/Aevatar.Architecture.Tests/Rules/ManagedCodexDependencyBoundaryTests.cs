@@ -48,6 +48,46 @@ public sealed class ManagedCodexDependencyBoundaryTests
     }
 
     [Fact]
+    public void ManagedCodexExecutionPortMustLiveInApplication()
+    {
+        var root = FindRepositoryRoot();
+        var managedExecutionPorts = Directory
+            .EnumerateFiles(Path.Combine(root, "src"), "*.cs", SearchOption.AllDirectories)
+            .Where(static path =>
+                !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal) &&
+                !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .Where(path =>
+            {
+                var source = File.ReadAllText(path);
+                return System.Text.RegularExpressions.Regex.IsMatch(
+                           source,
+                           @":\s*ICodexExecutionPort\b",
+                           System.Text.RegularExpressions.RegexOptions.CultureInvariant) &&
+                       source.Contains(
+                           "CodexExecutionTarget.TargetOneofCase.ManagedSandbox",
+                           StringComparison.Ordinal);
+            })
+            .Select(path => Path.GetRelativePath(root, path))
+            .ToArray();
+
+        Assert.Single(managedExecutionPorts);
+        Assert.StartsWith(
+            "src/Aevatar.AI.Application.CodexExecution/",
+            managedExecutionPorts[0].Replace(Path.DirectorySeparatorChar, '/'),
+            StringComparison.Ordinal);
+
+        var transportSource = File.ReadAllText(Path.Combine(
+            root,
+            "src",
+            "Aevatar.AI.Infrastructure.ChronoSandbox",
+            "NyxIdManagedCodexChronoTransport.cs"));
+        Assert.DoesNotContain(
+            "IManagedCodexCredentialQueryPort",
+            transportSource,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RepositoryMustNotRestoreTheDirectOpenSandboxSdkPath()
     {
         var root = FindRepositoryRoot();

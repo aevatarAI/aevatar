@@ -42,12 +42,15 @@ public sealed class AgentProfileTurnCatalogMaterializer
                 "snapshot_digest_invalid"));
             return CreatePreparation(
                 sessionId,
+                bindingIdentity: null,
                 candidate: null,
                 selectedExactSkillRef: null,
                 AgentProfileTurnAuthorityKind.RestrictedEmpty,
                 [],
                 diagnostics);
         }
+
+        var bindingIdentity = AgentProfileTurnAuthorityTransitionPolicy.CreateBindingIdentity(binding);
 
         var routeTools = await DiscoverToolSetAsync(
             binding.Admission.RouteToolSetRef,
@@ -59,6 +62,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
         {
             return CreatePreparation(
                 sessionId,
+                bindingIdentity,
                 candidate: null,
                 selectedExactSkillRef: null,
                 AgentProfileTurnAuthorityKind.RestrictedEmpty,
@@ -85,6 +89,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
         {
             return CreatePreparation(
                 sessionId,
+                bindingIdentity,
                 candidate: null,
                 selectedExactSkillRef: null,
                 recoveryNames.Count == 0
@@ -99,6 +104,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
         {
             return CreatePreparation(
                 sessionId,
+                bindingIdentity,
                 candidate: null,
                 selectedExactSkillRef: null,
                 AgentProfileTurnAuthorityKind.Recovery,
@@ -122,6 +128,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
                 candidate.IntentId));
             return CreatePreparation(
                 sessionId,
+                bindingIdentity,
                 candidateIdentity,
                 selectedExactSkillRef: null,
                 AgentProfileTurnAuthorityKind.Recovery,
@@ -134,6 +141,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
         {
             return CreatePreparation(
                 sessionId,
+                bindingIdentity,
                 candidate: null,
                 selectedExactSkillRef: null,
                 AgentProfileTurnAuthorityKind.Recovery,
@@ -147,6 +155,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
         ceiling.IntersectWith(selectedPolicy);
         return CreatePreparation(
             sessionId,
+            bindingIdentity,
             candidateIdentity,
             candidate.SkillProvenance.ExactSkillRef,
             AgentProfileTurnAuthorityKind.Selected,
@@ -167,8 +176,8 @@ public sealed class AgentProfileTurnCatalogMaterializer
         ArgumentNullException.ThrowIfNull(toolContext);
 
         var diagnostics = DiagnosticsFromAuthority(committedAuthority);
-        if (!AgentProfileExecutionBindingCodec.Verify(binding) ||
-            !MatchesCommittedBinding(binding, committedAuthority.CandidateRoute))
+        if (!AgentProfileTurnAuthorityTransitionPolicy.IsValid(committedAuthority) ||
+            !AgentProfileTurnAuthorityTransitionPolicy.MatchesBinding(binding, committedAuthority))
         {
             if (diagnostics.All(static diagnostic =>
                     diagnostic.Code != AgentProfileTurnDiagnosticCode.ProfileInvalid))
@@ -594,6 +603,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
 
     private static AgentProfileTurnAuthorityPreparation CreatePreparation(
         string sessionId,
+        AgentProfileTurnBindingIdentity? bindingIdentity,
         AgentProfileTurnCandidateRouteIdentity? candidate,
         ExactRemoteSkillRef? selectedExactSkillRef,
         AgentProfileTurnAuthorityKind authorityKind,
@@ -608,6 +618,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
                 SessionId = sessionId,
                 Attempt = 1,
             },
+            BindingIdentity = bindingIdentity?.Clone(),
             CandidateRoute = candidate?.Clone(),
             SelectedExactSkillRef = selectedExactSkillRef?.Clone(),
             AuthorityKind = ResolveAuthorityKindForCeiling(authorityKind, canonicalCeilingToolNames),
@@ -675,16 +686,6 @@ public sealed class AgentProfileTurnCatalogMaterializer
         authorityKind == AgentProfileTurnAuthorityKind.Recovery && canonicalCeilingToolNames.Count == 0
             ? AgentProfileTurnAuthorityKind.RestrictedEmpty
             : authorityKind;
-
-    private static bool MatchesCommittedBinding(
-        AgentProfileExecutionBinding binding,
-        AgentProfileTurnCandidateRouteIdentity? candidate) =>
-        candidate is null ||
-        string.Equals(binding.Source.ProfileId, candidate.SourceProfileId, StringComparison.Ordinal) &&
-        binding.Source.StateVersion == candidate.SourceStateVersion &&
-        binding.Source.PublishedRevision == candidate.PublishedRevision &&
-        binding.Source.PublishedSnapshotSha256.Equals(candidate.PublishedSnapshotSha256) &&
-        binding.DeterministicBindingSha256.Equals(candidate.ExecutionBindingSha256);
 
     private static AgentProfileExecutionMember? ResolveCommittedCandidate(
         AgentProfileExecutionBinding binding,

@@ -41,21 +41,38 @@ public static class WorkflowCallerCredentialExtractor
 
     private static CallerCredentialTokenExtractionResult ExtractCredentialToken(HttpContext? http)
     {
-        if (http?.Request.Headers.TryGetValue(NyxIdDelegationTokenHeader, out var delegationValues) == true)
+        if (http?.Request.Headers.TryGetValue("Authorization", out var authorizationValues) == true)
+        {
+            if (authorizationValues.Count != 1)
+                return CallerCredentialTokenExtractionResult.Invalid;
+
+            var authorization = authorizationValues[0];
+            if (string.Equals(
+                    authorization?.Trim(),
+                    "Bearer",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return CallerCredentialTokenExtractionResult.Invalid;
+            }
+
+            return authorization?.StartsWith(
+                       BearerPrefix,
+                       StringComparison.OrdinalIgnoreCase) == true
+                ? CallerCredentialTokenExtractionResult.Success(
+                    authorization[BearerPrefix.Length..])
+                : CallerCredentialTokenExtractionResult.Invalid;
+        }
+
+        if (http?.Request.Headers.TryGetValue(
+                NyxIdDelegationTokenHeader,
+                out var delegationValues) == true)
         {
             return delegationValues.Count != 1
                 ? CallerCredentialTokenExtractionResult.Invalid
                 : CallerCredentialTokenExtractionResult.Success(delegationValues[0]);
         }
 
-        var auth = http?.Request.Headers.Authorization.FirstOrDefault();
-        if (auth == null)
-            return CallerCredentialTokenExtractionResult.Missing;
-        if (string.Equals(auth.Trim(), "Bearer", StringComparison.OrdinalIgnoreCase))
-            return CallerCredentialTokenExtractionResult.Invalid;
-        return auth.StartsWith(BearerPrefix, StringComparison.OrdinalIgnoreCase)
-            ? CallerCredentialTokenExtractionResult.Success(auth[BearerPrefix.Length..])
-            : CallerCredentialTokenExtractionResult.Missing;
+        return CallerCredentialTokenExtractionResult.Missing;
     }
 
     private static WorkflowCallerCredentialExtractionResult ParseCredential(
@@ -101,7 +118,6 @@ public static class WorkflowCallerCredentialExtractor
 
         var externalUserId = ReadFirstClaim(
             principal,
-            "scope_id",
             "uid",
             "sub",
             ClaimTypes.NameIdentifier,
@@ -127,7 +143,6 @@ public static class WorkflowCallerCredentialExtractor
 
         var externalUserId = ReadFirstClaim(
             principal,
-            "scope_id",
             "uid",
             "sub",
             ClaimTypes.NameIdentifier,

@@ -708,7 +708,7 @@ button{font-family:inherit;cursor:pointer;}
 .obs-context-actions .ibtn{height:30px;}
 .obs-scope-notice{display:flex;align-items:center;gap:8px;min-width:0;padding:5px 9px;border:1px solid var(--waiting-bd);border-radius:5px;background:var(--waiting-bg);color:#8a5107;font-size:11.5px;}
 .obs-scope-notice span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.obs-scope-notice button{border:0;background:none;color:var(--primary-strong);font-size:11.5px;font-weight:600;white-space:nowrap;}
+.obs-scope-notice button{min-height:24px;border:0;background:none;color:var(--primary-strong);font-size:11.5px;font-weight:600;white-space:nowrap;}
 .obs-admin-tools{position:relative;}
 .obs-admin-tools summary{list-style:none;}
 .obs-admin-tools summary::-webkit-details-marker{display:none;}
@@ -720,12 +720,12 @@ button{font-family:inherit;cursor:pointer;}
 .ab-input{height:31px;width:100%;min-width:0;padding:0 9px;border:1px solid var(--border);border-radius:5px;font:12.5px var(--sans);color:var(--fg);background:var(--surface);}
 .ab-input:focus{outline:0;border-color:var(--primary);box-shadow:0 0 0 2px var(--primary-weak);}
 .ab-hint{display:block;min-height:18px;margin-top:8px;font-size:11.5px;color:var(--muted);}
-.obs-filterbar{flex:0 0 auto;padding:8px 14px;border-bottom:1px solid var(--border);background:var(--surface-2);}
+.obs-filterbar{position:relative;z-index:40;flex:0 0 auto;padding:8px 14px;border-bottom:1px solid var(--border);background:var(--surface-2);}
 .obs-filter-main{display:flex;align-items:center;gap:8px;min-width:0;}
 .obs-filter-search{display:flex;align-items:center;gap:7px;width:clamp(220px,28vw,380px);height:32px;padding:0 9px;border:1px solid var(--border);border-radius:5px;background:var(--surface);}
 .obs-filter-search:focus-within{border-color:var(--primary);box-shadow:0 0 0 2px var(--primary-weak);}
 .obs-filter-search svg{width:14px;height:14px;color:var(--faint);flex:0 0 auto;}
-.obs-filter-search input{min-width:0;width:100%;border:0;outline:0;background:none;color:var(--fg);font:12.5px var(--sans);}
+.obs-filter-search input{height:100%;min-width:0;width:100%;border:0;outline:0;background:none;color:var(--fg);font:12.5px var(--sans);}
 .obs-status-select{width:116px;flex:0 0 116px;}
 .filter-toggle{height:32px;display:inline-flex;align-items:center;gap:6px;padding:0 9px;border:1px solid var(--border);border-radius:5px;background:var(--surface);font-size:12px;color:var(--muted);white-space:nowrap;}
 .filter-toggle:hover,.filter-toggle.on{border-color:var(--border-strong);color:var(--heading);background:var(--surface-3);}
@@ -745,7 +745,7 @@ button{font-family:inherit;cursor:pointer;}
 .obs-filter-chip span{overflow:hidden;text-overflow:ellipsis;}
 .obs-filter-chip b{font-weight:600;color:var(--heading);}
 .obs-filter-chip:hover{border-color:var(--border-strong);color:var(--failed);}
-.obs-clear-all{border:0;background:none;color:var(--primary-strong);font-size:11px;white-space:nowrap;}
+.obs-clear-all{height:24px;border:0;background:none;color:var(--primary-strong);font-size:11px;white-space:nowrap;}
 .obs-split{flex:1 1 auto;min-height:0;display:flex;background:var(--surface);}
 .obs-run-rail{width:350px;flex:0 0 350px;min-height:0;display:flex;flex-direction:column;border-right:1px solid var(--border);background:var(--surface-2);}
 .obs-run-rail.is-collapsed{display:none;}
@@ -1213,7 +1213,7 @@ body.obs-immersive .obs-detail-inner{width:min(1380px,100%);}
   .obs-filter-main{flex-wrap:wrap;}
   .obs-filter-search{width:auto;flex:1 1 calc(100% - 124px);}
   .obs-filter-count{margin-left:0;}
-  .filter-body{grid-template-columns:1fr;}
+  .filter-body{position:absolute;top:100%;left:8px;right:8px;max-height:min(56vh,430px);overflow:auto;grid-template-columns:1fr;margin-top:0;padding:12px;border:1px solid var(--border-strong);border-radius:0 0 7px 7px;background:var(--surface);box-shadow:var(--shadow-hover);overscroll-behavior:contain;}
   .filter-row.time-range{grid-column:1;}
   .filter-row.filter-actions{grid-column:1;}
   .obs-run-rail{width:100%;flex:0 0 auto;min-height:180px;max-height:38vh;border-right:0;border-bottom:1px solid var(--border);}
@@ -1295,7 +1295,7 @@ function sparkSVG(data,color,w,h){
 }
 
 var STATUS_CN={busy:'忙',idle:'闲',stuck:'卡',failed:'失败'};
-var RUN_CN={running:'运行中',success:'完成',failed:'失败',waiting:'等待',stuck:'卡住'};
+var RUN_CN={running:'运行中',success:'完成',failed:'失败',waiting:'等待',stopped:'已停止',stuck:'卡住'};
 
 /* =====================================================================
    ① 全景看板 Fleet —— 真实跨组织（nyxid 账号）数据
@@ -1558,7 +1558,7 @@ var OBS_TAB_VALUES=['timeline','steps','diagnostics','logs','artifacts','graph']
 /* 真实 status 枚举 -> 渲染内部枚举 running|success|failed|stuck */
 function obsMapStatus(s){
   return ({ running:'running', completed:'success', failed:'failed', timed_out:'failed',
-    stopped:'stuck', disabled:'stuck', unknown:'stuck', not_found:'stuck' })[s]||'stuck';
+    stopped:'stopped', disabled:'stopped', unknown:'stuck', not_found:'stuck' })[s]||'stuck';
 }
 /* 步骤级 success/失败 -> timeline/dag 内部 st 枚举 */
 function obsStepStatus(st){
@@ -2407,7 +2407,7 @@ function srcLegendRows(){
 /* run 语义：完成=绿 / 运行中=蓝 / 等待=琥珀 / 失败=红；颜色之外配形状 icon + 文字 */
 function statusTag(s){
   var map={running:['tag-running','运行中','▶'],success:['tag-success','完成','✓'],failed:['tag-failed','失败','✕'],
-    waiting:['tag-waiting','等待','◷'],stuck:['tag-failed','卡住','▌'],idle:['tag-idle','空闲','○']};
+    waiting:['tag-waiting','等待','◷'],stopped:['tag-idle','已停止','■'],stuck:['tag-failed','卡住','▌'],idle:['tag-idle','空闲','○']};
   var m=map[s]||map.idle;
   var ic=s==='running'?'<i class="tdot" aria-hidden="true"></i>':'<span class="tg" aria-hidden="true">'+m[2]+'</span>';
   return '<span class="tag '+m[0]+'">'+ic+m[1]+'</span>';
@@ -2594,7 +2594,7 @@ function l1Roster(detail,coId){
     '</tr></thead><tbody>'+wfRows+'</tbody></table></div></div>';
   /* 真实运行列表（点击行 -> foundation data-run 深链进 observatory，选中该 run） */
   var runRows=detail.runs.slice(0,80).map(function(r){
-    var rstatus={running:'running',completed:'success',failed:'failed',timed_out:'failed',stopped:'stuck',disabled:'stuck'}[r.status]||'stuck';
+    var rstatus={running:'running',completed:'success',failed:'failed',timed_out:'failed',stopped:'stopped',disabled:'stopped'}[r.status]||'stuck';
     var scopeId=r.scope||coId;
     return '<tr data-run="'+esc(r.id)+'" data-scope="'+esc(scopeId)+'">'+
       '<td><b style="color:var(--heading);font-weight:550">'+esc(r.name)+'</b><div style="font-size:11px;color:var(--faint)" class="tnum">'+esc(r.id)+'</div></td>'+
@@ -2832,7 +2832,7 @@ function emptyBlock(kind){
     'company-filter':['没有符合条件的公司','当前筛选下无公司，调整快筛或排序。',null],
     roster:['这家公司还没有员工','部门下尚未配置 AI 员工（member），先去添加一个 workflow / script / gagent。','添加员工'],
     graph:['暂无数据流','该公司近 24h 没有产生 Run 交接，跑一次 workflow 后这里会出现活的流水线。',null],
-    run:['暂无 Run','该员工还没有执行记录。',null]
+    run:['暂无 Run','当前没有可展示的运行记录。',null]
   };
   var m=map[kind]||map.run;
   return '<div class="empty">'+ICON.empty+'<div class="et">'+m[0]+'</div><div class="es">'+m[1]+'</div>'+
@@ -3151,7 +3151,7 @@ function obsRunsFiltered(){
 }
 function obsPinnedRun(){
   if(!OBS_STATE.selectedId) return null;
-  return OBS_RUNS.some(function(r){return r.id===OBS_STATE.selectedId;})?null:obsSyntheticRun(OBS_STATE.selectedId);
+  return obsRunsFiltered().some(function(r){return r.id===OBS_STATE.selectedId;})?null:obsSyntheticRun(OBS_STATE.selectedId);
 }
 function obsRunRow(r,pinned){
   var sd={running:'var(--running)',success:'var(--success)',failed:'var(--failed)',stuck:'var(--waiting)'}[r.status]||'var(--idle)';
@@ -3161,12 +3161,18 @@ function obsRunRow(r,pinned){
     '<span class="obs-row-meta"><span class="obs-row-def" title="'+esc(r.definition||'—')+'">'+esc(r.definition||'—')+'</span><time>'+esc(fleetAgo(r.updatedAtUtc))+'</time>'+originPill(r.origin)+'</span>'+
     (pinned?'<span class="obs-row-pin">不在当前筛选结果中</span>':'')+'</button>';
 }
+function obsEmptyList(){
+  var serverFiltered=['status','origin','definition','schedule','from','to'].some(function(key){return !!OBS_STATE[key];});
+  if((OBS_STATE.localSearch||'').trim()) return '<div class="empty"><div class="et">当前加载结果中没有匹配运行</div><div class="es">本地搜索仅覆盖已加载的 '+OBS_RUNS.length+' 条运行摘要。</div><button class="btn" data-act="obsLocalSearchClear">清除搜索</button></div>';
+  if(serverFiltered) return '<div class="empty"><div class="et">当前服务端筛选下没有运行</div><div class="es">调整状态、来源、定义、排班或更新时间范围。</div><button class="btn" data-act="obsFilterReset">清除筛选</button></div>';
+  return '<div class="empty"><div class="et">当前 scope 暂无运行记录</div><div class="es">新的运行提交后会自动出现在这里。</div></div>';
+}
 function obsList(){
   if(OBS_RUNS_LOADING&&!OBS_RUNS_LOADED) return '<div class="obs-loading">正在加载运行记录…</div>';
   var pinned=obsPinnedRun(),rows=obsRunsFiltered().map(function(r){return obsRunRow(r,false);}).join('');
   var pinnedHtml=pinned?'<div class="obs-pinned">'+obsRunRow(pinned,true)+'</div>':'';
   var error=OBS_RUNS_ERR?'<div class="alert" style="margin-bottom:7px"><span class="grow">'+esc(OBS_RUNS_ERR)+'</span><button class="btn" data-act="obsReload">重试</button></div>':'';
-  return error+pinnedHtml+(rows||(!OBS_RUNS_ERR?emptyBlock('run'):''));
+  return error+pinnedHtml+(rows||(!OBS_RUNS_ERR?obsEmptyList():''));
 }
 function obsRunRail(){
   var visible=obsRunsFiltered().length,loaded=OBS_RUNS.length;
@@ -3359,6 +3365,7 @@ function bindObservatory(root){
     var a=act.getAttribute('data-act');
     if(a==='obsFilterToggle'){ OBS_STATE.filterOpen=!OBS_STATE.filterOpen; reBar(); }
     else if(a==='obsFilterReset'){ obsNavigate({status:null,origin:null,definition:null,schedule:null,from:null,to:null}); }
+    else if(a==='obsLocalSearchClear'){ OBS_STATE.localSearch=''; reBar(); reList(); }
     else if(a==='obsFilterRemove'){ var filterPatch={}; filterPatch[act.getAttribute('data-filter-key')]=null; obsNavigate(filterPatch); }
     else if(a==='obsReload'){ loadObsRuns(function(){ reList(); reDetail(); }).then(function(){ var current=obsSelected(); if(current) loadObsDetail(current.id,function(){ reList(); reDetail(); },true); }); }
     else if(a==='obsReloadDetail'){ var rid=act.getAttribute('data-run'); if(rid){ delete OBS_DETAIL[rid]; loadObsDetail(rid,reDetail); } }
@@ -3540,7 +3547,7 @@ function bindStudio(root){
   }
   root.addEventListener('click',function(ev){
     if(ev.target.closest('[data-act="studioSend"]')) send();
-    var or=ev.target.closest('[data-act="studioOpenRun"]'); if(or){ navigate(['observatory'],{}); }
+    var or=ev.target.closest('[data-act="studioOpenRun"]'); if(or){ obsNavigate({run:or.getAttribute('data-run'),scope:'mine'}); }
   });
   ta&&ta.addEventListener('keydown',function(e){ if(e.key==='Enter'&&(e.metaKey||e.ctrlKey)){ e.preventDefault(); send(); } });
 }
@@ -3797,7 +3804,7 @@ function bindSkills(root){
     if(a==='skBack'){ SKILL_STATE.mobileDetail=false; reDetail(); }
     else if(a==='skInvoke'){ capture(); runInvoke(); }
     else if(a==='skCopy'){ copyWithToast(act.getAttribute('data-copy')); }
-    else if(a==='skOpenRun'){ var u=act.getAttribute('data-url'); if(u){ location.assign(u); } else { navigate(['observatory'],{}); } }
+    else if(a==='skOpenRun'){ obsNavigate({run:act.getAttribute('data-run'),scope:'mine'}); }
     else if(a==='skReload'){ SKILL_STATE.loaded=false; SKILLS_LOADED=false; SKILL_STATE.loading=true; reList(); loadSkills(function(){ SKILL_STATE.loaded=true; SKILL_STATE.loading=false; reList(); }); }
     else if(a==='skPreset'){ capture(); SKILL_STATE.sched.cron=act.getAttribute('data-cron'); reDetail(); }
     else if(a==='skSchedCreate'){ capture(); createSched(); }
@@ -4831,7 +4838,7 @@ function bindEvents(){
     if(stchip && stchip.closest('[data-act="l1status"]')){ /* handled above */ }
 
     /* navigation: run > emp > company（顺序很重要） */
-    var runEl=t.closest&&t.closest('[data-run]');
+    var runEl=t.closest&&t.closest('[data-run][data-scope]');
     if(runEl){ var rid=runEl.getAttribute('data-run'); var runScope=runEl.getAttribute('data-scope');
       if(rid) obsNavigate({run:rid,scope:runScope||'mine'});
       return; }

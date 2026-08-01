@@ -110,6 +110,10 @@ public static class ServiceCollectionExtensions
 
         services.AddCurrentStateProjectionMaterializer<
             StudioMaterializationContext,
+            NyxIdChatConversationCurrentStateProjector>();
+
+        services.AddCurrentStateProjectionMaterializer<
+            StudioMaterializationContext,
             ChatHistoryCreateRecoveryCurrentStateProjector>();
 
         services.AddCurrentStateProjectionMaterializer<
@@ -194,6 +198,10 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<
             IProjectionDocumentMetadataProvider<ChatConversationCurrentStateDocument>,
             ChatConversationCurrentStateDocumentMetadataProvider>();
+
+        services.TryAddSingleton<
+            IProjectionDocumentMetadataProvider<NyxIdChatConversationCurrentStateDocument>,
+            NyxIdChatConversationCurrentStateDocumentMetadataProvider>();
 
         services.TryAddSingleton<
             IProjectionDocumentMetadataProvider<ChatHistoryCreateRecoveryCurrentStateDocument>,

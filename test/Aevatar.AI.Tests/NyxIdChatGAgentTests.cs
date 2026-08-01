@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Diagnostics.Metrics;
 using System.Net;
 using System.Reflection;
@@ -24,6 +25,7 @@ using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Implementations.Local.Actors;
 using Aevatar.Foundation.Runtime.Streaming;
+using Aevatar.GAgents.ChatHistory;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgents.NyxidChat.AgentProfiles;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
@@ -72,8 +74,9 @@ public class NyxIdChatGAgentTests
 
         result.Succeeded.Should().BeTrue();
         source.CallCount.Should().Be(1);
-        runtime.CreateCalls.Should().ContainSingle();
-        source.ActorIds.Should().ContainSingle();
+        runtime.CreateCalls.Should().ContainSingle().Which.Type.Should()
+            .Be(typeof(NyxIdChatConversationGAgent));
+        source.ActorIds.Should().Equal(runtime.CreateCalls.Select(static call => call.Id!));
         source.RouteToolSetNames.Should().Equal("profile.route");
         command.AgentProfileBinding.Should().BeNull();
     }
@@ -170,7 +173,7 @@ public class NyxIdChatGAgentTests
         var registry = new RecordingGAgentActorRegistryCommandPort();
         using var provider = BuildServiceProvider(registry, new RecordingActorRuntime());
         const string actorId = "nyxid-chat-profile-order";
-        var agent = CreateAgent(provider, actorId);
+        var (agent, inbox) = CreateConversationAgentWithInbox(provider, actorId);
 
         await agent.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatConversationCreateCommand
         {
@@ -178,6 +181,7 @@ public class NyxIdChatGAgentTests
             CreatedLocally = true,
             AgentProfileBinding = BuildSealedBinding(sourceStateVersion: 17, rolloutStage: "canary"),
         }));
+        await inbox.DrainAsync();
 
         var events = await provider.GetRequiredService<IEventStore>().GetEventsAsync(actorId);
         events.Select(static stateEvent => stateEvent.EventData.TypeUrl).Should().Equal(
@@ -200,7 +204,7 @@ public class NyxIdChatGAgentTests
         var registry = new RecordingGAgentActorRegistryCommandPort();
         using var provider = BuildServiceProvider(registry, new RecordingActorRuntime());
         const string actorId = "nyxid-chat-profile-repeat";
-        var agent = CreateAgent(provider, actorId);
+        var (agent, inbox) = CreateConversationAgentWithInbox(provider, actorId);
         var binding = BuildSealedBinding();
 
         await agent.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatConversationCreateCommand
@@ -209,18 +213,21 @@ public class NyxIdChatGAgentTests
             CreatedLocally = true,
             AgentProfileBinding = binding.Clone(),
         }));
+        await inbox.DrainAsync();
         await agent.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatConversationCreateCommand
         {
             ScopeId = "scope-a",
             CreatedLocally = true,
             AgentProfileBinding = binding.Clone(),
         }));
+        await inbox.DrainAsync();
 
         var events = await provider.GetRequiredService<IEventStore>().GetEventsAsync(actorId);
         events.Count(static stateEvent => stateEvent.EventData.Is(AgentProfileBoundEvent.Descriptor))
             .Should()
             .Be(1);
-        registry.RegisteredActors.Should().HaveCount(2);
+        registry.RegisteredActors.Should().ContainSingle(
+            "an equivalent create replay must not repeat the external registration action");
     }
 
     [Fact]
@@ -229,13 +236,14 @@ public class NyxIdChatGAgentTests
         var registry = new RecordingGAgentActorRegistryCommandPort();
         using var provider = BuildServiceProvider(registry, new RecordingActorRuntime());
         const string actorId = "nyxid-chat-profile-conflict";
-        var agent = CreateAgent(provider, actorId);
+        var (agent, inbox) = CreateConversationAgentWithInbox(provider, actorId);
 
         await agent.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatConversationCreateCommand
         {
             ScopeId = "scope-a",
             AgentProfileBinding = BuildSealedBinding(),
         }));
+        await inbox.DrainAsync();
 
         var replace = () => agent.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatConversationCreateCommand
         {
@@ -262,12 +270,13 @@ public class NyxIdChatGAgentTests
         var registry = new RecordingGAgentActorRegistryCommandPort();
         using var provider = BuildServiceProvider(registry, new RecordingActorRuntime());
         const string actorId = "nyxid-chat-binding-replacement";
-        var agent = CreateAgent(provider, actorId);
+        var (agent, inbox) = CreateConversationAgentWithInbox(provider, actorId);
         await agent.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatConversationCreateCommand
         {
             ScopeId = "scope-a",
             AgentProfileBinding = BuildSealedBinding(),
         }));
+        await inbox.DrainAsync();
         var replacement = replacementKind switch
         {
             "source-provenance" => BuildSealedBinding(sourceStateVersion: 18),
@@ -292,7 +301,7 @@ public class NyxIdChatGAgentTests
         var registry = new RecordingGAgentActorRegistryCommandPort();
         using var provider = BuildServiceProvider(registry, new RecordingActorRuntime());
         const string actorId = "nyxid-chat-profile-bad-digest";
-        var agent = CreateAgent(provider, actorId);
+        var agent = CreateConversationAgent(provider, actorId);
         var binding = BuildSealedBinding();
         binding.Members[0].InstructionBody = "tampered";
 
@@ -308,12 +317,524 @@ public class NyxIdChatGAgentTests
     }
 
     [Fact]
+    public async Task CanonicalStartTurn_Profiled_ShouldCommitAuthorityBeforeOperationDispatch()
+    {
+        const string actorId = "conversation-profile-alpha";
+        var tools = new IAgentTool[]
+        {
+            new DelegateTool("recovery", _ => "recovered"),
+            new DelegateTool("task", _ => "task complete"),
+            new DelegateTool("hidden", _ => "hidden complete"),
+        };
+        var materializer = new AgentProfileTurnCatalogMaterializer(
+            new StaticProfileToolSetRegistry("profile.route", tools),
+            new NoMatchClassifier());
+        var eventStore = new InMemoryEventStoreForTests();
+        var runtime = new RecordingActorRuntime();
+        NyxIdChatConversationGAgent? agent = null;
+        NyxIdChatOperationDispatchCommand? dispatched = null;
+        NyxIdChatConversationGAgentState? stateAtDispatch = null;
+        IReadOnlyList<StateEvent>? eventsAtDispatch = null;
+        var dispatch = new CallbackActorDispatchPort(async (_, envelope) =>
+        {
+            dispatched = envelope.Payload.Unpack<NyxIdChatOperationDispatchCommand>();
+            stateAtDispatch = agent!.State.Clone();
+            eventsAtDispatch = await eventStore.GetEventsAsync(actorId);
+        });
+        using var provider = BuildServiceProvider(
+            actorRuntime: runtime,
+            eventStore: eventStore,
+            turnCatalogMaterializer: materializer);
+        var binding = BuildSealedBinding();
+        await AppendCommittedEventsAsync(
+            provider,
+            actorId,
+            new AgentProfileBoundEvent { Binding = binding.Clone() });
+        agent = CreateConversationAgent(provider, actorId, dispatch);
+        await agent.ActivateAsync();
+
+        await agent.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatStartTurnCommand
+        {
+            ScopeId = "scope-profile-alpha",
+            ConversationActorId = actorId,
+            TurnId = "turn-profile-alpha",
+            TaskId = "task-profile-alpha",
+            ClientRequestId = "client-profile-alpha",
+            CommandId = "command-profile-alpha",
+            CorrelationId = "correlation-profile-alpha",
+            Prompt = "/alpha run the selected procedure",
+            ToolContext = new AgentToolExecutionContextPayload
+            {
+                Credentials = new AgentToolCredentialsPayload
+                {
+                    NyxIdAccessToken = "runtime-token-profile-alpha",
+                },
+            },
+        }));
+
+        dispatched.Should().NotBeNull();
+        dispatched!.AgentProfileBinding.Should().NotBeNull();
+        AgentProfileExecutionBindingCodec.ByteEquivalent(
+            dispatched.AgentProfileBinding,
+            binding).Should().BeTrue();
+        dispatched.AgentProfileTurnAuthority.Should().NotBeNull();
+        dispatched.AgentProfileTurnAuthority.ReconciliationKey.SessionId
+            .Should().Be("turn-profile-alpha");
+        dispatched.AgentProfileTurnAuthority.AuthorityKind
+            .Should().Be(AgentProfileTurnAuthorityKind.Selected);
+        stateAtDispatch!.AgentProfileTurnAuthority.Should()
+            .BeEquivalentTo(dispatched.AgentProfileTurnAuthority);
+        eventsAtDispatch!.Select(static stateEvent => stateEvent.EventData.TypeUrl).Should().Equal(
+            Any.Pack(new AgentProfileBoundEvent()).TypeUrl,
+            Any.Pack(new NyxIdChatTurnStartedEvent()).TypeUrl,
+            Any.Pack(new AgentProfileTurnAuthorityCommittedEvent()).TypeUrl,
+            Any.Pack(new AgentProfileTurnAuthorityCommittedEvent()).TypeUrl);
+        eventsAtDispatch!.Skip(2).Select(static stateEvent => stateEvent.EventData
+                .Unpack<AgentProfileTurnAuthorityCommittedEvent>().CommitKind)
+            .Should().Equal(
+                AgentProfileTurnAuthorityCommitKind.Initial,
+                AgentProfileTurnAuthorityCommitKind.Reconcile);
+    }
+
+    [Fact]
+    public async Task CanonicalStartTurn_Profiled_ShouldRecordSafeRouteAndMaterializationTelemetry()
+    {
+        const long sourceStateVersion = 910_001;
+        const string promptSecret = "customer-prompt-must-not-be-telemetry";
+        const string instructionSecret = "sealed-instruction-must-not-be-telemetry";
+        const string credentialSecret = "nyx-token-must-not-be-telemetry";
+        var seams = new List<string>();
+        var targetActivities = new List<IReadOnlyDictionary<string, object?>>();
+        using var activityListener = new ActivityListener
+        {
+            ShouldListenTo = static source => source.Name == AgentProfileTelemetry.MeterName,
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) =>
+                ActivitySamplingResult.AllDataAndRecorded,
+            SampleUsingParentId = static (ref ActivityCreationOptions<string> _) =>
+                ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = activity =>
+            {
+                if (activity.DisplayName != "agent_profile turn" ||
+                    activity.GetTagItem("aevatar.agent_profile.source_state_version")?.ToString() !=
+                    sourceStateVersion.ToString(System.Globalization.CultureInfo.InvariantCulture))
+                {
+                    return;
+                }
+
+                targetActivities.Add(activity.TagObjects.ToDictionary(
+                    static tag => tag.Key,
+                    static tag => tag.Value,
+                    StringComparer.Ordinal));
+            },
+        };
+        ActivitySource.AddActivityListener(activityListener);
+        using var meterListener = new MeterListener();
+        meterListener.InstrumentPublished = (instrument, listener) =>
+        {
+            if (instrument.Meter.Name == AgentProfileTelemetry.MeterName &&
+                instrument.Name == "aevatar.agent_profile.seam.events")
+            {
+                listener.EnableMeasurementEvents(instrument);
+            }
+        };
+        meterListener.SetMeasurementEventCallback<long>((_, _, tags, _) =>
+        {
+            foreach (var tag in tags)
+            {
+                if (tag.Key == "aevatar.agent_profile.seam" && tag.Value?.ToString() is { } seam)
+                    seams.Add(seam);
+            }
+        });
+        meterListener.Start();
+
+        var tools = new IAgentTool[]
+        {
+            new DelegateTool("recovery", _ => "recovered"),
+            new DelegateTool("task", _ => "task complete"),
+        };
+        var materializer = new AgentProfileTurnCatalogMaterializer(
+            new StaticProfileToolSetRegistry("profile.route", tools),
+            new NoMatchClassifier());
+        var eventStore = new InMemoryEventStoreForTests();
+        var runtime = new RecordingActorRuntime();
+        using var provider = BuildServiceProvider(
+            actorRuntime: runtime,
+            eventStore: eventStore,
+            turnCatalogMaterializer: materializer);
+        const string actorId = "conversation-profile-telemetry";
+        var binding = BuildSealedBinding(
+            sourceStateVersion,
+            instructionBody: instructionSecret);
+        await AppendCommittedEventsAsync(
+            provider,
+            actorId,
+            new AgentProfileBoundEvent { Binding = binding.Clone() });
+        var agent = CreateConversationAgent(provider, actorId);
+        await agent.ActivateAsync();
+
+        await agent.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatStartTurnCommand
+        {
+            ScopeId = "scope-profile-telemetry",
+            ConversationActorId = actorId,
+            TurnId = "turn-profile-telemetry",
+            TaskId = "task-profile-telemetry",
+            ClientRequestId = "client-profile-telemetry",
+            CommandId = "command-profile-telemetry",
+            CorrelationId = "correlation-profile-telemetry",
+            Prompt = $"/alpha {promptSecret}",
+            ToolContext = new AgentToolExecutionContextPayload
+            {
+                Credentials = new AgentToolCredentialsPayload
+                {
+                    NyxIdAccessToken = credentialSecret,
+                },
+            },
+        }));
+
+        seams.Should().Contain(["route", "materialize"]);
+        var activityTags = targetActivities.Should().ContainSingle().Subject;
+        activityTags.Should().ContainKey("aevatar.agent_profile.routing.mode")
+            .WhoseValue.Should().Be("alias");
+        activityTags.Should().ContainKey("aevatar.agent_profile.effective_tool.count")
+            .WhoseValue.Should().Be(2);
+        var serializedTags = string.Join(
+            "\n",
+            activityTags.Select(static tag => $"{tag.Key}={tag.Value}"));
+        serializedTags.Should().NotContain(promptSecret);
+        serializedTags.Should().NotContain(instructionSecret);
+        serializedTags.Should().NotContain(credentialSecret);
+    }
+
+    [Theory]
+    [InlineData(false, "completed", NyxIdChatTurnStatus.Succeeded)]
+    [InlineData(true, "handoff_pending", NyxIdChatTurnStatus.Active)]
+    public async Task CanonicalFinalResult_Profiled_ShouldRecordPlanOrHandoffAfterCommit(
+        bool approvalRequired,
+        string expectedStatus,
+        NyxIdChatTurnStatus expectedTurnStatus)
+    {
+        var sourceStateVersion = approvalRequired ? 910_004 : 910_003;
+        var targetActivities = new List<IReadOnlyDictionary<string, object?>>();
+        NyxIdChatConversationGAgent? agent = null;
+        NyxIdChatConversationGAgentState? stateAtObservation = null;
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = static source => source.Name == AgentProfileTelemetry.MeterName,
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) =>
+                ActivitySamplingResult.AllDataAndRecorded,
+            SampleUsingParentId = static (ref ActivityCreationOptions<string> _) =>
+                ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = activity =>
+            {
+                if (activity.DisplayName != "agent_profile lifecycle reconciliation" ||
+                    activity.GetTagItem("aevatar.agent_profile.source_state_version")?.ToString() !=
+                    sourceStateVersion.ToString(System.Globalization.CultureInfo.InvariantCulture))
+                {
+                    return;
+                }
+
+                targetActivities.Add(activity.TagObjects.ToDictionary(
+                    static tag => tag.Key,
+                    static tag => tag.Value,
+                    StringComparer.Ordinal));
+                stateAtObservation = agent!.State.Clone();
+            },
+        };
+        ActivitySource.AddActivityListener(listener);
+        var tools = new IAgentTool[]
+        {
+            new DelegateTool("recovery", _ => "recovered"),
+            new DelegateTool("task", _ => "task complete"),
+        };
+        var materializer = new AgentProfileTurnCatalogMaterializer(
+            new StaticProfileToolSetRegistry("profile.route", tools),
+            new NoMatchClassifier());
+        var eventStore = new InMemoryEventStoreForTests();
+        var runtime = new RecordingActorRuntime();
+        var dispatched = new List<NyxIdChatOperationDispatchCommand>();
+        var dispatch = new CallbackActorDispatchPort((_, envelope) =>
+        {
+            dispatched.Add(envelope.Payload.Unpack<NyxIdChatOperationDispatchCommand>());
+            return Task.CompletedTask;
+        });
+        using var provider = BuildServiceProvider(
+            actorRuntime: runtime,
+            eventStore: eventStore,
+            turnCatalogMaterializer: materializer);
+        var actorId = approvalRequired
+            ? "conversation-profile-handoff-telemetry"
+            : "conversation-profile-plan-telemetry";
+        var binding = BuildSealedBinding(sourceStateVersion);
+        await AppendCommittedEventsAsync(
+            provider,
+            actorId,
+            new AgentProfileBoundEvent { Binding = binding.Clone() });
+        agent = CreateConversationAgent(provider, actorId, dispatch);
+        await agent.ActivateAsync();
+        await agent.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatStartTurnCommand
+        {
+            ScopeId = "scope-profile-plan-telemetry",
+            ConversationActorId = actorId,
+            TurnId = "turn-profile-plan-telemetry",
+            TaskId = "task-profile-plan-telemetry",
+            ClientRequestId = "client-profile-plan-telemetry",
+            CommandId = "command-profile-plan-telemetry",
+            CorrelationId = "correlation-profile-plan-telemetry",
+            Prompt = "/alpha finish the task",
+        }));
+
+        if (approvalRequired)
+        {
+            await agent.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatOperationResultSignal
+            {
+                Key = dispatched.Should().ContainSingle().Subject.Key.Clone(),
+                Llm = new NyxIdChatLLMOperationResult
+                {
+                    ToolCalls =
+                    {
+                        new NyxIdChatToolCall
+                        {
+                            CallId = "call-profile-handoff",
+                            ToolName = "task",
+                            ArgumentsJson = "{}",
+                            Safety = new NyxIdChatToolCallSafety
+                            {
+                                IsDestructive = true,
+                                SideEffectKind = "delete",
+                                MayChangeExternalState = true,
+                            },
+                        },
+                    },
+                },
+            }));
+            dispatched.Should().HaveCount(2);
+            var toolDispatch = dispatched[1];
+            await agent.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatOperationResultSignal
+            {
+                Key = toolDispatch.Key.Clone(),
+                Tool = new NyxIdChatToolOperationResult
+                {
+                    ExternalEffect = NyxIdChatEffectEvidence.NotStarted,
+                    Receipt = new AgentToolReceipt
+                    {
+                        CallId = "call-profile-handoff",
+                        ToolName = "task",
+                        Status = AgentToolReceiptStatus.ApprovalRequired,
+                        ApprovalRequestId = "approval-profile-handoff",
+                        IsDestructive = true,
+                    },
+                },
+            }));
+        }
+        else
+        {
+            await agent.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatOperationResultSignal
+            {
+                Key = dispatched.Should().ContainSingle().Subject.Key.Clone(),
+                Llm = new NyxIdChatLLMOperationResult { Content = "done" },
+            }));
+        }
+
+        var activityTags = targetActivities.Should().ContainSingle().Subject;
+        activityTags.Should().ContainKey("aevatar.agent_profile.plan.status")
+            .WhoseValue.Should().Be(expectedStatus);
+        stateAtObservation!.ActiveTurn.Status.Should().Be(expectedTurnStatus);
+        if (approvalRequired)
+            stateAtObservation.PendingApproval.Should().NotBeNull();
+        else
+            stateAtObservation.PendingApproval.Should().BeNull();
+        var events = await eventStore.GetEventsAsync(actorId);
+        events[^1].EventData.TypeUrl.Should().Be(
+            Any.Pack(new NyxIdChatOperationReconciledEvent()).TypeUrl);
+    }
+
+    [Fact]
+    public async Task CanonicalRetry_Profiled_ShouldCommitRetryAuthorityBeforeOperationDispatch()
+    {
+        const string actorId = "conversation-profile-retry";
+        var tools = new IAgentTool[]
+        {
+            new DelegateTool("recovery", _ => "recovered"),
+            new DelegateTool("task", _ => "task complete"),
+            new DelegateTool("hidden", _ => "hidden complete"),
+        };
+        var materializer = new AgentProfileTurnCatalogMaterializer(
+            new StaticProfileToolSetRegistry("profile.route", tools),
+            new NoMatchClassifier());
+        var eventStore = new InMemoryEventStoreForTests();
+        var runtime = new RecordingActorRuntime();
+        NyxIdChatConversationGAgent? agent = null;
+        var dispatches = new List<NyxIdChatOperationDispatchCommand>();
+        IReadOnlyList<StateEvent>? eventsAtRetryDispatch = null;
+        var dispatch = new CallbackActorDispatchPort(async (_, envelope) =>
+        {
+            dispatches.Add(envelope.Payload.Unpack<NyxIdChatOperationDispatchCommand>());
+            if (dispatches.Count == 2)
+                eventsAtRetryDispatch = await eventStore.GetEventsAsync(actorId);
+        });
+        using var provider = BuildServiceProvider(
+            actorRuntime: runtime,
+            eventStore: eventStore,
+            turnCatalogMaterializer: materializer);
+        var binding = BuildSealedBinding();
+        await AppendCommittedEventsAsync(
+            provider,
+            actorId,
+            new AgentProfileBoundEvent { Binding = binding.Clone() });
+        agent = CreateConversationAgent(provider, actorId, dispatch);
+        await agent.ActivateAsync();
+        await agent.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatStartTurnCommand
+        {
+            ScopeId = "scope-profile-retry",
+            ConversationActorId = actorId,
+            TurnId = "turn-profile-retry",
+            TaskId = "task-profile-retry",
+            ClientRequestId = "client-profile-retry",
+            CommandId = "command-profile-retry",
+            CorrelationId = "correlation-profile-retry",
+            Prompt = "/alpha run the selected procedure",
+        }));
+        var initialKey = dispatches.Should().ContainSingle().Subject.Key.Clone();
+        await agent.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatOperationResultSignal
+        {
+            Key = initialKey,
+            Failure = new NyxIdChatOperationFailure
+            {
+                FailureCode = "MODEL_FAILED",
+                SafeMessage = "The model attempt failed.",
+                ExternalEffect = NyxIdChatEffectEvidence.NotApplied,
+            },
+        }));
+        var stateVersion = (await eventStore.GetEventsAsync(actorId))[^1].Version;
+        await agent.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatRetryStepCommand
+        {
+            ScopeId = "scope-profile-retry",
+            ConversationActorId = actorId,
+            TurnId = "turn-profile-retry",
+            TaskId = "task-profile-retry",
+            StepId = initialKey.StepId,
+            RetryRequestId = "retry-profile-alpha",
+            ClientRequestId = "client-retry-profile-alpha",
+            CommandId = "command-retry-profile-alpha",
+            CorrelationId = "correlation-retry-profile-alpha",
+            ExpectedOperationGeneration = 1,
+            ExpectedStateVersion = stateVersion,
+        }));
+
+        dispatches.Should().HaveCount(2);
+        var retry = dispatches[1];
+        retry.Key.OperationGeneration.Should().Be(2);
+        retry.AgentProfileBinding.Should().NotBeNull();
+        AgentProfileExecutionBindingCodec.ByteEquivalent(retry.AgentProfileBinding, binding)
+            .Should().BeTrue();
+        retry.AgentProfileTurnAuthority.Should().NotBeNull();
+        retry.AgentProfileTurnAuthority.ReconciliationKey.SessionId.Should().Be("turn-profile-retry");
+        retry.AgentProfileTurnAuthority.ReconciliationKey.Attempt.Should().Be(2);
+        agent.State.AgentProfileTurnAuthority.Should().BeEquivalentTo(retry.AgentProfileTurnAuthority);
+        eventsAtRetryDispatch.Should().NotBeNull();
+        var authorityEvent = eventsAtRetryDispatch![^1].EventData
+            .Unpack<AgentProfileTurnAuthorityCommittedEvent>();
+        authorityEvent.CommitKind.Should().Be(AgentProfileTurnAuthorityCommitKind.RetryStarted);
+        authorityEvent.Authority.Should().BeEquivalentTo(retry.AgentProfileTurnAuthority);
+    }
+
+    [Fact]
+    public async Task CanonicalRetry_ShadowRecoveryAuthority_ShouldCommitAndDispatchNextAttempt()
+    {
+        const string actorId = "conversation-shadow-recovery-retry";
+        var tools = new IAgentTool[]
+        {
+            new DelegateTool("recovery", _ => "recovered"),
+            new DelegateTool("task", _ => "task complete"),
+            new DelegateTool("hidden", _ => "hidden complete"),
+        };
+        var materializer = new AgentProfileTurnCatalogMaterializer(
+            new StaticProfileToolSetRegistry("profile.route", tools),
+            new NoMatchClassifier());
+        var eventStore = new InMemoryEventStoreForTests();
+        var dispatches = new List<NyxIdChatOperationDispatchCommand>();
+        IReadOnlyList<StateEvent>? eventsAtRetryDispatch = null;
+        var dispatch = new CallbackActorDispatchPort(async (_, envelope) =>
+        {
+            dispatches.Add(envelope.Payload.Unpack<NyxIdChatOperationDispatchCommand>());
+            if (dispatches.Count == 2)
+                eventsAtRetryDispatch = await eventStore.GetEventsAsync(actorId);
+        });
+        using var provider = BuildServiceProvider(
+            actorRuntime: new RecordingActorRuntime(),
+            eventStore: eventStore,
+            turnCatalogMaterializer: materializer);
+        var binding = BuildSealedShadowBinding();
+        await AppendCommittedEventsAsync(
+            provider,
+            actorId,
+            new AgentProfileBoundEvent { Binding = binding.Clone() });
+        var agent = CreateConversationAgent(provider, actorId, dispatch);
+        await agent.ActivateAsync();
+        await agent.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatStartTurnCommand
+        {
+            ScopeId = "scope-shadow-recovery-retry",
+            ConversationActorId = actorId,
+            TurnId = "turn-shadow-recovery-retry",
+            TaskId = "task-shadow-recovery-retry",
+            ClientRequestId = "client-shadow-recovery-retry",
+            CommandId = "command-shadow-recovery-retry",
+            CorrelationId = "correlation-shadow-recovery-retry",
+            Prompt = "/alpha run the shadow procedure",
+        }));
+        var initial = dispatches.Should().ContainSingle().Subject;
+        initial.AgentProfileTurnAuthority.AuthorityKind.Should()
+            .Be(AgentProfileTurnAuthorityKind.Recovery);
+        initial.AgentProfileTurnAuthority.SelectedExactSkillRef.Should().BeNull();
+        await agent.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatOperationResultSignal
+        {
+            Key = initial.Key.Clone(),
+            Failure = new NyxIdChatOperationFailure
+            {
+                FailureCode = "MODEL_FAILED",
+                SafeMessage = "The shadow model attempt failed.",
+                ExternalEffect = NyxIdChatEffectEvidence.NotApplied,
+            },
+        }));
+        var stateVersion = (await eventStore.GetEventsAsync(actorId))[^1].Version;
+
+        var act = () => agent.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatRetryStepCommand
+        {
+            ScopeId = "scope-shadow-recovery-retry",
+            ConversationActorId = actorId,
+            TurnId = "turn-shadow-recovery-retry",
+            TaskId = "task-shadow-recovery-retry",
+            StepId = initial.Key.StepId,
+            RetryRequestId = "retry-shadow-recovery",
+            ClientRequestId = "client-retry-shadow-recovery",
+            CommandId = "command-retry-shadow-recovery",
+            CorrelationId = "correlation-retry-shadow-recovery",
+            ExpectedOperationGeneration = 1,
+            ExpectedStateVersion = stateVersion,
+        }));
+
+        await act.Should().NotThrowAsync();
+        dispatches.Should().HaveCount(2);
+        var retry = dispatches[1];
+        retry.Key.OperationGeneration.Should().Be(2);
+        retry.AgentProfileTurnAuthority.AuthorityKind.Should()
+            .Be(AgentProfileTurnAuthorityKind.Recovery);
+        retry.AgentProfileTurnAuthority.SelectedExactSkillRef.Should().BeNull();
+        retry.AgentProfileTurnAuthority.ReconciliationKey.Attempt.Should().Be(2);
+        eventsAtRetryDispatch.Should().NotBeNull();
+        var authorityEvent = eventsAtRetryDispatch![^1].EventData
+            .Unpack<AgentProfileTurnAuthorityCommittedEvent>();
+        authorityEvent.CommitKind.Should().Be(AgentProfileTurnAuthorityCommitKind.RetryStarted);
+        authorityEvent.Authority.Should().BeEquivalentTo(retry.AgentProfileTurnAuthority);
+    }
+
+    [Fact]
     public async Task ActivateAsync_ShouldRestoreCompleteBindingProvenanceFromCommittedEvents()
     {
         var registry = new RecordingGAgentActorRegistryCommandPort();
         using var provider = BuildServiceProvider(registry, new RecordingActorRuntime());
         const string actorId = "nyxid-chat-profile-restart";
-        var first = CreateAgent(provider, actorId);
+        var first = CreateConversationAgent(provider, actorId);
         await first.ActivateAsync();
         await first.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatConversationCreateCommand
         {
@@ -326,7 +847,7 @@ public class NyxIdChatGAgentTests
         }));
         await first.DeactivateAsync();
 
-        var restored = CreateAgent(provider, actorId);
+        var restored = CreateConversationAgent(provider, actorId);
         await restored.ActivateAsync();
 
         restored.State.AgentProfileBinding.Should().NotBeNull();
@@ -387,7 +908,7 @@ public class NyxIdChatGAgentTests
         }
 
         await AppendCommittedEventsAsync(provider, actorId, binding);
-        var agent = CreateAgent(provider, actorId);
+        var agent = CreateConversationAgent(provider, actorId);
 
         var act = () => agent.ActivateAsync();
 
@@ -407,7 +928,7 @@ public class NyxIdChatGAgentTests
             actorId,
             new AgentProfileBoundEvent { Binding = binding.Clone() },
             new AgentProfileBoundEvent { Binding = binding.Clone() });
-        var agent = CreateAgent(provider, actorId);
+        var agent = CreateConversationAgent(provider, actorId);
 
         await agent.ActivateAsync();
 
@@ -424,7 +945,7 @@ public class NyxIdChatGAgentTests
             actorId,
             new AgentProfileBoundEvent { Binding = BuildSealedBinding(sourceStateVersion: 17) },
             new AgentProfileBoundEvent { Binding = BuildSealedBinding(sourceStateVersion: 18) });
-        var agent = CreateAgent(provider, actorId);
+        var agent = CreateConversationAgent(provider, actorId);
 
         var act = () => agent.ActivateAsync();
 
@@ -434,12 +955,57 @@ public class NyxIdChatGAgentTests
     }
 
     [Fact]
+    public async Task ActivateAsync_ShouldRejectReplacedRegistryUnregistrationIdentityDuringReplay()
+    {
+        using var provider = BuildServiceProvider();
+        const string actorId = "nyxid-chat-registry-operation-replay-conflict";
+        await AppendCommittedEventsAsync(
+            provider,
+            actorId,
+            new NyxIdChatConversationCreationStartedEvent
+            {
+                ScopeId = "scope-alpha",
+                ActorId = actorId,
+                CommandId = "command-create-alpha",
+                CorrelationId = "correlation-create-alpha",
+            },
+            new NyxIdChatConversationRegistrationUnavailableEvent
+            {
+                ScopeId = "scope-alpha",
+                ActorId = actorId,
+                Reason = "registration_failed",
+                CommandId = "command-create-alpha",
+                CorrelationId = "correlation-create-alpha",
+            },
+            new NyxIdChatConversationLifecycleTransitionedEvent
+            {
+                Lifecycle = new NyxIdChatConversationLifecycleState
+                {
+                    Phase = NyxIdChatConversationLifecyclePhase.CreationCompensationUnregisterPending,
+                    ScopeId = "scope-alpha",
+                    ActorId = actorId,
+                    CommandId = "command-create-alpha",
+                    CorrelationId = "correlation-create-alpha",
+                    RegistryActorId = GAgentRegistryActorIds.ForScope("scope-alpha"),
+                    RegistryUnregistrationOperationId = "registry-unregister-forged",
+                },
+            });
+        var agent = CreateConversationAgent(provider, actorId);
+
+        var act = () => agent.ActivateAsync();
+
+        await act.Should()
+            .ThrowAsync<InvalidOperationException>()
+            .WithMessage("*registry unregistration operation identity cannot be replaced*");
+    }
+
+    [Fact]
     public async Task Conversations_ShouldKeepIndependentBindingProvenance()
     {
         var registry = new RecordingGAgentActorRegistryCommandPort();
         using var provider = BuildServiceProvider(registry, new RecordingActorRuntime());
         var agents = Enumerable.Range(1, 4)
-            .Select(index => CreateAgent(provider, $"nyxid-chat-profile-{index}"))
+            .Select(index => CreateConversationAgent(provider, $"nyxid-chat-profile-{index}"))
             .ToArray();
 
         for (var index = 0; index < agents.Length; index++)
@@ -1843,13 +2409,14 @@ public class NyxIdChatGAgentTests
         var runtime = new RecordingActorRuntime();
         using var provider = BuildServiceProvider(registry, runtime);
         var actorId = $"{NyxIdChatServiceDefaults.ActorIdPrefix}-existing";
-        var agent = CreateAgent(provider, actorId);
+        var (agent, inbox) = CreateConversationAgentWithInbox(provider, actorId);
 
         await agent.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatConversationCreateCommand
         {
             ScopeId = "scope-a",
             CreatedLocally = false,
         }));
+        await inbox.DrainAsync();
 
         registry.UnregisteredActors.Should().ContainSingle().Which.Should().Be(new GAgentActorRegistration(
             "scope-a",
@@ -1859,7 +2426,7 @@ public class NyxIdChatGAgentTests
     }
 
     [Fact]
-    public async Task HandleCreateConversationAsync_WhenLocalActorRegistrationUnavailable_ShouldDestroyActor()
+    public async Task HandleCreateConversationAsync_WhenLocalActorRegistrationUnavailable_ShouldDestroyActorAfterRegistryCompletion()
     {
         var registry = new RecordingGAgentActorRegistryCommandPort
         {
@@ -1868,19 +2435,87 @@ public class NyxIdChatGAgentTests
         var runtime = new RecordingActorRuntime();
         using var provider = BuildServiceProvider(registry, runtime);
         const string actorId = "routed-id-without-local-prefix";
-        var agent = CreateAgent(provider, actorId);
+        var (agent, inbox) = CreateConversationAgentWithInbox(provider, actorId);
 
         await agent.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatConversationCreateCommand
         {
             ScopeId = "scope-a",
             CreatedLocally = true,
         }));
+        await inbox.DrainAsync();
 
         registry.UnregisteredActors.Should().ContainSingle().Which.Should().Be(new GAgentActorRegistration(
             "scope-a",
             NyxIdChatServiceDefaults.GAgentKind,
             actorId));
+        runtime.DestroyedActors.Should().BeEmpty();
+        var request = registry.UnregistrationRequests.Should().ContainSingle().Which;
+
+        await agent.HandleEventAsync(CreateEnvelope(actorId, RegistryCompletion(request)));
+        await inbox.DrainAsync();
+
         runtime.DestroyedActors.Should().ContainSingle().Which.Should().Be(actorId);
+    }
+
+    [Fact]
+    public async Task CreationCompensationDispatchWithoutActorCompletion_ShouldRemainPendingWithoutDestroy()
+    {
+        var registry = new RecordingGAgentActorRegistryCommandPort
+        {
+            RegisterStage = GAgentActorRegistryCommandStage.AcceptedForDispatch,
+        };
+        var runtime = new RecordingActorRuntime();
+        using var provider = BuildServiceProvider(registry, runtime);
+        const string actorId = "conversation-creation-compensation-pending";
+        var (agent, inbox) = CreateConversationAgentWithInbox(provider, actorId);
+
+        await agent.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatConversationCreateCommand
+        {
+            ScopeId = "scope-a",
+            CreatedLocally = true,
+        }));
+        await inbox.DrainAsync();
+
+        agent.State.ConversationLifecycle.Phase.Should().Be(
+            NyxIdChatConversationLifecyclePhase.CreationCompensationUnregisterPending);
+        var request = registry.UnregistrationRequests.Should().ContainSingle().Which;
+        request.OperationId.Should().Be(
+            agent.State.ConversationLifecycle.RegistryUnregistrationOperationId);
+        request.RegistryActorId.Should().Be(agent.State.ConversationLifecycle.RegistryActorId);
+        runtime.DestroyedActors.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CreationCompensationRegistryCompletion_AfterRestart_ShouldAdvanceCleanupExactlyOnce()
+    {
+        const string actorId = "conversation-creation-registry-completion";
+        var eventStore = new InMemoryEventStoreForTests();
+        var registry = new RecordingGAgentActorRegistryCommandPort();
+        var runtime = new RecordingActorRuntime();
+        using var provider = BuildServiceProvider(registry, runtime, eventStore: eventStore);
+        await AppendCommittedEventsAsync(
+            provider,
+            actorId,
+            LifecycleBoundaryEvents("creation-compensation-unregister", actorId));
+        var (first, firstInbox) = CreateConversationAgentWithInbox(provider, actorId);
+        await first.ActivateAsync();
+        await firstInbox.DrainAsync();
+        var request = registry.UnregistrationRequests.Should().ContainSingle().Which;
+        var (restarted, restartedInbox) = CreateConversationAgentWithInbox(provider, actorId);
+        await restarted.ActivateAsync();
+        await restartedInbox.DrainAsync();
+        registry.UnregistrationRequests.Should().HaveCount(2);
+        registry.UnregistrationRequests[1].Should().BeEquivalentTo(request);
+        var completion = RegistryCompletion(request, GAgentRegistryUnregistrationOutcome.AuthoritativeAbsent);
+
+        await restarted.HandleEventAsync(CreateEnvelope(actorId, completion));
+        await restartedInbox.DrainAsync();
+        await restarted.HandleEventAsync(CreateEnvelope(actorId, completion.Clone()));
+        await restartedInbox.DrainAsync();
+
+        restarted.State.ConversationLifecycle.Phase.Should().Be(
+            NyxIdChatConversationLifecyclePhase.CreationFailed);
+        runtime.DestroyedActors.Should().BeEmpty();
     }
 
     [Fact]
@@ -1888,28 +2523,613 @@ public class NyxIdChatGAgentTests
     {
         var registry = new RecordingGAgentActorRegistryCommandPort();
         var runtime = new RecordingActorRuntime();
-        using var provider = BuildServiceProvider(registry, runtime);
+        var eventStore = new InMemoryEventStoreForTests();
+        using var provider = BuildServiceProvider(registry, runtime, eventStore: eventStore);
         const string actorId = "nyxid-chat-delete-compensation";
-        var agent = CreateAgent(provider, actorId);
+        await AppendCommittedEventsAsync(
+            provider,
+            actorId,
+            LifecycleBoundaryEvents("history-delete", actorId));
+        var (agent, inbox) = CreateConversationAgentWithInbox(provider, actorId);
+        await agent.ActivateAsync();
 
         await agent.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatConversationDeletionCompensationRequested
         {
-            ScopeId = "scope-a",
+            ScopeId = "scope-alpha",
             ActorId = actorId,
             Reason = "history_delete_failed",
         }));
+        await inbox.DrainAsync();
 
         registry.RegisteredActors.Should().ContainSingle().Which.Should().Be(new GAgentActorRegistration(
-            "scope-a",
+            "scope-alpha",
             NyxIdChatServiceDefaults.GAgentKind,
             actorId));
+    }
+
+    [Theory]
+    [InlineData("creation-register", 1, 0, 0, 0)]
+    [InlineData("creation-compensation-unregister", 0, 2, 0, 0)]
+    [InlineData("deletion-unregister", 0, 2, 0, 0)]
+    [InlineData("history-delete", 0, 0, 1, 0)]
+    [InlineData("deletion-compensation-register", 1, 0, 0, 0)]
+    [InlineData("final-cleanup", 0, 0, 0, 1)]
+    public async Task Activation_WithOutstandingConversationLifecycleBoundary_ShouldRedriveThroughInboxIdempotently(
+        string boundary,
+        int expectedRegisterCount,
+        int expectedUnregisterCount,
+        int expectedHistoryDeleteCount,
+        int expectedDestroyCount)
+    {
+        const string actorId = "conversation-lifecycle-recovery";
+        var eventStore = new InMemoryEventStoreForTests();
+        var registry = new RecordingGAgentActorRegistryCommandPort();
+        var history = new RecordingChatHistoryCommandPort();
+        var runtime = new RecordingActorRuntime();
+        using var provider = BuildServiceProvider(registry, runtime, history, eventStore);
+        await AppendCommittedEventsAsync(provider, actorId, LifecycleBoundaryEvents(boundary, actorId));
+        var selfSignals = new List<EventEnvelope>();
+        var dispatch = new CallbackActorDispatchPort((targetActorId, envelope) =>
+        {
+            targetActorId.Should().Be(actorId);
+            selfSignals.Add(envelope.Clone());
+            return Task.CompletedTask;
+        });
+        var agent = CreateConversationAgent(provider, actorId, dispatch);
+
+        await agent.ActivateAsync();
+
+        selfSignals.Should().NotBeEmpty("activation must redrive the committed lifecycle waterline");
+        for (var index = 0; index < selfSignals.Count; index++)
+        {
+            index.Should().BeLessThan(8, "a closed lifecycle must converge without an event loop");
+            var signal = selfSignals[index];
+            signal.Route.GetTopologyAudience().Should().Be(TopologyAudience.Self);
+            await agent.HandleEventAsync(signal);
+            await agent.HandleEventAsync(signal.Clone());
+        }
+
+        registry.RegisteredActors.Should().HaveCount(expectedRegisterCount);
+        registry.UnregisteredActors.Should().HaveCount(expectedUnregisterCount);
+        if (registry.UnregistrationRequests.Count > 1)
+        {
+            registry.UnregistrationRequests.Should().OnlyContain(request =>
+                request.Equals(registry.UnregistrationRequests[0]));
+        }
+        history.Deleted.Should().HaveCount(expectedHistoryDeleteCount);
+        runtime.DestroyedActors.Should().HaveCount(expectedDestroyCount);
+    }
+
+    [Fact]
+    public async Task Activation_AfterFailedDeletionCompensation_ShouldRetryCommittedBoundary()
+    {
+        const string actorId = "conversation-compensation-retry";
+        var eventStore = new InMemoryEventStoreForTests();
+        var registry = new RecordingGAgentActorRegistryCommandPort
+        {
+            RegisterFailuresRemaining = 1,
+        };
+        using var provider = BuildServiceProvider(
+            registry,
+            new RecordingActorRuntime(),
+            new RecordingChatHistoryCommandPort(),
+            eventStore);
+        await AppendCommittedEventsAsync(
+            provider,
+            actorId,
+            LifecycleBoundaryEvents("deletion-compensation-register", actorId));
+        var (first, firstInbox) = CreateConversationAgentWithInbox(provider, actorId);
+
+        await first.ActivateAsync();
+        await firstInbox.DrainAsync();
+
+        registry.RegisterAttempts.Should().Be(1);
+        registry.RegisteredActors.Should().BeEmpty();
+        first.State.ConversationLifecycle.Phase.Should().Be(
+            NyxIdChatConversationLifecyclePhase.DeletionCompensationRegisterPending);
+        first.State.ConversationLifecycle.FailureCount.Should().Be(1);
+        first.State.ConversationLifecycle.LastFailureCode.Should().Be("deletion_compensation_failed");
+
+        var (restarted, restartedInbox) = CreateConversationAgentWithInbox(provider, actorId);
+        await restarted.ActivateAsync();
+        await restartedInbox.DrainAsync();
+
+        registry.RegisterAttempts.Should().Be(2);
+        registry.RegisteredActors.Should().ContainSingle().Which.Should().Be(new GAgentActorRegistration(
+            "scope-alpha",
+            NyxIdChatServiceDefaults.GAgentKind,
+            actorId));
+        restarted.State.ConversationLifecycle.Phase.Should().Be(
+            NyxIdChatConversationLifecyclePhase.Active);
+        restarted.State.ConversationLifecycle.FailureCount.Should().Be(0);
+        restarted.State.ConversationLifecycle.LastFailureCode.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task DeletionHistoryAcceptedWithoutCommittedCompletion_ShouldRemainPendingWithoutCleanup()
+    {
+        const string actorId = "conversation-history-accepted";
+        var eventStore = new InMemoryEventStoreForTests();
+        var history = new RecordingChatHistoryCommandPort();
+        var runtime = new RecordingActorRuntime();
+        using var provider = BuildServiceProvider(
+            new RecordingGAgentActorRegistryCommandPort(),
+            runtime,
+            history,
+            eventStore);
+        await AppendCommittedEventsAsync(
+            provider,
+            actorId,
+            LifecycleBoundaryEvents("history-delete", actorId));
+        var (agent, inbox) = CreateConversationAgentWithInbox(provider, actorId);
+
+        await agent.ActivateAsync();
+        await inbox.DrainAsync();
+
+        history.DeletionRequests.Should().ContainSingle();
+        history.DeletionRequests.Single().OperationId.Should().NotBeNullOrWhiteSpace();
+        agent.State.ConversationLifecycle.Phase.Should().Be(
+            NyxIdChatConversationLifecyclePhase.DeletionHistoryDeletePending);
+        agent.State.ConversationLifecycle.HistoryDeletionOperationId.Should().Be(
+            history.DeletionRequests.Single().OperationId);
+        runtime.DestroyedActors.Should().BeEmpty();
+        var committed = await eventStore.GetEventsAsync(actorId);
+        committed.Should().NotContain(entry =>
+            entry.EventData.Is(NyxIdChatConversationHistoryDeletedEvent.Descriptor));
+    }
+
+    [Fact]
+    public async Task DeletionRegistryDispatchWithoutActorCompletion_ShouldRemainPendingBeforeHistoryDeletion()
+    {
+        const string actorId = "conversation-registry-completion-pending";
+        var eventStore = new InMemoryEventStoreForTests();
+        var registry = new RecordingGAgentActorRegistryCommandPort();
+        var history = new RecordingChatHistoryCommandPort();
+        var runtime = new RecordingActorRuntime();
+        using var provider = BuildServiceProvider(registry, runtime, history, eventStore);
+        await AppendCommittedEventsAsync(
+            provider,
+            actorId,
+            LifecycleBoundaryEvents("deletion-unregister", actorId));
+        var (agent, inbox) = CreateConversationAgentWithInbox(provider, actorId);
+
+        await agent.ActivateAsync();
+        await inbox.DrainAsync();
+
+        agent.State.ConversationLifecycle.Phase.Should().Be(
+            NyxIdChatConversationLifecyclePhase.DeletionUnregisterPending);
+        var request = registry.UnregistrationRequests.Should().ContainSingle().Which;
+        request.OperationId.Should().Be(
+            agent.State.ConversationLifecycle.RegistryUnregistrationOperationId);
+        request.RegistryActorId.Should().Be(agent.State.ConversationLifecycle.RegistryActorId);
+        history.DeletionRequests.Should().BeEmpty();
+        runtime.DestroyedActors.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task DeletionRegistryCompletion_AfterRestart_ShouldAdvanceToHistoryExactlyOnce()
+    {
+        const string actorId = "conversation-deletion-registry-completion";
+        var eventStore = new InMemoryEventStoreForTests();
+        var registry = new RecordingGAgentActorRegistryCommandPort();
+        var history = new RecordingChatHistoryCommandPort();
+        using var provider = BuildServiceProvider(
+            registry,
+            new RecordingActorRuntime(),
+            history,
+            eventStore);
+        await AppendCommittedEventsAsync(
+            provider,
+            actorId,
+            LifecycleBoundaryEvents("deletion-unregister", actorId));
+        var (first, firstInbox) = CreateConversationAgentWithInbox(provider, actorId);
+        await first.ActivateAsync();
+        await firstInbox.DrainAsync();
+        var request = registry.UnregistrationRequests.Should().ContainSingle().Which;
+        var (restarted, restartedInbox) = CreateConversationAgentWithInbox(provider, actorId);
+        await restarted.ActivateAsync();
+        await restartedInbox.DrainAsync();
+        registry.UnregistrationRequests.Should().HaveCount(2);
+        registry.UnregistrationRequests[1].Should().BeEquivalentTo(request);
+        var completion = RegistryCompletion(request);
+
+        await restarted.HandleEventAsync(CreateEnvelope(actorId, completion));
+        await restartedInbox.DrainAsync();
+        await restarted.HandleEventAsync(CreateEnvelope(actorId, completion.Clone()));
+        await restartedInbox.DrainAsync();
+
+        restarted.State.ConversationLifecycle.Phase.Should().Be(
+            NyxIdChatConversationLifecyclePhase.DeletionHistoryDeletePending);
+        history.DeletionRequests.Should().ContainSingle();
+        var committed = await eventStore.GetEventsAsync(actorId);
+        committed.Count(entry => entry.EventData.Is(NyxIdChatConversationUnregisteredEvent.Descriptor))
+            .Should().Be(1);
+    }
+
+    [Fact]
+    public async Task DeletionRegistryDispatchRejected_ShouldRemainPendingForRedrive()
+    {
+        const string actorId = "conversation-deletion-registry-rejected";
+        var eventStore = new InMemoryEventStoreForTests();
+        var registry = new RecordingGAgentActorRegistryCommandPort
+        {
+            UnregistrationStage = GAgentActorRegistryCommandStage.AdmissionRemoved,
+        };
+        var history = new RecordingChatHistoryCommandPort();
+        using var provider = BuildServiceProvider(
+            registry,
+            new RecordingActorRuntime(),
+            history,
+            eventStore);
+        await AppendCommittedEventsAsync(
+            provider,
+            actorId,
+            LifecycleBoundaryEvents("deletion-unregister", actorId));
+        var (agent, inbox) = CreateConversationAgentWithInbox(provider, actorId);
+
+        await agent.ActivateAsync();
+        await inbox.DrainAsync();
+
+        agent.State.ConversationLifecycle.Phase.Should().Be(
+            NyxIdChatConversationLifecyclePhase.DeletionUnregisterPending);
+        agent.State.ConversationLifecycle.LastFailureCode.Should().Be(
+            "deletion_unregister_dispatch_not_accepted");
+        history.DeletionRequests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task DeletionRegistryCompletion_FromForeignEnvelopePublisher_ShouldNotAdvance()
+    {
+        const string actorId = "conversation-deletion-registry-forged-publisher";
+        var eventStore = new InMemoryEventStoreForTests();
+        var registry = new RecordingGAgentActorRegistryCommandPort();
+        var history = new RecordingChatHistoryCommandPort();
+        using var provider = BuildServiceProvider(
+            registry,
+            new RecordingActorRuntime(),
+            history,
+            eventStore);
+        await AppendCommittedEventsAsync(
+            provider,
+            actorId,
+            LifecycleBoundaryEvents("deletion-unregister", actorId));
+        var (agent, inbox) = CreateConversationAgentWithInbox(provider, actorId);
+        await agent.ActivateAsync();
+        await inbox.DrainAsync();
+        var request = registry.UnregistrationRequests.Should().ContainSingle().Which;
+        var forged = CreateEnvelope(actorId, RegistryCompletion(request));
+        forged.Route.PublisherActorId = "gagent-registry-scope-foreign";
+
+        await agent.HandleEventAsync(forged);
+        await inbox.DrainAsync();
+
+        agent.State.ConversationLifecycle.Phase.Should().Be(
+            NyxIdChatConversationLifecyclePhase.DeletionUnregisterPending);
+        history.DeletionRequests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task DeletionHistoryCommittedCompletion_AfterRestart_ShouldAdvanceCleanupExactlyOnce()
+    {
+        const string actorId = "conversation-history-completion";
+        var eventStore = new InMemoryEventStoreForTests();
+        var history = new RecordingChatHistoryCommandPort();
+        var runtime = new RecordingActorRuntime();
+        using var provider = BuildServiceProvider(
+            new RecordingGAgentActorRegistryCommandPort(),
+            runtime,
+            history,
+            eventStore);
+        await AppendCommittedEventsAsync(
+            provider,
+            actorId,
+            LifecycleBoundaryEvents("history-delete", actorId));
+        var (first, firstInbox) = CreateConversationAgentWithInbox(provider, actorId);
+        await first.ActivateAsync();
+        await firstInbox.DrainAsync();
+        var request = history.DeletionRequests.Should().ContainSingle().Which;
+        var (restarted, restartedInbox) = CreateConversationAgentWithInbox(provider, actorId);
+        await restarted.ActivateAsync();
+        var canonical = HistoryCompletion(
+            request,
+            ChatHistoryConversationOwnerKind.Canonical,
+            ChatHistoryConversationDeletionOutcome.CommittedDeleted);
+        var legacy = HistoryCompletion(
+            request,
+            ChatHistoryConversationOwnerKind.Legacy,
+            ChatHistoryConversationDeletionOutcome.AuthoritativeAbsent);
+
+        await restarted.HandleEventAsync(CreateEnvelope(actorId, canonical));
+        await restartedInbox.DrainAsync();
+        await restarted.HandleEventAsync(CreateEnvelope(actorId, legacy));
+        await restartedInbox.DrainAsync();
+        await restarted.HandleEventAsync(CreateEnvelope(actorId, canonical.Clone()));
+        await restarted.HandleEventAsync(CreateEnvelope(actorId, legacy.Clone()));
+        await restartedInbox.DrainAsync();
+
+        runtime.DestroyedActors.Should().ContainSingle().Which.Should().Be(actorId);
+        restarted.State.ConversationLifecycle.Phase.Should().Be(
+            NyxIdChatConversationLifecyclePhase.DeletionCleanupDispatching);
+        var committed = await eventStore.GetEventsAsync(actorId);
+        committed.Count(entry =>
+                entry.EventData.Is(NyxIdChatConversationHistoryDeletedEvent.Descriptor))
+            .Should().Be(1);
+    }
+
+    [Fact]
+    public async Task DeletionHistoryOwnersCommittedBeforeAggregateCompletion_AfterRestart_ShouldFinishCleanupExactlyOnce()
+    {
+        const string actorId = "conversation-history-owners-committed";
+        var eventStore = new InMemoryEventStoreForTests();
+        var history = new RecordingChatHistoryCommandPort();
+        var runtime = new RecordingActorRuntime();
+        using var provider = BuildServiceProvider(
+            new RecordingGAgentActorRegistryCommandPort(),
+            runtime,
+            history,
+            eventStore);
+        var lifecycleEvents = LifecycleBoundaryEvents("final-cleanup", actorId);
+        await AppendCommittedEventsAsync(
+            provider,
+            actorId,
+            lifecycleEvents[..^1]);
+        var (restarted, restartedInbox) = CreateConversationAgentWithInbox(provider, actorId);
+
+        await restarted.ActivateAsync();
+        await restartedInbox.DrainAsync();
+
+        restarted.State.ConversationLifecycle.Phase.Should().Be(
+            NyxIdChatConversationLifecyclePhase.DeletionCleanupDispatching);
+        runtime.DestroyedActors.Should().ContainSingle().Which.Should().Be(actorId);
+        history.DeletionRequests.Should().BeEmpty();
+        var committed = await eventStore.GetEventsAsync(actorId);
+        committed.Count(entry => entry.EventData.Is(NyxIdChatConversationHistoryDeletedEvent.Descriptor))
+            .Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task DeletionHistoryOwnerCompletions_ShouldWaitForBothOwnersAndCleanupExactlyOnce(
+        bool canonicalFirst)
+    {
+        const string actorId = "conversation-history-owner-completions";
+        var eventStore = new InMemoryEventStoreForTests();
+        var history = new RecordingChatHistoryCommandPort();
+        var runtime = new RecordingActorRuntime();
+        using var provider = BuildServiceProvider(
+            new RecordingGAgentActorRegistryCommandPort(),
+            runtime,
+            history,
+            eventStore);
+        await AppendCommittedEventsAsync(
+            provider,
+            actorId,
+            LifecycleBoundaryEvents("history-delete", actorId));
+        var (agent, inbox) = CreateConversationAgentWithInbox(provider, actorId);
+        await agent.ActivateAsync();
+        await inbox.DrainAsync();
+        var request = history.DeletionRequests.Should().ContainSingle().Which;
+        var canonical = new ChatHistoryConversationDeletionCommitted
+        {
+            OperationId = request.OperationId,
+            ScopeId = request.ScopeId,
+            ConversationId = request.ConversationId,
+            OwnerActorId = ChatHistoryActorIds.Conversation(request.ScopeId, request.ConversationId),
+            OwnerKind = ChatHistoryConversationOwnerKind.Canonical,
+            Outcome = ChatHistoryConversationDeletionOutcome.CommittedDeleted,
+            CompletionActorId = actorId,
+            CommittedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-27T01:00:00Z")),
+        };
+        var legacy = new ChatHistoryConversationDeletionCommitted
+        {
+            OperationId = request.OperationId,
+            ScopeId = request.ScopeId,
+            ConversationId = request.ConversationId,
+            OwnerActorId = ChatHistoryActorIds.LegacyConversation(request.ScopeId, request.ConversationId),
+            OwnerKind = ChatHistoryConversationOwnerKind.Legacy,
+            Outcome = ChatHistoryConversationDeletionOutcome.AuthoritativeAbsent,
+            CompletionActorId = actorId,
+            CommittedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-27T01:00:01Z")),
+        };
+        var first = canonicalFirst ? canonical : legacy;
+        var second = canonicalFirst ? legacy : canonical;
+
+        await agent.HandleEventAsync(CreateEnvelope(actorId, first));
+        await inbox.DrainAsync();
+
+        agent.State.ConversationLifecycle.Phase.Should().Be(
+            NyxIdChatConversationLifecyclePhase.DeletionHistoryDeletePending);
+        runtime.DestroyedActors.Should().BeEmpty();
+
+        await agent.HandleEventAsync(CreateEnvelope(actorId, second));
+        await inbox.DrainAsync();
+        await agent.HandleEventAsync(CreateEnvelope(actorId, first.Clone()));
+        await agent.HandleEventAsync(CreateEnvelope(actorId, second.Clone()));
+        await inbox.DrainAsync();
+
+        runtime.DestroyedActors.Should().ContainSingle().Which.Should().Be(actorId);
+        agent.State.ConversationLifecycle.Phase.Should().Be(
+            NyxIdChatConversationLifecyclePhase.DeletionCleanupDispatching);
+        var committed = await eventStore.GetEventsAsync(actorId);
+        committed.Count(entry => entry.EventData.Is(NyxIdChatConversationHistoryDeletedEvent.Descriptor))
+            .Should().Be(1);
+    }
+
+    [Fact]
+    public async Task DeletionHistoryCompletion_FromForeignEnvelopePublisher_ShouldNotAcknowledgeOwner()
+    {
+        const string actorId = "conversation-history-forged-publisher";
+        var eventStore = new InMemoryEventStoreForTests();
+        var history = new RecordingChatHistoryCommandPort();
+        using var provider = BuildServiceProvider(
+            new RecordingGAgentActorRegistryCommandPort(),
+            new RecordingActorRuntime(),
+            history,
+            eventStore);
+        await AppendCommittedEventsAsync(
+            provider,
+            actorId,
+            LifecycleBoundaryEvents("history-delete", actorId));
+        var (agent, inbox) = CreateConversationAgentWithInbox(provider, actorId);
+        await agent.ActivateAsync();
+        await inbox.DrainAsync();
+        var request = history.DeletionRequests.Should().ContainSingle().Which;
+        var completion = HistoryCompletion(
+            request,
+            ChatHistoryConversationOwnerKind.Canonical,
+            ChatHistoryConversationDeletionOutcome.CommittedDeleted);
+        var forged = CreateEnvelope(actorId, completion);
+        forged.Route.PublisherActorId = "chat-conversation:foreign";
+
+        await agent.HandleEventAsync(forged);
+        await inbox.DrainAsync();
+
+        agent.State.ConversationLifecycle.Phase.Should().Be(
+            NyxIdChatConversationLifecyclePhase.DeletionHistoryDeletePending);
+        agent.State.ConversationLifecycle.CanonicalHistoryOwnerCompleted.Should().BeFalse();
+        agent.State.ConversationLifecycle.LegacyHistoryOwnerCompleted.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task DeletionHistoryAmbiguousDispatch_ShouldRemainPendingAndRedriveSameOperationWithoutCompensation()
+    {
+        const string actorId = "conversation-history-ambiguous";
+        var eventStore = new InMemoryEventStoreForTests();
+        var history = new RecordingChatHistoryCommandPort
+        {
+            ThrowAfterRequestCount = 1,
+        };
+        var registry = new RecordingGAgentActorRegistryCommandPort();
+        using var provider = BuildServiceProvider(
+            registry,
+            new RecordingActorRuntime(),
+            history,
+            eventStore);
+        await AppendCommittedEventsAsync(
+            provider,
+            actorId,
+            LifecycleBoundaryEvents("history-delete", actorId));
+        var (first, firstInbox) = CreateConversationAgentWithInbox(provider, actorId);
+
+        await first.ActivateAsync();
+        await firstInbox.DrainAsync();
+
+        first.State.ConversationLifecycle.Phase.Should().Be(
+            NyxIdChatConversationLifecyclePhase.DeletionHistoryDeletePending);
+        first.State.ConversationLifecycle.LastFailureCode.Should().Be(
+            "history_delete_dispatch_ambiguous");
+        registry.RegisteredActors.Should().BeEmpty();
+        var firstRequest = history.DeletionRequests.Should().ContainSingle().Which;
+        var (restarted, restartedInbox) = CreateConversationAgentWithInbox(provider, actorId);
+
+        await restarted.ActivateAsync();
+        await restartedInbox.DrainAsync();
+
+        history.DeletionRequests.Should().HaveCount(2);
+        history.DeletionRequests[1].OperationId.Should().Be(firstRequest.OperationId);
+        restarted.State.ConversationLifecycle.Phase.Should().Be(
+            NyxIdChatConversationLifecyclePhase.DeletionHistoryDeletePending);
+        registry.RegisteredActors.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task DeletionHistoryReplicaNotFound_ShouldRemainPendingUntilExactCommittedCompletion()
+    {
+        const string actorId = "conversation-history-not-found";
+        var eventStore = new InMemoryEventStoreForTests();
+        var history = new RecordingChatHistoryCommandPort
+        {
+            DeleteStatus = ChatHistoryDeleteResultStatus.NotFound,
+        };
+        var runtime = new RecordingActorRuntime();
+        using var provider = BuildServiceProvider(
+            new RecordingGAgentActorRegistryCommandPort(),
+            runtime,
+            history,
+            eventStore);
+        await AppendCommittedEventsAsync(
+            provider,
+            actorId,
+            LifecycleBoundaryEvents("history-delete", actorId));
+        var (agent, inbox) = CreateConversationAgentWithInbox(provider, actorId);
+
+        await agent.ActivateAsync();
+        await inbox.DrainAsync();
+
+        var request = history.DeletionRequests.Should().ContainSingle().Which;
+        agent.State.ConversationLifecycle.Phase.Should().Be(
+            NyxIdChatConversationLifecyclePhase.DeletionHistoryDeletePending);
+        runtime.DestroyedActors.Should().BeEmpty();
+        var beforeCompletion = await eventStore.GetEventsAsync(actorId);
+        beforeCompletion.Should().NotContain(entry =>
+            entry.EventData.Is(NyxIdChatConversationHistoryDeletedEvent.Descriptor));
+
+        await agent.HandleEventAsync(CreateEnvelope(
+            actorId,
+            HistoryCompletion(
+                request,
+                ChatHistoryConversationOwnerKind.Canonical,
+                ChatHistoryConversationDeletionOutcome.CommittedDeleted)));
+        await inbox.DrainAsync();
+        await agent.HandleEventAsync(CreateEnvelope(
+            actorId,
+            HistoryCompletion(
+                request,
+                ChatHistoryConversationOwnerKind.Legacy,
+                ChatHistoryConversationDeletionOutcome.AuthoritativeAbsent)));
+        await inbox.DrainAsync();
+
+        runtime.DestroyedActors.Should().ContainSingle().Which.Should().Be(actorId);
+        agent.State.ConversationLifecycle.Phase.Should().Be(
+            NyxIdChatConversationLifecyclePhase.DeletionCleanupDispatching);
+    }
+
+    [Fact]
+    public async Task DeletionHistoryMismatchedCompletion_ShouldNotAdvance()
+    {
+        const string actorId = "conversation-history-mismatch";
+        var eventStore = new InMemoryEventStoreForTests();
+        var history = new RecordingChatHistoryCommandPort();
+        var runtime = new RecordingActorRuntime();
+        using var provider = BuildServiceProvider(
+            new RecordingGAgentActorRegistryCommandPort(),
+            runtime,
+            history,
+            eventStore);
+        await AppendCommittedEventsAsync(
+            provider,
+            actorId,
+            LifecycleBoundaryEvents("history-delete", actorId));
+        var (agent, inbox) = CreateConversationAgentWithInbox(provider, actorId);
+        await agent.ActivateAsync();
+        await inbox.DrainAsync();
+        var request = history.DeletionRequests.Should().ContainSingle().Which;
+
+        var staleOperation = HistoryCompletion(
+            request,
+            ChatHistoryConversationOwnerKind.Canonical,
+            ChatHistoryConversationDeletionOutcome.CommittedDeleted);
+        staleOperation.OperationId = "history-delete-stale";
+        await agent.HandleEventAsync(CreateEnvelope(actorId, staleOperation));
+        var foreignScope = HistoryCompletion(
+            request,
+            ChatHistoryConversationOwnerKind.Canonical,
+            ChatHistoryConversationDeletionOutcome.CommittedDeleted);
+        foreignScope.ScopeId = "scope-foreign";
+        await agent.HandleEventAsync(CreateEnvelope(actorId, foreignScope));
+
+        agent.State.ConversationLifecycle.Phase.Should().Be(
+            NyxIdChatConversationLifecyclePhase.DeletionHistoryDeletePending);
+        runtime.DestroyedActors.Should().BeEmpty();
     }
 
     private static ServiceProvider BuildServiceProvider(
         IGAgentActorRegistryCommandPort? registryCommandPort = null,
         IActorRuntime? actorRuntime = null,
         IChatHistoryCommandPort? historyCommandPort = null,
-        IEventStore? eventStore = null)
+        IEventStore? eventStore = null,
+        AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer = null)
     {
         eventStore ??= new InMemoryEventStoreForTests();
         var services = new ServiceCollection()
@@ -1919,13 +3139,20 @@ public class NyxIdChatGAgentTests
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
 
         if (registryCommandPort is not null)
+        {
             services.AddSingleton(registryCommandPort);
+            if (registryCommandPort is IGAgentActorRegistryUnregistrationPort unregistrationPort)
+                services.AddSingleton(unregistrationPort);
+        }
 
         if (actorRuntime is not null)
             services.AddSingleton(actorRuntime);
 
         if (historyCommandPort is not null)
             services.AddSingleton(historyCommandPort);
+
+        if (turnCatalogMaterializer is not null)
+            services.AddSingleton(turnCatalogMaterializer);
 
         return services.BuildServiceProvider();
     }
@@ -1955,6 +3182,37 @@ public class NyxIdChatGAgentTests
             .GetMethod("SetId", BindingFlags.Instance | BindingFlags.NonPublic)!;
         setId.Invoke(agent, [actorId]);
         return agent;
+    }
+
+    private static NyxIdChatConversationGAgent CreateConversationAgent(
+        IServiceProvider provider,
+        string actorId,
+        IActorDispatchPort? dispatchPort = null)
+    {
+        var agent = new NyxIdChatConversationGAgent(
+            provider.GetService<IActorRuntime>() ?? new RecordingActorRuntime(),
+            dispatchPort ?? new NoopActorDispatchPort(),
+            TimeProvider.System)
+        {
+            Services = provider,
+            EventSourcingBehaviorFactory = provider.GetRequiredService<
+                IEventSourcingBehaviorFactory<NyxIdChatConversationGAgentState>>(),
+        };
+        var setId = typeof(Aevatar.Foundation.Core.GAgentBase)
+            .GetMethod("SetId", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        setId.Invoke(agent, [actorId]);
+        return agent;
+    }
+
+    private static (NyxIdChatConversationGAgent Agent, DeterministicActorInbox Inbox)
+        CreateConversationAgentWithInbox(
+            IServiceProvider provider,
+            string actorId)
+    {
+        var inbox = new DeterministicActorInbox(actorId);
+        var agent = CreateConversationAgent(provider, actorId, inbox);
+        inbox.Attach(agent);
+        return (agent, inbox);
     }
 
     private static async Task AssertBoundTurnMaterializationFailureRejectsAllToolsAsync(
@@ -2015,7 +3273,16 @@ public class NyxIdChatGAgentTests
         Id = Guid.NewGuid().ToString("N"),
         Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         Payload = Any.Pack(payload),
-        Route = new EnvelopeRoute { Direct = new DirectRoute { TargetActorId = actorId } },
+        Route = new EnvelopeRoute
+        {
+            PublisherActorId = payload switch
+            {
+                GAgentRegistryUnregistrationCompleted completion => completion.RegistryActorId,
+                ChatHistoryConversationDeletionCommitted completion => completion.OwnerActorId,
+                _ => string.Empty,
+            },
+            Direct = new DirectRoute { TargetActorId = actorId },
+        },
         Propagation = new EnvelopePropagation { CorrelationId = Guid.NewGuid().ToString("N") },
     };
 
@@ -2036,6 +3303,157 @@ public class NyxIdChatGAgentTests
 
         await provider.GetRequiredService<IEventStore>()
             .AppendAsync(actorId, stateEvents, expectedVersion: 0);
+    }
+
+    private static IMessage[] LifecycleBoundaryEvents(string boundary, string actorId)
+    {
+        var creation = new NyxIdChatConversationCreationStartedEvent
+        {
+            ScopeId = "scope-alpha",
+            ActorId = actorId,
+            CreatedLocally = false,
+            CommandId = "command-create-alpha",
+            CorrelationId = "correlation-create-alpha",
+        };
+        var registrationAccepted = new NyxIdChatConversationRegistrationAcceptedEvent
+        {
+            ScopeId = "scope-alpha",
+            ActorId = actorId,
+            CommandId = "command-create-alpha",
+            CorrelationId = "correlation-create-alpha",
+        };
+        var deletionStarted = new NyxIdChatConversationDeletionStartedEvent
+        {
+            ScopeId = "scope-alpha",
+            ActorId = actorId,
+            CommandId = "command-delete-alpha",
+            CorrelationId = "correlation-delete-alpha",
+        };
+        var unregistered = new NyxIdChatConversationUnregisteredEvent
+        {
+            ScopeId = "scope-alpha",
+            ActorId = actorId,
+            CommandId = "command-delete-alpha",
+            CorrelationId = "correlation-delete-alpha",
+        };
+        return boundary switch
+        {
+            "creation-register" => [creation],
+            "creation-compensation-unregister" =>
+            [
+                creation,
+                new NyxIdChatConversationRegistrationUnavailableEvent
+                {
+                    ScopeId = "scope-alpha",
+                    ActorId = actorId,
+                    DestroyActor = false,
+                    Reason = "registration_failed",
+                    CommandId = "command-create-alpha",
+                    CorrelationId = "correlation-create-alpha",
+                },
+            ],
+            "deletion-unregister" => [creation, registrationAccepted, deletionStarted],
+            "history-delete" => [creation, registrationAccepted, deletionStarted, unregistered],
+            "deletion-compensation-register" =>
+            [
+                creation,
+                registrationAccepted,
+                deletionStarted,
+                unregistered,
+                new NyxIdChatConversationDeletionCompensationStartedEvent
+                {
+                    ScopeId = "scope-alpha",
+                    ActorId = actorId,
+                    Reason = "history_delete_failed",
+                    CommandId = "command-delete-alpha",
+                    CorrelationId = "correlation-delete-alpha",
+                },
+            ],
+            "final-cleanup" =>
+            [
+                creation,
+                registrationAccepted,
+                deletionStarted,
+                unregistered,
+                new NyxIdChatConversationLifecycleTransitionedEvent
+                {
+                    Lifecycle = new NyxIdChatConversationLifecycleState
+                    {
+                        Phase = NyxIdChatConversationLifecyclePhase.DeletionHistoryDeletePending,
+                        ScopeId = "scope-alpha",
+                        ActorId = actorId,
+                        CommandId = "command-delete-alpha",
+                        CorrelationId = "correlation-delete-alpha",
+                        CanonicalHistoryOwnerCompleted = true,
+                        LegacyHistoryOwnerCompleted = true,
+                        RegistryActorId = GAgentRegistryActorIds.ForScope("scope-alpha"),
+                        RegistryUnregistrationOperationId = StableIdentity(
+                            "registry-unregister",
+                            "deletion",
+                            "scope-alpha",
+                            actorId,
+                            "command-delete-alpha",
+                            "correlation-delete-alpha"),
+                        HistoryDeletionOperationId = StableIdentity(
+                            "history-delete",
+                            "scope-alpha",
+                            actorId,
+                            "command-delete-alpha",
+                            "correlation-delete-alpha"),
+                    },
+                },
+                new NyxIdChatConversationHistoryDeletedEvent
+                {
+                    ScopeId = "scope-alpha",
+                    ActorId = actorId,
+                    CommandId = "command-delete-alpha",
+                    CorrelationId = "correlation-delete-alpha",
+                },
+            ],
+            _ => throw new ArgumentOutOfRangeException(nameof(boundary), boundary, null),
+        };
+    }
+
+    private static GAgentRegistryUnregistrationCompleted RegistryCompletion(
+        GAgentRegistryUnregistrationRequest request,
+        GAgentRegistryUnregistrationOutcome outcome =
+            GAgentRegistryUnregistrationOutcome.CommittedRemoved) =>
+        new()
+        {
+            OperationId = request.OperationId,
+            RegistryActorId = request.RegistryActorId,
+            ScopeId = request.ScopeId,
+            AgentKind = request.AgentKind,
+            ActorId = request.ActorId,
+            CompletionActorId = request.CompletionActorId,
+            Outcome = outcome,
+            CompletedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
+
+    private static ChatHistoryConversationDeletionCommitted HistoryCompletion(
+        ChatHistoryConversationDeletionRequest request,
+        ChatHistoryConversationOwnerKind ownerKind,
+        ChatHistoryConversationDeletionOutcome outcome) =>
+        new()
+        {
+            OperationId = request.OperationId,
+            ScopeId = request.ScopeId,
+            ConversationId = request.ConversationId,
+            OwnerActorId = ownerKind == ChatHistoryConversationOwnerKind.Canonical
+                ? ChatHistoryActorIds.Conversation(request.ScopeId, request.ConversationId)
+                : ChatHistoryActorIds.LegacyConversation(request.ScopeId, request.ConversationId),
+            OwnerKind = ownerKind,
+            Outcome = outcome,
+            CompletionActorId = request.CompletionActorId,
+            CommittedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
+
+    private static string StableIdentity(string prefix, params string[] parts)
+    {
+        var identity = string.Concat(parts.Select(static part => $"{part.Length}:{part}"));
+        var hash = System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(identity));
+        return $"{prefix}-{Convert.ToHexStringLower(hash)[..32]}";
     }
 
     private static ChatRouteResolver NewChatRouteResolver() =>
@@ -2156,18 +3574,32 @@ public class NyxIdChatGAgentTests
             DispatchAsync(TCommand command, CancellationToken ct = default) => Task.FromResult(result);
     }
 
-    private sealed class RecordingGAgentActorRegistryCommandPort : IGAgentActorRegistryCommandPort
+    private sealed class RecordingGAgentActorRegistryCommandPort :
+        IGAgentActorRegistryCommandPort,
+        IGAgentActorRegistryUnregistrationPort
     {
         public GAgentActorRegistryCommandStage RegisterStage { get; init; } =
             GAgentActorRegistryCommandStage.AdmissionVisible;
+        public int RegisterFailuresRemaining { get; set; }
+        public int RegisterAttempts { get; private set; }
+        public GAgentActorRegistryCommandStage UnregistrationStage { get; init; } =
+            GAgentActorRegistryCommandStage.AcceptedForDispatch;
 
         public List<GAgentActorRegistration> RegisteredActors { get; } = [];
         public List<GAgentActorRegistration> UnregisteredActors { get; } = [];
+        public List<GAgentRegistryUnregistrationRequest> UnregistrationRequests { get; } = [];
 
         public Task<GAgentActorRegistryCommandReceipt> RegisterActorAsync(
             GAgentActorRegistration registration,
             CancellationToken cancellationToken = default)
         {
+            RegisterAttempts++;
+            if (RegisterFailuresRemaining > 0)
+            {
+                RegisterFailuresRemaining--;
+                throw new InvalidOperationException("Injected registry registration failure.");
+            }
+
             RegisteredActors.Add(registration);
             return Task.FromResult(new GAgentActorRegistryCommandReceipt(registration, RegisterStage));
         }
@@ -2181,12 +3613,31 @@ public class NyxIdChatGAgentTests
                 registration,
                 GAgentActorRegistryCommandStage.AdmissionRemoved));
         }
+
+        public Task<GAgentActorRegistryCommandReceipt> RequestUnregistrationAsync(
+            GAgentRegistryUnregistrationRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            UnregistrationRequests.Add(request.Clone());
+            var registration = new GAgentActorRegistration(
+                request.ScopeId,
+                request.AgentKind,
+                request.ActorId);
+            UnregisteredActors.Add(registration);
+            return Task.FromResult(new GAgentActorRegistryCommandReceipt(
+                registration,
+                UnregistrationStage));
+        }
     }
 
     private sealed class RecordingChatHistoryCommandPort : IChatHistoryCommandPort
     {
         public List<SavedChatHistory> Saved { get; } = [];
         public List<(string ScopeId, string ConversationId)> Deleted { get; } = [];
+        public List<ChatHistoryConversationDeletionRequest> DeletionRequests { get; } = [];
+        public ChatHistoryDeleteResultStatus DeleteStatus { get; set; } =
+            ChatHistoryDeleteResultStatus.Accepted;
+        public int ThrowAfterRequestCount { get; set; }
 
         public Task SaveMessagesAsync(
             string scopeId,
@@ -2203,6 +3654,23 @@ public class NyxIdChatGAgentTests
         {
             Deleted.Add((scopeId, conversationId));
             return Task.FromResult(ChatHistoryDeleteResult.Accepted());
+        }
+
+        public Task<ChatHistoryDeleteResult> DeleteConversationAsync(
+            ChatHistoryConversationDeletionRequest request,
+            CancellationToken ct = default)
+        {
+            DeletionRequests.Add(request.Clone());
+            Deleted.Add((request.ScopeId, request.ConversationId));
+            if (ThrowAfterRequestCount > 0)
+            {
+                ThrowAfterRequestCount--;
+                throw new InvalidOperationException("ambiguous history deletion dispatch");
+            }
+
+            return Task.FromResult(DeleteStatus == ChatHistoryDeleteResultStatus.NotFound
+                ? ChatHistoryDeleteResult.NotFound()
+                : ChatHistoryDeleteResult.Accepted());
         }
     }
 
@@ -2282,6 +3750,58 @@ public class NyxIdChatGAgentTests
         public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) => Task.CompletedTask;
 
         public Task UnlinkAsync(string childId, CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed class NoopActorDispatchPort : IActorDispatchPort
+    {
+        public Task<DispatchAdmission> DispatchAsync(
+            string actorId,
+            EventEnvelope envelope,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
+        }
+    }
+
+    private sealed class CallbackActorDispatchPort(
+        Func<string, EventEnvelope, Task> onDispatch) : IActorDispatchPort
+    {
+        public async Task<DispatchAdmission> DispatchAsync(
+            string actorId,
+            EventEnvelope envelope,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            await onDispatch(actorId, envelope);
+            return DispatchAdmissionFactory.Create(actorId, envelope);
+        }
+    }
+
+    private sealed class DeterministicActorInbox(string actorId) : IActorDispatchPort
+    {
+        private readonly Queue<EventEnvelope> _pending = new();
+        private NyxIdChatConversationGAgent? _agent;
+
+        public void Attach(NyxIdChatConversationGAgent agent) => _agent = agent;
+
+        public Task<DispatchAdmission> DispatchAsync(
+            string targetActorId,
+            EventEnvelope envelope,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            targetActorId.Should().Be(actorId);
+            _pending.Enqueue(envelope.Clone());
+            return Task.FromResult(DispatchAdmissionFactory.Create(targetActorId, envelope));
+        }
+
+        public async Task DrainAsync()
+        {
+            var agent = _agent ?? throw new InvalidOperationException("The actor inbox is not attached.");
+            while (_pending.TryDequeue(out var envelope))
+                await agent.HandleEventAsync(envelope);
+        }
     }
 
     private sealed class RecordingActor(string id) : IActor

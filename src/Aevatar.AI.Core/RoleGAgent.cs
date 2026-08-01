@@ -1207,9 +1207,6 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             return ResolveCommittedTurnAuthority(request.SessionId);
         }
 
-        if (active.SelectedExactSkillRef is null)
-            return active.Clone();
-
         var retryAuthority = active.Clone();
         retryAuthority.ReconciliationKey.Attempt++;
         var retry = new AgentProfileTurnAuthorityCommittedEvent
@@ -1245,7 +1242,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         };
         await PersistValidatedTurnAuthorityAsync(reconcile);
         var active = State.AgentProfileTurnAuthority;
-        return active is not null && HasSameReconciliationKey(active, reconcile.Authority)
+        return active is not null && AgentProfileTurnAuthorityTransitionPolicy.HasSameReconciliationKey(
+            active,
+            reconcile.Authority)
             ? materialization.Catalog
             : null;
     }
@@ -2392,40 +2391,21 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         if (evt.Authority?.ReconciliationKey is null)
             return false;
 
-        var incoming = CanonicalizeTurnAuthority(evt.Authority);
+        var incoming = evt.Authority;
         var sessionId = incoming.ReconciliationKey.SessionId;
         if (string.IsNullOrWhiteSpace(sessionId) || incoming.ReconciliationKey.Attempt <= 0 ||
             !current.Sessions.TryGetValue(sessionId, out var session) || session.Completed ||
-            AuthorityRank(incoming.AuthorityKind) < 0 ||
-            !HasConsistentAuthorityKindAndCeiling(incoming))
+            !AgentProfileTurnAuthorityTransitionPolicy.TryApply(
+                current.AgentProfileTurnAuthority,
+                evt,
+                (active, candidate) => CanReplaceInitialAuthority(current, active, candidate),
+                out var accepted))
         {
             return false;
         }
 
-        var active = current.AgentProfileTurnAuthority;
-        AgentProfileTurnAuthorityState accepted;
-        switch (evt.CommitKind)
-        {
-            case AgentProfileTurnAuthorityCommitKind.Initial:
-                if (incoming.ReconciliationKey.Attempt != 1 || !CanApplyInitialAuthority(current, active, incoming))
-                    return false;
-                accepted = incoming;
-                break;
-            case AgentProfileTurnAuthorityCommitKind.RetryStarted:
-                if (!CanApplyRetryAuthority(active, incoming))
-                    return false;
-                accepted = incoming;
-                break;
-            case AgentProfileTurnAuthorityCommitKind.Reconcile:
-                if (!CanApplyReconciledAuthority(active, incoming))
-                    return false;
-                accepted = MergeReconciledAuthority(active!, incoming);
-                break;
-            default:
-                return false;
-        }
-
-        if (active is not null && active.Equals(accepted))
+        if (current.AgentProfileTurnAuthority is not null &&
+            current.AgentProfileTurnAuthority.Equals(accepted))
             return true;
 
         next = current.Clone();
@@ -2433,18 +2413,12 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         return true;
     }
 
-    private static bool CanApplyInitialAuthority(
+    private static bool CanReplaceInitialAuthority(
         RoleGAgentState current,
-        AgentProfileTurnAuthorityState? active,
+        AgentProfileTurnAuthorityState active,
         AgentProfileTurnAuthorityState incoming)
     {
-        if (active is null)
-            return true;
-
-        if (HasSameReconciliationKey(active, incoming))
-            return CanonicalizeTurnAuthority(active).Equals(incoming);
-
-        if (IsLegacyRestrictedEmptyAuthority(incoming))
+        if (AgentProfileTurnAuthorityTransitionPolicy.IsLegacyRestrictedEmpty(incoming))
             return true;
 
         if (!current.Sessions.TryGetValue(active.ReconciliationKey.SessionId, out var activeSession) ||
@@ -2455,135 +2429,6 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
 
         return incomingSession.Sequence > activeSession.Sequence;
     }
-
-    private static bool CanApplyRetryAuthority(
-        AgentProfileTurnAuthorityState? active,
-        AgentProfileTurnAuthorityState incoming)
-    {
-        if (active?.ReconciliationKey is null || active.SelectedExactSkillRef is null ||
-            !string.Equals(
-                active.ReconciliationKey.SessionId,
-                incoming.ReconciliationKey.SessionId,
-                StringComparison.Ordinal) ||
-            incoming.ReconciliationKey.Attempt != active.ReconciliationKey.Attempt + 1)
-        {
-            return false;
-        }
-
-        var expected = CanonicalizeTurnAuthority(active);
-        expected.ReconciliationKey.Attempt = incoming.ReconciliationKey.Attempt;
-        return expected.Equals(incoming);
-    }
-
-    private static bool CanApplyReconciledAuthority(
-        AgentProfileTurnAuthorityState? active,
-        AgentProfileTurnAuthorityState incoming)
-    {
-        if (active?.ReconciliationKey is null || !HasSameReconciliationKey(active, incoming))
-        {
-            return false;
-        }
-
-        var activeRank = AuthorityRank(active.AuthorityKind);
-        var incomingRank = AuthorityRank(incoming.AuthorityKind);
-        if (incomingRank > activeRank ||
-            !HasValidReconciledIdentityTransition(active, incoming, activeRank, incomingRank))
-        {
-            return false;
-        }
-
-        var activeNames = active.AuthorityCeilingToolNames.ToHashSet(StringComparer.OrdinalIgnoreCase);
-        return incoming.AuthorityCeilingToolNames.All(activeNames.Contains);
-    }
-
-    private static bool HasValidReconciledIdentityTransition(
-        AgentProfileTurnAuthorityState active,
-        AgentProfileTurnAuthorityState incoming,
-        int activeRank,
-        int incomingRank)
-    {
-        if (incomingRank < activeRank &&
-            active.CandidateRoute is not null &&
-            active.SelectedExactSkillRef is not null)
-        {
-            return incoming.CandidateRoute is null &&
-                   incoming.SelectedExactSkillRef is null;
-        }
-
-        return Equals(active.CandidateRoute, incoming.CandidateRoute) &&
-               Equals(active.SelectedExactSkillRef, incoming.SelectedExactSkillRef);
-    }
-
-    private static AgentProfileTurnAuthorityState MergeReconciledAuthority(
-        AgentProfileTurnAuthorityState active,
-        AgentProfileTurnAuthorityState incoming)
-    {
-        var accepted = incoming.Clone();
-        accepted.DegradationReasons.Clear();
-        accepted.DegradationReasons.Add(
-            active.DegradationReasons
-                .Concat(incoming.DegradationReasons)
-                .Where(static reason => reason != AgentProfileTurnDegradationReason.Unspecified)
-                .Distinct()
-                .OrderBy(static reason => (int)reason));
-        return accepted;
-    }
-
-    private static AgentProfileTurnAuthorityState CanonicalizeTurnAuthority(
-        AgentProfileTurnAuthorityState authority)
-    {
-        var canonical = authority.Clone();
-        canonical.AuthorityCeilingToolNames.Clear();
-        canonical.AuthorityCeilingToolNames.Add(
-            authority.AuthorityCeilingToolNames
-                .Where(static name => !string.IsNullOrWhiteSpace(name))
-                .Select(static name => name.Trim())
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .OrderBy(static name => name, StringComparer.Ordinal));
-        canonical.DegradationReasons.Clear();
-        canonical.DegradationReasons.Add(
-            authority.DegradationReasons
-                .Where(static reason => reason != AgentProfileTurnDegradationReason.Unspecified)
-                .Distinct()
-                .OrderBy(static reason => (int)reason));
-        return canonical;
-    }
-
-    private static bool HasSameReconciliationKey(
-        AgentProfileTurnAuthorityState left,
-        AgentProfileTurnAuthorityState right) =>
-        left.ReconciliationKey is not null &&
-        right.ReconciliationKey is not null &&
-        left.ReconciliationKey.Attempt == right.ReconciliationKey.Attempt &&
-        string.Equals(
-            left.ReconciliationKey.SessionId,
-            right.ReconciliationKey.SessionId,
-            StringComparison.Ordinal);
-
-    private static bool IsLegacyRestrictedEmptyAuthority(AgentProfileTurnAuthorityState authority) =>
-        authority.AuthorityKind == AgentProfileTurnAuthorityKind.RestrictedEmpty &&
-        authority.CandidateRoute is null &&
-        authority.SelectedExactSkillRef is null &&
-        authority.AuthorityCeilingToolNames.Count == 0 &&
-        authority.DegradationReasons.Count == 1 &&
-        authority.DegradationReasons[0] == AgentProfileTurnDegradationReason.LegacyAuthorityMissing;
-
-    private static bool HasConsistentAuthorityKindAndCeiling(AgentProfileTurnAuthorityState authority) =>
-        authority.AuthorityKind switch
-        {
-            AgentProfileTurnAuthorityKind.RestrictedEmpty => authority.AuthorityCeilingToolNames.Count == 0,
-            AgentProfileTurnAuthorityKind.Recovery => authority.AuthorityCeilingToolNames.Count > 0,
-            AgentProfileTurnAuthorityKind.Selected => true,
-            _ => false,
-        };
-
-    private static int AuthorityRank(AgentProfileTurnAuthorityKind kind) => kind switch
-    {
-        AgentProfileTurnAuthorityKind.RestrictedEmpty => 1,
-        AgentProfileTurnAuthorityKind.Recovery => 2,
-        AgentProfileTurnAuthorityKind.Selected => 3,
-        _ => -1,
-    };
 
     private static RoleGAgentState ApplyChatSessionCompleted(
         RoleGAgentState current,

@@ -461,7 +461,7 @@ public class RoleGAgentReplayContractTests
     }
 
     [Fact]
-    public async Task StartedAuthorityReplay_ShouldRespectFrozenExactRefRetryBoundaryWithoutReclassification()
+    public async Task StartedAuthorityReplay_ShouldAdvanceSelectedAndRecoveryWithoutReclassification()
     {
         var store = new InMemoryEventStoreForTests();
         const string actorId = "role-profiled-replay";
@@ -528,12 +528,14 @@ public class RoleGAgentReplayContractTests
         recoveryAgent.PrepareCallCount.Should().Be(0);
         recoveryAgent.MaterializedAuthorities.Should().ContainSingle(authority =>
             authority.ReconciliationKey.SessionId == "session-recovery" &&
-            authority.ReconciliationKey.Attempt == 1 &&
+            authority.ReconciliationKey.Attempt == 2 &&
             authority.SelectedExactSkillRef == null);
         (await store.GetEventsAsync(recoveryActorId))
             .Where(stateEvent => stateEvent.EventData.Is(AgentProfileTurnAuthorityCommittedEvent.Descriptor))
-            .Select(stateEvent => stateEvent.EventData.Unpack<AgentProfileTurnAuthorityCommittedEvent>().CommitKind)
-            .Should().NotContain(AgentProfileTurnAuthorityCommitKind.RetryStarted);
+            .Select(stateEvent => stateEvent.EventData.Unpack<AgentProfileTurnAuthorityCommittedEvent>())
+            .Should().Contain(authorityEvent =>
+                authorityEvent.CommitKind == AgentProfileTurnAuthorityCommitKind.RetryStarted &&
+                authorityEvent.Authority.ReconciliationKey.Attempt == 2);
     }
 
     [Fact]
@@ -1975,6 +1977,17 @@ public class RoleGAgentReplayContractTests
             {
                 SessionId = sessionId,
                 Attempt = attempt,
+            },
+            BindingIdentity = new AgentProfileTurnBindingIdentity
+            {
+                Source = new AgentProfileExecutionSourceProvenance
+                {
+                    ProfileId = "profile-a",
+                    StateVersion = 1,
+                    PublishedRevision = 1,
+                    PublishedSnapshotSha256 = ByteString.CopyFrom(new byte[32]),
+                },
+                ExecutionBindingSha256 = ByteString.CopyFrom(Enumerable.Repeat((byte)1, 32).ToArray()),
             },
             CandidateRoute = new AgentProfileTurnCandidateRouteIdentity
             {

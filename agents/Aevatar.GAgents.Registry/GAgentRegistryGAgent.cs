@@ -3,7 +3,9 @@ using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -18,6 +20,8 @@ namespace Aevatar.GAgents.Registry;
 [GAgent("gagent.registry")]
 public sealed class GAgentRegistryGAgent : GAgentBase<GAgentRegistryState>, IProjectedActor
 {
+    public const int MaxRetainedUnregistrationOperations = 256;
+
     public static string ProjectionKind => "gagent-registry";
 
 
@@ -63,6 +67,50 @@ public sealed class GAgentRegistryGAgent : GAgentBase<GAgentRegistryState>, IPro
             return;
 
         throw new GAgentRegistryAdmissionNotFoundException();
+    }
+
+    [EventHandler(EndpointName = "unregisterActorOperation")]
+    public async Task HandleGAgentRegistryUnregistrationRequested(
+        GAgentRegistryUnregistrationRequest request)
+    {
+        var normalized = NormalizeUnregistrationRequest(request);
+        if (normalized is null)
+            return;
+
+        if (State.UnregistrationOperations.TryGetValue(normalized.OperationId, out var existing))
+        {
+            if (MatchesUnregistrationOperation(existing, normalized))
+                await DispatchUnregistrationCompletionAsync(existing).ConfigureAwait(false);
+            return;
+        }
+
+        if (!CanAdmitUnregistrationOperation())
+        {
+            throw new InvalidOperationException(
+                "GAgent registry unregistration retention capacity is exhausted by pending completions.");
+        }
+
+        var group = State.Groups.FirstOrDefault(candidate =>
+            string.Equals(candidate.AgentKind, normalized.AgentKind, StringComparison.Ordinal));
+        var outcome = group?.ActorIds.Contains(normalized.ActorId) == true
+            ? GAgentRegistryUnregistrationOutcome.CommittedRemoved
+            : GAgentRegistryUnregistrationOutcome.AuthoritativeAbsent;
+        var committed = new GAgentRegistryUnregistrationCommittedEvent
+        {
+            OperationId = normalized.OperationId,
+            RegistryActorId = normalized.RegistryActorId,
+            ScopeId = normalized.ScopeId,
+            AgentKind = normalized.AgentKind,
+            ActorId = normalized.ActorId,
+            CompletionActorId = normalized.CompletionActorId,
+            Outcome = outcome,
+            CompletedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
+
+        await PersistDomainEventAsync(committed).ConfigureAwait(false);
+        await DispatchUnregistrationCompletionAsync(
+                State.UnregistrationOperations[normalized.OperationId])
+            .ConfigureAwait(false);
     }
 
     private async Task<bool> TryCanonicalizeLegacyRegistrationAsync(ScopeResourceAdmissionRequested request)
@@ -176,6 +224,9 @@ public sealed class GAgentRegistryGAgent : GAgentBase<GAgentRegistryState>, IPro
             .On<ActorRegisteredEvent>(ApplyRegistered)
             .On<ActorUnregisteredEvent>(ApplyUnregistered)
             .On<ActorRegistrationKeyCanonicalizedEvent>(ApplyKeyCanonicalized)
+            .On<GAgentRegistryUnregistrationCommittedEvent>(ApplyUnregistrationCommitted)
+            .On<GAgentRegistryUnregistrationCompletionDispatchAcceptedEvent>(
+                ApplyUnregistrationCompletionDispatchAccepted)
             .OrCurrent();
     }
 
@@ -240,6 +291,98 @@ public sealed class GAgentRegistryGAgent : GAgentBase<GAgentRegistryState>, IPro
         return next;
     }
 
+    private static GAgentRegistryState ApplyUnregistrationCommitted(
+        GAgentRegistryState state,
+        GAgentRegistryUnregistrationCommittedEvent evt)
+    {
+        var next = state.Clone();
+        if (evt.Outcome == GAgentRegistryUnregistrationOutcome.CommittedRemoved)
+            RemoveActorFromGroup(next, evt.AgentKind, evt.ActorId);
+
+        next.UnregistrationOperations[evt.OperationId] = new GAgentRegistryUnregistrationOperation
+        {
+            OperationId = evt.OperationId,
+            RegistryActorId = evt.RegistryActorId,
+            ScopeId = evt.ScopeId,
+            AgentKind = evt.AgentKind,
+            ActorId = evt.ActorId,
+            CompletionActorId = evt.CompletionActorId,
+            Outcome = evt.Outcome,
+            CompletedAt = evt.CompletedAt?.Clone(),
+        };
+        if (!next.UnregistrationOperationOrder.Contains(evt.OperationId))
+            next.UnregistrationOperationOrder.Add(evt.OperationId);
+        CompactUnregistrationOperations(next);
+        return next;
+    }
+
+    private static GAgentRegistryState ApplyUnregistrationCompletionDispatchAccepted(
+        GAgentRegistryState state,
+        GAgentRegistryUnregistrationCompletionDispatchAcceptedEvent evt)
+    {
+        var next = state.Clone();
+        if (!next.UnregistrationOperations.TryGetValue(evt.OperationId, out var operation))
+            throw new InvalidOperationException(
+                "GAgent registry completion dispatch references an unknown unregistration operation.");
+
+        operation.CompletionDispatchAcceptedAt ??= evt.AcceptedAt?.Clone();
+        CompactUnregistrationOperations(next);
+        return next;
+    }
+
+    private static void CompactUnregistrationOperations(GAgentRegistryState state)
+    {
+        NormalizeUnregistrationOperationOrder(state);
+        while (state.UnregistrationOperations.Count > MaxRetainedUnregistrationOperations)
+        {
+            var removableIndex = -1;
+            for (var index = 0; index < state.UnregistrationOperationOrder.Count; index++)
+            {
+                var operationId = state.UnregistrationOperationOrder[index];
+                if (state.UnregistrationOperations.TryGetValue(operationId, out var operation) &&
+                    operation.CompletionDispatchAcceptedAt is not null)
+                {
+                    removableIndex = index;
+                    break;
+                }
+            }
+
+            if (removableIndex < 0)
+            {
+                throw new InvalidOperationException(
+                    "GAgent registry unregistration retention capacity is exhausted by pending completions.");
+            }
+
+            var removableOperationId = state.UnregistrationOperationOrder[removableIndex];
+            state.UnregistrationOperationOrder.RemoveAt(removableIndex);
+            state.UnregistrationOperations.Remove(removableOperationId);
+        }
+    }
+
+    private static void NormalizeUnregistrationOperationOrder(GAgentRegistryState state)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        for (var index = 0; index < state.UnregistrationOperationOrder.Count;)
+        {
+            var operationId = state.UnregistrationOperationOrder[index];
+            if (!state.UnregistrationOperations.ContainsKey(operationId) || !seen.Add(operationId))
+            {
+                state.UnregistrationOperationOrder.RemoveAt(index);
+                continue;
+            }
+
+            index++;
+        }
+
+        var missing = state.UnregistrationOperations
+            .Where(entry => !seen.Contains(entry.Key))
+            .OrderBy(entry => entry.Value.CompletedAt?.Seconds ?? long.MinValue)
+            .ThenBy(entry => entry.Value.CompletedAt?.Nanos ?? int.MinValue)
+            .ThenBy(entry => entry.Key, StringComparer.Ordinal)
+            .Select(entry => entry.Key);
+        state.UnregistrationOperationOrder.Add(missing);
+    }
+
     private static void RemoveActorFromGroup(
         GAgentRegistryState state,
         string registryKey,
@@ -263,6 +406,110 @@ public sealed class GAgentRegistryGAgent : GAgentBase<GAgentRegistryState>, IPro
 
         var registry = Services.GetService<IAgentKindRegistry>();
         return registry?.TryResolve(normalized, out _) == true;
+    }
+
+    private GAgentRegistryUnregistrationRequest? NormalizeUnregistrationRequest(
+        GAgentRegistryUnregistrationRequest request)
+    {
+        if (request is null ||
+            string.IsNullOrWhiteSpace(request.OperationId) ||
+            string.IsNullOrWhiteSpace(request.RegistryActorId) ||
+            string.IsNullOrWhiteSpace(request.ScopeId) ||
+            string.IsNullOrWhiteSpace(request.AgentKind) ||
+            string.IsNullOrWhiteSpace(request.ActorId) ||
+            string.IsNullOrWhiteSpace(request.CompletionActorId))
+        {
+            return null;
+        }
+
+        var normalized = request.Clone();
+        normalized.OperationId = normalized.OperationId.Trim();
+        normalized.RegistryActorId = normalized.RegistryActorId.Trim();
+        normalized.ScopeId = normalized.ScopeId.Trim();
+        normalized.AgentKind = normalized.AgentKind.Trim();
+        normalized.ActorId = normalized.ActorId.Trim();
+        normalized.CompletionActorId = normalized.CompletionActorId.Trim();
+
+        if (!string.Equals(Id, normalized.RegistryActorId, StringComparison.Ordinal) ||
+            !string.Equals(
+                normalized.RegistryActorId,
+                GAgentRegistryActorIds.ForScope(normalized.ScopeId),
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                normalized.ActorId,
+                normalized.CompletionActorId,
+                StringComparison.Ordinal) ||
+            !IsRegisteredAgentKind(normalized.AgentKind))
+        {
+            return null;
+        }
+
+        return normalized;
+    }
+
+    private static bool MatchesUnregistrationOperation(
+        GAgentRegistryUnregistrationOperation operation,
+        GAgentRegistryUnregistrationRequest request) =>
+        string.Equals(operation.OperationId, request.OperationId, StringComparison.Ordinal) &&
+        string.Equals(operation.RegistryActorId, request.RegistryActorId, StringComparison.Ordinal) &&
+        string.Equals(operation.ScopeId, request.ScopeId, StringComparison.Ordinal) &&
+        string.Equals(operation.AgentKind, request.AgentKind, StringComparison.Ordinal) &&
+        string.Equals(operation.ActorId, request.ActorId, StringComparison.Ordinal) &&
+        string.Equals(operation.CompletionActorId, request.CompletionActorId, StringComparison.Ordinal);
+
+    private bool CanAdmitUnregistrationOperation() =>
+        State.UnregistrationOperations.Count < MaxRetainedUnregistrationOperations ||
+        State.UnregistrationOperations.Values.Any(operation =>
+            operation.CompletionDispatchAcceptedAt is not null);
+
+    private async Task DispatchUnregistrationCompletionAsync(
+        GAgentRegistryUnregistrationOperation operation)
+    {
+        if (operation.CompletedAt is null)
+            return;
+
+        var dispatchPort = Services.GetService<IActorDispatchPort>();
+        if (dispatchPort is null)
+            return;
+
+        var completion = new GAgentRegistryUnregistrationCompleted
+        {
+            OperationId = operation.OperationId,
+            RegistryActorId = operation.RegistryActorId,
+            ScopeId = operation.ScopeId,
+            AgentKind = operation.AgentKind,
+            ActorId = operation.ActorId,
+            CompletionActorId = operation.CompletionActorId,
+            Outcome = operation.Outcome,
+            CompletedAt = operation.CompletedAt.Clone(),
+        };
+        var envelope = new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Payload = Any.Pack(completion),
+            Route = EnvelopeRouteSemantics.CreateDirect(Id, operation.CompletionActorId),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = operation.OperationId,
+            },
+        };
+        var admission = await dispatchPort.DispatchAsync(
+                operation.CompletionActorId,
+                envelope,
+                CancellationToken.None)
+            .ConfigureAwait(false);
+        if (!admission.Accepted)
+            throw new InvalidOperationException("GAgent registry unregistration completion dispatch was rejected.");
+
+        if (operation.CompletionDispatchAcceptedAt is null)
+        {
+            await PersistDomainEventAsync(new GAgentRegistryUnregistrationCompletionDispatchAcceptedEvent
+            {
+                OperationId = operation.OperationId,
+                AcceptedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            }).ConfigureAwait(false);
+        }
     }
 
     private IReadOnlyList<string> FindLegacyGroupsContainingActor(

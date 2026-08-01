@@ -4,6 +4,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.Prompting;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.Core.Prompting;
@@ -217,6 +218,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             replyPlan.DisableTools,
             isChannelTurn,
             primaryDiscoveryContext,
+            turnCatalog: null,
             ct);
 
         try
@@ -248,6 +250,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 disableTools: true,
                 isChannelTurn,
                 discoveryContext: null,
+                turnCatalog: null,
                 ct);
             return await GenerateWithMetadataAsync(
                     activity,
@@ -281,6 +284,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 toolContext,
                 priorHistory,
                 attachmentContext: null,
+                turnCatalog: null,
                 forceDisableTools,
                 ct)
             .ConfigureAwait(false);
@@ -302,9 +306,31 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 toolContext,
                 priorHistory,
                 attachmentContext,
+                turnCatalog: null,
                 forceDisableTools,
                 ct)
             .ConfigureAwait(false);
+
+    Task<AgentRunReplyStepPlan> IAgentRunStepConversationReplyGenerator.BuildStepPlanAsync(
+        ChatActivity activity,
+        IReadOnlyDictionary<string, string> metadata,
+        LLMControlContext? llmControl,
+        AgentToolExecutionContext? toolContext,
+        IReadOnlyList<ConversationHistoryEntry>? priorHistory,
+        ChatAttachmentInputContext? attachmentContext,
+        AgentProfileTurnCatalog? turnCatalog,
+        bool forceDisableTools,
+        CancellationToken ct) =>
+        BuildStepPlanCoreAsync(
+            activity,
+            metadata,
+            llmControl,
+            toolContext,
+            priorHistory,
+            attachmentContext,
+            turnCatalog,
+            forceDisableTools,
+            ct);
 
     private async Task<AgentRunReplyStepPlan> BuildStepPlanCoreAsync(
         ChatActivity activity,
@@ -313,6 +339,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         AgentToolExecutionContext? toolContext,
         IReadOnlyList<ConversationHistoryEntry>? priorHistory,
         ChatAttachmentInputContext? attachmentContext,
+        AgentProfileTurnCatalog? turnCatalog,
         bool forceDisableTools,
         CancellationToken ct)
     {
@@ -331,6 +358,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             disableTools,
             IsChannelRelayTurn(toolContext),
             effectiveToolContext,
+            turnCatalog,
             ct);
         var input = await BuildUserInputPartsAsync(
                 activity,
@@ -345,7 +373,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             effectiveToolContext,
             externalMetadata,
             tools,
-            input.AttachmentVisibilityInstruction);
+            input.AttachmentVisibilityInstruction,
+            turnCatalog);
 
         // The unbound-sender gate (issue #1318) detaches the entire tool surface while
         // the kernel prompt still documents those tools; without this override the
@@ -358,13 +387,14 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 externalMetadata,
                 effectiveToolContext,
                 input.AttachmentVisibilityInstruction,
-                replyPlan.DisableTools ? UnboundSenderToolsDisabledNotice : null)),
+                replyPlan.DisableTools ? UnboundSenderToolsDisabledNotice : null,
+                turnCatalog)),
         };
         initialMessages.AddRange((priorHistory ?? []).Where(IsReplayableHistoryEntry).TakeLast(MaxRecentPriorHistoryMessages).Select(ToChatMessage));
         initialMessages.Add(ChatMessage.User(input.Parts, input.Text));
 
         return new AgentRunReplyStepPlan(
-            runtime.CreateStepExecutor(turnCatalog: null),
+            runtime.CreateStepExecutor(turnCatalog),
             externalMetadata,
             replyPlan.PrimaryControl,
             effectiveToolContext,
@@ -383,11 +413,22 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         bool disableTools,
         bool isChannelTurn,
         AgentToolExecutionContext? discoveryContext,
+        AgentProfileTurnCatalog? turnCatalog,
         CancellationToken ct)
     {
         var tools = new ToolManager();
         if (disableTools)
             return tools;
+
+        if (turnCatalog is not null)
+        {
+            foreach (var tool in turnCatalog.RouteOwnedTools.Values.Where(tool =>
+                         turnCatalog.FinalAllowedToolNames.Contains(tool.Name)))
+            {
+                tools.Register(tool);
+            }
+            return tools;
+        }
 
         using (AgentToolContextScope.Push(discoveryContext))
         {
@@ -1105,7 +1146,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         AgentToolExecutionContext toolContext,
         IReadOnlyDictionary<string, string> externalMetadata,
         ToolManager tools,
-        string? attachmentVisibilityInstruction)
+        string? attachmentVisibilityInstruction,
+        AgentProfileTurnCatalog? turnCatalog)
     {
         var history = new global::Aevatar.AI.Core.Chat.ChatHistory
         {
@@ -1120,11 +1162,15 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 toolMiddlewares: BuildToolMiddlewaresForTurn(),
                 llmMiddlewares: _llmMiddlewares),
             hooks: null,
-            requestBuilder: _ => new LLMRequest
+            requestBuilder: catalog => new LLMRequest
             {
                 Messages =
                 [
-                    ChatMessage.System(BuildSystemPrompt(externalMetadata, toolContext, attachmentVisibilityInstruction)),
+                    ChatMessage.System(BuildSystemPrompt(
+                        externalMetadata,
+                        toolContext,
+                        attachmentVisibilityInstruction,
+                        turnCatalog: catalog)),
                 ],
                 Metadata = externalMetadata,
                 ToolContext = toolContext,
@@ -1444,7 +1490,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         IReadOnlyDictionary<string, string> metadata,
         AgentToolExecutionContext toolContext,
         string? attachmentVisibilityInstruction = null,
-        string? runtimeNotice = null)
+        string? runtimeNotice = null,
+        AgentProfileTurnCatalog? turnCatalog = null)
     {
         var runtimeFacts = new StringBuilder();
         AppendRuntimeFact(
@@ -1476,8 +1523,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             NyxIdChatSystemPrompt.Value,
             _builtInPromptFloorProvider.GetFloor(),
             global,
-            profile: null,
-            selectedSkill: null,
+            turnCatalog?.ProfilePromptLayer,
+            turnCatalog?.SelectedSkillPromptLayer,
             runtime,
             conversation: null).Prompt;
     }

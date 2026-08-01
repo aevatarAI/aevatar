@@ -1462,6 +1462,12 @@ public sealed partial class RoleGAgentStateCoverageTests
         new()
         {
             ReconciliationKey = new AgentProfileTurnReconciliationKey { SessionId = sessionId, Attempt = attempt },
+            BindingIdentity = new AgentProfileTurnBindingIdentity
+            {
+                Source = new AgentProfileExecutionSourceProvenance { ProfileId = "profile-a", StateVersion = 1,
+                    PublishedRevision = 1, PublishedSnapshotSha256 = ByteString.CopyFrom(new byte[32]) },
+                ExecutionBindingSha256 = ByteString.CopyFrom(Enumerable.Repeat((byte)1, 32).ToArray()),
+            },
             CandidateRoute = new AgentProfileTurnCandidateRouteIdentity
             {
                 SourceProfileId = "profile-a",

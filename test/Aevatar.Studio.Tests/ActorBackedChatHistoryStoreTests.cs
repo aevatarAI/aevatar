@@ -177,6 +177,84 @@ public sealed class ActorBackedChatHistoryStoreTests
     }
 
     [Fact]
+    public async Task DeleteConversationAsync_ShouldCarryStableOperationAndCompletionActor()
+    {
+        var actorId = ChatHistoryActorIds.Conversation("scope-a", "conversation-a");
+        var reader = new RecordingDocumentReader();
+        reader.Documents[actorId] = new ChatConversationCurrentStateDocument
+        {
+            Id = actorId,
+            ActorId = actorId,
+            ScopeId = "scope-a",
+            ConversationId = "conversation-a",
+            Deleted = false,
+        };
+        var dispatch = new RecordingDispatchService();
+        var bootstrap = new RecordingBootstrap(new StubActor(actorId));
+        var store = new ActorBackedChatHistoryStore(
+            bootstrap,
+            new StudioActorCommandDispatch(dispatch),
+            reader,
+            new RecordingDeliveryDocumentReader());
+        var request = new ChatHistoryConversationDeletionRequest
+        {
+            OperationId = "history-delete-operation-alpha",
+            ScopeId = "scope-a",
+            ConversationId = "conversation-a",
+            CompletionActorId = "nyxid-conversation-alpha",
+        };
+
+        var result = await store.DeleteConversationAsync(request);
+
+        result.Status.Should().Be(ChatHistoryDeleteResultStatus.Accepted);
+        bootstrap.EnsuredActorIds.Should().Equal(
+            ChatHistoryActorIds.Conversation(request.ScopeId, request.ConversationId),
+            ChatHistoryActorIds.LegacyConversation(request.ScopeId, request.ConversationId));
+        dispatch.Payloads.Should().HaveCount(2).And.AllBeOfType<ConversationDeletedEvent>();
+        dispatch.Payloads.Cast<ConversationDeletedEvent>().Should().OnlyContain(deletion =>
+            deletion.OperationId == request.OperationId &&
+            deletion.ScopeId == request.ScopeId &&
+            deletion.ConversationId == request.ConversationId &&
+            deletion.CompletionActorId == request.CompletionActorId);
+    }
+
+    [Fact]
+    public async Task DeleteConversationAsync_TypedLifecycleRequest_ShouldDispatchCanonicalTombstone_WhenProjectionIsMissing()
+    {
+        var actorId = ChatHistoryActorIds.Conversation("scope-a", "conversation-a");
+        var reader = new RecordingDocumentReader();
+        var bootstrap = new RecordingBootstrap(new StubActor(actorId));
+        var dispatch = new RecordingDispatchService();
+        var store = new ActorBackedChatHistoryStore(
+            bootstrap,
+            new StudioActorCommandDispatch(dispatch),
+            reader,
+            new RecordingDeliveryDocumentReader());
+        var request = new ChatHistoryConversationDeletionRequest
+        {
+            OperationId = "history-delete-operation-alpha",
+            ScopeId = "scope-a",
+            ConversationId = "conversation-a",
+            CompletionActorId = "nyxid-conversation-alpha",
+        };
+
+        var result = await store.DeleteConversationAsync(request);
+
+        result.Status.Should().Be(ChatHistoryDeleteResultStatus.Accepted);
+        bootstrap.EnsuredActorIds.Should().Equal(
+            actorId,
+            ChatHistoryActorIds.LegacyConversation("scope-a", "conversation-a"));
+        reader.GetKeys.Should().BeEmpty(
+            "lifecycle deletion cannot derive authoritative absence from a projection miss");
+        dispatch.Payloads.Should().HaveCount(2).And.AllBeOfType<ConversationDeletedEvent>();
+        dispatch.Payloads.Cast<ConversationDeletedEvent>().Should().OnlyContain(deletion =>
+            deletion.OperationId == request.OperationId &&
+            deletion.ScopeId == request.ScopeId &&
+            deletion.ConversationId == request.ConversationId &&
+            deletion.CompletionActorId == request.CompletionActorId);
+    }
+
+    [Fact]
     public async Task GetIndexAsync_ShouldPagePastTwoHundredFiftyConversationsWithStableOrdering()
     {
         var reader = new InMemoryProjectionDocumentStore<ChatConversationCurrentStateDocument, string>(
@@ -274,7 +352,13 @@ public sealed class ActorBackedChatHistoryStoreTests
             Payloads.Add(command.Payload);
             return Task.FromResult(
                 CommandDispatchResult<StudioActorCommandReceipt, StudioActorCommandStartError>.Success(
-                    new StudioActorCommandReceipt(command.Actor.Id, "command-1", "correlation-1")));
+                    new StudioActorCommandReceipt(command.Actor.Id, "command-1", "correlation-1"),
+                    new DispatchAdmission(
+                        true,
+                        "command-1",
+                        DateTimeOffset.Parse("2026-07-27T00:00:00Z"),
+                        command.Actor.Id,
+                        "correlation-1")));
         }
     }
 
@@ -320,9 +404,14 @@ public sealed class ActorBackedChatHistoryStoreTests
 
     private sealed class RecordingBootstrap(IActor actor) : IStudioActorBootstrap
     {
+        public List<string> EnsuredActorIds { get; } = [];
+
         public Task<IActor> EnsureAsync<TAgent>(string actorId, CancellationToken ct = default)
-            where TAgent : IAgent, IProjectedActor =>
-            Task.FromResult(actor);
+            where TAgent : IAgent, IProjectedActor
+        {
+            EnsuredActorIds.Add(actorId);
+            return Task.FromResult(actor);
+        }
     }
 
     private sealed class StubActor(string id) : IActor

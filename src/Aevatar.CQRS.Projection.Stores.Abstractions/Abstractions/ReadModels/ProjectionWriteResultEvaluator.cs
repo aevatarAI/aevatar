@@ -1,3 +1,5 @@
+using Google.Protobuf;
+
 namespace Aevatar.CQRS.Projection.Stores.Abstractions;
 
 public static class ProjectionWriteResultEvaluator
@@ -23,9 +25,21 @@ public static class ProjectionWriteResultEvaluator
 
         if (incoming.StateVersion == existing.StateVersion)
         {
-            return string.Equals(existing.LastEventId, incoming.LastEventId, StringComparison.Ordinal)
-                ? ProjectionWriteResult.Applied()
-                : ProjectionWriteResult.Conflict();
+            if (!string.Equals(existing.LastEventId, incoming.LastEventId, StringComparison.Ordinal))
+                return ProjectionWriteResult.Conflict();
+
+            if (existing is IMessage existingMessage && incoming is IMessage incomingMessage)
+            {
+                return existingMessage.Descriptor.FullName == incomingMessage.Descriptor.FullName &&
+                       existingMessage.ToByteString().Equals(incomingMessage.ToByteString())
+                    ? ProjectionWriteResult.Duplicate()
+                    : ProjectionWriteResult.Conflict();
+            }
+
+            // Legacy non-protobuf read models cannot prove byte equivalence.
+            // Preserve their historical same-event idempotency behavior while
+            // every typed projection read model uses the strict branch above.
+            return ProjectionWriteResult.Applied();
         }
 
         return ProjectionWriteResult.Applied();

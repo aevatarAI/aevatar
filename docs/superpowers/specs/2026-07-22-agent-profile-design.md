@@ -561,47 +561,44 @@ outside query call stacks.
 
 ## Runtime Resolution And Pinning
 
-For a new binding, the entry adapter maps `AgentProfileReference` to a
-`profileId` through the namespace read model and verifies management/binding
-authority. For later turns, the Application layer reads the binding owner's
-current-state read model and resolves the protected execution snapshot directly
-by stored `profileId`; the human reference is not load-bearing. The resolver
-verifies scope eligibility and the snapshot digest before use.
+For a new direct NyxID conversation, the entry adapter maps
+`AgentProfileReference` to a `profileId` through the namespace read model and
+verifies binding authority. It then reads the protected execution snapshot once
+by that opaque `profileId`, verifies scope eligibility and the snapshot digest,
+and seals the complete runtime facts into an immutable conversation-owned
+binding. Later turns read that persisted binding from the conversation Actor;
+they do not reread Profile or binding-owner read models. The human reference is
+not load-bearing after creation.
 
 At execution time, a committed bot or conversation binding is the authority to
 use that published Profile within its allowed scope. An inbound channel sender
 does not need Profile-management visibility. Caller authorization is still
 applied independently to tools and external effects.
 
-Resolution produces an immutable `ResolvedAgentProfileSnapshot`. The command
-builder passes that snapshot explicitly to the run-scoped or turn-scoped Actor.
-There is no ambient DI profile context, `AsyncLocal`, `Metadata`, `Headers`,
-`Items`, static current-profile property, or process-local registry.
+Resolution produces the final immutable `AgentProfileExecutionBinding`. The
+canonical conversation controller verifies that binding, resolves the route,
+and commits `AgentProfileTurnAuthorityState` before dispatch. The typed
+`NyxIdChatOperationDispatchCommand` passes both binding and committed authority
+to the turn Actor. There is no ambient DI profile context, `AsyncLocal`,
+`Metadata`, `Headers`, `Items`, static current-profile property, or process-local
+registry.
 
-Each turn records a typed execution stamp:
+The turn executor materializes one exact catalog from those typed facts for a
+fresh attempt and holds it only in the transient execution session. Every model
+round and same-attempt continuation reuses the same catalog object. Binding,
+authority, or reconciliation-key drift fails before model or tool invocation;
+a fresh retry with newly committed authority rematerializes the transient
+catalog. Provenance remains in typed binding and authority fields and is never
+inferred from prompt text.
 
-```proto
-message AgentProfileExecutionStamp {
-  string profile_id = 1;
-  int64 published_revision = 2;
-  int64 authority_state_version = 3;
-  bytes snapshot_sha256 = 4;
-}
-```
-
-The binding owner's existing current-state projection supplies the binding to
-the Application command builder. This is not a fourth Profile read model. The
-stamp is carried by the typed run/turn contract and committed terminal facts
-where provenance is needed. It is not inferred from prompt text.
-
-Snapshot timing is deliberate:
+Binding timing is deliberate:
 
 - draft changes have no runtime effect;
 - a published revision becomes eligible only after its execution read model is
   materialized;
-- a new turn resolves the currently visible published snapshot;
-- an in-flight turn keeps the snapshot with which it started; and
-- a later turn may use a newer published revision.
+- a new conversation binds the currently visible published snapshot;
+- every later turn uses that conversation's persisted immutable binding; and
+- Profile publication changes apply only to later conversation creation.
 
 A genuinely unbound agent follows the existing generic path. Once a binding is
 committed, missing, unpublished, inaccessible, lagging, or digest-invalid

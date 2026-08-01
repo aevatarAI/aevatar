@@ -27,7 +27,7 @@ Authoritative architecture and developer guides. Each covers one topic.
 - [Workflow LLM 流式链路详细架构文档（2026-02-25）](canon/llm-streaming.md)
 - [Managed Codex Execution](canon/managed-codex-execution.md)
 - [Module Placement Map](canon/module-placement-map.md)
-- [NyxIdChat API Identity And Streaming Contract](canon/nyxid-chat-api.md)
+- [NyxID Assistant Chat v1 Contract](canon/nyxid-chat-api.md)
 - [NyxID Chat Agent Profile Binding](canon/nyxid-chat-agent-profile-binding.md)
 - [NyxID Connected-Service LLM Tools](canon/nyxid-connected-service-tools.md)
 - [NyxID LLM Provider 集成指南](canon/nyxid-llm-integration.md)

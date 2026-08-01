@@ -2,6 +2,9 @@ syntax = "proto3";
 package aevatar.gagents.registry;
 option csharp_namespace = "Aevatar.GAgents.Registry";
 
+import "google/protobuf/timestamp.proto";
+import "gagent_registry_lifecycle.proto";
+
 // ─── State ───
 
 message GAgentRegistryEntry {
@@ -12,6 +15,20 @@ message GAgentRegistryEntry {
 
 message GAgentRegistryState {
   repeated GAgentRegistryEntry groups = 1;
+  map<string, GAgentRegistryUnregistrationOperation> unregistration_operations = 2;
+  repeated string unregistration_operation_order = 3;
+}
+
+message GAgentRegistryUnregistrationOperation {
+  string operation_id = 1;
+  string registry_actor_id = 2;
+  string scope_id = 3;
+  string agent_kind = 4;
+  string actor_id = 5;
+  string completion_actor_id = 6;
+  aevatar.gagent_service.scope_gagents.GAgentRegistryUnregistrationOutcome outcome = 7;
+  google.protobuf.Timestamp completed_at = 8;
+  google.protobuf.Timestamp completion_dispatch_accepted_at = 9;
 }
 
 // ─── Events ───
@@ -35,6 +52,22 @@ message ActorRegistrationKeyCanonicalizedEvent {
   string actor_id = 3;
 }
 
+message GAgentRegistryUnregistrationCommittedEvent {
+  string operation_id = 1;
+  string registry_actor_id = 2;
+  string scope_id = 3;
+  string agent_kind = 4;
+  string actor_id = 5;
+  string completion_actor_id = 6;
+  aevatar.gagent_service.scope_gagents.GAgentRegistryUnregistrationOutcome outcome = 7;
+  google.protobuf.Timestamp completed_at = 8;
+}
+
+message GAgentRegistryUnregistrationCompletionDispatchAcceptedEvent {
+  string operation_id = 1;
+  google.protobuf.Timestamp accepted_at = 2;
+}
+
 // ─── Admission ───
 
 enum GAgentRegistryOperation {
@@ -47,6 +80,7 @@ enum GAgentRegistryOperation {
   JOIN = 6;
   LIST_PARTICIPANTS = 7;
   DRAFT_RUN_REUSE = 8;
+  CONTROL = 9;
 }
 
 message ScopeResourceAdmissionRequested {

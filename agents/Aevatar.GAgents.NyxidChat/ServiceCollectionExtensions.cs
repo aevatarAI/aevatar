@@ -31,9 +31,11 @@ using Aevatar.GAgents.NyxidChat.LlmSelection;
 using Aevatar.GAgents.NyxidChat.Slash;
 using Aevatar.GAgents.NyxidChat.WorkflowDraftRun;
 using Aevatar.GAgents.NyxidChat.WorkflowRunDelivery;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.NyxidChat;
@@ -43,6 +45,8 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddNyxIdChat(this IServiceCollection services, IConfiguration? configuration = null)
     {
         ArgumentNullException.ThrowIfNull(services);
+        RuntimeHelpers.RunClassConstructor(typeof(NyxIdChatConversationGAgent).TypeHandle);
+        RuntimeHelpers.RunClassConstructor(typeof(NyxIdChatTurnGAgent).TypeHandle);
         RuntimeHelpers.RunClassConstructor(typeof(NyxIdChatGAgent).TypeHandle);
         RuntimeHelpers.RunClassConstructor(typeof(AgentRunGAgent).TypeHandle);
         RuntimeHelpers.RunClassConstructor(typeof(ChannelWorkflowDraftRunGAgent).TypeHandle);
@@ -51,7 +55,26 @@ public static class ServiceCollectionExtensions
 
         services.AddCqrsCore();
         services.AddToolSetRegistry();
-        services.AddHttpClient();
+        if (configuration is null)
+            services.AddNyxIdApiAccess();
+        else
+            services.AddNyxIdApiAccess(configuration);
+        var assistantActionsOptions = BindAssistantActionsOptions(configuration);
+        services.TryAddSingleton(assistantActionsOptions);
+        if (assistantActionsOptions.Enabled)
+        {
+            services.TryAddSingleton<NyxIdAssistantActionRegistrySnapshot>();
+            services.TryAddSingleton<INyxIdAssistantActionRegistrySource,
+                NyxIdAssistantActionRegistryHttpSource>();
+            services.TryAddSingleton<NyxIdAssistantActionRegistry>(sp =>
+                sp.GetRequiredService<NyxIdAssistantActionRegistrySnapshot>().GetRequired());
+            services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService,
+                NyxIdAssistantActionRegistryStartupService>());
+        }
+        else
+        {
+            services.TryAddSingleton(NyxIdAssistantActionRegistry.CreateDisabled());
+        }
         services.TryAddSingleton(provider => BindRelayOptions(configuration));
         services.TryAddSingleton<Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions>(
             provider => provider.GetRequiredService<NyxIdRelayOptions>());
@@ -68,6 +91,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IChannelRelayTailTextSender, MissingChannelRelayTailTextSender>();
         services.TryAddSingleton<IChannelRelayProxyResponseClassifier, MissingChannelRelayProxyResponseClassifier>();
         services.TryAddSingleton<NyxIdChatLifecycleFacade>();
+        services.TryAddSingleton<INyxIdChatControlCommandPort, NyxIdChatControlCommandPort>();
         AddNyxIdLifecycleCommands(services);
 
         // ─── Channel LLM reply run dispatch ───
@@ -144,6 +168,14 @@ public static class ServiceCollectionExtensions
                 overlayProvider: sp.GetService<ISystemSkillOverlayProvider>(),
                 larkOutboundClientFactory: sp.GetService<ILarkOutboundClientFactory>()));
         services.TryAddSingleton<IAgentRunReplyGenerationExecutorPort, AgentRunReplyGenerationExecutor>();
+        services.TryAddSingleton<INyxIdActionPostconditionPort>(sp =>
+            sp.GetService<INyxIdAuthorizationCatalogQueryPort>() is { } catalogQueryPort
+                ? new NyxIdActionPostconditionPort(
+                    catalogQueryPort,
+                    sp.GetRequiredService<TimeProvider>())
+                : new UnavailableNyxIdActionPostconditionPort());
+        services.TryAddSingleton<INyxIdChatTurnOperationExecutor, NyxIdChatTurnOperationExecutor>();
+        services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton<IAgentToolReceiptRenderer, AgentToolReceiptRenderer>();
         services.TryAddSingleton<ILarkCardReplyStreamRenderer, LarkCardReplyStreamRenderer>();
         services.TryAddSingleton<IWorkflowRunBackgroundDeliveryRegistrationPort, WorkflowRunBackgroundDeliveryRegistrationPort>();
@@ -220,8 +252,10 @@ public static class ServiceCollectionExtensions
         //   New principle: commands use accepted receipts; observation is owned by binders or attach-only sessions.
         services.TryAddSingleton(NyxIdChatInteractionFactories.CreateChatResolver);
         services.TryAddSingleton(NyxIdChatInteractionFactories.CreateApprovalResolver);
+        services.TryAddSingleton(NyxIdChatInteractionFactories.CreateActionContinuationResolver);
         services.TryAddSingleton(NyxIdChatInteractionFactories.CreateChatObservationLifecycle);
         services.TryAddSingleton(NyxIdChatInteractionFactories.CreateApprovalObservationLifecycle);
+        services.TryAddSingleton(NyxIdChatInteractionFactories.CreateActionContinuationObservationLifecycle);
         services.TryAddSingleton<
             ICommandObservationScopeLeasePreparation<NyxIdChatCommand, NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt, NyxIdChatStartError>>(
             sp => new NyxIdChatObservationScopeLeasePreparation<NyxIdChatCommand>(
@@ -234,12 +268,21 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<IProjectionScopeActivationService<NyxIdChatSessionRuntimeLease>>(),
                 sp.GetRequiredService<IProjectionScopeReleaseService<NyxIdChatSessionRuntimeLease>>(),
                 static command => command.TurnId));
+        services.TryAddSingleton<
+            ICommandObservationScopeLeasePreparation<NyxIdActionContinuationCommand, NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt, NyxIdChatStartError>>(
+            sp => new NyxIdChatObservationScopeLeasePreparation<NyxIdActionContinuationCommand>(
+                sp.GetRequiredService<IProjectionScopeActivationService<NyxIdChatSessionRuntimeLease>>(),
+                sp.GetRequiredService<IProjectionScopeReleaseService<NyxIdChatSessionRuntimeLease>>(),
+                static command => command.ContinuationTurnId));
         services.TryAddSingleton<ICommandEnvelopeFactory<NyxIdChatCommand>, NyxIdChatCommandEnvelopeFactory>();
         services.TryAddSingleton<ICommandEnvelopeFactory<NyxIdApprovalCommand>, NyxIdApprovalCommandEnvelopeFactory>();
+        services.TryAddSingleton<ICommandEnvelopeFactory<NyxIdActionContinuationCommand>,
+            NyxIdActionContinuationCommandEnvelopeFactory>();
         services.TryAddSingleton<ICommandTargetDispatcher<NyxIdChatCommandTarget>, ActorCommandTargetDispatcher<NyxIdChatCommandTarget>>();
         services.TryAddSingleton<ICommandReceiptFactory<NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt>, NyxIdChatAcceptedReceiptFactory>();
         services.TryAddSingleton<ICommandDispatchPipeline<NyxIdChatCommand, NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt, NyxIdChatStartError>, DefaultCommandDispatchPipeline<NyxIdChatCommand, NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt, NyxIdChatStartError>>();
         services.TryAddSingleton<ICommandDispatchPipeline<NyxIdApprovalCommand, NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt, NyxIdChatStartError>, DefaultCommandDispatchPipeline<NyxIdApprovalCommand, NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt, NyxIdChatStartError>>();
+        services.TryAddSingleton<ICommandDispatchPipeline<NyxIdActionContinuationCommand, NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt, NyxIdChatStartError>, DefaultCommandDispatchPipeline<NyxIdActionContinuationCommand, NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt, NyxIdChatStartError>>();
         services.TryAddSingleton<ICommandCompletionPolicy<AGUIEvent, NyxIdChatCompletionStatus>, NyxIdChatCompletionPolicy>();
         services.TryAddSingleton<ICommandFinalizeEmitter<NyxIdChatAcceptedReceipt, NyxIdChatCompletionStatus, AGUIEvent>, NyxIdChatFinalizeEmitter>();
         services.TryAddSingleton<ICommandDurableCompletionResolver<NyxIdChatAcceptedReceipt, NyxIdChatCompletionStatus>, NyxIdChatDurableCompletionResolver>();
@@ -271,6 +314,19 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<ICommandObservationScopeLeasePreparation<NyxIdApprovalCommand, NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt, NyxIdChatStartError>>()));
         services.TryAddSingleton<IRealtimeSession<NyxIdApprovalCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>(sp =>
             sp.GetRequiredService<ICommandInteractionService<NyxIdApprovalCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>());
+        services.TryAddSingleton<ICommandInteractionService<NyxIdActionContinuationCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>(sp =>
+            new DefaultCommandInteractionService<NyxIdActionContinuationCommand, NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, AGUIEvent, NyxIdChatCompletionStatus>(
+                sp.GetRequiredService<ICommandDispatchPipeline<NyxIdActionContinuationCommand, NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt, NyxIdChatStartError>>(),
+                sp.GetRequiredService<IEventOutputStream<AGUIEvent, AGUIEvent>>(),
+                sp.GetRequiredService<ICommandCompletionPolicy<AGUIEvent, NyxIdChatCompletionStatus>>(),
+                sp.GetRequiredService<ICommandFinalizeEmitter<NyxIdChatAcceptedReceipt, NyxIdChatCompletionStatus, AGUIEvent>>(),
+                sp.GetRequiredService<ICommandDurableCompletionResolver<NyxIdChatAcceptedReceipt, NyxIdChatCompletionStatus>>(),
+                sp.GetService<ILogger<DefaultCommandInteractionService<NyxIdActionContinuationCommand, NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, AGUIEvent, NyxIdChatCompletionStatus>>>(),
+                sp.GetRequiredService<ICommandObservationLifecycle<NyxIdActionContinuationCommand, NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt, NyxIdChatStartError>>(),
+                sp.GetRequiredService<ICommandReceiptFactory<NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt>>(),
+                sp.GetRequiredService<ICommandObservationScopeLeasePreparation<NyxIdActionContinuationCommand, NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt, NyxIdChatStartError>>()));
+        services.TryAddSingleton<IRealtimeSession<NyxIdActionContinuationCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>(sp =>
+            sp.GetRequiredService<ICommandInteractionService<NyxIdActionContinuationCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>());
     }
 
     private static void AddNyxIdLifecycleCommands(IServiceCollection services)
@@ -296,6 +352,14 @@ public static class ServiceCollectionExtensions
     {
         var options = new NyxIdRelayOptions();
         configuration?.GetSection("Aevatar:NyxId:Relay").Bind(options);
+        return options;
+    }
+
+    private static NyxIdAssistantActionsOptions BindAssistantActionsOptions(
+        IConfiguration? configuration)
+    {
+        var options = new NyxIdAssistantActionsOptions();
+        configuration?.GetSection(NyxIdAssistantActionsOptions.ConfigSection).Bind(options);
         return options;
     }
 }

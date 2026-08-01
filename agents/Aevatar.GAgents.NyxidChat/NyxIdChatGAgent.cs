@@ -37,7 +37,7 @@ namespace Aevatar.GAgents.NyxidChat;
 // Refactor (iter27/cluster-027-skill-registry-remote-skill-process-state):
 //   Old pattern: SkillRegistry 暴露混合 local + remote skill 注册并用 5min TTL process-wide cache 缓存 remote skill,违反读写分离 + 多用户 token 共享 + 进程内事实状态
 //   New principle: 删 SkillRegistry + TTL tests + 5min cache;新建 local-only LocalSkillCatalog;remote skill 每次 use_skill 调用 IRemoteSkillFetcher.FetchSkillAsync(currentToken, ...) 不缓存;docs/canon factual sync
-[GAgent(NyxIdChatServiceDefaults.GAgentKind)]
+[GAgent(NyxIdChatServiceDefaults.LegacyGAgentKind)]
 public sealed class NyxIdChatGAgent : RoleGAgent
 {
     private const int SystemSkillOverlayPromptLogSampleRate = 64;
@@ -85,7 +85,7 @@ public sealed class NyxIdChatGAgent : RoleGAgent
     // Refactor (iter47/issue-877-chat-endpoints-own-lifecycle-and-compensation):
     //   Old pattern: Chat endpoints owned actor lifecycle, registry compensation, participant orchestration, terminal-state recovery, and chat history command-port side effects.
     //   New principle: Endpoint is adapter-only (HTTP/SSE); typed command facade owns lifecycle; existing chat actors own compensation events and terminal-state publication.
-    [EventHandler(AllowSelfHandling = true)]
+    // Canonical create/delete commands are owned by NyxIdChatConversationGAgent.
     public async Task HandleCreationCompensationAsync(
         NyxIdChatConversationCreationCompensationRequested command)
     {
@@ -128,7 +128,6 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         }
     }
 
-    [EventHandler(AllowSelfHandling = true)]
     public async Task HandleCreateConversationAsync(
         NyxIdChatConversationCreateCommand command)
     {
@@ -190,7 +189,6 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         }
     }
 
-    [EventHandler(AllowSelfHandling = true)]
     public async Task HandleDeleteConversationAsync(
         NyxIdChatConversationDeleteCommand command)
     {
@@ -257,7 +255,6 @@ public sealed class NyxIdChatGAgent : RoleGAgent
     // Refactor (iter47/issue-877-chat-endpoints-own-lifecycle-and-compensation):
     //   Old pattern: Chat endpoints owned actor lifecycle, registry compensation, participant orchestration, terminal-state recovery, and chat history command-port side effects.
     //   New principle: Endpoint is adapter-only (HTTP/SSE); typed command facade owns lifecycle; existing chat actors own compensation events and terminal-state publication.
-    [EventHandler(AllowSelfHandling = true)]
     public async Task HandleDeletionCompensationAsync(
         NyxIdChatConversationDeletionCompensationRequested command)
     {
@@ -365,6 +362,7 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         if (_turnCatalogMaterializer is null)
         {
             var unavailable = CreateFailClosedPreparation(
+                binding,
                 request.SessionId,
                 AgentProfileTurnDegradationReason.MaterializerUnavailable);
             RecordRouteDecision(unavailable, "materializer_unavailable", 0);
@@ -391,6 +389,7 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         {
             Logger.LogWarning(ex, "Agent profile turn authority preparation failed closed.");
             preparation = CreateFailClosedPreparation(
+                binding,
                 request.SessionId,
                 AgentProfileTurnDegradationReason.MaterializationFailed);
         }
@@ -480,32 +479,11 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         if (_activeAgentProfileTelemetryContext is not { } context)
             return;
 
-        var diagnostics = preparation.Diagnostics;
-        var routeDiagnostic = diagnostics.FirstOrDefault(static diagnostic => diagnostic.Code is
-            AgentProfileTurnDiagnosticCode.AliasMatched or
-            AgentProfileTurnDiagnosticCode.ClassifierMatched or
-            AgentProfileTurnDiagnosticCode.ClassifierNoMatch or
-            AgentProfileTurnDiagnosticCode.ClassifierFailed);
-        var authority = preparation.Authority;
-        var degradation = authority.DegradationReasons
-            .FirstOrDefault(static reason => reason != AgentProfileTurnDegradationReason.Unspecified);
-        var routingMode = routeDiagnostic?.Code switch
-        {
-            AgentProfileTurnDiagnosticCode.AliasMatched => "alias",
-            AgentProfileTurnDiagnosticCode.ClassifierMatched or
-                AgentProfileTurnDiagnosticCode.ClassifierNoMatch or
-                AgentProfileTurnDiagnosticCode.ClassifierFailed => "classifier",
-            _ => "none",
-        };
-        AgentProfileTelemetry.RecordRouteDecision(
+        NyxIdChatAgentProfileTelemetry.RecordRouteDecision(
             context,
-            routingMode,
-            authority.CandidateRoute?.IntentId ?? string.Empty,
-            degradation == AgentProfileTurnDegradationReason.Unspecified
-                ? outcome
-                : degradation.ToString().ToLowerInvariant(),
-            routeDiagnostic?.Code.ToString().ToLowerInvariant() ?? string.Empty,
-            Math.Max(0, durationMs));
+            preparation,
+            outcome,
+            durationMs);
     }
 
     private void RecordMaterialization(
@@ -516,28 +494,14 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         if (_activeAgentProfileTelemetryContext is not { } context)
             return;
 
-        var catalog = materialization.Catalog;
-        var selectedSkill = catalog.SelectedSkillPromptLayer;
-        var outcome = selectedSkill is not null ? "ok" : "degraded";
-        if (committedAuthority.SelectedExactSkillRef is { } selectedRef)
-        {
-            AgentProfileTelemetry.RecordSelectedSkill(
-                context,
-                selectedRef.Guid,
-                selectedRef.LiteralVersion);
-        }
-
-        AgentProfileTelemetry.RecordPromptAndToolMaterialization(
+        NyxIdChatAgentProfileTelemetry.RecordMaterialization(
             context,
-            selectedSkill is not null
-                ? "selected_skill"
-                : catalog.ProfilePromptLayer is not null ? "profile" : "recovery",
-            selectedSkill?.ActualUtf8Bytes ?? 0,
-            catalog.FinalAllowedToolNames.Count,
-            outcome);
+            committedAuthority,
+            materialization);
     }
 
     private static AgentProfileTurnAuthorityPreparation CreateFailClosedPreparation(
+        AgentProfileExecutionBinding binding,
         string sessionId,
         AgentProfileTurnDegradationReason reason) =>
         AgentProfileTurnAuthorityPreparation.Create(new AgentProfileTurnAuthorityState
@@ -547,6 +511,7 @@ public sealed class NyxIdChatGAgent : RoleGAgent
                 SessionId = sessionId,
                 Attempt = 1,
             },
+            BindingIdentity = AgentProfileTurnAuthorityTransitionPolicy.CreateBindingIdentity(binding),
             AuthorityKind = AgentProfileTurnAuthorityKind.RestrictedEmpty,
             DegradationReasons = { reason },
         });
@@ -603,15 +568,7 @@ public sealed class NyxIdChatGAgent : RoleGAgent
     }
 
     private static AgentProfileTelemetryContext CreateTelemetryContext(AgentProfileExecutionBinding binding) =>
-        new(
-            binding.Source.ProfileId,
-            binding.Source.StateVersion,
-            binding.Source.PublishedRevision,
-            Convert.ToHexString(binding.Source.PublishedSnapshotSha256.Span).ToLowerInvariant(),
-            Convert.ToHexString(binding.DeterministicBindingSha256.Span).ToLowerInvariant(),
-            binding.Admission.ActivationMode.ToString().ToLowerInvariant(),
-            binding.Admission.RolloutRelease,
-            binding.Admission.RolloutStage);
+        NyxIdChatAgentProfileTelemetry.CreateContext(binding);
 
     private static void AppendRuntimeFact(System.Text.StringBuilder builder, string? content)
     {

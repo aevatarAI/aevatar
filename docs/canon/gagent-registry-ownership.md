@@ -30,7 +30,26 @@ Target actors may own their capability-local business facts. They must not indep
 - unregister actor membership for a scope
 - return only an honest dispatch/acceptance result unless a stronger receipt is explicitly modeled
 - expose a committed or admission-visible receipt when a caller needs create-then-immediately-operate semantics
-- expose a distinct removal receipt for unregister; removal must not be reported as admission-visible
+- never report removal from an ordinary unregister dispatch receipt
+
+`IGAgentActorRegistryUnregistrationPort` is the narrow continuation contract for
+workflows that must observe committed removal or authoritative absence:
+
+- carry one stable operation ID plus exact registry Actor, scope, `AgentKind`,
+  target Actor, and completion Actor identities
+- require the completion Actor to equal the target Actor, so an unregister
+  operation cannot redirect lifecycle authority to another Actor
+- let the registry Actor commit removal or authoritative absence before it emits
+  `GAgentRegistryUnregistrationCompleted`
+- emit the completion with the actual registry Actor as the direct-envelope
+  publisher; consumers must match both payload identity and envelope publisher
+- redeliver the immutable completion for an exact duplicate and fail closed for
+  a changed tuple
+- retain a typed deterministic order of at most 256 operations; only callbacks
+  already admitted to their completion Actor inbox are evictable, while rejected
+  callbacks remain pinned for exact redrive
+- reject a new operation before commit when all retained entries are still
+  pending, rather than dropping active recovery authority
 
 `IGAgentActorRegistryQueryPort` owns registry listing reads:
 
@@ -55,6 +74,20 @@ Create:
 3. Registry command port submits authoritative scope membership to the registry ownership authority.
 4. If the response or follow-up command path promises that the target is immediately operable, the application command surface must obtain a committed or admission-visible registry receipt through the registry ownership contract. An accepted-for-dispatch receipt is not enough.
 5. The response must not promise immediate registry list visibility.
+
+Unregister with committed continuation:
+
+1. The lifecycle owner commits the deterministic registry Actor ID and one
+   stable unregistration operation ID.
+2. The narrow unregistration port dispatches the exact typed tuple to that
+   per-scope registry Actor and returns only accepted-for-dispatch.
+3. The registry Actor commits removal or authoritative absence and the immutable
+   completion tuple before callback dispatch.
+4. A rejected callback remains retained and exact-redrivable. Accepted callback
+   admission makes an old terminal entry eligible for bounded eviction; it does
+   not rewrite the completion fact.
+5. The lifecycle owner advances only when payload identity and direct-envelope
+   publisher both match its committed tuple.
 
 List:
 
@@ -102,3 +135,10 @@ Changes in this area must cover:
 - registry, admission, draft-run, tool, and frontend runtime paths use `AgentKind`/`agent_kind`
 - legacy identity aliases are absent from positive request schemas and are rejected at HTTP/tool boundaries
 - old CLR-keyed rows are canonicalized only through actor-owned kind facts, and unmappable rows are not admitted
+- ordinary unregister receipts never claim committed removal
+- typed unregistration commits before callback, exact duplicates redeliver, and
+  changed tuples or redirected completion Actors fail closed
+- completion payload identity is bound to the actual registry Actor publisher
+- the 256-entry operation ledger evicts only dispatch-admitted callbacks,
+  preserves rejected callbacks for exact redrive, and rejects all-pending
+  overflow without growing Actor state

@@ -68,9 +68,9 @@
 - Delete or migrate: `test/Aevatar.AI.ToolProviders.Ornn.Tests/OrnnExactRemoteSkillFetcherTests.cs`
 
 **Interfaces:**
-- Replaces `AgentProfileSnapshot` with `AgentProfileExecutionBinding` carrying
-  source Profile ID/state version/revision/digest, rollout provenance, effective
-  policies, and sealed routing members.
+- Defines the final `AgentProfileExecutionBinding` carrying source Profile
+  ID/state version/revision/digest, rollout provenance, effective policies, and
+  sealed routing members.
 - Materialization no longer accepts an access token or remote fetcher.
 
 - [ ] Add failing tests proving binding provenance persistence/replay and zero
@@ -85,21 +85,28 @@
 ### Task 3: Add Read-Model-Backed NyxID Conversation Binding
 
 **Files:**
-- Replace: `agents/Aevatar.GAgents.NyxidChat/AgentProfiles/INyxIdChatAgentProfileSnapshotSource.cs`
-- Replace: `agents/Aevatar.GAgents.NyxidChat/AgentProfiles/DisabledNyxIdChatAgentProfileSnapshotSource.cs`
+- Modify: `agents/Aevatar.GAgents.NyxidChat/AgentProfiles/INyxIdChatAgentProfileBindingSource.cs`
+- Modify: `agents/Aevatar.GAgents.NyxidChat/AgentProfiles/DisabledNyxIdChatAgentProfileBindingSource.cs`
 - Modify: `agents/Aevatar.GAgents.NyxidChat/NyxIdChatLifecycleFacade.cs`
+- Modify: `agents/Aevatar.GAgents.NyxidChat/NyxIdChatConversationGAgent.cs`
+- Modify: `agents/Aevatar.GAgents.NyxidChat/NyxIdChatTurnGAgent.cs`
+- Modify: `agents/Aevatar.GAgents.NyxidChat/NyxIdChatTurnOperationExecutor.cs`
 - Modify: `agents/Aevatar.GAgents.NyxidChat/ServiceCollectionExtensions.cs`
 - Replace: `src/Aevatar.Mainnet.Host.Api/Profiles/MainnetAgentProfileRolloutSelector.cs`
-- Replace: `src/Aevatar.Mainnet.Host.Api/AgentProfiles/MainnetNyxIdChatAgentProfileSnapshotSource.cs`
+- Modify: `src/Aevatar.Mainnet.Host.Api/AgentProfiles/MainnetNyxIdChatAgentProfileBindingSource.cs`
 - Modify: `src/Aevatar.Mainnet.Host.Api/AgentProfiles/NyxIdChatAgentProfileOptions.cs`
 - Modify: `src/Aevatar.Mainnet.Host.Api/AgentProfiles/NyxIdChatAgentProfileOptionsValidator.cs`
 - Modify: `src/Aevatar.Mainnet.Host.Api/Hosting/MainnetHostBuilderExtensions.cs`
 - Modify: `src/Aevatar.Mainnet.Host.Api/appsettings.json`
+- Modify: `src/Aevatar.AI.Core/Observability/AgentProfileTelemetry.cs`
 - Test: `test/Aevatar.Capabilities.Tests/MainnetAgentProfileRolloutSelectorTests.cs`
+- Test: `test/Aevatar.Capabilities.Tests/MainnetNyxIdChatAgentProfileBindingSourceTests.cs`
 - Test: `test/Aevatar.Capabilities.Tests/NyxIdChatAgentProfileOptionsTests.cs`
 - Test: `test/Aevatar.Capabilities.Tests/MainnetHostCompositionTests.cs`
 - Test: `test/Aevatar.AI.Tests/NyxIdChatProfileActivationModeTests.cs`
 - Test: `test/Aevatar.AI.Tests/NyxIdChatGAgentTests.cs`
+- Test: `test/Aevatar.AI.Tests/NyxIdChatConversationGAgentTests.cs`
+- Test: `test/Aevatar.AI.Tests/NyxIdChatTurnGAgentTests.cs`
 
 **Interfaces:**
 
@@ -134,6 +141,13 @@ public interface INyxIdChatAgentProfileBindingSource
   snapshot once by opaque Profile ID and verify every source/admission pin.
 - [ ] Map the complete immutable execution binding and carry it in the create
   command; never query after Actor creation.
+- [ ] Make the canonical conversation controller commit typed turn authority
+  before dispatch, then carry both binding and authority through the turn Actor
+  into one transient exact catalog reused across provider rounds and
+  same-attempt continuations.
+- [ ] Add canonical propagation tests for drift fencing, fresh-retry
+  rematerialization, real multi-round provider requests, and route,
+  materialization, one-shot first-output, and post-commit plan/handoff telemetry.
 - [ ] Register only the read-model-backed binder in Mainnet and the typed
   disabled binder in non-Mainnet hosts.
 - [ ] Run capabilities, lifecycle, query-boundary, and stability tests.

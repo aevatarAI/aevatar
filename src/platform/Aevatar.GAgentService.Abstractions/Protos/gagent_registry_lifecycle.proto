@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+package aevatar.gagent_service.scope_gagents;
+option csharp_namespace = "Aevatar.GAgentService.Abstractions.ScopeGAgents";
+
+import "google/protobuf/timestamp.proto";
+
+enum GAgentRegistryUnregistrationOutcome {
+  G_AGENT_REGISTRY_UNREGISTRATION_OUTCOME_UNSPECIFIED = 0;
+  G_AGENT_REGISTRY_UNREGISTRATION_OUTCOME_COMMITTED_REMOVED = 1;
+  G_AGENT_REGISTRY_UNREGISTRATION_OUTCOME_AUTHORITATIVE_ABSENT = 2;
+}
+
+message GAgentRegistryUnregistrationRequest {
+  string operation_id = 1;
+  string registry_actor_id = 2;
+  string scope_id = 3;
+  string agent_kind = 4;
+  string actor_id = 5;
+  string completion_actor_id = 6;
+}
+
+message GAgentRegistryUnregistrationCompleted {
+  string operation_id = 1;
+  string registry_actor_id = 2;
+  string scope_id = 3;
+  string agent_kind = 4;
+  string actor_id = 5;
+  string completion_actor_id = 6;
+  GAgentRegistryUnregistrationOutcome outcome = 7;
+  google.protobuf.Timestamp completed_at = 8;
+}

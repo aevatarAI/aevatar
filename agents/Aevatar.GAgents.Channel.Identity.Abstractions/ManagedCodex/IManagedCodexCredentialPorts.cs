@@ -4,15 +4,6 @@ using Aevatar.GAgents.Channel.Abstractions;
 namespace Aevatar.GAgents.Channel.Identity.Abstractions;
 
 /// <summary>
-/// Current non-secret managed Codex credential facts materialized from the
-/// authoritative per-user actor.
-/// </summary>
-public sealed record ManagedCodexCredentialSnapshot(
-    ManagedCodexCredentialDescriptor Credential,
-    IReadOnlyList<ManagedCodexCredentialCleanup> PendingRevocations,
-    long StateVersion);
-
-/// <summary>
 /// Read-only current-state projection query for one NyxID user's managed Codex
 /// invocation credential.
 /// </summary>
@@ -25,6 +16,32 @@ public interface IManagedCodexCredentialQueryPort
 }
 
 /// <summary>
+/// Binds an owner-scoped observation to readiness-capable committed managed
+/// Codex credential snapshots emitted by the unified Projection Pipeline.
+/// </summary>
+public interface IManagedCodexCredentialReadinessObservationPort
+{
+    /// <summary>
+    /// Creates a fresh observation session that emits only committed provision,
+    /// rotation, policy-reconciliation, or explicit readiness-confirmation facts.
+    /// </summary>
+    Task<IManagedCodexCredentialReadinessObservationLease> BindAsync(
+        ExternalSubjectRef owner,
+        CancellationToken ct = default);
+}
+
+/// <summary>
+/// Reads committed managed Codex credential snapshots for one observation
+/// session.
+/// </summary>
+public interface IManagedCodexCredentialReadinessObservationLease : IAsyncDisposable
+{
+    /// <summary>Streams cloned authoritative readiness snapshots until cancellation or lease disposal.</summary>
+    IAsyncEnumerable<ManagedCodexCredentialSnapshot> ReadAllAsync(
+        CancellationToken ct = default);
+}
+
+/// <summary>
 /// Accepted-only command boundary for the per-user managed Codex credential actor.
 /// </summary>
 public interface IManagedCodexCredentialCommandPort
@@ -32,12 +49,32 @@ public interface IManagedCodexCredentialCommandPort
     /// <summary>Admits an initial provisioned descriptor.</summary>
     Task<DispatchAdmission> CommitProvisionedAsync(
         ManagedCodexCredentialDescriptor credential,
+        IReadOnlyList<ManagedCodexCredentialCleanup> obsoleteCredentialCleanups,
         CancellationToken ct = default);
 
-    /// <summary>Admits a rotation guarded by the expected current NyxID API key ID.</summary>
+    /// <summary>
+    /// Admits a rotation guarded by the exact Actor-owned previous-credential
+    /// cleanup that must be committed atomically with the new descriptor.
+    /// </summary>
     Task<DispatchAdmission> CommitRotatedAsync(
         string expectedPreviousApiKeyId,
         ManagedCodexCredentialDescriptor credential,
+        ManagedCodexCredentialCleanup previousCredentialCleanup,
+        IReadOnlyList<ManagedCodexCredentialCleanup> obsoleteCredentialCleanups,
+        CancellationToken ct = default);
+
+    /// <summary>Admits policy reconciliation while preserving the current API key and Vault reference.</summary>
+    Task<DispatchAdmission> CommitPolicyReconciledAsync(
+        string expectedApiKeyId,
+        ManagedCodexCredentialDescriptor credential,
+        IReadOnlyList<ManagedCodexCredentialCleanup> obsoleteCredentialCleanups,
+        CancellationToken ct = default);
+
+    /// <summary>Admits an idempotent readiness confirmation for the exact expected active credential.</summary>
+    Task<DispatchAdmission> ConfirmReadinessAsync(
+        ExternalSubjectRef owner,
+        ManagedCodexCredentialDescriptor expectedCredential,
+        ManagedCodexCredentialReadinessEvidence readinessEvidence,
         CancellationToken ct = default);
 
     /// <summary>Admits credential revocation and its independently retryable cleanup tracks.</summary>
@@ -58,6 +95,7 @@ public interface IManagedCodexCredentialCommandPort
     Task<DispatchAdmission> CompleteCleanupTrackAsync(
         ExternalSubjectRef owner,
         string apiKeyId,
+        string secretRef,
         ManagedCodexCredentialCleanupTrack track,
         DateTimeOffset completedAt,
         CancellationToken ct = default);

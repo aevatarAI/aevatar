@@ -106,12 +106,13 @@ and do not create an Actor.
 
 ## Runtime Binding
 
-The current `Aevatar.AI.Abstractions.AgentProfileSnapshot` is renamed and
-modeled as a query-derived execution binding, not a content authority. It
-contains source Profile ID, source state version, published revision, published
-snapshot digest, rollout release/stage/mode, normalized effective policies,
-and sealed execution members. Each member contains the authoritative routing
-facts plus the already sealed instruction body and content digest.
+The final runtime contract is
+`Aevatar.AI.Abstractions.AgentProfileExecutionBinding`. It is a query-derived
+execution binding, not a content authority. It contains source Profile ID,
+source state version, published revision, published snapshot digest, rollout
+release/stage/mode, normalized effective policies, and sealed execution members.
+Each member contains the authoritative routing facts plus the already sealed
+instruction body and content digest.
 
 The binding has its own deterministic digest covering the source provenance,
 rollout admission, effective policies, and sealed members. The Actor accepts an
@@ -136,6 +137,20 @@ from the Actor-owned binding. Runtime code removes `IExactRemoteSkillFetcher`,
 Ornn access tokens, network timeouts, and runtime `SKILL.md` parsing. Ornn is
 used only by the publish-side Profile sealer and deployment provisioning tool.
 
+Canonical direct chat keeps the binding in
+`NyxIdChatConversationGAgentState`. The conversation controller verifies that
+binding, selects the route, and commits `AgentProfileTurnAuthorityState` before
+dispatching a typed command carrying both binding and authority to the turn
+Actor. The turn executor materializes one exact `AgentProfileTurnCatalog` into
+its transient execution session. Every provider round and same-attempt
+continuation reuses that same object; any binding, authority, or reconciliation
+drift fails before model or tool invocation. A fresh retry with newly committed
+authority clears the transient catalog and rematerializes it.
+
+Telemetry remains on the shared pipeline: controller route/materialization,
+one-shot first streamed output across continuation rounds, and plan/handoff only
+after the typed operation-reconciled fact commits with no successor command.
+
 ## Rollout Spec Portability
 
 The rollout provisioning tool must not execute a packaged x64 `protoc` at
@@ -150,7 +165,7 @@ without a global compiler or Rosetta.
 - Selected but namespace/read model unavailable or stale: admission unavailable.
 - Manifest pin, exact closure, or deterministic digest mismatch: admission
   unavailable with no Profile content in logs.
-- Bound snapshot replacement or tampering: reject in the Actor before effects.
+- Bound binding replacement or tampering: reject in the Actor before effects.
 - Turn classifier/materializer failure: existing bounded fail-closed recovery.
 
 ## Governance

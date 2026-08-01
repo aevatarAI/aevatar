@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 
 namespace Aevatar.GAgents.ChatHistory;
@@ -7,10 +8,10 @@ namespace Aevatar.GAgents.ChatHistory;
 public static class ChatHistoryActorIds
 {
     public static string Conversation(string scopeId, string conversationId) =>
-        $"chat-conversation:{HashTuple(Normalize(scopeId), Normalize(conversationId))}";
+        ChatHistoryConversationActorIds.Canonical(scopeId, conversationId);
 
     public static string LegacyConversation(string scopeId, string conversationId) =>
-        $"chat-{Normalize(scopeId)}-{Normalize(conversationId)}";
+        ChatHistoryConversationActorIds.Legacy(scopeId, conversationId);
 
     public static string TurnDelivery(string workflowActorId, string workflowCommandId) =>
         $"chat-history-delivery-{workflowActorId.Trim()}-{workflowCommandId.Trim()}";
