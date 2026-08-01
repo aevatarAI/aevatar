@@ -5,7 +5,7 @@
   "snapshotInterval": 50,
   "enableEventCompaction": true,
   "retainedEventsAfterSnapshot": 5,
-  "crashAfterSuccessfulAppends": 12,
+  "crashAfterSuccessfulAppendFences": [4, 12, 24],
   "workloads": [
     {
       "name": "short_text",

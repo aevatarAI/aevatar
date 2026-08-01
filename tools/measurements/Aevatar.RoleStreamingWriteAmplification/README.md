@@ -16,9 +16,15 @@ measured samples per workload.
 
 The actor is initialized outside the measured turn. The fixed snapshot policy
 uses an interval of 50 committed versions, compaction enabled, and five
-retained events. Crash recovery injects a persistent append failure after 12
-successful turn appends, creates a new actor activation over the same stores,
-and re-dispatches the same session.
+retained events. Crash recovery sweeps failure fences after 4, 12, and 24
+successful turn appends. Each fence creates a new actor activation over the
+same stores and re-dispatches the same session.
+
+Each instrumented resource sample has a matched control turn with the same
+workload, adapter, actor lifecycle, and committed-state publisher but without
+the append/snapshot measurement decorators. Even iterations run control first;
+odd iterations run it second. This alternating order reduces systematic order
+bias without claiming to remove process-level runtime noise.
 
 ## Run
 
@@ -28,17 +34,28 @@ InMemory only:
 tools/measurements/Aevatar.RoleStreamingWriteAmplification/run.sh --adapter inmemory
 ```
 
-InMemory plus a local Garnet 2.1-compatible server:
+InMemory plus the pinned Garnet 2.1.0 image used by the checked-in result:
 
 ```bash
 docker run -d --name aevatar-role-stream-measure -p 6399:6379 \
-  ghcr.io/microsoft/garnet:latest --lua --lua-transaction-mode
+  ghcr.io/microsoft/garnet:2.1.0@sha256:4e298b9b274088cded4156853a32b85fed7b42242eb9ca90216d332e25f2bceb \
+  --lua --lua-transaction-mode
 
 AEVATAR_TEST_GARNET_CONNECTION_STRING='localhost:6399,abortConnect=false' \
+AEVATAR_TEST_GARNET_IMAGE_REFERENCE='ghcr.io/microsoft/garnet:2.1.0@sha256:4e298b9b274088cded4156853a32b85fed7b42242eb9ca90216d332e25f2bceb' \
   tools/measurements/Aevatar.RoleStreamingWriteAmplification/run.sh --adapter all
 
 docker rm -f aevatar-role-stream-measure
 ```
+
+Garnet selection is fail-closed. Before warmups, the harness requires the
+exact declared image reference above, verifies `server_name=garnet` and
+`garnet_version=2.1.0` through `INFO SERVER`, verifies RESP2 standalone/master
+identity through `HELLO 2`, executes a Lua `redis.call` read/write probe, and
+executes the production `GarnetEventStore` append and compaction scripts. The
+image reference remains operator-declared because the Redis protocol does not
+expose an OCI digest; the independently observed server identity and all
+verified capabilities are recorded beside it in raw output.
 
 Validate the fixed config without running samples:
 
@@ -54,8 +71,10 @@ dotnet run \
 
 - A non-empty `ConfirmEventsAsync` maps one-to-one to `AppendAsync` on the
   measured path. Failed append attempts are reported separately.
-- Committed bytes are protobuf `StateEvent.CalculateSize()` values captured
-  before the adapter call.
+- Committed bytes are protobuf `StateEvent.CalculateSize()` scalar totals. The
+  append decorator does not clone committed events. It retains event
+  references only for crash-recovery samples, whose gross resource values are
+  paired with the same uninstrumented control as every other workload.
 - Snapshot bytes are the typed `RoleGAgentState` protobuf size. The checked-in
   run uses the InMemory snapshot store for both adapters; Garnet measurements
   cover event append/read/version/compaction I/O, not a production snapshot
@@ -63,7 +82,17 @@ dotnet run \
 - Mailbox occupancy means in-flight plus queued chat turns. The harness awaits
   one dispatch at a time, so occupancy is one and queued depth is zero; all
   provider chunks execute inside that single actor turn.
-- CPU, allocation, managed heap, and working-set values are process deltas.
+- Gross CPU/allocation values include append/snapshot decorators. Net values
+  are the matched undecorated control turn; the signed gross-minus-control
+  delta quantifies measurement overhead and can be negative under process
+  noise. CPU and allocation remain process deltas (`TotalProcessorTime` and
+  `GC.GetTotalAllocatedBytes(true)`), so neither gross nor net is a production
+  cost attribution. Managed heap and working set are gross diagnostics only.
+- Recovery validation subscribes to the actual `CommittedStateEventPublished`
+  stream. It compares append-acknowledged progress, adapter durable readback,
+  and projection-visible progress by event ID, `session_id + sequence`, and a
+  sequence-free payload SHA-256 fingerprint. Redo is reported only as payload
+  overlap observed at each configured fence; no fence is labelled a maximum.
 - Percentiles use nearest rank. With twelve samples, p95 and p99 are both the
   maximum sample and must not be treated as production tail estimates.
 

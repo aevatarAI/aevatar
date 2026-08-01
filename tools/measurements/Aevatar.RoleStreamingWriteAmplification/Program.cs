@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Runtime;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aevatar.AI.Abstractions;
@@ -12,6 +13,7 @@ using Aevatar.AI.Core;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions.Tools;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
@@ -29,6 +31,10 @@ namespace Aevatar.RoleStreamingWriteAmplification;
 
 public static class Program
 {
+    private const string GarnetVersion = "2.1.0";
+    private const string GarnetImageReference =
+        "ghcr.io/microsoft/garnet:2.1.0@sha256:4e298b9b274088cded4156853a32b85fed7b42242eb9ca90216d332e25f2bceb";
+
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         WriteIndented = true,
@@ -51,48 +57,103 @@ public static class Program
         var adapterResults = new List<AdapterResult>();
         foreach (var adapterName in selectedAdapters)
         {
-            await using var adapter = await AdapterContext.TryCreateAsync(adapterName);
-            if (!adapter.Available)
-            {
-                adapterResults.Add(new AdapterResult(
-                    adapterName,
-                    "unavailable",
-                    adapter.UnavailableReason,
-                    []));
-                continue;
-            }
+            await using var adapter = await AdapterContext.CreateAsync(
+                adapterName,
+                GarnetVersion,
+                GarnetImageReference);
 
             Console.WriteLine($"Measuring adapter={adapterName}");
             var workloadResults = new List<WorkloadResult>();
             foreach (var workload in config.Workloads)
             {
-                Console.WriteLine($"  workload={workload.Name}");
-                for (var warmup = 0; warmup < config.WarmupIterations; warmup++)
-                    _ = await RunSampleAsync(adapter.EventStore!, config, workload, warmup, measured: false);
-
-                var samples = new List<TurnSample>(config.MeasuredIterations);
-                for (var iteration = 0; iteration < config.MeasuredIterations; iteration++)
+                var crashFences = string.Equals(workload.Kind, "crash_recovery", StringComparison.Ordinal)
+                    ? config.CrashAfterSuccessfulAppendFences.Select(static fence => (int?)fence)
+                    : [null];
+                foreach (var crashFence in crashFences)
                 {
-                    samples.Add(await RunSampleAsync(
-                        adapter.EventStore!,
-                        config,
-                        workload,
-                        iteration,
-                        measured: true));
-                }
+                    var resultName = crashFence.HasValue
+                        ? $"{workload.Name}_fence_{crashFence.Value}"
+                        : workload.Name;
+                    Console.WriteLine($"  workload={resultName}");
+                    for (var warmup = 0; warmup < config.WarmupIterations; warmup++)
+                    {
+                        _ = await RunSampleAsync(
+                            adapter.EventStore,
+                            config,
+                            workload,
+                            warmup,
+                            measured: false,
+                            crashFence);
+                        _ = await RunResourceControlAsync(
+                            adapter.EventStore,
+                            config,
+                            workload,
+                            warmup,
+                            measured: false,
+                            crashFence);
+                    }
 
-                workloadResults.Add(new WorkloadResult(
-                    workload.Name,
-                    workload.Kind,
-                    samples,
-                    WorkloadSummary.From(samples)));
+                    var samples = new List<TurnSample>(config.MeasuredIterations);
+                    for (var iteration = 0; iteration < config.MeasuredIterations; iteration++)
+                    {
+                        TurnSample sample;
+                        ResourceControlSample control;
+                        if (iteration % 2 == 0)
+                        {
+                            control = await RunResourceControlAsync(
+                                adapter.EventStore,
+                                config,
+                                workload,
+                                iteration,
+                                measured: true,
+                                crashFence);
+                            sample = await RunSampleAsync(
+                                adapter.EventStore,
+                                config,
+                                workload,
+                                iteration,
+                                measured: true,
+                                crashFence);
+                        }
+                        else
+                        {
+                            sample = await RunSampleAsync(
+                                adapter.EventStore,
+                                config,
+                                workload,
+                                iteration,
+                                measured: true,
+                                crashFence);
+                            control = await RunResourceControlAsync(
+                                adapter.EventStore,
+                                config,
+                                workload,
+                                iteration,
+                                measured: true,
+                                crashFence);
+                        }
+
+                        samples.Add(sample.WithResourceControl(control));
+                    }
+
+                    workloadResults.Add(new WorkloadResult(
+                        resultName,
+                        workload.Kind,
+                        crashFence,
+                        samples,
+                        WorkloadSummary.From(samples)));
+                }
             }
 
-            adapterResults.Add(new AdapterResult(adapterName, "measured", null, workloadResults));
+            adapterResults.Add(new AdapterResult(
+                adapterName,
+                "measured",
+                adapter.Identity,
+                workloadResults));
         }
 
         var output = new MeasurementOutput(
-            1,
+            2,
             DateTimeOffset.UtcNow,
             await ResolveGitCommitAsync(),
             new EnvironmentFacts(
@@ -104,10 +165,11 @@ public static class Program
             config,
             new MetricSemantics(
                 "One non-empty ConfirmEventsAsync call maps to one IEventStore.AppendAsync call on this path.",
-                "Serialized bytes are StateEvent protobuf sizes observed immediately before adapter append.",
+                "Serialized bytes are low-allocation StateEvent.CalculateSize scalar totals from adapter-returned committed records; the append decorator does not clone them.",
                 "Mailbox occupancy is in-flight plus queued chat turns. The harness awaits one dispatch at a time, so max occupancy is one; chunks remain inside that actor turn.",
                 "Nearest-rank percentiles: ceil(p * sample_count) - 1 after ascending sort.",
-                "CPU and memory are process-level deltas and include runtime noise; allocation uses GC.GetTotalAllocatedBytes(true)."),
+                "Net CPU/allocation values come from an alternating-order matched control turn with append/snapshot measurement decorators removed. Gross values include those decorators; their signed difference estimates instrumentation cost. Both remain process-level and noisy.",
+                "Crash recovery compares append-acknowledged progress with real CommittedStateEventPublished observations by event identity, session sequence, and payload fingerprint. Each fence reports only its observed window."),
             adapterResults);
 
         var outputPath = Path.GetFullPath(options.OutputPath);
@@ -122,24 +184,38 @@ public static class Program
         MeasurementConfig config,
         WorkloadDefinition workload,
         int iteration,
-        bool measured)
+        bool measured,
+        int? crashFence)
     {
-        var sampleId = $"{workload.Name}-{(measured ? "m" : "w")}-{iteration}-{Guid.NewGuid():N}";
+        var sampleId = $"{workload.Name}-{crashFence}-{(measured ? "m" : "w")}-{iteration}-{Guid.NewGuid():N}";
         var actorId = $"measure-role-{sampleId}";
-        var eventStore = new MeasuringEventStore(baseStore);
+        var isRecovery = string.Equals(workload.Kind, "crash_recovery", StringComparison.Ordinal);
+        var eventStore = new MeasuringEventStore(baseStore, captureCommittedEvents: isRecovery);
         var snapshotStore = new MeasuringSnapshotStore<RoleGAgentState>(
             new InMemoryEventSourcingSnapshotStore<RoleGAgentState>());
         var provider = new WorkloadProviderFactory(workload);
+        var streams = CreateStreamProvider();
         var actor = await CreateActorAsync(
             actorId,
             eventStore,
             snapshotStore,
             config,
             provider,
+            streams,
             initialize: true);
 
         eventStore.Reset();
         snapshotStore.Reset();
+        ProjectionProgressRecorder? projectionRecorder = null;
+        IAsyncDisposable? projectionSubscription = null;
+        if (isRecovery)
+        {
+            projectionRecorder = new ProjectionProgressRecorder();
+            var subscriptionProvider = new StreamProviderActorEventSubscriptionProvider(streams);
+            projectionSubscription = await subscriptionProvider.SubscribeAsync(
+                actorId,
+                (Func<EventEnvelope, Task>)projectionRecorder.ObserveAsync);
+        }
 
         var process = Process.GetCurrentProcess();
         process.Refresh();
@@ -149,15 +225,20 @@ public static class Program
         var allocatedBefore = GC.GetTotalAllocatedBytes(precise: true);
         var startedAt = Stopwatch.GetTimestamp();
         Exception? failure = null;
-        var crashRedoEvents = 0L;
-        var crashRedoBytes = 0L;
         var mailboxTurns = 1;
         TimeSpan? firstToken = null;
         ActorFixture? recoveredActor = null;
+        CrashRecoveryObservation? crashRecovery = null;
+        var excludedRecoveryValidationDuration = TimeSpan.Zero;
+        IReadOnlyList<StateEvent> committedBeforeRecovery = [];
+        IReadOnlyList<StateEvent> durableBeforeRecovery = [];
+        IReadOnlyList<StateEvent> observedBeforeRecovery = [];
 
-        if (string.Equals(workload.Kind, "crash_recovery", StringComparison.Ordinal))
+        if (isRecovery)
         {
-            eventStore.FailAfterSuccessfulAppends = config.CrashAfterSuccessfulAppends;
+            if (!crashFence.HasValue)
+                throw new InvalidOperationException("Crash-recovery workload requires an append fence.");
+            eventStore.FailAfterSuccessfulAppends = crashFence.Value;
             try
             {
                 await DispatchAsync(actor, actorId, CreateRequest(workload, sampleId));
@@ -167,16 +248,16 @@ public static class Program
                 failure = ex;
             }
 
-            var committedBeforeRecovery = eventStore.CommittedEventsSnapshot();
-            var redo = committedBeforeRecovery
-                .Where(static stateEvent => stateEvent.EventData.Is(RoleChatSessionProgressedEvent.Descriptor))
-                .ToArray();
-            crashRedoEvents = redo.LongLength;
-            crashRedoBytes = redo.Sum(static stateEvent => (long)stateEvent.CalculateSize());
             firstToken = actor.Agent.FirstTokenLatency;
 
             await actor.LocalActor.DeactivateAsync();
             await actor.Services.DisposeAsync();
+            var validationStartedAt = Stopwatch.GetTimestamp();
+            await projectionRecorder!.DrainAsync(streams.GetStream(actorId));
+            committedBeforeRecovery = eventStore.CommittedEventsSnapshot();
+            durableBeforeRecovery = await baseStore.GetEventsAsync(actorId);
+            observedBeforeRecovery = projectionRecorder.ObservedEventsSnapshot();
+            excludedRecoveryValidationDuration += Stopwatch.GetElapsedTime(validationStartedAt);
             eventStore.FailAfterSuccessfulAppends = null;
             var recoveryProvider = new WorkloadProviderFactory(workload);
             recoveredActor = await CreateActorAsync(
@@ -185,6 +266,7 @@ public static class Program
                 snapshotStore,
                 config,
                 recoveryProvider,
+                streams,
                 initialize: false);
             mailboxTurns++;
             await DispatchAsync(recoveredActor, actorId, CreateRequest(workload, sampleId));
@@ -196,7 +278,7 @@ public static class Program
             firstToken = actor.Agent.FirstTokenLatency;
         }
 
-        var completion = Stopwatch.GetElapsedTime(startedAt);
+        var completion = Stopwatch.GetElapsedTime(startedAt) - excludedRecoveryValidationDuration;
         process.Refresh();
         var cpuAfter = process.TotalProcessorTime;
         var workingSetAfter = process.WorkingSet64;
@@ -216,7 +298,26 @@ public static class Program
             await actor.Services.DisposeAsync();
         }
 
-        if (string.Equals(workload.Kind, "crash_recovery", StringComparison.Ordinal) && failure == null)
+        if (isRecovery)
+        {
+            await projectionRecorder!.DrainAsync(streams.GetStream(actorId));
+            crashRecovery = AnalyzeCrashRecovery(
+                crashFence!.Value,
+                committedBeforeRecovery,
+                durableBeforeRecovery,
+                eventStore.CommittedEventsSnapshot(),
+                observedBeforeRecovery,
+                projectionRecorder.ObservedEventsSnapshot());
+        }
+        else
+        {
+            await DrainStreamAsync(streams, actorId);
+        }
+
+        if (projectionSubscription != null)
+            await projectionSubscription.DisposeAsync();
+
+        if (isRecovery && failure == null)
             throw new InvalidOperationException("Crash-recovery workload did not hit its configured append failure fence.");
 
         return new TurnSample(
@@ -240,6 +341,10 @@ public static class Program
             storeMetrics.TotalIoDuration.TotalMilliseconds,
             Math.Max(0, (cpuAfter - cpuBefore).TotalMilliseconds),
             allocatedAfter - allocatedBefore,
+            0,
+            0,
+            0,
+            0,
             managedHeapAfter - managedHeapBefore,
             workingSetAfter - workingSetBefore,
             firstToken?.TotalMilliseconds,
@@ -247,8 +352,7 @@ public static class Program
             mailboxTurns,
             1,
             0,
-            crashRedoEvents,
-            crashRedoBytes,
+            crashRecovery,
             failure?.GetType().Name);
     }
 
@@ -261,12 +365,215 @@ public static class Program
             CommandAttemptId = $"attempt-{sampleId}",
         };
 
+    private static async Task<ResourceControlSample> RunResourceControlAsync(
+        IEventStore baseStore,
+        MeasurementConfig config,
+        WorkloadDefinition workload,
+        int iteration,
+        bool measured,
+        int? crashFence)
+    {
+        var sampleId = $"control-{workload.Name}-{crashFence}-{(measured ? "m" : "w")}-{iteration}-{Guid.NewGuid():N}";
+        var actorId = $"measure-role-{sampleId}";
+        var isRecovery = string.Equals(workload.Kind, "crash_recovery", StringComparison.Ordinal);
+        var controlStore = isRecovery
+            ? new FailureInjectingEventStore(baseStore)
+            : null;
+        var eventStore = (IEventStore?)controlStore ?? baseStore;
+        var snapshotStore = new InMemoryEventSourcingSnapshotStore<RoleGAgentState>();
+        var streams = CreateStreamProvider();
+        var actor = await CreateActorAsync(
+            actorId,
+            eventStore,
+            snapshotStore,
+            config,
+            new WorkloadProviderFactory(workload),
+            streams,
+            initialize: true);
+        controlStore?.Reset();
+
+        var process = Process.GetCurrentProcess();
+        process.Refresh();
+        var cpuBefore = process.TotalProcessorTime;
+        var allocatedBefore = GC.GetTotalAllocatedBytes(precise: true);
+        ActorFixture? recoveredActor = null;
+        try
+        {
+            if (isRecovery)
+            {
+                if (!crashFence.HasValue)
+                    throw new InvalidOperationException("Crash-recovery control requires an append fence.");
+                controlStore!.FailAfterSuccessfulAppends = crashFence.Value;
+                try
+                {
+                    await DispatchAsync(actor, actorId, CreateRequest(workload, sampleId));
+                    throw new InvalidOperationException("Crash-recovery control did not hit its append fence.");
+                }
+                catch (SimulatedProcessCrashException)
+                {
+                }
+
+                await actor.LocalActor.DeactivateAsync();
+                await actor.Services.DisposeAsync();
+                controlStore.FailAfterSuccessfulAppends = null;
+                recoveredActor = await CreateActorAsync(
+                    actorId,
+                    eventStore,
+                    snapshotStore,
+                    config,
+                    new WorkloadProviderFactory(workload),
+                    streams,
+                    initialize: false);
+                await DispatchAsync(recoveredActor, actorId, CreateRequest(workload, sampleId));
+            }
+            else
+            {
+                await DispatchAsync(actor, actorId, CreateRequest(workload, sampleId));
+            }
+
+            process.Refresh();
+            return new ResourceControlSample(
+                Math.Max(0, (process.TotalProcessorTime - cpuBefore).TotalMilliseconds),
+                GC.GetTotalAllocatedBytes(precise: true) - allocatedBefore);
+        }
+        finally
+        {
+            if (recoveredActor != null)
+            {
+                await recoveredActor.LocalActor.DeactivateAsync();
+                await recoveredActor.Services.DisposeAsync();
+            }
+            else if (!isRecovery)
+            {
+                await actor.LocalActor.DeactivateAsync();
+                await actor.Services.DisposeAsync();
+            }
+
+            await DrainStreamAsync(streams, actorId);
+        }
+    }
+
+    private static InMemoryStreamProvider CreateStreamProvider() =>
+        new(
+            new InMemoryStreamOptions(),
+            NullLoggerFactory.Instance,
+            new InMemoryStreamForwardingRegistry());
+
+    private static async Task DrainStreamAsync(InMemoryStreamProvider streams, string actorId)
+    {
+        var stream = streams.GetStream(actorId);
+        var subscriptionProvider = new StreamProviderActorEventSubscriptionProvider(streams);
+        var markerId = $"stream-drain-{Guid.NewGuid():N}";
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var subscription = await subscriptionProvider.SubscribeAsync(
+            actorId,
+            (EventEnvelope envelope) =>
+            {
+                if (string.Equals(envelope.Id, markerId, StringComparison.Ordinal))
+                    completion.TrySetResult();
+                return Task.CompletedTask;
+            });
+        await stream.ProduceAsync(new EventEnvelope
+        {
+            Id = markerId,
+            Payload = Any.Pack(new StringValue { Value = "measurement-stream-drain" }),
+            Route = EnvelopeRouteSemantics.CreateDirect("measurement-harness", stream.StreamId),
+        });
+        await completion.Task.WaitAsync(TimeSpan.FromSeconds(30));
+    }
+
+    private static CrashRecoveryObservation AnalyzeCrashRecovery(
+        int fence,
+        IReadOnlyList<StateEvent> committedBeforeRecovery,
+        IReadOnlyList<StateEvent> durableBeforeRecovery,
+        IReadOnlyList<StateEvent> allCommitted,
+        IReadOnlyList<StateEvent> observedBeforeRecovery,
+        IReadOnlyList<StateEvent> allObserved)
+    {
+        var preCommitted = BuildProgressFacts(committedBeforeRecovery);
+        var preDurable = BuildProgressFacts(durableBeforeRecovery);
+        var finalCommitted = BuildProgressFacts(allCommitted);
+        var preObserved = BuildProgressFacts(observedBeforeRecovery);
+        var finalObserved = BuildProgressFacts(allObserved);
+        var recoveryCommitted = BuildProgressFacts(allCommitted.Skip(committedBeforeRecovery.Count));
+        var recoveryObserved = BuildProgressFacts(allObserved.Skip(observedBeforeRecovery.Count));
+
+        var preCommittedIds = preCommitted.Select(static fact => fact.EventId).ToHashSet(StringComparer.Ordinal);
+        var preDurableIds = preDurable.Select(static fact => fact.EventId).ToHashSet(StringComparer.Ordinal);
+        var finalCommittedIds = finalCommitted.Select(static fact => fact.EventId).ToHashSet(StringComparer.Ordinal);
+        var preObservedIds = preObserved.Select(static fact => fact.EventId).ToHashSet(StringComparer.Ordinal);
+        var finalObservedIds = finalObserved.Select(static fact => fact.EventId).ToHashSet(StringComparer.Ordinal);
+        var preSequences = preCommitted.Select(static fact => fact.SequenceKey).ToHashSet(StringComparer.Ordinal);
+        var prePayloads = preCommitted.Select(static fact => fact.PayloadFingerprint).ToHashSet(StringComparer.Ordinal);
+
+        var durableReadbackMissing = preCommittedIds.Except(preDurableIds).LongCount();
+        var phaseOneProjectionMissing = preCommittedIds.Except(preObservedIds).LongCount();
+        var finalProjectionMissing = finalCommittedIds.Except(finalObservedIds).LongCount();
+        var committedLoss = preCommittedIds.Except(finalCommittedIds).LongCount();
+        var committedIdentityOverlap = recoveryCommitted.LongCount(fact => preCommittedIds.Contains(fact.EventId));
+        var projectionIdentityOverlap = recoveryObserved.LongCount(fact => preObservedIds.Contains(fact.EventId));
+        var sequenceOverlap = recoveryCommitted.LongCount(fact => preSequences.Contains(fact.SequenceKey));
+        var payloadOverlapFacts = recoveryCommitted
+            .Where(fact => prePayloads.Contains(fact.PayloadFingerprint))
+            .ToArray();
+
+        if (durableReadbackMissing != 0 || phaseOneProjectionMissing != 0 || finalProjectionMissing != 0)
+        {
+            throw new InvalidOperationException(
+                $"Recovery fence {fence} failed committed/projection reconciliation: " +
+                $"durableMissing={durableReadbackMissing}, phaseOneProjectionMissing={phaseOneProjectionMissing}, " +
+                $"finalProjectionMissing={finalProjectionMissing}.");
+        }
+
+        return new CrashRecoveryObservation(
+            fence,
+            preCommitted.LongCount(),
+            preDurable.LongCount(),
+            preObserved.LongCount(),
+            recoveryCommitted.LongCount(),
+            recoveryObserved.LongCount(),
+            finalCommitted.LongCount(),
+            finalObserved.LongCount(),
+            committedIdentityOverlap,
+            projectionIdentityOverlap,
+            sequenceOverlap,
+            payloadOverlapFacts.LongLength,
+            payloadOverlapFacts.Sum(static fact => fact.SerializedBytes),
+            durableReadbackMissing,
+            phaseOneProjectionMissing,
+            finalProjectionMissing,
+            committedLoss);
+    }
+
+    private static IReadOnlyList<ProgressFact> BuildProgressFacts(IEnumerable<StateEvent> events)
+    {
+        var facts = new List<ProgressFact>();
+        foreach (var stateEvent in events)
+        {
+            if (stateEvent.EventData?.Is(RoleChatSessionProgressedEvent.Descriptor) != true)
+                continue;
+            var progress = stateEvent.EventData.Unpack<RoleChatSessionProgressedEvent>();
+            var payloadOnly = progress.Clone();
+            payloadOnly.SessionId = string.Empty;
+            payloadOnly.Sequence = 0;
+            var payloadFingerprint = Convert.ToHexString(SHA256.HashData(payloadOnly.ToByteArray()));
+            facts.Add(new ProgressFact(
+                stateEvent.EventId,
+                $"{progress.SessionId}\u001f{progress.Sequence}",
+                payloadFingerprint,
+                stateEvent.CalculateSize()));
+        }
+
+        return facts;
+    }
+
     private static async Task<ActorFixture> CreateActorAsync(
         string actorId,
-        MeasuringEventStore eventStore,
-        MeasuringSnapshotStore<RoleGAgentState> snapshotStore,
+        IEventStore eventStore,
+        IEventSourcingSnapshotStore<RoleGAgentState> snapshotStore,
         MeasurementConfig config,
         WorkloadProviderFactory provider,
+        InMemoryStreamProvider streams,
         bool initialize)
     {
         var services = new ServiceCollection()
@@ -298,11 +605,16 @@ public static class Program
         typeof(GAgentBase).GetMethod("SetId", BindingFlags.Instance | BindingFlags.NonPublic)!
             .Invoke(agent, [actorId]);
 
-        var streams = new InMemoryStreamProvider(
-            new InMemoryStreamOptions(),
-            NullLoggerFactory.Instance,
-            new InMemoryStreamForwardingRegistry());
         var localActor = new LocalActor(agent, actorId, streams, NullLogger.Instance);
+        var publisher = new LocalActorPublisher(
+            actorId,
+            static () => null,
+            static () => 0,
+            streams);
+        agent.EventPublisher = publisher;
+        typeof(GAgentBase)
+            .GetProperty("CommittedStateEventPublisher", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .SetValue(agent, publisher);
         await localActor.ActivateAsync();
         var fixture = new ActorFixture(
             agent,
@@ -354,8 +666,15 @@ public static class Program
             throw new InvalidOperationException($"Unsupported config schema version {config.SchemaVersion}.");
         if (config.WarmupIterations < 0 || config.MeasuredIterations < 1)
             throw new InvalidOperationException("Iteration counts are invalid.");
-        if (config.SnapshotInterval < 1 || config.CrashAfterSuccessfulAppends < 3)
-            throw new InvalidOperationException("Snapshot/crash fences are invalid.");
+        if (config.SnapshotInterval < 1 ||
+            config.CrashAfterSuccessfulAppendFences.Count < 2 ||
+            config.CrashAfterSuccessfulAppendFences.Any(static fence => fence < 3) ||
+            config.CrashAfterSuccessfulAppendFences.Distinct().Count()
+            != config.CrashAfterSuccessfulAppendFences.Count)
+        {
+            throw new InvalidOperationException(
+                "Snapshot/crash fences are invalid; recovery requires at least two distinct fences >= 3.");
+        }
 
         var required = new HashSet<string>(StringComparer.Ordinal)
         {
@@ -454,7 +773,7 @@ public sealed record MeasurementConfig
     public int SnapshotInterval { get; init; }
     public bool EnableEventCompaction { get; init; }
     public int RetainedEventsAfterSnapshot { get; init; }
-    public int CrashAfterSuccessfulAppends { get; init; }
+    public List<int> CrashAfterSuccessfulAppendFences { get; init; } = [];
     public List<WorkloadDefinition> Workloads { get; init; } = [];
 }
 
@@ -491,17 +810,29 @@ public sealed record MetricSemantics(
     string SerializedBytes,
     string MailboxOccupancy,
     string Percentiles,
-    string ResourceDeltas);
+    string ResourceDeltas,
+    string CrashRecovery);
 
 public sealed record AdapterResult(
     string Adapter,
     string Status,
-    string? UnavailableReason,
+    AdapterIdentity Identity,
     IReadOnlyList<WorkloadResult> Workloads);
+
+public sealed record AdapterIdentity(
+    string ServerName,
+    string ServerVersion,
+    string ProtocolVersion,
+    string Mode,
+    string Role,
+    string ImageReference,
+    string ImageReferenceEvidence,
+    IReadOnlyList<string> VerifiedCapabilities);
 
 public sealed record WorkloadResult(
     string Workload,
     string StreamShape,
+    int? CrashAfterSuccessfulAppends,
     IReadOnlyList<TurnSample> Samples,
     WorkloadSummary Summary);
 
@@ -524,18 +855,56 @@ public sealed record TurnSample(
     long VersionReadCalls,
     double VersionReadDurationMs,
     double EventStoreIoDurationMs,
-    double CpuMs,
-    long AllocatedBytes,
-    long ManagedHeapDeltaBytes,
-    long WorkingSetDeltaBytes,
+    double GrossInstrumentedCpuMs,
+    long GrossInstrumentedAllocatedBytes,
+    double NetCpuMs,
+    long NetAllocatedBytes,
+    double EstimatedInstrumentationCpuDeltaMs,
+    long EstimatedInstrumentationAllocatedDeltaBytes,
+    long GrossManagedHeapDeltaBytes,
+    long GrossWorkingSetDeltaBytes,
     double? FirstTokenLatencyMs,
     double CompletionLatencyMs,
     int MailboxTurnCount,
     int MailboxMaxOccupancy,
     int MailboxMaxQueued,
-    long CrashRedoProgressEvents,
-    long CrashRedoSerializedBytes,
-    string? InjectedFailureType);
+    CrashRecoveryObservation? CrashRecovery,
+    string? InjectedFailureType)
+{
+    internal TurnSample WithResourceControl(ResourceControlSample control) => this with
+    {
+        NetCpuMs = control.CpuMs,
+        NetAllocatedBytes = control.AllocatedBytes,
+        EstimatedInstrumentationCpuDeltaMs = GrossInstrumentedCpuMs - control.CpuMs,
+        EstimatedInstrumentationAllocatedDeltaBytes = GrossInstrumentedAllocatedBytes - control.AllocatedBytes,
+    };
+}
+
+public sealed record CrashRecoveryObservation(
+    int Fence,
+    long PhaseOneCommittedProgressEvents,
+    long PhaseOneDurableReadbackProgressEvents,
+    long PhaseOneProjectionVisibleProgressEvents,
+    long RecoveryCommittedProgressEvents,
+    long RecoveryProjectionVisibleProgressEvents,
+    long FinalCommittedProgressEvents,
+    long FinalProjectionVisibleProgressEvents,
+    long RecoveryCommittedEventIdentityOverlap,
+    long RecoveryProjectionEventIdentityOverlap,
+    long RecoverySequenceOverlap,
+    long RecoveryPayloadOverlapEvents,
+    long RecoveryPayloadOverlapSerializedBytes,
+    long PhaseOneDurableReadbackMissingEvents,
+    long PhaseOneProjectionMissingEvents,
+    long FinalProjectionMissingEvents,
+    long CommittedProgressLossEvents);
+
+internal sealed record ResourceControlSample(double CpuMs, long AllocatedBytes);
+internal sealed record ProgressFact(
+    string EventId,
+    string SequenceKey,
+    string PayloadFingerprint,
+    long SerializedBytes);
 
 public sealed record Distribution(int Count, double? P50, double? P95, double? P99, double? Max)
 {
@@ -573,15 +942,18 @@ public sealed record WorkloadSummary(
     Distribution CompactionDeletedEvents,
     Distribution CompactionDurationMs,
     Distribution EventStoreIoDurationMs,
-    Distribution CpuMs,
-    Distribution AllocatedBytes,
-    Distribution ManagedHeapDeltaBytes,
-    Distribution WorkingSetDeltaBytes,
+    Distribution GrossInstrumentedCpuMs,
+    Distribution GrossInstrumentedAllocatedBytes,
+    Distribution NetCpuMs,
+    Distribution NetAllocatedBytes,
+    Distribution EstimatedInstrumentationCpuDeltaMs,
+    Distribution EstimatedInstrumentationAllocatedDeltaBytes,
+    Distribution GrossManagedHeapDeltaBytes,
+    Distribution GrossWorkingSetDeltaBytes,
     Distribution FirstTokenLatencyMs,
     Distribution CompletionLatencyMs,
     Distribution MailboxMaxOccupancy,
-    Distribution CrashRedoProgressEvents,
-    Distribution CrashRedoSerializedBytes)
+    CrashRecoverySummary? CrashRecovery)
 {
     public static WorkloadSummary From(IReadOnlyList<TurnSample> samples) => new(
         Distribution.From(samples.Select(static sample => (double?)sample.AppendAttempts)),
@@ -594,15 +966,50 @@ public sealed record WorkloadSummary(
         Distribution.From(samples.Select(static sample => (double?)sample.CompactionDeletedEvents)),
         Distribution.From(samples.Select(static sample => (double?)sample.CompactionDurationMs)),
         Distribution.From(samples.Select(static sample => (double?)sample.EventStoreIoDurationMs)),
-        Distribution.From(samples.Select(static sample => (double?)sample.CpuMs)),
-        Distribution.From(samples.Select(static sample => (double?)sample.AllocatedBytes)),
-        Distribution.From(samples.Select(static sample => (double?)sample.ManagedHeapDeltaBytes)),
-        Distribution.From(samples.Select(static sample => (double?)sample.WorkingSetDeltaBytes)),
+        Distribution.From(samples.Select(static sample => (double?)sample.GrossInstrumentedCpuMs)),
+        Distribution.From(samples.Select(static sample => (double?)sample.GrossInstrumentedAllocatedBytes)),
+        Distribution.From(samples.Select(static sample => (double?)sample.NetCpuMs)),
+        Distribution.From(samples.Select(static sample => (double?)sample.NetAllocatedBytes)),
+        Distribution.From(samples.Select(static sample => (double?)sample.EstimatedInstrumentationCpuDeltaMs)),
+        Distribution.From(samples.Select(static sample => (double?)sample.EstimatedInstrumentationAllocatedDeltaBytes)),
+        Distribution.From(samples.Select(static sample => (double?)sample.GrossManagedHeapDeltaBytes)),
+        Distribution.From(samples.Select(static sample => (double?)sample.GrossWorkingSetDeltaBytes)),
         Distribution.From(samples.Select(static sample => sample.FirstTokenLatencyMs)),
         Distribution.From(samples.Select(static sample => (double?)sample.CompletionLatencyMs)),
         Distribution.From(samples.Select(static sample => (double?)sample.MailboxMaxOccupancy)),
-        Distribution.From(samples.Select(static sample => (double?)sample.CrashRedoProgressEvents)),
-        Distribution.From(samples.Select(static sample => (double?)sample.CrashRedoSerializedBytes)));
+        CrashRecoverySummary.From(samples));
+}
+
+public sealed record CrashRecoverySummary(
+    Distribution RecoveryCommittedEventIdentityOverlap,
+    Distribution RecoveryProjectionEventIdentityOverlap,
+    Distribution RecoverySequenceOverlap,
+    Distribution RecoveryPayloadOverlapEvents,
+    Distribution RecoveryPayloadOverlapSerializedBytes,
+    Distribution PhaseOneDurableReadbackMissingEvents,
+    Distribution PhaseOneProjectionMissingEvents,
+    Distribution FinalProjectionMissingEvents,
+    Distribution CommittedProgressLossEvents)
+{
+    public static CrashRecoverySummary? From(IReadOnlyList<TurnSample> samples)
+    {
+        var observations = samples.Select(static sample => sample.CrashRecovery)
+            .Where(static observation => observation != null)
+            .Cast<CrashRecoveryObservation>()
+            .ToArray();
+        if (observations.Length == 0)
+            return null;
+        return new CrashRecoverySummary(
+            Distribution.From(observations.Select(static item => (double?)item.RecoveryCommittedEventIdentityOverlap)),
+            Distribution.From(observations.Select(static item => (double?)item.RecoveryProjectionEventIdentityOverlap)),
+            Distribution.From(observations.Select(static item => (double?)item.RecoverySequenceOverlap)),
+            Distribution.From(observations.Select(static item => (double?)item.RecoveryPayloadOverlapEvents)),
+            Distribution.From(observations.Select(static item => (double?)item.RecoveryPayloadOverlapSerializedBytes)),
+            Distribution.From(observations.Select(static item => (double?)item.PhaseOneDurableReadbackMissingEvents)),
+            Distribution.From(observations.Select(static item => (double?)item.PhaseOneProjectionMissingEvents)),
+            Distribution.From(observations.Select(static item => (double?)item.FinalProjectionMissingEvents)),
+            Distribution.From(observations.Select(static item => (double?)item.CommittedProgressLossEvents)));
+    }
 }
 
 internal sealed record ActorFixture(
@@ -872,10 +1279,10 @@ internal sealed class NoopRuntimeCallbackScheduler : IActorRuntimeCallbackSchedu
     public Task PurgeActorAsync(string actorId, CancellationToken ct = default) => Task.CompletedTask;
 }
 
-internal sealed class MeasuringEventStore(IEventStore inner) : IEventStore
+internal sealed class MeasuringEventStore(IEventStore inner, bool captureCommittedEvents) : IEventStore
 {
     private readonly object _lock = new();
-    private readonly List<StateEvent> _committedEvents = [];
+    private readonly List<StateEvent> _committedEvents = new(256);
     private StoreMetrics _metrics = new();
 
     public int? FailAfterSuccessfulAppends { get; set; }
@@ -886,7 +1293,7 @@ internal sealed class MeasuringEventStore(IEventStore inner) : IEventStore
         long expectedVersion,
         CancellationToken ct = default)
     {
-        var batch = events.Select(static stateEvent => stateEvent.Clone()).ToArray();
+        var batch = events as IReadOnlyList<StateEvent> ?? events.ToArray();
         var startedAt = Stopwatch.GetTimestamp();
         lock (_lock)
             _metrics.AppendAttempts++;
@@ -902,12 +1309,15 @@ internal sealed class MeasuringEventStore(IEventStore inner) : IEventStore
             }
 
             var result = await inner.AppendAsync(agentId, batch, expectedVersion, ct);
+            var committedCount = result.CommittedEvents.Count;
+            var committedBytes = result.CommittedEvents.Sum(static stateEvent => (long)stateEvent.CalculateSize());
             lock (_lock)
             {
                 _metrics.SuccessfulAppendCalls++;
-                _metrics.CommittedEventCount += batch.LongLength;
-                _metrics.CommittedSerializedBytes += batch.Sum(static stateEvent => (long)stateEvent.CalculateSize());
-                _committedEvents.AddRange(batch.Select(static stateEvent => stateEvent.Clone()));
+                _metrics.CommittedEventCount += committedCount;
+                _metrics.CommittedSerializedBytes += committedBytes;
+                if (captureCommittedEvents)
+                    _committedEvents.AddRange(result.CommittedEvents);
             }
             return result;
         }
@@ -1002,7 +1412,98 @@ internal sealed class MeasuringEventStore(IEventStore inner) : IEventStore
     public IReadOnlyList<StateEvent> CommittedEventsSnapshot()
     {
         lock (_lock)
-            return _committedEvents.Select(static stateEvent => stateEvent.Clone()).ToArray();
+            return _committedEvents.ToArray();
+    }
+}
+
+internal sealed class FailureInjectingEventStore(IEventStore inner) : IEventStore
+{
+    private int _successfulAppends;
+
+    public int? FailAfterSuccessfulAppends { get; set; }
+
+    public async Task<EventStoreCommitResult> AppendAsync(
+        string agentId,
+        IEnumerable<StateEvent> events,
+        long expectedVersion,
+        CancellationToken ct = default)
+    {
+        if (FailAfterSuccessfulAppends is { } fence && _successfulAppends >= fence)
+            throw new SimulatedProcessCrashException(fence);
+        var result = await inner.AppendAsync(agentId, events, expectedVersion, ct);
+        _successfulAppends++;
+        return result;
+    }
+
+    public Task<IReadOnlyList<StateEvent>> GetEventsAsync(
+        string agentId,
+        long? fromVersion = null,
+        CancellationToken ct = default) =>
+        inner.GetEventsAsync(agentId, fromVersion, ct);
+
+    public Task<long> GetVersionAsync(string agentId, CancellationToken ct = default) =>
+        inner.GetVersionAsync(agentId, ct);
+
+    public Task<long> DeleteEventsUpToAsync(
+        string agentId,
+        long toVersion,
+        CancellationToken ct = default) =>
+        inner.DeleteEventsUpToAsync(agentId, toVersion, ct);
+
+    public void Reset() => _successfulAppends = 0;
+}
+
+internal sealed class ProjectionProgressRecorder
+{
+    private readonly object _lock = new();
+    private readonly List<StateEvent> _observedEvents = new(256);
+    private readonly Dictionary<string, TaskCompletionSource> _drainMarkers = new(StringComparer.Ordinal);
+
+    public Task ObserveAsync(EventEnvelope envelope)
+    {
+        TaskCompletionSource? drainCompletion = null;
+        lock (_lock)
+        {
+            if (_drainMarkers.Remove(envelope.Id, out var pendingDrain))
+                drainCompletion = pendingDrain;
+        }
+        if (drainCompletion != null)
+        {
+            drainCompletion.TrySetResult();
+            return Task.CompletedTask;
+        }
+
+        if (envelope.Payload?.Is(CommittedStateEventPublished.Descriptor) != true)
+            return Task.CompletedTask;
+        var published = envelope.Payload.Unpack<CommittedStateEventPublished>();
+        if (published.StateEvent?.EventData?.Is(RoleChatSessionProgressedEvent.Descriptor) == true)
+        {
+            lock (_lock)
+                _observedEvents.Add(published.StateEvent);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public async Task DrainAsync(IStream stream)
+    {
+        var markerId = $"projection-drain-{Guid.NewGuid():N}";
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        lock (_lock)
+            _drainMarkers.Add(markerId, completion);
+        await stream.ProduceAsync(new EventEnvelope
+        {
+            Id = markerId,
+            Payload = Any.Pack(new StringValue { Value = "measurement-projection-drain" }),
+            Route = EnvelopeRouteSemantics.CreateDirect("measurement-harness", stream.StreamId),
+        });
+        await completion.Task.WaitAsync(TimeSpan.FromSeconds(30));
+    }
+
+    public IReadOnlyList<StateEvent> ObservedEventsSnapshot()
+    {
+        lock (_lock)
+            return _observedEvents.ToArray();
     }
 }
 
@@ -1103,69 +1604,170 @@ internal sealed class AdapterContext : IAsyncDisposable
 
     private AdapterContext(
         string name,
-        bool available,
-        IEventStore? eventStore,
-        string? unavailableReason,
+        IEventStore eventStore,
+        AdapterIdentity identity,
         IConnectionMultiplexer? connection)
     {
         Name = name;
-        Available = available;
         EventStore = eventStore;
-        UnavailableReason = unavailableReason;
+        Identity = identity;
         _connection = connection;
     }
 
     public string Name { get; }
-    public bool Available { get; }
-    public IEventStore? EventStore { get; }
-    public string? UnavailableReason { get; }
+    public IEventStore EventStore { get; }
+    public AdapterIdentity Identity { get; }
 
-    public static async Task<AdapterContext> TryCreateAsync(string name)
+    public static async Task<AdapterContext> CreateAsync(
+        string name,
+        string expectedGarnetVersion,
+        string expectedGarnetImageReference)
     {
         if (string.Equals(name, "inmemory", StringComparison.Ordinal))
-            return new AdapterContext(name, true, new InMemoryEventStore(), null, null);
+        {
+            return new AdapterContext(
+                name,
+                new InMemoryEventStore(),
+                new AdapterIdentity(
+                    "aevatar-inmemory-event-store",
+                    "repository-source",
+                    "in-process",
+                    "development-test",
+                    "single-process",
+                    "not-applicable",
+                    "Repository implementation selected directly by the harness.",
+                    ["append", "version-read", "event-read", "compaction"]),
+                null);
+        }
 
         var connectionString = Environment.GetEnvironmentVariable("AEVATAR_TEST_GARNET_CONNECTION_STRING");
         if (string.IsNullOrWhiteSpace(connectionString))
+            throw new InvalidOperationException(
+                "AEVATAR_TEST_GARNET_CONNECTION_STRING is required when Garnet is selected.");
+
+        var declaredImageReference = Environment.GetEnvironmentVariable("AEVATAR_TEST_GARNET_IMAGE_REFERENCE");
+        if (!string.Equals(declaredImageReference, expectedGarnetImageReference, StringComparison.Ordinal))
         {
-            return new AdapterContext(
-                name,
-                false,
-                null,
-                "AEVATAR_TEST_GARNET_CONNECTION_STRING is not set. Start a Redis-protocol Garnet instance and rerun with the variable set.",
-                null);
+            throw new InvalidOperationException(
+                "AEVATAR_TEST_GARNET_IMAGE_REFERENCE must exactly match the checked-in pinned image reference " +
+                $"'{expectedGarnetImageReference}'.");
         }
 
+        IConnectionMultiplexer? connection = null;
         try
         {
-            IConnectionMultiplexer? connection = null;
-            try
+            connection = await ConnectionMultiplexer.ConnectAsync(connectionString);
+            var database = connection.GetDatabase();
+            var info = ParseInfo((await database.ExecuteAsync("INFO", "SERVER")).ToString());
+            RequireInfoValue(info, "server_name", "garnet");
+            RequireInfoValue(info, "garnet_version", expectedGarnetVersion);
+
+            var hello = ParseAlternatingArray(await database.ExecuteAsync("HELLO", 2));
+            RequireInfoValue(hello, "garnet_version", expectedGarnetVersion);
+            RequireInfoValue(hello, "proto", "2");
+            RequireInfoValue(hello, "mode", "standalone");
+            RequireInfoValue(hello, "role", "master");
+
+            var capabilityKey = (RedisKey)$"aevatar:measure:capability:{Guid.NewGuid():N}";
+            const string capabilityValue = "lua-read-write-ok";
+            var luaResult = await database.ScriptEvaluateAsync(
+                "redis.call('SET', KEYS[1], ARGV[1]); return redis.call('GET', KEYS[1])",
+                [capabilityKey],
+                [capabilityValue]);
+            if (!string.Equals(luaResult.ToString(), capabilityValue, StringComparison.Ordinal))
+                throw new InvalidOperationException("Garnet Lua redis.call read/write probe returned an unexpected value.");
+            _ = await database.KeyDeleteAsync(capabilityKey);
+
+            var prefix = $"aevatar:measure:role-stream:{Guid.NewGuid():N}";
+            var store = new GarnetEventStore(connection, new GarnetEventStoreOptions
             {
-                connection = await ConnectionMultiplexer.ConnectAsync(connectionString);
-                var prefix = $"aevatar:measure:role-stream:{Guid.NewGuid():N}";
-                var store = new GarnetEventStore(connection, new GarnetEventStoreOptions
-                {
-                    ConnectionString = connectionString,
-                    KeyPrefix = prefix,
-                });
-                _ = await store.GetVersionAsync("connectivity-probe");
-                return new AdapterContext(name, true, store, null, connection);
-            }
-            catch
+                ConnectionString = connectionString,
+                KeyPrefix = prefix,
+            });
+            var probeActorId = $"adapter-capability-{Guid.NewGuid():N}";
+            var probeEvent = new StateEvent
             {
-                if (connection != null)
-                    await connection.DisposeAsync();
-                throw;
-            }
+                AgentId = probeActorId,
+                EventId = Guid.NewGuid().ToString("N"),
+                EventType = StringValue.Descriptor.FullName,
+                EventData = Any.Pack(new StringValue { Value = "capability" }),
+                Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+                Version = 1,
+            };
+            var appendProbe = await store.AppendAsync(probeActorId, [probeEvent], expectedVersion: 0);
+            if (appendProbe.LatestVersion != 1 || appendProbe.CommittedEvents.Count != 1)
+                throw new InvalidOperationException("Garnet production append-script capability probe failed.");
+            var deletedProbeEvents = await store.DeleteEventsUpToAsync(probeActorId, 1);
+            if (deletedProbeEvents != 1)
+                throw new InvalidOperationException("Garnet production compaction-script capability probe failed.");
+
+            return new AdapterContext(
+                name,
+                store,
+                new AdapterIdentity(
+                    info["server_name"],
+                    info["garnet_version"],
+                    hello["proto"],
+                    hello["mode"],
+                    hello["role"],
+                    declaredImageReference!,
+                    "Operator-declared pinned digest; server name/version independently verified through INFO and HELLO.",
+                    [
+                        "info-server-identity",
+                        "hello-resp2",
+                        "lua-redis-call-read-write",
+                        "production-append-script",
+                        "production-compaction-script",
+                    ]),
+                connection);
         }
         catch (Exception ex)
         {
-            return new AdapterContext(
-                name,
-                false,
-                null,
-                $"Garnet connectivity failed: {ex.GetType().Name}: {ex.Message}",
-                null);
+            if (connection != null)
+                await connection.DisposeAsync();
+            throw new InvalidOperationException(
+                $"Garnet fail-closed capability validation failed: {ex.GetType().Name}: {ex.Message}",
+                ex);
+        }
+    }
+
+    private static Dictionary<string, string> ParseInfo(string? raw)
+    {
+        var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var line in (raw ?? string.Empty).Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var normalized = line.Trim();
+            if (normalized.Length == 0 || normalized[0] == '#')
+                continue;
+            var separator = normalized.IndexOf(':');
+            if (separator > 0)
+                values[normalized[..separator]] = normalized[(separator + 1)..];
+        }
+
+        return values;
+    }
+
+    private static Dictionary<string, string> ParseAlternatingArray(RedisResult result)
+    {
+        var entries = (RedisResult[]?)result;
+        if (entries == null || entries.Length % 2 != 0)
+            throw new InvalidOperationException("Garnet HELLO response is not an alternating key/value array.");
+        var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        for (var index = 0; index < entries.Length; index += 2)
+            values[entries[index].ToString()] = entries[index + 1].ToString();
+        return values;
+    }
+
+    private static void RequireInfoValue(
+        IReadOnlyDictionary<string, string> values,
+        string key,
+        string expected)
+    {
+        if (!values.TryGetValue(key, out var actual) ||
+            !string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Garnet capability field '{key}' expected '{expected}' but observed '{actual ?? "<missing>"}'.");
         }
     }
 
