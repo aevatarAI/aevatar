@@ -39,13 +39,39 @@ public sealed class GAgentRunTerminalProjector
                 out var payload,
                 out var eventId,
                 out var stateVersion) ||
-            payload?.Is(RoleChatSessionCompletedEvent.Descriptor) != true)
+            payload == null)
         {
             return;
         }
 
-        var completed = payload.Unpack<RoleChatSessionCompletedEvent>();
-        if (string.IsNullOrWhiteSpace(completed.SessionId))
+        string sessionId;
+        GAgentRunTerminalStatus status;
+        string reasonCode;
+        string reasonMessage;
+        if (payload.Is(RoleChatSessionCompletedEvent.Descriptor))
+        {
+            var completed = payload.Unpack<RoleChatSessionCompletedEvent>();
+            sessionId = completed.SessionId;
+            (status, reasonCode, reasonMessage) = ResolveTerminal(completed);
+        }
+        else if (payload.Is(RoleChatCommandAttemptRejectedEvent.Descriptor))
+        {
+            var rejection = payload.Unpack<RoleChatCommandAttemptRejectedEvent>();
+            if (rejection.Reason != RoleChatCommandAttemptRejectionReason.CapacityExhausted)
+                return;
+
+            sessionId = rejection.RequestedSessionId;
+            status = GAgentRunTerminalStatus.Failed;
+            reasonCode = GAgentRunFailureCodes.CapacityExhausted;
+            var safeMessage = rejection.SafeMessage?.Trim() ?? string.Empty;
+            reasonMessage = string.IsNullOrWhiteSpace(safeMessage) ? reasonCode : safeMessage;
+        }
+        else
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(sessionId))
             return;
 
         var correlationId = envelope.Propagation?.CorrelationId?.Trim() ?? string.Empty;
@@ -57,14 +83,13 @@ public sealed class GAgentRunTerminalProjector
 
         var documentId = BuildDocumentId(context.RootActorId, correlationId);
         var observedAt = CommittedStateEventEnvelope.ResolveTimestamp(envelope, _clock.UtcNow);
-        var (status, reasonCode, reasonMessage) = ResolveTerminal(completed);
         var document = new GAgentRunTerminalReadModel
         {
             Id = documentId,
             ActorId = context.RootActorId,
             StateVersion = stateVersion,
             LastEventId = eventId,
-            SessionId = completed.SessionId,
+            SessionId = sessionId,
             CorrelationId = correlationId,
             InteractionKind = (int)context.InteractionKind,
             Status = (int)status,

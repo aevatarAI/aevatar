@@ -11,6 +11,7 @@ public enum GAgentRunTerminalStatus
 
 public static class GAgentRunFailureCodes
 {
+    public const string CapacityExhausted = "CAPACITY_EXHAUSTED";
     public const string OutcomeUncertain = "SESSION_OUTCOME_UNCERTAIN";
 }
 

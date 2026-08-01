@@ -511,6 +511,75 @@ public sealed class RoleGAgentCompletionNotificationTests
             .Should().Be(1);
     }
 
+    [Theory]
+    [InlineData(RoleChatCompletionNotificationDeliveryStatus.Prepared, RoleChatSessionOutcome.Completed)]
+    [InlineData(RoleChatCompletionNotificationDeliveryStatus.Prepared, RoleChatSessionOutcome.Failed)]
+    [InlineData(RoleChatCompletionNotificationDeliveryStatus.RetryScheduled, RoleChatSessionOutcome.Completed)]
+    [InlineData(RoleChatCompletionNotificationDeliveryStatus.RetryScheduled, RoleChatSessionOutcome.Failed)]
+    public async Task OutcomeUncertainReconciliation_WithPendingOutbox_ShouldCommitReplacementBeforeRedelivery(
+        RoleChatCompletionNotificationDeliveryStatus pendingStatus,
+        RoleChatSessionOutcome reconciledOutcome)
+    {
+        const string sessionId = "session-pending-reconciliation";
+        var store = new InMemoryEventStoreForTests();
+        var publisher = new RecordingEventPublisher();
+        var actor = await CreateInitializedActorAsync(
+            store,
+            new RecordingRuntimeCallbackScheduler(),
+            publisher,
+            $"role-pending-reconciliation-{(int)pendingStatus}-{(int)reconciledOutcome}");
+        var runContext = new RoleChatRunContext
+        {
+            RunId = "run-pending-reconciliation",
+            CommandId = "command-pending-reconciliation",
+            CompletionNotificationActorId = "service-run:pending-reconciliation",
+            CompletionNotificationDeliveryId = $"delivery-{sessionId}",
+        };
+        await actor.PersistForTestAsync(new RoleChatSessionStartedEvent
+        {
+            SessionId = sessionId,
+            Prompt = "perform work",
+            RunContext = runContext.Clone(),
+        });
+        await actor.PersistForTestAsync(new RoleChatSessionCompletedEvent
+        {
+            SessionId = sessionId,
+            Prompt = "perform work",
+            Outcome = RoleChatSessionOutcome.OutcomeUncertain,
+            FailureCode = "SESSION_OUTCOME_UNCERTAIN",
+            RunContext = runContext.Clone(),
+        });
+        if (pendingStatus == RoleChatCompletionNotificationDeliveryStatus.RetryScheduled)
+            await actor.PersistForTestAsync(RetryScheduledEvent(sessionId, attempt: 1, "stale-retry"));
+
+        actor.State.Sessions[sessionId].CompletionNotificationDeliveryStatus.Should().Be(pendingStatus);
+        var request = new ChatRequestEvent
+        {
+            SessionId = sessionId,
+            Prompt = "perform work",
+            RunContext = runContext.Clone(),
+        };
+
+        await actor.CompleteForTestAsync(request, reconciledOutcome);
+        await actor.CompleteForTestAsync(request, reconciledOutcome);
+
+        var committedSession = actor.TerminalCommittedSessions.Should().ContainSingle().Which;
+        committedSession.Outcome.Should().Be(reconciledOutcome);
+        committedSession.CompletionNotificationDeliveryStatus.Should()
+            .Be(RoleChatCompletionNotificationDeliveryStatus.Prepared);
+        committedSession.CompletionNotificationAttempt.Should().Be(0);
+        committedSession.CompletionNotificationRetryCallbackId.Should().BeEmpty();
+        committedSession.CompletionNotificationRetryAt.Should().BeNull();
+        publisher.SuccessfulSends.Should().ContainSingle().Which.Event
+            .Should().BeOfType<RoleChatSessionCompletedEvent>()
+            .Which.Outcome.Should().Be(reconciledOutcome);
+        (await store.GetEventsAsync(actor.Id))
+            .Where(stateEvent => stateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
+            .Select(stateEvent => stateEvent.EventData.Unpack<RoleChatSessionCompletedEvent>())
+            .Count(completion => completion.Outcome == reconciledOutcome)
+            .Should().Be(1);
+    }
+
     [Fact]
     public async Task DurableRetrySchedulerFailure_ShouldRemainObservableAndRecoverThroughSelfInbox()
     {
@@ -1221,6 +1290,8 @@ public sealed class RoleGAgentCompletionNotificationTests
             timeProvider: timeProvider,
             chatExecutionOptions: chatExecutionOptions)
     {
+        public List<RoleChatSessionState> TerminalCommittedSessions { get; } = [];
+
         public Task PersistForTestAsync(IMessage evt) => PersistDomainEventAsync(evt);
 
         public Task CompleteForTestAsync(
@@ -1236,6 +1307,14 @@ public sealed class RoleGAgentCompletionNotificationTests
                 outcome: outcome,
                 failureCode: outcome == RoleChatSessionOutcome.Failed ? "CONFIRMED_FAILURE" : string.Empty,
                 safeMessage: outcome == RoleChatSessionOutcome.Failed ? "The operation failed." : string.Empty);
+
+        protected override Task OnRoleChatSessionTerminalCommittedAsync(
+            string sessionId,
+            CancellationToken ct)
+        {
+            TerminalCommittedSessions.Add(State.Sessions[sessionId].Clone());
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class FailOnceRetryScheduledEventStore(int failedAttempt) : IEventStore

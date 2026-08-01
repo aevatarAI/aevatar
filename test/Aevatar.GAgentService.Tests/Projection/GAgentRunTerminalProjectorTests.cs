@@ -8,6 +8,7 @@ using Aevatar.GAgentService.Projection.Queries;
 using Aevatar.GAgentService.Projection.ReadModels;
 using Aevatar.AGUI.Contracts;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using AiTextMessageEndEvent = Aevatar.AI.Abstractions.TextMessageEndEvent;
 
@@ -118,6 +119,65 @@ public sealed class GAgentRunTerminalProjectorTests
         doc!.Status.Should().Be((int)expectedStatus);
         doc.ReasonCode.Should().Be(expectedFailureCode);
         doc.ReasonMessage.Should().Be(expectedReasonMessage);
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldMaterializeCapacityRejection_ForDurableCompletionLookup()
+    {
+        var store = new RecordingDocumentStore<GAgentRunTerminalReadModel>(x => x.Id);
+        var projector = new GAgentRunTerminalProjector(
+            store,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-05-14T00:00:00+00:00")));
+
+        await projector.ProjectAsync(
+            CreateContext("actor-1", "corr-capacity"),
+            WrapCommitted(
+                new RoleChatCommandAttemptRejectedEvent
+                {
+                    RequestedSessionId = "session-capacity",
+                    CommandAttemptId = "attempt-capacity",
+                    Reason = RoleChatCommandAttemptRejectionReason.CapacityExhausted,
+                    SafeMessage = "The role is at capacity. Please retry later.",
+                },
+                stateVersion: 5,
+                eventId: "evt-capacity",
+                correlationId: "corr-capacity",
+                observedAt: DateTimeOffset.Parse("2026-05-14T01:00:00+00:00")));
+
+        var snapshot = await new GAgentRunTerminalQueryReader(store)
+            .GetByCorrelationIdAsync("actor-1", "corr-capacity");
+        snapshot.Should().NotBeNull();
+        snapshot!.SessionId.Should().Be("session-capacity");
+        snapshot.Status.Should().Be(GAgentRunTerminalStatus.Failed);
+        snapshot.ReasonCode.Should().Be(GAgentRunFailureCodes.CapacityExhausted);
+        snapshot.ReasonMessage.Should().Be("The role is at capacity. Please retry later.");
+        snapshot.StateVersion.Should().Be(5);
+        snapshot.LastEventId.Should().Be("evt-capacity");
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldIgnoreCommittedNonCapacityRejection()
+    {
+        var store = new RecordingDocumentStore<GAgentRunTerminalReadModel>(x => x.Id);
+        var projector = new GAgentRunTerminalProjector(
+            store,
+            new FixedProjectionClock(DateTimeOffset.UtcNow));
+
+        await projector.ProjectAsync(
+            CreateContext("actor-1", "corr-conflict"),
+            WrapCommitted(
+                new RoleChatCommandAttemptRejectedEvent
+                {
+                    RequestedSessionId = "session-conflict",
+                    Reason = RoleChatCommandAttemptRejectionReason.PromptMismatch,
+                    SafeMessage = "The prompt does not match the existing session.",
+                },
+                stateVersion: 6,
+                eventId: "evt-conflict",
+                correlationId: "corr-conflict",
+                observedAt: DateTimeOffset.Parse("2026-05-14T01:00:00+00:00")));
+
+        (await store.ReadItemsAsync()).Should().BeEmpty();
     }
 
     [Fact]
@@ -329,6 +389,17 @@ public sealed class GAgentRunTerminalProjectorTests
                 Id = "agui",
                 Payload = Any.Pack(new AGUIEvent { RunError = new RunErrorEvent { Message = "boom" } }),
             });
+        await projector.ProjectAsync(
+            CreateContext("actor-1"),
+            new EventEnvelope
+            {
+                Id = "raw-rejection",
+                Payload = Any.Pack(new RoleChatCommandAttemptRejectedEvent
+                {
+                    RequestedSessionId = "session-1",
+                    Reason = RoleChatCommandAttemptRejectionReason.CapacityExhausted,
+                }),
+            });
 
         (await store.ReadItemsAsync()).Should().BeEmpty();
     }
@@ -515,7 +586,7 @@ public sealed class GAgentRunTerminalProjectorTests
         };
 
     private static EventEnvelope WrapCommitted(
-        RoleChatSessionCompletedEvent evt,
+        IMessage evt,
         long stateVersion,
         string eventId,
         string correlationId,

@@ -6,6 +6,8 @@ using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Projection.Orchestration;
 using Aevatar.AGUI.Contracts;
 using Google.Protobuf.WellKnownTypes;
+using RoleChatCommandAttemptRejectedEvent = Aevatar.AI.Abstractions.RoleChatCommandAttemptRejectedEvent;
+using RoleChatCommandAttemptRejectionReason = Aevatar.AI.Abstractions.RoleChatCommandAttemptRejectionReason;
 using RoleChatSessionCompletedEvent = Aevatar.AI.Abstractions.RoleChatSessionCompletedEvent;
 using RoleChatSessionOutcome = Aevatar.AI.Abstractions.RoleChatSessionOutcome;
 
@@ -33,7 +35,7 @@ public sealed class GAgentDraftRunSessionEventProjector
         if (!string.Equals(envelope.Propagation?.CorrelationId, context.SessionId, StringComparison.Ordinal))
             return EmptyEntries;
 
-        var committedEntries = TryResolveCommittedCompletionEntries(context, envelope);
+        var committedEntries = TryResolveCommittedTerminalEntries(context, envelope);
         if (committedEntries.Count > 0)
             return committedEntries;
 
@@ -76,15 +78,21 @@ public sealed class GAgentDraftRunSessionEventProjector
         ];
     }
 
-    private static IReadOnlyList<ProjectionSessionEventEntry<AGUIEvent>> TryResolveCommittedCompletionEntries(
+    private static IReadOnlyList<ProjectionSessionEventEntry<AGUIEvent>> TryResolveCommittedTerminalEntries(
         GAgentDraftRunProjectionContext context,
         EventEnvelope envelope)
     {
         if (!CommittedStateEventEnvelope.TryGetObservedPayload(envelope, out var payload, out _, out _) ||
-            payload?.Is(RoleChatSessionCompletedEvent.Descriptor) != true)
+            payload == null)
         {
             return EmptyEntries;
         }
+
+        if (payload.Is(RoleChatCommandAttemptRejectedEvent.Descriptor))
+            return TryResolveCommittedRejectionEntries(context, payload.Unpack<RoleChatCommandAttemptRejectedEvent>());
+
+        if (!payload.Is(RoleChatSessionCompletedEvent.Descriptor))
+            return EmptyEntries;
 
         var completed = payload.Unpack<RoleChatSessionCompletedEvent>();
         if (TryBuildFailureFrame(completed, out var failureFrame))
@@ -103,6 +111,33 @@ public sealed class GAgentDraftRunSessionEventProjector
             : completed.SessionId;
         var content = completed.Content ?? string.Empty;
         return BuildTerminalEntries(context, messageId, content, completed.ContentEmitted, completed.Usage, completed.Model);
+    }
+
+    private static IReadOnlyList<ProjectionSessionEventEntry<AGUIEvent>> TryResolveCommittedRejectionEntries(
+        GAgentDraftRunProjectionContext context,
+        RoleChatCommandAttemptRejectedEvent rejection)
+    {
+        if (rejection.Reason != RoleChatCommandAttemptRejectionReason.CapacityExhausted)
+            return EmptyEntries;
+
+        var safeMessage = rejection.SafeMessage?.Trim() ?? string.Empty;
+        return
+        [
+            new ProjectionSessionEventEntry<AGUIEvent>(
+                context.RootActorId,
+                context.SessionId,
+                new AGUIEvent
+                {
+                    RunError = new RunErrorEvent
+                    {
+                        Message = string.IsNullOrWhiteSpace(safeMessage)
+                            ? GAgentRunFailureCodes.CapacityExhausted
+                            : safeMessage,
+                        Code = GAgentRunFailureCodes.CapacityExhausted,
+                        RunId = context.SessionId,
+                    },
+                }),
+        ];
     }
 
     private static void CompleteRunFinishedFrame(
