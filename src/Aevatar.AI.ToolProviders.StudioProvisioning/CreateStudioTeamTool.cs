@@ -1,5 +1,8 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Studio.Application.Provisioning;
 
@@ -8,9 +11,22 @@ namespace Aevatar.AI.ToolProviders.StudioProvisioning;
 /// <summary>
 /// Local, typed Studio team creation tool. Scope authority comes from
 /// AgentToolRequestContext, not from LLM arguments.
+///
+/// The tool resolves a deterministic team id when the caller does not supply one.
+/// <c>StudioTeamGAgent.HandleCreated</c> is already first-write-wins and treats a
+/// repeated create for the same team id and identity-stable fields as an idempotent
+/// no-op, so a stable id is what makes one logical create intent converge on a
+/// single Team instead of minting a fresh actor per retry.
 /// </summary>
 internal sealed class CreateStudioTeamTool : IAgentTool
 {
+    /// <summary>
+    /// Fingerprint inputs are exactly the fields <c>StudioTeamGAgent</c> treats as
+    /// identity-stable (scope, display name, description). Keeping the two in step
+    /// guarantees that a replay of the same intent lands on the same actor and is
+    /// accepted as a no-op rather than rejected as a conflicting create.
+    /// </summary>
+    private const string TeamIdFingerprintSchema = "studio-team-create/v1";
     private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
