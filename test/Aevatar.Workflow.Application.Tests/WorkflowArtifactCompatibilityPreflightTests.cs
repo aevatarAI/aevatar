@@ -209,6 +209,27 @@ public sealed class WorkflowArtifactCompatibilityPreflightTests
             .Which.Should().BeOfType<WorkflowArtifactCompatibilityPreflight>();
     }
 
+    [Fact]
+    public void AdmissionException_WithUnknownBlockerCode_ShouldExposeFallbackSafeEvidence()
+    {
+        var exception = new WorkflowExternalCapabilityAdmissionException(new ExternalCapabilityReadiness
+        {
+            Status = ExternalCapabilityReadinessStatus.ContractDrift,
+            Blockers =
+            {
+                new ExternalCapabilityBlocker
+                {
+                    Status = ExternalCapabilityReadinessStatus.ContractDrift,
+                    Code = "UNTRUSTED_UPSTREAM_CODE",
+                    SafeMessage = " ",
+                },
+            },
+        });
+
+        exception.StableCode.Should().Be("WORKFLOW_ADMISSION_REJECTED");
+        exception.SafeMessage.Should().Be("Workflow admission was rejected.");
+    }
+
     private static async Task<WorkflowExternalCapabilityAdmissionException> AssertFailureAsync(
         Func<Task> act,
         string expectedCode,

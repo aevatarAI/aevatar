@@ -258,13 +258,32 @@ public interface IWorkflowExternalCapabilityAdmissionService
 
 public sealed class WorkflowExternalCapabilityAdmissionException : InvalidOperationException
 {
+    private const string AdmissionRejectedCode = "WORKFLOW_ADMISSION_REJECTED";
+    private const string AdmissionRejectedMessage = "Workflow admission was rejected.";
+
     public WorkflowExternalCapabilityAdmissionException(ExternalCapabilityReadiness readiness)
         : base(BuildSafeMessage(readiness))
     {
         Readiness = readiness?.Clone() ?? throw new ArgumentNullException(nameof(readiness));
+        var blocker = Readiness.Blockers.FirstOrDefault(static item => !string.IsNullOrWhiteSpace(item.Code));
+        StableCode = NormalizeStableCode(blocker?.Code);
+        SafeMessage = string.IsNullOrWhiteSpace(blocker?.SafeMessage)
+            ? AdmissionRejectedMessage
+            : blocker.SafeMessage.Trim();
     }
 
     public ExternalCapabilityReadiness Readiness { get; }
+    public string StableCode { get; }
+    public string SafeMessage { get; }
+
+    private static string NormalizeStableCode(string? code) =>
+        code?.Trim() switch
+        {
+            "WORKFLOW_DEFINITION_INVALID" => "WORKFLOW_DEFINITION_INVALID",
+            "NYXID_OPERATION_AUTHORING_MIGRATION_REQUIRED" => "NYXID_OPERATION_AUTHORING_MIGRATION_REQUIRED",
+            "CAPABILITY_ADMISSION_REBIND_REQUIRED" => "CAPABILITY_ADMISSION_REBIND_REQUIRED",
+            _ => AdmissionRejectedCode,
+        };
 
     private static string BuildSafeMessage(ExternalCapabilityReadiness? readiness)
     {

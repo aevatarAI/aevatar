@@ -81,6 +81,7 @@ public sealed class ScheduledDispatchCurrentStateProjector
             LastCommandId = state.LastCommandId ?? string.Empty,
             LastCorrelationId = state.LastCorrelationId ?? string.Empty,
             LastError = state.LastError ?? string.Empty,
+            LastErrorCode = state.LastErrorCode ?? string.Empty,
             FireCount = state.FireCount,
             FailureCount = state.FailureCount,
             OverdueFireDetectedCount = state.OverdueFireDetectedCount,
@@ -201,6 +202,7 @@ public sealed class ScheduledDispatchCurrentStateProjector
                 CommandId = x.CommandId ?? string.Empty,
                 CorrelationId = x.CorrelationId ?? string.Empty,
                 Error = x.Error ?? string.Empty,
+                ErrorCode = x.ErrorCode ?? string.Empty,
                 Manual = x.Manual,
             })
             .ToArray();

@@ -6,6 +6,7 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
@@ -21,6 +22,7 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
     private readonly IScriptRuntimeCommandPort? _scriptRuntimeCommandPort;
     private readonly IWorkflowRunProvisioningPort _workflowRunProvisioningPort;
     private readonly IServiceRunRegistrationPort _serviceRunRegistrationPort;
+    private readonly IWorkflowArtifactCompatibilityPreflight _artifactPreflight;
     private readonly ILogger<DefaultServiceInvocationDispatcher> _logger;
 
     public DefaultServiceInvocationDispatcher(
@@ -28,12 +30,14 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         IScriptRuntimeCommandPort? scriptRuntimeCommandPort,
         IWorkflowRunProvisioningPort workflowRunProvisioningPort,
         IServiceRunRegistrationPort serviceRunRegistrationPort,
+        IWorkflowArtifactCompatibilityPreflight artifactPreflight,
         ILogger<DefaultServiceInvocationDispatcher>? logger = null)
     {
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _scriptRuntimeCommandPort = scriptRuntimeCommandPort;
         _workflowRunProvisioningPort = workflowRunProvisioningPort ?? throw new ArgumentNullException(nameof(workflowRunProvisioningPort));
         _serviceRunRegistrationPort = serviceRunRegistrationPort ?? throw new ArgumentNullException(nameof(serviceRunRegistrationPort));
+        _artifactPreflight = artifactPreflight ?? throw new ArgumentNullException(nameof(artifactPreflight));
         _logger = logger ?? NullLogger<DefaultServiceInvocationDispatcher>.Instance;
     }
 
@@ -219,6 +223,15 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
                 "Requested Run identity requires IWorkflowRunIdentityExecutionPort support.");
         }
 
+        await _artifactPreflight.ValidateAsync(
+            new WorkflowArtifactCompatibilityRequest(
+                definition.WorkflowYaml,
+                definition.InlineWorkflowYamls,
+                definition.CapabilityAdmissionPlan?.Clone(),
+                definition.ExpectedExecutionMode,
+                definition.WorkflowId,
+                definition.RevisionId),
+            ct);
         var registration = await RegisterRunAsync(
             target,
             request,

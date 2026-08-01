@@ -2770,6 +2770,7 @@ public sealed class ScheduledDispatchEndpointsTests
                 string.Empty,
                 string.Empty,
                 string.Empty,
+                string.Empty,
                 0,
                 0,
                 new Dictionary<string, string>(),

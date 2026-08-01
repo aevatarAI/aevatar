@@ -6,6 +6,7 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
@@ -74,6 +75,13 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
                 receipt.CommandId ?? string.Empty,
                 receipt.TargetActorId ?? string.Empty,
                 receipt.CorrelationId ?? string.Empty);
+        }
+        catch (WorkflowExternalCapabilityAdmissionException ex)
+        {
+            await TryRevokeProjectedCredentialAsync(
+                prepared.DurableCallerCredential,
+                "scheduled-workflow-dispatch-failed");
+            throw new ScheduledWorkflowAdmissionException(ex.StableCode, ex.SafeMessage);
         }
         catch
         {

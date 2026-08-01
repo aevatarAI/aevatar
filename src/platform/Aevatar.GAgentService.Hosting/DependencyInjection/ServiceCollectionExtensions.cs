@@ -157,6 +157,7 @@ public static class ServiceCollectionExtensions
             sp.GetService<IScriptRuntimeCommandPort>(),
             sp.GetRequiredService<IWorkflowRunProvisioningPort>(),
             sp.GetRequiredService<IServiceRunRegistrationPort>(),
+            sp.GetRequiredService<IWorkflowArtifactCompatibilityPreflight>(),
             sp.GetService<Microsoft.Extensions.Logging.ILogger<DefaultServiceInvocationDispatcher>>()));
         services.TryAddSingleton<IExecutionActivityScopeResolver, ExecutionActivityScopeResolver>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<Aevatar.Foundation.Abstractions.Hooks.IGAgentExecutionHook, ExecutionActivityPublisherHook>());
@@ -244,6 +245,7 @@ public static class ServiceCollectionExtensions
             sp.GetService<IScriptRuntimeCommandPort>(),
             sp.GetRequiredService<IWorkflowRunProvisioningPort>(),
             sp.GetRequiredService<IServiceRunRegistrationPort>(),
+            sp.GetRequiredService<IWorkflowArtifactCompatibilityPreflight>(),
             sp.GetService<Microsoft.Extensions.Logging.ILogger<DefaultServiceInvocationDispatcher>>()));
         services.TryAddSingleton<IServiceInvocationPort, ServiceInvocationApplicationService>();
         services.TryAddSingleton<IScheduledServiceInvocationDispatchPort, ScheduledServiceInvocationDispatchPort>();

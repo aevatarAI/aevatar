@@ -1284,6 +1284,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
                 LastCommandId: string.Empty,
                 LastCorrelationId: string.Empty,
                 LastError: string.Empty,
+                LastErrorCode: string.Empty,
                 FireCount: 0,
                 FailureCount: 0,
                 Headers: new Dictionary<string, string>(),

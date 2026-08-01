@@ -609,6 +609,54 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
         document.StateVersion.Should().Be(24);
     }
 
+    [Fact]
+    public async Task ProjectAsync_ShouldMaterializeTypedScheduleFailureEvidence()
+    {
+        var store = new RecordingDocumentStore<ScheduledDispatchDocument>(x => x.Id);
+        var projector = new ScheduledDispatchCurrentStateProjector(
+            store,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-08-02T00:00:00+00:00")));
+        var state = CreateServiceInvocationState(
+            "schedule-admission-failure",
+            new ServiceIdentity
+            {
+                TenantId = "scope-alpha",
+                AppId = "app-alpha",
+                Namespace = "default",
+                ServiceId = "svc-alpha",
+            });
+        state.LastError = "Workflow definition is invalid.";
+        state.LastErrorCode = "WORKFLOW_DEFINITION_INVALID";
+        state.FireCount = 1;
+        state.FailureCount = 1;
+        state.FireRecords["fire-alpha"] = new ScheduledDispatchFireRecordState
+        {
+            IdempotencyKey = "fire-alpha",
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-02T01:00:00+00:00")),
+            CompletedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-02T01:00:01+00:00")),
+            Error = "Workflow definition is invalid.",
+            ErrorCode = "WORKFLOW_DEFINITION_INVALID",
+            Status = ScheduledDispatchFireStatusState.Failed,
+        };
+
+        await projector.ProjectAsync(
+            CreateContext("scheduled-dispatch:schedule-admission-failure"),
+            WrapCommitted(
+                state,
+                version: 25,
+                eventId: "evt-admission-failure",
+                observedAt: DateTimeOffset.Parse("2026-08-02T01:00:02+00:00")));
+
+        var document = await store.GetAsync("schedule-admission-failure");
+        document.Should().NotBeNull();
+        document!.LastError.Should().Be("Workflow definition is invalid.");
+        document.LastErrorCode.Should().Be("WORKFLOW_DEFINITION_INVALID");
+        var fire = document.FireRecords.Should().ContainSingle().Subject;
+        fire.Error.Should().Be("Workflow definition is invalid.");
+        fire.ErrorCode.Should().Be("WORKFLOW_DEFINITION_INVALID");
+        fire.TargetActorId.Should().BeEmpty();
+    }
+
     private static ScheduledDispatchProjectionContext CreateContext(string rootActorId) =>
         new()
         {

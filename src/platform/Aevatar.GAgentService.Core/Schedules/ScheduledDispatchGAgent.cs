@@ -1070,6 +1070,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                 await PersistFireFailedAsync(
                     scheduledFireAt,
                     idempotencyKey,
+                    "scheduled_dispatch_failed",
                     "Scheduled dispatch was not accepted.",
                     command.Manual,
                     ct);
@@ -1117,10 +1118,30 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                 previousCredentialExpiryLease,
                 CancellationToken.None);
         }
+        catch (ScheduledWorkflowAdmissionException ex)
+        {
+            Logger.LogWarning(
+                "Scheduled dispatch {ActorId} workflow admission failed. errorCode={ErrorCode}",
+                Id,
+                ex.StableCode);
+            await PersistFireFailedAsync(
+                scheduledFireAt,
+                idempotencyKey,
+                ex.StableCode,
+                ex.SafeMessage,
+                command.Manual,
+                CancellationToken.None);
+        }
         catch (Exception ex)
         {
             Logger.LogWarning(ex, "Scheduled dispatch {ActorId} dispatch failed.", Id);
-            await PersistFireFailedAsync(scheduledFireAt, idempotencyKey, ex.Message, command.Manual, CancellationToken.None);
+            await PersistFireFailedAsync(
+                scheduledFireAt,
+                idempotencyKey,
+                "scheduled_dispatch_failed",
+                ex.Message,
+                command.Manual,
+                CancellationToken.None);
         }
 
         if (!command.Manual)
@@ -1215,6 +1236,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
     private async Task PersistFireFailedAsync(
         DateTimeOffset scheduledFireAt,
         string idempotencyKey,
+        string errorCode,
         string error,
         bool manual,
         CancellationToken ct)
@@ -1225,6 +1247,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             FailedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             IdempotencyKey = idempotencyKey,
             Error = string.IsNullOrWhiteSpace(error) ? "Scheduled dispatch failed." : error.Trim(),
+            ErrorCode = string.IsNullOrWhiteSpace(errorCode) ? "scheduled_dispatch_failed" : errorCode.Trim(),
             Manual = manual,
         }, ct);
     }
@@ -3533,6 +3556,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                 FailedAt = evt.OccurredAt?.Clone(),
                 IdempotencyKey = evt.IdempotencyKey,
                 Error = evt.ErrorCode ?? string.Empty,
+                ErrorCode = evt.ErrorCode ?? string.Empty,
                 Manual = evt.Manual,
             });
         }
@@ -3593,6 +3617,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         var next = current.Clone();
         next.LastFireAt = evt.ScheduledFireAt?.ToDateTimeOffset();
         next.LastError = string.Empty;
+        next.LastErrorCode = string.Empty;
         next.UpdatedAt = evt.StartedAt?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow;
         UpsertFireRecord(next, evt.IdempotencyKey, new ScheduledDispatchFireRecordState
         {
@@ -3615,6 +3640,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         next.LastCommandId = evt.CommandId ?? string.Empty;
         next.LastCorrelationId = evt.CorrelationId ?? string.Empty;
         next.LastError = string.Empty;
+        next.LastErrorCode = string.Empty;
         next.FireCount++;
         next.UpdatedAt = evt.DispatchedAt?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow;
         UpsertFireRecord(next, evt.IdempotencyKey, new ScheduledDispatchFireRecordState
@@ -3638,6 +3664,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         var next = current.Clone();
         next.LastFireAt = evt.ScheduledFireAt?.ToDateTimeOffset();
         next.LastError = evt.Error ?? string.Empty;
+        next.LastErrorCode = evt.ErrorCode ?? string.Empty;
         next.FireCount++;
         next.FailureCount++;
         next.UpdatedAt = evt.FailedAt?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow;
@@ -3647,6 +3674,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             CompletedAt = evt.FailedAt?.Clone(),
             IdempotencyKey = evt.IdempotencyKey ?? string.Empty,
             Error = evt.Error ?? string.Empty,
+            ErrorCode = evt.ErrorCode ?? string.Empty,
             Manual = evt.Manual,
             Status = ScheduledDispatchFireStatusState.Failed,
         });
