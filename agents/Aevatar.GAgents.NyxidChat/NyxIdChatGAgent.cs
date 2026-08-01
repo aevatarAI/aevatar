@@ -384,6 +384,7 @@ public sealed class NyxIdChatGAgent : RoleGAgent
     public override async Task HandleChatRequest(ChatRequestEvent request)
     {
         ArgumentNullException.ThrowIfNull(request);
+        ApplyNyxIdChatToolPolicy(request);
 
         var telemetryContext = State.AgentProfile is { } profile
             ? CreateTelemetryContext(profile)
@@ -402,6 +403,29 @@ public sealed class NyxIdChatGAgent : RoleGAgent
             _activeAgentProfileTelemetryContext = null;
         }
     }
+
+    private void ApplyNyxIdChatToolPolicy(ChatRequestEvent request)
+    {
+        var tools = Tools.GetAll();
+        if (!tools.Any(static tool => IsCredentialManagementTool(tool.Name)))
+            return;
+
+        var context = AgentToolExecutionContextMapper.FromPayload(request.ToolContext);
+        request.ToolContext = (context with
+        {
+            ToolVisibility = AgentToolVisibilityScope.FromAllowedToolNames(
+                tools
+                    .Select(static tool => tool.Name)
+                    .Where(name => context.ToolVisibility.Allows(name) &&
+                                   !IsCredentialManagementTool(name))),
+        }).ToPayload();
+    }
+
+    private static bool IsCredentialManagementTool(string? name) =>
+        name is "nyxid_services" or "nyxid_external_keys" or
+            "nyxid_service_handoff" ||
+        name?.Contains("credential", StringComparison.OrdinalIgnoreCase) == true ||
+        name?.Contains("api_key", StringComparison.OrdinalIgnoreCase) == true;
 
     private static AgentProfileTelemetryContext CreateTelemetryContext(AgentProfileSnapshot profile) =>
         new(

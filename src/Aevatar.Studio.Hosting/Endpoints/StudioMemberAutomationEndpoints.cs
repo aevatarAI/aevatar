@@ -62,7 +62,7 @@ internal static class StudioMemberAutomationEndpoints
                     http,
                     bindingQuery,
                     ct);
-            return Results.Ok(await schedules.PreflightAsync(
+            return Results.Ok(await schedules.PreflightForWriteAsync(
                 BuildScheduleRequest(
                     scopeId,
                     teamId,

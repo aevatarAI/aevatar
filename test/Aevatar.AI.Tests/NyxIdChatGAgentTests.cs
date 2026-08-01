@@ -1416,6 +1416,53 @@ public class NyxIdChatGAgentTests
     }
 
     [Fact]
+    public async Task HandleChatRequest_UnprofiledTurn_ShouldHideCredentialManagementTools()
+    {
+        var tools = new[]
+        {
+            "nyxid_services",
+            "nyxid_proxy",
+            "nyxid_external_keys",
+            "nyxid_api_keys",
+            "nyxid_require_service",
+            "nyxid_service_inventory",
+            "nyxid_service_operation__read_costs",
+        }.Select(name => (IAgentTool)new DelegateTool(name, _ => "{}")).ToArray();
+        using var provider = BuildServiceProvider(historyCommandPort: new RecordingChatHistoryCommandPort());
+        var llm = new StreamingToolLoopProviderFactory(
+        [
+            [new LLMStreamChunk { DeltaContent = "done" }],
+        ]);
+        var agent = CreateAgent(
+            provider,
+            "nyxid-chat-unprofiled-tool-policy",
+            llm,
+            [new StaticToolSource(tools)]);
+
+        await agent.ActivateAsync();
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            Prompt = "Inspect AWS costs",
+            SessionId = "unprofiled-tool-policy-session",
+            ToolContext = new AgentToolExecutionContextPayload
+            {
+                Credentials = new AgentToolCredentialsPayload { NyxIdAccessToken = "turn-token" },
+            },
+        });
+
+        var request = llm.StreamRequests.Should().ContainSingle().Which;
+        request.Tools!.Select(static tool => tool.Name).Should().BeEquivalentTo(
+            "nyxid_proxy",
+            "nyxid_require_service",
+            "nyxid_service_inventory",
+            "nyxid_service_operation__read_costs");
+        request.ToolContext!.ToolVisibility.IsRestricted.Should().BeTrue();
+        request.ToolContext.ToolVisibility.Allows("nyxid_services").Should().BeFalse();
+        request.ToolContext.ToolVisibility.Allows("nyxid_proxy").Should().BeTrue();
+        request.ToolContext.ToolVisibility.Allows("nyxid_require_service").Should().BeTrue();
+    }
+
+    [Fact]
     public async Task HandleChatRequest_CompletedReplay_ShouldNotRematerializeCatalog()
     {
         using var provider = BuildServiceProvider(historyCommandPort: new RecordingChatHistoryCommandPort());
