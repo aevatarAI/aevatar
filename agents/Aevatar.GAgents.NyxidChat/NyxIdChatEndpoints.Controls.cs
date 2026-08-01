@@ -262,6 +262,98 @@ public static partial class NyxIdChatEndpoints
         return AcceptedControl(http, identity.ScopeId, identity.ActorId, receipt);
     }
 
+    private static async Task<IResult> HandleInputResolveControlAsync(
+        HttpContext http,
+        string scopeId,
+        string actorId,
+        NyxIdChatInputResolveRequest request,
+        IScopeResourceAdmissionPort admissionPort,
+        INyxIdChatControlCommandPort commandPort,
+        CancellationToken ct)
+    {
+        if (!TryValidateNeedsYouRequest(
+                scopeId,
+                actorId,
+                request.RequestId,
+                request.ClientRequestId,
+                request.ExpectedStateVersion,
+                out var identity) ||
+            string.IsNullOrWhiteSpace(request.Answer) ||
+            request.Answer.Length > MaxSteeringInstructionLength)
+        {
+            return InvalidControlRequest();
+        }
+
+        var admissionError = await AuthorizeConversationAsync(
+            admissionPort,
+            identity.ScopeId,
+            identity.ActorId,
+            ScopeResourceOperation.Control,
+            ct).ConfigureAwait(false);
+        if (admissionError is not null)
+            return admissionError;
+
+        var (commandId, correlationId) = CreateControlTraceIdentity();
+        var receipt = await commandPort.DispatchInputResolveAsync(new NyxIdChatInputResolveCommand
+        {
+            ScopeId = identity.ScopeId,
+            ConversationActorId = identity.ActorId,
+            RequestId = identity.RequestId,
+            ClientRequestId = identity.ClientRequestId,
+            Answer = request.Answer.Trim(),
+            ExpectedStateVersion = request.ExpectedStateVersion,
+            CommandId = commandId,
+            CorrelationId = correlationId,
+        }, ct).ConfigureAwait(false);
+        return AcceptedControl(http, identity.ScopeId, identity.ActorId, receipt);
+    }
+
+    private static async Task<IResult> HandleApprovalResolveControlAsync(
+        HttpContext http,
+        string scopeId,
+        string actorId,
+        NyxIdChatApprovalResolveRequest request,
+        IScopeResourceAdmissionPort admissionPort,
+        INyxIdChatControlCommandPort commandPort,
+        CancellationToken ct)
+    {
+        if (!TryValidateNeedsYouRequest(
+                scopeId,
+                actorId,
+                request.RequestId,
+                request.ClientRequestId,
+                request.ExpectedStateVersion,
+                out var identity) ||
+            (request.Reason?.Length ?? 0) > MaxSteeringInstructionLength)
+        {
+            return InvalidControlRequest();
+        }
+
+        var admissionError = await AuthorizeConversationAsync(
+            admissionPort,
+            identity.ScopeId,
+            identity.ActorId,
+            ScopeResourceOperation.Approve,
+            ct).ConfigureAwait(false);
+        if (admissionError is not null)
+            return admissionError;
+
+        var (commandId, correlationId) = CreateControlTraceIdentity();
+        var receipt = await commandPort.DispatchApprovalResolveAsync(new NyxIdChatApprovalResolveCommand
+        {
+            ScopeId = identity.ScopeId,
+            ConversationActorId = identity.ActorId,
+            RequestId = identity.RequestId,
+            ClientRequestId = identity.ClientRequestId,
+            Approved = request.Approved,
+            Reason = request.Reason?.Trim() ?? string.Empty,
+            ExpectedStateVersion = request.ExpectedStateVersion,
+            CommandId = commandId,
+            CorrelationId = correlationId,
+        }, ct).ConfigureAwait(false);
+        return AcceptedControl(http, identity.ScopeId, identity.ActorId, receipt);
+    }
+
     private static AgentToolExecutionContextPayload BuildControlToolContext(
         string scopeId,
         string turnId,
@@ -345,6 +437,32 @@ public static partial class NyxIdChatEndpoints
         return true;
     }
 
+    private static bool TryValidateNeedsYouRequest(
+        string? scopeId,
+        string? actorId,
+        string? requestId,
+        string? clientRequestId,
+        long expectedStateVersion,
+        out NeedsYouIdentity identity)
+    {
+        identity = default;
+        if (!TryValidateControlIdentity(scopeId, out var normalizedScopeId) ||
+            !TryValidateControlIdentity(actorId, out var normalizedActorId) ||
+            !TryValidateControlIdentity(requestId, out var normalizedRequestId) ||
+            !TryValidateControlIdentity(clientRequestId, out var normalizedClientRequestId) ||
+            expectedStateVersion <= 0)
+        {
+            return false;
+        }
+
+        identity = new NeedsYouIdentity(
+            normalizedScopeId,
+            normalizedActorId,
+            normalizedRequestId,
+            normalizedClientRequestId);
+        return true;
+    }
+
     private static bool TryValidateControlIdentity(string? value, out string normalized)
     {
         normalized = value?.Trim() ?? string.Empty;
@@ -380,6 +498,12 @@ public static partial class NyxIdChatEndpoints
         string RequestId,
         string ClientRequestId);
 
+    private readonly record struct NeedsYouIdentity(
+        string ScopeId,
+        string ActorId,
+        string RequestId,
+        string ClientRequestId);
+
     public sealed record NyxIdChatStopRequest(
         string? TurnId,
         string? StopRequestId,
@@ -407,4 +531,17 @@ public static partial class NyxIdChatEndpoints
         string? ClientRequestId,
         long ExpectedOperationGeneration,
         long ExpectedStateVersion = 0);
+
+    public sealed record NyxIdChatInputResolveRequest(
+        string? RequestId,
+        string? ClientRequestId,
+        string? Answer,
+        long ExpectedStateVersion);
+
+    public sealed record NyxIdChatApprovalResolveRequest(
+        string? RequestId,
+        string? ClientRequestId,
+        bool Approved,
+        string? Reason,
+        long ExpectedStateVersion);
 }

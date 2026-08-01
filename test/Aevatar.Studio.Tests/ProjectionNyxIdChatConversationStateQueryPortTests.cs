@@ -48,7 +48,50 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
         result.Snapshot.PendingActions.Should().ContainSingle().Which.Reports
             .Should().ContainSingle().Which.Resource!.UserServiceId.Should()
             .Be("user-service-alpha");
+        result.Snapshot.PendingInput.Should().NotBeNull();
+        result.Snapshot.PendingInput!.RequestId.Should().Be("input-alpha");
+        result.Snapshot.PendingInput.Options.Select(static option => option.Label).Should()
+            .Equal("Singapore", "Frankfurt");
+        result.Snapshot.LatestInputResolution!.RequestId.Should().Be("input-before");
+        result.Snapshot.LatestApprovalResolution!.Approved.Should().BeFalse();
+        result.Snapshot.TaskStatus.Should().Be("active");
+        result.Snapshot.AttentionKind.Should().Be("input");
+        result.Snapshot.ActiveStepSummary.Should().Be("Choose a deployment region.");
         reader.Keys.Should().ContainSingle("conversation-alpha");
+    }
+
+    [Fact]
+    public async Task GetAttentionSummariesAsync_ShouldBatchReadActorScopedProjectionTruth()
+    {
+        var valid = BuildDocument(stateVersion: 23);
+        var foreign = BuildDocument(stateVersion: 24);
+        foreign.Id = "conversation-foreign";
+        foreign.ActorId = "conversation-foreign";
+        foreign.ConversationActorId = "conversation-foreign";
+        foreign.ScopeId = "scope-other";
+        var reader = new RecordingReader { QueryDocuments = [valid, foreign] };
+        var port = new ProjectionNyxIdChatConversationStateQueryPort(reader);
+
+        var result = await port.GetAttentionSummariesAsync(
+            " scope-alpha ",
+            [" conversation-alpha ", "conversation-alpha", "conversation-missing"]);
+
+        var summary = result.Should().ContainSingle().Which;
+        summary.Key.Should().Be("conversation-alpha");
+        summary.Value.TaskStatus.Should().Be("active");
+        summary.Value.AttentionKind.Should().Be("input");
+        summary.Value.AttentionSince.Should().Be(
+            DateTimeOffset.Parse("2026-08-01T12:00:00Z"));
+        summary.Value.ActiveStepSummary.Should().Be("Choose a deployment region.");
+        summary.Value.StateVersion.Should().Be(23);
+        reader.Queries.Should().ContainSingle().Which.Should().Match<ProjectionDocumentQuery>(query =>
+            query.Take == 2 &&
+            query.Filters.Any(filter =>
+                filter.FieldPath == nameof(NyxIdChatConversationCurrentStateDocument.ScopeId) &&
+                filter.Operator == ProjectionDocumentFilterOperator.Eq) &&
+            query.Filters.Any(filter =>
+                filter.FieldPath == nameof(NyxIdChatConversationCurrentStateDocument.ConversationActorId) &&
+                filter.Operator == ProjectionDocumentFilterOperator.In));
     }
 
     [Fact]
@@ -140,6 +183,39 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
         LastEventId = $"event-alpha-{stateVersion}",
         UpdatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-25T06:20:00Z")),
         ProgressSequence = 34,
+        PendingInput = new NyxIdChatConversationPendingInputDocument
+        {
+            RequestId = "input-alpha",
+            TurnId = "turn-alpha",
+            TaskId = "task-alpha",
+            StepId = "step-alpha",
+            Prompt = "Choose a deployment region.",
+            AskedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-01T12:00:00Z")),
+            Options =
+            {
+                new NyxIdChatConversationInputOptionDocument { Label = "Singapore" },
+                new NyxIdChatConversationInputOptionDocument { Label = "Frankfurt" },
+            },
+        },
+        LatestInputResolution = new NyxIdChatConversationInputResolutionDocument
+        {
+            RequestId = "input-before",
+            ClientRequestId = "client-input-before",
+            Outcome = "accepted",
+            CommittedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-01T11:55:00Z")),
+        },
+        LatestApprovalResolution = new NyxIdChatConversationApprovalResolutionDocument
+        {
+            RequestId = "approval-before",
+            ClientRequestId = "client-approval-before",
+            Outcome = "accepted",
+            Approved = false,
+            CommittedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-01T11:50:00Z")),
+        },
+        TaskStatus = "active",
+        AttentionKind = "input",
+        AttentionSince = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-01T12:00:00Z")),
+        ActiveStepSummary = "Choose a deployment region.",
         ActiveTurn = new NyxIdChatConversationTurnDocument
         {
             TurnId = "turn-alpha",
@@ -213,7 +289,9 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
         : IProjectionDocumentReader<NyxIdChatConversationCurrentStateDocument, string>
     {
         public NyxIdChatConversationCurrentStateDocument? Document { get; init; }
+        public IReadOnlyList<NyxIdChatConversationCurrentStateDocument> QueryDocuments { get; init; } = [];
         public List<string> Keys { get; } = [];
+        public List<ProjectionDocumentQuery> Queries { get; } = [];
 
         public Task<NyxIdChatConversationCurrentStateDocument?> GetAsync(
             string key,
@@ -226,7 +304,14 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
 
         public Task<ProjectionDocumentQueryResult<NyxIdChatConversationCurrentStateDocument>> QueryAsync(
             ProjectionDocumentQuery query,
-            CancellationToken ct = default) =>
-            throw new InvalidOperationException("The actor-scoped query must use GetAsync only.");
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Queries.Add(query);
+            return Task.FromResult(new ProjectionDocumentQueryResult<NyxIdChatConversationCurrentStateDocument>
+            {
+                Items = QueryDocuments.Select(static document => document.Clone()).ToArray(),
+            });
+        }
     }
 }

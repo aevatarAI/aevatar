@@ -2152,6 +2152,23 @@ public sealed class NyxIdChatConversationGAgentTests
         recent.ActionRequestId = "action-recent-alpha";
         recent.StepId = "step-recent-alpha";
         state.RecentActions.Add(recent);
+        state.LatestInputResolution = new NyxIdChatInputResolutionState
+        {
+            RequestId = "input-resolved-alpha",
+            ClientRequestId = "client-input-resolved-alpha",
+            Outcome = NyxIdChatNeedsYouResolutionOutcome.Accepted,
+            AnswerSha256 = ByteString.CopyFromUtf8("input-fingerprint"),
+        };
+        state.RecentInputResolutions.Add(state.LatestInputResolution.Clone());
+        state.LatestApprovalResolution = new NyxIdChatApprovalResolutionState
+        {
+            RequestId = "approval-resolved-alpha",
+            ClientRequestId = "client-approval-resolved-alpha",
+            Outcome = NyxIdChatNeedsYouResolutionOutcome.Accepted,
+            Approved = true,
+            DecisionSha256 = ByteString.CopyFromUtf8("approval-fingerprint"),
+        };
+        state.RecentApprovalResolutions.Add(state.LatestApprovalResolution.Clone());
         await PersistActionStateAsync(eventStore, conversationActorId, state);
         using var services = BuildEventSourcingServices(eventStore);
         var agent = CreateController(services, conversationActorId);
@@ -2170,6 +2187,14 @@ public sealed class NyxIdChatConversationGAgentTests
             action.ActionRequestId == state.PendingActions.Single().ActionRequestId);
         agent.State.RecentActions.Should().ContainSingle(action =>
             action.ActionRequestId == "action-recent-alpha");
+        agent.State.LatestInputResolution.Should().BeEquivalentTo(
+            state.LatestInputResolution);
+        agent.State.RecentInputResolutions.Should().ContainSingle(result =>
+            result.RequestId == "input-resolved-alpha");
+        agent.State.LatestApprovalResolution.Should().BeEquivalentTo(
+            state.LatestApprovalResolution);
+        agent.State.RecentApprovalResolutions.Should().ContainSingle(result =>
+            result.RequestId == "approval-resolved-alpha");
     }
 
     [Fact]
