@@ -461,6 +461,74 @@ public sealed class ProvisionWorkflowScheduleToolTests
     }
 
     [Fact]
+    public async Task CreateTeam_WithoutTeamId_AcrossRetryCalls_ShouldReuseDerivedTeamIdentity()
+    {
+        var teamPort = new RecordingTeamProvisioningPort();
+        var tool = await DiscoverCreateTeamToolAsync(teamPort);
+        const string arguments = """{"display_name":"Personal Reminders","description":"Weekly reminder team"}""";
+        var requestedTeamIds = new List<string>();
+
+        for (var attempt = 1; attempt <= 3; attempt++)
+        {
+            using var _ = PushContext(
+                scopeId: "scope-current",
+                ownerSubject: "owner-1",
+                accessToken: "access-token-1",
+                requestId: $"request-{attempt}",
+                callId: $"context-call-{attempt}");
+            var toolResult = await ExecuteToolThroughExecutorAsync(
+                tool,
+                $"tc-create-team-{attempt}",
+                CreateTeamToolName,
+                arguments);
+
+            toolResult.IsError.Should().BeFalse();
+            var requestedTeamId = teamPort.LastRequest!.TeamId;
+            requestedTeamId.Should().NotBeNullOrWhiteSpace(
+                "the tool must resolve a stable identity before the command service can mint a random one");
+            requestedTeamIds.Add(requestedTeamId!);
+
+            using var resultDocument = JsonDocument.Parse(toolResult.Result);
+            resultDocument.RootElement.GetProperty("team_id").GetString().Should().Be(requestedTeamId);
+            toolResult.Receipt.Should().NotBeNull();
+            toolResult.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+            toolResult.Receipt.SubjectId.Should().Be(requestedTeamId);
+        }
+
+        requestedTeamIds.Distinct(StringComparer.Ordinal).Should().ContainSingle(
+            "retries of one semantic create intent must address the same Team actor");
+        requestedTeamIds[0].Should().Be("t-e6155a545a2bbd9be529982f1c1b01ca",
+            "the v1 semantic identity must remain stable across deployments");
+    }
+
+    [Fact]
+    public async Task CreateTeam_WithoutTeamId_ForDifferentDisplayNames_ShouldDeriveDifferentIdentities()
+    {
+        var teamPort = new RecordingTeamProvisioningPort();
+        var tool = await DiscoverCreateTeamToolAsync(teamPort);
+        var requestedTeamIds = new List<string>();
+
+        foreach (var displayName in new[] { "Personal Reminders", "Work Reminders" })
+        {
+            using var _ = PushContext(
+                scopeId: "scope-current",
+                ownerSubject: "owner-1",
+                accessToken: "access-token-1");
+            var toolResult = await ExecuteToolThroughExecutorAsync(
+                tool,
+                $"tc-create-{displayName}",
+                CreateTeamToolName,
+                JsonSerializer.Serialize(new { display_name = displayName }));
+
+            toolResult.IsError.Should().BeFalse();
+            requestedTeamIds.Add(teamPort.LastRequest!.TeamId!);
+        }
+
+        requestedTeamIds.Should().OnlyContain(static teamId => !string.IsNullOrWhiteSpace(teamId));
+        requestedTeamIds.Distinct(StringComparer.Ordinal).Should().HaveCount(2);
+    }
+
+    [Fact]
     public async Task CreateTeam_ThroughStreamingExecutor_ShouldKeepStructuredMutationError()
     {
         var teamPort = new RecordingTeamProvisioningPort();

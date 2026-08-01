@@ -1,3 +1,6 @@
+using System.Buffers.Binary;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aevatar.AI.Abstractions;
@@ -12,6 +15,8 @@ namespace Aevatar.AI.ToolProviders.StudioProvisioning;
 /// </summary>
 internal sealed class CreateStudioTeamTool : IStudioMutationReceiptTool
 {
+    private const string DerivedTeamIdSchemaVersion = "studio-team-create/v1";
+
     private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -31,7 +36,9 @@ internal sealed class CreateStudioTeamTool : IStudioMutationReceiptTool
 
     public string Description =>
         "Create a Studio team in the caller's current Aevatar scope. " +
-        "Supply display_name and optional description or team_id; do not provide scope_id because scope is taken from the session context.";
+        "Supply display_name and optional description or team_id; do not provide scope_id because scope is taken from the session context. " +
+        "When team_id is omitted, creation is idempotent by display_name within the scope: retries reuse the same derived Team identity. " +
+        "Supply an explicit team_id only when a distinct Team with the same display_name is intentional.";
 
     public string ParametersSchema => """
         {
@@ -40,7 +47,7 @@ internal sealed class CreateStudioTeamTool : IStudioMutationReceiptTool
           "properties": {
             "display_name": {
               "type": "string",
-              "description": "Human-readable Studio team name. Required."
+              "description": "Human-readable Studio team name. Required. Reusing this name without an explicit team_id targets the same Team within the caller scope."
             },
             "description": {
               "type": "string",
@@ -48,7 +55,7 @@ internal sealed class CreateStudioTeamTool : IStudioMutationReceiptTool
             },
             "team_id": {
               "type": "string",
-              "description": "Optional caller-supplied URL-safe team id. Omit to let the service mint one."
+              "description": "Optional caller-supplied URL-safe team id. Omit to derive a stable scope-and-display-name identity so retries cannot create duplicate Teams."
             }
           },
           "required": ["display_name"]
@@ -104,7 +111,7 @@ internal sealed class CreateStudioTeamTool : IStudioMutationReceiptTool
         var request = new StudioTeamProvisioningRequest(scopeId, displayName)
         {
             Description = Normalize(args.Description),
-            TeamId = Normalize(args.TeamId),
+            TeamId = Normalize(args.TeamId) ?? DeriveTeamId(scopeId, displayName),
         };
 
         try
@@ -137,6 +144,32 @@ internal sealed class CreateStudioTeamTool : IStudioMutationReceiptTool
         {
             return ErrorJson("team_create_failed", $"Studio team creation failed: {ex.GetType().Name}");
         }
+    }
+
+    private static string DeriveTeamId(string scopeId, string displayName)
+    {
+        // The semantic identity intentionally excludes request/call ids: those
+        // change when Chat retries after an ambiguous transport or receipt outcome.
+        // Description is mutable presentation content, so the create contract uses
+        // scope + display_name as its stable intent key. An explicit team_id remains
+        // the escape hatch for intentionally distinct Teams sharing a display name.
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        AppendIdentityPart(hash, DerivedTeamIdSchemaVersion);
+        AppendIdentityPart(hash, scopeId);
+        AppendIdentityPart(hash, displayName);
+        var digest = hash.GetHashAndReset();
+        return $"t-{Convert.ToHexStringLower(digest.AsSpan(0, 16))}";
+    }
+
+    private static void AppendIdentityPart(IncrementalHash hash, string value)
+    {
+        // Length-prefix every UTF-8 component so the fingerprint has no delimiter
+        // ambiguity and remains stable for Unicode display names.
+        var bytes = Encoding.UTF8.GetBytes(value);
+        Span<byte> length = stackalloc byte[sizeof(int)];
+        BinaryPrimitives.WriteInt32BigEndian(length, bytes.Length);
+        hash.AppendData(length);
+        hash.AppendData(bytes);
     }
 
     private static string ErrorJson(string code, string message) =>
