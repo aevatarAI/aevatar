@@ -72,12 +72,10 @@ public sealed class RoleGAgentCompletionNotificationTests
             .Select(static request => request.TriggerEnvelope.Runtime!.Deduplication!.OperationId)
             .ToArray();
         retryOperationIds.Should().OnlyHaveUniqueItems();
-        var deduplicator = new MemoryCacheDeduplicator();
         foreach (var retryEnvelope in scheduler.TimeoutRequests.Select(static request => request.TriggerEnvelope))
         {
-            RuntimeEnvelopeDeduplication.TryBuildDedupKey(actor.Id, retryEnvelope, out var dedupKey)
+            RuntimeEnvelopeDeduplication.TryBuildDedupKey(actor.Id, retryEnvelope, out _)
                 .Should().BeTrue();
-            (await deduplicator.TryRecordAsync(dedupKey)).Should().BeTrue();
         }
 
         var deadlineScheduler = new RecordingRuntimeCallbackScheduler();
@@ -361,11 +359,8 @@ public sealed class RoleGAgentCompletionNotificationTests
                 },
             },
         };
-        var deduplicator = new MemoryCacheDeduplicator();
         RuntimeEnvelopeDeduplication.TryBuildDedupKey(actor.Id, recoveryEnvelope, out var recoveryDedupKey)
             .Should().BeTrue();
-        (await deduplicator.TryRecordAsync(recoveryDedupKey)).Should().BeTrue();
-        (await deduplicator.TryRecordAsync(recoveryDedupKey)).Should().BeFalse();
 
         await actor.HandleEventAsync(recoveryEnvelope);
 
@@ -381,7 +376,7 @@ public sealed class RoleGAgentCompletionNotificationTests
                 durableAttempt2.TriggerEnvelope,
                 out var durableAttempt2DedupKey)
             .Should().BeTrue();
-        (await deduplicator.TryRecordAsync(durableAttempt2DedupKey)).Should().BeTrue();
+        durableAttempt2DedupKey.Should().NotBe(recoveryDedupKey);
 
         publisher.FailurePredicate = null;
         await actor.HandleEventAsync(durableAttempt2.TriggerEnvelope);

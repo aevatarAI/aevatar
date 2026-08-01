@@ -110,12 +110,10 @@ public sealed class ScriptBehaviorCompletionNotificationTests
             .Select(static request => request.TriggerEnvelope.Runtime!.Deduplication!.OperationId)
             .ToArray();
         operationIds.Should().OnlyHaveUniqueItems();
-        var deduplicator = new MemoryCacheDeduplicator();
         foreach (var retryEnvelope in scheduler.TimeoutRequests.Select(static request => request.TriggerEnvelope))
         {
-            RuntimeEnvelopeDeduplication.TryBuildDedupKey(actor.Id, retryEnvelope, out var dedupKey)
+            RuntimeEnvelopeDeduplication.TryBuildDedupKey(actor.Id, retryEnvelope, out _)
                 .Should().BeTrue();
-            (await deduplicator.TryRecordAsync(dedupKey)).Should().BeTrue();
         }
 
         var handler = typeof(ScriptBehaviorGAgent).GetMethod(
@@ -563,11 +561,8 @@ public sealed class ScriptBehaviorCompletionNotificationTests
 
         scheduler.ScheduleException = null;
         var recoveryEnvelope = BuildSelfEnvelope(actor.Id, retry, recovery.Options);
-        var deduplicator = new MemoryCacheDeduplicator();
-        RuntimeEnvelopeDeduplication.TryBuildDedupKey(actor.Id, recoveryEnvelope, out var recoveryDedupKey)
+        RuntimeEnvelopeDeduplication.TryBuildDedupKey(actor.Id, recoveryEnvelope, out _)
             .Should().BeTrue();
-        (await deduplicator.TryRecordAsync(recoveryDedupKey)).Should().BeTrue();
-        (await deduplicator.TryRecordAsync(recoveryDedupKey)).Should().BeFalse();
         publisher.SendException = null;
         await actor.HandleEventAsync(recoveryEnvelope);
         await actor.HandleEventAsync(recoveryEnvelope);

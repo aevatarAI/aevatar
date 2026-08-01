@@ -1,7 +1,6 @@
 using System.Threading.Channels;
 using Aevatar.Foundation.Runtime.Observability;
 using Aevatar.Foundation.Runtime.Actors;
-using Aevatar.Foundation.Runtime.Deduplication;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Microsoft.Extensions.Logging;
@@ -19,8 +18,6 @@ public sealed class LocalActor : IActor
     private readonly IStreamProvider _streams;
     private readonly ILogger _logger;
     private readonly IActorDeactivationHookDispatcher? _deactivationHookDispatcher;
-    private readonly IEventDeduplicator? _deduplicator;
-    private readonly HashSet<string> _dedupBypassKeys = [];
     private Task? _mailboxPump;
     private IAsyncDisposable? _selfSubscription;
     private string? _parentId;
@@ -30,15 +27,13 @@ public sealed class LocalActor : IActor
         string id,
         IStreamProvider streams,
         ILogger logger,
-        IActorDeactivationHookDispatcher? deactivationHookDispatcher = null,
-        IEventDeduplicator? deduplicator = null)
+        IActorDeactivationHookDispatcher? deactivationHookDispatcher = null)
     {
         Agent = agent;
         Id = id;
         _streams = streams;
         _logger = logger;
         _deactivationHookDispatcher = deactivationHookDispatcher;
-        _deduplicator = deduplicator;
     }
 
     public string Id { get; }
@@ -191,30 +186,11 @@ public sealed class LocalActor : IActor
     {
         EventHandleScope scope = default;
         var scopeCreated = false;
-        string? dedupKey = null;
         try
         {
-            if (_deduplicator != null &&
-                RuntimeEnvelopeDeduplication.TryBuildDedupKey(Id, item.Envelope, out var candidateDedupKey))
-            {
-                dedupKey = candidateDedupKey;
-                if (!_dedupBypassKeys.Remove(dedupKey) &&
-                    !await _deduplicator.TryRecordAsync(dedupKey))
-                {
-                    _logger.LogDebug(
-                        "LocalActor {Id} dropped duplicate envelope {EnvelopeId} with dedup key {DedupKey}",
-                        Id,
-                        item.Envelope.Id,
-                        dedupKey);
-                    item.Completion.SetResult();
-                    return;
-                }
-            }
-
             scope = EventHandleScope.Begin(_logger, Id, item.Envelope, Agent.GetType().FullName ?? Agent.GetType().Name);
             scopeCreated = true;
             await Agent.HandleEventAsync(item.Envelope);
-            ClearDedupBypass(dedupKey);
             item.Completion.SetResult();
         }
         catch (Exception ex)
@@ -224,12 +200,10 @@ public sealed class LocalActor : IActor
             _logger.LogError(ex, "LocalActor {Id} failed to handle event", Id);
             if (item.PropagateFailure)
             {
-                await ForgetDedupReservationAsync(dedupKey);
                 item.Completion.SetException(ex);
             }
             else
             {
-                ClearDedupBypass(dedupKey);
                 item.Completion.SetResult();
             }
         }
@@ -238,33 +212,6 @@ public sealed class LocalActor : IActor
             if (scopeCreated)
                 scope.Dispose();
         }
-    }
-
-    private async Task ForgetDedupReservationAsync(string? dedupKey)
-    {
-        if (_deduplicator == null || string.IsNullOrWhiteSpace(dedupKey))
-            return;
-
-        try
-        {
-            await _deduplicator.ForgetAsync(dedupKey);
-            _dedupBypassKeys.Remove(dedupKey);
-        }
-        catch (Exception ex)
-        {
-            _dedupBypassKeys.Add(dedupKey);
-            _logger.LogWarning(
-                ex,
-                "LocalActor {Id} failed to release provisional dedup reservation {DedupKey}",
-                Id,
-                dedupKey);
-        }
-    }
-
-    private void ClearDedupBypass(string? dedupKey)
-    {
-        if (!string.IsNullOrWhiteSpace(dedupKey))
-            _dedupBypassKeys.Remove(dedupKey);
     }
 
     private sealed record MailboxWorkItem(

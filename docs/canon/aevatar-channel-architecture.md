@@ -2544,7 +2544,7 @@ VoicePresence 里（`src/Aevatar.Foundation.VoicePresence/VoicePresenceStateMach
 3. **真正缺口更窄**——仅在"HTTP ack 之前缺 durable receipt"：
    - `ChannelCallbackEndpoints.cs:113-131` 只用 `IMemoryCache` 做 dedup（代码注释里承认 phase 2 才做 durable）
    - `DeviceEventEndpoints.cs:100-112` 同步 dispatch 后回 202/502
-   - `MemoryCacheDeduplicator.cs:11-25` 内存 dedup
+   - runtime process-local envelope filter 已删除；ingress receipt 与业务幂等仍由各自 owner 的 durable contract 负责
    - 窄口已由 RFC §9.5 durable inbox 契约 + §9.5.2.1 pre-ack journal 覆盖——**是 chat / ingress layer 的事**，不需要平台新起 inbox 子系统
 
 4. **做了会三层语义叠加** = ownership / idempotency 责任模糊：

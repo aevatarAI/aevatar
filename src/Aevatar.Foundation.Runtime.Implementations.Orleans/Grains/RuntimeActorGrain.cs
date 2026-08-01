@@ -32,8 +32,6 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
     // unbound retries the registry probe, which amplifies a persistent
     // misconfiguration into per-envelope I/O.
     private bool _identityResolutionAttempted;
-    private IEventDeduplicator? _deduplicator;
-    private readonly HashSet<string> _dedupBypassKeys = [];
     private IEnvelopePropagationPolicy _propagationPolicy =
         new DefaultEnvelopePropagationPolicy(new DefaultCorrelationLinkPolicy());
     private Aevatar.Foundation.Abstractions.IStreamProvider _streams = null!;
@@ -55,7 +53,6 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
 
     public override async Task OnActivateAsync(CancellationToken cancellationToken)
     {
-        _deduplicator = ServiceProvider.GetService<IEventDeduplicator>();
         _propagationPolicy = ServiceProvider.GetService<IEnvelopePropagationPolicy>() ?? _propagationPolicy;
         _streams = ServiceProvider.GetRequiredService<Aevatar.Foundation.Abstractions.IStreamProvider>();
         _stateBindingAccessor = ServiceProvider.GetService<IRuntimeActorStateBindingAccessor>();
@@ -188,10 +185,6 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         if (await TryHandleCompatibilityRetryAsync(envelope, propagateFailure))
             return;
 
-        var dedupKey = ResolveDedupKey(envelope);
-        if (!await TryReserveEnvelopeAsync(dedupKey))
-            return;
-
         if (VisitedActorChain.ShouldDropForReceiver(envelope, this.GetPrimaryKeyString()))
             return;
 
@@ -247,7 +240,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             }
         }
 
-        await HandleAgentEnvelopeAsync(envelope, dedupKey, propagateFailure);
+        await HandleAgentEnvelopeAsync(envelope, propagateFailure);
     }
 
     private async Task<bool> EnsureAgentAvailableForEnvelopeAsync(
@@ -290,17 +283,13 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         return false;
     }
 
-    private async Task HandleAgentEnvelopeAsync(
-        EventEnvelope envelope,
-        string? dedupKey,
-        bool propagateFailure)
+    private async Task HandleAgentEnvelopeAsync(EventEnvelope envelope, bool propagateFailure)
     {
         using var scope = EventHandleScope.Begin(_logger, this.GetPrimaryKeyString(), envelope);
         try
         {
             using var stateBinding = _stateBindingAccessor?.Bind(_state);
             await _agent!.HandleEventAsync(envelope);
-            ClearDedupBypass(dedupKey);
         }
         catch (Exception ex)
         {
@@ -312,7 +301,6 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             }
             catch
             {
-                await ForgetDedupReservationAsync(dedupKey);
                 throw;
             }
 
@@ -328,11 +316,8 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
                 ResolveTerminalFailureDisposition(propagateFailure));
             if (propagateFailure)
             {
-                await ForgetDedupReservationAsync(dedupKey);
                 throw;
             }
-
-            ClearDedupBypass(dedupKey);
         }
     }
 
@@ -690,58 +675,6 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
 
     private static bool ShouldPropagateDirectDispatchFailure(EventEnvelope envelope) =>
         envelope.Runtime?.Dispatch?.PropagateFailure == true;
-
-    private string? ResolveDedupKey(EventEnvelope envelope)
-    {
-        if (_deduplicator == null ||
-            !RuntimeEnvelopeDeduplication.TryBuildDedupKey(
-                this.GetPrimaryKeyString(),
-                envelope,
-                out var dedupKey))
-        {
-            return null;
-        }
-
-        return dedupKey;
-    }
-
-    private async Task<bool> TryReserveEnvelopeAsync(string? dedupKey)
-    {
-        if (_deduplicator == null || string.IsNullOrWhiteSpace(dedupKey))
-            return true;
-
-        if (_dedupBypassKeys.Remove(dedupKey))
-            return true;
-
-        return await _deduplicator.TryRecordAsync(dedupKey);
-    }
-
-    private async Task ForgetDedupReservationAsync(string? dedupKey)
-    {
-        if (_deduplicator == null || string.IsNullOrWhiteSpace(dedupKey))
-            return;
-
-        try
-        {
-            await _deduplicator.ForgetAsync(dedupKey);
-            _dedupBypassKeys.Remove(dedupKey);
-        }
-        catch (Exception ex)
-        {
-            _dedupBypassKeys.Add(dedupKey);
-            _logger.LogWarning(
-                ex,
-                "Runtime actor {ActorId} failed to release provisional dedup reservation {DedupKey}",
-                this.GetPrimaryKeyString(),
-                dedupKey);
-        }
-    }
-
-    private void ClearDedupBypass(string? dedupKey)
-    {
-        if (!string.IsNullOrWhiteSpace(dedupKey))
-            _dedupBypassKeys.Remove(dedupKey);
-    }
 
     private static string ResolveTerminalFailureDisposition(bool propagateFailure) =>
         propagateFailure

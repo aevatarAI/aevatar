@@ -5,7 +5,6 @@ using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Deduplication;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Runtime.Persistence;
@@ -117,18 +116,6 @@ public class WorkflowExecutionProjectionRegistrationTests
         provider.Metadata.Mappings.Should().ContainKey("dynamic").WhoseValue.Should().Be(true);
         provider.Metadata.Settings.Should().BeEmpty();
         provider.Metadata.Aliases.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task AddWorkflowExecutionProjectionCQRS_ShouldNotRegisterLegacyEventDeduplicator()
-    {
-        var services = new ServiceCollection();
-        RegisterEventStore(services);
-        RegisterInMemoryProviders(services);
-        services.AddWorkflowExecutionProjectionCQRS();
-
-        await using var provider = services.BuildServiceProvider();
-        provider.GetService<IEventDeduplicator>().Should().BeNull();
     }
 
     private static void RegisterInMemoryProviders(IServiceCollection services)

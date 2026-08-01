@@ -92,15 +92,15 @@ Kafka 入站链路的阶段不可互换：
 | --- | --- | --- |
 | `consumed` | receiver 已从 Kafka poll 到 record，并登记 inflight offset | 否 |
 | `delivered-to-observer` | Orleans persistent stream 已调用并 await subscriber `OnNextAsync` | 否 |
-| `handler-succeeded` | `RuntimeActorGrain` 已完成路由、去重检查和 agent handler | 否；还需 Orleans 回调 receiver |
-| `handler-retry-scheduled` | handler 失败，但新的 typed retry envelope 已成功写入 stream 或 durable callback scheduler | 原 record 的 observer 可正常返回，之后才可进入 ACK；retry envelope 是独立 attempt |
+| `handler-succeeded` | `RuntimeActorGrain` 已完成路由和 agent handler | 否；还需 Orleans 回调 receiver |
+| `handler-retry-scheduled` | handler 失败，但新的 typed retry envelope 已成功写入 stream 或 durable callback scheduler | 原 record 的 observer 可正常返回，之后才可进入 ACK；retry envelope 使用独立 attempt identity |
 | `handler-terminally-failed` | retry disabled/exhausted，或 actor 无法处理 envelope | 由 `failure_disposition` 决定，不能称为 handler success 或 transport ACK |
 | `messages-delivered` | Orleans 确认该 batch 已成功交付给全部目标 consumer，并调用 `MessagesDeliveredAsync(...)` | receiver 只把对应 offset 标为 acknowledged |
 | `offset-committed` | receiver 已将连续 acknowledged watermark 提交给 Kafka | 是；只有这一阶段影响 rebalance/crash 后的 Kafka 起点 |
 
 `RuntimeActorGrain` 的默认 terminal-failure policy 是 bounded failure，而不是无限 poison retry：
 
-- handler retry 成功排程时，原 delivery 返回；后续 attempt 使用递增的 retry attempt 和独立 dedup key。
+- handler retry 成功排程时，原 delivery 返回；后续 attempt 使用递增的 retry attempt 和稳定 operation identity。
 - retry disabled/exhausted 时记录 error log，并增加
   `aevatar.runtime.envelope_terminal_failures_total{failure_reason,failure_disposition="returned"}`；
   observer 可以继续正常返回，但只有 Orleans 后续调用 `MessagesDeliveredAsync(...)` 才使原 offset 可被 receiver
@@ -108,14 +108,12 @@ Kafka 入站链路的阶段不可互换：
 - envelope 明确设置 `Runtime.Dispatch.PropagateFailure=true` 时，terminal exception 会穿透 observer，指标使用
   `failure_disposition="propagated"`，`MessagesDeliveredAsync(...)` 不应发生，Kafka offset 保持可重投。
   该选项只适用于调用方能够修复或隔离 poison payload 的受控链路，不是默认策略。
-- pre-handler duplicate filter 是进程内 provisional reservation。propagated failure 或 retry scheduling
-  自身失败时必须释放 reservation，使同一个 provider delivery attempt 能重新进入 handler；handler 成功或
-  returned terminal failure 保留 reservation。若底层 `ForgetAsync` 失败，Actor activation 内仅为该 key 保留
-  一次 redelivery bypass；成功或 returned terminal 后立即清除 bypass。它不是 durable business idempotency guarantee。
-
-以上仅是 #3136 为避免 terminal failure 被进程内 reservation 永久抑制所做的 tactical containment。
-#3145 仍负责审计并决定删除或重命名该 process-local filter，以及是否把 in-flight reservation 与 completed-envelope
-filter 拆成不同职责；不得把 activation-scoped bypass 当成新的 durable dedup contract。
+- runtime 不做 pre-handler process-local duplicate filtering。每次 provider redelivery 都进入 authoritative actor，
+  因而 handler failure、进程重启和跨节点重投不会被本地 cache entry 抑制。业务正确性必须由 actor committed
+  state、稳定 command/operation identity 或外部权威 idempotency contract 保证。
+- envelope 的 `DeduplicationOperationId` 与 retry attempt 仍用于派生稳定 delivery identity；该 identity 不记录
+  完成事实，也不提供 exactly-once。没有证据证明本地短窗 completed-envelope filter 有足够减载价值，因此
+  #3145 选择删除而不是保留新的 performance-only seam。
 
 其他失败边界：
 
@@ -124,8 +122,8 @@ filter 拆成不同职责；不得把 activation-scoped bypass 当成新的 dura
   标记为可提交，但只有连续水位实际 commit 后才是 `offset-committed`。
 - actor identity 缺失或初始化失败时，记录 `failure_reason="actor_unavailable"`。默认 disposition 为
   `returned`；显式 `PropagateFailure` 时异常穿透并保留重投能力。
-- handler 成功后、offset commit 前进程退出，或 commit 前发生 rebalance，Kafka 可以重投。进程内 duplicate
-  filter 只能减少同一进程内的重复，业务 side effect 仍必须使用 actor-owned committed state 或下游幂等键。
+- handler 成功后、offset commit 前进程退出，或 commit 前发生 rebalance，Kafka 可以重投。重投会再次进入
+  handler；业务 side effect 必须使用 actor-owned committed state 或下游权威幂等键。
 - offset 已 commit 后进程退出不会触发 Kafka 重投；业务完成事实必须由 actor committed event 表达，不能从
   offset commit 推断。
 

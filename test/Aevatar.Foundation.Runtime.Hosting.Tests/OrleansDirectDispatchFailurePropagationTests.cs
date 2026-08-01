@@ -3,7 +3,6 @@ using System.Net.Sockets;
 using System.Collections.Concurrent;
 using System.Diagnostics.Metrics;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Deduplication;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.TypeSystem;
@@ -278,7 +277,7 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
     }
 
     [Fact]
-    public async Task HandleEnvelopeAsync_ShouldNotDeduplicateSameAttemptAfterPropagatedHandlerFailure()
+    public async Task HandleEnvelopeAsync_ShouldInvokeHandlerAgainForSameAttemptAfterPropagatedHandlerFailure()
     {
         RetryAwareDirectDispatchAgent.Reset();
         var actorId = $"actor-{Guid.NewGuid():N}";
@@ -315,59 +314,7 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
                 .WithMessage("always-fail-no-retry");
 
             RetryAwareDirectDispatchAgent.GetAttemptCount(envelope.Id).Should().Be(2,
-                "a propagated failure must release its provisional dedup reservation for provider redelivery");
-        }
-        finally
-        {
-            await host.StopAsync();
-            host.Dispose();
-        }
-    }
-
-    [Fact]
-    public async Task HandleEnvelopeAsync_ShouldPreserveHandlerFailure_WhenDedupReleaseFails()
-    {
-        RetryAwareDirectDispatchAgent.Reset();
-        var actorId = $"actor-{Guid.NewGuid():N}";
-        var siloPort = ReserveTcpPort();
-        var gatewayPort = ReserveTcpPort();
-        var deduplicator = new ThrowingForgetDeduplicator();
-
-        using var envScope = new EnvironmentVariableScope(new Dictionary<string, string?>
-        {
-            ["AEVATAR_RUNTIME_AUTO_RETRY_MAX_ATTEMPTS"] = "0",
-            ["AEVATAR_RUNTIME_AUTO_RETRY_DELAY_MS"] = "50",
-            ["AEVATAR_TEST_NODE_VERSION_TAG"] = "new",
-            ["AEVATAR_TEST_FAIL_EVENT_TYPE_URLS"] = string.Empty,
-        });
-
-        var host = await StartSiloHostAsync(
-            siloPort,
-            gatewayPort,
-            deduplicator: deduplicator);
-
-        try
-        {
-            await InitializeAgentByKindAsync(host, actorId);
-            var grain = host.Services.GetRequiredService<IGrainFactory>()
-                .GetGrain<IRuntimeActorGrain>(actorId);
-            var envelope = CreateEnvelope("always-fail-no-retry");
-            envelope.Runtime = new EnvelopeRuntime
-            {
-                Dispatch = new EnvelopeDispatchControl { PropagateFailure = true },
-            };
-
-            await grain.Invoking(x => x.HandleEnvelopeAsync(envelope.ToByteArray()))
-                .Should().ThrowAsync<InvalidOperationException>()
-                .WithMessage("always-fail-no-retry");
-            await grain.Invoking(x => x.HandleEnvelopeAsync(envelope.ToByteArray()))
-                .Should().ThrowAsync<InvalidOperationException>()
-                .WithMessage("always-fail-no-retry");
-
-            RetryAwareDirectDispatchAgent.GetAttemptCount(envelope.Id).Should().Be(2);
-            deduplicator.TryRecordAttempts.Should().Be(1,
-                "the activation-scoped bypass must skip the residual reservation on redelivery");
-            deduplicator.ForgetAttempts.Should().Be(2);
+                "provider redelivery must always reach the authoritative actor");
         }
         finally
         {
@@ -380,8 +327,7 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
         int siloPort,
         int gatewayPort,
         ILoggerProvider? loggerProvider = null,
-        IActorRuntimeCallbackScheduler? callbackScheduler = null,
-        IEventDeduplicator? deduplicator = null)
+        IActorRuntimeCallbackScheduler? callbackScheduler = null)
     {
         var host = Host.CreateDefaultBuilder()
             .UseOrleans(siloBuilder =>
@@ -410,11 +356,6 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
                 {
                     services.Replace(
                         ServiceDescriptor.Singleton(callbackScheduler));
-                }
-                if (deduplicator != null)
-                {
-                    services.Replace(
-                        ServiceDescriptor.Singleton(deduplicator));
                 }
             })
             .Build();
@@ -627,27 +568,6 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
         public ConcurrentQueue<(string? Reason, string? Disposition)> Measurements { get; } = new();
 
         public void Dispose() => _listener.Dispose();
-    }
-
-    private sealed class ThrowingForgetDeduplicator : IEventDeduplicator
-    {
-        private readonly HashSet<string> _entries = [];
-
-        public int TryRecordAttempts { get; private set; }
-        public int ForgetAttempts { get; private set; }
-
-        public Task<bool> TryRecordAsync(string eventId)
-        {
-            TryRecordAttempts++;
-            return Task.FromResult(_entries.Add(eventId));
-        }
-
-        public Task ForgetAsync(string eventId)
-        {
-            _ = eventId;
-            ForgetAttempts++;
-            throw new InvalidOperationException("dedup release failure");
-        }
     }
 
     [GAgent("tests.retry-aware-direct-dispatch")]

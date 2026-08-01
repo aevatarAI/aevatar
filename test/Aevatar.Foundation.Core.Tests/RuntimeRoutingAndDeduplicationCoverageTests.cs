@@ -7,20 +7,6 @@ namespace Aevatar.Foundation.Core.Tests;
 public sealed class RuntimeRoutingAndDeduplicationCoverageTests
 {
     [Fact]
-    public async Task MemoryCacheDeduplicator_ShouldRejectDuplicateEventId()
-    {
-        var deduplicator = new MemoryCacheDeduplicator();
-
-        var first = await deduplicator.TryRecordAsync("evt-1");
-        var second = await deduplicator.TryRecordAsync("evt-1");
-        var third = await deduplicator.TryRecordAsync("evt-2");
-
-        first.Should().BeTrue();
-        second.Should().BeFalse();
-        third.Should().BeTrue();
-    }
-
-    [Fact]
     public void RuntimeEnvelopeDeduplication_ShouldPreferStableOriginMetadata()
     {
         var envelope = new EventEnvelope

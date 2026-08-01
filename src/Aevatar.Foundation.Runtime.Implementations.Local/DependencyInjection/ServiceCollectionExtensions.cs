@@ -4,7 +4,6 @@
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.Foundation.Abstractions.Context;
-using Aevatar.Foundation.Abstractions.Deduplication;
 using Aevatar.Foundation.Abstractions.Propagation;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Core.Configurations;
@@ -30,7 +29,7 @@ namespace Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 /// <summary>Service registration extension methods.</summary>
 public static class ServiceCollectionExtensions
 {
-    /// <summary>Registers full local actor runtime (stream + actor + persistence + deduplication).</summary>
+    /// <summary>Registers full local actor runtime (stream + actor + persistence).</summary>
     /// <param name="services">Service collection.</param>
     /// <param name="configureStreams">Optional stream buffering configuration.</param>
     /// <returns>Service collection for fluent chaining.</returns>
@@ -84,9 +83,6 @@ public static class ServiceCollectionExtensions
             (IEventStoreMaintenance)sp.GetRequiredService<IEventStore>());
         services.TryAddSingleton<IActorDeactivationHookDispatcher, ActorDeactivationHookDispatcher>();
         services.TryAddSingleton<ILocalActivationIndexStore, InMemoryLocalActivationIndexStore>();
-
-        // Deduplication
-        services.TryAddSingleton<IEventDeduplicator, MemoryCacheDeduplicator>();
 
         // Context
         services.TryAddSingleton<IAgentContextAccessor, AsyncLocalAgentContextAccessor>();

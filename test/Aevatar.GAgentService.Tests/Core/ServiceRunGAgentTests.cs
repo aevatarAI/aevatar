@@ -405,11 +405,8 @@ public sealed class ServiceRunGAgentTests
             .Be("service-run-terminal-retry:delivery-1:1");
 
         var recoveryEnvelope = BuildSelfEnvelope(actor.Id, retry, recovery.Options);
-        var deduplicator = new MemoryCacheDeduplicator();
-        RuntimeEnvelopeDeduplication.TryBuildDedupKey(actor.Id, recoveryEnvelope, out var recoveryKey)
+        RuntimeEnvelopeDeduplication.TryBuildDedupKey(actor.Id, recoveryEnvelope, out _)
             .Should().BeTrue();
-        (await deduplicator.TryRecordAsync(recoveryKey)).Should().BeTrue();
-        (await deduplicator.TryRecordAsync(recoveryKey)).Should().BeFalse();
 
         scheduler.ScheduleException = null;
         await actor.HandleEventAsync(recoveryEnvelope);
@@ -523,7 +520,7 @@ public sealed class ServiceRunGAgentTests
     }
 
     [Fact]
-    public async Task RetryCallbackEnvelopes_ShouldKeepStableCallbackId_AndDeduplicatePerAttempt()
+    public async Task RetryCallbackEnvelopes_ShouldKeepStableCallbackId_AndUseDistinctDeliveryIdentityPerAttempt()
     {
         var scheduler = new RecordingRuntimeCallbackScheduler();
         var publisher = new RecordingEventPublisher
@@ -544,11 +541,8 @@ public sealed class ServiceRunGAgentTests
         attemptOne.TriggerEnvelope.Payload.Unpack<ServiceRunTerminalNotificationRetryFiredEvent>()
             .Attempt.Should().Be(1);
         attemptOneOperationId.Should().Be("service-run-terminal-retry:delivery-1:1");
-        var deduplicator = new MemoryCacheDeduplicator();
         RuntimeEnvelopeDeduplication.TryBuildDedupKey(actor.Id, attemptOne.TriggerEnvelope, out var attemptOneKey)
             .Should().BeTrue();
-        (await deduplicator.TryRecordAsync(attemptOneKey)).Should().BeTrue();
-        (await deduplicator.TryRecordAsync(attemptOneKey)).Should().BeFalse();
 
         await actor.HandleEventAsync(attemptOne.TriggerEnvelope);
 
@@ -563,7 +557,6 @@ public sealed class ServiceRunGAgentTests
         RuntimeEnvelopeDeduplication.TryBuildDedupKey(actor.Id, attemptTwo.TriggerEnvelope, out var attemptTwoKey)
             .Should().BeTrue();
         attemptTwoKey.Should().NotBe(attemptOneKey);
-        (await deduplicator.TryRecordAsync(attemptTwoKey)).Should().BeTrue();
     }
 
     [Theory]

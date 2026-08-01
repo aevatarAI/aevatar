@@ -258,9 +258,8 @@ public sealed class ServiceRunWorkOrderIntegrationTests
                 scriptTerminalEnvelope,
                 out var scriptTerminalDedupKey)
             .Should().BeTrue();
-        var deduplicator = new MemoryCacheDeduplicator();
-        (await deduplicator.TryRecordAsync(scriptTerminalDedupKey)).Should().BeTrue();
-        (await deduplicator.TryRecordAsync(scriptTerminalDedupKey)).Should().BeFalse();
+        scriptTerminalDedupKey.Should()
+            .Be($"{serviceRunActorId}:{scriptTerminalOperationId}:0");
         router.Sends.Should().ContainSingle(sent =>
             sent.Message is ServiceRunTerminalNotification &&
             sent.Options != null &&

@@ -63,10 +63,10 @@ ActivityListener 消费方过滤：`source.Name == "Aevatar.Agents"`（单源
 `returned`，只有 envelope 显式请求 `PropagateFailure` 时才使用 `propagated`，
 避免永久业务错误默认无限阻塞 Kafka partition。
 
-#3136 对 process-local duplicate filter 的处理仅是 tactical containment：reservation cleanup 失败时，Actor
-activation 内允许同一 delivery key 绕过一次残留 entry，成功或 returned terminal 后即清除。#3145 仍需决定
-该 filter 的删除/重命名，以及 in-flight reservation 与 completed-envelope filter 的职责拆分；这里不建立新的
-durable dedup 或业务幂等保证。
+#3145 已删除 runtime process-local envelope filter 及其 DI seam。每次 transport delivery 都进入 authoritative
+actor；重复消息是否已完成只能由 actor committed state、稳定 command/operation identity 或外部权威
+idempotency contract 判断。`RuntimeEnvelopeDeduplication` 只派生稳定 operation/attempt identity，不记录事实、
+不抑制 delivery，也不提供 durable dedup 或 exactly-once 保证。
 
 ## 3. Activity 清单 (`Aevatar.Agents`)
 
