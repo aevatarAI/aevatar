@@ -443,16 +443,35 @@ public sealed class OrnnSkillClientTests
     }
 
     [Fact]
-    public async Task GetSkillJsonAsync_ReturnsNullWhenNyxIdProxyReportsError()
+    public async Task UseSkillTool_WhenNyxIdProxyReportsNotFound_ProducesNotFoundReceipt()
     {
         var handler = OrnnTestHttpMessageHandler.ReturningJson(
             """{ "error": "missing" }""",
             HttpStatusCode.NotFound);
-        var client = CreateClient(handler);
+        var tool = CreateUseSkillTool(handler);
+        const string arguments = """{"skill":"missing"}""";
 
-        var skill = await client.GetSkillJsonAsync("token", "missing");
+        var result = await tool.ExecuteAsync(arguments);
+        var receipt = tool.CreateResultReceipt("call-missing", tool.Name, arguments, result);
 
-        skill.Should().BeNull();
+        receipt.Should().NotBeNull();
+        receipt!.ErrorCode.Should().Be("USE_SKILL_NOT_FOUND");
+    }
+
+    [Fact]
+    public async Task UseSkillTool_WhenNyxIdProxyReportsServerError_ProducesLoadFailedReceipt()
+    {
+        var handler = OrnnTestHttpMessageHandler.ReturningJson(
+            """{ "error": "upstream failed" }""",
+            HttpStatusCode.InternalServerError);
+        var tool = CreateUseSkillTool(handler);
+        const string arguments = """{"skill":"nyxid-service-connect"}""";
+
+        var result = await tool.ExecuteAsync(arguments);
+        var receipt = tool.CreateResultReceipt("call-server-error", tool.Name, arguments, result);
+
+        receipt.Should().NotBeNull();
+        receipt!.ErrorCode.Should().Be("USE_SKILL_LOAD_FAILED");
     }
 
     [Fact]
@@ -505,20 +524,23 @@ public sealed class OrnnSkillClientTests
     }
 
     [Fact]
-    public async Task GetSkillJsonAsync_ReturnsNullWhenPerCallTimeoutFiresOnSlowUpstream()
+    public async Task UseSkillTool_WhenPerCallTimeoutFires_ProducesLoadFailedReceipt()
     {
         // Regression for the 2026-05-13 lark-bot incident: a NyxID-proxied call to
         // `/api/v1/skills/project-summary/json` hung for 113 s, holding the Orleans grain turn.
-        // OrnnSkillClient must surface a fast null instead of letting one upstream request
+        // OrnnSkillClient must surface a fast typed failure instead of letting one upstream request
         // stall the whole skill workflow.
         var handler = OrnnTestHttpMessageHandler.HangingUntilCanceled();
-        var client = CreateClient(handler, perCallTimeout: TimeSpan.FromMilliseconds(150));
+        var tool = CreateUseSkillTool(handler, perCallTimeout: TimeSpan.FromMilliseconds(150));
+        const string arguments = """{"skill":"project-summary"}""";
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var skill = await client.GetSkillJsonAsync("token", "project-summary");
+        var result = await tool.ExecuteAsync(arguments);
         sw.Stop();
+        var receipt = tool.CreateResultReceipt("call-timeout", tool.Name, arguments, result);
 
-        skill.Should().BeNull();
+        receipt.Should().NotBeNull();
+        receipt!.ErrorCode.Should().Be("USE_SKILL_LOAD_FAILED");
         sw.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(2),
             "per-call timeout (150ms) must abort the stuck request");
         handler.Requests.Should().ContainSingle();
@@ -588,5 +610,19 @@ public sealed class OrnnSkillClientTests
         return perCallTimeout is { } timeout
             ? new OrnnSkillClient(options, nyxClient, timeout)
             : new OrnnSkillClient(options, nyxClient);
+    }
+
+    private static UseSkillTool CreateUseSkillTool(
+        OrnnTestHttpMessageHandler handler,
+        TimeSpan? perCallTimeout = null) =>
+        new(
+            new LocalSkillCatalog(),
+            new OrnnRemoteSkillFetcher(CreateClient(handler, perCallTimeout: perCallTimeout)),
+            remoteAccessTokenResolver: new StaticRemoteSkillAccessTokenResolver());
+
+    private sealed class StaticRemoteSkillAccessTokenResolver : IRemoteSkillAccessTokenResolver
+    {
+        public Task<string?> ResolveAsync(string skillName, CancellationToken ct = default) =>
+            Task.FromResult<string?>("caller-token");
     }
 }
