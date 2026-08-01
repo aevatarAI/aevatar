@@ -453,7 +453,7 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
-    public async Task InvokeGAgent_ShouldKeepCallerScope_WhenApiChatContextCarriesOwnerScope()
+    public async Task InvokeGAgent_ShouldUseOwnerScope_WhenContextCarriesOwnerScope()
     {
         var harness = new Harness();
         harness.ActorRegistry.Snapshot = new GAgentActorRegistrySnapshot(
@@ -478,10 +478,10 @@ public sealed class AevatarInvocationToolSourceTests
             """);
 
         ErrorCodeOrNull(output).Should().BeNull(output);
-        harness.ActorRegistry.LastScopeId.Should().Be("registration-scope-1");
+        harness.ActorRegistry.LastScopeId.Should().Be("owner-scope-1");
         harness.ActorDispatch.Calls.Should().ContainSingle();
         var payload = harness.ActorDispatch.Calls.Single().Envelope.Payload.Unpack<ChatRequestEvent>();
-        payload.ScopeId.Should().Be("registration-scope-1");
+        payload.ScopeId.Should().Be("owner-scope-1");
     }
 
     [Fact]
@@ -912,11 +912,11 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
-    public async Task InvokeMember_ShouldKeepCallerScope_WhenApiChatContextCarriesOwnerScope()
+    public async Task InvokeMember_ShouldUseOwnerScope_WhenContextCarriesOwnerScope()
     {
         var harness = new Harness();
         harness.MemberResolver.Resolution = new MemberPublishedServiceResolution(
-            "registration-scope-1",
+            "owner-scope-1",
             "m-api",
             "svc-api");
         harness.ConfigureServiceTarget(
@@ -941,9 +941,9 @@ public sealed class AevatarInvocationToolSourceTests
             """);
 
         ErrorCodeOrNull(output).Should().BeNull(output);
-        harness.MemberResolver.LastScopeId.Should().Be("registration-scope-1");
+        harness.MemberResolver.LastScopeId.Should().Be("owner-scope-1");
         harness.ServiceInvocationDispatcher.Calls.Should().ContainSingle();
-        harness.ServiceInvocationDispatcher.Calls.Single().Request.Identity!.TenantId.Should().Be("registration-scope-1");
+        harness.ServiceInvocationDispatcher.Calls.Single().Request.Identity!.TenantId.Should().Be("owner-scope-1");
     }
 
     [Fact]
@@ -1811,7 +1811,7 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
-    public async Task StartWorkflow_ShouldKeepCallerScope_WhenApiChatContextCarriesOwnerScope()
+    public async Task StartWorkflow_ShouldUseOwnerScope_WhenContextCarriesOwnerScope()
     {
         var harness = new Harness();
         harness.WorkflowDispatch.Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
@@ -1834,7 +1834,7 @@ public sealed class AevatarInvocationToolSourceTests
 
         ErrorCodeOrNull(output).Should().BeNull(output);
         harness.WorkflowDispatch.Command.Should().NotBeNull();
-        harness.WorkflowDispatch.Command!.ScopeId.Should().Be("registration-scope-1");
+        harness.WorkflowDispatch.Command!.ScopeId.Should().Be("owner-scope-1");
     }
 
     [Fact]
