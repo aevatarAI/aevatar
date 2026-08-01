@@ -65,7 +65,7 @@
     {
       "name": "crash_recovery",
       "kind": "crash_recovery",
-      "textChunks": 32,
+      "textChunks": 22,
       "chunkCharacters": 24
     }
   ]

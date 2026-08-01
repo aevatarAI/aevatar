@@ -18,7 +18,10 @@ The actor is initialized outside the measured turn. The fixed snapshot policy
 uses an interval of 50 committed versions, compaction enabled, and five
 retained events. Crash recovery sweeps failure fences after 4, 12, and 24
 successful turn appends. Each fence creates a new actor activation over the
-same stores and re-dispatches the same session.
+same stores and re-dispatches the same session. The recovery shape uses 22 text
+chunks, so even the fence-24 final reconciliation remains below version 50 and
+does not confuse expected compaction deletion with durability loss. The
+128-chunk long-text shape independently measures snapshot and compaction cost.
 
 Each instrumented resource sample has a matched control turn with the same
 workload, adapter, actor lifecycle, and committed-state publisher but without
@@ -89,10 +92,14 @@ dotnet run \
   `GC.GetTotalAllocatedBytes(true)`), so neither gross nor net is a production
   cost attribution. Managed heap and working set are gross diagnostics only.
 - Recovery validation subscribes to the actual `CommittedStateEventPublished`
-  stream. It compares append-acknowledged progress, adapter durable readback,
-  and projection-visible progress by event ID, `session_id + sequence`, and a
-  sequence-free payload SHA-256 fingerprint. Redo is reported only as payload
-  overlap observed at each configured fence; no fence is labelled a maximum.
+  stream and performs a fresh `baseStore.GetEventsAsync(actorId)` read after
+  recovery completes. Every sample reconciles the full `StateEvent` ID sets in
+  four fail-closed directions: append ledger to durable missing, durable to
+  ledger unexpected, durable to projection missing, and projection to durable
+  unexpected. The raw output schema is version 3 and records all four counts.
+  Progress redo is a separate diagnostic based on event ID,
+  `session_id + sequence`, and a sequence-free payload SHA-256 fingerprint;
+  no fence is labelled a maximum.
 - Percentiles use nearest rank. With twelve samples, p95 and p99 are both the
   maximum sample and must not be treated as production tail estimates.
 

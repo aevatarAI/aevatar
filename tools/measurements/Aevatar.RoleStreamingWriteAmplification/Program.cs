@@ -152,8 +152,9 @@ public static class Program
                 workloadResults));
         }
 
+        ValidateRecoveryEvidence(config, selectedAdapters, adapterResults);
         var output = new MeasurementOutput(
-            2,
+            3,
             DateTimeOffset.UtcNow,
             await ResolveGitCommitAsync(),
             new EnvironmentFacts(
@@ -169,7 +170,7 @@ public static class Program
                 "Mailbox occupancy is in-flight plus queued chat turns. The harness awaits one dispatch at a time, so max occupancy is one; chunks remain inside that actor turn.",
                 "Nearest-rank percentiles: ceil(p * sample_count) - 1 after ascending sort.",
                 "Net CPU/allocation values come from an alternating-order matched control turn with append/snapshot measurement decorators removed. Gross values include those decorators; their signed difference estimates instrumentation cost. Both remain process-level and noisy.",
-                "Crash recovery compares append-acknowledged progress with real CommittedStateEventPublished observations by event identity, session sequence, and payload fingerprint. Each fence reports only its observed window."),
+                "Crash recovery reconciles the append-acknowledged ledger, final adapter durable readback, and real CommittedStateEventPublished observations in both directions by StateEvent event ID. Progress redo remains a separate session-sequence and payload-fingerprint diagnostic. Each fence reports only its observed window."),
             adapterResults);
 
         var outputPath = Path.GetFullPath(options.OutputPath);
@@ -195,6 +196,17 @@ public static class Program
             new InMemoryEventSourcingSnapshotStore<RoleGAgentState>());
         var provider = new WorkloadProviderFactory(workload);
         var streams = CreateStreamProvider();
+        CommittedStateEventRecorder? projectionRecorder = null;
+        IAsyncDisposable? projectionSubscription = null;
+        if (isRecovery)
+        {
+            projectionRecorder = new CommittedStateEventRecorder();
+            var subscriptionProvider = new StreamProviderActorEventSubscriptionProvider(streams);
+            projectionSubscription = await subscriptionProvider.SubscribeAsync(
+                actorId,
+                (Func<EventEnvelope, Task>)projectionRecorder.ObserveAsync);
+        }
+
         var actor = await CreateActorAsync(
             actorId,
             eventStore,
@@ -204,18 +216,11 @@ public static class Program
             streams,
             initialize: true);
 
+        var preMeasurementAppendLedger = isRecovery
+            ? eventStore.CommittedEventsSnapshot()
+            : [];
         eventStore.Reset();
         snapshotStore.Reset();
-        ProjectionProgressRecorder? projectionRecorder = null;
-        IAsyncDisposable? projectionSubscription = null;
-        if (isRecovery)
-        {
-            projectionRecorder = new ProjectionProgressRecorder();
-            var subscriptionProvider = new StreamProviderActorEventSubscriptionProvider(streams);
-            projectionSubscription = await subscriptionProvider.SubscribeAsync(
-                actorId,
-                (Func<EventEnvelope, Task>)projectionRecorder.ObserveAsync);
-        }
 
         var process = Process.GetCurrentProcess();
         process.Refresh();
@@ -301,11 +306,14 @@ public static class Program
         if (isRecovery)
         {
             await projectionRecorder!.DrainAsync(streams.GetStream(actorId));
+            var finalDurableEvents = await baseStore.GetEventsAsync(actorId);
             crashRecovery = AnalyzeCrashRecovery(
                 crashFence!.Value,
+                preMeasurementAppendLedger,
                 committedBeforeRecovery,
                 durableBeforeRecovery,
                 eventStore.CommittedEventsSnapshot(),
+                finalDurableEvents,
                 observedBeforeRecovery,
                 projectionRecorder.ObservedEventsSnapshot());
         }
@@ -484,15 +492,18 @@ public static class Program
 
     private static CrashRecoveryObservation AnalyzeCrashRecovery(
         int fence,
+        IReadOnlyList<StateEvent> preMeasurementAppendLedger,
         IReadOnlyList<StateEvent> committedBeforeRecovery,
         IReadOnlyList<StateEvent> durableBeforeRecovery,
         IReadOnlyList<StateEvent> allCommitted,
+        IReadOnlyList<StateEvent> finalDurableEvents,
         IReadOnlyList<StateEvent> observedBeforeRecovery,
         IReadOnlyList<StateEvent> allObserved)
     {
         var preCommitted = BuildProgressFacts(committedBeforeRecovery);
         var preDurable = BuildProgressFacts(durableBeforeRecovery);
         var finalCommitted = BuildProgressFacts(allCommitted);
+        var finalDurable = BuildProgressFacts(finalDurableEvents);
         var preObserved = BuildProgressFacts(observedBeforeRecovery);
         var finalObserved = BuildProgressFacts(allObserved);
         var recoveryCommitted = BuildProgressFacts(allCommitted.Skip(committedBeforeRecovery.Count));
@@ -500,16 +511,20 @@ public static class Program
 
         var preCommittedIds = preCommitted.Select(static fact => fact.EventId).ToHashSet(StringComparer.Ordinal);
         var preDurableIds = preDurable.Select(static fact => fact.EventId).ToHashSet(StringComparer.Ordinal);
-        var finalCommittedIds = finalCommitted.Select(static fact => fact.EventId).ToHashSet(StringComparer.Ordinal);
         var preObservedIds = preObserved.Select(static fact => fact.EventId).ToHashSet(StringComparer.Ordinal);
-        var finalObservedIds = finalObserved.Select(static fact => fact.EventId).ToHashSet(StringComparer.Ordinal);
         var preSequences = preCommitted.Select(static fact => fact.SequenceKey).ToHashSet(StringComparer.Ordinal);
         var prePayloads = preCommitted.Select(static fact => fact.PayloadFingerprint).ToHashSet(StringComparer.Ordinal);
 
         var durableReadbackMissing = preCommittedIds.Except(preDurableIds).LongCount();
         var phaseOneProjectionMissing = preCommittedIds.Except(preObservedIds).LongCount();
-        var finalProjectionMissing = finalCommittedIds.Except(finalObservedIds).LongCount();
-        var committedLoss = preCommittedIds.Except(finalCommittedIds).LongCount();
+        var finalAppendLedger = preMeasurementAppendLedger.Concat(allCommitted).ToArray();
+        var finalLedgerEventIds = BuildEventIds(finalAppendLedger, "append ledger");
+        var finalDurableEventIds = BuildEventIds(finalDurableEvents, "final durable readback");
+        var finalProjectionEventIds = BuildEventIds(allObserved, "committed-state projection");
+        var ledgerToDurableMissing = finalLedgerEventIds.Except(finalDurableEventIds).LongCount();
+        var durableToLedgerUnexpected = finalDurableEventIds.Except(finalLedgerEventIds).LongCount();
+        var durableToProjectionMissing = finalDurableEventIds.Except(finalProjectionEventIds).LongCount();
+        var projectionToDurableUnexpected = finalProjectionEventIds.Except(finalDurableEventIds).LongCount();
         var committedIdentityOverlap = recoveryCommitted.LongCount(fact => preCommittedIds.Contains(fact.EventId));
         var projectionIdentityOverlap = recoveryObserved.LongCount(fact => preObservedIds.Contains(fact.EventId));
         var sequenceOverlap = recoveryCommitted.LongCount(fact => preSequences.Contains(fact.SequenceKey));
@@ -517,12 +532,17 @@ public static class Program
             .Where(fact => prePayloads.Contains(fact.PayloadFingerprint))
             .ToArray();
 
-        if (durableReadbackMissing != 0 || phaseOneProjectionMissing != 0 || finalProjectionMissing != 0)
+        if (durableReadbackMissing != 0 || phaseOneProjectionMissing != 0 ||
+            ledgerToDurableMissing != 0 || durableToLedgerUnexpected != 0 ||
+            durableToProjectionMissing != 0 || projectionToDurableUnexpected != 0)
         {
             throw new InvalidOperationException(
                 $"Recovery fence {fence} failed committed/projection reconciliation: " +
                 $"durableMissing={durableReadbackMissing}, phaseOneProjectionMissing={phaseOneProjectionMissing}, " +
-                $"finalProjectionMissing={finalProjectionMissing}.");
+                $"ledgerToDurableMissing={ledgerToDurableMissing}, " +
+                $"durableToLedgerUnexpected={durableToLedgerUnexpected}, " +
+                $"durableToProjectionMissing={durableToProjectionMissing}, " +
+                $"projectionToDurableUnexpected={projectionToDurableUnexpected}.");
         }
 
         return new CrashRecoveryObservation(
@@ -533,7 +553,11 @@ public static class Program
             recoveryCommitted.LongCount(),
             recoveryObserved.LongCount(),
             finalCommitted.LongCount(),
+            finalDurable.LongCount(),
             finalObserved.LongCount(),
+            finalLedgerEventIds.Count,
+            finalDurableEventIds.Count,
+            finalProjectionEventIds.Count,
             committedIdentityOverlap,
             projectionIdentityOverlap,
             sequenceOverlap,
@@ -541,8 +565,81 @@ public static class Program
             payloadOverlapFacts.Sum(static fact => fact.SerializedBytes),
             durableReadbackMissing,
             phaseOneProjectionMissing,
-            finalProjectionMissing,
-            committedLoss);
+            ledgerToDurableMissing,
+            durableToLedgerUnexpected,
+            durableToProjectionMissing,
+            projectionToDurableUnexpected);
+    }
+
+    private static HashSet<string> BuildEventIds(
+        IReadOnlyCollection<StateEvent> events,
+        string source)
+    {
+        if (events.Any(static stateEvent => string.IsNullOrWhiteSpace(stateEvent.EventId)))
+            throw new InvalidOperationException($"Recovery {source} contains an empty StateEvent event ID.");
+        var eventIds = events.Select(static stateEvent => stateEvent.EventId)
+            .ToHashSet(StringComparer.Ordinal);
+        if (eventIds.Count != events.Count)
+            throw new InvalidOperationException($"Recovery {source} contains duplicate StateEvent event IDs.");
+        return eventIds;
+    }
+
+    private static void ValidateRecoveryEvidence(
+        MeasurementConfig config,
+        IReadOnlyCollection<string> selectedAdapters,
+        IReadOnlyCollection<AdapterResult> adapterResults)
+    {
+        if (adapterResults.Count != selectedAdapters.Count)
+            throw new InvalidOperationException("Recovery evidence is missing a selected event-store adapter.");
+
+        var expectedFences = config.CrashAfterSuccessfulAppendFences.ToHashSet();
+        foreach (var adapter in adapterResults)
+        {
+            var recoveryResults = adapter.Workloads
+                .Where(static workload => string.Equals(
+                    workload.StreamShape,
+                    "crash_recovery",
+                    StringComparison.Ordinal))
+                .ToArray();
+            var measuredFences = recoveryResults
+                .Select(static workload => workload.CrashAfterSuccessfulAppends)
+                .Where(static fence => fence.HasValue)
+                .Select(static fence => fence!.Value)
+                .ToHashSet();
+            if (!measuredFences.SetEquals(expectedFences))
+            {
+                throw new InvalidOperationException(
+                    $"Adapter {adapter.Adapter} recovery evidence does not cover every configured append fence.");
+            }
+
+            foreach (var recoveryResult in recoveryResults)
+            {
+                if (recoveryResult.Samples.Count != config.MeasuredIterations)
+                {
+                    throw new InvalidOperationException(
+                        $"Adapter {adapter.Adapter} fence {recoveryResult.CrashAfterSuccessfulAppends} " +
+                        "does not contain every configured measured sample.");
+                }
+
+                foreach (var sample in recoveryResult.Samples)
+                {
+                    var observation = sample.CrashRecovery ?? throw new InvalidOperationException(
+                        $"Adapter {adapter.Adapter} fence {recoveryResult.CrashAfterSuccessfulAppends} " +
+                        $"sample {sample.Iteration} has no recovery reconciliation evidence.");
+                    if (observation.LedgerToDurableMissingEvents != 0 ||
+                        observation.DurableToLedgerUnexpectedEvents != 0 ||
+                        observation.DurableToProjectionMissingEvents != 0 ||
+                        observation.ProjectionToDurableUnexpectedEvents != 0 ||
+                        observation.FinalAppendLedgerEvents != observation.FinalDurableReadbackEvents ||
+                        observation.FinalDurableReadbackEvents != observation.FinalProjectionVisibleEvents)
+                    {
+                        throw new InvalidOperationException(
+                            $"Adapter {adapter.Adapter} fence {observation.Fence} sample {sample.Iteration} " +
+                            "contains unreconciled final recovery evidence.");
+                    }
+                }
+            }
+        }
     }
 
     private static IReadOnlyList<ProgressFact> BuildProgressFacts(IEnumerable<StateEvent> events)
@@ -882,22 +979,28 @@ public sealed record TurnSample(
 
 public sealed record CrashRecoveryObservation(
     int Fence,
-    long PhaseOneCommittedProgressEvents,
+    long PhaseOneAppendLedgerProgressEvents,
     long PhaseOneDurableReadbackProgressEvents,
     long PhaseOneProjectionVisibleProgressEvents,
-    long RecoveryCommittedProgressEvents,
+    long RecoveryAppendLedgerProgressEvents,
     long RecoveryProjectionVisibleProgressEvents,
-    long FinalCommittedProgressEvents,
+    long FinalAppendLedgerProgressEvents,
+    long FinalDurableReadbackProgressEvents,
     long FinalProjectionVisibleProgressEvents,
-    long RecoveryCommittedEventIdentityOverlap,
+    long FinalAppendLedgerEvents,
+    long FinalDurableReadbackEvents,
+    long FinalProjectionVisibleEvents,
+    long RecoveryAppendLedgerEventIdentityOverlap,
     long RecoveryProjectionEventIdentityOverlap,
     long RecoverySequenceOverlap,
     long RecoveryPayloadOverlapEvents,
     long RecoveryPayloadOverlapSerializedBytes,
     long PhaseOneDurableReadbackMissingEvents,
     long PhaseOneProjectionMissingEvents,
-    long FinalProjectionMissingEvents,
-    long CommittedProgressLossEvents);
+    long LedgerToDurableMissingEvents,
+    long DurableToLedgerUnexpectedEvents,
+    long DurableToProjectionMissingEvents,
+    long ProjectionToDurableUnexpectedEvents);
 
 internal sealed record ResourceControlSample(double CpuMs, long AllocatedBytes);
 internal sealed record ProgressFact(
@@ -981,15 +1084,17 @@ public sealed record WorkloadSummary(
 }
 
 public sealed record CrashRecoverySummary(
-    Distribution RecoveryCommittedEventIdentityOverlap,
+    Distribution RecoveryAppendLedgerEventIdentityOverlap,
     Distribution RecoveryProjectionEventIdentityOverlap,
     Distribution RecoverySequenceOverlap,
     Distribution RecoveryPayloadOverlapEvents,
     Distribution RecoveryPayloadOverlapSerializedBytes,
     Distribution PhaseOneDurableReadbackMissingEvents,
     Distribution PhaseOneProjectionMissingEvents,
-    Distribution FinalProjectionMissingEvents,
-    Distribution CommittedProgressLossEvents)
+    Distribution LedgerToDurableMissingEvents,
+    Distribution DurableToLedgerUnexpectedEvents,
+    Distribution DurableToProjectionMissingEvents,
+    Distribution ProjectionToDurableUnexpectedEvents)
 {
     public static CrashRecoverySummary? From(IReadOnlyList<TurnSample> samples)
     {
@@ -1000,15 +1105,17 @@ public sealed record CrashRecoverySummary(
         if (observations.Length == 0)
             return null;
         return new CrashRecoverySummary(
-            Distribution.From(observations.Select(static item => (double?)item.RecoveryCommittedEventIdentityOverlap)),
+            Distribution.From(observations.Select(static item => (double?)item.RecoveryAppendLedgerEventIdentityOverlap)),
             Distribution.From(observations.Select(static item => (double?)item.RecoveryProjectionEventIdentityOverlap)),
             Distribution.From(observations.Select(static item => (double?)item.RecoverySequenceOverlap)),
             Distribution.From(observations.Select(static item => (double?)item.RecoveryPayloadOverlapEvents)),
             Distribution.From(observations.Select(static item => (double?)item.RecoveryPayloadOverlapSerializedBytes)),
             Distribution.From(observations.Select(static item => (double?)item.PhaseOneDurableReadbackMissingEvents)),
             Distribution.From(observations.Select(static item => (double?)item.PhaseOneProjectionMissingEvents)),
-            Distribution.From(observations.Select(static item => (double?)item.FinalProjectionMissingEvents)),
-            Distribution.From(observations.Select(static item => (double?)item.CommittedProgressLossEvents)));
+            Distribution.From(observations.Select(static item => (double?)item.LedgerToDurableMissingEvents)),
+            Distribution.From(observations.Select(static item => (double?)item.DurableToLedgerUnexpectedEvents)),
+            Distribution.From(observations.Select(static item => (double?)item.DurableToProjectionMissingEvents)),
+            Distribution.From(observations.Select(static item => (double?)item.ProjectionToDurableUnexpectedEvents)));
     }
 }
 
@@ -1453,7 +1560,7 @@ internal sealed class FailureInjectingEventStore(IEventStore inner) : IEventStor
     public void Reset() => _successfulAppends = 0;
 }
 
-internal sealed class ProjectionProgressRecorder
+internal sealed class CommittedStateEventRecorder
 {
     private readonly object _lock = new();
     private readonly List<StateEvent> _observedEvents = new(256);
@@ -1476,7 +1583,7 @@ internal sealed class ProjectionProgressRecorder
         if (envelope.Payload?.Is(CommittedStateEventPublished.Descriptor) != true)
             return Task.CompletedTask;
         var published = envelope.Payload.Unpack<CommittedStateEventPublished>();
-        if (published.StateEvent?.EventData?.Is(RoleChatSessionProgressedEvent.Descriptor) == true)
+        if (published.StateEvent != null)
         {
             lock (_lock)
                 _observedEvents.Add(published.StateEvent);
