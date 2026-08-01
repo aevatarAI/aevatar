@@ -777,7 +777,8 @@ public sealed class DefaultServiceInvocationDispatcherTests
             dispatchPort,
             new RecordingScriptRuntimeCommandPort(),
             workflowPort,
-            new RecordingServiceRunRegistrationPort());
+            new RecordingServiceRunRegistrationPort(),
+            new AcceptingArtifactCompatibilityPreflight());
         var target = CreateTarget(
             ServiceImplementationKind.Workflow,
             endpointId: "chat",
@@ -786,6 +787,11 @@ public sealed class DefaultServiceInvocationDispatcherTests
         {
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
         };
 
         await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
@@ -817,7 +823,8 @@ public sealed class DefaultServiceInvocationDispatcherTests
             dispatchPort,
             new RecordingScriptRuntimeCommandPort(),
             workflowPort,
-            new RecordingServiceRunRegistrationPort());
+            new RecordingServiceRunRegistrationPort(),
+            new AcceptingArtifactCompatibilityPreflight());
         var target = CreateTarget(
             ServiceImplementationKind.Workflow,
             endpointId: "chat",
@@ -826,6 +833,11 @@ public sealed class DefaultServiceInvocationDispatcherTests
         {
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
         };
 
         var act = () => dispatcher.DispatchAsync(target, new ServiceInvocationRequest
@@ -854,7 +866,8 @@ public sealed class DefaultServiceInvocationDispatcherTests
             dispatchPort,
             new RecordingScriptRuntimeCommandPort(),
             workflowPort,
-            new RecordingServiceRunRegistrationPort());
+            new RecordingServiceRunRegistrationPort(),
+            new AcceptingArtifactCompatibilityPreflight());
         var target = CreateTarget(
             ServiceImplementationKind.Workflow,
             endpointId: "chat",
@@ -863,6 +876,11 @@ public sealed class DefaultServiceInvocationDispatcherTests
         {
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
         };
 
         var act = () => dispatcher.DispatchAsync(target, new ServiceInvocationRequest
