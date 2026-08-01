@@ -20,6 +20,7 @@ public sealed class LocalActor : IActor
     private readonly ILogger _logger;
     private readonly IActorDeactivationHookDispatcher? _deactivationHookDispatcher;
     private readonly IEventDeduplicator? _deduplicator;
+    private readonly HashSet<string> _dedupBypassKeys = [];
     private Task? _mailboxPump;
     private IAsyncDisposable? _selfSubscription;
     private string? _parentId;
@@ -197,7 +198,8 @@ public sealed class LocalActor : IActor
                 RuntimeEnvelopeDeduplication.TryBuildDedupKey(Id, item.Envelope, out var candidateDedupKey))
             {
                 dedupKey = candidateDedupKey;
-                if (!await _deduplicator.TryRecordAsync(dedupKey))
+                if (!_dedupBypassKeys.Remove(dedupKey) &&
+                    !await _deduplicator.TryRecordAsync(dedupKey))
                 {
                     _logger.LogDebug(
                         "LocalActor {Id} dropped duplicate envelope {EnvelopeId} with dedup key {DedupKey}",
@@ -212,6 +214,7 @@ public sealed class LocalActor : IActor
             scope = EventHandleScope.Begin(_logger, Id, item.Envelope, Agent.GetType().FullName ?? Agent.GetType().Name);
             scopeCreated = true;
             await Agent.HandleEventAsync(item.Envelope);
+            ClearDedupBypass(dedupKey);
             item.Completion.SetResult();
         }
         catch (Exception ex)
@@ -225,7 +228,10 @@ public sealed class LocalActor : IActor
                 item.Completion.SetException(ex);
             }
             else
+            {
+                ClearDedupBypass(dedupKey);
                 item.Completion.SetResult();
+            }
         }
         finally
         {
@@ -242,15 +248,23 @@ public sealed class LocalActor : IActor
         try
         {
             await _deduplicator.ForgetAsync(dedupKey);
+            _dedupBypassKeys.Remove(dedupKey);
         }
         catch (Exception ex)
         {
+            _dedupBypassKeys.Add(dedupKey);
             _logger.LogWarning(
                 ex,
                 "LocalActor {Id} failed to release provisional dedup reservation {DedupKey}",
                 Id,
                 dedupKey);
         }
+    }
+
+    private void ClearDedupBypass(string? dedupKey)
+    {
+        if (!string.IsNullOrWhiteSpace(dedupKey))
+            _dedupBypassKeys.Remove(dedupKey);
     }
 
     private sealed record MailboxWorkItem(

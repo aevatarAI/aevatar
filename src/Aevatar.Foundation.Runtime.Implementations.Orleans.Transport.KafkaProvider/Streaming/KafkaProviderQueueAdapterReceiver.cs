@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using Aevatar.Foundation.Abstractions;
 using Confluent.Kafka;
 using Aevatar.Foundation.Runtime.Observability;
+using Google.Protobuf;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Orleans.Providers.Streams.Common;
@@ -204,7 +205,7 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
         }
     }
 
-    internal bool ProcessPolledRecord(ConsumeResult<Ignore, byte[]> consumeResult)
+    private bool ProcessPolledRecord(ConsumeResult<Ignore, byte[]> consumeResult)
     {
         RegisterOffset(consumeResult.Offset.Value);
         var classification = ClassifyPolledRecord(consumeResult);
@@ -252,7 +253,7 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
         }
     }
 
-    internal KafkaPolledRecordClassification ClassifyPolledRecord(
+    private KafkaPolledRecordClassification ClassifyPolledRecord(
         ConsumeResult<Ignore, byte[]> consumeResult)
     {
         if (Volatile.Read(ref _shuttingDown) == 1)
@@ -284,7 +285,7 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
         {
             envelope = EventEnvelope.Parser.ParseFrom(consumeResult.Message.Value);
         }
-        catch (Exception ex)
+        catch (InvalidProtocolBufferException ex)
         {
             return KafkaPolledRecordClassification.AcknowledgeInvalidRecord(
                 KafkaInvalidRecordReason.ProtobufParseFailed,
@@ -385,49 +386,49 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
             _transportOptions.TopicName,
             _partitionId,
             _messages.Count);
-}
 
-internal enum KafkaPolledRecordDisposition
-{
-    Deliver,
-    AcknowledgeForeignRecord,
-    AcknowledgeInvalidRecord,
-    PreserveForRedelivery,
-}
+    private enum KafkaPolledRecordDisposition
+    {
+        Deliver,
+        AcknowledgeForeignRecord,
+        AcknowledgeInvalidRecord,
+        PreserveForRedelivery,
+    }
 
-internal enum KafkaInvalidRecordReason
-{
-    None,
-    MissingRoutingHeaders,
-    EmptyPayload,
-    ProtobufParseFailed,
-}
+    private enum KafkaInvalidRecordReason
+    {
+        None,
+        MissingRoutingHeaders,
+        EmptyPayload,
+        ProtobufParseFailed,
+    }
 
-internal sealed record KafkaPolledRecordClassification(
-    KafkaPolledRecordDisposition Disposition,
-    string? StreamNamespace = null,
-    string? StreamId = null,
-    EventEnvelope? Envelope = null,
-    KafkaInvalidRecordReason InvalidReason = KafkaInvalidRecordReason.None,
-    Exception? ParseException = null)
-{
-    public static KafkaPolledRecordClassification Deliver(
-        string streamNamespace,
-        string streamId,
-        EventEnvelope envelope) =>
-        new(KafkaPolledRecordDisposition.Deliver, streamNamespace, streamId, envelope);
+    private sealed record KafkaPolledRecordClassification(
+        KafkaPolledRecordDisposition Disposition,
+        string? StreamNamespace = null,
+        string? StreamId = null,
+        EventEnvelope? Envelope = null,
+        KafkaInvalidRecordReason InvalidReason = KafkaInvalidRecordReason.None,
+        Exception? ParseException = null)
+    {
+        public static KafkaPolledRecordClassification Deliver(
+            string streamNamespace,
+            string streamId,
+            EventEnvelope envelope) =>
+            new(KafkaPolledRecordDisposition.Deliver, streamNamespace, streamId, envelope);
 
-    public static KafkaPolledRecordClassification AcknowledgeForeignRecord(string streamNamespace) =>
-        new(KafkaPolledRecordDisposition.AcknowledgeForeignRecord, StreamNamespace: streamNamespace);
+        public static KafkaPolledRecordClassification AcknowledgeForeignRecord(string streamNamespace) =>
+            new(KafkaPolledRecordDisposition.AcknowledgeForeignRecord, StreamNamespace: streamNamespace);
 
-    public static KafkaPolledRecordClassification AcknowledgeInvalidRecord(
-        KafkaInvalidRecordReason reason,
-        Exception? parseException = null) =>
-        new(
-            KafkaPolledRecordDisposition.AcknowledgeInvalidRecord,
-            InvalidReason: reason,
-            ParseException: parseException);
+        public static KafkaPolledRecordClassification AcknowledgeInvalidRecord(
+            KafkaInvalidRecordReason reason,
+            Exception? parseException = null) =>
+            new(
+                KafkaPolledRecordDisposition.AcknowledgeInvalidRecord,
+                InvalidReason: reason,
+                ParseException: parseException);
 
-    public static KafkaPolledRecordClassification PreserveForRedelivery() =>
-        new(KafkaPolledRecordDisposition.PreserveForRedelivery);
+        public static KafkaPolledRecordClassification PreserveForRedelivery() =>
+            new(KafkaPolledRecordDisposition.PreserveForRedelivery);
+    }
 }

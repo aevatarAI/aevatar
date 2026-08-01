@@ -110,7 +110,12 @@ Kafka 入站链路的阶段不可互换：
   该选项只适用于调用方能够修复或隔离 poison payload 的受控链路，不是默认策略。
 - pre-handler duplicate filter 是进程内 provisional reservation。propagated failure 或 retry scheduling
   自身失败时必须释放 reservation，使同一个 provider delivery attempt 能重新进入 handler；handler 成功或
-  returned terminal failure 保留 reservation。它不是 durable business idempotency guarantee。
+  returned terminal failure 保留 reservation。若底层 `ForgetAsync` 失败，Actor activation 内仅为该 key 保留
+  一次 redelivery bypass；成功或 returned terminal 后立即清除 bypass。它不是 durable business idempotency guarantee。
+
+以上仅是 #3136 为避免 terminal failure 被进程内 reservation 永久抑制所做的 tactical containment。
+#3145 仍负责审计并决定删除或重命名该 process-local filter，以及是否把 in-flight reservation 与 completed-envelope
+filter 拆成不同职责；不得把 activation-scoped bypass 当成新的 durable dedup contract。
 
 其他失败边界：
 
