@@ -82,12 +82,32 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using NSubstitute;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Trace;
 
 namespace Aevatar.Capabilities.Tests;
 
 [Collection(ProcessEnvSerialCollection.Name)]
 public sealed class MainnetHostCompositionTests
 {
+    [Fact]
+    public void AddAevatarMainnetHost_ShouldExportProjectionAndKafkaTelemetry()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder();
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        builder.Services.Should().Contain(descriptor => descriptor.ServiceType == typeof(MeterProvider));
+        builder.Services.Should().Contain(descriptor => descriptor.ServiceType == typeof(TracerProvider));
+        AevatarHostObservabilityExtensions.CoreMeterNames.Should().Contain("Aevatar.CQRS.Projection");
+        AevatarHostObservabilityExtensions.CoreMeterNames.Should().Contain("Aevatar.Kafka.Transport");
+    }
+
     [Fact]
     public void MainnetHost_ShouldExposeAnActorBackedNyxIdChatProfileResolver()
     {

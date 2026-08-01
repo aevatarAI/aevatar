@@ -134,6 +134,7 @@ public static class MainnetHostBuilderExtensions
             // Set/Remove on the secrets store will throw at the call site.
             options.AllowLocalFileSecretsStore = false;
         });
+        builder.AddAevatarHostObservability("Aevatar.Mainnet.Host.Api");
         builder.AddMainnetDistributedOrleansHost();
         ConfigureMainnetListenUrls(builder);
         builder.AddAevatarPlatform(options =>
