@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Aevatar.Studio.Application;
 using Aevatar.Studio.Application.Scripts.Contracts;
 using Aevatar.Studio.Application.Studio;
@@ -1286,9 +1287,12 @@ internal static class StudioEndpoints
             {
                 throw;
             }
-            catch
+            catch (Exception ex)
             {
-                // Best-effort
+                http.RequestServices
+                    .GetService<ILoggerFactory>()?
+                    .CreateLogger(typeof(StudioEndpoints).FullName!)
+                    .LogWarning(ex, "Failed to apply the owner LLM selection to the Studio preview context.");
             }
         }
 

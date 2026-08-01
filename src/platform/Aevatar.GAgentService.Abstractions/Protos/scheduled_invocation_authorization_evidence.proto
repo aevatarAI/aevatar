@@ -4,7 +4,7 @@ package aevatar.gagentservice.schedules.authorization;
 option csharp_namespace = "Aevatar.GAgentService.Abstractions.Schedules.Authorization";
 
 import "google/protobuf/timestamp.proto";
-import "LLMProviders/llm_selection.proto";
+import "llm_selection.proto";
 import "workflow_capability_admission.proto";
 
 enum AuthorizationOwnerKind {

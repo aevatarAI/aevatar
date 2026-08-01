@@ -28,7 +28,6 @@ src/Aevatar.Scripting.Infrastructure/Compilation/CachedScriptBehaviorArtifactRes
 src/Aevatar.Scripting.Infrastructure/Compilation/GrpcToolsScriptProtoCompiler.cs	131	empty broad catch block
 src/Aevatar.Studio.Application/AppScopedScriptService.cs	404	empty broad catch block
 src/Aevatar.Studio.Application/Studio/Services/ExecutionService.cs	270	empty broad catch block
-src/Aevatar.Studio.Hosting/Endpoints/StudioEndpoints.cs	1288	empty broad catch block
 src/Aevatar.Studio.Infrastructure/Storage/ChronoStorageMasterKeyResolver.cs	76	empty broad catch block
 src/Aevatar.Studio.Infrastructure/Storage/ChronoStorageMasterKeyResolver.cs	102	empty broad catch block
 src/Aevatar.Studio.Infrastructure/Storage/ChronoStorageMasterKeyResolver.cs	140	empty broad catch block

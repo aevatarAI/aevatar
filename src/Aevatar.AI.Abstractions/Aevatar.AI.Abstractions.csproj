@@ -21,6 +21,6 @@
     <Protobuf Include="ai_messages.proto" GrpcServices="None" AdditionalImportDirs="..\Aevatar.Foundation.VoicePresence.Abstractions;..\Aevatar.Foundation.Abstractions" />
     <Protobuf Include="CodexExecution\codex_execution.proto" GrpcServices="None" />
     <Protobuf Include="ToolProviders\agent_tool_admission.proto" GrpcServices="None" />
-    <Protobuf Include="LLMProviders\llm_selection.proto" GrpcServices="None" />
+    <Protobuf Include="llm_selection.proto" GrpcServices="None" />
   </ItemGroup>
 </Project>

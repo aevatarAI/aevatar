@@ -2,7 +2,7 @@ syntax = "proto3";
 package aevatar.gagents.user_config;
 option csharp_namespace = "Aevatar.GAgents.UserConfig";
 
-import "LLMProviders/llm_selection.proto";
+import "llm_selection.proto";
 
 // ─── State ───
 
