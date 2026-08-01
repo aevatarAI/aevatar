@@ -428,10 +428,10 @@ public sealed class AevatarInvocationDispatcher
                 ct);
         }
 
-        var workflowScope = WorkflowInvocationScopeResolver.Resolve(AgentToolRequestContext.Current);
+        var workflowScope = ResolveWorkflowInvocationScope(AgentToolRequestContext.Current);
         if (workflowScope.Error != null)
             return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(workflowScope.Error), workflowScope.Error);
-        var scope = workflowScope.Value!.CallerScope;
+        var scope = workflowScope.Value!;
 
         var backgroundDelivery = ResolveWorkflowBackgroundDelivery(AgentToolRequestContext.Current);
         if (backgroundDelivery.Error != null)
@@ -2189,66 +2189,37 @@ public sealed class AevatarInvocationDispatcher
 
     private sealed record InvocationCallerScope(string ScopeId, string OwnerSubject, string ResponseId);
 
-    private sealed record WorkflowInvocationScope(
-        InvocationCallerScope CallerScope,
-        string SelectionKind,
-        string RegistrationScopeId,
-        string? OwnerScopeId);
-
-    private sealed record WorkflowInvocationScopeResolution(
-        WorkflowInvocationScope? Value,
-        InvocationToolError? Error)
+    private static CallerScopeResolution ResolveWorkflowInvocationScope(AgentToolExecutionContext? context)
     {
-        public static WorkflowInvocationScopeResolution Success(WorkflowInvocationScope scope) => new(scope, null);
-
-        public static WorkflowInvocationScopeResolution Failed(InvocationToolError error) => new(null, error);
-    }
-
-    private static class WorkflowInvocationScopeResolver
-    {
-        public static WorkflowInvocationScopeResolution Resolve(AgentToolExecutionContext? context)
+        context ??= AgentToolExecutionContext.Empty;
+        var callerScopeId = Normalize(context.Caller.ScopeId);
+        var ownerSubject = Normalize(context.Caller.OwnerSubject);
+        var responseId = Normalize(context.Caller.ResponseId) ??
+                         Normalize(context.Request.RequestId) ??
+                         Normalize(context.Request.CallId);
+        if (callerScopeId is null || responseId is null)
         {
-            context ??= AgentToolExecutionContext.Empty;
-            var callerScopeId = Normalize(context.Caller.ScopeId);
-            var ownerSubject = Normalize(context.Caller.OwnerSubject);
-            var responseId = Normalize(context.Caller.ResponseId) ??
-                             Normalize(context.Request.RequestId) ??
-                             Normalize(context.Request.CallId);
-            if (callerScopeId is null || responseId is null)
+            return CallerScopeResolution.Failed(new InvocationToolError
             {
-                return WorkflowInvocationScopeResolution.Failed(new InvocationToolError
-                {
-                    Code = "caller_scope_unavailable",
-                    Message = "scope_id and response_id/request_id are required in AgentToolRequestContext.",
-                });
-            }
-
-            var registrationScopeId = Normalize(context.Channel.RegistrationScopeId) ?? callerScopeId;
-            var ownerScopeId = Normalize(context.Caller.OwnerScopeId);
-            if (IsLarkChannel(context) && ownerScopeId is not null)
-            {
-                return WorkflowInvocationScopeResolution.Success(new WorkflowInvocationScope(
-                    new InvocationCallerScope(ownerScopeId, ownerScopeId, responseId),
-                    "channel_owner_scope",
-                    registrationScopeId,
-                    ownerScopeId));
-            }
-
-            if (ownerSubject is null)
-            {
-                return WorkflowInvocationScopeResolution.Failed(new InvocationToolError
-                {
-                    Code = "caller_scope_unavailable",
-                    Message = "owner_subject is required in AgentToolRequestContext for caller-scope workflow invocation.",
-                });
-            }
-
-            return WorkflowInvocationScopeResolution.Success(new WorkflowInvocationScope(
-                new InvocationCallerScope(callerScopeId, ownerSubject, responseId),
-                "caller_scope",
-                registrationScopeId,
-                ownerScopeId));
+                Code = "caller_scope_unavailable",
+                Message = "scope_id and response_id/request_id are required in AgentToolRequestContext.",
+            });
         }
+
+        var ownerScopeId = Normalize(context.Caller.OwnerScopeId);
+        if (IsLarkChannel(context) && ownerScopeId is not null)
+            return CallerScopeResolution.Success(new InvocationCallerScope(ownerScopeId, ownerScopeId, responseId));
+
+        if (ownerSubject is null)
+        {
+            return CallerScopeResolution.Failed(new InvocationToolError
+            {
+                Code = "caller_scope_unavailable",
+                Message = "owner_subject is required in AgentToolRequestContext for caller-scope workflow invocation.",
+            });
+        }
+
+        return CallerScopeResolution.Success(new InvocationCallerScope(callerScopeId, ownerSubject, responseId));
     }
 
     private sealed record PublishedServiceInvocationTarget(
