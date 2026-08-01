@@ -546,7 +546,8 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         var assistantStatus = completedSession.Outcome switch
         {
             RoleChatSessionOutcome.Blocked => "blocked",
-            RoleChatSessionOutcome.Failed or RoleChatSessionOutcome.OutcomeUncertain => "error",
+            RoleChatSessionOutcome.Failed => "error",
+            RoleChatSessionOutcome.OutcomeUncertain => "outcome_uncertain",
             _ => "completed",
         };
         var safeError = completedSession.Outcome switch
@@ -638,7 +639,7 @@ public sealed class NyxIdChatGAgent : RoleGAgent
     {
         var next = base.TransitionState(current, evt);
         if (StateTransitionMatcher.TryExtract<RoleChatSessionCompletedEvent>(evt, out var completed))
-            next = PrepareDirectChatHistoryDelivery(next, completed.SessionId);
+            next = PrepareDirectChatHistoryDelivery(current, next, completed);
         if (StateTransitionMatcher.TryExtract<NyxIdDirectChatHistoryDispatchedEvent>(evt, out var dispatched))
             next = ApplyDirectChatHistoryDispatched(next, dispatched);
 
@@ -663,21 +664,37 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         return profileNext;
     }
 
-    private RoleGAgentState PrepareDirectChatHistoryDelivery(RoleGAgentState state, string sessionId)
+    private RoleGAgentState PrepareDirectChatHistoryDelivery(
+        RoleGAgentState current,
+        RoleGAgentState next,
+        RoleChatSessionCompletedEvent completed)
     {
+        var sessionId = completed.SessionId;
         if (string.IsNullOrWhiteSpace(sessionId) ||
-            !state.Sessions.TryGetValue(sessionId, out var session) ||
-            string.IsNullOrWhiteSpace(session.ScopeId) ||
-            session.HistoryDeliveryStatus == RoleChatHistoryDeliveryStatus.Dispatched)
+            !next.Sessions.TryGetValue(sessionId, out var session) ||
+            string.IsNullOrWhiteSpace(session.ScopeId))
         {
-            return state;
+            return next;
         }
 
-        var next = state.Clone();
-        var nextSession = next.Sessions[sessionId];
+        var hasPrevious = current.Sessions.TryGetValue(sessionId, out var previous);
+        var isInitialTerminal = previous is not { Completed: true };
+        var isExplicitReconciliation = previous is
+            {
+                Completed: true,
+                Outcome: RoleChatSessionOutcome.OutcomeUncertain,
+                HistoryDeliveryStatus: RoleChatHistoryDeliveryStatus.Dispatched,
+            } &&
+            session.Outcome is RoleChatSessionOutcome.Completed or RoleChatSessionOutcome.Failed;
+        if (!isInitialTerminal && !isExplicitReconciliation)
+            return next;
+
+        var prepared = next.Clone();
+        var nextSession = prepared.Sessions[sessionId];
         nextSession.HistoryDeliveryStatus = RoleChatHistoryDeliveryStatus.Prepared;
-        nextSession.HistoryDeliveryId = BuildDirectChatHistoryDeliveryId(sessionId);
-        return next;
+        if (!hasPrevious || string.IsNullOrWhiteSpace(nextSession.HistoryDeliveryId))
+            nextSession.HistoryDeliveryId = BuildDirectChatHistoryDeliveryId(sessionId);
+        return prepared;
     }
 
     private static RoleGAgentState ApplyDirectChatHistoryDispatched(

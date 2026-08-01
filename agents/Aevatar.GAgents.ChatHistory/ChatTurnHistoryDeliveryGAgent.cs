@@ -38,6 +38,7 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
             .On<ChatTurnHistoryDeliveryReservedEvent>(ApplyReserved)
             .On<ChatTurnHistoryDeliveryBoundEvent>(ApplyBound)
             .On<ChatTurnHistoryDeliveryTerminalFrameObserved>(ApplyTerminalFrameObserved)
+            .On<ChatTurnHistoryDeliveryTerminalReconciledEvent>(ApplyTerminalReconciled)
             .On<ChatTurnHistoryDeliveryAppendDispatchedEvent>(ApplyAppendDispatched)
             .On<ChatTurnHistoryDeliveryAppendResultRecordedEvent>(ApplyAppendResultRecorded)
             .On<ChatTurnHistoryDeliveryAbandonedEvent>(ApplyAbandoned)
@@ -165,11 +166,29 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
         };
         if (State.TerminalStatus != ChatTurnTerminalStatus.Unspecified)
         {
-            if (!HasSameTerminalFrame(State, terminal))
+            if (HasSameTerminalFrame(State, terminal))
+            {
+                if (State.Status is ChatTurnHistoryDeliveryStatus.Reserved or ChatTurnHistoryDeliveryStatus.Bound)
+                    await DispatchPendingTerminalAppendAsync(CancellationToken.None).ConfigureAwait(false);
+                return;
+            }
+
+            if (State.Status != ChatTurnHistoryDeliveryStatus.AppendCommitted ||
+                !CanReconcileTerminal(State.TerminalStatus, terminal.Status))
                 throw new InvalidOperationException("Chat history delivery terminal conflicts with the committed terminal.");
 
-            if (State.Status is ChatTurnHistoryDeliveryStatus.Reserved or ChatTurnHistoryDeliveryStatus.Bound)
-                await DispatchPendingTerminalAppendAsync(CancellationToken.None).ConfigureAwait(false);
+            await PersistDomainEventAsync(new ChatTurnHistoryDeliveryTerminalReconciledEvent
+            {
+                DeliveryId = terminal.DeliveryId,
+                SourceActorId = terminal.SourceActorId,
+                SourceCommandId = terminal.SourceCommandId,
+                PreviousStatus = State.TerminalStatus,
+                Status = terminal.Status,
+                Text = terminal.Text,
+                ErrorCode = terminal.ErrorCode,
+                ObservedAtUnixMs = terminal.ObservedAtUnixMs,
+            });
+            await DispatchPendingTerminalAppendAsync(CancellationToken.None).ConfigureAwait(false);
             return;
         }
 
@@ -182,7 +201,9 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
 
     private async Task DispatchPendingTerminalAppendAsync(CancellationToken ct)
     {
-        if (State.Status is not (ChatTurnHistoryDeliveryStatus.Reserved or ChatTurnHistoryDeliveryStatus.Bound) ||
+        if (State.Status is not (ChatTurnHistoryDeliveryStatus.Reserved or
+                                ChatTurnHistoryDeliveryStatus.Bound or
+                                ChatTurnHistoryDeliveryStatus.TerminalReconciliationPrepared) ||
             State.TerminalStatus == ChatTurnTerminalStatus.Unspecified)
         {
             return;
@@ -221,7 +242,8 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
                     : State.SourceCorrelationId,
             },
         };
-        envelope.EnsureRuntime().EnsureDeduplication().OperationId = $"chat-history-append:{State.DeliveryId}";
+        envelope.EnsureRuntime().EnsureDeduplication().OperationId =
+            $"chat-history-append:{State.DeliveryId}:{Math.Max(1, State.AppendAttempt + 1)}";
 
         var admission = await _dispatchPort.DispatchAsync(conversationActorId, envelope, ct)
             .ConfigureAwait(false);
@@ -276,7 +298,8 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
 
     private AppendChatTurnCommand BuildAppendCommandFromState()
     {
-        var sanitizedError = State.TerminalStatus == ChatTurnTerminalStatus.Failed
+        var sanitizedError = State.TerminalStatus is
+            ChatTurnTerminalStatus.Failed or ChatTurnTerminalStatus.OutcomeUncertain
             ? SanitizeError(State.TerminalText, State.TerminalErrorCode)
             : State.TerminalStatus == ChatTurnTerminalStatus.Stopped
                 ? SanitizeError(string.Empty, State.TerminalErrorCode)
@@ -291,7 +314,10 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
             {
                 TurnId = State.TurnId,
                 UserText = State.UserText,
-                AssistantText = State.TerminalStatus is ChatTurnTerminalStatus.Completed or ChatTurnTerminalStatus.Blocked
+                AssistantText = State.TerminalStatus is
+                    ChatTurnTerminalStatus.Completed or
+                    ChatTurnTerminalStatus.Blocked or
+                    ChatTurnTerminalStatus.OutcomeUncertain
                     ? State.TerminalText?.Trim() ?? string.Empty
                     : string.Empty,
                 TerminalStatus = State.TerminalStatus,
@@ -429,6 +455,12 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
         string.Equals(state.TerminalErrorCode, terminal.ErrorCode, StringComparison.Ordinal) &&
         state.TerminalObservedAtUnixMs == terminal.ObservedAtUnixMs;
 
+    private static bool CanReconcileTerminal(
+        ChatTurnTerminalStatus current,
+        ChatTurnTerminalStatus candidate) =>
+        current == ChatTurnTerminalStatus.OutcomeUncertain &&
+        candidate is ChatTurnTerminalStatus.Completed or ChatTurnTerminalStatus.Failed;
+
     private static bool HasSameReservation(
         ChatTurnHistoryDeliveryState state,
         ChatTurnHistoryDeliveryReserveRequested command) =>
@@ -513,6 +545,27 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
         ChatTurnHistoryDeliveryTerminalFrameObserved evt)
     {
         var next = current.Clone();
+        next.TerminalStatus = evt.Status;
+        next.TerminalText = evt.Text;
+        next.TerminalErrorCode = evt.ErrorCode;
+        next.TerminalObservedAtUnixMs = evt.ObservedAtUnixMs;
+        next.ErrorCode = string.Empty;
+        next.ErrorSummary = string.Empty;
+        return next;
+    }
+
+    private static ChatTurnHistoryDeliveryState ApplyTerminalReconciled(
+        ChatTurnHistoryDeliveryState current,
+        ChatTurnHistoryDeliveryTerminalReconciledEvent evt)
+    {
+        if (current.TerminalStatus != evt.PreviousStatus ||
+            !CanReconcileTerminal(current.TerminalStatus, evt.Status))
+        {
+            return current;
+        }
+
+        var next = current.Clone();
+        next.Status = ChatTurnHistoryDeliveryStatus.TerminalReconciliationPrepared;
         next.TerminalStatus = evt.Status;
         next.TerminalText = evt.Text;
         next.TerminalErrorCode = evt.ErrorCode;

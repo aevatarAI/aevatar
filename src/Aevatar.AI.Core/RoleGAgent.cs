@@ -1052,6 +1052,19 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             return;
         }
 
+        if (!string.IsNullOrWhiteSpace(request.SessionId) &&
+            !HasTrackedSessionAdmissionCapacity(State))
+        {
+            await PersistDomainEventAsync(new RoleChatCommandAttemptRejectedEvent
+            {
+                RequestedSessionId = request.SessionId,
+                CommandAttemptId = ResolveCommandAttemptId(request),
+                Reason = RoleChatCommandAttemptRejectionReason.CapacityExhausted,
+                SafeMessage = "This role is already tracking the maximum number of active chat sessions. Please try again later.",
+            });
+            return;
+        }
+
         var turnStartedTimestamp = ChatRequestTimeProvider.GetTimestamp();
         var timeoutMs = ResolveLlmTimeoutMs(request);
         var useWorkflowFailureMarker = timeoutMs > 0;
@@ -1620,6 +1633,13 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         if (string.IsNullOrWhiteSpace(request.SessionId))
             return;
 
+        if (State.Sessions.TryGetValue(request.SessionId, out var existingTerminal) &&
+            existingTerminal.Completed &&
+            !CanReconcileTerminalOutcome(existingTerminal.Outcome, outcome))
+        {
+            return;
+        }
+
         var completion = new RoleChatSessionCompletedEvent
         {
             // Refactor (iter15/cluster-028):
@@ -2063,7 +2083,24 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             .ToList();
 
         foreach (var (sessionId, session) in pending)
-            await DeliverCompletionNotificationAsync(sessionId, session, ct);
+        {
+            try
+            {
+                await DeliverCompletionNotificationAsync(sessionId, session, ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                Logger.LogWarning(
+                    exception,
+                    "Role chat completion notification recovery remains pending; activation will continue. actor={ActorId} session={SessionId}",
+                    Id,
+                    sessionId);
+            }
+        }
     }
 
     private async Task RequestIncompleteSessionFinalizationAsync(CancellationToken ct)
@@ -2197,7 +2234,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 {
                     Delivery = new EventEnvelopeDeliveryOptions
                     {
-                        DeduplicationOperationId = $"role-chat-terminal:{deliveryId}",
+                        DeduplicationOperationId = string.Create(
+                            CultureInfo.InvariantCulture,
+                            $"role-chat-terminal:{deliveryId}:outcome:{(int)completion.Outcome}"),
                     },
                 });
         }
@@ -2508,7 +2547,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         session.RunContext = evt.RunContext?.Clone();
         session.ScopeId = evt.ScopeId ?? string.Empty;
         sessions[evt.SessionId] = session;
-        TrimTrackedSessions(next);
+        TrimTrackedSessions(next, evt.SessionId);
         return next;
     }
 
@@ -2703,6 +2742,15 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         if (string.IsNullOrWhiteSpace(evt.SessionId))
             return current;
 
+        var isTerminalReconciliation =
+            current.Sessions.TryGetValue(evt.SessionId, out var existingTerminal) &&
+            existingTerminal.Completed &&
+            CanReconcileTerminalOutcome(existingTerminal.Outcome, evt.Outcome);
+        if (existingTerminal is { Completed: true } && !isTerminalReconciliation)
+        {
+            return current;
+        }
+
         if (HasPendingCompletionNotification(current, evt.SessionId))
             return current;
 
@@ -2720,7 +2768,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         }
 
         var runContextMatches = RoleChatRunContextsEqual(session.RunContext, evt.RunContext);
-        var completionNotificationDeliveryStatus = runContextMatches
+        var completionNotificationDeliveryStatus = runContextMatches && !isTerminalReconciliation
             ? session.CompletionNotificationDeliveryStatus
             : RoleChatCompletionNotificationDeliveryStatus.Unspecified;
         session.Completed = true;
@@ -2751,7 +2799,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                     ? RoleChatCompletionNotificationDeliveryStatus.Prepared
                     : completionNotificationDeliveryStatus
                 : RoleChatCompletionNotificationDeliveryStatus.Unspecified;
-        if (!runContextMatches)
+        if (!runContextMatches || isTerminalReconciliation)
         {
             session.CompletionNotificationAttempt = 0;
             session.CompletionNotificationRetryCallbackId = string.Empty;
@@ -2766,9 +2814,14 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             }
         }
         next.Sessions[evt.SessionId] = session;
-        TrimTrackedSessions(next);
         return next;
     }
+
+    private static bool CanReconcileTerminalOutcome(
+        RoleChatSessionOutcome current,
+        RoleChatSessionOutcome candidate) =>
+        current == RoleChatSessionOutcome.OutcomeUncertain &&
+        candidate is RoleChatSessionOutcome.Completed or RoleChatSessionOutcome.Failed;
 
     private static RoleGAgentState ApplyChatSessionProgressed(
         RoleGAgentState current,
@@ -2788,7 +2841,6 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             return current;
 
         session.LastProgressSequence = evt.Sequence;
-        TrimTrackedSessions(next);
         return next;
     }
 
@@ -2823,7 +2875,6 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             evt.Attempt);
         nextSession.CompletionNotificationRetryCallbackId = string.Empty;
         nextSession.CompletionNotificationRetryAt = null;
-        TrimTrackedSessions(next);
         return next;
     }
 
@@ -2869,7 +2920,6 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             evt.Attempt);
         nextSession.CompletionNotificationRetryCallbackId = string.Empty;
         nextSession.CompletionNotificationRetryAt = null;
-        TrimTrackedSessions(next);
         return next;
     }
 
@@ -3050,7 +3100,11 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         };
     }
 
-    private static void TrimTrackedSessions(RoleGAgentState state)
+    private static bool HasTrackedSessionAdmissionCapacity(RoleGAgentState state) =>
+        state.Sessions.Count < MaxTrackedSessions ||
+        state.Sessions.Values.Any(CanTrimTrackedSession);
+
+    private static void TrimTrackedSessions(RoleGAgentState state, string? preservedSessionId = null)
     {
         if (state.Sessions.Count <= MaxTrackedSessions)
             return;
@@ -3062,6 +3116,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
 
             foreach (var session in state.Sessions)
             {
+                if (string.Equals(session.Key, preservedSessionId, StringComparison.Ordinal))
+                    continue;
+
                 if (!CanTrimTrackedSession(session.Value))
                     continue;
 
@@ -3082,6 +3139,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
 
     private static bool CanTrimTrackedSession(RoleChatSessionState session) =>
         session.Completed &&
+        session.HistoryDeliveryStatus != RoleChatHistoryDeliveryStatus.Prepared &&
         (string.IsNullOrWhiteSpace(session.RunContext?.CompletionNotificationActorId) ||
          session.CompletionNotificationDeliveryStatus is
              RoleChatCompletionNotificationDeliveryStatus.Dispatched or

@@ -1062,7 +1062,7 @@ public class RoleGAgentReplayContractTests
         var sent = recoveredPublisher.Sends.Should().ContainSingle().Subject;
         sent.TargetActorId.Should().Be("service-run:tenant:svc:run-1");
         sent.Options!.Delivery!.DeduplicationOperationId.Should()
-            .Be("role-chat-terminal:run-1:cmd-1");
+            .Be("role-chat-terminal:run-1:cmd-1:outcome:1");
         var notification = sent.Event.Should().BeOfType<RoleChatSessionCompletedEvent>().Which;
         var expectedNotification = committed.Clone();
         expectedNotification.TerminalProgress.Clear();
@@ -1071,6 +1071,58 @@ public class RoleGAgentReplayContractTests
             "actor-to-actor completion notification carries final authority, not AGUI presentation tail");
         recovered.State.Sessions["session-1"].CompletionNotificationDeliveryStatus.Should()
             .Be(RoleChatCompletionNotificationDeliveryStatus.Dispatched);
+    }
+
+    [Fact]
+    public async Task Activation_WhenPendingCompletionDeliveryFails_ShouldStillRequestIncompleteFinalization()
+    {
+        var innerStore = new InMemoryEventStoreForTests();
+        const string actorId = "role-activation-delivery-isolation";
+        await innerStore.AppendAsync(
+            actorId,
+            [
+                StateEventFor(actorId, 1, new RoleChatSessionStartedEvent
+                {
+                    SessionId = "terminal-session",
+                    Prompt = "already finished",
+                    RunContext = new RoleChatRunContext
+                    {
+                        RunId = "run-terminal",
+                        CommandId = "command-terminal",
+                        CompletionNotificationActorId = "service-run:scope:service:run-terminal",
+                    },
+                }),
+                StateEventFor(actorId, 2, new RoleChatSessionCompletedEvent
+                {
+                    SessionId = "terminal-session",
+                    Prompt = "already finished",
+                    Outcome = RoleChatSessionOutcome.Completed,
+                    RunContext = new RoleChatRunContext
+                    {
+                        RunId = "run-terminal",
+                        CommandId = "command-terminal",
+                        CompletionNotificationActorId = "service-run:scope:service:run-terminal",
+                    },
+                }),
+                StateEventFor(actorId, 3, new RoleChatSessionStartedEvent
+                {
+                    SessionId = "incomplete-session",
+                    Prompt = "recover me",
+                }),
+            ],
+            expectedVersion: 0);
+        var store = new FailOnCompletionNotificationDispatchedEventStore(innerStore);
+        var services = BuildServices(store);
+        var publisher = new RecordingEventPublisher();
+        var agent = CreateAgent(services, actorId);
+        agent.EventPublisher = publisher;
+
+        await agent.ActivateAsync();
+
+        publisher.Sends.Should().ContainSingle(send => send.Event is RoleChatSessionCompletedEvent);
+        publisher.Published.OfType<RoleChatIncompleteSessionFinalizationRequested>()
+            .Should().ContainSingle()
+            .Which.SessionId.Should().Be("incomplete-session");
     }
 
     [Fact]
@@ -1490,8 +1542,62 @@ public class RoleGAgentReplayContractTests
 
         agent.State.Sessions.Should().HaveCount(130);
         agent.State.Sessions.Values.Should().OnlyContain(session => !session.Completed);
-        publisher.Published.OfType<RoleChatIncompleteSessionFinalizationRequested>()
-            .Should().HaveCount(130);
+        var finalizationSignals = publisher.Published
+            .OfType<RoleChatIncompleteSessionFinalizationRequested>()
+            .ToArray();
+        finalizationSignals.Should().HaveCount(130);
+
+        foreach (var signal in finalizationSignals)
+            await agent.HandleIncompleteSessionFinalizationRequestedAsync(signal);
+
+        agent.State.Sessions.Should().HaveCount(130);
+        agent.State.Sessions.Values.Should().OnlyContain(session => session.Completed);
+        var provider = new CountingLlmProviderFactory("must not run");
+        var retryAgent = CreateAgent(services, actorId, provider);
+        await retryAgent.ActivateAsync();
+        await retryAgent.HandleChatRequest(new ChatRequestEvent
+        {
+            SessionId = "session-1",
+            Prompt = "prompt-1",
+        });
+        provider.StreamCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task HandleChatRequest_WhenCapacityIsFullOfIncompleteSessions_ShouldCommitTypedAdmissionRejection()
+    {
+        var store = new InMemoryEventStoreForTests();
+        var services = BuildServices(store);
+        const string actorId = "role-session-capacity-rejection";
+        var startedEvents = Enumerable.Range(1, 128)
+            .Select(index => StateEventFor(actorId, index, new RoleChatSessionStartedEvent
+            {
+                SessionId = $"session-{index}",
+                Prompt = $"prompt-{index}",
+            }))
+            .ToArray();
+        await store.AppendAsync(actorId, startedEvents, expectedVersion: 0);
+        var provider = new CountingLlmProviderFactory("must not run");
+        var agent = CreateAgent(services, actorId, provider);
+        await agent.ActivateAsync();
+
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            SessionId = "session-overflow",
+            CommandAttemptId = "attempt-overflow",
+            Prompt = "must be rejected",
+        });
+
+        provider.StreamCallCount.Should().Be(0);
+        agent.State.Sessions.Should().HaveCount(128);
+        agent.State.Sessions.Should().NotContainKey("session-overflow");
+        var rejection = (await store.GetEventsAsync(actorId))
+            .Where(stateEvent => stateEvent.EventData.Is(RoleChatCommandAttemptRejectedEvent.Descriptor))
+            .Select(stateEvent => stateEvent.EventData.Unpack<RoleChatCommandAttemptRejectedEvent>())
+            .Should().ContainSingle().Which;
+        rejection.RequestedSessionId.Should().Be("session-overflow");
+        rejection.CommandAttemptId.Should().Be("attempt-overflow");
+        rejection.Reason.Should().Be(RoleChatCommandAttemptRejectionReason.CapacityExhausted);
     }
 
     [Fact]
@@ -2676,6 +2782,41 @@ public class RoleGAgentReplayContractTests
             inner.GetVersionAsync(agentId, ct);
 
         public Task<long> DeleteEventsUpToAsync(string agentId, long toVersion, CancellationToken ct = default) =>
+            inner.DeleteEventsUpToAsync(agentId, toVersion, ct);
+    }
+
+    private sealed class FailOnCompletionNotificationDispatchedEventStore(
+        InMemoryEventStoreForTests inner) : IEventStore
+    {
+        public Task<EventStoreCommitResult> AppendAsync(
+            string agentId,
+            IEnumerable<StateEvent> events,
+            long expectedVersion,
+            CancellationToken ct = default)
+        {
+            var pending = events.ToArray();
+            if (pending.Any(stateEvent =>
+                    stateEvent.EventData.Is(RoleChatCompletionNotificationDispatchedEvent.Descriptor)))
+            {
+                throw new InvalidOperationException("Simulated completion notification checkpoint failure.");
+            }
+
+            return inner.AppendAsync(agentId, pending, expectedVersion, ct);
+        }
+
+        public Task<IReadOnlyList<StateEvent>> GetEventsAsync(
+            string agentId,
+            long? fromVersion = null,
+            CancellationToken ct = default) =>
+            inner.GetEventsAsync(agentId, fromVersion, ct);
+
+        public Task<long> GetVersionAsync(string agentId, CancellationToken ct = default) =>
+            inner.GetVersionAsync(agentId, ct);
+
+        public Task<long> DeleteEventsUpToAsync(
+            string agentId,
+            long toVersion,
+            CancellationToken ct = default) =>
             inner.DeleteEventsUpToAsync(agentId, toVersion, ct);
     }
 

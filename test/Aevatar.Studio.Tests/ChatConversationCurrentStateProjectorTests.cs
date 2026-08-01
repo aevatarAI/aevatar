@@ -157,6 +157,17 @@ public sealed class ChatConversationCurrentStateProjectorTests
             {
                 TurnId = "turn-4",
                 Sequence = 4,
+                UserText = "side effect",
+                AssistantText = "outcome unknown",
+                TerminalStatus = ChatTurnTerminalStatus.OutcomeUncertain,
+                SanitizedError = "SESSION_OUTCOME_UNCERTAIN",
+                LlmRoute = "route-d",
+                LlmModel = "model-d",
+            },
+            new ChatTurn
+            {
+                TurnId = "turn-5",
+                Sequence = 5,
                 UserText = "pending",
                 AssistantText = "no terminal name",
                 TerminalStatus = ChatTurnTerminalStatus.Unspecified,
@@ -187,14 +198,14 @@ public sealed class ChatConversationCurrentStateProjectorTests
         written.ServiceKind.Should().Be("workflow");
         written.CreatedAtMs.Should().Be(1784170000000);
         written.UpdatedAtMs.Should().Be(1784170300000);
-        written.MessageCount.Should().Be(4);
+        written.MessageCount.Should().Be(5);
         written.LlmRoute.Should().Be("route-final");
         written.LlmModel.Should().Be("model-final");
         written.Deleted.Should().BeTrue();
 
-        written.Turns.Should().HaveCount(4);
+        written.Turns.Should().HaveCount(5);
         written.Turns.Select(turn => turn.TerminalStatus)
-            .Should().Equal("complete", "error", "stopped", string.Empty);
+            .Should().Equal("complete", "error", "stopped", "outcome_uncertain", string.Empty);
         written.Turns[0].TurnId.Should().Be("turn-1");
         written.Turns[0].Sequence.Should().Be(1);
         written.Turns[0].UserText.Should().Be("hello");
@@ -204,7 +215,8 @@ public sealed class ChatConversationCurrentStateProjectorTests
         written.Turns[0].LlmRoute.Should().Be("route-a");
         written.Turns[0].LlmModel.Should().Be("model-a");
         written.Turns[1].SanitizedError.Should().Be("safe error");
-        written.Turns[3].TerminalTimeMs.Should().Be(0);
+        written.Turns[3].SanitizedError.Should().Be("SESSION_OUTCOME_UNCERTAIN");
+        written.Turns[4].TerminalTimeMs.Should().Be(0);
     }
 
     private static StudioMaterializationContext NewContext() => new()
