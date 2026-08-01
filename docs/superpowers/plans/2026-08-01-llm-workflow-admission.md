@@ -718,7 +718,7 @@ git commit -m "Expose honest LLM selection status"
 - Modify: agents/Aevatar.GAgents.NyxidChat/AgentRunReplyGenerationExecutor.cs
 - Modify: agents/Aevatar.GAgents.NyxidChat/NyxIdChatEndpoints.cs
 - Modify: agents/Aevatar.GAgents.StreamingProxy/StreamingProxyNyxParticipantCoordinator.cs
-- Modify: test/Aevatar.AI.Tests/OwnerLlmConfigApplierTests.cs
+- Create: test/Aevatar.AI.Tests/OwnerLlmConfigApplierTests.cs
 - Modify: test/Aevatar.Capabilities.Tests/StudioUserConfigOwnerLlmConfigSourceTests.cs
 - Modify: test/Aevatar.Studio.Tests/ActorBackedNyxIdUserLlmPreferencesStoreTests.cs
 - Modify: test/Aevatar.GAgentService.Tests/Application/ResponsesCommandFacadeTests.cs
@@ -1267,7 +1267,6 @@ git commit -m "Refresh exact LLM catalog targets"
 - Modify: src/platform/Aevatar.GAgentService.Application/Schedules/Authorization/ScheduledInvocationAuthorizationRevalidator.cs
 - Modify: src/platform/Aevatar.GAgentService.Infrastructure/Schedules/ScheduledServiceInvocationDispatchPort.cs
 - Modify: test/Aevatar.GAgentService.Tests/Authorization/ScheduledInvocationAuthorizationPlannerTests.cs
-- Modify: test/Aevatar.GAgentService.Tests/Authorization/ScheduledInvocationAuthorizationRevalidatorTests.cs
 - Modify: test/Aevatar.GAgentService.Tests/Application/ScheduledDispatchServiceInvocationTests.cs
 
 **Interfaces:**
@@ -1312,7 +1311,7 @@ Run serially:
 
 ~~~bash
 dotnet test test/Aevatar.GAgentService.Tests/Aevatar.GAgentService.Tests.csproj --nologo --filter 'FullyQualifiedName~ScheduledInvocationAuthorizationPlannerTests'
-dotnet test test/Aevatar.GAgentService.Tests/Aevatar.GAgentService.Tests.csproj --nologo --filter 'FullyQualifiedName~ScheduledInvocationAuthorizationRevalidatorTests|FullyQualifiedName~ScheduledDispatchServiceInvocationTests'
+dotnet test test/Aevatar.GAgentService.Tests/Aevatar.GAgentService.Tests.csproj --nologo --filter 'FullyQualifiedName~ScheduledInvocationAuthorizationPlannerTests|FullyQualifiedName~ScheduledDispatchServiceInvocationTests'
 ~~~
 
 Expected: the planner has only one generic DurableAuthorizationUnavailable outcome, Gateway bypasses the catalog when no service grant is required, and plan results cannot carry a typed LLM refresh requirement.
@@ -1361,7 +1360,7 @@ Expected: typed planner/revalidator failures, Gateway evidence, digest binding, 
 - [ ] **Step 7: Commit durable LLM admission**
 
 ~~~bash
-git add src/platform/Aevatar.GAgentService.Abstractions/Protos/scheduled_invocation_authorization_plan.proto src/platform/Aevatar.GAgentService.Abstractions/Schedules/Authorization/ScheduledInvocationAuthorizationContracts.cs src/platform/Aevatar.GAgentService.Abstractions/Schedules/ScheduledServiceInvocationAuthorizationFailure.cs src/platform/Aevatar.GAgentService.Application/Schedules/Authorization/ScheduledInvocationAuthorizationPlanner.cs src/platform/Aevatar.GAgentService.Application/Schedules/Authorization/ScheduledInvocationAuthorizationRevalidator.cs src/platform/Aevatar.GAgentService.Infrastructure/Schedules/ScheduledServiceInvocationDispatchPort.cs test/Aevatar.GAgentService.Tests/Authorization/ScheduledInvocationAuthorizationPlannerTests.cs test/Aevatar.GAgentService.Tests/Authorization/ScheduledInvocationAuthorizationRevalidatorTests.cs test/Aevatar.GAgentService.Tests/Application/ScheduledDispatchServiceInvocationTests.cs
+git add src/platform/Aevatar.GAgentService.Abstractions/Protos/scheduled_invocation_authorization_plan.proto src/platform/Aevatar.GAgentService.Abstractions/Schedules/Authorization/ScheduledInvocationAuthorizationContracts.cs src/platform/Aevatar.GAgentService.Abstractions/Schedules/ScheduledServiceInvocationAuthorizationFailure.cs src/platform/Aevatar.GAgentService.Application/Schedules/Authorization/ScheduledInvocationAuthorizationPlanner.cs src/platform/Aevatar.GAgentService.Application/Schedules/Authorization/ScheduledInvocationAuthorizationRevalidator.cs src/platform/Aevatar.GAgentService.Infrastructure/Schedules/ScheduledServiceInvocationDispatchPort.cs test/Aevatar.GAgentService.Tests/Authorization/ScheduledInvocationAuthorizationPlannerTests.cs test/Aevatar.GAgentService.Tests/Application/ScheduledDispatchServiceInvocationTests.cs
 git commit -m "Enforce durable LLM target evidence"
 ~~~
 
@@ -1371,9 +1370,9 @@ git commit -m "Enforce durable LLM target evidence"
 - Modify: src/workflow/Aevatar.Workflow.Abstractions/WorkflowCapabilityAdmissionPlanIntegrity.cs
 - Modify: src/workflow/Aevatar.Workflow.Application.Abstractions/ExternalCapabilities/ExternalWorkflowCapabilityPorts.cs
 - Create: src/workflow/Aevatar.Workflow.Application/ExternalCapabilities/WorkflowArtifactCompatibilityPreflight.cs
-- Modify: src/workflow/Aevatar.Workflow.Application/ExternalCapabilities/ServiceCollectionExtensions.cs
-- Test: test/Aevatar.Workflow.Application.Tests/WorkflowCapabilityAdmissionPlanIntegrityTests.cs
-- Test: test/Aevatar.Workflow.Application.Tests/WorkflowArtifactCompatibilityPreflightTests.cs
+- Modify: src/workflow/Aevatar.Workflow.Application/DependencyInjection/ServiceCollectionExtensions.cs
+- Create: test/Aevatar.Workflow.Application.Tests/WorkflowCapabilityAdmissionPlanIntegrityTests.cs
+- Create: test/Aevatar.Workflow.Application.Tests/WorkflowArtifactCompatibilityPreflightTests.cs
 
 **Interfaces:**
 - Consumes: WorkflowDefinitionParser-compatible IWorkflowDefinitionParser, WorkflowAuthorizationDependencyEvaluator output, persisted WorkflowCapabilityAdmissionPlan, and explicit ExternalCapabilityExecutionMode.
@@ -1480,7 +1479,7 @@ Expected: every structural dimension has a typed result; absent-plan rules and s
 - [ ] **Step 6: Commit local compatibility preflight**
 
 ~~~bash
-git add src/workflow/Aevatar.Workflow.Abstractions/WorkflowCapabilityAdmissionPlanIntegrity.cs src/workflow/Aevatar.Workflow.Application.Abstractions/ExternalCapabilities/ExternalWorkflowCapabilityPorts.cs src/workflow/Aevatar.Workflow.Application/ExternalCapabilities/WorkflowArtifactCompatibilityPreflight.cs src/workflow/Aevatar.Workflow.Application/ExternalCapabilities/ServiceCollectionExtensions.cs test/Aevatar.Workflow.Application.Tests/WorkflowCapabilityAdmissionPlanIntegrityTests.cs test/Aevatar.Workflow.Application.Tests/WorkflowArtifactCompatibilityPreflightTests.cs
+git add src/workflow/Aevatar.Workflow.Abstractions/WorkflowCapabilityAdmissionPlanIntegrity.cs src/workflow/Aevatar.Workflow.Application.Abstractions/ExternalCapabilities/ExternalWorkflowCapabilityPorts.cs src/workflow/Aevatar.Workflow.Application/ExternalCapabilities/WorkflowArtifactCompatibilityPreflight.cs src/workflow/Aevatar.Workflow.Application/DependencyInjection/ServiceCollectionExtensions.cs test/Aevatar.Workflow.Application.Tests/WorkflowCapabilityAdmissionPlanIntegrityTests.cs test/Aevatar.Workflow.Application.Tests/WorkflowArtifactCompatibilityPreflightTests.cs
 git commit -m "Add local workflow artifact preflight"
 ~~~
 
@@ -1489,24 +1488,47 @@ git commit -m "Add local workflow artifact preflight"
 **Files:**
 - Modify: src/workflow/Aevatar.Workflow.Abstractions/workflow_execution_messages.proto
 - Modify: src/workflow/Aevatar.Workflow.Application.Abstractions/Runs/WorkflowRunPorts.cs
+- Modify: src/workflow/Aevatar.Workflow.Application.Abstractions/Runs/WorkflowChatRunModels.cs
 - Modify: src/workflow/Aevatar.Workflow.Core/workflow_state.proto
 - Modify: src/workflow/Aevatar.Workflow.Core/WorkflowGAgent.cs
 - Modify: src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.cs
 - Modify: src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.IdentityProvisioning.cs
 - Modify: src/workflow/Aevatar.Workflow.Infrastructure/Runs/WorkflowRunActorPort.cs
 - Modify: src/workflow/Aevatar.Workflow.Projection/workflow_actor_binding_document.proto
+- Modify: src/workflow/Aevatar.Workflow.Projection/workflow_projection_transport.proto
 - Modify: src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowActorBindingProjector.cs
+- Modify: src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowExecutionCurrentStateProjector.cs
 - Modify: src/workflow/Aevatar.Workflow.Projection/Orchestration/ProjectionWorkflowActorBindingReader.cs
+- Modify: src/workflow/Aevatar.Workflow.Projection/ReadModels/WorkflowRunForkSeedReadModelMapper.cs
 - Modify: src/platform/Aevatar.GAgentService.Infrastructure/Activation/DefaultServiceRuntimeActivator.cs
 - Modify: src/platform/Aevatar.GAgentService.Infrastructure/Dispatch/DefaultServiceInvocationDispatcher.cs
+- Modify: src/platform/Aevatar.GAgentService.Abstractions/Protos/service_revision.proto
+- Modify: src/platform/Aevatar.GAgentService.Abstractions/Services/WorkflowServiceRevisionArtifactBuilder.cs
+- Modify: src/platform/Aevatar.GAgentService.Abstractions/Services/WorkflowServiceDeploymentPlanIntegrity.cs
 - Modify: src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunActorResolver.cs
 - Modify: src/workflow/Aevatar.Workflow.Application/RunForks/WorkflowForkRunCommandTargetResolver.cs
+- Modify: src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatRunRequestNormalizer.cs
+- Modify: src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/WorkflowWebhookIngressRequestBuilder.cs
+- Modify: src/Aevatar.AI.ToolProviders.AevatarInvocation/AevatarInvocationDispatcher.cs
+- Modify: src/Aevatar.Mainnet.Host.Api/Skills/UserSkillRunService.cs
+- Modify: src/platform/Aevatar.GAgentService.Hosting/Endpoints/ScopeServiceEndpoints.cs
+- Modify: src/platform/Aevatar.GAgentService.Hosting/Endpoints/ScopeWorkflowEndpoints.cs
+- Modify: src/workflow/Aevatar.Workflow.Core/Primitives/SubWorkflowOrchestrator.cs
 - Modify: test/Aevatar.Workflow.Host.Api.Tests/WorkflowRunActorPortBranchTests.cs
 - Modify: test/Aevatar.Workflow.Host.Api.Tests/WorkflowActorBindingProjectorTests.cs
 - Modify: test/Aevatar.Workflow.Host.Api.Tests/RuntimeWorkflowActorBindingReaderTests.cs
 - Modify: test/Aevatar.GAgentService.Tests/Infrastructure/DefaultServiceInvocationDispatcherTests.cs
+- Modify: test/Aevatar.GAgentService.Tests/Infrastructure/DefaultServiceRuntimeActivatorTests.cs
+- Modify: test/Aevatar.GAgentService.Tests/Application/WorkflowServiceRevisionArtifactBuilderTests.cs
+- Modify: test/Aevatar.AI.ToolProviders.AevatarInvocation.Tests/AevatarInvocationToolSourceTests.cs
+- Modify: test/Aevatar.Capabilities.Tests/UserSkillRunServiceTests.cs
+- Modify: test/Aevatar.GAgentService.Integration.Tests/ScopeServiceEndpoints/ScopeServiceContractEndpointTests.cs
+- Modify: test/Aevatar.GAgentService.Integration.Tests/ScopeWorkflowEndpointsTests.cs
 - Modify: test/Aevatar.Workflow.Application.Tests/WorkflowRunActorResolverTests.cs
-- Modify: test/Aevatar.Workflow.Application.Tests/WorkflowForkRunCommandTargetResolverTests.cs
+- Modify: test/Aevatar.Workflow.Application.Tests/WorkflowChatRunRequestSeedTests.cs
+- Modify: test/Aevatar.Workflow.Application.Tests/WorkflowForkRunCommandDispatchTests.cs
+- Modify: test/Aevatar.Workflow.Host.Api.Tests/WorkflowCapabilityEndpointsCoverageTests.cs
+- Modify: test/Aevatar.Workflow.Host.Api.Tests/WorkflowWebhookIngressEndpointsTests.cs
 
 **Interfaces:**
 - Consumes: IWorkflowArtifactCompatibilityPreflight from Task 12 and explicit ExternalCapabilityExecutionMode from publish, service deployment, chat, and fork contexts.
@@ -1543,7 +1565,7 @@ public async Task EnsureRunAndDispatchAsync_WhenArtifactNeedsRebind_ShouldMutate
 
 Add an existing-definition case: allow one read-only binding read, reject when request mode Durable differs from bound Interactive, and assert zero runtime create/link/bind/repair/dispatch. Add an accepted case and assert the preflight is called once with the authoritative existing binding payload and mode before the first mutation.
 
-Add protobuf/state/projector/reader tests proving Interactive and Durable survive definition event -> actor state -> committed state event -> WorkflowActorBindingDocument -> WorkflowActorBinding, and that run ensure rejects a mode different from its first binding. Use distinct memberId m-alpha, workflowId wf-alpha, and publishedServiceId svc-alpha fixtures.
+Add protobuf/state/projector/reader tests proving Interactive and Durable survive definition event -> actor state -> committed state event -> WorkflowActorBindingDocument -> WorkflowActorBinding, and that run ensure rejects a mode different from its first binding. Add request-seed tests proving every WorkflowChatRunRequest carries a non-optional ExpectedExecutionMode and rejects Unspecified. Add artifact-builder tests proving WorkflowServiceDeploymentPlan carries the same explicit mode as its capability plan and rejects Unspecified or disagreement. Use distinct memberId m-alpha, workflowId wf-alpha, and publishedServiceId svc-alpha fixtures.
 
 - [ ] **Step 2: Run focused lifecycle tests and verify RED**
 
@@ -1551,15 +1573,15 @@ Run serially:
 
 ~~~bash
 dotnet test test/Aevatar.Workflow.Host.Api.Tests/Aevatar.Workflow.Host.Api.Tests.csproj --nologo --filter 'FullyQualifiedName~WorkflowRunActorPortBranchTests|FullyQualifiedName~WorkflowActorBindingProjectorTests|FullyQualifiedName~RuntimeWorkflowActorBindingReaderTests'
-dotnet test test/Aevatar.GAgentService.Tests/Aevatar.GAgentService.Tests.csproj --nologo --filter 'FullyQualifiedName~DefaultServiceInvocationDispatcherTests'
-dotnet test test/Aevatar.Workflow.Application.Tests/Aevatar.Workflow.Application.Tests.csproj --nologo --filter 'FullyQualifiedName~WorkflowRunActorResolverTests|FullyQualifiedName~WorkflowForkRunCommandTargetResolverTests'
+dotnet test test/Aevatar.GAgentService.Tests/Aevatar.GAgentService.Tests.csproj --nologo --filter 'FullyQualifiedName~DefaultServiceInvocationDispatcherTests|FullyQualifiedName~DefaultServiceRuntimeActivatorTests|FullyQualifiedName~WorkflowServiceRevisionArtifactBuilderTests'
+dotnet test test/Aevatar.Workflow.Application.Tests/Aevatar.Workflow.Application.Tests.csproj --nologo --filter 'FullyQualifiedName~WorkflowRunActorResolverTests|FullyQualifiedName~WorkflowChatRunRequestSeedTests|FullyQualifiedName~WorkflowForkRunCommandDispatchTests'
 ~~~
 
 Expected: binding records and protobufs have no ExpectedExecutionMode, WorkflowRunActorPort has no preflight dependency, and invalid artifacts can reach actor creation.
 
 - [ ] **Step 3: Add the execution mode to authoritative binding contracts**
 
-Add expected_execution_mode at field 10 on BindWorkflowDefinitionEvent and field 10 on BindWorkflowRunDefinitionEvent. Add expected_execution_mode at field 22 on WorkflowState, field 44 on WorkflowRunState, and field 18 on WorkflowActorBindingDocument. Extend the two C# records as follows and update every constructor call:
+Add expected_execution_mode at field 10 on BindWorkflowDefinitionEvent and field 10 on BindWorkflowRunDefinitionEvent. Add expected_execution_mode at field 22 on WorkflowState, field 44 on WorkflowRunState, field 18 on WorkflowActorBindingDocument, and field 35 on WorkflowExecutionCurrentStateDocument. Add execution_mode at field 9 on WorkflowServiceDeploymentPlan; WorkflowServiceRevisionArtifactBuilder copies capabilityAdmissionPlan.ExecutionMode after rejecting Unspecified, and WorkflowServiceDeploymentPlanIntegrity requires exact equality. Add non-optional ExternalCapabilityExecutionMode ExpectedExecutionMode to WorkflowChatRunRequest immediately after Source, and require every Host/Application ingress builder to supply it explicitly. The required producers are AevatarInvocationDispatcher, UserSkillRunService, ScopeServiceEndpoints, ScopeWorkflowEndpoints, ChatRunRequestNormalizer, WorkflowWebhookIngressRequestBuilder, WorkflowRunActorResolver, and WorkflowForkRunCommandTargetResolver; update their focused contract tests so no producer relies on a constructor default. Add ExternalCapabilityExecutionMode expectedExecutionMode immediately before CancellationToken on IWorkflowDefinitionProvisioningPort.BindWorkflowDefinitionAsync, WorkflowRunActorPort.BindWorkflowDefinitionAsync, and WorkflowGAgent.BindWorkflowDefinitionAsync; update all implementations, test doubles, and direct callers. Extend the two C# binding records as follows and update every constructor call:
 
 ~~~csharp
 public sealed record WorkflowDefinitionBinding(
@@ -1577,11 +1599,11 @@ public sealed record WorkflowDefinitionBinding(
     string RevisionId = "");
 ~~~
 
-WorkflowActorBinding gets the same non-optional property after InlineWorkflowYamls. Actor bind handlers reject Unspecified, persist the exact value, and existing definition/run binding equality includes it. The projector copies it from committed events and the reader maps it without inference.
+WorkflowActorBinding gets the same non-optional property after InlineWorkflowYamls. Actor bind handlers reject Unspecified, persist the exact value, and existing definition/run binding equality includes it. The projector copies it from committed events and the reader maps it without inference. No overload retaining an implicit mode remains.
 
 - [ ] **Step 4: Supply mode from each typed producer**
 
-DefaultServiceRuntimeActivator and DefaultServiceInvocationDispatcher use Durable because deployment plans are callable unattended artifacts. WorkflowRunActorResolver uses Interactive for catalog chat and inline chat. WorkflowForkRunCommandTargetResolver copies the source run's projected ExpectedExecutionMode; extend WorkflowRunForkSeedView and WorkflowRunForkSeedReadModelMapper to carry it if the source seed does not already expose it. Publish/bind producers pass their existing admission request ExecutionMode. Do not derive mode from RunOrigin, ScheduleId, actor ID, workflow name, route, or presence of a capability plan.
+DefaultServiceRuntimeActivator and DefaultServiceInvocationDispatcher copy WorkflowServiceDeploymentPlan.ExecutionMode and reject Unspecified; they do not assign a mode from service context. WorkflowRunActorResolver copies WorkflowChatRunRequest.ExpectedExecutionMode and rejects Unspecified. Interactive HTTP/chat ingress builders set Interactive as their typed protocol fact; durable schedule/service builders set Durable as their typed protocol fact. WorkflowExecutionCurrentStateDocument and WorkflowRunForkSeedView carry the committed run ExpectedExecutionMode, and WorkflowForkRunCommandTargetResolver copies that exact value. SubWorkflowOrchestrator copies the parent run state's ExpectedExecutionMode into every child BindWorkflowRunDefinitionEvent. Publish/bind producers pass their existing admission request ExecutionMode. Do not derive mode from RunOrigin, ScheduleId, actor ID, workflow name, route, or presence of a capability plan.
 
 - [ ] **Step 5: Gate every WorkflowRunActorPort lifecycle entry once**
 
@@ -1607,6 +1629,192 @@ Expected: all guards exit 0; the preflight uses the binding read model only and 
 - [ ] **Step 8: Commit the pre-actor gate**
 
 ~~~bash
-git add src/workflow/Aevatar.Workflow.Abstractions/workflow_execution_messages.proto src/workflow/Aevatar.Workflow.Application.Abstractions/Runs/WorkflowRunPorts.cs src/workflow/Aevatar.Workflow.Core src/workflow/Aevatar.Workflow.Infrastructure/Runs/WorkflowRunActorPort.cs src/workflow/Aevatar.Workflow.Projection src/platform/Aevatar.GAgentService.Infrastructure/Activation/DefaultServiceRuntimeActivator.cs src/platform/Aevatar.GAgentService.Infrastructure/Dispatch/DefaultServiceInvocationDispatcher.cs src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunActorResolver.cs src/workflow/Aevatar.Workflow.Application/RunForks/WorkflowForkRunCommandTargetResolver.cs test/Aevatar.Workflow.Host.Api.Tests/WorkflowRunActorPortBranchTests.cs test/Aevatar.Workflow.Host.Api.Tests/WorkflowActorBindingProjectorTests.cs test/Aevatar.Workflow.Host.Api.Tests/RuntimeWorkflowActorBindingReaderTests.cs test/Aevatar.GAgentService.Tests/Infrastructure/DefaultServiceInvocationDispatcherTests.cs test/Aevatar.Workflow.Application.Tests/WorkflowRunActorResolverTests.cs test/Aevatar.Workflow.Application.Tests/WorkflowForkRunCommandTargetResolverTests.cs
+git add src/workflow/Aevatar.Workflow.Abstractions/workflow_execution_messages.proto src/workflow/Aevatar.Workflow.Application.Abstractions/Runs/WorkflowRunPorts.cs src/workflow/Aevatar.Workflow.Application.Abstractions/Runs/WorkflowChatRunModels.cs src/workflow/Aevatar.Workflow.Core src/workflow/Aevatar.Workflow.Infrastructure/Runs/WorkflowRunActorPort.cs src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatRunRequestNormalizer.cs src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/WorkflowWebhookIngressRequestBuilder.cs src/workflow/Aevatar.Workflow.Projection src/platform/Aevatar.GAgentService.Abstractions/Protos/service_revision.proto src/platform/Aevatar.GAgentService.Abstractions/Services/WorkflowServiceRevisionArtifactBuilder.cs src/platform/Aevatar.GAgentService.Abstractions/Services/WorkflowServiceDeploymentPlanIntegrity.cs src/platform/Aevatar.GAgentService.Infrastructure/Activation/DefaultServiceRuntimeActivator.cs src/platform/Aevatar.GAgentService.Infrastructure/Dispatch/DefaultServiceInvocationDispatcher.cs src/platform/Aevatar.GAgentService.Hosting/Endpoints/ScopeServiceEndpoints.cs src/platform/Aevatar.GAgentService.Hosting/Endpoints/ScopeWorkflowEndpoints.cs src/Aevatar.AI.ToolProviders.AevatarInvocation/AevatarInvocationDispatcher.cs src/Aevatar.Mainnet.Host.Api/Skills/UserSkillRunService.cs src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunActorResolver.cs src/workflow/Aevatar.Workflow.Application/RunForks/WorkflowForkRunCommandTargetResolver.cs test/Aevatar.Workflow.Host.Api.Tests/WorkflowRunActorPortBranchTests.cs test/Aevatar.Workflow.Host.Api.Tests/WorkflowActorBindingProjectorTests.cs test/Aevatar.Workflow.Host.Api.Tests/RuntimeWorkflowActorBindingReaderTests.cs test/Aevatar.Workflow.Host.Api.Tests/WorkflowCapabilityEndpointsCoverageTests.cs test/Aevatar.Workflow.Host.Api.Tests/WorkflowWebhookIngressEndpointsTests.cs test/Aevatar.GAgentService.Tests/Infrastructure/DefaultServiceInvocationDispatcherTests.cs test/Aevatar.GAgentService.Tests/Infrastructure/DefaultServiceRuntimeActivatorTests.cs test/Aevatar.GAgentService.Tests/Application/WorkflowServiceRevisionArtifactBuilderTests.cs test/Aevatar.GAgentService.Integration.Tests/ScopeServiceEndpoints/ScopeServiceContractEndpointTests.cs test/Aevatar.GAgentService.Integration.Tests/ScopeWorkflowEndpointsTests.cs test/Aevatar.AI.ToolProviders.AevatarInvocation.Tests/AevatarInvocationToolSourceTests.cs test/Aevatar.Capabilities.Tests/UserSkillRunServiceTests.cs test/Aevatar.Workflow.Application.Tests/WorkflowRunActorResolverTests.cs test/Aevatar.Workflow.Application.Tests/WorkflowChatRunRequestSeedTests.cs test/Aevatar.Workflow.Application.Tests/WorkflowForkRunCommandDispatchTests.cs
 git commit -m "Reject incompatible workflows before actor lifecycle"
+~~~
+
+### Task 14: Attribute scheduled admission rejection to the schedule with zero Run artifacts
+
+**Files:**
+- Modify: src/workflow/Aevatar.Workflow.Application.Abstractions/ExternalCapabilities/ExternalWorkflowCapabilityPorts.cs
+- Modify: src/platform/Aevatar.GAgentService.Infrastructure/Dispatch/DefaultServiceInvocationDispatcher.cs
+- Modify: src/platform/Aevatar.GAgentService.Core/Schedules/scheduled_dispatch_state.proto
+- Modify: src/platform/Aevatar.GAgentService.Core/Schedules/ScheduledDispatchGAgent.cs
+- Modify: src/platform/Aevatar.GAgentService.Projection/service_projection_read_models.proto
+- Modify: src/platform/Aevatar.GAgentService.Projection/Projectors/ScheduledDispatchCurrentStateProjector.cs
+- Modify: src/platform/Aevatar.GAgentService.Projection/Queries/ScheduledDispatchQueryPort.cs
+- Modify: src/platform/Aevatar.GAgentService.Abstractions/Schedules/ScheduledDispatchModels.cs
+- Modify: test/Aevatar.GAgentService.Tests/Infrastructure/DefaultServiceInvocationDispatcherTests.cs
+- Modify: test/Aevatar.Workflow.Core.Tests/ScheduledDispatchGAgentTests.cs
+- Modify: test/Aevatar.GAgentService.Tests/Projection/ScheduledDispatchCurrentStateProjectorTests.cs
+
+**Interfaces:**
+- Consumes: WorkflowExternalCapabilityAdmissionException with typed ExternalCapabilityReadiness and WorkflowRunActorPort's pre-mutation rejection from Task 13.
+- Produces: safe StableCode on WorkflowExternalCapabilityAdmissionException; ScheduledDispatchFireFailedEvent.error_code; schedule LastError safe message plus LastErrorCode, incremented FailureCount, and no workflow actor or service-run registration.
+
+- [ ] **Step 1: Write failing zero-Run and schedule evidence tests**
+
+Add an exact requested-run service invocation test whose injected local preflight rejects with NYXID_OPERATION_AUTHORING_MIGRATION_REQUIRED before service-run registration or workflow actor lifecycle:
+
+~~~csharp
+[Fact]
+public async Task WorkflowAdmissionRejection_ShouldCreateNoWorkflowOrServiceRun()
+{
+    var workflowPort = new RecordingWorkflowRunActorPort();
+    var preflight = RejectingPreflight(
+        "NYXID_OPERATION_AUTHORING_MIGRATION_REQUIRED",
+        "Workflow uses a retired NyxID tool contract.");
+    var registrations = new RecordingServiceRunRegistrationPort();
+    var dispatcher = CreateDispatcher(workflowPort, registrations, preflight);
+
+    var act = () => dispatcher.DispatchAsync(DurableWorkflowTarget(), ScheduledRequest("run-alpha"));
+
+    var error = await act.Should().ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
+    error.Which.StableCode.Should().Be("NYXID_OPERATION_AUTHORING_MIGRATION_REQUIRED");
+    workflowPort.Calls.Should().BeEmpty();
+    registrations.Records.Should().BeEmpty();
+}
+~~~
+
+Cover WORKFLOW_DEFINITION_INVALID and CAPABILITY_ADMISSION_REBIND_REQUIRED the same way. Add schedule actor tests that inject each rejection and assert FireCount=1, FailureCount=1, LastError equals the safe message, LastErrorCode equals the stable code, the fire record is Failed, and no target receipt exists. Assert actor state, projected document, logs, and API summary contain no YAML, bearer, secret reference, upstream error body, stack trace, or exception type.
+
+- [ ] **Step 2: Run focused rejection tests and verify RED**
+
+Run serially:
+
+~~~bash
+dotnet test test/Aevatar.GAgentService.Tests/Aevatar.GAgentService.Tests.csproj --nologo --filter 'FullyQualifiedName~DefaultServiceInvocationDispatcherTests'
+dotnet test test/Aevatar.Workflow.Core.Tests/Aevatar.Workflow.Core.Tests.csproj --nologo --filter 'FullyQualifiedName~ScheduledDispatchGAgentTests'
+dotnet test test/Aevatar.GAgentService.Tests/Aevatar.GAgentService.Tests.csproj --nologo --filter 'FullyQualifiedName~ScheduledDispatchCurrentStateProjectorTests'
+~~~
+
+Expected: exact-run dispatch registers a service Run before the workflow port admits it, and schedule failure has only an untyped exception message.
+
+- [ ] **Step 3: Expose one safe stable workflow admission code**
+
+Add StableCode and SafeMessage to WorkflowExternalCapabilityAdmissionException. StableCode is the first non-empty typed blocker code, restricted to WORKFLOW_DEFINITION_INVALID, NYXID_OPERATION_AUTHORING_MIGRATION_REQUIRED, or CAPABILITY_ADMISSION_REBIND_REQUIRED for this path; an unknown value maps to WORKFLOW_ADMISSION_REJECTED. SafeMessage is the blocker SafeMessage or "Workflow admission was rejected.". Neither property includes YAML, selectors, service response content, credentials, or the exception stack.
+
+- [ ] **Step 4: Preflight exact runs before service-run registration**
+
+Inject the same IWorkflowArtifactCompatibilityPreflight into DefaultServiceInvocationDispatcher and validate the exact WorkflowDefinitionBinding before RegisterRunAsync. Only after this pure local check succeeds may the existing order continue: register service Run, then call EnsureRunAndDispatchAsync. Keep WorkflowRunActorPort's pre-mutation gate as the authoritative final guard; the dispatcher check exists only to prevent the surrounding service-run record from preceding that guard. The random-run branch already calls CreateRunAsync before registration, so its compatibility rejection remains registration-free. Do not move registration after execution start and do not erase a Run that was genuinely accepted.
+
+- [ ] **Step 5: Persist typed schedule failure evidence**
+
+Add string error_code=6 to ScheduledDispatchFireFailedEvent, string error_code=10 to ScheduledDispatchFireRecordState (field 9 is the existing status), string last_error_code=66 to ScheduledDispatchState (field 65 is the existing delete reason), string last_error_code=64 to ScheduledDispatchDocument, and string error_code=9 to ScheduledDispatchFireRecordDocument. Add LastErrorCode to ScheduledDispatchSummary immediately after LastError. When catching WorkflowExternalCapabilityAdmissionException, call PersistFireFailedAsync with StableCode and SafeMessage. Store LastError as the safe message, LastErrorCode as the stable code, increment FireCount and FailureCount once, and keep the schedule enabled for operator repair. For generic exceptions use error_code=scheduled_dispatch_failed and the existing sanitized message. Project the typed code through the existing current-state projector and query summary without adding a second failure store.
+
+- [ ] **Step 6: Run focused rejection tests and verify GREEN**
+
+Run all three commands from Step 2 again.
+
+Expected: all three stable workflow admission outcomes produce zero workflow/service Run artifacts and one schedule-owned failed fire with redacted typed evidence.
+
+- [ ] **Step 7: Commit schedule rejection evidence**
+
+~~~bash
+git add src/workflow/Aevatar.Workflow.Application.Abstractions/ExternalCapabilities/ExternalWorkflowCapabilityPorts.cs src/platform/Aevatar.GAgentService.Infrastructure/Dispatch/DefaultServiceInvocationDispatcher.cs src/platform/Aevatar.GAgentService.Core/Schedules/scheduled_dispatch_state.proto src/platform/Aevatar.GAgentService.Core/Schedules/ScheduledDispatchGAgent.cs src/platform/Aevatar.GAgentService.Projection/service_projection_read_models.proto src/platform/Aevatar.GAgentService.Projection/Projectors/ScheduledDispatchCurrentStateProjector.cs src/platform/Aevatar.GAgentService.Projection/Queries/ScheduledDispatchQueryPort.cs src/platform/Aevatar.GAgentService.Abstractions/Schedules/ScheduledDispatchModels.cs test/Aevatar.GAgentService.Tests/Infrastructure/DefaultServiceInvocationDispatcherTests.cs test/Aevatar.Workflow.Core.Tests/ScheduledDispatchGAgentTests.cs test/Aevatar.GAgentService.Tests/Projection/ScheduledDispatchCurrentStateProjectorTests.cs
+git commit -m "Record workflow admission failure on schedules"
+~~~
+
+### Task 15: Canonical documentation and release verification
+
+**Files:**
+- Modify: docs/canon/workflow-runtime.md
+- Modify: docs/canon/nyxid-llm-integration.md
+- Modify: docs/canon/scheduled-skill-runners.md
+- Generated: docs/README.md via tools/docs/build-index.sh
+- Verify: docs/superpowers/specs/2026-08-01-llm-workflow-admission-design.md
+
+**Interfaces:**
+- Consumes: all contracts and behavior from Tasks 1-14.
+- Produces: one documented route/model authority, one durable catalog evidence path, one local workflow preflight path, rollout order, operator remediation, and a fully verified release candidate.
+
+- [ ] **Step 1: Record the pre-change documentation gap**
+
+Run these bounded checks and record that the canonical pages do not yet state the new contract:
+
+~~~bash
+rg -n 'LLMSelection|enumerated committed catalog|ExpectedExecutionMode|zero Run' docs/canon/workflow-runtime.md docs/canon/nyxid-llm-integration.md docs/canon/scheduled-skill-runners.md
+~~~
+
+Expected: at least one of the four required phrases is absent. This is the documentation gap; do not add a new linter or architecture guard for prose wording.
+
+- [ ] **Step 2: Update only canonical documentation**
+
+Document these exact semantics in the three canonical pages: LLMSelection is the atomic UserConfig route/model fact; Reset is System default, not Gateway; durable LLM execution needs an explicit model in Enumerated committed catalog evidence; workflow compatibility completes before actor lifecycle; ExpectedExecutionMode is explicit; rejection belongs to the schedule and creates no Run. Also document the UserConfig -> projection selection write, authorization catalog refresh -> actor -> projection evidence path, planner/runtime exact match, typed error/remediation table, and deployment order. State that rollout performs a read-only audit and no automatic production migration, rerun, pause, delete, or repair. Explicitly reject empty-list-as-open-catalog, accepted-ACK-as-active, silent Gateway fallback, query-time catalog reads, and invocation-time RevalidatePersistedAsync.
+
+Use this required Mermaid header and quoted labels:
+
+~~~mermaid
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
+flowchart LR
+  A["Typed selection or persisted workflow"] --> B["Committed read models"]
+  B --> C["Local admission"]
+  C -->|"accepted"| D["Actor inbox"]
+  C -->|"rejected"| E["Typed repair action; zero Run"]
+~~~
+
+Regenerate docs/README.md with tools/docs/build-index.sh after editing canonical pages.
+
+- [ ] **Step 3: Verify the canonical contract and docs lint**
+
+~~~bash
+rg -n 'LLMSelection|enumerated committed catalog|ExpectedExecutionMode|zero Run' docs/canon/workflow-runtime.md docs/canon/nyxid-llm-integration.md docs/canon/scheduled-skill-runners.md
+bash tools/docs/lint.sh
+~~~
+
+Expected: all four required phrases are present across the canonical pages and docs lint exits 0.
+
+- [ ] **Step 4: Run focused tests and mandatory guards serially**
+
+~~~bash
+dotnet test test/Aevatar.AI.Tests/Aevatar.AI.Tests.csproj --nologo
+dotnet test test/Aevatar.Studio.Tests/Aevatar.Studio.Tests.csproj --nologo
+dotnet test test/Aevatar.GAgents.ChannelRuntime.Tests/Aevatar.GAgents.ChannelRuntime.Tests.csproj --nologo
+dotnet test test/Aevatar.Workflow.Application.Tests/Aevatar.Workflow.Application.Tests.csproj --nologo
+dotnet test test/Aevatar.Workflow.Host.Api.Tests/Aevatar.Workflow.Host.Api.Tests.csproj --nologo
+dotnet test test/Aevatar.GAgentService.Tests/Aevatar.GAgentService.Tests.csproj --nologo
+dotnet test test/Aevatar.Workflow.Core.Tests/Aevatar.Workflow.Core.Tests.csproj --nologo
+bash tools/ci/test_stability_guards.sh
+bash tools/ci/workflow_binding_boundary_guard.sh
+bash tools/ci/query_projection_priming_guard.sh
+bash tools/ci/projection_state_version_guard.sh
+bash tools/ci/projection_state_mirror_current_state_guard.sh
+bash tools/ci/projection_route_mapping_guard.sh
+bash tools/ci/solution_split_guards.sh
+bash tools/ci/test_solution_ownership_guard.sh
+bash tools/ci/architecture_guards.sh
+bash tools/docs/lint.sh
+~~~
+
+Expected: every command exits 0. Run .NET commands one at a time.
+
+- [ ] **Step 5: Run full restore, build, test, and frontend verification**
+
+~~~bash
+dotnet restore aevatar.slnx --nologo
+dotnet build aevatar.slnx --nologo
+dotnet test aevatar.slnx --nologo
+pnpm --dir apps/aevatar-console-web tsc
+pnpm --dir apps/aevatar-console-web test --runInBand
+pnpm --dir apps/aevatar-console-web build
+~~~
+
+Expected: every command exits 0. Run the .NET commands serially and do not use port 5000 or 5050.
+
+- [ ] **Step 6: Audit the final diff for forbidden behavior and secrets**
+
+~~~bash
+rg -n 'DefaultModel\s*=|SetModelOverrideAsync|SaveSelectedOptionAsync|RevalidatePersistedAsync|Task\.Delay\(|WaitUntilAsync\(' agents src test apps/aevatar-console-web/src
+rg -n 'bearer|refresh_token|agent[_ -]?key|vault ciphertext' docs/superpowers/specs/2026-08-01-llm-workflow-admission-design.md docs/canon/workflow-runtime.md docs/canon/nyxid-llm-integration.md docs/canon/scheduled-skill-runners.md
+git diff --check
+git status --short
+~~~
+
+Expected: first search contains only documented compatibility reads, explicit publish/reauthorize uses of RevalidatePersistedAsync, and pre-existing allowlisted polling; no removed model-only write survives. Second search contains only redaction/security policy prose and no credential value. git diff --check exits 0, and status contains only intended implementation/docs files.
+
+- [ ] **Step 7: Commit canonical docs**
+
+~~~bash
+git add docs/canon/workflow-runtime.md docs/canon/nyxid-llm-integration.md docs/canon/scheduled-skill-runners.md docs/README.md tools/docs test
+git commit -m "Document LLM workflow admission boundaries"
 ~~~
