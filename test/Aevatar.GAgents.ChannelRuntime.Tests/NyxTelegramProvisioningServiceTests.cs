@@ -215,6 +215,40 @@ public class NyxTelegramProvisioningServiceTests
         handler.Requests.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task ProvisionAsync_ShouldCompensateRemoteState_WhenCancelledAfterApiKeyCreated()
+    {
+        // When the triggering failure IS the caller's cancellation, compensation must still run:
+        // reusing the cancelled token would abort the rollback delete and leak a live NyxID api
+        // key whose full_key stays resolvable with no registration referencing it.
+        using var cts = new CancellationTokenSource();
+        var handler = new RecordingHandler();
+        handler.Enqueue("/api/v1/api-keys", """{"id":"key-tg-1","full_key":"full-key"}""");
+        handler.Enqueue(HttpMethod.Post, "/api/v1/channel-bots", () =>
+        {
+            cts.Cancel();
+            return new OperationCanceledException(cts.Token);
+        });
+        handler.Enqueue(HttpMethod.Delete, "/api/v1/api-keys/key-tg-1", """{"ok":true}""");
+
+        var service = CreateService(handler);
+
+        var result = await service.ProvisionAsync(
+            new NyxTelegramProvisioningRequest(
+                AccessToken: "user-token",
+                BotToken: "1234567890:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef-hi",
+                WebhookBaseUrl: "https://aevatar.example.com",
+                ScopeId: "scope-1",
+                Label: "Ops Bot",
+                NyxProviderSlug: "api-telegram-bot"),
+            cts.Token);
+
+        result.Succeeded.Should().BeFalse();
+        handler.Requests.Should().HaveCount(3);
+        handler.Requests[2].Method.Should().Be(HttpMethod.Delete);
+        handler.Requests[2].Path.Should().Be("/api/v1/api-keys/key-tg-1");
+    }
+
     private static NyxTelegramProvisioningService CreateService(RecordingHandler handler)
     {
         var nyxClient = new NyxIdApiClient(
@@ -233,18 +267,28 @@ public class NyxTelegramProvisioningServiceTests
 
     private sealed class RecordingHandler : HttpMessageHandler
     {
-        private readonly Queue<(HttpMethod? Method, string Path, string Body)> _responses = new();
+        private readonly Queue<(HttpMethod? Method, string Path, string Body, Func<Exception>? ExceptionFactory)> _responses = new();
 
         public List<(HttpMethod Method, string Path, string Body)> Requests { get; } = [];
 
-        public void Enqueue(string path, string body) => _responses.Enqueue((null, path, body));
+        public void Enqueue(string path, string body) => _responses.Enqueue((null, path, body, null));
+
+        public void Enqueue(HttpMethod method, string path, string body) => _responses.Enqueue((method, path, body, null));
+
+        public void Enqueue(HttpMethod method, string path, Func<Exception> exceptionFactory) =>
+            _responses.Enqueue((method, path, string.Empty, exceptionFactory));
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
+            // A real socket handler aborts a request whose token is already cancelled; without
+            // this check the cancellation-compensation test passes even when rollback deletes
+            // reuse the cancelled caller token.
+            cancellationToken.ThrowIfCancellationRequested();
+
             if (_responses.Count == 0)
                 throw new InvalidOperationException("No more queued responses.");
 
-            var (expectedMethod, expectedPath, responseBody) = _responses.Dequeue();
+            var (expectedMethod, expectedPath, responseBody, exceptionFactory) = _responses.Dequeue();
             request.RequestUri.Should().NotBeNull();
             request.RequestUri!.AbsolutePath.Should().Be(expectedPath);
             if (expectedMethod is not null)
@@ -254,6 +298,9 @@ public class NyxTelegramProvisioningServiceTests
                 ? string.Empty
                 : await request.Content.ReadAsStringAsync(cancellationToken);
             Requests.Add((request.Method, expectedPath, body));
+
+            if (exceptionFactory is not null)
+                throw exceptionFactory();
 
             return new HttpResponseMessage(HttpStatusCode.OK)
             {

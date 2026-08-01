@@ -145,12 +145,16 @@ public sealed class NyxTelegramProvisioningService : INyxTelegramProvisioningSer
                 apiKeyId,
                 routeId);
 
+            // Compensation runs detached from the caller's token: when the triggering failure IS
+            // the caller's cancellation, the same token would abort every rollback delete and leave
+            // live NyxID resources (api key / channel bot / route) — the api key's full_key stays
+            // resolvable — with no registration referencing them.
             if (!localMirrorAccepted && routeId is not null)
-                await NyxApiResponseHelper.TryRollbackAsync(() => _nyxClient.DeleteConversationRouteAsync(request.AccessToken, routeId, ct), "channel_route", routeId, _logger);
+                await NyxApiResponseHelper.TryRollbackAsync(() => _nyxClient.DeleteConversationRouteAsync(request.AccessToken, routeId, CancellationToken.None), "channel_route", routeId, _logger);
             if (!localMirrorAccepted && channelBotId is not null)
-                await NyxApiResponseHelper.TryRollbackAsync(() => _nyxClient.DeleteChannelBotAsync(request.AccessToken, channelBotId, ct), "channel_bot", channelBotId, _logger);
+                await NyxApiResponseHelper.TryRollbackAsync(() => _nyxClient.DeleteChannelBotAsync(request.AccessToken, channelBotId, CancellationToken.None), "channel_bot", channelBotId, _logger);
             if (!localMirrorAccepted && apiKeyId is not null)
-                await NyxApiResponseHelper.TryRollbackAsync(() => _nyxClient.DeleteApiKeyAsync(request.AccessToken, apiKeyId, ct), "api_key", apiKeyId, _logger);
+                await NyxApiResponseHelper.TryRollbackAsync(() => _nyxClient.DeleteApiKeyAsync(request.AccessToken, apiKeyId, CancellationToken.None), "api_key", apiKeyId, _logger);
 
             return Failure(localMirrorAccepted
                 ? "local_mirror_accepted_remote_cleanup_skipped"
