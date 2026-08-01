@@ -360,8 +360,14 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
             await grain.Invoking(x => x.HandleEnvelopeAsync(envelope.ToByteArray()))
                 .Should().ThrowAsync<InvalidOperationException>()
                 .WithMessage("always-fail-no-retry");
+            await grain.Invoking(x => x.HandleEnvelopeAsync(envelope.ToByteArray()))
+                .Should().ThrowAsync<InvalidOperationException>()
+                .WithMessage("always-fail-no-retry");
 
-            deduplicator.ForgetAttempts.Should().Be(1);
+            RetryAwareDirectDispatchAgent.GetAttemptCount(envelope.Id).Should().Be(2);
+            deduplicator.TryRecordAttempts.Should().Be(1,
+                "the activation-scoped bypass must skip the residual reservation on redelivery");
+            deduplicator.ForgetAttempts.Should().Be(2);
         }
         finally
         {
@@ -625,12 +631,15 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
 
     private sealed class ThrowingForgetDeduplicator : IEventDeduplicator
     {
+        private readonly HashSet<string> _entries = [];
+
+        public int TryRecordAttempts { get; private set; }
         public int ForgetAttempts { get; private set; }
 
         public Task<bool> TryRecordAsync(string eventId)
         {
-            _ = eventId;
-            return Task.FromResult(true);
+            TryRecordAttempts++;
+            return Task.FromResult(_entries.Add(eventId));
         }
 
         public Task ForgetAsync(string eventId)

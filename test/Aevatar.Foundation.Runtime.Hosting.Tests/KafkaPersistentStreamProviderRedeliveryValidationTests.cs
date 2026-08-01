@@ -15,7 +15,9 @@ using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging.Abstractions;
 using Orleans;
+using Orleans.Streams;
 
 namespace Aevatar.Foundation.Runtime.Hosting.Tests;
 
@@ -61,15 +63,16 @@ public sealed class KafkaPersistentStreamProviderRedeliveryValidationTests
             await PublishEnvelopeAsync(host, topology, envelopeId, propagateFailure: false);
 
             await OnNextAttemptRecorder.WaitForAttemptsAsync(envelopeId, expectedAttempts: 1, RedeliveryTimeout);
+            await WaitForCommittedOffsetAsync(
+                bootstrapServers,
+                topology,
+                new Offset(1),
+                RedeliveryTimeout);
             await Task.Delay(NoRedeliveryQuietPeriod);
 
             OnNextAttemptRecorder.CountAttempts(envelopeId).Should().Be(
                 1,
                 "a persistent stream provider must NOT redeliver an envelope whose subscriber returned normally");
-            ReadCommittedOffset(bootstrapServers, topology).Should().Be(
-                new Offset(1),
-                "normal handler return must reach MessagesDeliveredAsync before Kafka offset commit");
-
             await host.StopAsync();
             host.Dispose();
             host = await StartSiloHostAsync(
@@ -116,14 +119,15 @@ public sealed class KafkaPersistentStreamProviderRedeliveryValidationTests
             await PublishEnvelopeAsync(host, topology, envelopeId, propagateFailure: true);
 
             await OnNextAttemptRecorder.WaitForAttemptsAsync(envelopeId, expectedAttempts: 2, RedeliveryTimeout);
-            await Task.Delay(NoRedeliveryQuietPeriod);
+            await WaitForCommittedOffsetAsync(
+                bootstrapServers,
+                topology,
+                new Offset(1),
+                RedeliveryTimeout);
 
             OnNextAttemptRecorder.CountAttempts(envelopeId).Should().BeGreaterThanOrEqualTo(
                 2,
                 "a persistent stream provider must redeliver an envelope whose subscriber's OnNextAsync throws (checkpoint not advanced)");
-            ReadCommittedOffset(bootstrapServers, topology).Should().Be(
-                new Offset(1),
-                "the offset may advance only after the redelivered attempt returns successfully");
         }
         finally
         {
@@ -155,12 +159,13 @@ public sealed class KafkaPersistentStreamProviderRedeliveryValidationTests
             var envelopeId = Guid.NewGuid().ToString("N");
             await PublishEnvelopeAsync(host, topology, envelopeId, propagateFailure: false);
             await OnNextAttemptRecorder.WaitForAttemptsAsync(envelopeId, expectedAttempts: 1, RedeliveryTimeout);
-            await Task.Delay(NoRedeliveryQuietPeriod);
+            await WaitForCommittedOffsetAsync(
+                bootstrapServers,
+                topology,
+                new Offset(1),
+                RedeliveryTimeout);
 
             OnNextAttemptRecorder.CountAttempts(envelopeId).Should().Be(1);
-            ReadCommittedOffset(bootstrapServers, topology).Should().Be(
-                new Offset(1),
-                "the bounded default terminal-failure policy returns before provider acknowledgement");
 
             await host.StopAsync();
             host.Dispose();
@@ -202,11 +207,11 @@ public sealed class KafkaPersistentStreamProviderRedeliveryValidationTests
                 topology,
                 Guid.NewGuid().ToString("N"),
                 propagateFailure: false);
-            await Task.Delay(NoRedeliveryQuietPeriod);
-
-            ReadCommittedOffset(bootstrapServers, topology).Should().Be(
+            await WaitForCommittedOffsetAsync(
+                bootstrapServers,
+                topology,
                 new Offset(1),
-                "actor-unavailable is an explicit default terminal return, not handler success");
+                RedeliveryTimeout);
         }
         finally
         {
@@ -230,11 +235,11 @@ public sealed class KafkaPersistentStreamProviderRedeliveryValidationTests
                 topology.ActorId,
                 [0xff, 0xff],
                 CancellationToken.None);
-            await Task.Delay(NoRedeliveryQuietPeriod);
-
-            ReadCommittedOffset(bootstrapServers, topology).Should().Be(
+            await WaitForCommittedOffsetAsync(
+                bootstrapServers,
+                topology,
                 new Offset(1),
-                "invalid protobuf is an explicit receiver terminal disposition");
+                RedeliveryTimeout);
 
             await host.StopAsync();
             host.Dispose();
@@ -253,6 +258,81 @@ public sealed class KafkaPersistentStreamProviderRedeliveryValidationTests
                 await host.StopAsync();
                 host.Dispose();
             }
+        }
+    }
+
+    [KafkaGarnetIntegrationFact]
+    public async Task KafkaReceiver_WhenBatchIsNotDelivered_ShouldRedeliverSameOffsetAfterRestart()
+    {
+        var bootstrapServers = RequireKafkaBootstrapServers();
+        _ = RequireGarnetConnectionString();
+        var topology = TestTopology.Create();
+        var options = new KafkaProviderTransportOptions
+        {
+            BootstrapServers = bootstrapServers,
+            TopicName = topology.TopicName,
+            ConsumerGroup = topology.ConsumerGroup,
+            TopicPartitionCount = 4,
+        };
+        var mapper = new KafkaQueuePartitionMapper(topology.StreamProviderName, 4);
+        await using var producer = new KafkaProviderProducer(options, mapper);
+        KafkaProviderQueueAdapterReceiver? receiver = null;
+
+        try
+        {
+            var queueId = mapper.GetQueueForStream(
+                StreamId.Create(topology.ActorEventNamespace, topology.ActorId));
+            receiver = new KafkaProviderQueueAdapterReceiver(
+                queueId,
+                producer,
+                options,
+                mapper,
+                topology.ActorEventNamespace,
+                NullLoggerFactory.Instance);
+            await receiver.Initialize(TimeSpan.FromSeconds(10));
+
+            var envelope = new EventEnvelope
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                Payload = Any.Pack(new StringValue { Value = "commit-window" }),
+                Route = EnvelopeRouteSemantics.CreateDirect("commit-window-test", topology.ActorId),
+            };
+            await producer.PublishAsync(
+                topology.ActorEventNamespace,
+                topology.ActorId,
+                envelope.ToByteArray(),
+                CancellationToken.None);
+
+            var firstDelivery = await WaitForReceiverBatchAsync(receiver, RedeliveryTimeout);
+            await receiver.Shutdown(TimeSpan.FromSeconds(10));
+            receiver = null;
+
+            ReadCommittedOffset(bootstrapServers, topology).Should().NotBe(
+                new Offset(firstDelivery.KafkaOffset + 1),
+                "returning a batch from the receiver must not commit before MessagesDeliveredAsync");
+
+            receiver = new KafkaProviderQueueAdapterReceiver(
+                queueId,
+                producer,
+                options,
+                mapper,
+                topology.ActorEventNamespace,
+                NullLoggerFactory.Instance);
+            await receiver.Initialize(TimeSpan.FromSeconds(10));
+            var redelivery = await WaitForReceiverBatchAsync(receiver, RedeliveryTimeout);
+
+            redelivery.KafkaOffset.Should().Be(firstDelivery.KafkaOffset);
+            await receiver.MessagesDeliveredAsync(new List<IBatchContainer> { redelivery });
+            await WaitForCommittedOffsetAsync(
+                bootstrapServers,
+                topology,
+                new Offset(redelivery.KafkaOffset + 1),
+                RedeliveryTimeout);
+        }
+        finally
+        {
+            if (receiver != null)
+                await receiver.Shutdown(TimeSpan.FromSeconds(10));
         }
     }
 
@@ -349,6 +429,64 @@ public sealed class KafkaPersistentStreamProviderRedeliveryValidationTests
         var partition = mapper.GetPartitionId(topology.ActorEventNamespace, topology.ActorId);
         var topicPartition = new TopicPartition(topology.TopicName, new Partition(partition));
         return consumer.Committed([topicPartition], TimeSpan.FromSeconds(10)).Single().Offset;
+    }
+
+    private static async Task WaitForCommittedOffsetAsync(
+        string bootstrapServers,
+        TestTopology topology,
+        Offset expectedOffset,
+        TimeSpan timeout)
+    {
+        using var consumer = new ConsumerBuilder<Ignore, byte[]>(new ConsumerConfig
+        {
+            BootstrapServers = bootstrapServers,
+            GroupId = topology.ConsumerGroup,
+            EnableAutoCommit = false,
+            EnableAutoOffsetStore = false,
+        }).Build();
+        var mapper = new KafkaQueuePartitionMapper(topology.StreamProviderName, 4);
+        var partition = mapper.GetPartitionId(topology.ActorEventNamespace, topology.ActorId);
+        var topicPartition = new TopicPartition(topology.TopicName, new Partition(partition));
+        using var cts = new CancellationTokenSource(timeout);
+        try
+        {
+            while (true)
+            {
+                var actual = consumer.Committed([topicPartition], TimeSpan.FromSeconds(1)).Single().Offset;
+                if (actual == expectedOffset)
+                    return;
+
+                await Task.Delay(TimeSpan.FromMilliseconds(100), cts.Token);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw new TimeoutException(
+                $"Timed out after {timeout} waiting for Kafka group '{topology.ConsumerGroup}' to commit offset {expectedOffset.Value}.");
+        }
+    }
+
+    private static async Task<KafkaProviderBatchContainer> WaitForReceiverBatchAsync(
+        KafkaProviderQueueAdapterReceiver receiver,
+        TimeSpan timeout)
+    {
+        using var cts = new CancellationTokenSource(timeout);
+        try
+        {
+            while (true)
+            {
+                var messages = await receiver.GetQueueMessagesAsync(1);
+                if (messages.FirstOrDefault() is KafkaProviderBatchContainer batch)
+                    return batch;
+
+                await Task.Delay(TimeSpan.FromMilliseconds(100), cts.Token);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw new TimeoutException(
+                $"Timed out after {timeout} waiting for Kafka receiver batch delivery.");
+        }
     }
 
     private static int ReserveTcpPort()

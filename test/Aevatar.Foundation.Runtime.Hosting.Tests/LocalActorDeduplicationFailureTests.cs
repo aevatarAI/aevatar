@@ -1,7 +1,7 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Deduplication;
 using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Foundation.Runtime.Implementations.Local.Actors;
-using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Foundation.Runtime.Streaming;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
@@ -19,12 +19,13 @@ public sealed class LocalActorDeduplicationFailureTests
             NullLoggerFactory.Instance,
             new InMemoryStreamForwardingRegistry());
         var agent = new AlwaysFailAgent();
+        var deduplicator = new FailingForgetDeduplicator();
         var actor = new LocalActor(
             agent,
             "local-dedup-failure",
             streams,
             NullLogger.Instance,
-            deduplicator: new MemoryCacheDeduplicator());
+            deduplicator: deduplicator);
         await actor.ActivateAsync();
 
         try
@@ -44,10 +45,34 @@ public sealed class LocalActorDeduplicationFailureTests
                 .WithMessage("local handler failure");
 
             agent.Attempts.Should().Be(2);
+            deduplicator.TryRecordAttempts.Should().Be(1,
+                "the activation-scoped bypass must skip the residual reservation on redelivery");
+            deduplicator.ForgetAttempts.Should().Be(2);
         }
         finally
         {
             await actor.DeactivateAsync();
+        }
+    }
+
+    private sealed class FailingForgetDeduplicator : IEventDeduplicator
+    {
+        private readonly HashSet<string> _entries = [];
+
+        public int TryRecordAttempts { get; private set; }
+        public int ForgetAttempts { get; private set; }
+
+        public Task<bool> TryRecordAsync(string eventId)
+        {
+            TryRecordAttempts++;
+            return Task.FromResult(_entries.Add(eventId));
+        }
+
+        public Task ForgetAsync(string eventId)
+        {
+            _ = eventId;
+            ForgetAttempts++;
+            throw new InvalidOperationException("dedup release failure");
         }
     }
 
