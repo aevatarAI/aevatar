@@ -16,6 +16,7 @@ enum ServiceRunStatus {
   SERVICE_RUN_STATUS_COMPLETED = 2;
   SERVICE_RUN_STATUS_FAILED = 3;
   SERVICE_RUN_STATUS_STOPPED = 4;
+  SERVICE_RUN_STATUS_OUTCOME_UNCERTAIN = 5;
 }
 
 enum ServiceRunTerminalNotificationDeliveryStatus {

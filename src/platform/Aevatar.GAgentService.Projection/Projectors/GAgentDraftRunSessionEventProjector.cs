@@ -7,6 +7,7 @@ using Aevatar.GAgentService.Projection.Orchestration;
 using Aevatar.AGUI.Contracts;
 using Google.Protobuf.WellKnownTypes;
 using RoleChatSessionCompletedEvent = Aevatar.AI.Abstractions.RoleChatSessionCompletedEvent;
+using RoleChatSessionOutcome = Aevatar.AI.Abstractions.RoleChatSessionOutcome;
 
 namespace Aevatar.GAgentService.Projection.Projectors;
 
@@ -86,7 +87,7 @@ public sealed class GAgentDraftRunSessionEventProjector
         }
 
         var completed = payload.Unpack<RoleChatSessionCompletedEvent>();
-        if (TryBuildFailureFrame(completed.Content, out var failureFrame))
+        if (TryBuildFailureFrame(completed, out var failureFrame))
         {
             return
             [
@@ -119,9 +120,30 @@ public sealed class GAgentDraftRunSessionEventProjector
             : aguiEvent.RunFinished.RunId;
     }
 
-    private static bool TryBuildFailureFrame(string? content, out AGUIEvent failureFrame)
+    private static bool TryBuildFailureFrame(
+        RoleChatSessionCompletedEvent completed,
+        out AGUIEvent failureFrame)
     {
         failureFrame = null!;
+        if (completed.Outcome is RoleChatSessionOutcome.Failed or RoleChatSessionOutcome.OutcomeUncertain)
+        {
+            var failureCode = completed.FailureCode?.Trim() ?? string.Empty;
+            var safeMessage = completed.SafeMessage?.Trim() ?? string.Empty;
+            failureFrame = new AGUIEvent
+            {
+                RunError = new RunErrorEvent
+                {
+                    Message = string.IsNullOrWhiteSpace(safeMessage) ? failureCode : safeMessage,
+                    Code = string.IsNullOrWhiteSpace(failureCode) ? null : failureCode,
+                },
+            };
+            return true;
+        }
+
+        if (completed.Outcome != RoleChatSessionOutcome.Unspecified)
+            return false;
+
+        var content = completed.Content;
         if (string.IsNullOrEmpty(content))
             return false;
 

@@ -1193,6 +1193,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 Prompt = request.Prompt,
                 InputParts = { request.InputParts },
                 RunContext = request.RunContext?.Clone(),
+                ScopeId = request.ScopeId ?? string.Empty,
             };
             var preparation = await PrepareAgentProfileTurnAuthorityAsync(request, toolContext, ct);
             if (preparation is null)
@@ -1648,12 +1649,17 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         await DeliverCompletionNotificationAsync(request.SessionId, State.Sessions[request.SessionId], CancellationToken.None);
     }
 
-    private Task PersistCompletionWithTerminalProgressAsync(RoleChatSessionCompletedEvent completion)
+    private async Task PersistCompletionWithTerminalProgressAsync(RoleChatSessionCompletedEvent completion)
     {
         completion.TerminalProgress.Clear();
         completion.TerminalProgress.Add(BuildTerminalProgressEvents(completion));
-        return PersistDomainEventAsync(completion);
+        await PersistDomainEventAsync(completion);
+        await OnRoleChatSessionTerminalCommittedAsync(completion.SessionId, CancellationToken.None);
     }
+
+    protected virtual Task OnRoleChatSessionTerminalCommittedAsync(
+        string sessionId,
+        CancellationToken ct) => Task.CompletedTask;
 
     private IReadOnlyList<RoleChatSessionProgressedEvent> BuildTerminalProgressEvents(
         RoleChatSessionCompletedEvent completion)
@@ -1916,6 +1922,25 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         };
         await PersistSessionProgressAsync(sessionId, progress =>
             progress.Replay = new RoleChatReplayProgress { Snapshot = snapshot });
+
+        // Failed and uncertain retries are represented by the committed typed replay
+        // snapshot. Publishing an empty TextMessageEnd would falsely present success
+        // to live consumers that do not inspect the committed outcome.
+        if (trackedSession.Outcome is
+            RoleChatSessionOutcome.Failed or
+            RoleChatSessionOutcome.OutcomeUncertain)
+        {
+            await PublishAsync(new RoleChatSessionErrorEvent
+            {
+                SessionId = sessionId,
+                Outcome = trackedSession.Outcome,
+                Reason = trackedSession.FailureCode ?? string.Empty,
+                Message = string.IsNullOrWhiteSpace(trackedSession.SafeMessage)
+                    ? trackedSession.FailureCode ?? string.Empty
+                    : trackedSession.SafeMessage,
+            }, TopologyAudience.Parent);
+            return;
+        }
 
         await PublishAsync(new TextMessageStartEvent
         {
@@ -2481,6 +2506,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         session.InputParts.Clear();
         session.InputParts.Add(evt.InputParts);
         session.RunContext = evt.RunContext?.Clone();
+        session.ScopeId = evt.ScopeId ?? string.Empty;
         sessions[evt.SessionId] = session;
         TrimTrackedSessions(next);
         return next;

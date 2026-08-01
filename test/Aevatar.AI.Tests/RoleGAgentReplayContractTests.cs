@@ -1323,6 +1323,8 @@ public class RoleGAgentReplayContractTests
             })],
             expectedVersion: 0);
         var agent = CreateAgent(services, actorId, provider);
+        var publisher = new RecordingEventPublisher();
+        agent.EventPublisher = publisher;
         await agent.ActivateAsync();
 
         await agent.HandleChatRequest(new ChatRequestEvent
@@ -1334,6 +1336,67 @@ public class RoleGAgentReplayContractTests
         provider.StreamCallCount.Should().Be(0);
         agent.State.Sessions["session-1"].Completed.Should().BeTrue();
         agent.State.Sessions["session-1"].FailureCode.Should().Be("SESSION_ORPHANED");
+        publisher.Published.OfType<TextMessageEndEvent>().Should().BeEmpty();
+        publisher.Published.OfType<RoleChatSessionErrorEvent>()
+            .Should().ContainSingle()
+            .Which.Should().BeEquivalentTo(new RoleChatSessionErrorEvent
+            {
+                SessionId = "session-1",
+                Outcome = RoleChatSessionOutcome.Failed,
+                Reason = "SESSION_ORPHANED",
+                Message = "The chat session was interrupted before execution started. Please try again.",
+            });
+    }
+
+    [Theory]
+    [InlineData(RoleChatSessionOutcome.Failed, "SESSION_FAILED", "Safe failure", "Safe failure")]
+    [InlineData(RoleChatSessionOutcome.OutcomeUncertain, "SESSION_OUTCOME_UNCERTAIN", "", "SESSION_OUTCOME_UNCERTAIN")]
+    public async Task CallerRetry_TerminalFailure_ShouldPublishTypedLiveError(
+        RoleChatSessionOutcome outcome,
+        string failureCode,
+        string safeMessage,
+        string expectedMessage)
+    {
+        var store = new InMemoryEventStoreForTests();
+        var services = BuildServices(store);
+        const string actorId = "role-session-error-replay";
+        await store.AppendAsync(
+            actorId,
+            [
+                StateEventFor(actorId, 1, new RoleChatSessionStartedEvent
+                {
+                    SessionId = "session-1",
+                    Prompt = "hello",
+                }),
+                StateEventFor(actorId, 2, new RoleChatSessionCompletedEvent
+                {
+                    SessionId = "session-1",
+                    Prompt = "hello",
+                    Outcome = outcome,
+                    FailureCode = failureCode,
+                    SafeMessage = safeMessage,
+                    TerminalTime = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-02T00:00:00Z")),
+                }),
+            ],
+            expectedVersion: 0);
+        var agent = CreateAgent(services, actorId);
+        var publisher = new RecordingEventPublisher();
+        agent.EventPublisher = publisher;
+        await agent.ActivateAsync();
+
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            SessionId = "session-1",
+            Prompt = "hello",
+        });
+
+        publisher.Published.OfType<TextMessageEndEvent>().Should().BeEmpty();
+        var error = publisher.Published.OfType<RoleChatSessionErrorEvent>()
+            .Should().ContainSingle().Which;
+        error.SessionId.Should().Be("session-1");
+        error.Outcome.Should().Be(outcome);
+        error.Reason.Should().Be(failureCode);
+        error.Message.Should().Be(expectedMessage);
     }
 
     [Fact]

@@ -75,6 +75,15 @@ message ChatRequestEvent  {
 }
 message ChatResponseEvent { string content = 1; string session_id = 2; }
 
+// Live terminal observation used when an idempotent caller retries a session
+// whose committed outcome cannot be represented as a successful text end.
+message RoleChatSessionErrorEvent {
+  string session_id = 1;
+  RoleChatSessionOutcome outcome = 2;
+  string reason = 3;
+  string message = 4;
+}
+
 message RoleChatRunContext {
   string run_id = 1;
   string command_id = 2;
@@ -414,6 +423,7 @@ message RoleChatSessionStartedEvent {
   string prompt = 2;
   repeated ChatContentPart input_parts = 3;
   RoleChatRunContext run_context = 4;
+  string scope_id = 5;
 }
 
 // Legacy committed wire contract retained for rolling upgrades and queued
@@ -567,6 +577,12 @@ enum RoleChatCompletionNotificationDeliveryStatus {
   ROLE_CHAT_COMPLETION_NOTIFICATION_DELIVERY_STATUS_RETRY_SCHEDULED = 2;
   ROLE_CHAT_COMPLETION_NOTIFICATION_DELIVERY_STATUS_DISPATCHED = 3;
   ROLE_CHAT_COMPLETION_NOTIFICATION_DELIVERY_STATUS_EXPIRED = 4;
+}
+
+enum RoleChatHistoryDeliveryStatus {
+  ROLE_CHAT_HISTORY_DELIVERY_STATUS_UNSPECIFIED = 0;
+  ROLE_CHAT_HISTORY_DELIVERY_STATUS_PREPARED = 1;
+  ROLE_CHAT_HISTORY_DELIVERY_STATUS_DISPATCHED = 2;
 }
 
 message RoleChatCompletionNotificationRetryScheduledEvent {
@@ -845,6 +861,10 @@ message RoleChatSessionState {
   int32 completion_notification_attempt = 23;
   string completion_notification_retry_callback_id = 24;
   google.protobuf.Timestamp completion_notification_retry_at = 25;
+  string scope_id = 26;
+  RoleChatHistoryDeliveryStatus history_delivery_status = 27;
+  int32 history_delivery_attempt = 28;
+  string history_delivery_id = 29;
 }
 
 message RoleGAgentState {
