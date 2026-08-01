@@ -496,7 +496,9 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
             _backpressureActive = false;
         }
 
-        if (!_hasAssignmentSnapshot || (_backpressureActive && (enteredBackpressure || refreshAssignment)))
+        var requiresAssignmentReconciliation = _backpressureActive || _pausedPartitions.Count > 0;
+        if (!_hasAssignmentSnapshot || enteredBackpressure ||
+            (refreshAssignment && requiresAssignmentReconciliation))
             RefreshAssignment(consumer);
 
         if (_backpressureActive)

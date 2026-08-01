@@ -258,6 +258,72 @@ public sealed class KafkaReceiverBackpressureTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public async Task KafkaReceiver_WhenAssignmentChangesAsPausedBufferDrainsLow_ShouldNotResumeRevokedPartition()
+    {
+        var harness = CreateHarness(capacity: 3, highWatermark: 2, lowWatermark: 1);
+        var replacementPartition = new TopicPartition(harness.Options.TopicName, new Partition(1));
+        await harness.Receiver.Initialize(TestTimeout);
+
+        try
+        {
+            harness.Consumer.AddRecord(0);
+            harness.Consumer.AddRecord(1);
+            (await harness.Consumer.ReadPauseAsync()).Should().Equal(harness.TopicPartition);
+
+            using var rebalance = harness.Consumer.BlockNextConsumeBeforeAssignmentChange(replacementPartition);
+            await rebalance.Entered.WaitAsync(TestTimeout);
+            (await harness.Receiver.GetQueueMessagesAsync(1)).Should().ContainSingle();
+
+            var blockedConsumeCount = harness.Consumer.ConsumeCount;
+            rebalance.Release();
+            await harness.Consumer.AwaitConsumeCountAsync(blockedConsumeCount + 1);
+
+            harness.Consumer.ResumeCallCount.Should().Be(0,
+                "the revoked paused partition must be removed before the low-watermark resume path");
+            harness.Consumer.ResumedPartitions.Should().NotContain(harness.TopicPartition);
+
+            harness.Consumer.AddRecord(2);
+            (await harness.Consumer.ReadPauseAsync()).Should().Equal([replacementPartition],
+                "the current assignment must be paused when the buffer reaches the high watermark again");
+        }
+        finally
+        {
+            await harness.Receiver.Shutdown(TestTimeout);
+        }
+    }
+
+    [Fact]
+    public async Task KafkaReceiver_WhenAssignmentBecomesEmptyAsPausedBufferDrainsLow_ShouldNotResumeRevokedPartition()
+    {
+        var harness = CreateHarness(capacity: 3, highWatermark: 2, lowWatermark: 1);
+        await harness.Receiver.Initialize(TestTimeout);
+
+        try
+        {
+            harness.Consumer.AddRecord(0);
+            harness.Consumer.AddRecord(1);
+            (await harness.Consumer.ReadPauseAsync()).Should().Equal(harness.TopicPartition);
+
+            using var rebalance = harness.Consumer.BlockNextConsumeBeforeAssignmentChange();
+            await rebalance.Entered.WaitAsync(TestTimeout);
+            (await harness.Receiver.GetQueueMessagesAsync(1)).Should().ContainSingle();
+
+            var blockedConsumeCount = harness.Consumer.ConsumeCount;
+            rebalance.Release();
+            await harness.Consumer.AwaitConsumeCountAsync(blockedConsumeCount + 1);
+
+            harness.Consumer.ResumeCallCount.Should().Be(0,
+                "an empty current assignment must not resume the revoked paused partition");
+            harness.Consumer.PauseCallCount.Should().Be(1,
+                "only the initial assignment should have been paused");
+        }
+        finally
+        {
+            await harness.Receiver.Shutdown(TestTimeout);
+        }
+    }
+
+    [Fact]
     public async Task KafkaReceiver_WhenPollReturnsAtHardCapacity_ShouldRewindWithoutGrowingBuffer()
     {
         var harness = CreateHarness(capacity: 2, highWatermark: 2, lowWatermark: 1);
@@ -743,6 +809,26 @@ public sealed class KafkaReceiverBackpressureTests(ITestOutputHelper output)
             (double)AllocatedBytes / MessageCount;
     }
 
+    private sealed class BlockedConsumeAssignmentChange : IDisposable
+    {
+        private readonly ManualResetEventSlim _release = new();
+        private readonly TaskCompletionSource _entered =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task Entered => _entered.Task;
+
+        public void Release() => _release.Set();
+
+        public void Dispose() => _release.Dispose();
+
+        internal void EnterAndWait()
+        {
+            _entered.TrySetResult();
+            if (!_release.Wait(TestTimeout))
+                throw new TimeoutException("Timed out waiting to release the deterministic consume step.");
+        }
+    }
+
     private sealed class ReceiverShapeKafkaConsumer(ConsumeResult<Ignore, byte[]> record)
     {
         private long _offset = -1;
@@ -962,6 +1048,23 @@ public sealed class KafkaReceiverBackpressureTests(ITestOutputHelper output)
                 }
                 return null;
             });
+        }
+
+        public BlockedConsumeAssignmentChange BlockNextConsumeBeforeAssignmentChange(
+            params TopicPartition[] assignment)
+        {
+            var blockedConsume = new BlockedConsumeAssignmentChange();
+            AddConsumeStep(() =>
+            {
+                blockedConsume.EnterAndWait();
+                lock (_stateLock)
+                {
+                    _assignment.Clear();
+                    _assignment.AddRange(assignment);
+                }
+                return null;
+            });
+            return blockedConsume;
         }
 
         public async Task<TopicPartition[]> ReadPauseAsync() =>
