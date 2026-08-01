@@ -46,6 +46,8 @@ public static class ServiceCollectionExtensions
             provider.GetRequiredService<ExternalWorkflowCapabilityReadinessService>());
         services.TryAddTransient<IWorkflowExternalCapabilityAdmissionService,
             WorkflowExternalCapabilityAdmissionService>();
+        services.TryAddTransient<IWorkflowArtifactCompatibilityPreflight,
+            WorkflowArtifactCompatibilityPreflight>();
         services.TryAddTransient<IWorkflowExplicitRequestPreviewService,
             WorkflowExplicitRequestPreviewService>();
 

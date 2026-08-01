@@ -230,6 +230,21 @@ public interface IExternalWorkflowCapabilityReadinessPort
         CancellationToken cancellationToken = default);
 }
 
+public sealed record WorkflowArtifactCompatibilityRequest(
+    string WorkflowYaml,
+    IReadOnlyDictionary<string, string> InlineWorkflowYamls,
+    WorkflowCapabilityAdmissionPlan? CapabilityAdmissionPlan,
+    ExternalCapabilityExecutionMode ExpectedExecutionMode,
+    string WorkflowId = "",
+    string RevisionId = "");
+
+public interface IWorkflowArtifactCompatibilityPreflight
+{
+    Task ValidateAsync(
+        WorkflowArtifactCompatibilityRequest request,
+        CancellationToken ct = default);
+}
+
 public interface IWorkflowExternalCapabilityAdmissionService
 {
     Task<WorkflowCapabilityAdmissionPlan> AdmitAsync(
