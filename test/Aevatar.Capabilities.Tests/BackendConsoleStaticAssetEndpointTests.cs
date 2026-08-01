@@ -2430,14 +2430,18 @@ public sealed class BackendConsoleStaticAssetEndpointTests
 
         cqrs.Should().Contain("function renderPurposeBanner()");
         cqrs.Should().Contain("function healthOf(s)");
-        cqrs.Should().Contain("版本滞后");
+        cqrs.Should().Contain("未解决失败");
+        cqrs.Should().Contain("singleSourceVersionGap");
         cqrs.Should().Contain("Envelope Inspector");
         cqrs.Should().Contain("function loadScopeIntrospection(scopeActorId)");
         cqrs.Should().Contain("尚无最近 committed envelope 元数据");
         cqrs.Should().Contain("function openAdminObservatory(scopeId)");
         cqrs.Should().Contain("function readDeepLinkFilters()");
-        cqrs.Should().Contain("本页回答：读侧投影是否健康");
-        cqrs.Should().Contain("StateVersion 差，不是毫秒");
+        cqrs.Should().Contain("本页回答：投影收到了什么");
+        cqrs.Should().Contain("版本差只在同一个权威 source actor 轴上展示");
+        cqrs.Should().NotContain("observed − successful");
+        cqrs.Should().Contain("if((s.retryExhaustedFailureCount||0) > 0)");
+        cqrs.Should().NotContain("if((s.retryExhaustedTotal||0) > 0)");
     }
 
     [Fact]
@@ -2480,8 +2484,15 @@ public sealed class BackendConsoleStaticAssetEndpointTests
                 return { ok:true, status:200, async json() { return {
                   scopeActorId: empty ? 'scope-empty' : 'scope/alpha',
                   stateVersion:12,
-                  lastObservedVersion:11,
-                  lastSuccessfulVersion:10,
+                  receivedEnvelopeTotal:12,
+                  attemptedEnvelopeTotal:11,
+                  successfulMaterializationTotal:10,
+                  failedAttemptTotal:1,
+                  retryExhaustedTotal:0,
+                  retryExhaustedFailureCount:0,
+                  unresolvedFailureCount:1,
+                  failureDiagnosticDroppedTotal:0,
+                  sourceVersions:[{sourceActorId:'actor-alpha',highestSeenVersion:11,lastSuccessfulVersion:10,versionGap:1}],
                   updatedAt:'2026-07-30T08:00:00Z'
                 }; } };
               }

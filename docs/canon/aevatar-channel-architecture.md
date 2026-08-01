@@ -2388,7 +2388,7 @@ v1 cutover step 2 细化为：
 1. ~~`IProjectionWriteDispatcher<T>` + `IProjectionWriteSink<T>` 加 `DeleteAsync`~~ — **已完成**（Codex v11 校对）
 2. Per-entry current-state base class **继承已有 `ICurrentStateProjectionMaterializer<TContext>`**（不另起 `TState→TDocument` 宇宙——那会脱离 projection runtime，违背"贴已有抽象"原则）
 3. Read model 继续用 `IProjectionReadModel`（`src/Aevatar.CQRS.Projection.Stores.Abstractions/.../IProjectionReadModel.cs:5-15`，带 `Id / ActorId / StateVersion`）
-4. **Tombstone 清理不引入新 watermark**——复用 `ProjectionScopeWatermarkAdvancedEvent` + `last_observed_version` / `last_successful_version`，并通过 `ProjectionScopeStatusDocument` readmodel 提供 compaction 查询入口。物理清理条件：scope status readmodel 的 watermark **跨过 state 版本** AND **超过 projector lag + safety margin**；查询端口不得回读或重放 event store。
+4. **Tombstone 清理不引入新 watermark**——复用 `ProjectionScopeWatermarkAdvancedEvent`、`last_successful_versions_by_actor` 与 durable unresolved-failure backlog，并通过 `ProjectionScopeStatusDocument` readmodel 提供 compaction 查询入口。物理清理条件：所有相关 projector 在同一个 authoritative source actor 版本轴上的 successful watermark **跨过 tombstone state 版本**、该版本及更早版本没有 unresolved failure，且超过 safety margin；禁止用跨 actor 的 `observed - successful` 聚合值判断安全边界，查询端口不得回读或重放 event store。
 
 **Phase 0 前置（修正）**：`DeleteAsync` 已合入，Phase 0 实际 delta = **§7.1 `PerEntryDocumentProjector` 基类抽取 + 3 个 existing projector（ChannelBotRegistration / DeviceRegistration / UserAgentCatalog）refactor 到基类**。预估 ~150 行（比原 200 行估值下调，因接口改动已不在范围内），**不再是独立 PR 前置**，可随本 RFC §7.1 实现一起落地。
 

@@ -52,6 +52,8 @@ internal static class ObservabilityExtensions
                     .AddRuntimeInstrumentation()
                     .AddMeter("Aevatar.Agents")
                     .AddMeter("Aevatar.Api")
+                    .AddMeter("Aevatar.CQRS.Projection")
+                    .AddMeter("Aevatar.Kafka.Transport")
                     .AddMeter("Aevatar.Workflow")
                     .AddView(
                         instrumentName: "aevatar.api.request_duration_ms",

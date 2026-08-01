@@ -15,6 +15,12 @@ public sealed class KafkaProviderTransportOptions
     public TimeSpan MetadataTimeout { get; set; } = TimeSpan.FromSeconds(5);
 
     /// <summary>
+    /// librdkafka statistics cadence. Set to <see cref="TimeSpan.Zero"/> to disable statistics;
+    /// consumer-group lag will then be unavailable rather than reported as zero.
+    /// </summary>
+    public TimeSpan StatisticsInterval { get; set; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>
     /// Maximum size (bytes) of a single produced message, applied to the librdkafka producer.
     /// Actor event envelopes can legitimately carry large payloads (e.g. aggregated tool-call
     /// results from a skill run), so this default raises the producer ceiling above the ~1 MB

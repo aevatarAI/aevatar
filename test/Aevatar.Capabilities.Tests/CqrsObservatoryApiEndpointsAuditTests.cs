@@ -74,9 +74,16 @@ public sealed class CqrsObservatoryApiEndpointsAuditTests
                 ObservationAttached: true,
                 Released: false,
                 StateVersion: 12,
-                LastObservedVersion: 11,
-                LastSuccessfulVersion: 10,
-                FailureCount: 1,
+                ReceivedEnvelopeTotal: 12,
+                AttemptedEnvelopeTotal: 11,
+                SuccessfulMaterializationTotal: 10,
+                FailedAttemptTotal: 1,
+                RetryExhaustedTotal: 7,
+                RetryExhaustedFailureCount: 0,
+                UnresolvedFailureCount: 1,
+                OldestUnresolvedFailureAt: DateTimeOffset.Parse("2026-07-30T07:55:00Z"),
+                FailureDiagnosticDroppedTotal: 0,
+                SourceVersions: [new ProjectionSourceVersionSnapshot("actor-alpha", 11, 10, 1)],
                 UpdatedAt: DateTimeOffset.Parse("2026-07-30T08:00:00Z")),
             Envelopes =
             [
@@ -112,8 +119,14 @@ public sealed class CqrsObservatoryApiEndpointsAuditTests
         using var detail = JsonDocument.Parse(await detailResponse.Content.ReadAsStringAsync());
         detail.RootElement.GetProperty("scopeActorId").GetString().Should().Be("projection-scope-alpha");
         detail.RootElement.GetProperty("stateVersion").GetInt64().Should().Be(12);
-        detail.RootElement.GetProperty("lastObservedVersion").GetInt64().Should().Be(11);
-        detail.RootElement.GetProperty("lastSuccessfulVersion").GetInt64().Should().Be(10);
+        detail.RootElement.GetProperty("attemptedEnvelopeTotal").GetInt64().Should().Be(11);
+        detail.RootElement.GetProperty("successfulMaterializationTotal").GetInt64().Should().Be(10);
+        detail.RootElement.GetProperty("retryExhaustedTotal").GetInt64().Should().Be(7);
+        detail.RootElement.GetProperty("retryExhaustedFailureCount").GetInt32().Should().Be(0);
+        detail.RootElement.GetProperty("unresolvedFailureCount").GetInt32().Should().Be(1);
+        var sourceVersion = detail.RootElement.GetProperty("sourceVersions")[0];
+        sourceVersion.GetProperty("sourceActorId").GetString().Should().Be("actor-alpha");
+        sourceVersion.GetProperty("versionGap").GetInt64().Should().Be(1);
         detail.RootElement.GetProperty("updatedAt").GetDateTimeOffset()
             .Should().Be(DateTimeOffset.Parse("2026-07-30T08:00:00Z"));
 
@@ -315,10 +328,17 @@ public sealed class CqrsObservatoryApiEndpointsAuditTests
                 new ProjectionScopeStatusSnapshot(
                     "projection-scope-a",
                     Active: true,
-                    LastObservedVersion: 8,
-                    LastSuccessfulVersion: 7,
-                    FailureCount: 0,
-                    Lag: 1,
+                    ReceivedEnvelopeTotal: 8,
+                    AttemptedEnvelopeTotal: 8,
+                    SuccessfulMaterializationTotal: 7,
+                    FailedAttemptTotal: 1,
+                    RetryExhaustedTotal: 7,
+                    RetryExhaustedFailureCount: 0,
+                    UnresolvedFailureCount: 0,
+                    OldestUnresolvedFailureAt: null,
+                    FailureDiagnosticDroppedTotal: 0,
+                    SourceActorCount: 1,
+                    SingleSourceVersionGap: 1,
                     UpdatedAt: DateTimeOffset.UnixEpoch),
             ]);
         }

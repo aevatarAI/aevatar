@@ -1,3 +1,4 @@
+using System.Diagnostics.Metrics;
 using Aevatar.Foundation.Runtime.Hosting;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider;
@@ -11,6 +12,72 @@ namespace Aevatar.Foundation.Runtime.Hosting.Tests;
 
 public sealed class KafkaProviderTransportTests
 {
+    [Fact]
+    public void KafkaStatisticsPayload_DrivesTransportLagWithoutProjectionState()
+    {
+        const string statistics = """
+                                  {
+                                    "topics": {
+                                      "events-alpha": {
+                                        "partitions": {
+                                          "2": { "consumer_lag": 37 }
+                                        }
+                                      }
+                                    }
+                                  }
+                                  """;
+
+        KafkaTransportMetrics.TryReadConsumerLag(statistics, "events-alpha", 2, out var lag)
+            .Should().BeTrue();
+        lag.Should().Be(37);
+        KafkaTransportMetrics.TryReadConsumerLag(statistics, "events-alpha", 3, out _)
+            .Should().BeFalse("missing provider statistics must be unavailable, not zero");
+    }
+
+    [Fact]
+    public void KafkaTransportMetrics_KeepLagAndReceiverDepthSeparateWithInfrastructureLabelsOnly()
+    {
+        var measurements = new List<(string Instrument, long Value, string[] TagKeys)>();
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (instrument, meterListener) =>
+        {
+            if (instrument.Meter.Name == KafkaTransportMetrics.MeterName)
+                meterListener.EnableMeasurementEvents(instrument);
+        };
+        listener.SetMeasurementEventCallback<long>((instrument, value, tags, _) =>
+            measurements.Add((instrument.Name, value, tags.ToArray().Select(tag => tag.Key).ToArray())));
+        listener.Start();
+
+        KafkaTransportMetrics.ObserveStatistics(
+            """{"topics":{"events-alpha":{"partitions":{"1":{"consumer_lag":9}}}}}""",
+            "kafka-provider",
+            "events-alpha",
+            1).Should().BeTrue();
+        KafkaTransportMetrics.RecordReceiverBufferDepth("kafka-provider", "events-alpha", 1, 4);
+
+        measurements.Should().Contain(measurement =>
+            measurement.Instrument == "aevatar.kafka.consumer_group.lag" && measurement.Value == 9);
+        measurements.Should().Contain(measurement =>
+            measurement.Instrument == "aevatar.kafka.receiver.buffer_depth" && measurement.Value == 4);
+        measurements.SelectMany(measurement => measurement.TagKeys).Should().OnlyContain(key =>
+            key == KafkaTransportMetrics.ProviderTag ||
+            key == KafkaTransportMetrics.TopicTag ||
+            key == KafkaTransportMetrics.PartitionTag);
+    }
+
+    [Fact]
+    public void BuildConsumerConfig_DisablesStatisticsWithoutFabricatingLag()
+    {
+        var options = new KafkaProviderTransportOptions
+        {
+            StatisticsInterval = TimeSpan.Zero,
+        };
+
+        var config = KafkaProviderQueueAdapterReceiver.BuildConsumerConfig(options);
+
+        config.StatisticsIntervalMs.Should().Be(0);
+    }
+
     [Fact]
     public void KafkaQueuePartitionMapper_ShouldProvideStablePartitionQueueMapping()
     {

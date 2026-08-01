@@ -13,6 +13,7 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
     private static readonly TimeSpan ConsumePollInterval = TimeSpan.FromMilliseconds(100);
 
     private readonly int _partitionId;
+    private readonly string _providerName;
     private readonly KafkaProviderProducer _producer;
     private readonly KafkaProviderTransportOptions _transportOptions;
     private readonly string _actorEventNamespace;
@@ -35,6 +36,7 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
     private Task? _consumeLoopTask;
     public KafkaProviderQueueAdapterReceiver(
         QueueId queueId,
+        string providerName,
         KafkaProviderProducer producer,
         KafkaProviderTransportOptions transportOptions,
         KafkaQueuePartitionMapper mapper,
@@ -42,6 +44,7 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
         ILoggerFactory? loggerFactory = null)
     {
         _partitionId = mapper.GetPartitionId(queueId);
+        _providerName = providerName;
         _producer = producer;
         _transportOptions = transportOptions;
         _actorEventNamespace = actorEventNamespace;
@@ -67,15 +70,17 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
     {
         await _producer.StartAsync();
 
-        var consumer = new ConsumerBuilder<Ignore, byte[]>(new ConsumerConfig
+        var consumerBuilder = new ConsumerBuilder<Ignore, byte[]>(BuildConsumerConfig(_transportOptions));
+        if (_transportOptions.StatisticsInterval > TimeSpan.Zero)
         {
-            BootstrapServers = _transportOptions.BootstrapServers,
-            GroupId = _transportOptions.ConsumerGroup,
-            AutoOffsetReset = AutoOffsetReset.Earliest,
-            EnableAutoCommit = false,
-            EnableAutoOffsetStore = false,
-            AllowAutoCreateTopics = true,
-        }).Build();
+            consumerBuilder.SetStatisticsHandler((_, statisticsJson) =>
+                KafkaTransportMetrics.ObserveStatistics(
+                    statisticsJson,
+                    _providerName,
+                    _transportOptions.TopicName,
+                    _partitionId));
+        }
+        var consumer = consumerBuilder.Build();
 
         consumer.Assign(new TopicPartitionOffset(_topicPartition, Offset.Stored));
         _consumer = consumer;
@@ -91,6 +96,7 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
         {
             result.Add(message);
         }
+        RecordBufferDepth();
 
         return Task.FromResult(result);
     }
@@ -142,6 +148,12 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
             consumer.Close();
             consumer.Dispose();
         }
+
+        KafkaTransportMetrics.RecordReceiverBufferDepth(
+            _providerName,
+            _transportOptions.TopicName,
+            _partitionId,
+            0);
     }
 
     private async Task ConsumeLoopAsync(CancellationToken ct)
@@ -178,6 +190,7 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
                     else
                     {
                         _messages.Enqueue(batch);
+                        RecordBufferDepth();
                     }
                 }
 
@@ -303,4 +316,28 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
             ? string.Empty
             : System.Text.Encoding.UTF8.GetString(bytes);
     }
+
+    internal static ConsumerConfig BuildConsumerConfig(KafkaProviderTransportOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        return new ConsumerConfig
+        {
+            BootstrapServers = options.BootstrapServers,
+            GroupId = options.ConsumerGroup,
+            AutoOffsetReset = AutoOffsetReset.Earliest,
+            EnableAutoCommit = false,
+            EnableAutoOffsetStore = false,
+            AllowAutoCreateTopics = true,
+            StatisticsIntervalMs = options.StatisticsInterval > TimeSpan.Zero
+                ? Math.Max(1, (int)Math.Min(int.MaxValue, options.StatisticsInterval.TotalMilliseconds))
+                : 0,
+        };
+    }
+
+    private void RecordBufferDepth() =>
+        KafkaTransportMetrics.RecordReceiverBufferDepth(
+            _providerName,
+            _transportOptions.TopicName,
+            _partitionId,
+            _messages.Count);
 }

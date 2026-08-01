@@ -158,7 +158,6 @@ public sealed class ProjectionScopeStatusQueryPortTests
                     EventType = ProjectionScopeWatermarkAdvancedEvent.Descriptor.FullName,
                     EventData = Any.Pack(new ProjectionScopeWatermarkAdvancedEvent
                     {
-                        LastObservedVersion = lastObservedVersion,
                         LastSuccessfulVersion = lastSuccessfulVersion,
                         OccurredAtUtc = timestamp,
                     }),
@@ -170,7 +169,7 @@ public sealed class ProjectionScopeStatusQueryPortTests
                     Mode = ProjectionScopeMode.DurableMaterialization,
                     Active = true,
                     ObservationAttached = true,
-                    LastObservedVersion = lastObservedVersion,
+                    HighestSeenVersion = lastObservedVersion,
                     LastSuccessfulVersion = lastSuccessfulVersion,
                 }),
             }),
