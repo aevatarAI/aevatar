@@ -585,6 +585,15 @@ public sealed class AevatarInvocationDispatcher
         }
         catch (Exception ex)
         {
+            _logger.LogWarning(
+                ex,
+                "Workflow start dispatch threw before acceptance: scopeId={ScopeId} sourceKind={SourceKind} workflowName={WorkflowName} workflowActorId={WorkflowActorId} commandId={CommandId} deliveryActorId={DeliveryActorId}",
+                scopeId,
+                command.Source.Kind,
+                command.Source.WorkflowName ?? string.Empty,
+                command.Source.ActorId ?? string.Empty,
+                deliveryReservation?.Reservation.ExpectedWorkflowCommandId ?? command.CommandIdSeed ?? string.Empty,
+                deliveryReservation?.Receipt.DeliveryActorId ?? string.Empty);
             await TryAbandonWorkflowRunBackgroundDeliveryAsync(
                     deliveryReservation,
                     $"workflow dispatch threw before acceptance: {ex.GetType().Name}")
@@ -593,6 +602,15 @@ public sealed class AevatarInvocationDispatcher
         }
         if (!result.Succeeded || result.Receipt == null)
         {
+            _logger.LogWarning(
+                "Workflow start dispatch was not accepted: error={Error} scopeId={ScopeId} sourceKind={SourceKind} workflowName={WorkflowName} workflowActorId={WorkflowActorId} commandId={CommandId} deliveryActorId={DeliveryActorId}",
+                result.Error,
+                scopeId,
+                command.Source.Kind,
+                command.Source.WorkflowName ?? string.Empty,
+                command.Source.ActorId ?? string.Empty,
+                deliveryReservation?.Reservation.ExpectedWorkflowCommandId ?? command.CommandIdSeed ?? string.Empty,
+                deliveryReservation?.Receipt.DeliveryActorId ?? string.Empty);
             await TryAbandonWorkflowRunBackgroundDeliveryAsync(
                     deliveryReservation,
                     $"workflow dispatch was not accepted: {result.Error}")
@@ -609,6 +627,15 @@ public sealed class AevatarInvocationDispatcher
         var receipt = result.Receipt;
         if (result.Admission is { Accepted: false })
         {
+            _logger.LogWarning(
+                "Workflow start dispatch admission was rejected after receipt creation: scopeId={ScopeId} sourceKind={SourceKind} workflowName={WorkflowName} workflowActorId={WorkflowActorId} actorId={ActorId} commandId={CommandId} deliveryActorId={DeliveryActorId}",
+                scopeId,
+                command.Source.Kind,
+                command.Source.WorkflowName ?? string.Empty,
+                command.Source.ActorId ?? string.Empty,
+                receipt.ActorId,
+                receipt.CommandId,
+                deliveryReservation?.Receipt.DeliveryActorId ?? string.Empty);
             await TryAbandonWorkflowRunBackgroundDeliveryAsync(
                     deliveryReservation,
                     "workflow dispatch admission was rejected")
@@ -1279,14 +1306,22 @@ public sealed class AevatarInvocationDispatcher
         if (deliveryReservation is null || _workflowRunDeliveryRegistrationPort is null)
             return;
 
+        var abandonmentReason = string.IsNullOrWhiteSpace(reason)
+            ? "workflow dispatch did not complete registration"
+            : reason;
         try
         {
             await _workflowRunDeliveryRegistrationPort
                 .AbandonAsync(
                     deliveryReservation.Receipt,
-                    string.IsNullOrWhiteSpace(reason) ? "workflow dispatch did not complete registration" : reason,
+                    abandonmentReason,
                     CancellationToken.None)
                 .ConfigureAwait(false);
+            _logger.LogInformation(
+                "Workflow run background delivery abandonment request accepted: deliveryActorId={DeliveryActorId} commandId={CommandId} reason={Reason}",
+                deliveryReservation.Receipt.DeliveryActorId,
+                deliveryReservation.Receipt.WorkflowCommandId,
+                abandonmentReason);
         }
         catch (Exception ex)
         {
