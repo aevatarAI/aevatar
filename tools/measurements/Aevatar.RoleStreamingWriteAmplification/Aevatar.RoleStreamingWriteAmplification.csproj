@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>Aevatar.RoleStreamingWriteAmplification</AssemblyName>
+    <RootNamespace>Aevatar.RoleStreamingWriteAmplification</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../../src/Aevatar.AI.Core/Aevatar.AI.Core.csproj" />
+    <ProjectReference Include="../../../src/Aevatar.Foundation.Runtime/Aevatar.Foundation.Runtime.csproj" />
+    <ProjectReference Include="../../../src/Aevatar.Foundation.Runtime.Implementations.Local/Aevatar.Foundation.Runtime.Implementations.Local.csproj" />
+    <ProjectReference Include="../../../src/Aevatar.Foundation.Runtime.Persistence.Implementations.Garnet/Aevatar.Foundation.Runtime.Persistence.Implementations.Garnet.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="StackExchange.Redis" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Update="streaming-write-amplification.config.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>
