@@ -45,8 +45,9 @@ public sealed class GAgentDraftRunInputFileRefTests
                 ]),
             new CommandContext("actor-1", "cmd-1", "corr-1", new Dictionary<string, string>()));
 
-        var inputPart = envelope.Payload.Unpack<ChatRequestEvent>()
-            .InputParts.Should()
+        var request = envelope.Payload.Unpack<ChatRequestEvent>();
+        request.CommandAttemptId.Should().Be("cmd-1");
+        var inputPart = request.InputParts.Should()
             .ContainSingle()
             .Which;
         inputPart.Kind.Should().Be(ChatContentPartKind.Text);

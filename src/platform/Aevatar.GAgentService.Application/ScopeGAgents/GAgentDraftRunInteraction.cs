@@ -428,6 +428,7 @@ internal sealed class GAgentDraftRunCommandEnvelopeFactory
             Prompt = command.Prompt,
             SessionId = sessionId,
             ScopeId = command.ScopeId,
+            CommandAttemptId = context.CommandId,
         };
 
         CopyHeaders(chatRequest.Headers, context.Headers);

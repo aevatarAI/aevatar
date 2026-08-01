@@ -32,6 +32,10 @@ public sealed class GAgentDraftRunSessionEventProjector
         if (string.IsNullOrWhiteSpace(context.SessionId))
             return EmptyEntries;
 
+        var committedRejectionEntries = TryResolveCommittedRejectionEntries(context, envelope);
+        if (committedRejectionEntries.Count > 0)
+            return committedRejectionEntries;
+
         if (!string.Equals(envelope.Propagation?.CorrelationId, context.SessionId, StringComparison.Ordinal))
             return EmptyEntries;
 
@@ -88,9 +92,6 @@ public sealed class GAgentDraftRunSessionEventProjector
             return EmptyEntries;
         }
 
-        if (payload.Is(RoleChatCommandAttemptRejectedEvent.Descriptor))
-            return TryResolveCommittedRejectionEntries(context, payload.Unpack<RoleChatCommandAttemptRejectedEvent>());
-
         if (!payload.Is(RoleChatSessionCompletedEvent.Descriptor))
             return EmptyEntries;
 
@@ -115,9 +116,20 @@ public sealed class GAgentDraftRunSessionEventProjector
 
     private static IReadOnlyList<ProjectionSessionEventEntry<AGUIEvent>> TryResolveCommittedRejectionEntries(
         GAgentDraftRunProjectionContext context,
-        RoleChatCommandAttemptRejectedEvent rejection)
+        EventEnvelope envelope)
     {
+        if (!CommittedStateEventEnvelope.TryGetObservedPayload(envelope, out var payload, out _, out _) ||
+            payload == null ||
+            !payload.Is(RoleChatCommandAttemptRejectedEvent.Descriptor))
+        {
+            return EmptyEntries;
+        }
+
+        var rejection = payload.Unpack<RoleChatCommandAttemptRejectedEvent>();
         if (rejection.Reason != RoleChatCommandAttemptRejectionReason.CapacityExhausted)
+            return EmptyEntries;
+
+        if (!string.Equals(rejection.CommandAttemptId, context.SessionId, StringComparison.Ordinal))
             return EmptyEntries;
 
         var safeMessage = rejection.SafeMessage?.Trim() ?? string.Empty;
