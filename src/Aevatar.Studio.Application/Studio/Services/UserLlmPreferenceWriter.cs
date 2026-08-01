@@ -194,18 +194,27 @@ public sealed class UserLlmPreferenceWriter
         switch (modelSelection.Kind)
         {
             case LLMModelSelectionKind.ProviderDefault when string.IsNullOrEmpty(modelSelection.ModelId):
-                return;
+                if (option.ModelCatalog.Certainty is
+                    LLMModelCatalogCertainty.Enumerated or
+                    LLMModelCatalogCertainty.NotVerifiable)
+                {
+                    return;
+                }
+
+                break;
             case LLMModelSelectionKind.ExplicitModel:
-                if (!option.AvailableModels.Contains(modelSelection.ModelId, StringComparer.Ordinal))
+                if (option.ModelCatalog.Certainty != LLMModelCatalogCertainty.Enumerated ||
+                    !option.ModelCatalog.ModelIds.Contains(modelSelection.ModelId, StringComparer.Ordinal))
                 {
                     throw new InvalidOperationException(
                         $"LLM model '{modelSelection.ModelId}' is not available for the selected route.");
                 }
 
                 return;
-            default:
-                throw new InvalidOperationException("Select a provider default or one explicit LLM model.");
         }
+
+
+        throw new InvalidOperationException("Select a verifiable provider default or one explicit LLM model.");
     }
 
     private static LLMModelSelection ToModelSelection(string? model)

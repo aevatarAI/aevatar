@@ -1,3 +1,6 @@
+using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
+
 namespace Aevatar.Studio.Application.Studio.Abstractions;
 
 public readonly record struct UserLlmCatalogStatusValue(string Value)
@@ -84,17 +87,19 @@ public static class NyxIdLlmServiceMapping
         ServiceSlug: NormalizeRequired(service.ServiceSlug, nameof(service.ServiceSlug)),
         DisplayName: NormalizeRequired(service.DisplayName, nameof(service.DisplayName)),
         RouteValue: NormalizeRequired(service.RouteValue, nameof(service.RouteValue)),
-        DefaultModel: NormalizeOptional(service.DefaultModel),
-        AvailableModels: service.Models
-            .Where(model => !string.IsNullOrWhiteSpace(model))
-            .Select(model => model.Trim())
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray(),
+        ModelCatalog: CloneValidated(service.ModelCatalog),
         Status: UserLlmCatalogNormalization.NormalizeStatus(service.Status).ToWireValue(),
         Source: UserLlmCatalogNormalization.NormalizeSource(service.Source).ToWireValue(),
         Allowed: service.Allowed,
         Description: NormalizeOptional(service.Description),
         Identity: service.Identity);
+
+    private static LLMModelCatalog CloneValidated(LLMModelCatalog catalog)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        LLMSelectionPolicy.ValidateCatalog(catalog);
+        return catalog.Clone();
+    }
 
     private static string NormalizeRequired(string value, string name)
     {

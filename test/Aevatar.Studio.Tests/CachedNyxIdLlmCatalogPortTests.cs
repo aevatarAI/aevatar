@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Hosting.NyxId;
 using FluentAssertions;
@@ -320,8 +321,11 @@ public sealed class CachedNyxIdLlmCatalogPortTests
             ServiceSlug: slug,
             DisplayName: slug,
             RouteValue: routeValue,
-            DefaultModel: null,
-            Models: [],
+            ModelCatalog: new LLMModelCatalog
+            {
+                Certainty = LLMModelCatalogCertainty.NotVerifiable,
+                DiagnosticKind = LLMModelCatalogDiagnosticKind.NotPublished,
+            },
             Status: "ready",
             Source: NyxIdLlmProviderSource.GatewayProvider,
             Allowed: true,

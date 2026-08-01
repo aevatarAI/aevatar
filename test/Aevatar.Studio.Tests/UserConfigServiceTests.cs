@@ -647,8 +647,18 @@ public sealed class UserConfigServiceTests
         ServiceSlug: slug,
         DisplayName: slug,
         RouteValue: $"/api/v1/proxy/s/{slug}",
-        DefaultModel: defaultModel,
-        Models: defaultModel is null ? [] : [defaultModel],
+        ModelCatalog: defaultModel is null
+            ? new LLMModelCatalog
+            {
+                Certainty = LLMModelCatalogCertainty.NotVerifiable,
+                DiagnosticKind = LLMModelCatalogDiagnosticKind.NotPublished,
+            }
+            : new LLMModelCatalog
+            {
+                Certainty = LLMModelCatalogCertainty.Enumerated,
+                DefaultModelId = defaultModel,
+                ModelIds = { defaultModel },
+            },
         Status: UserLlmRouteStatus.Ready,
         Source: UserLlmRouteSource.UserService,
         Allowed: true,
@@ -662,8 +672,12 @@ public sealed class UserConfigServiceTests
         ServiceSlug: "gateway",
         DisplayName: "Gateway",
         RouteValue: UserConfigLlmRouteDefaults.Gateway,
-        DefaultModel: model,
-        Models: [model],
+        ModelCatalog: new LLMModelCatalog
+        {
+            Certainty = LLMModelCatalogCertainty.Enumerated,
+            DefaultModelId = model,
+            ModelIds = { model },
+        },
         Status: UserLlmRouteStatus.Ready,
         Source: UserLlmRouteSource.GatewayProvider,
         Allowed: true,

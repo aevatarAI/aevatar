@@ -864,7 +864,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                     string.Equals(identity.NyxIdUserServiceId, action.Value.Trim(), StringComparison.Ordinal));
                 return picked is null
                     ? new MessageContent { Text = "已切换 LLM service。下一条消息会用新的设置回复。" }
-                    : renderer.RenderSelectionConfirm(picked, picked.DefaultModel);
+                    : renderer.RenderSelectionConfirm(picked, picked.ModelCatalog.DefaultModelId);
             }
 
             if (string.Equals(action.Action, TextUserLlmOptionsRenderer.ApplyPresetAction, StringComparison.Ordinal))
@@ -876,7 +876,9 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 var updated = await optionsService.GetOptionsAsync(query, ct).ConfigureAwait(false);
                 return updated.Current is null
                     ? new MessageContent { Text = $"已应用 preset **{action.Value.Trim()}**。下一条消息会用新的 LLM 设置回复。" }
-                    : renderer.RenderSelectionConfirm(updated.Current, updated.Current.DefaultModel);
+                    : renderer.RenderSelectionConfirm(
+                        updated.Current,
+                        updated.Current.ModelCatalog.DefaultModelId);
             }
 
             if (string.Equals(action.Action, TextUserLlmOptionsRenderer.ListPageAction, StringComparison.Ordinal))

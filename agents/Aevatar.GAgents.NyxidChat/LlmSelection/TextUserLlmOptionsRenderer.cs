@@ -142,7 +142,7 @@ public sealed class TextUserLlmOptionsRenderer : IUserLlmOptionsRenderer<Message
         ArgumentNullException.ThrowIfNull(picked);
 
         var resolvedModel = string.IsNullOrWhiteSpace(model)
-            ? picked.DefaultModel
+            ? picked.ModelCatalog.DefaultModelId
             : model.Trim();
         var modelLine = string.IsNullOrWhiteSpace(resolvedModel)
             ? "未覆盖,使用 route 默认"
@@ -240,16 +240,16 @@ public sealed class TextUserLlmOptionsRenderer : IUserLlmOptionsRenderer<Message
         if (!string.IsNullOrWhiteSpace(view.CurrentModel))
             return view.CurrentModel.Trim();
 
-        if (!string.IsNullOrWhiteSpace(view.Current?.DefaultModel))
-            return $"{view.Current.DefaultModel} (route 默认)";
+        if (!string.IsNullOrWhiteSpace(view.Current?.ModelCatalog.DefaultModelId))
+            return $"{view.Current.ModelCatalog.DefaultModelId} (route 默认)";
 
         return "未覆盖,使用 route 默认";
     }
 
     private static string RenderDefaultModel(UserLlmOption option) =>
-        string.IsNullOrWhiteSpace(option.DefaultModel)
+        string.IsNullOrWhiteSpace(option.ModelCatalog.DefaultModelId)
             ? "service default"
-            : option.DefaultModel.Trim();
+            : option.ModelCatalog.DefaultModelId.Trim();
 
     private static string RenderStatus(UserLlmOption option) =>
         option.Allowed ? option.Status : $"{option.Status}, not allowed";

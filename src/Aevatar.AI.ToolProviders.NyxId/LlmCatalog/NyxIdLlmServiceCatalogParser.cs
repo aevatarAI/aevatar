@@ -1,4 +1,6 @@
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Studio.Application.Studio.Abstractions;
 
@@ -55,12 +57,17 @@ public static class NyxIdLlmServiceCatalogParser
         ArgumentNullException.ThrowIfNull(diagnostics);
         ArgumentNullException.ThrowIfNull(inventory);
 
-        var services = inventory.Services
+        var gateway = diagnostics.Services
+            .Where(static service =>
+                UserLlmCatalogNormalization.NormalizeSource(service.Source) ==
+                UserLlmRouteSourceValue.GatewayProvider)
+            .Select(static service => service with { ModelCatalog = service.ModelCatalog.Clone() });
+        var inventoryServices = inventory.Services
             .Where(IsEligible)
             .OrderBy(static service => service.Id, StringComparer.Ordinal)
             .Select(service => ComposeUserService(diagnostics.Services, service))
             .ToArray();
-        return diagnostics with { Services = services };
+        return diagnostics with { Services = gateway.Concat(inventoryServices).ToArray() };
     }
 
     private static NyxIdLlmServicesResult MergeRouteCandidates(
@@ -103,8 +110,11 @@ public static class NyxIdLlmServiceCatalogParser
                 diagnostic?.DisplayName,
                 inventoryService.Slug),
             RouteValue: $"/api/v1/proxy/s/{inventoryService.Slug}",
-            DefaultModel: diagnostic?.DefaultModel,
-            Models: diagnostic?.Models ?? [],
+            ModelCatalog: diagnostic?.ModelCatalog.Clone() ?? BuildModelCatalog(
+                [],
+                null,
+                ReadyStatus,
+                allowed: true),
             Status: diagnostic?.Status ?? ReadyStatus,
             Source: NyxIdLlmProviderSource.UserService,
             Allowed: true,
@@ -239,8 +249,7 @@ public static class NyxIdLlmServiceCatalogParser
             ServiceSlug: slug.Trim(),
             DisplayName: displayName.Trim(),
             RouteValue: routeValue,
-            DefaultModel: null,
-            Models: [],
+            ModelCatalog: BuildModelCatalog([], null, status, allowed),
             Status: status,
             Source: NyxIdLlmProviderSource.UserService,
             Allowed: allowed,
@@ -339,8 +348,11 @@ public static class NyxIdLlmServiceCatalogParser
             ServiceSlug: slug.Trim(),
             DisplayName: displayName.Trim(),
             RouteValue: routeValue,
-            DefaultModel: ReadOptionalString(element, "default_model", "defaultModel"),
-            Models: models,
+            ModelCatalog: BuildModelCatalog(
+                models,
+                ReadOptionalString(element, "default_model", "defaultModel"),
+                status,
+                explicitAllowed ?? string.Equals(status, ReadyStatus, StringComparison.OrdinalIgnoreCase)),
             Status: status,
             Source: NyxIdLlmProviderSource.ProxyService,
             Allowed: explicitAllowed ?? string.Equals(status, ReadyStatus, StringComparison.OrdinalIgnoreCase),
@@ -411,8 +423,11 @@ public static class NyxIdLlmServiceCatalogParser
                 ServiceSlug: slug,
                 DisplayName: ReadOptionalString(provider, "provider_name", "providerName") ?? slug,
                 RouteValue: routeValue,
-                DefaultModel: models.FirstOrDefault(),
-                Models: models,
+                ModelCatalog: BuildModelCatalog(
+                    models,
+                    models.FirstOrDefault(),
+                    status,
+                    string.Equals(status, "ready", StringComparison.OrdinalIgnoreCase)),
                 Status: status,
                 Source: ReadOptionalString(provider, "source") ?? NyxIdLlmProviderSource.GatewayProvider,
                 Allowed: string.Equals(status, "ready", StringComparison.OrdinalIgnoreCase),
@@ -466,13 +481,68 @@ public static class NyxIdLlmServiceCatalogParser
             ServiceSlug: serviceSlug,
             DisplayName: displayName,
             RouteValue: routeValue,
-            DefaultModel: ReadOptionalString(element, "default_model", "defaultModel"),
-            Models: models,
+            ModelCatalog: BuildModelCatalog(
+                models,
+                ReadOptionalString(element, "default_model", "defaultModel"),
+                ReadOptionalString(element, "status") ?? "unknown",
+                ReadOptionalBool(element, "allowed") ?? false),
             Status: ReadOptionalString(element, "status") ?? "unknown",
             Source: ReadOptionalString(element, "source") ?? NyxIdLlmProviderSource.UserService,
             Allowed: ReadOptionalBool(element, "allowed") ?? false,
             Description: ReadOptionalString(element, "description"));
     }
+
+    private static LLMModelCatalog BuildModelCatalog(
+        IReadOnlyList<string> models,
+        string? defaultModel,
+        string status,
+        bool allowed)
+    {
+        if (!allowed)
+        {
+            return UnavailableCatalog(LLMModelCatalogDiagnosticKind.AccessDenied);
+        }
+
+        if (!UserLlmCatalogNormalization.NormalizeStatus(status).IsReady)
+        {
+            return UnavailableCatalog(LLMModelCatalogDiagnosticKind.RouteNotReady);
+        }
+
+        if (models.Count > LLMSelectionPolicy.MaxModelsPerCatalog)
+        {
+            return NotVerifiableCatalog(LLMModelCatalogDiagnosticKind.ResponseTooLarge);
+        }
+
+        if (models.Any(static model => model.IndexOfAny(['*', '?', '[', ']', '{', '}']) >= 0) ||
+            defaultModel?.IndexOfAny(['*', '?', '[', ']', '{', '}']) >= 0)
+        {
+            return NotVerifiableCatalog(LLMModelCatalogDiagnosticKind.PatternOnly);
+        }
+
+        try
+        {
+            return LLMSelectionPolicy.NormalizeCatalog(
+                models,
+                defaultModel,
+                LLMModelCatalogDiagnosticKind.NotPublished);
+        }
+        catch (InvalidOperationException)
+        {
+            return NotVerifiableCatalog(LLMModelCatalogDiagnosticKind.ResponseInvalid);
+        }
+    }
+
+    private static LLMModelCatalog NotVerifiableCatalog(LLMModelCatalogDiagnosticKind diagnostic) => new()
+    {
+        Certainty = LLMModelCatalogCertainty.NotVerifiable,
+        DiagnosticKind = diagnostic,
+    };
+
+    private static LLMModelCatalog UnavailableCatalog(LLMModelCatalogDiagnosticKind diagnostic) => new()
+    {
+        Certainty = LLMModelCatalogCertainty.Unavailable,
+        DiagnosticKind = diagnostic,
+    };
 
     private static UserLlmSetupHint? ParseSetupHint(JsonElement element)
     {
@@ -794,11 +864,10 @@ public static class NyxIdLlmServiceCatalogParser
             }
 
             return property.EnumerateArray()
-                .Where(item => item.ValueKind == JsonValueKind.String)
-                .Select(item => item.GetString())
-                .Where(item => !string.IsNullOrWhiteSpace(item))
-                .Select(item => item!.Trim())
-                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Select(static item => item.ValueKind == JsonValueKind.String
+                    ? item.GetString() ?? string.Empty
+                    : string.Empty)
+                .Distinct(StringComparer.Ordinal)
                 .ToArray();
         }
 
@@ -822,11 +891,10 @@ public static class NyxIdLlmServiceCatalogParser
                     item => item.Name,
                     item => (IReadOnlyList<string>)(item.Value.ValueKind == JsonValueKind.Array
                         ? item.Value.EnumerateArray()
-                            .Where(model => model.ValueKind == JsonValueKind.String)
-                            .Select(model => model.GetString())
-                            .Where(model => !string.IsNullOrWhiteSpace(model))
-                            .Select(model => model!.Trim())
-                            .Distinct(StringComparer.OrdinalIgnoreCase)
+                            .Select(static model => model.ValueKind == JsonValueKind.String
+                                ? model.GetString() ?? string.Empty
+                                : string.Empty)
+                            .Distinct(StringComparer.Ordinal)
                             .ToArray()
                         : Array.Empty<string>()),
                     StringComparer.OrdinalIgnoreCase);

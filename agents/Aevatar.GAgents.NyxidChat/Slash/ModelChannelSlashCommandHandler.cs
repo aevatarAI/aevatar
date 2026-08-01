@@ -261,7 +261,7 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
             return new MessageContent { Text = ex.Message };
         }
 
-        return _renderer!.RenderSelectionConfirm(option, modelOverride ?? option.DefaultModel);
+        return _renderer!.RenderSelectionConfirm(option, modelOverride ?? option.ModelCatalog.DefaultModelId);
     }
 
     private async Task<MessageContent> HandlePresetAsync(

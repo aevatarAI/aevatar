@@ -154,7 +154,7 @@ internal sealed class UserLlmSettingsViewBuilder
                 ServiceSlug: service.ServiceSlug,
                 DefaultModel: userServiceId is null
                     ? null
-                    : UserLlmPreferenceWriteCore.NormalizeOptional(service.DefaultModel),
+                    : UserLlmPreferenceWriteCore.NormalizeOptional(service.ModelCatalog.DefaultModelId),
                 Description: UserLlmPreferenceWriteCore.NormalizeOptional(service.Description)));
         }
 
@@ -260,12 +260,7 @@ internal sealed class UserLlmSettingsViewBuilder
                         StringComparison.OrdinalIgnoreCase));
             foreach (var service in routeServices)
             {
-                var models = service.Models
-                    .Where(model => !string.IsNullOrWhiteSpace(model))
-                    .Select(model => model.Trim())
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .OrderBy(model => model, StringComparer.OrdinalIgnoreCase)
-                    .ToArray();
+                var models = service.ModelCatalog.ModelIds.ToArray();
                 if (models.Length == 0)
                     continue;
 

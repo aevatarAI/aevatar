@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Services;
 using FluentAssertions;
@@ -199,8 +200,12 @@ public sealed class UserLlmSettingsViewBuilderTests
         ServiceSlug: "shared-llm",
         DisplayName: displayName,
         RouteValue: route,
-        DefaultModel: defaultModel,
-        Models: ["gpt-5.5"],
+        ModelCatalog: new LLMModelCatalog
+        {
+            Certainty = LLMModelCatalogCertainty.Enumerated,
+            DefaultModelId = defaultModel ?? string.Empty,
+            ModelIds = { "gpt-5.5" },
+        },
         Status: UserLlmRouteStatus.Ready,
         Source: UserLlmRouteSource.UserService,
         Allowed: true,

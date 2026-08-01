@@ -1,3 +1,5 @@
+using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity;
@@ -24,8 +26,7 @@ public sealed class ModelSlashCommandHandlerTests
         ServiceSlug: "chrono-llm",
         DisplayName: "chrono-llm shared",
         RouteValue: "/api/v1/proxy/s/chrono-llm",
-        DefaultModel: "gpt-5.4",
-        Models: ["gpt-5.4"],
+        ModelCatalog: EnumeratedCatalog("gpt-5.4"),
         Status: "ready",
         Source: "shared",
         Allowed: true,
@@ -39,8 +40,7 @@ public sealed class ModelSlashCommandHandlerTests
         ServiceSlug: "openai-work",
         DisplayName: "OpenAI (work)",
         RouteValue: "/api/v1/proxy/s/openai-work",
-        DefaultModel: "gpt-4o",
-        Models: ["gpt-4o"],
+        ModelCatalog: EnumeratedCatalog("gpt-4o"),
         Status: "ready",
         Source: "user",
         Allowed: true,
@@ -386,7 +386,7 @@ public sealed class ModelSlashCommandHandlerTests
         reply!.Text.Should().Contain("Chrono LLM");
         var saved = preferencePort.SelectedOptions.Should().ContainSingle().Subject;
         saved.Option.RouteValue.Should().Be(selectableProxy.RouteValue);
-        saved.Model.Should().Be(selectableProxy.DefaultModel);
+        saved.Model.Should().Be(selectableProxy.ModelCatalog.DefaultModelId);
     }
 
     [Fact]
@@ -550,7 +550,7 @@ public sealed class ModelSlashCommandHandlerTests
         reply!.Text.Should().Contain("OpenAI (work)");
         var saved = preferencePort.SelectedOptions.Should().ContainSingle().Subject;
         saved.Option.RouteValue.Should().Be(OpenAi.RouteValue);
-        saved.Model.Should().Be(OpenAi.DefaultModel);
+        saved.Model.Should().Be(OpenAi.ModelCatalog.DefaultModelId);
     }
 
     [Fact]
@@ -604,7 +604,7 @@ public sealed class ModelSlashCommandHandlerTests
     [Fact]
     public async Task Preset_ProvisionThenUse_PreservesCurrentModel_WhenProvisionedServiceHasNoDefaultModel()
     {
-        var provisioned = ChronoLlm with { DefaultModel = null };
+        var provisioned = ChronoLlm with { ModelCatalog = EnumeratedCatalog("gpt-5.4", includeDefault: false) };
         var catalog = new StubCatalogClient
         {
             Services = [],
@@ -736,6 +736,13 @@ public sealed class ModelSlashCommandHandlerTests
             service.Identity!.NyxIdUserServiceId,
             service.ServiceSlug));
 
+    private static LLMModelCatalog EnumeratedCatalog(string modelId, bool includeDefault = true) => new()
+    {
+        Certainty = LLMModelCatalogCertainty.Enumerated,
+        DefaultModelId = includeDefault ? modelId : string.Empty,
+        ModelIds = { modelId },
+    };
+
     private sealed class StubCatalogClient : INyxIdLlmServiceCatalogClient
     {
         public IReadOnlyList<NyxIdLlmService> Services { get; init; } = [ChronoLlm, OpenAi];
@@ -754,7 +761,7 @@ public sealed class ModelSlashCommandHandlerTests
                     new UseExistingService(
                         ChronoLlm.Identity!.NyxIdUserServiceId,
                         ChronoLlm.RouteValue,
-                        ChronoLlm.DefaultModel)),
+                        ChronoLlm.ModelCatalog.DefaultModelId)),
             ]);
 
         public Task<NyxIdLlmServicesResult> GetServicesAsync(

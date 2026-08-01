@@ -44,7 +44,8 @@ public sealed class DefaultUserLlmSelectionService : IUserLlmSelectionService
         await SaveSelectedOptionAsync(
             context,
             option,
-            UserLlmPreferenceWriteCore.NormalizeOptional(modelOverride) ?? option.DefaultModel,
+            UserLlmPreferenceWriteCore.NormalizeOptional(modelOverride) ??
+            UserLlmPreferenceWriteCore.NormalizeOptional(option.ModelCatalog.DefaultModelId),
             preserveCurrentModelWhenMissing: false,
             ct).ConfigureAwait(false);
     }

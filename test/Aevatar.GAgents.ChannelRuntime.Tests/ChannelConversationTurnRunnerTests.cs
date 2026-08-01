@@ -1754,8 +1754,7 @@ public sealed class ChannelConversationTurnRunnerTests
             ServiceSlug: "openai-work",
             DisplayName: "OpenAI Work",
             RouteValue: "/api/v1/proxy/s/openai-work",
-            DefaultModel: "gpt-5.4",
-            AvailableModels: ["gpt-5.4"],
+            ModelCatalog: EnumeratedCatalog("gpt-5.4"),
             Status: "ready",
             Source: "user",
             Allowed: true,
@@ -1808,8 +1807,7 @@ public sealed class ChannelConversationTurnRunnerTests
             ServiceSlug: "openai-work",
             DisplayName: "OpenAI Work",
             RouteValue: "/api/v1/proxy/s/openai-work",
-            DefaultModel: "gpt-5.4",
-            AvailableModels: ["gpt-5.4"],
+            ModelCatalog: EnumeratedCatalog("gpt-5.4"),
             Status: "ready",
             Source: "user",
             Allowed: true,
@@ -1856,8 +1854,7 @@ public sealed class ChannelConversationTurnRunnerTests
             ServiceSlug: "form-route",
             DisplayName: "Form Route",
             RouteValue: "/api/v1/proxy/s/form-route",
-            DefaultModel: "gpt-5.4",
-            AvailableModels: ["gpt-5.4"],
+            ModelCatalog: EnumeratedCatalog("gpt-5.4"),
             Status: "ready",
             Source: "user",
             Allowed: true,
@@ -1906,8 +1903,7 @@ public sealed class ChannelConversationTurnRunnerTests
                 ServiceSlug: $"route-{i}",
                 DisplayName: $"Route {i}",
                 RouteValue: $"/api/v1/proxy/s/route-{i}",
-                DefaultModel: $"model-{i}",
-                AvailableModels: [$"model-{i}"],
+                ModelCatalog: EnumeratedCatalog($"model-{i}"),
                 Status: "ready",
                 Source: "user",
                 Allowed: true,
@@ -1961,8 +1957,7 @@ public sealed class ChannelConversationTurnRunnerTests
             ServiceSlug: "openai-work",
             DisplayName: "OpenAI Work",
             RouteValue: "/api/v1/proxy/s/openai-work",
-            DefaultModel: "gpt-5.4",
-            AvailableModels: ["gpt-5.4"],
+            ModelCatalog: EnumeratedCatalog("gpt-5.4"),
             Status: "ready",
             Source: "user",
             Allowed: true,
@@ -5164,6 +5159,13 @@ public sealed class ChannelConversationTurnRunnerTests
         }
     }
 
+    private static LLMModelCatalog EnumeratedCatalog(string modelId) => new()
+    {
+        Certainty = LLMModelCatalogCertainty.Enumerated,
+        DefaultModelId = modelId,
+        ModelIds = { modelId },
+    };
+
     private sealed class StubUserLlmOptionsService : IUserLlmOptionsService
     {
         private readonly IReadOnlyList<UserLlmOption> _options;
@@ -5186,7 +5188,7 @@ public sealed class ChannelConversationTurnRunnerTests
             Task.FromResult(new UserLlmOptionsView(_current, _options, null)
             {
                 CurrentRouteValue = _current?.RouteValue,
-                CurrentModel = _current?.DefaultModel,
+                CurrentModel = _current?.ModelCatalog.DefaultModelId,
             });
     }
 

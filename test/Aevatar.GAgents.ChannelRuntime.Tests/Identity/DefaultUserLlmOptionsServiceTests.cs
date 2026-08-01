@@ -1,3 +1,5 @@
+using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.NyxidChat.LlmSelection;
@@ -147,8 +149,7 @@ public sealed class DefaultUserLlmOptionsServiceTests
         ServiceSlug: "gateway",
         DisplayName: "NyxID Gateway",
         RouteValue: UserConfigLlmRouteDefaults.Gateway,
-        DefaultModel: "gpt-5.5",
-        Models: ["gpt-5.5"],
+        ModelCatalog: EnumeratedCatalog("gpt-5.5"),
         Status: UserLlmRouteStatus.Ready,
         Source: UserLlmRouteSource.GatewayProvider,
         Allowed: true,
@@ -159,8 +160,7 @@ public sealed class DefaultUserLlmOptionsServiceTests
         ServiceSlug: "shared-llm",
         DisplayName: $"Service {id}",
         RouteValue: SharedRoute,
-        DefaultModel: "gpt-5.5",
-        Models: ["gpt-5.5"],
+        ModelCatalog: EnumeratedCatalog("gpt-5.5"),
         Status: UserLlmRouteStatus.Ready,
         Source: UserLlmRouteSource.UserService,
         Allowed: true,
@@ -168,6 +168,13 @@ public sealed class DefaultUserLlmOptionsServiceTests
         Identity: new UserLlmServiceIdentity(
             UserLlmIdentityAuthority.NyxIdUserServicesInventory,
             id));
+
+    private static LLMModelCatalog EnumeratedCatalog(string modelId) => new()
+    {
+        Certainty = LLMModelCatalogCertainty.Enumerated,
+        DefaultModelId = modelId,
+        ModelIds = { modelId },
+    };
 
     private sealed class StubCatalogClient(NyxIdLlmServicesResult result) : INyxIdLlmServiceCatalogClient
     {
