@@ -65,10 +65,10 @@ public sealed class NyxIdExplicitWorkflowCapabilitySource(
                 "NYXID_SOURCE_UNAVAILABLE", "NyxID UserService facts are currently unavailable.");
         }
 
-        NyxIdApiAccessResult<NyxIdUserServices> inventory;
+        NyxIdApiAccessResult<NyxIdUserServiceKeys> inventory;
         try
         {
-            inventory = NyxIdApiAccessResponseParser.ParseUserServices(
+            inventory = NyxIdApiAccessResponseParser.ParseUserServiceKeys(
                 await client.ListServicesAsync(sourceReadableBearerToken, cancellationToken));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -115,6 +115,37 @@ public sealed class NyxIdExplicitWorkflowCapabilitySource(
                 selector, executionMode, ExternalCapabilityReadinessStatus.ServiceAccessDenied,
                 "USER_SERVICE_ACCESS_DENIED", "The selected NyxID UserService is not allowed for this caller.", source);
         }
+        if (service.NodeId is null &&
+            service.CredentialStatus != NyxIdUserServiceCredentialStatus.Active)
+        {
+            return Failure(
+                selector, executionMode, ExternalCapabilityReadinessStatus.CredentialConnectionRequired,
+                "USER_SERVICE_CREDENTIAL_NOT_READY",
+                "The selected NyxID UserService credential is not ready.",
+                source,
+                remediationAction: ExternalCapabilityRemediationActionKind.ConnectCredential,
+                remediationLabel: "Connect NyxID credential");
+        }
+        if (service.NodeStatus == NyxIdUserServiceNodeStatus.Inaccessible)
+        {
+            return Failure(
+                selector, executionMode, ExternalCapabilityReadinessStatus.ServiceAccessDenied,
+                "USER_SERVICE_NODE_ACCESS_DENIED",
+                "The selected NyxID UserService node is not accessible to this caller.",
+                source,
+                remediationAction: ExternalCapabilityRemediationActionKind.RequestAccess,
+                remediationLabel: "Request NyxID node access");
+        }
+        if (service.NodeId is not null && service.NodeStatus != NyxIdUserServiceNodeStatus.Online)
+        {
+            return Failure(
+                selector, executionMode, ExternalCapabilityReadinessStatus.NodeUnavailable,
+                "USER_SERVICE_NODE_UNAVAILABLE",
+                "The selected NyxID UserService node is unavailable.",
+                source,
+                remediationAction: ExternalCapabilityRemediationActionKind.RestoreNode,
+                remediationLabel: "Restore NyxID node");
+        }
 
         var capability = BuildCapability(request, service.Slug);
         if (executionMode == ExternalCapabilityExecutionMode.Durable)
@@ -155,7 +186,7 @@ public sealed class NyxIdExplicitWorkflowCapabilitySource(
 
     private ExternalCapabilitySourceStamp BuildSource(
         ExternalWorkflowCapabilityAccessContext access,
-        IReadOnlyList<NyxIdUserService> services)
+        IReadOnlyList<NyxIdUserServiceKey> services)
     {
         var observedAt = _timeProvider.GetUtcNow();
         var components = services
@@ -165,6 +196,7 @@ public sealed class NyxIdExplicitWorkflowCapabilitySource(
                 service.Id, service.Slug, service.IsActive.ToString(CultureInfo.InvariantCulture),
                 service.CredentialSource.Kind.ToString(), service.CredentialSource.OrganizationId,
                 service.CredentialSource.Allowed.ToString(CultureInfo.InvariantCulture),
+                service.CredentialStatus.ToString(), service.NodeId, service.NodeStatus.ToString(),
             });
         return new ExternalCapabilitySourceStamp
         {
@@ -234,7 +266,10 @@ public sealed class NyxIdExplicitWorkflowCapabilitySource(
         string code,
         string message,
         ExternalCapabilitySourceStamp? source = null,
-        ExternalWorkflowCapabilityRef? capability = null)
+        ExternalWorkflowCapabilityRef? capability = null,
+        ExternalCapabilityRemediationActionKind remediationAction =
+            ExternalCapabilityRemediationActionKind.Unspecified,
+        string? remediationLabel = null)
     {
         var result = new ExternalCapabilityReadiness
         {
@@ -249,14 +284,18 @@ public sealed class NyxIdExplicitWorkflowCapabilitySource(
             Code = code,
             SafeMessage = message,
         });
+        var durableAuthorizationUnavailable =
+            status == ExternalCapabilityReadinessStatus.DurableAuthorizationUnavailable;
         result.Remediations.Add(new ExternalCapabilityRemediation
         {
-            ActionKind = status == ExternalCapabilityReadinessStatus.DurableAuthorizationUnavailable
-                ? ExternalCapabilityRemediationActionKind.UseInteractiveExecution
-                : ExternalCapabilityRemediationActionKind.RefreshSource,
-            Label = status == ExternalCapabilityReadinessStatus.DurableAuthorizationUnavailable
+            ActionKind = remediationAction != ExternalCapabilityRemediationActionKind.Unspecified
+                ? remediationAction
+                : durableAuthorizationUnavailable
+                    ? ExternalCapabilityRemediationActionKind.UseInteractiveExecution
+                    : ExternalCapabilityRemediationActionKind.RefreshSource,
+            Label = remediationLabel ?? (durableAuthorizationUnavailable
                 ? "Use interactive execution"
-                : "Refresh NyxID services",
+                : "Refresh NyxID services"),
         });
         if (source is not null)
             result.Sources.Add(source);

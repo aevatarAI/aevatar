@@ -8,7 +8,7 @@ owner: eanzhao
 
 NyxID 是 exact UserService、credential、route、effective OpenAPI 与 normalized operation catalog 的唯一权威 owner。Aevatar 不托管 OpenAPI、不保存 UserService/endpoint 影子目录、不从 slug 推导实例身份，也不在 prompt 中维护第二份权限目录。
 
-NyxID `GET /api/v1/mcp/config` is the only descriptor source for published operations. `GET /api/v1/keys` supplies exact UserService inventory only for bind-time authored-request admission, credential ownership, and management actions. Aevatar never fetches or parses raw OpenAPI from `/keys`. Published-operation runtime retains exact MCP endpoint-digest revalidation; authored-request runtime reads neither MCP, OpenAPI, nor inventory.
+NyxID `GET /api/v1/mcp/config` is the only descriptor source for published operations. `GET /api/v1/keys` supplies exact UserService inventory plus credential/node execution readiness for bind-time authored-request admission, credential ownership, and management actions; `/api/v1/user-services` is the route-configuration projection, not the execution-readiness authority. Aevatar never fetches or parses raw OpenAPI from `/keys`. Published-operation runtime retains exact MCP endpoint-digest revalidation; authored-request runtime reads neither MCP, OpenAPI, nor inventory.
 
 ## 1. 实例与 operation 身份
 

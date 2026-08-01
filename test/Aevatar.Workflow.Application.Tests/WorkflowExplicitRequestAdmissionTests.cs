@@ -308,7 +308,7 @@ public sealed class WorkflowExplicitRequestAdmissionTests
     public async Task AdmitAsync_WithRealExplicitSourceAndExactCatalogGrant_ShouldAdmitDurableRequest(
         string method)
     {
-        var handler = new UserServicesHandler();
+        var handler = new UserServiceKeysHandler();
         var source = CreateRealSource(handler, ReadyCatalogSnapshot());
         var service = CreateService(source);
 
@@ -349,7 +349,7 @@ public sealed class WorkflowExplicitRequestAdmissionTests
             "exact_id_missing" => ReadyCatalogSnapshot(userServiceId: "usvc-beta"),
             _ => throw new ArgumentOutOfRangeException(nameof(scenario)),
         };
-        var service = CreateService(CreateRealSource(new UserServicesHandler(), snapshot));
+        var service = CreateService(CreateRealSource(new UserServiceKeysHandler(), snapshot));
 
         Func<Task> act = async () => await service.AdmitAsync(Request(
             SafeWorkflowYaml("GET"),
@@ -438,7 +438,7 @@ public sealed class WorkflowExplicitRequestAdmissionTests
     }
 
     private static NyxIdExplicitWorkflowCapabilitySource CreateRealSource(
-        UserServicesHandler handler,
+        UserServiceKeysHandler handler,
         NyxIdAuthorizationCatalogSnapshot? snapshot)
     {
         var options = new NyxIdToolOptions { BaseUrl = "https://nyxid.invalid" };
@@ -782,7 +782,7 @@ public sealed class WorkflowExplicitRequestAdmissionTests
             CancellationToken ct = default) => Task.FromResult(snapshot);
     }
 
-    private sealed class UserServicesHandler : HttpMessageHandler
+    private sealed class UserServiceKeysHandler : HttpMessageHandler
     {
         public List<string> Paths { get; } = [];
 
@@ -794,7 +794,7 @@ public sealed class WorkflowExplicitRequestAdmissionTests
             Paths.Add(path);
             if (path != "/api/v1/keys")
                 throw new InvalidOperationException($"Unexpected explicit admission request: {path}");
-            const string body = "{\"services\":[{\"id\":\"usvc-alpha\",\"slug\":\"shared-slug\",\"label\":\"Example service\",\"catalog_service_name\":null,\"is_active\":true,\"credential_source\":{\"type\":\"personal\"}}]}";
+            const string body = "{\"keys\":[{\"id\":\"usvc-alpha\",\"slug\":\"shared-slug\",\"label\":\"Example service\",\"catalog_service_name\":null,\"status\":\"active\",\"is_active\":true,\"credential_source\":{\"type\":\"personal\"}}]}";
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(body, Encoding.UTF8, "application/json"),

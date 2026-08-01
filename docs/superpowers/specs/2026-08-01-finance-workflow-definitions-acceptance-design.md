@@ -9,9 +9,11 @@ Read-only and preview paths must finish successfully. Lark message delivery and 
 creation must stop after admission and binding until a separate explicit mutation approval.
 
 This design is an acceptance-layer extension of
-`docs/superpowers/specs/2026-07-30-finance-workflow-acceptance-design.md`. The platform
-implementation described there is already deployed. This document owns only the local
-artifact migration, artifact disposition, and production acceptance procedure.
+`docs/superpowers/specs/2026-07-30-finance-workflow-acceptance-design.md`. Production
+acceptance exposed one narrow platform adapter defect in addition to the local artifact
+migration: explicit admission fetched NyxID's execution inventory from `/api/v1/keys` but
+parsed it as the `/api/v1/user-services` response contract. This document therefore owns
+that adapter correction, local artifact disposition, and the production acceptance procedure.
 
 ## Facts recovered from the current artifacts
 
@@ -49,8 +51,9 @@ runtime slots, body mode, and response mode. The binder previews and explicitly 
 the canonical digest and risk before the definition actor commits the grant.
 
 This is the smallest correct migration because the request shapes are already known and
-the deployed platform already implements `AuthoredRequest(request_contract_digest)`.
-It avoids both a compatibility shim and one-off changes to the runtime.
+the deployed platform already implements `AuthoredRequest(request_contract_digest)`. It
+requires no compatibility shim or second runtime path; the only platform change is to parse
+the existing `/keys` response using its own strict typed contract.
 
 The migration must not:
 
@@ -60,6 +63,36 @@ The migration must not:
 - call NyxID or Lark from `code_execute`;
 - preserve a duplicate artifact solely for historical compatibility;
 - treat successful admission or an accepted dispatch receipt as a successful workflow run.
+
+## NyxID execution-inventory authority
+
+NyxID `service list` calls `GET /api/v1/keys`. Both `/keys` and `/user-services` begin
+from the same caller-visible UserService and credential-source list, but they expose different
+contracts:
+
+- `/user-services` is the UserService route-configuration projection. It proves identity,
+  active configuration, and caller credential-source access, but not current execution
+  readiness.
+- `/keys` is the combined discovery and execution view. It additionally exposes the exact
+  credential status and enriched node status used to decide whether the proxy route can run.
+
+Explicit authored-request admission therefore continues to call `/api/v1/keys`. The adapter
+parses only the published `keys` envelope; it does not accept `services`, `items`, or `data`
+as compatibility aliases. Duplicate IDs, unknown credential or node states, and a node route
+without `node_status` fail closed as a stale source.
+
+Readiness mirrors NyxID proxy routing:
+
+- a direct route requires `is_active=true`, caller access, and credential `status=active`;
+- a node route requires `is_active=true`, caller access, and `node_status=online`;
+- an online node route may legitimately carry a non-active server credential such as
+  `pending_auth`, because the node supplies the execution credential;
+- `offline`, `draining`, or `unknown` nodes are unavailable, while `inaccessible` is an
+  access-denied result.
+
+Credential and node states contribute to the source digest so a readiness transition
+invalidates an older admission proof. `/user-services` remains available to callers that
+actually consume route configuration; its parser is not repurposed for execution admission.
 
 ## Canonical call-site mapping
 

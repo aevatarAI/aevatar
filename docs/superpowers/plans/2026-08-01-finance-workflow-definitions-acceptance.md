@@ -4,7 +4,7 @@
 
 **Goal:** Migrate every retained Aevatar definition in the private finance workflow package to typed NyxID authored-request admission and prove the strongest permitted Mainnet outcome without sending Lark messages or creating approvals.
 
-**Architecture:** Keep the deployed `nyxid_proxy` runtime and actor-owned admission chain unchanged. Rewrite only the private workflow definitions so every external call owns a static `capability.nyxid_request`, then use one interactive preview, five-field confirmation set, and member bind for each definition. Manual invocation proves safe execution; write branches remain bind-only, and a retired service identity remains a typed blocker instead of being guessed.
+**Architecture:** Keep the deployed `nyxid_proxy` runtime and actor-owned admission chain. Correct its NyxID inventory adapter to parse the existing `/api/v1/keys` execution view instead of treating it as `/user-services`, then rewrite the private workflow definitions so every external call owns a static `capability.nyxid_request`. Use one interactive preview, five-field confirmation set, and member bind for each definition. Manual invocation proves safe execution; write branches remain bind-only, and a retired service identity remains a typed blocker instead of being guessed.
 
 **Tech Stack:** Aevatar workflow YAML/JSON, `jq`, Ruby Psych for local parsing, .NET workflow parser tests, NyxID CLI, GitHub CLI.
 
@@ -106,7 +106,54 @@ ruby -e 'require "yaml"; ARGV.each { |f| YAML.safe_load_file(f, permitted_classe
 
 Expected: JSON/YAML parse successfully and both negative searches return no match.
 
-### Task 2: Preview and bind the interactive definitions
+### Task 2: Correct explicit admission's NyxID execution inventory contract
+
+**Files:**
+- Modify: `docs/canon/nyxid-connected-service-tools.md`
+- Modify: `src/Aevatar.AI.ToolProviders.NyxId/NyxIdApiAccessContracts.cs`
+- Modify: `src/Aevatar.AI.ToolProviders.NyxId/NyxIdExplicitWorkflowCapabilitySource.cs`
+- Test: `test/Aevatar.AI.Tests/NyxIdApiAccessContractTests.cs`
+- Test: `test/Aevatar.AI.Tests/NyxIdExplicitWorkflowCapabilitySourceTests.cs`
+- Test: `test/Aevatar.Workflow.Application.Tests/WorkflowExplicitRequestAdmissionTests.cs`
+
+**Interfaces:**
+- Consumes: the published `GET /api/v1/keys` response used by `nyxid service list`.
+- Produces: exact UserService readiness from caller access, direct credential status, and
+  node dispatchability without introducing a second inventory source.
+
+- [ ] **Step 1: Preserve the observed contract failure**
+
+Use realistic `keys`-envelope fixtures for explicit admission. Before the production change,
+verify the focused source suite fails as `SourceStale` because `ParseUserServices` requires a
+`services` envelope.
+
+- [ ] **Step 2: Add a strict typed `/keys` parser**
+
+Keep `ParseUserServices` for actual `/user-services` consumers. Add a separate typed parser
+for `/keys` that requires exact IDs, `status`, `is_active`, `credential_source`, and the
+node ID/status pair. Reject the `services` envelope, duplicate IDs, unknown statuses, and a
+node ID without a node status. Ignore only unrelated additive fields.
+
+- [ ] **Step 3: Mirror NyxID proxy readiness**
+
+Use the `/keys` parser in explicit admission. Require `active` credentials for direct routes.
+For node routes, require `node_status=online` but permit a non-active server credential because
+NyxID's node agent supplies it. Return typed access, credential, or node blockers and include
+credential/node state in the source digest.
+
+- [ ] **Step 4: Run focused regression tests**
+
+Run:
+
+```bash
+dotnet test test/Aevatar.AI.Tests/Aevatar.AI.Tests.csproj --no-restore --nologo \
+  --filter 'FullyQualifiedName~NyxIdApiAccessContractTests|FullyQualifiedName~NyxIdExplicitWorkflowCapabilitySourceTests'
+```
+
+Expected: parser and admission tests pass for direct active/inactive credentials, online and
+unavailable node routes, strict malformed responses, exact identity, and caller access.
+
+### Task 3: Preview and bind the interactive definitions
 
 **Files:** no repository files; request/response bodies live in a mode-0700 temporary directory and are deleted after redacted evidence is recorded.
 
@@ -157,7 +204,7 @@ Reject missing, extra, duplicate, or mismatched items before mutation.
 
 PUT `/api/scopes/{scopeId}/members/{memberId}/binding` with the exact workflow/revision identities, exact YAML, and confirmations. Poll only the binding-run read model returned by the accepted receipt until `succeeded`, `failed`, or `rejected`; accepted alone is not success. Do not create a schedule.
 
-### Task 3: Run the permitted acceptance matrix
+### Task 4: Run the permitted acceptance matrix
 
 **Files:** no repository files; safe evidence contains identifiers and status only.
 
@@ -189,7 +236,7 @@ Verify P2 send and P1 v5's write call sites were admitted in interactive mode an
 
 Only after v5 preview passes, delete v2 and replace obsolete issue/deployment instructions in the README with the canonical artifact matrix, typed admission requirement, exact run results, v6 blocker/result, and the explicit statement that send/approval and weekly durable scheduling remain untested.
 
-### Task 4: Record the independent receipt defect and finish verification
+### Task 5: Record the independent receipt defect and finish verification
 
 **Files:**
 - Verify: `docs/superpowers/specs/2026-08-01-finance-workflow-definitions-acceptance-design.md`

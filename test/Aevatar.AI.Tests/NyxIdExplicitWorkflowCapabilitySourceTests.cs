@@ -27,7 +27,7 @@ public sealed class NyxIdExplicitWorkflowCapabilitySourceTests
     [Fact]
     public async Task InspectAsync_ShouldBuildExplicitProofFromExactUserServiceWithoutMcpRead()
     {
-        var handler = new InventoryHandler(UserServices(Service()));
+        var handler = new InventoryHandler(UserServiceKeys(Service()));
         var source = CreateSource(handler);
 
         var result = await source.InspectAsync(
@@ -58,7 +58,7 @@ public sealed class NyxIdExplicitWorkflowCapabilitySourceTests
     [Fact]
     public async Task InspectAsync_WithoutSourceReadableCredential_ShouldFailBeforeInventoryRead()
     {
-        var handler = new InventoryHandler(UserServices(Service()));
+        var handler = new InventoryHandler(UserServiceKeys(Service()));
         var source = CreateSource(handler);
 
         var result = await source.InspectAsync(
@@ -80,7 +80,7 @@ public sealed class NyxIdExplicitWorkflowCapabilitySourceTests
     public async Task InspectAsync_ShouldAdmitDurableSafeRequestFromExactCatalogGrant(
         NyxIdRequestMethod method)
     {
-        var handler = new InventoryHandler(UserServices(Service()));
+        var handler = new InventoryHandler(UserServiceKeys(Service()));
         var catalog = new RecordingCatalogQueryPort(ReadyCatalogSnapshot());
         var source = CreateSource(handler, catalog);
 
@@ -124,7 +124,7 @@ public sealed class NyxIdExplicitWorkflowCapabilitySourceTests
             _ => throw new ArgumentOutOfRangeException(nameof(scenario)),
         };
         var source = CreateSource(
-            new InventoryHandler(UserServices(Service())),
+            new InventoryHandler(UserServiceKeys(Service())),
             new RecordingCatalogQueryPort(snapshot));
 
         var result = await source.InspectAsync(
@@ -141,7 +141,7 @@ public sealed class NyxIdExplicitWorkflowCapabilitySourceTests
         const string sensitiveExceptionMessage = "catalog secret-token-alpha";
         var logger = new RecordingLogger<NyxIdExplicitWorkflowCapabilitySource>();
         var source = CreateSource(
-            new InventoryHandler(UserServices(Service())),
+            new InventoryHandler(UserServiceKeys(Service())),
             new ThrowingCatalogQueryPort(new InvalidOperationException(sensitiveExceptionMessage)),
             logger);
 
@@ -172,7 +172,7 @@ public sealed class NyxIdExplicitWorkflowCapabilitySourceTests
             ? Service(active: false)
             : Service(credentialSource: "org", allowed: false);
         var catalog = new RecordingCatalogQueryPort(ReadyCatalogSnapshot());
-        var source = CreateSource(new InventoryHandler(UserServices(service)), catalog);
+        var source = CreateSource(new InventoryHandler(UserServiceKeys(service)), catalog);
 
         var result = await source.InspectAsync(
             Access(), Selector(), ExternalCapabilityExecutionMode.Durable, CancellationToken.None);
@@ -186,7 +186,7 @@ public sealed class NyxIdExplicitWorkflowCapabilitySourceTests
     public async Task InspectAsync_ShouldNotReadDurableCatalogForInteractiveRequest()
     {
         var catalog = new RecordingCatalogQueryPort(ReadyCatalogSnapshot());
-        var source = CreateSource(new InventoryHandler(UserServices(Service())), catalog);
+        var source = CreateSource(new InventoryHandler(UserServiceKeys(Service())), catalog);
 
         var result = await source.InspectAsync(
             Access(), Selector(), ExternalCapabilityExecutionMode.Interactive, CancellationToken.None);
@@ -207,7 +207,7 @@ public sealed class NyxIdExplicitWorkflowCapabilitySourceTests
         NyxIdOperationRisk expectedRisk)
     {
         var catalog = new RecordingCatalogQueryPort(ReadyCatalogSnapshot());
-        var source = CreateSource(new InventoryHandler(UserServices(Service())), catalog);
+        var source = CreateSource(new InventoryHandler(UserServiceKeys(Service())), catalog);
 
         var result = await source.InspectAsync(
             Access(), Selector(method), ExternalCapabilityExecutionMode.Durable, CancellationToken.None);
@@ -234,10 +234,10 @@ public sealed class NyxIdExplicitWorkflowCapabilitySourceTests
     {
         var response = scenario switch
         {
-            "missing" => UserServices(Service(id: "usvc-beta")),
-            "inactive" => UserServices(Service(active: false)),
-            "inaccessible" => UserServices(Service(credentialSource: "org", allowed: false)),
-            "ambiguous" => UserServices(Service(), Service(slug: "other-slug")),
+            "missing" => UserServiceKeys(Service(id: "usvc-beta")),
+            "inactive" => UserServiceKeys(Service(active: false)),
+            "inaccessible" => UserServiceKeys(Service(credentialSource: "org", allowed: false)),
+            "ambiguous" => UserServiceKeys(Service(), Service(slug: "other-slug")),
             _ => throw new ArgumentOutOfRangeException(nameof(scenario)),
         };
         var source = CreateSource(new InventoryHandler(response));
@@ -251,6 +251,77 @@ public sealed class NyxIdExplicitWorkflowCapabilitySourceTests
         result.Status.Should().Be(expectedStatus);
         result.SelectedCapability.Should().BeNull();
         result.Blockers.Should().ContainSingle().Which.Code.Should().NotBeNullOrWhiteSpace();
+    }
+
+    [Theory]
+    [InlineData("pending_auth")]
+    [InlineData("expired")]
+    [InlineData("revoked")]
+    [InlineData("failed")]
+    [InlineData("refresh_failed")]
+    public async Task InspectAsync_ShouldRejectDirectServiceWithoutActiveCredential(string status)
+    {
+        var catalog = new RecordingCatalogQueryPort(ReadyCatalogSnapshot());
+        var source = CreateSource(
+            new InventoryHandler(UserServiceKeys(Service(status: status))),
+            catalog);
+
+        var result = await source.InspectAsync(
+            Access(), Selector(), ExternalCapabilityExecutionMode.Durable, CancellationToken.None);
+
+        result.Status.Should().Be(ExternalCapabilityReadinessStatus.CredentialConnectionRequired);
+        result.Blockers.Should().ContainSingle().Which.Code.Should()
+            .Be("USER_SERVICE_CREDENTIAL_NOT_READY");
+        result.Remediations.Should().ContainSingle().Which.ActionKind.Should()
+            .Be(ExternalCapabilityRemediationActionKind.ConnectCredential);
+        catalog.ReadCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task InspectAsync_ShouldAdmitOnlineNodeManagedServiceWithoutActiveServerCredential()
+    {
+        var source = CreateSource(new InventoryHandler(UserServiceKeys(
+            Service(status: "pending_auth", nodeId: "node-alpha", nodeStatus: "online"))));
+
+        var result = await source.InspectAsync(
+            Access(), Selector(), ExternalCapabilityExecutionMode.Interactive, CancellationToken.None);
+
+        result.Status.Should().Be(ExternalCapabilityReadinessStatus.Ready);
+    }
+
+    [Theory]
+    [InlineData("offline")]
+    [InlineData("draining")]
+    [InlineData("unknown")]
+    public async Task InspectAsync_ShouldRejectUnavailableExplicitNodeRoute(string nodeStatus)
+    {
+        var source = CreateSource(new InventoryHandler(UserServiceKeys(
+            Service(nodeId: "node-alpha", nodeStatus: nodeStatus))));
+
+        var result = await source.InspectAsync(
+            Access(), Selector(), ExternalCapabilityExecutionMode.Interactive, CancellationToken.None);
+
+        result.Status.Should().Be(ExternalCapabilityReadinessStatus.NodeUnavailable);
+        result.Blockers.Should().ContainSingle().Which.Code.Should()
+            .Be("USER_SERVICE_NODE_UNAVAILABLE");
+        result.Remediations.Should().ContainSingle().Which.ActionKind.Should()
+            .Be(ExternalCapabilityRemediationActionKind.RestoreNode);
+    }
+
+    [Fact]
+    public async Task InspectAsync_ShouldRejectInaccessibleExplicitNodeRoute()
+    {
+        var source = CreateSource(new InventoryHandler(UserServiceKeys(
+            Service(nodeId: "node-alpha", nodeStatus: "inaccessible"))));
+
+        var result = await source.InspectAsync(
+            Access(), Selector(), ExternalCapabilityExecutionMode.Interactive, CancellationToken.None);
+
+        result.Status.Should().Be(ExternalCapabilityReadinessStatus.ServiceAccessDenied);
+        result.Blockers.Should().ContainSingle().Which.Code.Should()
+            .Be("USER_SERVICE_NODE_ACCESS_DENIED");
+        result.Remediations.Should().ContainSingle().Which.ActionKind.Should()
+            .Be(ExternalCapabilityRemediationActionKind.RequestAccess);
     }
 
     private static NyxIdExplicitWorkflowCapabilitySource CreateSource(
@@ -296,20 +367,26 @@ public sealed class NyxIdExplicitWorkflowCapabilitySourceTests
         return new ExternalWorkflowCapabilitySelector { NyxIdRequest = request };
     }
 
-    private static string UserServices(params string[] services) =>
-        $"{{\"services\":[{string.Join(',', services)}]}}";
+    private static string UserServiceKeys(params string[] services) =>
+        $"{{\"keys\":[{string.Join(',', services)}]}}";
 
     private static string Service(
         string id = "usvc-alpha",
         string slug = "shared-slug",
         bool active = true,
+        string status = "active",
+        string? nodeId = null,
+        string? nodeStatus = null,
         string credentialSource = "personal",
         bool allowed = true)
     {
         var source = credentialSource == "personal"
             ? "{\"type\":\"personal\"}"
             : $"{{\"type\":\"org\",\"org_id\":\"org-alpha\",\"org_name\":\"Org Alpha\",\"role\":\"member\",\"allowed\":{allowed.ToString().ToLowerInvariant()}}}";
-        return $"{{\"id\":\"{id}\",\"slug\":\"{slug}\",\"label\":\"Example service\",\"catalog_service_name\":null,\"is_active\":{active.ToString().ToLowerInvariant()},\"credential_source\":{source}}}";
+        var node = nodeId is null
+            ? string.Empty
+            : $",\"node_id\":\"{nodeId}\",\"node_status\":\"{nodeStatus ?? "online"}\"";
+        return $"{{\"id\":\"{id}\",\"slug\":\"{slug}\",\"label\":\"Example service\",\"catalog_service_name\":null,\"status\":\"{status}\",\"is_active\":{active.ToString().ToLowerInvariant()},\"credential_source\":{source},\"endpoint_id\":\"endpoint-alpha\",\"endpoint_url\":\"https://example.invalid\",\"connected\":true{node}}}";
     }
 
     private static AuthorizationOwnerIdentity Owner(string subject = "nyx-user-alpha") =>
