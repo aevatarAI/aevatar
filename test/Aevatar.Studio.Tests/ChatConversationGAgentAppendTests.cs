@@ -31,6 +31,7 @@ public sealed class ChatConversationGAgentAppendTests
         agent.State.Title.Should().Be("Initial title");
         agent.State.CreatedAtMs.Should().Be(ConversationCreatedAt.ToUnixTimeMilliseconds());
         agent.State.UpdatedAtMs.Should().Be(ConversationCreatedAt.ToUnixTimeMilliseconds());
+        agent.State.NextTurnSequence.Should().Be(1);
         agent.State.Turns.Should().BeEmpty();
         var persisted = await eventStore.GetEventsAsync(ActorId);
         persisted.Count(evt => evt.EventData.Is(ChatConversationInitializedEvent.Descriptor))
@@ -132,6 +133,7 @@ public sealed class ChatConversationGAgentAppendTests
         agent.State.Turns[1].TurnId.Should().Be("turn-2");
         agent.State.Turns[1].Sequence.Should().Be(2);
         agent.State.Turns[1].TerminalStatus.Should().Be(ChatTurnTerminalStatus.Failed);
+        agent.State.NextTurnSequence.Should().Be(3);
     }
 
     [Fact]
@@ -236,38 +238,51 @@ public sealed class ChatConversationGAgentAppendTests
     }
 
     [Fact]
-    public async Task AppendChatTurnCommand_ShouldRejectTurnAfterMaxTurnsWithoutTrimmingExistingTurns()
+    public async Task AppendChatTurnCommand_ShouldRemainAppendableBeyondFormerTurnLimit()
     {
         var agent = await CreateAgentAsync();
-        for (var i = 1; i <= ChatConversationGAgent.MaxTurns; i++)
+        for (var i = 1; i <= 250; i++)
         {
             await agent.HandleEventAsync(Envelope(CreateAppend($"turn-{i}", $"user-{i}", $"assistant-{i}", ChatTurnTerminalStatus.Completed)));
         }
 
-        await agent.HandleEventAsync(Envelope(CreateAppend("turn-251", "overflow", "overflow", ChatTurnTerminalStatus.Completed)));
+        await agent.HandleEventAsync(Envelope(CreateAppend("turn-251", "continued", "continued", ChatTurnTerminalStatus.Completed)));
 
-        agent.State.Turns.Should().HaveCount(ChatConversationGAgent.MaxTurns);
+        agent.State.Turns.Should().HaveCount(251);
         agent.State.Turns[0].TurnId.Should().Be("turn-1");
-        agent.State.Turns[^1].TurnId.Should().Be("turn-250");
-        agent.State.LastRejectedAppend.Should().NotBeNull();
-        agent.State.LastRejectedAppend!.Reason.Should().Be(ChatTurnAppendRejectionReason.MaxTurnsExceeded);
+        agent.State.Turns[^1].TurnId.Should().Be("turn-251");
+        agent.State.Turns[^1].Sequence.Should().Be(251);
+        agent.State.NextTurnSequence.Should().Be(252);
+        agent.State.LastRejectedAppend.Should().BeNull();
     }
 
     [Fact]
-    public async Task AppendChatTurnCommand_WhenRejectedWithDeliveryActor_ShouldDispatchAppendResult()
+    public async Task AppendChatTurnCommand_AfterReactivationAndDuplicate_ShouldKeepSequenceMonotonic()
     {
+        var eventStore = new RecordingEventStore();
         var dispatch = new RecordingActorDispatchPort();
-        var agent = await CreateAgentAsync(dispatch);
-        for (var i = 1; i <= ChatConversationGAgent.MaxTurns; i++)
+        var agent = await CreateAgentAsync(dispatch, eventStore);
+        for (var i = 1; i <= 251; i++)
         {
             await agent.HandleEventAsync(Envelope(CreateAppend($"turn-{i}", $"user-{i}", $"assistant-{i}", ChatTurnTerminalStatus.Completed)));
         }
 
-        var overflow = CreateAppend("turn-251", "overflow", "overflow", ChatTurnTerminalStatus.Completed);
-        overflow.DeliveryActorId = "delivery-actor";
+        var repeated = CreateAppend("turn-251", "user-251", "assistant-251", ChatTurnTerminalStatus.Completed);
+        repeated.DeliveryActorId = "delivery-actor";
+        var reactivated = await CreateAgentAsync(dispatch, eventStore);
 
-        await agent.HandleEventAsync(Envelope(overflow));
+        await reactivated.HandleEventAsync(Envelope(repeated));
+        await reactivated.HandleEventAsync(Envelope(CreateAppend(
+            "turn-252",
+            "user-252",
+            "assistant-252",
+            ChatTurnTerminalStatus.Completed)));
 
+        reactivated.State.Turns.Should().HaveCount(252);
+        reactivated.State.Turns[^1].Sequence.Should().Be(252);
+        reactivated.State.NextTurnSequence.Should().Be(253);
+        var persisted = await eventStore.GetEventsAsync(ActorId);
+        persisted.Count(evt => evt.EventData.Is(ChatTurnAppendedEvent.Descriptor)).Should().Be(252);
         dispatch.Calls.Should().ContainSingle();
         var call = dispatch.Calls.Single();
         call.ActorId.Should().Be("delivery-actor");
@@ -275,8 +290,49 @@ public sealed class ChatConversationGAgentAppendTests
         result.DeliveryActorId.Should().Be("delivery-actor");
         result.ConversationId.Should().Be("conversation-a");
         result.TurnId.Should().Be("turn-251");
-        result.Accepted.Should().BeFalse();
-        result.RejectionReason.Should().Be(ChatTurnAppendRejectionReason.MaxTurnsExceeded);
+        result.Accepted.Should().BeTrue();
+        result.RejectionReason.Should().Be(ChatTurnAppendRejectionReason.Unspecified);
+    }
+
+    [Fact]
+    public async Task AppendChatTurnCommand_WhenReplayingLegacyTurn_ShouldRecoverSequenceWatermark()
+    {
+        var eventStore = new RecordingEventStore();
+        var legacyTurn = CreateAppend(
+            "turn-250",
+            "legacy-user",
+            "legacy-assistant",
+            ChatTurnTerminalStatus.Completed).Turn;
+        legacyTurn.Sequence = 250;
+        await eventStore.AppendAsync(
+            ActorId,
+            [
+                new StateEvent
+                {
+                    EventId = "legacy-turn-event",
+                    EventType = ChatTurnAppendedEvent.Descriptor.FullName,
+                    EventData = Any.Pack(new ChatTurnAppendedEvent
+                    {
+                        ScopeId = "scope-a",
+                        ConversationId = "conversation-a",
+                        Turn = legacyTurn,
+                    }),
+                    Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-16T00:00:00Z")),
+                },
+            ],
+            expectedVersion: 0);
+        var agent = await CreateAgentAsync(eventStore: eventStore);
+
+        agent.State.NextTurnSequence.Should().Be(251);
+        await agent.HandleEventAsync(Envelope(CreateAppend(
+            "turn-251",
+            "new-user",
+            "new-assistant",
+            ChatTurnTerminalStatus.Completed)));
+
+        agent.State.Turns.Should().HaveCount(2);
+        agent.State.Turns[^1].Sequence.Should().Be(251);
+        agent.State.NextTurnSequence.Should().Be(252);
     }
 
     private static AppendChatTurnCommand CreateAppend(

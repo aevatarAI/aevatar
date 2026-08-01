@@ -21,7 +21,6 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>,
 {
     public static string ProjectionKind => "chat-conversation";
 
-    public const int MaxTurns = 250;
     private const int MaxSynthesizedConversationTitleLength = 48;
     private const string TitleEllipsis = "…";
 
@@ -79,14 +78,7 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>,
             return;
         }
 
-        if (State.Turns.Count >= MaxTurns)
-        {
-            await PersistRejectionAsync(command, ChatTurnAppendRejectionReason.MaxTurnsExceeded);
-            await DispatchAppendResultAsync(command, false, ChatTurnAppendRejectionReason.MaxTurnsExceeded);
-            return;
-        }
-
-        turn.Sequence = State.Turns.Count + 1;
+        turn.Sequence = ResolveNextTurnSequence(State);
         await PersistDomainEventAsync(new ChatTurnAppendedEvent
         {
             ScopeId = command.ScopeId,
@@ -247,6 +239,18 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>,
         string.Equals(existing.LlmModel, candidate.LlmModel, StringComparison.Ordinal) &&
         Equals(existing.TerminalTime, candidate.TerminalTime);
 
+    private static int ResolveNextTurnSequence(ChatConversationState state)
+    {
+        if (state.NextTurnSequence > 0)
+            return state.NextTurnSequence;
+
+        // Snapshots written before next_turn_sequence existed need a one-time
+        // migration from already committed turn identities.
+        return state.Turns.Count == 0
+            ? 1
+            : checked(state.Turns.Max(static turn => turn.Sequence) + 1);
+    }
+
     private string ResolveAppendTitle(AppendChatTurnCommand command, ChatTurn turn)
     {
         if (!string.IsNullOrWhiteSpace(command.Title))
@@ -331,7 +335,10 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>,
         next.Deleted = false;
         next.LastRejectedAppend = null;
         if (evt.Turn is not null)
+        {
             next.Turns.Add(evt.Turn.Clone());
+            next.NextTurnSequence = checked(Math.Max(next.NextTurnSequence, evt.Turn.Sequence + 1));
+        }
         return next;
     }
 
@@ -351,6 +358,8 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>,
         next.CreatedAtMs = createdAtMs;
         next.UpdatedAtMs = Math.Max(next.UpdatedAtMs, createdAtMs);
         next.Deleted = false;
+        if (next.NextTurnSequence == 0 && next.Turns.Count == 0)
+            next.NextTurnSequence = 1;
         next.Initialization = new ChatConversationInitialization
         {
             OperationId = evt.OperationId,

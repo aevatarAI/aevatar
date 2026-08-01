@@ -40,6 +40,8 @@ Mainnet also exposes the authenticated Assistant resource family:
 | `GET /api/chat/conversations/{conversationId}/state?afterStateVersion={v}&turnId={turnId}` | Read the conditional actor current-state replica. |
 | `DELETE /api/chat/conversations/{conversationId}` | Submit the existing authoritative retirement/deletion workflow. |
 
+The transcript endpoint returns every committed terminal turn while the conversation is active. The current contract has no per-turn TTL or silent rolling eviction: the 251st and later turns remain appendable, and only explicit whole-conversation deletion removes query availability. LLM continuation context is independently bounded to the latest 24 nonblank messages; that prompt selection never prunes the durable transcript.
+
 Standalone Workflow Host behavior is unchanged: its own `POST /api/chat` remains Workflow JSON/multipart, and `GET /api/ws/chat` remains the Workflow WebSocket surface. Mainnet's WebSocket route is likewise not selected by the Assistant JSON discriminators. New NyxID clients use only the HTTP facade and `/api/chat/conversations/**`; scoped NyxIdChat routes are compatibility adapters, not a second evolving contract.
 
 ## Chat Activity audit surface

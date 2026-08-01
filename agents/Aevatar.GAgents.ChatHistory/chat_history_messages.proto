@@ -40,6 +40,7 @@ enum ChatTurnTerminalStatus {
 enum ChatTurnAppendRejectionReason {
   CHAT_TURN_APPEND_REJECTION_REASON_UNSPECIFIED = 0;
   CHAT_TURN_APPEND_REJECTION_REASON_CONFLICT = 1;
+  // Historical committed fact. New appends no longer enforce a turn limit.
   CHAT_TURN_APPEND_REJECTION_REASON_MAX_TURNS_EXCEEDED = 2;
   CHAT_TURN_APPEND_REJECTION_REASON_INVALID = 3;
 }
@@ -88,6 +89,7 @@ message ChatConversationState {
   bool deleted = 11;
   ChatTurnAppendRejection last_rejected_append = 12;
   ChatConversationInitialization initialization = 13;
+  int32 next_turn_sequence = 14;
 }
 
 // ─── ChatConversationGAgent Events ───

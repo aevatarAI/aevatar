@@ -456,6 +456,10 @@ Trail records do not share that TTL.
 
 All turns under one public `conversationId` (the controller `actorId`) share a conversation transcript, including after passivation/reactivation. Transcript/history remains a separate `ChatConversationGAgent` concern and is not the task current-state read model. Accepted registration initializes this authority even with zero turns. Completed, failed, stopped, and blocked terminal turns are delivered through the existing chat-history delivery actor at least once; stable delivery identities make initialization, reservation, and terminal replay idempotent and prevent duplicate transcript turns. Once a reservation is committed, any malformed or conflicting reuse fails without replacing that authoritative delivery state.
 
+Every committed turn remains queryable through `GET /api/chat/conversations/{conversationId}` until the whole conversation is explicitly deleted. There is no per-turn TTL, silent rolling eviction, transcript segmentation, archive tier, or background transcript cleanup in the current product contract. `ChatConversationGAgent` owns the committed transcript and its deletion fact. The actor persists a monotonic `next_turn_sequence`; the 251st and later turns remain appendable, and reactivation or duplicate delivery cannot reuse sequence identities.
+
+LLM execution context is a different, bounded input. Continuation admission selects at most the latest 24 nonblank user/assistant messages from the transcript read model. This prompt-window selection does not delete actor-owned turns or narrow the transcript returned by the formal history query. Transcript queries read only the materialized current-state document and never replay actor events or prime projection in the request path.
+
 For a text turn whose `prompt` is empty and whose content is supplied only by
 typed `inputParts`, transcript `userText` is the fixed safe placeholder
 `Shared input content.` Raw part text, bytes, URI, and name are not copied into

@@ -207,6 +207,48 @@ public sealed class ChatConversationCurrentStateProjectorTests
         written.Turns[3].TerminalTimeMs.Should().Be(0);
     }
 
+    [Fact]
+    public async Task ProjectAsync_ShouldKeepEntireTranscriptBeyondPromptWindow()
+    {
+        var dispatcher = new RecordingWriteDispatcher();
+        var projector = new ChatConversationCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-08-01T09:00:00Z")));
+        var state = new ChatConversationState
+        {
+            ScopeId = "scope-a",
+            ConversationId = "conversation-a",
+            NextTurnSequence = 252,
+        };
+        for (var sequence = 1; sequence <= 251; sequence++)
+        {
+            state.Turns.Add(new ChatTurn
+            {
+                TurnId = $"turn-{sequence}",
+                Sequence = sequence,
+                UserText = $"user-{sequence}",
+                AssistantText = $"assistant-{sequence}",
+                TerminalStatus = ChatTurnTerminalStatus.Completed,
+            });
+        }
+
+        await projector.ProjectAsync(
+            NewContext(),
+            WrapCommitted(
+                new ChatTurnAppendedEvent { ScopeId = "scope-a", ConversationId = "conversation-a" },
+                state,
+                version: 251,
+                eventId: "evt-chat-251",
+                stateEventTimestamp: DateTimeOffset.Parse("2026-08-01T08:30:00Z")));
+
+        var written = dispatcher.Upserts.Should().ContainSingle().Subject;
+        written.MessageCount.Should().Be(251);
+        written.Turns.Should().HaveCount(251);
+        written.Turns[0].TurnId.Should().Be("turn-1");
+        written.Turns[^1].TurnId.Should().Be("turn-251");
+        written.Turns[^1].Sequence.Should().Be(251);
+    }
+
     private static StudioMaterializationContext NewContext() => new()
     {
         RootActorId = RootActorId,
