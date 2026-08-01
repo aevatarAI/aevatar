@@ -2,6 +2,7 @@ using System.Net;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.CodexExecution;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
@@ -235,6 +236,95 @@ public sealed class NyxIdCodexExecToolTests
         var exception = await act.Should().ThrowAsync<CodexExecutionException>();
         exception.Which.Failure.Kind.Should().Be(CodexExecutionFailureKind.ProvisioningFailed);
         exception.Which.Failure.Code.Should().Be("sandbox_provisioning_failed");
+    }
+
+    [Fact]
+    public void CreateResultReceipt_WhenManagedResultSucceeded_ReportsVerifiedSuccess()
+    {
+        var tool = new NyxIdCodexExecTool(CreateDummyClient());
+
+        var receipt = tool.CreateResultReceipt(
+            "call-1",
+            "codex_exec",
+            "{}",
+            """{"status":"succeeded","target":"managed_sandbox","output":"done","exit_code":0,"diagnostic_id":"diag","elapsed_ms":42}""");
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        receipt.CallId.Should().Be("call-1");
+        receipt.ToolName.Should().Be("codex_exec");
+    }
+
+    [Fact]
+    public void CreateResultReceipt_WhenPrivateSshExitedCleanly_ReportsVerifiedSuccess()
+    {
+        var tool = new NyxIdCodexExecTool(CreateDummyClient());
+
+        var receipt = tool.CreateResultReceipt(
+            "call-1",
+            "codex_exec",
+            "{}",
+            """{"exit_code":0,"stdout":"done","stderr":"","duration_ms":42,"timed_out":false}""");
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+    }
+
+    [Theory]
+    [InlineData(
+        """{"error":"invalid_target","detail":"'target.kind' is required."}""",
+        "invalid_target",
+        "'target.kind' is required.")]
+    [InlineData(
+        """{"error":"ssh_timeout","detail":"NyxID did not return an SSH exec response within 45s."}""",
+        "ssh_timeout",
+        "NyxID did not return an SSH exec response within 45s.")]
+    [InlineData(
+        """{"error":"No NyxID access token available. User must be authenticated."}""",
+        "codex_exec_failed",
+        "No NyxID access token available. User must be authenticated.")]
+    public void CreateResultReceipt_WhenToolReturnedErrorJson_CarriesStableFailureCode(
+        string resultJson,
+        string expectedCode,
+        string expectedMessage)
+    {
+        var tool = new NyxIdCodexExecTool(CreateDummyClient());
+
+        var receipt = tool.CreateResultReceipt("call-1", "codex_exec", "{}", resultJson);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ErrorCode.Should().Be(expectedCode);
+        receipt.ErrorMessage.Should().Be(expectedMessage);
+        receipt.ResultJson.Should().Contain(expectedCode);
+    }
+
+    [Theory]
+    [InlineData("""{"exit_code":2,"stdout":"","stderr":"boom","timed_out":false}""", "codex_exec_nonzero_exit")]
+    [InlineData("""{"exit_code":0,"stdout":"","stderr":"","timed_out":true}""", "codex_exec_timed_out")]
+    public void CreateResultReceipt_WhenPrivateSshFailed_ReportsTypedError(
+        string resultJson,
+        string expectedCode)
+    {
+        var tool = new NyxIdCodexExecTool(CreateDummyClient());
+
+        var receipt = tool.CreateResultReceipt("call-1", "codex_exec", "{}", resultJson);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ErrorCode.Should().Be(expectedCode);
+    }
+
+    [Theory]
+    [InlineData("not json at all")]
+    [InlineData("[]")]
+    [InlineData("""{"status":"running"}""")]
+    [InlineData("""{"stdout":"no terminal markers"}""")]
+    public void CreateResultReceipt_WhenOutcomeIsAmbiguous_StaysUnknown(string resultJson)
+    {
+        var tool = new NyxIdCodexExecTool(CreateDummyClient());
+
+        tool.CreateResultReceipt("call-1", "codex_exec", "{}", resultJson).Should().BeNull();
     }
 
     private static string DecodePrompt(string command)
