@@ -269,6 +269,53 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
         }
     }
 
+    [Fact]
+    public async Task HandleEnvelopeAsync_ShouldNotDeduplicateSameAttemptAfterPropagatedHandlerFailure()
+    {
+        RetryAwareDirectDispatchAgent.Reset();
+        var actorId = $"actor-{Guid.NewGuid():N}";
+        var siloPort = ReserveTcpPort();
+        var gatewayPort = ReserveTcpPort();
+
+        using var envScope = new EnvironmentVariableScope(new Dictionary<string, string?>
+        {
+            ["AEVATAR_RUNTIME_AUTO_RETRY_MAX_ATTEMPTS"] = "0",
+            ["AEVATAR_RUNTIME_AUTO_RETRY_DELAY_MS"] = "50",
+            ["AEVATAR_TEST_NODE_VERSION_TAG"] = "new",
+            ["AEVATAR_TEST_FAIL_EVENT_TYPE_URLS"] = string.Empty,
+        });
+
+        var host = await StartSiloHostAsync(siloPort, gatewayPort);
+
+        try
+        {
+            await InitializeAgentByKindAsync(host, actorId);
+
+            var grainFactory = host.Services.GetRequiredService<IGrainFactory>();
+            var grain = grainFactory.GetGrain<IRuntimeActorGrain>(actorId);
+            var envelope = CreateEnvelope("always-fail-no-retry");
+            envelope.Runtime = new EnvelopeRuntime
+            {
+                Dispatch = new EnvelopeDispatchControl { PropagateFailure = true },
+            };
+
+            await grain.Invoking(x => x.HandleEnvelopeAsync(envelope.ToByteArray()))
+                .Should().ThrowAsync<InvalidOperationException>()
+                .WithMessage("always-fail-no-retry");
+            await grain.Invoking(x => x.HandleEnvelopeAsync(envelope.ToByteArray()))
+                .Should().ThrowAsync<InvalidOperationException>()
+                .WithMessage("always-fail-no-retry");
+
+            RetryAwareDirectDispatchAgent.GetAttemptCount(envelope.Id).Should().Be(2,
+                "a propagated failure must release its provisional dedup reservation for provider redelivery");
+        }
+        finally
+        {
+            await host.StopAsync();
+            host.Dispose();
+        }
+    }
+
     private static async Task<IHost> StartSiloHostAsync(
         int siloPort,
         int gatewayPort,
