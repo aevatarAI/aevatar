@@ -6,7 +6,6 @@ using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
-using Aevatar.Foundation.Runtime.Deduplication;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Application.Runtime;
@@ -110,11 +109,6 @@ public sealed class ScriptBehaviorCompletionNotificationTests
             .Select(static request => request.TriggerEnvelope.Runtime!.Deduplication!.OperationId)
             .ToArray();
         operationIds.Should().OnlyHaveUniqueItems();
-        foreach (var retryEnvelope in scheduler.TimeoutRequests.Select(static request => request.TriggerEnvelope))
-        {
-            RuntimeEnvelopeDeduplication.TryBuildDedupKey(actor.Id, retryEnvelope, out _)
-                .Should().BeTrue();
-        }
 
         var handler = typeof(ScriptBehaviorGAgent).GetMethod(
             nameof(ScriptBehaviorGAgent.HandleRunOutcomeRetryFiredAsync));
@@ -561,8 +555,6 @@ public sealed class ScriptBehaviorCompletionNotificationTests
 
         scheduler.ScheduleException = null;
         var recoveryEnvelope = BuildSelfEnvelope(actor.Id, retry, recovery.Options);
-        RuntimeEnvelopeDeduplication.TryBuildDedupKey(actor.Id, recoveryEnvelope, out _)
-            .Should().BeTrue();
         publisher.SendException = null;
         await actor.HandleEventAsync(recoveryEnvelope);
         await actor.HandleEventAsync(recoveryEnvelope);

@@ -12,7 +12,7 @@ using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Actors;
 using Aevatar.Foundation.Runtime.Callbacks;
-using Aevatar.Foundation.Runtime.Deduplication;
+using Aevatar.Foundation.Runtime.Delivery;
 using Aevatar.Foundation.Runtime.Observability;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains.Callbacks;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
@@ -631,7 +631,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
 
     private string BuildRuntimeRetryCallbackId(EventEnvelope envelope, int nextAttempt)
     {
-        var originId = RuntimeEnvelopeDeduplication.ResolveOriginId(envelope) ?? envelope.Id;
+        var originId = RuntimeEnvelopeDeliveryIdentity.ResolveOriginId(envelope) ?? envelope.Id;
 
         if (string.IsNullOrWhiteSpace(originId))
             originId = envelope.Id ?? Guid.NewGuid().ToString("N");

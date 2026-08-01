@@ -1,6 +1,6 @@
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Core.EventSourcing;
-using Aevatar.Foundation.Runtime.Deduplication;
+using Aevatar.Foundation.Runtime.Delivery;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 
@@ -98,7 +98,7 @@ internal sealed class RuntimeEnvelopeRetryPolicy
 
     private static int GetAttempt(EventEnvelope envelope)
     {
-        return RuntimeEnvelopeDeduplication.GetAttempt(envelope);
+        return RuntimeEnvelopeDeliveryIdentity.GetAttempt(envelope);
     }
 
     private static int ParseOrDefault(string? value, int defaultValue)
@@ -110,6 +110,6 @@ internal sealed class RuntimeEnvelopeRetryPolicy
 
     private static string? ResolveOriginEventId(EventEnvelope envelope)
     {
-        return RuntimeEnvelopeDeduplication.ResolveOriginId(envelope);
+        return RuntimeEnvelopeDeliveryIdentity.ResolveOriginId(envelope);
     }
 }

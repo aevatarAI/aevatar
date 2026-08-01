@@ -1,7 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core.EventSourcing;
-using Aevatar.Foundation.Runtime.Deduplication;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Core.GAgents;
@@ -253,13 +252,7 @@ public sealed class ServiceRunWorkOrderIntegrationTests
         };
         scriptTerminalEnvelope.EnsureRuntime().EnsureDeduplication().OperationId =
             scriptTerminalOperationId;
-        RuntimeEnvelopeDeduplication.TryBuildDedupKey(
-                serviceRunActorId,
-                scriptTerminalEnvelope,
-                out var scriptTerminalDedupKey)
-            .Should().BeTrue();
-        scriptTerminalDedupKey.Should()
-            .Be($"{serviceRunActorId}:{scriptTerminalOperationId}:0");
+        scriptTerminalEnvelope.Runtime.Deduplication.OperationId.Should().Be(scriptTerminalOperationId);
         router.Sends.Should().ContainSingle(sent =>
             sent.Message is ServiceRunTerminalNotification &&
             sent.Options != null &&

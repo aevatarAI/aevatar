@@ -7,7 +7,7 @@ using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core.TypeSystem;
-using Aevatar.Foundation.Runtime.Deduplication;
+using Aevatar.Foundation.Runtime.Delivery;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains.Callbacks;
@@ -220,7 +220,7 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
             var successfulEnvelope =
                 await RetryAwareDirectDispatchAgent.WaitForSuccessAsync(envelope.Id, TimeSpan.FromSeconds(20));
 
-            RuntimeEnvelopeDeduplication.GetAttempt(successfulEnvelope).Should().Be(1);
+            RuntimeEnvelopeDeliveryIdentity.GetAttempt(successfulEnvelope).Should().Be(1);
             RetryAwareDirectDispatchAgent.GetAttemptCount(envelope.Id).Should().Be(2);
         }
         finally
@@ -654,13 +654,13 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
                 throw new InvalidOperationException("always-fail-retry-exhausted");
 
             if (payload == "fail-once-then-succeed" &&
-                RuntimeEnvelopeDeduplication.GetAttempt(envelope) == 0)
+                RuntimeEnvelopeDeliveryIdentity.GetAttempt(envelope) == 0)
             {
                 throw new InvalidOperationException("fail-once-before-retry");
             }
 
             if (payload == "occ-fail-once-then-succeed" &&
-                RuntimeEnvelopeDeduplication.GetAttempt(envelope) == 0)
+                RuntimeEnvelopeDeliveryIdentity.GetAttempt(envelope) == 0)
             {
                 throw new EventStoreOptimisticConcurrencyException(
                     envelope.Id,

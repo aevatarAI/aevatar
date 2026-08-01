@@ -8,7 +8,6 @@ using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
-using Aevatar.Foundation.Runtime.Deduplication;
 using Aevatar.Foundation.Runtime.Implementations.Local.Actors;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Foundation.Runtime.Streaming;
@@ -72,11 +71,6 @@ public sealed class RoleGAgentCompletionNotificationTests
             .Select(static request => request.TriggerEnvelope.Runtime!.Deduplication!.OperationId)
             .ToArray();
         retryOperationIds.Should().OnlyHaveUniqueItems();
-        foreach (var retryEnvelope in scheduler.TimeoutRequests.Select(static request => request.TriggerEnvelope))
-        {
-            RuntimeEnvelopeDeduplication.TryBuildDedupKey(actor.Id, retryEnvelope, out _)
-                .Should().BeTrue();
-        }
 
         var deadlineScheduler = new RecordingRuntimeCallbackScheduler();
         var deadlineActor = await CreateInitializedActorAsync(
@@ -359,9 +353,6 @@ public sealed class RoleGAgentCompletionNotificationTests
                 },
             },
         };
-        RuntimeEnvelopeDeduplication.TryBuildDedupKey(actor.Id, recoveryEnvelope, out var recoveryDedupKey)
-            .Should().BeTrue();
-
         await actor.HandleEventAsync(recoveryEnvelope);
 
         var durableAttempt2 = scheduler.TimeoutRequests.Should().ContainSingle().Subject;
@@ -371,13 +362,6 @@ public sealed class RoleGAgentCompletionNotificationTests
         var durableAttempt2OperationId = durableAttempt2.TriggerEnvelope.Runtime!.Deduplication!.OperationId;
         durableAttempt2OperationId.Should().Be("role-chat-completion-retry:session-1:delivery-session-1:2");
         durableAttempt2OperationId.Should().NotBe(recovery.Options.Delivery.DeduplicationOperationId);
-        RuntimeEnvelopeDeduplication.TryBuildDedupKey(
-                actor.Id,
-                durableAttempt2.TriggerEnvelope,
-                out var durableAttempt2DedupKey)
-            .Should().BeTrue();
-        durableAttempt2DedupKey.Should().NotBe(recoveryDedupKey);
-
         publisher.FailurePredicate = null;
         await actor.HandleEventAsync(durableAttempt2.TriggerEnvelope);
 

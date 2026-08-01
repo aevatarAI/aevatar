@@ -111,8 +111,9 @@ Kafka 入站链路的阶段不可互换：
 - runtime 不做 pre-handler process-local duplicate filtering。每次 provider redelivery 都进入 authoritative actor，
   因而 handler failure、进程重启和跨节点重投不会被本地 cache entry 抑制。业务正确性必须由 actor committed
   state、稳定 command/operation identity 或外部权威 idempotency contract 保证。
-- envelope 的 `DeduplicationOperationId` 与 retry attempt 仍用于派生稳定 delivery identity；该 identity 不记录
-  完成事实，也不提供 exactly-once。没有证据证明本地短窗 completed-envelope filter 有足够减载价值，因此
+- envelope 的稳定 operation id（当前由 typed `Runtime.Deduplication.OperationId` wire contract 承载）与
+  retry attempt 共同描述 delivery identity；该 identity 不记录完成事实，也不提供 exactly-once。没有证据证明
+  本地短窗 completed-envelope filter 有足够减载价值，因此
   #3145 选择删除而不是保留新的 performance-only seam。
 
 其他失败边界：

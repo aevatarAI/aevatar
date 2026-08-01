@@ -4,7 +4,6 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core.EventSourcing;
-using Aevatar.Foundation.Runtime.Deduplication;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Core.GAgents;
@@ -405,8 +404,6 @@ public sealed class ServiceRunGAgentTests
             .Be("service-run-terminal-retry:delivery-1:1");
 
         var recoveryEnvelope = BuildSelfEnvelope(actor.Id, retry, recovery.Options);
-        RuntimeEnvelopeDeduplication.TryBuildDedupKey(actor.Id, recoveryEnvelope, out _)
-            .Should().BeTrue();
 
         scheduler.ScheduleException = null;
         await actor.HandleEventAsync(recoveryEnvelope);
@@ -541,8 +538,6 @@ public sealed class ServiceRunGAgentTests
         attemptOne.TriggerEnvelope.Payload.Unpack<ServiceRunTerminalNotificationRetryFiredEvent>()
             .Attempt.Should().Be(1);
         attemptOneOperationId.Should().Be("service-run-terminal-retry:delivery-1:1");
-        RuntimeEnvelopeDeduplication.TryBuildDedupKey(actor.Id, attemptOne.TriggerEnvelope, out var attemptOneKey)
-            .Should().BeTrue();
 
         await actor.HandleEventAsync(attemptOne.TriggerEnvelope);
 
@@ -554,9 +549,6 @@ public sealed class ServiceRunGAgentTests
             .Attempt.Should().Be(2);
         attemptTwoOperationId.Should().Be("service-run-terminal-retry:delivery-1:2");
         attemptTwoOperationId.Should().NotBe(attemptOneOperationId);
-        RuntimeEnvelopeDeduplication.TryBuildDedupKey(actor.Id, attemptTwo.TriggerEnvelope, out var attemptTwoKey)
-            .Should().BeTrue();
-        attemptTwoKey.Should().NotBe(attemptOneKey);
     }
 
     [Theory]
@@ -796,6 +788,65 @@ public sealed class ServiceRunGAgentTests
         recovered.State.TerminalNotificationDeliveryStatus.Should()
             .Be(ServiceRunTerminalNotificationDeliveryStatus.Dispatched);
         recovered.State.PendingTerminalNotification.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task TerminalRedelivery_AfterCommitAndReactivation_ShouldNotReapplyStateOrSideEffect()
+    {
+        const string actorId = "service-run:tenant-1:svc-1:run-1";
+        const string operationId = "role-chat-terminal:run-1";
+        var eventStore = new InMemoryEventStore();
+        var firstPublisher = new RecordingEventPublisher();
+        var first = GAgentServiceTestKit.CreateStatefulAgent<ServiceRunGAgent, ServiceRunState>(
+            eventStore,
+            actorId,
+            static () => new ServiceRunGAgent());
+        first.EventPublisher = firstPublisher;
+        await first.ActivateAsync();
+        await RegisterNotificationRunAsync(first, DateTimeOffset.UtcNow.AddMinutes(1));
+        var terminalEnvelope = BuildInboundEnvelope(BuildTerminalEvent(actorId), "role-actor-1");
+        terminalEnvelope.Id = "role-chat-terminal-envelope-1";
+        terminalEnvelope.EnsureRuntime().EnsureDeduplication().OperationId = operationId;
+
+        await first.HandleEventAsync(terminalEnvelope);
+
+        var committedVersion = await eventStore.GetVersionAsync(actorId);
+        var authoritativeVersion = first.State.LastAppliedEventVersion;
+        first.State.Record!.Status.Should().Be(ServiceRunStatus.Failed);
+        first.State.Record.LastError.Should().Be("failed");
+        first.State.TerminalNotificationDeliveryStatus.Should()
+            .Be(ServiceRunTerminalNotificationDeliveryStatus.Dispatched);
+        authoritativeVersion.Should().Be(committedVersion);
+        firstPublisher.Sends.Should().ContainSingle()
+            .Which.Options!.Delivery!.DeduplicationOperationId.Should()
+            .Be("service-run-terminal-delivery-1");
+
+        // The handler committed successfully, but the transport ACK is assumed lost before process exit.
+        var recoveredPublisher = new RecordingEventPublisher();
+        var recovered = GAgentServiceTestKit.CreateStatefulAgent<ServiceRunGAgent, ServiceRunState>(
+            eventStore,
+            actorId,
+            static () => new ServiceRunGAgent());
+        recovered.EventPublisher = recoveredPublisher;
+        await recovered.ActivateAsync();
+
+        await recovered.HandleEventAsync(terminalEnvelope.Clone());
+
+        recovered.State.Record!.Status.Should().Be(ServiceRunStatus.Failed);
+        recovered.State.Record.LastError.Should().Be("failed");
+        recovered.State.LastAppliedEventVersion.Should().Be(authoritativeVersion);
+        (await eventStore.GetVersionAsync(actorId)).Should().Be(committedVersion);
+        firstPublisher.Sends.Count.Should().Be(1);
+        recoveredPublisher.Sends.Should().BeEmpty();
+        var committedEvents = await eventStore.GetEventsAsync(actorId);
+        committedEvents.Count(stateEvent => stateEvent.EventData.Is(ServiceRunStatusUpdatedEvent.Descriptor))
+            .Should().Be(1);
+        committedEvents.Count(stateEvent =>
+                stateEvent.EventData.Is(ServiceRunTerminalNotificationPreparedEvent.Descriptor))
+            .Should().Be(1);
+        committedEvents.Count(stateEvent =>
+                stateEvent.EventData.Is(ServiceRunTerminalNotificationDispatchedEvent.Descriptor))
+            .Should().Be(1);
     }
 
     [Fact]
