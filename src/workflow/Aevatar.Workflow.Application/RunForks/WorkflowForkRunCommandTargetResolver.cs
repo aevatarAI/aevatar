@@ -56,6 +56,13 @@ internal sealed class WorkflowForkRunCommandTargetResolver
                 WorkflowForkRunStartError.SourceRunNotFound(sourceRunId));
         }
 
+        if (!string.IsNullOrWhiteSpace(scopeId) &&
+            !string.Equals(scopeId, Normalize(seedView.ScopeId), StringComparison.Ordinal))
+        {
+            return CommandTargetResolution<WorkflowForkRunCommandTarget, WorkflowForkRunStartError>.Failure(
+                WorkflowForkRunStartError.SourceRunNotFound(sourceRunId));
+        }
+
         if (!IsTerminal(seedView.Status))
         {
             return CommandTargetResolution<WorkflowForkRunCommandTarget, WorkflowForkRunStartError>.Failure(

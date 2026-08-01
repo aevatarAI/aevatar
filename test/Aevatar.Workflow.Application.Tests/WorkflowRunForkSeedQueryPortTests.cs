@@ -113,6 +113,62 @@ public sealed class WorkflowRunForkSeedQueryPortTests
         currentStateReader.GetKeys.Should().ContainSingle().Which.Should().Be("actor-run-failed");
     }
 
+    [Fact]
+    public async Task GetForkSeedAsync_WhenBindingBelongsToVictimScope_ShouldReturnNullWithoutReadingCurrentState()
+    {
+        var currentStateReader = new RecordingDocumentReader<WorkflowExecutionCurrentStateDocument>();
+        var bindingReader = new FakeWorkflowRunBindingReader(
+            new WorkflowActorBinding(
+                WorkflowActorKind.Run,
+                "actor-victim-run",
+                "wf-alpha",
+                "victim-run",
+                "demo",
+                "name: demo\nsteps: []",
+                new Dictionary<string, string>(StringComparer.Ordinal),
+                "victim-scope"));
+        var port = new WorkflowRunForkSeedQueryPort(
+            currentStateReader,
+            bindingReader,
+            new WorkflowRunForkSeedReadModelMapper());
+
+        var view = await port.GetForkSeedAsync("attacker-scope", "victim-run", CancellationToken.None);
+
+        view.Should().BeNull();
+        bindingReader.LastQuery.Should().NotBeNull();
+        bindingReader.LastQuery!.ScopeId.Should().Be("attacker-scope");
+        bindingReader.LastQuery.RunIds.Should().Equal("victim-run");
+        currentStateReader.GetKeys.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetForkSeedAsync_WhenCurrentStateBelongsToVictimScope_ShouldReturnNull()
+    {
+        var victimState = BuildWorkflowRunState("victim-run", "failed", "step boom");
+        victimState.ScopeId = "victim-scope";
+        var mapper = new WorkflowRunForkSeedReadModelMapper();
+        var currentStateReader = new RecordingDocumentReader<WorkflowExecutionCurrentStateDocument>
+        {
+            Item = BuildDocument(victimState, mapper.ToProjectionSnapshot(victimState)),
+        };
+        var bindingReader = new FakeWorkflowRunBindingReader(
+            new WorkflowActorBinding(
+                WorkflowActorKind.Run,
+                "actor-victim-run",
+                "wf-alpha",
+                "victim-run",
+                "demo",
+                "name: demo\nsteps: []",
+                new Dictionary<string, string>(StringComparer.Ordinal),
+                "attacker-scope"));
+        var port = new WorkflowRunForkSeedQueryPort(currentStateReader, bindingReader, mapper);
+
+        var view = await port.GetForkSeedAsync("attacker-scope", "victim-run", CancellationToken.None);
+
+        view.Should().BeNull();
+        currentStateReader.GetKeys.Should().ContainSingle().Which.Should().Be("actor-victim-run");
+    }
+
     private static WorkflowRunState BuildWorkflowRunState(
         string runId,
         string status,

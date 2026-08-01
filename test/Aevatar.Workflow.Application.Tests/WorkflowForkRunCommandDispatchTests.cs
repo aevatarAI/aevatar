@@ -175,7 +175,8 @@ public sealed class WorkflowForkRunCommandDispatchTests
                     ["input"] = "seed-input",
                     ["topic"] = "seed-topic",
                     ["step-a"] = "alpha",
-                }),
+                },
+                scopeId: "scope-1"),
         };
         var runPort = new RecordingRunProvisioningPort();
         var dispatchPort = new RecordingActorDispatchPort();
@@ -226,7 +227,8 @@ public sealed class WorkflowForkRunCommandDispatchTests
                 idempotencyByStepId: new Dictionary<string, WorkflowStepIdempotencyView>(StringComparer.Ordinal)
                 {
                     ["step-b"] = new("source-run", "step-b", 2, "source-run:step-b:2"),
-                }),
+                },
+                scopeId: "scope-1"),
         };
         var runPort = new RecordingRunProvisioningPort();
         var dispatchPort = new RecordingActorDispatchPort();
@@ -293,7 +295,7 @@ public sealed class WorkflowForkRunCommandDispatchTests
     }
 
     [Fact]
-    public async Task DispatchAsync_ShouldNotReplaceTrustedCommandScopeWithSeedScope()
+    public async Task DispatchAsync_WhenSeedScopeDiffersFromTrustedCommandScope_ShouldFailClosed()
     {
         var seedPort = new RecordingSeedQueryPort
         {
@@ -308,10 +310,11 @@ public sealed class WorkflowForkRunCommandDispatchTests
             StartAtStepId: "step-b",
             ScopeId: "attacker-scope"));
 
-        result.Succeeded.Should().BeTrue();
+        result.Succeeded.Should().BeFalse();
+        result.Error.Code.Should().Be(WorkflowForkRunStartErrorCode.SourceRunNotFound);
         seedPort.RequestedScopeIds.Should().Equal("attacker-scope");
-        runPort.CreateRunBindings.Should().ContainSingle().Which.ScopeId.Should().Be("attacker-scope");
-        dispatchPort.DispatchedRequest().ScopeId.Should().Be("attacker-scope");
+        runPort.CreateRunBindings.Should().BeEmpty();
+        dispatchPort.Dispatches.Should().BeEmpty();
     }
 
     [Fact]

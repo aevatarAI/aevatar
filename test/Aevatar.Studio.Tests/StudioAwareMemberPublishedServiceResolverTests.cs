@@ -24,21 +24,18 @@ public sealed class StudioAwareMemberPublishedServiceResolverTests
     {
         var port = new InMemoryQueryPort(new Dictionary<(string, string), string>
         {
-            [("scope-1", "m-abc")] = "member-m-abc",
+            [("scope-1", "m-alpha")] = "svc-alpha",
         });
         var resolver = new StudioAwareMemberPublishedServiceResolver(port);
 
         var result = await resolver.ResolveAsync(
-            new MemberPublishedServiceResolveRequest("scope-1", "m-abc"),
+            new MemberPublishedServiceResolveRequest("scope-1", "m-alpha"),
             CancellationToken.None);
 
         result.ScopeId.Should().Be("scope-1");
-        result.MemberId.Should().Be("m-abc");
-        // The fix the inline review flagged: contract / activate / retire
-        // resolved at "member-m-abc"; if invoke kept resolving at "m-abc"
-        // the URL contract handed back to the frontend would 404 against
-        // its own binding.
-        result.PublishedServiceId.Should().Be("member-m-abc");
+        result.MemberId.Should().Be("m-alpha");
+        // Member, workflow, and published-service identities are intentionally distinct.
+        result.PublishedServiceId.Should().Be("svc-alpha");
         result.IsMemberAuthorityBacked.Should().BeTrue();
     }
 
