@@ -42,6 +42,7 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
     private Task? _initializeTask;
     private CancellationTokenSource? _consumeLoopCts;
     private Task? _consumeLoopTask;
+    private Exception? _ownerLoopFault;
 
     internal int BufferedMessageCount => _messageBuffer.Depth;
 
@@ -125,6 +126,9 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
 
     public Task<IList<IBatchContainer>> GetQueueMessagesAsync(int maxCount)
     {
+        if (Volatile.Read(ref _ownerLoopFault) is { } ownerLoopFault)
+            return Task.FromException<IList<IBatchContainer>>(ownerLoopFault);
+
         var count = Math.Max(1, maxCount);
         IList<IBatchContainer> result = new List<IBatchContainer>(count);
         while (result.Count < count && _messageBuffer.TryRead(out var message))
@@ -138,6 +142,9 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
 
     public Task MessagesDeliveredAsync(IList<IBatchContainer> messages)
     {
+        if (Volatile.Read(ref _ownerLoopFault) is { } ownerLoopFault)
+            return Task.FromException(ownerLoopFault);
+
         foreach (var message in messages.OfType<KafkaProviderBatchContainer>())
         {
             lock (_stateLock)
@@ -234,16 +241,29 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
                         break;
                 }
 
-                TryCommitContiguousOffsets(consumer);
+                try
+                {
+                    TryCommitContiguousOffsets(consumer);
+                }
+                catch (KafkaException ex) when (!ex.Error.IsFatal)
+                {
+                    _logger.LogWarning(ex,
+                        "Kafka offset commit failed on partition {Partition}, will retry the preserved ACK watermark.",
+                        _partitionId);
+                }
             }
         }
         catch (Exception ex)
         {
-            loopReady.TrySetException(ex);
-            _logger.LogError(ex,
+            var ownerLoopFault = new InvalidOperationException(
+                $"Kafka receiver owner loop failed on partition {_partitionId}.",
+                ex);
+            Volatile.Write(ref _ownerLoopFault, ownerLoopFault);
+            loopReady.TrySetException(ownerLoopFault);
+            _logger.LogError(ownerLoopFault,
                 "Kafka receiver owner loop failed on partition {Partition}.",
                 _partitionId);
-            throw;
+            throw ownerLoopFault;
         }
         finally
         {
@@ -408,32 +428,37 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
 
     private void TryCommitContiguousOffsets(IKafkaReceiverConsumer consumer)
     {
-        long? committedInclusive = null;
+        long? commitCandidateInclusive = null;
 
         lock (_stateLock)
         {
             if (!_hasCommitCursor || !_commitDirty)
                 return;
 
-            while (_ackedOffsets.Contains(_lastCommittedOffset + 1))
+            var nextOffset = _lastCommittedOffset + 1;
+            while (_ackedOffsets.Contains(nextOffset))
             {
-                var nextOffset = _lastCommittedOffset + 1;
-                _ackedOffsets.Remove(nextOffset);
-                _inflightOffsets.Remove(nextOffset);
-                _lastCommittedOffset = nextOffset;
-                committedInclusive = nextOffset;
+                commitCandidateInclusive = nextOffset;
+                nextOffset++;
             }
-
-            _commitDirty = _ackedOffsets.Count > 0;
         }
 
-        if (!committedInclusive.HasValue)
+        if (!commitCandidateInclusive.HasValue)
             return;
 
         consumer.Commit(
         [
-            new TopicPartitionOffset(_topicPartition, new Offset(committedInclusive.Value + 1))
+            new TopicPartitionOffset(_topicPartition, new Offset(commitCandidateInclusive.Value + 1))
         ]);
+
+        lock (_stateLock)
+        {
+            var committedInclusive = commitCandidateInclusive.Value;
+            _ackedOffsets.RemoveWhere(offset => offset <= committedInclusive);
+            _inflightOffsets.RemoveWhere(offset => offset <= committedInclusive);
+            _lastCommittedOffset = committedInclusive;
+            _commitDirty = _ackedOffsets.Count > 0;
+        }
     }
 
     private static string? TryGetHeaderValue(Headers headers, string name)
@@ -542,6 +567,7 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
         _partitionPaused = false;
         _pauseStartedTimestamp = null;
         _reportedPausedPartitionCount = -1;
+        Volatile.Write(ref _ownerLoopFault, null);
 
         lock (_stateLock)
         {

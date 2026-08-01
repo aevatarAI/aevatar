@@ -288,6 +288,78 @@ public sealed class KafkaReceiverBackpressureTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public async Task KafkaReceiver_WhenCommitFailsOnce_ShouldRetryThePreservedContiguousAckWatermark()
+    {
+        var harness = CreateHarness(capacity: 4, highWatermark: 3, lowWatermark: 1);
+        await harness.Receiver.Initialize(TestTimeout);
+
+        try
+        {
+            harness.Consumer.AddRecord(0);
+            harness.Consumer.AddRecord(1);
+            await harness.Consumer.AwaitReturnedOffsetAsync(1);
+            var batches = (await harness.Receiver.GetQueueMessagesAsync(2))
+                .OfType<KafkaProviderBatchContainer>()
+                .ToDictionary(batch => batch.KafkaOffset);
+
+            await harness.Receiver.MessagesDeliveredAsync([batches[1]]);
+            harness.Consumer.FailNextCommit(new KafkaException(
+                new Error(Confluent.Kafka.ErrorCode.Local_TimedOut, "transient commit failure")));
+            await harness.Receiver.MessagesDeliveredAsync([batches[0]]);
+
+            var committedOffset = await harness.Consumer.ReadCommitAsync();
+            committedOffset.Should().Be(2);
+            harness.Consumer.CommitAttemptCount.Should().Be(2,
+                "the first broker failure must preserve the candidate for the next owner-loop attempt");
+            harness.Consumer.CommittedOffsets.Should().Equal(2);
+        }
+        finally
+        {
+            await harness.Receiver.Shutdown(TestTimeout);
+        }
+    }
+
+    [Fact]
+    public async Task KafkaReceiver_WhenOwnerLoopFaults_ShouldSurfaceTheFaultThroughReceiverApis()
+    {
+        var harness = CreateHarness(capacity: 3, highWatermark: 2, lowWatermark: 1);
+        await harness.Receiver.Initialize(TestTimeout);
+        var resumeFailure = new InvalidOperationException("resume failed on owner loop");
+
+        try
+        {
+            harness.Consumer.FailNextResume(resumeFailure);
+            harness.Consumer.AddRecord(0);
+            harness.Consumer.AddRecord(1);
+            _ = await harness.Consumer.ReadPauseAsync();
+            var deliveredBatch = await harness.Receiver.GetQueueMessagesAsync(1);
+            await harness.Consumer.AwaitDisposedAsync();
+
+            Func<Task> read = async () => _ = await harness.Receiver.GetQueueMessagesAsync(1);
+            var readFailure = await read.Should().ThrowAsync<InvalidOperationException>();
+            readFailure.Which.InnerException.Should().BeSameAs(resumeFailure);
+
+            Func<Task> acknowledge = () => harness.Receiver.MessagesDeliveredAsync(deliveredBatch);
+            var acknowledgementFailure = await acknowledge.Should().ThrowAsync<InvalidOperationException>();
+            acknowledgementFailure.Which.Should().BeSameAs(readFailure.Which);
+
+            Func<Task> shutdown = () => harness.Receiver.Shutdown(TestTimeout);
+            var shutdownFailure = await shutdown.Should().ThrowAsync<InvalidOperationException>();
+            shutdownFailure.Which.Should().BeSameAs(readFailure.Which);
+        }
+        finally
+        {
+            try
+            {
+                await harness.Receiver.Shutdown(TestTimeout);
+            }
+            catch (InvalidOperationException)
+            {
+            }
+        }
+    }
+
+    [Fact]
     public async Task KafkaReceiverMessageBuffer_ShouldBoundRetentionAndRetainTransportHeadroom()
     {
         const int operationCount = 1_000_000;
@@ -739,8 +811,12 @@ public sealed class KafkaReceiverBackpressureTests(ITestOutputHelper output)
         private int _consumeCount;
         private int _pauseCallCount;
         private int _resumeCallCount;
+        private int _commitAttemptCount;
         private int _closeCallCount;
         private int _disposeCallCount;
+        private Exception? _nextResumeFailure;
+        private KafkaException? _nextCommitFailure;
+        private readonly TaskCompletionSource _disposed = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public TopicPartition? AssignedPartition
         {
@@ -756,6 +832,8 @@ public sealed class KafkaReceiverBackpressureTests(ITestOutputHelper output)
         public int PauseCallCount => Volatile.Read(ref _pauseCallCount);
 
         public int ResumeCallCount => Volatile.Read(ref _resumeCallCount);
+
+        public int CommitAttemptCount => Volatile.Read(ref _commitAttemptCount);
 
         public int CloseCallCount => Volatile.Read(ref _closeCallCount);
 
@@ -815,6 +893,9 @@ public sealed class KafkaReceiverBackpressureTests(ITestOutputHelper output)
         {
             RecordOwnerThread();
             EnsureFixedPartition(partitions);
+            if (Interlocked.Exchange(ref _nextResumeFailure, null) is { } failure)
+                throw failure;
+
             Interlocked.Increment(ref _resumeCallCount);
             _resumeCalls.Writer.TryWrite([.. partitions]);
         }
@@ -823,6 +904,10 @@ public sealed class KafkaReceiverBackpressureTests(ITestOutputHelper output)
         {
             RecordOwnerThread();
             EnsureFixedPartition(offsets.Select(offset => offset.TopicPartition));
+            Interlocked.Increment(ref _commitAttemptCount);
+            if (Interlocked.Exchange(ref _nextCommitFailure, null) is { } failure)
+                throw failure;
+
             foreach (var offset in offsets)
             {
                 lock (_stateLock)
@@ -850,12 +935,25 @@ public sealed class KafkaReceiverBackpressureTests(ITestOutputHelper output)
         {
             RecordOwnerThread();
             Interlocked.Increment(ref _disposeCallCount);
+            _disposed.TrySetResult();
             _consumeStepsAvailable.Dispose();
         }
 
         public void AddRecord(long offset)
         {
             AddConsumeStep(() => CreateRecord(offset, GetAssignedPartition()));
+        }
+
+        public void FailNextResume(Exception failure)
+        {
+            ArgumentNullException.ThrowIfNull(failure);
+            Interlocked.Exchange(ref _nextResumeFailure, failure).Should().BeNull();
+        }
+
+        public void FailNextCommit(KafkaException failure)
+        {
+            ArgumentNullException.ThrowIfNull(failure);
+            Interlocked.Exchange(ref _nextCommitFailure, failure).Should().BeNull();
         }
 
         private Partition GetAssignedPartition()
@@ -902,6 +1000,8 @@ public sealed class KafkaReceiverBackpressureTests(ITestOutputHelper output)
 
         public async Task<long> ReadSeekAsync() =>
             await _seekCalls.Reader.ReadAsync().AsTask().WaitAsync(TestTimeout);
+
+        public Task AwaitDisposedAsync() => _disposed.Task.WaitAsync(TestTimeout);
 
         public async Task AwaitReturnedOffsetAsync(long expectedOffset)
         {
