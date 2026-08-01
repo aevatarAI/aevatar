@@ -4,12 +4,21 @@ using System.Runtime;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core;
+using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
+using Aevatar.CQRS.Projection.Core.DependencyInjection;
+using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
+using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
+using Aevatar.CQRS.Projection.Runtime.Abstractions;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
@@ -154,7 +163,7 @@ public static class Program
 
         ValidateRecoveryEvidence(config, selectedAdapters, adapterResults);
         var output = new MeasurementOutput(
-            3,
+            4,
             DateTimeOffset.UtcNow,
             await ResolveGitCommitAsync(),
             new EnvironmentFacts(
@@ -170,7 +179,7 @@ public static class Program
                 "Mailbox occupancy is in-flight plus queued chat turns. The harness awaits one dispatch at a time, so max occupancy is one; chunks remain inside that actor turn.",
                 "Nearest-rank percentiles: ceil(p * sample_count) - 1 after ascending sort.",
                 "Net CPU/allocation values come from an alternating-order matched control turn with append/snapshot measurement decorators removed. Gross values include those decorators; their signed difference estimates instrumentation cost. Both remain process-level and noisy.",
-                "Crash recovery reconciles the append-acknowledged ledger, final adapter durable readback, and real CommittedStateEventPublished observations in both directions by StateEvent event ID. Progress redo remains a separate session-sequence and payload-fingerprint diagnostic. Each fence reports only its observed window."),
+                "Crash recovery reconciles provider-generated semantic evidence, the append-acknowledged ledger, final adapter durable readback, real CommittedStateEventPublished observations, and a measurement-only current-state read model written through the formal projection runtime. Generated boundaries use session + attempt + semantic ordinal + kind + payload hash identities: the injected phase-one generated-but-uncommitted tail is reported separately, while the successful recovery attempt must match committed semantics bidirectionally and its final text/usage hashes must match the materialized user-visible state. Each fence reports only its observed window."),
             adapterResults);
 
         var outputPath = Path.GetFullPath(options.OutputPath);
@@ -190,21 +199,38 @@ public static class Program
     {
         var sampleId = $"{workload.Name}-{crashFence}-{(measured ? "m" : "w")}-{iteration}-{Guid.NewGuid():N}";
         var actorId = $"measure-role-{sampleId}";
+        var sessionId = $"session-{sampleId}";
         var isRecovery = string.Equals(workload.Kind, "crash_recovery", StringComparison.Ordinal);
         var eventStore = new MeasuringEventStore(baseStore, captureCommittedEvents: isRecovery);
         var snapshotStore = new MeasuringSnapshotStore<RoleGAgentState>(
             new InMemoryEventSourcingSnapshotStore<RoleGAgentState>());
-        var provider = new WorkloadProviderFactory(workload);
+        var phaseOneGeneratedRecorder = isRecovery
+            ? new GeneratedSemanticEvidenceRecorder(sessionId, "phase-one")
+            : null;
+        var provider = new WorkloadProviderFactory(workload, phaseOneGeneratedRecorder);
         var streams = CreateStreamProvider();
-        CommittedStateEventRecorder? projectionRecorder = null;
-        IAsyncDisposable? projectionSubscription = null;
+        ServiceProvider? projectionServices = null;
+        CommittedPublicationProjectionObserver? publicationObserver = null;
+        IAsyncDisposable? publicationSubscription = null;
+        IProjectionDocumentReader<MeasurementRoleCurrentStateReadModel, string>? currentStateReader = null;
+        ICurrentStateProjectionMaterializer<MeasurementRoleCurrentStateProjectionContext>?
+            currentStateMaterializer = null;
+        MeasurementRoleCurrentStateProjectionContext? projectionContext = null;
         if (isRecovery)
         {
-            projectionRecorder = new CommittedStateEventRecorder();
+            projectionServices = CreateMeasurementProjectionServices();
+            currentStateReader = projectionServices.GetRequiredService<
+                IProjectionDocumentReader<MeasurementRoleCurrentStateReadModel, string>>();
+            currentStateMaterializer = projectionServices.GetRequiredService<
+                ICurrentStateProjectionMaterializer<MeasurementRoleCurrentStateProjectionContext>>();
+            projectionContext = new MeasurementRoleCurrentStateProjectionContext(actorId);
+            publicationObserver = new CommittedPublicationProjectionObserver(
+                currentStateMaterializer,
+                projectionContext);
             var subscriptionProvider = new StreamProviderActorEventSubscriptionProvider(streams);
-            projectionSubscription = await subscriptionProvider.SubscribeAsync(
+            publicationSubscription = await subscriptionProvider.SubscribeAsync(
                 actorId,
-                (Func<EventEnvelope, Task>)projectionRecorder.ObserveAsync);
+                (Func<EventEnvelope, Task>)publicationObserver.ObserveAsync);
         }
 
         var actor = await CreateActorAsync(
@@ -237,7 +263,11 @@ public static class Program
         var excludedRecoveryValidationDuration = TimeSpan.Zero;
         IReadOnlyList<StateEvent> committedBeforeRecovery = [];
         IReadOnlyList<StateEvent> durableBeforeRecovery = [];
-        IReadOnlyList<StateEvent> observedBeforeRecovery = [];
+        IReadOnlyList<StateEvent> publicationsBeforeRecovery = [];
+        IReadOnlyList<EventEnvelope> publicationEnvelopesBeforeRecovery = [];
+        GeneratedSemanticEvidenceSnapshot? generatedBeforeRecovery = null;
+        MeasurementRoleCurrentStateReadModel? materializedBeforeRecovery = null;
+        GeneratedSemanticEvidenceRecorder? recoveryGeneratedRecorder = null;
 
         if (isRecovery)
         {
@@ -258,13 +288,17 @@ public static class Program
             await actor.LocalActor.DeactivateAsync();
             await actor.Services.DisposeAsync();
             var validationStartedAt = Stopwatch.GetTimestamp();
-            await projectionRecorder!.DrainAsync(streams.GetStream(actorId));
+            await publicationObserver!.DrainAsync(streams.GetStream(actorId));
             committedBeforeRecovery = eventStore.CommittedEventsSnapshot();
             durableBeforeRecovery = await baseStore.GetEventsAsync(actorId);
-            observedBeforeRecovery = projectionRecorder.ObservedEventsSnapshot();
+            publicationsBeforeRecovery = publicationObserver.PublishedEventsSnapshot();
+            publicationEnvelopesBeforeRecovery = publicationObserver.PublishedEnvelopesSnapshot();
+            generatedBeforeRecovery = phaseOneGeneratedRecorder!.Snapshot();
+            materializedBeforeRecovery = await currentStateReader!.GetAsync(actorId);
             excludedRecoveryValidationDuration += Stopwatch.GetElapsedTime(validationStartedAt);
             eventStore.FailAfterSuccessfulAppends = null;
-            var recoveryProvider = new WorkloadProviderFactory(workload);
+            recoveryGeneratedRecorder = new GeneratedSemanticEvidenceRecorder(sessionId, "recovery");
+            var recoveryProvider = new WorkloadProviderFactory(workload, recoveryGeneratedRecorder);
             recoveredActor = await CreateActorAsync(
                 actorId,
                 eventStore,
@@ -305,8 +339,19 @@ public static class Program
 
         if (isRecovery)
         {
-            await projectionRecorder!.DrainAsync(streams.GetStream(actorId));
+            await publicationObserver!.DrainAsync(streams.GetStream(actorId));
             var finalDurableEvents = await baseStore.GetEventsAsync(actorId);
+            var finalPublicationEnvelopes = publicationObserver.PublishedEnvelopesSnapshot();
+            var finalMaterializedState = await VerifyMaterializedCurrentStateAsync(
+                actorId,
+                currentStateReader!,
+                currentStateMaterializer!,
+                projectionContext!,
+                durableBeforeRecovery,
+                finalDurableEvents,
+                publicationEnvelopesBeforeRecovery,
+                finalPublicationEnvelopes,
+                materializedBeforeRecovery);
             crashRecovery = AnalyzeCrashRecovery(
                 crashFence!.Value,
                 preMeasurementAppendLedger,
@@ -314,16 +359,21 @@ public static class Program
                 durableBeforeRecovery,
                 eventStore.CommittedEventsSnapshot(),
                 finalDurableEvents,
-                observedBeforeRecovery,
-                projectionRecorder.ObservedEventsSnapshot());
+                publicationsBeforeRecovery,
+                publicationObserver.PublishedEventsSnapshot(),
+                generatedBeforeRecovery!,
+                recoveryGeneratedRecorder!.Snapshot(),
+                finalMaterializedState);
         }
         else
         {
             await DrainStreamAsync(streams, actorId);
         }
 
-        if (projectionSubscription != null)
-            await projectionSubscription.DisposeAsync();
+        if (publicationSubscription != null)
+            await publicationSubscription.DisposeAsync();
+        if (projectionServices != null)
+            await projectionServices.DisposeAsync();
 
         if (isRecovery && failure == null)
             throw new InvalidOperationException("Crash-recovery workload did not hit its configured append failure fence.");
@@ -490,6 +540,166 @@ public static class Program
         await completion.Task.WaitAsync(TimeSpan.FromSeconds(30));
     }
 
+    private static ServiceProvider CreateMeasurementProjectionServices()
+    {
+        var services = new ServiceCollection();
+        services.AddProjectionReadModelRuntime();
+        services.AddInMemoryDocumentProjectionStore<MeasurementRoleCurrentStateReadModel, string>(
+            static readModel => readModel.Id);
+        services.AddSingleton<IProjectionClock, SystemProjectionClock>();
+        services.AddCurrentStateProjectionMaterializer<
+            MeasurementRoleCurrentStateProjectionContext,
+            MeasurementRoleCurrentStateProjector>();
+        return services.BuildServiceProvider();
+    }
+
+    private static async Task<MaterializedCurrentStateEvidence> VerifyMaterializedCurrentStateAsync(
+        string actorId,
+        IProjectionDocumentReader<MeasurementRoleCurrentStateReadModel, string> reader,
+        ICurrentStateProjectionMaterializer<MeasurementRoleCurrentStateProjectionContext> materializer,
+        MeasurementRoleCurrentStateProjectionContext context,
+        IReadOnlyList<StateEvent> durableBeforeRecovery,
+        IReadOnlyList<StateEvent> finalDurableEvents,
+        IReadOnlyList<EventEnvelope> publicationEnvelopesBeforeRecovery,
+        IReadOnlyList<EventEnvelope> finalPublicationEnvelopes,
+        MeasurementRoleCurrentStateReadModel? materializedBeforeRecovery)
+    {
+        var phaseOne = BuildMaterializedCurrentStateCheckpoint(
+            actorId,
+            durableBeforeRecovery,
+            publicationEnvelopesBeforeRecovery,
+            materializedBeforeRecovery);
+        var materializedFinal = await reader.GetAsync(actorId);
+        var final = BuildMaterializedCurrentStateCheckpoint(
+            actorId,
+            finalDurableEvents,
+            finalPublicationEnvelopes,
+            materializedFinal);
+
+        if (materializedFinal == null)
+            return new MaterializedCurrentStateEvidence(phaseOne, final, false, false);
+
+        var latestPublication = FindLatestCommittedPublication(finalPublicationEnvelopes);
+        var baseline = materializedFinal.ToByteString();
+        await materializer.ProjectAsync(context, latestPublication.Envelope);
+        var afterDuplicate = await reader.GetAsync(actorId);
+        var duplicateWriteIdempotent = afterDuplicate?.ToByteString().Equals(baseline) == true;
+
+        var stalePublication = finalPublicationEnvelopes
+            .Select(TryCreateCommittedPublication)
+            .Where(static publication => publication != null)
+            .Cast<CommittedPublicationSnapshot>()
+            .Where(publication => publication.StateVersion < latestPublication.StateVersion)
+            .OrderByDescending(static publication => publication.StateVersion)
+            .FirstOrDefault();
+        var staleWriteDidNotOverwrite = false;
+        if (stalePublication != null && afterDuplicate != null)
+        {
+            var duplicateBaseline = afterDuplicate.ToByteString();
+            await materializer.ProjectAsync(context, stalePublication.Envelope);
+            var afterStale = await reader.GetAsync(actorId);
+            staleWriteDidNotOverwrite = afterStale?.ToByteString().Equals(duplicateBaseline) == true;
+        }
+
+        return new MaterializedCurrentStateEvidence(
+            phaseOne,
+            final,
+            duplicateWriteIdempotent,
+            staleWriteDidNotOverwrite);
+    }
+
+    private static MaterializedCurrentStateCheckpoint BuildMaterializedCurrentStateCheckpoint(
+        string actorId,
+        IReadOnlyList<StateEvent> durableEvents,
+        IReadOnlyList<EventEnvelope> publicationEnvelopes,
+        MeasurementRoleCurrentStateReadModel? materialized)
+    {
+        var latestDurable = durableEvents.MaxBy(static stateEvent => stateEvent.Version)
+            ?? throw new InvalidOperationException("Current-state verification requires a durable event.");
+        var latestPublication = FindLatestCommittedPublication(publicationEnvelopes);
+        var publishedFacts = BuildRoleCurrentStateFacts(actorId, latestPublication);
+        var materializedFacts = materialized == null
+            ? null
+            : new RoleCurrentStateFacts(
+                materialized.ActorId,
+                materialized.StateVersion,
+                materialized.LastEventId,
+                materialized.StateRootSha256,
+                materialized.TrackedSessionCount,
+                materialized.TerminalSessionCount,
+                materialized.CompletedSessionCount,
+                materialized.FailedSessionCount,
+                materialized.BlockedSessionCount,
+                materialized.MaxProgressSequence,
+                materialized.SessionId,
+                materialized.FinalContentSha256,
+                materialized.UsageSha256);
+        var durableIdentity = new StateEventIdentity(latestDurable.Version, latestDurable.EventId);
+        return new MaterializedCurrentStateCheckpoint(
+            materialized != null,
+            durableIdentity,
+            publishedFacts,
+            materializedFacts,
+            durableIdentity.StateVersion == publishedFacts.StateVersion &&
+            string.Equals(durableIdentity.EventId, publishedFacts.LastEventId, StringComparison.Ordinal),
+            materializedFacts == publishedFacts);
+    }
+
+    private static CommittedPublicationSnapshot FindLatestCommittedPublication(
+        IReadOnlyList<EventEnvelope> envelopes) =>
+        envelopes
+            .Select(TryCreateCommittedPublication)
+            .Where(static publication => publication != null)
+            .Cast<CommittedPublicationSnapshot>()
+            .MaxBy(static publication => publication.StateVersion)
+        ?? throw new InvalidOperationException("Current-state verification requires a committed publication.");
+
+    private static CommittedPublicationSnapshot? TryCreateCommittedPublication(EventEnvelope envelope)
+    {
+        if (!CommittedStateEventEnvelope.TryUnpackState<RoleGAgentState>(
+                envelope,
+                out _,
+                out var stateEvent,
+                out var state) ||
+            stateEvent == null ||
+            state == null)
+        {
+            return null;
+        }
+
+        return new CommittedPublicationSnapshot(envelope, stateEvent.Version, stateEvent.EventId, state);
+    }
+
+    private static RoleCurrentStateFacts BuildRoleCurrentStateFacts(
+        string actorId,
+        CommittedPublicationSnapshot publication)
+    {
+        var sessions = publication.State.Sessions.Values;
+        var onlySession = publication.State.Sessions.Count == 1
+            ? publication.State.Sessions.Single()
+            : default(KeyValuePair<string, RoleChatSessionState>);
+        return new RoleCurrentStateFacts(
+            actorId,
+            publication.StateVersion,
+            publication.EventId,
+            Convert.ToHexString(SHA256.HashData(publication.State.ToByteArray())),
+            sessions.Count,
+            sessions.Count(static session =>
+                session.Outcome != RoleChatSessionOutcome.Unspecified),
+            sessions.Count(static session =>
+                session.Outcome == RoleChatSessionOutcome.Completed),
+            sessions.Count(static session =>
+                session.Outcome == RoleChatSessionOutcome.Failed),
+            sessions.Count(static session =>
+                session.Outcome == RoleChatSessionOutcome.Blocked),
+            sessions.Count == 0 ? 0 : sessions.Max(static session => session.LastProgressSequence),
+            onlySession.Key ?? string.Empty,
+            StreamingSemanticEvidence.HashTextContent(onlySession.Value?.FinalContent ?? string.Empty),
+            onlySession.Value?.Usage == null
+                ? string.Empty
+                : StreamingSemanticEvidence.HashUsage(onlySession.Value.Usage));
+    }
+
     private static CrashRecoveryObservation AnalyzeCrashRecovery(
         int fence,
         IReadOnlyList<StateEvent> preMeasurementAppendLedger,
@@ -497,78 +707,175 @@ public static class Program
         IReadOnlyList<StateEvent> durableBeforeRecovery,
         IReadOnlyList<StateEvent> allCommitted,
         IReadOnlyList<StateEvent> finalDurableEvents,
-        IReadOnlyList<StateEvent> observedBeforeRecovery,
-        IReadOnlyList<StateEvent> allObserved)
+        IReadOnlyList<StateEvent> publicationsBeforeRecovery,
+        IReadOnlyList<StateEvent> allPublications,
+        GeneratedSemanticEvidenceSnapshot generatedBeforeRecovery,
+        GeneratedSemanticEvidenceSnapshot generatedDuringRecovery,
+        MaterializedCurrentStateEvidence materializedCurrentState)
     {
         var preCommitted = BuildProgressFacts(committedBeforeRecovery);
         var preDurable = BuildProgressFacts(durableBeforeRecovery);
         var finalCommitted = BuildProgressFacts(allCommitted);
         var finalDurable = BuildProgressFacts(finalDurableEvents);
-        var preObserved = BuildProgressFacts(observedBeforeRecovery);
-        var finalObserved = BuildProgressFacts(allObserved);
-        var recoveryCommitted = BuildProgressFacts(allCommitted.Skip(committedBeforeRecovery.Count));
-        var recoveryObserved = BuildProgressFacts(allObserved.Skip(observedBeforeRecovery.Count));
+        var prePublished = BuildProgressFacts(publicationsBeforeRecovery);
+        var finalPublished = BuildProgressFacts(allPublications);
+        var recoveryCommittedEvents = allCommitted.Skip(committedBeforeRecovery.Count).ToArray();
+        var recoveryCommitted = BuildProgressFacts(recoveryCommittedEvents);
+        var recoveryPublished = BuildProgressFacts(allPublications.Skip(publicationsBeforeRecovery.Count));
 
         var preCommittedIds = preCommitted.Select(static fact => fact.EventId).ToHashSet(StringComparer.Ordinal);
         var preDurableIds = preDurable.Select(static fact => fact.EventId).ToHashSet(StringComparer.Ordinal);
-        var preObservedIds = preObserved.Select(static fact => fact.EventId).ToHashSet(StringComparer.Ordinal);
+        var prePublishedIds = prePublished.Select(static fact => fact.EventId).ToHashSet(StringComparer.Ordinal);
         var preSequences = preCommitted.Select(static fact => fact.SequenceKey).ToHashSet(StringComparer.Ordinal);
         var prePayloads = preCommitted.Select(static fact => fact.PayloadFingerprint).ToHashSet(StringComparer.Ordinal);
 
         var durableReadbackMissing = preCommittedIds.Except(preDurableIds).LongCount();
-        var phaseOneProjectionMissing = preCommittedIds.Except(preObservedIds).LongCount();
+        var phaseOnePublicationMissing = preCommittedIds.Except(prePublishedIds).LongCount();
         var finalAppendLedger = preMeasurementAppendLedger.Concat(allCommitted).ToArray();
         var finalLedgerEventIds = BuildEventIds(finalAppendLedger, "append ledger");
         var finalDurableEventIds = BuildEventIds(finalDurableEvents, "final durable readback");
-        var finalProjectionEventIds = BuildEventIds(allObserved, "committed-state projection");
+        var finalPublicationEventIds = BuildEventIds(allPublications, "committed publication");
         var ledgerToDurableMissing = finalLedgerEventIds.Except(finalDurableEventIds).LongCount();
         var durableToLedgerUnexpected = finalDurableEventIds.Except(finalLedgerEventIds).LongCount();
-        var durableToProjectionMissing = finalDurableEventIds.Except(finalProjectionEventIds).LongCount();
-        var projectionToDurableUnexpected = finalProjectionEventIds.Except(finalDurableEventIds).LongCount();
+        var durableToPublicationMissing = finalDurableEventIds.Except(finalPublicationEventIds).LongCount();
+        var publicationToDurableUnexpected = finalPublicationEventIds.Except(finalDurableEventIds).LongCount();
         var committedIdentityOverlap = recoveryCommitted.LongCount(fact => preCommittedIds.Contains(fact.EventId));
-        var projectionIdentityOverlap = recoveryObserved.LongCount(fact => preObservedIds.Contains(fact.EventId));
+        var publicationIdentityOverlap = recoveryPublished.LongCount(fact => prePublishedIds.Contains(fact.EventId));
         var sequenceOverlap = recoveryCommitted.LongCount(fact => preSequences.Contains(fact.SequenceKey));
         var payloadOverlapFacts = recoveryCommitted
             .Where(fact => prePayloads.Contains(fact.PayloadFingerprint))
             .ToArray();
+        var phaseOneCommittedSemantics = BuildProviderComparableSemanticOperations(
+            committedBeforeRecovery,
+            "phase-one");
+        var recoveryCommittedSemantics = BuildProviderComparableSemanticOperations(
+            recoveryCommittedEvents,
+            "recovery");
+        var phaseOneAttemptLocalTail = CountOperationDifference(
+            generatedBeforeRecovery.Operations,
+            phaseOneCommittedSemantics);
+        var phaseOneCommittedWithoutGenerated = CountOperationDifference(
+            phaseOneCommittedSemantics,
+            generatedBeforeRecovery.Operations);
+        var recoveryGeneratedToCommittedMissing = CountOperationDifference(
+            generatedDuringRecovery.Operations,
+            recoveryCommittedSemantics);
+        var recoveryCommittedWithoutGenerated = CountOperationDifference(
+            recoveryCommittedSemantics,
+            generatedDuringRecovery.Operations);
+        var materializedFinal = materializedCurrentState.Final.MaterializedReadModel;
+        var recoveredUserVisibleSemantics = new RecoveredUserVisibleSemanticEvidence(
+            generatedDuringRecovery.SessionId,
+            generatedDuringRecovery.TextDeltaCount,
+            generatedDuringRecovery.GeneratedTextSha256,
+            materializedFinal?.FinalContentSha256 ?? string.Empty,
+            generatedDuringRecovery.GeneratedUsageSha256,
+            materializedFinal?.UsageSha256 ?? string.Empty,
+            materializedFinal != null &&
+            string.Equals(
+                generatedDuringRecovery.GeneratedTextSha256,
+                materializedFinal.FinalContentSha256,
+                StringComparison.Ordinal),
+            materializedFinal != null &&
+            string.Equals(
+                generatedDuringRecovery.GeneratedUsageSha256,
+                materializedFinal.UsageSha256,
+                StringComparison.Ordinal));
 
-        if (durableReadbackMissing != 0 || phaseOneProjectionMissing != 0 ||
+        if (durableReadbackMissing != 0 || phaseOnePublicationMissing != 0 ||
             ledgerToDurableMissing != 0 || durableToLedgerUnexpected != 0 ||
-            durableToProjectionMissing != 0 || projectionToDurableUnexpected != 0)
+            durableToPublicationMissing != 0 || publicationToDurableUnexpected != 0)
         {
             throw new InvalidOperationException(
-                $"Recovery fence {fence} failed committed/projection reconciliation: " +
-                $"durableMissing={durableReadbackMissing}, phaseOneProjectionMissing={phaseOneProjectionMissing}, " +
+                $"Recovery fence {fence} failed committed/publication reconciliation: " +
+                $"durableMissing={durableReadbackMissing}, phaseOnePublicationMissing={phaseOnePublicationMissing}, " +
                 $"ledgerToDurableMissing={ledgerToDurableMissing}, " +
                 $"durableToLedgerUnexpected={durableToLedgerUnexpected}, " +
-                $"durableToProjectionMissing={durableToProjectionMissing}, " +
-                $"projectionToDurableUnexpected={projectionToDurableUnexpected}.");
+                $"durableToPublicationMissing={durableToPublicationMissing}, " +
+                $"publicationToDurableUnexpected={publicationToDurableUnexpected}.");
         }
 
         return new CrashRecoveryObservation(
             fence,
             preCommitted.LongCount(),
             preDurable.LongCount(),
-            preObserved.LongCount(),
+            prePublished.LongCount(),
             recoveryCommitted.LongCount(),
-            recoveryObserved.LongCount(),
+            recoveryPublished.LongCount(),
             finalCommitted.LongCount(),
             finalDurable.LongCount(),
-            finalObserved.LongCount(),
+            finalPublished.LongCount(),
             finalLedgerEventIds.Count,
             finalDurableEventIds.Count,
-            finalProjectionEventIds.Count,
+            finalPublicationEventIds.Count,
             committedIdentityOverlap,
-            projectionIdentityOverlap,
+            publicationIdentityOverlap,
             sequenceOverlap,
             payloadOverlapFacts.LongLength,
             payloadOverlapFacts.Sum(static fact => fact.SerializedBytes),
             durableReadbackMissing,
-            phaseOneProjectionMissing,
+            phaseOnePublicationMissing,
             ledgerToDurableMissing,
             durableToLedgerUnexpected,
-            durableToProjectionMissing,
-            projectionToDurableUnexpected);
+            durableToPublicationMissing,
+            publicationToDurableUnexpected,
+            generatedBeforeRecovery.Operations.Count,
+            phaseOneCommittedSemantics.Count,
+            generatedDuringRecovery.Operations.Count,
+            recoveryCommittedSemantics.Count,
+            phaseOneAttemptLocalTail,
+            phaseOneCommittedWithoutGenerated,
+            recoveryGeneratedToCommittedMissing,
+            recoveryCommittedWithoutGenerated,
+            materializedCurrentState,
+            recoveredUserVisibleSemantics);
+    }
+
+    private static IReadOnlyList<string> BuildProviderComparableSemanticOperations(
+        IEnumerable<StateEvent> events,
+        string attemptId)
+    {
+        var operations = new List<string>();
+        long ordinal = 0;
+
+        void Add(RoleChatSessionProgressedEvent progress)
+        {
+            var fingerprint = StreamingSemanticEvidence.FromCommittedProgress(progress);
+            if (fingerprint == null)
+                return;
+            operations.Add(StreamingSemanticEvidence.BuildOperationEvidence(
+                progress.SessionId,
+                attemptId,
+                ++ordinal,
+                fingerprint));
+        }
+
+        foreach (var stateEvent in events)
+        {
+            if (stateEvent.EventData?.Is(RoleChatSessionProgressedEvent.Descriptor) == true)
+            {
+                Add(stateEvent.EventData.Unpack<RoleChatSessionProgressedEvent>());
+                continue;
+            }
+
+            if (stateEvent.EventData?.Is(RoleChatSessionCompletedEvent.Descriptor) != true)
+                continue;
+            var completed = stateEvent.EventData.Unpack<RoleChatSessionCompletedEvent>();
+            foreach (var terminalProgress in completed.TerminalProgress)
+                Add(terminalProgress);
+        }
+
+        return operations;
+    }
+
+    private static long CountOperationDifference(
+        IReadOnlyCollection<string> source,
+        IReadOnlyCollection<string> comparison)
+    {
+        var comparisonKeys = comparison.ToHashSet(StringComparer.Ordinal);
+        if (comparisonKeys.Count != comparison.Count)
+            throw new InvalidOperationException("Semantic operation evidence contains duplicate identities.");
+        return source.LongCount(operation => !comparisonKeys.Contains(operation));
     }
 
     private static HashSet<string> BuildEventIds(
@@ -628,10 +935,33 @@ public static class Program
                         $"sample {sample.Iteration} has no recovery reconciliation evidence.");
                     if (observation.LedgerToDurableMissingEvents != 0 ||
                         observation.DurableToLedgerUnexpectedEvents != 0 ||
-                        observation.DurableToProjectionMissingEvents != 0 ||
-                        observation.ProjectionToDurableUnexpectedEvents != 0 ||
+                        observation.DurableToCommittedPublicationMissingEvents != 0 ||
+                        observation.CommittedPublicationToDurableUnexpectedEvents != 0 ||
                         observation.FinalAppendLedgerEvents != observation.FinalDurableReadbackEvents ||
-                        observation.FinalDurableReadbackEvents != observation.FinalProjectionVisibleEvents)
+                        observation.FinalDurableReadbackEvents != observation.FinalCommittedPublicationEvents ||
+                        observation.PhaseOneGeneratedSemanticEvents <= 0 ||
+                        observation.PhaseOneAttemptLocalGeneratedTailEvents != 1 ||
+                        observation.PhaseOneCommittedWithoutGeneratedEvidence != 0 ||
+                        observation.PhaseOneGeneratedSemanticEvents !=
+                            observation.PhaseOneCommittedSemanticEvents +
+                            observation.PhaseOneAttemptLocalGeneratedTailEvents ||
+                        observation.RecoveryGeneratedSemanticEvents <= 0 ||
+                        observation.RecoveryGeneratedSemanticEvents !=
+                            observation.RecoveryCommittedSemanticEvents ||
+                        observation.RecoveryGeneratedToCommittedMissingEvents != 0 ||
+                        observation.RecoveryCommittedWithoutGeneratedEvidence != 0 ||
+                        !IsValidMaterializedCheckpoint(observation.MaterializedCurrentState.PhaseOne) ||
+                        !IsValidMaterializedCheckpoint(observation.MaterializedCurrentState.Final) ||
+                        !observation.MaterializedCurrentState.DuplicateWriteIdempotent ||
+                        !observation.MaterializedCurrentState.StaleWriteDidNotOverwrite ||
+                        !string.Equals(
+                            observation.RecoveredUserVisibleSemantics.SessionId,
+                            observation.MaterializedCurrentState.Final.MaterializedReadModel?.SessionId,
+                            StringComparison.Ordinal) ||
+                        string.IsNullOrWhiteSpace(
+                            observation.RecoveredUserVisibleSemantics.RecoveryGeneratedUsageSha256) ||
+                        !observation.RecoveredUserVisibleSemantics.FinalContentMatchesRecoveryGeneration ||
+                        !observation.RecoveredUserVisibleSemantics.FinalUsageMatchesRecoveryGeneration)
                     {
                         throw new InvalidOperationException(
                             $"Adapter {adapter.Adapter} fence {observation.Fence} sample {sample.Iteration} " +
@@ -641,6 +971,11 @@ public static class Program
             }
         }
     }
+
+    private static bool IsValidMaterializedCheckpoint(MaterializedCurrentStateCheckpoint checkpoint) =>
+        checkpoint.ReadModelFound &&
+        checkpoint.DurableIdentityMatchesCommittedPublication &&
+        checkpoint.ReadModelMatchesCommittedPublication;
 
     private static IReadOnlyList<ProgressFact> BuildProgressFacts(IEnumerable<StateEvent> events)
     {
@@ -981,26 +1316,77 @@ public sealed record CrashRecoveryObservation(
     int Fence,
     long PhaseOneAppendLedgerProgressEvents,
     long PhaseOneDurableReadbackProgressEvents,
-    long PhaseOneProjectionVisibleProgressEvents,
+    long PhaseOneCommittedPublicationProgressEvents,
     long RecoveryAppendLedgerProgressEvents,
-    long RecoveryProjectionVisibleProgressEvents,
+    long RecoveryCommittedPublicationProgressEvents,
     long FinalAppendLedgerProgressEvents,
     long FinalDurableReadbackProgressEvents,
-    long FinalProjectionVisibleProgressEvents,
+    long FinalCommittedPublicationProgressEvents,
     long FinalAppendLedgerEvents,
     long FinalDurableReadbackEvents,
-    long FinalProjectionVisibleEvents,
+    long FinalCommittedPublicationEvents,
     long RecoveryAppendLedgerEventIdentityOverlap,
-    long RecoveryProjectionEventIdentityOverlap,
+    long RecoveryCommittedPublicationEventIdentityOverlap,
     long RecoverySequenceOverlap,
     long RecoveryPayloadOverlapEvents,
     long RecoveryPayloadOverlapSerializedBytes,
     long PhaseOneDurableReadbackMissingEvents,
-    long PhaseOneProjectionMissingEvents,
+    long PhaseOneCommittedPublicationMissingEvents,
     long LedgerToDurableMissingEvents,
     long DurableToLedgerUnexpectedEvents,
-    long DurableToProjectionMissingEvents,
-    long ProjectionToDurableUnexpectedEvents);
+    long DurableToCommittedPublicationMissingEvents,
+    long CommittedPublicationToDurableUnexpectedEvents,
+    long PhaseOneGeneratedSemanticEvents,
+    long PhaseOneCommittedSemanticEvents,
+    long RecoveryGeneratedSemanticEvents,
+    long RecoveryCommittedSemanticEvents,
+    long PhaseOneAttemptLocalGeneratedTailEvents,
+    long PhaseOneCommittedWithoutGeneratedEvidence,
+    long RecoveryGeneratedToCommittedMissingEvents,
+    long RecoveryCommittedWithoutGeneratedEvidence,
+    MaterializedCurrentStateEvidence MaterializedCurrentState,
+    RecoveredUserVisibleSemanticEvidence RecoveredUserVisibleSemantics);
+
+public sealed record RecoveredUserVisibleSemanticEvidence(
+    string SessionId,
+    int GeneratedTextDeltaCount,
+    string RecoveryGeneratedTextSha256,
+    string MaterializedFinalContentSha256,
+    string RecoveryGeneratedUsageSha256,
+    string MaterializedUsageSha256,
+    bool FinalContentMatchesRecoveryGeneration,
+    bool FinalUsageMatchesRecoveryGeneration);
+
+public sealed record MaterializedCurrentStateEvidence(
+    MaterializedCurrentStateCheckpoint PhaseOne,
+    MaterializedCurrentStateCheckpoint Final,
+    bool DuplicateWriteIdempotent,
+    bool StaleWriteDidNotOverwrite);
+
+public sealed record MaterializedCurrentStateCheckpoint(
+    bool ReadModelFound,
+    StateEventIdentity DurableAuthority,
+    RoleCurrentStateFacts CommittedPublication,
+    RoleCurrentStateFacts? MaterializedReadModel,
+    bool DurableIdentityMatchesCommittedPublication,
+    bool ReadModelMatchesCommittedPublication);
+
+public sealed record StateEventIdentity(long StateVersion, string EventId);
+
+public sealed record RoleCurrentStateFacts(
+    string ActorId,
+    long StateVersion,
+    string LastEventId,
+    string StateRootSha256,
+    int TrackedSessionCount,
+    int TerminalSessionCount,
+    int CompletedSessionCount,
+    int FailedSessionCount,
+    int BlockedSessionCount,
+    long MaxProgressSequence,
+    string SessionId,
+    string FinalContentSha256,
+    string UsageSha256);
 
 internal sealed record ResourceControlSample(double CpuMs, long AllocatedBytes);
 internal sealed record ProgressFact(
@@ -1008,6 +1394,18 @@ internal sealed record ProgressFact(
     string SequenceKey,
     string PayloadFingerprint,
     long SerializedBytes);
+internal sealed record GeneratedSemanticEvidenceSnapshot(
+    string SessionId,
+    string AttemptId,
+    IReadOnlyList<string> Operations,
+    int TextDeltaCount,
+    string GeneratedTextSha256,
+    string GeneratedUsageSha256);
+internal sealed record CommittedPublicationSnapshot(
+    EventEnvelope Envelope,
+    long StateVersion,
+    string EventId,
+    RoleGAgentState State);
 
 public sealed record Distribution(int Count, double? P50, double? P95, double? P99, double? Max)
 {
@@ -1085,16 +1483,20 @@ public sealed record WorkloadSummary(
 
 public sealed record CrashRecoverySummary(
     Distribution RecoveryAppendLedgerEventIdentityOverlap,
-    Distribution RecoveryProjectionEventIdentityOverlap,
+    Distribution RecoveryCommittedPublicationEventIdentityOverlap,
     Distribution RecoverySequenceOverlap,
     Distribution RecoveryPayloadOverlapEvents,
     Distribution RecoveryPayloadOverlapSerializedBytes,
     Distribution PhaseOneDurableReadbackMissingEvents,
-    Distribution PhaseOneProjectionMissingEvents,
+    Distribution PhaseOneCommittedPublicationMissingEvents,
     Distribution LedgerToDurableMissingEvents,
     Distribution DurableToLedgerUnexpectedEvents,
-    Distribution DurableToProjectionMissingEvents,
-    Distribution ProjectionToDurableUnexpectedEvents)
+    Distribution DurableToCommittedPublicationMissingEvents,
+    Distribution CommittedPublicationToDurableUnexpectedEvents,
+    Distribution PhaseOneAttemptLocalGeneratedTailEvents,
+    Distribution PhaseOneCommittedWithoutGeneratedEvidence,
+    Distribution RecoveryGeneratedToCommittedMissingEvents,
+    Distribution RecoveryCommittedWithoutGeneratedEvidence)
 {
     public static CrashRecoverySummary? From(IReadOnlyList<TurnSample> samples)
     {
@@ -1106,16 +1508,20 @@ public sealed record CrashRecoverySummary(
             return null;
         return new CrashRecoverySummary(
             Distribution.From(observations.Select(static item => (double?)item.RecoveryAppendLedgerEventIdentityOverlap)),
-            Distribution.From(observations.Select(static item => (double?)item.RecoveryProjectionEventIdentityOverlap)),
+            Distribution.From(observations.Select(static item => (double?)item.RecoveryCommittedPublicationEventIdentityOverlap)),
             Distribution.From(observations.Select(static item => (double?)item.RecoverySequenceOverlap)),
             Distribution.From(observations.Select(static item => (double?)item.RecoveryPayloadOverlapEvents)),
             Distribution.From(observations.Select(static item => (double?)item.RecoveryPayloadOverlapSerializedBytes)),
             Distribution.From(observations.Select(static item => (double?)item.PhaseOneDurableReadbackMissingEvents)),
-            Distribution.From(observations.Select(static item => (double?)item.PhaseOneProjectionMissingEvents)),
+            Distribution.From(observations.Select(static item => (double?)item.PhaseOneCommittedPublicationMissingEvents)),
             Distribution.From(observations.Select(static item => (double?)item.LedgerToDurableMissingEvents)),
             Distribution.From(observations.Select(static item => (double?)item.DurableToLedgerUnexpectedEvents)),
-            Distribution.From(observations.Select(static item => (double?)item.DurableToProjectionMissingEvents)),
-            Distribution.From(observations.Select(static item => (double?)item.ProjectionToDurableUnexpectedEvents)));
+            Distribution.From(observations.Select(static item => (double?)item.DurableToCommittedPublicationMissingEvents)),
+            Distribution.From(observations.Select(static item => (double?)item.CommittedPublicationToDurableUnexpectedEvents)),
+            Distribution.From(observations.Select(static item => (double?)item.PhaseOneAttemptLocalGeneratedTailEvents)),
+            Distribution.From(observations.Select(static item => (double?)item.PhaseOneCommittedWithoutGeneratedEvidence)),
+            Distribution.From(observations.Select(static item => (double?)item.RecoveryGeneratedToCommittedMissingEvents)),
+            Distribution.From(observations.Select(static item => (double?)item.RecoveryCommittedWithoutGeneratedEvidence)));
     }
 }
 
@@ -1198,7 +1604,9 @@ internal sealed class SingleActorRuntime(LocalActor actor) : IActorRuntime
         throw new NotSupportedException("The measurement fixture has no topology links.");
 }
 
-internal sealed class WorkloadProviderFactory(WorkloadDefinition workload)
+internal sealed class WorkloadProviderFactory(
+    WorkloadDefinition workload,
+    GeneratedSemanticEvidenceRecorder? generatedSemanticEvidence = null)
     : ILLMProviderFactory, ILLMProvider
 {
     private int _round;
@@ -1220,7 +1628,7 @@ internal sealed class WorkloadProviderFactory(WorkloadDefinition workload)
             for (var index = 1; index <= Workload.ToolCalls; index++)
             {
                 ct.ThrowIfCancellationRequested();
-                yield return new LLMStreamChunk
+                yield return RecordGenerated(new LLMStreamChunk
                 {
                     DeltaToolCall = new ToolCall
                     {
@@ -1228,10 +1636,10 @@ internal sealed class WorkloadProviderFactory(WorkloadDefinition workload)
                         Name = $"measurement_tool_{index}",
                         ArgumentsJson = $"{{\"index\":{index}}}",
                     },
-                };
+                });
                 await Task.Yield();
             }
-            yield return new LLMStreamChunk { IsLast = true, FinishReason = "tool_calls" };
+            yield return RecordGenerated(new LLMStreamChunk { IsLast = true, FinishReason = "tool_calls" });
             yield break;
         }
 
@@ -1247,10 +1655,10 @@ internal sealed class WorkloadProviderFactory(WorkloadDefinition workload)
                 for (var index = 0; index < Workload.ReasoningChunks; index++)
                 {
                     ct.ThrowIfCancellationRequested();
-                    yield return new LLMStreamChunk
+                    yield return RecordGenerated(new LLMStreamChunk
                     {
                         DeltaReasoningContent = FixedChunk("reasoning", index, Workload.ChunkCharacters),
-                    };
+                    });
                     await Task.Yield();
                 }
                 await foreach (var chunk in TextChunks(Workload.TextChunks, Workload.ChunkCharacters, ct))
@@ -1260,12 +1668,12 @@ internal sealed class WorkloadProviderFactory(WorkloadDefinition workload)
                 for (var index = 0; index < Workload.MediaParts; index++)
                 {
                     ct.ThrowIfCancellationRequested();
-                    yield return new LLMStreamChunk
+                    yield return RecordGenerated(new LLMStreamChunk
                     {
                         DeltaContentPart = ContentPart.ImageUriPart(
                             $"https://example.invalid/measurement/{index}.png",
                             name: $"measurement-{index}.png"),
-                    };
+                    });
                     await Task.Yield();
                 }
                 break;
@@ -1284,15 +1692,15 @@ internal sealed class WorkloadProviderFactory(WorkloadDefinition workload)
                 throw new InvalidOperationException($"Unknown workload kind '{Workload.Kind}'.");
         }
 
-        yield return new LLMStreamChunk
+        yield return RecordGenerated(new LLMStreamChunk
         {
             IsLast = true,
             FinishReason = "stop",
             Usage = new TokenUsage(32, Math.Max(1, Workload.TextChunks), 32 + Math.Max(1, Workload.TextChunks)),
-        };
+        });
     }
 
-    private static async IAsyncEnumerable<LLMStreamChunk> TextChunks(
+    private async IAsyncEnumerable<LLMStreamChunk> TextChunks(
         int count,
         int characters,
         [EnumeratorCancellation] CancellationToken ct)
@@ -1300,15 +1708,172 @@ internal sealed class WorkloadProviderFactory(WorkloadDefinition workload)
         for (var index = 0; index < count; index++)
         {
             ct.ThrowIfCancellationRequested();
-            yield return new LLMStreamChunk { DeltaContent = FixedChunk("text", index, characters) };
+            yield return RecordGenerated(
+                new LLMStreamChunk { DeltaContent = FixedChunk("text", index, characters) });
             await Task.Yield();
         }
+    }
+
+    private LLMStreamChunk RecordGenerated(LLMStreamChunk chunk)
+    {
+        generatedSemanticEvidence?.Observe(chunk);
+        return chunk;
     }
 
     private static string FixedChunk(string prefix, int index, int characters)
     {
         var header = $"{prefix}-{index:D3}:";
         return header + new string('x', Math.Max(1, characters - header.Length));
+    }
+}
+
+internal sealed class GeneratedSemanticEvidenceRecorder(string sessionId, string attemptId)
+{
+    private readonly object _lock = new();
+    private readonly List<string> _operations = new(64);
+    private readonly StringBuilder _generatedText = new();
+    private long _ordinal;
+    private int _textDeltaCount;
+    private string _generatedUsageSha256 = string.Empty;
+
+    public void Observe(LLMStreamChunk chunk)
+    {
+        var generated = StreamingSemanticEvidence.FromGeneratedChunk(chunk);
+        if (generated.Count == 0)
+            return;
+        lock (_lock)
+        {
+            foreach (var fingerprint in generated)
+            {
+                _operations.Add(StreamingSemanticEvidence.BuildOperationEvidence(
+                    sessionId,
+                    attemptId,
+                    ++_ordinal,
+                    fingerprint));
+            }
+            if (!string.IsNullOrEmpty(chunk.DeltaContent))
+            {
+                _generatedText.Append(chunk.DeltaContent);
+                _textDeltaCount++;
+            }
+            if (chunk.Usage != null)
+            {
+                _generatedUsageSha256 = StreamingSemanticEvidence.HashUsage(
+                    new TokenUsagePayload
+                    {
+                        PromptTokens = chunk.Usage.PromptTokens,
+                        CompletionTokens = chunk.Usage.CompletionTokens,
+                        TotalTokens = chunk.Usage.TotalTokens,
+                    });
+            }
+        }
+    }
+
+    public GeneratedSemanticEvidenceSnapshot Snapshot()
+    {
+        lock (_lock)
+        {
+            return new GeneratedSemanticEvidenceSnapshot(
+                sessionId,
+                attemptId,
+                _operations.ToArray(),
+                _textDeltaCount,
+                StreamingSemanticEvidence.HashTextContent(_generatedText.ToString()),
+                _generatedUsageSha256);
+        }
+    }
+}
+
+internal static class StreamingSemanticEvidence
+{
+    public static IReadOnlyList<string> FromGeneratedChunk(LLMStreamChunk chunk)
+    {
+        var fingerprints = new List<string>(2);
+        if (!string.IsNullOrEmpty(chunk.DeltaContent))
+        {
+            fingerprints.Add(Fingerprint(
+                "text_delta",
+                new RoleChatTextDeltaProgress { Delta = chunk.DeltaContent }));
+        }
+        if (!string.IsNullOrEmpty(chunk.DeltaReasoningContent))
+        {
+            fingerprints.Add(Fingerprint(
+                "reasoning_delta",
+                new RoleChatReasoningDeltaProgress { Delta = chunk.DeltaReasoningContent }));
+        }
+        if (chunk.DeltaContentPart != null)
+        {
+            fingerprints.Add(Fingerprint(
+                "media_part",
+                ContentPartProtoMapper.ToProto(chunk.DeltaContentPart)));
+        }
+        if (chunk.DeltaToolCall != null)
+        {
+            fingerprints.Add(Fingerprint(
+                "tool_start_identity",
+                new RoleChatToolStartedProgress
+                {
+                    CallId = chunk.DeltaToolCall.Id ?? string.Empty,
+                    ToolName = chunk.DeltaToolCall.Name ?? string.Empty,
+                }));
+        }
+        if (chunk.Usage != null)
+        {
+            fingerprints.Add(Fingerprint(
+                "usage",
+                new TokenUsagePayload
+                {
+                    PromptTokens = chunk.Usage.PromptTokens,
+                    CompletionTokens = chunk.Usage.CompletionTokens,
+                    TotalTokens = chunk.Usage.TotalTokens,
+                }));
+        }
+        return fingerprints;
+    }
+
+    public static string? FromCommittedProgress(RoleChatSessionProgressedEvent progress) =>
+        progress.PayloadCase switch
+        {
+            RoleChatSessionProgressedEvent.PayloadOneofCase.TextDelta =>
+                Fingerprint("text_delta", progress.TextDelta),
+            RoleChatSessionProgressedEvent.PayloadOneofCase.ReasoningDelta =>
+                Fingerprint("reasoning_delta", progress.ReasoningDelta),
+            RoleChatSessionProgressedEvent.PayloadOneofCase.Media =>
+                Fingerprint("media_part", progress.Media.Part),
+            RoleChatSessionProgressedEvent.PayloadOneofCase.ToolStarted =>
+                Fingerprint(
+                    "tool_start_identity",
+                    new RoleChatToolStartedProgress
+                    {
+                        CallId = progress.ToolStarted.CallId,
+                        ToolName = progress.ToolStarted.ToolName,
+                    }),
+            RoleChatSessionProgressedEvent.PayloadOneofCase.Usage =>
+                Fingerprint("usage", progress.Usage.Usage),
+            _ => null,
+        };
+
+    public static string BuildOperationEvidence(
+        string sessionId,
+        string attemptId,
+        long ordinal,
+        string semanticFingerprint) =>
+        $"{sessionId}\u001f{attemptId}\u001f{ordinal}\u001f{semanticFingerprint}";
+
+    public static string HashTextContent(string content) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(content ?? string.Empty)));
+
+    public static string HashUsage(TokenUsagePayload usage) => Fingerprint("usage", usage);
+
+    private static string Fingerprint(string kind, IMessage payload)
+    {
+        var kindBytes = Encoding.UTF8.GetBytes(kind);
+        var payloadBytes = payload.ToByteArray();
+        var input = new byte[kindBytes.Length + 1 + payloadBytes.Length];
+        kindBytes.CopyTo(input, 0);
+        input[kindBytes.Length] = 0;
+        payloadBytes.CopyTo(input, kindBytes.Length + 1);
+        return $"{kind}:{Convert.ToHexString(SHA256.HashData(input))}";
     }
 }
 
@@ -1560,13 +2125,72 @@ internal sealed class FailureInjectingEventStore(IEventStore inner) : IEventStor
     public void Reset() => _successfulAppends = 0;
 }
 
-internal sealed class CommittedStateEventRecorder
+internal sealed record MeasurementRoleCurrentStateProjectionContext(string RootActorId)
+    : IProjectionMaterializationContext
+{
+    public string ProjectionKind => "measurement-role-current-state";
+}
+
+internal sealed class MeasurementRoleCurrentStateProjector
+    : MappedCurrentStateProjectionMaterializer<
+        MeasurementRoleCurrentStateProjectionContext,
+        RoleGAgentState,
+        MeasurementRoleCurrentStateReadModel>
+{
+    public MeasurementRoleCurrentStateProjector(
+        IProjectionWriteDispatcher<MeasurementRoleCurrentStateReadModel> writeDispatcher,
+        IProjectionClock clock)
+        : base(writeDispatcher, clock)
+    {
+    }
+
+    protected override MeasurementRoleCurrentStateReadModel Map(
+        MappedCurrentStateProjectionInput<MeasurementRoleCurrentStateProjectionContext, RoleGAgentState> input)
+    {
+        var sessions = input.State.Sessions.Values;
+        var onlySession = input.State.Sessions.Count == 1
+            ? input.State.Sessions.Single()
+            : default(KeyValuePair<string, RoleChatSessionState>);
+        return new MeasurementRoleCurrentStateReadModel
+        {
+            Id = input.Context.RootActorId,
+            ActorId = input.Context.RootActorId,
+            StateVersion = input.StateEvent.Version,
+            LastEventId = input.StateEvent.EventId ?? string.Empty,
+            UpdatedAt = input.ObservedAt,
+            StateRootSha256 = Convert.ToHexString(SHA256.HashData(input.State.ToByteArray())),
+            TrackedSessionCount = sessions.Count,
+            TerminalSessionCount = sessions.Count(static session =>
+                session.Outcome != RoleChatSessionOutcome.Unspecified),
+            CompletedSessionCount = sessions.Count(static session =>
+                session.Outcome == RoleChatSessionOutcome.Completed),
+            FailedSessionCount = sessions.Count(static session =>
+                session.Outcome == RoleChatSessionOutcome.Failed),
+            BlockedSessionCount = sessions.Count(static session =>
+                session.Outcome == RoleChatSessionOutcome.Blocked),
+            MaxProgressSequence = sessions.Count == 0
+                ? 0
+                : sessions.Max(static session => session.LastProgressSequence),
+            SessionId = onlySession.Key ?? string.Empty,
+            FinalContentSha256 = StreamingSemanticEvidence.HashTextContent(
+                onlySession.Value?.FinalContent ?? string.Empty),
+            UsageSha256 = onlySession.Value?.Usage == null
+                ? string.Empty
+                : StreamingSemanticEvidence.HashUsage(onlySession.Value.Usage),
+        };
+    }
+}
+
+internal sealed class CommittedPublicationProjectionObserver(
+    ICurrentStateProjectionMaterializer<MeasurementRoleCurrentStateProjectionContext> materializer,
+    MeasurementRoleCurrentStateProjectionContext context)
 {
     private readonly object _lock = new();
-    private readonly List<StateEvent> _observedEvents = new(256);
+    private readonly List<StateEvent> _publishedEvents = new(256);
+    private readonly List<EventEnvelope> _publishedEnvelopes = new(256);
     private readonly Dictionary<string, TaskCompletionSource> _drainMarkers = new(StringComparer.Ordinal);
 
-    public Task ObserveAsync(EventEnvelope envelope)
+    public async Task ObserveAsync(EventEnvelope envelope)
     {
         TaskCompletionSource? drainCompletion = null;
         lock (_lock)
@@ -1577,40 +2201,49 @@ internal sealed class CommittedStateEventRecorder
         if (drainCompletion != null)
         {
             drainCompletion.TrySetResult();
-            return Task.CompletedTask;
+            return;
         }
 
         if (envelope.Payload?.Is(CommittedStateEventPublished.Descriptor) != true)
-            return Task.CompletedTask;
+            return;
         var published = envelope.Payload.Unpack<CommittedStateEventPublished>();
         if (published.StateEvent != null)
         {
             lock (_lock)
-                _observedEvents.Add(published.StateEvent);
+            {
+                _publishedEvents.Add(published.StateEvent.Clone());
+                _publishedEnvelopes.Add(envelope.Clone());
+            }
         }
 
-        return Task.CompletedTask;
+        await materializer.ProjectAsync(context, envelope);
     }
 
     public async Task DrainAsync(IStream stream)
     {
-        var markerId = $"projection-drain-{Guid.NewGuid():N}";
+        var markerId = $"publication-projection-drain-{Guid.NewGuid():N}";
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         lock (_lock)
             _drainMarkers.Add(markerId, completion);
         await stream.ProduceAsync(new EventEnvelope
         {
             Id = markerId,
-            Payload = Any.Pack(new StringValue { Value = "measurement-projection-drain" }),
+            Payload = Any.Pack(new StringValue { Value = "measurement-publication-projection-drain" }),
             Route = EnvelopeRouteSemantics.CreateDirect("measurement-harness", stream.StreamId),
         });
         await completion.Task.WaitAsync(TimeSpan.FromSeconds(30));
     }
 
-    public IReadOnlyList<StateEvent> ObservedEventsSnapshot()
+    public IReadOnlyList<StateEvent> PublishedEventsSnapshot()
     {
         lock (_lock)
-            return _observedEvents.ToArray();
+            return _publishedEvents.Select(static stateEvent => stateEvent.Clone()).ToArray();
+    }
+
+    public IReadOnlyList<EventEnvelope> PublishedEnvelopesSnapshot()
+    {
+        lock (_lock)
+            return _publishedEnvelopes.Select(static envelope => envelope.Clone()).ToArray();
     }
 }
 

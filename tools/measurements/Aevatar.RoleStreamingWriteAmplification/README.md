@@ -91,15 +91,32 @@ dotnet run \
   noise. CPU and allocation remain process deltas (`TotalProcessorTime` and
   `GC.GetTotalAllocatedBytes(true)`), so neither gross nor net is a production
   cost attribution. Managed heap and working set are gross diagnostics only.
-- Recovery validation subscribes to the actual `CommittedStateEventPublished`
-  stream and performs a fresh `baseStore.GetEventsAsync(actorId)` read after
-  recovery completes. Every sample reconciles the full `StateEvent` ID sets in
-  four fail-closed directions: append ledger to durable missing, durable to
-  ledger unexpected, durable to projection missing, and projection to durable
-  unexpected. The raw output schema is version 3 and records all four counts.
-  Progress redo is a separate diagnostic based on event ID,
-  `session_id + sequence`, and a sequence-free payload SHA-256 fingerprint;
-  no fence is labelled a maximum.
+- Recovery validation records provider-generated text, reasoning, media,
+  tool-start identity, and usage immediately before each fake provider chunk
+  is yielded. Attempt-scoped operation evidence uses
+  `session + attempt + semantic ordinal + kind + payload hash`; terminal
+  progress embedded in the completion event is expanded through the same
+  extractor. The injected phase-one generated-but-uncommitted tail is reported
+  separately from committed progress loss. The successful recovery attempt
+  must match committed semantics in both directions without deriving expected
+  evidence from configuration or the append decorator.
+- The harness subscribes to the actual `CommittedStateEventPublished` stream,
+  then sends the same envelope through a formally registered
+  `ICurrentStateProjectionMaterializer`, projection write dispatcher, and
+  InMemory document projection store. The measurement-only protobuf read model
+  is independently read after phase one and final recovery; it is not a
+  production `RoleGAgent` read model and is never registered by a host.
+- Every sample reconciles full `StateEvent` ID sets in four fail-closed
+  directions: append ledger to durable missing, durable to ledger unexpected,
+  durable to committed-publication missing, and committed-publication to
+  durable unexpected. It also requires read-model version, last event ID,
+  state-root SHA-256, and session facts to match the committed publication,
+  and proves duplicate-write idempotency plus stale-write rejection. The raw
+  output also requires the successful recovery attempt's generated text and
+  usage hashes to equal the independently materialized final session facts.
+  The schema is version 4. Progress redo remains a separate diagnostic based on
+  event ID, `session_id + sequence`, and a sequence-free payload SHA-256
+  fingerprint; no fence is labelled a maximum.
 - Percentiles use nearest rank. With twelve samples, p95 and p99 are both the
   maximum sample and must not be treated as production tail estimates.
 
@@ -110,7 +127,7 @@ Assert the checked-in final recovery evidence:
 
 ```bash
 jq -e '
-  .schemaVersion == 3 and
+  .schemaVersion == 4 and
   ([.adapters[].adapter] | sort) == ["garnet", "inmemory"] and
   all(.adapters[]; .status == "measured") and
   all(
@@ -120,10 +137,28 @@ jq -e '
       .samples[];
       .crashRecovery.ledgerToDurableMissingEvents == 0 and
       .crashRecovery.durableToLedgerUnexpectedEvents == 0 and
-      .crashRecovery.durableToProjectionMissingEvents == 0 and
-      .crashRecovery.projectionToDurableUnexpectedEvents == 0 and
+      .crashRecovery.durableToCommittedPublicationMissingEvents == 0 and
+      .crashRecovery.committedPublicationToDurableUnexpectedEvents == 0 and
       .crashRecovery.finalAppendLedgerEvents == .crashRecovery.finalDurableReadbackEvents and
-      .crashRecovery.finalDurableReadbackEvents == .crashRecovery.finalProjectionVisibleEvents
+      .crashRecovery.finalDurableReadbackEvents == .crashRecovery.finalCommittedPublicationEvents and
+      .crashRecovery.phaseOneAttemptLocalGeneratedTailEvents == 1 and
+      .crashRecovery.phaseOneCommittedWithoutGeneratedEvidence == 0 and
+      .crashRecovery.phaseOneGeneratedSemanticEvents ==
+        (.crashRecovery.phaseOneCommittedSemanticEvents + 1) and
+      .crashRecovery.recoveryGeneratedSemanticEvents ==
+        .crashRecovery.recoveryCommittedSemanticEvents and
+      .crashRecovery.recoveryGeneratedToCommittedMissingEvents == 0 and
+      .crashRecovery.recoveryCommittedWithoutGeneratedEvidence == 0 and
+      .crashRecovery.materializedCurrentState.phaseOne.readModelFound and
+      .crashRecovery.materializedCurrentState.phaseOne.durableIdentityMatchesCommittedPublication and
+      .crashRecovery.materializedCurrentState.phaseOne.readModelMatchesCommittedPublication and
+      .crashRecovery.materializedCurrentState.final.readModelFound and
+      .crashRecovery.materializedCurrentState.final.durableIdentityMatchesCommittedPublication and
+      .crashRecovery.materializedCurrentState.final.readModelMatchesCommittedPublication and
+      .crashRecovery.materializedCurrentState.duplicateWriteIdempotent and
+      .crashRecovery.materializedCurrentState.staleWriteDidNotOverwrite and
+      .crashRecovery.recoveredUserVisibleSemantics.finalContentMatchesRecoveryGeneration and
+      .crashRecovery.recoveredUserVisibleSemantics.finalUsageMatchesRecoveryGeneration
     )
   )
 ' docs/audit-scorecard/raw/2026-08-02-role-streaming-write-amplification.json
