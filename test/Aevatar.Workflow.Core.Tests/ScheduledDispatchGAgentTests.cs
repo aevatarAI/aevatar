@@ -5063,8 +5063,7 @@ public sealed class ScheduledDispatchGAgentTests
         {
             configured.ScheduleMode = ScheduledDispatchScheduleModeState.OneShotAtUtc;
             configured.CronExpression = string.Empty;
-            configured.OneShotFireAt = Timestamp.FromDateTimeOffset(
-                new DateTimeOffset(2026, 8, 1, 2, 0, 0, TimeSpan.Zero));
+            configured.OneShotFireAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddDays(1));
         }),
         ("credential-target-kind", configured => configured.Target.CredentialRequirementTargetKind =
             ScheduledDispatchCredentialRequirementTargetKindState.Connector),
