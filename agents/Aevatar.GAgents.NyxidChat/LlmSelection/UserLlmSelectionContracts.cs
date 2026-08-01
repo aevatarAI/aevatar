@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.Studio.Application.Studio.Abstractions;
@@ -30,12 +31,7 @@ public interface IUserLlmSelectionService
     Task SetByServiceAsync(
         UserLlmSelectionContext context,
         string userServiceId,
-        string? modelOverride,
-        CancellationToken ct);
-
-    Task SetModelOverrideAsync(
-        UserLlmSelectionContext context,
-        string model,
+        LLMModelSelection modelSelection,
         CancellationToken ct);
 
     Task ApplyPresetAsync(
@@ -71,7 +67,7 @@ public interface IUserLlmOptionsRenderer<TChannelMessage>
 
     TChannelMessage RenderOptions(UserLlmOptionsView view, UserLlmSelectionDisplayMode mode, int page = 1);
 
-    TChannelMessage RenderSelectionConfirm(UserLlmOption picked, string? model);
+    TChannelMessage RenderSelectionConfirm(UserLlmOption picked, LLMModelSelection modelSelection);
 
     TChannelMessage RenderSetupGuide(UserLlmSetupHint hint);
 

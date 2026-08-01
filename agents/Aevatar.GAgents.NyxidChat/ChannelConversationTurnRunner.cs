@@ -853,18 +853,24 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 if (string.IsNullOrWhiteSpace(action.Value))
                     return new MessageContent { Text = "缺少要切换的 LLM service,请重新发送 /models。" };
 
-                await selectionService.SetByServiceAsync(selectionContext, action.Value.Trim(), modelOverride: null, ct)
+                var picked = (await optionsService.GetOptionsAsync(query, ct).ConfigureAwait(false))
+                    .Available.FirstOrDefault(option =>
+                        option.Identity is
+                        {
+                            Authority: UserLlmIdentityAuthority.NyxIdUserServicesInventory,
+                        } identity &&
+                        string.Equals(identity.NyxIdUserServiceId, action.Value.Trim(), StringComparison.Ordinal));
+                await selectionService.SetByServiceAsync(
+                        selectionContext,
+                        action.Value.Trim(),
+                        new LLMModelSelection { Kind = LLMModelSelectionKind.ProviderDefault },
+                        ct)
                     .ConfigureAwait(false);
-                var updated = await optionsService.GetOptionsAsync(query, ct).ConfigureAwait(false);
-                var picked = updated.Current ?? updated.Available.FirstOrDefault(option =>
-                    option.Identity is
-                    {
-                        Authority: UserLlmIdentityAuthority.NyxIdUserServicesInventory,
-                    } identity &&
-                    string.Equals(identity.NyxIdUserServiceId, action.Value.Trim(), StringComparison.Ordinal));
                 return picked is null
-                    ? new MessageContent { Text = "已切换 LLM service。下一条消息会用新的设置回复。" }
-                    : renderer.RenderSelectionConfirm(picked, picked.ModelCatalog.DefaultModelId);
+                    ? new MessageContent { Text = "LLM 选择更新已提交；观察到更新后的设置后生效。" }
+                    : renderer.RenderSelectionConfirm(
+                        picked,
+                        new LLMModelSelection { Kind = LLMModelSelectionKind.ProviderDefault });
             }
 
             if (string.Equals(action.Action, TextUserLlmOptionsRenderer.ApplyPresetAction, StringComparison.Ordinal))
@@ -873,12 +879,10 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                     return new MessageContent { Text = "缺少要应用的 LLM preset,请重新发送 /models。" };
 
                 await selectionService.ApplyPresetAsync(selectionContext, action.Value.Trim(), ct).ConfigureAwait(false);
-                var updated = await optionsService.GetOptionsAsync(query, ct).ConfigureAwait(false);
-                return updated.Current is null
-                    ? new MessageContent { Text = $"已应用 preset **{action.Value.Trim()}**。下一条消息会用新的 LLM 设置回复。" }
-                    : renderer.RenderSelectionConfirm(
-                        updated.Current,
-                        updated.Current.ModelCatalog.DefaultModelId);
+                return new MessageContent
+                {
+                    Text = $"LLM preset **{action.Value.Trim()}** 更新已提交；观察到更新后的设置后生效。",
+                };
             }
 
             if (string.Equals(action.Action, TextUserLlmOptionsRenderer.ListPageAction, StringComparison.Ordinal))
@@ -887,7 +891,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 return renderer.RenderOptions(updated, action.DisplayMode, action.Page);
             }
 
-            return new MessageContent { Text = "未识别的模型设置操作,请重新发送 /models。" };
+            return new MessageContent { Text = "这张模型设置卡片已失效，请重新发送 /models 获取最新选项。" };
         }
         catch (AevatarOAuthClientNotProvisionedException)
         {
@@ -1116,6 +1120,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 TextUserLlmOptionsRenderer.ApplyPresetActionId => TextUserLlmOptionsRenderer.ApplyPresetAction,
                 TextUserLlmOptionsRenderer.ListPageActionId => TextUserLlmOptionsRenderer.ListPageAction,
                 TextUserLlmOptionsRenderer.LegacySelectServiceActionId => TextUserLlmOptionsRenderer.SelectServiceAction,
+                TextUserLlmOptionsRenderer.LegacySelectModelActionId => TextUserLlmOptionsRenderer.LegacySelectModelAction,
                 TextUserLlmOptionsRenderer.LegacyApplyPresetActionId => TextUserLlmOptionsRenderer.ApplyPresetAction,
                 _ => string.Empty,
             };

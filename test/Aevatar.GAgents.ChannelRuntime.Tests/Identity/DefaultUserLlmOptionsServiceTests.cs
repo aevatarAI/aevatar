@@ -75,14 +75,12 @@ public sealed class DefaultUserLlmOptionsServiceTests
     }
 
     [Fact]
-    public async Task GetOptionsAsync_WithTypedGatewayAndServiceRouteSnapshot_ShouldResolveCanonicalGatewayOnly()
+    public async Task GetOptionsAsync_WithValidTypedGateway_ShouldResolveCanonicalGatewayOnly()
     {
         var selection = new LLMSelection
         {
             RouteKind = LLMRouteKind.Gateway,
-            RouteValue = SharedRoute,
-            NyxIdUserServiceId = "us-alpha",
-            ServiceSlugSnapshot = "shared-llm",
+            RouteValue = UserConfigLlmRouteDefaults.Gateway,
             ModelSelection = ProviderDefaultModel(),
         };
 

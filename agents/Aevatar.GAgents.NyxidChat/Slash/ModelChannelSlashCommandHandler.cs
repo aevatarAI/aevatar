@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions.Slash;
@@ -211,7 +212,7 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(argument))
-            return new MessageContent { Text = "用法:`/route use <service-number|service-name> [model-name]` 或 `/model use <model-name>`" };
+            return new MessageContent { Text = "用法:`/model use <service-number|service-name> [model-name]`" };
 
         var query = BuildQuery(context, bindingId);
         var selectionContext = BuildSelectionContext(context, bindingId);
@@ -227,33 +228,28 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
                 .ConfigureAwait(false);
         }
 
-        try
-        {
-            await _selectionService!.SetModelOverrideAsync(selectionContext, requested, ct).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
-        {
-            return new MessageContent { Text = ex.Message };
-        }
-
-        return new MessageContent
-        {
-            Text = $"已设置模型覆盖 **{requested}**。当前 LLM route 保持不变,下一条消息会尝试使用这个 model。",
-        };
+        return UsageHint();
     }
 
     private async Task<MessageContent> ApplyServiceAsync(
         UserLlmSelectionContext context,
         UserLlmOption option,
-        string? modelOverride,
+        string? model,
         CancellationToken ct)
     {
+        var modelSelection = new LLMModelSelection
+        {
+            Kind = string.IsNullOrWhiteSpace(model)
+                ? LLMModelSelectionKind.ProviderDefault
+                : LLMModelSelectionKind.ExplicitModel,
+            ModelId = model?.Trim() ?? string.Empty,
+        };
         try
         {
             var userServiceId = InventoryUserServiceId(option) ??
                                 throw new InvalidOperationException(
                                     "The selected LLM option does not have an inventory identity.");
-            await _selectionService!.SetByServiceAsync(context, userServiceId, modelOverride, ct)
+            await _selectionService!.SetByServiceAsync(context, userServiceId, modelSelection, ct)
                 .ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
@@ -261,7 +257,7 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
             return new MessageContent { Text = ex.Message };
         }
 
-        return _renderer!.RenderSelectionConfirm(option, modelOverride ?? option.ModelCatalog.DefaultModelId);
+        return _renderer!.RenderSelectionConfirm(option, modelSelection);
     }
 
     private async Task<MessageContent> HandlePresetAsync(
@@ -286,7 +282,7 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
 
         return new MessageContent
         {
-            Text = $"已应用 preset **{presetId.Trim()}**。下一条消息会用新的 LLM 设置回复。",
+            Text = $"LLM preset **{presetId.Trim()}** 更新已提交；观察到更新后的设置后生效。",
         };
     }
 
@@ -306,7 +302,7 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
             return new MessageContent { Text = ex.Message };
         }
 
-        return new MessageContent { Text = "已清空你的 service/model 偏好,后续消息使用 bot 默认设置。" };
+        return new MessageContent { Text = "LLM 选择重置已提交；观察到更新后的设置后使用系统默认。" };
     }
 
     private static bool TryResolveServiceSelection(
@@ -339,13 +335,6 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
             return true;
         }
 
-        var named = FindOption(requested, available);
-        if (named is not null)
-        {
-            option = named;
-            return true;
-        }
-
         if (TryResolveExactOptionPrefix(requested, available, out var prefixOption, out var prefixModel))
         {
             option = prefixOption;
@@ -371,7 +360,7 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
             return true;
         }
 
-        var namedOption = FindOption(serviceToken, available);
+        var namedOption = FindExactOption(serviceToken, available);
         if (namedOption is null)
             return false;
 
@@ -413,21 +402,6 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
 
         option = available[number - 1];
         return true;
-    }
-
-    private static UserLlmOption? FindOption(string requested, IReadOnlyList<UserLlmOption> available)
-    {
-        var exact = FindExactOption(requested, available);
-        if (exact is not null)
-            return exact;
-
-        var fuzzy = available
-            .Where(option =>
-                option.ServiceSlug.Contains(requested, StringComparison.OrdinalIgnoreCase) ||
-                option.DisplayName.Contains(requested, StringComparison.OrdinalIgnoreCase))
-            .ToArray();
-        return UserLlmPreferenceWriteCore.ChoosePreferredOption(fuzzy.Where(IsSelectable)) ??
-               (fuzzy.Length == 1 ? fuzzy[0] : null);
     }
 
     private static UserLlmOption? FindExactOption(string requested, IReadOnlyList<UserLlmOption> available)
@@ -567,8 +541,7 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
             "- `/route`:查看当前 route",
             "- `/model`:查看当前 model",
             "- `/route list` 或 `/model list`:查看所有可配置选项",
-            "- `/route use <编号|service-name> [model-name]`:切换 service,可同时指定 model",
-            "- `/model use <model-name>`:只覆盖当前 route 下的 model",
+            "- `/model use <编号|service-name> [model-name]`:提交完整 service/model 选择",
             "- `/model preset <preset-id>`:使用 setup preset",
             "- `/model reset`:清空你的偏好,回退到 bot 默认"),
     };

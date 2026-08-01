@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.Studio.Application.Studio.Abstractions;
@@ -42,7 +43,7 @@ public sealed class DefaultUserLlmOptionsService : IUserLlmOptionsService
         return new UserLlmOptionsView(current, available, setupHint)
         {
             CurrentRouteValue = ResolveCurrentRoute(currentConfig, current),
-            CurrentModel = currentConfig?.DefaultModel,
+            CurrentModel = ResolveCurrentModel(currentConfig),
         };
     }
 
@@ -96,6 +97,9 @@ public sealed class DefaultUserLlmOptionsService : IUserLlmOptionsService
         StudioUserConfig? config,
         IReadOnlyList<UserLlmOption> available)
     {
+        if (!HasReadyTypedSelection(config))
+            return null;
+
         return config?.LlmSelection?.RouteKind switch
         {
             LLMRouteKind.Gateway => FindRouteOption(
@@ -136,12 +140,31 @@ public sealed class DefaultUserLlmOptionsService : IUserLlmOptionsService
     }
 
     private static string ResolveCurrentRoute(StudioUserConfig? config, UserLlmOption? current) =>
-        config?.LlmSelection?.RouteKind switch
+        !HasReadyTypedSelection(config)
+            ? string.Empty
+            : config!.LlmSelection!.RouteKind switch
         {
             LLMRouteKind.Gateway => UserConfigLlmRouteDefaults.Gateway,
             LLMRouteKind.NyxIdUserService => current?.RouteValue ??
                                                      UserConfigLlmRoute.Normalize(config.LlmSelection.RouteValue),
             _ => string.Empty,
         };
+
+    private static string? ResolveCurrentModel(StudioUserConfig? config)
+    {
+        if (!HasReadyTypedSelection(config))
+            return null;
+
+        return config!.LlmSelection!.ModelSelection.Kind == LLMModelSelectionKind.ExplicitModel
+            ? config.LlmSelection.ModelSelection.ModelId
+            : null;
+    }
+
+    private static bool HasReadyTypedSelection(StudioUserConfig? config) =>
+        config is not null &&
+        LLMSelectionPolicy.ClassifyPersisted(
+            config.LlmSelection,
+            config.PreferredLlmRoute,
+            config.DefaultModel) == LLMSelectionPersistenceStatus.Ready;
 
 }

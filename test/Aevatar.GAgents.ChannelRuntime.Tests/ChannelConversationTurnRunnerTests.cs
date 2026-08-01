@@ -1780,9 +1780,16 @@ public sealed class ChannelConversationTurnRunnerTests
         result.LlmReplyRequest.Should().BeNull();
         result.SentActivityId.Should().Be("direct-reply:evt-llm-select-1");
         selectionService.SelectedServiceId.Should().Be("us-openai");
+        selectionService.SelectedModelSelection.Should().NotBeNull();
+        selectionService.SelectedModelSelection!.Kind.Should().Be(LLMModelSelectionKind.ProviderDefault);
+        selectionService.SelectedModelSelection.ModelId.Should().BeEmpty();
         selectionService.Context?.BindingId.Value.Should().Be("bnd-user-1");
+        optionsService.Calls.Should().Be(1);
         adapter.Replies.Should().ContainSingle();
         adapter.Replies[0].ReplyText.Should().Contain("OpenAI Work");
+        adapter.Replies[0].ReplyText.Should().Contain("更新已提交");
+        adapter.Replies[0].ReplyText.Should().NotContain("已切换");
+        adapter.Replies[0].ReplyText.Should().NotContain("下一条消息");
     }
 
     [Fact]
@@ -1984,9 +1991,89 @@ public sealed class ChannelConversationTurnRunnerTests
         result.SentActivityId.Should().Be("direct-reply:evt-llm-preset-typed-1");
         selectionService.PresetId.Should().Be("work-fast");
         selectionService.Context?.BindingId.Value.Should().Be("bnd-user-1");
+        selectionService.SelectedServiceId.Should().BeNull();
+        optionsService.Calls.Should().Be(0);
         adapter.Replies.Should().ContainSingle();
-        adapter.Replies[0].ReplyText.Should().Contain("OpenAI Work");
-        adapter.Replies[0].ReplyText.Should().Contain("/api/v1/proxy/s/openai-work");
+        adapter.Replies[0].ReplyText.Should().Contain("work-fast");
+        adapter.Replies[0].ReplyText.Should().Contain("更新已提交");
+        adapter.Replies[0].ReplyText.Should().NotContain("已应用");
+        adapter.Replies[0].ReplyText.Should().NotContain("下一条消息");
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldRejectLegacyLlmModelCardAction_WithRefreshHintAndNoWrite()
+    {
+        var subject = new ExternalSubjectRef
+        {
+            Platform = "lark",
+            Tenant = "scope-1",
+            ExternalUserId = "ou_user_1",
+        };
+        var broker = new InMemoryCapabilityBroker();
+        broker.SeedBinding(subject, new BindingId { Value = "bnd-user-1" });
+        var optionsService = new StubUserLlmOptionsService([]);
+        var selectionService = new RecordingUserLlmSelectionService();
+        var services = new ServiceCollection()
+            .AddSingleton<IExternalIdentityBindingQueryPort>(broker)
+            .AddSingleton<IUserLlmOptionsService>(optionsService)
+            .AddSingleton<IUserLlmSelectionService>(selectionService)
+            .AddSingleton<IUserLlmOptionsRenderer<MessageContent>>(new TextUserLlmOptionsRenderer())
+            .BuildServiceProvider();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(BuildRegistrationQueryPort(), adapter, services);
+        var activity = BuildCardActionActivity("evt-llm-model-legacy-1");
+        activity.Content.CardAction!.ActionId = TextUserLlmOptionsRenderer.LegacySelectModelActionId;
+        activity.Content.CardAction.SubmittedValue = "gpt-5.4";
+
+        var result = await runner.RunInboundAsync(activity, CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        selectionService.SelectedServiceId.Should().BeNull();
+        selectionService.PresetId.Should().BeNull();
+        selectionService.ResetCalled.Should().BeFalse();
+        optionsService.Calls.Should().Be(0);
+        adapter.Replies.Should().ContainSingle();
+        adapter.Replies[0].ReplyText.Should().Contain("/models");
+        adapter.Replies[0].ReplyText.Should().Contain("失效");
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldRejectUnknownLlmCardAction_WithRefreshHintAndNoWrite()
+    {
+        var subject = new ExternalSubjectRef
+        {
+            Platform = "lark",
+            Tenant = "scope-1",
+            ExternalUserId = "ou_user_1",
+        };
+        var broker = new InMemoryCapabilityBroker();
+        broker.SeedBinding(subject, new BindingId { Value = "bnd-user-1" });
+        var optionsService = new StubUserLlmOptionsService([]);
+        var selectionService = new RecordingUserLlmSelectionService();
+        var services = new ServiceCollection()
+            .AddSingleton<IExternalIdentityBindingQueryPort>(broker)
+            .AddSingleton<IUserLlmOptionsService>(optionsService)
+            .AddSingleton<IUserLlmSelectionService>(selectionService)
+            .AddSingleton<IUserLlmOptionsRenderer<MessageContent>>(new TextUserLlmOptionsRenderer())
+            .BuildServiceProvider();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(BuildRegistrationQueryPort(), adapter, services);
+        var activity = BuildCardActionActivity("evt-llm-action-unknown-1");
+        activity.Content.CardAction!.LlmSelection = new LlmSelectionActionPayload
+        {
+            Action = "select_future_model",
+        };
+
+        var result = await runner.RunInboundAsync(activity, CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        selectionService.SelectedServiceId.Should().BeNull();
+        selectionService.PresetId.Should().BeNull();
+        selectionService.ResetCalled.Should().BeFalse();
+        optionsService.Calls.Should().Be(0);
+        adapter.Replies.Should().ContainSingle();
+        adapter.Replies[0].ReplyText.Should().Contain("/models");
+        adapter.Replies[0].ReplyText.Should().Contain("失效");
     }
 
     [Fact]
@@ -5165,6 +5252,8 @@ public sealed class ChannelConversationTurnRunnerTests
         private readonly IReadOnlyList<UserLlmOption> _options;
         private readonly UserLlmOption? _current;
 
+        public int Calls { get; private set; }
+
         public StubUserLlmOptionsService(UserLlmOption option)
             : this([option], option)
         {
@@ -5178,18 +5267,21 @@ public sealed class ChannelConversationTurnRunnerTests
             _current = current;
         }
 
-        public Task<UserLlmOptionsView> GetOptionsAsync(UserLlmOptionsQuery query, CancellationToken ct) =>
-            Task.FromResult(new UserLlmOptionsView(_current, _options, null)
+        public Task<UserLlmOptionsView> GetOptionsAsync(UserLlmOptionsQuery query, CancellationToken ct)
+        {
+            Calls++;
+            return Task.FromResult(new UserLlmOptionsView(_current, _options, null)
             {
                 CurrentRouteValue = _current?.RouteValue,
                 CurrentModel = _current?.ModelCatalog.DefaultModelId,
             });
+        }
     }
 
     private sealed class RecordingUserLlmSelectionService : IUserLlmSelectionService
     {
         public string? SelectedServiceId { get; private set; }
-        public string? SelectedModel { get; private set; }
+        public LLMModelSelection? SelectedModelSelection { get; private set; }
         public string? PresetId { get; private set; }
         public bool ResetCalled { get; private set; }
         public UserLlmSelectionContext? Context { get; private set; }
@@ -5197,22 +5289,12 @@ public sealed class ChannelConversationTurnRunnerTests
         public Task SetByServiceAsync(
             UserLlmSelectionContext context,
             string serviceId,
-            string? modelOverride,
+            LLMModelSelection modelSelection,
             CancellationToken ct)
         {
             Context = context;
             SelectedServiceId = serviceId;
-            SelectedModel = modelOverride;
-            return Task.CompletedTask;
-        }
-
-        public Task SetModelOverrideAsync(
-            UserLlmSelectionContext context,
-            string model,
-            CancellationToken ct)
-        {
-            Context = context;
-            SelectedModel = model;
+            SelectedModelSelection = modelSelection.Clone();
             return Task.CompletedTask;
         }
 

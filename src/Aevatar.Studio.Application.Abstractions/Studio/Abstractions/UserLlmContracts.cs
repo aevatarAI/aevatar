@@ -214,13 +214,6 @@ public interface IChannelUserLlmPreferencePort
     Task<UserConfigSaveReceipt> SaveAsync(
         string bindingId,
         string? bearerToken,
-        SaveUserLlmPreferenceCommand command,
-        CancellationToken ct);
-
-    Task<UserConfigSaveReceipt> SaveSelectedOptionAsync(
-        string bindingId,
-        UserLlmOption option,
-        string? model,
-        bool preserveCurrentModelWhenMissing,
+        UserLlmPreferenceIntent intent,
         CancellationToken ct);
 }

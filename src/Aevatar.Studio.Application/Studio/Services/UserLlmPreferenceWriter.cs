@@ -38,24 +38,6 @@ public sealed class UserLlmPreferenceWriter
         CancellationToken ct) =>
         SaveAsync(resource, bearerToken, ToIntent(command), ct);
 
-    public Task<UserConfigSaveReceipt> SaveSelectedOptionAsync(
-        UserConfigResourceKey resource,
-        UserLlmOption option,
-        string? model,
-        bool preserveCurrentModelWhenMissing,
-        CancellationToken ct)
-    {
-        ArgumentNullException.ThrowIfNull(option);
-        _ = preserveCurrentModelWhenMissing;
-        var modelSelection = ToModelSelection(model);
-        ValidateModelSelection(option, modelSelection);
-        return _commandService.UpdateAsync(
-            resource,
-            new UserConfigUpdate(
-                LlmSelection: UserLlmPreferenceWriteCore.BuildInventorySelection(option, modelSelection)),
-            ct);
-    }
-
     private async Task<LLMSelection> BuildSelectionAsync(
         string? bearerToken,
         UserLlmPreferenceIntent intent,
