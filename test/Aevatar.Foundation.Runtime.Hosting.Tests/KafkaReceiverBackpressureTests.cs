@@ -167,6 +167,66 @@ public sealed class KafkaReceiverBackpressureTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public async Task KafkaReceiver_WhenRebalancedBeforeHighWatermark_ShouldRefreshAssignmentBeforeFirstPause()
+    {
+        var harness = CreateHarness(capacity: 3, highWatermark: 2, lowWatermark: 1);
+        var replacementPartition = new TopicPartition(harness.Options.TopicName, new Partition(1));
+        await harness.Receiver.Initialize(TestTimeout);
+
+        try
+        {
+            harness.Consumer.AddRecord(0);
+            await harness.Consumer.AwaitReturnedOffsetAsync(0);
+
+            harness.Consumer.ChangeAssignmentAndAddRecordOnNextConsume(
+                offset: 1,
+                recordPartition: replacementPartition,
+                replacementPartition);
+            await harness.Consumer.AwaitReturnedOffsetAsync(1);
+
+            var paused = await harness.Consumer.ReadPauseAsync();
+            paused.Should().Equal(replacementPartition);
+            paused.Should().NotContain(harness.TopicPartition,
+                "the first pause must use the assignment refreshed on the owner thread");
+            harness.Consumer.PauseCallCount.Should().Be(1);
+
+            var consumeCount = harness.Consumer.ConsumeCount;
+            await harness.Consumer.AwaitConsumeCountAsync(consumeCount + 2);
+        }
+        finally
+        {
+            await harness.Receiver.Shutdown(TestTimeout);
+        }
+    }
+
+    [Fact]
+    public async Task KafkaReceiver_WhenAssignmentBecomesEmptyBeforeHighWatermark_ShouldNotPauseRevokedPartition()
+    {
+        var harness = CreateHarness(capacity: 3, highWatermark: 2, lowWatermark: 1);
+        await harness.Receiver.Initialize(TestTimeout);
+
+        try
+        {
+            harness.Consumer.AddRecord(0);
+            await harness.Consumer.AwaitReturnedOffsetAsync(0);
+
+            harness.Consumer.ChangeAssignmentAndAddRecordOnNextConsume(
+                offset: 1,
+                recordPartition: harness.TopicPartition);
+            await harness.Consumer.AwaitReturnedOffsetAsync(1);
+
+            var consumeCount = harness.Consumer.ConsumeCount;
+            await harness.Consumer.AwaitConsumeCountAsync(consumeCount + 2);
+            harness.Consumer.PauseCallCount.Should().Be(0,
+                "an empty refreshed assignment must not reuse the revoked initial partition");
+        }
+        finally
+        {
+            await harness.Receiver.Shutdown(TestTimeout);
+        }
+    }
+
+    [Fact]
     public async Task KafkaReceiver_WhenAssignmentChangesWhilePaused_ShouldForgetRevokedAndPauseNewPartition()
     {
         var harness = CreateHarness(capacity: 3, highWatermark: 2, lowWatermark: 1);
@@ -839,10 +899,37 @@ public sealed class KafkaReceiverBackpressureTests(ITestOutputHelper output)
 
         public void AddRecord(long offset)
         {
-            AddConsumeStep(() => new ConsumeResult<Ignore, byte[]>
+            AddConsumeStep(() => CreateRecord(offset, GetAssignedPartition()));
+        }
+
+        public void ChangeAssignmentAndAddRecordOnNextConsume(
+            long offset,
+            TopicPartition recordPartition,
+            params TopicPartition[] assignment)
+        {
+            AddConsumeStep(() =>
+            {
+                lock (_stateLock)
+                {
+                    _assignment.Clear();
+                    _assignment.AddRange(assignment);
+                }
+
+                return CreateRecord(offset, recordPartition.Partition);
+            });
+        }
+
+        private Partition GetAssignedPartition()
+        {
+            lock (_stateLock)
+                return _assignment.Single().Partition;
+        }
+
+        private ConsumeResult<Ignore, byte[]> CreateRecord(long offset, Partition partition) =>
+            new()
             {
                 Topic = topicName,
-                Partition = GetAssignedPartition(),
+                Partition = partition,
                 Offset = new Offset(offset),
                 Message = new Message<Ignore, byte[]>
                 {
@@ -862,14 +949,7 @@ public sealed class KafkaReceiverBackpressureTests(ITestOutputHelper output)
                         Route = EnvelopeRouteSemantics.CreateDirect("publisher", streamId),
                     }.ToByteArray(),
                 },
-            });
-        }
-
-        private Partition GetAssignedPartition()
-        {
-            lock (_stateLock)
-                return _assignment.Single().Partition;
-        }
+            };
 
         public void ChangeAssignmentOnNextConsume(TopicPartition partition)
         {

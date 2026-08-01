@@ -481,9 +481,11 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
     private void ApplyBackpressure(IKafkaReceiverConsumer consumer, bool refreshAssignment)
     {
         var depth = _messageBuffer.Depth;
+        var enteredBackpressure = false;
         if (!_backpressureActive && depth >= _transportOptions.ReceiverBufferHighWatermark)
         {
             _backpressureActive = true;
+            enteredBackpressure = true;
             KafkaTransportMetrics.RecordReceiverBufferSaturation(
                 _providerName,
                 _transportOptions.TopicName,
@@ -494,7 +496,7 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
             _backpressureActive = false;
         }
 
-        if (!_hasAssignmentSnapshot || (refreshAssignment && _backpressureActive))
+        if (!_hasAssignmentSnapshot || (_backpressureActive && (enteredBackpressure || refreshAssignment)))
             RefreshAssignment(consumer);
 
         if (_backpressureActive)
