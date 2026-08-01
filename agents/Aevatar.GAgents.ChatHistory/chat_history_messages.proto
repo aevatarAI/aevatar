@@ -141,9 +141,15 @@ message ChatTurnAppendRejectedEvent {
   google.protobuf.Timestamp rejected_at = 5;
 }
 
+message DeleteConversationCommand {
+  string conversation_id = 1;
+  string scope_id = 2;
+}
+
 message ConversationDeletedEvent {
   string conversation_id = 1;
   string scope_id = 2;
+  google.protobuf.Timestamp deleted_at = 3;
 }
 
 // ─── ChatTurnHistoryDeliveryGAgent State ───

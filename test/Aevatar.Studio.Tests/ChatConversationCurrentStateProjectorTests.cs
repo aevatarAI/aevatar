@@ -249,6 +249,47 @@ public sealed class ChatConversationCurrentStateProjectorTests
         written.Turns[^1].Sequence.Should().Be(251);
     }
 
+    [Fact]
+    public async Task ProjectAsync_WhenDeletionIsRedeliveredExactly_ShouldKeepContentStableAndReportDuplicate()
+    {
+        var dispatcher = new IdempotencyRecordingWriteDispatcher();
+        var projector = new ChatConversationCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-08-02T09:00:00Z")));
+        var deletedAt = DateTimeOffset.Parse("2026-08-02T08:30:00Z");
+        var deletedEvent = new ConversationDeletedEvent
+        {
+            ScopeId = "scope-a",
+            ConversationId = "conversation-a",
+            DeletedAt = Timestamp.FromDateTimeOffset(deletedAt),
+        };
+        var state = new ChatConversationState
+        {
+            ScopeId = "scope-a",
+            ConversationId = "conversation-a",
+            Deleted = true,
+            UpdatedAtMs = deletedAt.ToUnixTimeMilliseconds(),
+            NextTurnSequence = 1,
+        };
+        var envelope = WrapCommitted(
+            deletedEvent,
+            state,
+            version: 2,
+            eventId: "evt-chat-deleted",
+            stateEventTimestamp: deletedAt);
+
+        await projector.ProjectAsync(NewContext(), envelope);
+        await projector.ProjectAsync(NewContext(), envelope.Clone());
+
+        dispatcher.Results.Select(static result => result.Disposition).Should().Equal(
+            ProjectionWriteDisposition.Applied,
+            ProjectionWriteDisposition.Duplicate);
+        dispatcher.Inputs.Should().HaveCount(2);
+        dispatcher.Inputs[1].ToByteString().Should().Equal(dispatcher.Inputs[0].ToByteString());
+        dispatcher.Inputs[1].UpdatedAtMs.Should().Be(deletedAt.ToUnixTimeMilliseconds());
+        dispatcher.Inputs[1].Deleted.Should().BeTrue();
+    }
+
     private static StudioMaterializationContext NewContext() => new()
     {
         RootActorId = RootActorId,
@@ -299,6 +340,32 @@ public sealed class ChatConversationCurrentStateProjectorTests
         {
             throw new NotSupportedException();
         }
+    }
+
+    private sealed class IdempotencyRecordingWriteDispatcher
+        : IProjectionWriteDispatcher<ChatConversationCurrentStateDocument>
+    {
+        private ChatConversationCurrentStateDocument? _current;
+
+        public List<ChatConversationCurrentStateDocument> Inputs { get; } = [];
+        public List<ProjectionWriteResult> Results { get; } = [];
+
+        public Task<ProjectionWriteResult> UpsertAsync(
+            ChatConversationCurrentStateDocument readModel,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            var input = readModel.Clone();
+            var result = ProjectionWriteResultEvaluator.Evaluate(_current, input);
+            Inputs.Add(input);
+            Results.Add(result);
+            if (result.IsApplied)
+                _current = input.Clone();
+            return Task.FromResult(result);
+        }
+
+        public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default) =>
+            throw new NotSupportedException();
     }
 
     private sealed class FixedProjectionClock(DateTimeOffset utcNow) : IProjectionClock

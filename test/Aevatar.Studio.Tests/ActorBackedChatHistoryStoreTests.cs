@@ -322,6 +322,36 @@ public sealed class ActorBackedChatHistoryStoreTests
     }
 
     [Fact]
+    public async Task DeleteConversationAsync_ShouldDispatchTypedDeleteCommandToResolvedActor()
+    {
+        var actorId = ChatHistoryActorIds.Conversation("scope-a", "conversation-a");
+        var reader = new RecordingDocumentReader();
+        reader.Documents[actorId] = new ChatConversationCurrentStateDocument
+        {
+            Id = actorId,
+            ActorId = actorId,
+            ScopeId = "scope-a",
+            ConversationId = "conversation-a",
+        };
+        var bootstrap = new RecordingBootstrap(new StubActor(actorId));
+        var dispatch = new RecordingDispatchService();
+        var store = new ActorBackedChatHistoryStore(
+            bootstrap,
+            new StudioActorCommandDispatch(dispatch),
+            reader,
+            new RecordingDeliveryDocumentReader());
+
+        var result = await store.DeleteConversationAsync("scope-a", "conversation-a");
+
+        result.Status.Should().Be(ChatHistoryDeleteResultStatus.Accepted);
+        bootstrap.ActorIds.Should().ContainSingle(actorId);
+        var command = dispatch.Payloads.Should().ContainSingle().Which.Should()
+            .BeOfType<DeleteConversationCommand>().Subject;
+        command.ScopeId.Should().Be("scope-a");
+        command.ConversationId.Should().Be("conversation-a");
+    }
+
+    [Fact]
     public async Task GetIndexAsync_ShouldPagePastTwoHundredFiftyConversationsWithStableOrdering()
     {
         var reader = new InMemoryProjectionDocumentStore<ChatConversationCurrentStateDocument, string>(

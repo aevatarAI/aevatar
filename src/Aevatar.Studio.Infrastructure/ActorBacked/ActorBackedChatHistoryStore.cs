@@ -205,12 +205,12 @@ internal sealed class ActorBackedChatHistoryStore :
             return ChatHistoryDeleteResult.NotFound();
 
         var conversationActor = await EnsureConversationActorAsync(resolved.Value.ActorId, ct);
-        var deleteEvt = new ConversationDeletedEvent
+        var command = new DeleteConversationCommand
         {
             ConversationId = resolved.Value.Document.ConversationId,
             ScopeId = resolved.Value.Document.ScopeId,
         };
-        await _commandDispatch.DispatchAsync(conversationActor, deleteEvt, PublisherId, ct);
+        await _commandDispatch.DispatchAsync(conversationActor, command, PublisherId, ct);
         return ChatHistoryDeleteResult.Accepted();
     }
 

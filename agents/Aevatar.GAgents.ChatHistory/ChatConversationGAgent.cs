@@ -92,15 +92,29 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>,
     }
 
     [EventHandler(EndpointName = "deleteConversation")]
-    public async Task HandleConversationDeleted(ConversationDeletedEvent evt)
+    public async Task HandleDeleteConversation(DeleteConversationCommand command)
     {
-        if (string.IsNullOrWhiteSpace(evt.ConversationId))
+        ArgumentNullException.ThrowIfNull(command);
+        if (string.IsNullOrWhiteSpace(command.ScopeId) ||
+            string.IsNullOrWhiteSpace(command.ConversationId))
             return;
+
+        if (HasDifferentValue(State.ScopeId, command.ScopeId) ||
+            HasDifferentValue(State.ConversationId, command.ConversationId))
+        {
+            throw new InvalidOperationException(
+                "Chat conversation deletion conflicts with the current conversation identity.");
+        }
 
         if (State.Deleted || (string.IsNullOrWhiteSpace(State.ConversationId) && State.Turns.Count == 0))
             return;
 
-        await PersistDomainEventAsync(evt);
+        await PersistDomainEventAsync(new ConversationDeletedEvent
+        {
+            ConversationId = command.ConversationId,
+            ScopeId = command.ScopeId,
+            DeletedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
     }
 
     protected override async Task OnActivateAsync(CancellationToken ct)
@@ -395,7 +409,8 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>,
         next.Deleted = true;
         next.ScopeId = string.IsNullOrWhiteSpace(next.ScopeId) ? evt.ScopeId : next.ScopeId;
         next.ConversationId = string.IsNullOrWhiteSpace(next.ConversationId) ? evt.ConversationId : next.ConversationId;
-        next.UpdatedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        if (evt.DeletedAt is not null)
+            next.UpdatedAtMs = evt.DeletedAt.ToDateTimeOffset().ToUnixTimeMilliseconds();
         return next;
     }
 }

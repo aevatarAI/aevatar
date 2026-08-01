@@ -5,6 +5,7 @@ using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.ChatHistory;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -335,6 +336,104 @@ public sealed class ChatConversationGAgentAppendTests
         agent.State.NextTurnSequence.Should().Be(252);
     }
 
+    [Fact]
+    public async Task DeleteConversationCommand_AfterReactivation_ShouldReplayTheCommittedDeletionTimeExactly()
+    {
+        var eventStore = new RecordingEventStore();
+        var agent = await CreateAgentAsync(eventStore: eventStore);
+        await agent.HandleEventAsync(Envelope(CreateInitialize()));
+
+        await agent.HandleEventAsync(Envelope(CreateDelete()));
+
+        var persisted = await eventStore.GetEventsAsync(ActorId);
+        var deletedEvent = persisted
+            .Should().ContainSingle(evt => evt.EventData.Is(ConversationDeletedEvent.Descriptor))
+            .Which.EventData.Unpack<ConversationDeletedEvent>();
+        deletedEvent.DeletedAt.Should().NotBeNull();
+        agent.State.Deleted.Should().BeTrue();
+        agent.State.UpdatedAtMs.Should().Be(deletedEvent.DeletedAt.ToDateTimeOffset().ToUnixTimeMilliseconds());
+        var committedStateRoot = agent.State.ToByteString();
+
+        var reactivated = await CreateAgentAsync(eventStore: eventStore);
+
+        reactivated.State.ToByteString().Should().Equal(committedStateRoot);
+        reactivated.State.UpdatedAtMs.Should().Be(deletedEvent.DeletedAt.ToDateTimeOffset().ToUnixTimeMilliseconds());
+    }
+
+    [Fact]
+    public async Task LegacyConversationDeletedEvent_WithoutDeletionTime_ShouldReplayWithoutReadingTheClock()
+    {
+        var eventStore = new RecordingEventStore();
+        var agent = await CreateAgentAsync(eventStore: eventStore);
+        await agent.HandleEventAsync(Envelope(CreateInitialize()));
+        await eventStore.AppendAsync(
+            ActorId,
+            [
+                new StateEvent
+                {
+                    EventId = "legacy-delete-event",
+                    EventType = ConversationDeletedEvent.Descriptor.FullName,
+                    EventData = Any.Pack(new ConversationDeletedEvent
+                    {
+                        ScopeId = "scope-a",
+                        ConversationId = "conversation-a",
+                    }),
+                    Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-17T00:00:00Z")),
+                },
+            ],
+            expectedVersion: 1);
+
+        var firstReplay = await CreateAgentAsync(eventStore: eventStore);
+        var firstStateRoot = firstReplay.State.ToByteString();
+        var secondReplay = await CreateAgentAsync(eventStore: eventStore);
+
+        firstReplay.State.Deleted.Should().BeTrue();
+        firstReplay.State.UpdatedAtMs.Should().Be(ConversationCreatedAt.ToUnixTimeMilliseconds());
+        secondReplay.State.ToByteString().Should().Equal(firstStateRoot);
+    }
+
+    [Fact]
+    public async Task DeleteConversationCommand_WhenExactlyRepeated_ShouldNotPersistOrChangeStateAgain()
+    {
+        var eventStore = new RecordingEventStore();
+        var agent = await CreateAgentAsync(eventStore: eventStore);
+        await agent.HandleEventAsync(Envelope(CreateInitialize()));
+        var command = CreateDelete();
+
+        await agent.HandleEventAsync(Envelope(command));
+        var stateAfterDelete = agent.State.ToByteString();
+        await agent.HandleEventAsync(Envelope(command.Clone()));
+
+        agent.State.ToByteString().Should().Equal(stateAfterDelete);
+        var persisted = await eventStore.GetEventsAsync(ActorId);
+        persisted.Count(evt => evt.EventData.Is(ConversationDeletedEvent.Descriptor)).Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData("scope-b", "conversation-a")]
+    [InlineData("scope-a", "conversation-b")]
+    public async Task DeleteConversationCommand_WhenBoundIdentityDiffers_ShouldFailClosed(
+        string scopeId,
+        string conversationId)
+    {
+        var eventStore = new RecordingEventStore();
+        var agent = await CreateAgentAsync(eventStore: eventStore);
+        await agent.HandleEventAsync(Envelope(CreateInitialize()));
+        var command = new DeleteConversationCommand
+        {
+            ScopeId = scopeId,
+            ConversationId = conversationId,
+        };
+
+        var act = () => agent.HandleEventAsync(Envelope(command));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*deletion conflicts*");
+        agent.State.Deleted.Should().BeFalse();
+        var persisted = await eventStore.GetEventsAsync(ActorId);
+        persisted.Should().NotContain(evt => evt.EventData.Is(ConversationDeletedEvent.Descriptor));
+    }
+
     private static AppendChatTurnCommand CreateAppend(
         string turnId,
         string userText,
@@ -366,6 +465,13 @@ public sealed class ChatConversationGAgentAppendTests
             ServiceKind = "nyxid.chat",
             CreatedAt = Timestamp.FromDateTimeOffset(ConversationCreatedAt),
             InitialTitle = "Initial title",
+        };
+
+    private static DeleteConversationCommand CreateDelete() =>
+        new()
+        {
+            ScopeId = "scope-a",
+            ConversationId = "conversation-a",
         };
 
     private static InitializeChatConversationCommand Changed(
