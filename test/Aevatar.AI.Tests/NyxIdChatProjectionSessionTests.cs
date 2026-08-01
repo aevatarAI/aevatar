@@ -235,8 +235,11 @@ public sealed class NyxIdChatProjectionSessionTests
         hub.Published[^1].Event.RunFinished.Status.Should().Be(RunCompletionStatus.Blocked);
     }
 
-    [Fact]
-    public async Task Projector_ExplicitFailedReplay_ShouldRestoreRichSnapshotBeforeRunError()
+    [Theory]
+    [InlineData(RoleChatSessionOutcome.Failed)]
+    [InlineData(RoleChatSessionOutcome.OutcomeUncertain)]
+    public async Task Projector_ExplicitErrorReplay_ShouldRestoreRichSnapshotBeforeRunError(
+        RoleChatSessionOutcome outcome)
     {
         var hub = new RecordingSessionEventHub();
         var projector = new NyxIdChatSessionEventProjector(hub);
@@ -290,7 +293,7 @@ public sealed class NyxIdChatProjectionSessionTests
                             },
                             Usage = new TokenUsagePayload { TotalTokens = 9 },
                             Model = "model-failed",
-                            Outcome = RoleChatSessionOutcome.Failed,
+                            Outcome = outcome,
                             FailureCode = "PROVIDER_FAILURE",
                             SafeMessage = "The provider is unavailable.",
                         },
@@ -1004,8 +1007,11 @@ public sealed class NyxIdChatProjectionSessionTests
         hub.Published.Should().BeEmpty();
     }
 
-    [Fact]
-    public async Task Projector_ShouldEmitRunErrorFromCommittedTerminalProgress()
+    [Theory]
+    [InlineData(RoleChatSessionOutcome.Failed)]
+    [InlineData(RoleChatSessionOutcome.OutcomeUncertain)]
+    public async Task Projector_ShouldEmitRunErrorFromCommittedTerminalProgress(
+        RoleChatSessionOutcome outcome)
     {
         var hub = new RecordingSessionEventHub();
         var projector = new NyxIdChatSessionEventProjector(hub);
@@ -1026,7 +1032,7 @@ public sealed class NyxIdChatProjectionSessionTests
                     Sequence = 21,
                     Terminal = new RoleChatTerminalProgress
                     {
-                        Outcome = RoleChatSessionOutcome.Failed,
+                        Outcome = outcome,
                         FailureCode = "PROVIDER_FAILURE",
                         SafeMessage = "upstream unavailable",
                     },

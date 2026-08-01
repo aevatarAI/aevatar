@@ -448,6 +448,15 @@ enum RoleChatSessionOutcome {
   ROLE_CHAT_SESSION_OUTCOME_COMPLETED = 1;
   ROLE_CHAT_SESSION_OUTCOME_FAILED = 2;
   ROLE_CHAT_SESSION_OUTCOME_BLOCKED = 3;
+  ROLE_CHAT_SESSION_OUTCOME_OUTCOME_UNCERTAIN = 4;
+}
+
+// Actor-internal activation continuation. This signal is never a committed
+// domain fact; the matching actor turn rechecks the durable session state
+// before committing one terminal RoleChatSessionCompletedEvent.
+message RoleChatIncompleteSessionFinalizationRequested {
+  string session_id = 1;
+  int64 expected_last_progress_sequence = 2;
 }
 
 message RoleChatSessionCompletedEvent {

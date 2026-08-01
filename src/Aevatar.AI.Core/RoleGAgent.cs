@@ -40,6 +40,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
 {
     private const string LlmFailureContentPrefix = "[[AEVATAR_LLM_ERROR]]";
     private const int MaxTrackedSessions = 128;
+    private const string OrphanedSessionFailureCode = "SESSION_ORPHANED";
+    private const string UncertainSessionFailureCode = "SESSION_OUTCOME_UNCERTAIN";
     private const string CompletionNotificationRetryCallbackPrefix = "role-chat-completion-retry";
     private const int CompletionNotificationRetryInitialDelayMs = 250;
     private const int CompletionNotificationRetryMaxDelayMs = 30_000;
@@ -107,6 +109,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         await base.OnActivateAsync(ct);
         RestoreHistoryFromCommittedSessions();
         await DeliverPendingCompletionNotificationsAsync(ct);
+        await RequestIncompleteSessionFinalizationAsync(ct);
     }
 
     // Refactor (iter35/cluster-036-voice-presence-rolegagent-state):
@@ -999,6 +1002,16 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             retry.Attempt);
     }
 
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    public Task HandleIncompleteSessionFinalizationRequestedAsync(
+        RoleChatIncompleteSessionFinalizationRequested request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return TryFinalizeIncompleteSessionAsync(
+            request.SessionId,
+            request.ExpectedLastProgressSequence);
+    }
+
     private async Task HandleChatRequestCoreAsync(ChatRequestEvent request)
     {
         RoleChatSessionState? trackedSession;
@@ -1029,6 +1042,16 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             return;
         }
 
+        if (trackedSession != null)
+        {
+            var finalized = await TryFinalizeIncompleteSessionAsync(
+                request.SessionId,
+                trackedSession.LastProgressSequence);
+            if (finalized && State.Sessions.TryGetValue(request.SessionId, out var terminalSession))
+                await ReplayCompletedSessionAsync(request.SessionId, terminalSession);
+            return;
+        }
+
         var turnStartedTimestamp = ChatRequestTimeProvider.GetTimestamp();
         var timeoutMs = ResolveLlmTimeoutMs(request);
         var useWorkflowFailureMarker = timeoutMs > 0;
@@ -1043,14 +1066,6 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             trackedSession,
             toolContext,
             streamCt);
-        if (trackedSession != null)
-        {
-            Logger.LogInformation(
-                "[{Role}] Resuming incomplete LLM session={SessionId}",
-                RoleName,
-                request.SessionId);
-        }
-
         // Refactor (iter85/cluster-085-workflow-raw-content-information-logs):
         //   Old pattern: Information log included raw value/prompt/input preview
         //   New principle: only stable id + length + status + redaction marker
@@ -2026,6 +2041,75 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             await DeliverCompletionNotificationAsync(sessionId, session, ct);
     }
 
+    private async Task RequestIncompleteSessionFinalizationAsync(CancellationToken ct)
+    {
+        var candidates = State.Sessions
+            .Where(entry => !entry.Value.Completed && !IsPendingApprovalSession(entry.Key))
+            .OrderBy(static entry => entry.Value.Sequence)
+            .Select(static entry => new RoleChatIncompleteSessionFinalizationRequested
+            {
+                SessionId = entry.Key,
+                ExpectedLastProgressSequence = entry.Value.LastProgressSequence,
+            })
+            .ToArray();
+
+        foreach (var request in candidates)
+            await PublishAsync(request, TopologyAudience.Self, ct);
+    }
+
+    private async Task<bool> TryFinalizeIncompleteSessionAsync(
+        string? sessionId,
+        long expectedLastProgressSequence)
+    {
+        var normalizedSessionId = sessionId?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(normalizedSessionId) ||
+            !State.Sessions.TryGetValue(normalizedSessionId, out var session) ||
+            session.Completed ||
+            session.LastProgressSequence != expectedLastProgressSequence ||
+            IsPendingApprovalSession(normalizedSessionId))
+        {
+            return false;
+        }
+
+        var hasCommittedProgress = session.LastProgressSequence > 0;
+        var completion = new RoleChatSessionCompletedEvent
+        {
+            RoleId = RoleId,
+            SessionId = normalizedSessionId,
+            Prompt = session.Prompt ?? string.Empty,
+            ContentEmitted = session.ContentEmitted,
+            Outcome = hasCommittedProgress
+                ? RoleChatSessionOutcome.OutcomeUncertain
+                : RoleChatSessionOutcome.Failed,
+            FailureCode = hasCommittedProgress
+                ? UncertainSessionFailureCode
+                : OrphanedSessionFailureCode,
+            SafeMessage = hasCommittedProgress
+                ? "The chat session was interrupted after execution started, so its outcome could not be confirmed."
+                : "The chat session was interrupted before execution started. Please try again.",
+            TerminalTime = CreateTerminalTimestamp(),
+            RunContext = session.RunContext?.Clone(),
+            ActorId = Id,
+        };
+
+        Logger.LogWarning(
+            "[{Role}] Finalizing incomplete chat session without replay. session={SessionId} progressSequence={ProgressSequence} outcome={Outcome}",
+            RoleName,
+            normalizedSessionId,
+            session.LastProgressSequence,
+            completion.Outcome);
+        await PersistCompletionWithTerminalProgressAsync(completion);
+        await DeliverCompletionNotificationAsync(
+            normalizedSessionId,
+            State.Sessions[normalizedSessionId],
+            CancellationToken.None);
+        return true;
+    }
+
+    private bool IsPendingApprovalSession(string sessionId) =>
+        State.PendingApproval != null &&
+        string.Equals(State.PendingApproval.SessionId, sessionId, StringComparison.Ordinal);
+
     private async Task DeliverCompletionNotificationAsync(
         string sessionId,
         RoleChatSessionState session,
@@ -2926,7 +3010,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         var assistantContent = session.Outcome switch
         {
             RoleChatSessionOutcome.Blocked => session.AuthorizationRequired?.SafeMessage,
-            RoleChatSessionOutcome.Failed => session.SafeMessage,
+            RoleChatSessionOutcome.Failed or RoleChatSessionOutcome.OutcomeUncertain => session.SafeMessage,
             _ => session.FinalContent,
         };
         yield return new SerializableMessage
@@ -2971,10 +3055,11 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
     }
 
     private static bool CanTrimTrackedSession(RoleChatSessionState session) =>
-        string.IsNullOrWhiteSpace(session.RunContext?.CompletionNotificationActorId) ||
-        session.CompletionNotificationDeliveryStatus is
-            RoleChatCompletionNotificationDeliveryStatus.Dispatched or
-            RoleChatCompletionNotificationDeliveryStatus.Expired;
+        session.Completed &&
+        (string.IsNullOrWhiteSpace(session.RunContext?.CompletionNotificationActorId) ||
+         session.CompletionNotificationDeliveryStatus is
+             RoleChatCompletionNotificationDeliveryStatus.Dispatched or
+             RoleChatCompletionNotificationDeliveryStatus.Expired);
 
     private static AIAgentConfigOverrides EnsureConfigOverrides(RoleGAgentState state)
     {

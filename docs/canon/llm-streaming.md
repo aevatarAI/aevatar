@@ -340,6 +340,8 @@ NyxIdChat 的用户可见 live path 不直接投影上述 transient publications
 
 `RoleChatSessionCompletedEvent` 仍是 terminal/final authority，并在同一个 committed fact 内嵌尚未 live 投递的 final text、usage、text end、authorization 与唯一 terminal typed tail。normal projector 只展开该 tail，不读取 completion snapshot 合成全文，因此 completed authority 与 terminal presentation 不会被逐事件发布失败拆开，也不会重复已流式投递的内容。显式 replay 才能把 committed completion snapshot 按 tool、reasoning、media、text、usage、terminal 的展示顺序完整展开。不同输入复用同一 turn id 时，新 producer 提交带独立 command attempt id 的 rejection，不推进已完成 session 的 progress sequence；projection 在滚动升级期间仍兼容旧 `RoleChatSessionConflictEvent` TypeUrl。provider-native tool、text-parsed tool 与 initial skill recovery 都使用同一个 start-before-execution/result lifecycle；`use_skill` 在 start snapshot 时从结构化参数解析实际 skill identity。
 
+Actor activation 对 durable session 只做候选发现：每个未终态 session 通过 typed `RoleChatIncompleteSessionFinalizationRequested(session_id, expected_last_progress_sequence)` self-message 进入下一次 actor turn，再与权威 state 对账。当前恢复契约不持久化 LLM credential、tool context 或完整 tool intent，因此 activation 和 caller retry 都不得自动重放 provider/tool 调用；started-only session 提交 `FAILED + SESSION_ORPHANED`，已有 committed progress 的 session 提交 `OUTCOME_UNCERTAIN + SESSION_OUTCOME_UNCERTAIN`。两者都复用唯一的 `RoleChatSessionCompletedEvent + terminal_progress + completion notification` 主链。重复、陈旧 signal 幂等忽略，等待 typed tool approval continuation 的 session 不参与该 sweep；session retention 只清理已终态且 completion notification 已无需继续投递的记录。
+
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart LR
