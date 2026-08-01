@@ -284,6 +284,7 @@ public sealed class KafkaPersistentStreamProviderRedeliveryValidationTests
                 StreamId.Create(topology.ActorEventNamespace, topology.ActorId));
             receiver = new KafkaProviderQueueAdapterReceiver(
                 queueId,
+                topology.StreamProviderName,
                 producer,
                 options,
                 mapper,
@@ -313,6 +314,7 @@ public sealed class KafkaPersistentStreamProviderRedeliveryValidationTests
 
             receiver = new KafkaProviderQueueAdapterReceiver(
                 queueId,
+                topology.StreamProviderName,
                 producer,
                 options,
                 mapper,
