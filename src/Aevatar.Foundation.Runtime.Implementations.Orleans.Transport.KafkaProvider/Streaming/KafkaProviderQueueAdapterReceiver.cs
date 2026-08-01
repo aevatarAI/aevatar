@@ -220,6 +220,7 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
                     classification.Envelope!,
                     token,
                     consumeResult.Offset.Value));
+                RecordBufferDepth();
                 return true;
             }
             case KafkaPolledRecordDisposition.AcknowledgeForeignRecord:

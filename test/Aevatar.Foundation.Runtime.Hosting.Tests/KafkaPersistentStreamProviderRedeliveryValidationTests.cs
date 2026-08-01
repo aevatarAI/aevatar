@@ -1,4 +1,6 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading.Channels;
@@ -281,6 +283,39 @@ public sealed class KafkaPersistentStreamProviderRedeliveryValidationTests
             TopicPartitionCount = 4,
         };
         var mapper = new KafkaQueuePartitionMapper(topology.StreamProviderName, 4);
+        var expectedPartition = mapper.GetPartitionId(topology.ActorEventNamespace, topology.ActorId);
+        var receiverBufferDepths = new ConcurrentQueue<(
+            long Value,
+            string? Provider,
+            string? Topic,
+            int? Partition)>();
+        using var metricListener = new MeterListener();
+        metricListener.InstrumentPublished = (instrument, listener) =>
+        {
+            if (instrument.Meter.Name == KafkaTransportMetrics.MeterName &&
+                instrument.Name == "aevatar.kafka.receiver.buffer_depth")
+            {
+                listener.EnableMeasurementEvents(instrument);
+            }
+        };
+        metricListener.SetMeasurementEventCallback<long>((_, value, tags, _) =>
+        {
+            string? provider = null;
+            string? topic = null;
+            int? partition = null;
+            foreach (var tag in tags)
+            {
+                if (tag.Key == KafkaTransportMetrics.ProviderTag)
+                    provider = tag.Value?.ToString();
+                else if (tag.Key == KafkaTransportMetrics.TopicTag)
+                    topic = tag.Value?.ToString();
+                else if (tag.Key == KafkaTransportMetrics.PartitionTag && tag.Value is int partitionValue)
+                    partition = partitionValue;
+            }
+
+            receiverBufferDepths.Enqueue((value, provider, topic, partition));
+        });
+        metricListener.Start();
         await using var producer = new KafkaProviderProducer(options, mapper);
         KafkaProviderQueueAdapterReceiver? receiver = null;
 
@@ -311,6 +346,12 @@ public sealed class KafkaPersistentStreamProviderRedeliveryValidationTests
                 CancellationToken.None);
 
             var firstDelivery = await WaitForReceiverBatchAsync(receiver, RedeliveryTimeout);
+            receiverBufferDepths.Should().Contain(measurement =>
+                measurement.Value == 1 &&
+                measurement.Provider == topology.StreamProviderName &&
+                measurement.Topic == topology.TopicName &&
+                measurement.Partition == expectedPartition,
+                "enqueueing a Kafka batch must report the receiver's buffered message count");
             await receiver.Shutdown(TimeSpan.FromSeconds(10));
             receiver = null;
 
