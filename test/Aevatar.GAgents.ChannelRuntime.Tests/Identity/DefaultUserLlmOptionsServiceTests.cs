@@ -35,11 +35,13 @@ public sealed class DefaultUserLlmOptionsServiceTests
             MissingTypedSelectionCase.Unspecified => new StudioConfig(
                 DefaultModel: "gpt-5.5",
                 PreferredLlmRoute: compatibilityRoute,
-                LlmSelection: new UserLlmSelectionValue(
-                    UserLlmSelectionKind.Unspecified,
-                    SharedRoute,
-                    "us-alpha",
-                    "shared-llm")),
+                LlmSelection: new LLMSelection
+                {
+                    RouteValue = SharedRoute,
+                    NyxIdUserServiceId = "us-alpha",
+                    ServiceSlugSnapshot = "shared-llm",
+                    ModelSelection = new LLMModelSelection(),
+                }),
             _ => throw new ArgumentOutOfRangeException(nameof(selectionCase)),
         };
 
@@ -52,11 +54,7 @@ public sealed class DefaultUserLlmOptionsServiceTests
     [Fact]
     public async Task GetOptionsAsync_WithTypedServiceMissingIdAndGatewayRoute_ShouldHaveNoCurrentOption()
     {
-        var selection = new UserLlmSelectionValue(
-            UserLlmSelectionKind.NyxIdUserService,
-            UserConfigLlmRouteDefaults.Gateway,
-            " ",
-            "shared-llm");
+        var selection = ServiceSelection(" ", UserConfigLlmRouteDefaults.Gateway);
 
         var view = await GetOptionsAsync(Config(selection), GatewayService(), InventoryService("us-alpha"));
 
@@ -66,11 +64,7 @@ public sealed class DefaultUserLlmOptionsServiceTests
     [Fact]
     public async Task GetOptionsAsync_WithTypedServiceMissingIdAndDuplicateRoute_ShouldNotMatchByRoute()
     {
-        var selection = new UserLlmSelectionValue(
-            UserLlmSelectionKind.NyxIdUserService,
-            SharedRoute,
-            string.Empty,
-            "shared-llm");
+        var selection = ServiceSelection(string.Empty, SharedRoute);
 
         var view = await GetOptionsAsync(
             Config(selection),
@@ -83,11 +77,14 @@ public sealed class DefaultUserLlmOptionsServiceTests
     [Fact]
     public async Task GetOptionsAsync_WithTypedGatewayAndServiceRouteSnapshot_ShouldResolveCanonicalGatewayOnly()
     {
-        var selection = new UserLlmSelectionValue(
-            UserLlmSelectionKind.Gateway,
-            SharedRoute,
-            "us-alpha",
-            "shared-llm");
+        var selection = new LLMSelection
+        {
+            RouteKind = LLMRouteKind.Gateway,
+            RouteValue = SharedRoute,
+            NyxIdUserServiceId = "us-alpha",
+            ServiceSlugSnapshot = "shared-llm",
+            ModelSelection = ProviderDefaultModel(),
+        };
 
         var view = await GetOptionsAsync(Config(selection), GatewayService(), InventoryService("us-alpha"));
 
@@ -100,11 +97,7 @@ public sealed class DefaultUserLlmOptionsServiceTests
     [Fact]
     public async Task GetOptionsAsync_WithValidTypedServiceAndDuplicateRoute_ShouldResolveExactInventoryId()
     {
-        var selection = new UserLlmSelectionValue(
-            UserLlmSelectionKind.NyxIdUserService,
-            SharedRoute,
-            "us-beta",
-            "shared-llm");
+        var selection = ServiceSelection("us-beta", SharedRoute);
 
         var view = await GetOptionsAsync(
             Config(selection),
@@ -115,10 +108,24 @@ public sealed class DefaultUserLlmOptionsServiceTests
         view.Current!.Identity!.NyxIdUserServiceId.Should().Be("us-beta");
     }
 
-    private static StudioConfig Config(UserLlmSelectionValue selection) => new(
+    private static StudioConfig Config(LLMSelection selection) => new(
         DefaultModel: "gpt-5.5",
         PreferredLlmRoute: selection.RouteValue,
         LlmSelection: selection);
+
+    private static LLMSelection ServiceSelection(string userServiceId, string route) => new()
+    {
+        RouteKind = LLMRouteKind.NyxIdUserService,
+        RouteValue = route,
+        NyxIdUserServiceId = userServiceId,
+        ServiceSlugSnapshot = "shared-llm",
+        ModelSelection = ProviderDefaultModel(),
+    };
+
+    private static LLMModelSelection ProviderDefaultModel() => new()
+    {
+        Kind = LLMModelSelectionKind.ProviderDefault,
+    };
 
     private static async Task<UserLlmOptionsView> GetOptionsAsync(
         StudioConfig? config,

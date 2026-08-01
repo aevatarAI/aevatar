@@ -148,6 +148,52 @@ public static class LLMSelectionPolicy
         },
     };
 
+    public static LLMSelectionPersistenceStatus ClassifyPersisted(
+        LLMSelection? selection,
+        string? legacyRoute,
+        string? legacyModel)
+    {
+        if (selection is null)
+        {
+            return string.IsNullOrEmpty(legacyRoute) && string.IsNullOrEmpty(legacyModel)
+                ? LLMSelectionPersistenceStatus.SystemDefault
+                : LLMSelectionPersistenceStatus.LegacyRepairRequired;
+        }
+
+        try
+        {
+            ValidateSelection(selection);
+        }
+        catch (InvalidOperationException)
+        {
+            return LLMSelectionPersistenceStatus.LegacyRepairRequired;
+        }
+
+        if (selection.RouteKind != LLMRouteKind.Unspecified)
+            return LLMSelectionPersistenceStatus.Ready;
+
+        return string.IsNullOrEmpty(legacyRoute) && string.IsNullOrEmpty(legacyModel)
+            ? LLMSelectionPersistenceStatus.SystemDefault
+            : LLMSelectionPersistenceStatus.LegacyRepairRequired;
+    }
+
+    public static LLMControlContext ApplyTo(LLMControlContext current, LLMSelection selection)
+    {
+        ArgumentNullException.ThrowIfNull(current);
+        ValidateSelection(selection);
+
+        if (selection.RouteKind == LLMRouteKind.Unspecified)
+            return current;
+
+        return current with
+        {
+            NyxIdRoutePreference = selection.RouteValue,
+            ModelOverride = selection.ModelSelection.Kind == LLMModelSelectionKind.ExplicitModel
+                ? selection.ModelSelection.ModelId
+                : current.ModelOverride,
+        };
+    }
+
     private static void ValidateEnumeratedCatalog(LLMModelCatalog catalog)
     {
         if (catalog.ModelIds.Count == 0 || catalog.ModelIds.Count > MaxModelsPerCatalog)

@@ -1077,7 +1077,10 @@ public partial class NyxIdChatEndpointsCoverageTests
         var context = CreateAuthorizedStreamContext();
         context.RequestServices = new ServiceCollection()
             .AddLogging()
-            .AddSingleton<INyxIdUserLlmPreferencesStore>(new StubPreferencesStore("relay-model", "/relay-route", 7))
+            .AddSingleton<INyxIdUserLlmPreferencesStore>(new StubPreferencesStore(
+                "relay-model",
+                "/api/v1/proxy/s/relay-provider",
+                7))
             .AddSingleton<IUserMemoryPromptContextProvider>(new StubUserMemoryPromptContextProvider("remember this"))
             .BuildServiceProvider();
         context.Request.Headers["X-NyxID-Delegation-Token"] = "delegation-token";
@@ -1128,7 +1131,7 @@ public partial class NyxIdChatEndpointsCoverageTests
             NyxIdOrgToken: null,
             SenderNyxIdAccessToken: null,
             ModelOverride: "relay-model",
-            NyxIdRoutePreference: "/relay-route",
+            NyxIdRoutePreference: "/api/v1/proxy/s/relay-provider",
             MaxToolRoundsOverride: 7,
             UserMemoryPrompt: "remember this"));
         context.Response.Body.Position = 0;
@@ -3932,11 +3935,27 @@ public partial class NyxIdChatEndpointsCoverageTests
 
     private sealed class StubPreferencesStore(string model, string route, int maxToolRounds) : INyxIdUserLlmPreferencesStore
     {
+        private readonly NyxIdUserLlmPreferences _preferences = new(
+            new LLMSelection
+            {
+                RouteKind = LLMRouteKind.NyxIdUserService,
+                RouteValue = route,
+                NyxIdUserServiceId = "us-relay",
+                ServiceSlugSnapshot = "relay-provider",
+                ModelSelection = new LLMModelSelection
+                {
+                    Kind = LLMModelSelectionKind.ExplicitModel,
+                    ModelId = model,
+                },
+            },
+            LLMSelectionPersistenceStatus.Ready,
+            maxToolRounds);
+
         public Task<NyxIdUserLlmPreferences> GetOwnerAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult(new NyxIdUserLlmPreferences(model, route, maxToolRounds));
+            Task.FromResult(_preferences);
 
         public Task<NyxIdUserLlmPreferences> GetForBindingAsync(string bindingId, CancellationToken cancellationToken = default) =>
-            Task.FromResult(new NyxIdUserLlmPreferences(model, route, maxToolRounds));
+            Task.FromResult(_preferences);
     }
 
     private sealed class StubUserMemoryPromptContextProvider(string promptSection)

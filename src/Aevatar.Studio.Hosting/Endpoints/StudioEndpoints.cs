@@ -1280,10 +1280,11 @@ internal static class StudioEndpoints
                 // channel inbound path is the only caller that overrides
                 // with a sender-specific binding-id.
                 var preferences = await llmPreferencesStore.GetOwnerAsync(ct);
-                if (!string.IsNullOrWhiteSpace(preferences.DefaultModel))
-                    llmControl = llmControl with { ModelOverride = preferences.DefaultModel.Trim() };
-                if (!string.IsNullOrWhiteSpace(preferences.PreferredRoute))
-                    llmControl = llmControl with { NyxIdRoutePreference = preferences.PreferredRoute.Trim() };
+                llmControl = preferences.ApplyTo(llmControl);
+            }
+            catch (LLMSelectionRepairRequiredException)
+            {
+                throw;
             }
             catch
             {

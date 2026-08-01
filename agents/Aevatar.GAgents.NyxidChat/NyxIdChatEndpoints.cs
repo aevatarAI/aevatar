@@ -283,24 +283,15 @@ public static partial class NyxIdChatEndpoints
                 // Studio chat endpoint always uses the ambient (bot owner) scope —
                 // the channel inbound path passes the sender binding-id explicitly.
                 var preferences = await preferencesStore.GetOwnerAsync(ct);
+                control = preferences.ApplyTo(control);
                 logger?.LogInformation(
-                    "User config loaded: model={Model}, route={Route}, maxToolRounds={MaxToolRounds}",
-                    preferences.DefaultModel ?? "<empty>",
-                    preferences.PreferredRoute ?? "<empty>",
+                    "User LLM selection loaded: status={Status}, maxToolRounds={MaxToolRounds}",
+                    preferences.Status,
                     preferences.MaxToolRounds);
-
-                control = control with
-                {
-                    ModelOverride = string.IsNullOrWhiteSpace(preferences.DefaultModel)
-                        ? control.ModelOverride
-                        : preferences.DefaultModel.Trim(),
-                    NyxIdRoutePreference = string.IsNullOrWhiteSpace(preferences.PreferredRoute)
-                        ? control.NyxIdRoutePreference
-                        : preferences.PreferredRoute.Trim(),
-                    MaxToolRoundsOverride = preferences.MaxToolRounds > 0
-                        ? preferences.MaxToolRounds
-                        : control.MaxToolRoundsOverride,
-                };
+            }
+            catch (LLMSelectionRepairRequiredException)
+            {
+                throw;
             }
             catch (Exception ex)
             {

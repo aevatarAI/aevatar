@@ -106,11 +106,14 @@ public sealed class ScopeServiceEndpointPrivateHelperTests : ScopeServiceEndpoin
                     new UserConfig(
                         DefaultModel: "user-model",
                         PreferredLlmRoute: "/api/v1/proxy/s/legacy",
-                        LlmSelection: new UserLlmSelectionValue(
-                            UserLlmSelectionKind.NyxIdUserService,
-                            " /preferred-route ",
-                            "us-preferred",
-                            "preferred"))))
+                        LlmSelection: new LLMSelection
+                        {
+                            RouteKind = LLMRouteKind.NyxIdUserService,
+                            RouteValue = " /preferred-route ",
+                            NyxIdUserServiceId = "us-preferred",
+                            ServiceSlugSnapshot = "preferred",
+                            ModelSelection = new LLMModelSelection { Kind = LLMModelSelectionKind.ProviderDefault },
+                        })))
                 .BuildServiceProvider(),
         };
         successContext.Request.Headers.Authorization = "Bearer token-123";
@@ -164,11 +167,14 @@ public sealed class ScopeServiceEndpointPrivateHelperTests : ScopeServiceEndpoin
     {
         const string prefixedModel = "chrono-llm/gpt-5.5";
         var selection = useUnspecifiedSelection
-            ? new UserLlmSelectionValue(
-                UserLlmSelectionKind.Unspecified,
-                "/api/v1/proxy/s/typed-but-ignored",
-                "us-ignored",
-                "ignored")
+            ? new LLMSelection
+            {
+                RouteKind = LLMRouteKind.Unspecified,
+                RouteValue = "/api/v1/proxy/s/typed-but-ignored",
+                NyxIdUserServiceId = "us-ignored",
+                ServiceSlugSnapshot = "ignored",
+                ModelSelection = new LLMModelSelection { Kind = LLMModelSelectionKind.Unspecified },
+            }
             : null;
         var context = new DefaultHttpContext
         {

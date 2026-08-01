@@ -820,27 +820,26 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             var config = await _userConfigQueryPort
                 .GetAsync(UserConfigResourceKey.ForOwnerScope(scopeId), ct)
                 .ConfigureAwait(false);
-            control = control with
-            {
-                ModelOverride = string.IsNullOrWhiteSpace(config.DefaultModel)
-                    ? control.ModelOverride
-                    : config.DefaultModel.Trim(),
-                NyxIdRoutePreference = string.IsNullOrWhiteSpace(config.PreferredLlmRoute)
-                    ? control.NyxIdRoutePreference
-                    : config.PreferredLlmRoute.Trim(),
-                MaxToolRoundsOverride = config.MaxToolRounds > 0
-                    ? config.MaxToolRounds
-                    : control.MaxToolRoundsOverride,
-            };
+            var ownerConfig = new OwnerLlmConfig(
+                config.LlmSelection?.Clone() ?? LLMSelectionPolicy.SystemDefaultSelection(),
+                LLMSelectionPolicy.ClassifyPersisted(
+                    config.LlmSelection,
+                    config.PreferredLlmRoute,
+                    config.DefaultModel),
+                config.MaxToolRounds);
+            control = ownerConfig.ApplyTo(control);
 
             _logger.LogInformation(
-                "Applied bot owner LLM config: correlation={CorrelationId} scopeId={ScopeId} model={Model} route={Route}",
+                "Applied bot owner LLM config: correlation={CorrelationId} scopeId={ScopeId} status={Status}",
                 request.CorrelationId,
                 scopeId,
-                string.IsNullOrWhiteSpace(config.DefaultModel) ? "<server-default>" : config.DefaultModel,
-                string.IsNullOrWhiteSpace(config.PreferredLlmRoute) ? "<server-default>" : config.PreferredLlmRoute);
+                ownerConfig.Status);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (LLMSelectionRepairRequiredException)
         {
             throw;
         }

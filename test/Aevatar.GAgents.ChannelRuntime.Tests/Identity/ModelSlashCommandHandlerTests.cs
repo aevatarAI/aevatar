@@ -730,11 +730,18 @@ public sealed class ModelSlashCommandHandlerTests
         RemoteRuntimeBaseUrl: UserConfigRuntimeDefaults.RemoteRuntimeBaseUrl,
         GithubUsername: null,
         MaxToolRounds: 0,
-        LlmSelection: new UserLlmSelectionValue(
-            UserLlmSelectionKind.NyxIdUserService,
-            service.RouteValue,
-            service.Identity!.NyxIdUserServiceId,
-            service.ServiceSlug));
+        LlmSelection: new LLMSelection
+        {
+            RouteKind = LLMRouteKind.NyxIdUserService,
+            RouteValue = service.RouteValue,
+            NyxIdUserServiceId = service.Identity!.NyxIdUserServiceId,
+            ServiceSlugSnapshot = service.ServiceSlug,
+            ModelSelection = new LLMModelSelection
+            {
+                Kind = LLMModelSelectionKind.ExplicitModel,
+                ModelId = defaultModel,
+            },
+        });
 
     private static LLMModelCatalog EnumeratedCatalog(string modelId, bool includeDefault = true) => new()
     {

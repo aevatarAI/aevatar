@@ -26,22 +26,12 @@ internal sealed class StudioUserConfigOwnerLlmConfigSource : IOwnerLlmConfigSour
         if (config is null)
             return OwnerLlmConfig.Empty;
 
-        var preferredRoute = config.LlmSelection?.RouteKind switch
-        {
-            LLMRouteKind.Gateway => UserConfigLlmRouteDefaults.Gateway,
-            LLMRouteKind.NyxIdUserService => NormalizeOptional(config.LlmSelection.RouteValue),
-            _ => null,
-        };
-
         return new OwnerLlmConfig(
-            DefaultModel: NormalizeOptional(config.DefaultModel),
-            PreferredLlmRoute: preferredRoute,
+            Selection: config.LlmSelection?.Clone() ?? LLMSelectionPolicy.SystemDefaultSelection(),
+            Status: LLMSelectionPolicy.ClassifyPersisted(
+                config.LlmSelection,
+                config.PreferredLlmRoute,
+                config.DefaultModel),
             MaxToolRounds: config.MaxToolRounds);
-    }
-
-    private static string? NormalizeOptional(string? value)
-    {
-        var trimmed = value?.Trim();
-        return string.IsNullOrEmpty(trimmed) ? null : trimmed;
     }
 }

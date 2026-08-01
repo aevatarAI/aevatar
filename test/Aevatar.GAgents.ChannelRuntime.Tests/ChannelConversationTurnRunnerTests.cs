@@ -666,10 +666,7 @@ public sealed class ChannelConversationTurnRunnerTests
         var registrationQueryPort = BuildRegistrationQueryPort();
         var adapter = new RecordingPlatformAdapter();
         var ownerSource = new StubOwnerLlmConfigSource(
-            new OwnerLlmConfig(
-                DefaultModel: "gpt-5.5",
-                PreferredLlmRoute: "/api/v1/proxy/s/chrono-llm",
-                MaxToolRounds: 12));
+            OwnerConfig("gpt-5.5", 12));
         var services = new ServiceCollection()
             .AddSingleton<IOwnerLlmConfigSource>(ownerSource)
             .BuildServiceProvider();
@@ -785,10 +782,7 @@ public sealed class ChannelConversationTurnRunnerTests
         var registrationQueryPort = BuildRegistrationQueryPort();
         var adapter = new RecordingPlatformAdapter();
         var ownerSource = new StubOwnerLlmConfigSource(
-            new OwnerLlmConfig(
-                DefaultModel: null,
-                PreferredLlmRoute: "/api/v1/proxy/s/chrono-llm",
-                MaxToolRounds: 0));
+            OwnerConfig(null, 0));
         var services = new ServiceCollection()
             .AddSingleton<IOwnerLlmConfigSource>(ownerSource)
             .BuildServiceProvider();
@@ -5348,6 +5342,24 @@ public sealed class ChannelConversationTurnRunnerTests
             return response;
         }
     }
+
+    private static OwnerLlmConfig OwnerConfig(string? modelId, int maxToolRounds) => new(
+        new LLMSelection
+        {
+            RouteKind = LLMRouteKind.NyxIdUserService,
+            RouteValue = "/api/v1/proxy/s/chrono-llm",
+            NyxIdUserServiceId = "us-chrono",
+            ServiceSlugSnapshot = "chrono-llm",
+            ModelSelection = new LLMModelSelection
+            {
+                Kind = modelId is null
+                    ? LLMModelSelectionKind.ProviderDefault
+                    : LLMModelSelectionKind.ExplicitModel,
+                ModelId = modelId ?? string.Empty,
+            },
+        },
+        LLMSelectionPersistenceStatus.Ready,
+        maxToolRounds);
 
     private sealed class StubOwnerLlmConfigSource : IOwnerLlmConfigSource
     {

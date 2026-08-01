@@ -1,5 +1,6 @@
 using System.Text;
 using System.Runtime.CompilerServices;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.Lark;
@@ -1494,7 +1495,10 @@ public sealed class AgentRunGAgentTests
                 LocalRuntimeBaseUrl: "http://localhost",
                 RemoteRuntimeBaseUrl: "https://example.com",
                 GithubUsername: null,
-                MaxToolRounds: 11)));
+                MaxToolRounds: 11,
+                LlmSelection: UserServiceSelection(
+                    "anthropic-via-bot-owner",
+                    "gpt-4o-bot-owner"))));
 
         var runtime = CreateRunAgent(
             actorRuntime,
@@ -1871,10 +1875,7 @@ public sealed class AgentRunGAgentTests
         {
             ByBinding =
             {
-                ["bnd-user-1"] = new NyxIdUserLlmPreferences(
-                    "sender-model",
-                    "/api/v1/proxy/s/sender",
-                    MaxToolRounds: 7),
+                ["bnd-user-1"] = SenderPreferences(7),
             },
         };
         var replyGenerator = new NyxIdConversationReplyGenerator(
@@ -1898,7 +1899,8 @@ public sealed class AgentRunGAgentTests
                 LocalRuntimeBaseUrl: "http://localhost",
                 RemoteRuntimeBaseUrl: "https://example.com",
                 GithubUsername: null,
-                MaxToolRounds: 11)));
+                MaxToolRounds: 11,
+                LlmSelection: UserServiceSelection("owner", "owner-model"))));
 
         var runtime = CreateRunAgent(
             actorRuntime,
@@ -3477,7 +3479,10 @@ public sealed class AgentRunGAgentTests
                 LocalRuntimeBaseUrl: "http://localhost",
                 RemoteRuntimeBaseUrl: "https://example.com",
                 GithubUsername: null,
-                MaxToolRounds: 11)));
+                MaxToolRounds: 11,
+                LlmSelection: UserServiceSelection(
+                    "anthropic-via-bot-owner",
+                    "gpt-4o-bot-owner"))));
 
         var runtime = CreateRunAgent(
             actorRuntime,
@@ -4319,18 +4324,14 @@ public sealed class AgentRunGAgentTests
                         var config = await _userConfigQueryPort.GetAsync(
                             UserConfigResourceKey.ForOwnerScope(scopeId),
                             ct);
-                        control = control with
-                        {
-                            ModelOverride = string.IsNullOrWhiteSpace(config.DefaultModel)
-                                ? control.ModelOverride
-                                : config.DefaultModel.Trim(),
-                            NyxIdRoutePreference = string.IsNullOrWhiteSpace(config.PreferredLlmRoute)
-                                ? control.NyxIdRoutePreference
-                                : config.PreferredLlmRoute.Trim(),
-                            MaxToolRoundsOverride = config.MaxToolRounds > 0
-                                ? config.MaxToolRounds
-                                : control.MaxToolRoundsOverride,
-                        };
+                        control = new OwnerLlmConfig(
+                                config.LlmSelection?.Clone() ?? LLMSelectionPolicy.SystemDefaultSelection(),
+                                LLMSelectionPolicy.ClassifyPersisted(
+                                    config.LlmSelection,
+                                    config.PreferredLlmRoute,
+                                    config.DefaultModel),
+                                config.MaxToolRounds)
+                            .ApplyTo(control);
                     }
                 }
             }
@@ -4766,7 +4767,7 @@ public sealed class AgentRunGAgentTests
         public Task<NyxIdUserLlmPreferences> GetOwnerAsync(CancellationToken cancellationToken = default)
         {
             Lookups.Add(null);
-            return Task.FromResult(new NyxIdUserLlmPreferences(string.Empty, string.Empty));
+            return Task.FromResult(NyxIdUserLlmPreferences.Empty);
         }
 
         public Task<NyxIdUserLlmPreferences> GetForBindingAsync(string bindingId, CancellationToken cancellationToken = default)
@@ -4774,9 +4775,27 @@ public sealed class AgentRunGAgentTests
             Lookups.Add(bindingId);
             return Task.FromResult(ByBinding.TryGetValue(bindingId, out var prefs)
                 ? prefs
-                : new NyxIdUserLlmPreferences(string.Empty, string.Empty));
+                : NyxIdUserLlmPreferences.Empty);
         }
     }
+
+    private static NyxIdUserLlmPreferences SenderPreferences(int maxToolRounds) => new(
+        UserServiceSelection("sender", "sender-model"),
+        LLMSelectionPersistenceStatus.Ready,
+        maxToolRounds);
+
+    private static LLMSelection UserServiceSelection(string serviceSlug, string modelId) => new()
+    {
+        RouteKind = LLMRouteKind.NyxIdUserService,
+        RouteValue = $"/api/v1/proxy/s/{serviceSlug}",
+        NyxIdUserServiceId = $"us-{serviceSlug}",
+        ServiceSlugSnapshot = serviceSlug,
+        ModelSelection = new LLMModelSelection
+        {
+            Kind = LLMModelSelectionKind.ExplicitModel,
+            ModelId = modelId,
+        },
+    };
 
     private sealed class SingleReplyProviderFactory(string replyText) : ILLMProviderFactory, ILLMProvider
     {

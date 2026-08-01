@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Infrastructure.ActorBacked;
 using FluentAssertions;
@@ -30,7 +31,7 @@ public sealed class ActorBackedNyxIdUserLlmPreferencesStoreTests
 
         var preferences = await store.GetForBindingAsync("binding-alpha");
 
-        preferences.PreferredRoute.Should().BeEmpty();
+        preferences.Status.Should().Be(LLMSelectionPersistenceStatus.LegacyRepairRequired);
     }
 
     [Fact]
@@ -53,7 +54,8 @@ public sealed class ActorBackedNyxIdUserLlmPreferencesStoreTests
 
         var preferences = await store.GetForBindingAsync("binding-alpha");
 
-        preferences.PreferredRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
+        preferences.Selection.RouteValue.Should().Be(UserConfigLlmRouteDefaults.Gateway);
+        preferences.Status.Should().Be(LLMSelectionPersistenceStatus.Ready);
     }
 
     [Fact]
@@ -82,8 +84,9 @@ public sealed class ActorBackedNyxIdUserLlmPreferencesStoreTests
 
         queryPort.Resources.Should().ContainSingle().Which.Should()
             .Be(UserConfigResourceKey.ForChannelBinding("binding-alpha"));
-        preferences.DefaultModel.Should().Be("gpt-5.5");
-        preferences.PreferredRoute.Should().Be(typedRoute);
+        preferences.Selection.ModelSelection.ModelId.Should().Be("gpt-5.5");
+        preferences.Selection.RouteValue.Should().Be(typedRoute);
+        preferences.Status.Should().Be(LLMSelectionPersistenceStatus.Ready);
         preferences.MaxToolRounds.Should().Be(8);
     }
 

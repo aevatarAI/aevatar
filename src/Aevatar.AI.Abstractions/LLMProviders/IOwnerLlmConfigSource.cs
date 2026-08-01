@@ -29,9 +29,32 @@ public interface IOwnerLlmConfigSource
 /// the host has wired up.
 /// </summary>
 public sealed record OwnerLlmConfig(
-    string? DefaultModel,
-    string? PreferredLlmRoute,
+    LLMSelection Selection,
+    LLMSelectionPersistenceStatus Status,
     int MaxToolRounds)
 {
-    public static OwnerLlmConfig Empty { get; } = new(null, null, 0);
+    public static OwnerLlmConfig Empty { get; } = new(
+        LLMSelectionPolicy.SystemDefaultSelection(),
+        LLMSelectionPersistenceStatus.SystemDefault,
+        0);
+
+    public LLMControlContext ApplyTo(LLMControlContext current)
+    {
+        ArgumentNullException.ThrowIfNull(current);
+
+        var applied = Status switch
+        {
+            LLMSelectionPersistenceStatus.SystemDefault => current,
+            LLMSelectionPersistenceStatus.Ready => LLMSelectionPolicy.ApplyTo(current, Selection),
+            LLMSelectionPersistenceStatus.LegacyRepairRequired => throw new LLMSelectionRepairRequiredException(),
+            _ => throw new InvalidOperationException("Owner LLM selection persistence status is unspecified."),
+        };
+
+        return applied with
+        {
+            MaxToolRoundsOverride = MaxToolRounds > 0
+                ? MaxToolRounds
+                : applied.MaxToolRoundsOverride,
+        };
+    }
 }
