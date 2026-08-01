@@ -106,7 +106,7 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         html.Should().NotContain("var skillOption=ev.target.closest('[data-ap-skill-option]')");
         html.Should().NotContain("data-ap-skill-search");
         html.Should().Contain("/api/workflow/skills/'+encodeURIComponent(guid)+'/exact");
-        html.Should().Contain("loadAgentProfileBindings()");
+        html.Should().Contain("loadAgentProfileBindings(owner,request)");
         html.Should().Contain("AGENT_PROFILE_STATE.systemBinding&&AGENT_PROFILE_STATE.systemBinding.etag");
         html.Should().Contain("agentProfileField('Maximum tools','maximumTools'");
         html.Should().Contain("仅影响新建实例");
@@ -123,6 +123,224 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         html.Should().NotContain("data-ap-new-slug");
         html.Should().Contain("@media (max-width:768px)");
         html.Should().NotContain("data-ap-field=\"rawJson\"");
+    }
+
+    [Fact]
+    public async Task AdminShell_AgentProfiles_ShouldSwitchOwnersFromCacheAndIgnoreStaleRefreshes()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name, nextName) {
+              const starts = [
+                html.indexOf('function ' + name + '('),
+                html.indexOf('async function ' + name + '(')
+              ].filter(index => index !== -1);
+              const start = starts.length ? Math.min(...starts) : -1;
+              const ends = [
+                html.indexOf('\nfunction ' + nextName + '(', start),
+                html.indexOf('\nasync function ' + nextName + '(', start)
+              ].filter(index => index !== -1);
+              const end = ends.length ? Math.min(...ends) : -1;
+              assert.notEqual(start, -1, name + ' must exist in the served admin asset');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return html.slice(start, end);
+            }
+
+            function deferred() {
+              let resolve, reject;
+              const promise = new Promise((ok, fail) => { resolve = ok; reject = fail; });
+              return {promise, resolve, reject};
+            }
+            async function waitForRequestCount(count) {
+              while (requests.length < count) await new Promise(resolve => setImmediate(resolve));
+            }
+
+            const requests = [], renders = [];
+            const context = {
+              structuredClone,
+              ACCOUNT:{admin:true,scope:'scope-alpha'},
+              AGENT_PROFILE_REQUEST:0,
+              AGENT_PROFILE_AUTHORITY:'scope-alpha|true',
+              AGENT_PROFILE_OWNER_SNAPSHOTS:{mine:null,system:null},
+              AGENT_PROFILE_STATE:{owner:'mine',status:'all',search:'',items:[],selected:null,
+                detail:null,loaded:false,loading:false,error:null,forbidden:false,dirty:false,
+                createFlow:null,etag:null,binding:null,systemBinding:null,rolloutDraft:null,
+                diagnostics:[],skillProofs:{}},
+              render() {
+                const state = context.AGENT_PROFILE_STATE;
+                renders.push({owner:state.owner,selected:state.selected,
+                  detail:state.detail && state.detail.displayName});
+              },
+              agentProfileResetSkillSearch() {},
+              agentProfileScope() { return 'scope-alpha'; },
+              agentProfileCollectionEndpoint() {
+                return context.AGENT_PROFILE_STATE.owner === 'system'
+                  ? '/api/admin/agent-profiles'
+                  : '/api/scopes/scope-alpha/agent-profiles';
+              },
+              agentProfileItemEndpoint(item) {
+                return item.ownerKind === 'system'
+                  ? '/api/admin/agent-profiles/' + item.profileSlug
+                  : '/api/scopes/scope-alpha/agent-profiles/' + item.profileSlug;
+              },
+              agentProfileProblem(status) { return {kind:'error',title:'HTTP ' + status}; },
+              agentProfileNormalizeItem(item, owner) {
+                return Object.assign({ownerKind:owner === 'system' ? 'system' : 'scope',
+                  profileId:'',profileSlug:'',displayName:'',purpose:'',publishedRevision:0,
+                  available:true,isDefault:false,etag:null}, item);
+              },
+              agentProfileReconcilePending() {},
+              agentProfileAdvanceCreate() { return Promise.resolve(false); },
+              agentProfileCanWrite() { return true; },
+              agentProfileRuntime() {
+                return {activationMode:'SHADOW',members:[],maximumToolPolicy:{},
+                  recoveryToolPolicy:{}};
+              },
+              agentProfileEmptyDraft() { return {runtimeProfile:{members:[]}}; },
+              agentProfileUnionNames(existing, additions) {
+                return [...new Set([...(existing || []), ...(additions || [])])];
+              },
+              agentProfileRolloutFromBinding() {
+                return {enabled:false,cohortBasisPoints:0};
+              },
+              agentProfileStatus() { return ''; },
+              agentProfileSkillsSectionHtml(_, disabled) {
+                return '<span data-skills-disabled="' + disabled + '"></span>';
+              },
+              agentProfileDiagnosticsHtml() { return ''; },
+              agentProfileLifecycleState() {
+                return {label:'idle',tone:'draft',description:'idle'};
+              },
+              agentProfilePublicSummaryHtml() { return ''; },
+              agentProfileCreateHtml() { return ''; },
+              esc(value) { return String(value == null ? '' : value); },
+              agentProfileJson(path) {
+                const request = deferred();
+                requests.push(Object.assign({path}, request));
+                return request.promise;
+              }
+            };
+            vm.createContext(context);
+            vm.runInContext(`
+              ${functionSource('agentProfileRequestIsCurrent', 'agentProfileSaveOwnerSnapshot')}
+              ${functionSource('agentProfileSaveOwnerSnapshot', 'agentProfileRestoreOwnerSnapshot')}
+              ${functionSource('agentProfileRestoreOwnerSnapshot', 'agentProfileSwitchOwner')}
+              ${functionSource('agentProfileSwitchOwner', 'agentProfileResetSkillSearch')}
+              ${functionSource('loadAgentProfileBindings', 'agentProfileApplyBinding')}
+              ${functionSource('agentProfileApplyBinding', 'loadAgentProfiles')}
+              ${functionSource('loadAgentProfiles', 'loadAgentProfileDetail')}
+              ${functionSource('loadAgentProfileDetail', 'agentProfileRows')}
+              ${functionSource('agentProfileField', 'agentProfileSelect')}
+              ${functionSource('agentProfileSelect', 'agentProfileHidden')}
+              ${functionSource('agentProfileActionBarHtml', 'agentProfileRefreshActionState')}
+              ${functionSource('agentProfileEditorHtml', 'agentProfileCollectFields')}
+            `, context);
+
+            vm.runInContext(`
+              AGENT_PROFILE_STATE.items=[{ownerKind:'scope',profileId:'mine-cached-id',
+                profileSlug:'mine-cached',displayName:'Mine cached'}];
+              AGENT_PROFILE_STATE.selected='mine-cached';
+              AGENT_PROFILE_STATE.detail={ownerKind:'scope',profileId:'mine-cached-id',
+                profileSlug:'mine-cached',displayName:'Mine cached'};
+              AGENT_PROFILE_STATE.etag='mine-etag';
+              AGENT_PROFILE_STATE.binding={target:null};
+              AGENT_PROFILE_STATE.loaded=true;
+              agentProfileSaveOwnerSnapshot('mine');
+
+              AGENT_PROFILE_STATE.owner='system';
+              AGENT_PROFILE_STATE.items=[{ownerKind:'system',profileId:'system-cached-id',
+                profileSlug:'system-cached',displayName:'System cached'}];
+              AGENT_PROFILE_STATE.selected='system-cached';
+              AGENT_PROFILE_STATE.detail={ownerKind:'system',profileId:'system-cached-id',
+                profileSlug:'system-cached',displayName:'System cached'};
+              AGENT_PROFILE_STATE.etag='system-etag';
+              AGENT_PROFILE_STATE.loaded=true;
+              agentProfileSaveOwnerSnapshot('system');
+              AGENT_PROFILE_STATE.loading=true;
+              var refreshingSystemEditor=agentProfileEditorHtml();
+              if(!refreshingSystemEditor.includes('data-ap-field="rolloutEnabled" disabled'))
+                throw new Error('cached system rollout fields stay read-only while refreshing');
+              if(!refreshingSystemEditor.includes('data-ap-field="cohortBasisPoints" type="number" value="0" disabled'))
+                throw new Error('cached cohort field stays read-only while refreshing');
+              AGENT_PROFILE_STATE.loading=false;
+              agentProfileRestoreOwnerSnapshot('mine');
+            `, context);
+            context.AGENT_PROFILE_STATE.loading = true;
+            const refreshingEditor = vm.runInContext('agentProfileEditorHtml()', context);
+            assert.match(refreshingEditor, /data-ap-field="displayName"[^>]* disabled/,
+              'cached editor fields stay read-only until the authoritative refresh settles');
+            assert.match(refreshingEditor, /data-ap-action="save" disabled/,
+              'cached editor actions stay disabled until the authoritative refresh settles');
+            context.AGENT_PROFILE_STATE.loading = false;
+
+            (async function() {
+              const systemLoad = vm.runInContext("agentProfileSwitchOwner('system')", context);
+              assert.equal(context.AGENT_PROFILE_STATE.detail.displayName, 'System cached');
+              assert.equal(renders.at(-1).detail, 'System cached');
+              assert.deepEqual(requests.slice(0, 3).map(request => request.path), [
+                '/api/admin/agent-profiles?take=100',
+                '/api/scopes/scope-alpha/agent-profile-bindings/nyxid.chat',
+                '/api/admin/agent-profile-bindings/nyxid.chat'
+              ]);
+
+              requests[0].resolve({body:{items:[{ownerKind:'system',
+                profileId:'stale-system-id',profileSlug:'stale-system',
+                displayName:'Stale system'}]}});
+              await waitForRequestCount(4);
+              assert.equal(requests.length, 4);
+              assert.equal(requests[3].path, '/api/admin/agent-profiles/stale-system');
+
+              const mineLoad = vm.runInContext("agentProfileSwitchOwner('mine')", context);
+              assert.equal(context.AGENT_PROFILE_STATE.detail.displayName, 'Mine cached');
+              assert.equal(requests.length, 7, 'the next owner refresh starts without waiting');
+
+              requests[1].resolve({body:{target:{profileId:'stale-system-id'}}});
+              requests[2].resolve({body:{target:{profileId:'stale-system-id'}}});
+              requests[3].resolve({body:{displayName:'Stale system detail'},
+                etag:'stale-system-etag'});
+              await systemLoad;
+              assert.equal(context.AGENT_PROFILE_STATE.owner, 'mine');
+              assert.equal(context.AGENT_PROFILE_STATE.detail.displayName, 'Mine cached');
+              assert.equal(context.AGENT_PROFILE_STATE.items[0].profileSlug, 'mine-cached');
+
+              requests[4].resolve({body:{items:[{ownerKind:'scope',profileId:'mine-fresh-id',
+                profileSlug:'mine-fresh',displayName:'Mine fresh'}]}});
+              await waitForRequestCount(8);
+              assert.equal(requests.length, 8,
+                'detail starts after the list without waiting for either binding');
+              assert.equal(requests[7].path,
+                '/api/scopes/scope-alpha/agent-profiles/mine-fresh');
+
+              requests[7].resolve({body:{displayName:'Mine fresh detail'},etag:'mine-fresh-etag'});
+              requests[5].resolve({body:{target:{ownerKind:'scope',profileId:'mine-fresh-id'}}});
+              requests[6].resolve({body:{target:null}});
+              await mineLoad;
+
+              assert.equal(context.AGENT_PROFILE_STATE.loading, false);
+              assert.equal(context.AGENT_PROFILE_STATE.items[0].profileSlug, 'mine-fresh');
+              assert.equal(context.AGENT_PROFILE_STATE.items[0].isDefault, true);
+              assert.equal(context.AGENT_PROFILE_STATE.detail.displayName, 'Mine fresh detail');
+              assert.equal(context.AGENT_PROFILE_STATE.etag, 'mine-fresh-etag');
+
+              context.ACCOUNT.scope = 'scope-beta';
+              const staleAuthorityRequest = context.AGENT_PROFILE_REQUEST;
+              assert.equal(vm.runInContext('agentProfileSyncAuthority()', context), true);
+              assert.equal(vm.runInContext(
+                `agentProfileRequestIsCurrent('mine', ${staleAuthorityRequest})`, context),
+                false, 'authority changes invalidate already in-flight reads');
+              assert.equal(context.AGENT_PROFILE_STATE.items.length, 0);
+            })().catch(error => { console.error(error); process.exitCode = 1; });
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error);
     }
 
     [Fact]
@@ -300,6 +518,7 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             }
 
             const context = {
+              AGENT_PROFILE_REQUEST:0,
               AGENT_PROFILE_STATE:{
                 detail:{draft:{runtimeProfile:{maximumToolPolicy:{toolNames:[],toolSetRefs:[]},
                   members:[{intentId:'old',skillRef:{guid:'old-guid',literalVersion:'1.0'},
@@ -1374,6 +1593,7 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             }
 
             const context = {
+              AGENT_PROFILE_REQUEST:0,
               AGENT_PROFILE_STATE:{
                 items:[{ownerKind:'scope',profileSlug:'aevatar-operator'}],
                 createFlow:{owner:'mine',slug:'aevatar-operator',stage:'catalog'},
@@ -1386,6 +1606,8 @@ public sealed class BackendConsoleStaticAssetEndpointTests
                   profileSlug:'aevatar-operator',draft:null}};
               },
               agentProfileReconcilePending() {}, render() {}
+              ,agentProfileRequestIsCurrent() { return true; }
+              ,agentProfileSaveOwnerSnapshot() { return false; }
             };
             vm.createContext(context);
             vm.runInContext(`

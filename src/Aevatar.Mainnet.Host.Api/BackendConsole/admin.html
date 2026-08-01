@@ -2433,6 +2433,36 @@ var AGENT_PROFILE_STATE={owner:'mine',status:'all',search:'',items:[],selected:n
   loaded:false,loading:false,error:null,forbidden:false,dirty:false,busy:false,busyAction:null,notice:null,diagnostics:[],etag:null,
   binding:null,systemBinding:null,rolloutDraft:null,skillRequest:0,skillMemberIndex:null,skillQuery:'',skillResults:[],skillLoading:false,skillError:null,skillProofs:{},
   skillCardsOpen:{},skillModal:null,skillFocusReturn:null,pending:null,completedPending:null,pollTimer:null,createFlow:null};
+var AGENT_PROFILE_REQUEST=0,AGENT_PROFILE_AUTHORITY='',AGENT_PROFILE_OWNER_SNAPSHOTS={mine:null,system:null};
+
+function agentProfileRequestIsCurrent(owner,request){
+  return AGENT_PROFILE_AUTHORITY===agentProfileSnapshotAuthority()&&AGENT_PROFILE_STATE.owner===owner&&(request==null||request===AGENT_PROFILE_REQUEST);
+}
+function agentProfileSnapshotAuthority(){return (ACCOUNT&&ACCOUNT.scope||'')+'|'+!!(ACCOUNT&&ACCOUNT.admin);}
+function agentProfileSyncAuthority(){
+  var authority=agentProfileSnapshotAuthority();if(authority===AGENT_PROFILE_AUTHORITY)return false;
+  AGENT_PROFILE_AUTHORITY=authority;AGENT_PROFILE_REQUEST+=1;AGENT_PROFILE_OWNER_SNAPSHOTS={mine:null,system:null};
+  AGENT_PROFILE_STATE.createFlow=null;AGENT_PROFILE_STATE.pending=null;AGENT_PROFILE_STATE.completedPending=null;agentProfileResetSkillSearch();
+  agentProfileRestoreOwnerSnapshot(AGENT_PROFILE_STATE.owner);return true;
+}
+function agentProfileSaveOwnerSnapshot(owner){
+  if(!AGENT_PROFILE_STATE.loaded||AGENT_PROFILE_STATE.loading||AGENT_PROFILE_STATE.dirty||AGENT_PROFILE_STATE.createFlow)return false;
+  AGENT_PROFILE_OWNER_SNAPSHOTS[owner]=structuredClone({authority:agentProfileSnapshotAuthority(),items:AGENT_PROFILE_STATE.items,selected:AGENT_PROFILE_STATE.selected,
+    detail:AGENT_PROFILE_STATE.detail,etag:AGENT_PROFILE_STATE.etag,binding:AGENT_PROFILE_STATE.binding,systemBinding:AGENT_PROFILE_STATE.systemBinding});
+  return true;
+}
+function agentProfileRestoreOwnerSnapshot(owner){
+  var cached=AGENT_PROFILE_OWNER_SNAPSHOTS[owner];if(cached&&cached.authority!==agentProfileSnapshotAuthority())cached=null;
+  AGENT_PROFILE_STATE.owner=owner;AGENT_PROFILE_STATE.loading=false;AGENT_PROFILE_STATE.error=null;AGENT_PROFILE_STATE.forbidden=false;AGENT_PROFILE_STATE.dirty=false;
+  AGENT_PROFILE_STATE.notice=null;AGENT_PROFILE_STATE.completedPending=null;AGENT_PROFILE_STATE.rolloutDraft=null;AGENT_PROFILE_STATE.diagnostics=[];
+  if(cached){cached=structuredClone(cached);Object.assign(AGENT_PROFILE_STATE,cached,{loaded:true});return true;}
+  Object.assign(AGENT_PROFILE_STATE,{items:[],selected:null,detail:null,etag:null,binding:null,systemBinding:null,loaded:false});return false;
+}
+function agentProfileSwitchOwner(owner){
+  if(owner===AGENT_PROFILE_STATE.owner)return Promise.resolve();
+  agentProfileSaveOwnerSnapshot(AGENT_PROFILE_STATE.owner);agentProfileResetSkillSearch();AGENT_PROFILE_STATE.createFlow=null;
+  agentProfileRestoreOwnerSnapshot(owner);var refresh=loadAgentProfiles();render();return refresh;
+}
 
 function agentProfileResetSkillSearch(){
   AGENT_PROFILE_STATE.skillRequest=Number(AGENT_PROFILE_STATE.skillRequest||0)+1;AGENT_PROFILE_STATE.skillMemberIndex=null;
@@ -2548,21 +2578,25 @@ function agentProfileNormalizeItem(item,owner){
     displayName:item.displayName||item.profileSlug||'',purpose:item.purpose||'',publishedRevision:Number(item.publishedRevision||0),
     isDefault:!!item.isDefault,available:item.available!==false,etag:item.etag||null};
 }
-async function loadAgentProfileBindings(){
-  AGENT_PROFILE_STATE.binding=null;AGENT_PROFILE_STATE.systemBinding=null;
+async function loadAgentProfileBindings(owner,request){
   var scope=agentProfileScope();if(!scope)return;
-  try{
-    var personal=await agentProfileJson('/api/scopes/'+encodeURIComponent(scope)+'/agent-profile-bindings/nyxid.chat');
+  var reads=[agentProfileJson('/api/scopes/'+encodeURIComponent(scope)+'/agent-profile-bindings/nyxid.chat')];
+  if(ACCOUNT&&ACCOUNT.admin)reads.push(agentProfileJson('/api/admin/agent-profile-bindings/nyxid.chat'));
+  var settled=await Promise.allSettled(reads);if(!agentProfileRequestIsCurrent(owner,request))return;
+  AGENT_PROFILE_STATE.binding=null;AGENT_PROFILE_STATE.systemBinding=null;
+  var personal=settled[0];
+  if(personal.status==='fulfilled'){personal=personal.value;
     AGENT_PROFILE_STATE.binding=Object.assign({},personal.body||{},{etag:personal.etag||(personal.body&&personal.body.etag)||null});
     agentProfileReconcilePending(personal.body&&personal.body.lastMutation);
-  }catch(e){if(!e||e.status!==404)AGENT_PROFILE_STATE.error=e&&e.problem?e.problem:agentProfileProblem(e&&e.status);}
-  if(ACCOUNT&&ACCOUNT.admin){
-    try{
-      var system=await agentProfileJson('/api/admin/agent-profile-bindings/nyxid.chat');
+  }else if(!personal.reason||personal.reason.status!==404)AGENT_PROFILE_STATE.error=personal.reason&&personal.reason.problem?personal.reason.problem:agentProfileProblem(personal.reason&&personal.reason.status);
+  var system=settled[1];
+  if(system){
+    if(system.status==='fulfilled'){system=system.value;
       AGENT_PROFILE_STATE.systemBinding=Object.assign({},system.body||{},{etag:system.etag||(system.body&&system.body.etag)||null});
       agentProfileReconcilePending(system.body&&system.body.lastMutation);
-    }catch(e){if(e&&e.status!==403&&e.status!==404)AGENT_PROFILE_STATE.error=e.problem||agentProfileProblem(e.status);}
+    }else if(system.reason&&system.reason.status!==403&&system.reason.status!==404)AGENT_PROFILE_STATE.error=system.reason.problem||agentProfileProblem(system.reason.status);
   }
+  agentProfileApplyBinding(AGENT_PROFILE_STATE.items);agentProfileSaveOwnerSnapshot(owner);render();
 }
 function agentProfileApplyBinding(items){
   var target=AGENT_PROFILE_STATE.binding&&AGENT_PROFILE_STATE.binding.target;
@@ -2570,33 +2604,42 @@ function agentProfileApplyBinding(items){
   return items;
 }
 async function loadAgentProfiles(){
+  agentProfileSyncAuthority();
   if(AGENT_PROFILE_STATE.loading)return;
+  var owner=AGENT_PROFILE_STATE.owner,request=++AGENT_PROFILE_REQUEST,q='?take=100';
   AGENT_PROFILE_STATE.loading=true;AGENT_PROFILE_STATE.error=null;AGENT_PROFILE_STATE.forbidden=false;
+  var listRead=agentProfileJson(agentProfileCollectionEndpoint()+q),bindingRead=loadAgentProfileBindings(owner,request);
   try{
-    var q='?take=100',result=await agentProfileJson(agentProfileCollectionEndpoint()+q);
-    AGENT_PROFILE_STATE.items=(result.body&&result.body.items||[]).map(function(x){return agentProfileNormalizeItem(x,AGENT_PROFILE_STATE.owner);});
+    var result=await listRead;if(!agentProfileRequestIsCurrent(owner,request))return;
+    AGENT_PROFILE_STATE.items=(result.body&&result.body.items||[]).map(function(x){return agentProfileNormalizeItem(x,owner);});
     agentProfileReconcilePending(result.body&&result.body.lastMutation);
-    await loadAgentProfileBindings();agentProfileApplyBinding(AGENT_PROFILE_STATE.items);
+    agentProfileApplyBinding(AGENT_PROFILE_STATE.items);
     AGENT_PROFILE_STATE.loaded=true;
     if(AGENT_PROFILE_STATE.selected&&!AGENT_PROFILE_STATE.items.some(function(x){return x.profileSlug===AGENT_PROFILE_STATE.selected;}))AGENT_PROFILE_STATE.selected=null;
     if(!AGENT_PROFILE_STATE.createFlow&&!AGENT_PROFILE_STATE.selected&&AGENT_PROFILE_STATE.items.length)AGENT_PROFILE_STATE.selected=AGENT_PROFILE_STATE.items[0].profileSlug;
-    if(AGENT_PROFILE_STATE.selected)await loadAgentProfileDetail(AGENT_PROFILE_STATE.selected,false);
-    await agentProfileAdvanceCreate();
-  }catch(e){AGENT_PROFILE_STATE.loaded=true;AGENT_PROFILE_STATE.forbidden=e&&e.status===403;AGENT_PROFILE_STATE.error=e&&e.problem?e.problem:agentProfileProblem(e&&e.status);}
-  AGENT_PROFILE_STATE.loading=false;render();
+    if(!AGENT_PROFILE_STATE.selected||!AGENT_PROFILE_STATE.detail||AGENT_PROFILE_STATE.detail.profileSlug!==AGENT_PROFILE_STATE.selected){AGENT_PROFILE_STATE.detail=null;AGENT_PROFILE_STATE.etag=null;}
+    render();
+    var detailRead=AGENT_PROFILE_STATE.selected?loadAgentProfileDetail(AGENT_PROFILE_STATE.selected,false,owner,request):Promise.resolve();
+    await Promise.all([bindingRead,detailRead]);if(!agentProfileRequestIsCurrent(owner,request))return;
+    await agentProfileAdvanceCreate();agentProfileSaveOwnerSnapshot(owner);
+  }catch(e){if(agentProfileRequestIsCurrent(owner,request)){AGENT_PROFILE_STATE.loaded=true;AGENT_PROFILE_STATE.forbidden=e&&e.status===403;AGENT_PROFILE_STATE.error=e&&e.problem?e.problem:agentProfileProblem(e&&e.status);}}
+  if(agentProfileRequestIsCurrent(owner,request)){AGENT_PROFILE_STATE.loading=false;agentProfileSaveOwnerSnapshot(owner);render();}
 }
-async function loadAgentProfileDetail(slug,rerender){
+async function loadAgentProfileDetail(slug,rerender,owner,request){
+  owner=owner||AGENT_PROFILE_STATE.owner;if(request==null)request=AGENT_PROFILE_REQUEST;
   var item=AGENT_PROFILE_STATE.items.filter(function(x){return x.profileSlug===slug;})[0];if(!item)return;
   var createProofs=AGENT_PROFILE_STATE.createFlow?AGENT_PROFILE_STATE.skillProofs:null;
-  agentProfileResetSkillSearch();if(createProofs)AGENT_PROFILE_STATE.skillProofs=createProofs;AGENT_PROFILE_STATE.selected=slug;AGENT_PROFILE_STATE.detail=null;AGENT_PROFILE_STATE.etag=null;AGENT_PROFILE_STATE.diagnostics=[];
+  agentProfileResetSkillSearch();if(createProofs)AGENT_PROFILE_STATE.skillProofs=createProofs;AGENT_PROFILE_STATE.selected=slug;
+  if(!AGENT_PROFILE_STATE.detail||AGENT_PROFILE_STATE.detail.profileSlug!==slug){AGENT_PROFILE_STATE.detail=null;AGENT_PROFILE_STATE.etag=null;}AGENT_PROFILE_STATE.diagnostics=[];
   try{
     var result=await agentProfileJson(agentProfileItemEndpoint(item));
+    if(!agentProfileRequestIsCurrent(owner,request)||AGENT_PROFILE_STATE.selected!==slug)return;
     AGENT_PROFILE_STATE.detail=Object.assign({},item,result.body||{});
     AGENT_PROFILE_STATE.etag=result.etag||(result.body&&result.body.etag)||item.etag||null;
     AGENT_PROFILE_STATE.rolloutDraft=null;AGENT_PROFILE_STATE.dirty=!!AGENT_PROFILE_STATE.createFlow;
     if(result.body&&result.body.lastMutation)agentProfileReconcilePending(Object.assign({},result.body.lastMutation,{executionAvailable:result.body.executionAvailable===true}));
-  }catch(e){AGENT_PROFILE_STATE.error=e&&e.problem?e.problem:agentProfileProblem(e&&e.status);}
-  if(rerender!==false)render();
+  }catch(e){if(agentProfileRequestIsCurrent(owner,request)&&AGENT_PROFILE_STATE.selected===slug)AGENT_PROFILE_STATE.error=e&&e.problem?e.problem:agentProfileProblem(e&&e.status);}
+  if(agentProfileRequestIsCurrent(owner,request)&&AGENT_PROFILE_STATE.selected===slug){agentProfileSaveOwnerSnapshot(owner);if(rerender!==false)render();}
 }
 function agentProfileRows(){
   var text=AGENT_PROFILE_STATE.search.trim().toLowerCase(),status=AGENT_PROFILE_STATE.status;
@@ -2761,7 +2804,7 @@ function agentProfileLifecycleState(detail){
   return {label:'草稿已保存',tone:'draft',description:'没有未保存的本地修改'};
 }
 function agentProfileActionBarHtml(detail,writable){
-  var state=agentProfileLifecycleState(detail),disabled=AGENT_PROFILE_STATE.busy||!!AGENT_PROFILE_STATE.pending;
+  var state=agentProfileLifecycleState(detail),disabled=AGENT_PROFILE_STATE.loading||AGENT_PROFILE_STATE.busy||!!AGENT_PROFILE_STATE.pending;
   var secondary='<div class="ap-action-secondary"><button type="button" class="btn" data-ap-action="personal-default"'+(disabled?' disabled':'')+'>设为我的默认</button>'+(detail&&detail.isDefault?'<button type="button" class="btn" data-ap-action="clear-default"'+(disabled?' disabled':'')+'>清除默认</button>':'')+'</div>';
   var primary=writable?'<button type="button" class="btn" data-ap-action="save"'+(disabled?' disabled':'')+'>保存草稿</button><button type="button" class="btn" data-ap-action="validate"'+(disabled?' disabled':'')+'>校验</button><button type="button" class="btn btn-primary" data-ap-action="publish"'+(disabled?' disabled':'')+'>发布</button>':'';
   return '<div class="ap-action-bar"><div class="ap-action-state" role="status" aria-live="polite"><span class="ap-lifecycle '+state.tone+'" aria-hidden="true"></span><span class="ap-action-state-copy"><b>'+esc(state.label)+'</b><span>'+esc(state.description)+'</span></span></div><div class="ap-action-buttons">'+secondary+primary+'</div></div>';
@@ -2813,7 +2856,7 @@ function agentProfileEditorHtml(){
   var rollout=AGENT_PROFILE_STATE.rolloutDraft||agentProfileRolloutFromBinding(AGENT_PROFILE_STATE.systemBinding);
   var notice=AGENT_PROFILE_STATE.notice?'<div class="ap-banner pending" role="status">'+esc(AGENT_PROFILE_STATE.notice)+'</div>':'';
   var error=AGENT_PROFILE_STATE.error?'<div class="ap-banner error" role="alert">'+esc(AGENT_PROFILE_STATE.error.title)+'</div>':'';
-  var dis=!writable||!!AGENT_PROFILE_STATE.pending,actionDisabled=AGENT_PROFILE_STATE.busy||!!AGENT_PROFILE_STATE.pending;
+  var dis=!writable||AGENT_PROFILE_STATE.loading||!!AGENT_PROFILE_STATE.pending,actionDisabled=AGENT_PROFILE_STATE.loading||AGENT_PROFILE_STATE.busy||!!AGENT_PROFILE_STATE.pending;
   return '<div class="ap-workspace-inner">'+
     '<div class="ap-head"><div><div class="ap-title">'+esc(d.displayName||d.profileSlug)+'</div><div class="ap-sub">'+esc((d.ownerKind==='system'?'system/':'mine/')+d.profileSlug)+
       ' · ETag '+esc(AGENT_PROFILE_STATE.etag||'等待投影')+' · state '+esc(d.authorityStateVersion||0)+'</div></div>'+agentProfileStatus(d)+'</div>'+notice+error+
@@ -2834,8 +2877,8 @@ function agentProfileEditorHtml(){
       agentProfileField('Exact fetch timeout (ms)','exactSkillFetchTimeoutMs',rt.exactSkillFetchTimeoutMs||1500,{type:'number',readonly:true,disabled:dis})+
       agentProfileField('Max selected skill bytes','maxSelectedSkillBytes',rt.maxSelectedSkillBytes||24576,{type:'number',readonly:true,disabled:dis})+'</div><div class="ap-disclosure-body"><span class="ap-help">当前 nyxid.chat runtime 固定参数；由服务端 editor options 定义。</span></div></details></section>'+agentProfileDiagnosticsHtml()+'</form>'+
     ((d.ownerKind==='system'&&ACCOUNT&&ACCOUNT.admin)?'<section class="ap-section"><h3>System default rollout</h3><div class="ap-rollout">'+
-      agentProfileSelect('Enabled','rolloutEnabled',String(rollout.enabled),[{value:'true',label:'启用'},{value:'false',label:'停用'}],false)+
-      agentProfileField('Cohort basis points','cohortBasisPoints',rollout.cohortBasisPoints,{type:'number',min:0,max:10000})+
+      agentProfileSelect('Enabled','rolloutEnabled',String(rollout.enabled),[{value:'true',label:'启用'},{value:'false',label:'停用'}],actionDisabled)+
+      agentProfileField('Cohort basis points','cohortBasisPoints',rollout.cohortBasisPoints,{type:'number',min:0,max:10000,disabled:actionDisabled})+
       '<button class="btn" data-ap-action="system-default"'+(actionDisabled?' disabled':'')+'>保存 system 默认</button></div></section>':'')+agentProfileActionBarHtml(d,writable)+'</div>';
 }
 function agentProfileCollectFields(root){
@@ -2997,6 +3040,7 @@ function agentProfileBeforeUnload(event){
 }
 window.addEventListener('beforeunload',agentProfileBeforeUnload);
 function viewAgentProfiles(){
+  agentProfileSyncAuthority();
   var mine=AGENT_PROFILE_STATE.owner==='mine',canCreate=mine||!!(ACCOUNT&&ACCOUNT.admin);
   var body=moduleSubHeader('agent-profiles','<span class="ap-status">Actor-backed read model</span>')+
     '<div class="ap-shell"><div class="ap-toolbar"><div class="segmented" role="tablist" aria-label="Profile owner">'+
@@ -3012,7 +3056,7 @@ function viewAgentProfiles(){
 function mountAgentProfiles(root){
   if(!AGENT_PROFILE_STATE.loaded&&!AGENT_PROFILE_STATE.loading){loadAgentProfiles();return;}
   root.addEventListener('click',function(ev){
-    var owner=ev.target.closest('[data-ap-owner]');if(owner){if(AGENT_PROFILE_STATE.pending){toast('当前操作仍在等待投影');return;}if(AGENT_PROFILE_STATE.dirty&&!confirm('有未保存修改，确定离开？'))return;agentProfileResetSkillSearch();AGENT_PROFILE_STATE.createFlow=null;AGENT_PROFILE_STATE.owner=owner.getAttribute('data-ap-owner');AGENT_PROFILE_STATE.loaded=false;AGENT_PROFILE_STATE.detail=null;AGENT_PROFILE_STATE.selected=null;loadAgentProfiles();return;}
+    var owner=ev.target.closest('[data-ap-owner]');if(owner){if(AGENT_PROFILE_STATE.pending){toast('当前操作仍在等待投影');return;}if(AGENT_PROFILE_STATE.dirty&&!confirm('有未保存修改，确定离开？'))return;agentProfileSwitchOwner(owner.getAttribute('data-ap-owner'));return;}
     var row=ev.target.closest('[data-ap-select]');if(row){if(AGENT_PROFILE_STATE.pending){toast('当前操作仍在等待投影');return;}if(AGENT_PROFILE_STATE.dirty&&!confirm('有未保存修改，确定离开？'))return;AGENT_PROFILE_STATE.createFlow=null;AGENT_PROFILE_STATE.error=null;loadAgentProfileDetail(row.getAttribute('data-ap-select'));return;}
     if(ev.target.closest('[data-ap-start-create]')){if(AGENT_PROFILE_STATE.pending){toast('当前操作仍在等待投影');return;}if(AGENT_PROFILE_STATE.dirty&&!confirm('有未保存修改，确定开始新建？'))return;agentProfileStartCreate();return;}
     if(ev.target.closest('[data-ap-create-cancel]')){if(!agentProfileCancelCreate())return;if(AGENT_PROFILE_STATE.items.length)loadAgentProfileDetail(AGENT_PROFILE_STATE.items[0].profileSlug);else render();return;}
