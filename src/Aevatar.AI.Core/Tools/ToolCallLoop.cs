@@ -21,26 +21,30 @@ public sealed class ToolCallLoop
 {
     private readonly ToolManager _tools;
     private readonly AgentHookPipeline? _hooks;
-    private readonly IReadOnlyList<IToolCallMiddleware> _toolMiddlewares;
     private readonly IReadOnlyList<ILLMCallMiddleware> _llmMiddlewares;
     private readonly TokenBudgetTracker? _budgetTracker;
+    private readonly IAgentToolExecutionPort? _toolExecutionPort;
+    private readonly AgentToolApprovalContinuationMode _approvalContinuationMode;
 
     public ToolCallLoop(
         ToolManager tools,
         AgentHookPipeline? hooks = null,
-        IReadOnlyList<IToolCallMiddleware>? toolMiddlewares = null,
         IReadOnlyList<ILLMCallMiddleware>? llmMiddlewares = null,
-        TokenBudgetTracker? budgetTracker = null)
+        TokenBudgetTracker? budgetTracker = null,
+        IAgentToolExecutionPort? toolExecutionPort = null,
+        AgentToolApprovalContinuationMode approvalContinuationMode = AgentToolApprovalContinuationMode.None)
     {
         _tools = tools;
         _hooks = hooks;
-        _toolMiddlewares = toolMiddlewares ?? [];
         _llmMiddlewares = llmMiddlewares ?? [];
         _budgetTracker = budgetTracker;
+        _toolExecutionPort = toolExecutionPort;
+        _approvalContinuationMode = approvalContinuationMode;
     }
 
-    /// <summary>Exposes the tool middlewares for streaming tool execution.</summary>
-    internal IReadOnlyList<IToolCallMiddleware> ToolMiddlewares => _toolMiddlewares;
+    internal IAgentToolExecutionPort? ToolExecutionPort => _toolExecutionPort;
+
+    internal AgentToolApprovalContinuationMode ApprovalContinuationMode => _approvalContinuationMode;
 
     /// <summary>
     /// 执行 Tool Calling 循环。返回最终的 LLM 文本内容。
@@ -583,7 +587,7 @@ public sealed class ToolCallLoop
         public string ParametersSchema => "{}";
         public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
-            Task.FromResult("{}");
+            Task.FromException<string>(new InvalidOperationException($"Tool '{name}' was not found."));
     }
 
     internal static ToolManager CreateRequestToolManager(IReadOnlyList<IAgentTool>? tools)
@@ -603,7 +607,11 @@ public sealed class ToolCallLoop
         // Refactor (iter35/cluster-040-streaming-tool-executor):
         //   Old pattern: StreamingToolExecutor owns process-local channel coordinator + TaskCompletionSource waiters + List<TrackedTool>/List<TaskCompletionSource> as object fields for tool execution ordering.
         //   New principle: Tool execution state kept in owning chat/actor turn,或 narrow runtime-neutral tool scheduling abstraction(no process-local progress storage)。Streaming tool progress advanced by owning execution flow;process-local channels 仅作 transport mechanics,不作 business progress 来源。
-        var executor = new StreamingToolExecutor(tools, _hooks, _toolMiddlewares);
+        var executor = new StreamingToolExecutor(
+            tools,
+            _hooks,
+            toolExecutionPort: _toolExecutionPort,
+            approvalContinuationMode: _approvalContinuationMode);
         using var executionState = executor.CreateExecutionState();
 
         foreach (var call in toolCalls)

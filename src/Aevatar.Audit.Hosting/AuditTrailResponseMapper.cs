@@ -55,6 +55,7 @@ internal static class AuditTrailResponseMapper
             ToFailure(record, terminalOutcome, hasCurrentContract),
             hasCurrentContract ? ToProvenance(record) : null,
             hasCurrentContract ? ToRedaction(record.Redaction) : null,
+            hasCurrentContract ? ToToolExecution(record.ToolExecution) : null,
             hasCurrentContract ? ToCommittedFact(record.CommittedFactRef) : null,
             hasCurrentContract ? Optional(record.RequestSummary) : null,
             hasCurrentContract ? Optional(record.ResultSummary) : null);
@@ -194,6 +195,14 @@ internal static class AuditTrailResponseMapper
                 redaction.OmittedFields.ToArray(),
                 redaction.ValuesSanitized);
 
+    private static AuditToolExecutionResponse? ToToolExecution(AuditToolExecution? toolExecution) =>
+        toolExecution is null
+            ? null
+            : new AuditToolExecutionResponse(
+                toolExecution.ArgumentsSha256,
+                ToolExecutionPhaseName(toolExecution.ExecutionPhase),
+                toolExecution.IsMutation);
+
     private static AuditCommittedFactReferenceResponse? ToCommittedFact(AuditCommittedFactReference? reference) =>
         reference is null
             ? null
@@ -240,6 +249,14 @@ internal static class AuditTrailResponseMapper
         AuditTerminalOutcome.Failed => "failed",
         AuditTerminalOutcome.Cancelled => "cancelled",
         AuditTerminalOutcome.TimedOut => "timed_out",
+        _ => "unspecified",
+    };
+
+    private static string ToolExecutionPhaseName(AuditToolExecutionPhase value) => value switch
+    {
+        AuditToolExecutionPhase.Running => "running",
+        AuditToolExecutionPhase.WaitingApproval => "waiting_approval",
+        AuditToolExecutionPhase.Terminal => "terminal",
         _ => "unspecified",
     };
 

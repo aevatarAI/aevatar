@@ -1,6 +1,7 @@
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Audit.Abstractions.Models;
 using Aevatar.Audit.Abstractions.Ports;
+using Aevatar.Audit.Core.DependencyInjection;
 using Aevatar.Audit.Hosting;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.Configuration;
@@ -70,6 +71,7 @@ public sealed class MainnetHealthEndpointsTests
         builder.Services.AddSingleton<IResponsesWebSubstituteBackend, ResponsesWebSubstituteBackendAdapter>();
         builder.Services.AddSingleton<ResponsesWebSubstituteToolExecutionService>();
         builder.Services.AddSingleton<IAuditTrailQueryPort, ReadyAuditTrailQueryPort>();
+        builder.Services.AddAuditTrailCore(builder.Configuration);
         builder.AddGAgentServiceCapabilityBundle();
         builder.Services.AddMainnetAgentProjectionDocumentStores(builder.Configuration);
         builder.Services.AddSingleton(Substitute.For<IScheduledAgentCredentialLifecycle>());

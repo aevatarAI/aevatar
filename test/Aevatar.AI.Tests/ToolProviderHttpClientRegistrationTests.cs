@@ -1,9 +1,7 @@
 using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.CodexExecution;
-using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.AI.Core.Auditing;
 using Aevatar.AI.ToolProviders.ChronoStorage;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
@@ -38,7 +36,6 @@ public sealed class ToolProviderHttpClientRegistrationTests
             .NotBeNull();
         provider.GetRequiredService<IRemoteToolApprovalPort>().Should()
             .BeOfType<NyxIdRemoteToolApprovalPort>();
-        provider.GetServices<IToolApprovalHandler>().Should().BeEmpty();
     }
 
     [Fact]
@@ -205,39 +202,6 @@ public sealed class ToolProviderHttpClientRegistrationTests
             receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
             receipt.ResultJson.Should().Be(result);
             receipt.AuthorizationRequired.Should().BeNull();
-        }
-        finally
-        {
-            AgentToolRequestContext.Current = previous;
-        }
-    }
-
-    [Fact]
-    public async Task NyxIdRequireServiceTool_ShouldFinalizeReadyServiceAsVerifiedSuccess()
-    {
-        var handler = new StubUserServiceListHandler("""{ "keys": [{ "id": "us-github-alpha", "slug": "api-github" }] }""");
-        var tool = CreateRequireServiceTool(handler);
-        const string arguments = """{"service_slug":"api-github"}""";
-
-        var previous = AgentToolRequestContext.Current;
-        AgentToolRequestContext.Current = CapabilityContext();
-        try
-        {
-            var result = await tool.ExecuteAsync(arguments);
-            var finalized = ToolCallReceiptFinalizer.Finalize(new ToolCallContext
-            {
-                Tool = tool,
-                ToolName = tool.Name,
-                ToolCallId = "call-1",
-                ArgumentsJson = arguments,
-                Result = result,
-            });
-
-            finalized.IsSynthetic.Should().BeFalse();
-            finalized.Receipt.Status.Should().Be(AgentToolReceiptStatus.Success);
-            finalized.Receipt.ErrorCode.Should().NotBe(ToolCallReceiptFinalizer.UnknownErrorCode);
-            finalized.Receipt.ResultJson.Should().Be(result);
-            finalized.Receipt.AuthorizationRequired.Should().BeNull();
         }
         finally
         {
@@ -490,7 +454,7 @@ public sealed class ToolProviderHttpClientRegistrationTests
     }
 
     [Fact]
-    public async Task AddNyxIdTools_WithSshBypass_DiscoversSshExecWithoutLocalApprovalHandler()
+    public async Task AddNyxIdTools_WithSshOptIn_DiscoversToolsThatAlwaysRequireApproval()
     {
         var services = new ServiceCollection();
 
@@ -498,21 +462,22 @@ public sealed class ToolProviderHttpClientRegistrationTests
         {
             options.BaseUrl = "https://nyx.test";
             options.EnableSshExecTool = true;
-            options.BypassSshExecApproval = true;
         });
 
         await using var provider = services.BuildServiceProvider();
-        provider.GetServices<IToolApprovalHandler>().Should().BeEmpty();
         var source = provider.GetServices<IAgentToolSource>().OfType<NyxIdAgentToolSource>().Single();
 
         var tools = await source.DiscoverToolsAsync();
         var sshExec = tools.Should().ContainSingle(tool => tool is NyxIdSshExecTool).Subject;
         var codexExec = tools.Should().ContainSingle(tool => tool is NyxIdCodexExecTool).Subject;
         codexExec.Name.Should().Be("codex_exec");
-        sshExec.RequiresApproval("""{"service":"host","command":"uptime","principal":"ubuntu"}""")
-            .Should()
-            .BeFalse();
+        sshExec.ApprovalMode.Should().Be(ToolApprovalMode.AlwaysRequire);
+        sshExec.IsDestructive.Should().BeTrue();
+        codexExec.ApprovalMode.Should().Be(ToolApprovalMode.AlwaysRequire);
         codexExec.RequiresApproval("""{"target":{"kind":"private_ssh","private_ssh":{"service":"host","principal":"ubuntu"}},"prompt":"check"}""")
+            .Should()
+            .BeTrue();
+        codexExec.RequiresApproval("""{"target":{"kind":"managed_sandbox"},"workspace":{"kind":"empty_git"},"prompt":"check"}""")
             .Should()
             .BeFalse();
     }

@@ -425,7 +425,8 @@ public sealed class ChannelWorkflowResultDeliveryContractTests
             nyxClient,
             CreateOutboundPort(nyxHandler),
             null,
-            NullLogger<ChannelConversationTurnRunner>.Instance);
+            NullLogger<ChannelConversationTurnRunner>.Instance,
+            toolExecutionPort: Substitute.For<IAgentToolExecutionPort>());
     }
 
     private static AevatarInvocationDispatcher CreateInvocationDispatcher(

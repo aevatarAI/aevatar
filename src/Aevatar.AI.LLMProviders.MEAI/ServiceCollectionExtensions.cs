@@ -3,6 +3,7 @@
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Microsoft.Extensions.DependencyInjection;
 using System.Linq;
 
@@ -31,9 +32,13 @@ public static class ServiceCollectionExtensions
                 "ILLMProviderFactory is already registered. Multiple factory implementations are not supported in the same IServiceCollection.");
         }
 
-        var factory = new MEAILLMProviderFactory();
-        configure(factory);
-        services.AddSingleton<ILLMProviderFactory>(factory);
+        services.AddSingleton<ILLMProviderFactory>(serviceProvider =>
+        {
+            var factory = new MEAILLMProviderFactory(
+                serviceProvider.GetRequiredService<IAgentToolExecutionPort>());
+            configure(factory);
+            return factory;
+        });
         return services;
     }
 }

@@ -1978,7 +1978,8 @@ public sealed class AgentRunGAgentTests
                     new RecordingAgentTool("scheduled_agent_creator", toolOrder, """{"accepted":true,"agent_id":"agent-1"}"""),
                 ]),
             ],
-            localSkillCatalog: new LocalSkillCatalog());
+            localSkillCatalog: new LocalSkillCatalog(),
+            toolExecutionPort: new ChannelConversationTurnRunnerTests.TestAgentToolExecutionPort());
         var actorRuntime = new DispatchingActorRuntime(("conversation:c", targetActor));
         var runtime = CreateRunAgent(
             actorRuntime,

@@ -1115,6 +1115,8 @@ message WorkflowConnectorAttemptCompletedEvent {
   string error = 7;
   map<string, string> annotations = 8;
   string execution_id = 9;
+  optional bool terminal_invoked = 10;
+  optional bool retryable = 11;
 }
 message WorkflowSignalBufferedEvent
 {

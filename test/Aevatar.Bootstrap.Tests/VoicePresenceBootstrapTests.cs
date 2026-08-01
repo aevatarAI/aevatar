@@ -1,5 +1,10 @@
 using System.Reflection;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Abstractions.Voice;
+using Aevatar.Audit;
+using Aevatar.Audit.Abstractions.Identity;
+using Aevatar.Audit.Abstractions.Models;
+using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.Bootstrap.Extensions.AI;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
@@ -389,8 +394,45 @@ public sealed class VoicePresenceBootstrapTests
             17,
             toolContext);
 
-    private static void AddVoicePresenceTestCredentialResolver(IServiceCollection services) =>
+    private static void AddVoicePresenceTestCredentialResolver(IServiceCollection services)
+    {
         services.AddSingleton<IRealtimeProviderCredentialResolver, NoOpRealtimeProviderCredentialResolver>();
+        services.AddSingleton<IAgentToolExecutionPort, UnusedAgentToolExecutionPort>();
+    }
+
+    internal static void AddToolExecutionAuditDependencies(IServiceCollection services)
+    {
+        services.AddSingleton<IAuditTrailAppender, AppendedAuditTrail>();
+        services.AddSingleton<IAuditActorIdentityHasher, StableIdentityHasher>();
+    }
+
+    internal sealed class UnusedAgentToolExecutionPort : IAgentToolExecutionPort
+    {
+        public Task<AgentToolExecutionOutcome> ExecuteAsync(
+            AgentToolExecutionRequest request,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("Voice bootstrap composition does not execute agent tools.");
+    }
+
+    internal sealed class TestHttpClientFactory : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) => new();
+    }
+
+    private sealed class AppendedAuditTrail : IAuditTrailAppender
+    {
+        public Task<AuditTrailAppendResult> AppendAsync(
+            AuditRecord record,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(AuditTrailAppendResult.Appended(record.AuditId));
+    }
+
+    private sealed class StableIdentityHasher : IAuditActorIdentityHasher
+    {
+        public AuditActorIdentity Hash(string canonicalActorKey) => new("actor-hash", "test-key");
+
+        public bool Verify(string canonicalActorKey, string auditActorId, string identityKeyId) => true;
+    }
 
     private sealed class EnvironmentVariablesScope : IDisposable
     {

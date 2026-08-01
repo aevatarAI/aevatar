@@ -3,6 +3,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.AgentProfiles;
+using Aevatar.AI.Core.DependencyInjection;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
@@ -56,6 +57,7 @@ public static class ServiceCollectionExtensions
         services.AddAevatarAgentKindRegistry(builder => builder.ScanAssemblies(typeof(NyxIdChatGAgent).Assembly));
 
         services.AddCqrsCore();
+        services.AddAgentToolExecution();
         services.AddToolSetRegistry();
         if (configuration is null)
             services.AddNyxIdApiAccess();
@@ -169,7 +171,6 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<IBuiltInPromptFloorProvider>(),
                 ResolveChannelToolSources(sp),
                 sp.GetServices<IAgentRunMiddleware>(),
-                sp.GetServices<IToolCallMiddleware>(),
                 sp.GetServices<ILLMCallMiddleware>(),
                 sp.GetService<LocalSkillCatalog>(),
                 sp.GetService<IRemoteSkillFetcher>(),
@@ -179,10 +180,10 @@ public static class ServiceCollectionExtensions
                 larkClient: sp.GetService<ILarkNyxClient>(),
                 fileIngressPort: sp.GetService<Aevatar.Workflow.Application.Abstractions.Runs.IFileArtifactIngressPort>(),
                 fileArtifactReadPort: sp.GetService<Aevatar.Workflow.Application.Abstractions.Runs.IFileArtifactReadPort>(),
-                approvalHandler: null,
                 logger: sp.GetService<ILogger<NyxIdConversationReplyGenerator>>(),
                 overlayProvider: sp.GetService<ISystemSkillOverlayProvider>(),
                 larkOutboundClientFactory: sp.GetService<ILarkOutboundClientFactory>(),
+                toolExecutionPort: sp.GetRequiredService<IAgentToolExecutionPort>(),
                 remoteSkillAccessTokenResolver: sp.GetService<IRemoteSkillAccessTokenResolver>()));
         services.TryAddSingleton<ChannelNyxIdConnectedServiceInventoryToolSource>();
         services.TryAddSingleton<IAgentRunReplyGenerationExecutorPort, AgentRunReplyGenerationExecutor>();

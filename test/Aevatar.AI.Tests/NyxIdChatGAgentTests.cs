@@ -10,9 +10,14 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Observability;
+using Aevatar.AI.Core.Tools;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.Tools;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
+using Aevatar.Audit;
+using Aevatar.Audit.Abstractions.Identity;
+using Aevatar.Audit.Abstractions.Models;
+using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
 using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
@@ -2198,6 +2203,10 @@ public class NyxIdChatGAgentTests
             .AddSingleton(eventStore)
             .AddSingleton<EventSourcingRuntimeOptions>()
             .AddSingleton(callbackScheduler)
+            .AddSingleton<IAuditTrailAppender, AppendedAuditTrail>()
+            .AddSingleton<IAuditActorIdentityHasher, StableIdentityHasher>()
+            .AddSingleton<IAgentToolAdmissionLedger>(AlwaysStartingAgentToolAdmissionLedger.Instance)
+            .AddSingleton<IAgentToolExecutionPort, AdmittedAgentToolExecutor>()
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
 
         if (registryCommandPort is not null)
@@ -2223,6 +2232,7 @@ public class NyxIdChatGAgentTests
     {
         var agent = new NyxIdChatGAgent(
             new SystemSkillOverlayPromptInjectionTests.StubBuiltInPromptFloorProvider(),
+            provider.GetRequiredService<IAgentToolExecutionPort>(),
             llmProviderFactory: llmProviderFactory,
             toolSources: toolSources,
             relayOptions: relayOptions,
@@ -3116,6 +3126,21 @@ public class NyxIdChatGAgentTests
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
             Task.FromResult(execute(argumentsJson));
+    }
+
+    private sealed class AppendedAuditTrail : IAuditTrailAppender
+    {
+        public Task<AuditTrailAppendResult> AppendAsync(
+            AuditRecord record,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(AuditTrailAppendResult.Appended(record.AuditId));
+    }
+
+    private sealed class StableIdentityHasher : IAuditActorIdentityHasher
+    {
+        public AuditActorIdentity Hash(string canonicalActorKey) => new("actor-hash", "key-1");
+
+        public bool Verify(string canonicalActorKey, string auditActorId, string identityKeyId) => true;
     }
 
     private sealed class VerifiedMissingServiceTool : IAgentTool

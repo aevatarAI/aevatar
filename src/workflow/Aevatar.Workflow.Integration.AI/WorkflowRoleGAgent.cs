@@ -19,24 +19,22 @@ namespace Aevatar.Workflow.Integration.AI;
 
 [GAgent(WorkflowRoleConventions.DefaultAgentKind)]
 public class WorkflowRoleGAgent(
+    IAgentToolExecutionPort toolExecutionPort,
     ILLMProviderFactory? llmProviderFactory = null,
     IEnumerable<IAIGAgentExecutionHook>? additionalHooks = null,
     IEnumerable<IAgentRunMiddleware>? agentMiddlewares = null,
-    IEnumerable<IToolCallMiddleware>? toolMiddlewares = null,
     IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
     IEnumerable<IAgentToolSource>? toolSources = null,
-    IToolApprovalHandler? approvalHandler = null,
     IRemoteToolApprovalPort? remoteToolApprovalPort = null,
     IToolSetRegistry? toolSetRegistry = null,
     IWorkflowCallerAccessTokenProvider? callerAccessTokenProvider = null)
     : RoleGAgent(
+        toolExecutionPort,
         llmProviderFactory,
         additionalHooks,
         agentMiddlewares,
-        toolMiddlewares,
         llmMiddlewares,
         toolSources,
-        approvalHandler,
         remoteToolApprovalPort)
 {
     public const string WorkflowAssistantRoleAgentKind = "workflow.assistant-role";
@@ -168,24 +166,22 @@ public class WorkflowRoleGAgent(
         await HandleWorkflowApprovalContinuationAsync(request);
     }
 
-    protected override async Task<ChatMessage> ExecuteApprovedToolAsync(
+    protected override async Task<(IAgentTool Tool, AgentToolExecutionContext ExecutionContext)>
+        ResolveApprovedToolExecutionAsync(
         PendingToolApprovalState pending,
         AgentToolExecutionContext toolContext,
         CancellationToken ct)
     {
         var continuation = pending.WorkflowLlmContinuation;
         if (continuation is null)
-            return await base.ExecuteApprovedToolAsync(pending, toolContext, ct);
+            return await base.ResolveApprovedToolExecutionAsync(pending, toolContext, ct);
 
         var effectiveContext = await RefreshCallerTokenAsync(toolContext, ct);
         var catalog = await BuildRequestToolCatalogAsync(ToToolScope(continuation), effectiveContext, ct);
         var tool = catalog?.RouteOwnedTools.GetValueOrDefault(pending.ToolName)
                    ?? throw new InvalidOperationException(
                        $"Approved workflow tool '{pending.ToolName}' is no longer available.");
-        using var _ = AgentToolContextScope.Push(effectiveContext);
-        return ChatMessage.Tool(
-            pending.ToolCallId,
-            await tool.ExecuteAsync(pending.ArgumentsJson, ct));
+        return (tool, effectiveContext);
     }
 
     protected override Task OnApprovalTerminalFailureAsync(

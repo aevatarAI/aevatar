@@ -6,6 +6,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Abstractions.CodexExecution;
 using Aevatar.AI.Application.CodexExecution;
 using Aevatar.AI.Infrastructure.ChronoSandbox;
+using Aevatar.AI.Infrastructure.ToolExecution;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.ToolProviders.AgentCatalog;
 using Aevatar.AI.ToolProviders.AevatarInvocation;
@@ -21,8 +22,11 @@ using Aevatar.AI.ToolProviders.StudioProvisioning;
 using Aevatar.AI.ToolProviders.Telegram;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.AI.ToolProviders.Web;
+using Aevatar.Audit.Abstractions.Identity;
+using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.AI.ToolProviders.Workflow;
 using Aevatar.Audit.Core.Identity;
+using Aevatar.Audit.Core.DependencyInjection;
 using Aevatar.Bootstrap.Extensions.AI;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.ChatRouting.Abstractions;
@@ -131,6 +135,7 @@ public sealed class MainnetHostCompositionTests
         builder.AddMainnetDistributedOrleansHost();
         builder.AddAevatarPlatform(options => options.EnableMakerExtensions = true);
         builder.AddGAgentServiceCapabilityBundle();
+        builder.Services.AddAuditTrailCore(builder.Configuration);
         builder.Services.AddMainnetAgentProjectionDocumentStores(builder.Configuration);
         builder.Services.AddSingleton(Substitute.For<IScheduledAgentCredentialLifecycle>());
         builder.Services.AddSingleton(Substitute.For<INyxIdApiClientFactory>());
@@ -336,14 +341,7 @@ public sealed class MainnetHostCompositionTests
         app.Services.GetRequiredService<IRemoteToolApprovalNotificationPort>()
             .Should()
             .BeOfType<NyxIdRelayRemoteToolApprovalNotificationPort>();
-        // Yield capability follows the actor, never the container (#2004): a DI-global
-        // yielding handler hands "I will resume you" to surfaces with no pending-approval
-        // continuation, stranding dead-letter approvals. RoleGAgent wires its own handler;
-        // every other surface must fall through to MissingApprovalHandler and fail closed.
-        app.Services.GetServices<IToolApprovalHandler>().Should().BeEmpty();
-        app.Services.GetServices<IToolCallMiddleware>()
-            .Should()
-            .NotContain(middleware => middleware is ToolApprovalMiddleware);
+        app.Services.GetRequiredService<IAgentToolExecutionPort>().Should().NotBeNull();
 
         await app.StopAsync();
     }
@@ -1021,6 +1019,46 @@ public sealed class MainnetHostCompositionTests
     }
 
     [Fact]
+    public void AddAevatarMainnetHost_WithoutAuditTrailAppender_ShouldFailDuringBuild()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder();
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+        builder.Services.RemoveAll<IAuditTrailAppender>();
+
+        var act = () => builder.Build();
+
+        act.Should()
+            .Throw<Exception>()
+            .WithMessage("*IAuditTrailAppender*");
+    }
+
+    [Fact]
+    public void AddAevatarMainnetHost_WithoutAuditActorIdentityHasher_ShouldFailDuringBuild()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder();
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+        builder.Services.RemoveAll<IAuditActorIdentityHasher>();
+
+        var act = () => builder.Build();
+
+        act.Should()
+            .Throw<Exception>()
+            .WithMessage("*IAuditActorIdentityHasher*");
+    }
+
+    [Fact]
     public void AddAevatarMainnetHost_WhenSkipHmacVerificationEnabledInProduction_ShouldThrow()
     {
         // Security fail-fast wiring: the host must abort startup if device-event HMAC
@@ -1185,6 +1223,80 @@ public sealed class MainnetHostCompositionTests
         var descriptor = builder.Services.Last(service =>
             service.ServiceType == typeof(IIdentityAssertionReplayGuard));
         descriptor.ImplementationType.Should().Be(typeof(DistributedIdentityAssertionReplayGuard));
+    }
+
+    [Theory]
+    [InlineData("Development", typeof(InMemoryAgentToolAdmissionLedger))]
+    [InlineData("Testing", typeof(InMemoryAgentToolAdmissionLedger))]
+    [InlineData("Production", typeof(DistributedAgentToolAdmissionLedger))]
+    public void AddAevatarMainnetHost_ShouldSelectAdmissionLedgerByEnvironment(
+        string environmentName,
+        System.Type expectedLedgerType)
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder(environmentName: environmentName);
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        var descriptor = builder.Services.Last(service =>
+            service.ServiceType == typeof(IAgentToolAdmissionLedger));
+        descriptor.ImplementationType.Should().Be(expectedLedgerType);
+    }
+
+    [Fact]
+    public void AddAevatarMainnetHost_ShouldOwnConfiguredAdmissionReplayLifetime()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder(environmentName: Environments.Production);
+        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            [MainnetHostBuilderExtensions.AgentToolAdmissionMaximumRequestLifetimeKey] = "06:00:00",
+            [MainnetHostBuilderExtensions.AgentToolAdmissionFutureClockSkewKey] = "00:02:00",
+        });
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        var descriptor = builder.Services.Last(service =>
+            service.ServiceType == typeof(AgentToolAdmissionPolicy));
+        descriptor.ImplementationInstance.Should().Be(new AgentToolAdmissionPolicy(
+            TimeSpan.FromHours(6),
+            TimeSpan.FromMinutes(2)));
+    }
+
+    [Theory]
+    [InlineData(null, "aevatar:mainnet:agent-tool-admission:v1:")]
+    [InlineData("aevatar:mainnet-test:agent-tool-admission:v2:", "aevatar:mainnet-test:agent-tool-admission:v2:")]
+    public void AddAevatarMainnetHost_ShouldOwnAdmissionLedgerKeyPrefix(
+        string? configuredPrefix,
+        string expectedPrefix)
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder(environmentName: Environments.Production);
+        if (configuredPrefix is not null)
+        {
+            builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [MainnetHostBuilderExtensions.AgentToolAdmissionKeyPrefixKey] = configuredPrefix,
+            });
+        }
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        var descriptor = builder.Services.Last(service =>
+            service.ServiceType == typeof(AgentToolAdmissionLedgerOptions));
+        descriptor.ImplementationInstance.Should().Be(new AgentToolAdmissionLedgerOptions(expectedPrefix));
     }
 
     [Theory]

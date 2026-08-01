@@ -227,6 +227,37 @@ public sealed class AuditTrailEndpointsTests
         body.Should().Contain(expectedCode).And.NotContain("elastic-secret");
     }
 
+    [Theory]
+    [InlineData(AuditToolExecutionPhase.Running, "running")]
+    [InlineData(AuditToolExecutionPhase.WaitingApproval, "waiting_approval")]
+    [InlineData(AuditToolExecutionPhase.Terminal, "terminal")]
+    [InlineData(AuditToolExecutionPhase.Unspecified, "unspecified")]
+    public void ToRecordResponse_ToolExecutionPhase_ShouldExposeTypedSafeDetails(
+        AuditToolExecutionPhase executionPhase,
+        string expectedPhase)
+    {
+        var response = AuditTrailResponseMapper.ToRecordResponse(new AuditRecord
+        {
+            AuditId = "audit-tool",
+            EventKind = "tool.execute",
+            Subject = "tool/test_tool",
+            Source = "urn:aevatar:audit:tool-execution",
+            SchemaVersion = "1.0",
+            OperationName = "test_tool",
+            ToolExecution = new AuditToolExecution
+            {
+                ArgumentsSha256 = new string('a', 64),
+                ExecutionPhase = executionPhase,
+                IsMutation = true,
+            },
+        });
+
+        response.ToolExecution.Should().BeEquivalentTo(new AuditToolExecutionResponse(
+            new string('a', 64),
+            expectedPhase,
+            IsMutation: true));
+    }
+
     [Fact]
     public async Task QueryAuditTrail_WhenScopeOmitted_UsesCallerScopeWithoutAdminAuthorization()
     {

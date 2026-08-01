@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Projection.Core.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
@@ -64,7 +65,7 @@ public sealed class WorkflowLlmChunkSseProjectionTests
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
             .BuildServiceProvider();
         var llmProvider = new StreamingLlmProvider();
-        var roleAgent = new WorkflowRoleGAgent(llmProvider)
+        var roleAgent = new WorkflowRoleGAgent(UnexpectedAgentToolExecutionPort.Instance, llmProvider)
         {
             Services = services,
             EventPublisher = new LocalActorPublisher(
@@ -200,6 +201,17 @@ public sealed class WorkflowLlmChunkSseProjectionTests
             yield return new LLMStreamChunk { IsLast = true, FinishReason = "stop" };
             await Task.CompletedTask;
         }
+    }
+
+    private sealed class UnexpectedAgentToolExecutionPort : IAgentToolExecutionPort
+    {
+        public static UnexpectedAgentToolExecutionPort Instance { get; } = new();
+
+        public Task<AgentToolExecutionOutcome> ExecuteAsync(
+            AgentToolExecutionRequest request,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException(
+                $"Tool '{request.Tool.Name}' must not execute in workflow SSE projection tests.");
     }
 
     private sealed class FlushSignalingStream : MemoryStream

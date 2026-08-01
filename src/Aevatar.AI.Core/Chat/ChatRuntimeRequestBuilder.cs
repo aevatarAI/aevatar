@@ -23,6 +23,25 @@ internal static class ChatRuntimeRequestBuilder
             ? AgentToolExecutionContextMapper.FromRequest(baseRequest)
             : AgentToolExecutionContextMapper.MergeExternalMetadata(toolContext, mergedMetadata);
         effectiveToolContext = effectiveLlmControl?.ToToolContext(effectiveToolContext) ?? effectiveToolContext;
+        if (effectiveToolContext.Request.IssuedAtUnixMs <= 0)
+        {
+            effectiveToolContext = effectiveToolContext with
+            {
+                Request = effectiveToolContext.Request with
+                {
+                    IssuedAtUnixMs = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds(),
+                },
+            };
+        }
+        if (baseRequest.ToolContext?.ExecutionOwner is { } executionOwner &&
+            executionOwner.Kind != AgentToolExecutionOwnerKind.Unspecified &&
+            !string.IsNullOrWhiteSpace(executionOwner.OwnerId))
+        {
+            effectiveToolContext = effectiveToolContext with
+            {
+                ExecutionOwner = executionOwner.Clone(),
+            };
+        }
         if (!string.IsNullOrWhiteSpace(requestId))
         {
             effectiveToolContext = effectiveToolContext with

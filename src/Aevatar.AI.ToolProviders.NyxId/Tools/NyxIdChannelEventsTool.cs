@@ -55,6 +55,12 @@ public sealed class NyxIdChannelEventsTool : INyxIdBuiltInTool
         }
         """;
 
+    public ToolApprovalMode ApprovalMode => ToolApprovalMode.AlwaysRequire;
+
+    public bool IsReadOnly => false;
+
+    public bool IsDestructive => false;
+
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
         var token = AgentToolRequestContext.NyxIdAccessToken;

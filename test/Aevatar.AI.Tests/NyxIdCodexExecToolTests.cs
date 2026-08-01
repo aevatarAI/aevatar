@@ -22,7 +22,7 @@ public sealed class NyxIdCodexExecToolTests
         var tool = new NyxIdCodexExecTool(CreateDummyClient());
 
         tool.Name.Should().Be("codex_exec");
-        tool.ApprovalMode.Should().Be(ToolApprovalMode.Auto);
+        tool.ApprovalMode.Should().Be(ToolApprovalMode.AlwaysRequire);
         tool.RequiresApproval("{}").Should().BeTrue();
         tool.Description.Should().Contain("private NyxID-backed SSH");
         tool.Description.Should().Contain("managed isolated sandbox");
@@ -43,13 +43,12 @@ public sealed class NyxIdCodexExecToolTests
     }
 
     [Fact]
-    public void RequiresApproval_WhenSshBypassEnabled_AppliesOnlyToPrivateSsh()
+    public void ApprovalPolicy_RequiresPrivateSshButAllowsManagedSandbox()
     {
-        var tool = new NyxIdCodexExecTool(
-            CreateDummyClient(),
-            new NyxIdToolOptions { BypassSshExecApproval = true });
+        var tool = new NyxIdCodexExecTool(CreateDummyClient());
 
-        tool.RequiresApproval("""{"target":{"kind":"private_ssh"}}""").Should().BeFalse();
+        tool.ApprovalMode.Should().Be(ToolApprovalMode.AlwaysRequire);
+        tool.RequiresApproval("""{"target":{"kind":"private_ssh"}}""").Should().BeTrue();
         tool.RequiresApproval("""{"target":{"kind":"managed_sandbox"}}""").Should().BeFalse();
         tool.RequiresApproval("{}").Should().BeTrue();
         tool.RequiresApproval("""{"target":{"kind":"unknown"}}""").Should().BeTrue();

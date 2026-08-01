@@ -42,6 +42,9 @@ public sealed class ConnectorRequest
     /// <summary>Advisory idempotency key for the logical workflow side effect.</summary>
     public string IdempotencyKey { get; init; } = "";
 
+    /// <summary>Unix timestamp when the logical connector request was first issued.</summary>
+    public long IssuedAtUnixMs { get; init; }
+
     /// <summary>Connector name selected by workflow.</summary>
     public string Connector { get; init; } = "";
 
@@ -68,6 +71,12 @@ public sealed class ConnectorResponse
 
     /// <summary>Error text when success=false.</summary>
     public string Error { get; init; } = "";
+
+    /// <summary>Whether an admitted, start-once terminal was invoked, when the connector can prove it.</summary>
+    public bool? TerminalInvoked { get; init; }
+
+    /// <summary>Whether the failed invocation is safe to retry with the same logical identity, when known.</summary>
+    public bool? Retryable { get; init; }
 
     /// <summary>Structured metadata returned by connector.</summary>
     public Dictionary<string, string> Metadata { get; init; } = [];

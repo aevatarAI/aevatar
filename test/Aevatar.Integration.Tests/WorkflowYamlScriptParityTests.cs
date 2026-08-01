@@ -1,4 +1,5 @@
 using Aevatar.AI.Core;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core.TypeSystem;
@@ -52,6 +53,8 @@ public class WorkflowYamlScriptParityTests
         var services = new ServiceCollection();
         services.AddAevatarRuntime();
         services.AddAevatarWorkflow();
+        services.AddSingleton<IAgentToolExecutionPort>(
+            WorkflowGAgentTestBase.UnexpectedAgentToolExecutionPort.Instance);
         services.AddAevatarAgentKindRegistry(RegisterAssistantRoleKind);
         await using var provider = services.BuildServiceProvider();
         var runtime = provider.GetRequiredService<IActorRuntime>();

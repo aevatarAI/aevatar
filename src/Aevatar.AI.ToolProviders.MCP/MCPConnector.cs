@@ -1,6 +1,10 @@
+using System.Buffers.Binary;
 using System.Collections.Frozen;
 using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Microsoft.Extensions.Logging;
@@ -15,6 +19,7 @@ namespace Aevatar.AI.ToolProviders.MCP;
 public sealed class MCPConnector : IConnector, IAsyncDisposable
 {
     private readonly IMCPToolDiscoveryPort _clientManager;
+    private readonly IAgentToolExecutionPort _toolExecutionPort;
     private readonly MCPServerConfig _serverConfig;
     private readonly string? _defaultTool;
     private readonly HashSet<string> _allowedTools;
@@ -32,6 +37,7 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
         IEnumerable<string>? allowedTools = null,
         IEnumerable<string>? allowedInputKeys = null,
         IMCPToolDiscoveryPort? clientManager = null,
+        IAgentToolExecutionPort? toolExecutionPort = null,
         ILogger? logger = null)
     {
         if (string.IsNullOrWhiteSpace(name)) throw new ArgumentException("name is required", nameof(name));
@@ -41,6 +47,8 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
         _allowedTools = new HashSet<string>(allowedTools ?? [], StringComparer.OrdinalIgnoreCase);
         _allowedInputKeys = new HashSet<string>(allowedInputKeys ?? [], StringComparer.OrdinalIgnoreCase);
         _clientManager = clientManager ?? new MCPClientManager(logger);
+        _toolExecutionPort = toolExecutionPort
+            ?? throw new ArgumentNullException(nameof(toolExecutionPort));
         _ownsClientManager = clientManager == null;
         _logger = logger ?? NullLogger.Instance;
     }
@@ -54,9 +62,19 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
     /// <inheritdoc />
     public async Task<ConnectorResponse> ExecuteAsync(ConnectorRequest request, CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(request);
         var sw = Stopwatch.StartNew();
         try
         {
+            if (!TryCreateRequestIdentity(request, out var requestIdentity))
+            {
+                return new ConnectorResponse
+                {
+                    Success = false,
+                    Error = "mcp connector requires stable run, step, idempotency, and issued-time identities",
+                };
+            }
+
             var tools = await GetOrConnectAsync(ct);
 
             var toolName = ResolveToolName(request);
@@ -96,12 +114,46 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
                 };
             }
 
-            var result = await tool.ExecuteAsync(request.Payload ?? "", ct);
+            var outcome = await _toolExecutionPort.ExecuteAsync(
+                new AgentToolExecutionRequest(
+                    tool,
+                    request.Payload ?? string.Empty,
+                    AgentToolExecutionContext.Empty with
+                    {
+                        Request = requestIdentity,
+                        ExecutionOwner = AgentToolExecutionOwners.Connector(Name),
+                    },
+                    AgentToolApprovalContinuationMode.None,
+                    null),
+                ct).ConfigureAwait(false);
+            if (outcome.Kind is not (AgentToolExecutionOutcomeKind.Executed or
+                    AgentToolExecutionOutcomeKind.ExecutedAuditIncomplete) ||
+                outcome.Receipt.Status != AgentToolReceiptStatus.Success)
+            {
+                sw.Stop();
+                return new ConnectorResponse
+                {
+                    Success = false,
+                    Error = ResolveFailureMessage(outcome),
+                    TerminalInvoked = outcome.TerminalInvoked,
+                    Retryable = outcome.Retryable,
+                    Metadata = new Dictionary<string, string>
+                    {
+                        ["connector.mcp.server"] = _serverConfig.Name,
+                        ["connector.mcp.tool"] = toolName,
+                        ["connector.mcp.duration_ms"] = sw.Elapsed.TotalMilliseconds.ToString("F2"),
+                    },
+                };
+            }
+
+            var result = outcome.ResultJson;
             sw.Stop();
             return new ConnectorResponse
             {
                 Success = true,
                 Output = result,
+                TerminalInvoked = outcome.TerminalInvoked,
+                Retryable = outcome.Retryable,
                 Metadata = new Dictionary<string, string>
                 {
                     ["connector.mcp.server"] = _serverConfig.Name,
@@ -118,6 +170,8 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
             {
                 Success = false,
                 Error = ex.Message,
+                TerminalInvoked = false,
+                Retryable = true,
                 Metadata = new Dictionary<string, string>
                 {
                     ["connector.mcp.server"] = _serverConfig.Name,
@@ -125,6 +179,20 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
                 },
             };
         }
+    }
+
+    private static string ResolveFailureMessage(AgentToolExecutionOutcome outcome)
+    {
+        if (!string.IsNullOrWhiteSpace(outcome.SafeMessage))
+            return outcome.SafeMessage;
+        if (!string.IsNullOrWhiteSpace(outcome.Receipt.ErrorMessage))
+            return outcome.Receipt.ErrorMessage;
+        if (!string.IsNullOrWhiteSpace(outcome.FailureCode))
+            return outcome.FailureCode;
+        if (!string.IsNullOrWhiteSpace(outcome.Receipt.ErrorCode))
+            return outcome.Receipt.ErrorCode;
+
+        return "The MCP tool did not report a verified success.";
     }
 
     private string ResolveToolName(ConnectorRequest request)
@@ -135,6 +203,46 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
             return toolFromParams;
         return _defaultTool ?? "";
     }
+
+    private static bool TryCreateRequestIdentity(
+        ConnectorRequest request,
+        out AgentToolRequestIdentity identity)
+    {
+        var runId = Normalize(request.RunId);
+        var stepId = Normalize(request.StepId);
+        var idempotencyKey = Normalize(request.IdempotencyKey);
+        if (runId is null || stepId is null || idempotencyKey is null || request.IssuedAtUnixMs <= 0)
+        {
+            identity = AgentToolRequestIdentity.Empty;
+            return false;
+        }
+
+        identity = new AgentToolRequestIdentity(
+            "workflow-connector:v1:" + HashLengthPrefixed(runId, stepId),
+            idempotencyKey,
+            idempotencyKey,
+            request.IssuedAtUnixMs);
+        return true;
+    }
+
+    private static string HashLengthPrefixed(params string[] values)
+    {
+        using var stream = new MemoryStream();
+        Span<byte> length = stackalloc byte[sizeof(uint)];
+        foreach (var value in values)
+        {
+            var bytes = Encoding.UTF8.GetBytes(value);
+            BinaryPrimitives.WriteUInt32BigEndian(length, checked((uint)bytes.Length));
+            stream.Write(length);
+            stream.Write(bytes);
+        }
+
+        return Convert.ToHexStringLower(
+            SHA256.HashData(stream.GetBuffer().AsSpan(0, checked((int)stream.Length))));
+    }
+
+    private static string? Normalize(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private Task<IReadOnlyDictionary<string, IAgentTool>> GetOrConnectAsync(CancellationToken ct)
     {
@@ -206,9 +314,9 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
             {
                 await toolsTask;
             }
-            catch
+            catch (Exception ex)
             {
-                // Discovery may be canceled or faulted while shutdown is releasing the transport.
+                _logger.LogWarning(ex, "MCP discovery ended with an error while connector {ConnectorName} was shutting down", Name);
             }
         }
 

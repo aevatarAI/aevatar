@@ -1,5 +1,4 @@
 using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Tools;
 using FluentAssertions;
@@ -10,14 +9,14 @@ namespace Aevatar.AI.Core.Tests.Tools;
 public sealed class StreamingToolExecutorTests
 {
     [Fact]
-    public async Task GetRemainingResultsAsync_WhenMiddlewareThrows_LogsOriginalFailureAndReturnsSafeError()
+    public async Task GetRemainingResultsAsync_WhenExecutionPortThrows_LogsOriginalFailureAndReturnsSafeError()
     {
         var tools = new ToolManager();
         tools.Register(new FakeAgentTool("echo"));
         var logger = new CapturingLogger();
         var executor = new StreamingToolExecutor(
             tools,
-            toolMiddlewares: [new ThrowingToolCallMiddleware()],
+            toolExecutionPort: new ThrowingExecutionPort(),
             logger: logger);
         using var state = executor.CreateExecutionState();
 
@@ -42,14 +41,16 @@ public sealed class StreamingToolExecutorTests
         logger.Entries.Should().ContainSingle(entry =>
             entry.Level == LogLevel.Warning &&
             entry.Exception is InvalidOperationException &&
-            entry.Exception.Message == "middleware failed" &&
+            entry.Exception.Message == "execution port failed" &&
             entry.Message.Contains("Tool execution failed before receipt finalization for tool echo and call call-failed-finalization"));
     }
 
-    private sealed class ThrowingToolCallMiddleware : IToolCallMiddleware
+    private sealed class ThrowingExecutionPort : IAgentToolExecutionPort
     {
-        public Task InvokeAsync(ToolCallContext context, Func<Task> next) =>
-            throw new InvalidOperationException("middleware failed");
+        public Task<AgentToolExecutionOutcome> ExecuteAsync(
+            AgentToolExecutionRequest request,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("execution port failed");
     }
 
     private sealed class FakeAgentTool(string name) : IAgentTool

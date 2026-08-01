@@ -1,4 +1,3 @@
-using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Tools;
 using FluentAssertions;
@@ -8,40 +7,7 @@ namespace Aevatar.AI.Tests;
 public class ToolManagerTests
 {
     [Fact]
-    public async Task ExecuteToolCallAsync_WhenToolMissing_ShouldReturnErrorToolMessage()
-    {
-        var manager = new ToolManager();
-
-        var result = await manager.ExecuteToolCallAsync(new ToolCall
-        {
-            Id = "tc-1",
-            Name = "missing",
-            ArgumentsJson = "{}",
-        });
-
-        result.Role.Should().Be("tool");
-        result.ToolCallId.Should().Be("tc-1");
-        result.Content.Should().Contain("not found");
-    }
-
-    [Fact]
-    public async Task ExecuteToolCallAsync_WhenToolThrows_ShouldReturnErrorToolMessage()
-    {
-        var manager = new ToolManager();
-        manager.Register(new DelegateTool("bad", _ => throw new InvalidOperationException("boom")));
-
-        var result = await manager.ExecuteToolCallAsync(new ToolCall
-        {
-            Id = "tc-2",
-            Name = "bad",
-            ArgumentsJson = "{}",
-        });
-
-        result.Content.Should().Contain("boom");
-    }
-
-    [Fact]
-    public async Task RegisterAndUnregister_ShouldControlToolVisibility()
+    public void RegisterAndUnregister_ShouldControlToolVisibility()
     {
         var manager = new ToolManager();
         manager.Register(new DelegateTool("one", _ => "1"));
@@ -54,17 +20,10 @@ public class ToolManagerTests
         manager.Get("one").Should().BeNull();
         manager.HasTools.Should().BeFalse();
 
-        var result = await manager.ExecuteToolCallAsync(new ToolCall
-        {
-            Id = "tc-3",
-            Name = "one",
-            ArgumentsJson = "{}",
-        });
-        result.Content.Should().Contain("not found");
     }
 
     [Fact]
-    public async Task RegisterEnumerableAndClear_ShouldApplyExpectedState()
+    public void RegisterEnumerableAndClear_ShouldApplyExpectedState()
     {
         var manager = new ToolManager();
         manager.Register(
@@ -74,14 +33,6 @@ public class ToolManagerTests
         ]);
 
         manager.GetAll().Select(x => x.Name).Should().BeEquivalentTo(["a", "b"]);
-
-        var ok = await manager.ExecuteToolCallAsync(new ToolCall
-        {
-            Id = "tc-4",
-            Name = "b",
-            ArgumentsJson = "{}",
-        });
-        ok.Content.Should().Be("B");
 
         manager.Clear();
         manager.HasTools.Should().BeFalse();

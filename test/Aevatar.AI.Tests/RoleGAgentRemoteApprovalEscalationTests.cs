@@ -279,6 +279,7 @@ public sealed class RoleGAgentRemoteApprovalEscalationTests
         IRemoteToolApprovalPort remoteToolApprovalPort,
         IRemoteToolApprovalNotificationPort remoteToolApprovalNotificationPort)
         : RoleGAgent(
+            toolExecutionPort: TestAgentToolExecutionPort.Instance,
             llmProviderFactory: null,
             toolSources: [],
             remoteToolApprovalPort: remoteToolApprovalPort,

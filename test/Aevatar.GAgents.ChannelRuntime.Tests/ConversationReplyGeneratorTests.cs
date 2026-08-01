@@ -2063,102 +2063,6 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
-    public async Task GenerateReplyAsync_CreatesApprovalMiddlewarePerTurn()
-    {
-        var approvalHandler = new CountingApprovalHandler();
-        var generator = new NyxIdConversationReplyGenerator(
-            new ToolCallingProviderFactory(),
-            BuiltInPromptFloorProvider,
-            toolSources: [new SingleToolSource(new ApprovalRequiredTool())],
-            approvalHandler: approvalHandler);
-
-        for (var i = 0; i < 4; i++)
-        {
-            var reply = await generator.GenerateReplyAsync(
-                new ChatActivity
-                {
-                    Id = $"msg-approval-{i}",
-                    Conversation = new ConversationReference { CanonicalKey = $"lark:dm:user-{i}" },
-                    Content = new MessageContent { Text = "run tool" },
-                },
-                new Dictionary<string, string>(),
-                streamingSink: null,
-                CancellationToken.None);
-
-            reply.Text.Should().Be("done");
-        }
-
-        approvalHandler.RequestCount.Should().Be(4);
-    }
-
-    [Fact]
-    public async Task GenerateReplyAsync_WhenApprovalHandlerMissingAndToolRequiresApproval_ShouldDenyWithoutExecutingTool()
-    {
-        var tool = new ApprovalRequiredTool();
-        var generator = new NyxIdConversationReplyGenerator(
-            new ToolResultEchoingProviderFactory(),
-            BuiltInPromptFloorProvider,
-            toolSources: [new SingleToolSource(tool)]);
-
-        var reply = await generator.GenerateReplyAsync(
-            new ChatActivity
-            {
-                Id = "msg-no-handler-approval",
-                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-no-handler" },
-                Content = new MessageContent { Text = "run tool" },
-            },
-            new Dictionary<string, string>(),
-            streamingSink: null,
-            CancellationToken.None);
-
-        reply.Text.Should().Contain("approval-gated tools cannot run here");
-        reply.Text.Should().NotContain("An approval request has been sent.");
-        reply.Text.Should().NotContain("\"approval_required\":true");
-        tool.ExecuteCount.Should().Be(0);
-    }
-
-    [Fact]
-    public async Task GenerateReplyAsync_WhenSenderBoundMutationHasNoSenderToken_ShouldDenyBeforeApprovalAndExecution()
-    {
-        var tool = new ApprovalRequiredTool();
-        var approvalHandler = new CountingApprovalHandler();
-        var providerFactory = new ToolResultEchoingProviderFactory();
-        var generator = new NyxIdConversationReplyGenerator(
-            providerFactory,
-            BuiltInPromptFloorProvider,
-            toolSources: [new SingleToolSource(tool)],
-            approvalHandler: approvalHandler);
-
-        var reply = await generator.GenerateReplyAsync(
-            new ChatActivity
-            {
-                Id = "msg-sender-bound-no-token-write",
-                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-sender-bound-no-token" },
-                Content = new MessageContent { Text = "run tool" },
-            },
-            new Dictionary<string, string>(),
-            Control(token: "owner-token"),
-            ToolContext("bnd_sender"),
-            streamingSink: null,
-            CancellationToken.None);
-
-        providerFactory.Requests.Should().HaveCount(2);
-        var toolResult = providerFactory.Requests[1].Messages
-            .Should()
-            .ContainSingle(message => message.Role == "tool")
-            .Subject
-            .Content;
-        toolResult.Should().Contain("credential_denied");
-        toolResult.Should().Contain("Owner credentials were not used");
-        toolResult.Should().Contain("/init");
-        reply.Text.Should().Contain("credential_denied");
-        reply.Text.Should().Contain("Owner credentials were not used");
-        reply.Text.Should().Contain("/init");
-        approvalHandler.RequestCount.Should().Be(0);
-        tool.ExecuteCount.Should().Be(0);
-    }
-
-    [Fact]
     public async Task GenerateReplyAsync_WithLocalSkillCatalog_AddsLocalSkillsWithoutRemoteFetcherWarning()
     {
         var logger = new ListLogger<NyxIdConversationReplyGenerator>();
@@ -2374,7 +2278,8 @@ public sealed class ConversationReplyGeneratorTests
             [
                 new SingleToolSource(new UseSkillTool(catalog, scopeWorkflowCommandPort: commandPort)),
             ],
-            localSkillCatalog: catalog);
+            localSkillCatalog: catalog,
+            toolExecutionPort: new ChannelConversationTurnRunnerTests.TestAgentToolExecutionPort());
 
         var reply = await generator.GenerateReplyAsync(
             new ChatActivity
@@ -2451,7 +2356,9 @@ public sealed class ConversationReplyGeneratorTests
             executionEvents);
         var inventoryHandler = new RecordingNyxIdInventoryHandler(executionEvents);
         var nyxIdOptions = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
+        var toolExecutionPort = new ChannelConversationTurnRunnerTests.TestAgentToolExecutionPort();
         var inventorySource = new ChannelNyxIdConnectedServiceInventoryToolSource(
+            toolExecutionPort,
             nyxIdOptions,
             new FixedNyxIdApiClientFactory(new NyxIdApiClient(
                 nyxIdOptions,
@@ -2470,7 +2377,8 @@ public sealed class ConversationReplyGeneratorTests
             },
             remoteSkillAccessTokenResolver: new ChannelRemoteSkillAccessTokenResolver(
                 skillCapabilityIssuer,
-                NullLogger<ChannelRemoteSkillAccessTokenResolver>.Instance));
+                NullLogger<ChannelRemoteSkillAccessTokenResolver>.Instance),
+            toolExecutionPort: toolExecutionPort);
         var sink = new RecordingStreamingSink();
         var toolContext = AgentToolExecutionContext.Empty with
         {
@@ -2630,7 +2538,8 @@ public sealed class ConversationReplyGeneratorTests
             relayOptions: new global::Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
             {
                 StreamingPlaceholderText = "…",
-            });
+            },
+            toolExecutionPort: new ChannelConversationTurnRunnerTests.TestAgentToolExecutionPort());
         var skillRecovery = new AgentSkillRecoveryContext(
             RequireInitialOrnnSearch: true,
             RequireOrnnSearchOnBlocker: true,
@@ -2727,7 +2636,8 @@ public sealed class ConversationReplyGeneratorTests
                     "chrono_storage_query",
                     "Error: Invalid URI: The hostname could not be parsed.",
                     AgentToolReceiptStatus.Error)),
-            ]);
+            ],
+            toolExecutionPort: new ChannelConversationTurnRunnerTests.TestAgentToolExecutionPort());
         var skillRecovery = new AgentSkillRecoveryContext(
             RequireInitialOrnnSearch: true,
             RequireOrnnSearchOnBlocker: true,
@@ -2778,7 +2688,8 @@ public sealed class ConversationReplyGeneratorTests
             [
                 new SingleToolSource(new FixedResultTool("ornn_search_skills", "Found 1 skills:\n- **goal**")),
                 new SingleToolSource(new FixedResultTool("use_skill", "# goal\n## Instructions\nExecute the goal command.")),
-            ]);
+            ],
+            toolExecutionPort: new ChannelConversationTurnRunnerTests.TestAgentToolExecutionPort());
         var skillRecovery = new AgentSkillRecoveryContext(
             RequireInitialOrnnSearch: true,
             RequireOrnnSearchOnBlocker: true,
@@ -2826,7 +2737,8 @@ public sealed class ConversationReplyGeneratorTests
             toolSources:
             [
                 new SingleToolSource(new FixedResultTool("ornn_search_skills", "Found 1 skills:\n* project-summary")),
-            ]);
+            ],
+            toolExecutionPort: new ChannelConversationTurnRunnerTests.TestAgentToolExecutionPort());
         var skillRecovery = new AgentSkillRecoveryContext(
             RequireInitialOrnnSearch: true,
             RequireOrnnSearchOnBlocker: true,
@@ -4379,17 +4291,6 @@ public sealed class ConversationReplyGeneratorTests
         {
             ExecuteCount++;
             return Task.FromResult("""{"executed":true}""");
-        }
-    }
-
-    private sealed class CountingApprovalHandler : IToolApprovalHandler
-    {
-        public int RequestCount { get; private set; }
-
-        public Task<ToolApprovalResult> RequestApprovalAsync(ToolApprovalRequest request, CancellationToken ct)
-        {
-            RequestCount++;
-            return Task.FromResult(ToolApprovalResult.Denied("test denial"));
         }
     }
 

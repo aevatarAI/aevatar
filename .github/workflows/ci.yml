@@ -387,6 +387,19 @@ jobs:
       needs.changes.outputs.docs_only == 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    services:
+      agent-tool-admission-redis:
+        image: redis:7.2.3
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      AGENT_TOOL_ADMISSION_REDIS_CONNECTION_STRING: >-
+        127.0.0.1:6379,abortConnect=true,allowAdmin=true,connectTimeout=5000,syncTimeout=5000
     steps:
       - uses: actions/checkout@v4
 
