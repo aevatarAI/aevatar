@@ -680,7 +680,10 @@ public sealed class ResponsesCommandFacade(
             new LLMRequestRoutingContext(null, routePreference, null, null),
             AgentToolConnectedServicesContext.Empty,
             AgentSkillRecoveryContext.Empty,
-            new Dictionary<string, string>(StringComparer.Ordinal));
+            new Dictionary<string, string>(StringComparer.Ordinal))
+        {
+            NyxIdAuthority = callerScope.NyxIdAuthority,
+        };
 
     private Task<ChatRouteDecision> ResolveResponsesChatRouteAsync(
         ResponsesCallerScope callerScope,

@@ -17,6 +17,9 @@ namespace Aevatar.GAgentService.Tests.Application;
 
 public sealed class ResponsesCommandFacadeTests
 {
+    private static readonly AgentToolNyxIdAuthorityContext TestNyxIdAuthority =
+        new(OwnerScope.NyxIdPlatform, string.Empty, "nyx-user-alpha");
+
     [Fact]
     public async Task CreateAsync_ShouldRegisterSession_AndExecuteRoutedNonStreamingRequest()
     {
@@ -57,6 +60,9 @@ public sealed class ResponsesCommandFacadeTests
         toolContext.Caller.OwnerScopeId.Should().Be("owner-1");
         toolContext.Credentials.NyxIdAccessToken.Should().Be("token");
         toolContext.Routing.NyxIdRoutePreference.Should().Be("route-value");
+        toolContext.NyxIdAuthority.Should().BeEquivalentTo(TestNyxIdAuthority);
+        toolContext.NyxIdAuthority.ExternalUserId.Should().NotBe(toolContext.Caller.ScopeId);
+        toolContext.NyxIdAuthority.ExternalUserId.Should().NotBe(toolContext.Caller.OwnerSubject);
     }
 
     [Fact]
@@ -1124,7 +1130,10 @@ public sealed class ResponsesCommandFacadeTests
         public Task<ResponsesCallerScope> ResolveAsync(
             ResponsesCallerScopeResolutionContext context,
             CancellationToken ct = default) =>
-            Task.FromResult(new ResponsesCallerScope(scopeId, ownerSubject, originKind));
+            Task.FromResult(new ResponsesCallerScope(scopeId, ownerSubject, originKind)
+            {
+                NyxIdAuthority = TestNyxIdAuthority,
+            });
     }
 
     private sealed class ThrowingCallerScopeResolver : IResponsesCallerScopeResolver
