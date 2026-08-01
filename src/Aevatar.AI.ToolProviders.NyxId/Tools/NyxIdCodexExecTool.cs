@@ -396,7 +396,7 @@ public sealed class NyxIdCodexExecTool : INyxIdBuiltInTool
             prompt,
             timeoutSeconds,
             new CodexExecutionCallerContext(
-                context?.Credentials.NyxIdAccessToken,
+                AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(context?.Credentials),
                 context?.NyxIdAuthority.IsComplete == true
                     ? new CodexExecutionNyxIdAuthority(
                         context.NyxIdAuthority.Platform!,

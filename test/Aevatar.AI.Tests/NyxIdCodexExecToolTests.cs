@@ -170,7 +170,14 @@ public sealed class NyxIdCodexExecToolTests
     {
         var port = new RecordingManagedPort();
         var tool = new NyxIdCodexExecTool([port], new NyxIdToolOptions());
-        SetToken("caller-token");
+        AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
+        {
+            Credentials = AgentToolExecutionContext.Empty.Credentials with
+            {
+                NyxIdAccessToken = "caller-token",
+                NyxIdCredentialKind = AgentToolNyxIdCredentialKind.SourceReadableUserBearer,
+            },
+        };
         try
         {
             const string arguments = """
@@ -195,6 +202,71 @@ public sealed class NyxIdCodexExecToolTests
                 CodexExecutionWorkspace.WorkspaceOneofCase.EmptyGit);
             port.Request.Caller.NyxIdAccessToken.Should().Be("caller-token");
             port.Request.TimeoutSeconds.Should().Be(180);
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ManagedTargetUsesSourceReadableBearerInsteadOfProxyDelegation()
+    {
+        var port = new RecordingManagedPort();
+        var tool = new NyxIdCodexExecTool([port], new NyxIdToolOptions());
+        AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
+        {
+            Credentials = new AgentToolCredentials(
+                "delegation-alpha",
+                "org-alpha",
+                "sender-alpha",
+                AgentToolNyxIdCredentialKind.ProxyDelegation,
+                "source-alpha"),
+        };
+        try
+        {
+            await tool.ExecuteAsync("""
+                {
+                  "target": { "kind": "managed_sandbox" },
+                  "workspace": { "kind": "empty_git" },
+                  "prompt": "Reply with exactly CODEX_EXEC_READY"
+                }
+                """);
+
+            port.Request.Should().NotBeNull();
+            port.Request!.Caller.NyxIdAccessToken.Should().Be("source-alpha");
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ManagedTargetDoesNotTreatOrganizationOrSenderCredentialAsSourceReadable()
+    {
+        var port = new RecordingManagedPort();
+        var tool = new NyxIdCodexExecTool([port], new NyxIdToolOptions());
+        AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
+        {
+            Credentials = new AgentToolCredentials(
+                "delegation-alpha",
+                "source-alpha",
+                "source-beta",
+                AgentToolNyxIdCredentialKind.ProxyDelegation),
+        };
+        try
+        {
+            await tool.ExecuteAsync("""
+                {
+                  "target": { "kind": "managed_sandbox" },
+                  "workspace": { "kind": "empty_git" },
+                  "prompt": "Reply with exactly CODEX_EXEC_READY"
+                }
+                """);
+
+            port.Request.Should().NotBeNull();
+            port.Request!.Caller.NyxIdAccessToken.Should().BeNull();
         }
         finally
         {

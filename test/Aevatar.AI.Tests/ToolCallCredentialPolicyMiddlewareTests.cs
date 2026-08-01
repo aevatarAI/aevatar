@@ -69,6 +69,37 @@ public sealed class ToolCallCredentialPolicyMiddlewareTests
         context.Terminate.Should().BeFalse();
     }
 
+    [Fact]
+    public async Task InvokeAsync_WhenProxyDelegationHasSupplementalSourceCredential_ShouldPreservePurposes()
+    {
+        var middleware = new ToolCallCredentialPolicyMiddleware();
+        var context = NewContext(new StubTool(isReadOnly: true), "{}");
+        using var _ = AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
+        {
+            Credentials = new AgentToolCredentials(
+                " proxy-delegation ",
+                " org-token ",
+                " sender-token ",
+                AgentToolNyxIdCredentialKind.ProxyDelegation,
+                " source-token "),
+            SenderBinding = new AgentToolSenderBindingContext("binding-1"),
+        });
+        AgentToolExecutionContext? observed = null;
+
+        await middleware.InvokeAsync(context, () =>
+        {
+            observed = AgentToolRequestContext.Current;
+            return Task.CompletedTask;
+        });
+
+        observed.Should().NotBeNull();
+        observed!.Credentials.NyxIdAccessToken.Should().Be("proxy-delegation");
+        observed.Credentials.NyxIdOrgToken.Should().BeNull();
+        observed.Credentials.SenderNyxIdAccessToken.Should().BeNull();
+        observed.Credentials.SourceReadableNyxIdAccessToken.Should().Be("source-token");
+        observed.Credentials.NyxIdCredentialKind.Should().Be(AgentToolNyxIdCredentialKind.ProxyDelegation);
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]

@@ -140,7 +140,9 @@ public static class AgentToolExecutionContextMapper
                 AgentToolExecutionContext.Normalize(payload.Credentials?.NyxIdAccessToken),
                 AgentToolExecutionContext.Normalize(payload.Credentials?.NyxIdOrgToken),
                 AgentToolExecutionContext.Normalize(payload.Credentials?.SenderNyxIdAccessToken),
-                FromNyxIdCredentialKindPayload(payload.Credentials?.NyxIdCredentialKind)),
+                FromNyxIdCredentialKindPayload(payload.Credentials?.NyxIdCredentialKind),
+                AgentToolExecutionContext.Normalize(
+                    payload.Credentials?.SourceReadableNyxIdAccessToken)),
             new AgentToolCallerContext(
                 AgentToolExecutionContext.Normalize(payload.Caller?.ScopeId),
                 AgentToolExecutionContext.Normalize(payload.Caller?.OwnerSubject),
@@ -190,6 +192,8 @@ public static class AgentToolExecutionContextMapper
                 NyxIdOrgToken = context.Credentials.NyxIdOrgToken ?? string.Empty,
                 SenderNyxIdAccessToken = context.Credentials.SenderNyxIdAccessToken ?? string.Empty,
                 NyxIdCredentialKind = ToNyxIdCredentialKindPayload(context.Credentials.NyxIdCredentialKind),
+                SourceReadableNyxIdAccessToken =
+                    context.Credentials.SourceReadableNyxIdAccessToken ?? string.Empty,
             },
             Caller = new AgentToolCallerContextPayload
             {

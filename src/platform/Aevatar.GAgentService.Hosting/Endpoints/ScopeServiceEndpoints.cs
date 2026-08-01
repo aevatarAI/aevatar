@@ -3638,6 +3638,9 @@ const response = await fetch("{{invokePath}}", {
             Prompt = prompt,
             ScopeId = scopeId,
             ConnectorHttpAuthorization = ToConnectorHttpAuthorization(callerCredential),
+            CallerNyxIdCredentialKind = ToAgentToolNyxIdCredentialKind(callerCredential?.Kind),
+            CallerSourceReadableNyxIdBearerToken =
+                callerCredential?.SourceReadableUserBearerToken?.Trim() ?? string.Empty,
         };
         if (headers != null)
         {
@@ -3665,6 +3668,16 @@ const response = await fetch("{{invokePath}}", {
         var token = callerCredential?.BearerToken?.Trim();
         return string.IsNullOrWhiteSpace(token) ? string.Empty : $"Bearer {token}";
     }
+
+    private static AgentToolNyxIdCredentialKindPayload ToAgentToolNyxIdCredentialKind(
+        Aevatar.Workflow.Abstractions.NyxIdCallerCredentialKind? kind) => kind switch
+        {
+            Aevatar.Workflow.Abstractions.NyxIdCallerCredentialKind.SourceReadableUserBearer =>
+                AgentToolNyxIdCredentialKindPayload.SourceReadableUserBearer,
+            Aevatar.Workflow.Abstractions.NyxIdCallerCredentialKind.ProxyDelegation =>
+                AgentToolNyxIdCredentialKindPayload.ProxyDelegation,
+            _ => AgentToolNyxIdCredentialKindPayload.Unspecified,
+        };
 
     private static void EnsureWorkflowStreamTarget(
         ServiceInvocationResolvedTarget target,

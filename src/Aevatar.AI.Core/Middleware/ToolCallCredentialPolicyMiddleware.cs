@@ -35,6 +35,8 @@ public sealed class ToolCallCredentialPolicyMiddleware : IToolCallMiddleware
                     NyxIdAccessToken = proxyDelegationToken,
                     NyxIdOrgToken = null,
                     SenderNyxIdAccessToken = null,
+                    SourceReadableNyxIdAccessToken =
+                        current.Credentials.SourceReadableNyxIdAccessToken?.Trim(),
                 },
             };
 

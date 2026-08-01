@@ -657,7 +657,11 @@ public sealed class AevatarInvocationToolSourceTests
         };
         var dispatcher = harness.CreateDispatcher();
 
-        using var _ = PushContext(callId: "cmd-team-alpha", requestId: "corr-team-alpha");
+        using var _ = PushContext(
+            callId: "cmd-team-alpha",
+            requestId: "corr-team-alpha",
+            nyxIdCredentialKind: AgentToolNyxIdCredentialKind.ProxyDelegation,
+            sourceReadableAccessToken: "source-token");
         var request = BuildChatRunRequest(
             "response-team-workflow",
             "call-team-workflow-tool",
@@ -708,10 +712,16 @@ public sealed class AevatarInvocationToolSourceTests
         chatPayload.ToolContext.Caller.ScopeId.Should().Be("scope-1");
         chatPayload.ToolContext.Caller.OwnerSubject.Should().Be("owner-1");
         chatPayload.ToolContext.Credentials.NyxIdAccessToken.Should().Be("access-token");
+        chatPayload.ToolContext.Credentials.NyxIdOrgToken.Should().Be("org-token");
         chatPayload.ToolContext.Credentials.SenderNyxIdAccessToken.Should().Be("sender-token");
+        chatPayload.ToolContext.Credentials.SourceReadableNyxIdAccessToken.Should().Be("source-token");
+        chatPayload.ConnectorHttpAuthorization.Should().Be("Bearer access-token");
+        chatPayload.CallerNyxIdCredentialKind.Should().Be(
+            AgentToolNyxIdCredentialKindPayload.ProxyDelegation);
+        chatPayload.CallerSourceReadableNyxIdBearerToken.Should().Be("source-token");
         chatPayload.LlmControl.ModelOverride.Should().Be("model-1");
         chatPayload.LlmControl.NyxIdRoutePreference.Should().Be("route-1");
-        chatPayload.LlmControl.SenderNyxIdAccessToken.Should().Be("sender-token");
+        chatPayload.LlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
         ShouldNotCarryTrustedCallerValues(chatPayload.Headers);
         ShouldNotCarryTrustedCallerValues(chatPayload.Metadata);
 
@@ -2481,6 +2491,29 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
+    public async Task StartWorkflow_WhenSourceReadableCredentialHasNoExecutionCredential_ShouldReturnStructuredError()
+    {
+        var harness = new Harness();
+        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
+
+        using var _ = PushContext(
+            callId: "call-workflow-source-only",
+            accessToken: null,
+            nyxIdCredentialKind: AgentToolNyxIdCredentialKind.ProxyDelegation,
+            sourceReadableAccessToken: "source-token");
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_id": "wf-main",
+              "inputs": { "prompt": "run workflow" },
+              "wait": "ack"
+            }
+            """);
+
+        ErrorCode(output).Should().Be("invalidcallercredential");
+        harness.WorkflowDispatch.Command.Should().BeNull();
+    }
+
+    [Fact]
     public async Task InvokeGAgentForChatRun_WhenValidationFails_ShouldMapTypedErrorCodeAndPreserveRequest()
     {
         var harness = new Harness();
@@ -3886,10 +3919,18 @@ public sealed class AevatarInvocationToolSourceTests
         long durableReplyCredentialExpiresAtUnixMs = 0,
         IReadOnlyDictionary<string, string>? externalMetadata = null,
         IReadOnlyList<Aevatar.AI.Abstractions.ChatFileRef>? inputFileRefs = null,
-        AgentToolNyxIdCredentialKind nyxIdCredentialKind = AgentToolNyxIdCredentialKind.Unspecified) =>
+        AgentToolNyxIdCredentialKind nyxIdCredentialKind = AgentToolNyxIdCredentialKind.Unspecified,
+        string? organizationAccessToken = "org-token",
+        string? senderAccessToken = "sender-token",
+        string? sourceReadableAccessToken = null) =>
         AgentToolContextScope.Push(new AgentToolExecutionContext(
             new AgentToolRequestIdentity(requestId, callId),
-            new AgentToolCredentials(accessToken, "org-token", "sender-token", nyxIdCredentialKind),
+            new AgentToolCredentials(
+                accessToken,
+                organizationAccessToken,
+                senderAccessToken,
+                nyxIdCredentialKind,
+                sourceReadableAccessToken),
             new AgentToolCallerContext(scopeId, ownerSubject, "response-1", ownerScopeId),
             new AgentToolChannelContext(
                 channelPlatform,

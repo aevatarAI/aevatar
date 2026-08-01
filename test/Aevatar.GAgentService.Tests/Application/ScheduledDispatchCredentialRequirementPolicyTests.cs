@@ -99,6 +99,19 @@ public sealed class ScheduledDispatchCredentialRequirementPolicyTests
     }
 
     [Fact]
+    public void SummarizePayloadCredentialSignal_ShouldDetectCallerSourceReadableBearerPayload()
+    {
+        var signal = ScheduledDispatchCredentialRequirementRequests.SummarizePayloadCredentialSignal(
+            Any.Pack(new ChatRequestEvent
+            {
+                CallerSourceReadableNyxIdBearerToken = "current-session-source-token",
+            }));
+
+        signal.HasCurrentSessionCredential.Should().BeTrue();
+        signal.Source.Should().Be(nameof(ChatRequestEvent.CallerSourceReadableNyxIdBearerToken));
+    }
+
+    [Fact]
     public void SummarizePayloadCredentialSignal_ShouldDetectToolContextCredentialsPayload()
     {
         var signal = ScheduledDispatchCredentialRequirementRequests.SummarizePayloadCredentialSignal(
@@ -108,7 +121,7 @@ public sealed class ScheduledDispatchCredentialRequirementPolicyTests
                 {
                     Credentials = new AgentToolCredentialsPayload
                     {
-                        SenderNyxIdAccessToken = "sender-token",
+                        SourceReadableNyxIdAccessToken = "source-token",
                     },
                 },
             }));

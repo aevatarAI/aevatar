@@ -1619,7 +1619,12 @@ public sealed class ChatEndpointsInternalTests
         invalid.Error.Should().Be(WorkflowChatRunStartError.InvalidCallerCredential);
         invalid.Credential.Should().BeNull();
         bothValid.Succeeded.Should().BeTrue();
-        bothValid.Credential!.BearerToken.Should().Be("forwarded-token");
+        bothValid.Credential!.BearerToken.Should().Be("delegation-token");
+        bothValid.Credential.Kind.Should().Be(NyxIdCallerCredentialKind.ProxyDelegation);
+        bothValid.Credential.SourceReadableUserBearerToken.Should().Be("forwarded-token");
+        bothValid.NyxIdCredentialSelection!.Kind.Should().Be(
+            NyxIdCallerCredentialKind.SourceReadableUserBearer);
+        bothValid.NyxIdCredentialSelection.SourceReadableUserBearerToken.Should().Be("forwarded-token");
         unsupportedScheme.Succeeded.Should().BeFalse();
         unsupportedScheme.Error.Should().Be(WorkflowChatRunStartError.InvalidCallerCredential);
         unsupportedScheme.Credential.Should().BeNull();
@@ -1631,9 +1636,9 @@ public sealed class ChatEndpointsInternalTests
         malformedAuthorizationWithDelegation.Succeeded.Should().BeFalse();
         malformedAuthorizationWithDelegation.Error.Should().Be(
             WorkflowChatRunStartError.InvalidCallerCredential);
-        validAuthorizationWithMalformedDelegation.Succeeded.Should().BeTrue();
-        validAuthorizationWithMalformedDelegation.Credential!.BearerToken.Should().Be(
-            "forwarded-token");
+        validAuthorizationWithMalformedDelegation.Succeeded.Should().BeFalse();
+        validAuthorizationWithMalformedDelegation.Error.Should().Be(
+            WorkflowChatRunStartError.InvalidCallerCredential);
         identityOnly.Succeeded.Should().BeTrue();
         identityOnly.Credential.Should().BeNull();
         malformedDelegationOnly.Succeeded.Should().BeFalse();

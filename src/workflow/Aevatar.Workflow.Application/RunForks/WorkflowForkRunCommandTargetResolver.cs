@@ -39,7 +39,10 @@ internal sealed class WorkflowForkRunCommandTargetResolver
 
         var sourceRunId = Normalize(command.SourceRunId);
         var startAtStepId = Normalize(command.StartAtStepId);
-        if (WorkflowCallerCredentialTokens.ParseOptional(command.CallerCredential?.BearerToken).IsInvalid)
+        if (WorkflowCallerCredentialTokens.IsInvalidCredentialSet(
+                command.CallerCredential?.BearerToken,
+                command.CallerCredential?.Kind ?? NyxIdCallerCredentialKind.Unspecified,
+                command.CallerCredential?.SourceReadableUserBearerToken))
         {
             return CommandTargetResolution<WorkflowForkRunCommandTarget, WorkflowForkRunStartError>.Failure(
                 WorkflowForkRunStartError.InvalidCallerCredential(sourceRunId, startAtStepId));

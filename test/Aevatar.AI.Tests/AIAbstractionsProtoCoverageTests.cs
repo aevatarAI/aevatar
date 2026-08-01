@@ -30,6 +30,28 @@ public sealed class AIAbstractionsProtoCoverageTests
     }
 
     [Fact]
+    public void AgentToolExecutionContext_ShouldRoundTripDedicatedSourceReadableCredential()
+    {
+        var payload = (AgentToolExecutionContext.Empty with
+        {
+            Credentials = new AgentToolCredentials(
+                "delegation-alpha",
+                "org-alpha",
+                "sender-alpha",
+                AgentToolNyxIdCredentialKind.ProxyDelegation,
+                "source-alpha"),
+        }).ToPayload();
+
+        var copy = AgentToolExecutionContextMapper.FromPayload(
+            AgentToolExecutionContextPayload.Parser.ParseFrom(payload.ToByteArray()));
+
+        copy.Credentials.NyxIdAccessToken.Should().Be("delegation-alpha");
+        copy.Credentials.NyxIdOrgToken.Should().Be("org-alpha");
+        copy.Credentials.SenderNyxIdAccessToken.Should().Be("sender-alpha");
+        copy.Credentials.SourceReadableNyxIdAccessToken.Should().Be("source-alpha");
+    }
+
+    [Fact]
     public void LLMControlContext_ShouldMergeIntoTypedContexts_AndRoundTripPayload()
     {
         var control = new LLMControlContext(
@@ -139,6 +161,8 @@ public sealed class AIAbstractionsProtoCoverageTests
             TimeoutMs = 2500,
             ScopeId = "scope-1",
             ConnectorHttpAuthorization = "Bearer connector-token",
+            CallerNyxIdCredentialKind = AgentToolNyxIdCredentialKindPayload.ProxyDelegation,
+            CallerSourceReadableNyxIdBearerToken = "source-readable-token",
             LlmControl = new LLMControlContextPayload
             {
                 NyxIdAccessToken = "access-token",
@@ -164,6 +188,9 @@ public sealed class AIAbstractionsProtoCoverageTests
         request.TimeoutMs.Should().Be(2500);
         request.ScopeId.Should().Be("scope-1");
         request.ConnectorHttpAuthorization.Should().Be("Bearer connector-token");
+        request.CallerNyxIdCredentialKind.Should().Be(
+            AgentToolNyxIdCredentialKindPayload.ProxyDelegation);
+        request.CallerSourceReadableNyxIdBearerToken.Should().Be("source-readable-token");
         request.LlmControl.ModelOverride.Should().Be("model-a");
         request.LlmControl.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/llm");
         request.LlmControl.MaxToolRoundsOverride.Should().Be(7);

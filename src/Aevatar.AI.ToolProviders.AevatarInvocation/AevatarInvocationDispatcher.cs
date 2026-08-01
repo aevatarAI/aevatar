@@ -1596,6 +1596,21 @@ public sealed class AevatarInvocationDispatcher
             return;
 
         chatRequest.ConnectorHttpAuthorization = ToConnectorHttpAuthorization(callerCredential);
+        chatRequest.CallerSourceReadableNyxIdBearerToken =
+            callerCredential?.SourceReadableUserBearerToken?.Trim() ?? string.Empty;
+        chatRequest.CallerNyxIdCredentialKind = callerCredential?.Kind switch
+        {
+            NyxIdCallerCredentialKind.SourceReadableUserBearer =>
+                AgentToolNyxIdCredentialKindPayload.SourceReadableUserBearer,
+            NyxIdCallerCredentialKind.ProxyDelegation =>
+                AgentToolNyxIdCredentialKindPayload.ProxyDelegation,
+            _ => AgentToolNyxIdCredentialKindPayload.Unspecified,
+        };
+        if (!string.IsNullOrWhiteSpace(callerCredential?.SourceReadableUserBearerToken) &&
+            chatRequest.LlmControl != null)
+        {
+            chatRequest.LlmControl.SenderNyxIdAccessToken = string.Empty;
+        }
         invocationRequest.Payload = Any.Pack(chatRequest);
     }
 
@@ -1942,17 +1957,6 @@ public sealed class AevatarInvocationDispatcher
 
     private static WorkflowCallerCredentialResolution ResolveWorkflowCallerCredential(AgentToolExecutionContext? context)
     {
-        var parsed = WorkflowCallerCredentialTokens.ParseOptional(context?.Credentials.NyxIdAccessToken);
-        if (parsed.IsInvalid)
-        {
-            return WorkflowCallerCredentialResolution.Failed(Error(
-                WorkflowChatRunStartError.InvalidCallerCredential.ToString(),
-                "Caller credential is invalid."));
-        }
-
-        if (parsed.IsMissing)
-            return WorkflowCallerCredentialResolution.Success(null);
-
         var credentialKind = context?.Credentials.NyxIdCredentialKind switch
         {
             AgentToolNyxIdCredentialKind.SourceReadableUserBearer =>
@@ -1961,10 +1965,28 @@ public sealed class AevatarInvocationDispatcher
                 NyxIdCallerCredentialKind.ProxyDelegation,
             _ => NyxIdCallerCredentialKind.Unspecified,
         };
+        if (WorkflowCallerCredentialTokens.IsInvalidCredentialSet(
+                context?.Credentials.NyxIdAccessToken,
+                credentialKind,
+                context?.Credentials.SourceReadableNyxIdAccessToken))
+        {
+            return WorkflowCallerCredentialResolution.Failed(Error(
+                WorkflowChatRunStartError.InvalidCallerCredential.ToString(),
+                "Caller credential is invalid."));
+        }
+
+        var parsed = WorkflowCallerCredentialTokens.ParseOptional(context?.Credentials.NyxIdAccessToken);
+        if (parsed.IsMissing)
+            return WorkflowCallerCredentialResolution.Success(null);
+
+        var sourceReadableUserBearerToken = credentialKind == NyxIdCallerCredentialKind.ProxyDelegation
+            ? AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(context?.Credentials)
+            : null;
         return WorkflowCallerCredentialResolution.Success(
             new WorkflowRunCallerCredential(
                 parsed.NormalizedBearerToken,
-                Kind: credentialKind));
+                Kind: credentialKind,
+                SourceReadableUserBearerToken: sourceReadableUserBearerToken));
     }
 
     private static bool TryGetManagedWorkflowRuntimeContext(

@@ -134,7 +134,12 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         Application.Abstractions.Runs.WorkflowCallerCredential? source)
     {
         var parsed = WorkflowCallerCredentialTokens.ParseOptional(source?.BearerToken);
-        if (parsed.IsInvalid)
+        var sourceReadable = WorkflowCallerCredentialTokens.ParseOptional(
+            source?.SourceReadableUserBearerToken);
+        if (WorkflowCallerCredentialTokens.IsInvalidCredentialSet(
+                source?.BearerToken,
+                source?.Kind ?? NyxIdCallerCredentialKind.Unspecified,
+                source?.SourceReadableUserBearerToken))
             throw new ArgumentException("Workflow caller credential bearer token is invalid.", nameof(source));
 
         var authority = source?.NyxIdAuthority;
@@ -149,6 +154,7 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         {
             BearerToken = parsed.NormalizedBearerToken ?? string.Empty,
             Kind = source?.Kind ?? NyxIdCallerCredentialKind.Unspecified,
+            SourceReadableUserBearerToken = sourceReadable.NormalizedBearerToken ?? string.Empty,
         };
         if (authority != null)
         {

@@ -667,13 +667,137 @@ public sealed class DefaultServiceInvocationDispatcherTests
             Payload = Any.Pack(new ChatRequestEvent
             {
                 Prompt = "hello",
-                ConnectorHttpAuthorization = "Bearer connector-token",
+                ConnectorHttpAuthorization = "Bearer delegation-alpha",
+                CallerNyxIdCredentialKind = AgentToolNyxIdCredentialKindPayload.ProxyDelegation,
+                CallerSourceReadableNyxIdBearerToken = "source-alpha",
+                LlmControl = new LLMControlContextPayload
+                {
+                    SenderNyxIdAccessToken = "llm-sender-alpha",
+                },
             }),
         });
 
         var workflowRequest = dispatchPort.Calls.Should().ContainSingle().Which
             .envelope.Payload.Unpack<WorkflowChatRequestEvent>();
-        workflowRequest.CallerCredential.BearerToken.Should().Be("connector-token");
+        workflowRequest.CallerCredential.BearerToken.Should().Be("delegation-alpha");
+        workflowRequest.CallerCredential.Kind.Should().Be(NyxIdCallerCredentialKind.ProxyDelegation);
+        workflowRequest.CallerCredential.SourceReadableUserBearerToken.Should().Be("source-alpha");
+        workflowRequest.LlmControl.SenderNyxIdAccessToken.Should().Be("llm-sender-alpha");
+    }
+
+    [Fact]
+    public async Task DispatchAsync_ShouldPreserveTypedProxyDelegationWithoutSupplementalSourceCredential()
+    {
+        var workflowPort = new RecordingWorkflowRunActorPort();
+        var dispatchPort = new RecordingDispatchPort();
+        var dispatcher = new DefaultServiceInvocationDispatcher(
+            dispatchPort,
+            new RecordingScriptRuntimeCommandPort(),
+            workflowPort,
+            new RecordingServiceRunRegistrationPort());
+        var target = CreateTarget(
+            ServiceImplementationKind.Workflow,
+            endpointId: "chat",
+            requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
+        target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
+        {
+            WorkflowName = "wf",
+            WorkflowYaml = "name: wf",
+        };
+
+        await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
+        {
+            Identity = GAgentServiceTestKit.CreateIdentity(),
+            EndpointId = "chat",
+            CommandId = "cmd-delegation-only",
+            Payload = Any.Pack(new ChatRequestEvent
+            {
+                Prompt = "hello",
+                ConnectorHttpAuthorization = "Bearer delegation-only",
+                CallerNyxIdCredentialKind = AgentToolNyxIdCredentialKindPayload.ProxyDelegation,
+            }),
+        });
+
+        var workflowRequest = dispatchPort.Calls.Should().ContainSingle().Which
+            .envelope.Payload.Unpack<WorkflowChatRequestEvent>();
+        workflowRequest.CallerCredential.BearerToken.Should().Be("delegation-only");
+        workflowRequest.CallerCredential.Kind.Should().Be(NyxIdCallerCredentialKind.ProxyDelegation);
+        workflowRequest.CallerCredential.SourceReadableUserBearerToken.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task DispatchAsync_ShouldRejectSupplementalSourceCredentialWithoutExecutionCredential()
+    {
+        var workflowPort = new RecordingWorkflowRunActorPort();
+        var dispatchPort = new RecordingDispatchPort();
+        var dispatcher = new DefaultServiceInvocationDispatcher(
+            dispatchPort,
+            new RecordingScriptRuntimeCommandPort(),
+            workflowPort,
+            new RecordingServiceRunRegistrationPort());
+        var target = CreateTarget(
+            ServiceImplementationKind.Workflow,
+            endpointId: "chat",
+            requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
+        target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
+        {
+            WorkflowName = "wf",
+            WorkflowYaml = "name: wf",
+        };
+
+        var act = () => dispatcher.DispatchAsync(target, new ServiceInvocationRequest
+        {
+            Identity = GAgentServiceTestKit.CreateIdentity(),
+            EndpointId = "chat",
+            CommandId = "cmd-source-only",
+            Payload = Any.Pack(new ChatRequestEvent
+            {
+                Prompt = "hello",
+                CallerNyxIdCredentialKind = AgentToolNyxIdCredentialKindPayload.ProxyDelegation,
+                CallerSourceReadableNyxIdBearerToken = "source-alpha",
+            }),
+        });
+
+        await act.Should().ThrowAsync<ArgumentException>();
+        dispatchPort.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task DispatchAsync_ShouldRejectSupplementalSourceCredentialForSourceReadableExecutionKind()
+    {
+        var workflowPort = new RecordingWorkflowRunActorPort();
+        var dispatchPort = new RecordingDispatchPort();
+        var dispatcher = new DefaultServiceInvocationDispatcher(
+            dispatchPort,
+            new RecordingScriptRuntimeCommandPort(),
+            workflowPort,
+            new RecordingServiceRunRegistrationPort());
+        var target = CreateTarget(
+            ServiceImplementationKind.Workflow,
+            endpointId: "chat",
+            requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
+        target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
+        {
+            WorkflowName = "wf",
+            WorkflowYaml = "name: wf",
+        };
+
+        var act = () => dispatcher.DispatchAsync(target, new ServiceInvocationRequest
+        {
+            Identity = GAgentServiceTestKit.CreateIdentity(),
+            EndpointId = "chat",
+            CommandId = "cmd-invalid-source-kind",
+            Payload = Any.Pack(new ChatRequestEvent
+            {
+                Prompt = "hello",
+                ConnectorHttpAuthorization = "Bearer source-alpha",
+                CallerNyxIdCredentialKind = AgentToolNyxIdCredentialKindPayload.SourceReadableUserBearer,
+                CallerSourceReadableNyxIdBearerToken = "source-alpha",
+            }),
+        });
+
+        await act.Should().ThrowAsync<ArgumentException>();
+        dispatchPort.Calls.Should().BeEmpty();
     }
 
     [Fact]

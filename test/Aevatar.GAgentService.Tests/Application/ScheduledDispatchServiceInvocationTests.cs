@@ -83,6 +83,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
                     {
                         Prompt = "hello",
                         ConnectorHttpAuthorization = "Bearer stored-connector-token",
+                        CallerSourceReadableNyxIdBearerToken = "source-readable-secret",
                         Headers =
                         {
                             [ScheduledServiceInvocationPayloadPolicy.ConnectorHttpAuthorizationKey] = "Bearer header-token",
@@ -105,6 +106,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
                                 NyxIdAccessToken = "tool-owner-secret",
                                 NyxIdOrgToken = "tool-org-secret",
                                 SenderNyxIdAccessToken = "tool-sender-secret",
+                                SourceReadableNyxIdAccessToken = "tool-source-secret",
                             },
                             Routing = new LLMRequestRoutingContextPayload
                             {
@@ -135,6 +137,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
         var request = prepared.TriggerEnvelope.Payload.Unpack<ServiceInvocationRequest>();
         var persistedChat = request.Payload.Unpack<ChatRequestEvent>();
         persistedChat.ConnectorHttpAuthorization.Should().BeEmpty();
+        persistedChat.CallerSourceReadableNyxIdBearerToken.Should().BeEmpty();
         persistedChat.Headers.Should().NotContainKey(ScheduledServiceInvocationPayloadPolicy.ConnectorHttpAuthorizationKey);
         persistedChat.Headers.Should().Contain("client", "kept");
         persistedChat.Metadata.Should().NotContainKey(ScheduledServiceInvocationPayloadPolicy.ConnectorHttpAuthorizationKey);
@@ -152,12 +155,14 @@ public sealed class ScheduledDispatchServiceInvocationTests
         persistedChat.ToolContext.Credentials.NyxIdAccessToken.Should().BeEmpty();
         persistedChat.ToolContext.Credentials.NyxIdOrgToken.Should().BeEmpty();
         persistedChat.ToolContext.Credentials.SenderNyxIdAccessToken.Should().BeEmpty();
+        persistedChat.ToolContext.Credentials.SourceReadableNyxIdAccessToken.Should().BeEmpty();
         persistedChat.ToolContext.Routing.ModelOverride.Should().Be("tool-model");
         persistedChat.ToolContext.Routing.NyxIdRoutePreference.Should().Be("tool-route");
         persistedChat.ToolContext.Routing.MaxToolRoundsOverride.Should().Be(5);
         persistedChat.ToolContext.Routing.UserMemoryPrompt.Should().Be("tool memory");
         var descriptorChat = prepared.Descriptor.ServiceInvocation!.Payload.Unpack<ChatRequestEvent>();
         descriptorChat.ConnectorHttpAuthorization.Should().BeEmpty();
+        descriptorChat.CallerSourceReadableNyxIdBearerToken.Should().BeEmpty();
         descriptorChat.Headers.Should().NotContainKey(ScheduledServiceInvocationPayloadPolicy.ConnectorHttpAuthorizationKey);
         descriptorChat.Metadata.Should().NotContainKey(ScheduledServiceInvocationPayloadPolicy.ConnectorHttpAuthorizationKey);
         descriptorChat.LlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
@@ -165,6 +170,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
         descriptorChat.CallerDurableCredential.Should().BeNull();
         descriptorChat.LlmControl.ModelOverride.Should().Be("sonnet");
         descriptorChat.ToolContext.Credentials.SenderNyxIdAccessToken.Should().BeEmpty();
+        descriptorChat.ToolContext.Credentials.SourceReadableNyxIdAccessToken.Should().BeEmpty();
         descriptorChat.ToolContext.Routing.ModelOverride.Should().Be("tool-model");
     }
 

@@ -190,7 +190,8 @@ public sealed record AgentToolCredentials(
     string? NyxIdAccessToken,
     string? NyxIdOrgToken,
     string? SenderNyxIdAccessToken,
-    AgentToolNyxIdCredentialKind NyxIdCredentialKind = AgentToolNyxIdCredentialKind.Unspecified)
+    AgentToolNyxIdCredentialKind NyxIdCredentialKind = AgentToolNyxIdCredentialKind.Unspecified,
+    string? SourceReadableNyxIdAccessToken = null)
 {
     public static AgentToolCredentials Empty { get; } = new(null, null, null);
 }

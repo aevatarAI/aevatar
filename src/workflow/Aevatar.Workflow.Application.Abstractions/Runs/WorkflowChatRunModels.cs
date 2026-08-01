@@ -69,10 +69,11 @@ public sealed record WorkflowCallerCredential(
     string? BearerToken = null,
     WorkflowCallerNyxIdAuthority? NyxIdAuthority = null,
     Aevatar.Workflow.Abstractions.NyxIdCallerCredentialKind Kind =
-        Aevatar.Workflow.Abstractions.NyxIdCallerCredentialKind.Unspecified)
+        Aevatar.Workflow.Abstractions.NyxIdCallerCredentialKind.Unspecified,
+    string? SourceReadableUserBearerToken = null)
 {
     public override string ToString() =>
-        $"{nameof(WorkflowCallerCredential)} {{ BearerToken = [REDACTED], NyxIdAuthorityPresent = {NyxIdAuthority is not null} }}";
+        $"{nameof(WorkflowCallerCredential)} {{ BearerToken = [REDACTED], SourceReadableUserBearerToken = [REDACTED], NyxIdAuthorityPresent = {NyxIdAuthority is not null} }}";
 }
 
 public sealed record WorkflowExternalIngressContext(

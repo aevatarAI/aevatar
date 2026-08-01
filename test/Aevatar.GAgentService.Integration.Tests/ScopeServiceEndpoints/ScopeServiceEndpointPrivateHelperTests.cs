@@ -401,7 +401,10 @@ public sealed class ScopeServiceEndpointPrivateHelperTests : ScopeServiceEndpoin
             " chat ",
             "prompt",
             new Dictionary<string, string> { ["trace-id"] = "abc" },
-            new WorkflowCallerCredential("connector-token"),
+            new WorkflowCallerCredential(
+                "delegation-alpha",
+                Kind: Aevatar.Workflow.Abstractions.NyxIdCallerCredentialKind.ProxyDelegation,
+                SourceReadableUserBearerToken: "source-alpha"),
             " rev-1 ",
             " app-x ");
         invocation.Identity.AppId.Should().Be("app-x");
@@ -410,7 +413,11 @@ public sealed class ScopeServiceEndpointPrivateHelperTests : ScopeServiceEndpoin
         invocation.RevisionId.Should().Be("rev-1");
         var payload = invocation.Payload!.Unpack<ChatRequestEvent>();
         payload.Metadata["trace-id"].Should().Be("abc");
-        payload.ConnectorHttpAuthorization.Should().Be("Bearer connector-token");
+        payload.ConnectorHttpAuthorization.Should().Be("Bearer delegation-alpha");
+        payload.CallerNyxIdCredentialKind.Should().Be(
+            AgentToolNyxIdCredentialKindPayload.ProxyDelegation);
+        payload.CallerSourceReadableNyxIdBearerToken.Should().Be("source-alpha");
+        payload.LlmControl.Should().BeNull();
 
         InvokePrivateStatic<string>("ResolveDefaultScopeServiceId", options).Should().Be("default");
     }

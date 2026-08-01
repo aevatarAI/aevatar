@@ -1733,10 +1733,17 @@ public sealed partial class WorkflowRunGAgent
         if (delta.CallerCredential != null)
         {
             var parsed = WorkflowCallerCredentialTokens.ParseOptional(delta.CallerCredential.BearerToken);
+            var sourceReadable = WorkflowCallerCredentialTokens.ParseOptional(
+                delta.CallerCredential.SourceReadableUserBearerToken);
             state.CallerCredential = new WorkflowCallerCredentialState
             {
                 BearerToken = parsed.IsValid ? parsed.NormalizedBearerToken ?? string.Empty : string.Empty,
+                SourceReadableUserBearerToken = sourceReadable.IsValid
+                    ? sourceReadable.NormalizedBearerToken ?? string.Empty
+                    : string.Empty,
                 RuntimeSecretReference = delta.CallerCredential.RuntimeSecretReference?.Clone(),
+                SourceReadableUserBearerRuntimeSecretReference =
+                    delta.CallerCredential.SourceReadableUserBearerRuntimeSecretReference?.Clone(),
                 DurableCallerCredential = delta.CallerCredential.DurableCallerCredential?.Clone(),
                 NyxIdAuthority = delta.CallerCredential.NyxIdAuthority?.Clone(),
                 Kind = delta.CallerCredential.Kind,

@@ -72,6 +72,8 @@ message ChatRequestEvent  {
   // remains the idempotent turn identity and may already name a final session.
   string command_attempt_id = 14;
   WorkflowLlmToolApprovalContinuation workflow_llm_tool_approval_continuation = 15;
+  AgentToolNyxIdCredentialKindPayload caller_nyx_id_credential_kind = 16;
+  string caller_source_readable_nyx_id_bearer_token = 17;
 }
 message ChatResponseEvent { string content = 1; string session_id = 2; }
 
@@ -217,6 +219,7 @@ message AgentToolCredentialsPayload {
   string nyx_id_org_token = 2;
   string sender_nyx_id_access_token = 3;
   AgentToolNyxIdCredentialKindPayload nyx_id_credential_kind = 4;
+  string source_readable_nyx_id_access_token = 5;
 }
 
 message AgentToolCallerContextPayload {
