@@ -440,6 +440,16 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             _agent = agent;
             return true;
         }
+        catch (Exception ex) when (IsCommittedStatePublicationActivationFailure(ex))
+        {
+            _logger.LogError(
+                ex,
+                "Committed-state publication recovery prevented activation of grain actor {ActorId} for kind '{Kind}' (impl '{ImplClr}').",
+                SafeGetActorIdForLog(),
+                implementation.Metadata.Kind,
+                implementation.Metadata.ImplementationClrTypeName);
+            throw;
+        }
         catch (Exception ex)
         {
             _logger.LogError(
@@ -451,6 +461,10 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             return false;
         }
     }
+
+    private static bool IsCommittedStatePublicationActivationFailure(Exception exception) =>
+        exception is CommittedStatePublicationException
+            or CommittedStatePublicationRecoveryException;
 
     private void InjectDependencies(IAgent agent, string actorId)
     {
