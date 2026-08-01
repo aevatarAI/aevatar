@@ -582,6 +582,58 @@ public sealed class WorkflowRunActorResolverTests
     }
 
     [Fact]
+    public async Task ResolveOrCreateAsync_ShouldPreserveSourceBindingAdmissionPlanAndRevisionIdentity()
+    {
+        const string workflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        var admissionPlan = new WorkflowCapabilityAdmissionPlan
+        {
+            SchemaVersion = WorkflowCapabilityAdmissionPlanIntegrity.SchemaVersion,
+            ExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+            DefinitionDigest = "definition-digest-alpha",
+            AdmissionDigest = "admission-digest-alpha",
+        };
+        admissionPlan.InvocationAdmissions.Add(new WorkflowCapabilityInvocationAdmission
+        {
+            CallSiteId = "direct/request-alpha",
+            NyxIdExplicitRequestGrant = new NyxIdExplicitRequestGrant
+            {
+                WorkflowId = "wf-alpha",
+                RevisionId = "rev-alpha",
+            },
+        });
+        var actorPort = new RecordingWorkflowRunActorPort();
+        var resolver = new WorkflowRunActorResolver(
+            new StaticWorkflowActorBindingReader(
+                new WorkflowActorBinding(
+                    WorkflowActorKind.Definition,
+                    "definition-alpha",
+                    string.Empty,
+                    string.Empty,
+                    "direct",
+                    workflowYaml,
+                    new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                    CapabilityAdmissionPlan: admissionPlan,
+                    WorkflowId: "wf-alpha",
+                    RevisionId: "rev-alpha")),
+            actorPort,
+            actorPort,
+            new InMemoryWorkflowDefinitionCatalog());
+
+        var result = await resolver.ResolveOrCreateAsync(
+            new WorkflowChatRunRequest(
+                "hello",
+                WorkflowChatSource.DefinitionActor("definition-alpha", "direct")),
+            CancellationToken.None);
+
+        result.Error.Should().Be(WorkflowChatRunStartError.None);
+        var runBinding = actorPort.CreateRunBindings.Should().ContainSingle().Which;
+        runBinding.CapabilityAdmissionPlan.Should().Be(admissionPlan);
+        runBinding.CapabilityAdmissionPlan.Should().NotBeSameAs(admissionPlan);
+        runBinding.WorkflowId.Should().Be("wf-alpha");
+        runBinding.RevisionId.Should().Be("rev-alpha");
+    }
+
+    [Fact]
     public async Task ResolveOrCreateAsync_ShouldKeepExistingBindingForOpaqueActorId_WhileNewRunUsesLatestRegistryDefinition()
     {
         const string opaqueActorId = "script-runtime:legacy-worker-42";

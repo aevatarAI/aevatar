@@ -197,7 +197,10 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
                 workflowYamlFromSource,
                 sourceBinding.InlineWorkflowYamls,
                 ResolveScopeId(sourceBinding.ScopeId, scopeIdHint),
-                WorkflowRunOrigins.AdHocChat),
+                WorkflowRunOrigins.AdHocChat,
+                CapabilityAdmissionPlan: sourceBinding.CapabilityAdmissionPlan?.Clone(),
+                WorkflowId: sourceBinding.WorkflowId,
+                RevisionId: sourceBinding.RevisionId),
             wrapAsFallbackTrigger: true,
             ct);
 
