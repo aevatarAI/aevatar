@@ -1738,7 +1738,7 @@ public sealed class ScheduledDispatchGAgentTests
             },
             OwnerLlmSelection = new ScheduledInvocationOwnerLLMSelection
             {
-                RouteKind = ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService,
+                RouteKind = LLMRouteKind.NyxIdUserService,
                 RouteValue = "/api/v1/proxy/s/chrono-llm-public",
                 NyxIdUserServiceId = "nyx-llm-service-alpha",
                 ServiceSlugSnapshot = "chrono-llm-public",
@@ -5044,7 +5044,7 @@ public sealed class ScheduledDispatchGAgentTests
         ("authorization-catalog-evaluated", configured =>
             configured.Target.ServiceInvocation.AuthorizationFact.Authority.CatalogEvaluatedAt.Seconds++),
         ("owner-llm-route-kind", configured => configured.Target.ServiceInvocation.AuthorizationFact
-            .OwnerLlmSelection.RouteKind = ScheduledInvocationOwnerLLMRouteKind.Unspecified),
+            .OwnerLlmSelection.RouteKind = LLMRouteKind.Unspecified),
         ("owner-llm-route", configured => configured.Target.ServiceInvocation.AuthorizationFact
             .OwnerLlmSelection.RouteValue = "route-substituted"),
         ("owner-llm-service", configured => configured.Target.ServiceInvocation.AuthorizationFact
@@ -5220,7 +5220,7 @@ public sealed class ScheduledDispatchGAgentTests
 
     private static ScheduledInvocationOwnerLLMSelection CreateOwnerLLMSelection() => new()
     {
-        RouteKind = ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService,
+        RouteKind = LLMRouteKind.NyxIdUserService,
         RouteValue = "/api/v1/proxy/s/chrono-llm-public",
         NyxIdUserServiceId = "nyx-llm-service-alpha",
         ServiceSlugSnapshot = "chrono-llm-public",

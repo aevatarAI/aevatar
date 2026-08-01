@@ -4,6 +4,7 @@ package aevatar.gagentservice.schedules.authorization;
 option csharp_namespace = "Aevatar.GAgentService.Abstractions.Schedules.Authorization";
 
 import "google/protobuf/timestamp.proto";
+import "LLMProviders/llm_selection.proto";
 import "workflow_capability_admission.proto";
 
 enum AuthorizationOwnerKind {
@@ -31,6 +32,19 @@ message AuthorizationOwnerIdentity {
   string owner_subject = 3;
 }
 
+message NyxIdAuthorizationLLMTargetEvidence {
+  aevatar.ai.LLMRouteKind route_kind = 1;
+  string route_value = 2;
+  string nyx_id_user_service_id = 3;
+  string service_slug_snapshot = 4;
+  aevatar.ai.LLMModelCatalog model_catalog = 5;
+  google.protobuf.Timestamp observed_at = 6;
+  google.protobuf.Timestamp fresh_until = 7;
+  google.protobuf.Timestamp evaluated_at = 8;
+  string authority_contract_version = 9;
+  string authority_policy_version = 10;
+}
+
 message NyxIdAuthorizationServiceEvidence {
   reserved 6;
   reserved "nodes";
@@ -47,11 +61,13 @@ message NyxIdAuthorizationServiceEvidence {
   google.protobuf.Timestamp evaluated_at = 11;
   string authority_contract_version = 12;
   string authority_policy_version = 13;
+  NyxIdAuthorizationLLMTargetEvidence llm_target = 14;
 }
 
 message NyxIdAuthorizationCatalogContent {
   AuthorizationOwnerIdentity owner = 1;
   repeated NyxIdAuthorizationServiceEvidence services = 2;
+  NyxIdAuthorizationLLMTargetEvidence gateway_llm_target = 3;
 }
 
 message WorkflowRevisionAuthorizationEvidence {

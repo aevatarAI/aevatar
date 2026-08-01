@@ -8,6 +8,7 @@ using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.Credentials.Testing;
+using Aevatar.AI.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Application.Schedules.Authorization;
 using Aevatar.GAgents.Channel.Runtime;
@@ -432,7 +433,7 @@ public sealed class ScheduledAgentCreatorToolTests
                 17,
                 new ScheduledInvocationOwnerLLMSelection
                 {
-                    RouteKind = ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService,
+                    RouteKind = LLMRouteKind.NyxIdUserService,
                     RouteValue = "/api/v1/proxy/s/chrono-llm",
                     NyxIdUserServiceId = "svc-chrono",
                     ServiceSlugSnapshot = "chrono-llm",
@@ -478,7 +479,7 @@ public sealed class ScheduledAgentCreatorToolTests
                     18,
                     new ScheduledInvocationOwnerLLMSelection
                     {
-                        RouteKind = ScheduledInvocationOwnerLLMRouteKind.Gateway,
+                        RouteKind = LLMRouteKind.Gateway,
                         RouteValue = ScheduledInvocationOwnerLLMSelectionPolicy.GatewayRoute,
                         Model = "gpt-5.5",
                     })));
@@ -1258,7 +1259,7 @@ public sealed class ScheduledAgentCreatorToolTests
                     29,
                     new ScheduledInvocationOwnerLLMSelection
                     {
-                        RouteKind = ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService,
+                        RouteKind = LLMRouteKind.NyxIdUserService,
                         RouteValue = "/api/v1/proxy/s/chrono-llm-public",
                         NyxIdUserServiceId = "svc-llm",
                         ServiceSlugSnapshot = "chrono-llm-public",

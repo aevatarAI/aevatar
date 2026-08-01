@@ -210,7 +210,7 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
 
         var selection = fact.OwnerLLMSelection;
         if (!ScheduledInvocationOwnerLLMSelectionPolicy.IsDurableSelectionValid(selection) ||
-            (selection!.RouteKind == ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService &&
+            (selection!.RouteKind == LLMRouteKind.NyxIdUserService &&
              !fact.ServiceGrants.Any(grant => string.Equals(
                  grant.ServiceId,
                  selection.NyxIdUserServiceId,

@@ -40,6 +40,7 @@ public sealed class ProjectionNyxIdAuthorizationCatalogQueryPort
             document.Activated,
             document.Cleaned,
             document.CleanedAt,
-            document.CleanupReason);
+            document.CleanupReason,
+            document.GatewayLlmTarget?.Clone());
     }
 }

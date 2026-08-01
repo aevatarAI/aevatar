@@ -122,7 +122,7 @@ public sealed class ScheduledDispatchCurrentStateProjector
             PermissionDigest = state.TeamAutomationPermissionDigest ?? string.Empty,
             PolicyVersion = state.TeamAutomationPolicyVersion ?? string.Empty,
             OwnerLlmRouteKind = ToOwnerLLMRouteKindName(ownerLLMSelection?.RouteKind ??
-                ScheduledInvocationOwnerLLMRouteKind.Unspecified),
+                LLMRouteKind.Unspecified),
             OwnerLlmRoute = ownerLLMSelection?.RouteValue ?? string.Empty,
             OwnerLlmUserServiceId = ownerLLMSelection?.NyxIdUserServiceId ?? string.Empty,
             OwnerLlmServiceSlug = ownerLLMSelection?.ServiceSlugSnapshot ?? string.Empty,
@@ -212,11 +212,11 @@ public sealed class ScheduledDispatchCurrentStateProjector
             _ => ScheduledDispatchTargetKind.Envelope,
         };
 
-    private static string ToOwnerLLMRouteKindName(ScheduledInvocationOwnerLLMRouteKind routeKind) => routeKind switch
+    private static string ToOwnerLLMRouteKindName(LLMRouteKind routeKind) => routeKind switch
     {
-        ScheduledInvocationOwnerLLMRouteKind.Unspecified => "unspecified",
-        ScheduledInvocationOwnerLLMRouteKind.Gateway => "gateway",
-        ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService => "nyx_id_user_service",
+        LLMRouteKind.Unspecified => "unspecified",
+        LLMRouteKind.Gateway => "gateway",
+        LLMRouteKind.NyxIdUserService => "nyx_id_user_service",
         _ => throw new InvalidOperationException($"Unknown owner LLM route kind value '{(int)routeKind}'."),
     };
 

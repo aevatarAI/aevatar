@@ -1845,7 +1845,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
                 "malformed-selection",
                 dispatch => ReplaceOwnerLLMSelection(dispatch, new ScheduledInvocationOwnerLLMSelection
                 {
-                    RouteKind = ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService,
+                    RouteKind = LLMRouteKind.NyxIdUserService,
                     RouteValue = $" {OwnerLLMRoute}",
                     NyxIdUserServiceId = OwnerLLMServiceId,
                     ServiceSlugSnapshot = "chrono-llm-public",
@@ -1996,7 +1996,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
 
     private static ScheduledInvocationOwnerLLMSelection CreateOwnerLLMSelection() => new()
     {
-        RouteKind = ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService,
+        RouteKind = LLMRouteKind.NyxIdUserService,
         RouteValue = OwnerLLMRoute,
         NyxIdUserServiceId = OwnerLLMServiceId,
         ServiceSlugSnapshot = "chrono-llm-public",

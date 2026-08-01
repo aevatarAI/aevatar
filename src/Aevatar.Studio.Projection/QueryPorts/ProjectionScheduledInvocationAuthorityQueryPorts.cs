@@ -127,9 +127,9 @@ public sealed class ProjectionScheduledInvocationOwnerLLMQueryPort(
         {
             RouteKind = selection.RouteKind switch
             {
-                LLMRouteKind.Gateway => ScheduledInvocationOwnerLLMRouteKind.Gateway,
-                LLMRouteKind.NyxIdUserService => ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService,
-                _ => ScheduledInvocationOwnerLLMRouteKind.Unspecified,
+                LLMRouteKind.Gateway => LLMRouteKind.Gateway,
+                LLMRouteKind.NyxIdUserService => LLMRouteKind.NyxIdUserService,
+                _ => LLMRouteKind.Unspecified,
             },
             RouteValue = selection.RouteValue,
             NyxIdUserServiceId = selection.NyxIdUserServiceId,

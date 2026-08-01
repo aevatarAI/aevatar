@@ -518,7 +518,7 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
         {
             OwnerLlmSelection = new ScheduledInvocationOwnerLLMSelection
             {
-                RouteKind = ScheduledInvocationOwnerLLMRouteKind.Gateway,
+                RouteKind = LLMRouteKind.Gateway,
                 RouteValue = "/api/v1/llm/gateway/v1",
                 Model = "fallback-model",
             },
@@ -533,7 +533,7 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
             },
             OwnerLlmSelection = new ScheduledInvocationOwnerLLMSelection
             {
-                RouteKind = ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService,
+                RouteKind = LLMRouteKind.NyxIdUserService,
                 RouteValue = "/api/v1/proxy/s/chrono-llm-public",
                 NyxIdUserServiceId = "us-chrono",
                 ServiceSlugSnapshot = "chrono-llm-public",
@@ -564,10 +564,10 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
     }
 
     [Theory]
-    [InlineData(ScheduledInvocationOwnerLLMRouteKind.Unspecified, "unspecified", "")]
-    [InlineData(ScheduledInvocationOwnerLLMRouteKind.Gateway, "gateway", "/api/v1/llm/gateway/v1")]
+    [InlineData(LLMRouteKind.Unspecified, "unspecified", "")]
+    [InlineData(LLMRouteKind.Gateway, "gateway", "/api/v1/llm/gateway/v1")]
     public async Task ProjectAsync_ShouldExposeExplicitRouteKindFromTargetAuthorizationFact(
-        ScheduledInvocationOwnerLLMRouteKind routeKind,
+        LLMRouteKind routeKind,
         string expectedRouteKind,
         string route)
     {
@@ -590,7 +590,7 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
             {
                 RouteKind = routeKind,
                 RouteValue = route,
-                Model = routeKind == ScheduledInvocationOwnerLLMRouteKind.Gateway ? "gpt-5.5" : string.Empty,
+                Model = routeKind == LLMRouteKind.Gateway ? "gpt-5.5" : string.Empty,
             },
         };
 

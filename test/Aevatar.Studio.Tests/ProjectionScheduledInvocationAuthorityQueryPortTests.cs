@@ -137,7 +137,7 @@ public sealed class ProjectionScheduledInvocationAuthorityQueryPortTests
 
         reader.Key.Should().Be("user-config-scope-alpha");
         ownerLlm!.StateVersion.Should().Be(11);
-        ownerLlm.Selection.RouteKind.Should().Be(ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService);
+        ownerLlm.Selection.RouteKind.Should().Be(LLMRouteKind.NyxIdUserService);
         ownerLlm.Selection.RouteValue.Should().Be("/api/v1/proxy/s/chrono-llm-public");
         ownerLlm.Selection.NyxIdUserServiceId.Should().Be("us-chrono");
         ownerLlm.Selection.ServiceSlugSnapshot.Should().Be("chrono-llm-public");
@@ -165,7 +165,7 @@ public sealed class ProjectionScheduledInvocationAuthorityQueryPortTests
 
         result.Should().NotBeNull();
         result!.StateVersion.Should().Be(12);
-        result.Selection.RouteKind.Should().Be(ScheduledInvocationOwnerLLMRouteKind.Gateway);
+        result.Selection.RouteKind.Should().Be(LLMRouteKind.Gateway);
         result.Selection.RouteValue.Should().Be(ScheduledInvocationOwnerLLMSelectionPolicy.GatewayRoute);
         result.Selection.NyxIdUserServiceId.Should().BeEmpty();
         result.Selection.ServiceSlugSnapshot.Should().BeEmpty();
@@ -187,7 +187,7 @@ public sealed class ProjectionScheduledInvocationAuthorityQueryPortTests
 
         result.Should().NotBeNull();
         result!.StateVersion.Should().Be(13);
-        result.Selection.RouteKind.Should().Be(ScheduledInvocationOwnerLLMRouteKind.Unspecified);
+        result.Selection.RouteKind.Should().Be(LLMRouteKind.Unspecified);
         result.Selection.RouteValue.Should().BeEmpty();
         result.Selection.NyxIdUserServiceId.Should().BeEmpty();
         result.Selection.ServiceSlugSnapshot.Should().BeEmpty();
@@ -212,7 +212,7 @@ public sealed class ProjectionScheduledInvocationAuthorityQueryPortTests
 
         result.Should().NotBeNull();
         result!.StateVersion.Should().Be(14);
-        result.Selection.RouteKind.Should().Be(ScheduledInvocationOwnerLLMRouteKind.Unspecified);
+        result.Selection.RouteKind.Should().Be(LLMRouteKind.Unspecified);
         result.Selection.RouteValue.Should().BeEmpty();
         result.Selection.NyxIdUserServiceId.Should().BeEmpty();
         result.Selection.ServiceSlugSnapshot.Should().BeEmpty();
@@ -270,7 +270,7 @@ public sealed class ProjectionScheduledInvocationAuthorityQueryPortTests
 
         result.Should().NotBeNull();
         result!.StateVersion.Should().Be(15);
-        result.Selection.RouteKind.Should().Be(ScheduledInvocationOwnerLLMRouteKind.Unspecified);
+        result.Selection.RouteKind.Should().Be(LLMRouteKind.Unspecified);
         result.Selection.RouteValue.Should().BeEmpty();
         result.Selection.NyxIdUserServiceId.Should().BeEmpty();
         result.Selection.ServiceSlugSnapshot.Should().BeEmpty();
@@ -301,7 +301,7 @@ public sealed class ProjectionScheduledInvocationAuthorityQueryPortTests
 
         result.Should().NotBeNull();
         result!.StateVersion.Should().Be(16);
-        result.Selection.RouteKind.Should().Be(ScheduledInvocationOwnerLLMRouteKind.Unspecified);
+        result.Selection.RouteKind.Should().Be(LLMRouteKind.Unspecified);
         result.Selection.RouteValue.Should().BeEmpty();
         result.Selection.NyxIdUserServiceId.Should().BeEmpty();
         result.Selection.ServiceSlugSnapshot.Should().BeEmpty();

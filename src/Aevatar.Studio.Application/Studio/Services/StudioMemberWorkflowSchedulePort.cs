@@ -1479,7 +1479,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             ScopeId = scopeId,
         };
         if (fact?.OwnerLLMSelection is { } selection &&
-            selection.RouteKind != ScheduledInvocationOwnerLLMRouteKind.Unspecified)
+            selection.RouteKind != LLMRouteKind.Unspecified)
         {
             if (!ScheduledInvocationOwnerLLMSelectionPolicy.IsDurableSelectionValid(selection))
                 throw new InvalidOperationException("scheduled_owner_llm_selection_invalid");

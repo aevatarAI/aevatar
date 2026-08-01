@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using System.Security.Cryptography;
 using System.Text;
 using Aevatar.Workflow.Abstractions;
@@ -99,12 +100,17 @@ public static class NyxIdAuthorizationCatalogIntegrity
 {
     public static string ComputeContentDigest(
         AuthorizationOwnerIdentity owner,
-        IEnumerable<NyxIdAuthorizationServiceEvidence> services)
+        IEnumerable<NyxIdAuthorizationServiceEvidence> services,
+        NyxIdAuthorizationLLMTargetEvidence? gatewayLLMTarget = null)
     {
         ArgumentNullException.ThrowIfNull(owner);
         ArgumentNullException.ThrowIfNull(services);
         var content = new NyxIdAuthorizationCatalogContent { Owner = owner.Clone() };
-        content.Services.Add(services.Select(static service => service.Clone()));
+        content.Services.Add(services
+            .Select(static service => service.Clone())
+            .OrderBy(static service => service.UserServiceId, StringComparer.Ordinal));
+        if (gatewayLLMTarget != null)
+            content.GatewayLlmTarget = gatewayLLMTarget.Clone();
         return Convert.ToHexStringLower(SHA256.HashData(content.ToByteArray()));
     }
 }
@@ -174,7 +180,8 @@ public sealed record NyxIdAuthorizationCatalogSnapshot(
     bool Activated = false,
     bool Cleaned = false,
     DateTimeOffset? CleanedAtUtc = null,
-    string CleanupReason = "");
+    string CleanupReason = "",
+    NyxIdAuthorizationLLMTargetEvidence? GatewayLLMTarget = null);
 
 public enum ScheduledAuthorizationPlanMismatchReason
 {
@@ -260,7 +267,8 @@ public sealed record NyxIdAuthorizationCatalogObservation(
     string ContentDigest,
     IReadOnlyList<NyxIdAuthorizationServiceEvidence> Services,
     NyxIdAuthorizationCatalogObservationCoverage Coverage = NyxIdAuthorizationCatalogObservationCoverage.FullOwner,
-    IReadOnlyList<string>? CoveredUserServiceIds = null);
+    IReadOnlyList<string>? CoveredUserServiceIds = null,
+    NyxIdAuthorizationLLMTargetEvidence? GatewayLLMTarget = null);
 
 public enum NyxIdAuthorizationCatalogRefreshStatus
 {
@@ -318,10 +326,10 @@ public static class ScheduledInvocationOwnerLLMSelectionPolicy
     public static bool IsDurableSelectionValid(ScheduledInvocationOwnerLLMSelection? value) =>
         value?.RouteKind switch
         {
-            ScheduledInvocationOwnerLLMRouteKind.Gateway =>
+            LLMRouteKind.Gateway =>
                 value.RouteValue == GatewayRoute && Canonical(value.Model) &&
                 value.NyxIdUserServiceId.Length == 0 && value.ServiceSlugSnapshot.Length == 0,
-            ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService =>
+            LLMRouteKind.NyxIdUserService =>
                 Canonical(value.RouteValue) && Canonical(value.NyxIdUserServiceId) &&
                 Canonical(value.ServiceSlugSnapshot) && Canonical(value.Model) &&
                 !value.ServiceSlugSnapshot.Contains('/') &&

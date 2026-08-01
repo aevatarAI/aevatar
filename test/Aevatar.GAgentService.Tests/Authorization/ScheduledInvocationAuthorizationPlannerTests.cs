@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Application.Schedules.Authorization;
 using Aevatar.Workflow.Abstractions;
@@ -38,6 +39,44 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
         result.Plan.CredentialPolicy.ServiceGrantRequirement.Should()
             .Be(AuthorizationGrantRequirement.NotRequired);
         catalog.QueryCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task PlanAsync_WithLegacyCatalogWithoutLLMEvidence_ShouldStillAuthorizeNonLLMGrant()
+    {
+        var evidence = StudioWorkflowEvidence(NyxIdCapability("svc-a", "provider-a"));
+        var snapshot = Snapshot(
+            Service("svc-a", "provider-a", AuthorizationGrantRequirement.NotRequired));
+        snapshot.Services[0].LlmTarget.Should().BeNull();
+        snapshot.GatewayLLMTarget.Should().BeNull();
+        var planner = new ScheduledInvocationAuthorizationPlanner(
+            new MutableCatalogQueryPort(snapshot),
+            evidence,
+            evidence,
+            evidence,
+            evidence);
+        var request = Request(Array.Empty<string>()) with
+        {
+            InvocationTarget = new ScheduledInvocationTarget
+            {
+                StudioMember = new StudioMemberInvocationTarget
+                {
+                    ScopeId = "scope-alpha",
+                    TeamId = "team-alpha",
+                    MemberId = "m-alpha",
+                    PublishedServiceId = "svc-alpha",
+                    DraftWorkflowId = "wf-alpha",
+                    WorkflowRevisionId = "rev-alpha",
+                },
+            },
+        };
+
+        var result = await planner.PlanAsync(request);
+
+        result.Success.Should().BeTrue();
+        result.Plan!.NyxIdServiceGrants.Should().ContainSingle()
+            .Which.UserServiceId.Should().Be("svc-a");
+        evidence.OwnerLLMQueries.Should().Be(0);
     }
 
     [Fact]
@@ -519,7 +558,7 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
             static plan => plan.CredentialPolicy.PolicyVersion = "policy-other",
             static plan => plan.CredentialPolicy.AllowAllServices = true,
             static plan => plan.Disclosures[0] = ScheduledInvocationDisclosure.BrowserNeverReceivesSecret,
-            static plan => plan.OwnerLlmSelection.RouteKind = ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService,
+            static plan => plan.OwnerLlmSelection.RouteKind = LLMRouteKind.NyxIdUserService,
             static plan => plan.OwnerLlmSelection.RouteValue = "/api/v1/proxy/s/provider-other",
             static plan => plan.OwnerLlmSelection.NyxIdUserServiceId = "us-other",
             static plan => plan.OwnerLlmSelection.ServiceSlugSnapshot = "provider-other",
@@ -720,13 +759,13 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
     }
 
     [Theory]
-    [InlineData(ScheduledInvocationOwnerLLMRouteKind.Unspecified, "", "", "", "")]
-    [InlineData(ScheduledInvocationOwnerLLMRouteKind.Gateway, "/api/v1/llm/gateway/v1", "", "", "")]
-    [InlineData(ScheduledInvocationOwnerLLMRouteKind.Gateway, " /api/v1/llm/gateway/v1", "", "", "gpt-5.5")]
-    [InlineData(ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService, "/api/v1/proxy/s/provider-b", "", "provider-b", "gpt-5.5")]
-    [InlineData(ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService, "/api/v1/proxy/s/provider-b", "svc-b", "provider-other", "gpt-5.5")]
+    [InlineData(LLMRouteKind.Unspecified, "", "", "", "")]
+    [InlineData(LLMRouteKind.Gateway, "/api/v1/llm/gateway/v1", "", "", "")]
+    [InlineData(LLMRouteKind.Gateway, " /api/v1/llm/gateway/v1", "", "", "gpt-5.5")]
+    [InlineData(LLMRouteKind.NyxIdUserService, "/api/v1/proxy/s/provider-b", "", "provider-b", "gpt-5.5")]
+    [InlineData(LLMRouteKind.NyxIdUserService, "/api/v1/proxy/s/provider-b", "svc-b", "provider-other", "gpt-5.5")]
     public async Task PlanAsync_ForScheduledAgent_ShouldRejectInvalidOwnerLlmSelectionBeforeCatalogAccess(
-        ScheduledInvocationOwnerLLMRouteKind routeKind,
+        LLMRouteKind routeKind,
         string routeValue,
         string serviceId,
         string serviceSlug,
@@ -1010,7 +1049,7 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
 
     private static ScheduledInvocationOwnerLLMSelection GatewaySelection() => new()
     {
-        RouteKind = ScheduledInvocationOwnerLLMRouteKind.Gateway,
+        RouteKind = LLMRouteKind.Gateway,
         RouteValue = ScheduledInvocationOwnerLLMSelectionPolicy.GatewayRoute,
         Model = "gpt-5.5",
     };
@@ -1019,7 +1058,7 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
         string serviceId,
         string serviceSlug) => new()
         {
-            RouteKind = ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService,
+            RouteKind = LLMRouteKind.NyxIdUserService,
             RouteValue = $"{ScheduledInvocationOwnerLLMSelectionPolicy.NyxIdProxyRoutePrefix}{serviceSlug}",
             NyxIdUserServiceId = serviceId,
             ServiceSlugSnapshot = serviceSlug,

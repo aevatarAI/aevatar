@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.Workflow.Abstractions;
 using Timestamp = Google.Protobuf.WellKnownTypes.Timestamp;
@@ -376,7 +377,7 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
         }
 
         var selection = ownerLLM.Selection;
-        if (selection.RouteKind == ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService)
+        if (selection.RouteKind == LLMRouteKind.NyxIdUserService)
         {
             requiredServices.Add(new NyxIdUserServiceCapabilityRef
             {

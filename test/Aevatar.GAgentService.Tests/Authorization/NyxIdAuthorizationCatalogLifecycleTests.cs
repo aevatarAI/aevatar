@@ -1,4 +1,6 @@
 using System.Reflection;
+using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Abstractions.Persistence;
@@ -1186,6 +1188,130 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
     }
 
     [Fact]
+    public void ComputeContentDigest_ShouldBindGatewayAndExactServiceModelEvidence()
+    {
+        var service = ServiceEvidence("us-alpha", "chrono-llm-public");
+        service.LlmTarget = ServiceTarget("us-alpha", "chrono-llm-public", "gpt-5.5");
+        var gateway = GatewayTarget("gateway-model-a");
+        var first = NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(
+            Owner(),
+            [service],
+            gateway);
+
+        var changedGateway = NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(
+            Owner(),
+            [service],
+            GatewayTarget("gateway-model-b"));
+        var changedService = service.Clone();
+        changedService.LlmTarget = ServiceTarget("us-alpha", "chrono-llm-public", "gpt-5.6");
+
+        changedGateway.Should().NotBe(first);
+        NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(
+                Owner(),
+                [changedService],
+                gateway)
+            .Should().NotBe(first);
+    }
+
+    [Fact]
+    public async Task ObserveHandler_ShouldRoundTripGatewayAndServiceLLMEvidence()
+    {
+        var owner = Owner();
+        var agent = CreateAgent(owner);
+        await BeginRefreshAsync(agent, owner, "refresh-llm", ObservedAt.AddSeconds(1));
+        var command = ObservationCommand(owner, "refresh-llm", ObservedAt.AddMinutes(1));
+        command.Services[0].LlmTarget = ServiceTarget("svc-alpha", "calendar", "gpt-5.5");
+        command.GatewayLlmTarget = GatewayTarget("gateway-model-a");
+        command.ContentDigest = NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(
+            owner,
+            command.Services,
+            command.GatewayLlmTarget);
+
+        await agent.HandleObserveAsync(command);
+
+        agent.State.Services.Should().ContainSingle();
+        agent.State.Services[0].LlmTarget.Should().BeEquivalentTo(command.Services[0].LlmTarget);
+        agent.State.Services[0].LlmTarget.Should().NotBeSameAs(command.Services[0].LlmTarget);
+        agent.State.GatewayLlmTarget.Should().BeEquivalentTo(command.GatewayLlmTarget);
+        agent.State.GatewayLlmTarget.Should().NotBeSameAs(command.GatewayLlmTarget);
+    }
+
+    [Theory]
+    [InlineData("enumerated_empty", "*bounded non-empty model list*")]
+    [InlineData("non_enumerated_models", "*non-enumerated catalog cannot expose selectable model IDs*")]
+    [InlineData("duplicate_models", "*ordinal-sorted and distinct*")]
+    [InlineData("unsorted_models", "*ordinal-sorted and distinct*")]
+    [InlineData("service_id_mismatch", "*does not match its parent service*")]
+    [InlineData("service_slug_mismatch", "*does not match its parent service*")]
+    [InlineData("service_route_mismatch", "*does not match its parent service*")]
+    [InlineData("gateway_service_identity", "*Gateway LLM target identity is invalid*")]
+    public async Task ObserveHandler_ShouldRejectInvalidLLMEvidence(
+        string scenario,
+        string expectedMessage)
+    {
+        var owner = Owner();
+        var eventStore = new InMemoryEventStore();
+        var agent = CreateAgent(owner, eventStore);
+        await BeginRefreshAsync(agent, owner, "refresh-invalid-llm", ObservedAt.AddSeconds(1));
+        var command = ObservationCommand(owner, "refresh-invalid-llm", ObservedAt.AddMinutes(1));
+        command.Services[0].LlmTarget = ServiceTarget("svc-alpha", "calendar", "gpt-5.5");
+
+        switch (scenario)
+        {
+            case "enumerated_empty":
+                command.Services[0].LlmTarget.ModelCatalog = new LLMModelCatalog
+                {
+                    Certainty = LLMModelCatalogCertainty.Enumerated,
+                };
+                break;
+            case "non_enumerated_models":
+                command.Services[0].LlmTarget.ModelCatalog = new LLMModelCatalog
+                {
+                    Certainty = LLMModelCatalogCertainty.NotVerifiable,
+                    DiagnosticKind = LLMModelCatalogDiagnosticKind.NotPublished,
+                    ModelIds = { "gpt-5.5" },
+                };
+                break;
+            case "duplicate_models":
+                command.Services[0].LlmTarget.ModelCatalog.ModelIds.Add("gpt-5.5");
+                break;
+            case "unsorted_models":
+                command.Services[0].LlmTarget.ModelCatalog.ModelIds.Clear();
+                command.Services[0].LlmTarget.ModelCatalog.ModelIds.Add("gpt-z");
+                command.Services[0].LlmTarget.ModelCatalog.ModelIds.Add("gpt-a");
+                command.Services[0].LlmTarget.ModelCatalog.DefaultModelId = "gpt-a";
+                break;
+            case "service_id_mismatch":
+                command.Services[0].LlmTarget.NyxIdUserServiceId = "us-other";
+                break;
+            case "service_slug_mismatch":
+                command.Services[0].LlmTarget.ServiceSlugSnapshot = "other-service";
+                break;
+            case "service_route_mismatch":
+                command.Services[0].LlmTarget.RouteValue = "/api/v1/proxy/s/other-service";
+                break;
+            case "gateway_service_identity":
+                command.Services[0].LlmTarget = null;
+                command.GatewayLlmTarget = GatewayTarget("gateway-model-a");
+                command.GatewayLlmTarget.NyxIdUserServiceId = "us-alpha";
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(scenario), scenario, null);
+        }
+        command.ContentDigest = NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(
+            owner,
+            command.Services,
+            command.GatewayLlmTarget);
+        var versionBefore = await eventStore.GetVersionAsync(agent.Id);
+
+        var act = () => agent.HandleObserveAsync(command);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage(expectedMessage);
+        (await eventStore.GetVersionAsync(agent.Id)).Should().Be(versionBefore);
+    }
+
+    [Fact]
     public void StateTransition_ShouldPreserveCatalogFactsAndClearInvalidationOnNewObservation()
     {
         var agent = new NyxIdAuthorizationCatalogGAgent();
@@ -1429,10 +1555,13 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
         var projector = new NyxIdAuthorizationCatalogCurrentStateProjector(
             store,
             new FixedProjectionClock(ObservedAt.AddMinutes(3)));
+        var observed = Observed(owner, "digest-19");
+        observed.Services[0].LlmTarget = ServiceTarget("svc-alpha", "calendar", "gpt-5.5");
+        observed.GatewayLlmTarget = GatewayTarget("gateway-model-a");
         var state = Transition(
             new NyxIdAuthorizationCatalogGAgent(),
             new NyxIdAuthorizationCatalogState(),
-            Observed(owner, "digest-19"));
+            observed);
 
         await projector.ProjectAsync(
             new NyxIdAuthorizationCatalogProjectionContext
@@ -1454,6 +1583,10 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
         service.UserServiceId.Should().Be("svc-alpha");
         service.ResourceOwner.Should().BeEquivalentTo(ResourceOwner());
         service.NodeIds.Should().Equal("node-a", "node-z");
+        service.LlmTarget.Should().BeEquivalentTo(observed.Services[0].LlmTarget);
+        service.LlmTarget.Should().NotBeSameAs(observed.Services[0].LlmTarget);
+        snapshot.GatewayLLMTarget.Should().BeEquivalentTo(observed.GatewayLlmTarget);
+        snapshot.GatewayLLMTarget.Should().NotBeSameAs(observed.GatewayLlmTarget);
     }
 
     [Fact]
@@ -1626,6 +1759,42 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
         service.NodeIds.Add("node-z");
         return service;
     }
+
+    private static NyxIdAuthorizationLLMTargetEvidence ServiceTarget(
+        string userServiceId,
+        string serviceSlug,
+        string modelId) => new()
+        {
+            RouteKind = LLMRouteKind.NyxIdUserService,
+            RouteValue = $"/api/v1/proxy/s/{serviceSlug}",
+            NyxIdUserServiceId = userServiceId,
+            ServiceSlugSnapshot = serviceSlug,
+            ModelCatalog = EnumeratedCatalog(modelId),
+            ObservedAt = Timestamp.FromDateTimeOffset(ObservedAt),
+            FreshUntil = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(15)),
+            EvaluatedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(-1)),
+            AuthorityContractVersion = "1",
+            AuthorityPolicyVersion = "llm-model-catalog-v1",
+        };
+
+    private static NyxIdAuthorizationLLMTargetEvidence GatewayTarget(string modelId) => new()
+    {
+        RouteKind = LLMRouteKind.Gateway,
+        RouteValue = LLMSelectionPolicy.GatewayRoute,
+        ModelCatalog = EnumeratedCatalog(modelId),
+        ObservedAt = Timestamp.FromDateTimeOffset(ObservedAt),
+        FreshUntil = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(15)),
+        EvaluatedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(-1)),
+        AuthorityContractVersion = "1",
+        AuthorityPolicyVersion = "llm-model-catalog-v1",
+    };
+
+    private static LLMModelCatalog EnumeratedCatalog(string modelId) => new()
+    {
+        Certainty = LLMModelCatalogCertainty.Enumerated,
+        ModelIds = { modelId },
+        DefaultModelId = modelId,
+    };
 
     private static string ToDisplayName(string serviceSlug) => serviceSlug switch
     {
