@@ -553,11 +553,18 @@ public sealed class UserConfigServiceTests
     [Fact]
     public async Task GetSettingsAsync_WhenSavedIdDisappearsButSameRouteRemains_ShouldMarkSavedSelectionUnavailable()
     {
-        var saved = new UserLlmSelectionValue(
-            UserLlmSelectionKind.NyxIdUserService,
-            "/api/v1/proxy/s/shared",
-            "us-beta",
-            "shared");
+        var saved = new LLMSelection
+        {
+            RouteKind = LLMRouteKind.NyxIdUserService,
+            RouteValue = "/api/v1/proxy/s/shared",
+            NyxIdUserServiceId = "us-beta",
+            ServiceSlugSnapshot = "shared",
+            ModelSelection = new LLMModelSelection
+            {
+                Kind = LLMModelSelectionKind.ExplicitModel,
+                ModelId = "gpt-5.5",
+            },
+        };
         var service = new UserLlmPreferenceService(
             new StubUserConfigQueryPort(new UserConfig(
                 DefaultModel: "gpt-5.5",
@@ -569,39 +576,53 @@ public sealed class UserConfigServiceTests
 
         var result = await service.GetSettingsAsync("bearer", CancellationToken.None);
 
-        result.SavedUserServiceId.Should().Be("us-beta");
-        result.RouteFallbackActive.Should().BeTrue();
-        result.FallbackReason.Should().Be(UserLlmFallbackReason.SavedRouteUnavailable);
-        result.EffectiveRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
+        result.SavedSelection.Should().BeEquivalentTo(saved);
+        result.SelectionStatus.Should().Be(UserLlmSelectionStatus.NeedsRepair);
+        result.Remediation.Should().Be(UserLlmRemediationKind.ChooseReplacement);
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task GetSettingsAsync_WithoutCommittedSelection_ShouldKeepSavedRouteUnspecified(
-        bool useUnspecifiedSelection)
+    [Fact]
+    public async Task GetSettingsAsync_WithCompatibilityOnlySelection_ShouldRequireLegacyRepair()
     {
         var service = new UserLlmPreferenceService(
             new StubUserConfigQueryPort(new UserConfig(
                 DefaultModel: "shared/gpt-5.5",
-                PreferredLlmRoute: string.Empty,
-                LlmSelection: useUnspecifiedSelection
-                    ? new UserLlmSelectionValue(
-                        UserLlmSelectionKind.Unspecified,
-                        UserConfigLlmRouteDefaults.Gateway,
-                        "us-legacy",
-                        "shared")
-                    : null)),
+                PreferredLlmRoute: "/api/v1/proxy/s/shared",
+                LlmSelection: null)),
             new StubUserLlmCatalogPort(new NyxIdLlmServicesResult(
                 [InventoryService("us-alpha", "shared")],
                 null)));
 
         var result = await service.GetSettingsAsync("bearer", CancellationToken.None);
 
-        result.SavedRouteKind.Should().Be(UserLlmSelectionKindWire.Unspecified);
-        result.SavedRoute.Should().BeEmpty();
-        result.EffectiveRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
-        result.DefaultModel.Should().Be("shared/gpt-5.5");
+        result.SavedSelection.Should().BeNull();
+        result.SelectionStatus.Should().Be(UserLlmSelectionStatus.LegacyRepairRequired);
+        result.Remediation.Should().Be(UserLlmRemediationKind.Reselect);
+    }
+
+    [Fact]
+    public async Task GetSettingsAsync_WithResetSelection_ShouldUseSystemDefault()
+    {
+        var selection = new LLMSelection
+        {
+            ModelSelection = new LLMModelSelection
+            {
+                Kind = LLMModelSelectionKind.Unspecified,
+            },
+        };
+        var service = new UserLlmPreferenceService(
+            new StubUserConfigQueryPort(new UserConfig(
+                DefaultModel: string.Empty,
+                PreferredLlmRoute: string.Empty,
+                LlmSelection: selection)),
+            new StubUserLlmCatalogPort(new NyxIdLlmServicesResult(
+                [InventoryService("us-alpha", "shared")],
+                null)));
+
+        var result = await service.GetSettingsAsync("bearer", CancellationToken.None);
+
+        result.SavedSelection.Should().BeEquivalentTo(selection);
+        result.SelectionStatus.Should().Be(UserLlmSelectionStatus.SystemDefault);
     }
 
     private static UserLlmPreferenceWriter CreateWriter(

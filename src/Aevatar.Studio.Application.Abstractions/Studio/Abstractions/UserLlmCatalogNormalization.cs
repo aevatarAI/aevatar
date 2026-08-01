@@ -12,14 +12,6 @@ public readonly record struct UserLlmCatalogStatusValue(string Value)
     public string ToWireValue() => Value;
 }
 
-public readonly record struct UserLlmFallbackReasonValue(string Value)
-{
-    public static readonly UserLlmFallbackReasonValue CatalogUnavailable = new(UserLlmFallbackReason.CatalogUnavailable);
-    public static readonly UserLlmFallbackReasonValue SavedRouteUnavailable = new(UserLlmFallbackReason.SavedRouteUnavailable);
-
-    public string ToWireValue() => Value;
-}
-
 public readonly record struct UserLlmRouteStatusValue(string Value)
 {
     public static readonly UserLlmRouteStatusValue Ready = new(UserLlmRouteStatus.Ready);
@@ -47,6 +39,47 @@ public readonly record struct UserLlmRouteSourceValue(string Value)
 
 public static class UserLlmCatalogNormalization
 {
+    public static string ToWireValue(this UserLlmSelectionStatus status) => status switch
+    {
+        UserLlmSelectionStatus.SystemDefault => "system_default",
+        UserLlmSelectionStatus.Ready => "ready",
+        UserLlmSelectionStatus.VerificationUnavailable => "verification_unavailable",
+        UserLlmSelectionStatus.NeedsRepair => "needs_repair",
+        UserLlmSelectionStatus.LegacyRepairRequired => "legacy_repair_required",
+        _ => throw new ArgumentOutOfRangeException(nameof(status)),
+    };
+
+    public static string ToWireValue(this UserLlmRemediationKind remediation) => remediation switch
+    {
+        UserLlmRemediationKind.None => "none",
+        UserLlmRemediationKind.RetryCatalog => "retry_catalog",
+        UserLlmRemediationKind.ConnectProvider => "connect_provider",
+        UserLlmRemediationKind.ChooseReplacement => "choose_replacement",
+        UserLlmRemediationKind.Reselect => "reselect",
+        _ => throw new ArgumentOutOfRangeException(nameof(remediation)),
+    };
+
+    public static string ToWireValue(this LLMModelCatalogDiagnosticKind diagnostic) => diagnostic switch
+    {
+        LLMModelCatalogDiagnosticKind.Unspecified => "unspecified",
+        LLMModelCatalogDiagnosticKind.NotPublished => "not_published",
+        LLMModelCatalogDiagnosticKind.RouteNotReady => "route_not_ready",
+        LLMModelCatalogDiagnosticKind.AccessDenied => "access_denied",
+        LLMModelCatalogDiagnosticKind.ObservationUnavailable => "observation_unavailable",
+        LLMModelCatalogDiagnosticKind.ResponseInvalid => "response_invalid",
+        LLMModelCatalogDiagnosticKind.ResponseTooLarge => "response_too_large",
+        LLMModelCatalogDiagnosticKind.PatternOnly => "pattern_only",
+        _ => throw new ArgumentOutOfRangeException(nameof(diagnostic)),
+    };
+
+    public static string ToWireValue(this LLMModelCatalogCertainty certainty) => certainty switch
+    {
+        LLMModelCatalogCertainty.Enumerated => "enumerated",
+        LLMModelCatalogCertainty.NotVerifiable => "not_verifiable",
+        LLMModelCatalogCertainty.Unavailable => "unavailable",
+        _ => throw new ArgumentOutOfRangeException(nameof(certainty)),
+    };
+
     public static UserLlmRouteStatusValue NormalizeStatus(string? status)
     {
         var normalized = status?.Trim().ToLowerInvariant();

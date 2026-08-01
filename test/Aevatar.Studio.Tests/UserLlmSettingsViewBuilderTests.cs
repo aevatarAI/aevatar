@@ -7,210 +7,233 @@ namespace Aevatar.Studio.Tests;
 
 public sealed class UserLlmSettingsViewBuilderTests
 {
-    private const string SharedRoute = "/api/v1/proxy/s/shared-llm";
     private readonly UserLlmSettingsViewBuilder _builder = new("NyxID Gateway");
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void BuildAvailable_WithoutCommittedSelection_ShouldKeepSavedRouteUnspecified(
-        bool useUnspecifiedSelection)
+    [Fact]
+    public void BuildAvailable_WithoutSelectionOrCompatibilityValues_ShouldUseSystemDefault()
     {
-        var selection = useUnspecifiedSelection
-            ? new UserLlmSelectionValue(
-                UserLlmSelectionKind.Unspecified,
-                UserConfigLlmRouteDefaults.Gateway,
-                "us-legacy",
-                "legacy")
-            : null;
+        var view = _builder.BuildAvailable(Services(), Config());
 
-        var view = _builder.BuildAvailable(
-            new NyxIdLlmServicesResult([], null),
-            selection,
-            string.Empty);
-
-        view.SavedRouteKind.Should().Be(UserLlmSelectionKindWire.Unspecified);
-        view.SavedRoute.Should().BeEmpty();
-        view.SavedUserServiceId.Should().BeNull();
-        view.SavedServiceSlug.Should().BeNull();
-        view.EffectiveRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
-        view.RouteFallbackActive.Should().BeFalse();
-        view.FallbackReason.Should().BeNull();
+        view.SavedSelection.Should().BeNull();
+        view.SelectionStatus.Should().Be(UserLlmSelectionStatus.SystemDefault);
+        view.Remediation.Should().Be(UserLlmRemediationKind.None);
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void BuildUnavailable_WithoutCommittedSelection_ShouldExposeOnlyEffectiveGatewayFallback(
-        bool useUnspecifiedSelection)
+    [Fact]
+    public void BuildAvailable_WithCompleteUnspecifiedSelection_ShouldUseSystemDefault()
     {
-        var selection = useUnspecifiedSelection
-            ? new UserLlmSelectionValue(
-                UserLlmSelectionKind.Unspecified,
-                "/api/v1/proxy/s/legacy",
-                "us-legacy",
-                "legacy")
-            : null;
+        var saved = SystemDefaultSelection();
 
-        var view = _builder.BuildUnavailable(
-            selection,
-            string.Empty);
+        var view = _builder.BuildAvailable(Services(), Config(saved));
 
-        view.SavedRouteKind.Should().Be(UserLlmSelectionKindWire.Unspecified);
-        view.SavedRoute.Should().BeEmpty();
-        view.SavedRouteLabel.Should().BeEmpty();
-        view.EffectiveRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
-        view.EffectiveRouteLabel.Should().Be("NyxID Gateway");
-        view.FallbackReason.Should().Be(UserLlmFallbackReason.CatalogUnavailable);
+        view.SavedSelection.Should().BeEquivalentTo(saved);
+        view.SavedSelection.Should().NotBeSameAs(saved);
+        view.SelectionStatus.Should().Be(UserLlmSelectionStatus.SystemDefault);
+    }
+
+    [Fact]
+    public void BuildAvailable_WithCompatibilityOnlySelection_ShouldRequireLegacyRepair()
+    {
+        var view = _builder.BuildAvailable(
+            Services(),
+            Config(selection: null, legacyRoute: "/api/v1/proxy/s/legacy", legacyModel: "gpt-legacy"));
+
+        view.SelectionStatus.Should().Be(UserLlmSelectionStatus.LegacyRepairRequired);
+        view.Remediation.Should().Be(UserLlmRemediationKind.Reselect);
+    }
+
+    [Fact]
+    public void BuildAvailable_WithTypedRouteMissingModelSelection_ShouldRequireLegacyRepair()
+    {
+        var saved = new LLMSelection
+        {
+            RouteKind = LLMRouteKind.Gateway,
+            RouteValue = UserConfigLlmRouteDefaults.Gateway,
+        };
+
+        var view = _builder.BuildAvailable(Services(Gateway()), Config(saved));
+
+        view.SavedSelection.Should().BeEquivalentTo(saved);
+        view.SelectionStatus.Should().Be(UserLlmSelectionStatus.LegacyRepairRequired);
+        view.Remediation.Should().Be(UserLlmRemediationKind.Reselect);
+    }
+
+    [Fact]
+    public void BuildAvailable_WithSavedUnavailableService_ShouldPreserveSelectionAndRequireRepair()
+    {
+        var saved = UserServiceSelection("us-alpha", "chrono-llm-public", "gpt-5.5");
+        var view = _builder.BuildAvailable(
+            Services(UserService("us-alpha", "chrono-llm-public", UnavailableCatalog())),
+            Config(saved));
+
+        view.SavedSelection.Should().BeEquivalentTo(saved);
+        view.SavedSelection.Should().NotBeSameAs(saved);
+        view.SelectionStatus.Should().Be(UserLlmSelectionStatus.NeedsRepair);
+        view.CatalogDiagnostic.Should().Be(LLMModelCatalogDiagnosticKind.AccessDenied);
+        view.Remediation.Should().Be(UserLlmRemediationKind.ChooseReplacement);
+    }
+
+    [Fact]
+    public void BuildAvailable_WithSavedReadyServiceAndExactModel_ShouldBeReady()
+    {
+        var saved = UserServiceSelection("us-alpha", "chrono-llm-public", "MODEL-A");
+        var view = _builder.BuildAvailable(
+            Services(UserService(
+                "us-alpha",
+                "chrono-llm-public",
+                EnumeratedCatalog("MODEL-A", "model-a"))),
+            Config(saved));
+
+        view.SelectionStatus.Should().Be(UserLlmSelectionStatus.Ready);
+        view.CatalogDiagnostic.Should().Be(LLMModelCatalogDiagnosticKind.Unspecified);
+        view.Remediation.Should().Be(UserLlmRemediationKind.None);
+    }
+
+    [Fact]
+    public void BuildAvailable_WithCaseMismatchedExplicitModel_ShouldRequireRepair()
+    {
+        var saved = UserServiceSelection("us-alpha", "chrono-llm-public", "Model-A");
+        var view = _builder.BuildAvailable(
+            Services(UserService(
+                "us-alpha",
+                "chrono-llm-public",
+                EnumeratedCatalog("MODEL-A", "model-a"))),
+            Config(saved));
+
+        view.SelectionStatus.Should().Be(UserLlmSelectionStatus.NeedsRepair);
+        view.Remediation.Should().Be(UserLlmRemediationKind.ChooseReplacement);
+    }
+
+    [Fact]
+    public void BuildAvailable_WithExplicitGatewayMissingFromCatalog_ShouldNotSynthesizeReadyGateway()
+    {
+        var saved = GatewayProviderDefault();
+
+        var view = _builder.BuildAvailable(Services(), Config(saved));
+
+        view.SelectionStatus.Should().Be(UserLlmSelectionStatus.NeedsRepair);
+        view.CatalogDiagnostic.Should().Be(LLMModelCatalogDiagnosticKind.RouteNotReady);
+        view.Remediation.Should().Be(UserLlmRemediationKind.ConnectProvider);
         view.RouteOptions.Should().ContainSingle().Which.Should().Match<UserLlmRouteOption>(option =>
             option.RouteValue == UserConfigLlmRouteDefaults.Gateway &&
-            option.Source == UserLlmRouteSource.GatewayProvider &&
             !option.Allowed &&
-            !option.Ready);
+            !option.Ready &&
+            option.ModelCatalog.Certainty == LLMModelCatalogCertainty.Unavailable);
     }
 
     [Fact]
-    public void BuildAvailable_WithTypedServiceMissingIdAndGatewayRoute_ShouldMarkSelectionUnavailable()
+    public void BuildVerificationUnavailable_WithValidSavedSelection_ShouldReportVerificationUnavailable()
     {
-        var view = Build(new UserLlmSelectionValue(
-            UserLlmSelectionKind.NyxIdUserService,
-            UserConfigLlmRouteDefaults.Gateway,
-            " ",
-            "shared-llm"));
+        var saved = GatewayProviderDefault();
 
-        view.SavedRouteKind.Should().Be(UserLlmSelectionKindWire.NyxIdUserService);
-        view.SavedUserServiceId.Should().BeNull();
-        view.RouteFallbackActive.Should().BeTrue();
-        view.FallbackReason.Should().Be(UserLlmFallbackReason.SavedRouteUnavailable);
+        var view = _builder.BuildVerificationUnavailable(Config(saved));
+
+        view.SavedSelection.Should().BeEquivalentTo(saved);
+        view.SelectionStatus.Should().Be(UserLlmSelectionStatus.VerificationUnavailable);
+        view.CatalogDiagnostic.Should().Be(LLMModelCatalogDiagnosticKind.ObservationUnavailable);
+        view.Remediation.Should().Be(UserLlmRemediationKind.RetryCatalog);
     }
 
     [Fact]
-    public void BuildAvailable_WithTypedServiceMissingIdAndDuplicateRoute_ShouldNotMatchByRoute()
+    public void BuildAvailable_ShouldCloneCatalogsAtTheViewBoundary()
     {
-        var view = Build(new UserLlmSelectionValue(
-            UserLlmSelectionKind.NyxIdUserService,
-            SharedRoute,
-            string.Empty,
-            "shared-llm"));
-
-        view.SavedRoute.Should().Be(SharedRoute);
-        view.SavedUserServiceId.Should().BeNull();
-        view.EffectiveRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
-        view.RouteFallbackActive.Should().BeTrue();
-    }
-
-    [Fact]
-    public void BuildAvailable_WithTypedGatewayAndServiceRouteSnapshot_ShouldUseCanonicalGateway()
-    {
-        var view = Build(new UserLlmSelectionValue(
-            UserLlmSelectionKind.Gateway,
-            SharedRoute,
-            "us-alpha",
-            "shared-llm"));
-
-        view.SavedRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
-        view.SavedRouteKind.Should().Be(UserLlmSelectionKindWire.Gateway);
-        view.SavedUserServiceId.Should().BeNull();
-        view.SavedServiceSlug.Should().BeNull();
-        view.EffectiveRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
-        view.RouteFallbackActive.Should().BeFalse();
-    }
-
-    [Fact]
-    public void BuildAvailable_WithTypedServiceRoute_ShouldTrimWithoutGenericRewriting()
-    {
-        var selection = new UserLlmSelectionValue(
-            UserLlmSelectionKind.NyxIdUserService,
-            " route-alpha ",
-            "us-alpha",
-            "service-alpha");
+        var catalog = EnumeratedCatalog("gpt-5.5");
 
         var view = _builder.BuildAvailable(
-            new NyxIdLlmServicesResult(
-                [InventoryService("us-alpha", "Alpha service", " route-alpha ")],
-                null),
-            selection,
-            "gpt-5.5");
+            Services(UserService("us-alpha", "chrono-llm-public", catalog)),
+            Config());
 
-        view.SavedRoute.Should().Be("route-alpha");
-        view.EffectiveRoute.Should().Be("route-alpha");
+        var exposed = view.RouteOptions.Single(option => option.UserServiceId == "us-alpha").ModelCatalog;
+        exposed.Should().BeEquivalentTo(catalog);
+        exposed.Should().NotBeSameAs(catalog);
     }
 
-    [Fact]
-    public void BuildAvailable_WithValidTypedServiceAndDuplicateRoute_ShouldResolveExactInventoryId()
-    {
-        var view = Build(new UserLlmSelectionValue(
-            UserLlmSelectionKind.NyxIdUserService,
-            SharedRoute,
-            "us-beta",
-            "shared-llm"));
+    private static UserConfig Config(
+        LLMSelection? selection = null,
+        string legacyRoute = "",
+        string legacyModel = "") => new(
+        DefaultModel: legacyModel,
+        PreferredLlmRoute: legacyRoute,
+        LlmSelection: selection);
 
-        view.SavedUserServiceId.Should().Be("us-beta");
-        view.SavedRouteLabel.Should().Be("Beta service");
-        view.EffectiveRoute.Should().Be(SharedRoute);
-        view.EffectiveRouteLabel.Should().Be("Beta service");
-        view.RouteFallbackActive.Should().BeFalse();
-    }
+    private static NyxIdLlmServicesResult Services(params NyxIdLlmService[] services) =>
+        new(services, null);
 
-    [Fact]
-    public void BuildAvailable_WithDuplicateRouteDefaults_ShouldMapDefaultModelByExactInventoryId()
-    {
-        var view = _builder.BuildAvailable(
-            new NyxIdLlmServicesResult(
-                [
-                    InventoryService("us-alpha", "Alpha service", defaultModel: " gpt-alpha "),
-                    InventoryService("us-beta", "Beta service", defaultModel: "gpt-beta"),
-                    InventoryService("us-blank", "Blank service", defaultModel: " "),
-                ],
-                null),
-            new UserLlmSelectionValue(
-                UserLlmSelectionKind.NyxIdUserService,
-                SharedRoute,
-                "us-beta",
-                "shared-llm"),
-            "gpt-saved");
-
-        view.RouteOptions.Single(option => option.UserServiceId == "us-alpha")
-            .DefaultModel.Should().Be("gpt-alpha");
-        view.RouteOptions.Single(option => option.UserServiceId == "us-beta")
-            .DefaultModel.Should().Be("gpt-beta");
-        view.RouteOptions.Single(option => option.UserServiceId == "us-blank")
-            .DefaultModel.Should().BeNull();
-        view.RouteOptions.Single(option => option.Source == UserLlmRouteSource.GatewayProvider)
-            .DefaultModel.Should().BeNull();
-    }
-
-    private UserLlmSettingsView Build(UserLlmSelectionValue selection) =>
-        _builder.BuildAvailable(
-            new NyxIdLlmServicesResult(
-                [
-                    InventoryService("us-alpha", "Alpha service"),
-                    InventoryService("us-beta", "Beta service"),
-                ],
-                null),
-            selection,
-            "gpt-5.5");
-
-    private static NyxIdLlmService InventoryService(
-        string id,
-        string displayName,
-        string route = SharedRoute,
-        string? defaultModel = "gpt-5.5") => new(
+    private static NyxIdLlmService Gateway() => new(
         CatalogEntryId: null,
-        ServiceSlug: "shared-llm",
-        DisplayName: displayName,
-        RouteValue: route,
-        ModelCatalog: new LLMModelCatalog
-        {
-            Certainty = LLMModelCatalogCertainty.Enumerated,
-            DefaultModelId = defaultModel ?? string.Empty,
-            ModelIds = { "gpt-5.5" },
-        },
+        ServiceSlug: "gateway",
+        DisplayName: "NyxID Gateway",
+        RouteValue: UserConfigLlmRouteDefaults.Gateway,
+        ModelCatalog: EnumeratedCatalog("gpt-5.5"),
         Status: UserLlmRouteStatus.Ready,
-        Source: UserLlmRouteSource.UserService,
+        Source: UserLlmRouteSource.GatewayProvider,
         Allowed: true,
+        Description: null);
+
+    private static NyxIdLlmService UserService(
+        string id,
+        string slug,
+        LLMModelCatalog catalog) => new(
+        CatalogEntryId: null,
+        ServiceSlug: slug,
+        DisplayName: slug,
+        RouteValue: $"/api/v1/proxy/s/{slug}",
+        ModelCatalog: catalog,
+        Status: catalog.Certainty == LLMModelCatalogCertainty.Unavailable
+            ? UserLlmRouteStatus.Unavailable
+            : UserLlmRouteStatus.Ready,
+        Source: UserLlmRouteSource.UserService,
+        Allowed: catalog.Certainty != LLMModelCatalogCertainty.Unavailable,
         Description: null,
         Identity: new UserLlmServiceIdentity(
             UserLlmIdentityAuthority.NyxIdUserServicesInventory,
             id));
+
+    private static LLMModelCatalog EnumeratedCatalog(params string[] modelIds)
+    {
+        var catalog = new LLMModelCatalog
+        {
+            Certainty = LLMModelCatalogCertainty.Enumerated,
+            DefaultModelId = modelIds[0],
+        };
+        catalog.ModelIds.Add(modelIds.Order(StringComparer.Ordinal));
+        return catalog;
+    }
+
+    private static LLMModelCatalog UnavailableCatalog() => new()
+    {
+        Certainty = LLMModelCatalogCertainty.Unavailable,
+        DiagnosticKind = LLMModelCatalogDiagnosticKind.AccessDenied,
+    };
+
+    private static LLMSelection SystemDefaultSelection() => new()
+    {
+        ModelSelection = new LLMModelSelection
+        {
+            Kind = LLMModelSelectionKind.Unspecified,
+        },
+    };
+
+    private static LLMSelection GatewayProviderDefault() => new()
+    {
+        RouteKind = LLMRouteKind.Gateway,
+        RouteValue = UserConfigLlmRouteDefaults.Gateway,
+        ModelSelection = new LLMModelSelection
+        {
+            Kind = LLMModelSelectionKind.ProviderDefault,
+        },
+    };
+
+    private static LLMSelection UserServiceSelection(string id, string slug, string model) => new()
+    {
+        RouteKind = LLMRouteKind.NyxIdUserService,
+        RouteValue = $"/api/v1/proxy/s/{slug}",
+        NyxIdUserServiceId = id,
+        ServiceSlugSnapshot = slug,
+        ModelSelection = new LLMModelSelection
+        {
+            Kind = LLMModelSelectionKind.ExplicitModel,
+            ModelId = model,
+        },
+    };
 }

@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.Studio.Application.Studio.Abstractions;
@@ -95,15 +96,15 @@ public sealed class DefaultUserLlmOptionsService : IUserLlmOptionsService
         StudioUserConfig? config,
         IReadOnlyList<UserLlmOption> available)
     {
-        return config?.LlmSelection?.Kind switch
+        return config?.LlmSelection?.RouteKind switch
         {
-            UserLlmSelectionKind.Gateway => FindRouteOption(
+            LLMRouteKind.Gateway => FindRouteOption(
                 UserConfigLlmRouteDefaults.Gateway,
                 available),
-            UserLlmSelectionKind.NyxIdUserService => FindInventoryOption(
+            LLMRouteKind.NyxIdUserService => FindInventoryOption(
                 config.LlmSelection.NyxIdUserServiceId,
                 available),
-            null or UserLlmSelectionKind.Unspecified => null,
+            null or LLMRouteKind.Unspecified => null,
             _ => null,
         };
     }
@@ -135,10 +136,10 @@ public sealed class DefaultUserLlmOptionsService : IUserLlmOptionsService
     }
 
     private static string ResolveCurrentRoute(StudioUserConfig? config, UserLlmOption? current) =>
-        config?.LlmSelection?.Kind switch
+        config?.LlmSelection?.RouteKind switch
         {
-            UserLlmSelectionKind.Gateway => UserConfigLlmRouteDefaults.Gateway,
-            UserLlmSelectionKind.NyxIdUserService => current?.RouteValue ??
+            LLMRouteKind.Gateway => UserConfigLlmRouteDefaults.Gateway,
+            LLMRouteKind.NyxIdUserService => current?.RouteValue ??
                                                      UserConfigLlmRoute.Normalize(config.LlmSelection.RouteValue),
             _ => string.Empty,
         };

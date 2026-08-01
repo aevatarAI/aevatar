@@ -48,7 +48,7 @@ public sealed class ProjectionUserConfigQueryPort : IUserConfigQueryPort
         if (document is null)
             return CreateDefaultConfig();
 
-        var llmSelection = MapSelection(document.LlmSelection);
+        var llmSelection = document.LlmSelection?.Clone();
         return new UserConfig(
             DefaultModel: document.DefaultModel,
             PreferredLlmRoute: UserLlmSelectionRoute.Resolve(llmSelection) ?? string.Empty,
@@ -75,26 +75,6 @@ public sealed class ProjectionUserConfigQueryPort : IUserConfigQueryPort
             RemoteRuntimeBaseUrl: _defaultRemoteRuntimeBaseUrl,
             GithubUsername: null,
             LlmSelection: null);
-
-    private static UserLlmSelectionValue? MapSelection(LLMSelection? selection)
-    {
-        if (selection is null)
-            return null;
-
-        var kind = selection.RouteKind switch
-        {
-            LLMRouteKind.Unspecified => UserLlmSelectionKind.Unspecified,
-            LLMRouteKind.Gateway => UserLlmSelectionKind.Gateway,
-            LLMRouteKind.NyxIdUserService => UserLlmSelectionKind.NyxIdUserService,
-            _ => throw new ArgumentOutOfRangeException(nameof(selection)),
-        };
-
-        return new UserLlmSelectionValue(
-            kind,
-            selection.RouteValue,
-            selection.NyxIdUserServiceId,
-            selection.ServiceSlugSnapshot);
-    }
 
     private static string? NormalizeOptional(string? value)
     {

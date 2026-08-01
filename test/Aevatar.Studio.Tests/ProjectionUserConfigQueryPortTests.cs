@@ -75,7 +75,7 @@ public sealed class ProjectionUserConfigQueryPortTests
         var config = await port.GetAsync(UserConfigResourceKey.ForOwnerScope("scope-alpha"));
 
         config.LlmSelection.Should().NotBeNull();
-        config.LlmSelection!.Kind.Should().Be(UserLlmSelectionKind.Unspecified);
+        config.LlmSelection!.RouteKind.Should().Be(LLMRouteKind.Unspecified);
         config.PreferredLlmRoute.Should().BeEmpty();
     }
 
@@ -101,7 +101,7 @@ public sealed class ProjectionUserConfigQueryPortTests
         var config = await port.GetAsync(UserConfigResourceKey.ForOwnerScope("scope-alpha"));
 
         config.LlmSelection.Should().NotBeNull();
-        config.LlmSelection!.Kind.Should().Be(UserLlmSelectionKind.Gateway);
+        config.LlmSelection!.RouteKind.Should().Be(LLMRouteKind.Gateway);
         config.PreferredLlmRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
     }
 
@@ -127,11 +127,13 @@ public sealed class ProjectionUserConfigQueryPortTests
 
         var config = await port.GetAsync(UserConfigResourceKey.ForOwnerScope("scope-alpha"));
 
-        config.LlmSelection.Should().Be(new UserLlmSelectionValue(
-            UserLlmSelectionKind.NyxIdUserService,
-            " route-alpha ",
-            "us-alpha",
-            "service-alpha"));
+        config.LlmSelection.Should().BeEquivalentTo(new LLMSelection
+        {
+            RouteKind = LLMRouteKind.NyxIdUserService,
+            RouteValue = " route-alpha ",
+            NyxIdUserServiceId = "us-alpha",
+            ServiceSlugSnapshot = "service-alpha",
+        });
         config.PreferredLlmRoute.Should().Be("route-alpha");
     }
 

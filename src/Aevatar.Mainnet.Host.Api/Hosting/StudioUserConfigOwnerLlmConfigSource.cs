@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Studio.Application.Studio.Abstractions;
 
@@ -25,10 +26,10 @@ internal sealed class StudioUserConfigOwnerLlmConfigSource : IOwnerLlmConfigSour
         if (config is null)
             return OwnerLlmConfig.Empty;
 
-        var preferredRoute = config.LlmSelection?.Kind switch
+        var preferredRoute = config.LlmSelection?.RouteKind switch
         {
-            UserLlmSelectionKind.Gateway => UserConfigLlmRouteDefaults.Gateway,
-            UserLlmSelectionKind.NyxIdUserService => NormalizeOptional(config.LlmSelection.RouteValue),
+            LLMRouteKind.Gateway => UserConfigLlmRouteDefaults.Gateway,
+            LLMRouteKind.NyxIdUserService => NormalizeOptional(config.LlmSelection.RouteValue),
             _ => null,
         };
 

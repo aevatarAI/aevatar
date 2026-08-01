@@ -113,38 +113,66 @@ public sealed record UserConfigSaveReceiptResponse(
 }
 
 public sealed record UserLlmSettingsResponse(
-    [property: JsonPropertyName("savedRoute")] string SavedRoute,
+    [property: JsonPropertyName("savedSelection")] UserLlmSelectionResponse? SavedSelection,
     [property: JsonPropertyName("savedRouteLabel")] string SavedRouteLabel,
-    [property: JsonPropertyName("savedRouteKind")] string SavedRouteKind,
-    [property: JsonPropertyName("savedUserServiceId")] string? SavedUserServiceId,
-    [property: JsonPropertyName("savedServiceSlug")] string? SavedServiceSlug,
-    [property: JsonPropertyName("effectiveRoute")] string EffectiveRoute,
-    [property: JsonPropertyName("effectiveRouteLabel")] string EffectiveRouteLabel,
-    [property: JsonPropertyName("routeFallbackActive")] bool RouteFallbackActive,
-    [property: JsonPropertyName("fallbackReason")] string? FallbackReason,
+    [property: JsonPropertyName("selectionStatus")] string SelectionStatus,
+    [property: JsonPropertyName("catalogDiagnostic")] string CatalogDiagnostic,
+    [property: JsonPropertyName("remediation")] string Remediation,
     [property: JsonPropertyName("routeOptions")] IReadOnlyList<UserLlmRouteOptionResponse> RouteOptions,
     [property: JsonPropertyName("modelGroupsByRoute")] IReadOnlyList<UserLlmModelGroupResponse> ModelGroupsByRoute,
     [property: JsonPropertyName("catalogStatus")] string CatalogStatus,
     [property: JsonPropertyName("capabilities")] UserLlmSettingsCapabilitiesResponse Capabilities,
-    [property: JsonPropertyName("defaultModel")] string DefaultModel,
     [property: JsonPropertyName("setupHint")] UserLlmSetupHintResponse? SetupHint)
 {
     public static UserLlmSettingsResponse FromApplication(UserLlmSettingsView view) => new(
-        view.SavedRoute,
+        view.SavedSelection is null ? null : UserLlmSelectionResponse.FromApplication(view.SavedSelection),
         view.SavedRouteLabel,
-        view.SavedRouteKind,
-        view.SavedUserServiceId,
-        view.SavedServiceSlug,
-        view.EffectiveRoute,
-        view.EffectiveRouteLabel,
-        view.RouteFallbackActive,
-        view.FallbackReason,
+        view.SelectionStatus.ToWireValue(),
+        view.CatalogDiagnostic.ToWireValue(),
+        view.Remediation.ToWireValue(),
         view.RouteOptions.Select(UserLlmRouteOptionResponse.FromApplication).ToArray(),
         view.ModelGroupsByRoute.Select(UserLlmModelGroupResponse.FromApplication).ToArray(),
         view.CatalogStatus,
         UserLlmSettingsCapabilitiesResponse.FromApplication(view.Capabilities),
-        view.DefaultModel,
         view.SetupHint is null ? null : UserLlmSetupHintResponse.FromApplication(view.SetupHint));
+}
+
+public sealed record UserLlmSelectionResponse(
+    [property: JsonPropertyName("routeKind")] string RouteKind,
+    [property: JsonPropertyName("routeValue")] string RouteValue,
+    [property: JsonPropertyName("nyxIdUserServiceId")] string NyxIdUserServiceId,
+    [property: JsonPropertyName("serviceSlugSnapshot")] string ServiceSlugSnapshot,
+    [property: JsonPropertyName("modelSelection")] UserLlmModelSelectionResponse? ModelSelection)
+{
+    public static UserLlmSelectionResponse FromApplication(LLMSelection selection) => new(
+        selection.RouteKind switch
+        {
+            LLMRouteKind.Unspecified => "unspecified",
+            LLMRouteKind.Gateway => "gateway",
+            LLMRouteKind.NyxIdUserService => "nyx_id_user_service",
+            _ => "unsupported",
+        },
+        selection.RouteValue,
+        selection.NyxIdUserServiceId,
+        selection.ServiceSlugSnapshot,
+        selection.ModelSelection is null
+            ? null
+            : UserLlmModelSelectionResponse.FromApplication(selection.ModelSelection));
+}
+
+public sealed record UserLlmModelSelectionResponse(
+    [property: JsonPropertyName("kind")] string Kind,
+    [property: JsonPropertyName("modelId")] string? ModelId)
+{
+    public static UserLlmModelSelectionResponse FromApplication(LLMModelSelection selection) => new(
+        selection.Kind switch
+        {
+            LLMModelSelectionKind.Unspecified => "unspecified",
+            LLMModelSelectionKind.ProviderDefault => "provider_default",
+            LLMModelSelectionKind.ExplicitModel => "explicit_model",
+            _ => "unsupported",
+        },
+        selection.Kind == LLMModelSelectionKind.ExplicitModel ? selection.ModelId : null);
 }
 
 public sealed record UserLlmRouteOptionResponse(
@@ -156,7 +184,7 @@ public sealed record UserLlmRouteOptionResponse(
     [property: JsonPropertyName("ready")] bool Ready,
     [property: JsonPropertyName("userServiceId")] string? UserServiceId,
     [property: JsonPropertyName("serviceSlug")] string? ServiceSlug,
-    [property: JsonPropertyName("defaultModel")] string? DefaultModel,
+    [property: JsonPropertyName("modelCatalog")] UserLlmModelCatalogResponse ModelCatalog,
     [property: JsonPropertyName("description")] string? Description)
 {
     public static UserLlmRouteOptionResponse FromApplication(UserLlmRouteOption option) => new(
@@ -168,8 +196,21 @@ public sealed record UserLlmRouteOptionResponse(
         option.Ready,
         option.UserServiceId,
         option.ServiceSlug,
-        option.DefaultModel,
+        UserLlmModelCatalogResponse.FromApplication(option.ModelCatalog),
         option.Description);
+}
+
+public sealed record UserLlmModelCatalogResponse(
+    [property: JsonPropertyName("certainty")] string Certainty,
+    [property: JsonPropertyName("modelIds")] IReadOnlyList<string> ModelIds,
+    [property: JsonPropertyName("defaultModelId")] string? DefaultModelId,
+    [property: JsonPropertyName("diagnostic")] string Diagnostic)
+{
+    public static UserLlmModelCatalogResponse FromApplication(LLMModelCatalog catalog) => new(
+        catalog.Certainty.ToWireValue(),
+        catalog.ModelIds.ToArray(),
+        string.IsNullOrEmpty(catalog.DefaultModelId) ? null : catalog.DefaultModelId,
+        catalog.DiagnosticKind.ToWireValue());
 }
 
 public sealed record UserLlmModelGroupResponse(
