@@ -1483,3 +1483,130 @@ Expected: every structural dimension has a typed result; absent-plan rules and s
 git add src/workflow/Aevatar.Workflow.Abstractions/WorkflowCapabilityAdmissionPlanIntegrity.cs src/workflow/Aevatar.Workflow.Application.Abstractions/ExternalCapabilities/ExternalWorkflowCapabilityPorts.cs src/workflow/Aevatar.Workflow.Application/ExternalCapabilities/WorkflowArtifactCompatibilityPreflight.cs src/workflow/Aevatar.Workflow.Application/ExternalCapabilities/ServiceCollectionExtensions.cs test/Aevatar.Workflow.Application.Tests/WorkflowCapabilityAdmissionPlanIntegrityTests.cs test/Aevatar.Workflow.Application.Tests/WorkflowArtifactCompatibilityPreflightTests.cs
 git commit -m "Add local workflow artifact preflight"
 ~~~
+
+### Task 13: Explicit execution mode propagation and pre-actor lifecycle gate
+
+**Files:**
+- Modify: src/workflow/Aevatar.Workflow.Abstractions/workflow_execution_messages.proto
+- Modify: src/workflow/Aevatar.Workflow.Application.Abstractions/Runs/WorkflowRunPorts.cs
+- Modify: src/workflow/Aevatar.Workflow.Core/workflow_state.proto
+- Modify: src/workflow/Aevatar.Workflow.Core/WorkflowGAgent.cs
+- Modify: src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.cs
+- Modify: src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.IdentityProvisioning.cs
+- Modify: src/workflow/Aevatar.Workflow.Infrastructure/Runs/WorkflowRunActorPort.cs
+- Modify: src/workflow/Aevatar.Workflow.Projection/workflow_actor_binding_document.proto
+- Modify: src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowActorBindingProjector.cs
+- Modify: src/workflow/Aevatar.Workflow.Projection/Orchestration/ProjectionWorkflowActorBindingReader.cs
+- Modify: src/platform/Aevatar.GAgentService.Infrastructure/Activation/DefaultServiceRuntimeActivator.cs
+- Modify: src/platform/Aevatar.GAgentService.Infrastructure/Dispatch/DefaultServiceInvocationDispatcher.cs
+- Modify: src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunActorResolver.cs
+- Modify: src/workflow/Aevatar.Workflow.Application/RunForks/WorkflowForkRunCommandTargetResolver.cs
+- Modify: test/Aevatar.Workflow.Host.Api.Tests/WorkflowRunActorPortBranchTests.cs
+- Modify: test/Aevatar.Workflow.Host.Api.Tests/WorkflowActorBindingProjectorTests.cs
+- Modify: test/Aevatar.Workflow.Host.Api.Tests/RuntimeWorkflowActorBindingReaderTests.cs
+- Modify: test/Aevatar.GAgentService.Tests/Infrastructure/DefaultServiceInvocationDispatcherTests.cs
+- Modify: test/Aevatar.Workflow.Application.Tests/WorkflowRunActorResolverTests.cs
+- Modify: test/Aevatar.Workflow.Application.Tests/WorkflowForkRunCommandTargetResolverTests.cs
+
+**Interfaces:**
+- Consumes: IWorkflowArtifactCompatibilityPreflight from Task 12 and explicit ExternalCapabilityExecutionMode from publish, service deployment, chat, and fork contexts.
+- Produces: non-optional WorkflowDefinitionBinding.ExpectedExecutionMode and WorkflowActorBinding.ExpectedExecutionMode; expected_execution_mode on definition/run binding events, actor state, and binding read model; one WorkflowRunActorPort gate before create, link, bind, repair, or dispatch.
+
+- [ ] **Step 1: Write failing zero-mutation gate and propagation tests**
+
+For EnsureDefinitionAsync, CreateRunAsync, EnsureRunAsync, EnsureRunAndDispatchAsync, and BindWorkflowDefinitionAsync add invalid-YAML, legacy NyxID authoring, absent-plan, mismatched-plan, and Unspecified-mode cases. Use a recording runtime and preflight:
+
+~~~csharp
+[Fact]
+public async Task EnsureRunAndDispatchAsync_WhenArtifactNeedsRebind_ShouldMutateNoLifecycleState()
+{
+    var runtime = new RecordingActorRuntime();
+    var dispatch = new RecordingActorDispatchPort();
+    var preflight = new RejectingArtifactPreflight("CAPABILITY_ADMISSION_REBIND_REQUIRED");
+    var port = CreatePort(runtime, dispatch, preflight);
+
+    var act = () => port.EnsureRunAndDispatchAsync(
+        DurableBinding(LegacyPlan()),
+        "run-alpha",
+        Request(),
+        "cmd-alpha",
+        "corr-alpha",
+        default);
+
+    await act.Should().ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
+    runtime.CreateRequests.Should().BeEmpty();
+    runtime.LinkRequests.Should().BeEmpty();
+    runtime.DestroyRequests.Should().BeEmpty();
+    dispatch.Dispatches.Should().BeEmpty();
+}
+~~~
+
+Add an existing-definition case: allow one read-only binding read, reject when request mode Durable differs from bound Interactive, and assert zero runtime create/link/bind/repair/dispatch. Add an accepted case and assert the preflight is called once with the authoritative existing binding payload and mode before the first mutation.
+
+Add protobuf/state/projector/reader tests proving Interactive and Durable survive definition event -> actor state -> committed state event -> WorkflowActorBindingDocument -> WorkflowActorBinding, and that run ensure rejects a mode different from its first binding. Use distinct memberId m-alpha, workflowId wf-alpha, and publishedServiceId svc-alpha fixtures.
+
+- [ ] **Step 2: Run focused lifecycle tests and verify RED**
+
+Run serially:
+
+~~~bash
+dotnet test test/Aevatar.Workflow.Host.Api.Tests/Aevatar.Workflow.Host.Api.Tests.csproj --nologo --filter 'FullyQualifiedName~WorkflowRunActorPortBranchTests|FullyQualifiedName~WorkflowActorBindingProjectorTests|FullyQualifiedName~RuntimeWorkflowActorBindingReaderTests'
+dotnet test test/Aevatar.GAgentService.Tests/Aevatar.GAgentService.Tests.csproj --nologo --filter 'FullyQualifiedName~DefaultServiceInvocationDispatcherTests'
+dotnet test test/Aevatar.Workflow.Application.Tests/Aevatar.Workflow.Application.Tests.csproj --nologo --filter 'FullyQualifiedName~WorkflowRunActorResolverTests|FullyQualifiedName~WorkflowForkRunCommandTargetResolverTests'
+~~~
+
+Expected: binding records and protobufs have no ExpectedExecutionMode, WorkflowRunActorPort has no preflight dependency, and invalid artifacts can reach actor creation.
+
+- [ ] **Step 3: Add the execution mode to authoritative binding contracts**
+
+Add expected_execution_mode at field 10 on BindWorkflowDefinitionEvent and field 10 on BindWorkflowRunDefinitionEvent. Add expected_execution_mode at field 22 on WorkflowState, field 44 on WorkflowRunState, and field 18 on WorkflowActorBindingDocument. Extend the two C# records as follows and update every constructor call:
+
+~~~csharp
+public sealed record WorkflowDefinitionBinding(
+    string DefinitionActorId,
+    string WorkflowName,
+    string WorkflowYaml,
+    IReadOnlyDictionary<string, string> InlineWorkflowYamls,
+    ExternalCapabilityExecutionMode ExpectedExecutionMode,
+    string ScopeId = "",
+    string RunOrigin = "",
+    string ScheduleId = "",
+    string SourceKind = "",
+    WorkflowCapabilityAdmissionPlan? CapabilityAdmissionPlan = null,
+    string WorkflowId = "",
+    string RevisionId = "");
+~~~
+
+WorkflowActorBinding gets the same non-optional property after InlineWorkflowYamls. Actor bind handlers reject Unspecified, persist the exact value, and existing definition/run binding equality includes it. The projector copies it from committed events and the reader maps it without inference.
+
+- [ ] **Step 4: Supply mode from each typed producer**
+
+DefaultServiceRuntimeActivator and DefaultServiceInvocationDispatcher use Durable because deployment plans are callable unattended artifacts. WorkflowRunActorResolver uses Interactive for catalog chat and inline chat. WorkflowForkRunCommandTargetResolver copies the source run's projected ExpectedExecutionMode; extend WorkflowRunForkSeedView and WorkflowRunForkSeedReadModelMapper to carry it if the source seed does not already expose it. Publish/bind producers pass their existing admission request ExecutionMode. Do not derive mode from RunOrigin, ScheduleId, actor ID, workflow name, route, or presence of a capability plan.
+
+- [ ] **Step 5: Gate every WorkflowRunActorPort lifecycle entry once**
+
+Inject IWorkflowArtifactCompatibilityPreflight. At the start of EnsureDefinitionAsync and CreateRunAsync call a shared ValidateArtifactAsync. EnsureRunAsync and EnsureRunAndDispatchAsync call it once through EnsureRunCoreAsync. BindWorkflowDefinitionAsync calls it before runtime lookup or dispatch. When a requested definition actor already exists, read its current binding, require the requested and bound modes to match, and preflight the authoritative bound YAML/inline bundle/plan. Complete preflight before CreateAsync, LinkAsync, bind envelope dispatch, healing/repair, or run execution dispatch. Do not catch and downgrade WorkflowExternalCapabilityAdmissionException.
+
+- [ ] **Step 6: Run focused lifecycle tests and verify GREEN**
+
+Run all three commands from Step 2 again.
+
+Expected: exact mode round-trip, producer propagation, mismatch rejection, accepted artifact, and zero-mutation rejection tests pass.
+
+- [ ] **Step 7: Run mandatory workflow boundary guards**
+
+~~~bash
+bash tools/ci/workflow_binding_boundary_guard.sh
+bash tools/ci/query_projection_priming_guard.sh
+bash tools/ci/projection_state_version_guard.sh
+bash tools/ci/projection_state_mirror_current_state_guard.sh
+~~~
+
+Expected: all guards exit 0; the preflight uses the binding read model only and no query-time priming or local version is introduced.
+
+- [ ] **Step 8: Commit the pre-actor gate**
+
+~~~bash
+git add src/workflow/Aevatar.Workflow.Abstractions/workflow_execution_messages.proto src/workflow/Aevatar.Workflow.Application.Abstractions/Runs/WorkflowRunPorts.cs src/workflow/Aevatar.Workflow.Core src/workflow/Aevatar.Workflow.Infrastructure/Runs/WorkflowRunActorPort.cs src/workflow/Aevatar.Workflow.Projection src/platform/Aevatar.GAgentService.Infrastructure/Activation/DefaultServiceRuntimeActivator.cs src/platform/Aevatar.GAgentService.Infrastructure/Dispatch/DefaultServiceInvocationDispatcher.cs src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunActorResolver.cs src/workflow/Aevatar.Workflow.Application/RunForks/WorkflowForkRunCommandTargetResolver.cs test/Aevatar.Workflow.Host.Api.Tests/WorkflowRunActorPortBranchTests.cs test/Aevatar.Workflow.Host.Api.Tests/WorkflowActorBindingProjectorTests.cs test/Aevatar.Workflow.Host.Api.Tests/RuntimeWorkflowActorBindingReaderTests.cs test/Aevatar.GAgentService.Tests/Infrastructure/DefaultServiceInvocationDispatcherTests.cs test/Aevatar.Workflow.Application.Tests/WorkflowRunActorResolverTests.cs test/Aevatar.Workflow.Application.Tests/WorkflowForkRunCommandTargetResolverTests.cs
+git commit -m "Reject incompatible workflows before actor lifecycle"
+~~~
