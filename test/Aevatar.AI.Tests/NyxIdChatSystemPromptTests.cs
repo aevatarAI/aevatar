@@ -125,11 +125,11 @@ public class NyxIdChatSystemPromptTests
     }
 
     [Fact]
-    public void Value_ShouldLoadNyxIdSkillBeforeReadingSenderInventory()
+    public void Value_ShouldLoadNyxIdServiceDiscoveryBeforeReadingSenderInventory()
     {
         var prompt = NyxIdChatSystemPrompt.Value.Content;
         var skillCall = prompt.IndexOf(
-            "first call `use_skill(skill=\"nyxid\")`",
+            "first call `use_skill(skill=\"nyxid-service-discovery\")`",
             StringComparison.Ordinal);
         var inventoryCall = prompt.IndexOf(
             "then call `nyxid_service_inventory`",
@@ -142,8 +142,21 @@ public class NyxIdChatSystemPromptTests
         prompt.Should().Contain("binding is explicitly missing or revoked");
         prompt.Should().Contain("Do not call `code_execute`");
         prompt.Should().Contain("`nyxid service list`");
+        prompt.Should().NotContain("skill=\"nyxid\"");
         prompt.Should().NotContain("call `nyxid_service_inventory` directly");
         prompt.Should().NotContain("Do not load a skill");
+    }
+
+    [Fact]
+    public void ComposedPrompt_ShouldRouteNyxIdServiceWorkToCurrentSkills()
+    {
+        var prompt = ComposedAgentPrompt();
+
+        prompt.Should().Contain("use_skill(skill=\"nyxid-service-connect\")");
+        prompt.Should().Contain("use_skill(skill=\"nyxid-service-discovery\")");
+        prompt.Should().Contain("use_skill(skill=\"nyxid-service-maintenance\")");
+        prompt.Should().Contain("use_skill(skill=\"nyxid-service-call\")");
+        prompt.Should().NotContain("skill=\"nyxid\"");
     }
 
     [Fact]

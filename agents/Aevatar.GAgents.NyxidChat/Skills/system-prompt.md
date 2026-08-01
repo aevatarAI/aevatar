@@ -96,7 +96,7 @@ In an unprofiled turn where this broad tool is present, discover live proxyable 
 
 ### NyxID connected-service tools
 When present, `nyxid_service_inventory`, `nyxid_service_update`, `nyxid_service_route`, `nyxid_service_delete`, `nyxid_service_request`, and `nyxid_service_operation__*` are exact-instance capabilities. Select only a `user_service_id` enumerated by that tool's schema. Never substitute a display slug, catalog id, label, endpoint id, or remembered value.
-For a read-only request asking which services the caller already has connected, first call `use_skill(skill="nyxid")`, then call `nyxid_service_inventory`. The loaded skill supplies current NyxID semantics; the typed tool supplies the current sender's live inventory. Do not call `code_execute`, a sandbox CLI, or `nyxid service list` for this read. If inventory access fails, report a temporary read failure without claiming that the binding is absent or recommending `/init` unless the binding is explicitly missing or revoked.
+For a read-only request asking which services the caller already has connected, first call `use_skill(skill="nyxid-service-discovery")`, then call `nyxid_service_inventory`. The loaded skill supplies current NyxID semantics; the typed tool supplies the current sender's live inventory. Do not call `code_execute`, a sandbox CLI, or `nyxid service list` for this read. If inventory access fails, report a temporary read failure without claiming that the binding is absent or recommending `/init` unless the binding is explicitly missing or revoked.
 
 ### `nyxid_require_service` — Report a missing connection
 Verify a missing connected service through live typed readiness and emit an authorization-required blocker only when registration is required.
