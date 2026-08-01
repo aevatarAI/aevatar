@@ -1940,14 +1940,15 @@ public sealed class AevatarInvocationDispatcher
         return workflowRuntimeContext.HasManagedParent;
     }
 
-    private CallerScopeResolution ResolveCallerScope(bool requireOwner = true)
+    private CallerScopeResolution ResolveCallerScope(bool requireOwner = true) =>
+        ResolveCallerScope(ReadInvocationScopeContext(AgentToolRequestContext.Current), requireOwner);
+
+    private static CallerScopeResolution ResolveCallerScope(
+        InvocationScopeContext scopeContext,
+        bool requireOwner = true)
     {
-        var scopeId = Normalize(AgentToolRequestContext.ScopeId);
-        var ownerSubject = Normalize(AgentToolRequestContext.OwnerSubject);
-        var responseId = Normalize(AgentToolRequestContext.ResponseId)
-                         ?? Normalize(AgentToolRequestContext.RequestId)
-                         ?? Normalize(AgentToolRequestContext.CallId);
-        if (scopeId == null || responseId == null || (requireOwner && ownerSubject == null))
+        if (scopeContext.ScopeId == null || scopeContext.ResponseId == null ||
+            (requireOwner && scopeContext.OwnerSubject == null))
         {
             return CallerScopeResolution.Failed(Error(
                 "caller_scope_unavailable",
@@ -1957,21 +1958,23 @@ public sealed class AevatarInvocationDispatcher
         }
 
         return CallerScopeResolution.Success(new InvocationCallerScope(
-            scopeId,
-            ownerSubject ?? string.Empty,
-            responseId));
+            scopeContext.ScopeId,
+            scopeContext.OwnerSubject ?? string.Empty,
+            scopeContext.ResponseId));
     }
 
-    private CallerScopeResolution ResolveChannelAwareInvocationScope() =>
-        ResolveLarkOwnerInvocationScope() ?? ResolveCallerScope();
-
-    private CallerScopeResolution? ResolveLarkOwnerInvocationScope()
+    private CallerScopeResolution ResolveChannelAwareInvocationScope()
     {
-        var context = AgentToolRequestContext.Current;
-        if (!IsLarkChannel(context) || Normalize(context?.Caller.OwnerScopeId) is not { } ownerScopeId)
+        var scopeContext = ReadInvocationScopeContext(AgentToolRequestContext.Current);
+        return ResolveLarkOwnerInvocationScope(scopeContext) ?? ResolveCallerScope(scopeContext);
+    }
+
+    private static CallerScopeResolution? ResolveLarkOwnerInvocationScope(InvocationScopeContext scopeContext)
+    {
+        if (!scopeContext.IsLarkChannel || scopeContext.OwnerScopeId is not { } ownerScopeId)
             return null;
 
-        var baseScope = ResolveCallerScope(requireOwner: false);
+        var baseScope = ResolveCallerScope(scopeContext, requireOwner: false);
         if (baseScope.Error != null)
             return baseScope;
 
@@ -1991,13 +1994,12 @@ public sealed class AevatarInvocationDispatcher
 
     private CallerScopeResolution ResolveTeamInvocationScope()
     {
-        var baseScope = ResolveCallerScope();
+        var scopeContext = ReadInvocationScopeContext(AgentToolRequestContext.Current);
+        var baseScope = ResolveCallerScope(scopeContext);
         if (baseScope.Error != null)
             return baseScope;
 
-        var context = AgentToolRequestContext.Current;
-        var senderNyxUserId = Normalize(context?.SenderBinding.NyxUserId) ??
-                              Normalize(context?.Caller.OwnerScopeId);
+        var senderNyxUserId = scopeContext.SenderNyxUserId ?? scopeContext.OwnerScopeId;
         if (senderNyxUserId == null)
             return baseScope;
 
@@ -2189,37 +2191,57 @@ public sealed class AevatarInvocationDispatcher
 
     private sealed record InvocationCallerScope(string ScopeId, string OwnerSubject, string ResponseId);
 
-    private static CallerScopeResolution ResolveWorkflowInvocationScope(AgentToolExecutionContext? context)
+    private sealed record InvocationScopeContext(
+        string? ScopeId,
+        string? OwnerSubject,
+        string? ResponseId,
+        string? OwnerScopeId,
+        string? SenderNyxUserId,
+        bool IsLarkChannel);
+
+    private static InvocationScopeContext ReadInvocationScopeContext(AgentToolExecutionContext? context)
     {
         context ??= AgentToolExecutionContext.Empty;
-        var callerScopeId = Normalize(context.Caller.ScopeId);
-        var ownerSubject = Normalize(context.Caller.OwnerSubject);
-        var responseId = Normalize(context.Caller.ResponseId) ??
-                         Normalize(context.Request.RequestId) ??
-                         Normalize(context.Request.CallId);
-        if (callerScopeId is null || responseId is null)
+        return new InvocationScopeContext(
+            Normalize(context.Caller.ScopeId),
+            Normalize(context.Caller.OwnerSubject),
+            Normalize(context.Caller.ResponseId) ??
+            Normalize(context.Request.RequestId) ??
+            Normalize(context.Request.CallId),
+            Normalize(context.Caller.OwnerScopeId),
+            Normalize(context.SenderBinding.NyxUserId),
+            IsLarkChannel(context));
+    }
+
+    private static CallerScopeResolution ResolveWorkflowInvocationScope(AgentToolExecutionContext? context)
+    {
+        var scopeContext = ReadInvocationScopeContext(context);
+        if (scopeContext.ScopeId is null || scopeContext.ResponseId is null)
         {
-            return CallerScopeResolution.Failed(new InvocationToolError
-            {
-                Code = "caller_scope_unavailable",
-                Message = "scope_id and response_id/request_id are required in AgentToolRequestContext.",
-            });
+            return CallerScopeResolution.Failed(Error(
+                "caller_scope_unavailable",
+                "scope_id and response_id/request_id are required in AgentToolRequestContext."));
         }
 
-        var ownerScopeId = Normalize(context.Caller.OwnerScopeId);
-        if (IsLarkChannel(context) && ownerScopeId is not null)
-            return CallerScopeResolution.Success(new InvocationCallerScope(ownerScopeId, ownerScopeId, responseId));
-
-        if (ownerSubject is null)
+        if (scopeContext.IsLarkChannel && scopeContext.OwnerScopeId is not null)
         {
-            return CallerScopeResolution.Failed(new InvocationToolError
-            {
-                Code = "caller_scope_unavailable",
-                Message = "owner_subject is required in AgentToolRequestContext for caller-scope workflow invocation.",
-            });
+            return CallerScopeResolution.Success(new InvocationCallerScope(
+                scopeContext.OwnerScopeId,
+                scopeContext.OwnerScopeId,
+                scopeContext.ResponseId));
         }
 
-        return CallerScopeResolution.Success(new InvocationCallerScope(callerScopeId, ownerSubject, responseId));
+        if (scopeContext.OwnerSubject is null)
+        {
+            return CallerScopeResolution.Failed(Error(
+                "caller_scope_unavailable",
+                "owner_subject is required in AgentToolRequestContext for caller-scope workflow invocation."));
+        }
+
+        return CallerScopeResolution.Success(new InvocationCallerScope(
+            scopeContext.ScopeId,
+            scopeContext.OwnerSubject,
+            scopeContext.ResponseId));
     }
 
     private sealed record PublishedServiceInvocationTarget(
