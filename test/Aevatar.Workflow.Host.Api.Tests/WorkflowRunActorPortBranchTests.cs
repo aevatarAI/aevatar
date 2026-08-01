@@ -12,6 +12,7 @@ using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Foundation.Runtime.Streaming;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Execution;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Core;
@@ -26,6 +27,146 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 public sealed class WorkflowRunActorPortBranchTests
 {
     [Fact]
+    public async Task EnsureDefinitionAsync_WhenDefinitionIsInvalid_ShouldRejectBeforeLifecycleMutation()
+    {
+        var runtime = new RecordingActorRuntime();
+        var preflight = new RejectingArtifactCompatibilityPreflight("WORKFLOW_DEFINITION_INVALID");
+        var port = CreatePort(runtime, artifactPreflight: preflight);
+
+        var act = () => port.EnsureDefinitionAsync(
+            InteractiveBinding(definitionActorId: string.Empty),
+            ct: CancellationToken.None);
+
+        var error = await act.Should().ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
+        error.Which.Readiness.Blockers.Should().ContainSingle()
+            .Which.Code.Should().Be("WORKFLOW_DEFINITION_INVALID");
+        AssertNoLifecycleMutations(runtime);
+    }
+
+    [Fact]
+    public async Task CreateRunAsync_WhenNyxIdAuthoringIsRetired_ShouldRejectBeforeLifecycleMutation()
+    {
+        var runtime = new RecordingActorRuntime();
+        var preflight = new RejectingArtifactCompatibilityPreflight(
+            "NYXID_OPERATION_AUTHORING_MIGRATION_REQUIRED");
+        var port = CreatePort(runtime, artifactPreflight: preflight);
+
+        var act = () => port.CreateRunAsync(
+            InteractiveBinding(definitionActorId: string.Empty),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
+        AssertNoLifecycleMutations(runtime);
+    }
+
+    [Fact]
+    public async Task EnsureRunAsync_WhenAdmissionPlanIsAbsent_ShouldRejectBeforeLifecycleMutation()
+    {
+        var runtime = new RecordingActorRuntime();
+        var preflight = new RejectingArtifactCompatibilityPreflight("CAPABILITY_ADMISSION_REBIND_REQUIRED");
+        var port = CreatePort(runtime, artifactPreflight: preflight);
+
+        var act = () => port.EnsureRunAsync(
+            InteractiveBinding(definitionActorId: string.Empty),
+            "run-alpha",
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
+        AssertNoLifecycleMutations(runtime);
+    }
+
+    [Fact]
+    public async Task EnsureRunAndDispatchAsync_WhenAdmissionPlanMismatches_ShouldRejectBeforeLifecycleMutation()
+    {
+        var runtime = new RecordingActorRuntime();
+        var preflight = new RejectingArtifactCompatibilityPreflight("CAPABILITY_ADMISSION_REBIND_REQUIRED");
+        var port = CreatePort(runtime, artifactPreflight: preflight);
+
+        var act = () => port.EnsureRunAndDispatchAsync(
+            InteractiveBinding(definitionActorId: string.Empty),
+            "run-alpha",
+            new WorkflowChatRequestEvent { Prompt = "execute" },
+            "cmd-alpha",
+            "corr-alpha",
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
+        AssertNoLifecycleMutations(runtime);
+    }
+
+    [Fact]
+    public async Task BindWorkflowDefinitionAsync_WhenModeIsUnspecified_ShouldRejectBeforeDispatch()
+    {
+        var runtime = new RecordingActorRuntime();
+        var preflight = new RejectingArtifactCompatibilityPreflight("CAPABILITY_ADMISSION_REBIND_REQUIRED");
+        var port = CreatePort(runtime, artifactPreflight: preflight);
+
+        var act = () => port.BindWorkflowDefinitionAsync(
+            "definition-alpha",
+            "name: direct\nroles: []\nsteps: []\n",
+            "direct",
+            inlineWorkflowYamls: null,
+            scopeId: null,
+            sourceKind: null,
+            capabilityAdmissionPlan: null,
+            workflowId: null,
+            revisionId: null,
+            expectedExecutionMode: ExternalCapabilityExecutionMode.Unspecified,
+            ct: CancellationToken.None);
+
+        await act.Should().ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
+        AssertNoLifecycleMutations(runtime);
+    }
+
+    [Fact]
+    public async Task CreateRunAsync_WhenExistingDefinitionModeDiffers_ShouldRejectBeforePreflightOrMutation()
+    {
+        var runtime = new RecordingActorRuntime();
+        var definitionAgent = CreateBoundDefinitionAgent(
+            "name: direct\nroles: []\nsteps: []\n",
+            CreateCapabilityAdmissionPlan("name: direct\nroles: []\nsteps: []\n"));
+        runtime.StoredActors["definition-alpha"] = new RecordingActor("definition-alpha", definitionAgent);
+        var preflight = new RecordingArtifactCompatibilityPreflight();
+        var port = CreatePort(runtime, artifactPreflight: preflight);
+
+        var act = () => port.CreateRunAsync(
+            InteractiveBinding("definition-alpha") with
+            {
+                ExpectedExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*expected execution mode*");
+        preflight.Calls.Should().BeEmpty();
+        AssertNoLifecycleMutations(runtime);
+    }
+
+    [Fact]
+    public async Task CreateRunAsync_WhenExistingDefinitionIsCompatible_ShouldPreflightAuthoritativeArtifactOnce()
+    {
+        const string workflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        var runtime = new RecordingActorRuntime();
+        var authoritativePlan = CreateCapabilityAdmissionPlan(workflowYaml);
+        var definitionAgent = CreateBoundDefinitionAgent(workflowYaml, authoritativePlan);
+        runtime.StoredActors["definition-alpha"] = new RecordingActor("definition-alpha", definitionAgent);
+        runtime.ActorsToCreate.Enqueue(new RecordingActor("run-alpha", new StubAgent("run-alpha")));
+        var preflight = new RecordingArtifactCompatibilityPreflight(
+            _ => runtime.CreateRequests.Should().BeEmpty());
+        var port = CreatePort(runtime, artifactPreflight: preflight);
+
+        await port.CreateRunAsync(
+            InteractiveBinding("definition-alpha"),
+            CancellationToken.None);
+
+        var request = preflight.Calls.Should().ContainSingle().Subject;
+        request.WorkflowYaml.Should().Be(workflowYaml);
+        request.ExpectedExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Interactive);
+        request.CapabilityAdmissionPlan!.AdmissionDigest.Should().Be(authoritativePlan.AdmissionDigest);
+        runtime.CreateRequests.Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task EnsureDefinitionAsync_WithRealPort_ShouldBindDefinitionOnce()
     {
         var runtime = new RecordingActorRuntime();
@@ -38,7 +179,8 @@ public sealed class WorkflowRunActorPortBranchTests
                 "definition-once",
                 "direct",
                 "name: direct\nroles: []\nsteps: []\n",
-                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExternalCapabilityExecutionMode.Interactive),
             "definition-once",
             CancellationToken.None);
 
@@ -60,7 +202,8 @@ public sealed class WorkflowRunActorPortBranchTests
                 "definition-preferred",
                 "direct",
                 "name: direct\nroles: []\nsteps: []\n",
-                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExternalCapabilityExecutionMode.Interactive),
             "definition-preferred",
             CancellationToken.None);
 
@@ -81,6 +224,7 @@ public sealed class WorkflowRunActorPortBranchTests
                 {
                     WorkflowName = "direct",
                     WorkflowYaml = "name: direct\nroles: []\nsteps:\n  - id: old\n    type: delay\n",
+                    ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
                 },
             });
         runtime.StoredActors[definitionActor.Id] = definitionActor;
@@ -91,7 +235,8 @@ public sealed class WorkflowRunActorPortBranchTests
                 definitionActor.Id,
                 "direct",
                 "name: direct\nroles: []\nsteps: []\n",
-                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExternalCapabilityExecutionMode.Interactive),
             definitionActor.Id,
             CancellationToken.None);
 
@@ -110,6 +255,7 @@ public sealed class WorkflowRunActorPortBranchTests
         definitionAgent.State.WorkflowName = "direct";
         definitionAgent.State.WorkflowYaml = workflowYaml;
         definitionAgent.State.CapabilityAdmissionPlan = CreateCapabilityAdmissionPlan(workflowYaml);
+        definitionAgent.State.ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive;
         var definitionActor = new RecordingActor("definition-1", definitionAgent);
         runtime.StoredActors[definitionActor.Id] = definitionActor;
         runtime.ActorsToCreate.Enqueue(new RecordingActor("run-1", new StubAgent("run-1")));
@@ -120,7 +266,8 @@ public sealed class WorkflowRunActorPortBranchTests
                 "definition-1",
                 "direct",
                 workflowYaml,
-                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExternalCapabilityExecutionMode.Interactive),
             CancellationToken.None);
 
         result.DefinitionActorId.Should().Be("definition-1");
@@ -155,6 +302,7 @@ public sealed class WorkflowRunActorPortBranchTests
                 "direct",
                 workflowYaml,
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
                 CapabilityAdmissionPlan: plan,
                 WorkflowId: "wf-beta",
                 RevisionId: "rev-beta"),
@@ -188,6 +336,7 @@ public sealed class WorkflowRunActorPortBranchTests
                 "direct",
                 workflowYaml,
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
                 CapabilityAdmissionPlan: plan,
                 WorkflowId: "wf-beta",
                 RevisionId: "rev-beta"),
@@ -215,6 +364,7 @@ public sealed class WorkflowRunActorPortBranchTests
                 "direct",
                 workflowYaml,
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
                 CapabilityAdmissionPlan: plan,
                 WorkflowId: "wf-alpha",
                 RevisionId: "rev-alpha"),
@@ -246,6 +396,7 @@ public sealed class WorkflowRunActorPortBranchTests
                 "direct",
                 workflowYaml,
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
                 CapabilityAdmissionPlan: plan,
                 WorkflowId: "wf-alpha",
                 RevisionId: "rev-alpha"),
@@ -266,6 +417,7 @@ public sealed class WorkflowRunActorPortBranchTests
         definitionAgent.State.WorkflowName = "direct";
         definitionAgent.State.WorkflowYaml = workflowYaml;
         definitionAgent.State.RevisionId = "rev-alpha";
+        definitionAgent.State.ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive;
         var definitionActor = new RecordingActor("definition-revision-only", definitionAgent);
         runtime.StoredActors[definitionActor.Id] = definitionActor;
         var port = CreatePort(runtime);
@@ -276,6 +428,7 @@ public sealed class WorkflowRunActorPortBranchTests
                 "direct",
                 workflowYaml,
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
                 RevisionId: "rev-beta"),
             definitionActor.Id,
             CancellationToken.None);
@@ -292,6 +445,7 @@ public sealed class WorkflowRunActorPortBranchTests
         var definitionAgent = new WorkflowGAgent();
         definitionAgent.State.WorkflowName = "direct";
         definitionAgent.State.WorkflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        definitionAgent.State.ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive;
         runtime.StoredActors["definition-scope"] = new RecordingActor("definition-scope", definitionAgent);
         runtime.ActorsToCreate.Enqueue(new RecordingActor("run-scope", new StubAgent("run-scope")));
         var port = CreatePort(runtime);
@@ -302,6 +456,7 @@ public sealed class WorkflowRunActorPortBranchTests
                 "direct",
                 "name: direct\nroles: []\nsteps: []\n",
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExternalCapabilityExecutionMode.Interactive,
                 "scope-user-1"),
             CancellationToken.None);
 
@@ -314,7 +469,9 @@ public sealed class WorkflowRunActorPortBranchTests
     public async Task CreateRunAsync_WhenExistingDefinitionHasNoPayload_ShouldFailWithoutBinding()
     {
         var runtime = new RecordingActorRuntime();
-        var definitionActor = new RecordingActor("definition-2", new WorkflowGAgent());
+        var definitionAgent = new WorkflowGAgent();
+        definitionAgent.State.ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive;
+        var definitionActor = new RecordingActor("definition-2", definitionAgent);
         runtime.StoredActors["definition-2"] = definitionActor;
         var port = CreatePort(runtime);
 
@@ -323,7 +480,8 @@ public sealed class WorkflowRunActorPortBranchTests
                 "definition-2",
                 "direct",
                 "name: direct\nroles: []\nsteps: []\n",
-                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExternalCapabilityExecutionMode.Interactive),
             CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -339,6 +497,7 @@ public sealed class WorkflowRunActorPortBranchTests
         var definitionAgent = new WorkflowGAgent();
         definitionAgent.State.WorkflowName = "direct";
         definitionAgent.State.WorkflowYaml = "name: direct\nroles: []\nsteps:\n  - id: old\n    type: delay\n";
+        definitionAgent.State.ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive;
         runtime.StoredActors["definition-3"] = new RecordingActor("definition-3", definitionAgent);
         var port = CreatePort(runtime);
 
@@ -347,7 +506,8 @@ public sealed class WorkflowRunActorPortBranchTests
                 "definition-3",
                 "direct",
                 "name: direct\nroles: []\nsteps: []\n",
-                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExternalCapabilityExecutionMode.Interactive),
             CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -363,6 +523,7 @@ public sealed class WorkflowRunActorPortBranchTests
         var definitionAgent = new WorkflowGAgent();
         definitionAgent.State.WorkflowName = "other";
         definitionAgent.State.WorkflowYaml = "name: other\nroles: []\nsteps: []\n";
+        definitionAgent.State.ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive;
         runtime.StoredActors["definition-3"] = new RecordingActor("definition-3", definitionAgent);
         var port = CreatePort(runtime);
 
@@ -371,7 +532,8 @@ public sealed class WorkflowRunActorPortBranchTests
                 "definition-3",
                 "direct",
                 "name: direct\nroles: []\nsteps: []\n",
-                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExternalCapabilityExecutionMode.Interactive),
             CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -392,7 +554,8 @@ public sealed class WorkflowRunActorPortBranchTests
                 "definition-missing",
                 "direct",
                 "name: direct\nroles: []\nsteps: []\n",
-                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExternalCapabilityExecutionMode.Interactive),
             CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -414,7 +577,8 @@ public sealed class WorkflowRunActorPortBranchTests
                 "definition-4",
                 "direct",
                 "name: direct\nroles: []\nsteps: []\n",
-                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExternalCapabilityExecutionMode.Interactive),
             CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -433,7 +597,8 @@ public sealed class WorkflowRunActorPortBranchTests
                 "definition-5",
                 " ",
                 " ",
-                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExternalCapabilityExecutionMode.Interactive),
             CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -459,7 +624,8 @@ public sealed class WorkflowRunActorPortBranchTests
                 "definition-missing-binding",
                 "direct",
                 "name: direct\nroles: []\nsteps: []\n",
-                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExternalCapabilityExecutionMode.Interactive),
             CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -486,6 +652,7 @@ public sealed class WorkflowRunActorPortBranchTests
                     "studio",
                     "name: studio\nroles: []\nsteps: []\n",
                     new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                    ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
                     SourceVersion: 701),
             }));
 
@@ -494,7 +661,8 @@ public sealed class WorkflowRunActorPortBranchTests
                 "workflow-definition:studio",
                 "studio",
                 "name: studio\nroles: []\nsteps: []\n",
-                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExternalCapabilityExecutionMode.Interactive),
             CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -681,6 +849,7 @@ public sealed class WorkflowRunActorPortBranchTests
         definitionAgent.State.WorkflowName = "direct";
         definitionAgent.State.WorkflowYaml = "name: direct\nroles: []\nsteps: []\n";
         definitionAgent.State.InlineWorkflowYamls["child"] = "name: child\nroles: []\nsteps: []\n";
+        definitionAgent.State.ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive;
         runtime.StoredActors["definition-inline"] = new RecordingActor("definition-inline", definitionAgent);
         var port = CreatePort(runtime);
 
@@ -692,7 +861,8 @@ public sealed class WorkflowRunActorPortBranchTests
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
                 {
                     ["child"] = "name: child-updated\nroles: []\nsteps: []\n",
-                }),
+                },
+                ExternalCapabilityExecutionMode.Interactive),
             CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -722,6 +892,7 @@ public sealed class WorkflowRunActorPortBranchTests
                     "studio",
                     workflowYaml,
                     new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                    ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
                     ScopeId: string.Empty,
                     CapabilityAdmissionPlan: CreateCapabilityAdmissionPlan(workflowYaml)),
             }));
@@ -732,6 +903,7 @@ public sealed class WorkflowRunActorPortBranchTests
                 "studio",
                 workflowYaml,
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
                 ScopeId: "scope-a"),
             CancellationToken.None);
         var runB = await port.CreateRunAsync(
@@ -740,6 +912,7 @@ public sealed class WorkflowRunActorPortBranchTests
                 "studio",
                 workflowYaml,
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
                 ScopeId: "scope-b"),
             CancellationToken.None);
 
@@ -767,6 +940,7 @@ public sealed class WorkflowRunActorPortBranchTests
                     "private",
                     workflowYaml,
                     new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                    ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
                     ScopeId: "scope-a"),
             }));
 
@@ -776,6 +950,7 @@ public sealed class WorkflowRunActorPortBranchTests
                 "private",
                 workflowYaml,
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
                 ScopeId: "scope-b"),
             CancellationToken.None);
 
@@ -790,7 +965,18 @@ public sealed class WorkflowRunActorPortBranchTests
     {
         var port = CreatePort(new RecordingActorRuntime());
 
-        await FluentActions.Invoking(() => port.BindWorkflowDefinitionAsync(" ", "name: x", "x", null, ct: CancellationToken.None))
+        await FluentActions.Invoking(() => port.BindWorkflowDefinitionAsync(
+                " ",
+                "name: x",
+                "x",
+                inlineWorkflowYamls: null,
+                scopeId: null,
+                sourceKind: null,
+                capabilityAdmissionPlan: null,
+                workflowId: null,
+                revisionId: null,
+                ExternalCapabilityExecutionMode.Interactive,
+                CancellationToken.None))
             .Should().ThrowAsync<ArgumentException>();
     }
 
@@ -819,10 +1005,12 @@ public sealed class WorkflowRunActorPortBranchTests
             {
                 ["child"] = "name: child\nroles: []\nsteps: []\n",
             },
+            scopeId: null,
             sourceKind: "service_revision",
             capabilityAdmissionPlan: capabilityAdmissionPlan,
             workflowId: "wf-direct-alpha",
             revisionId: "rev-direct-alpha",
+            expectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
             ct: CancellationToken.None);
 
         actor.LastHandledEnvelope.Should().NotBeNull();
@@ -844,6 +1032,7 @@ public sealed class WorkflowRunActorPortBranchTests
         var definitionAgent = new WorkflowGAgent();
         definitionAgent.State.WorkflowName = "direct";
         definitionAgent.State.WorkflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        definitionAgent.State.ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive;
         runtime.StoredActors["definition-projection"] = new RecordingActor("definition-projection", definitionAgent);
         runtime.ActorsToCreate.Enqueue(new RecordingActor("run-projection", new StubAgent("run-projection")));
         var port = CreatePort(runtime);
@@ -853,7 +1042,8 @@ public sealed class WorkflowRunActorPortBranchTests
                 "definition-projection",
                 "direct",
                 "name: direct\nroles: []\nsteps: []\n",
-                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExternalCapabilityExecutionMode.Interactive),
             CancellationToken.None);
 
         ((RecordingActor)runtime.StoredActors["run-projection"]).LastHandledEnvelope.Should().NotBeNull();
@@ -869,6 +1059,7 @@ public sealed class WorkflowRunActorPortBranchTests
         var definitionAgent = new WorkflowGAgent();
         definitionAgent.State.WorkflowName = "direct";
         definitionAgent.State.WorkflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        definitionAgent.State.ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive;
         runtime.StoredActors["definition-projection-fail"] = new RecordingActor("definition-projection-fail", definitionAgent);
         runtime.ActorsToCreate.Enqueue(new RecordingActor("run-projection-fail", new StubAgent("run-projection-fail")));
         var port = CreatePort(runtime);
@@ -878,7 +1069,8 @@ public sealed class WorkflowRunActorPortBranchTests
                 "definition-projection-fail",
                 "direct",
                 "name: direct\nroles: []\nsteps: []\n",
-                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExternalCapabilityExecutionMode.Interactive),
             CancellationToken.None);
 
         runtime.Destroyed.Should().BeEmpty();
@@ -912,7 +1104,8 @@ public sealed class WorkflowRunActorPortBranchTests
                     string.Empty,
                     "direct",
                     "name: direct\nroles: []\nsteps: []\n",
-                    new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+                    new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExternalCapabilityExecutionMode.Interactive),
             }));
 
         var result = await port.CreateRunAsync(
@@ -920,7 +1113,8 @@ public sealed class WorkflowRunActorPortBranchTests
                 "definition-proxy",
                 "direct",
                 "name: direct\nroles: []\nsteps: []\n",
-                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExternalCapabilityExecutionMode.Interactive),
             CancellationToken.None);
 
         result.DefinitionActorId.Should().Be("definition-proxy");
@@ -952,7 +1146,8 @@ public sealed class WorkflowRunActorPortBranchTests
                 string.Empty,
                 "direct",
                 "name: direct\nroles: []\nsteps: []\n",
-                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExternalCapabilityExecutionMode.Interactive),
             CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -980,7 +1175,8 @@ public sealed class WorkflowRunActorPortBranchTests
                 string.Empty,
                 "direct",
                 "name: direct\nroles: []\nsteps: []\n",
-                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExternalCapabilityExecutionMode.Interactive),
             CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -1003,6 +1199,7 @@ public sealed class WorkflowRunActorPortBranchTests
                 "direct",
                 "name: direct\nroles: []\nsteps: []\n",
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
                 ScopeId: "scope-a"),
             CancellationToken.None);
 
@@ -1016,7 +1213,9 @@ public sealed class WorkflowRunActorPortBranchTests
     public async Task EnsureDefinitionAsync_WhenDefinitionCreateRaces_ShouldReuseWinnerAndContinue()
     {
         var runtime = new RecordingActorRuntime();
-        var racedDefinition = new RecordingActor("definition-race", new WorkflowGAgent());
+        var racedDefinitionAgent = new WorkflowGAgent();
+        racedDefinitionAgent.State.ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive;
+        var racedDefinition = new RecordingActor("definition-race", racedDefinitionAgent);
         runtime.CreateExceptionFactory = (agentType, requestedId) =>
         {
             if (agentType == typeof(WorkflowGAgent) &&
@@ -1035,7 +1234,8 @@ public sealed class WorkflowRunActorPortBranchTests
                 "definition-race",
                 "direct",
                 "name: direct\nroles: []\nsteps: []\n",
-                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExternalCapabilityExecutionMode.Interactive),
             "definition-race",
             CancellationToken.None);
 
@@ -1078,6 +1278,7 @@ public sealed class WorkflowRunActorPortBranchTests
                 "direct",
                 workflowYaml,
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
                 CapabilityAdmissionPlan: plan,
                 WorkflowId: "wf-beta",
                 RevisionId: "rev-beta"),
@@ -1098,6 +1299,7 @@ public sealed class WorkflowRunActorPortBranchTests
         definitionAgent.State.WorkflowName = "direct";
         definitionAgent.State.WorkflowYaml = workflowYaml;
         definitionAgent.State.CapabilityAdmissionPlan = CreateCapabilityAdmissionPlan(workflowYaml);
+        definitionAgent.State.ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive;
         var definitionActor = new RecordingActor("definition-stable", definitionAgent);
         runtime.StoredActors[definitionActor.Id] = definitionActor;
         runtime.ActorsToCreate.Enqueue(new RecordingActor("work-order-run-1", new StubAgent("work-order-run-1")));
@@ -1109,6 +1311,7 @@ public sealed class WorkflowRunActorPortBranchTests
                 "direct",
                 workflowYaml,
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExternalCapabilityExecutionMode.Interactive,
                 "scope-1",
                 WorkflowRunOrigins.WorkOrder),
             "work-order-run-1",
@@ -1133,6 +1336,7 @@ public sealed class WorkflowRunActorPortBranchTests
         var definitionAgent = new WorkflowGAgent();
         definitionAgent.State.WorkflowName = "direct";
         definitionAgent.State.WorkflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        definitionAgent.State.ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive;
         runtime.StoredActors["definition-stable"] = new RecordingActor("definition-stable", definitionAgent);
         runtime.ActorsToCreate.Enqueue(new RecordingActor("work-order-run-1", new StubAgent("work-order-run-1")));
         var acceptedOnlyDispatch = new AcceptedOnlyDispatchPort();
@@ -1140,6 +1344,7 @@ public sealed class WorkflowRunActorPortBranchTests
             runtime,
             acceptedOnlyDispatch,
             new RuntimeBackedWorkflowActorBindingReader(runtime),
+            new AcceptingArtifactCompatibilityPreflight(),
             [new WorkflowCoreModulePack()]);
 
         await port.EnsureRunAsync(
@@ -1148,6 +1353,7 @@ public sealed class WorkflowRunActorPortBranchTests
                 "direct",
                 "name: direct\nroles: []\nsteps: []\n",
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExternalCapabilityExecutionMode.Interactive,
                 "scope-1",
                 WorkflowRunOrigins.WorkOrder),
             "work-order-run-1",
@@ -1166,6 +1372,7 @@ public sealed class WorkflowRunActorPortBranchTests
         definitionAgent.State.WorkflowName = "direct";
         definitionAgent.State.WorkflowYaml = workflowYaml;
         definitionAgent.State.CapabilityAdmissionPlan = CreateCapabilityAdmissionPlan(workflowYaml);
+        definitionAgent.State.ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive;
         runtime.StoredActors["definition-stable"] = new RecordingActor("definition-stable", definitionAgent);
         runtime.ActorsToCreate.Enqueue(new RecordingActor("work-order-run-1", new StubAgent("work-order-run-1")));
         var acceptedOnlyDispatch = new AcceptedOnlyDispatchPort();
@@ -1173,6 +1380,7 @@ public sealed class WorkflowRunActorPortBranchTests
             runtime,
             acceptedOnlyDispatch,
             new RuntimeBackedWorkflowActorBindingReader(runtime),
+            new AcceptingArtifactCompatibilityPreflight(),
             [new WorkflowCoreModulePack()]);
 
         var result = await port.EnsureRunAndDispatchAsync(
@@ -1181,6 +1389,7 @@ public sealed class WorkflowRunActorPortBranchTests
                 "direct",
                 workflowYaml,
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExternalCapabilityExecutionMode.Interactive,
                 "scope-1",
                 WorkflowRunOrigins.WorkOrder),
             "work-order-run-1",
@@ -1202,11 +1411,13 @@ public sealed class WorkflowRunActorPortBranchTests
     private static WorkflowRunActorPort CreatePort(
         RecordingActorRuntime runtime,
         IWorkflowActorBindingReader? bindingReader = null,
-        IAgentKindRegistry? agentKindRegistry = null) =>
+        IAgentKindRegistry? agentKindRegistry = null,
+        IWorkflowArtifactCompatibilityPreflight? artifactPreflight = null) =>
         new(
             runtime,
             runtime,
             bindingReader ?? new RuntimeBackedWorkflowActorBindingReader(runtime),
+            artifactPreflight ?? new AcceptingArtifactCompatibilityPreflight(),
             [new WorkflowCoreModulePack()],
             agentKindRegistry);
 
@@ -1228,6 +1439,22 @@ public sealed class WorkflowRunActorPortBranchTests
             ExternalCapabilityExecutionMode.Interactive,
             [],
             []);
+
+    private static WorkflowDefinitionBinding InteractiveBinding(string definitionActorId) =>
+        new(
+            definitionActorId,
+            "direct",
+            "name: direct\nroles: []\nsteps: []\n",
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+            ExternalCapabilityExecutionMode.Interactive);
+
+    private static void AssertNoLifecycleMutations(RecordingActorRuntime runtime)
+    {
+        runtime.CreateRequests.Should().BeEmpty();
+        runtime.Linked.Should().BeEmpty();
+        runtime.Destroyed.Should().BeEmpty();
+        runtime.Dispatches.Should().BeEmpty();
+    }
 
     private static WorkflowCapabilityAdmissionPlan CreateExplicitCapabilityAdmissionPlan(
         string workflowId,
@@ -1264,6 +1491,7 @@ public sealed class WorkflowRunActorPortBranchTests
         agent.State.CapabilityAdmissionPlan = capabilityAdmissionPlan.Clone();
         agent.State.WorkflowId = workflowId;
         agent.State.RevisionId = revisionId;
+        agent.State.ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive;
         return agent;
     }
 
@@ -1312,6 +1540,7 @@ public sealed class WorkflowRunActorPortBranchTests
 
         public List<(string ParentId, string ChildId)> Linked { get; } = [];
         public List<string> Destroyed { get; } = [];
+        public List<(string ActorId, EventEnvelope Envelope)> Dispatches { get; } = [];
         public Func<Type, string?, Exception?>? CreateExceptionFactory { get; set; }
         public Func<string, EventEnvelope, Exception?>? DispatchExceptionFactory { get; set; }
 
@@ -1360,6 +1589,7 @@ public sealed class WorkflowRunActorPortBranchTests
         public async Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            Dispatches.Add((actorId, envelope.Clone()));
             var dispatchException = DispatchExceptionFactory?.Invoke(actorId, envelope);
             if (dispatchException != null)
                 throw dispatchException;
@@ -1473,7 +1703,8 @@ public sealed class WorkflowRunActorPortBranchTests
                         static x => x.Key,
                         static x => x.Value,
                         StringComparer.OrdinalIgnoreCase),
-                    definition.State.ScopeId,
+                    definition.State.ExpectedExecutionMode,
+                    ScopeId: definition.State.ScopeId,
                     SourceKind: definition.State.SourceKind,
                     CapabilityAdmissionPlan: definition.State.CapabilityAdmissionPlan?.Clone(),
                     WorkflowId: definition.State.WorkflowId,
@@ -1488,9 +1719,65 @@ public sealed class WorkflowRunActorPortBranchTests
                     run.State.InlineWorkflowYamls.ToDictionary(
                         static x => x.Key,
                         static x => x.Value,
-                        StringComparer.OrdinalIgnoreCase)),
+                        StringComparer.OrdinalIgnoreCase),
+                    run.State.ExpectedExecutionMode),
                 _ => WorkflowActorBinding.Unsupported(actor.Id),
             };
+        }
+    }
+
+    private sealed class AcceptingArtifactCompatibilityPreflight : IWorkflowArtifactCompatibilityPreflight
+    {
+        public Task ValidateAsync(
+            WorkflowArtifactCompatibilityRequest request,
+            CancellationToken ct = default)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingArtifactCompatibilityPreflight(
+        Action<WorkflowArtifactCompatibilityRequest>? onValidate = null)
+        : IWorkflowArtifactCompatibilityPreflight
+    {
+        public List<WorkflowArtifactCompatibilityRequest> Calls { get; } = [];
+
+        public Task ValidateAsync(
+            WorkflowArtifactCompatibilityRequest request,
+            CancellationToken ct = default)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            ct.ThrowIfCancellationRequested();
+            Calls.Add(request with { CapabilityAdmissionPlan = request.CapabilityAdmissionPlan?.Clone() });
+            onValidate?.Invoke(request);
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RejectingArtifactCompatibilityPreflight(string code)
+        : IWorkflowArtifactCompatibilityPreflight
+    {
+        public Task ValidateAsync(
+            WorkflowArtifactCompatibilityRequest request,
+            CancellationToken ct = default)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            ct.ThrowIfCancellationRequested();
+            throw new WorkflowExternalCapabilityAdmissionException(new ExternalCapabilityReadiness
+            {
+                Status = ExternalCapabilityReadinessStatus.AdmissionRebindRequired,
+                Blockers =
+                {
+                    new ExternalCapabilityBlocker
+                    {
+                        Status = ExternalCapabilityReadinessStatus.AdmissionRebindRequired,
+                        Code = code,
+                        SafeMessage = "Workflow admission was rejected.",
+                    },
+                },
+            });
         }
     }
 

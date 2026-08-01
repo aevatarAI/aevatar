@@ -135,6 +135,11 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
             ?? throw new InvalidOperationException("Workflow services require ChatRequestEvent payload.");
         var callerCredential = BuildWorkflowCallerCredential(chatRequest, request);
         var plan = target.Artifact.DeploymentPlan.WorkflowPlan;
+        if (plan.ExecutionMode == ExternalCapabilityExecutionMode.Unspecified ||
+            !System.Enum.IsDefined(plan.ExecutionMode))
+        {
+            throw new InvalidOperationException("Workflow service deployment execution mode is required.");
+        }
         var bindingIdentity = WorkflowServiceDeploymentPlanIntegrity.ResolveBindingIdentity(
             target.Artifact,
             target.Service.RevisionId);
@@ -146,6 +151,7 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
             plan.WorkflowName,
             plan.WorkflowYaml,
             plan.InlineWorkflowYamls,
+            plan.ExecutionMode,
             ResolveAuthoritativeScopeId(request, chatRequest),
             string.IsNullOrWhiteSpace(request.RunOrigin)
                 ? WorkflowRunOrigins.ServiceInvoke

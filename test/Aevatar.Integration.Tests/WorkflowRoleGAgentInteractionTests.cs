@@ -42,7 +42,7 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
             var runtime = new RecordingActorRuntime();
             var agent = CreateRunAgent(
                 runtime: runtime);
-            await agent.BindWorkflowRunDefinitionAsync(
+            await BindInteractiveWorkflowRunDefinitionAsync(agent,
                 "definition-1",
                 BuildWorkflowYamlWithFullRoleConfig(),
                 "wf_role_fields",
@@ -72,7 +72,7 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
             var agent = CreateRunAgent(
                 runtime: runtime);
             SetAgentId(agent, "workflow-run-implicit-assistant");
-            await agent.BindWorkflowRunDefinitionAsync(
+            await BindInteractiveWorkflowRunDefinitionAsync(agent,
                 "definition-1",
                 """
                 name: wf_implicit_assistant
@@ -111,7 +111,7 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
             var agent = CreateRunAgent(
                 runtime: runtime);
             SetAgentId(agent, "workflow-run-kind");
-            await agent.BindWorkflowRunDefinitionAsync(
+            await BindInteractiveWorkflowRunDefinitionAsync(agent,
                 "definition-1",
                 """
                 name: wf_kind
@@ -151,7 +151,7 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
             var runtime = new RecordingActorRuntime();
             var agent = CreateRunAgent(runtime: runtime);
             SetAgentId(agent, "workflow-run-default-role");
-            await agent.BindWorkflowRunDefinitionAsync(
+            await BindInteractiveWorkflowRunDefinitionAsync(agent,
                 "definition-1",
                 BuildValidWorkflowYaml("role_a", "RoleA", workflowName: "wf_default_role", includeAgentKind: false),
                 "wf_default_role",
@@ -178,7 +178,7 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
             var runtime = new RecordingActorRuntime();
             var agent = CreateRunAgent(runtime: runtime);
             SetAgentId(agent, "workflow-run-public-alias");
-            await agent.BindWorkflowRunDefinitionAsync(
+            await BindInteractiveWorkflowRunDefinitionAsync(agent,
                 "definition-1",
                 """
                 name: wf_public_alias
@@ -218,7 +218,7 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
             };
             var agent = CreateRunAgent(runtime: runtime);
             SetAgentId(agent, "workflow-run-invalid-kind");
-            await agent.BindWorkflowRunDefinitionAsync(
+            await BindInteractiveWorkflowRunDefinitionAsync(agent,
                 "definition-1",
                 """
                 name: wf_invalid_kind
@@ -252,7 +252,7 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
             var agent = CreateRunAgent(
                 runtime: new RecordingActorRuntime());
             agent.EventPublisher = publisher;
-            await agent.BindWorkflowRunDefinitionAsync(
+            await BindInteractiveWorkflowRunDefinitionAsync(agent,
                 "definition-1",
                 BuildValidWorkflowYaml("", "RoleNoId"),
                 "wf_missing_role",

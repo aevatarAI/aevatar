@@ -8,6 +8,7 @@ using Aevatar.Workflow.Application.Abstractions.Runs;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
+using ExternalCapabilityExecutionMode = Aevatar.Workflow.Abstractions.ExternalCapabilityExecutionMode;
 
 namespace Aevatar.GAgents.NyxidChat.WorkflowDraftRun;
 
@@ -336,6 +337,7 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
         return new WorkflowChatRunRequest(
             Prompt: request.Prompt ?? string.Empty,
             Source: WorkflowChatSource.DefinitionActor(source.DefinitionActorId, source.WorkflowName),
+            ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
             SessionId: request.RunId,
             InputParts: inputParts,
             Metadata: new Dictionary<string, string>(StringComparer.Ordinal)

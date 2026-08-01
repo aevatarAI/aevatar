@@ -275,13 +275,14 @@ public sealed class DefaultServiceInvocationDispatcherTests
         var capabilityAdmissionPlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
             "name: wf",
             new Dictionary<string, string> { ["child"] = "name: child" },
-            ExternalCapabilityExecutionMode.Interactive,
+            ExternalCapabilityExecutionMode.Durable,
             [],
             []);
         target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
         {
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
             InlineWorkflowYamls =
             {
                 ["child"] = "name: child",
@@ -331,6 +332,11 @@ public sealed class DefaultServiceInvocationDispatcherTests
         {
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
         };
 
         var receipt = await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
@@ -378,6 +384,11 @@ public sealed class DefaultServiceInvocationDispatcherTests
         {
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
         };
 
         await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
@@ -434,6 +445,11 @@ public sealed class DefaultServiceInvocationDispatcherTests
         {
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
         };
         var request = new ServiceInvocationRequest
         {
@@ -475,6 +491,11 @@ public sealed class DefaultServiceInvocationDispatcherTests
         {
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
         };
 
         await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
@@ -523,6 +544,11 @@ public sealed class DefaultServiceInvocationDispatcherTests
         {
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
         };
 
         await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
@@ -604,6 +630,11 @@ public sealed class DefaultServiceInvocationDispatcherTests
         {
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
         };
 
         await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
@@ -657,6 +688,11 @@ public sealed class DefaultServiceInvocationDispatcherTests
         {
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
         };
 
         await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
@@ -818,6 +854,11 @@ public sealed class DefaultServiceInvocationDispatcherTests
         {
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
         };
 
         await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
@@ -862,6 +903,11 @@ public sealed class DefaultServiceInvocationDispatcherTests
         {
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
         };
 
         await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
@@ -901,6 +947,11 @@ public sealed class DefaultServiceInvocationDispatcherTests
         {
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
         };
 
         await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
@@ -967,6 +1018,11 @@ public sealed class DefaultServiceInvocationDispatcherTests
         {
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
         };
         var request = new ServiceInvocationRequest
         {
@@ -1018,6 +1074,11 @@ public sealed class DefaultServiceInvocationDispatcherTests
         {
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
         };
         var chatRequest = new ChatRequestEvent
         {
@@ -1065,6 +1126,11 @@ public sealed class DefaultServiceInvocationDispatcherTests
         {
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
         };
         var request = new ServiceInvocationRequest
         {
@@ -1105,6 +1171,11 @@ public sealed class DefaultServiceInvocationDispatcherTests
         {
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
         };
         var request = new ServiceInvocationRequest
         {
@@ -1150,6 +1221,11 @@ public sealed class DefaultServiceInvocationDispatcherTests
         {
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
         };
 
         var dispatch = async () => await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
@@ -1195,6 +1271,11 @@ public sealed class DefaultServiceInvocationDispatcherTests
         {
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
         };
 
         var dispatch = async () => await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
@@ -1303,6 +1384,11 @@ public sealed class DefaultServiceInvocationDispatcherTests
         {
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
         };
 
         var act = () => dispatcher.DispatchAsync(target, new ServiceInvocationRequest
@@ -1441,6 +1527,11 @@ public sealed class DefaultServiceInvocationDispatcherTests
         {
             WorkflowName = "artifact-wf",
             WorkflowYaml = "name: artifact-wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
             DefinitionActorId = "artifact-definition-actor",
             WorkflowId = "wf-artifact-alpha",
             RevisionId = "rev-artifact-alpha",
@@ -1536,6 +1627,11 @@ public sealed class DefaultServiceInvocationDispatcherTests
         {
             WorkflowName = "artifact-wf",
             WorkflowYaml = "name: artifact-wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
             DefinitionActorId = "artifact-definition-actor",
         };
         var request = new ServiceInvocationRequest
@@ -1621,6 +1717,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
             requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl,
             revisionId: resolvedRevisionId);
         var admissionPlan = new WorkflowCapabilityAdmissionPlan();
+        admissionPlan.ExecutionMode = ExternalCapabilityExecutionMode.Durable;
         admissionPlan.InvocationAdmissions.Add(new WorkflowCapabilityInvocationAdmission
         {
             CallSiteId = "workflow/request-alpha",
@@ -1631,6 +1728,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
         {
             WorkflowName = "workflow",
             WorkflowYaml = "name: workflow",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
             WorkflowId = "wf-dispatch-alpha",
             RevisionId = planRevisionId,
             CapabilityAdmissionPlan = admissionPlan,
@@ -1825,12 +1923,13 @@ public sealed class DefaultServiceInvocationDispatcherTests
             string actorId,
             string workflowYaml,
             string workflowName,
-            IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
-            string? scopeId = null,
-            string? sourceKind = null,
-            WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan = null,
-            string? workflowId = null,
-            string? revisionId = null,
+            IReadOnlyDictionary<string, string>? inlineWorkflowYamls,
+            string? scopeId,
+            string? sourceKind,
+            WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan,
+            string? workflowId,
+            string? revisionId,
+            ExternalCapabilityExecutionMode expectedExecutionMode,
             CancellationToken ct = default) => Task.CompletedTask;
 
         public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(string workflowYaml, CancellationToken ct = default) =>

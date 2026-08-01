@@ -85,6 +85,7 @@ message WorkflowState
   WorkflowCapabilityAdmissionPlan capability_admission_plan = 19;
   string workflow_id = 20;
   string revision_id = 21;
+  ExternalCapabilityExecutionMode expected_execution_mode = 22;
 }
 
 message WorkflowRunState
@@ -190,6 +191,7 @@ message WorkflowRunState
   string terminal_notification_retry_callback_id = 42;
   // Committed call-site admission proof owned by this Run for its whole lifetime.
   WorkflowCapabilityAdmissionPlan capability_admission_plan = 43;
+  ExternalCapabilityExecutionMode expected_execution_mode = 44;
 }
 
 message WorkflowRunExecutionContextState

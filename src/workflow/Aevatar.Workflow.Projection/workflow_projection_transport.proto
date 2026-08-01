@@ -75,6 +75,7 @@ message WorkflowExecutionCurrentStateDocument {
   string schedule_id = 32;
   repeated aevatar.workflow.WorkflowExternalActionApprovalSnapshot connector_approval_entries = 33;
   aevatar.workflow.WorkflowCapabilityAdmissionPlan capability_admission_plan = 34;
+  aevatar.workflow.ExternalCapabilityExecutionMode expected_execution_mode = 35;
 }
 
 message WorkflowExternalApprovalContinuationDocument {

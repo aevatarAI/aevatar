@@ -299,6 +299,7 @@ message BindWorkflowRunDefinitionEvent
   // Committed call-site admission proof copied from the authoritative Definition binding.
   // The Run actor owns this copy for its whole lifetime; runtime never re-reads the Definition.
   WorkflowCapabilityAdmissionPlan capability_admission_plan = 9;
+  ExternalCapabilityExecutionMode expected_execution_mode = 10;
 }
 
 // Idempotent provisioning command for a stable Run actor identity. The first
@@ -322,6 +323,7 @@ message BindWorkflowDefinitionEvent
   WorkflowCapabilityAdmissionPlan capability_admission_plan = 7;
   string workflow_id = 8;
   string revision_id = 9;
+  ExternalCapabilityExecutionMode expected_execution_mode = 10;
 }
 
 enum WorkflowServiceGrantPolicy {

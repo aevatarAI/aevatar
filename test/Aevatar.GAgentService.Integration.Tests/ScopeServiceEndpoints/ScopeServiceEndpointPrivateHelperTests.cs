@@ -18,6 +18,8 @@ using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Abstractions.ScopeScripts;
 using Aevatar.GAgentService.Application.Bindings;
 using Aevatar.GAgentService.Application.Services;
+using Aevatar.Workflow.Abstractions;
+using WorkflowCallerCredential = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential;
 using Aevatar.GAgentService.Application.Workflows;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgentService.Governance.Abstractions;
@@ -467,6 +469,7 @@ public sealed class ScopeServiceEndpointPrivateHelperTests : ScopeServiceEndpoin
             "main",
             "yaml",
             new Dictionary<string, string>(StringComparer.Ordinal),
+            ExternalCapabilityExecutionMode.Durable,
             "scope-a");
         var deployments = new ServiceDeploymentCatalogSnapshot(
             "scope-a:default:default:orders",
@@ -487,6 +490,7 @@ public sealed class ScopeServiceEndpointPrivateHelperTests : ScopeServiceEndpoin
             "main",
             "yaml",
             new Dictionary<string, string>(StringComparer.Ordinal),
+            ExternalCapabilityExecutionMode.Durable,
             "scope-a");
         var fallbackDeployment = InvokePrivateStatic<ServiceDeploymentSnapshot?>(
             "ResolveRunDeployment",
@@ -504,6 +508,7 @@ public sealed class ScopeServiceEndpointPrivateHelperTests : ScopeServiceEndpoin
             "main",
             "yaml",
             new Dictionary<string, string>(StringComparer.Ordinal),
+            ExternalCapabilityExecutionMode.Durable,
             "scope-a");
         InvokePrivateStatic<ServiceDeploymentSnapshot?>("ResolveRunDeployment", missingBinding, service, deployments)
             .Should().BeNull();
@@ -638,6 +643,7 @@ public sealed class ScopeServiceEndpointPrivateHelperTests : ScopeServiceEndpoin
                 "main",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a"),
             "scope-a",
             service,
@@ -653,6 +659,7 @@ public sealed class ScopeServiceEndpointPrivateHelperTests : ScopeServiceEndpoin
                 "main",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a"),
             "scope-a",
             service,
@@ -668,6 +675,7 @@ public sealed class ScopeServiceEndpointPrivateHelperTests : ScopeServiceEndpoin
                 "main",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a"),
             "scope-a",
             service,
@@ -683,6 +691,7 @@ public sealed class ScopeServiceEndpointPrivateHelperTests : ScopeServiceEndpoin
                 "main",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a"),
             "scope-a",
             service,
@@ -698,6 +707,7 @@ public sealed class ScopeServiceEndpointPrivateHelperTests : ScopeServiceEndpoin
                 "main",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-b"),
             "scope-a",
             service,
@@ -713,6 +723,7 @@ public sealed class ScopeServiceEndpointPrivateHelperTests : ScopeServiceEndpoin
                 "main",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a"),
             "scope-a",
             service,

@@ -25,4 +25,5 @@ message WorkflowActorBindingDocument {
   aevatar.workflow.WorkflowCapabilityAdmissionPlan capability_admission_plan = 15;
   string workflow_id = 16;
   string revision_id = 17;
+  aevatar.workflow.ExternalCapabilityExecutionMode expected_execution_mode = 18;
 }

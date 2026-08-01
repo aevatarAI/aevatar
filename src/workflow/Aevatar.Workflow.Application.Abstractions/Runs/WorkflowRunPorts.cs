@@ -67,6 +67,7 @@ public sealed record WorkflowDefinitionBinding(
     string WorkflowName,
     string WorkflowYaml,
     IReadOnlyDictionary<string, string> InlineWorkflowYamls,
+    ExternalCapabilityExecutionMode ExpectedExecutionMode,
     string ScopeId = "",
     string RunOrigin = "",
     string ScheduleId = "",
@@ -92,6 +93,7 @@ public sealed record WorkflowActorBinding(
     string WorkflowName,
     string WorkflowYaml,
     IReadOnlyDictionary<string, string> InlineWorkflowYamls,
+    ExternalCapabilityExecutionMode ExpectedExecutionMode,
     string ScopeId = "",
     long SourceVersion = 0,
     string SourceEventId = "",
@@ -110,7 +112,8 @@ public sealed record WorkflowActorBinding(
             string.Empty,
             string.Empty,
             string.Empty,
-            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+            ExternalCapabilityExecutionMode.Unspecified);
 
     public bool IsWorkflowCapable => ActorKind != WorkflowActorKind.Unsupported;
 
@@ -138,12 +141,14 @@ public sealed record WorkflowRunForkSeedView(
     string Status,
     string WorkflowYaml,
     IReadOnlyDictionary<string, string> InlineWorkflowYamls,
+    ExternalCapabilityExecutionMode ExpectedExecutionMode,
     IReadOnlyDictionary<string, string> Variables,
     IReadOnlyList<string> CompletedStepIds,
     string LastFailedStepId,
     string FinalError,
     string ScopeId = "",
-    IReadOnlyDictionary<string, WorkflowStepIdempotencyView>? IdempotencyByStepId = null)
+    IReadOnlyDictionary<string, WorkflowStepIdempotencyView>? IdempotencyByStepId = null,
+    WorkflowCapabilityAdmissionPlan? CapabilityAdmissionPlan = null)
 {
     public WorkflowRunForkSeedView()
         : this(
@@ -151,12 +156,14 @@ public sealed record WorkflowRunForkSeedView(
             string.Empty,
             string.Empty,
             new Dictionary<string, string>(StringComparer.Ordinal),
+            ExternalCapabilityExecutionMode.Unspecified,
             new Dictionary<string, string>(StringComparer.Ordinal),
             [],
             string.Empty,
             string.Empty,
             string.Empty,
-            new Dictionary<string, WorkflowStepIdempotencyView>(StringComparer.Ordinal))
+            new Dictionary<string, WorkflowStepIdempotencyView>(StringComparer.Ordinal),
+            null)
     {
     }
 }
@@ -253,12 +260,13 @@ public interface IWorkflowDefinitionProvisioningPort
         string actorId,
         string workflowYaml,
         string workflowName,
-        IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
-        string? scopeId = null,
-        string? sourceKind = null,
-        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan = null,
-        string? workflowId = null,
-        string? revisionId = null,
+        IReadOnlyDictionary<string, string>? inlineWorkflowYamls,
+        string? scopeId,
+        string? sourceKind,
+        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan,
+        string? workflowId,
+        string? revisionId,
+        ExternalCapabilityExecutionMode expectedExecutionMode,
         CancellationToken ct = default);
 }
 

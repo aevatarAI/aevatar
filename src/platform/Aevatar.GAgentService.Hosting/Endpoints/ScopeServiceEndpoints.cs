@@ -29,6 +29,7 @@ using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
+using ExternalCapabilityExecutionMode = Aevatar.Workflow.Abstractions.ExternalCapabilityExecutionMode;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -206,6 +207,7 @@ public static class ScopeServiceEndpoints
             var chatRequest = new WorkflowChatRunRequest(
                 Prompt: normalizedPrompt,
                 Source: WorkflowChatSource.InlineYamlBundle(request.WorkflowYamls),
+                ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
                 SessionId: request.SessionId,
                 InputParts: MapWorkflowChatInputParts(requestInput.InputParts),
                 Metadata: scopedHeaders,

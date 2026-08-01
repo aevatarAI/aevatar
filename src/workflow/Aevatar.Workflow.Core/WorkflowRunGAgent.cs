@@ -401,14 +401,28 @@ public sealed partial class WorkflowRunGAgent
         string definitionActorId,
         string workflowYaml,
         string? workflowName,
-        IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
-        string? runId = null,
-        string? scopeId = null,
-        string? runOrigin = null,
-        string? scheduleId = null,
-        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan = null,
+        IReadOnlyDictionary<string, string>? inlineWorkflowYamls,
+        string? runId,
+        string? scopeId,
+        string? runOrigin,
+        string? scheduleId,
+        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan,
+        ExternalCapabilityExecutionMode expectedExecutionMode,
         CancellationToken ct = default)
     {
+        if (expectedExecutionMode == ExternalCapabilityExecutionMode.Unspecified ||
+            !System.Enum.IsDefined(expectedExecutionMode))
+        {
+            throw new InvalidOperationException("Workflow Run expected execution mode is required.");
+        }
+
+        if (State.ExpectedExecutionMode != ExternalCapabilityExecutionMode.Unspecified &&
+            State.ExpectedExecutionMode != expectedExecutionMode)
+        {
+            throw new InvalidOperationException(
+                "Workflow Run is already bound to a different expected execution mode.");
+        }
+
         EnsureWorkflowNameCanBind(workflowName);
         var childActorIdsToReset = CaptureDerivedChildActorIdsForReset();
         var stateBeforeBind = State.Clone();
@@ -422,6 +436,7 @@ public sealed partial class WorkflowRunGAgent
             RunOrigin = runOrigin?.Trim() ?? string.Empty,
             ScheduleId = scheduleId?.Trim() ?? string.Empty,
             CapabilityAdmissionPlan = capabilityAdmissionPlan?.Clone(),
+            ExpectedExecutionMode = expectedExecutionMode,
         };
         if (inlineWorkflowYamls != null)
         {
@@ -447,7 +462,8 @@ public sealed partial class WorkflowRunGAgent
             request.ScopeId,
             request.RunOrigin,
             request.ScheduleId,
-            request.CapabilityAdmissionPlan);
+            request.CapabilityAdmissionPlan,
+            request.ExpectedExecutionMode);
 
     public override Task<string> GetDescriptionAsync()
     {
@@ -1540,6 +1556,7 @@ public sealed partial class WorkflowRunGAgent
             ? current.ScheduleId
             : evt.ScheduleId.Trim();
         next.CapabilityAdmissionPlan = evt.CapabilityAdmissionPlan?.Clone();
+        next.ExpectedExecutionMode = evt.ExpectedExecutionMode;
         next.Status = "bound";
         next.Input = string.Empty;
         next.FinalOutput = string.Empty;
@@ -2877,6 +2894,7 @@ public sealed partial class WorkflowRunGAgent
             RunOrigin = State.RunOrigin ?? string.Empty,
             ScheduleId = State.ScheduleId ?? string.Empty,
             CapabilityAdmissionPlan = State.CapabilityAdmissionPlan?.Clone(),
+            ExpectedExecutionMode = State.ExpectedExecutionMode,
             InlineWorkflowYamls = { State.InlineWorkflowYamls },
         }, ct);
         await _subWorkflowOrchestrator.CancelPendingDefinitionResolutionTimeoutsAsync(stateBeforeBind, CancellationToken.None);

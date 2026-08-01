@@ -90,6 +90,7 @@ public sealed class WorkflowRunForkSeedQueryPortTests
                 "demo",
                 "name: demo\nsteps: []",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Interactive,
                 "scope-1"));
         var port = new WorkflowRunForkSeedQueryPort(
             currentStateReader,
@@ -126,6 +127,7 @@ public sealed class WorkflowRunForkSeedQueryPortTests
                 "demo",
                 "name: demo\nsteps: []",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Interactive,
                 "victim-scope"));
         var port = new WorkflowRunForkSeedQueryPort(
             currentStateReader,
@@ -160,6 +162,7 @@ public sealed class WorkflowRunForkSeedQueryPortTests
                 "demo",
                 "name: demo\nsteps: []",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Interactive,
                 "attacker-scope"));
         var port = new WorkflowRunForkSeedQueryPort(currentStateReader, bindingReader, mapper);
 

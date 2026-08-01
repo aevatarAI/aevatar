@@ -257,9 +257,13 @@ public sealed class WorkflowAuthorizationDependenciesTests
         await agent.BindWorkflowDefinitionAsync(
             yaml,
             "explicit-workflow",
+            inlineWorkflowYamls: null,
+            scopeId: null,
+            sourceKind: null,
             capabilityAdmissionPlan: plan,
             workflowId: workflowId,
-            revisionId: revisionId);
+            revisionId: revisionId,
+            expectedExecutionMode: ExternalCapabilityExecutionMode.Interactive);
 
         agent.State.AuthorizationDependencies.ServiceGrantPolicy.Should()
             .Be(WorkflowServiceGrantPolicy.Required);
@@ -267,6 +271,7 @@ public sealed class WorkflowAuthorizationDependenciesTests
             .Which.Selector.NyxIdRequest.UserServiceId.Should().Be("usvc-explicit-alpha");
         agent.State.WorkflowId.Should().Be(workflowId);
         agent.State.RevisionId.Should().Be(revisionId);
+        agent.State.ExpectedExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Interactive);
     }
 
     [Fact]
@@ -279,16 +284,24 @@ public sealed class WorkflowAuthorizationDependenciesTests
         await agent.BindWorkflowDefinitionAsync(
             yaml,
             "explicit-workflow",
+            inlineWorkflowYamls: null,
+            scopeId: null,
+            sourceKind: null,
             capabilityAdmissionPlan: planAlpha,
             workflowId: "wf-alpha",
-            revisionId: "rev-alpha");
+            revisionId: "rev-alpha",
+            expectedExecutionMode: ExternalCapabilityExecutionMode.Interactive);
 
         var act = () => agent.BindWorkflowDefinitionAsync(
             yaml,
             "explicit-workflow",
+            inlineWorkflowYamls: null,
+            scopeId: null,
+            sourceKind: null,
             capabilityAdmissionPlan: planBeta,
             workflowId: "wf-beta",
-            revisionId: "rev-beta");
+            revisionId: "rev-beta",
+            expectedExecutionMode: ExternalCapabilityExecutionMode.Interactive);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*workflow revision identity*");
@@ -306,15 +319,23 @@ public sealed class WorkflowAuthorizationDependenciesTests
         await agent.BindWorkflowDefinitionAsync(
             yaml,
             "explicit-workflow",
+            inlineWorkflowYamls: null,
+            scopeId: null,
+            sourceKind: null,
             capabilityAdmissionPlan: planAlpha,
             workflowId: "wf-alpha",
-            revisionId: "rev-alpha");
+            revisionId: "rev-alpha",
+            expectedExecutionMode: ExternalCapabilityExecutionMode.Interactive);
         await agent.BindWorkflowDefinitionAsync(
             "name: explicit-workflow\nroles: [\n",
             "explicit-workflow",
+            inlineWorkflowYamls: null,
+            scopeId: null,
+            sourceKind: null,
             capabilityAdmissionPlan: planAlpha,
             workflowId: "wf-alpha",
-            revisionId: "rev-alpha");
+            revisionId: "rev-alpha",
+            expectedExecutionMode: ExternalCapabilityExecutionMode.Interactive);
 
         agent.State.Compiled.Should().BeFalse();
         agent.State.CapabilityAdmissionPlan.Should().BeNull();
@@ -322,9 +343,13 @@ public sealed class WorkflowAuthorizationDependenciesTests
         var act = () => agent.BindWorkflowDefinitionAsync(
             yaml,
             "explicit-workflow",
+            inlineWorkflowYamls: null,
+            scopeId: null,
+            sourceKind: null,
             capabilityAdmissionPlan: planBeta,
             workflowId: "wf-beta",
-            revisionId: "rev-beta");
+            revisionId: "rev-beta",
+            expectedExecutionMode: ExternalCapabilityExecutionMode.Interactive);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*workflow revision identity*");
@@ -341,14 +366,24 @@ public sealed class WorkflowAuthorizationDependenciesTests
         await agent.BindWorkflowDefinitionAsync(
             "name: explicit-workflow\nroles: []\nsteps: []\n",
             "explicit-workflow",
-            revisionId: "rev-alpha");
+            inlineWorkflowYamls: null,
+            scopeId: null,
+            sourceKind: null,
+            capabilityAdmissionPlan: null,
+            workflowId: null,
+            revisionId: "rev-alpha",
+            expectedExecutionMode: ExternalCapabilityExecutionMode.Interactive);
 
         var act = () => agent.BindWorkflowDefinitionAsync(
             explicitYaml,
             "explicit-workflow",
+            inlineWorkflowYamls: null,
+            scopeId: null,
+            sourceKind: null,
             capabilityAdmissionPlan: plan,
             workflowId: "wf-beta",
-            revisionId: "rev-beta");
+            revisionId: "rev-beta",
+            expectedExecutionMode: ExternalCapabilityExecutionMode.Interactive);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*workflow revision identity*");
@@ -369,9 +404,13 @@ public sealed class WorkflowAuthorizationDependenciesTests
         var act = () => agent.BindWorkflowDefinitionAsync(
             yaml,
             "explicit-workflow",
+            inlineWorkflowYamls: null,
+            scopeId: null,
+            sourceKind: null,
             capabilityAdmissionPlan: plan,
             workflowId: "wf-alpha",
-            revisionId: "rev-alpha");
+            revisionId: "rev-alpha",
+            expectedExecutionMode: ExternalCapabilityExecutionMode.Interactive);
 
         await act.Should().ThrowAsync<WorkflowCapabilityAdmissionRebindRequiredException>();
     }
@@ -408,9 +447,12 @@ public sealed class WorkflowAuthorizationDependenciesTests
             rootYaml,
             "root-workflow",
             inlineWorkflowYamls,
+            scopeId: null,
+            sourceKind: null,
             capabilityAdmissionPlan: plan,
             workflowId: workflowId,
-            revisionId: revisionId);
+            revisionId: revisionId,
+            expectedExecutionMode: ExternalCapabilityExecutionMode.Interactive);
 
         agent.State.AuthorizationDependencies.ServiceGrantPolicy.Should()
             .Be(WorkflowServiceGrantPolicy.Required);
@@ -510,6 +552,7 @@ public sealed class WorkflowAuthorizationDependenciesTests
     {
         WorkflowState.Descriptor.FindFieldByName("workflow_id")!.FieldNumber.Should().Be(20);
         WorkflowState.Descriptor.FindFieldByName("revision_id")!.FieldNumber.Should().Be(21);
+        WorkflowState.Descriptor.FindFieldByName("expected_execution_mode")!.FieldNumber.Should().Be(22);
     }
 
     [Fact]
@@ -524,11 +567,51 @@ public sealed class WorkflowAuthorizationDependenciesTests
         await agent.BindWorkflowDefinitionAsync(
             "name: wf-alpha\nroles: []\nsteps: []\n",
             "wf-alpha",
-            scopeId: null);
+            inlineWorkflowYamls: null,
+            scopeId: null,
+            sourceKind: null,
+            capabilityAdmissionPlan: null,
+            workflowId: null,
+            revisionId: null,
+            expectedExecutionMode: ExternalCapabilityExecutionMode.Interactive);
 
         var bind = eventSourcing.CommittedEvents.Should().ContainSingle().Which
             .Should().BeOfType<BindWorkflowDefinitionEvent>().Subject;
         bind.HasScopeId.Should().BeFalse();
+        bind.ExpectedExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Interactive);
+        agent.State.ExpectedExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Interactive);
+    }
+
+    [Fact]
+    public async Task BindWorkflowDefinitionAsync_WhenModeChanges_ShouldRejectAndPreserveFirstMode()
+    {
+        var agent = NewAgent();
+        const string yaml = "name: wf-alpha\nroles: []\nsteps: []\n";
+        await agent.BindWorkflowDefinitionAsync(
+            yaml,
+            "wf-alpha",
+            inlineWorkflowYamls: null,
+            scopeId: null,
+            sourceKind: null,
+            capabilityAdmissionPlan: null,
+            workflowId: null,
+            revisionId: null,
+            expectedExecutionMode: ExternalCapabilityExecutionMode.Interactive);
+
+        var act = () => agent.BindWorkflowDefinitionAsync(
+            yaml,
+            "wf-alpha",
+            inlineWorkflowYamls: null,
+            scopeId: null,
+            sourceKind: null,
+            capabilityAdmissionPlan: null,
+            workflowId: null,
+            revisionId: null,
+            expectedExecutionMode: ExternalCapabilityExecutionMode.Durable);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*execution mode*");
+        agent.State.ExpectedExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Interactive);
     }
 
     [Fact]
@@ -541,12 +624,14 @@ public sealed class WorkflowAuthorizationDependenciesTests
             WorkflowName = "wf-alpha",
             WorkflowYaml = yaml,
             ScopeId = "scope-a",
+            ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
         });
 
         await agent.HandleBindWorkflowDefinition(new BindWorkflowDefinitionEvent
         {
             WorkflowName = "wf-alpha",
             WorkflowYaml = yaml,
+            ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
         });
 
         agent.State.ScopeId.Should().Be("scope-a");
@@ -562,6 +647,7 @@ public sealed class WorkflowAuthorizationDependenciesTests
             WorkflowName = "wf-alpha",
             WorkflowYaml = yaml,
             ScopeId = "scope-a",
+            ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
         });
 
         await agent.HandleBindWorkflowDefinition(new BindWorkflowDefinitionEvent
@@ -569,6 +655,7 @@ public sealed class WorkflowAuthorizationDependenciesTests
             WorkflowName = "wf-alpha",
             WorkflowYaml = yaml,
             ScopeId = string.Empty,
+            ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
         });
 
         agent.State.ScopeId.Should().BeEmpty();
@@ -845,6 +932,7 @@ public sealed class WorkflowAuthorizationDependenciesTests
             WorkflowYaml = yaml,
             AuthorizationDependencies = forged,
             CapabilityAdmissionPlan = admissionPlan,
+            ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
         });
 
         agent.State.AuthorizationDependencies.ExternalInvocations.Should().ContainSingle();
@@ -870,6 +958,7 @@ public sealed class WorkflowAuthorizationDependenciesTests
             WorkflowName = "wf-alpha",
             WorkflowYaml = yaml,
             CapabilityAdmissionPlan = plan,
+            ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
         });
 
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -897,6 +986,7 @@ public sealed class WorkflowAuthorizationDependenciesTests
             WorkflowName = "wf-alpha",
             WorkflowYaml = yaml,
             CapabilityAdmissionPlan = plan,
+            ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
         });
 
         await act.Should().ThrowAsync<InvalidOperationException>()

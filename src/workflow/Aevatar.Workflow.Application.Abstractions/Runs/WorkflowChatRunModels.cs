@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.Workflow.Abstractions;
 using System.Text.Json.Serialization;
 
 namespace Aevatar.Workflow.Application.Abstractions.Runs;
@@ -244,6 +245,7 @@ public sealed record WorkflowChatSource
 public sealed record WorkflowChatRunRequest(
     string Prompt,
     WorkflowChatSource Source,
+    ExternalCapabilityExecutionMode ExpectedExecutionMode,
     string? SessionId = null,
     IReadOnlyList<WorkflowChatInputPart>? InputParts = null,
     IReadOnlyDictionary<string, string>? Metadata = null,

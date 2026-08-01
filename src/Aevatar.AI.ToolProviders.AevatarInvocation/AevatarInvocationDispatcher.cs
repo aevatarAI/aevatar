@@ -463,6 +463,7 @@ public sealed class AevatarInvocationDispatcher
         var command = new WorkflowChatRunRequest(
             Prompt: request.Inputs.Prompt,
             Source: sourceResolution.Source!,
+            ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
             SessionId: ResolveSessionId(),
             InputParts: ToWorkflowInputParts(request.Inputs),
             Metadata: metadata,

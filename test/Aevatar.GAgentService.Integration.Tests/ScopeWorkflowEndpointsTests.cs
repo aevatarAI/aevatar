@@ -440,7 +440,8 @@ public sealed class ScopeWorkflowEndpointsTests
             new Dictionary<string, string>
             {
                 ["child"] = "name: child\nsteps: []\n",
-            });
+            },
+            ExternalCapabilityExecutionMode.Durable);
         var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
         await revisionCatalog.UpsertRevisionAsync(
             "tenant-a:workflow-app:user:token:approval",
@@ -511,7 +512,8 @@ public sealed class ScopeWorkflowEndpointsTests
             string.Empty,
             "approval",
             "name: approval\nsteps: []\n",
-            new Dictionary<string, string>());
+            new Dictionary<string, string>(),
+            ExternalCapabilityExecutionMode.Durable);
 
         var result = await ScopeWorkflowEndpoints.HandleListWorkflowsAsync(
             http,
@@ -1484,7 +1486,8 @@ public sealed class ScopeWorkflowEndpointsTests
                     string.Empty,
                     string.Empty,
                     string.Empty,
-                    new Dictionary<string, string>()));
+                    new Dictionary<string, string>(),
+                    ExternalCapabilityExecutionMode.Durable));
     }
 
     private sealed class FakeServiceRevisionCatalogQueryReader : IServiceRevisionCatalogQueryReader

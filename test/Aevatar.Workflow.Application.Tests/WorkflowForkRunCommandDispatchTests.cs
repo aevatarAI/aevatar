@@ -400,6 +400,7 @@ public sealed class WorkflowForkRunCommandDispatchTests
             Status: status,
             WorkflowYaml: workflowYaml ?? WorkflowYaml("source"),
             InlineWorkflowYamls: inlineWorkflowYamls ?? new Dictionary<string, string>(StringComparer.Ordinal),
+            ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
             Variables: variables ?? new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["input"] = "seed-input",
