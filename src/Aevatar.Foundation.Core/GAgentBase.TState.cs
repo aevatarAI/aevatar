@@ -25,6 +25,7 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
     private IReadOnlyList<IStateEventApplier<TState>> _appliers = [];
     private IServiceProvider? _publicationHookServiceProvider;
     private IReadOnlyList<ICommittedStatePublicationHook> _publicationHooks = [];
+    private IReadOnlyList<CommittedStateEventPublished> _unconfirmedPublications = [];
 
     /// <summary>Mutable agent state, writable only in EventHandler/OnActivateAsync scopes.</summary>
     public TState State
@@ -51,6 +52,13 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
         var replayed = await eventSourcing.ReplayAsync(Id, ct);
         _state = replayed ?? new TState();
         await OnStateChangedAsync(_state, ct);
+        var recoveredPublications = GetPublicationRecovery(eventSourcing)
+            ?.PendingCommittedStatePublications ?? [];
+        if (recoveredPublications.Count > 0)
+        {
+            await PublishAndCheckpointAsync(recoveredPublications, ct);
+            await eventSourcing.PersistSnapshotAsync(_state, ct);
+        }
         await InitializeLifecycleAwareModulesAsync(ct);
         await OnActivateAsync(ct);
     }
@@ -64,7 +72,16 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
             await OnDeactivateAsync(ct);
             try
             {
-                await eventSourcing.ConfirmEventsAsync(ct);
+                var commitResult = await eventSourcing.ConfirmEventsAsync(ct);
+                if (commitResult.CommittedEvents.Count > 0)
+                {
+                    var publications = ApplyCommittedEvents(
+                        eventSourcing,
+                        commitResult,
+                        commitResult.CommittedEvents.Select(static x => (IMessage)x.EventData));
+                    await OnStateChangedAsync(_state, ct);
+                    await PublishAndCheckpointAsync(publications, ct);
+                }
             }
             catch (EventStoreOptimisticConcurrencyException)
             {
@@ -100,6 +117,26 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
 
     /// <summary>Deactivation hook for subclass cleanup.</summary>
     protected virtual Task OnDeactivateAsync(CancellationToken ct) => Task.CompletedTask;
+
+    protected override async Task<bool> PrepareEnvelopeHandlingAsync(
+        EventEnvelope envelope,
+        CancellationToken ct)
+    {
+        if (!await base.PrepareEnvelopeHandlingAsync(envelope, ct))
+            return false;
+
+        if (_unconfirmedPublications.Count == 0)
+            return true;
+
+        var pending = _unconfirmedPublications;
+        _unconfirmedPublications = [];
+        await PublishAndCheckpointAsync(pending, ct);
+
+        return !string.Equals(
+            envelope.Runtime?.Retry?.LastErrorType,
+            nameof(CommittedStatePublicationException),
+            StringComparison.Ordinal);
+    }
 
     /// <summary>
     /// Applies one persisted domain event to state.
@@ -221,13 +258,11 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
 
         var commitResult = await eventSourcing.ConfirmEventsAsync(ct);
 
-        using var guard = StateGuard.BeginWriteScope();
-        foreach (var evt in domainEvents)
-            _state = eventSourcing.TransitionState(_state, evt);
+        var publications = ApplyCommittedEvents(eventSourcing, commitResult, domainEvents);
 
         await OnStateChangedAsync(_state, ct);
+        await PublishAndCheckpointAsync(publications, ct);
         await eventSourcing.PersistSnapshotAsync(_state, ct);
-        await PublishCommittedDomainEventsAsync(commitResult, ct);
     }
 
     private IEventSourcingBehavior<TState> EnsureEventSourcingConfigured()
@@ -274,18 +309,122 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
         return _appliers;
     }
 
-    private async Task PublishCommittedDomainEventsAsync(
+    private IReadOnlyList<CommittedStateEventPublished> ApplyCommittedEvents(
+        IEventSourcingBehavior<TState> eventSourcing,
         EventStoreCommitResult commitResult,
-        CancellationToken ct)
+        IEnumerable<IMessage> domainEvents)
     {
-        for (var i = 0; i < commitResult.CommittedEvents.Count; i++)
+        var events = domainEvents as IMessage[] ?? domainEvents.ToArray();
+        if (events.Length != commitResult.CommittedEvents.Count)
         {
-            var published = new CommittedStateEventPublished
+            throw new InvalidOperationException(
+                $"Event store commit for actor '{Id}' returned {commitResult.CommittedEvents.Count} " +
+                $"events for a batch of {events.Length}.");
+        }
+
+        var publications = new List<CommittedStateEventPublished>(events.Length);
+        using var guard = StateGuard.BeginWriteScope();
+        for (var i = 0; i < events.Length; i++)
+        {
+            _state = eventSourcing.TransitionState(_state, events[i]);
+            publications.Add(new CommittedStateEventPublished
             {
                 StateEvent = commitResult.CommittedEvents[i].Clone(),
                 StateRoot = Any.Pack(_state),
-            };
-            await PublishCommittedStateAsync(published, ct);
+            });
+        }
+
+        return publications;
+    }
+
+    private async Task PublishAndCheckpointAsync(
+        IReadOnlyList<CommittedStateEventPublished> publications,
+        CancellationToken ct)
+    {
+        var recovery = GetPublicationRecovery(EnsureEventSourcingConfigured());
+        for (var i = 0; i < publications.Count; i++)
+        {
+            var publication = publications[i];
+            try
+            {
+                await PublishCommittedStateAsync(publication, ct);
+            }
+            catch (Exception ex)
+            {
+                RememberUnconfirmedPublications(publications, i);
+                var failure = await TryRecordPublicationFailureAsync(
+                    recovery,
+                    publication.StateEvent,
+                    CommittedStatePublicationFailureStage.AdapterAcceptance,
+                    ex,
+                    ct);
+                throw new CommittedStatePublicationException(
+                    Id,
+                    publication.StateEvent,
+                    CommittedStatePublicationFailureStage.AdapterAcceptance,
+                    failure);
+            }
+
+            if (recovery == null)
+                continue;
+
+            try
+            {
+                await recovery.ConfirmPublicationAsync(publication.StateEvent, ct);
+            }
+            catch (Exception ex)
+            {
+                RememberUnconfirmedPublications(publications, i);
+                var failure = await TryRecordPublicationFailureAsync(
+                    recovery,
+                    publication.StateEvent,
+                    CommittedStatePublicationFailureStage.Checkpoint,
+                    ex,
+                    ct);
+                throw new CommittedStatePublicationException(
+                    Id,
+                    publication.StateEvent,
+                    CommittedStatePublicationFailureStage.Checkpoint,
+                    failure);
+            }
+        }
+    }
+
+    private void RememberUnconfirmedPublications(
+        IReadOnlyList<CommittedStateEventPublished> publications,
+        int startIndex)
+    {
+        _unconfirmedPublications = publications
+            .Skip(startIndex)
+            .Select(static publication => publication.Clone())
+            .ToArray();
+    }
+
+    private static ICommittedStatePublicationRecoveryBehavior? GetPublicationRecovery(
+        IEventSourcingBehavior<TState> eventSourcing) =>
+        eventSourcing as ICommittedStatePublicationRecoveryBehavior;
+
+    private static async Task<Exception> TryRecordPublicationFailureAsync(
+        ICommittedStatePublicationRecoveryBehavior? recovery,
+        StateEvent stateEvent,
+        CommittedStatePublicationFailureStage stage,
+        Exception error,
+        CancellationToken ct)
+    {
+        if (recovery == null)
+            return error;
+
+        try
+        {
+            await recovery.RecordPublicationFailureAsync(stateEvent, stage, error, ct);
+            return error;
+        }
+        catch (Exception recordFailure)
+        {
+            return new AggregateException(
+                "Committed-state publication failed and its durable failure record could not be written.",
+                error,
+                recordFailure);
         }
     }
 

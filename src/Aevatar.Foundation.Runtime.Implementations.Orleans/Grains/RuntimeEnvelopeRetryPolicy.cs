@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Deduplication;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
@@ -86,6 +87,7 @@ internal sealed class RuntimeEnvelopeRetryPolicy
         return exception switch
         {
             EventStoreOptimisticConcurrencyException => true,
+            CommittedStatePublicationException => true,
             AggregateException aggregate =>
                 aggregate.InnerExceptions.Any(ContainsRecoverableConcurrencyFailure),
             _ when exception.InnerException is not null =>

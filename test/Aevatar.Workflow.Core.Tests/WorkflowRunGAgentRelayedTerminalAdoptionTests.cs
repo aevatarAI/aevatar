@@ -758,7 +758,7 @@ public sealed class WorkflowRunGAgentRelayedTerminalAdoptionTests
         };
 
         var firstAttempt = () => harness.Agent.HandleWorkflowCompleted(terminal);
-        await firstAttempt.Should().ThrowAsync<InvalidOperationException>();
+        await firstAttempt.Should().ThrowAsync<CommittedStatePublicationException>();
         harness.Agent.State.Status.Should().Be("completed");
         harness.Agent.State.PendingTerminalNotification.Should().NotBeNull();
         harness.Agent.State.TerminalNotificationDeliveryStatus

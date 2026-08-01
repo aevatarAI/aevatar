@@ -4,6 +4,7 @@
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Abstractions.Helpers;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Google.Protobuf;
@@ -17,7 +18,9 @@ namespace Aevatar.Foundation.Core.EventSourcing;
 /// <summary>
 /// Default implementation of Event Sourcing behavior.
 /// </summary>
-public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
+public class EventSourcingBehavior<TState> :
+    IEventSourcingBehavior<TState>,
+    ICommittedStatePublicationRecoveryBehavior
     where TState : class, IMessage<TState>, new()
 {
     private readonly IEventStore _eventStore;
@@ -26,11 +29,13 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
     private readonly bool _enableEventCompaction;
     private readonly int _retainedEventsAfterSnapshot;
     private readonly bool _recoverFromVersionDriftOnReplay;
+    private readonly ICommittedStatePublicationStateStore? _publicationStateStore;
     private readonly ILogger<EventSourcingBehavior<TState>> _logger;
     private readonly List<IMessage> _pending = [];
     private readonly string _agentId;
     private long _currentVersion;
     private long _lastSnapshotVersion;
+    private IReadOnlyList<CommittedStateEventPublished> _pendingCommittedStatePublications = [];
 
     public EventSourcingBehavior(
         IEventStore eventStore,
@@ -40,7 +45,8 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
         ILogger<EventSourcingBehavior<TState>>? logger = null,
         bool enableEventCompaction = false,
         int retainedEventsAfterSnapshot = 0,
-        bool recoverFromVersionDriftOnReplay = false)
+        bool recoverFromVersionDriftOnReplay = false,
+        ICommittedStatePublicationStateStore? publicationStateStore = null)
     {
         _eventStore = eventStore;
         _agentId = agentId;
@@ -49,11 +55,16 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
         _enableEventCompaction = enableEventCompaction;
         _retainedEventsAfterSnapshot = Math.Max(0, retainedEventsAfterSnapshot);
         _recoverFromVersionDriftOnReplay = recoverFromVersionDriftOnReplay;
+        _publicationStateStore = publicationStateStore;
         _logger = logger ?? NullLogger<EventSourcingBehavior<TState>>.Instance;
     }
 
     /// <inheritdoc />
     public long CurrentVersion => _currentVersion;
+
+    IReadOnlyList<CommittedStateEventPublished>
+        ICommittedStatePublicationRecoveryBehavior.PendingCommittedStatePublications =>
+        _pendingCommittedStatePublications;
 
     /// <inheritdoc />
     public void RaiseEvent<TEvent>(TEvent evt) where TEvent : IMessage =>
@@ -191,6 +202,21 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
         if (_snapshotStore == null)
             return;
 
+        if (_publicationStateStore != null)
+        {
+            var publicationState = await _publicationStateStore.LoadAsync(_agentId, ct);
+            if (publicationState?.Initialized != true
+                || publicationState.PublishedVersion < _currentVersion)
+            {
+                _logger.LogWarning(
+                    "Event sourcing snapshot skipped until committed-state publication catches up. agentId={AgentId} currentVersion={CurrentVersion} publishedVersion={PublishedVersion}",
+                    _agentId,
+                    _currentVersion,
+                    publicationState?.PublishedVersion ?? 0);
+                return;
+            }
+        }
+
         var eventsSinceLastSnapshot = _currentVersion - _lastSnapshotVersion;
         if (!_snapshotStrategy.ShouldCreateSnapshot(eventsSinceLastSnapshot))
             return;
@@ -227,6 +253,9 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
         _lastSnapshotVersion = snapshot?.Version ?? 0;
         long? fromVersion = snapshot?.Version;
         var events = await _eventStore.GetEventsAsync(agentId, fromVersion, ct);
+        var publicationState = _publicationStateStore == null
+            ? null
+            : await _publicationStateStore.LoadAsync(agentId, ct);
 
         // Always probe the store's authoritative version key. Partial
         // compaction can leave the events sorted set with valid (but
@@ -239,16 +268,28 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
         // activation envelope.
         var storeVersion = await _eventStore.GetVersionAsync(agentId, ct);
 
-        var state = snapshot?.State ?? new TState();
-        foreach (var stateEvent in events)
-        {
-            if (stateEvent.EventData != null)
-                state = TransitionState(state, stateEvent.EventData);
-        }
+        var publishedVersion = publicationState?.PublishedVersion ?? storeVersion;
+        var (state, recoveredPublications) = ApplyReplayedEvents(
+            agentId,
+            snapshot,
+            events,
+            publicationState,
+            publishedVersion,
+            storeVersion);
 
         var replayedVersion = events.Count > 0
             ? events[^1].Version
             : (snapshot?.Version ?? 0);
+
+        if (publicationState?.Initialized == true)
+        {
+            ValidateRecoveryRange(
+                agentId,
+                publicationState.PublishedVersion,
+                storeVersion,
+                snapshot?.Version ?? 0,
+                recoveredPublications);
+        }
 
         if (storeVersion > replayedVersion)
         {
@@ -282,11 +323,59 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
                 events.Count,
                 snapshot != null);
             _currentVersion = storeVersion;
+            await InitializePublicationStateIfNeededAsync(publicationState, storeVersion, ct);
+            _pendingCommittedStatePublications = [];
             return events.Count == 0 && snapshot == null ? null : state;
         }
 
         _currentVersion = replayedVersion;
+        if (publicationState == null || !publicationState.Initialized)
+        {
+            await InitializePublicationStateIfNeededAsync(publicationState, storeVersion, ct);
+            _pendingCommittedStatePublications = [];
+        }
+        else
+        {
+            _pendingCommittedStatePublications = recoveredPublications;
+        }
+
         return events.Count == 0 && snapshot == null ? null : state;
+    }
+
+    async Task ICommittedStatePublicationRecoveryBehavior.ConfirmPublicationAsync(
+        StateEvent publishedEvent,
+        CancellationToken ct)
+    {
+        if (_publicationStateStore == null)
+            return;
+
+        var expectedPublishedVersion = publishedEvent.Version - 1;
+        await _publicationStateStore.InitializeAsync(_agentId, expectedPublishedVersion, ct);
+        await _publicationStateStore.AdvanceAsync(
+            _agentId,
+            expectedPublishedVersion,
+            publishedEvent,
+            ct);
+    }
+
+    async Task ICommittedStatePublicationRecoveryBehavior.RecordPublicationFailureAsync(
+        StateEvent failedEvent,
+        CommittedStatePublicationFailureStage stage,
+        Exception error,
+        CancellationToken ct)
+    {
+        if (_publicationStateStore == null)
+            return;
+
+        var expectedPublishedVersion = failedEvent.Version - 1;
+        await _publicationStateStore.InitializeAsync(_agentId, expectedPublishedVersion, ct);
+        await _publicationStateStore.RecordFailureAsync(
+            _agentId,
+            expectedPublishedVersion,
+            failedEvent,
+            stage,
+            error,
+            ct);
     }
 
     /// <summary>
@@ -350,6 +439,20 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
             return;
 
         var compactToVersion = _currentVersion - _retainedEventsAfterSnapshot;
+        if (_publicationStateStore != null)
+        {
+            var publicationState = await _publicationStateStore.LoadAsync(_agentId, ct);
+            if (publicationState?.Initialized != true)
+            {
+                _logger.LogWarning(
+                    "Event sourcing compaction skipped because committed-state publication progress is not initialized. agentId={AgentId}",
+                    _agentId);
+                return;
+            }
+
+            compactToVersion = Math.Min(compactToVersion, publicationState.PublishedVersion);
+        }
+
         if (compactToVersion <= 0)
             return;
 
@@ -373,6 +476,109 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
                 _retainedEventsAfterSnapshot,
                 "ignored",
                 ex.GetType().Name);
+        }
+    }
+
+    private async Task InitializePublicationStateIfNeededAsync(
+        CommittedStatePublicationState? publicationState,
+        long storeVersion,
+        CancellationToken ct)
+    {
+        if (_publicationStateStore == null || publicationState?.Initialized == true)
+            return;
+
+        // Upgrade baseline: facts committed before this runtime capability existed are
+        // treated as already published. Every commit after initialization is recoverable.
+        await _publicationStateStore.InitializeAsync(_agentId, storeVersion, ct);
+    }
+
+    private (TState State, List<CommittedStateEventPublished> Publications) ApplyReplayedEvents(
+        string actorId,
+        EventSourcingSnapshot<TState>? snapshot,
+        IReadOnlyList<StateEvent> events,
+        CommittedStatePublicationState? publicationState,
+        long publishedVersion,
+        long storeVersion)
+    {
+        if (publicationState?.Initialized == true && snapshot?.Version > publishedVersion)
+        {
+            throw new CommittedStatePublicationRecoveryException(
+                actorId,
+                publishedVersion,
+                storeVersion,
+                $"snapshot version {snapshot.Version} is ahead of the durable publication checkpoint");
+        }
+
+        var state = snapshot?.State ?? new TState();
+        var publications = new List<CommittedStateEventPublished>();
+        foreach (var stateEvent in events)
+        {
+            if (stateEvent.EventData != null)
+                state = TransitionState(state, stateEvent.EventData);
+
+            if (publicationState?.Initialized != true || stateEvent.Version <= publishedVersion)
+                continue;
+
+            publications.Add(new CommittedStateEventPublished
+            {
+                StateEvent = stateEvent.Clone(),
+                StateRoot = Any.Pack(state),
+            });
+        }
+
+        return (state, publications);
+    }
+
+    private static void ValidateRecoveryRange(
+        string actorId,
+        long publishedVersion,
+        long storeVersion,
+        long snapshotVersion,
+        IReadOnlyList<CommittedStateEventPublished> publications)
+    {
+        if (publishedVersion > storeVersion)
+        {
+            throw new CommittedStatePublicationRecoveryException(
+                actorId,
+                publishedVersion,
+                storeVersion,
+                "durable checkpoint is ahead of the authoritative event-store version");
+        }
+
+        if (publishedVersion == storeVersion)
+            return;
+
+        if (snapshotVersion > publishedVersion)
+        {
+            throw new CommittedStatePublicationRecoveryException(
+                actorId,
+                publishedVersion,
+                storeVersion,
+                $"snapshot version {snapshotVersion} is ahead of the durable publication checkpoint");
+        }
+
+        var expectedVersion = publishedVersion + 1;
+        foreach (var publication in publications)
+        {
+            if (publication.StateEvent.Version != expectedVersion)
+            {
+                throw new CommittedStatePublicationRecoveryException(
+                    actorId,
+                    publishedVersion,
+                    storeVersion,
+                    $"committed version {expectedVersion} is unavailable for recovery");
+            }
+
+            expectedVersion++;
+        }
+
+        if (expectedVersion != storeVersion + 1)
+        {
+            throw new CommittedStatePublicationRecoveryException(
+                actorId,
+                publishedVersion,
+                storeVersion,
+                $"committed version {expectedVersion} is unavailable for recovery");
         }
     }
 }

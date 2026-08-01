@@ -4491,9 +4491,11 @@ public sealed class AgentRunGAgentTests
                 throw new InvalidOperationException(
                     $"Simulated persistence failure for event type {typeof(TFailEvent).Name}");
             }
-            CurrentVersion += _pending.Count;
+
+            var result = BuildCommitResult(_pending, CurrentVersion);
+            CurrentVersion = result.LatestVersion;
             _pending.Clear();
-            return Task.FromResult(new EventStoreCommitResult { LatestVersion = CurrentVersion });
+            return Task.FromResult(result);
         }
 
         public Task PersistSnapshotAsync(TState currentState, CancellationToken ct = default) =>
@@ -4522,12 +4524,10 @@ public sealed class AgentRunGAgentTests
 
         public Task<EventStoreCommitResult> ConfirmEventsAsync(CancellationToken ct = default)
         {
-            CurrentVersion += _pending.Count;
+            var result = BuildCommitResult(_pending, CurrentVersion);
+            CurrentVersion = result.LatestVersion;
             _pending.Clear();
-            return Task.FromResult(new EventStoreCommitResult
-            {
-                LatestVersion = CurrentVersion,
-            });
+            return Task.FromResult(result);
         }
 
         public Task PersistSnapshotAsync(TState currentState, CancellationToken ct = default) =>
@@ -4542,6 +4542,28 @@ public sealed class AgentRunGAgentTests
         }
 
         public TState TransitionState(TState current, IMessage evt) => transition(current, evt);
+    }
+
+    private static EventStoreCommitResult BuildCommitResult(
+        IEnumerable<IMessage> pending,
+        long currentVersion)
+    {
+        var result = new EventStoreCommitResult();
+        foreach (var evt in pending)
+        {
+            currentVersion++;
+            result.CommittedEvents.Add(new StateEvent
+            {
+                EventId = Guid.NewGuid().ToString("N"),
+                Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+                Version = currentVersion,
+                EventType = evt.Descriptor.FullName,
+                EventData = Any.Pack(evt),
+            });
+        }
+
+        result.LatestVersion = currentVersion;
+        return result;
     }
 
     private sealed class RecordingCallbackScheduler : IActorRuntimeCallbackScheduler

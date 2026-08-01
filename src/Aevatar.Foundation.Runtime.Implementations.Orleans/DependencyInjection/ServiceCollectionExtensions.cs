@@ -39,9 +39,11 @@ public static class ServiceCollectionExtensions
         services.RemoveAll(typeof(IStateStore<>));
         services.RemoveAll(typeof(IEventSourcingSnapshotStore<>));
         services.RemoveAll(typeof(IEventSourcingBehaviorFactory<>));
+        services.RemoveAll<ICommittedStatePublicationStateStore>();
         services.TryAddSingleton<IRuntimeActorStateBindingAccessor, AsyncLocalRuntimeActorStateBindingAccessor>();
         services.TryAddTransient(typeof(IStateStore<>), typeof(RuntimeActorGrainStateStore<>));
         services.TryAddTransient(typeof(IEventSourcingSnapshotStore<>), typeof(RuntimeActorGrainEventSourcingSnapshotStore<>));
+        services.TryAddTransient<ICommittedStatePublicationStateStore, RuntimeActorGrainCommittedStatePublicationStateStore>();
         services.TryAddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
         if (IsPersistenceBackend(options, AevatarOrleansRuntimeOptions.PersistenceBackendGarnet))
         {

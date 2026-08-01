@@ -379,17 +379,39 @@ public sealed class ProjectionScopeGAgentBaseTests
 
     private sealed class TrackingEventSourcing : IEventSourcingBehavior<ProjectionScopeState>
     {
+        private readonly List<IMessage> _pending = [];
         public int DiscardCallCount { get; private set; }
-        public EventStoreCommitResult ConfirmResult { get; init; } = new();
-        public long CurrentVersion => ConfirmResult.LatestVersion;
-        public void RaiseEvent<TEvent>(TEvent evt) where TEvent : IMessage { }
-        public Task<EventStoreCommitResult> ConfirmEventsAsync(CancellationToken ct = default) =>
-            Task.FromResult(ConfirmResult);
+        public long CurrentVersion { get; private set; }
+        public void RaiseEvent<TEvent>(TEvent evt) where TEvent : IMessage => _pending.Add(evt);
+        public Task<EventStoreCommitResult> ConfirmEventsAsync(CancellationToken ct = default)
+        {
+            var result = new EventStoreCommitResult();
+            foreach (var evt in _pending)
+            {
+                CurrentVersion++;
+                result.CommittedEvents.Add(new StateEvent
+                {
+                    EventId = Guid.NewGuid().ToString("N"),
+                    Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+                    Version = CurrentVersion,
+                    EventType = evt.Descriptor.FullName,
+                    EventData = Any.Pack(evt),
+                });
+            }
+
+            result.LatestVersion = CurrentVersion;
+            _pending.Clear();
+            return Task.FromResult(result);
+        }
         public Task PersistSnapshotAsync(ProjectionScopeState currentState, CancellationToken ct = default) =>
             Task.CompletedTask;
         public Task<ProjectionScopeState?> ReplayAsync(string agentId, CancellationToken ct = default) =>
             Task.FromResult<ProjectionScopeState?>(null);
-        public void DiscardPendingEvents() => DiscardCallCount++;
+        public void DiscardPendingEvents()
+        {
+            DiscardCallCount++;
+            _pending.Clear();
+        }
         public ProjectionScopeState TransitionState(ProjectionScopeState current, IMessage evt) =>
             evt switch
             {

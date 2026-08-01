@@ -77,6 +77,7 @@ public static class ServiceCollectionExtensions
 
         services.TryAddSingleton(typeof(IStateStore<>), typeof(InMemoryStateStore<>));
         services.TryAddSingleton(typeof(IEventSourcingSnapshotStore<>), typeof(InMemoryEventSourcingSnapshotStore<>));
+        services.TryAddSingleton<ICommittedStatePublicationStateStore, InMemoryCommittedStatePublicationStateStore>();
         services.TryAddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
         services.TryAddSingleton<IEventStore, InMemoryEventStore>();
         services.TryAddSingleton<IEventStoreMaintenance>(sp =>
@@ -119,6 +120,7 @@ public static class ServiceCollectionExtensions
         services.Replace(ServiceDescriptor.Singleton<IEventStoreMaintenance>(sp =>
             (IEventStoreMaintenance)sp.GetRequiredService<IEventStore>()));
         services.Replace(ServiceDescriptor.Singleton(typeof(IEventSourcingSnapshotStore<>), typeof(FileEventSourcingSnapshotStore<>)));
+        services.Replace(ServiceDescriptor.Singleton<ICommittedStatePublicationStateStore, FileCommittedStatePublicationStateStore>());
         return services;
     }
 }

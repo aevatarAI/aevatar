@@ -1145,19 +1145,29 @@ public sealed class WorkflowAuthorizationDependenciesTests
         public Task<EventStoreCommitResult> ConfirmEventsAsync(CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            var result = new EventStoreCommitResult
+            {
+                AgentId = agentId,
+            };
             foreach (var evt in _pending)
             {
                 _state = transitionState(_state, evt);
                 committedEvents.Add(evt);
                 CurrentVersion++;
+                result.CommittedEvents.Add(new StateEvent
+                {
+                    EventId = Guid.NewGuid().ToString("N"),
+                    Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTime(DateTime.UtcNow),
+                    Version = CurrentVersion,
+                    EventType = evt.Descriptor.FullName,
+                    EventData = Google.Protobuf.WellKnownTypes.Any.Pack(evt),
+                    AgentId = agentId,
+                });
             }
 
+            result.LatestVersion = CurrentVersion;
             _pending.Clear();
-            return Task.FromResult(new EventStoreCommitResult
-            {
-                AgentId = agentId,
-                LatestVersion = CurrentVersion,
-            });
+            return Task.FromResult(result);
         }
 
         public Task PersistSnapshotAsync(WorkflowState currentState, CancellationToken ct = default)
