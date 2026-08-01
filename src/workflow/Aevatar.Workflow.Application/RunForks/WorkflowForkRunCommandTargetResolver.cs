@@ -39,6 +39,7 @@ internal sealed class WorkflowForkRunCommandTargetResolver
 
         var sourceRunId = Normalize(command.SourceRunId);
         var startAtStepId = Normalize(command.StartAtStepId);
+        var scopeId = Normalize(command.ScopeId);
         if (WorkflowCallerCredentialTokens.IsInvalidCredentialSet(
                 command.CallerCredential?.BearerToken,
                 command.CallerCredential?.Kind ?? NyxIdCallerCredentialKind.Unspecified,
@@ -48,8 +49,15 @@ internal sealed class WorkflowForkRunCommandTargetResolver
                 WorkflowForkRunStartError.InvalidCallerCredential(sourceRunId, startAtStepId));
         }
 
-        var seedView = await _seedQueryPort.GetForkSeedAsync(sourceRunId, ct).ConfigureAwait(false);
+        var seedView = await _seedQueryPort.GetForkSeedAsync(scopeId, sourceRunId, ct).ConfigureAwait(false);
         if (seedView == null)
+        {
+            return CommandTargetResolution<WorkflowForkRunCommandTarget, WorkflowForkRunStartError>.Failure(
+                WorkflowForkRunStartError.SourceRunNotFound(sourceRunId));
+        }
+
+        if (!string.IsNullOrWhiteSpace(scopeId) &&
+            !string.Equals(scopeId, Normalize(seedView.ScopeId), StringComparison.Ordinal))
         {
             return CommandTargetResolution<WorkflowForkRunCommandTarget, WorkflowForkRunStartError>.Failure(
                 WorkflowForkRunStartError.SourceRunNotFound(sourceRunId));
@@ -73,7 +81,6 @@ internal sealed class WorkflowForkRunCommandTargetResolver
         }
 
         WorkflowRunCreationReceipt creationReceipt;
-        var scopeId = ResolveScopeId(command.ScopeId, seedView.ScopeId);
         try
         {
             creationReceipt = await _runProvisioningPort.CreateRunAsync(
@@ -243,11 +250,6 @@ internal sealed class WorkflowForkRunCommandTargetResolver
         variables.TryGetValue("input", out var seedInput)
             ? seedInput ?? string.Empty
             : commandInput ?? string.Empty;
-
-    private static string ResolveScopeId(string? commandScopeId, string? sourceScopeId) =>
-        !string.IsNullOrWhiteSpace(commandScopeId)
-            ? commandScopeId.Trim()
-            : sourceScopeId?.Trim() ?? string.Empty;
 
     private static WorkflowStepIdempotencyView? ResolveStartStepIdempotency(
         WorkflowRunForkSeedView seedView,
