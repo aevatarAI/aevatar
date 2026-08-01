@@ -1318,7 +1318,7 @@ public sealed class AevatarInvocationDispatcher
                     CancellationToken.None)
                 .ConfigureAwait(false);
             _logger.LogInformation(
-                "Abandoned workflow run background delivery reservation: deliveryActorId={DeliveryActorId} commandId={CommandId} reason={Reason}",
+                "Workflow run background delivery abandonment request accepted: deliveryActorId={DeliveryActorId} commandId={CommandId} reason={Reason}",
                 deliveryReservation.Receipt.DeliveryActorId,
                 deliveryReservation.Receipt.WorkflowCommandId,
                 abandonmentReason);
