@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading.Channels;
@@ -14,6 +15,7 @@ using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Orleans;
@@ -42,6 +44,10 @@ public sealed class KafkaPersistentStreamProviderRedeliveryValidationTests
 {
     private static readonly TimeSpan RedeliveryTimeout = TimeSpan.FromSeconds(45);
     private static readonly TimeSpan NoRedeliveryQuietPeriod = TimeSpan.FromSeconds(10);
+    private const string CrashWorkerEnvironmentVariable = "AEVATAR_KAFKA_ACK_CRASH_WORKER";
+    private const string CrashWorkerEnvelopeIdEnvironmentVariable = "AEVATAR_KAFKA_ACK_CRASH_ENVELOPE_ID";
+    private const string CrashWorkerHandlerMarkerEnvironmentVariable = "AEVATAR_KAFKA_ACK_CRASH_HANDLER_MARKER";
+    private const string CrashWorkerAckMarkerEnvironmentVariable = "AEVATAR_KAFKA_ACK_CRASH_ACK_MARKER";
 
     [KafkaGarnetIntegrationFact]
     public async Task KafkaPersistentProvider_WhenOnNextAsyncReturns_DoesNotRedeliver()
@@ -338,6 +344,117 @@ public sealed class KafkaPersistentStreamProviderRedeliveryValidationTests
         }
     }
 
+    [KafkaGarnetIntegrationFact]
+    public async Task KafkaPersistentProvider_WhenProcessExitsAfterHandlerSuccessBeforeMessagesDelivered_RedeliversAfterRestart()
+    {
+        var bootstrapServers = RequireKafkaBootstrapServers();
+        var garnetConnectionString = RequireGarnetConnectionString();
+        var topology = TestTopology.Create();
+        var envelopeId = Guid.NewGuid().ToString("N");
+        var markerDirectory = Path.Combine(
+            Path.GetTempPath(),
+            $"aevatar-kafka-ack-crash-{Guid.NewGuid():N}");
+        var handlerMarkerPath = Path.Combine(markerDirectory, "handler-succeeded");
+        var ackMarkerPath = Path.Combine(markerDirectory, "messages-delivered-entered");
+        Directory.CreateDirectory(markerDirectory);
+
+        try
+        {
+            using var worker = StartCrashWorkerProcess(
+                bootstrapServers,
+                garnetConnectionString,
+                topology,
+                envelopeId,
+                handlerMarkerPath,
+                ackMarkerPath);
+            var workerStandardOutput = worker.StandardOutput.ReadToEndAsync();
+            var workerStandardError = worker.StandardError.ReadToEndAsync();
+            using var workerTimeout = new CancellationTokenSource(RedeliveryTimeout);
+            try
+            {
+                await worker.WaitForExitAsync(workerTimeout.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                worker.Kill(entireProcessTree: true);
+                await worker.WaitForExitAsync();
+                throw new TimeoutException(
+                    $"Crash worker did not exit within {RedeliveryTimeout}.\n" +
+                    await ReadWorkerOutputAsync(workerStandardOutput, workerStandardError));
+            }
+
+            var workerOutput = await ReadWorkerOutputAsync(workerStandardOutput, workerStandardError);
+            worker.ExitCode.Should().NotBe(
+                0,
+                $"the isolated silo must terminate at the pre-ACK crash point\n{workerOutput}");
+            File.ReadAllText(handlerMarkerPath).Should().Be(
+                envelopeId,
+                "the real RuntimeActorGrain handler must finish before the process is terminated");
+            File.ReadAllText(ackMarkerPath).Should().Be(
+                envelopeId,
+                "the process must terminate exactly when Orleans enters MessagesDeliveredAsync");
+            ReadCommittedOffset(bootstrapServers, topology).Should().NotBe(
+                new Offset(1),
+                "the intercepted MessagesDeliveredAsync call must not advance the Kafka group offset");
+
+            OnNextAttemptRecorder.Reset();
+            var restartedTopology = topology.WithFreshPorts();
+            var host = await StartSiloHostAsync(
+                bootstrapServers,
+                garnetConnectionString,
+                restartedTopology);
+            try
+            {
+                await OnNextAttemptRecorder.WaitForAttemptsAsync(
+                    envelopeId,
+                    expectedAttempts: 1,
+                    RedeliveryTimeout);
+                await WaitForCommittedOffsetAsync(
+                    bootstrapServers,
+                    restartedTopology,
+                    new Offset(1),
+                    RedeliveryTimeout);
+
+                OnNextAttemptRecorder.CountAttempts(envelopeId).Should().Be(
+                    1,
+                    "the uncommitted Kafka record must traverse observer -> RuntimeActorGrain -> handler after restart");
+            }
+            finally
+            {
+                await host.StopAsync();
+                host.Dispose();
+            }
+        }
+        finally
+        {
+            Directory.Delete(markerDirectory, recursive: true);
+        }
+    }
+
+    [KafkaAckCrashWorkerFact]
+    public async Task KafkaPersistentProvider_AckCrashWorker()
+    {
+        var bootstrapServers = RequireKafkaBootstrapServers();
+        var garnetConnectionString = RequireGarnetConnectionString();
+        var topology = TestTopology.FromCrashWorkerEnvironment();
+        var envelopeId = RequireEnvironmentVariable(CrashWorkerEnvelopeIdEnvironmentVariable);
+        var host = await StartSiloHostAsync(
+            bootstrapServers,
+            garnetConnectionString,
+            topology,
+            crashBeforeAcknowledgement: true);
+
+        var grain = host.Services.GetRequiredService<IGrainFactory>()
+            .GetGrain<IRuntimeActorGrain>(topology.ActorId);
+        (await grain.InitializeAgentByKindAsync("tests.always-succeed-on-next"))
+            .Should().BeTrue();
+        await PublishEnvelopeAsync(host, topology, envelopeId, propagateFailure: false);
+
+        await Task.Delay(RedeliveryTimeout);
+        throw new TimeoutException(
+            "The Kafka ACK crash worker did not reach MessagesDeliveredAsync after handler success.");
+    }
+
     private static async Task PublishEnvelopeAsync(
         IHost host,
         TestTopology topology,
@@ -369,7 +486,8 @@ public sealed class KafkaPersistentStreamProviderRedeliveryValidationTests
     private static async Task<IHost> StartSiloHostAsync(
         string bootstrapServers,
         string garnetConnectionString,
-        TestTopology topology)
+        TestTopology topology,
+        bool crashBeforeAcknowledgement = false)
     {
         var host = Host.CreateDefaultBuilder()
             .UseOrleans(siloBuilder =>
@@ -403,6 +521,11 @@ public sealed class KafkaPersistentStreamProviderRedeliveryValidationTests
                     options.ConsumerGroup = topology.ConsumerGroup;
                     options.TopicPartitionCount = 4;
                 });
+                if (crashBeforeAcknowledgement)
+                {
+                    services.RemoveAll<IQueueAdapterFactory>();
+                    services.AddSingleton<IQueueAdapterFactory, CrashBeforeAcknowledgementQueueAdapterFactory>();
+                }
             })
             .Build();
 
@@ -417,6 +540,49 @@ public sealed class KafkaPersistentStreamProviderRedeliveryValidationTests
     private static string RequireGarnetConnectionString() =>
         Environment.GetEnvironmentVariable("AEVATAR_TEST_GARNET_CONNECTION_STRING")
         ?? throw new InvalidOperationException("Missing AEVATAR_TEST_GARNET_CONNECTION_STRING.");
+
+    private static string RequireEnvironmentVariable(string name) =>
+        Environment.GetEnvironmentVariable(name)
+        ?? throw new InvalidOperationException($"Missing {name}.");
+
+    private static Process StartCrashWorkerProcess(
+        string bootstrapServers,
+        string garnetConnectionString,
+        TestTopology topology,
+        string envelopeId,
+        string handlerMarkerPath,
+        string ackMarkerPath)
+    {
+        var startInfo = new ProcessStartInfo(
+            Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+        };
+        startInfo.ArgumentList.Add("vstest");
+        startInfo.ArgumentList.Add(typeof(KafkaPersistentStreamProviderRedeliveryValidationTests).Assembly.Location);
+        startInfo.ArgumentList.Add(
+            $"--Tests:{typeof(KafkaPersistentStreamProviderRedeliveryValidationTests).FullName}.KafkaPersistentProvider_AckCrashWorker");
+        startInfo.Environment["AEVATAR_TEST_KAFKA_BOOTSTRAP_SERVERS"] = bootstrapServers;
+        startInfo.Environment["AEVATAR_TEST_GARNET_CONNECTION_STRING"] = garnetConnectionString;
+        startInfo.Environment[CrashWorkerEnvironmentVariable] = "1";
+        startInfo.Environment[CrashWorkerEnvelopeIdEnvironmentVariable] = envelopeId;
+        startInfo.Environment[CrashWorkerHandlerMarkerEnvironmentVariable] = handlerMarkerPath;
+        startInfo.Environment[CrashWorkerAckMarkerEnvironmentVariable] = ackMarkerPath;
+        topology.WriteCrashWorkerEnvironment(startInfo.Environment);
+
+        return Process.Start(startInfo)
+               ?? throw new InvalidOperationException("Failed to start isolated Kafka ACK crash worker.");
+    }
+
+    private static async Task<string> ReadWorkerOutputAsync(
+        Task<string> standardOutput,
+        Task<string> standardError)
+    {
+        return $"stdout:\n{await standardOutput}\nstderr:\n{await standardError}";
+    }
 
     private static Offset ReadCommittedOffset(string bootstrapServers, TestTopology topology)
     {
@@ -530,6 +696,113 @@ public sealed class KafkaPersistentStreamProviderRedeliveryValidationTests
                 SiloPort = ReserveTcpPort(),
                 GatewayPort = ReserveTcpPort(),
             };
+
+        public static TestTopology FromCrashWorkerEnvironment() =>
+            new(
+                ActorId: RequireEnvironmentVariable("AEVATAR_KAFKA_ACK_CRASH_ACTOR_ID"),
+                TopicName: RequireEnvironmentVariable("AEVATAR_KAFKA_ACK_CRASH_TOPIC"),
+                ConsumerGroup: RequireEnvironmentVariable("AEVATAR_KAFKA_ACK_CRASH_CONSUMER_GROUP"),
+                StreamProviderName: RequireEnvironmentVariable("AEVATAR_KAFKA_ACK_CRASH_STREAM_PROVIDER"),
+                ActorEventNamespace: RequireEnvironmentVariable("AEVATAR_KAFKA_ACK_CRASH_STREAM_NAMESPACE"),
+                ClusterId: RequireEnvironmentVariable("AEVATAR_KAFKA_ACK_CRASH_CLUSTER_ID"),
+                ServiceId: RequireEnvironmentVariable("AEVATAR_KAFKA_ACK_CRASH_SERVICE_ID"),
+                SiloPort: int.Parse(RequireEnvironmentVariable("AEVATAR_KAFKA_ACK_CRASH_SILO_PORT")),
+                GatewayPort: int.Parse(RequireEnvironmentVariable("AEVATAR_KAFKA_ACK_CRASH_GATEWAY_PORT")));
+
+        public void WriteCrashWorkerEnvironment(IDictionary<string, string?> environment)
+        {
+            environment["AEVATAR_KAFKA_ACK_CRASH_ACTOR_ID"] = ActorId;
+            environment["AEVATAR_KAFKA_ACK_CRASH_TOPIC"] = TopicName;
+            environment["AEVATAR_KAFKA_ACK_CRASH_CONSUMER_GROUP"] = ConsumerGroup;
+            environment["AEVATAR_KAFKA_ACK_CRASH_STREAM_PROVIDER"] = StreamProviderName;
+            environment["AEVATAR_KAFKA_ACK_CRASH_STREAM_NAMESPACE"] = ActorEventNamespace;
+            environment["AEVATAR_KAFKA_ACK_CRASH_CLUSTER_ID"] = ClusterId;
+            environment["AEVATAR_KAFKA_ACK_CRASH_SERVICE_ID"] = ServiceId;
+            environment["AEVATAR_KAFKA_ACK_CRASH_SILO_PORT"] = SiloPort.ToString();
+            environment["AEVATAR_KAFKA_ACK_CRASH_GATEWAY_PORT"] = GatewayPort.ToString();
+        }
+    }
+
+    private sealed class CrashBeforeAcknowledgementQueueAdapterFactory : IQueueAdapterFactory
+    {
+        private readonly KafkaProviderQueueAdapterFactory _inner;
+
+        public CrashBeforeAcknowledgementQueueAdapterFactory(
+            AevatarOrleansRuntimeOptions runtimeOptions,
+            KafkaProviderProducer transport,
+            KafkaProviderTransportOptions transportOptions,
+            KafkaQueuePartitionMapper mapper,
+            Microsoft.Extensions.Logging.ILoggerFactory loggerFactory)
+        {
+            _inner = new KafkaProviderQueueAdapterFactory(
+                runtimeOptions,
+                transport,
+                transportOptions,
+                mapper,
+                loggerFactory);
+        }
+
+        public async Task<IQueueAdapter> CreateAdapter() =>
+            new CrashBeforeAcknowledgementQueueAdapter(await _inner.CreateAdapter());
+
+        public IQueueAdapterCache GetQueueAdapterCache() => _inner.GetQueueAdapterCache();
+
+        public IStreamQueueMapper GetStreamQueueMapper() => _inner.GetStreamQueueMapper();
+
+        public Task<IStreamFailureHandler> GetDeliveryFailureHandler(QueueId queueId) =>
+            _inner.GetDeliveryFailureHandler(queueId);
+    }
+
+    private sealed class CrashBeforeAcknowledgementQueueAdapter(IQueueAdapter inner) : IQueueAdapter
+    {
+        public string Name => inner.Name;
+
+        public bool IsRewindable => inner.IsRewindable;
+
+        public StreamProviderDirection Direction => inner.Direction;
+
+        public Task QueueMessageBatchAsync<T>(
+            StreamId streamId,
+            IEnumerable<T> events,
+            StreamSequenceToken token,
+            Dictionary<string, object> requestContext) =>
+            inner.QueueMessageBatchAsync(streamId, events, token, requestContext);
+
+        public IQueueAdapterReceiver CreateReceiver(QueueId queueId) =>
+            new CrashBeforeAcknowledgementQueueAdapterReceiver(inner.CreateReceiver(queueId));
+    }
+
+    private sealed class CrashBeforeAcknowledgementQueueAdapterReceiver(IQueueAdapterReceiver inner)
+        : IQueueAdapterReceiver
+    {
+        public Task Initialize(TimeSpan timeout) => inner.Initialize(timeout);
+
+        public Task<IList<IBatchContainer>> GetQueueMessagesAsync(int maxCount) =>
+            inner.GetQueueMessagesAsync(maxCount);
+
+        public Task MessagesDeliveredAsync(IList<IBatchContainer> messages)
+        {
+            if (messages.Count == 0)
+                return inner.MessagesDeliveredAsync(messages);
+
+            var envelopeId = RequireEnvironmentVariable(CrashWorkerEnvelopeIdEnvironmentVariable);
+            var handlerMarkerPath = RequireEnvironmentVariable(CrashWorkerHandlerMarkerEnvironmentVariable);
+            if (!File.Exists(handlerMarkerPath) ||
+                !string.Equals(File.ReadAllText(handlerMarkerPath), envelopeId, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "Orleans entered MessagesDeliveredAsync before the expected RuntimeActorGrain handler completed.");
+            }
+
+            File.WriteAllText(
+                RequireEnvironmentVariable(CrashWorkerAckMarkerEnvironmentVariable),
+                envelopeId);
+            Environment.FailFast(
+                "Intentional test-only process exit after handler success and before Kafka offset acknowledgement.");
+            return Task.CompletedTask;
+        }
+
+        public Task Shutdown(TimeSpan timeout) => inner.Shutdown(timeout);
     }
 
     private sealed class EnvironmentVariableScope : IDisposable
@@ -635,6 +908,20 @@ public sealed class KafkaPersistentStreamProviderRedeliveryValidationTests
         public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            if (string.Equals(
+                    Environment.GetEnvironmentVariable(CrashWorkerEnvironmentVariable),
+                    "1",
+                    StringComparison.Ordinal) &&
+                string.Equals(
+                    envelope.Id,
+                    Environment.GetEnvironmentVariable(CrashWorkerEnvelopeIdEnvironmentVariable),
+                    StringComparison.Ordinal))
+            {
+                File.WriteAllText(
+                    RequireEnvironmentVariable(CrashWorkerHandlerMarkerEnvironmentVariable),
+                    envelope.Id);
+            }
+
             OnNextAttemptRecorder.RecordAttempt(envelope.Id ?? string.Empty);
             return Task.CompletedTask;
         }
@@ -721,6 +1008,20 @@ public sealed class KafkaPersistentStreamProviderRedeliveryValidationTests
         {
             ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
+        }
+    }
+}
+
+public sealed class KafkaAckCrashWorkerFactAttribute : FactAttribute
+{
+    public KafkaAckCrashWorkerFactAttribute()
+    {
+        if (!string.Equals(
+                Environment.GetEnvironmentVariable("AEVATAR_KAFKA_ACK_CRASH_WORKER"),
+                "1",
+                StringComparison.Ordinal))
+        {
+            Skip = "Executed only by the isolated Kafka pre-ACK crash-window harness.";
         }
     }
 }
