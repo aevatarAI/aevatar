@@ -528,7 +528,11 @@ internal sealed class NyxIdChatCommandEnvelopeFactory : ICommandEnvelopeFactory<
         var toolContext = AgentToolExecutionContext.Empty with
         {
             Request = new AgentToolRequestIdentity(command.TurnId, null),
-            Credentials = new AgentToolCredentials(command.AccessToken, null, null),
+            Credentials = new AgentToolCredentials(
+                command.AccessToken,
+                null,
+                null,
+                AgentToolNyxIdCredentialKind.SourceReadableUserBearer),
             Caller = new AgentToolCallerContext(
                 command.ScopeId,
                 command.OwnerSubject,

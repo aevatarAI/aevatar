@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using System.Text.Json;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AGUI.Contracts;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
@@ -81,6 +82,9 @@ public sealed class NyxIdChatPublicEndpointsTests
         start.ToolContext.NyxIdAuthority.Platform.Should().Be("nyxid");
         start.ToolContext.NyxIdAuthority.ExternalUserId.Should().Be("user-alpha");
         start.ToolContext.NyxIdAuthority.Scope.Should().Be("proxy");
+        AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(
+                AgentToolExecutionContextMapper.FromPayload(start.ToolContext).Credentials)
+            .Should().Be("delegated-token");
 
         context.Response.Body.Position = 0;
         var body = await new StreamReader(context.Response.Body).ReadToEndAsync();
