@@ -591,11 +591,16 @@ public sealed class ChannelWorkflowResultDeliveryContractTests
 
             Agent = await actorNetwork.CreateWorkflowRunAsync(actorId, ct);
             await Agent.BindWorkflowRunDefinitionAsync(
-                "contract-inline-definition",
-                workflowYaml,
-                workflowName,
+                definitionActorId: "contract-inline-definition",
+                workflowYaml: workflowYaml,
+                workflowName: workflowName,
+                inlineWorkflowYamls: null,
                 runId: actorId,
                 scopeId: command.ScopeId,
+                runOrigin: null,
+                scheduleId: null,
+                capabilityAdmissionPlan: null,
+                expectedExecutionMode: command.ExpectedExecutionMode,
                 ct: ct);
 
             var context = new DefaultCommandContextPolicy().Create(
@@ -681,6 +686,7 @@ public sealed class ChannelWorkflowResultDeliveryContractTests
                         WorkflowName = "wf-alpha",
                         WorkflowYaml = "name: wf-alpha\nroles: []\nsteps:\n  - id: result\n    type: transform",
                         DefinitionActorId = "wf-definition-alpha",
+                        ExecutionMode = ExternalCapabilityExecutionMode.Interactive,
                     },
                 },
             };
@@ -729,6 +735,7 @@ public sealed class ChannelWorkflowResultDeliveryContractTests
                         [plan.WorkflowYaml],
                         plan.WorkflowName,
                         WorkflowActorId),
+                    ExpectedExecutionMode: plan.ExecutionMode,
                     SessionId: chatRequest.SessionId,
                     ScopeId: request.Identity?.TenantId ?? chatRequest.ScopeId,
                     CommandIdSeed: request.CommandId,

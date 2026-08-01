@@ -758,14 +758,19 @@ jest.mock("@/shared/studio/api", () => ({
       ],
     })),
     getUserLlmSettings: jest.fn(async () => ({
-      savedRoute: "",
+      savedSelection: {
+        routeKind: "gateway",
+        routeValue: "/api/v1/llm/gateway/v1",
+        modelSelection: {
+          kind: "explicit_model",
+          modelId: "gpt-4.1-mini",
+        },
+      },
       savedRouteLabel: "Company LLM Gateway",
-      effectiveRoute: "",
-      effectiveRouteLabel: "Company LLM Gateway",
-      routeFallbackActive: false,
-      fallbackReason: null,
+      selectionStatus: "ready",
+      catalogDiagnostic: "unspecified",
+      remediation: "none",
       catalogStatus: "ready",
-      defaultModel: "gpt-4.1-mini",
       capabilities: {
         canEditRoute: true,
         canEditModel: true,
@@ -1928,6 +1933,13 @@ jest.mock("./components/StudioBuildPanels", () => {
         { key: "dry-run-route", "data-testid": "workflow-dry-run-route" },
         props.dryRunRouteLabel || ""
       ),
+      props.dryRunBlockedReason
+        ? mockReact.createElement(
+            "div",
+            { key: "dry-run-blocked", role: "alert" },
+            props.dryRunBlockedReason,
+          )
+        : null,
       mockReact.createElement("textarea", {
         key: "run-input",
         "aria-label": "Workflow dry run input",
@@ -3450,16 +3462,23 @@ describe("StudioPage", () => {
     expect(await screen.findByText("Workflow description")).toBeTruthy();
   });
 
-  it("uses the backend effective route when the saved workflow dry-run route is stale", async () => {
+  it("blocks a repair-required saved route without substituting Gateway", async () => {
     (studioApi.getUserLlmSettings as jest.Mock).mockResolvedValueOnce({
-      savedRoute: "/api/v1/proxy/s/stale-openai",
+      savedSelection: {
+        routeKind: "nyx_id_user_service",
+        routeValue: "/api/v1/proxy/s/stale-openai",
+        nyxIdUserServiceId: "us-stale-openai",
+        serviceSlugSnapshot: "stale-openai",
+        modelSelection: {
+          kind: "explicit_model",
+          modelId: "gpt-5.4-mini",
+        },
+      },
       savedRouteLabel: "/api/v1/proxy/s/stale-openai",
-      effectiveRoute: "",
-      effectiveRouteLabel: "Company LLM Gateway",
-      routeFallbackActive: true,
-      fallbackReason: "saved_route_unavailable",
+      selectionStatus: "needs_repair",
+      catalogDiagnostic: "route_not_ready",
+      remediation: "choose_replacement",
       catalogStatus: "ready",
-      defaultModel: "gpt-5.4-mini",
       capabilities: {
         canEditRoute: true,
         canEditModel: true,
@@ -3474,8 +3493,14 @@ describe("StudioPage", () => {
           status: "ready",
           allowed: true,
           ready: true,
-          serviceId: null,
+          userServiceId: null,
           serviceSlug: null,
+          modelCatalog: {
+            certainty: "enumerated",
+            modelIds: ["gpt-4.1-mini", "gpt-5.4-mini"],
+            defaultModelId: "gpt-4.1-mini",
+            diagnostic: "unspecified",
+          },
           description: null,
         },
         {
@@ -3485,8 +3510,14 @@ describe("StudioPage", () => {
           status: "ready",
           allowed: true,
           ready: true,
-          serviceId: "svc-openai",
+          userServiceId: "us-openai",
           serviceSlug: "openai",
+          modelCatalog: {
+            certainty: "enumerated",
+            modelIds: ["gpt-4.1-mini", "gpt-5.4-mini"],
+            defaultModelId: "gpt-4.1-mini",
+            diagnostic: "unspecified",
+          },
           description: null,
         },
       ],
@@ -3504,8 +3535,14 @@ describe("StudioPage", () => {
 
     const routeLabel = await screen.findByTestId("workflow-dry-run-route");
     await waitFor(() => {
-      expect(routeLabel).toHaveTextContent("Company LLM Gateway");
+      expect(routeLabel).toHaveTextContent("/api/v1/proxy/s/stale-openai");
     });
+    expect(routeLabel).not.toHaveTextContent("Company LLM Gateway");
+    expect(
+      screen.getByText(
+        "The saved LLM selection needs attention in Settings before this workflow can run.",
+      ),
+    ).toBeTruthy();
   });
 
   it("canonicalizes legacy service member params to real member ids", async () => {

@@ -127,6 +127,32 @@ Runtime does no raw OpenAPI read, definition-actor/read-model/event-store side r
 
 Mainnet 的 `Enforce` startup gate 只读 actor-scoped current-state read models，不 activate、prime、replay 或 mutate projection。它分页校验所有未被 typed deployment state 明确标记为 deactivated 的 definition binding，以及所有非 `completed / failed / stopped` run current state；每个对象都必须携带完整且 digest-valid 的 v4 plan。已 deactivated service definition 可作为历史 revision 留存；缺 deployment relationship、active/failed/unknown deployment、普通 definition 和非终态 run 一律保守校验。失败使用稳定 blocker `CAPABILITY_ADMISSION_REBIND_REQUIRED`，仅含总数与每类最多八个 actor ID sample。`Shadow` 不执行 startup inventory scan。
 
+### Local artifact compatibility before actor lifecycle
+
+Every publish, deployment, chat, schedule, and fork producer supplies a typed, non-`Unspecified` `ExpectedExecutionMode`. The value is protocol evidence owned by that producer; it is never inferred from `scheduleId`, `runOrigin`, an actor ID, a route position, or the admission plan being checked. Definition and run bindings persist the same value, and a run cannot change mode after its first binding.
+
+Before creating, linking, binding, repairing, registering, or dispatching a workflow actor, the Application preflight parses the root YAML and every distinct inline workflow with the canonical parser, evaluates external invocations with the canonical dependency evaluator, and validates the persisted capability plan locally. It performs no network call, catalog lookup, source-freshness check, event replay, projection priming, repair, or invocation-time `RevalidatePersistedAsync`. The authoritative `WorkflowRunActorPort` repeats this pre-mutation gate; exact service-run dispatch also performs it before service-run registration so a deterministic rejection leaves zero Run artifacts.
+
+```mermaid
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
+flowchart LR
+  A["Typed selection or persisted workflow"] --> B["Committed read models"]
+  B --> C["Local admission"]
+  C -->|"accepted"| D["Actor inbox"]
+  C -->|"rejected"| E["Typed repair action; zero Run"]
+```
+
+The stable local outcomes are deliberately bounded and safe:
+
+| Condition | Stable code | Safe message | Repair action |
+| --- | --- | --- | --- |
+| Invalid root or inline YAML | `WORKFLOW_DEFINITION_INVALID` | Workflow definition is invalid. | Update and rebind workflow. |
+| Retired direct NyxID authoring | `NYXID_OPERATION_AUTHORING_MIGRATION_REQUIRED` | Workflow uses a retired NyxID tool contract. | Update and rebind workflow. |
+| Missing or legacy plan | `CAPABILITY_ADMISSION_REBIND_REQUIRED` | Workflow capability admission must be rebuilt. | Update and rebind workflow. |
+| YAML/plan or execution-mode mismatch | `CAPABILITY_ADMISSION_REBIND_REQUIRED` | Saved workflow and capability admission no longer match. | Update and rebind workflow. |
+
+The exception exposes only the stable code and safe message. YAML, selectors, credentials, upstream response bodies, exception types, and stack traces do not enter state, projection, logs, or API summaries.
+
 ### Event Module
 
 可插拔的事件处理器（实现 `IEventModule<TContext>`），四个要素：

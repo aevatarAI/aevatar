@@ -80,10 +80,10 @@ public sealed class ResponsesCommandFacade(
         // Single preferred-model source: explicit caller model > account UserConfig > route
         // policy / deployment default. See IngressModelPreference.
         var explicitCallerModel = IngressModelPreference.Normalize(request.Model);
-        var ownerConfig = await TryLoadOwnerConfigAsync(callerScope.ScopeId, ct);
+        var ownerControl = await TryLoadOwnerControlAsync(callerScope.ScopeId, ct);
         var trigger = ParseSkillInvocationTrigger(normalized.Prompt);
         var routedModelResult = await ResolveRouteTargetAsync(
-            normalized, callerScope, explicitCallerModel, ownerConfig, trigger, ct);
+            normalized, callerScope, explicitCallerModel, ownerControl, trigger, ct);
         if (routedModelResult.Error is not null)
             return ResponsesCreateCommandResult.FromError(
                 routedModelResult.Error.StatusCode,
@@ -125,7 +125,7 @@ public sealed class ResponsesCommandFacade(
             continuation.PreviousSnapshot,
             callerScope,
             routedModelResult.Action!,
-            ownerConfig,
+            ownerControl,
             trigger,
             callerScopeContext.InboundBearerToken,
             sessionResult.Session!,
@@ -287,16 +287,21 @@ public sealed class ResponsesCommandFacade(
     // Account UserConfig is the single "preferred model" source for ingress. Reads are
     // swallow-and-logged (mirroring OwnerLlmConfigApplier) so a flaky projection never fails a
     // request — resolution then falls through to the route policy / deployment default.
-    private async Task<OwnerLlmConfig?> TryLoadOwnerConfigAsync(string scopeId, CancellationToken ct)
+    private async Task<LLMControlContext?> TryLoadOwnerControlAsync(string scopeId, CancellationToken ct)
     {
         if (ownerLlmConfigSource is null || string.IsNullOrWhiteSpace(scopeId))
             return null;
 
         try
         {
-            return await ownerLlmConfigSource.GetForScopeAsync(scopeId, ct).ConfigureAwait(false);
+            var config = await ownerLlmConfigSource.GetForScopeAsync(scopeId, ct).ConfigureAwait(false);
+            return config.ApplyTo(LLMControlContext.Empty);
         }
         catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (LLMSelectionRepairRequiredException)
         {
             throw;
         }
@@ -311,7 +316,7 @@ public sealed class ResponsesCommandFacade(
         NormalizedResponsesRequest normalized,
         ResponsesCallerScope callerScope,
         string? explicitCallerModel,
-        OwnerLlmConfig? ownerConfig,
+        LLMControlContext? ownerControl,
         SkillInvocationTrigger? trigger,
         CancellationToken ct)
     {
@@ -343,7 +348,7 @@ public sealed class ResponsesCommandFacade(
             : null;
         var routedModel = IngressModelPreference.ResolveModel(
             explicitCallerModel,
-            ownerConfig?.DefaultModel,
+            ownerControl?.ModelOverride,
             routePolicyForwardModel,
             normalized.Model);
         if (action.ForwardToModel is null)
@@ -455,7 +460,7 @@ public sealed class ResponsesCommandFacade(
         LlmSessionSnapshot? previousSnapshot,
         ResponsesCallerScope callerScope,
         ChatRouteAction routeAction,
-        OwnerLlmConfig? ownerConfig,
+        LLMControlContext? ownerControl,
         SkillInvocationTrigger? trigger,
         string bearerToken,
         LlmSessionRegistrationResult responseSession,
@@ -477,7 +482,7 @@ public sealed class ResponsesCommandFacade(
             ? normalized.Model
             : forwardToModel.ModelName.Trim();
         var (effectiveModel, resolvedRouteValue) = await ResolveModelRouteAsync(
-            routedModel, ownerConfig?.PreferredLlmRoute, bearerToken, ct);
+            routedModel, ownerControl?.NyxIdRoutePreference, bearerToken, ct);
         var toolContext = toolProviderContext.ToolContext with
         {
             Routing = toolProviderContext.ToolContext.Routing with

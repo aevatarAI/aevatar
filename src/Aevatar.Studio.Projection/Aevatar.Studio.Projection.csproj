@@ -9,6 +9,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Aevatar.Audit.Abstractions\Aevatar.Audit.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.Audit.Core\Aevatar.Audit.Core.csproj" />
+    <ProjectReference Include="..\Aevatar.AI.Abstractions\Aevatar.AI.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.ContentArtifacts.Abstractions\Aevatar.ContentArtifacts.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.CQRS.Core\Aevatar.CQRS.Core.csproj" />
@@ -47,7 +48,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Protobuf Include="ReadModels/studio_projection_readmodels.proto" GrpcServices="None" AdditionalImportDirs="../../agents/Aevatar.GAgents.UserConfig" />
+    <Protobuf Include="ReadModels/studio_projection_readmodels.proto" GrpcServices="None" AdditionalImportDirs="../Aevatar.AI.Abstractions" />
   </ItemGroup>
 
   <ItemGroup>

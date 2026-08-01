@@ -1551,7 +1551,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
         var now = new DateTimeOffset(2026, 7, 15, 8, 0, 0, TimeSpan.Zero);
         var ownerLLMSelection = new ScheduledInvocationOwnerLLMSelection
         {
-            RouteKind = ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService,
+            RouteKind = LLMRouteKind.NyxIdUserService,
             RouteValue = "/api/v1/proxy/s/chrono-llm-public",
             NyxIdUserServiceId = "nyx-llm-service-alpha",
             ServiceSlugSnapshot = "chrono-llm-public",
@@ -2019,6 +2019,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
                     DateTimeOffset.Parse("2026-05-29T09:00:00+00:00"),
                     null,
                     null,
+                    string.Empty,
                     string.Empty,
                     string.Empty,
                     string.Empty,
@@ -2772,6 +2773,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
                 DateTimeOffset.UnixEpoch,
                 null,
                 null,
+                string.Empty,
                 string.Empty,
                 string.Empty,
                 string.Empty,

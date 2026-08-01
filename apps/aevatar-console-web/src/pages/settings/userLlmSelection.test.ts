@@ -1,12 +1,22 @@
-import type { StudioUserLlmRouteOption } from "@/shared/studio/models";
+import type {
+  StudioLlmModelCatalog,
+  StudioUserLlmRouteOption,
+} from "@/shared/studio/models";
 import {
   buildUserLlmSelectionOptions,
   decodeUserLlmSelectionValue,
   encodeUserLlmSelectionValue,
   resolveSavedUserLlmSelection,
+  userLlmSelectionsEqual,
 } from "./userLlmSelection";
 
 const duplicateRoute = "/api/v1/proxy/s/shared-openai";
+const enumeratedCatalog = (modelId: string): StudioLlmModelCatalog => ({
+  certainty: "enumerated",
+  modelIds: [modelId],
+  defaultModelId: modelId,
+  diagnostic: "unspecified",
+});
 
 const routeOptions: StudioUserLlmRouteOption[] = [
   {
@@ -18,33 +28,26 @@ const routeOptions: StudioUserLlmRouteOption[] = [
     ready: true,
     userServiceId: null,
     serviceSlug: null,
-    defaultModel: null,
+    modelCatalog: {
+      certainty: "not_verifiable",
+      modelIds: [],
+      defaultModelId: null,
+      diagnostic: "not_published",
+    },
     description: null,
   },
-  {
+  ...["alpha", "beta"].map((suffix) => ({
     routeValue: duplicateRoute,
-    label: "Shared OpenAI alpha",
+    label: `Shared OpenAI ${suffix}`,
     source: "user_service",
     status: "ready",
     allowed: true,
     ready: true,
-    userServiceId: "us-alpha",
+    userServiceId: `us-${suffix}`,
     serviceSlug: "shared-openai",
-    defaultModel: "gpt-alpha",
+    modelCatalog: enumeratedCatalog(`gpt-${suffix}`),
     description: null,
-  },
-  {
-    routeValue: duplicateRoute,
-    label: "Shared OpenAI beta",
-    source: "user_service",
-    status: "ready",
-    allowed: true,
-    ready: true,
-    userServiceId: "us-beta",
-    serviceSlug: "shared-openai",
-    defaultModel: "gpt-beta",
-    description: null,
-  },
+  })),
   {
     routeValue: "/api/v1/proxy/s/diagnostic-only",
     label: "Provider diagnostic",
@@ -54,13 +57,13 @@ const routeOptions: StudioUserLlmRouteOption[] = [
     ready: true,
     userServiceId: "diag-health",
     serviceSlug: "diagnostic-only",
-    defaultModel: "diagnostic-model",
+    modelCatalog: enumeratedCatalog("diagnostic-model"),
     description: "Visible in health details only",
   },
 ];
 
 describe("userLlmSelection", () => {
-  it("keeps duplicate-route inventory services distinct and excludes diagnostics", () => {
+  it("keeps duplicate-route inventory identities distinct and starts with Provider default", () => {
     const options = buildUserLlmSelectionOptions(routeOptions);
 
     expect(options.map((option) => option.value)).toEqual([
@@ -68,70 +71,73 @@ describe("userLlmSelection", () => {
       "user-service:us-alpha",
       "user-service:us-beta",
     ]);
-    expect(options.map((option) => option.label)).not.toContain(
-      "Provider diagnostic",
-    );
     expect(
       decodeUserLlmSelectionValue("user-service:us-beta", options),
     ).toEqual({
-      kind: "nyx_id_user_service",
-      userServiceId: "us-beta",
+      routeKind: "nyx_id_user_service",
       routeValue: duplicateRoute,
+      nyxIdUserServiceId: "us-beta",
+      serviceSlugSnapshot: "shared-openai",
+      modelSelection: { kind: "provider_default" },
     });
-    expect(options.find((option) => option.value === "user-service:us-beta"))
-      .toMatchObject({ defaultModel: "gpt-beta" });
   });
 
   it("encodes exact user service IDs without using their route", () => {
     expect(
       encodeUserLlmSelectionValue({
-        kind: "nyx_id_user_service",
-        userServiceId: "us/team beta",
+        routeKind: "nyx_id_user_service",
         routeValue: duplicateRoute,
+        nyxIdUserServiceId: "us/team beta",
+        serviceSlugSnapshot: "shared-openai",
+        modelSelection: { kind: "provider_default" },
       }),
     ).toBe("user-service:us%2Fteam%20beta");
   });
 
-  it("does not recover a saved service identity from a matching route", () => {
+  it("retains the exact saved selection without replacing its route from inventory", () => {
+    const savedSelection = {
+      routeKind: "nyx_id_user_service" as const,
+      routeValue: "/api/v1/proxy/s/shared-openai-old",
+      nyxIdUserServiceId: "us-alpha",
+      serviceSlugSnapshot: "shared-openai-old",
+      modelSelection: {
+        kind: "explicit_model" as const,
+        modelId: "gpt-old",
+      },
+    };
+
+    expect(resolveSavedUserLlmSelection({ savedSelection })).toEqual(
+      savedSelection,
+    );
+  });
+
+  it("does not turn System default into Gateway", () => {
     expect(
       resolveSavedUserLlmSelection({
-        savedRoute: duplicateRoute,
-        savedRouteKind: "nyx_id_user_service",
-        savedUserServiceId: null,
+        savedSelection: {
+          routeKind: "unspecified",
+          modelSelection: { kind: "unspecified" },
+        },
       }),
     ).toBeUndefined();
   });
 
-  it("uses the explicit Gateway route for a saved Gateway selection", () => {
+  it("compares the full route identity and model selection", () => {
+    const left = resolveSavedUserLlmSelection({
+      savedSelection: {
+        routeKind: "nyx_id_user_service",
+        routeValue: duplicateRoute,
+        nyxIdUserServiceId: "us-alpha",
+        serviceSlugSnapshot: "shared-openai",
+        modelSelection: { kind: "explicit_model", modelId: "gpt-alpha" },
+      },
+    });
+
     expect(
-      resolveSavedUserLlmSelection({
-        savedRoute: "",
-        savedRouteKind: "gateway",
-        savedUserServiceId: null,
+      userLlmSelectionsEqual(left, {
+        ...left!,
+        modelSelection: { kind: "explicit_model", modelId: "gpt-beta" },
       }),
-    ).toEqual({
-      kind: "gateway",
-      routeValue: "/api/v1/llm/gateway/v1",
-    });
-  });
-
-  it("resolves an exact saved ID through its current inventory route", () => {
-    const settings = {
-      savedRoute: "/api/v1/proxy/s/shared-openai-old",
-      savedRouteKind: "nyx_id_user_service" as const,
-      savedUserServiceId: "us-alpha",
-      routeOptions: [
-        {
-          ...routeOptions[1],
-          routeValue: "/api/v1/proxy/s/shared-openai-current",
-        },
-      ],
-    };
-
-    expect(resolveSavedUserLlmSelection(settings)).toEqual({
-      kind: "nyx_id_user_service",
-      userServiceId: "us-alpha",
-      routeValue: "/api/v1/proxy/s/shared-openai-current",
-    });
+    ).toBe(false);
   });
 });

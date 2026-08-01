@@ -4,6 +4,7 @@ using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Core;
 using Aevatar.GAgentService.Core.Ports;
 using Aevatar.Scripting.Core.Ports;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 
 namespace Aevatar.GAgentService.Infrastructure.Activation;
@@ -129,6 +130,11 @@ public sealed class DefaultServiceRuntimeActivator : IServiceRuntimeActivator
         CancellationToken ct)
     {
         var plan = artifact.DeploymentPlan.WorkflowPlan;
+        if (plan.ExecutionMode == ExternalCapabilityExecutionMode.Unspecified ||
+            !Enum.IsDefined(plan.ExecutionMode))
+        {
+            throw new InvalidOperationException("Workflow service deployment execution mode is required.");
+        }
         var bindingIdentity = WorkflowServiceDeploymentPlanIntegrity.ResolveBindingIdentity(
             artifact,
             resolvedRevisionId);
@@ -141,6 +147,7 @@ public sealed class DefaultServiceRuntimeActivator : IServiceRuntimeActivator
                 plan.WorkflowName,
                 plan.WorkflowYaml,
                 plan.InlineWorkflowYamls,
+                plan.ExecutionMode,
                 ScopeId: scopeId?.Trim() ?? string.Empty,
                 SourceKind: "service_revision",
                 CapabilityAdmissionPlan: plan.CapabilityAdmissionPlan?.Clone(),

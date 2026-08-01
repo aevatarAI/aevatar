@@ -1,3 +1,5 @@
+using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.NyxidChat.LlmSelection;
@@ -33,11 +35,13 @@ public sealed class DefaultUserLlmOptionsServiceTests
             MissingTypedSelectionCase.Unspecified => new StudioConfig(
                 DefaultModel: "gpt-5.5",
                 PreferredLlmRoute: compatibilityRoute,
-                LlmSelection: new UserLlmSelectionValue(
-                    UserLlmSelectionKind.Unspecified,
-                    SharedRoute,
-                    "us-alpha",
-                    "shared-llm")),
+                LlmSelection: new LLMSelection
+                {
+                    RouteValue = SharedRoute,
+                    NyxIdUserServiceId = "us-alpha",
+                    ServiceSlugSnapshot = "shared-llm",
+                    ModelSelection = new LLMModelSelection(),
+                }),
             _ => throw new ArgumentOutOfRangeException(nameof(selectionCase)),
         };
 
@@ -50,11 +54,7 @@ public sealed class DefaultUserLlmOptionsServiceTests
     [Fact]
     public async Task GetOptionsAsync_WithTypedServiceMissingIdAndGatewayRoute_ShouldHaveNoCurrentOption()
     {
-        var selection = new UserLlmSelectionValue(
-            UserLlmSelectionKind.NyxIdUserService,
-            UserConfigLlmRouteDefaults.Gateway,
-            " ",
-            "shared-llm");
+        var selection = ServiceSelection(" ", UserConfigLlmRouteDefaults.Gateway);
 
         var view = await GetOptionsAsync(Config(selection), GatewayService(), InventoryService("us-alpha"));
 
@@ -64,11 +64,7 @@ public sealed class DefaultUserLlmOptionsServiceTests
     [Fact]
     public async Task GetOptionsAsync_WithTypedServiceMissingIdAndDuplicateRoute_ShouldNotMatchByRoute()
     {
-        var selection = new UserLlmSelectionValue(
-            UserLlmSelectionKind.NyxIdUserService,
-            SharedRoute,
-            string.Empty,
-            "shared-llm");
+        var selection = ServiceSelection(string.Empty, SharedRoute);
 
         var view = await GetOptionsAsync(
             Config(selection),
@@ -79,13 +75,14 @@ public sealed class DefaultUserLlmOptionsServiceTests
     }
 
     [Fact]
-    public async Task GetOptionsAsync_WithTypedGatewayAndServiceRouteSnapshot_ShouldResolveCanonicalGatewayOnly()
+    public async Task GetOptionsAsync_WithValidTypedGateway_ShouldResolveCanonicalGatewayOnly()
     {
-        var selection = new UserLlmSelectionValue(
-            UserLlmSelectionKind.Gateway,
-            SharedRoute,
-            "us-alpha",
-            "shared-llm");
+        var selection = new LLMSelection
+        {
+            RouteKind = LLMRouteKind.Gateway,
+            RouteValue = UserConfigLlmRouteDefaults.Gateway,
+            ModelSelection = ProviderDefaultModel(),
+        };
 
         var view = await GetOptionsAsync(Config(selection), GatewayService(), InventoryService("us-alpha"));
 
@@ -98,11 +95,7 @@ public sealed class DefaultUserLlmOptionsServiceTests
     [Fact]
     public async Task GetOptionsAsync_WithValidTypedServiceAndDuplicateRoute_ShouldResolveExactInventoryId()
     {
-        var selection = new UserLlmSelectionValue(
-            UserLlmSelectionKind.NyxIdUserService,
-            SharedRoute,
-            "us-beta",
-            "shared-llm");
+        var selection = ServiceSelection("us-beta", SharedRoute);
 
         var view = await GetOptionsAsync(
             Config(selection),
@@ -113,10 +106,24 @@ public sealed class DefaultUserLlmOptionsServiceTests
         view.Current!.Identity!.NyxIdUserServiceId.Should().Be("us-beta");
     }
 
-    private static StudioConfig Config(UserLlmSelectionValue selection) => new(
+    private static StudioConfig Config(LLMSelection selection) => new(
         DefaultModel: "gpt-5.5",
         PreferredLlmRoute: selection.RouteValue,
         LlmSelection: selection);
+
+    private static LLMSelection ServiceSelection(string userServiceId, string route) => new()
+    {
+        RouteKind = LLMRouteKind.NyxIdUserService,
+        RouteValue = route,
+        NyxIdUserServiceId = userServiceId,
+        ServiceSlugSnapshot = "shared-llm",
+        ModelSelection = ProviderDefaultModel(),
+    };
+
+    private static LLMModelSelection ProviderDefaultModel() => new()
+    {
+        Kind = LLMModelSelectionKind.ProviderDefault,
+    };
 
     private static async Task<UserLlmOptionsView> GetOptionsAsync(
         StudioConfig? config,
@@ -147,8 +154,7 @@ public sealed class DefaultUserLlmOptionsServiceTests
         ServiceSlug: "gateway",
         DisplayName: "NyxID Gateway",
         RouteValue: UserConfigLlmRouteDefaults.Gateway,
-        DefaultModel: "gpt-5.5",
-        Models: ["gpt-5.5"],
+        ModelCatalog: EnumeratedCatalog("gpt-5.5"),
         Status: UserLlmRouteStatus.Ready,
         Source: UserLlmRouteSource.GatewayProvider,
         Allowed: true,
@@ -159,8 +165,7 @@ public sealed class DefaultUserLlmOptionsServiceTests
         ServiceSlug: "shared-llm",
         DisplayName: $"Service {id}",
         RouteValue: SharedRoute,
-        DefaultModel: "gpt-5.5",
-        Models: ["gpt-5.5"],
+        ModelCatalog: EnumeratedCatalog("gpt-5.5"),
         Status: UserLlmRouteStatus.Ready,
         Source: UserLlmRouteSource.UserService,
         Allowed: true,
@@ -168,6 +173,13 @@ public sealed class DefaultUserLlmOptionsServiceTests
         Identity: new UserLlmServiceIdentity(
             UserLlmIdentityAuthority.NyxIdUserServicesInventory,
             id));
+
+    private static LLMModelCatalog EnumeratedCatalog(string modelId) => new()
+    {
+        Certainty = LLMModelCatalogCertainty.Enumerated,
+        DefaultModelId = modelId,
+        ModelIds = { modelId },
+    };
 
     private sealed class StubCatalogClient(NyxIdLlmServicesResult result) : INyxIdLlmServiceCatalogClient
     {

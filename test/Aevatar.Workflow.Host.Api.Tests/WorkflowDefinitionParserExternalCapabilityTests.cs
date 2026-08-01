@@ -260,14 +260,20 @@ public sealed class WorkflowDefinitionParserExternalCapabilityTests
             new NoopActorRuntime(),
             dispatch,
             new NoopWorkflowActorBindingReader(),
+            new AcceptingArtifactCompatibilityPreflight(),
             [new WorkflowCoreModulePack()],
             logger: NullLogger<WorkflowRunActorPort>.Instance);
         await port.BindWorkflowDefinitionAsync(
             $"workflow-definition:{workflowId}",
             workflowYaml,
             parsed.WorkflowName,
+            inlineWorkflowYamls: null,
+            scopeId: null,
             sourceKind: "host_fixture",
-            capabilityAdmissionPlan: plan);
+            capabilityAdmissionPlan: plan,
+            workflowId: workflowId,
+            revisionId: revisionId,
+            expectedExecutionMode: ExternalCapabilityExecutionMode.Interactive);
 
         dispatch.ActorId.Should().Be($"workflow-definition:{workflowId}");
         var bind = dispatch.Envelope.Payload!.Unpack<BindWorkflowDefinitionEvent>();
@@ -393,5 +399,17 @@ public sealed class WorkflowDefinitionParserExternalCapabilityTests
     {
         public Task<WorkflowActorBinding?> GetAsync(string actorId, CancellationToken ct = default) =>
             Task.FromResult<WorkflowActorBinding?>(null);
+    }
+
+    private sealed class AcceptingArtifactCompatibilityPreflight : IWorkflowArtifactCompatibilityPreflight
+    {
+        public Task ValidateAsync(
+            WorkflowArtifactCompatibilityRequest request,
+            CancellationToken ct = default)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
     }
 }

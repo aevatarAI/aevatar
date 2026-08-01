@@ -88,8 +88,13 @@ public sealed class WorkflowExecutionContextAdapterTests
             definitionActorId: "definition-1",
             workflowYaml: "",
             workflowName: "wf_scope",
+            inlineWorkflowYamls: null,
             runId: "run-1",
-            scopeId: " scope-1 ");
+            scopeId: " scope-1 ",
+            runOrigin: null,
+            scheduleId: null,
+            capabilityAdmissionPlan: null,
+            expectedExecutionMode: ExternalCapabilityExecutionMode.Interactive);
         var adapter = WorkflowExecutionContextAdapter.Create(new RecordingEventHandlerContext(), stateHost);
 
         stateHost.ScopeId.Should().Be("scope-1");
@@ -107,6 +112,7 @@ public sealed class WorkflowExecutionContextAdapterTests
         await agent.HandleEnsureWorkflowRunDefinitionAsync(command.Clone());
 
         agent.State.Equals(boundState).Should().BeTrue();
+        agent.State.ExpectedExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Interactive);
         runtime.Links.Should().OnlyContain(link =>
             link.ParentId == "definition-1" &&
             link.ChildId == "work-order-run-1");
@@ -131,6 +137,29 @@ public sealed class WorkflowExecutionContextAdapterTests
             .WithMessage("*already bound to a different definition or identity*");
         runtime.Links.Should().HaveCount(linksBeforeConflict);
         agent.State.LastCommandId.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task EnsureWorkflowRunDefinition_WhenModeChanges_ShouldRejectAndPreserveFirstMode()
+    {
+        var (agent, runtime) = CreateBareWorkflowRunAgent("work-order-run-1");
+        await agent.HandleEnsureWorkflowRunDefinitionAsync(BuildEnsureWorkflowRunDefinition());
+        var linksBeforeConflict = runtime.Links.Count;
+        var conflicting = BuildEnsureWorkflowRunDefinition();
+        conflicting.Binding.ExpectedExecutionMode = ExternalCapabilityExecutionMode.Durable;
+
+        var act = () => agent.HandleEnsureWorkflowRunDefinitionAsync(conflicting);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*different definition or identity*");
+        agent.State.ExpectedExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Interactive);
+        runtime.Links.Should().HaveCount(linksBeforeConflict);
+    }
+
+    [Fact]
+    public void WorkflowRunStateContract_ShouldCarryExpectedExecutionMode()
+    {
+        WorkflowRunState.Descriptor.FindFieldByName("expected_execution_mode")!.FieldNumber.Should().Be(44);
     }
 
     [Fact]
@@ -704,6 +733,7 @@ public sealed class WorkflowExecutionContextAdapterTests
                 RunId = "work-order-run-1",
                 ScopeId = "scope-1",
                 RunOrigin = WorkflowRunOrigins.WorkOrder,
+                ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
             },
         };
 

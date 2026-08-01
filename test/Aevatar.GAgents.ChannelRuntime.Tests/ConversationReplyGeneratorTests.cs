@@ -2770,21 +2770,19 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
-    public async Task GenerateReplyAsync_AppliesSenderPrefsOverChainOwnerDefault()
+    public async Task GenerateReplyAsync_AppliesCompleteSenderSelectionOverOwnerSelection()
     {
         // Issue #513 phase 3: when the inbound carries a sender binding-id,
-        // sender prefs override the upstream-pinned bot-owner prefs field-
-        // by-field. The owner's metadata is already in the input (channel
+        // sender prefs override the upstream-pinned bot-owner selection as one fact. The owner's metadata is already in the input (channel
         // turn runner pins it via OwnerLlmConfigApplier in production), so
         // the generator only has to layer sender overrides where the sender
         // actually set a value.
         var providerFactory = new RecordingProviderFactory();
         var prefsStore = new ScopedStubPreferencesStore
         {
-            // Sender (binding-id) has chosen a model but left route blank.
             ByBinding =
             {
-                ["bnd_sender"] = new NyxIdUserLlmPreferences("sender-model", string.Empty, MaxToolRounds: 0),
+                ["bnd_sender"] = SenderPreferences(),
             },
         };
         var generator = new NyxIdConversationReplyGenerator(providerFactory, BuiltInPromptFloorProvider, preferencesStore: prefsStore);
@@ -2797,7 +2795,7 @@ public sealed class ConversationReplyGeneratorTests
                 Content = new MessageContent { Text = "hello" },
             },
             new Dictionary<string, string>(),
-            Control("owner-model", "/api/v1/proxy/s/owner", 9),
+            Control("owner-model", "/api/v1/proxy/s/owner", 9, "owner-token", "sender-token"),
             ToolContext("bnd_sender"),
             streamingSink: null,
             CancellationToken.None);
@@ -2806,10 +2804,8 @@ public sealed class ConversationReplyGeneratorTests
         request.Metadata.Should().NotBeNull();
         request.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
         var toolContext = request.ToolContext!;
-        // Sender's model wins (non-empty).
         toolContext.Routing.ModelOverride.Should().Be("sender-model");
-        // Sender left route blank → owner's upstream-pinned route stays.
-        toolContext.Routing.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/owner");
+        toolContext.Routing.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/sender");
         // Sender left max-rounds at 0 → owner's upstream-pinned value stays.
         toolContext.Routing.MaxToolRoundsOverride.Should().Be(9);
     }
@@ -3110,10 +3106,7 @@ public sealed class ConversationReplyGeneratorTests
         {
             ByBinding =
             {
-                ["bnd_sender"] = new NyxIdUserLlmPreferences(
-                    "sender-model",
-                    "/api/v1/proxy/s/sender",
-                    MaxToolRounds: 7),
+                ["bnd_sender"] = SenderPreferences(7),
             },
         };
         var generator = new NyxIdConversationReplyGenerator(providerFactory, BuiltInPromptFloorProvider, preferencesStore: prefsStore);
@@ -3167,10 +3160,7 @@ public sealed class ConversationReplyGeneratorTests
         {
             ByBinding =
             {
-                ["bnd_sender"] = new NyxIdUserLlmPreferences(
-                    "sender-model",
-                    "/api/v1/proxy/s/sender",
-                    MaxToolRounds: 7),
+                ["bnd_sender"] = SenderPreferences(7),
             },
         };
         var generator = new NyxIdConversationReplyGenerator(
@@ -3255,10 +3245,7 @@ public sealed class ConversationReplyGeneratorTests
         {
             ByBinding =
             {
-                ["bnd_sender"] = new NyxIdUserLlmPreferences(
-                    "sender-model",
-                    "/api/v1/proxy/s/sender",
-                    MaxToolRounds: 7),
+                ["bnd_sender"] = SenderPreferences(7),
             },
         };
         var generator = new NyxIdConversationReplyGenerator(providerFactory, BuiltInPromptFloorProvider, preferencesStore: prefsStore);
@@ -3279,9 +3266,9 @@ public sealed class ConversationReplyGeneratorTests
         var request = providerFactory.Requests.Should().ContainSingle().Subject;
         request.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
         var requestToolContext = request.ToolContext!;
-        requestToolContext.Routing.ModelOverride.Should().Be("sender-model");
+        requestToolContext.Routing.ModelOverride.Should().Be("owner-model");
         requestToolContext.Routing.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/owner");
-        requestToolContext.Routing.MaxToolRoundsOverride.Should().Be(7);
+        requestToolContext.Routing.MaxToolRoundsOverride.Should().Be(5);
         requestToolContext.Credentials.NyxIdAccessToken.Should().Be("owner-token");
         requestToolContext.Credentials.NyxIdOrgToken.Should().Be("owner-token");
         requestToolContext.SenderBinding.BindingId.Should().Be("bnd_sender");
@@ -3289,14 +3276,14 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
-    public async Task GenerateReplyAsync_WhenSenderHasNoRoutePreference_ShouldStillPromoteSenderTokenForTools()
+    public async Task GenerateReplyAsync_WithSenderSelection_ShouldPromoteSenderTokenForTools()
     {
         var providerFactory = new RecordingProviderFactory();
         var prefsStore = new ScopedStubPreferencesStore
         {
             ByBinding =
             {
-                ["bnd_sender"] = new NyxIdUserLlmPreferences("sender-model", string.Empty, MaxToolRounds: 0),
+                ["bnd_sender"] = SenderPreferences(),
             },
         };
         var generator = new NyxIdConversationReplyGenerator(providerFactory, BuiltInPromptFloorProvider, preferencesStore: prefsStore);
@@ -3316,7 +3303,7 @@ public sealed class ConversationReplyGeneratorTests
 
         var toolContext = providerFactory.Requests.Should().ContainSingle().Subject.ToolContext!;
         toolContext.Routing.ModelOverride.Should().Be("sender-model");
-        toolContext.Routing.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/owner");
+        toolContext.Routing.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/sender");
         toolContext.Credentials.NyxIdAccessToken.Should().Be("sender-token");
         toolContext.Credentials.NyxIdOrgToken.Should().Be("sender-token");
         toolContext.Credentials.SenderNyxIdAccessToken.Should().Be("sender-token");
@@ -3336,7 +3323,7 @@ public sealed class ConversationReplyGeneratorTests
     // now falls back only the LLM route while preserving sender binding.
     public const string MatrixUnbound = "unbound";
     public const string MatrixBoundEmpty = "bound_empty_prefs";
-    public const string MatrixBoundModelOnly = "bound_model_only";
+    public const string MatrixBoundSelection = "bound_selection";
     public const string MatrixOwnerNone = "owner_none";
     public const string MatrixOwnerPartial = "owner_partial_model_only";
     public const string MatrixOwnerFull = "owner_full";
@@ -3348,9 +3335,9 @@ public sealed class ConversationReplyGeneratorTests
     [InlineData(MatrixBoundEmpty, MatrixOwnerNone, null, null, null)]
     [InlineData(MatrixBoundEmpty, MatrixOwnerPartial, "owner-model", null, null)]
     [InlineData(MatrixBoundEmpty, MatrixOwnerFull, "owner-model", "/api/v1/proxy/s/owner", "9")]
-    [InlineData(MatrixBoundModelOnly, MatrixOwnerNone, "sender-model", null, null)]
-    [InlineData(MatrixBoundModelOnly, MatrixOwnerPartial, "sender-model", null, null)]
-    [InlineData(MatrixBoundModelOnly, MatrixOwnerFull, "sender-model", "/api/v1/proxy/s/owner", "9")]
+    [InlineData(MatrixBoundSelection, MatrixOwnerNone, "sender-model", "/api/v1/proxy/s/sender", null)]
+    [InlineData(MatrixBoundSelection, MatrixOwnerPartial, "sender-model", "/api/v1/proxy/s/sender", null)]
+    [InlineData(MatrixBoundSelection, MatrixOwnerFull, "sender-model", "/api/v1/proxy/s/sender", "9")]
     public async Task GenerateReplyAsync_OverrideMatrix_BindingTimesOwnerPrefs(
         string bindingState,
         string ownerState,
@@ -3367,11 +3354,8 @@ public sealed class ConversationReplyGeneratorTests
                 // Lookup returns the default empty record (no entry in
                 // ByBinding), so SetIfFilled writes nothing.
                 break;
-            case MatrixBoundModelOnly:
-                prefsStore.ByBinding["bnd_sender"] = new NyxIdUserLlmPreferences(
-                    DefaultModel: "sender-model",
-                    PreferredRoute: string.Empty,
-                    MaxToolRounds: 0);
+            case MatrixBoundSelection:
+                prefsStore.ByBinding["bnd_sender"] = SenderPreferences();
                 break;
         }
 
@@ -3388,6 +3372,8 @@ public sealed class ConversationReplyGeneratorTests
                 control = Control("owner-model", "/api/v1/proxy/s/owner", 9);
                 break;
         }
+        if (bindingState == MatrixBoundSelection)
+            control = (control ?? LLMControlContext.Empty) with { SenderNyxIdAccessToken = "sender-token" };
 
         var generator = new NyxIdConversationReplyGenerator(providerFactory, BuiltInPromptFloorProvider, preferencesStore: prefsStore);
         await generator.GenerateReplyAsync(
@@ -3429,7 +3415,7 @@ public sealed class ConversationReplyGeneratorTests
             Lookups.Add(null);
             if (ThrowOnLookup)
                 throw new InvalidOperationException("simulated projection outage");
-            return Task.FromResult(new NyxIdUserLlmPreferences(string.Empty, string.Empty));
+            return Task.FromResult(NyxIdUserLlmPreferences.Empty);
         }
 
         public Task<NyxIdUserLlmPreferences> GetForBindingAsync(string bindingId, CancellationToken cancellationToken = default)
@@ -3439,9 +3425,25 @@ public sealed class ConversationReplyGeneratorTests
                 throw new InvalidOperationException("simulated projection outage");
             return Task.FromResult(ByBinding.TryGetValue(bindingId, out var prefs)
                 ? prefs
-                : new NyxIdUserLlmPreferences(string.Empty, string.Empty));
+                : NyxIdUserLlmPreferences.Empty);
         }
     }
+
+    private static NyxIdUserLlmPreferences SenderPreferences(int maxToolRounds = 0) => new(
+        new LLMSelection
+        {
+            RouteKind = LLMRouteKind.NyxIdUserService,
+            RouteValue = "/api/v1/proxy/s/sender",
+            NyxIdUserServiceId = "us-sender",
+            ServiceSlugSnapshot = "sender",
+            ModelSelection = new LLMModelSelection
+            {
+                Kind = LLMModelSelectionKind.ExplicitModel,
+                ModelId = "sender-model",
+            },
+        },
+        LLMSelectionPersistenceStatus.Ready,
+        maxToolRounds);
 
     private sealed class StubSystemSkillOverlayProvider(string? overlayMarkdown) : ISystemSkillOverlayProvider
     {

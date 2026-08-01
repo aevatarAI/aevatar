@@ -19,6 +19,7 @@ public sealed class WorkflowActorBindingProjectorTests
     {
         WorkflowActorBindingDocument.Descriptor.FindFieldByName("workflow_id")!.FieldNumber.Should().Be(16);
         WorkflowActorBindingDocument.Descriptor.FindFieldByName("revision_id")!.FieldNumber.Should().Be(17);
+        WorkflowActorBindingDocument.Descriptor.FindFieldByName("expected_execution_mode")!.FieldNumber.Should().Be(18);
     }
 
     [Fact]
@@ -50,6 +51,7 @@ public sealed class WorkflowActorBindingProjectorTests
                     SourceKind = "service_revision",
                     WorkflowId = "wf-alpha",
                     RevisionId = "rev-alpha",
+                    ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
                     CapabilityAdmissionPlan = capabilityAdmissionPlan,
                     InlineWorkflowYamls =
                     {
@@ -71,6 +73,7 @@ public sealed class WorkflowActorBindingProjectorTests
         document.SourceKind.Should().Be("service_revision");
         document.WorkflowId.Should().Be("wf-alpha");
         document.RevisionId.Should().Be("rev-alpha");
+        document.ExpectedExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Interactive);
         document.CapabilityAdmissionPlan.AdmissionDigest.Should().Be(capabilityAdmissionPlan.AdmissionDigest);
         document.LastEventId.Should().Be("evt-definition");
     }
@@ -95,6 +98,7 @@ public sealed class WorkflowActorBindingProjectorTests
                     RunId = " run-2 ",
                     WorkflowName = " auto ",
                     WorkflowYaml = "name: auto",
+                    ExpectedExecutionMode = ExternalCapabilityExecutionMode.Durable,
                     InlineWorkflowYamls =
                     {
                         [" child "] = "yaml-child",
@@ -109,6 +113,7 @@ public sealed class WorkflowActorBindingProjectorTests
         document.DefinitionActorId.Should().Be("definition-2");
         document.RunId.Should().Be("run-2");
         document.WorkflowName.Should().Be("auto");
+        document.ExpectedExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Durable);
         document.InlineWorkflowYamls.Should().ContainKey("child");
     }
 

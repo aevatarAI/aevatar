@@ -159,11 +159,14 @@ public sealed class ScopeServiceDraftRunEndpointTests : ScopeServiceEndpointTest
                 new UserConfig(
                     DefaultModel: string.Empty,
                     PreferredLlmRoute: "/api/v1/proxy/s/legacy",
-                    LlmSelection: new UserLlmSelectionValue(
-                        UserLlmSelectionKind.NyxIdUserService,
-                        " /preferred-route ",
-                        "us-preferred",
-                        "preferred"))));
+                    LlmSelection: new LLMSelection
+                    {
+                        RouteKind = LLMRouteKind.NyxIdUserService,
+                        RouteValue = " /preferred-route ",
+                        NyxIdUserServiceId = "us-preferred",
+                        ServiceSlugSnapshot = "preferred",
+                        ModelSelection = new LLMModelSelection { Kind = LLMModelSelectionKind.ProviderDefault },
+                    })));
         host.InteractionService.ResultFactory = async (_, _, onAcceptedAsync, ct) =>
         {
             var receipt = new WorkflowChatRunAcceptedReceipt("run-actor-1", "main", "cmd-1", "corr-1");

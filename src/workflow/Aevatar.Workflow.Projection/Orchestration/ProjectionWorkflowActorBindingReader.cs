@@ -215,6 +215,7 @@ internal sealed class ProjectionWorkflowActorBindingReader : IWorkflowActorBindi
             document.WorkflowName ?? string.Empty,
             document.WorkflowYaml ?? string.Empty,
             new Dictionary<string, string>(document.InlineWorkflowYamls, StringComparer.OrdinalIgnoreCase),
+            document.ExpectedExecutionMode,
             document.ScopeId ?? string.Empty,
             document.StateVersion,
             document.LastEventId ?? string.Empty,

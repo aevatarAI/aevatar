@@ -22,7 +22,7 @@ public sealed class WorkflowRunControlCommandTests
                     "run-1",
                     "direct",
                     "yaml",
-                    new Dictionary<string, string>())));
+                    new Dictionary<string, string>(), ExternalCapabilityExecutionMode.Interactive)));
 
         var result = await resolver.ResolveAsync(
             new WorkflowResumeCommand("actor-1", "run-1", "step-1", "cmd-1", true, "approved"),
@@ -47,7 +47,7 @@ public sealed class WorkflowRunControlCommandTests
                     "run-expected",
                     "direct",
                     "yaml",
-                    new Dictionary<string, string>())));
+                    new Dictionary<string, string>(), ExternalCapabilityExecutionMode.Interactive)));
 
         var result = await resolver.ResolveAsync(
             new WorkflowSignalCommand("actor-1", "run-other", "approve", "cmd-1", "yes"),
@@ -98,7 +98,7 @@ public sealed class WorkflowRunControlCommandTests
                     "run-1",
                     "direct",
                     "yaml",
-                    new Dictionary<string, string>())));
+                    new Dictionary<string, string>(), ExternalCapabilityExecutionMode.Interactive)));
 
         var result = await resolver.ResolveAsync(
             new WorkflowStopCommand("actor-1", "run-1", "cmd-1", "user requested stop"),
@@ -121,7 +121,7 @@ public sealed class WorkflowRunControlCommandTests
                     "run-1",
                     "direct",
                     "yaml",
-                    new Dictionary<string, string>())));
+                    new Dictionary<string, string>(), ExternalCapabilityExecutionMode.Interactive)));
 
         var result = await resolver.ResolveAsync(
             new WorkflowRetryCompensationCommand(

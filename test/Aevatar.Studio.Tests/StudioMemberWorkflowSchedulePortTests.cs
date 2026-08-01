@@ -2140,6 +2140,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                 string.Empty,
                 string.Empty,
                 string.Empty,
+                string.Empty,
                 0,
                 0,
                 new Dictionary<string, string>(),
@@ -2306,7 +2307,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                 },
                 OwnerLlmSelection = new ScheduledInvocationOwnerLLMSelection
                 {
-                    RouteKind = ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService,
+                    RouteKind = LLMRouteKind.NyxIdUserService,
                     RouteValue = "/api/v1/proxy/s/chrono-llm-public",
                     NyxIdUserServiceId = "nyx-llm-service-alpha",
                     ServiceSlugSnapshot = "chrono-llm-public",
@@ -2372,6 +2373,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         public AuthorizationOwnerIdentity? LastOwner { get; private set; }
         public string? LastBearerToken { get; private set; }
         public IReadOnlyList<NyxIdUserServiceCapabilityRef> LastRequiredServices { get; private set; } = [];
+        public ScheduledInvocationLLMRefreshRequirement? LastLLMTarget { get; private set; }
         public List<string>? Calls { get; init; }
         public Exception? Exception { get; init; }
         public NyxIdAuthorizationCatalogRefreshResult Result { get; init; } =
@@ -2381,25 +2383,29 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             AuthorizationOwnerIdentity owner,
             string bearerToken,
             CancellationToken ct = default) =>
-            RecordRefreshAsync(owner, bearerToken, []);
+            RecordRefreshAsync(
+                owner,
+                bearerToken,
+                new NyxIdAuthorizationCatalogRefreshRequest([], LLMTarget: null));
 
         public Task<NyxIdAuthorizationCatalogRefreshResult> RefreshAsync(
             AuthorizationOwnerIdentity owner,
             string bearerToken,
-            IReadOnlyList<NyxIdUserServiceCapabilityRef> requiredServices,
+            NyxIdAuthorizationCatalogRefreshRequest request,
             CancellationToken ct = default) =>
-            RecordRefreshAsync(owner, bearerToken, requiredServices);
+            RecordRefreshAsync(owner, bearerToken, request);
 
         private Task<NyxIdAuthorizationCatalogRefreshResult> RecordRefreshAsync(
             AuthorizationOwnerIdentity owner,
             string bearerToken,
-            IReadOnlyList<NyxIdUserServiceCapabilityRef> requiredServices)
+            NyxIdAuthorizationCatalogRefreshRequest request)
         {
             RefreshCallCount++;
             Calls?.Add("refresh");
             LastOwner = owner.Clone();
             LastBearerToken = bearerToken;
-            LastRequiredServices = requiredServices.Select(static service => service.Clone()).ToArray();
+            LastRequiredServices = request.RequiredServices.Select(static service => service.Clone()).ToArray();
+            LastLLMTarget = request.LLMTarget;
             return Exception == null
                 ? Task.FromResult(Result)
                 : Task.FromException<NyxIdAuthorizationCatalogRefreshResult>(Exception);

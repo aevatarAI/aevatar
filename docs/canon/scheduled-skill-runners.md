@@ -199,6 +199,21 @@ Create, reauthorize, and update mutations share one refresh-aware revalidation p
 
 Both GAgentService and standalone Studio call the idempotent `AddNyxIdAuthorizationCatalogHosting` composition entrypoint. It installs the catalog actor, authorization planner/revalidator, NyxID adapter, refresh observation session, committed-state projector, and read-model provider on the single shared GAgentService Projection Pipeline; repeated full or scheduled capability composition does not duplicate these registrations.
 
+## Workflow admission rejection and rollout
+
+Scheduled workflow compatibility is decided before workflow actor lifecycle and before service-run registration. The invocation adapter maps the bounded workflow admission outcome into a schedule-owned typed failure. `ScheduledDispatchGAgent` commits one failed fire, increments `fireCount` and `failureCount` once, stores the safe message in `lastError`, stores the stable code in `lastErrorCode` and the fire record, and keeps the schedule enabled for operator repair. It creates zero Run artifacts and adds no second failure store.
+
+| Stable code | Operator meaning | Remediation |
+| --- | --- | --- |
+| `WORKFLOW_DEFINITION_INVALID` | Root or inline workflow structure is invalid. | Update the definition and rebind. |
+| `NYXID_OPERATION_AUTHORING_MIGRATION_REQUIRED` | The workflow uses a retired NyxID authoring contract. | Replace the authoring contract and rebind. |
+| `CAPABILITY_ADMISSION_REBIND_REQUIRED` | The persisted plan is absent, legacy, mismatched, or has the wrong `ExpectedExecutionMode`. | Rebuild admission and rebind. |
+| `scheduled_dispatch_failed` | Dispatch failed outside the bounded workflow admission contract. | Inspect the sanitized schedule failure and retry only after repair. |
+
+Deployment order is: shared protobuf contracts; actor validation and state; projectors and query mapping; catalog composition; UserConfig/settings/channel atomic writers; durable planner/runtime exact-match enforcement; workflow preflight; then scheduled fires. Deploy these as one compatible release before enabling unattended execution.
+
+Rollout begins with a read-only audit of active UserConfig selections, authorization catalog evidence, workflow artifacts, and schedules. There is no automatic production migration, rerun, pause, delete, repair, replay, or backfill. Operators explicitly reselect unavailable LLM targets, rebuild incompatible admission plans, and reauthorize affected schedules. The rollout rejects empty-list-as-open-catalog, accepted-ACK-as-active, silent Gateway fallback, query-time catalog reads, and invocation-time `RevalidatePersistedAsync`.
+
 ## Catalog Projection Version-Regression Recovery
 
 NyxID authorization catalog version-regression repair is a platform-admin

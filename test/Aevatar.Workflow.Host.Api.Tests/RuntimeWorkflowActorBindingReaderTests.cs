@@ -14,6 +14,7 @@ public sealed class ProjectionWorkflowActorBindingReaderTests
     {
         typeof(WorkflowActorBinding).GetProperty("WorkflowId").Should().NotBeNull();
         typeof(WorkflowActorBinding).GetProperty("RevisionId").Should().NotBeNull();
+        typeof(WorkflowActorBinding).GetProperty("ExpectedExecutionMode").Should().NotBeNull();
     }
 
     [Fact]
@@ -57,6 +58,7 @@ public sealed class ProjectionWorkflowActorBindingReaderTests
                 SourceKind = "service_revision",
                 WorkflowId = "wf-alpha",
                 RevisionId = "rev-alpha",
+                ExpectedExecutionMode = ExternalCapabilityExecutionMode.Durable,
                 CapabilityAdmissionPlan = capabilityAdmissionPlan,
                 InlineWorkflowYamls = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
                 {
@@ -77,6 +79,7 @@ public sealed class ProjectionWorkflowActorBindingReaderTests
         result.SourceKind.Should().Be("service_revision");
         result.WorkflowId.Should().Be("wf-alpha");
         result.RevisionId.Should().Be("rev-alpha");
+        result.ExpectedExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Durable);
         result.CapabilityAdmissionPlan!.AdmissionDigest.Should().Be(capabilityAdmissionPlan.AdmissionDigest);
     }
 

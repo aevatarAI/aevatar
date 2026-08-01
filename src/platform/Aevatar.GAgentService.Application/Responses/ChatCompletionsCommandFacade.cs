@@ -71,11 +71,11 @@ public sealed class ChatCompletionsCommandFacade(
         // semantics); otherwise the account's UserConfig preference; otherwise the route
         // policy / deployment default. See IngressModelPreference.
         var explicitCallerModel = IngressModelPreference.Normalize(request.Model);
-        var ownerConfig = await TryLoadOwnerConfigAsync(callerScopeResult.Scope!.ScopeId, ct);
+        var ownerControl = await TryLoadOwnerControlAsync(callerScopeResult.Scope!.ScopeId, ct);
 
         var trigger = ParseSkillInvocationTrigger(BuildRouteContentHint(normalized));
         var routedModelResult = await ResolveRouteTargetAsync(
-            normalized, callerScopeResult.Scope!, explicitCallerModel, ownerConfig, trigger, ct);
+            normalized, callerScopeResult.Scope!, explicitCallerModel, ownerControl, trigger, ct);
         if (routedModelResult.Error is not null)
             return ChatCompletionsCreateCommandResult.FromError(
                 routedModelResult.Error.StatusCode,
@@ -95,7 +95,7 @@ public sealed class ChatCompletionsCommandFacade(
             callerScopeResult.Scope!,
             routedModelResult.Model!,
             routedModelResult.Action!,
-            ownerConfig,
+            ownerControl,
             trigger,
             callerScopeContext.InboundBearerToken,
             sessionResult.Session!,
@@ -215,16 +215,21 @@ public sealed class ChatCompletionsCommandFacade(
     // Account UserConfig is the single "preferred model" source for ingress. Reads are
     // swallow-and-logged (mirroring OwnerLlmConfigApplier) so a flaky projection never fails a
     // request — resolution then falls through to the route policy / deployment default.
-    private async Task<OwnerLlmConfig?> TryLoadOwnerConfigAsync(string scopeId, CancellationToken ct)
+    private async Task<LLMControlContext?> TryLoadOwnerControlAsync(string scopeId, CancellationToken ct)
     {
         if (ownerLlmConfigSource is null || string.IsNullOrWhiteSpace(scopeId))
             return null;
 
         try
         {
-            return await ownerLlmConfigSource.GetForScopeAsync(scopeId, ct).ConfigureAwait(false);
+            var config = await ownerLlmConfigSource.GetForScopeAsync(scopeId, ct).ConfigureAwait(false);
+            return config.ApplyTo(LLMControlContext.Empty);
         }
         catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (LLMSelectionRepairRequiredException)
         {
             throw;
         }
@@ -242,7 +247,7 @@ public sealed class ChatCompletionsCommandFacade(
         NormalizedChatCompletionsCommand normalized,
         ResponsesCallerScope callerScope,
         string? explicitCallerModel,
-        OwnerLlmConfig? ownerConfig,
+        LLMControlContext? ownerControl,
         SkillInvocationTrigger? trigger,
         CancellationToken ct)
     {
@@ -271,7 +276,7 @@ public sealed class ChatCompletionsCommandFacade(
         // tool-set selection on `action`; it can no longer silently swap an explicit/preferred model.
         var routedModel = IngressModelPreference.ResolveModel(
             explicitCallerModel,
-            ownerConfig?.DefaultModel,
+            ownerControl?.ModelOverride,
             action.ForwardToModel?.ModelName,
             normalized.Model);
         if (action.ForwardToModel is null)
@@ -316,7 +321,7 @@ public sealed class ChatCompletionsCommandFacade(
         ResponsesCallerScope callerScope,
         string routedModel,
         ChatRouteAction routeAction,
-        OwnerLlmConfig? ownerConfig,
+        LLMControlContext? ownerControl,
         SkillInvocationTrigger? trigger,
         string bearerToken,
         LlmSessionRegistrationResult session,
@@ -334,7 +339,7 @@ public sealed class ChatCompletionsCommandFacade(
             toolPlan.AdditionalToolProviders,
             ct: ct);
         var (effectiveModel, resolvedRouteValue) = await ResolveModelRouteAsync(
-            routedModel, ownerConfig?.PreferredLlmRoute, bearerToken, ct);
+            routedModel, ownerControl?.NyxIdRoutePreference, bearerToken, ct);
         var toolContext = toolProviderContext.ToolContext with
         {
             Routing = toolProviderContext.ToolContext.Routing with

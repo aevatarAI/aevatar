@@ -4,6 +4,7 @@ using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using WorkflowCallerCredentialTokens = Aevatar.Workflow.Abstractions.WorkflowCallerCredentialTokens;
+using ExternalCapabilityExecutionMode = Aevatar.Workflow.Abstractions.ExternalCapabilityExecutionMode;
 
 namespace Aevatar.Mainnet.Host.Api.Skills;
 
@@ -51,6 +52,7 @@ internal sealed class UserSkillRunService : IUserSkillRunService
         var request = new WorkflowChatRunRequest(
             Prompt: prompt ?? string.Empty,
             Source: WorkflowChatSource.InlineYamlBundle(yamls),
+            ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
             ScopeId: scopeId,
             CallerCredential: callerCredential);
 

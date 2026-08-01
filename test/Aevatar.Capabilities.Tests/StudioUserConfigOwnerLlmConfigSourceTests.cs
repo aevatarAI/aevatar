@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Mainnet.Host.Api.Hosting;
 using Aevatar.Studio.Application.Studio.Abstractions;
@@ -15,18 +16,14 @@ public sealed class StudioUserConfigOwnerLlmConfigSourceTests
             DefaultModel: "gpt-5.5",
             PreferredLlmRoute: "/api/v1/proxy/s/legacy-provider",
             MaxToolRounds: 7,
-            LlmSelection: new UserLlmSelectionValue(
-                UserLlmSelectionKind.NyxIdUserService,
-                "/api/v1/proxy/s/chrono-llm",
-                "us-chrono-alpha",
-                "chrono-llm"));
+            LlmSelection: UserServiceSelection("gpt-5.5"));
 
         var source = new StudioUserConfigOwnerLlmConfigSource(new StubQueryPort(config));
 
         var result = await source.GetForScopeAsync("scope-1");
 
-        result.DefaultModel.Should().Be("gpt-5.5");
-        result.PreferredLlmRoute.Should().Be("/api/v1/proxy/s/chrono-llm");
+        result.Selection.Should().BeEquivalentTo(UserServiceSelection("gpt-5.5"));
+        result.Status.Should().Be(LLMSelectionPersistenceStatus.Ready);
         result.MaxToolRounds.Should().Be(7);
     }
 
@@ -39,20 +36,13 @@ public sealed class StudioUserConfigOwnerLlmConfigSourceTests
             DefaultModel: "gpt-5.5",
             PreferredLlmRoute: "/api/v1/proxy/s/legacy-provider",
             MaxToolRounds: 9,
-            LlmSelection: useUnspecifiedSelection
-                ? new UserLlmSelectionValue(
-                    UserLlmSelectionKind.Unspecified,
-                    "/api/v1/proxy/s/legacy-provider",
-                    "us-legacy",
-                    "legacy-provider")
-                : null);
+            LlmSelection: useUnspecifiedSelection ? new LLMSelection() : null);
 
         var source = new StudioUserConfigOwnerLlmConfigSource(new StubQueryPort(config));
 
         var result = await source.GetForScopeAsync("scope-1");
 
-        result.DefaultModel.Should().Be("gpt-5.5");
-        result.PreferredLlmRoute.Should().BeNull();
+        result.Status.Should().Be(LLMSelectionPersistenceStatus.LegacyRepairRequired);
         result.MaxToolRounds.Should().Be(9);
     }
 
@@ -68,7 +58,7 @@ public sealed class StudioUserConfigOwnerLlmConfigSourceTests
 
         var result = await source.GetForScopeAsync("scope-1");
 
-        result.PreferredLlmRoute.Should().BeNull();
+        result.Status.Should().Be(LLMSelectionPersistenceStatus.LegacyRepairRequired);
     }
 
     [Fact]
@@ -78,17 +68,14 @@ public sealed class StudioUserConfigOwnerLlmConfigSourceTests
             DefaultModel: string.Empty,
             PreferredLlmRoute: "/api/v1/proxy/s/legacy-provider",
             MaxToolRounds: 0,
-            LlmSelection: new UserLlmSelectionValue(
-                UserLlmSelectionKind.Gateway,
-                UserConfigLlmRouteDefaults.Gateway,
-                string.Empty,
-                string.Empty));
+            LlmSelection: GatewaySelection(null));
 
         var source = new StudioUserConfigOwnerLlmConfigSource(new StubQueryPort(config));
 
         var result = await source.GetForScopeAsync("scope-1");
 
-        result.PreferredLlmRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
+        result.Selection.Should().BeEquivalentTo(GatewaySelection(null));
+        result.Status.Should().Be(LLMSelectionPersistenceStatus.Ready);
     }
 
     [Fact]
@@ -98,18 +85,14 @@ public sealed class StudioUserConfigOwnerLlmConfigSourceTests
             DefaultModel: "chrono-llm/gpt-5.5",
             PreferredLlmRoute: UserConfigLlmRouteDefaults.Gateway,
             MaxToolRounds: 7,
-            LlmSelection: new UserLlmSelectionValue(
-                UserLlmSelectionKind.Gateway,
-                UserConfigLlmRouteDefaults.Gateway,
-                string.Empty,
-                string.Empty));
+            LlmSelection: GatewaySelection("chrono-llm/gpt-5.5"));
 
         var source = new StudioUserConfigOwnerLlmConfigSource(new StubQueryPort(config));
 
         var result = await source.GetForScopeAsync("scope-1");
 
-        result.DefaultModel.Should().Be("chrono-llm/gpt-5.5");
-        result.PreferredLlmRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
+        result.Selection.Should().BeEquivalentTo(GatewaySelection("chrono-llm/gpt-5.5"));
+        result.Status.Should().Be(LLMSelectionPersistenceStatus.Ready);
         result.MaxToolRounds.Should().Be(7);
     }
 
@@ -132,6 +115,32 @@ public sealed class StudioUserConfigOwnerLlmConfigSourceTests
         public Task<UserConfig> GetAsync(UserConfigResourceKey resource, CancellationToken ct = default) =>
             Task.FromResult(config);
     }
+
+    private static LLMSelection UserServiceSelection(string modelId) => new()
+    {
+        RouteKind = LLMRouteKind.NyxIdUserService,
+        RouteValue = "/api/v1/proxy/s/chrono-llm",
+        NyxIdUserServiceId = "us-chrono-alpha",
+        ServiceSlugSnapshot = "chrono-llm",
+        ModelSelection = new LLMModelSelection
+        {
+            Kind = LLMModelSelectionKind.ExplicitModel,
+            ModelId = modelId,
+        },
+    };
+
+    private static LLMSelection GatewaySelection(string? modelId) => new()
+    {
+        RouteKind = LLMRouteKind.Gateway,
+        RouteValue = UserConfigLlmRouteDefaults.Gateway,
+        ModelSelection = new LLMModelSelection
+        {
+            Kind = modelId is null
+                ? LLMModelSelectionKind.ProviderDefault
+                : LLMModelSelectionKind.ExplicitModel,
+            ModelId = modelId ?? string.Empty,
+        },
+    };
 
     private sealed class NullQueryPort : IUserConfigQueryPort
     {

@@ -1,4 +1,20 @@
+using Aevatar.AI.Abstractions;
+
 namespace Aevatar.Studio.Application.Studio.Abstractions;
+
+public abstract record UserLlmPreferenceIntent;
+
+public sealed record ResetUserLlmPreferenceIntent : UserLlmPreferenceIntent;
+
+public sealed record SelectGatewayUserLlmPreferenceIntent(
+    LLMModelSelection ModelSelection) : UserLlmPreferenceIntent;
+
+public sealed record SelectUserServiceUserLlmPreferenceIntent(
+    string UserServiceId,
+    LLMModelSelection ModelSelection) : UserLlmPreferenceIntent;
+
+public sealed record ActivateUserLlmPresetIntent(
+    string PresetId) : UserLlmPreferenceIntent;
 
 /// <summary>
 /// Internal write-use-case command shared by Console Settings and channel /model selection.
@@ -11,21 +27,36 @@ public sealed record SaveUserLlmPreferenceCommand(
     bool? Reset = null);
 
 public sealed record UserLlmSettingsView(
-    string SavedRoute,
+    LLMSelection? SavedSelection,
     string SavedRouteLabel,
-    string SavedRouteKind,
-    string? SavedUserServiceId,
-    string? SavedServiceSlug,
-    string EffectiveRoute,
-    string EffectiveRouteLabel,
-    bool RouteFallbackActive,
-    string? FallbackReason,
+    UserLlmSelectionStatus SelectionStatus,
+    LLMModelCatalogDiagnosticKind CatalogDiagnostic,
+    UserLlmRemediationKind Remediation,
     IReadOnlyList<UserLlmRouteOption> RouteOptions,
     IReadOnlyList<UserLlmModelGroup> ModelGroupsByRoute,
     string CatalogStatus,
     UserLlmSettingsCapabilities Capabilities,
-    string DefaultModel,
     UserLlmSetupHint? SetupHint);
+
+public enum UserLlmSelectionStatus
+{
+    Unspecified = 0,
+    SystemDefault = 1,
+    Ready = 2,
+    VerificationUnavailable = 3,
+    NeedsRepair = 4,
+    LegacyRepairRequired = 5,
+}
+
+public enum UserLlmRemediationKind
+{
+    Unspecified = 0,
+    None = 1,
+    RetryCatalog = 2,
+    ConnectProvider = 3,
+    ChooseReplacement = 4,
+    Reselect = 5,
+}
 
 public sealed record UserLlmRouteOption(
     string RouteValue,
@@ -36,7 +67,7 @@ public sealed record UserLlmRouteOption(
     bool Ready,
     string? UserServiceId,
     string? ServiceSlug,
-    string? DefaultModel,
+    LLMModelCatalog ModelCatalog,
     string? Description);
 
 public sealed record UserLlmModelGroup(
@@ -61,12 +92,6 @@ public static class UserLlmCatalogStatus
     public const string Ready = "ready";
     public const string Empty = "empty";
     public const string Unavailable = "unavailable";
-}
-
-public static class UserLlmFallbackReason
-{
-    public const string CatalogUnavailable = "catalog_unavailable";
-    public const string SavedRouteUnavailable = "saved_route_unavailable";
 }
 
 public static class UserLlmRouteStatus
@@ -118,8 +143,7 @@ public sealed record UserLlmOption(
     string ServiceSlug,
     string DisplayName,
     string RouteValue,
-    string? DefaultModel,
-    IReadOnlyList<string> AvailableModels,
+    LLMModelCatalog ModelCatalog,
     string Status,
     string Source,
     bool Allowed,
@@ -153,8 +177,7 @@ public sealed record NyxIdLlmService(
     string ServiceSlug,
     string DisplayName,
     string RouteValue,
-    string? DefaultModel,
-    IReadOnlyList<string> Models,
+    LLMModelCatalog ModelCatalog,
     string Status,
     string Source,
     bool Allowed,
@@ -176,6 +199,8 @@ public interface IUserLlmCatalogPort
 {
     Task<NyxIdLlmServicesResult> GetServicesAsync(string bearerToken, CancellationToken ct);
 
+    Task<NyxIdLlmServicesResult> GetFreshServicesAsync(string bearerToken, CancellationToken ct);
+
     Task<NyxIdLlmService> ProvisionAsync(string bearerToken, string provisionEndpointId, CancellationToken ct);
 }
 
@@ -189,13 +214,6 @@ public interface IChannelUserLlmPreferencePort
     Task<UserConfigSaveReceipt> SaveAsync(
         string bindingId,
         string? bearerToken,
-        SaveUserLlmPreferenceCommand command,
-        CancellationToken ct);
-
-    Task<UserConfigSaveReceipt> SaveSelectedOptionAsync(
-        string bindingId,
-        UserLlmOption option,
-        string? model,
-        bool preserveCurrentModelWhenMissing,
+        UserLlmPreferenceIntent intent,
         CancellationToken ct);
 }

@@ -121,6 +121,7 @@ public sealed class AIAbstractionsProtoCoverageTests
         LLMControlContextMapper.FromPayload(null).Should().Be(LLMControlContext.Empty);
         control.ToPayload().HasMaxToolRoundsOverride.Should().BeFalse();
     }
+
     [Fact]
     public void ProtoMessages_ShouldRoundTripAndClone()
     {
@@ -728,4 +729,5 @@ public sealed class AIAbstractionsProtoCoverageTests
         merged.Should().Be(message);
         return parsed;
     }
+
 }

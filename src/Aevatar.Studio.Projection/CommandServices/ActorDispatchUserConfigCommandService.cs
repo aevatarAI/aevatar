@@ -1,3 +1,5 @@
+using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.UserConfig;
 using Aevatar.Studio.Application.Studio.Abstractions;
@@ -34,10 +36,11 @@ internal sealed class ActorDispatchUserConfigCommandService : IUserConfigCommand
         ArgumentNullException.ThrowIfNull(update);
 
         var command = new UpdateUserConfigCommand();
-        if (update.DefaultModel is not null)
-            command.DefaultModel = update.DefaultModel;
         if (update.LlmSelection is not null)
-            command.LlmSelection = MapSelection(update.LlmSelection);
+        {
+            LLMSelectionPolicy.ValidateSelection(update.LlmSelection);
+            command.LlmSelection = update.LlmSelection.Clone();
+        }
         if (update.RuntimeMode is not null)
             command.RuntimeMode = update.RuntimeMode;
         if (update.LocalRuntimeBaseUrl is not null)
@@ -51,22 +54,6 @@ internal sealed class ActorDispatchUserConfigCommandService : IUserConfigCommand
 
         return DispatchAsync(resource, command, ct);
     }
-
-
-    private static UserLlmSelection MapSelection(UserLlmSelectionValue selection) =>
-        new()
-        {
-            RouteKind = selection.Kind switch
-            {
-                UserLlmSelectionKind.Unspecified => UserLlmRouteKind.Unspecified,
-                UserLlmSelectionKind.Gateway => UserLlmRouteKind.Gateway,
-                UserLlmSelectionKind.NyxIdUserService => UserLlmRouteKind.NyxIdUserService,
-                _ => throw new ArgumentOutOfRangeException(nameof(selection)),
-            },
-            RouteValue = selection.RouteValue,
-            NyxIdUserServiceId = selection.NyxIdUserServiceId,
-            ServiceSlugSnapshot = selection.ServiceSlugSnapshot,
-        };
 
     private async Task<UserConfigSaveReceipt> DispatchAsync(
         UserConfigResourceKey resource,

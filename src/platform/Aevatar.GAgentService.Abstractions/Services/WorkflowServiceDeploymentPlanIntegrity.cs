@@ -31,6 +31,14 @@ public static class WorkflowServiceDeploymentPlanIntegrity
 
         var plan = artifact.DeploymentPlan?.WorkflowPlan
             ?? throw new InvalidOperationException("Workflow service deployment plan is required.");
+        if (plan.ExecutionMode == ExternalCapabilityExecutionMode.Unspecified ||
+            !Enum.IsDefined(plan.ExecutionMode) ||
+            plan.CapabilityAdmissionPlan == null ||
+            plan.ExecutionMode != plan.CapabilityAdmissionPlan.ExecutionMode)
+        {
+            throw new InvalidOperationException(
+                "Workflow service deployment execution mode must match the capability admission plan.");
+        }
         var requiresBindingIdentity = WorkflowCapabilityAdmissionPlanIntegrity
             .RequiresExplicitRequestBindingIdentity(plan.CapabilityAdmissionPlan);
         var hasWorkflowId = !string.IsNullOrWhiteSpace(plan.WorkflowId);

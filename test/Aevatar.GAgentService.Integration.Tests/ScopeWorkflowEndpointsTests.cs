@@ -1,4 +1,5 @@
 using System.Text;
+using Aevatar.AI.Abstractions;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Commands;
@@ -439,7 +440,8 @@ public sealed class ScopeWorkflowEndpointsTests
             new Dictionary<string, string>
             {
                 ["child"] = "name: child\nsteps: []\n",
-            });
+            },
+            ExternalCapabilityExecutionMode.Durable);
         var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
         await revisionCatalog.UpsertRevisionAsync(
             "tenant-a:workflow-app:user:token:approval",
@@ -510,7 +512,8 @@ public sealed class ScopeWorkflowEndpointsTests
             string.Empty,
             "approval",
             "name: approval\nsteps: []\n",
-            new Dictionary<string, string>());
+            new Dictionary<string, string>(),
+            ExternalCapabilityExecutionMode.Durable);
 
         var result = await ScopeWorkflowEndpoints.HandleListWorkflowsAsync(
             http,
@@ -724,11 +727,14 @@ public sealed class ScopeWorkflowEndpointsTests
     {
         const string prefixedModel = "chrono-llm/gpt-5.5";
         var selection = useUnspecifiedSelection
-            ? new UserLlmSelectionValue(
-                UserLlmSelectionKind.Unspecified,
-                "/api/v1/proxy/s/typed-but-ignored",
-                "us-ignored",
-                "ignored")
+            ? new LLMSelection
+            {
+                RouteKind = LLMRouteKind.Unspecified,
+                RouteValue = "/api/v1/proxy/s/typed-but-ignored",
+                NyxIdUserServiceId = "us-ignored",
+                ServiceSlugSnapshot = "ignored",
+                ModelSelection = new LLMModelSelection { Kind = LLMModelSelectionKind.Unspecified },
+            }
             : null;
         var http = CreateHttpContext(
             userConfigQueryPort: new StubUserConfigStore(new UserConfig(
@@ -752,11 +758,14 @@ public sealed class ScopeWorkflowEndpointsTests
             userConfigQueryPort: new StubUserConfigStore(new UserConfig(
                 DefaultModel: "gpt-5.5",
                 PreferredLlmRoute: "/api/v1/proxy/s/legacy",
-                LlmSelection: new UserLlmSelectionValue(
-                    UserLlmSelectionKind.Gateway,
-                    "/api/v1/proxy/s/typed-but-ignored",
-                    "us-ignored",
-                    "ignored"))));
+                LlmSelection: new LLMSelection
+                {
+                    RouteKind = LLMRouteKind.Gateway,
+                    RouteValue = "/api/v1/proxy/s/typed-but-ignored",
+                    NyxIdUserServiceId = "us-ignored",
+                    ServiceSlugSnapshot = "ignored",
+                    ModelSelection = new LLMModelSelection { Kind = LLMModelSelectionKind.ProviderDefault },
+                })));
 
         var control = await ScopeWorkflowEndpoints.BuildScopedLlmControlInputAsync(
             http,
@@ -851,11 +860,14 @@ public sealed class ScopeWorkflowEndpointsTests
                 new UserConfig(
                     DefaultModel: string.Empty,
                     PreferredLlmRoute: "/api/v1/proxy/s/legacy",
-                    LlmSelection: new UserLlmSelectionValue(
-                        UserLlmSelectionKind.NyxIdUserService,
-                        " /preferred-route ",
-                        "us-preferred",
-                        "preferred"))));
+                    LlmSelection: new LLMSelection
+                    {
+                        RouteKind = LLMRouteKind.NyxIdUserService,
+                        RouteValue = " /preferred-route ",
+                        NyxIdUserServiceId = "us-preferred",
+                        ServiceSlugSnapshot = "preferred",
+                        ModelSelection = new LLMModelSelection { Kind = LLMModelSelectionKind.ProviderDefault },
+                    })));
 
         await ScopeWorkflowEndpoints.HandleRunWorkflowByIdStreamAsync(
             http,
@@ -1474,7 +1486,8 @@ public sealed class ScopeWorkflowEndpointsTests
                     string.Empty,
                     string.Empty,
                     string.Empty,
-                    new Dictionary<string, string>()));
+                    new Dictionary<string, string>(),
+                    ExternalCapabilityExecutionMode.Durable));
     }
 
     private sealed class FakeServiceRevisionCatalogQueryReader : IServiceRevisionCatalogQueryReader

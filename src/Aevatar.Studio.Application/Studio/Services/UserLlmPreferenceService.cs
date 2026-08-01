@@ -26,15 +26,14 @@ public sealed class UserLlmPreferenceService : IUserLlmPreferenceService
     public async Task<UserLlmSettingsView> GetSettingsAsync(string? bearerToken, CancellationToken ct)
     {
         var config = await _queryPort.GetAsync(ct).ConfigureAwait(false);
-        var defaultModel = config.DefaultModel?.Trim() ?? string.Empty;
 
         if (string.IsNullOrWhiteSpace(bearerToken))
-            return _viewBuilder.BuildUnavailable(config.LlmSelection, defaultModel);
+            return _viewBuilder.BuildVerificationUnavailable(config);
 
         try
         {
             var result = await _catalogPort.GetServicesAsync(bearerToken, ct).ConfigureAwait(false);
-            return _viewBuilder.BuildAvailable(result, config.LlmSelection, defaultModel);
+            return _viewBuilder.BuildAvailable(result, config);
         }
         catch (OperationCanceledException)
         {
@@ -42,7 +41,7 @@ public sealed class UserLlmPreferenceService : IUserLlmPreferenceService
         }
         catch
         {
-            return _viewBuilder.BuildUnavailable(config.LlmSelection, defaultModel);
+            return _viewBuilder.BuildVerificationUnavailable(config);
         }
     }
 }

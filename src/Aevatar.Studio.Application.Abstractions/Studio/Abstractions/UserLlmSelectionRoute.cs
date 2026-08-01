@@ -1,11 +1,13 @@
+using Aevatar.AI.Abstractions;
+
 namespace Aevatar.Studio.Application.Studio.Abstractions;
 
 public static class UserLlmSelectionRoute
 {
-    public static string? Resolve(UserLlmSelectionValue? selection) => selection?.Kind switch
+    public static string? Resolve(LLMSelection? selection) => selection?.RouteKind switch
     {
-        UserLlmSelectionKind.Gateway => UserConfigLlmRouteDefaults.Gateway,
-        UserLlmSelectionKind.NyxIdUserService => NormalizeOptional(selection.RouteValue),
+        LLMRouteKind.Gateway => UserConfigLlmRouteDefaults.Gateway,
+        LLMRouteKind.NyxIdUserService => NormalizeOptional(selection.RouteValue),
         _ => null,
     };
 

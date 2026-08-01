@@ -681,6 +681,7 @@ public static class ScopeWorkflowEndpoints
             new WorkflowChatRunRequest(
                 prompt,
                 WorkflowChatSource.DefinitionActor(workflow.ActorId, workflow.WorkflowName),
+                ExternalCapabilityExecutionMode.Interactive,
                 sessionId,
                 Metadata: headers,
                 ScopeId: NormalizeRequired(scopeId, nameof(scopeId)),

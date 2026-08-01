@@ -2008,10 +2008,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                     effectiveControl.MaxToolRoundsOverride);
                 if (applied.RouteApplied && string.IsNullOrWhiteSpace(senderToken))
                 {
-                    effectiveControl = effectiveControl with
-                    {
-                        NyxIdRoutePreference = ownerFallbackControl?.NyxIdRoutePreference,
-                    };
+                    effectiveControl = ownerFallbackControl ?? LLMControlContext.Empty;
                 }
             }
             else
@@ -2088,18 +2085,11 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             return new SenderPreferenceResult(effectiveControl, new SenderPreferenceApplication(false, false, false));
         }
 
-        var modelApplied = !string.IsNullOrWhiteSpace(preferences.DefaultModel);
-        var routeApplied = !string.IsNullOrWhiteSpace(preferences.PreferredRoute);
+        var modelApplied = preferences.Status == LLMSelectionPersistenceStatus.Ready &&
+                           preferences.Selection.ModelSelection?.Kind == LLMModelSelectionKind.ExplicitModel;
+        var routeApplied = preferences.Status == LLMSelectionPersistenceStatus.Ready;
         var roundsApplied = preferences.MaxToolRounds > 0;
-        if (modelApplied || routeApplied || roundsApplied)
-        {
-            effectiveControl = effectiveControl with
-            {
-                ModelOverride = modelApplied ? preferences.DefaultModel!.Trim() : effectiveControl.ModelOverride,
-                NyxIdRoutePreference = routeApplied ? preferences.PreferredRoute!.Trim() : effectiveControl.NyxIdRoutePreference,
-                MaxToolRoundsOverride = roundsApplied ? preferences.MaxToolRounds : effectiveControl.MaxToolRoundsOverride,
-            };
-        }
+        effectiveControl = preferences.ApplyTo(effectiveControl);
         return new SenderPreferenceResult(
             effectiveControl,
             new SenderPreferenceApplication(modelApplied, routeApplied, roundsApplied));

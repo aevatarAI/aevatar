@@ -11,6 +11,8 @@ using Aevatar.GAgentService.Hosting.Endpoints.Schedules;
 using Aevatar.GAgentService.Infrastructure.Schedules;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
+using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -328,6 +330,44 @@ public sealed class ScheduledDispatchServiceInvocationTests
         receipt.CommandId.Should().Be("cmd-invoke");
         receipt.CorrelationId.Should().Be("corr-invoke");
         receipt.TargetActorId.Should().Be("service-actor");
+    }
+
+    [Fact]
+    public async Task ScheduledServiceInvocationDispatchPort_WithWorkflowAdmissionFailure_ShouldExposeSafeScheduleFailure()
+    {
+        var workflowFailure = new WorkflowExternalCapabilityAdmissionException(
+            new ExternalCapabilityReadiness
+            {
+                Status = ExternalCapabilityReadinessStatus.ContractDrift,
+                Blockers =
+                {
+                    new ExternalCapabilityBlocker
+                    {
+                        Status = ExternalCapabilityReadinessStatus.ContractDrift,
+                        Code = "CAPABILITY_ADMISSION_REBIND_REQUIRED",
+                        SafeMessage = "Workflow capability binding must be refreshed.",
+                    },
+                },
+            });
+        var invocationPort = new RecordingServiceInvocationPort(workflowFailure);
+        var port = new ScheduledServiceInvocationDispatchPort(
+            invocationPort,
+            new RecordingScheduledServiceInvocationCredentialExchangePort());
+
+        var act = () => port.DispatchAsync(
+            new ScheduledServiceInvocationDispatchRequest(
+                new ServiceInvocationRequest
+                {
+                    CommandId = "cmd-admission",
+                    CorrelationId = "corr-admission",
+                    Payload = Any.Pack(new StringValue { Value = "invoke" }),
+                },
+                ScheduleId: "schedule-admission"));
+
+        var failure = await act.Should().ThrowAsync<ScheduledWorkflowAdmissionException>();
+        failure.Which.StableCode.Should().Be("CAPABILITY_ADMISSION_REBIND_REQUIRED");
+        failure.Which.SafeMessage.Should().Be("Workflow capability binding must be refreshed.");
+        invocationPort.Requests.Should().ContainSingle();
     }
 
     [Fact]
@@ -1845,7 +1885,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
                 "malformed-selection",
                 dispatch => ReplaceOwnerLLMSelection(dispatch, new ScheduledInvocationOwnerLLMSelection
                 {
-                    RouteKind = ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService,
+                    RouteKind = LLMRouteKind.NyxIdUserService,
                     RouteValue = $" {OwnerLLMRoute}",
                     NyxIdUserServiceId = OwnerLLMServiceId,
                     ServiceSlugSnapshot = "chrono-llm-public",
@@ -1898,8 +1938,19 @@ public sealed class ScheduledDispatchServiceInvocationTests
                 dispatch => ReplaceOwnerLLMPayload(dispatch, "/api/v1/proxy/s/other-llm", OwnerLLMModel)
             },
             {
+                "gateway-route-mismatch",
+                dispatch => ReplaceOwnerLLMPayload(
+                    dispatch,
+                    ScheduledInvocationOwnerLLMSelectionPolicy.GatewayRoute,
+                    OwnerLLMModel)
+            },
+            {
                 "model-mismatch",
                 dispatch => ReplaceOwnerLLMPayload(dispatch, OwnerLLMRoute, "gpt-other")
+            },
+            {
+                "case-different-model-mismatch",
+                dispatch => ReplaceOwnerLLMPayload(dispatch, OwnerLLMRoute, OwnerLLMModel.ToUpperInvariant())
             },
             {
                 "route-present-without-owner-llm-source-stamp",
@@ -1996,7 +2047,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
 
     private static ScheduledInvocationOwnerLLMSelection CreateOwnerLLMSelection() => new()
     {
-        RouteKind = ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService,
+        RouteKind = LLMRouteKind.NyxIdUserService,
         RouteValue = OwnerLLMRoute,
         NyxIdUserServiceId = OwnerLLMServiceId,
         ServiceSlugSnapshot = "chrono-llm-public",

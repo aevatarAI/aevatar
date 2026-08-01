@@ -1738,7 +1738,7 @@ public sealed class ScheduledDispatchGAgentTests
             },
             OwnerLlmSelection = new ScheduledInvocationOwnerLLMSelection
             {
-                RouteKind = ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService,
+                RouteKind = LLMRouteKind.NyxIdUserService,
                 RouteValue = "/api/v1/proxy/s/chrono-llm-public",
                 NyxIdUserServiceId = "nyx-llm-service-alpha",
                 ServiceSlugSnapshot = "chrono-llm-public",
@@ -1968,6 +1968,73 @@ public sealed class ScheduledDispatchGAgentTests
         agent.State.FailureCount.Should().Be(1);
         agent.State.LastError.Should().Be("exchange failed");
         agent.State.FireRecords[idempotencyKey].Status.Should().Be(ScheduledDispatchFireStatusState.Failed);
+    }
+
+    [Theory]
+    [InlineData("WORKFLOW_DEFINITION_INVALID", "Workflow definition is invalid.")]
+    [InlineData("NYXID_OPERATION_AUTHORING_MIGRATION_REQUIRED", "Workflow uses a retired NyxID tool contract.")]
+    [InlineData("CAPABILITY_ADMISSION_REBIND_REQUIRED", "Saved workflow and capability admission no longer match.")]
+    public async Task HandleFireAsync_WhenWorkflowAdmissionIsRejected_ShouldRecordSafeTypedFailure(
+        string code,
+        string safeMessage)
+    {
+        var eventStore = new TestEventStore();
+        var serviceInvocationDispatch = new RecordingScheduledServiceInvocationDispatchPort
+        {
+            DispatchException = CreateWorkflowAdmissionException(code, safeMessage),
+        };
+        var agent = CreateAgent(
+            eventStore,
+            new RecordingActorDispatchPort(),
+            serviceInvocationDispatch: serviceInvocationDispatch);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(
+            enabled: false,
+            scheduleKind: ScheduledDispatchScheduleKindState.Workflow,
+            target: new ScheduledDispatchTargetState
+            {
+                Kind = ScheduledDispatchTargetKindState.ServiceInvocation,
+                CredentialRequirementTargetKind = ScheduledDispatchCredentialRequirementTargetKindState.WorkflowService,
+                ServiceInvocation = new ScheduledServiceInvocationTargetState
+                {
+                    Identity = new ServiceIdentity { ServiceId = "svc-alpha" },
+                    EndpointId = "chat",
+                    Payload = Any.Pack(new ChatRequestEvent { Prompt = "configured" }),
+                    Auth = new ScheduledServiceInvocationAuthState
+                    {
+                        SenderNyxId = new ScheduledServiceInvocationNyxIdCredentialSourceState
+                        {
+                            Subject = new ScheduledServiceInvocationNyxIdSubjectRefState
+                            {
+                                Platform = "lark",
+                                Tenant = "tenant-alpha",
+                                ExternalUserId = "user-alpha",
+                            },
+                            Scope = "proxy",
+                        },
+                    },
+                },
+            }));
+
+        var scheduledFireAt = new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero);
+        await agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
+            Manual = true,
+            IdempotencyKey = ManualFireIdempotencyKey,
+        });
+
+        agent.State.FireCount.Should().Be(1);
+        agent.State.FailureCount.Should().Be(1);
+        agent.State.LastError.Should().Be(safeMessage);
+        agent.State.LastErrorCode.Should().Be(code);
+        var record = agent.State.FireRecords[ManualFireIdempotencyKey];
+        record.Status.Should().Be(ScheduledDispatchFireStatusState.Failed);
+        record.Error.Should().Be(safeMessage);
+        record.ErrorCode.Should().Be(code);
+        record.TargetActorId.Should().BeEmpty();
+        agent.State.ToString().Should().NotContain("workflow yaml");
+        agent.State.ToString().Should().NotContain(nameof(ScheduledWorkflowAdmissionException));
     }
 
     [Fact]
@@ -5044,7 +5111,7 @@ public sealed class ScheduledDispatchGAgentTests
         ("authorization-catalog-evaluated", configured =>
             configured.Target.ServiceInvocation.AuthorizationFact.Authority.CatalogEvaluatedAt.Seconds++),
         ("owner-llm-route-kind", configured => configured.Target.ServiceInvocation.AuthorizationFact
-            .OwnerLlmSelection.RouteKind = ScheduledInvocationOwnerLLMRouteKind.Unspecified),
+            .OwnerLlmSelection.RouteKind = LLMRouteKind.Unspecified),
         ("owner-llm-route", configured => configured.Target.ServiceInvocation.AuthorizationFact
             .OwnerLlmSelection.RouteValue = "route-substituted"),
         ("owner-llm-service", configured => configured.Target.ServiceInvocation.AuthorizationFact
@@ -5220,7 +5287,7 @@ public sealed class ScheduledDispatchGAgentTests
 
     private static ScheduledInvocationOwnerLLMSelection CreateOwnerLLMSelection() => new()
     {
-        RouteKind = ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService,
+        RouteKind = LLMRouteKind.NyxIdUserService,
         RouteValue = "/api/v1/proxy/s/chrono-llm-public",
         NyxIdUserServiceId = "nyx-llm-service-alpha",
         ServiceSlugSnapshot = "chrono-llm-public",
@@ -5288,6 +5355,10 @@ public sealed class ScheduledDispatchGAgentTests
         SetAgentId(agent, ScheduleActorId);
         return agent;
     }
+
+    private static ScheduledWorkflowAdmissionException CreateWorkflowAdmissionException(
+        string code,
+        string safeMessage) => new(code, safeMessage);
 
     private static EventEnvelope CreateFiredCallbackEnvelope(
         RuntimeCallbackTimeoutRequest request,

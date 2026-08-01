@@ -54,6 +54,54 @@ public abstract class WorkflowGAgentTestBase
             return agent;
         }
 
+        internal static Task BindInteractiveWorkflowDefinitionAsync(
+            WorkflowGAgent agent,
+            string workflowYaml,
+            string? workflowName = null,
+            IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
+            string? scopeId = null,
+            string? sourceKind = null,
+            WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan = null,
+            string? workflowId = null,
+            string? revisionId = null,
+            CancellationToken ct = default) =>
+            agent.BindWorkflowDefinitionAsync(
+                workflowYaml,
+                workflowName,
+                inlineWorkflowYamls,
+                scopeId,
+                sourceKind,
+                capabilityAdmissionPlan,
+                workflowId,
+                revisionId,
+                ExternalCapabilityExecutionMode.Interactive,
+                ct);
+
+        internal static Task BindInteractiveWorkflowRunDefinitionAsync(
+            WorkflowRunGAgent agent,
+            string definitionActorId,
+            string workflowYaml,
+            string? workflowName = null,
+            IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
+            string? runId = null,
+            string? scopeId = null,
+            string? runOrigin = null,
+            string? scheduleId = null,
+            WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan = null,
+            CancellationToken ct = default) =>
+            agent.BindWorkflowRunDefinitionAsync(
+                definitionActorId,
+                workflowYaml,
+                workflowName,
+                inlineWorkflowYamls,
+                runId,
+                scopeId,
+                runOrigin,
+                scheduleId,
+                capabilityAdmissionPlan,
+                ExternalCapabilityExecutionMode.Interactive,
+                ct);
+
         internal static async Task<WorkflowGAgent> CreateRegisteredDefinitionAgentAsync(
             RecordingActorRuntime runtime,
             RecordingEventPublisher publisher,
@@ -64,7 +112,7 @@ public abstract class WorkflowGAgentTestBase
             var agent = CreateDefinitionAgent();
             SetAgentId(agent, actorId);
             agent.EventPublisher = publisher;
-            await agent.BindWorkflowDefinitionAsync(workflowYaml, workflowName);
+            await BindInteractiveWorkflowDefinitionAsync(agent, workflowYaml, workflowName);
             runtime.RegisterAgent(actorId, agent);
             return agent;
         }

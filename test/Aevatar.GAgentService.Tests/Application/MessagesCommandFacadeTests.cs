@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.ChatRouting.Abstractions;
@@ -94,7 +95,7 @@ public sealed class MessagesCommandFacadeTests
             dispatchPort: dispatch,
             defaultIngressModel: "fallback-vendor/fallback-model",
             ownerLlmConfigSource: new StubOwnerLlmConfigSource(
-                new OwnerLlmConfig("chrono-llm/gpt-5.5", null, 0)));
+                OwnerConfig("chrono-llm/gpt-5.5")));
 
         var result = await facade.CreateAsync(BuildRequest("  "), CallerScopeContext("token"));
 
@@ -449,6 +450,20 @@ public sealed class MessagesCommandFacadeTests
             ownerLlmConfigSource,
             llmRunExecutor);
     }
+
+    private static OwnerLlmConfig OwnerConfig(string modelId) => new(
+        new LLMSelection
+        {
+            RouteKind = LLMRouteKind.Gateway,
+            RouteValue = LLMSelectionPolicy.GatewayRoute,
+            ModelSelection = new LLMModelSelection
+            {
+                Kind = LLMModelSelectionKind.ExplicitModel,
+                ModelId = modelId,
+            },
+        },
+        LLMSelectionPersistenceStatus.Ready,
+        0);
 
     private sealed class StubOwnerLlmConfigSource(OwnerLlmConfig? config = null)
         : IOwnerLlmConfigSource

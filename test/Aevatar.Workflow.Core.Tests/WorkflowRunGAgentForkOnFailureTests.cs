@@ -376,6 +376,7 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
             WorkflowYaml = workflowYaml,
             RunId = runId,
             ScopeId = "scope-1",
+            ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
         }));
 
         return new RunHarness(agent, runId, string.Empty, committedHook, topologyPublisher);

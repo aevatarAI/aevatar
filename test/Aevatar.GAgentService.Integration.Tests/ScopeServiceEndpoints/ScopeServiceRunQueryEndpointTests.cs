@@ -73,6 +73,7 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
                 "default-flow",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a",
                 CreatedAt: createdAt,
                 UpdatedAt: updatedAt),
@@ -121,6 +122,7 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
                 "approval",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a",
                 CreatedAt: createdAt,
                 UpdatedAt: updatedAt),
@@ -186,6 +188,7 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
                 "member-flow",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a",
                 CreatedAt: createdAt,
                 UpdatedAt: updatedAt),
@@ -246,6 +249,7 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
                 "member-flow",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a",
                 CreatedAt: createdAt,
                 UpdatedAt: updatedAt),
@@ -312,6 +316,7 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
                 "member-flow",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a",
                 CreatedAt: createdAt,
                 UpdatedAt: updatedAt),
@@ -383,6 +388,7 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
                 "member-flow",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a"),
         ];
 
@@ -432,6 +438,7 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
                 "member-flow",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a"),
         ];
 
@@ -471,6 +478,7 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
                 "member-flow",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a"),
         ];
 
@@ -509,6 +517,7 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
                 "member-flow",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a"),
         ];
 
@@ -551,6 +560,7 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
                 "orders",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a",
                 CreatedAt: createdAt,
                 UpdatedAt: updatedAt),
@@ -645,6 +655,7 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
                 "member-flow",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a",
                 CreatedAt: baseTime.AddMinutes(10),
                 UpdatedAt: baseTime.AddHours(1)),
@@ -768,6 +779,7 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
                 "orders",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a",
                 CreatedAt: createdAt,
                 UpdatedAt: updatedAt),
@@ -937,6 +949,7 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
                 "approval",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a",
                 CreatedAt: createdAt,
                 UpdatedAt: updatedAt),
@@ -1010,6 +1023,7 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
                 "orders",
                 "yaml",
                 new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Durable,
                 "scope-a",
                 CreatedAt: createdAt,
                 UpdatedAt: updatedAt),

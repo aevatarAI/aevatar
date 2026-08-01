@@ -3575,7 +3575,8 @@ public sealed class AevatarInvocationToolSourceTests
                 "run-1",
                 "demo-dinner-workflow",
                 string.Empty,
-                new Dictionary<string, string>(StringComparer.Ordinal)),
+                new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Interactive),
         ];
         var tool = await harness.DiscoverToolAsync("aevatar_read_workflow_run_artifact");
 
@@ -3602,7 +3603,8 @@ public sealed class AevatarInvocationToolSourceTests
             "run-1",
             "demo-dinner-workflow",
             string.Empty,
-            new Dictionary<string, string>(StringComparer.Ordinal));
+            new Dictionary<string, string>(StringComparer.Ordinal),
+            ExternalCapabilityExecutionMode.Interactive);
         harness.WorkflowQuery.ReportsByWorkflowRunId["workflow-run-actor"] = new WorkflowRunReport
         {
             RootActorId = "workflow-run-actor",
@@ -3673,7 +3675,8 @@ public sealed class AevatarInvocationToolSourceTests
                 "run-1",
                 "demo-dinner-workflow",
                 string.Empty,
-                new Dictionary<string, string>(StringComparer.Ordinal)),
+                new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Interactive),
         ];
         harness.WorkflowQuery.Timeline =
         [

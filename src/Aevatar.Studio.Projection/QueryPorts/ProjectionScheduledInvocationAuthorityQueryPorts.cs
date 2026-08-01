@@ -1,3 +1,5 @@
+using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
@@ -102,26 +104,37 @@ public sealed class ProjectionScheduledInvocationOwnerLLMQueryPort(
 
         return document.LlmSelection == null
             ? Unspecified(document.StateVersion)
-            : MapTypedEvidence(document.StateVersion, document.DefaultModel, document.LlmSelection);
+            : MapTypedEvidence(document.StateVersion, document.LlmSelection);
     }
 
     private static ScheduledInvocationOwnerLLMEvidence MapTypedEvidence(
         long stateVersion,
-        string model,
-        UserLlmSelection selection)
+        LLMSelection selection)
     {
+        try
+        {
+            LLMSelectionPolicy.ValidateSelection(selection);
+        }
+        catch (InvalidOperationException)
+        {
+            return Unspecified(stateVersion);
+        }
+
+        if (selection.ModelSelection.Kind != LLMModelSelectionKind.ExplicitModel)
+            return Unspecified(stateVersion);
+
         var mapped = new ScheduledInvocationOwnerLLMSelection
         {
             RouteKind = selection.RouteKind switch
             {
-                UserLlmRouteKind.Gateway => ScheduledInvocationOwnerLLMRouteKind.Gateway,
-                UserLlmRouteKind.NyxIdUserService => ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService,
-                _ => ScheduledInvocationOwnerLLMRouteKind.Unspecified,
+                LLMRouteKind.Gateway => LLMRouteKind.Gateway,
+                LLMRouteKind.NyxIdUserService => LLMRouteKind.NyxIdUserService,
+                _ => LLMRouteKind.Unspecified,
             },
             RouteValue = selection.RouteValue,
             NyxIdUserServiceId = selection.NyxIdUserServiceId,
             ServiceSlugSnapshot = selection.ServiceSlugSnapshot,
-            Model = model,
+            Model = selection.ModelSelection.ModelId,
         };
 
         return ScheduledInvocationOwnerLLMSelectionPolicy.IsDurableSelectionValid(mapped)

@@ -248,6 +248,7 @@ internal static class ChatRunRequestNormalizer
             new WorkflowChatRunRequest(
                 Prompt: rawPrompt,
                 Source: sourceResult.Source!,
+                ExpectedExecutionMode: WorkflowProtocol.ExternalCapabilityExecutionMode.Interactive,
                 SessionId: NormalizeSessionId(input.SessionId),
                 InputParts: normalizedInputParts,
                 Metadata: normalizedMetadata,

@@ -4,7 +4,7 @@ option csharp_namespace = "Aevatar.Studio.Projection.ReadModels";
 
 import "google/protobuf/any.proto";
 import "google/protobuf/timestamp.proto";
-import "user_config_messages.proto";
+import "llm_selection.proto";
 
 message ContentArtifactCitationDocument {
   string citation_id = 1;
@@ -223,7 +223,7 @@ message UserConfigCurrentStateDocument {
   string remote_runtime_base_url = 14;
   int32 max_tool_rounds = 15;
   string github_username = 16;
-  aevatar.gagents.user_config.UserLlmSelection llm_selection = 17;
+  aevatar.ai.LLMSelection llm_selection = 17;
 }
 
 // ─── GAgentRegistry Current State ReadModel ───

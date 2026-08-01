@@ -1055,7 +1055,7 @@ export interface StudioUserLlmRouteOption {
   readonly ready: boolean;
   readonly userServiceId?: string | null;
   readonly serviceSlug?: string | null;
-  readonly defaultModel: string | null;
+  readonly modelCatalog: StudioLlmModelCatalog;
   readonly description?: string | null;
 }
 
@@ -1073,26 +1073,98 @@ export interface StudioUserLlmSettingsCapabilities {
   readonly canRetryCatalog: boolean;
 }
 
-export type StudioUserLlmSavedRouteKind =
-  | 'gateway'
-  | 'nyx_id_user_service'
-  | 'unknown';
+export type StudioLlmModelSelection =
+  | { readonly kind: 'unspecified' }
+  | { readonly kind: 'provider_default' }
+  | { readonly kind: 'explicit_model'; readonly modelId: string };
+
+export type StudioSelectedLlmModelSelection = Exclude<
+  StudioLlmModelSelection,
+  { kind: 'unspecified' }
+>;
+
+export type StudioLlmSelection =
+  | {
+      readonly routeKind: 'unspecified';
+      readonly modelSelection: { readonly kind: 'unspecified' };
+    }
+  | {
+      readonly routeKind: 'gateway';
+      readonly routeValue: string;
+      readonly modelSelection: StudioSelectedLlmModelSelection;
+    }
+  | {
+      readonly routeKind: 'nyx_id_user_service';
+      readonly routeValue: string;
+      readonly nyxIdUserServiceId: string;
+      readonly serviceSlugSnapshot: string;
+      readonly modelSelection: StudioSelectedLlmModelSelection;
+    };
+
+export type StudioLlmModelCatalogCertainty =
+  | 'enumerated'
+  | 'not_verifiable'
+  | 'unavailable';
+
+export type StudioLlmModelCatalogDiagnostic =
+  | 'unspecified'
+  | 'not_published'
+  | 'route_not_ready'
+  | 'access_denied'
+  | 'observation_unavailable'
+  | 'response_invalid'
+  | 'response_too_large'
+  | 'pattern_only';
+
+export interface StudioLlmModelCatalog {
+  readonly certainty: StudioLlmModelCatalogCertainty;
+  readonly modelIds: readonly string[];
+  readonly defaultModelId?: string | null;
+  readonly diagnostic: StudioLlmModelCatalogDiagnostic;
+}
+
+export type StudioUserLlmSelectionStatus =
+  | 'system_default'
+  | 'ready'
+  | 'verification_unavailable'
+  | 'needs_repair'
+  | 'legacy_repair_required';
+
+export type StudioUserLlmRemediation =
+  | 'none'
+  | 'retry_catalog'
+  | 'connect_provider'
+  | 'choose_replacement'
+  | 'reselect';
+
+export type StudioSaveUserLlmIntent =
+  | { readonly action: 'reset' }
+  | {
+      readonly action: 'select_gateway';
+      readonly gateway: { readonly model: StudioSelectedLlmModelSelection };
+    }
+  | {
+      readonly action: 'select_user_service';
+      readonly userService: {
+        readonly userServiceId: string;
+        readonly model: StudioSelectedLlmModelSelection;
+      };
+    }
+  | {
+      readonly action: 'activate_preset';
+      readonly preset: { readonly presetId: string };
+    };
 
 export interface StudioUserLlmSettings {
-  readonly savedRoute: string;
+  readonly savedSelection?: StudioLlmSelection | null;
   readonly savedRouteLabel: string;
-  readonly savedRouteKind: StudioUserLlmSavedRouteKind;
-  readonly savedUserServiceId?: string | null;
-  readonly savedServiceSlug?: string | null;
-  readonly effectiveRoute: string;
-  readonly effectiveRouteLabel: string;
-  readonly routeFallbackActive: boolean;
-  readonly fallbackReason?: string | null;
+  readonly selectionStatus: StudioUserLlmSelectionStatus;
+  readonly catalogDiagnostic: StudioLlmModelCatalogDiagnostic;
+  readonly remediation: StudioUserLlmRemediation;
   readonly routeOptions: readonly StudioUserLlmRouteOption[];
   readonly modelGroupsByRoute: readonly StudioUserLlmModelGroup[];
   readonly catalogStatus: 'ready' | 'empty' | 'unavailable' | string;
   readonly capabilities: StudioUserLlmSettingsCapabilities;
-  readonly defaultModel: string;
   readonly setupHint?: unknown;
 }
 

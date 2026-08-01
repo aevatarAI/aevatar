@@ -207,6 +207,7 @@ public class ConnectorCallIntegrationTests
                 WorkflowYaml = workflowYaml,
                 WorkflowName = "connector_flow",
                 CapabilityAdmissionPlan = capabilityAdmissionPlan,
+                ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
             }),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
             Propagation = new EnvelopePropagation
@@ -225,6 +226,7 @@ public class ConnectorCallIntegrationTests
                 WorkflowYaml = workflowYaml,
                 WorkflowName = "connector_flow",
                 RunId = "connector-flow-run",
+                ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
             }),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
             Propagation = new EnvelopePropagation

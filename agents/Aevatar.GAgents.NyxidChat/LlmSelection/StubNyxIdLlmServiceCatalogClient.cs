@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.Studio.Application.Studio.Abstractions;
 
 namespace Aevatar.GAgents.NyxidChat.LlmSelection;
@@ -53,8 +54,12 @@ public sealed class StubNyxIdLlmServiceCatalogClient : INyxIdLlmServiceCatalogCl
             ServiceSlug: SharedServiceSlug,
             DisplayName: "chrono-llm shared",
             RouteValue: SharedRouteValue,
-            DefaultModel: SharedDefaultModel,
-            Models: [SharedDefaultModel],
+            ModelCatalog: new LLMModelCatalog
+            {
+                Certainty = LLMModelCatalogCertainty.Enumerated,
+                DefaultModelId = SharedDefaultModel,
+                ModelIds = { SharedDefaultModel },
+            },
             Status: "ready",
             Source: "shared",
             Allowed: true,

@@ -1491,6 +1491,7 @@ internal sealed class SubWorkflowOrchestrator
                 ? state.ScopeId ?? string.Empty
                 : definition.ScopeId,
             InlineWorkflowYamls = { inlineWorkflowYamls },
+            ExpectedExecutionMode = state.ExpectedExecutionMode,
         };
 
         return new EventEnvelope

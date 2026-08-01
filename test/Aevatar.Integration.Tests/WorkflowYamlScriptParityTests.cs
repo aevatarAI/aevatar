@@ -11,6 +11,7 @@ using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Application.Queries;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Hosting.DependencyInjection;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Integration.AI;
 using FluentAssertions;
@@ -70,6 +71,7 @@ public class WorkflowYamlScriptParityTests
             {
                 WorkflowYaml = BuildParityWorkflowYaml(),
                 WorkflowName = "yaml_script_parity",
+                ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
             }),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
             Propagation = new EnvelopePropagation
@@ -88,6 +90,7 @@ public class WorkflowYamlScriptParityTests
                 WorkflowYaml = BuildParityWorkflowYaml(),
                 WorkflowName = "yaml_script_parity",
                 RunId = "yaml-script-parity-run",
+                ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
             }),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
             Propagation = new EnvelopePropagation
