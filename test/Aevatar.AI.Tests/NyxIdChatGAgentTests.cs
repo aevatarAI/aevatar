@@ -1687,6 +1687,144 @@ public class NyxIdChatGAgentTests
             .Should().Be(1);
     }
 
+    [Theory]
+    [InlineData(RoleChatSessionOutcome.Completed, "completed")]
+    [InlineData(RoleChatSessionOutcome.Failed, "error")]
+    public async Task DirectChatHistory_ShouldReconcileDeliveredOutcomeUncertainWithStableIdentity(
+        RoleChatSessionOutcome reconciledOutcome,
+        string expectedStatus)
+    {
+        var store = new InMemoryEventStoreForTests();
+        var history = new RecordingChatHistoryCommandPort();
+        using var services = BuildServiceProvider(historyCommandPort: history, eventStore: store);
+        var actorId = $"nyxid-chat-history-reconciliation-{expectedStatus}";
+        const string sessionId = "turn-history-reconciliation";
+        await AppendCommittedEventsAsync(
+            services,
+            actorId,
+            new RoleChatSessionStartedEvent
+            {
+                SessionId = sessionId,
+                ScopeId = "scope-a",
+                Prompt = "perform side effect",
+            },
+            new RoleChatSessionProgressedEvent
+            {
+                SessionId = sessionId,
+                Sequence = 1,
+                ToolStarted = new RoleChatToolStartedProgress
+                {
+                    CallId = "call-side-effect",
+                    ToolName = "side_effecting_tool",
+                },
+            });
+        var first = CreateAgent(services, actorId, loopbackHistoryDelivery: true);
+        await first.ActivateAsync();
+
+        await first.HandleIncompleteSessionFinalizationRequestedAsync(
+            new RoleChatIncompleteSessionFinalizationRequested
+            {
+                SessionId = sessionId,
+                ExpectedLastProgressSequence = 1,
+            });
+
+        var firstSession = first.State.Sessions[sessionId];
+        firstSession.HistoryDeliveryStatus.Should().Be(RoleChatHistoryDeliveryStatus.Dispatched);
+        firstSession.HistoryDeliveryAttempt.Should().Be(1);
+        var deliveryId = firstSession.HistoryDeliveryId;
+        var uncertainAssistant = history.Saved.Should().ContainSingle().Which.Messages[1];
+        uncertainAssistant.Status.Should().Be("outcome_uncertain");
+        uncertainAssistant.Content.Should().Contain("outcome could not be confirmed");
+        await first.DeactivateAsync();
+
+        var version = await store.GetVersionAsync(actorId);
+        await store.AppendAsync(
+            actorId,
+            [StateEventFor(actorId, version + 1, new RoleChatSessionCompletedEvent
+            {
+                SessionId = sessionId,
+                Prompt = "perform side effect",
+                Content = reconciledOutcome == RoleChatSessionOutcome.Completed ? "confirmed result" : string.Empty,
+                Outcome = reconciledOutcome,
+                FailureCode = reconciledOutcome == RoleChatSessionOutcome.Failed ? "CONFIRMED_FAILURE" : string.Empty,
+                SafeMessage = reconciledOutcome == RoleChatSessionOutcome.Failed ? "The operation failed." : string.Empty,
+                TerminalTime = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-02T08:00:00Z")),
+            })],
+            expectedVersion: version);
+        var recovered = CreateAgent(services, actorId, loopbackHistoryDelivery: true);
+
+        await recovered.ActivateAsync();
+
+        var reconciledSession = recovered.State.Sessions[sessionId];
+        reconciledSession.HistoryDeliveryStatus.Should().Be(RoleChatHistoryDeliveryStatus.Dispatched);
+        reconciledSession.HistoryDeliveryAttempt.Should().Be(2);
+        reconciledSession.HistoryDeliveryId.Should().Be(deliveryId);
+        history.Saved.Should().HaveCount(2);
+        history.Saved.SelectMany(saved => saved.Messages).Should()
+            .OnlyContain(message => message.TurnId == sessionId);
+        history.Saved[0].Messages.Select(message => message.Id).Should()
+            .Equal(history.Saved[1].Messages.Select(message => message.Id));
+        history.Saved[1].Messages[1].Status.Should().Be(expectedStatus);
+    }
+
+    [Fact]
+    public async Task PendingDirectChatHistoryOutbox_ShouldRemainNonTrimmableAtAdmissionCapacity()
+    {
+        var store = new InMemoryEventStoreForTests();
+        using var services = BuildServiceProvider(
+            historyCommandPort: new RecordingChatHistoryCommandPort(),
+            eventStore: store);
+        const string actorId = "nyxid-chat-history-capacity";
+        var events = new List<IMessage>
+        {
+            new RoleChatSessionStartedEvent
+            {
+                SessionId = "history-pending",
+                ScopeId = "scope-a",
+                Prompt = "preserve history",
+            },
+            new RoleChatSessionCompletedEvent
+            {
+                SessionId = "history-pending",
+                Prompt = "preserve history",
+                Content = "durable answer",
+                Outcome = RoleChatSessionOutcome.Completed,
+            },
+        };
+        events.AddRange(Enumerable.Range(1, 127).Select(index => (IMessage)new RoleChatSessionStartedEvent
+        {
+            SessionId = $"incomplete-{index}",
+            Prompt = $"prompt-{index}",
+        }));
+        await AppendCommittedEventsAsync(services, actorId, events.ToArray());
+        var llm = new StreamingToolLoopProviderFactory(
+            [[new LLMStreamChunk { DeltaContent = "must not run" }]]);
+        var agent = CreateAgent(services, actorId, llm);
+        var publisher = new RecordingEventPublisher { FailHistoryDeliveryRequests = true };
+        agent.EventPublisher = publisher;
+        await agent.ActivateAsync();
+
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            SessionId = "capacity-overflow",
+            CommandAttemptId = "capacity-attempt",
+            Prompt = "reject this",
+        });
+
+        agent.State.Sessions.Should().HaveCount(128);
+        agent.State.Sessions.Should().ContainKey("history-pending");
+        agent.State.Sessions["history-pending"].HistoryDeliveryStatus.Should()
+            .Be(RoleChatHistoryDeliveryStatus.Prepared);
+        agent.State.Sessions.Should().NotContainKey("capacity-overflow");
+        llm.StreamRequests.Should().BeEmpty();
+        (await store.GetEventsAsync(actorId))
+            .Where(stateEvent => stateEvent.EventData.Is(RoleChatCommandAttemptRejectedEvent.Descriptor))
+            .Select(stateEvent => stateEvent.EventData.Unpack<RoleChatCommandAttemptRejectedEvent>())
+            .Should().ContainSingle(rejection =>
+                rejection.RequestedSessionId == "capacity-overflow" &&
+                rejection.Reason == RoleChatCommandAttemptRejectionReason.CapacityExhausted);
+    }
+
     [Fact]
     public async Task HistoryRequestPublishFailure_ShouldNotPolluteCommittedTerminalOrActivation()
     {
@@ -2468,6 +2606,17 @@ public class NyxIdChatGAgentTests
         await provider.GetRequiredService<IEventStore>()
             .AppendAsync(actorId, stateEvents, expectedVersion: 0);
     }
+
+    private static StateEvent StateEventFor(string actorId, long version, IMessage evt) =>
+        new()
+        {
+            EventId = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Version = version,
+            EventType = evt.Descriptor.FullName,
+            EventData = Any.Pack(evt),
+            AgentId = actorId,
+        };
 
     private static ChatRouteResolver NewChatRouteResolver() =>
         new(new StaticChatRouteFallbackProvider(string.Empty));

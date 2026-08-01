@@ -238,6 +238,71 @@ public sealed class ChatConversationGAgentAppendTests
         agent.State.LastRejectedAppend!.Reason.Should().Be(ChatTurnAppendRejectionReason.Conflict);
     }
 
+    [Theory]
+    [InlineData(ChatTurnTerminalStatus.Completed)]
+    [InlineData(ChatTurnTerminalStatus.Failed)]
+    public async Task AppendChatTurnCommand_ShouldReconcileOutcomeUncertainExactlyOnce(
+        ChatTurnTerminalStatus reconciledStatus)
+    {
+        var eventStore = new RecordingEventStore();
+        var agent = await CreateAgentAsync(eventStore: eventStore);
+        var uncertain = CreateAppend(
+            "turn-uncertain",
+            "perform side effect",
+            "The outcome could not be confirmed.",
+            ChatTurnTerminalStatus.OutcomeUncertain);
+        uncertain.Turn.SanitizedError = "SESSION_OUTCOME_UNCERTAIN";
+        var reconciled = CreateAppend(
+            "turn-uncertain",
+            "perform side effect",
+            reconciledStatus == ChatTurnTerminalStatus.Completed ? "confirmed result" : string.Empty,
+            reconciledStatus);
+        reconciled.Turn.SanitizedError = reconciledStatus == ChatTurnTerminalStatus.Failed
+            ? "CONFIRMED_FAILURE"
+            : string.Empty;
+
+        await agent.HandleEventAsync(Envelope(uncertain));
+        await agent.HandleEventAsync(Envelope(reconciled));
+        await agent.HandleEventAsync(Envelope(reconciled.Clone()));
+
+        var turn = agent.State.Turns.Should().ContainSingle().Which;
+        turn.TurnId.Should().Be("turn-uncertain");
+        turn.Sequence.Should().Be(1);
+        turn.TerminalStatus.Should().Be(reconciledStatus);
+        turn.AssistantText.Should().Be(reconciled.Turn.AssistantText);
+        turn.SanitizedError.Should().Be(reconciled.Turn.SanitizedError);
+        agent.State.LastRejectedAppend.Should().BeNull();
+        var persisted = await eventStore.GetEventsAsync(ActorId);
+        persisted.Count(stateEvent => stateEvent.EventData.Is(ChatTurnAppendedEvent.Descriptor))
+            .Should().Be(1);
+        persisted.Count(stateEvent => stateEvent.EventData.Is(ChatTurnTerminalReconciledEvent.Descriptor))
+            .Should().Be(1);
+    }
+
+    [Fact]
+    public async Task AppendChatTurnCommand_ShouldRejectReconciliationAfterAbsorbingTerminal()
+    {
+        var eventStore = new RecordingEventStore();
+        var agent = await CreateAgentAsync(eventStore: eventStore);
+        await agent.HandleEventAsync(Envelope(CreateAppend(
+            "turn-terminal",
+            "perform work",
+            "completed",
+            ChatTurnTerminalStatus.Completed)));
+
+        await agent.HandleEventAsync(Envelope(CreateAppend(
+            "turn-terminal",
+            "perform work",
+            string.Empty,
+            ChatTurnTerminalStatus.Failed)));
+
+        agent.State.Turns.Should().ContainSingle().Which.TerminalStatus
+            .Should().Be(ChatTurnTerminalStatus.Completed);
+        agent.State.LastRejectedAppend!.Reason.Should().Be(ChatTurnAppendRejectionReason.Conflict);
+        (await eventStore.GetEventsAsync(ActorId)).Should().NotContain(stateEvent =>
+            stateEvent.EventData.Is(ChatTurnTerminalReconciledEvent.Descriptor));
+    }
+
     [Fact]
     public async Task AppendChatTurnCommand_ShouldRemainAppendableBeyondFormerTurnLimit()
     {

@@ -62,6 +62,7 @@ public enum GAgentDraftRunCompletionStatus
     TextMessageCompleted = 1,
     RunFinished = 2,
     Failed = 3,
+    OutcomeUncertain = 4,
 }
 
 public sealed record GAgentDraftRunAcceptedReceipt(
@@ -97,6 +98,7 @@ public enum GAgentApprovalCompletionStatus
     TextMessageCompleted = 1,
     RunFinished = 2,
     Failed = 3,
+    OutcomeUncertain = 4,
 }
 
 public sealed record GAgentApprovalAcceptedReceipt(

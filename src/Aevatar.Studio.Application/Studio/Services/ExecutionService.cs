@@ -308,7 +308,8 @@ public sealed class ExecutionService
     private static bool IsTerminalExecutionStatus(string status) =>
         string.Equals(status, "completed", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(status, "failed", StringComparison.OrdinalIgnoreCase) ||
-        string.Equals(status, "stopped", StringComparison.OrdinalIgnoreCase);
+        string.Equals(status, "stopped", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(status, "outcome_uncertain", StringComparison.OrdinalIgnoreCase);
 
     private static string NormalizeRequired(string value, string fieldName)
     {

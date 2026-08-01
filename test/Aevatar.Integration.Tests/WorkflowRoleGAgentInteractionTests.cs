@@ -670,7 +670,7 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
                 .Should().ContainSingle()
                 .Which.Options!.Delivery!.OperationId.Should().Be(
                     "workflow-llm-terminal:run-completion-publisher-deadline:" +
-                    "step-completion-publisher-deadline:" + firstSessionId);
+                    "step-completion-publisher-deadline:" + firstSessionId + ":outcome:1");
 
             await agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
             {
@@ -733,7 +733,8 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
                     completed.SessionId == sessionId)
                 .Should().ContainSingle()
                 .Which.Options!.Delivery!.OperationId.Should().Be(
-                    "workflow-llm-terminal:run-activation-retry:step-activation-retry:" + sessionId);
+                    "workflow-llm-terminal:run-activation-retry:step-activation-retry:" +
+                    sessionId + ":outcome:1");
 
             await recovered.HandleEventAsync(staleRetryEnvelope);
 

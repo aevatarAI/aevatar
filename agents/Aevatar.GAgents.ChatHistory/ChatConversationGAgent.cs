@@ -66,14 +66,26 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>,
             string.Equals(x.TurnId, turn.TurnId, StringComparison.Ordinal));
         if (existing is not null)
         {
-            if (!HasSamePayload(existing, turn))
+            if (HasSamePayload(existing, turn))
             {
-                await PersistRejectionAsync(command, ChatTurnAppendRejectionReason.Conflict);
-                await DispatchAppendResultAsync(command, false, ChatTurnAppendRejectionReason.Conflict);
+                await DispatchAppendResultAsync(command, true, ChatTurnAppendRejectionReason.Unspecified);
+            }
+            else if (CanReconcileTerminal(existing, turn))
+            {
+                turn.Sequence = existing.Sequence;
+                await PersistDomainEventAsync(new ChatTurnTerminalReconciledEvent
+                {
+                    ScopeId = command.ScopeId,
+                    ConversationId = command.ConversationId,
+                    PreviousStatus = existing.TerminalStatus,
+                    Turn = turn,
+                });
+                await DispatchAppendResultAsync(command, true, ChatTurnAppendRejectionReason.Unspecified);
             }
             else
             {
-                await DispatchAppendResultAsync(command, true, ChatTurnAppendRejectionReason.Unspecified);
+                await PersistRejectionAsync(command, ChatTurnAppendRejectionReason.Conflict);
+                await DispatchAppendResultAsync(command, false, ChatTurnAppendRejectionReason.Conflict);
             }
             return;
         }
@@ -130,6 +142,7 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>,
             .Match(current, evt)
             .On<ChatConversationInitializedEvent>(ApplyChatConversationInitialized)
             .On<ChatTurnAppendedEvent>(ApplyChatTurnAppended)
+            .On<ChatTurnTerminalReconciledEvent>(ApplyChatTurnTerminalReconciled)
             .On<ChatTurnAppendRejectedEvent>(ApplyChatTurnAppendRejected)
             .On<ConversationDeletedEvent>(ApplyConversationDeleted)
             .OrCurrent();
@@ -265,6 +278,13 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>,
             : checked(state.Turns.Max(static turn => turn.Sequence) + 1);
     }
 
+    private static bool CanReconcileTerminal(ChatTurn existing, ChatTurn candidate) =>
+        existing.TerminalStatus == ChatTurnTerminalStatus.OutcomeUncertain &&
+        candidate.TerminalStatus is ChatTurnTerminalStatus.Completed or ChatTurnTerminalStatus.Failed &&
+        string.Equals(existing.UserText, candidate.UserText, StringComparison.Ordinal) &&
+        string.Equals(existing.LlmRoute, candidate.LlmRoute, StringComparison.Ordinal) &&
+        string.Equals(existing.LlmModel, candidate.LlmModel, StringComparison.Ordinal);
+
     private string ResolveAppendTitle(AppendChatTurnCommand command, ChatTurn turn)
     {
         if (!string.IsNullOrWhiteSpace(command.Title))
@@ -384,6 +404,40 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>,
             CreatedAt = evt.CreatedAt.Clone(),
             InitialTitle = evt.InitialTitle,
         };
+        return next;
+    }
+
+    private static ChatConversationState ApplyChatTurnTerminalReconciled(
+        ChatConversationState state,
+        ChatTurnTerminalReconciledEvent evt)
+    {
+        if (evt.Turn is null ||
+            !string.Equals(state.ScopeId, evt.ScopeId, StringComparison.Ordinal) ||
+            !string.Equals(state.ConversationId, evt.ConversationId, StringComparison.Ordinal))
+        {
+            return state;
+        }
+
+        var existingIndex = state.Turns
+            .Select((turn, index) => (turn, index))
+            .FirstOrDefault(entry => string.Equals(
+                entry.turn.TurnId,
+                evt.Turn.TurnId,
+                StringComparison.Ordinal));
+        if (existingIndex.turn is null ||
+            existingIndex.turn.TerminalStatus != evt.PreviousStatus ||
+            !CanReconcileTerminal(existingIndex.turn, evt.Turn))
+        {
+            return state;
+        }
+
+        var next = state.Clone();
+        var reconciledTurn = evt.Turn.Clone();
+        reconciledTurn.Sequence = existingIndex.turn.Sequence;
+        next.Turns[existingIndex.index] = reconciledTurn;
+        next.UpdatedAtMs = reconciledTurn.TerminalTime?.ToDateTimeOffset().ToUnixTimeMilliseconds()
+                           ?? next.UpdatedAtMs;
+        next.LastRejectedAppend = null;
         return next;
     }
 

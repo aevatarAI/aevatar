@@ -65,6 +65,7 @@ public enum ChatHistoryCreateRecoveryStatus
     Failed = 5,
     AppendCommitted = 6,
     AppendRejected = 7,
+    TerminalReconciliationPrepared = 8,
 }
 
 public sealed record ChatHistoryCreateRecoveryResult(

@@ -81,11 +81,13 @@ public sealed class GAgentRunTerminalProjectorTests
     }
 
     [Theory]
-    [InlineData(RoleChatSessionOutcome.Failed, "SESSION_ORPHANED", "The interrupted session cannot be resumed.", "The interrupted session cannot be resumed.")]
-    [InlineData(RoleChatSessionOutcome.OutcomeUncertain, "SESSION_OUTCOME_UNCERTAIN", " ", "SESSION_OUTCOME_UNCERTAIN")]
-    public async Task ProjectAsync_ShouldMaterializeTypedFailure_WhenContentIsEmpty(
+    [InlineData(RoleChatSessionOutcome.Failed, GAgentRunTerminalStatus.Failed, "SESSION_ORPHANED", "SESSION_ORPHANED", "The interrupted session cannot be resumed.", "The interrupted session cannot be resumed.")]
+    [InlineData(RoleChatSessionOutcome.OutcomeUncertain, GAgentRunTerminalStatus.OutcomeUncertain, " ", "SESSION_OUTCOME_UNCERTAIN", " ", "SESSION_OUTCOME_UNCERTAIN")]
+    public async Task ProjectAsync_ShouldMaterializeTypedTerminalOutcome_WhenContentIsEmpty(
         RoleChatSessionOutcome outcome,
+        GAgentRunTerminalStatus expectedStatus,
         string failureCode,
+        string expectedFailureCode,
         string safeMessage,
         string expectedReasonMessage)
     {
@@ -113,8 +115,8 @@ public sealed class GAgentRunTerminalProjectorTests
         var doc = await store.GetAsync(
             GAgentRunTerminalProjector.BuildDocumentId("actor-1", "corr-typed-failure"));
         doc.Should().NotBeNull();
-        doc!.Status.Should().Be((int)GAgentRunTerminalStatus.Failed);
-        doc.ReasonCode.Should().Be(failureCode);
+        doc!.Status.Should().Be((int)expectedStatus);
+        doc.ReasonCode.Should().Be(expectedFailureCode);
         doc.ReasonMessage.Should().Be(expectedReasonMessage);
     }
 

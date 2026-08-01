@@ -89,9 +89,16 @@ public sealed class GAgentRunTerminalProjector
         if (completed.Outcome is RoleChatSessionOutcome.Failed or RoleChatSessionOutcome.OutcomeUncertain)
         {
             var failureCode = completed.FailureCode?.Trim() ?? string.Empty;
+            if (completed.Outcome == RoleChatSessionOutcome.OutcomeUncertain &&
+                string.IsNullOrWhiteSpace(failureCode))
+            {
+                failureCode = GAgentRunFailureCodes.OutcomeUncertain;
+            }
             var safeMessage = completed.SafeMessage?.Trim() ?? string.Empty;
             return (
-                GAgentRunTerminalStatus.Failed,
+                completed.Outcome == RoleChatSessionOutcome.OutcomeUncertain
+                    ? GAgentRunTerminalStatus.OutcomeUncertain
+                    : GAgentRunTerminalStatus.Failed,
                 failureCode,
                 string.IsNullOrWhiteSpace(safeMessage) ? failureCode : safeMessage);
         }

@@ -335,7 +335,9 @@ public class WorkflowRoleGAgent(
                     {
                         Delivery = new EventEnvelopeDeliveryOptions
                         {
-                            OperationId = $"workflow-llm-terminal:{deliveryId}",
+                            OperationId = string.Create(
+                                CultureInfo.InvariantCulture,
+                                $"workflow-llm-terminal:{deliveryId}:outcome:{(int)session.Outcome}"),
                         },
                     })
                 .WaitAsync(deliveryCt);

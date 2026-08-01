@@ -58,6 +58,7 @@ public enum ChatHistoryTurnTerminalStatus
     Failed = 2,
     Stopped = 3,
     Blocked = 4,
+    OutcomeUncertain = 5,
 }
 
 public sealed record ChatHistoryTurnTerminalNotification(
