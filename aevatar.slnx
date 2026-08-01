@@ -78,6 +78,7 @@
     <Project Path="src\Aevatar.AI.ToolProviders.Scripting\Aevatar.AI.ToolProviders.Scripting.csproj" />
     <Project Path="src\Aevatar.AI.Infrastructure.Local\Aevatar.AI.Infrastructure.Local.csproj" />
     <Project Path="src\Aevatar.AI.Infrastructure.ChronoSandbox\Aevatar.AI.Infrastructure.ChronoSandbox.csproj" />
+    <Project Path="src\Aevatar.AI.Infrastructure.ToolExecution\Aevatar.AI.Infrastructure.ToolExecution.csproj" />
     <Project Path="src\Aevatar.AI.ToolProviders.Workflow\Aevatar.AI.ToolProviders.Workflow.csproj" />
     <Project Path="src\Aevatar.Audit.Hosting\Aevatar.Audit.Hosting.csproj" />
     <Project Path="src\Aevatar.Bootstrap.Extensions.AI\Aevatar.Bootstrap.Extensions.AI.csproj" />

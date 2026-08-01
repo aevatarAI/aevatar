@@ -247,6 +247,46 @@ public sealed class NyxIdChatControlCommandTests
             summary.Status == NyxIdChatTurnStatus.Failed);
     }
 
+    [Fact]
+    public void StopPendingInput_ShouldClearNeedsYouFactWithTerminalFence()
+    {
+        var state = FailedStepState(
+            NyxIdChatStepKind.Input,
+            required: true,
+            safeToSkip: false,
+            retryInputRebuildable: false);
+        state.ActiveTask.Steps.Single().Status = NyxIdChatStepStatus.Waiting;
+        state.PendingInput = new NyxIdChatPendingInputState
+        {
+            RequestId = "input-alpha",
+            TurnId = "turn-alpha",
+            TaskId = "task-alpha",
+            StepId = "step-alpha",
+            Prompt = "Choose a region.",
+            AskedAt = Now.Clone(),
+        };
+
+        var decision = NyxIdChatControlCommands.Stop(
+            state,
+            new NyxIdChatStopCommand
+            {
+                ScopeId = "scope-alpha",
+                ConversationActorId = "conversation-alpha",
+                TurnId = "turn-alpha",
+                StopRequestId = "stop-alpha",
+                ClientRequestId = "client-stop-alpha",
+                ExpectedStateVersion = 3,
+            },
+            stateVersion: 3,
+            Now);
+
+        decision.ShouldCommit.Should().BeTrue();
+        decision.State.PendingInput.Should().BeNull();
+        decision.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Stopped);
+        NyxIdChatNeedsYouDecisions.RefreshAttention(decision.State)
+            .Attention.AttentionKind.Should().Be(NyxIdChatAttentionKind.None);
+    }
+
     private static NyxIdChatRetryStepCommand RetryCommand() => new()
     {
         ScopeId = "scope-alpha",

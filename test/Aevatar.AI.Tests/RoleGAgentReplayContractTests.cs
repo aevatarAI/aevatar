@@ -5,6 +5,11 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core;
 using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Routing;
+using Aevatar.AI.Core.Tools;
+using Aevatar.Audit;
+using Aevatar.Audit.Abstractions.Identity;
+using Aevatar.Audit.Abstractions.Models;
+using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Persistence;
@@ -1730,9 +1735,28 @@ public class RoleGAgentReplayContractTests
         var services = new ServiceCollection()
             .AddSingleton(store)
             .AddSingleton<EventSourcingRuntimeOptions>()
+            .AddSingleton<IAuditTrailAppender, AppendedAuditTrail>()
+            .AddSingleton<IAuditActorIdentityHasher, StableIdentityHasher>()
+            .AddSingleton<IAgentToolAdmissionLedger>(AlwaysStartingAgentToolAdmissionLedger.Instance)
+            .AddSingleton<IAgentToolExecutionPort, AdmittedAgentToolExecutor>()
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
         configure?.Invoke(services);
         return services.BuildServiceProvider();
+    }
+
+    private sealed class AppendedAuditTrail : IAuditTrailAppender
+    {
+        public Task<AuditTrailAppendResult> AppendAsync(
+            AuditRecord record,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(AuditTrailAppendResult.Appended(record.AuditId));
+    }
+
+    private sealed class StableIdentityHasher : IAuditActorIdentityHasher
+    {
+        public AuditActorIdentity Hash(string canonicalActorKey) => new("actor-hash", "key-1");
+
+        public bool Verify(string canonicalActorKey, string auditActorId, string identityKeyId) => true;
     }
 
     private static RoleGAgent CreateAgent(
@@ -1740,7 +1764,10 @@ public class RoleGAgentReplayContractTests
         string actorId,
         ILLMProviderFactory? providerFactory = null)
     {
-        var agent = new RoleGAgent(providerFactory, toolSources: services.GetServices<IAgentToolSource>())
+        var agent = new RoleGAgent(
+            services.GetRequiredService<IAgentToolExecutionPort>(),
+            providerFactory,
+            toolSources: services.GetServices<IAgentToolSource>())
         {
             Services = services,
             EventSourcingBehaviorFactory = services.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),
@@ -2219,7 +2246,7 @@ public class RoleGAgentReplayContractTests
         List<string>? operationLog,
         ReconcileProposalMutation reconcileProposalMutation,
         InitialAuthorityMutation initialAuthorityMutation)
-        : RoleGAgent(providerFactory)
+        : RoleGAgent(TestAgentToolExecutionPort.Instance, providerFactory)
     {
         public int PrepareCallCount { get; private set; }
         public int MaterializeCallCount { get; private set; }

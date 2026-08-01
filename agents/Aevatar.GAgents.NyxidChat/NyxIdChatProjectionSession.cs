@@ -356,6 +356,42 @@ public sealed class NyxIdChatSessionEventProjector
                     committed.State?.ProgressSequence ?? 0));
         }
 
+        if (payload.Is(NyxIdChatInputRequestedEvent.Descriptor))
+        {
+            var committed = payload.Unpack<NyxIdChatInputRequestedEvent>();
+            if (!string.Equals(
+                    committed.PendingInput?.TurnId,
+                    context.SessionId,
+                    StringComparison.Ordinal) ||
+                !MatchesControllerState(context, committed.State))
+            {
+                return EmptyEntries;
+            }
+            return Entries(
+                context,
+                NyxIdChatConversationAguiFrameBuilder.BuildInputRequested(committed));
+        }
+
+        if (payload.Is(NyxIdChatInputResolutionCommittedEvent.Descriptor))
+        {
+            var committed = payload.Unpack<NyxIdChatInputResolutionCommittedEvent>();
+            if (!MatchesControllerState(context, committed.State))
+                return EmptyEntries;
+            return Entries(
+                context,
+                NyxIdChatConversationAguiFrameBuilder.BuildInputChanged(committed));
+        }
+
+        if (payload.Is(NyxIdChatApprovalResolutionCommittedEvent.Descriptor))
+        {
+            var committed = payload.Unpack<NyxIdChatApprovalResolutionCommittedEvent>();
+            if (!MatchesControllerState(context, committed.State))
+                return EmptyEntries;
+            return Entries(
+                context,
+                NyxIdChatConversationAguiFrameBuilder.BuildApprovalChanged(committed));
+        }
+
         if (payload.Is(NyxIdChatContinuationAdmissionCommittedEvent.Descriptor))
         {
             var committed = payload.Unpack<NyxIdChatContinuationAdmissionCommittedEvent>();

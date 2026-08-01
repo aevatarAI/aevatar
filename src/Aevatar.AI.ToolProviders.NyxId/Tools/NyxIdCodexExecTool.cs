@@ -28,7 +28,6 @@ public sealed class NyxIdCodexExecTool : INyxIdBuiltInTool
 
     private readonly IReadOnlyList<ICodexExecutionPort> _ports;
     private readonly NyxIdToolOptions _options;
-
     public NyxIdCodexExecTool(
         NyxIdApiClient client,
         NyxIdToolOptions? options = null,
@@ -65,7 +64,7 @@ public sealed class NyxIdCodexExecTool : INyxIdBuiltInTool
         "or the operator-managed isolated sandbox. Private SSH uses the host's local Codex " +
         "configuration. Managed sandbox accepts only an empty Git workspace and fixed runtime policy.";
 
-    public ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
+    public ToolApprovalMode ApprovalMode => ToolApprovalMode.AlwaysRequire;
 
     public bool? RequiresApproval(string argumentsJson)
     {
@@ -77,7 +76,7 @@ public sealed class NyxIdCodexExecTool : INyxIdBuiltInTool
         return kind switch
         {
             "managed_sandbox" => false,
-            "private_ssh" => !_options.BypassSshExecApproval,
+            "private_ssh" => true,
             _ => true,
         };
     }

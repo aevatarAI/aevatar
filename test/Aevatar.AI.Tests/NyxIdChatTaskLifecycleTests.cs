@@ -236,6 +236,14 @@ public sealed class NyxIdChatTaskLifecycleTests
         decision.State.PendingApproval.TaskId.Should().Be("task-alpha");
         decision.State.PendingApproval.StepId.Should().Be("step-tool-alpha");
         decision.State.PendingApproval.ToolName.Should().Be("repository_delete");
+        decision.State.PendingApproval.AskedAt.Should().Be(Now);
+        decision.State.PendingApproval.Presentation.Action.Should().Be("repository_delete");
+        decision.State.PendingApproval.Presentation.Target.Should().Be("repository_delete");
+        decision.State.PendingApproval.Presentation.ActorLabel.Should()
+            .Be(NyxIdChatServiceDefaults.DisplayName);
+        decision.State.PendingApproval.Presentation.Reversibility.Should()
+            .Be(NyxIdChatApprovalReversibility.Irreversible);
+        decision.State.PendingApproval.Presentation.GrantBoundary.Should().Be("within_grant");
     }
 
     [Fact]

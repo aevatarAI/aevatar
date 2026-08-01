@@ -18,7 +18,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
     [Fact]
     public async Task DiscoverToolsAsync_ExposesListOnlySchemaWithoutUnverifiedInstanceIdentity()
     {
-        var source = new ChannelNyxIdConnectedServiceInventoryToolSource();
+        var source = new ChannelNyxIdConnectedServiceInventoryToolSource(new RecordingExecutionPort());
         using var context = AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
         {
             SenderBinding = new AgentToolSenderBindingContext(
@@ -40,7 +40,9 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         var handler = new InventoryHandler();
         var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
         var issuer = Substitute.For<INyxIdConnectedServiceInventoryCapabilityIssuer>();
+        var executionPort = new RecordingExecutionPort();
         var source = new ChannelNyxIdConnectedServiceInventoryToolSource(
+            executionPort,
             options,
             new TestNyxIdApiClientFactory(new NyxIdApiClient(
                 options,
@@ -65,6 +67,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         using var document = JsonDocument.Parse(result);
         document.RootElement.GetProperty("error").GetString().Should().Be("invalid_arguments");
         handler.RequestPath.Should().BeNull();
+        executionPort.Requests.Should().BeEmpty();
         await issuer.DidNotReceiveWithAnyArgs()
             .IssueByBindingIdAsync(default!, default!, default);
     }
@@ -78,6 +81,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             options,
             new HttpClient(handler)));
         var issuer = Substitute.For<INyxIdConnectedServiceInventoryCapabilityIssuer>();
+        var executionPort = new RecordingExecutionPort();
         issuer
             .IssueByBindingIdAsync(
                 Arg.Any<ExternalSubjectRef>(),
@@ -89,6 +93,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
                 Scope = "proxy",
             }));
         var source = new ChannelNyxIdConnectedServiceInventoryToolSource(
+            executionPort,
             options,
             clientFactory,
             issuer,
@@ -113,6 +118,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
                 "lark",
                 "tenant-1",
                 "ou_sender_1"),
+            Request = new AgentToolRequestIdentity("request-inventory-1", "call-inventory-1"),
         });
 
         var tool = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
@@ -128,6 +134,14 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         result.Should().Contain("GitHub");
         handler.Authorization.Should().Be("Bearer inventory-access-token");
         handler.RequestPath.Should().Be("/api/v1/keys");
+        executionPort.Requests.Should().ContainSingle();
+        executionPort.Requests[0].ArgumentsJson.Should().Be("{}");
+        executionPort.Requests[0].ExecutionContext.Request.RequestId.Should().Be("request-inventory-1");
+        executionPort.Requests[0].ExecutionContext.Request.CallId.Should().Be("call-inventory-1:inventory-read");
+        executionPort.Requests[0].ExecutionContext.Credentials.NyxIdAccessToken
+            .Should().Be("inventory-access-token");
+        executionPort.Requests[0].ApprovalContinuationMode.Should()
+            .Be(AgentToolApprovalContinuationMode.None);
         await issuer.Received(1).IssueByBindingIdAsync(
             Arg.Is<ExternalSubjectRef>(subject =>
                 subject.Platform == "lark" &&
@@ -146,7 +160,9 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             options,
             new HttpClient(handler)));
         var issuer = Substitute.For<INyxIdConnectedServiceInventoryCapabilityIssuer>();
+        var executionPort = new RecordingExecutionPort();
         var source = new ChannelNyxIdConnectedServiceInventoryToolSource(
+            executionPort,
             options,
             clientFactory,
             issuer,
@@ -195,6 +211,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             options,
             new HttpClient(handler)));
         var issuer = Substitute.For<INyxIdConnectedServiceInventoryCapabilityIssuer>();
+        var executionPort = new RecordingExecutionPort();
         issuer
             .IssueByBindingIdAsync(
                 Arg.Any<ExternalSubjectRef>(),
@@ -202,6 +219,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
                 Arg.Any<CancellationToken>())
             .Returns<Task<CapabilityHandle>>(_ => throw new HttpRequestException("NyxID unavailable"));
         var source = new ChannelNyxIdConnectedServiceInventoryToolSource(
+            executionPort,
             options,
             clientFactory,
             issuer,
@@ -257,6 +275,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             options,
             new HttpClient(handler)));
         var issuer = Substitute.For<INyxIdConnectedServiceInventoryCapabilityIssuer>();
+        var executionPort = new RecordingExecutionPort();
         issuer
             .IssueByBindingIdAsync(
                 Arg.Any<ExternalSubjectRef>(),
@@ -268,6 +287,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
                 Scope = "proxy",
             }));
         var source = new ChannelNyxIdConnectedServiceInventoryToolSource(
+            executionPort,
             options,
             clientFactory,
             issuer,
@@ -310,7 +330,9 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             options,
             new HttpClient(handler)));
         var issuer = new CancelingInventoryCapabilityIssuer(cts);
+        var executionPort = new RecordingExecutionPort();
         var source = new ChannelNyxIdConnectedServiceInventoryToolSource(
+            executionPort,
             options,
             clientFactory,
             issuer,
@@ -370,6 +392,44 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
     private sealed class TestNyxIdApiClientFactory(NyxIdApiClient client) : INyxIdApiClientFactory
     {
         public NyxIdApiClient CreateClient() => client;
+    }
+
+    private sealed class RecordingExecutionPort : IAgentToolExecutionPort
+    {
+        public List<AgentToolExecutionRequest> Requests { get; } = [];
+
+        public async Task<AgentToolExecutionOutcome> ExecuteAsync(
+            AgentToolExecutionRequest request,
+            CancellationToken ct = default)
+        {
+            Requests.Add(request);
+            string resultJson;
+            using (AgentToolContextScope.Push(request.ExecutionContext))
+                resultJson = await request.Tool.ExecuteAsync(request.ArgumentsJson, ct);
+            var receipt = request.Tool.CreateResultReceipt(
+                    request.ExecutionContext.Request.CallId ?? string.Empty,
+                    request.Tool.Name,
+                    request.ArgumentsJson,
+                    resultJson)
+                ?? new AgentToolReceipt
+                {
+                    CallId = request.ExecutionContext.Request.CallId ?? string.Empty,
+                    ToolName = request.Tool.Name,
+                    Status = AgentToolReceiptStatus.Unspecified,
+                    ResultJson = resultJson,
+                };
+            return new AgentToolExecutionOutcome(
+                AgentToolExecutionOutcomeKind.Executed,
+                resultJson,
+                receipt,
+                IsMutation: false,
+                FailureCode: string.Empty,
+                SafeMessage: string.Empty,
+                AgentToolExecutionFailureStage.None,
+                TerminalInvoked: true,
+                Retryable: false,
+                AuditCompleted: true);
+        }
     }
 
     private sealed class CancelingInventoryCapabilityIssuer(CancellationTokenSource callerCancellation)

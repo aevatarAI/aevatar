@@ -55,8 +55,9 @@ public sealed class NyxIdChatConversationGAgent
 
     protected override NyxIdChatConversationGAgentState TransitionState(
         NyxIdChatConversationGAgentState current,
-        IMessage evt) =>
-        StateTransitionMatcher
+        IMessage evt)
+    {
+        var next = StateTransitionMatcher
             .Match(current, evt)
             .On<AgentProfileBoundEvent>(ApplyAgentProfileBound)
             .On<NyxIdChatConversationCreationStartedEvent>(ApplyConversationCreationStarted)
@@ -78,7 +79,12 @@ public sealed class NyxIdChatConversationGAgent
             .On<NyxIdChatContinuationAdmissionCommittedEvent>(ApplyContinuationAdmissionCommitted)
             .On<NyxIdChatStepControlCommittedEvent>(ApplyStepControlCommitted)
             .On<NyxIdChatActionRequestedEvent>(ApplyActionRequested)
+            .On<NyxIdChatInputRequestedEvent>(ApplyInputRequested)
+            .On<NyxIdChatInputResolutionCommittedEvent>(ApplyInputResolutionCommitted)
+            .On<NyxIdChatApprovalResolutionCommittedEvent>(ApplyApprovalResolutionCommitted)
             .OrCurrent();
+        return NyxIdChatNeedsYouDecisions.RefreshAttention(next);
+    }
 
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
@@ -648,7 +654,8 @@ public sealed class NyxIdChatConversationGAgent
             OperationId = BuildStableIdentity("operation", Id, command.TurnId, command.TaskId, "llm", "1"),
             OperationGeneration = 1,
         };
-        var next = BuildStartedState(command, operationKey, turnAuthority, now);
+        var next = NyxIdChatNeedsYouDecisions.RefreshAttention(
+            BuildStartedState(command, operationKey, turnAuthority, now));
         next.HistoryDeliveryReservation = BuildHistoryDeliveryReservation(command);
 
         await PersistDomainEventAsync(new NyxIdChatTurnStartedEvent
@@ -711,7 +718,7 @@ public sealed class NyxIdChatConversationGAgent
         if (!decision.ShouldCommit)
             return;
 
-        var nextState = decision.State.Clone();
+        var nextState = NyxIdChatNeedsYouDecisions.RefreshAttention(decision.State);
         var terminalPrepared = PrepareHistoryTerminalOutbox(nextState);
 
         await PersistDomainEventAsync(new NyxIdChatControlFenceCommittedEvent
@@ -743,7 +750,7 @@ public sealed class NyxIdChatConversationGAgent
             return;
         }
 
-        var fencedState = decision.FencedState.Clone();
+        var fencedState = NyxIdChatNeedsYouDecisions.RefreshAttention(decision.FencedState);
         var terminalPrepared = PrepareHistoryTerminalOutbox(fencedState);
         await PersistDomainEventAsync(new NyxIdChatControlFenceCommittedEvent
         {
@@ -760,7 +767,7 @@ public sealed class NyxIdChatConversationGAgent
             return;
         }
 
-        var continuationState = decision.State.Clone();
+        var continuationState = NyxIdChatNeedsYouDecisions.RefreshAttention(decision.State);
         continuationState.PendingHistoryTerminal = State.PendingHistoryTerminal?.Clone();
 
         await PersistDomainEventAsync(new NyxIdChatContinuationAdmissionCommittedEvent
@@ -788,7 +795,7 @@ public sealed class NyxIdChatConversationGAgent
             now);
         if (decision.ShouldCommit)
         {
-            var nextState = decision.State.Clone();
+            var nextState = NyxIdChatNeedsYouDecisions.RefreshAttention(decision.State);
             var terminalPrepared = PrepareHistoryTerminalOutbox(nextState);
             await PersistDomainEventAsync(new NyxIdChatStepControlCommittedEvent
             {
@@ -821,7 +828,7 @@ public sealed class NyxIdChatConversationGAgent
         if (!decision.ShouldCommit)
             return;
 
-        var nextState = decision.State.Clone();
+        var nextState = NyxIdChatNeedsYouDecisions.RefreshAttention(decision.State);
         var terminalPrepared = PrepareHistoryTerminalOutbox(nextState);
 
         await PersistDomainEventAsync(new NyxIdChatStepControlCommittedEvent
@@ -832,6 +839,62 @@ public sealed class NyxIdChatConversationGAgent
 
         if (terminalPrepared)
             await DispatchPendingHistoryTerminalAsync();
+    }
+
+    [EventHandler]
+    public async Task HandleInputRequestAsync(NyxIdChatInputRequestCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        var decision = NyxIdChatNeedsYouDecisions.RequestInput(
+            State,
+            command,
+            Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()));
+        if (!decision.ShouldCommit || decision.Resolution is null)
+            return;
+
+        await PersistDomainEventAsync(new NyxIdChatInputRequestedEvent
+        {
+            PendingInput = decision.Resolution.Clone(),
+            State = NyxIdChatNeedsYouDecisions.RefreshAttention(decision.State),
+        }, CancellationToken.None);
+    }
+
+    [EventHandler]
+    public async Task HandleInputResolveAsync(NyxIdChatInputResolveCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        var decision = NyxIdChatNeedsYouDecisions.ResolveInput(
+            State,
+            command,
+            CurrentCommittedVersion(),
+            Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()));
+        if (!decision.ShouldCommit || decision.Resolution is null)
+            return;
+
+        await PersistDomainEventAsync(new NyxIdChatInputResolutionCommittedEvent
+        {
+            Resolution = decision.Resolution.Clone(),
+            State = NyxIdChatNeedsYouDecisions.RefreshAttention(decision.State),
+        }, CancellationToken.None);
+    }
+
+    [EventHandler]
+    public async Task HandleApprovalResolveAsync(NyxIdChatApprovalResolveCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        var decision = NyxIdChatNeedsYouDecisions.ResolveApproval(
+            State,
+            command,
+            CurrentCommittedVersion(),
+            Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()));
+        if (!decision.ShouldCommit || decision.Resolution is null)
+            return;
+
+        await PersistDomainEventAsync(new NyxIdChatApprovalResolutionCommittedEvent
+        {
+            Resolution = decision.Resolution.Clone(),
+            State = NyxIdChatNeedsYouDecisions.RefreshAttention(decision.State),
+        }, CancellationToken.None);
     }
 
     [EventHandler]
@@ -852,7 +915,7 @@ public sealed class NyxIdChatConversationGAgent
         }
         if (decision.ShouldCommit)
         {
-            var nextState = decision.State.Clone();
+            var nextState = NyxIdChatNeedsYouDecisions.RefreshAttention(decision.State);
             if (decision.Outcome == NyxIdChatTransitionOutcome.Accepted &&
                 decision.Admission.Status ==
                 NyxIdChatContinuationAdmissionStatus.Accepted)
@@ -974,7 +1037,7 @@ public sealed class NyxIdChatConversationGAgent
         if (decision.Outcome != NyxIdChatTransitionOutcome.Accepted)
             return;
 
-        var nextState = decision.State.Clone();
+        var nextState = NyxIdChatNeedsYouDecisions.RefreshAttention(decision.State);
         nextState.ProgressSequence = State.ProgressSequence + 1;
         nextState.UpdatedAt = now.Clone();
         var terminalPrepared = PrepareHistoryTerminalOutbox(nextState);
@@ -1028,6 +1091,7 @@ public sealed class NyxIdChatConversationGAgent
             if (!lateEvidence.ShouldCommit)
                 return;
 
+            var lateState = NyxIdChatNeedsYouDecisions.RefreshAttention(lateEvidence.State);
             await PersistDomainEventAsync(new NyxIdChatLateOperationEvidenceCommittedEvent
             {
                 Key = signal.Key.Clone(),
@@ -1036,9 +1100,9 @@ public sealed class NyxIdChatConversationGAgent
                 ToolReceipt = BuildDurableReceiptEvidence(signal.Tool?.Receipt),
                 TerminalCode = lateEvidence.TerminalCode,
                 SafeMessage = lateEvidence.SafeMessage,
-                ProgressSequence = lateEvidence.State.ProgressSequence,
+                ProgressSequence = lateState.ProgressSequence,
                 CommittedAt = now.Clone(),
-                State = lateEvidence.State.Clone(),
+                State = lateState,
             }, CancellationToken.None);
             return;
         }
@@ -1053,7 +1117,7 @@ public sealed class NyxIdChatConversationGAgent
             if (!actionDecision.ShouldCommit)
                 return;
 
-            var actionState = actionDecision.State.Clone();
+            var actionState = NyxIdChatNeedsYouDecisions.RefreshAttention(actionDecision.State);
             var actionTerminalPrepared = PrepareHistoryTerminalOutbox(actionState);
 
             await PersistDomainEventAsync(new NyxIdChatOperationReconciledEvent
@@ -1095,7 +1159,7 @@ public sealed class NyxIdChatConversationGAgent
                 if (!actionDecision.ShouldCommit)
                     return;
 
-                var actionState = actionDecision.State.Clone();
+                var actionState = NyxIdChatNeedsYouDecisions.RefreshAttention(actionDecision.State);
                 var authorizationTerminalPrepared = PrepareHistoryTerminalOutbox(actionState);
 
                 await PersistDomainEventAsync(new NyxIdChatActionRequestedEvent
@@ -1129,7 +1193,7 @@ public sealed class NyxIdChatConversationGAgent
         if (decision.Outcome != NyxIdChatTransitionOutcome.Accepted)
             return;
 
-        var nextState = decision.State.Clone();
+        var nextState = NyxIdChatNeedsYouDecisions.RefreshAttention(decision.State);
         nextState.ProgressSequence = State.ProgressSequence + 1;
         nextState.UpdatedAt = now.Clone();
         var terminalText = signal.ResultCase ==
@@ -1328,6 +1392,12 @@ public sealed class NyxIdChatConversationGAgent
         next.RecentStepControlResults.AddRange(
             State.RecentStepControlResults.Select(static result => result.Clone()));
         next.LatestStepControlResult = State.LatestStepControlResult?.Clone();
+        next.RecentInputResolutions.AddRange(
+            State.RecentInputResolutions.Select(static result => result.Clone()));
+        next.LatestInputResolution = State.LatestInputResolution?.Clone();
+        next.RecentApprovalResolutions.AddRange(
+            State.RecentApprovalResolutions.Select(static result => result.Clone()));
+        next.LatestApprovalResolution = State.LatestApprovalResolution?.Clone();
         next.PendingActions.AddRange(
             State.PendingActions.Select(static action => action.Clone()));
         next.RecentActions.AddRange(
@@ -1352,7 +1422,7 @@ public sealed class NyxIdChatConversationGAgent
         return safe;
     }
 
-    private static Aevatar.AI.Abstractions.ChatRequestEvent BuildTransientChatRequest(
+    private Aevatar.AI.Abstractions.ChatRequestEvent BuildTransientChatRequest(
         NyxIdChatStartTurnCommand command)
     {
         var request = new Aevatar.AI.Abstractions.ChatRequestEvent
@@ -1361,7 +1431,7 @@ public sealed class NyxIdChatConversationGAgent
             SessionId = command.TurnId.Trim(),
             ScopeId = command.ScopeId.Trim(),
             CommandAttemptId = command.CommandId.Trim(),
-            ToolContext = command.ToolContext?.Clone(),
+            ToolContext = BuildActorOwnedToolContext(command.ToolContext).ToPayload(),
             LlmControl = command.LlmControl?.Clone(),
         };
         request.InputParts.AddRange(command.InputParts.Select(static part => part.Clone()));
@@ -1383,7 +1453,7 @@ public sealed class NyxIdChatConversationGAgent
         try
         {
             var toolContext = LLMControlContextMapper.FromPayload(command.LlmControl)
-                .ToToolContext(AgentToolExecutionContextMapper.FromPayload(command.ToolContext));
+                .ToToolContext(BuildActorOwnedToolContext(command.ToolContext));
             return (await _turnCatalogMaterializer.PrepareAsync(
                     profile,
                     command.TurnId.Trim(),
@@ -1404,6 +1474,13 @@ public sealed class NyxIdChatConversationGAgent
                 AgentProfileTurnDegradationReason.MaterializationFailed);
         }
     }
+
+    private AgentToolExecutionContext BuildActorOwnedToolContext(
+        AgentToolExecutionContextPayload? payload) =>
+        AgentToolExecutionContextMapper.FromPayload(payload) with
+        {
+            ExecutionOwner = AgentToolExecutionOwners.Actor(Id),
+        };
 
     private static AgentProfileTurnAuthorityState RestrictedEmptyAuthority(
         string sessionId,
@@ -1877,6 +1954,21 @@ public sealed class NyxIdChatConversationGAgent
         return next;
     }
 
+    private static NyxIdChatConversationGAgentState ApplyInputRequested(
+        NyxIdChatConversationGAgentState current,
+        NyxIdChatInputRequestedEvent evt) =>
+        evt.State?.Clone() ?? current;
+
+    private static NyxIdChatConversationGAgentState ApplyInputResolutionCommitted(
+        NyxIdChatConversationGAgentState current,
+        NyxIdChatInputResolutionCommittedEvent evt) =>
+        evt.State?.Clone() ?? current;
+
+    private static NyxIdChatConversationGAgentState ApplyApprovalResolutionCommitted(
+        NyxIdChatConversationGAgentState current,
+        NyxIdChatApprovalResolutionCommittedEvent evt) =>
+        evt.State?.Clone() ?? current;
+
     private NyxIdChatHistoryDeliveryReservationState BuildHistoryDeliveryReservation(
         NyxIdChatStartTurnCommand command)
     {
@@ -2168,7 +2260,7 @@ public sealed class NyxIdChatConversationGAgent
         if (decision.Outcome != NyxIdChatTransitionOutcome.Accepted)
             return;
 
-        var next = decision.State.Clone();
+        var next = NyxIdChatNeedsYouDecisions.RefreshAttention(decision.State);
         next.ProgressSequence = State.ProgressSequence + 1;
         next.UpdatedAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow());
         var terminalPrepared = PrepareHistoryTerminalOutbox(next);

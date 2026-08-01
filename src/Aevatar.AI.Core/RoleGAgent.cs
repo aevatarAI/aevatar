@@ -28,7 +28,6 @@ using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 namespace Aevatar.AI.Core;
 
@@ -47,6 +46,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
     private string _appliedEventRoutes = string.Empty;
     private IServiceProvider? _appliedModuleServices;
     private readonly TimeProvider _timeProvider;
+    private readonly IAgentToolExecutionPort _toolExecutionPort;
     // Per-turn NyxID token, stashed before ChatStreamAsync so chartered direct-chat subclasses can
     // hand it to per-turn context consumers (DecorateSystemPrompt has no context param). The base
     // role agent itself never resolves capability overlays — see CurrentTurnNyxIdAccessToken.
@@ -61,30 +61,28 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
 
     protected virtual TimeProvider ChatRequestTimeProvider => TimeProvider.System;
 
+    protected override AgentToolApprovalContinuationMode ToolApprovalContinuationMode =>
+        AgentToolApprovalContinuationMode.ActorOwned;
+
     public RoleGAgent(
+        IAgentToolExecutionPort toolExecutionPort,
         ILLMProviderFactory? llmProviderFactory = null,
         IEnumerable<IAIGAgentExecutionHook>? additionalHooks = null,
         IEnumerable<IAgentRunMiddleware>? agentMiddlewares = null,
-        IEnumerable<IToolCallMiddleware>? toolMiddlewares = null,
         IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
         IEnumerable<IAgentToolSource>? toolSources = null,
-        IToolApprovalHandler? approvalHandler = null,
         IRemoteToolApprovalPort? remoteToolApprovalPort = null,
         IRemoteToolApprovalNotificationPort? remoteToolApprovalNotificationPort = null,
         TimeProvider? timeProvider = null)
         : base(
+            toolExecutionPort,
             llmProviderFactory,
             additionalHooks,
             agentMiddlewares,
-            toolMiddlewares,
             llmMiddlewares,
-            toolSources,
-            // RoleGAgent owns the pending-approval continuation (persisted state +
-            // remote escalation + timeout), so yielding is its capability default.
-            // Surfaces without that continuation must NOT wire a yielding handler;
-            // they fall through to MissingApprovalHandler and fail closed.
-            approvalHandler ?? new YieldApprovalHandler())
+            toolSources)
     {
+        _toolExecutionPort = toolExecutionPort ?? throw new ArgumentNullException(nameof(toolExecutionPort));
         RemoteToolApprovalPort = remoteToolApprovalPort;
         RemoteToolApprovalNotificationPort = remoteToolApprovalNotificationPort;
         _timeProvider = timeProvider ?? TimeProvider.System;
@@ -216,29 +214,52 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             // Refactor (issue1414/cluster-004):
             //   Old pattern: pending approval state could rehydrate stable tool/caller context from metadata.
             //   New principle: typed ToolContext/LlmControl are the only tool control authority.
+            AgentToolExecutionOutcome? toolOutcome = null;
             try
             {
                 // Refactor (issue1253-first):
                 //   Old pattern: Approval resume rebuilt control context from a durable annotation bag.
                 //   New principle: Use typed pending.ToolContext only; metadata is never a control source.
-                var pendingToolContext = ResolvePendingToolContext(pending);
+                var pendingToolContext = ResolvePendingToolContext(pending) with
+                {
+                    ExecutionOwner = AgentToolExecutionOwners.Actor(Id),
+                };
+                var approvedExecution = await ResolveApprovedToolExecutionAsync(
+                    pending,
+                    pendingToolContext,
+                    CancellationToken.None);
+                pendingToolContext = approvedExecution.ExecutionContext;
                 using (AgentToolContextScope.Push(pendingToolContext))
                 {
-                    // Execute the yielded tool call
-                    var toolResult = await ExecuteApprovedToolAsync(
-                        pending,
-                        pendingToolContext,
+                    toolOutcome = await _toolExecutionPort.ExecuteAsync(
+                        new AgentToolExecutionRequest(
+                            approvedExecution.Tool,
+                            pending.ArgumentsJson,
+                            pendingToolContext.WithCallId(pending.ToolCallId),
+                            AgentToolApprovalContinuationMode.ActorOwned,
+                            new AgentToolApprovalGrant(
+                                pendingToolContext.ExecutionOwner.Clone(),
+                                pending.RequestId,
+                                pendingToolContext.Request.RequestId ?? string.Empty,
+                                pending.ToolName,
+                                pending.ToolCallId,
+                                AgentToolArgumentsDigest.ComputeSha256(pending.ArgumentsJson))),
                         CancellationToken.None);
+                    if (toolOutcome.Kind is not (AgentToolExecutionOutcomeKind.Executed or
+                        AgentToolExecutionOutcomeKind.ExecutedAuditIncomplete))
+                    {
+                        throw new InvalidOperationException(
+                            string.IsNullOrWhiteSpace(toolOutcome.SafeMessage)
+                                ? toolOutcome.FailureCode
+                                : toolOutcome.SafeMessage);
+                    }
 
                     Logger.LogInformation(
                         "[{Role}] Tool executed. result length={Len} request={RequestId}",
-                        RoleName, toolResult.Content?.Length ?? 0, pending.RequestId);
-
-                    // Clear pending state
-                    await PersistDomainEventAsync(new ClearPendingApprovalEvent { RequestId = pending.RequestId });
+                        RoleName, toolOutcome.ResultJson.Length, pending.RequestId);
 
                     // Build continuation prompt with the actual tool result
-                    var continuation = BuildContinuationPrompt(pending, toolResult.Content);
+                    var continuation = BuildContinuationPrompt(pending, toolOutcome.ResultJson);
 
                     Logger.LogInformation(
                         "[{Role}] Dispatching continuation chat. request={RequestId}",
@@ -266,6 +287,17 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             }
             catch (Exception ex)
             {
+                if (toolOutcome is { TerminalInvoked: false, Retryable: true })
+                {
+                    Logger.LogWarning(
+                        ex,
+                        "[{Role}] Approval continuation remains pending after retryable pre-terminal failure. request={RequestId} failureCode={FailureCode}",
+                        RoleName,
+                        pending.RequestId,
+                        toolOutcome.FailureCode);
+                    throw;
+                }
+
                 Logger.LogError(ex,
                     "[{Role}] Approval continuation FAILED. request={RequestId}",
                     RoleName, pending.RequestId);
@@ -278,6 +310,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
 
                 throw; // Re-throw so the SSE endpoint sees the error
             }
+
+            await PersistDomainEventAsync(new ClearPendingApprovalEvent
+                { RequestId = pending.RequestId });
         }
         else
         {
@@ -551,7 +586,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             IsDestructive = receipt.IsDestructive,
             ToolContext = ResolveToolContext(
                 request,
-                receipt.ApprovalRequestId,
+                request.SessionId ?? string.Empty,
                 receipt.CallId ?? string.Empty).ToPayload(),
             ScopeId = request.ScopeId ?? string.Empty,
         };
@@ -575,18 +610,16 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         await ScheduleApprovalTimeoutAsync(pending);
     }
 
-    protected virtual Task<ChatMessage> ExecuteApprovedToolAsync(
+    protected virtual Task<(IAgentTool Tool, AgentToolExecutionContext ExecutionContext)>
+        ResolveApprovedToolExecutionAsync(
         PendingToolApprovalState pending,
         AgentToolExecutionContext toolContext,
-        CancellationToken ct) =>
-        Tools.ExecuteToolCallAsync(
-            new ToolCall
-            {
-                Id = pending.ToolCallId,
-                Name = pending.ToolName,
-                ArgumentsJson = pending.ArgumentsJson,
-            },
-            ct);
+        CancellationToken ct)
+    {
+        var tool = Tools.Get(pending.ToolName)
+                   ?? throw new InvalidOperationException($"Tool '{pending.ToolName}' not found");
+        return Task.FromResult((tool, toolContext));
+    }
 
     protected virtual Task OnApprovalTerminalFailureAsync(
         PendingToolApprovalState pending,
@@ -707,7 +740,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         IReadOnlyDictionary<string, string>? metadata) =>
         AgentToolExecutionContextMapper.StripOwnedControlKeys(metadata);
 
-    private static AgentToolExecutionContext ResolveToolContext(
+    private AgentToolExecutionContext ResolveToolContext(
         ChatRequestEvent request,
         string requestId,
         string toolCallId)
@@ -720,11 +753,14 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         context = LLMControlContextMapper.FromPayload(request.LlmControl).ToToolContext(context);
         context = context with
         {
-            Request = new AgentToolRequestIdentity(
-                NormalizeToolContextValue(requestId) ?? context.Request.RequestId,
-                NormalizeToolContextValue(toolCallId) ?? context.Request.CallId),
+            Request = context.Request with
+            {
+                RequestId = NormalizeToolContextValue(requestId) ?? context.Request.RequestId,
+                CallId = NormalizeToolContextValue(toolCallId) ?? context.Request.CallId,
+            },
             Credentials = AgentToolCredentials.Empty,
             ExternalMetadata = ScrubPendingApprovalMetadata(context.ExternalMetadata),
+            ExecutionOwner = AgentToolExecutionOwners.Actor(Id),
         };
 
         return context;

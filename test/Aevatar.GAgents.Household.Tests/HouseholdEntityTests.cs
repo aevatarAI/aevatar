@@ -6,7 +6,7 @@ namespace Aevatar.GAgents.Household.Tests;
 
 public class TriggerConditionTests
 {
-    private readonly HouseholdEntity _entity = new();
+    private readonly HouseholdEntity _entity = new(UnexpectedAgentToolExecutionPort.Instance);
 
     [Fact]
     public void ShouldTrigger_WhenTemperatureChangesSignificantly()
@@ -75,7 +75,7 @@ public class TriggerConditionTests
 
 public class SafetyCheckTests
 {
-    private readonly HouseholdEntity _entity = new();
+    private readonly HouseholdEntity _entity = new(UnexpectedAgentToolExecutionPort.Instance);
 
     [Fact]
     public void CanReason_WhenStateIsDefault()

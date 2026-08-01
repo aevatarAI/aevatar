@@ -363,6 +363,32 @@ public static class NyxIdChatTaskLifecycle
             ToolName = string.IsNullOrWhiteSpace(receipt.ToolName)
                 ? previousStep.Source?.Tool?.ToolName ?? string.Empty
                 : receipt.ToolName,
+            AskedAt = now.Clone(),
+            Presentation = new NyxIdChatApprovalPresentation
+            {
+                Action = string.IsNullOrWhiteSpace(receipt.SideEffectKind)
+                    ? receipt.ToolName ?? string.Empty
+                    : receipt.SideEffectKind,
+                Target = ResolveApprovalTarget(receipt),
+                ActorLabel = NyxIdChatServiceDefaults.DisplayName,
+                Reversibility = receipt.IsDestructive
+                    ? NyxIdChatApprovalReversibility.Irreversible
+                    : NyxIdChatApprovalReversibility.Unknown,
+                GrantBoundary = "within_grant",
+            },
+        };
+    }
+
+    private static string ResolveApprovalTarget(AgentToolReceipt receipt)
+    {
+        var kind = receipt.SubjectKind?.Trim() ?? string.Empty;
+        var id = receipt.SubjectId?.Trim() ?? string.Empty;
+        return (kind, id) switch
+        {
+            ({ Length: > 0 }, { Length: > 0 }) => $"{kind}:{id}",
+            (_, { Length: > 0 }) => id,
+            ({ Length: > 0 }, _) => kind,
+            _ => receipt.ToolName?.Trim() ?? string.Empty,
         };
     }
 

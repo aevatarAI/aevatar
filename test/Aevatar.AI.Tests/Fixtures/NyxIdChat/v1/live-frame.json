@@ -1,0 +1,27 @@
+{
+  "type": "CUSTOM",
+  "sequence": 23,
+  "custom": {
+    "name": "nyxid.input.request",
+    "payload": {
+      "requestId": "input-alpha",
+      "turnId": "turn-alpha",
+      "taskId": "task-alpha",
+      "stepId": "step-input-alpha",
+      "prompt": "Select the deployment regions.",
+      "options": [
+        {
+          "label": "Singapore",
+          "description": "Deploy to the Singapore region."
+        },
+        {
+          "label": "Frankfurt",
+          "description": "Deploy to the Frankfurt region."
+        }
+      ],
+      "askedAt": "2026-08-01T12:00:00Z",
+      "allowFreeText": true,
+      "multiSelect": true
+    }
+  }
+}

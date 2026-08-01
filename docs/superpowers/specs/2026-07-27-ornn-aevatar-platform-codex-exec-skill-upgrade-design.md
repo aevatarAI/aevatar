@@ -158,11 +158,13 @@ decode pipe ending in `codex exec -` through the selected NyxID SSH service.
 The target host owns the Git workspace, Codex authentication/configuration,
 forced-command wrapper, and Codex sandbox policy.
 
-Private SSH approval remains host policy: it requires the local tool-approval
-path unless that Aevatar host explicitly sets `BypassSshExecApproval`. The tool
-returns the NyxID SSH response without converting it to the managed result
-shape. Verification therefore checks the SSH response's `exit_code`,
-`timed_out`, and stdout rather than managed `status/target/diagnostic_id` fields.
+Private SSH is disabled by default. A host may explicitly enable the target,
+but every invocation still requires an actor-owned durable approval grant bound
+to the exact request, tool call, and frozen arguments. No host setting bypasses
+that admission path. The tool returns the NyxID SSH response without converting
+it to the managed result shape. Verification therefore checks the SSH response's
+`exit_code`, `timed_out`, and stdout rather than managed
+`status/target/diagnostic_id` fields.
 
 ## Skill Changes
 

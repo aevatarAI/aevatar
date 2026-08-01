@@ -479,7 +479,13 @@ public sealed class ConnectorCallModuleApprovalTests
     public async Task ApprovedPhysicalRetry_ShouldReuseStableIdempotencyKey()
     {
         var connector = new RecordingConnector(
-            new ConnectorResponse { Success = false, Error = "transient" },
+            new ConnectorResponse
+            {
+                Success = false,
+                Error = "transient",
+                TerminalInvoked = false,
+                Retryable = true,
+            },
             new ConnectorResponse { Success = true, Output = "retried-ok" });
         var harness = await ApprovalHarness.CreateAsync(connector: connector, retry: 1);
         await harness.BeginAsync();

@@ -1,4 +1,5 @@
 using Aevatar.Bootstrap.Extensions.AI;
+using Aevatar.AI.Infrastructure.ToolExecution;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Capabilities;
@@ -10,7 +11,11 @@ using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Aevatar.Workflow.Infrastructure.Workflows;
 using Aevatar.Workflow.Projection.ReadModels;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
+using StackExchange.Redis;
 
 namespace Aevatar.Workflow.Extensions.Hosting;
 
@@ -33,6 +38,13 @@ public sealed class AevatarPlatformCompositionOptions
 
 public static class AevatarPlatformHostBuilderExtensions
 {
+    internal const string AgentToolAdmissionRedisConnectionStringKey =
+        "AgentToolAdmission:RedisConnectionString";
+    internal const string AgentToolAdmissionKeyPrefixKey =
+        "AgentToolAdmission:KeyPrefix";
+    internal const string DefaultAgentToolAdmissionKeyPrefix =
+        "aevatar:workflow:agent-tool-admission:v1:";
+
     public static WebApplicationBuilder AddAevatarPlatform(
         this WebApplicationBuilder builder,
         Action<AevatarPlatformCompositionOptions>? configure = null)
@@ -134,6 +146,34 @@ public static class AevatarPlatformHostBuilderExtensions
         return builder;
     }
 
+    public static WebApplicationBuilder AddWorkflowAgentToolAdmission(
+        this WebApplicationBuilder builder)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+
+        var policy = ResolveAgentToolAdmissionPolicy(builder.Configuration);
+        if (builder.Environment.IsDevelopment() || builder.Environment.IsEnvironment("Testing"))
+        {
+            builder.Services.AddInMemoryAgentToolAdmissionLedger(policy);
+            return builder;
+        }
+
+        var connectionString = builder.Configuration[AgentToolAdmissionRedisConnectionStringKey]?.Trim();
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            throw new InvalidOperationException(
+                $"Workflow Host requires '{AgentToolAdmissionRedisConnectionStringKey}' " +
+                "when server-owned AI tools are enabled outside Development or Testing.");
+        }
+
+        builder.Services.TryAddSingleton<IConnectionMultiplexer>(_ =>
+            ConnectionMultiplexer.Connect(connectionString));
+        builder.Services.AddGarnetAgentToolAdmissionLedger(
+            ResolveAgentToolAdmissionLedgerOptions(builder.Configuration),
+            policy);
+        return builder;
+    }
+
     private static void ValidateOptions(AevatarPlatformCompositionOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -147,4 +187,19 @@ public static class AevatarPlatformHostBuilderExtensions
 
     private static bool ReadBoolean(string? value) =>
         bool.TryParse(value, out var result) && result;
+
+    private static AgentToolAdmissionPolicy ResolveAgentToolAdmissionPolicy(
+        IConfiguration configuration)
+    {
+        var defaults = AgentToolAdmissionPolicy.Default;
+        return new AgentToolAdmissionPolicy(
+            configuration.GetValue<TimeSpan?>("AgentToolAdmission:MaximumRequestLifetime") ??
+            AgentToolAdmissionPolicy.DefaultMaximumRequestLifetime,
+            configuration.GetValue<TimeSpan?>("AgentToolAdmission:MaximumFutureClockSkew") ??
+            defaults.MaximumFutureClockSkew);
+    }
+
+    private static AgentToolAdmissionLedgerOptions ResolveAgentToolAdmissionLedgerOptions(
+        IConfiguration configuration) =>
+        new(configuration[AgentToolAdmissionKeyPrefixKey]?.Trim() ?? DefaultAgentToolAdmissionKeyPrefix);
 }

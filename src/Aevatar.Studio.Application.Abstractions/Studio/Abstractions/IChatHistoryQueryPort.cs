@@ -104,7 +104,12 @@ public sealed record ConversationMeta(
     DateTimeOffset UpdatedAt,
     int MessageCount,
     string? LlmRoute = null,
-    string? LlmModel = null);
+    string? LlmModel = null,
+    string? TaskStatus = null,
+    string? AttentionKind = null,
+    DateTimeOffset? AttentionSince = null,
+    string? ActiveStepSummary = null,
+    long StateVersion = 0);
 
 public sealed record StoredChatMessage(
     string Id,

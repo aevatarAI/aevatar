@@ -41,30 +41,6 @@ public sealed class ToolManager
     /// <summary>是否已注册至少一个工具。</summary>
     public bool HasTools => _tools.Count > 0;
 
-    /// <summary>执行一次 tool_call，返回 ChatMessage（tool 角色，携带结果或错误）。</summary>
-    /// <param name="call">工具调用信息。</param>
-    /// <param name="ct">取消令牌。</param>
-    /// <returns>包含执行结果的 ChatMessage，异常时返回 error JSON。</returns>
-    public async Task<ChatMessage> ExecuteToolCallAsync(ToolCall call, CancellationToken ct = default)
-    {
-        var tool = Get(call.Name);
-        if (tool == null) return ChatMessage.Tool(call.Id, BuildErrorJson($"Tool '{call.Name}' not found"));
-        try { return ChatMessage.Tool(call.Id, await tool.ExecuteAsync(call.ArgumentsJson, ct)); }
-        catch (Exception ex) { return ChatMessage.Tool(call.Id, BuildErrorJson(ex.Message)); }
-    }
-
-    /// <summary>
-    /// 执行 tool_call，不吞异常。成功返回 (result, null)，失败返回 (errorJson, exception)。
-    /// 供需要感知异常的调用方（如 hook 系统）使用。
-    /// </summary>
-    public async Task<(string Result, Exception? Error)> ExecuteToolCallRawAsync(ToolCall call, CancellationToken ct = default)
-    {
-        var tool = Get(call.Name);
-        if (tool == null) return (BuildErrorJson($"Tool '{call.Name}' not found"), new InvalidOperationException($"Tool '{call.Name}' not found"));
-        try { return (await tool.ExecuteAsync(call.ArgumentsJson, ct), null); }
-        catch (Exception ex) { return (BuildErrorJson(ex.Message), ex); }
-    }
-
     /// <summary>Build a properly JSON-escaped error object.</summary>
     internal static string BuildErrorJson(string message)
     {

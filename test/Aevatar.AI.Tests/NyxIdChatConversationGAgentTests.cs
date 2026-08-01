@@ -6,8 +6,13 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.AgentProfiles;
+using Aevatar.AI.Core.Tools;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.AGUI.Contracts;
+using Aevatar.Audit;
+using Aevatar.Audit.Abstractions.Identity;
+using Aevatar.Audit.Abstractions.Models;
+using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
@@ -643,7 +648,10 @@ public sealed class NyxIdChatConversationGAgentTests
         var provider = new ServiceConnectToolCallProvider();
         var generationExecutor = new AgentRunReplyGenerationExecutor(
             new RecordingActorDispatchPort([], static (_, _) => Task.CompletedTask),
-            new NyxIdConversationReplyGenerator(provider, new BuiltInPromptFloorProvider()),
+            new NyxIdConversationReplyGenerator(
+                provider,
+                new BuiltInPromptFloorProvider(),
+                toolExecutionPort: services.GetRequiredService<IAgentToolExecutionPort>()),
             interactiveReplyCollector: null,
             relayOptions: null,
             logger: NullLogger<AgentRunReplyGenerationExecutor>.Instance);
@@ -2144,6 +2152,23 @@ public sealed class NyxIdChatConversationGAgentTests
         recent.ActionRequestId = "action-recent-alpha";
         recent.StepId = "step-recent-alpha";
         state.RecentActions.Add(recent);
+        state.LatestInputResolution = new NyxIdChatInputResolutionState
+        {
+            RequestId = "input-resolved-alpha",
+            ClientRequestId = "client-input-resolved-alpha",
+            Outcome = NyxIdChatNeedsYouResolutionOutcome.Accepted,
+            AnswerSha256 = ByteString.CopyFromUtf8("input-fingerprint"),
+        };
+        state.RecentInputResolutions.Add(state.LatestInputResolution.Clone());
+        state.LatestApprovalResolution = new NyxIdChatApprovalResolutionState
+        {
+            RequestId = "approval-resolved-alpha",
+            ClientRequestId = "client-approval-resolved-alpha",
+            Outcome = NyxIdChatNeedsYouResolutionOutcome.Accepted,
+            Approved = true,
+            DecisionSha256 = ByteString.CopyFromUtf8("approval-fingerprint"),
+        };
+        state.RecentApprovalResolutions.Add(state.LatestApprovalResolution.Clone());
         await PersistActionStateAsync(eventStore, conversationActorId, state);
         using var services = BuildEventSourcingServices(eventStore);
         var agent = CreateController(services, conversationActorId);
@@ -2162,6 +2187,14 @@ public sealed class NyxIdChatConversationGAgentTests
             action.ActionRequestId == state.PendingActions.Single().ActionRequestId);
         agent.State.RecentActions.Should().ContainSingle(action =>
             action.ActionRequestId == "action-recent-alpha");
+        agent.State.LatestInputResolution.Should().BeEquivalentTo(
+            state.LatestInputResolution);
+        agent.State.RecentInputResolutions.Should().ContainSingle(result =>
+            result.RequestId == "input-resolved-alpha");
+        agent.State.LatestApprovalResolution.Should().BeEquivalentTo(
+            state.LatestApprovalResolution);
+        agent.State.RecentApprovalResolutions.Should().ContainSingle(result =>
+            result.RequestId == "approval-resolved-alpha");
     }
 
     [Fact]
@@ -3674,6 +3707,10 @@ public sealed class NyxIdChatConversationGAgentTests
             .AddSingleton<EventSourcingRuntimeOptions>()
             .AddSingleton<IActorRuntimeCallbackScheduler>(
                 callbackScheduler ?? new NoopRuntimeCallbackScheduler())
+            .AddSingleton<IAuditTrailAppender, AppendedAuditTrail>()
+            .AddSingleton<IAuditActorIdentityHasher, StableIdentityHasher>()
+            .AddSingleton<IAgentToolAdmissionLedger>(AlwaysStartingAgentToolAdmissionLedger.Instance)
+            .AddSingleton<IAgentToolExecutionPort, AdmittedAgentToolExecutor>()
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
         if (historyCommandPort is not null)
             services.AddSingleton(historyCommandPort);
@@ -3697,6 +3734,35 @@ public sealed class NyxIdChatConversationGAgentTests
             Task.FromResult(new GAgentActorRegistryCommandReceipt(
                 registration,
                 GAgentActorRegistryCommandStage.AdmissionRemoved));
+    }
+
+    private sealed class AppendedAuditTrail : IAuditTrailAppender
+    {
+        public Task<AuditTrailAppendResult> AppendAsync(
+            AuditRecord record,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(AuditTrailAppendResult.Appended(record.AuditId));
+    }
+
+    private sealed class StableIdentityHasher : IAuditActorIdentityHasher
+    {
+        public AuditActorIdentity Hash(string canonicalActorKey) => new("actor-hash", "key-1");
+
+        public bool Verify(string canonicalActorKey, string auditActorId, string identityKeyId) => true;
+    }
+
+    private sealed class FixedProfileClassifier(string intentId) : IAgentProfileTurnClassifier
+    {
+        public List<AgentProfileTurnClassificationRequest> Requests { get; } = [];
+
+        public Task<AgentProfileTurnClassificationResult> ClassifyAsync(
+            AgentProfileTurnClassificationRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Requests.Add(request);
+            return Task.FromResult(AgentProfileTurnClassificationResult.Matched(intentId));
+        }
     }
 
     private sealed class FixedLlmProviderFactory(ILLMProvider provider) : ILLMProviderFactory

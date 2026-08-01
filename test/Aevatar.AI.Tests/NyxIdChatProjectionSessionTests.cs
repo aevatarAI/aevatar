@@ -1797,6 +1797,148 @@ public sealed class NyxIdChatProjectionSessionTests
         hub.Published.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task Projector_InputRequestAndResolution_ShouldEmitCommittedFrames()
+    {
+        var hub = new RecordingSessionEventHub();
+        var projector = new NyxIdChatSessionEventProjector(hub);
+        var context = ControllerContext();
+        var state = ControllerState(NyxIdChatTaskStatus.Active, NyxIdChatTurnStatus.Active);
+        state.ProgressSequence = 31;
+        state.PendingInput = new NyxIdChatPendingInputState
+        {
+            RequestId = "input-alpha",
+            TurnId = context.SessionId,
+            TaskId = "task-alpha",
+            StepId = "step-alpha",
+            Prompt = "Choose a deployment region.",
+            AskedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-01T12:00:00Z")),
+            Options =
+            {
+                new NyxIdChatInputOption { Label = "Singapore" },
+                new NyxIdChatInputOption { Label = "Frankfurt" },
+            },
+        };
+
+        await projector.ProjectAsync(
+            context,
+            CommittedEnvelope(
+                context.RootActorId,
+                new NyxIdChatInputRequestedEvent
+                {
+                    PendingInput = state.PendingInput.Clone(),
+                    State = state.Clone(),
+                },
+                stateVersion: 31),
+            CancellationToken.None);
+
+        var requested = hub.Published.Should().ContainSingle().Which.Event;
+        requested.Sequence.Should().Be(31);
+        requested.Custom.Name.Should().Be(
+            NyxIdChatConversationAguiFrameBuilder.InputRequestEventName);
+        requested.Custom.Payload.Unpack<NyxIdChatPendingInputState>()
+            .Should().BeEquivalentTo(state.PendingInput);
+
+        state.PendingInput = null;
+        state.ProgressSequence = 32;
+        var resolution = new NyxIdChatInputResolutionState
+        {
+            RequestId = "input-alpha",
+            ClientRequestId = "client-input-alpha",
+            Outcome = NyxIdChatNeedsYouResolutionOutcome.Accepted,
+            CommittedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-01T12:01:00Z")),
+        };
+        await projector.ProjectAsync(
+            context,
+            CommittedEnvelope(
+                context.RootActorId,
+                new NyxIdChatInputResolutionCommittedEvent
+                {
+                    Resolution = resolution,
+                    State = state,
+                },
+                stateVersion: 32),
+            CancellationToken.None);
+
+        var changed = hub.Published[^1].Event;
+        changed.Sequence.Should().Be(32);
+        changed.Custom.Name.Should().Be(
+            NyxIdChatConversationAguiFrameBuilder.InputChangedEventName);
+        changed.Custom.Payload.Unpack<NyxIdChatInputResolutionState>()
+            .Should().BeEquivalentTo(resolution);
+    }
+
+    [Fact]
+    public async Task Projector_ApprovalRequestAndResolution_ShouldEmitCommittedFrames()
+    {
+        var hub = new RecordingSessionEventHub();
+        var projector = new NyxIdChatSessionEventProjector(hub);
+        var context = ControllerContext();
+        var state = ControllerState(NyxIdChatTaskStatus.Active, NyxIdChatTurnStatus.Active);
+        state.ProgressSequence = 41;
+        state.PendingApproval = new NyxIdChatPendingApprovalState
+        {
+            ApprovalRequestId = "approval-alpha",
+            TurnId = context.SessionId,
+            TaskId = "task-alpha",
+            StepId = "step-alpha",
+            ToolName = "repository_delete",
+            AskedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-01T12:00:00Z")),
+            Presentation = new NyxIdChatApprovalPresentation
+            {
+                Action = "delete",
+                Target = "repository:repo-alpha",
+                ActorLabel = "Aevatar Assistant",
+                Reversibility = NyxIdChatApprovalReversibility.Irreversible,
+                GrantBoundary = "within_grant",
+            },
+        };
+
+        await projector.ProjectAsync(
+            context,
+            CommittedEnvelope(
+                context.RootActorId,
+                ControllerReconciled(state),
+                stateVersion: 41),
+            CancellationToken.None);
+
+        var request = hub.Published.Select(static entry => entry.Event)
+            .Single(frame => frame.Custom?.Name ==
+                NyxIdChatConversationAguiFrameBuilder.ApprovalRequestEventName);
+        request.Sequence.Should().Be(41);
+        request.Custom.Payload.Unpack<NyxIdChatPendingApprovalState>()
+            .Should().BeEquivalentTo(state.PendingApproval);
+
+        state.PendingApproval = null;
+        state.ProgressSequence = 42;
+        var resolution = new NyxIdChatApprovalResolutionState
+        {
+            RequestId = "approval-alpha",
+            ClientRequestId = "client-approval-alpha",
+            Outcome = NyxIdChatNeedsYouResolutionOutcome.Accepted,
+            Approved = false,
+            CommittedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-01T12:01:00Z")),
+        };
+        await projector.ProjectAsync(
+            context,
+            CommittedEnvelope(
+                context.RootActorId,
+                new NyxIdChatApprovalResolutionCommittedEvent
+                {
+                    Resolution = resolution,
+                    State = state,
+                },
+                stateVersion: 42),
+            CancellationToken.None);
+
+        var changed = hub.Published[^1].Event;
+        changed.Sequence.Should().Be(42);
+        changed.Custom.Name.Should().Be(
+            NyxIdChatConversationAguiFrameBuilder.ApprovalChangedEventName);
+        changed.Custom.Payload.Unpack<NyxIdChatApprovalResolutionState>()
+            .Should().BeEquivalentTo(resolution);
+    }
+
     private static EventEnvelope CommittedEnvelope(string actorId, IMessage evt, long stateVersion = 1) => new()
     {
         Payload = Any.Pack(new CommittedStateEventPublished

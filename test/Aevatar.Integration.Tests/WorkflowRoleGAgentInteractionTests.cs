@@ -281,7 +281,7 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
                 .BuildServiceProvider();
             var llm = new RecordingWorkflowIntentLlmProvider();
             var publisher = new RecordingEventPublisher();
-            var agent = new WorkflowRoleGAgent(llm)
+            var agent = new WorkflowRoleGAgent(UnexpectedAgentToolExecutionPort.Instance, llm)
             {
                 Services = services,
                 EventPublisher = publisher,
@@ -747,7 +747,9 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
                 .AddSingleton<EventSourcingRuntimeOptions>()
                 .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
                 .BuildServiceProvider();
-            var agent = new WorkflowRoleGAgent(new RecordingWorkflowIntentLlmProvider())
+            var agent = new WorkflowRoleGAgent(
+                UnexpectedAgentToolExecutionPort.Instance,
+                new RecordingWorkflowIntentLlmProvider())
             {
                 Services = services,
                 EventPublisher = new RecordingEventPublisher(),

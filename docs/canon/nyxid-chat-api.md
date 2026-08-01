@@ -6,13 +6,13 @@ owner: eanzhao
 
 # NyxID Assistant Chat v1 Contract
 
-This document is the canonical Aevatar contract for NyxID Assistant Chat v1. It covers conversation and turn identity, actor-owned task execution, live AGUI observation, stop and steering controls, browser-action handoff, conditional current-state reads, recovery, and the secret boundary.
+This document is the canonical Aevatar contract for NyxID Assistant Chat v1. It covers conversation and turn identity, actor-owned task execution, live AGUI observation, pending input and approval decisions, stop and steering controls, browser-action handoff, conditional current-state reads, recovery, and the secret boundary. The needs-you contract is implemented by [Aevatar #3131](https://github.com/aevatarAI/aevatar/issues/3131) for the upstream [nyxid-chat #6](https://github.com/eanz17/nyxid-chat/issues/6) milestone requirement.
 
 The ownership and retention distinction between execution state, derived prompt context,
 conversation transcript, and cross-conversation user memory is canonical in
 [conversation-context-and-memory.md](conversation-context-and-memory.md).
 
-The canonical client surface is Mainnet `POST /api/chat` plus `/api/chat/conversations/**`. Assistant commands are selected only by one of the seven explicit `type` discriminators: `text`, `action.continue`, `approval.resolve`, `task.stop`, `task.steer`, `step.retry`, and `step.skip`. The public routes never accept `scopeId`; they derive one unambiguous scope from the authenticated principal and fail closed otherwise.
+The canonical client surface is Mainnet `POST /api/chat` plus `/api/chat/conversations/**`. Assistant commands are selected only by one of the eight explicit `type` discriminators: `text`, `input.resolve`, `action.continue`, `approval.resolve`, `task.stop`, `task.steer`, `step.retry`, and `step.skip`. The public routes never accept `scopeId`; they derive one unambiguous scope from the authenticated principal and fail closed otherwise.
 
 The authoritative runtime is one durable conversation-controller actor plus a run-scoped turn actor that executes one authorized operation at a time. The controller's committed protobuf state is the task authority. AGUI and the current-state query are two consumers of the same committed Projection Pipeline; neither endpoint nor projector reconstructs task truth.
 
@@ -73,6 +73,7 @@ The HTTP endpoint owns only authentication/protocol adaptation, serialized SSE w
 | `correlationId` | Command pipeline, one trace chain | Correlates transport and observation independently of resource IDs. |
 | `stopRequestId` / `steeringId` | Caller-created control identity | Makes one stop or steering intent idempotent. |
 | `retryRequestId` / `skipRequestId` | Caller-created step-control identity | Makes one exact step control idempotent. |
+| input `requestId` | Conversation actor | Selects the exact pending input fact; it is distinct from the caller's `clientRequestId`. |
 | approval `requestId` | Conversation actor | Selects a pending Aevatar tool approval; it is not a browser-action ID. |
 | `actionRequestId` | Conversation actor | Correlates one NyxID browser journey and its reports. |
 | `originTurnId` | Conversation actor | The blocked turn that emitted an action request. |
@@ -143,6 +144,10 @@ Actor-authored task observation is committed before publication. The controller 
 - `nyxid.continuation.changed`
 - `nyxid.step.control.changed`
 - `nyxid.action.request`
+- `nyxid.input.request`
+- `nyxid.input.changed`
+- `nyxid.approval.request`
+- `nyxid.approval.changed`
 
 Text, reasoning, tool-start, task, control, and terminal frames share the actor-owned progress sequence. `RUN_STARTED`, keepalive, and bounded endpoint-local setup failures are transport context and do not invent an actor sequence. A stream closes with exactly one terminal:
 
@@ -151,7 +156,7 @@ Text, reasoning, tool-start, task, control, and terminal frames share the actor-
 - task and turn `failed`: `RUN_ERROR` with a stable code and safe message;
 - inconsistent committed task/turn terminal states: fail closed with `NYXID_CHAT_TERMINAL_STATE_CONFLICT`.
 
-Heartbeat and text/action/approval frames share one serialized writer gate. A real terminal atomically closes that gate. If the configured wall-clock deadline wins, the endpoint closes the same gate, emits exactly one safe `RUN_ERROR` with code `STREAM_TIMEOUT`, and only then cancels the inner interaction. It returns without waiting for an interaction that ignores cancellation; any later content or terminal callback is discarded. A provider or interaction that completes by throwing its own `TimeoutException` is instead an inner execution failure and maps to the safe `STREAM_FAILURE` terminal. Request cancellation closes the gate without attempting a synthetic terminal on a disconnected client.
+Heartbeat and text/action/input/approval frames share one serialized writer gate. A real terminal atomically closes that gate. If the configured wall-clock deadline wins, the endpoint closes the same gate, emits exactly one safe `RUN_ERROR` with code `STREAM_TIMEOUT`, and only then cancels the inner interaction. It returns without waiting for an interaction that ignores cancellation; any later content or terminal callback is discarded. A provider or interaction that completes by throwing its own `TimeoutException` is instead an inner execution failure and maps to the safe `STREAM_FAILURE` terminal. Request cancellation closes the gate without attempting a synthetic terminal on a disconnected client.
 
 ## Actor-owned state machine
 
@@ -205,6 +210,7 @@ All controls use authenticated JSON requests to `POST /api/chat`. A successful r
 | Steer active work | `task.steer` | `conversationId`, `turnId`, `steeringId`, `clientRequestId`, `instruction`, optional `inputParts`, `expectedStateVersion` |
 | Retry one step | `step.retry` | `conversationId`, `turnId`, `taskId`, `stepId`, `retryRequestId`, `clientRequestId`, `expectedOperationGeneration`, `expectedStateVersion` |
 | Skip one step | `step.skip` | `conversationId`, `turnId`, `taskId`, `stepId`, `skipRequestId`, `clientRequestId`, `expectedOperationGeneration`, `expectedStateVersion` |
+| Resolve pending input | `input.resolve` | `conversationId`, actor-owned `requestId`, `clientRequestId`, `answer`, `expectedStateVersion` |
 
 Example stop request:
 
@@ -225,16 +231,45 @@ Steering is serialized by the actor. If an operation is physically in flight, th
 
 Retry and skip validate the body `conversationId`, `turnId`, `taskId`, `stepId`, expected generation, expected actor version, and current actor-computed availability. Replaying the same request and content is idempotent. Reusing an identity with different content fails closed.
 
+## Pending input and tool approval
+
+Pending input is an actor-owned protobuf fact containing `requestId`, `turnId`, `taskId`, `stepId`, `prompt`, typed `options`, `askedAt`, `allowFreeText`, and `multiSelect`. The actor accepts a request only for the exact active turn/task/step and commits `nyxid.input.request`; the projection session then publishes that committed fact as a live frame. It is not reconstructed from LLM text or browser state.
+
+The caller resolves input through the same public command surface:
+
+```json
+{
+  "type": "input.resolve",
+  "conversationId": "conversation-alpha",
+  "requestId": "input-alpha",
+  "clientRequestId": "client-input-alpha",
+  "answer": "Singapore",
+  "expectedStateVersion": 23
+}
+```
+
+An accepted dispatch returns `202 Accepted` with `requestId`, `commandId`, `correlationId`, and `stateUrl`. This proves transport acceptance only. The first matching decision committed at the expected actor version wins and emits `nyxid.input.changed`; an exact duplicate is idempotent, while a stale version, unknown request, or conflicting reuse cannot advance actor state. The actor persists only the decision fingerprint and safe resolution facts, not the submitted answer.
+
+Pending approval carries the exact `requestId / turnId / taskId / stepId / toolName / askedAt` correlation plus optional `expiresAt` when an authoritative approval source supplies an expiry, and a safe `presentation`:
+
+- `action` and `target` describe the proposed operation without arguments or credentials;
+- `actorLabel` identifies the presenting assistant;
+- `reversibility` is `reversible`, `irreversible`, or `unknown`;
+- `grantBoundary` is `within_grant` for an Aevatar tool decision or `nyxid_step_up` when an explicitly correlated NyxID step-up owns the grant boundary;
+- `nyxidRequestId` is optional and may be present only when supplied by that explicit upstream contract.
+
+Both `nyxid.approval.request` and `nyxid.approval.changed` are committed projection frames. Presentation fields are descriptive and never grant authority.
+
 ## Tool approval versus NyxID browser actions
 
 These are separate products and identities:
 
-- `POST /api/chat` with `type=approval.resolve` resolves a real `PendingToolApprovalState.requestId` for an Aevatar tool decision;
+- `POST /api/chat` with `type=approval.resolve` resolves a real actor-owned `NyxIdChatPendingApprovalState.requestId` for an Aevatar tool decision;
 - `action.continue` reports a NyxID browser journey and starts a new continuation turn;
 - an authorization/browser-action blocked turn cannot be continued via `approval.resolve`;
 - neither route reuses the old turn ID.
 
-`approval.resolve` includes `conversationId`, `clientRequestId`, the actor-owned approval `requestId`, required explicit boolean `approved`, and an optional safe `reason`. Omitting `approved` returns `400 APPROVAL_DECISION_REQUIRED`. Unknown or stale IDs return a typed error and do not modify another pending approval. The response uses the existing AGUI stream/accepted interaction semantics rather than a task-control `202` receipt.
+`approval.resolve` includes `conversationId`, `clientRequestId`, the actor-owned approval `requestId`, required explicit boolean `approved`, optional safe `reason`, and `expectedStateVersion`. Omitting `approved` returns `400 APPROVAL_DECISION_REQUIRED`. An accepted dispatch returns the same transport-only `202` receipt shape as `input.resolve`; business commit and read-model visibility are observed through `nyxid.approval.changed` or the current-state query. The first matching decision wins, an exact duplicate is idempotent, and unknown requests, stale versions, or conflicting decisions do not advance actor state. The actor persists only the decision fingerprint and safe resolution facts, not the submitted reason.
 
 ## NyxID browser-action handoff: schema v4
 
@@ -355,24 +390,42 @@ Example `current` envelope:
 ```json
 {
   "status": "current",
-  "stateVersion": 18,
+  "stateVersion": 23,
   "turnId": "turn-alpha",
   "snapshot": {
     "actorId": "conversation-alpha",
     "scopeId": "scope-alpha",
-    "stateVersion": 18,
-    "progressSequence": 9,
-    "activeTurn": null,
-    "latestTurn": {
+    "stateVersion": 23,
+    "progressSequence": 23,
+    "activeTurn": {
       "turnId": "turn-alpha",
       "taskId": "task-alpha",
-      "status": "blocked"
-    }
+      "status": "active"
+    },
+    "latestTurn": null,
+    "pendingInput": {
+      "requestId": "input-alpha",
+      "turnId": "turn-alpha",
+      "taskId": "task-alpha",
+      "stepId": "step-input-alpha",
+      "prompt": "Select the deployment regions.",
+      "options": [
+        { "label": "Singapore", "description": "Deploy to Singapore." },
+        { "label": "Frankfurt", "description": "Deploy to Frankfurt." }
+      ],
+      "askedAt": "2026-08-01T12:00:00+00:00",
+      "allowFreeText": true,
+      "multiSelect": true
+    },
+    "taskStatus": "active",
+    "attentionKind": "input",
+    "attentionSince": "2026-08-01T12:00:00+00:00",
+    "activeStepSummary": "Select the deployment regions."
   }
 }
 ```
 
-The snapshot contains query-shaped safe data: active/latest/recent turns, ordered task steps, operation key/generation and phase, effect evidence, available actions, approval/action summaries, control fences, continuation admission, progress sequence, and actor version. It excludes transient capabilities, raw LLM/tool results, credentials, and actor runtime internals.
+The snapshot contains query-shaped safe data: active/latest/recent turns, ordered task steps, operation key/generation and phase, effect evidence, available actions, pending input, approval presentation, latest safe input/approval resolution facts, control fences, continuation admission, progress sequence, actor-authored attention, and actor version. It excludes submitted answers and reasons, transient capabilities, raw LLM/tool results, credentials, and actor runtime internals.
 
 The read model is eventually consistent and says so through its actor-derived `stateVersion`. Writes are monotonic overwrite: newer replaces older, byte-equivalent equal-version duplicates are idempotent, equal-version conflicts fail, and older versions cannot overwrite newer state. Query-time priming and replay are forbidden.
 
@@ -382,7 +435,7 @@ All resources use the authenticated scope and the same public `conversationId`; 
 
 | Route | Behavior |
 |---|---|
-| `GET /api/chat/conversations?pageSize={n}&cursor={cursor}` | Lists the caller's NyxID Assistant transcript index. `pageSize` defaults to `50`; `cursor` is opaque. The response contains `conversations` and an optional `nextCursor`. |
+| `GET /api/chat/conversations?pageSize={n}&cursor={cursor}` | Lists the caller's NyxID Assistant transcript index. `pageSize` defaults to `50`; `cursor` is opaque. Each materialized conversation may include actor-authored `taskStatus`, `attentionKind`, `attentionSince`, `activeStepSummary`, and `stateVersion`; the response also contains an optional `nextCursor`. |
 | `GET /api/chat/conversations/{conversationId}` | Returns the durable transcript as `messages` plus its `stateVersion`. |
 | `GET /api/chat/conversations/{conversationId}/state` | Returns the conditional current-state result documented above. |
 | `DELETE /api/chat/conversations/{conversationId}` | Submits the existing authoritative conversation retirement/deletion commands. |
@@ -397,7 +450,7 @@ NyxID Assistant ingress is `application/json` (including `+json`) with one recog
 
 The caller must authenticate with exactly one non-conflicting `scope_id` or `workflow.scope_id` claim. Missing or ambiguous scope returns `401`; an owned-resource mismatch returns `403`; absent conversations/read models return `404`; unavailable admission returns `503`. Stream setup and execution failures are emitted as safe AGUI `RUN_ERROR` terminals when streaming has begun.
 
-`clientRequestId` is the transport idempotency identity. When both the body and `Idempotency-Key` header provide one, the body wins. An exact retry preserves the existing admission/result, while reuse with different content fails closed. Controls and delete return honest `202` receipts; committed state and projection visibility are observed later through AGUI or the public state resource.
+`clientRequestId` is the transport idempotency identity. When both the body and `Idempotency-Key` header provide one, the body wins. An exact retry preserves the existing admission/result, while reuse with different content fails closed. Input, approval, controls, and delete return honest `202` receipts; committed state and projection visibility are observed later through AGUI or the public state resource.
 
 ## Scoped-route compatibility
 
@@ -414,6 +467,7 @@ Recovery rules are conservative:
 - an effect-capable tool is never replayed automatically, even when only its requested waterline was committed, because dispatch may have reached the external system before the next commit; it becomes `NYXID_CHAT_OPERATION_OUTCOME_UNCERTAIN / may_have_changed`;
 - a turn actor that committed completion but lost result delivery does not reconstruct raw output or repeat I/O; it reports `NYXID_CHAT_OPERATION_RESULT_DELIVERY_LOST` and preserves its committed effect evidence;
 - a blocked browser action has no hidden continuation after restart;
+- actor-owned pending input and approval survive passivation and reload; reconnect reads them from the current-state read model rather than requiring the lost stream;
 - late evidence after stop/steering may refine effect truth but cannot advance the old plan.
 
 The turn actor persists no raw LLM text, raw tool result, tool arguments, credential, or transient execution capability. Therefore recovery is deterministic and honest rather than a best-effort reconstruction of uncommitted output.
@@ -485,11 +539,12 @@ Callers must:
 4. use `type=task.steer` rather than a normal text turn while work is active;
 5. preserve the exact task/step/generation/version when invoking retry or skip;
 6. preserve approval `requestId` separately from browser `actionRequestId`;
-7. send schema v4 action reports with `actionRequestId`, `originTurnId`, `disposition`, and typed resource refs, or send `actions=[]` as a signal-only wake-up;
-8. treat browser `completed` and empty wake-up as signals pending typed postcondition proof;
-9. query `/api/chat/conversations/{conversationId}/state` with `stateVersion` and obey `reload_required`;
-10. use `/api/chat/conversations`, not Workflow `create-recovery`, to confirm creation;
-11. tolerate eventual transcript/current-state materialization after admission;
-12. never send `scopeId`, a secret, OAuth/device/user code, raw credential, or secret-bearing URL in action params or reports.
+7. resolve pending input and approval with their exact actor-owned `requestId`, a stable `clientRequestId`, and the observed `stateVersion`;
+8. send schema v4 action reports with `actionRequestId`, `originTurnId`, `disposition`, and typed resource refs, or send `actions=[]` as a signal-only wake-up;
+9. treat browser `completed` and empty wake-up as signals pending typed postcondition proof;
+10. query `/api/chat/conversations/{conversationId}/state` with `stateVersion` and obey `reload_required`;
+11. use `/api/chat/conversations`, not Workflow `create-recovery`, to confirm creation;
+12. tolerate eventual transcript/current-state materialization after admission;
+13. never send `scopeId`, a secret, OAuth/device/user code, raw credential, or secret-bearing URL in action params or reports.
 
 Earlier schema v3 drafts that use action `id`, inner `payload`, only `completed/declined`, or a device user-code action are obsolete and must not be used to implement or test this contract.

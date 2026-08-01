@@ -900,7 +900,10 @@ public sealed class RoleGAgentCompletionNotificationTests
 
     private sealed class TestRoleGAgent(
         ILLMProviderFactory provider,
-        TimeProvider timeProvider) : RoleGAgent(provider, timeProvider: timeProvider)
+        TimeProvider timeProvider) : RoleGAgent(
+            TestAgentToolExecutionPort.Instance,
+            provider,
+            timeProvider: timeProvider)
     {
         public Task PersistForTestAsync(IMessage evt) => PersistDomainEventAsync(evt);
     }
