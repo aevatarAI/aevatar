@@ -12,15 +12,56 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 public sealed class ChannelRemoteSkillAccessTokenResolverTests
 {
     [Fact]
-    public async Task ResolveAsync_WithoutSenderBinding_PreservesAmbientCallerToken()
+    public async Task ResolveAsync_WithoutSenderBinding_UsesTypedSourceReadableCallerToken()
     {
         var issuer = Substitute.For<INyxIdSkillCapabilityIssuer>();
         var resolver = NewResolver(issuer);
-        using var context = PushContext(bindingId: null, senderToken: null, ownerToken: "ambient-owner-token");
+        using var context = PushContext(
+            bindingId: null,
+            senderToken: null,
+            ownerToken: "ambient-owner-token",
+            credentialKind: AgentToolNyxIdCredentialKind.SourceReadableUserBearer);
 
         var token = await resolver.ResolveAsync("nyxid");
 
         token.Should().Be("ambient-owner-token");
+        await issuer.DidNotReceiveWithAnyArgs()
+            .IssueByBindingIdAsync(default!, default!, default);
+    }
+
+    [Fact]
+    public async Task ResolveAsync_WithoutSenderBinding_UsesSupplementalSourceCredentialInsteadOfDelegation()
+    {
+        var issuer = Substitute.For<INyxIdSkillCapabilityIssuer>();
+        var resolver = NewResolver(issuer);
+        using var context = PushContext(
+            bindingId: null,
+            senderToken: null,
+            ownerToken: "delegation-token",
+            credentialKind: AgentToolNyxIdCredentialKind.ProxyDelegation,
+            sourceReadableToken: "source-readable-token");
+
+        var token = await resolver.ResolveAsync("nyxid");
+
+        token.Should().Be("source-readable-token");
+        await issuer.DidNotReceiveWithAnyArgs()
+            .IssueByBindingIdAsync(default!, default!, default);
+    }
+
+    [Fact]
+    public async Task ResolveAsync_WithoutSenderBinding_DoesNotUseDelegationAsSourceCredential()
+    {
+        var issuer = Substitute.For<INyxIdSkillCapabilityIssuer>();
+        var resolver = NewResolver(issuer);
+        using var context = PushContext(
+            bindingId: null,
+            senderToken: null,
+            ownerToken: "delegation-token",
+            credentialKind: AgentToolNyxIdCredentialKind.ProxyDelegation);
+
+        var token = await resolver.ResolveAsync("nyxid");
+
+        token.Should().BeNull();
         await issuer.DidNotReceiveWithAnyArgs()
             .IssueByBindingIdAsync(default!, default!, default);
     }
@@ -167,13 +208,17 @@ public sealed class ChannelRemoteSkillAccessTokenResolverTests
         string? bindingId,
         string? senderToken,
         string? ownerToken,
-        AgentToolNyxIdAuthorityContext? authority = null) =>
+        AgentToolNyxIdAuthorityContext? authority = null,
+        AgentToolNyxIdCredentialKind credentialKind = AgentToolNyxIdCredentialKind.Unspecified,
+        string? sourceReadableToken = null) =>
         AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
         {
             Credentials = new AgentToolCredentials(
                 ownerToken,
                 "ambient-owner-org-token",
-                senderToken),
+                senderToken,
+                credentialKind,
+                sourceReadableToken),
             Channel = new AgentToolChannelContext(
                 "legacy-channel-platform",
                 "ou-channel-alpha",
