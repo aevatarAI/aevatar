@@ -6,14 +6,14 @@ namespace Aevatar.Foundation.Core.Tests;
 public sealed class RuntimeEnvelopeDeliveryIdentityTests
 {
     [Fact]
-    public void ResolveOriginId_ShouldUseStableDeliveryLineagePrecedence()
+    public void ResolveDeliveryLineageId_ShouldUseStableDeliveryLineagePrecedence()
     {
         var operationEnvelope = new EventEnvelope
         {
             Id = "envelope-id",
             Runtime = new EnvelopeRuntime
             {
-                Deduplication = new DeliveryDeduplication
+                DeliveryIdentity = new DeliveryIdentity
                 {
                     OperationId = "operation-id",
                 },
@@ -24,13 +24,13 @@ public sealed class RuntimeEnvelopeDeliveryIdentityTests
             },
         };
         var retryEnvelope = operationEnvelope.Clone();
-        retryEnvelope.Runtime.Deduplication.OperationId = string.Empty;
+        retryEnvelope.Runtime.DeliveryIdentity.OperationId = string.Empty;
         var baseEnvelope = retryEnvelope.Clone();
         baseEnvelope.Runtime.Retry.OriginEventId = string.Empty;
 
-        RuntimeEnvelopeDeliveryIdentity.ResolveOriginId(operationEnvelope).Should().Be("operation-id");
-        RuntimeEnvelopeDeliveryIdentity.ResolveOriginId(retryEnvelope).Should().Be("retry-origin-id");
-        RuntimeEnvelopeDeliveryIdentity.ResolveOriginId(baseEnvelope).Should().Be("envelope-id");
+        RuntimeEnvelopeDeliveryIdentity.ResolveDeliveryLineageId(operationEnvelope).Should().Be("operation-id");
+        RuntimeEnvelopeDeliveryIdentity.ResolveDeliveryLineageId(retryEnvelope).Should().Be("retry-origin-id");
+        RuntimeEnvelopeDeliveryIdentity.ResolveDeliveryLineageId(baseEnvelope).Should().Be("envelope-id");
     }
 
     [Theory]

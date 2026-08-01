@@ -14,7 +14,7 @@ public sealed class ContentArtifactCommandServiceTests
     private const string ScopeId = "scope-1";
 
     [Fact]
-    public async Task CreateAsync_ShouldUseStableArtifactRevisionAndRuntimeDedupIdentities()
+    public async Task CreateAsync_ShouldUseStableArtifactRevisionAndRuntimeDeliveryIdentity()
     {
         var bootstrap = new RecordingBootstrap();
         var dispatchPort = new RecordingDispatchPort();
@@ -38,7 +38,7 @@ public sealed class ContentArtifactCommandServiceTests
         command.FirstRevision.RevisionId.Should().Be(ContentArtifactConventions.BuildRevisionId(artifactId, 1));
         command.FirstRevision.RevisionNumber.Should().Be(1);
         command.FirstRevision.Provenance.ScopeId.Should().Be(ScopeId);
-        dispatchPort.Envelopes.Select(static envelope => envelope.EnsureRuntime().EnsureDeduplication().OperationId)
+        dispatchPort.Envelopes.Select(static envelope => envelope.EnsureRuntime().EnsureDeliveryIdentity().OperationId)
             .Should().OnlyContain(id => id == first.CommandId);
     }
 

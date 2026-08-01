@@ -82,7 +82,7 @@ public sealed class PropagationPolicyTests
             },
             Runtime = new EnvelopeRuntime
             {
-                Deduplication = new DeliveryDeduplication
+                DeliveryIdentity = new DeliveryIdentity
                 {
                     OperationId = "dispatch-op-1",
                 },

@@ -6,11 +6,11 @@ namespace Aevatar.Foundation.Runtime.Delivery;
 /// </summary>
 public static class RuntimeEnvelopeDeliveryIdentity
 {
-    public static string? ResolveOriginId(EventEnvelope envelope)
+    public static string? ResolveDeliveryLineageId(EventEnvelope envelope)
     {
         ArgumentNullException.ThrowIfNull(envelope);
 
-        var operationId = envelope.Runtime?.Deduplication?.OperationId;
+        var operationId = envelope.Runtime?.DeliveryIdentity?.OperationId;
         if (!string.IsNullOrWhiteSpace(operationId))
             return operationId;
 

@@ -193,7 +193,7 @@ deadline, retries use the normal per-attempt delay without inventing product
 expiry.
 
 Workflow, Role, Script, and ServiceRun producers retain their actor-owned
-durable delivery facts and stable deduplication identities. WorkOrder does not
+durable delivery facts and stable delivery operation identities. WorkOrder does not
 copy their payloads to gain recovery.
 
 ## Read Model And API

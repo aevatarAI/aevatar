@@ -728,7 +728,7 @@ public sealed class ServiceRunGAgent : GAgentBase<ServiceRunState>
                 {
                     Delivery = new EventEnvelopeDeliveryOptions
                     {
-                        DeduplicationOperationId = $"service-run-terminal-{notification.DeliveryId}",
+                        OperationId = $"service-run-terminal-{notification.DeliveryId}",
                     },
                 });
         }
@@ -848,7 +848,7 @@ public sealed class ServiceRunGAgent : GAgentBase<ServiceRunState>
         {
             Delivery = new EventEnvelopeDeliveryOptions
             {
-                DeduplicationOperationId = RuntimeCallbackKeyComposer.BuildCallbackId(
+                OperationId = RuntimeCallbackKeyComposer.BuildCallbackId(
                     callbackId,
                     attempt.ToString(CultureInfo.InvariantCulture)),
             },

@@ -210,8 +210,8 @@ internal sealed class TestEventHandlerContext :
         if (callback.Options?.Propagation != null)
             ApplyPropagationOverrides(envelope.EnsurePropagation(), callback.Options.Propagation);
 
-        if (!string.IsNullOrWhiteSpace(callback.Options?.Delivery?.DeduplicationOperationId))
-            envelope.EnsureRuntime().EnsureDeduplication().OperationId = callback.Options.Delivery.DeduplicationOperationId;
+        if (!string.IsNullOrWhiteSpace(callback.Options?.Delivery?.OperationId))
+            envelope.EnsureRuntime().EnsureDeliveryIdentity().OperationId = callback.Options.Delivery.OperationId;
 
         envelope.EnsureRuntime().Callback = new EnvelopeCallbackContext
         {

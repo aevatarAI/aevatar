@@ -110,6 +110,6 @@ internal sealed class RuntimeEnvelopeRetryPolicy
 
     private static string? ResolveOriginEventId(EventEnvelope envelope)
     {
-        return RuntimeEnvelopeDeliveryIdentity.ResolveOriginId(envelope);
+        return RuntimeEnvelopeDeliveryIdentity.ResolveDeliveryLineageId(envelope);
     }
 }

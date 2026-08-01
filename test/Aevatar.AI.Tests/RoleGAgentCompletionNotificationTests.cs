@@ -68,7 +68,7 @@ public sealed class RoleGAgentCompletionNotificationTests
         scheduler.TimeoutRequests.Select(static request => request.CallbackId)
             .Should().OnlyContain(callbackId => callbackId == callback.CallbackId);
         var retryOperationIds = scheduler.TimeoutRequests
-            .Select(static request => request.TriggerEnvelope.Runtime!.Deduplication!.OperationId)
+            .Select(static request => request.TriggerEnvelope.Runtime!.DeliveryIdentity!.OperationId)
             .ToArray();
         retryOperationIds.Should().OnlyHaveUniqueItems();
 
@@ -299,7 +299,7 @@ public sealed class RoleGAgentCompletionNotificationTests
         await actor.HandleEventAsync(callback);
 
         publisher.SuccessfulSends.Should().HaveCount(2);
-        publisher.SuccessfulSends.Select(static send => send.Options!.Delivery!.DeduplicationOperationId)
+        publisher.SuccessfulSends.Select(static send => send.Options!.Delivery!.OperationId)
             .Should().OnlyContain(static operationId => operationId == "role-chat-terminal:delivery-session-1");
         actor.State.Sessions["session-1"].CompletionNotificationDeliveryStatus.Should()
             .Be(RoleChatCompletionNotificationDeliveryStatus.Dispatched);
@@ -336,7 +336,7 @@ public sealed class RoleGAgentCompletionNotificationTests
         retry.SessionId.Should().Be("session-1");
         retry.DeliveryId.Should().Be("delivery-session-1");
         retry.Attempt.Should().Be(1);
-        recovery.Options!.Delivery!.DeduplicationOperationId.Should()
+        recovery.Options!.Delivery!.OperationId.Should()
             .Be("role-chat-completion-retry:session-1:delivery-session-1:1");
 
         scheduler.ScheduleException = null;
@@ -347,9 +347,9 @@ public sealed class RoleGAgentCompletionNotificationTests
             Route = EnvelopeRouteSemantics.CreateTopologyPublication(actor.Id, TopologyAudience.Self),
             Runtime = new EnvelopeRuntime
             {
-                Deduplication = new DeliveryDeduplication
+                DeliveryIdentity = new DeliveryIdentity
                 {
-                    OperationId = recovery.Options.Delivery.DeduplicationOperationId,
+                    OperationId = recovery.Options.Delivery.OperationId,
                 },
             },
         };
@@ -359,9 +359,9 @@ public sealed class RoleGAgentCompletionNotificationTests
         durableAttempt2.CallbackId.Should().Be("role-chat-completion-retry:session-1:delivery-session-1");
         durableAttempt2.TriggerEnvelope.Payload.Unpack<RoleChatCompletionNotificationRetryFiredEvent>()
             .Attempt.Should().Be(2);
-        var durableAttempt2OperationId = durableAttempt2.TriggerEnvelope.Runtime!.Deduplication!.OperationId;
+        var durableAttempt2OperationId = durableAttempt2.TriggerEnvelope.Runtime!.DeliveryIdentity!.OperationId;
         durableAttempt2OperationId.Should().Be("role-chat-completion-retry:session-1:delivery-session-1:2");
-        durableAttempt2OperationId.Should().NotBe(recovery.Options.Delivery.DeduplicationOperationId);
+        durableAttempt2OperationId.Should().NotBe(recovery.Options.Delivery.OperationId);
         publisher.FailurePredicate = null;
         await actor.HandleEventAsync(durableAttempt2.TriggerEnvelope);
 

@@ -65,7 +65,7 @@ internal sealed class StudioProjectionActorCommandTargetResolver
 internal sealed class StudioProjectionActorCommandEnvelopeFactory
     : ICommandEnvelopeFactory<StudioProjectionActorCommand>
 {
-    internal const string DeduplicationOperationIdHeader = "aevatar-deduplication-operation-id";
+    internal const string DeliveryOperationIdHeader = "aevatar-delivery-operation-id";
 
     public EventEnvelope CreateEnvelope(StudioProjectionActorCommand command, CommandContext context)
     {
@@ -79,10 +79,10 @@ internal sealed class StudioProjectionActorCommandEnvelopeFactory
             Payload = Any.Pack(command.Payload),
             Route = EnvelopeRouteSemantics.CreateDirect(command.PublisherId, context.TargetId),
         };
-        if (context.Headers.TryGetValue(DeduplicationOperationIdHeader, out var deduplicationOperationId) &&
-            !string.IsNullOrWhiteSpace(deduplicationOperationId))
+        if (context.Headers.TryGetValue(DeliveryOperationIdHeader, out var deliveryOperationId) &&
+            !string.IsNullOrWhiteSpace(deliveryOperationId))
         {
-            envelope.EnsureRuntime().EnsureDeduplication().OperationId = deduplicationOperationId;
+            envelope.EnsureRuntime().EnsureDeliveryIdentity().OperationId = deliveryOperationId;
         }
 
         return envelope;
@@ -120,15 +120,15 @@ internal sealed class StudioProjectionActorCommandDispatch
         string publisherId,
         string? commandId = null,
         string? correlationId = null,
-        string? deduplicationOperationId = null,
+        string? deliveryOperationId = null,
         CancellationToken ct = default)
     {
-        var headers = string.IsNullOrWhiteSpace(deduplicationOperationId)
+        var headers = string.IsNullOrWhiteSpace(deliveryOperationId)
             ? null
             : new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                [StudioProjectionActorCommandEnvelopeFactory.DeduplicationOperationIdHeader] =
-                    deduplicationOperationId,
+                [StudioProjectionActorCommandEnvelopeFactory.DeliveryOperationIdHeader] =
+                    deliveryOperationId,
             };
 
         var result = await _dispatchService.DispatchAsync(

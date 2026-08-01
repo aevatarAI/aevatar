@@ -106,7 +106,7 @@ public sealed class ScriptBehaviorCompletionNotificationTests
             TimeSpan.FromSeconds(2));
 
         var operationIds = scheduler.TimeoutRequests
-            .Select(static request => request.TriggerEnvelope.Runtime!.Deduplication!.OperationId)
+            .Select(static request => request.TriggerEnvelope.Runtime!.DeliveryIdentity!.OperationId)
             .ToArray();
         operationIds.Should().OnlyHaveUniqueItems();
 
@@ -550,7 +550,7 @@ public sealed class ScriptBehaviorCompletionNotificationTests
         var retry = recovery.Event.Should()
             .BeOfType<ScriptRunOutcomeNotificationRetryFiredEvent>().Subject;
         retry.Attempt.Should().Be(1);
-        recovery.Options!.Delivery!.DeduplicationOperationId.Should()
+        recovery.Options!.Delivery!.OperationId.Should()
             .Be("script-run-terminal-retry:run-1:delivery-1:1");
 
         scheduler.ScheduleException = null;
@@ -810,9 +810,9 @@ public sealed class ScriptBehaviorCompletionNotificationTests
             Route = EnvelopeRouteSemantics.CreateTopologyPublication(actorId, TopologyAudience.Self),
             Runtime = new EnvelopeRuntime
             {
-                Deduplication = new DeliveryDeduplication
+                DeliveryIdentity = new DeliveryIdentity
                 {
-                    OperationId = options.Delivery!.DeduplicationOperationId,
+                    OperationId = options.Delivery!.OperationId,
                 },
             },
         };

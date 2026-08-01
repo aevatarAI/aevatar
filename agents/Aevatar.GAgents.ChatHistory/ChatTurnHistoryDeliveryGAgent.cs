@@ -221,7 +221,7 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
                     : State.SourceCorrelationId,
             },
         };
-        envelope.EnsureRuntime().EnsureDeduplication().OperationId = $"chat-history-append:{State.DeliveryId}";
+        envelope.EnsureRuntime().EnsureDeliveryIdentity().OperationId = $"chat-history-append:{State.DeliveryId}";
 
         var admission = await _dispatchPort.DispatchAsync(conversationActorId, envelope, ct)
             .ConfigureAwait(false);

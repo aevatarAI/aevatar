@@ -150,7 +150,7 @@ public sealed class ChannelWorkflowDraftRunTests
         actorRuntime.Created.Should().ContainSingle().Which.Should().Be(runActorId);
         dispatch.Envelopes.Should().ContainSingle();
         dispatch.Envelopes[0].ActorId.Should().Be(runActorId);
-        dispatch.Envelopes[0].Envelope.Runtime.Deduplication.OperationId.Should()
+        dispatch.Envelopes[0].Envelope.Runtime.DeliveryIdentity.OperationId.Should()
             .Be("workflow-draft-run-start:workflow-draft-run-1");
         var command = dispatch.Envelopes[0].Envelope.Payload.Unpack<ChannelWorkflowDraftRunStartRequested>();
         command.RunId.Should().Be("workflow-draft-run-1");

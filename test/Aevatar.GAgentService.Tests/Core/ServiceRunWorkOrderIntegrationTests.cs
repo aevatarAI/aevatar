@@ -240,7 +240,7 @@ public sealed class ServiceRunWorkOrderIntegrationTests
 
         var scriptTerminalSend = router.Sends.Should().ContainSingle(sent =>
             sent.Message is ScriptRunOutcomeRecordedEvent).Subject;
-        var scriptTerminalOperationId = scriptTerminalSend.Options?.Delivery?.DeduplicationOperationId;
+        var scriptTerminalOperationId = scriptTerminalSend.Options?.Delivery?.OperationId;
         scriptTerminalOperationId.Should().Be($"script-run-terminal:{scriptDeliveryId}");
         var scriptTerminalEnvelope = new EventEnvelope
         {
@@ -250,14 +250,14 @@ public sealed class ServiceRunWorkOrderIntegrationTests
             Route = EnvelopeRouteSemantics.CreateDirect(scriptActorId, serviceRunActorId),
             Propagation = new EnvelopePropagation { CorrelationId = dispatchCommandId },
         };
-        scriptTerminalEnvelope.EnsureRuntime().EnsureDeduplication().OperationId =
+        scriptTerminalEnvelope.EnsureRuntime().EnsureDeliveryIdentity().OperationId =
             scriptTerminalOperationId;
-        scriptTerminalEnvelope.Runtime.Deduplication.OperationId.Should().Be(scriptTerminalOperationId);
+        scriptTerminalEnvelope.Runtime.DeliveryIdentity.OperationId.Should().Be(scriptTerminalOperationId);
         router.Sends.Should().ContainSingle(sent =>
             sent.Message is ServiceRunTerminalNotification &&
             sent.Options != null &&
             sent.Options.Delivery != null &&
-            sent.Options.Delivery.DeduplicationOperationId ==
+            sent.Options.Delivery.OperationId ==
             $"service-run-terminal-{terminalDeliveryId}");
     }
 

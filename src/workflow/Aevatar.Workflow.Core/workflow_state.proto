@@ -609,7 +609,7 @@ message PendingLlmCallState
   WorkflowRuntimeCallbackLeaseState watchdog_lease = 4;
   bool request_dispatched = 5;
   string watchdog_callback_id = 6;
-  string dispatch_dedup_id = 7;
+  string dispatch_operation_id = 7;
 }
 
 message LLMCallModuleState

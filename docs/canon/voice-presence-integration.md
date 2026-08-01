@@ -89,14 +89,14 @@ touch the audio socket.
 | **Audio + control** | edge ⇄ aevatar ⇄ OpenAI | binary PCM16 (audio) + JSON `VoiceControlFrame` (control) over `/ws/voice`; relay WS to OpenAI | Hot path. Raw PCM never enters the actor inbox / `EventEnvelope` / projection / committed store (ADR-013 media red line). |
 | **Credential** | aevatar → NyxID → OpenAI | HTTPS mint; `/ws/voice` admission carries a short-TTL opaque `credential_ref` in typed `VoiceToolExecutionContext` and binds the raw caller bearer only when the live transport lease attaches | Connect-time/provider/tool use only. Actor state carries the ref and non-secret caller/channel fields; catalog, invoker, and provider reconnect resolve through `ICredentialProvider` at the co-located transport boundary. Raw bearers do not cross lease/proto/actor/readmodel boundaries. |
 | **Edge tools** | actor → NyxID proxy → node WS → edge HTTP → LAN | NyxID connected-service `x-aevatar-tool` operations | The LAN tool bridge. Edge publishes `/edge-tools/openapi.json`; only `EDGE_TOOLS_ALLOWLIST` operations are exposed (ADR-0031 short-term bridge). |
-| **Device events** | edge → aevatar `/api/device-events/{regId}` | HMAC-SHA256 signed callback body | Off-socket household-event ingress. The endpoint admits only fresh signed body timestamps and maps a stable delivery id into the envelope dedupe operation; the actor owns fencing / turn creation. |
+| **Device events** | edge → aevatar `/api/device-events/{regId}` | HMAC-SHA256 signed callback body | Off-socket household-event ingress. The endpoint admits only fresh signed body timestamps and maps a stable delivery id into the envelope delivery operation identity; the actor owns fencing / turn creation. |
 
 Device-event replay protection is enforced before dispatch. The endpoint trusts
 only the timestamp carried in the HMAC-covered callback body, with a default
 10-second freshness window aligned to voice event staleness. `X-NyxID-Timestamp`
 is diagnostic only and cannot refresh a captured body. The delivery id is
 `content.text.event_id` when present, otherwise a home-alert `correlation_key`;
-it becomes `Runtime.Deduplication.OperationId =
+it becomes `Runtime.DeliveryIdentity.OperationId =
 device-event:{registrationId}:{deliveryId}`. If no active voice session exists,
 the event is still drop-and-log at the voice boundary; this integration does not
 add a durable spool.

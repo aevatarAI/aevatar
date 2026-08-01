@@ -323,8 +323,8 @@ public sealed class WorkflowRunGAgentRelayedTerminalAdoptionTests
         notification.Output.Should().Be("final output");
         notification.Error.Should().BeEmpty();
         notification.TerminalAt.Should().NotBeNull();
-        sent.Options?.Delivery?.DeduplicationOperationId.Should().Contain("delivery-1");
-        sent.Options?.Delivery?.DeduplicationOperationId.Should().Contain("command-1");
+        sent.Options?.Delivery?.OperationId.Should().Contain("delivery-1");
+        sent.Options?.Delivery?.OperationId.Should().Contain("command-1");
         harness.Agent.State.TerminalNotificationDeliveryStatus
             .Should().Be(WorkflowRunTerminalNotificationDeliveryStatus.Dispatched);
         harness.Agent.State.PendingTerminalNotification.Should().BeNull();
@@ -631,7 +631,7 @@ public sealed class WorkflowRunGAgentRelayedTerminalAdoptionTests
                 x.TargetActorId == harness.RunId &&
                 x.Event is WorkflowRunTerminalNotificationRetryFiredEvent)
             .Subject;
-        selfRetry.Options?.Delivery?.DeduplicationOperationId.Should().NotBeNullOrWhiteSpace();
+        selfRetry.Options?.Delivery?.OperationId.Should().NotBeNullOrWhiteSpace();
         harness.Publisher.FailTerminalNotificationDispatch = false;
 
         await harness.Agent.HandleEventAsync(SelfEnvelope(
@@ -1398,8 +1398,8 @@ public sealed class WorkflowRunGAgentRelayedTerminalAdoptionTests
         started.WorkflowCommandId.Should().Be("command-started-1");
         started.WorkflowCorrelationId.Should().Be("correlation-started-1");
         started.StartedAt.Should().NotBeNull();
-        var deduplicationOperationId = sent.Options?.Delivery?.DeduplicationOperationId;
-        deduplicationOperationId.Should().NotBeNullOrWhiteSpace();
+        var deliveryOperationId = sent.Options?.Delivery?.OperationId;
+        deliveryOperationId.Should().NotBeNullOrWhiteSpace();
 
         var reactivated = await CreateRunAsync(runId, harness.EventStore);
         var replayed = reactivated.Publisher.SuccessfulSends
@@ -1407,6 +1407,6 @@ public sealed class WorkflowRunGAgentRelayedTerminalAdoptionTests
             .Subject;
         replayed.TargetActorId.Should().Be("delivery-actor-1");
         replayed.Event.Should().BeEquivalentTo(started);
-        replayed.Options?.Delivery?.DeduplicationOperationId.Should().Be(deduplicationOperationId);
+        replayed.Options?.Delivery?.OperationId.Should().Be(deliveryOperationId);
     }
 }

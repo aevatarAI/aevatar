@@ -2377,7 +2377,7 @@ public sealed partial class WorkflowRunGAgent
         {
             Delivery = new EventEnvelopeDeliveryOptions
             {
-                DeduplicationOperationId = RuntimeCallbackKeyComposer.BuildCallbackId(
+                OperationId = RuntimeCallbackKeyComposer.BuildCallbackId(
                     TerminalNotificationDispatchOperationPrefix,
                     notification.DeliveryId,
                     notification.WorkflowCommandId),
@@ -2390,7 +2390,7 @@ public sealed partial class WorkflowRunGAgent
         {
             Delivery = new EventEnvelopeDeliveryOptions
             {
-                DeduplicationOperationId = RuntimeCallbackKeyComposer.BuildCallbackId(
+                OperationId = RuntimeCallbackKeyComposer.BuildCallbackId(
                     StartedNotificationDispatchOperationPrefix,
                     notification.DeliveryId,
                     notification.WorkflowCommandId),
@@ -2402,7 +2402,7 @@ public sealed partial class WorkflowRunGAgent
         {
             Delivery = new EventEnvelopeDeliveryOptions
             {
-                DeduplicationOperationId = callbackId,
+                OperationId = callbackId,
             },
         };
 

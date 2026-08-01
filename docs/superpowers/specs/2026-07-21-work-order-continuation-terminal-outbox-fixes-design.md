@@ -201,7 +201,7 @@ cross-platform generic framework:
 
 `Prepared -> RetryScheduled -> Dispatched | Expired`
 
-Each retry uses a stable deduplication operation ID, exponential delay from
+Each retry uses a stable delivery operation ID, exponential delay from
 `250 ms` to `30 seconds`, a durable self-event, activation recovery, and exact
 delivery/attempt matching. Cancellation requested by the actor runtime is
 rethrown. Other send failures schedule retry and preserve the payload.

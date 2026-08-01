@@ -9,7 +9,7 @@
 ## 它做什么
 
 - **传递消息包络**：通过统一 Stream/Router 抽象把 `EventEnvelope` 送到目标节点。
-- **存储与投递身份**：通过可替换存储保存事件事实，并解析 envelope 的 delivery origin/retry attempt；完成判定由权威 Actor 或下游幂等契约负责。
+- **存储与投递身份**：通过可替换存储保存事件事实，并从 typed `EnvelopeRuntime.delivery_identity.operation_id` / retry contract 解析 delivery lineage/attempt；完成判定由权威 Actor 或下游幂等契约负责。
 - **流式输出**：把运行过程以流的形式推送给调用方（例如 SSE）。
 
 这里的 `EventEnvelope` 是 runtime message envelope，不等于 Event Sourcing 持久化的领域事件。
@@ -23,7 +23,7 @@
 | 概念 | 目录 | 说明 |
 |------|------|------|
 | **Actor 生命周期钩子** | `Actor/` | Runtime 停用钩子与分发器（用于空闲清理、事件裁剪触发）。 |
-| **投递身份** | `Delivery/` | 解析稳定 delivery origin 与 retry attempt；不记录完成事实、不抑制重投。 |
+| **投递身份** | `Delivery/` | 解析稳定 delivery operation lineage 与 retry attempt；不记录完成事实、不抑制重投。 |
 | **Envelope Stream** | `Streaming/` | `EventEnvelope` 的消息流与订阅，用于 Actor 间传输和向前端/下游推送运行消息。 |
 | **路由** | `Routing/` | 维护 Agent 树的父子关系，按「方向」把 envelope 发给当前节点、父节点或子节点。 |
 | **持久化** | `Persistence/` | Event Sourcing 所需的 EventStore 与快照存储默认实现；可替换为持久化后端。 |

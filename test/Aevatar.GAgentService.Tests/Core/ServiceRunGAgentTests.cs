@@ -400,7 +400,7 @@ public sealed class ServiceRunGAgentTests
             .BeOfType<ServiceRunTerminalNotificationRetryFiredEvent>().Subject;
         retry.DeliveryId.Should().Be("delivery-1");
         retry.Attempt.Should().Be(1);
-        recovery.Options!.Delivery!.DeduplicationOperationId.Should()
+        recovery.Options!.Delivery!.OperationId.Should()
             .Be("service-run-terminal-retry:delivery-1:1");
 
         var recoveryEnvelope = BuildSelfEnvelope(actor.Id, retry, recovery.Options);
@@ -411,7 +411,7 @@ public sealed class ServiceRunGAgentTests
         attemptTwo.CallbackId.Should().Be("service-run-terminal-retry:delivery-1");
         attemptTwo.TriggerEnvelope.Payload.Unpack<ServiceRunTerminalNotificationRetryFiredEvent>()
             .Attempt.Should().Be(2);
-        attemptTwo.TriggerEnvelope.Runtime!.Deduplication!.OperationId.Should()
+        attemptTwo.TriggerEnvelope.Runtime!.DeliveryIdentity!.OperationId.Should()
             .Be("service-run-terminal-retry:delivery-1:2");
 
         publisher.SendException = null;
@@ -510,7 +510,7 @@ public sealed class ServiceRunGAgentTests
         await actor.HandleEventAsync(callback);
 
         publisher.Sends.Should().HaveCount(2);
-        publisher.Sends.Select(static send => send.Options!.Delivery!.DeduplicationOperationId)
+        publisher.Sends.Select(static send => send.Options!.Delivery!.OperationId)
             .Should().OnlyContain(static operationId => operationId == "service-run-terminal-delivery-1");
         actor.State.TerminalNotificationDeliveryStatus.Should()
             .Be(ServiceRunTerminalNotificationDeliveryStatus.Dispatched);
@@ -533,7 +533,7 @@ public sealed class ServiceRunGAgentTests
         await RegisterNotificationRunAsync(actor, DateTimeOffset.UtcNow.AddMinutes(1));
         await actor.HandleRoleChatCompletedAsync(BuildTerminalEvent(actor.Id));
         var attemptOne = scheduler.TimeoutRequests.Should().ContainSingle().Subject;
-        var attemptOneOperationId = attemptOne.TriggerEnvelope.Runtime?.Deduplication?.OperationId;
+        var attemptOneOperationId = attemptOne.TriggerEnvelope.Runtime?.DeliveryIdentity?.OperationId;
 
         attemptOne.TriggerEnvelope.Payload.Unpack<ServiceRunTerminalNotificationRetryFiredEvent>()
             .Attempt.Should().Be(1);
@@ -543,7 +543,7 @@ public sealed class ServiceRunGAgentTests
 
         scheduler.TimeoutRequests.Should().HaveCount(2);
         var attemptTwo = scheduler.TimeoutRequests[1];
-        var attemptTwoOperationId = attemptTwo.TriggerEnvelope.Runtime?.Deduplication?.OperationId;
+        var attemptTwoOperationId = attemptTwo.TriggerEnvelope.Runtime?.DeliveryIdentity?.OperationId;
         attemptTwo.CallbackId.Should().Be(attemptOne.CallbackId);
         attemptTwo.TriggerEnvelope.Payload.Unpack<ServiceRunTerminalNotificationRetryFiredEvent>()
             .Attempt.Should().Be(2);
@@ -806,7 +806,7 @@ public sealed class ServiceRunGAgentTests
         await RegisterNotificationRunAsync(first, DateTimeOffset.UtcNow.AddMinutes(1));
         var terminalEnvelope = BuildInboundEnvelope(BuildTerminalEvent(actorId), "role-actor-1");
         terminalEnvelope.Id = "role-chat-terminal-envelope-1";
-        terminalEnvelope.EnsureRuntime().EnsureDeduplication().OperationId = operationId;
+        terminalEnvelope.EnsureRuntime().EnsureDeliveryIdentity().OperationId = operationId;
 
         await first.HandleEventAsync(terminalEnvelope);
 
@@ -818,7 +818,7 @@ public sealed class ServiceRunGAgentTests
             .Be(ServiceRunTerminalNotificationDeliveryStatus.Dispatched);
         authoritativeVersion.Should().Be(committedVersion);
         firstPublisher.Sends.Should().ContainSingle()
-            .Which.Options!.Delivery!.DeduplicationOperationId.Should()
+            .Which.Options!.Delivery!.OperationId.Should()
             .Be("service-run-terminal-delivery-1");
 
         // The handler committed successfully, but the transport ACK is assumed lost before process exit.
@@ -1267,9 +1267,9 @@ public sealed class ServiceRunGAgentTests
             Route = EnvelopeRouteSemantics.CreateTopologyPublication(actorId, TopologyAudience.Self),
             Runtime = new EnvelopeRuntime
             {
-                Deduplication = new DeliveryDeduplication
+                DeliveryIdentity = new DeliveryIdentity
                 {
-                    OperationId = options.Delivery!.DeduplicationOperationId,
+                    OperationId = options.Delivery!.OperationId,
                 },
             },
         };

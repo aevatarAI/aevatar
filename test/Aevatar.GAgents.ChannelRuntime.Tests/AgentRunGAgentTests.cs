@@ -678,7 +678,7 @@ public sealed class AgentRunGAgentTests
         var (actorId, envelope) = dispatchPort.Dispatches.Single();
         actorId.Should().Be(ExpectedRunActorId("run-dispatch"));
         envelope.Id.Should().Be("agent-run-start:run-dispatch");
-        envelope.Runtime.Deduplication.OperationId.Should().Be("agent-run-start:run-dispatch");
+        envelope.Runtime.DeliveryIdentity.OperationId.Should().Be("agent-run-start:run-dispatch");
         envelope.Propagation.CorrelationId.Should().Be("corr-dispatch");
         var command = envelope.Payload.Unpack<AgentRunStartRequested>();
         command.Request.RunId.Should().Be("run-dispatch");

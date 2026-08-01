@@ -72,7 +72,7 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
             },
             Runtime = new EnvelopeRuntime
             {
-                Deduplication = new DeliveryDeduplication
+                DeliveryIdentity = new DeliveryIdentity
                 {
                     OperationId = commandId,
                 },

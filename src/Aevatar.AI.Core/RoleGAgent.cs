@@ -2124,7 +2124,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 {
                     Delivery = new EventEnvelopeDeliveryOptions
                     {
-                        DeduplicationOperationId = $"role-chat-terminal:{deliveryId}",
+                        OperationId = $"role-chat-terminal:{deliveryId}",
                     },
                 });
         }
@@ -2257,7 +2257,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         {
             Delivery = new EventEnvelopeDeliveryOptions
             {
-                DeduplicationOperationId = RuntimeCallbackKeyComposer.BuildCallbackId(
+                OperationId = RuntimeCallbackKeyComposer.BuildCallbackId(
                     callbackId,
                     attempt.ToString(CultureInfo.InvariantCulture)),
             },

@@ -1095,7 +1095,7 @@ public class RoleGAgentReplayContractTests
         provider.StreamCallCount.Should().Be(1);
         var sent = recoveredPublisher.Sends.Should().ContainSingle().Subject;
         sent.TargetActorId.Should().Be("service-run:tenant:svc:run-1");
-        sent.Options!.Delivery!.DeduplicationOperationId.Should()
+        sent.Options!.Delivery!.OperationId.Should()
             .Be("role-chat-terminal:run-1:cmd-1");
         var notification = sent.Event.Should().BeOfType<RoleChatSessionCompletedEvent>().Which;
         var expectedNotification = committed.Clone();

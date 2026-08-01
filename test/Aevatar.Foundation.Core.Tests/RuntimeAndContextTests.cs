@@ -227,11 +227,11 @@ public class LocalActorRuntimeTests : IAsyncLifetime
         var collector = (CollectorAgent)actor.Agent;
         var first = TestHelper.Envelope(new PingEvent { Message = "redelivery" }, publisherId: "source-1");
         first.Id = "env-1";
-        first.EnsureRuntime().EnsureDeduplication().OperationId = "logical-operation-1";
+        first.EnsureRuntime().EnsureDeliveryIdentity().OperationId = "logical-operation-1";
 
         var second = TestHelper.Envelope(new PingEvent { Message = "redelivery" }, publisherId: "source-1");
         second.Id = "env-2";
-        second.EnsureRuntime().EnsureDeduplication().OperationId = "logical-operation-1";
+        second.EnsureRuntime().EnsureDeliveryIdentity().OperationId = "logical-operation-1";
 
         await actor.HandleEventAsync(first);
         await actor.HandleEventAsync(second);

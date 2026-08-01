@@ -631,7 +631,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
 
     private string BuildRuntimeRetryCallbackId(EventEnvelope envelope, int nextAttempt)
     {
-        var originId = RuntimeEnvelopeDeliveryIdentity.ResolveOriginId(envelope) ?? envelope.Id;
+        var originId = RuntimeEnvelopeDeliveryIdentity.ResolveDeliveryLineageId(envelope) ?? envelope.Id;
 
         if (string.IsNullOrWhiteSpace(originId))
             originId = envelope.Id ?? Guid.NewGuid().ToString("N");

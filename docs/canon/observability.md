@@ -65,7 +65,7 @@ ActivityListener 消费方过滤：`source.Name == "Aevatar.Agents"`（单源
 
 #3145 已删除 runtime process-local envelope filter 及其 DI seam。每次 transport delivery 都进入 authoritative
 actor；重复消息是否已完成只能由 actor committed state、稳定 command/operation identity 或外部权威
-idempotency contract 判断。`RuntimeEnvelopeDeliveryIdentity` 只解析 delivery origin/retry attempt，不记录事实、
+idempotency contract 判断。`RuntimeEnvelopeDeliveryIdentity` 只解析 typed delivery operation lineage/retry attempt，不记录事实、
 不抑制 redelivery，也不提供 durable idempotency 或 exactly-once 保证。
 
 ## 3. Activity 清单 (`Aevatar.Agents`)
