@@ -85,10 +85,16 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         _identityResolutionAttempted = true;
 
         var identity = _state.State.Identity;
-        if (identity != null && !string.IsNullOrWhiteSpace(identity.Kind))
+        if (identity == null)
+            return;
+
+        if (string.IsNullOrWhiteSpace(identity.Kind))
         {
-            await BindAgentByKindAsync(identity.Kind, ct);
+            throw new InvalidOperationException(
+                $"Persisted runtime identity for actor '{SafeGetActorIdForLog()}' has no agent kind.");
         }
+
+        await BindAgentByKindAsync(identity.Kind, ct, throwOnFailure: true);
     }
 
     public override async Task OnDeactivateAsync(DeactivationReason reason, CancellationToken cancellationToken)
@@ -372,7 +378,10 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         await _state.ClearStateAsync();
     }
 
-    private async Task<AgentImplementation?> BindAgentByKindAsync(string kind, CancellationToken ct = default)
+    private async Task<AgentImplementation?> BindAgentByKindAsync(
+        string kind,
+        CancellationToken ct = default,
+        bool throwOnFailure = false)
     {
         var registry = ServiceProvider?.GetService<IAgentKindRegistry>();
         if (registry == null)
@@ -381,6 +390,12 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
                 "Cannot bind actor {ActorId} by kind '{Kind}': IAgentKindRegistry not registered.",
                 SafeGetActorIdForLog(),
                 kind);
+            if (throwOnFailure)
+            {
+                throw new InvalidOperationException(
+                    $"Cannot resume actor '{SafeGetActorIdForLog()}' because IAgentKindRegistry is not registered.");
+            }
+
             return null;
         }
 
@@ -396,10 +411,13 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
                 "Unable to resolve agent kind '{Kind}' for actor {ActorId}.",
                 kind,
                 SafeGetActorIdForLog());
+            if (throwOnFailure)
+                throw;
+
             return null;
         }
 
-        if (!await BindAgentAsync(implementation, ct))
+        if (!await BindAgentAsync(implementation, ct, throwOnFailure))
             return null;
 
         // Track the *canonical* kind from the registry, not the caller's
@@ -424,7 +442,10 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         }
     }
 
-    private async Task<bool> BindAgentAsync(AgentImplementation implementation, CancellationToken ct)
+    private async Task<bool> BindAgentAsync(
+        AgentImplementation implementation,
+        CancellationToken ct,
+        bool throwOnFailure)
     {
         try
         {
@@ -445,6 +466,16 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             _logger.LogError(
                 ex,
                 "Committed-state publication recovery prevented activation of grain actor {ActorId} for kind '{Kind}' (impl '{ImplClr}').",
+                SafeGetActorIdForLog(),
+                implementation.Metadata.Kind,
+                implementation.Metadata.ImplementationClrTypeName);
+            throw;
+        }
+        catch (Exception ex) when (throwOnFailure)
+        {
+            _logger.LogError(
+                ex,
+                "Failed to resume persisted grain actor {ActorId} for kind '{Kind}' (impl '{ImplClr}').",
                 SafeGetActorIdForLog(),
                 implementation.Metadata.Kind,
                 implementation.Metadata.ImplementationClrTypeName);
