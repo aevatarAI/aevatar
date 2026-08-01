@@ -105,3 +105,26 @@ dotnet run \
 
 The raw result is
 `docs/audit-scorecard/raw/2026-08-02-role-streaming-write-amplification.json`.
+
+Assert the checked-in final recovery evidence:
+
+```bash
+jq -e '
+  .schemaVersion == 3 and
+  ([.adapters[].adapter] | sort) == ["garnet", "inmemory"] and
+  all(.adapters[]; .status == "measured") and
+  all(
+    .adapters[].workloads[] | select(.streamShape == "crash_recovery");
+    (.samples | length) == 12 and
+    all(
+      .samples[];
+      .crashRecovery.ledgerToDurableMissingEvents == 0 and
+      .crashRecovery.durableToLedgerUnexpectedEvents == 0 and
+      .crashRecovery.durableToProjectionMissingEvents == 0 and
+      .crashRecovery.projectionToDurableUnexpectedEvents == 0 and
+      .crashRecovery.finalAppendLedgerEvents == .crashRecovery.finalDurableReadbackEvents and
+      .crashRecovery.finalDurableReadbackEvents == .crashRecovery.finalProjectionVisibleEvents
+    )
+  )
+' docs/audit-scorecard/raw/2026-08-02-role-streaming-write-amplification.json
+```
