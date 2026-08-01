@@ -1,4 +1,6 @@
 using System.Net;
+using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Services;
 using Aevatar.Studio.Hosting.Controllers;
@@ -590,13 +592,8 @@ public sealed class UserConfigControllerSettingsTests
         payload.FallbackReason.Should().BeNull();
     }
 
-    [Theory]
-    [InlineData("")]
-    [InlineData(" auto ")]
-    [InlineData("GATEWAY")]
-    [InlineData(UserConfigLlmRouteDefaults.Gateway)]
-    public async Task SaveLlmSettings_WithGatewayAlias_ShouldPersistCanonicalSelectionWithoutReadOrCatalog(
-        string routeValue)
+    [Fact]
+    public async Task SaveLlmSettings_WithReset_ShouldPersistUnspecifiedWithoutReadOrCatalog()
     {
         var commandService = new RecordingUserConfigCommandService();
         var queryPort = new StubUserConfigQueryPort(new UserConfig("old-model", "/api/v1/proxy/s/old"));
@@ -608,7 +605,7 @@ public sealed class UserConfigControllerSettingsTests
             bearerToken: "user-token-1");
 
         var response = await controller.SaveLlmSettings(
-            new SaveUserLlmSettingsRequest(RouteValue: routeValue, Model: " gpt-5.4 "),
+            new SaveUserLlmSettingsRequest("reset"),
             CancellationToken.None);
 
         var accepted = response.Result.Should().BeOfType<AcceptedResult>().Subject;
@@ -616,51 +613,46 @@ public sealed class UserConfigControllerSettingsTests
         payload.Accepted.Should().BeTrue();
         payload.AckStage.Should().Be(UserConfigCommandAckStage.Accepted);
         var update = commandService.Updates.Should().ContainSingle().Which.Update;
-        update.LlmSelection.Should().Be(UserLlmPreferenceWriteCore.BuildGatewaySelection());
-        update.DefaultModel.Should().Be("gpt-5.4");
+        update.LlmSelection!.RouteKind.Should().Be(LLMRouteKind.Unspecified);
+        update.LlmSelection.ModelSelection.Kind.Should().Be(LLMModelSelectionKind.Unspecified);
         queryPort.ReadCount.Should().Be(0);
         httpHandler.Requests.Should().BeEmpty();
     }
 
-    [Theory]
-    [InlineData("https://evil.example.com/path")]
-    [InlineData("//evil.example.com/path")]
-    public async Task SaveLlmSettings_WithExternalRoute_ShouldReturnBadRequestWithoutDispatch(string routeValue)
+    [Fact]
+    public void SaveLlmSettingsWireContract_ShouldMapEachClosedAction()
     {
-        var commandService = new RecordingUserConfigCommandService();
-        var httpHandler = new RecordingHttpHandler("""{"services":[]}""");
-        var controller = CreateController(
-            current: new UserConfig(string.Empty),
-            commandService: commandService,
-            httpHandler: httpHandler,
-            bearerToken: "user-token-1");
-
-        var response = await controller.SaveLlmSettings(
-            new SaveUserLlmSettingsRequest(RouteValue: routeValue),
-            CancellationToken.None);
-
-        response.Result.Should().BeOfType<BadRequestObjectResult>();
-        commandService.Updates.Should().BeEmpty();
-        httpHandler.Requests.Should().BeEmpty();
+        new SaveUserLlmSettingsRequest("reset").ToIntent()
+            .Should().BeOfType<ResetUserLlmPreferenceIntent>();
+        new SaveUserLlmSettingsRequest(
+                "select_gateway",
+                Gateway: new SelectGatewayRequest(new UserLlmModelSelectionRequest("provider_default")))
+            .ToIntent().Should().BeOfType<SelectGatewayUserLlmPreferenceIntent>();
+        new SaveUserLlmSettingsRequest(
+                "select_user_service",
+                UserService: new SelectUserServiceRequest(
+                    "us-alpha",
+                    new UserLlmModelSelectionRequest("explicit_model", "gpt-5.5")))
+            .ToIntent().Should().BeEquivalentTo(new SelectUserServiceUserLlmPreferenceIntent(
+                "us-alpha",
+                new LLMModelSelection
+                {
+                    Kind = LLMModelSelectionKind.ExplicitModel,
+                    ModelId = "gpt-5.5",
+                }));
+        new SaveUserLlmSettingsRequest(
+                "activate_preset",
+                Preset: new ActivatePresetRequest("chrono"))
+            .ToIntent().Should().BeEquivalentTo(new ActivateUserLlmPresetIntent("chrono"));
     }
 
     [Fact]
-    public async Task Save_WithRoutePrefixedDefaultModel_ShouldReturnBadRequest()
+    public void SaveUserConfigRequest_ShouldRejectDefaultModelJsonMember()
     {
-        var commandService = new RecordingUserConfigCommandService();
-        var controller = CreateController(
-            current: new UserConfig(string.Empty),
-            commandService: commandService,
-            httpHandler: new RecordingHttpHandler("""{"services":[]}"""),
-            bearerToken: "user-token-1");
+        var act = () => JsonSerializer.Deserialize<UserConfigController.SaveUserConfigRequest>(
+            """{"defaultModel":"gpt-5.5"}""");
 
-        var response = await controller.Save(
-            new UserConfigController.SaveUserConfigRequest(
-                DefaultModel: "chrono-llm-public/gpt-5.5"),
-            CancellationToken.None);
-
-        response.Result.Should().BeOfType<BadRequestObjectResult>();
-        commandService.Updates.Should().BeEmpty();
+        act.Should().Throw<JsonException>();
     }
 
     [Fact]
@@ -684,7 +676,7 @@ public sealed class UserConfigControllerSettingsTests
             bearerToken: "user-token-1");
 
         var response = await controller.SaveLlmSettings(
-            new SaveUserLlmSettingsRequest(RouteValue: string.Empty, Model: "gpt-5.4"),
+            new SaveUserLlmSettingsRequest("reset"),
             CancellationToken.None);
 
         var accepted = response.Result.Should().BeOfType<AcceptedResult>().Subject;
@@ -706,7 +698,7 @@ public sealed class UserConfigControllerSettingsTests
             bearerToken: "user-token-1");
 
         var response = await controller.SaveLlmSettings(
-            new SaveUserLlmSettingsRequest(),
+            new SaveUserLlmSettingsRequest("unknown"),
             CancellationToken.None);
 
         response.Result.Should().BeOfType<BadRequestObjectResult>();
@@ -726,7 +718,7 @@ public sealed class UserConfigControllerSettingsTests
     }
 
     [Fact]
-    public async Task SaveLlmSettings_WithUnknownRoute_ShouldReturnBadRequest()
+    public async Task SaveLlmSettings_WithMixedPayload_ShouldReturnBadRequestBeforeCatalog()
     {
         var controller = CreateController(
             current: new UserConfig(string.Empty),
@@ -734,10 +726,14 @@ public sealed class UserConfigControllerSettingsTests
             bearerToken: "user-token-1");
 
         var response = await controller.SaveLlmSettings(
-            new SaveUserLlmSettingsRequest(RouteValue: "/api/v1/proxy/s/missing"),
+            new SaveUserLlmSettingsRequest(
+                "reset",
+                Gateway: new SelectGatewayRequest(
+                    new UserLlmModelSelectionRequest("provider_default"))),
             CancellationToken.None);
 
         response.Result.Should().BeOfType<BadRequestObjectResult>();
+        controller.HttpContext.Should().NotBeNull();
     }
 
     [Fact]

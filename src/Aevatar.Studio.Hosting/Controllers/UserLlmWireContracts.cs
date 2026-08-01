@@ -1,17 +1,98 @@
+using Aevatar.AI.Abstractions;
 using System.Text.Json.Serialization;
 using Aevatar.Studio.Application.Studio.Abstractions;
 
 namespace Aevatar.Studio.Hosting.Controllers;
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record SaveUserLlmSettingsRequest(
-    [property: JsonPropertyName("userServiceId")] string? UserServiceId = null,
-    [property: JsonPropertyName("routeValue")] string? RouteValue = null,
-    [property: JsonPropertyName("model")] string? Model = null)
+    [property: JsonPropertyName("action")] string Action,
+    [property: JsonPropertyName("gateway")] SelectGatewayRequest? Gateway = null,
+    [property: JsonPropertyName("userService")] SelectUserServiceRequest? UserService = null,
+    [property: JsonPropertyName("preset")] ActivatePresetRequest? Preset = null)
 {
-    public SaveUserLlmPreferenceCommand ToCommand() => new(
-        UserServiceId: UserServiceId,
-        RouteValue: RouteValue,
-        Model: Model);
+    public UserLlmPreferenceIntent ToIntent() => Action switch
+    {
+        "reset" when Gateway is null && UserService is null && Preset is null =>
+            new ResetUserLlmPreferenceIntent(),
+        "select_gateway" when Gateway is not null && UserService is null && Preset is null =>
+            new SelectGatewayUserLlmPreferenceIntent(Gateway.RequireModelSelection()),
+        "select_user_service" when Gateway is null && UserService is not null && Preset is null =>
+            UserService.ToIntent(),
+        "activate_preset" when Gateway is null && UserService is null && Preset is not null =>
+            Preset.ToIntent(),
+        "reset" or "select_gateway" or "select_user_service" or "activate_preset" =>
+            throw new InvalidOperationException("The LLM action payload does not match its action."),
+        _ => throw new InvalidOperationException("Unknown LLM settings action."),
+    };
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record SelectGatewayRequest(
+    [property: JsonPropertyName("model")] UserLlmModelSelectionRequest? Model)
+{
+    public LLMModelSelection RequireModelSelection() =>
+        Model?.ToApplication() ?? throw new InvalidOperationException("Gateway model selection is required.");
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record SelectUserServiceRequest(
+    [property: JsonPropertyName("userServiceId")] string UserServiceId,
+    [property: JsonPropertyName("model")] UserLlmModelSelectionRequest? Model)
+{
+    public SelectUserServiceUserLlmPreferenceIntent ToIntent()
+    {
+        var id = UserServiceId?.Trim();
+        if (string.IsNullOrEmpty(id))
+            throw new InvalidOperationException("userServiceId is required.");
+
+        return new SelectUserServiceUserLlmPreferenceIntent(
+            id,
+            Model?.ToApplication() ??
+            throw new InvalidOperationException("User service model selection is required."));
+    }
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record ActivatePresetRequest(
+    [property: JsonPropertyName("presetId")] string PresetId)
+{
+    public ActivateUserLlmPresetIntent ToIntent()
+    {
+        var id = PresetId?.Trim();
+        return !string.IsNullOrEmpty(id)
+            ? new ActivateUserLlmPresetIntent(id)
+            : throw new InvalidOperationException("presetId is required.");
+    }
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record UserLlmModelSelectionRequest(
+    [property: JsonPropertyName("kind")] string Kind,
+    [property: JsonPropertyName("modelId")] string? ModelId = null)
+{
+    public LLMModelSelection ToApplication()
+    {
+        var selection = Kind switch
+        {
+            "provider_default" when ModelId is null => new LLMModelSelection
+            {
+                Kind = LLMModelSelectionKind.ProviderDefault,
+            },
+            "explicit_model" => new LLMModelSelection
+            {
+                Kind = LLMModelSelectionKind.ExplicitModel,
+                ModelId = ModelId ?? string.Empty,
+            },
+            "provider_default" => throw new InvalidOperationException(
+                "provider_default cannot include modelId."),
+            _ => throw new InvalidOperationException("Unknown LLM model selection kind."),
+        };
+
+        // Reuse the shared route/model validator for canonical model ID validation.
+        _ = UserLlmPreferenceWriteCore.BuildGatewaySelection(selection);
+        return selection;
+    }
 }
 
 public sealed record UserConfigSaveReceiptResponse(

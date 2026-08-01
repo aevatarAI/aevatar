@@ -1,4 +1,20 @@
+using Aevatar.AI.Abstractions;
+
 namespace Aevatar.Studio.Application.Studio.Abstractions;
+
+public abstract record UserLlmPreferenceIntent;
+
+public sealed record ResetUserLlmPreferenceIntent : UserLlmPreferenceIntent;
+
+public sealed record SelectGatewayUserLlmPreferenceIntent(
+    LLMModelSelection ModelSelection) : UserLlmPreferenceIntent;
+
+public sealed record SelectUserServiceUserLlmPreferenceIntent(
+    string UserServiceId,
+    LLMModelSelection ModelSelection) : UserLlmPreferenceIntent;
+
+public sealed record ActivateUserLlmPresetIntent(
+    string PresetId) : UserLlmPreferenceIntent;
 
 /// <summary>
 /// Internal write-use-case command shared by Console Settings and channel /model selection.
@@ -175,6 +191,8 @@ public static class NyxIdLlmProviderSource
 public interface IUserLlmCatalogPort
 {
     Task<NyxIdLlmServicesResult> GetServicesAsync(string bearerToken, CancellationToken ct);
+
+    Task<NyxIdLlmServicesResult> GetFreshServicesAsync(string bearerToken, CancellationToken ct);
 
     Task<NyxIdLlmService> ProvisionAsync(string bearerToken, string provisionEndpointId, CancellationToken ct);
 }

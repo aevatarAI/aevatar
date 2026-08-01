@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.UserConfig;
 using Aevatar.Studio.Application.Studio.Abstractions;
@@ -36,9 +37,10 @@ internal sealed class ActorDispatchUserConfigCommandService : IUserConfigCommand
 
         var command = new UpdateUserConfigCommand();
         if (update.LlmSelection is not null)
-            command.LlmSelection = MapSelection(update.LlmSelection, update.DefaultModel);
-        else if (update.DefaultModel is not null)
-            throw new InvalidOperationException("An LLM model cannot be updated without its complete route selection.");
+        {
+            LLMSelectionPolicy.ValidateSelection(update.LlmSelection);
+            command.LlmSelection = update.LlmSelection.Clone();
+        }
         if (update.RuntimeMode is not null)
             command.RuntimeMode = update.RuntimeMode;
         if (update.LocalRuntimeBaseUrl is not null)
@@ -52,31 +54,6 @@ internal sealed class ActorDispatchUserConfigCommandService : IUserConfigCommand
 
         return DispatchAsync(resource, command, ct);
     }
-
-
-    private static LLMSelection MapSelection(UserLlmSelectionValue selection, string? defaultModel) =>
-        new()
-        {
-            RouteKind = selection.Kind switch
-            {
-                UserLlmSelectionKind.Unspecified => LLMRouteKind.Unspecified,
-                UserLlmSelectionKind.Gateway => LLMRouteKind.Gateway,
-                UserLlmSelectionKind.NyxIdUserService => LLMRouteKind.NyxIdUserService,
-                _ => throw new ArgumentOutOfRangeException(nameof(selection)),
-            },
-            RouteValue = selection.RouteValue,
-            NyxIdUserServiceId = selection.NyxIdUserServiceId,
-            ServiceSlugSnapshot = selection.ServiceSlugSnapshot,
-            ModelSelection = new LLMModelSelection
-            {
-                Kind = selection.Kind == UserLlmSelectionKind.Unspecified
-                    ? LLMModelSelectionKind.Unspecified
-                    : string.IsNullOrEmpty(defaultModel)
-                        ? LLMModelSelectionKind.ProviderDefault
-                        : LLMModelSelectionKind.ExplicitModel,
-                ModelId = defaultModel ?? string.Empty,
-            },
-        };
 
     private async Task<UserConfigSaveReceipt> DispatchAsync(
         UserConfigResourceKey resource,

@@ -10,6 +10,24 @@ namespace Aevatar.Studio.Tests;
 public sealed class CachedNyxIdLlmCatalogPortTests
 {
     [Fact]
+    public async Task GetFreshServicesAsync_ShouldBypassSnapshotAndReplaceItAfterSuccess()
+    {
+        var inner = new RecordingCatalogPort();
+        inner.Enqueue(MakeResult("anthropic", "/cached"));
+        inner.EnqueueFresh(MakeResult("anthropic", "/fresh"));
+        var port = CreatePort(inner);
+
+        await port.GetServicesAsync("bearer-1", CancellationToken.None);
+        var fresh = await port.GetFreshServicesAsync("bearer-1", CancellationToken.None);
+        var cachedAfterFresh = await port.GetServicesAsync("bearer-1", CancellationToken.None);
+
+        fresh.Services.Single().RouteValue.Should().Be("/fresh");
+        cachedAfterFresh.Services.Single().RouteValue.Should().Be("/fresh");
+        inner.GetCalls.Should().Be(1);
+        inner.FreshCalls.Should().Be(1);
+    }
+
+    [Fact]
     public async Task GetServicesAsync_ShouldReuseFreshSnapshot_ForSameAuthorityAndBearer()
     {
         var inner = new RecordingCatalogPort();
@@ -312,10 +330,12 @@ public sealed class CachedNyxIdLlmCatalogPortTests
     private sealed class RecordingCatalogPort : IUserLlmCatalogPort
     {
         private readonly Queue<Func<Task<NyxIdLlmServicesResult>>> _responses = new();
+        private readonly Queue<Func<Task<NyxIdLlmServicesResult>>> _freshResponses = new();
         private readonly Dictionary<int, TaskCompletionSource> _callStartSignals = new();
         private readonly Dictionary<int, TaskCompletionSource> _callSignals = new();
 
         public int GetCalls { get; private set; }
+        public int FreshCalls { get; private set; }
 
         public List<string> CapturedBearers { get; } = [];
 
@@ -329,6 +349,9 @@ public sealed class CachedNyxIdLlmCatalogPortTests
 
         public void Enqueue(NyxIdLlmServicesResult result) =>
             _responses.Enqueue(() => Task.FromResult(result));
+
+        public void EnqueueFresh(NyxIdLlmServicesResult result) =>
+            _freshResponses.Enqueue(() => Task.FromResult(result));
 
         public void EnqueueAfter(Task gate, NyxIdLlmServicesResult result) =>
             _responses.Enqueue(async () =>
@@ -374,6 +397,16 @@ public sealed class CachedNyxIdLlmCatalogPortTests
                 if (_callSignals.TryGetValue(callNumber, out var signal))
                     signal.SetResult();
             }
+        }
+
+        public async Task<NyxIdLlmServicesResult> GetFreshServicesAsync(string bearerToken, CancellationToken ct)
+        {
+            FreshCalls++;
+            CapturedBearers.Add(bearerToken);
+            if (_freshResponses.Count == 0)
+                throw new InvalidOperationException("No fresh catalog response queued.");
+
+            return await _freshResponses.Dequeue().Invoke();
         }
 
         public Task<NyxIdLlmService> ProvisionAsync(

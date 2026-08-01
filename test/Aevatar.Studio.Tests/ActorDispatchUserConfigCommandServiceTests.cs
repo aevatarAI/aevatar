@@ -28,12 +28,7 @@ public sealed class ActorDispatchUserConfigCommandServiceTests
         var receipt = await service.UpdateAsync(
             UserConfigResourceKey.ForOwnerScope("scope-1"),
             new UserConfigUpdate(
-            DefaultModel: "gpt-5.5",
-            LlmSelection: new UserLlmSelectionValue(
-                UserLlmSelectionKind.NyxIdUserService,
-                "/api/v1/proxy/s/openai-work",
-                "us-openai",
-                "openai-work"),
+            LlmSelection: UserServiceSelection("us-openai", "openai-work", "gpt-5.5"),
             RuntimeMode: "remote",
             LocalRuntimeBaseUrl: "http://127.0.0.1:5080",
             RemoteRuntimeBaseUrl: "https://runtime.example.com",
@@ -69,7 +64,7 @@ public sealed class ActorDispatchUserConfigCommandServiceTests
     }
 
     [Fact]
-    public async Task UpdateAsync_WithModelOnlyDelta_ShouldRejectBeforeDispatch()
+    public void UserConfigUpdate_ShouldNotExposeModelOnlyMutation()
     {
         var dispatch = new RecordingDispatchPort(new DispatchAdmission(
             Accepted: false,
@@ -77,15 +72,7 @@ public sealed class ActorDispatchUserConfigCommandServiceTests
             AckedAt: new DateTimeOffset(2026, 5, 26, 12, 0, 0, TimeSpan.Zero),
             ActorId: "user-config-scope-1",
             CorrelationId: "corr-1"));
-        var service = new ActorDispatchUserConfigCommandService(
-            new RecordingBootstrap(),
-            dispatch);
-
-        var act = () => service.UpdateAsync(
-            UserConfigResourceKey.ForOwnerScope("scope-1"),
-            new UserConfigUpdate(DefaultModel: "gpt-5.5"));
-
-        await act.Should().ThrowAsync<InvalidOperationException>();
+        typeof(UserConfigUpdate).GetProperty("DefaultModel").Should().BeNull();
         dispatch.Dispatches.Should().BeEmpty();
     }
 
@@ -94,15 +81,11 @@ public sealed class ActorDispatchUserConfigCommandServiceTests
     {
         var dispatch = RecordingDispatchPort.Accepting();
         var service = CreateService(dispatch);
-        var selection = new UserLlmSelectionValue(
-            UserLlmSelectionKind.NyxIdUserService,
-            "/api/v1/proxy/s/chrono-llm-public",
-            "us-alpha",
-            "chrono-llm-public");
+        var selection = UserServiceSelection("us-alpha", "chrono-llm-public", "gpt-5.5");
 
         await service.UpdateAsync(
             UserConfigResourceKey.ForOwnerScope("binding-alpha"),
-            new UserConfigUpdate(DefaultModel: "gpt-5.5", LlmSelection: selection));
+            new UserConfigUpdate(LlmSelection: selection));
         await service.UpdateAsync(
             UserConfigResourceKey.ForChannelBinding("alpha"),
             new UserConfigUpdate(GithubUsername: "octocat"));
@@ -131,6 +114,19 @@ public sealed class ActorDispatchUserConfigCommandServiceTests
 
     private static ActorDispatchUserConfigCommandService CreateService(RecordingDispatchPort dispatch) =>
         new(new RecordingBootstrap(), dispatch);
+
+    private static LLMSelection UserServiceSelection(string id, string slug, string model) => new()
+    {
+        RouteKind = LLMRouteKind.NyxIdUserService,
+        RouteValue = $"/api/v1/proxy/s/{slug}",
+        NyxIdUserServiceId = id,
+        ServiceSlugSnapshot = slug,
+        ModelSelection = new LLMModelSelection
+        {
+            Kind = LLMModelSelectionKind.ExplicitModel,
+            ModelId = model,
+        },
+    };
 
     private sealed class RecordingBootstrap : IStudioActorBootstrap
     {

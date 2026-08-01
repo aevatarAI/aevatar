@@ -1,3 +1,5 @@
+using Aevatar.AI.Abstractions;
+
 namespace Aevatar.Studio.Application.Studio.Abstractions;
 
 public static class UserConfigLlmRouteDefaults
@@ -34,8 +36,7 @@ public sealed record UserLlmSelectionValue(
     string ServiceSlugSnapshot);
 
 public sealed record UserConfigUpdate(
-    string? DefaultModel = null,
-    UserLlmSelectionValue? LlmSelection = null,
+    LLMSelection? LlmSelection = null,
     string? RuntimeMode = null,
     string? LocalRuntimeBaseUrl = null,
     string? RemoteRuntimeBaseUrl = null,
