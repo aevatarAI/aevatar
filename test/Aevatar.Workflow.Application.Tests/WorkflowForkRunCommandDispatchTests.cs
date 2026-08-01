@@ -35,6 +35,7 @@ public sealed class WorkflowForkRunCommandDispatchTests
         result.Succeeded.Should().BeFalse();
         result.Error.Code.Should().Be(expectedCode);
         seedPort.RequestedRunIds.Should().Equal("source-run");
+        seedPort.RequestedScopeIds.Should().Equal(string.Empty);
         runPort.CreateRunBindings.Should().BeEmpty();
     }
 
@@ -190,9 +191,11 @@ public sealed class WorkflowForkRunCommandDispatchTests
             },
             Input: "command-input",
             CommandId: "cmd-fork",
-            CorrelationId: "corr-fork"));
+            CorrelationId: "corr-fork",
+            ScopeId: "scope-1"));
 
         result.Succeeded.Should().BeTrue();
+        seedPort.RequestedScopeIds.Should().Equal("scope-1");
         var request = dispatchPort.DispatchedRequest();
         request.ForkSeed.Variables["topic"].Should().Be("override-topic");
         request.ForkSeed.Variables["extra"].Should().Be("override-extra");
@@ -248,6 +251,7 @@ public sealed class WorkflowForkRunCommandDispatchTests
             CallerCredential: new WorkflowApplicationCallerCredential("typed-token")));
 
         result.Succeeded.Should().BeTrue();
+        seedPort.RequestedScopeIds.Should().Equal("scope-1");
         result.Receipt.Should().BeEquivalentTo(new
         {
             SourceRunId = "source-run",
@@ -289,7 +293,7 @@ public sealed class WorkflowForkRunCommandDispatchTests
     }
 
     [Fact]
-    public async Task DispatchAsync_WhenCommandScopeMissing_ShouldInheritSourceScopeFromSeedReadModel()
+    public async Task DispatchAsync_ShouldNotReplaceTrustedCommandScopeWithSeedScope()
     {
         var seedPort = new RecordingSeedQueryPort
         {
@@ -301,11 +305,13 @@ public sealed class WorkflowForkRunCommandDispatchTests
 
         var result = await service.DispatchAsync(new WorkflowForkRunCommand(
             SourceRunId: "source-run",
-            StartAtStepId: "step-b"));
+            StartAtStepId: "step-b",
+            ScopeId: "attacker-scope"));
 
         result.Succeeded.Should().BeTrue();
-        runPort.CreateRunBindings.Should().ContainSingle().Which.ScopeId.Should().Be("source-scope-1");
-        dispatchPort.DispatchedRequest().ScopeId.Should().Be("source-scope-1");
+        seedPort.RequestedScopeIds.Should().Equal("attacker-scope");
+        runPort.CreateRunBindings.Should().ContainSingle().Which.ScopeId.Should().Be("attacker-scope");
+        dispatchPort.DispatchedRequest().ScopeId.Should().Be("attacker-scope");
     }
 
     [Fact]
@@ -416,13 +422,16 @@ public sealed class WorkflowForkRunCommandDispatchTests
     private sealed class RecordingSeedQueryPort : IWorkflowRunForkSeedQueryPort
     {
         public WorkflowRunForkSeedView? View { get; set; }
+        public List<string> RequestedScopeIds { get; } = [];
         public List<string> RequestedRunIds { get; } = [];
 
         public Task<WorkflowRunForkSeedView?> GetForkSeedAsync(
+            string scopeId,
             string runId,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            RequestedScopeIds.Add(scopeId);
             RequestedRunIds.Add(runId);
             return Task.FromResult(View);
         }

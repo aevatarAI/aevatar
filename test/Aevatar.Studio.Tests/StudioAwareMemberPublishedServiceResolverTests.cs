@@ -12,9 +12,8 @@ namespace Aevatar.Studio.Tests;
 ///   - Studio members → return the actor-stored <c>publishedServiceId</c>
 ///     (e.g. <c>"member-{memberId}"</c>) so platform invoke / runs / binding
 ///     routes target the same service Studio's bind path wrote.
-///   - Non-Studio members → fall through to the legacy deterministic
-///     mapping (<c>publishedServiceId == memberId</c>) so direct platform
-///     binds keep working unchanged.
+///   - Missing or incomplete member authority → fail closed instead of
+///     treating <c>memberId</c> as <c>publishedServiceId</c>.
 ///   - Malformed input (empty / contains separator chars) → fail fast with
 ///     the legacy validation rules.
 /// </summary>
@@ -44,20 +43,17 @@ public sealed class StudioAwareMemberPublishedServiceResolverTests
     }
 
     [Fact]
-    public async Task ResolveAsync_ShouldFallBackToMemberId_WhenStudioMemberMissing()
+    public async Task ResolveAsync_ShouldFailClosed_WhenStudioMemberMissing()
     {
         var port = new InMemoryQueryPort(new Dictionary<(string, string), string>());
         var resolver = new StudioAwareMemberPublishedServiceResolver(port);
 
-        var result = await resolver.ResolveAsync(
-            new MemberPublishedServiceResolveRequest("scope-1", "legacy-member"),
+        var act = () => resolver.ResolveAsync(
+            new MemberPublishedServiceResolveRequest("scope-1", "m-alpha"),
             CancellationToken.None);
 
-        // Direct platform binds (no StudioMember actor) must preserve the
-        // legacy deterministic mapping; otherwise existing platform-only
-        // member-first calls would silently break under this resolver.
-        result.PublishedServiceId.Should().Be("legacy-member");
-        result.IsMemberAuthorityBacked.Should().BeFalse();
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*m-alpha*not found*");
     }
 
     [Fact]
@@ -117,25 +113,20 @@ public sealed class StudioAwareMemberPublishedServiceResolverTests
     }
 
     [Fact]
-    public async Task ResolveAsync_ShouldFallBack_WhenStudioMemberHasEmptyPublishedServiceId()
+    public async Task ResolveAsync_ShouldFailClosed_WhenStudioMemberHasEmptyPublishedServiceId()
     {
-        // Defensive: an authority record with a blank publishedServiceId is
-        // a backend invariant violation, but resolver shouldn't crash —
-        // it should degrade to the legacy mapping so the rest of the host
-        // keeps serving. The right place to surface the invariant violation
-        // is StudioMemberService, which the test there asserts.
         var port = new InMemoryQueryPort(new Dictionary<(string, string), string>
         {
-            [("scope-1", "m-abc")] = string.Empty,
+            [("scope-1", "m-alpha")] = string.Empty,
         });
         var resolver = new StudioAwareMemberPublishedServiceResolver(port);
 
-        var result = await resolver.ResolveAsync(
-            new MemberPublishedServiceResolveRequest("scope-1", "m-abc"),
+        var act = () => resolver.ResolveAsync(
+            new MemberPublishedServiceResolveRequest("scope-1", "m-alpha"),
             CancellationToken.None);
 
-        result.PublishedServiceId.Should().Be("m-abc");
-        result.IsMemberAuthorityBacked.Should().BeFalse();
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*m-alpha*published service*");
     }
 
     private sealed class InMemoryQueryPort : IStudioMemberQueryPort

@@ -130,7 +130,8 @@ public sealed record WorkflowActorBinding(
 public sealed record WorkflowRunBindingQuery(
     string ScopeId,
     IReadOnlyList<string> DefinitionActorIds,
-    int Take = 50);
+    int Take = 50,
+    IReadOnlyList<string>? RunIds = null);
 
 public sealed record WorkflowRunForkSeedView(
     string SourceRunId,
@@ -212,6 +213,7 @@ public interface IWorkflowRunBindingReader
 public interface IWorkflowRunForkSeedQueryPort
 {
     Task<WorkflowRunForkSeedView?> GetForkSeedAsync(
+        string scopeId,
         string runId,
         CancellationToken ct = default);
 }
