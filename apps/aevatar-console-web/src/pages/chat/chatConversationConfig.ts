@@ -1,4 +1,5 @@
 import type {
+  StudioUserLlmRemediation,
   StudioUserLlmModelGroup,
   StudioUserLlmRouteOption,
   StudioUserLlmSettings,
@@ -29,12 +30,15 @@ export function trimConversationValue(value?: string | null): string | undefined
 
 export function normalizeUserLlmRoute(value: unknown): string {
   const normalized = String(value || "").trim();
-  if (!normalized || /^auto$/i.test(normalized) || /^gateway$/i.test(normalized)) {
+  if (!normalized || /^auto$/i.test(normalized)) {
+    return "";
+  }
+  if (/^gateway$/i.test(normalized)) {
     return USER_LLM_ROUTE_GATEWAY;
   }
 
   if (normalized.includes("://") || normalized.startsWith("//")) {
-    return USER_LLM_ROUTE_GATEWAY;
+    return "";
   }
 
   if (normalized.startsWith("/")) {
@@ -125,10 +129,10 @@ export function buildConversationRouteOptions(
 }
 
 export function buildConversationModelGroups(input: {
-  effectiveRoute: string;
+  route: string;
   settings: StudioUserLlmSettings | undefined;
 }): ConversationLlmModelGroup[] {
-  const normalizedRoute = normalizeUserLlmRoute(input.effectiveRoute);
+  const normalizedRoute = normalizeUserLlmRoute(input.route);
   return (input.settings?.modelGroupsByRoute ?? [])
     .filter((group: StudioUserLlmModelGroup) =>
       normalizeUserLlmRoute(group.routeValue) === normalizedRoute
@@ -139,6 +143,51 @@ export function buildConversationModelGroups(input: {
       models: Array.from(new Set(group.models.filter(Boolean))),
     }))
     .filter((group) => group.models.length > 0);
+}
+
+export type SavedConversationLlmConfig =
+  | { readonly status: "system_default" }
+  | {
+      readonly status: "ready";
+      readonly route: string;
+      readonly model?: string;
+      readonly routeLabel: string;
+    }
+  | {
+      readonly status: "action_required";
+      readonly remediation: StudioUserLlmRemediation;
+      readonly routeLabel: string;
+    };
+
+export function resolveSavedConversationLlmConfig(
+  settings: StudioUserLlmSettings | undefined,
+): SavedConversationLlmConfig {
+  if (!settings || settings.selectionStatus === "system_default") {
+    return { status: "system_default" };
+  }
+
+  const selection = settings.savedSelection;
+  if (
+    settings.selectionStatus !== "ready" ||
+    !selection ||
+    selection.routeKind === "unspecified"
+  ) {
+    return {
+      status: "action_required",
+      remediation: settings.remediation,
+      routeLabel: settings.savedRouteLabel,
+    };
+  }
+
+  return {
+    status: "ready",
+    route: selection.routeValue,
+    model:
+      selection.modelSelection.kind === "explicit_model"
+        ? selection.modelSelection.modelId
+        : undefined,
+    routeLabel: settings.savedRouteLabel,
+  };
 }
 
 export function findConversationRouteOption(
