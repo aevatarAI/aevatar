@@ -1041,14 +1041,22 @@ public sealed class ServiceRunGAgentTests
     }
 
     [Fact]
-    public async Task HandleRoleChatCompletedAsync_ShouldMapOutcomeUncertainToFailedRun()
+    public async Task HandleRoleChatCompletedAsync_ShouldRetainOutcomeUncertain()
     {
+        var publisher = new RecordingEventPublisher();
         var actor = GAgentServiceTestKit.CreateStatefulAgent<ServiceRunGAgent, ServiceRunState>(
             new InMemoryEventStore(),
             "service-run:tenant-1:svc-1:run-1",
             static () => new ServiceRunGAgent());
+        actor.EventPublisher = publisher;
         var record = BuildRecord("run-1");
         record.TargetActorId = "role-actor-1";
+        record.CompletionNotificationTarget = new ServiceRunCompletionNotificationTarget
+        {
+            ActorId = "work-order:tenant-1:wo-1",
+            DeliveryId = "delivery-1",
+            ExpiresAtUnixMs = long.MaxValue,
+        };
         await actor.HandleRegisterAsync(new RegisterServiceRunRequested { Record = record });
         var terminal = BuildTerminalEvent(actor.Id);
         terminal.Outcome = RoleChatSessionOutcome.OutcomeUncertain;
@@ -1057,8 +1065,125 @@ public sealed class ServiceRunGAgentTests
 
         await actor.HandleRoleChatCompletedAsync(terminal);
 
-        actor.State.Record!.Status.Should().Be(ServiceRunStatus.Failed);
+        actor.State.Record!.Status.Should().Be(ServiceRunStatus.OutcomeUncertain);
         actor.State.Record.LastError.Should().Be("The chat outcome could not be confirmed.");
+        actor.State.PendingTerminalNotification.Should().BeNull();
+        actor.State.TerminalNotificationDeliveryStatus.Should()
+            .Be(ServiceRunTerminalNotificationDeliveryStatus.Unspecified);
+        publisher.Sends.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(RoleChatSessionOutcome.Completed, ServiceRunStatus.Completed)]
+    [InlineData(RoleChatSessionOutcome.Failed, ServiceRunStatus.Failed)]
+    public async Task HandleRoleChatCompletedAsync_ShouldNotifyOnceAfterOutcomeUncertainIsReconciled(
+        RoleChatSessionOutcome reconciledOutcome,
+        ServiceRunStatus reconciledStatus)
+    {
+        var publisher = new RecordingEventPublisher();
+        var actor = GAgentServiceTestKit.CreateStatefulAgent<ServiceRunGAgent, ServiceRunState>(
+            new InMemoryEventStore(),
+            "service-run:tenant-1:svc-1:run-1",
+            static () => new ServiceRunGAgent());
+        actor.EventPublisher = publisher;
+        await RegisterNotificationRunAsync(actor, DateTimeOffset.MaxValue);
+        var uncertain = BuildTerminalEvent(actor.Id);
+        uncertain.Outcome = RoleChatSessionOutcome.OutcomeUncertain;
+        uncertain.FailureCode = "SESSION_OUTCOME_UNCERTAIN";
+        uncertain.SafeMessage = "The chat outcome could not be confirmed.";
+
+        await actor.HandleRoleChatCompletedAsync(uncertain);
+
+        actor.State.PendingTerminalNotification.Should().BeNull();
+        actor.State.TerminalNotificationDeliveryStatus.Should()
+            .Be(ServiceRunTerminalNotificationDeliveryStatus.Unspecified);
+        publisher.Sends.Should().BeEmpty();
+
+        var reconciled = uncertain.Clone();
+        reconciled.Outcome = reconciledOutcome;
+        reconciled.Content = reconciledOutcome == RoleChatSessionOutcome.Completed
+            ? "confirmed output"
+            : string.Empty;
+        reconciled.FailureCode = reconciledOutcome == RoleChatSessionOutcome.Failed
+            ? "CONFIRMED_FAILURE"
+            : string.Empty;
+        reconciled.SafeMessage = reconciledOutcome == RoleChatSessionOutcome.Failed
+            ? "confirmed failure"
+            : string.Empty;
+
+        await actor.HandleRoleChatCompletedAsync(reconciled);
+        await actor.HandleRoleChatCompletedAsync(reconciled.Clone());
+
+        actor.State.Record!.Status.Should().Be(reconciledStatus);
+        actor.State.TerminalNotificationDeliveryStatus.Should()
+            .Be(ServiceRunTerminalNotificationDeliveryStatus.Dispatched);
+        actor.State.PendingTerminalNotification.Should().BeNull();
+        publisher.Sends.Should().ContainSingle();
+    }
+
+    [Theory]
+    [InlineData(ServiceRunStatus.Completed)]
+    [InlineData(ServiceRunStatus.Failed)]
+    public async Task HandleUpdateStatusAsync_ShouldReconcileOutcomeUncertain(
+        ServiceRunStatus reconciledStatus)
+    {
+        var actor = GAgentServiceTestKit.CreateStatefulAgent<ServiceRunGAgent, ServiceRunState>(
+            new InMemoryEventStore(),
+            "service-run:run-uncertain-reconcile",
+            static () => new ServiceRunGAgent());
+        await actor.HandleRegisterAsync(new RegisterServiceRunRequested
+        {
+            Record = BuildRecord("run-uncertain-reconcile"),
+        });
+        await actor.HandleUpdateStatusAsync(new UpdateServiceRunStatusRequested
+        {
+            RunId = "run-uncertain-reconcile",
+            Status = ServiceRunStatus.OutcomeUncertain,
+            LastError = "outcome uncertain",
+        });
+
+        await actor.HandleUpdateStatusAsync(new UpdateServiceRunStatusRequested
+        {
+            RunId = "run-uncertain-reconcile",
+            Status = reconciledStatus,
+            LastOutput = reconciledStatus == ServiceRunStatus.Completed ? "confirmed output" : null,
+            LastError = reconciledStatus == ServiceRunStatus.Failed ? "confirmed failure" : null,
+        });
+
+        actor.State.Record!.Status.Should().Be(reconciledStatus);
+    }
+
+    [Theory]
+    [InlineData(ServiceRunStatus.Completed, ServiceRunStatus.Failed)]
+    [InlineData(ServiceRunStatus.Failed, ServiceRunStatus.Completed)]
+    [InlineData(ServiceRunStatus.Completed, ServiceRunStatus.OutcomeUncertain)]
+    public async Task HandleUpdateStatusAsync_ShouldRejectConflictingAbsorbingTerminalTransition(
+        ServiceRunStatus currentStatus,
+        ServiceRunStatus conflictingStatus)
+    {
+        var actor = GAgentServiceTestKit.CreateStatefulAgent<ServiceRunGAgent, ServiceRunState>(
+            new InMemoryEventStore(),
+            "service-run:run-terminal-conflict",
+            static () => new ServiceRunGAgent());
+        await actor.HandleRegisterAsync(new RegisterServiceRunRequested
+        {
+            Record = BuildRecord("run-terminal-conflict"),
+        });
+        await actor.HandleUpdateStatusAsync(new UpdateServiceRunStatusRequested
+        {
+            RunId = "run-terminal-conflict",
+            Status = currentStatus,
+        });
+
+        var act = () => actor.HandleUpdateStatusAsync(new UpdateServiceRunStatusRequested
+        {
+            RunId = "run-terminal-conflict",
+            Status = conflictingStatus,
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*already terminal*cannot adopt*");
+        actor.State.Record!.Status.Should().Be(currentStatus);
     }
 
     [Fact]

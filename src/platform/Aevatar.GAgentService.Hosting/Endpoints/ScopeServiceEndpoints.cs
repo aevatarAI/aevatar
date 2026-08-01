@@ -3410,6 +3410,7 @@ const response = await fetch("{{invokePath}}", {
             ServiceRunStatus.Completed => WorkflowRunCompletionStatus.Completed,
             ServiceRunStatus.Failed => WorkflowRunCompletionStatus.Failed,
             ServiceRunStatus.Stopped => WorkflowRunCompletionStatus.Stopped,
+            ServiceRunStatus.OutcomeUncertain => WorkflowRunCompletionStatus.Unknown,
             _ => WorkflowRunCompletionStatus.Unknown,
         };
 
@@ -3419,6 +3420,7 @@ const response = await fetch("{{invokePath}}", {
             ServiceRunStatus.Completed => true,
             ServiceRunStatus.Failed => false,
             ServiceRunStatus.Stopped => false,
+            ServiceRunStatus.OutcomeUncertain => null,
             _ => null,
         };
 

@@ -1511,6 +1511,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 Prompt = request.Prompt,
                 InputParts = { request.InputParts },
                 RunContext = request.RunContext?.Clone(),
+                ScopeId = request.ScopeId ?? string.Empty,
             };
             var preparation = await PrepareAgentProfileTurnAuthorityAsync(request, toolContext, ct);
             ct.ThrowIfCancellationRequested();
@@ -2393,6 +2394,25 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             progress => progress.Replay = new RoleChatReplayProgress { Snapshot = snapshot },
             ct);
 
+        // Failed and uncertain retries are represented by the committed typed replay
+        // snapshot. Publishing an empty TextMessageEnd would falsely present success
+        // to live consumers that do not inspect the committed outcome.
+        if (trackedSession.Outcome is
+            RoleChatSessionOutcome.Failed or
+            RoleChatSessionOutcome.OutcomeUncertain)
+        {
+            await PublishAsync(new RoleChatSessionErrorEvent
+            {
+                SessionId = sessionId,
+                Outcome = trackedSession.Outcome,
+                Reason = trackedSession.FailureCode ?? string.Empty,
+                Message = string.IsNullOrWhiteSpace(trackedSession.SafeMessage)
+                    ? trackedSession.FailureCode ?? string.Empty
+                    : trackedSession.SafeMessage,
+            }, TopologyAudience.Parent, ct);
+            return;
+        }
+
         await PublishAsync(new TextMessageStartEvent
         {
             SessionId = sessionId,
@@ -3042,6 +3062,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         session.InputParts.Clear();
         session.InputParts.Add(evt.InputParts);
         session.RunContext = evt.RunContext?.Clone();
+        session.ScopeId = evt.ScopeId ?? string.Empty;
         sessions[evt.SessionId] = session;
         TrimTrackedSessions(next);
         return next;
@@ -3733,9 +3754,14 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             session.WorkflowLlmCompletionDeliveryContext is null ||
             session.WorkflowLlmCompletionDeliveryStatus ==
                 WorkflowLlmCompletionDeliveryStatus.Dispatched;
+        var historyDeliverySettled =
+            session.HistoryDeliveryStatus is
+                RoleChatHistoryDeliveryStatus.Unspecified or
+                RoleChatHistoryDeliveryStatus.Dispatched;
         return session.Completed &&
                completionNotificationSettled &&
-               workflowCompletionSettled;
+               workflowCompletionSettled &&
+               historyDeliverySettled;
     }
 
     private static AIAgentConfigOverrides EnsureConfigOverrides(RoleGAgentState state)

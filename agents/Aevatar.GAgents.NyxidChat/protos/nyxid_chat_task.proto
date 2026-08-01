@@ -7,6 +7,19 @@ option csharp_namespace = "Aevatar.GAgents.NyxidChat";
 import "ai_messages.proto";
 import "google/protobuf/timestamp.proto";
 
+message NyxIdDirectChatHistoryDispatchedEvent {
+  string session_id = 1;
+  string delivery_id = 2;
+  int32 attempt = 3;
+  google.protobuf.Timestamp dispatched_at = 4;
+}
+
+message NyxIdDirectChatHistoryDeliveryRequested {
+  string session_id = 1;
+  string delivery_id = 2;
+  int32 expected_attempt = 3;
+}
+
 // NyxIdChat owns these closed product states. Transport adapters may map them
 // to JSON, but no actor, projector, or client may replace them with prose.
 enum NyxIdChatTurnStatus {

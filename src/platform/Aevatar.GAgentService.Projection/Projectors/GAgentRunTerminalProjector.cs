@@ -86,6 +86,19 @@ public sealed class GAgentRunTerminalProjector
     private static (GAgentRunTerminalStatus status, string reasonCode, string reasonMessage) ResolveTerminal(
         RoleChatSessionCompletedEvent completed)
     {
+        if (completed.Outcome is RoleChatSessionOutcome.Failed or RoleChatSessionOutcome.OutcomeUncertain)
+        {
+            var failureCode = completed.FailureCode?.Trim() ?? string.Empty;
+            var safeMessage = completed.SafeMessage?.Trim() ?? string.Empty;
+            return (
+                GAgentRunTerminalStatus.Failed,
+                failureCode,
+                string.IsNullOrWhiteSpace(safeMessage) ? failureCode : safeMessage);
+        }
+
+        if (completed.Outcome != RoleChatSessionOutcome.Unspecified)
+            return (GAgentRunTerminalStatus.TextMessageCompleted, string.Empty, string.Empty);
+
         var content = completed.Content ?? string.Empty;
         if (content.StartsWith(LegacyLlmErrorPrefix, StringComparison.Ordinal))
         {

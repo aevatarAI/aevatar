@@ -65,6 +65,7 @@ public sealed class GAgentRunTerminalProjectorTests
                 {
                     SessionId = "session-1",
                     Content = "[[AEVATAR_LLM_ERROR]] denied",
+                    Outcome = RoleChatSessionOutcome.Unspecified,
                 },
                 stateVersion: 2,
                 eventId: "evt-failed",
@@ -77,6 +78,73 @@ public sealed class GAgentRunTerminalProjectorTests
         doc.ReasonCode.Should().Be("legacy_llm_error");
         doc.ReasonMessage.Should().Be("denied");
         doc.InteractionKind.Should().Be((int)GAgentRunTerminalInteractionKind.Approval);
+    }
+
+    [Theory]
+    [InlineData(RoleChatSessionOutcome.Failed, "SESSION_ORPHANED", "The interrupted session cannot be resumed.", "The interrupted session cannot be resumed.")]
+    [InlineData(RoleChatSessionOutcome.OutcomeUncertain, "SESSION_OUTCOME_UNCERTAIN", " ", "SESSION_OUTCOME_UNCERTAIN")]
+    public async Task ProjectAsync_ShouldMaterializeTypedFailure_WhenContentIsEmpty(
+        RoleChatSessionOutcome outcome,
+        string failureCode,
+        string safeMessage,
+        string expectedReasonMessage)
+    {
+        var store = new RecordingDocumentStore<GAgentRunTerminalReadModel>(x => x.Id);
+        var projector = new GAgentRunTerminalProjector(
+            store,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-05-14T00:00:00+00:00")));
+
+        await projector.ProjectAsync(
+            CreateContext("actor-1", "corr-typed-failure"),
+            WrapCommitted(
+                new RoleChatSessionCompletedEvent
+                {
+                    SessionId = "corr-typed-failure",
+                    Content = string.Empty,
+                    Outcome = outcome,
+                    FailureCode = failureCode,
+                    SafeMessage = safeMessage,
+                },
+                stateVersion: 3,
+                eventId: "evt-typed-failure",
+                correlationId: "corr-typed-failure",
+                observedAt: DateTimeOffset.Parse("2026-05-14T01:00:00+00:00")));
+
+        var doc = await store.GetAsync(
+            GAgentRunTerminalProjector.BuildDocumentId("actor-1", "corr-typed-failure"));
+        doc.Should().NotBeNull();
+        doc!.Status.Should().Be((int)GAgentRunTerminalStatus.Failed);
+        doc.ReasonCode.Should().Be(failureCode);
+        doc.ReasonMessage.Should().Be(expectedReasonMessage);
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldNotInterpretLegacyFailureMarker_WhenOutcomeIsCompleted()
+    {
+        var store = new RecordingDocumentStore<GAgentRunTerminalReadModel>(x => x.Id);
+        var projector = new GAgentRunTerminalProjector(
+            store,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-05-14T00:00:00+00:00")));
+
+        await projector.ProjectAsync(
+            CreateContext("actor-1", "corr-completed"),
+            WrapCommitted(
+                new RoleChatSessionCompletedEvent
+                {
+                    SessionId = "corr-completed",
+                    Content = "[[AEVATAR_LLM_ERROR]] preserved assistant text",
+                    Outcome = RoleChatSessionOutcome.Completed,
+                },
+                stateVersion: 3,
+                eventId: "evt-completed",
+                correlationId: "corr-completed",
+                observedAt: DateTimeOffset.Parse("2026-05-14T01:00:00+00:00")));
+
+        var doc = await store.GetAsync(GAgentRunTerminalProjector.BuildDocumentId("actor-1", "corr-completed"));
+        doc.Should().NotBeNull();
+        doc!.Status.Should().Be((int)GAgentRunTerminalStatus.TextMessageCompleted);
+        doc.ReasonCode.Should().BeEmpty();
+        doc.ReasonMessage.Should().BeEmpty();
     }
 
     [Fact]
