@@ -1898,8 +1898,19 @@ public sealed class ScheduledDispatchServiceInvocationTests
                 dispatch => ReplaceOwnerLLMPayload(dispatch, "/api/v1/proxy/s/other-llm", OwnerLLMModel)
             },
             {
+                "gateway-route-mismatch",
+                dispatch => ReplaceOwnerLLMPayload(
+                    dispatch,
+                    ScheduledInvocationOwnerLLMSelectionPolicy.GatewayRoute,
+                    OwnerLLMModel)
+            },
+            {
                 "model-mismatch",
                 dispatch => ReplaceOwnerLLMPayload(dispatch, OwnerLLMRoute, "gpt-other")
+            },
+            {
+                "case-different-model-mismatch",
+                dispatch => ReplaceOwnerLLMPayload(dispatch, OwnerLLMRoute, OwnerLLMModel.ToUpperInvariant())
             },
             {
                 "route-present-without-owner-llm-source-stamp",

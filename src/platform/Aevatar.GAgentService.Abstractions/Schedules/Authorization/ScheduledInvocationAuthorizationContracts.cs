@@ -8,7 +8,7 @@ namespace Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 
 public static class ScheduledInvocationAuthorizationContractVersions
 {
-    public const string Schema = "scheduled-invocation-authorization/v2";
+    public const string Schema = "scheduled-invocation-authorization/v3";
     public const string CredentialPolicy = "nyxid-api-key/scheduled-invocation/v2";
 }
 
@@ -39,7 +39,8 @@ public sealed record ScheduledInvocationAuthorizationPlanResult(
     ScheduledInvocationAuthorizationFailureCode FailureCode,
     string Detail,
     long ObservedCatalogStateVersion = 0,
-    IReadOnlyList<NyxIdUserServiceCapabilityRef>? RequiredNyxIdServices = null)
+    IReadOnlyList<NyxIdUserServiceCapabilityRef>? RequiredNyxIdServices = null,
+    ScheduledInvocationLLMRefreshRequirement? LLMRefreshRequirement = null)
 {
     public bool Success => Plan is not null;
 
@@ -55,8 +56,15 @@ public sealed record ScheduledInvocationAuthorizationPlanResult(
         ScheduledInvocationAuthorizationFailureCode failureCode,
         string detail,
         long observedCatalogStateVersion = 0,
-        IReadOnlyList<NyxIdUserServiceCapabilityRef>? requiredNyxIdServices = null) =>
-        new(null, failureCode, detail, observedCatalogStateVersion, requiredNyxIdServices);
+        IReadOnlyList<NyxIdUserServiceCapabilityRef>? requiredNyxIdServices = null,
+        ScheduledInvocationLLMRefreshRequirement? llmRefreshRequirement = null) =>
+        new(
+            null,
+            failureCode,
+            detail,
+            observedCatalogStateVersion,
+            requiredNyxIdServices,
+            llmRefreshRequirement);
 }
 
 public sealed class ValidatedScheduledInvocationAuthorizationPlan
@@ -121,7 +129,8 @@ public sealed record ScheduledInvocationAuthorizationValidationResult(
     string Detail,
     long RequiredStateVersion = 0,
     long ObservedCatalogStateVersion = 0,
-    IReadOnlyList<NyxIdUserServiceCapabilityRef>? RequiredNyxIdServices = null)
+    IReadOnlyList<NyxIdUserServiceCapabilityRef>? RequiredNyxIdServices = null,
+    ScheduledInvocationLLMRefreshRequirement? LLMRefreshRequirement = null)
 {
     public bool Success => ValidatedPlan is not null;
 
@@ -136,13 +145,15 @@ public sealed record ScheduledInvocationAuthorizationValidationResult(
         ScheduledInvocationAuthorizationFailureCode failureCode,
         string detail,
         long observedCatalogStateVersion = 0,
-        IReadOnlyList<NyxIdUserServiceCapabilityRef>? requiredNyxIdServices = null) =>
+        IReadOnlyList<NyxIdUserServiceCapabilityRef>? requiredNyxIdServices = null,
+        ScheduledInvocationLLMRefreshRequirement? llmRefreshRequirement = null) =>
         new(
             null,
             failureCode,
             detail,
             ObservedCatalogStateVersion: observedCatalogStateVersion,
-            RequiredNyxIdServices: requiredNyxIdServices);
+            RequiredNyxIdServices: requiredNyxIdServices,
+            LLMRefreshRequirement: llmRefreshRequirement);
 
     public static ScheduledInvocationAuthorizationValidationResult ProjectionPending(
         long requiredStateVersion,

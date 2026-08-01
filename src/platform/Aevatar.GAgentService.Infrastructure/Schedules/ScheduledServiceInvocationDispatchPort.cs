@@ -130,7 +130,10 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         authority.CatalogEvaluatedAt == default;
 
     private static bool RequiresCatalogAuthority(ScheduledInvocationAuthorizationFact fact) =>
-        !fact.ServiceGrantsNotRequired || fact.ServiceGrants.Count > 0;
+        !fact.ServiceGrantsNotRequired ||
+        fact.ServiceGrants.Count > 0 ||
+        fact.Authority.OwnerLlmStateVersion > 0 ||
+        fact.OwnerLLMSelection != null;
 
     private static bool AreServiceGrantsInvalid(ScheduledInvocationAuthorizationFact fact) =>
         fact.ServiceGrants.Count == 0 && !fact.ServiceGrantsNotRequired ||
@@ -209,7 +212,7 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         }
 
         var selection = fact.OwnerLLMSelection;
-        if (!ScheduledInvocationOwnerLLMSelectionPolicy.IsDurableSelectionValid(selection) ||
+        if (!IsValidExplicitOwnerLLMSelection(selection) ||
             (selection!.RouteKind == LLMRouteKind.NyxIdUserService &&
              !fact.ServiceGrants.Any(grant => string.Equals(
                  grant.ServiceId,
@@ -225,6 +228,34 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
             !string.Equals(model, selection.Model, StringComparison.Ordinal))
         {
             ThrowOwnerLLMPayloadMismatch();
+        }
+    }
+
+    private static bool IsValidExplicitOwnerLLMSelection(
+        ScheduledInvocationOwnerLLMSelection? selection)
+    {
+        if (!ScheduledInvocationOwnerLLMSelectionPolicy.IsDurableSelectionValid(selection))
+            return false;
+
+        try
+        {
+            LLMSelectionPolicy.ValidateSelection(new LLMSelection
+            {
+                RouteKind = selection!.RouteKind,
+                RouteValue = selection.RouteValue,
+                NyxIdUserServiceId = selection.NyxIdUserServiceId,
+                ServiceSlugSnapshot = selection.ServiceSlugSnapshot,
+                ModelSelection = new LLMModelSelection
+                {
+                    Kind = LLMModelSelectionKind.ExplicitModel,
+                    ModelId = selection.Model,
+                },
+            });
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
         }
     }
 

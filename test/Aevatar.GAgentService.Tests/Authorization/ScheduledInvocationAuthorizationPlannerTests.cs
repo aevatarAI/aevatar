@@ -19,6 +19,9 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
     {
         ((int)ScheduledInvocationAuthorizationFailureCode.DurableAuthorizationUnavailable).Should().Be(13);
         ((int)ScheduledInvocationAuthorizationFailureCode.CatalogProjectionPending).Should().Be(14);
+        ((int)ScheduledInvocationAuthorizationFailureCode.OwnerLlmRouteUnavailable).Should().Be(15);
+        ((int)ScheduledInvocationAuthorizationFailureCode.OwnerLlmModelNotVerifiable).Should().Be(16);
+        ((int)ScheduledInvocationAuthorizationFailureCode.OwnerLlmModelUnavailable).Should().Be(17);
     }
 
     [Fact]
@@ -147,8 +150,15 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
     [Fact]
     public async Task PlanAsync_ForPersonalOwner_ShouldBindAuthenticatedActorToOwner()
     {
-        var planner = NewPlanner(new MutableCatalogQueryPort(Snapshot(
-            Service("svc-a", "provider-a", AuthorizationGrantRequirement.NotRequired))));
+        var evidence = new StudioEvidencePorts
+        {
+            OwnerLLM = new ScheduledInvocationOwnerLLMEvidence(11, GatewaySelection()),
+        };
+        var planner = new ScheduledInvocationAuthorizationPlanner(
+            new MutableCatalogQueryPort(SnapshotWithGateway(
+                GatewayTarget("gpt-5.5"),
+                Service("svc-a", "provider-a", AuthorizationGrantRequirement.NotRequired))),
+            ownerLLMQueryPort: evidence);
 
         var result = await planner.PlanAsync(Request(["svc-a"]));
 
@@ -527,15 +537,22 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
         second.Success.Should().BeTrue();
         first.Plan!.ToByteArray().Should().Equal(second.Plan!.ToByteArray());
         first.Plan!.PermissionDigest.Should().Be(second.Plan!.PermissionDigest);
-        first.Plan.SchemaVersion.Should().Be("scheduled-invocation-authorization/v2");
+        first.Plan.SchemaVersion.Should().Be("scheduled-invocation-authorization/v3");
         first.Plan.CredentialPolicy.PolicyVersion.Should().Be("nyxid-api-key/scheduled-invocation/v2");
     }
 
     [Fact]
     public async Task ComputeDigest_ShouldCoverTargetOwnerAuthorityPolicySourceDisclosureAndOwnerLlmSelection()
     {
-        var planner = NewPlanner(new MutableCatalogQueryPort(Snapshot(
-            Service("svc-a", "provider-a", AuthorizationGrantRequirement.NotRequired))));
+        var evidence = new StudioEvidencePorts
+        {
+            OwnerLLM = new ScheduledInvocationOwnerLLMEvidence(11, GatewaySelection()),
+        };
+        var planner = new ScheduledInvocationAuthorizationPlanner(
+            new MutableCatalogQueryPort(SnapshotWithGateway(
+                GatewayTarget("gpt-5.5"),
+                Service("svc-a", "provider-a", AuthorizationGrantRequirement.NotRequired))),
+            ownerLLMQueryPort: evidence);
         var original = (await planner.PlanAsync(Request(["svc-a"]))).Plan!;
         original.OwnerLlmSelection.Should().NotBeNull();
         var originalDigest = ScheduledInvocationAuthorizationPlanner.ComputeDigest(original);
@@ -715,7 +732,8 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
             OwnerLLM = new ScheduledInvocationOwnerLLMEvidence(11, selection),
         };
         var planner = new ScheduledInvocationAuthorizationPlanner(
-            new MutableCatalogQueryPort(Snapshot(
+            new MutableCatalogQueryPort(SnapshotWithGateway(
+                GatewayTarget("gpt-5.5"),
                 Service("svc-a", "provider-a", AuthorizationGrantRequirement.NotRequired))),
             ownerLLMQueryPort: evidence);
 
@@ -731,6 +749,159 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
     }
 
     [Fact]
+    public async Task PlanAsync_WithExactEnumeratedUserServiceModel_ShouldBindCatalogVersionAndModel()
+    {
+        var service = Service(
+            "us-alpha",
+            "chrono-llm-public",
+            AuthorizationGrantRequirement.NotRequired);
+        service.LlmTarget = ServiceTarget("us-alpha", "chrono-llm-public", "gpt-5.5");
+        var snapshot = Snapshot(service) with { StateVersion = 29 };
+        var evidence = new StudioEvidencePorts
+        {
+            OwnerLLM = new ScheduledInvocationOwnerLLMEvidence(
+                17,
+                ServiceSelection("us-alpha", "chrono-llm-public")),
+        };
+        var planner = new ScheduledInvocationAuthorizationPlanner(
+            new MutableCatalogQueryPort(snapshot),
+            ownerLLMQueryPort: evidence);
+
+        var result = await planner.PlanAsync(Request(Array.Empty<string>()));
+
+        result.Success.Should().BeTrue();
+        result.Plan!.OwnerLlmSelection.Model.Should().Be("gpt-5.5");
+        result.Plan.CatalogAuthority.ActorStateVersion.Should().Be(29);
+        result.Plan.NyxIdServiceGrants.Should().ContainSingle()
+            .Which.UserServiceId.Should().Be("us-alpha");
+        ScheduledInvocationAuthorizationPlanIntegrity.IsValid(result.Plan).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task PlanAsync_WithDuplicateExactUserServiceEvidence_ShouldFailClosed()
+    {
+        var first = Service("us-alpha", "chrono-llm-public", AuthorizationGrantRequirement.NotRequired);
+        first.LlmTarget = ServiceTarget("us-alpha", "chrono-llm-public", "gpt-5.5");
+        var second = Service("us-alpha", "chrono-llm-public", AuthorizationGrantRequirement.NotRequired);
+        second.LlmTarget = ServiceTarget("us-alpha", "chrono-llm-public", "gpt-5.5");
+        var evidence = new StudioEvidencePorts
+        {
+            OwnerLLM = new ScheduledInvocationOwnerLLMEvidence(
+                17,
+                ServiceSelection("us-alpha", "chrono-llm-public")),
+        };
+        var planner = new ScheduledInvocationAuthorizationPlanner(
+            new MutableCatalogQueryPort(Snapshot(first, second)),
+            ownerLLMQueryPort: evidence);
+
+        var result = await planner.PlanAsync(Request(Array.Empty<string>()));
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(
+            ScheduledInvocationAuthorizationFailureCode.OwnerLlmRouteUnavailable);
+        result.Detail.Should().Be("owner_llm_route_unavailable");
+    }
+
+    [Theory]
+    [InlineData(
+        LLMModelCatalogCertainty.Unavailable,
+        ScheduledInvocationAuthorizationFailureCode.OwnerLlmRouteUnavailable,
+        "owner_llm_route_unavailable")]
+    [InlineData(
+        LLMModelCatalogCertainty.NotVerifiable,
+        ScheduledInvocationAuthorizationFailureCode.OwnerLlmModelNotVerifiable,
+        "owner_llm_model_not_verifiable")]
+    [InlineData(
+        LLMModelCatalogCertainty.Enumerated,
+        ScheduledInvocationAuthorizationFailureCode.OwnerLlmModelUnavailable,
+        "owner_llm_model_unavailable")]
+    public async Task PlanAsync_WhenGatewayModelEvidenceCannotAuthorizeExactModel_ShouldReturnTypedFailure(
+        LLMModelCatalogCertainty certainty,
+        ScheduledInvocationAuthorizationFailureCode expectedFailure,
+        string expectedDetail)
+    {
+        var target = GatewayTarget(certainty == LLMModelCatalogCertainty.Enumerated
+            ? "gpt-other"
+            : "gpt-5.5");
+        target.ModelCatalog.Certainty = certainty;
+        if (certainty != LLMModelCatalogCertainty.Enumerated)
+        {
+            target.ModelCatalog.ModelIds.Clear();
+            target.ModelCatalog.DefaultModelId = string.Empty;
+            target.ModelCatalog.DiagnosticKind = certainty == LLMModelCatalogCertainty.Unavailable
+                ? LLMModelCatalogDiagnosticKind.AccessDenied
+                : LLMModelCatalogDiagnosticKind.NotPublished;
+        }
+        var evidence = new StudioEvidencePorts
+        {
+            OwnerLLM = new ScheduledInvocationOwnerLLMEvidence(17, GatewaySelection()),
+        };
+        var planner = new ScheduledInvocationAuthorizationPlanner(
+            new MutableCatalogQueryPort(SnapshotWithGateway(target)),
+            ownerLLMQueryPort: evidence);
+
+        var result = await planner.PlanAsync(Request(Array.Empty<string>()));
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(expectedFailure);
+        result.Detail.Should().Be(expectedDetail);
+        result.LLMRefreshRequirement.Should().Be(new ScheduledInvocationLLMRefreshRequirement(
+            LLMRouteKind.Gateway,
+            "/api/v1/llm/gateway/v1",
+            string.Empty,
+            string.Empty,
+            "gpt-5.5",
+            17));
+    }
+
+    [Fact]
+    public async Task PlanAsync_WhenGatewayEvidenceIsMissing_ShouldRequireExactTargetRefresh()
+    {
+        var evidence = new StudioEvidencePorts
+        {
+            OwnerLLM = new ScheduledInvocationOwnerLLMEvidence(17, GatewaySelection()),
+        };
+        var planner = new ScheduledInvocationAuthorizationPlanner(
+            new MutableCatalogQueryPort(Snapshot()),
+            ownerLLMQueryPort: evidence);
+
+        var result = await planner.PlanAsync(Request(Array.Empty<string>()));
+
+        result.FailureCode.Should().Be(
+            ScheduledInvocationAuthorizationFailureCode.OwnerLlmRouteUnavailable);
+        result.LLMRefreshRequirement!.UserConfigStateVersion.Should().Be(17);
+        result.LLMRefreshRequirement.ExplicitModelId.Should().Be("gpt-5.5");
+    }
+
+    [Fact]
+    public async Task RevalidateAsync_WhenExactModelDisappears_ShouldReturnTypedModelFailure()
+    {
+        var evidence = new StudioEvidencePorts
+        {
+            OwnerLLM = new ScheduledInvocationOwnerLLMEvidence(17, GatewaySelection()),
+        };
+        var catalog = new MutableCatalogQueryPort(SnapshotWithGateway(GatewayTarget("gpt-5.5")));
+        var planner = new ScheduledInvocationAuthorizationPlanner(catalog, ownerLLMQueryPort: evidence);
+        var request = Request(Array.Empty<string>()) with
+        {
+            ServiceGrantRequirement = AuthorizationGrantRequirement.NotRequired,
+        };
+        var original = await planner.PlanAsync(request);
+        catalog.Snapshot = SnapshotWithGateway(GatewayTarget("gpt-other"));
+        var revalidator = new ScheduledInvocationAuthorizationRevalidator(
+            planner,
+            new FakeTimeProvider(Now));
+
+        var result = await revalidator.RevalidateAsync(
+            request,
+            ScheduledInvocationAuthorizationConfirmations.FromPlan(original.Plan!));
+
+        result.FailureCode.Should().Be(
+            ScheduledInvocationAuthorizationFailureCode.OwnerLlmModelUnavailable);
+        result.LLMRefreshRequirement!.UserConfigStateVersion.Should().Be(17);
+    }
+
+    [Fact]
     public async Task PlanAsync_ForScheduledAgent_ShouldComposeExactOwnerLlmEvidenceFromExecutionScope()
     {
         var selection = ServiceSelection("svc-b", "provider-b");
@@ -738,10 +909,12 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
         {
             OwnerLLM = new ScheduledInvocationOwnerLLMEvidence(11, selection),
         };
+        var llmService = Service("svc-b", "provider-b", AuthorizationGrantRequirement.NotRequired);
+        llmService.LlmTarget = ServiceTarget("svc-b", "provider-b", "gpt-5.5");
         var planner = new ScheduledInvocationAuthorizationPlanner(
             new MutableCatalogQueryPort(Snapshot(
                 Service("svc-a", "provider-a", AuthorizationGrantRequirement.NotRequired),
-                Service("svc-b", "provider-b", AuthorizationGrantRequirement.NotRequired))),
+                llmService)),
             ownerLLMQueryPort: evidence);
 
         var result = await planner.PlanAsync(Request(["svc-a"]));
@@ -759,17 +932,18 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
     }
 
     [Theory]
-    [InlineData(LLMRouteKind.Unspecified, "", "", "", "")]
-    [InlineData(LLMRouteKind.Gateway, "/api/v1/llm/gateway/v1", "", "", "")]
-    [InlineData(LLMRouteKind.Gateway, " /api/v1/llm/gateway/v1", "", "", "gpt-5.5")]
-    [InlineData(LLMRouteKind.NyxIdUserService, "/api/v1/proxy/s/provider-b", "", "provider-b", "gpt-5.5")]
-    [InlineData(LLMRouteKind.NyxIdUserService, "/api/v1/proxy/s/provider-b", "svc-b", "provider-other", "gpt-5.5")]
+    [InlineData(LLMRouteKind.Unspecified, "", "", "", "", ScheduledInvocationAuthorizationFailureCode.OwnerLlmModelNotVerifiable)]
+    [InlineData(LLMRouteKind.Gateway, "/api/v1/llm/gateway/v1", "", "", "", ScheduledInvocationAuthorizationFailureCode.OwnerLlmModelNotVerifiable)]
+    [InlineData(LLMRouteKind.Gateway, " /api/v1/llm/gateway/v1", "", "", "gpt-5.5", ScheduledInvocationAuthorizationFailureCode.OwnerLlmRouteUnavailable)]
+    [InlineData(LLMRouteKind.NyxIdUserService, "/api/v1/proxy/s/provider-b", "", "provider-b", "gpt-5.5", ScheduledInvocationAuthorizationFailureCode.OwnerLlmRouteUnavailable)]
+    [InlineData(LLMRouteKind.NyxIdUserService, "/api/v1/proxy/s/provider-b", "svc-b", "provider-other", "gpt-5.5", ScheduledInvocationAuthorizationFailureCode.OwnerLlmRouteUnavailable)]
     public async Task PlanAsync_ForScheduledAgent_ShouldRejectInvalidOwnerLlmSelectionBeforeCatalogAccess(
         LLMRouteKind routeKind,
         string routeValue,
         string serviceId,
         string serviceSlug,
-        string model)
+        string model,
+        ScheduledInvocationAuthorizationFailureCode expectedFailureCode)
     {
         var evidence = new StudioEvidencePorts
         {
@@ -794,9 +968,7 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
         var result = await planner.PlanAsync(Request(["svc-a"]));
 
         result.Success.Should().BeFalse();
-        result.FailureCode.Should().Be(
-            ScheduledInvocationAuthorizationFailureCode.DurableAuthorizationUnavailable);
-        result.Detail.Should().Be("owner_llm_selection_invalid");
+        result.FailureCode.Should().Be(expectedFailureCode);
         catalog.QueryCount.Should().Be(0);
     }
 
@@ -819,10 +991,15 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
                 11,
                 ServiceSelection("nyx-service-b", "provider-b")),
         };
+        var ownerLLMService = Service(
+            "nyx-service-b",
+            "provider-b",
+            AuthorizationGrantRequirement.NotRequired);
+        ownerLLMService.LlmTarget = ServiceTarget("nyx-service-b", "provider-b", "gpt-5.5");
         var planner = new ScheduledInvocationAuthorizationPlanner(
             new MutableCatalogQueryPort(Snapshot(
                 Service("nyx-service-a", "provider-a", AuthorizationGrantRequirement.NotRequired),
-                Service("nyx-service-b", "provider-b", AuthorizationGrantRequirement.NotRequired))),
+                ownerLLMService)),
             evidence,
             evidence,
             evidence,
@@ -1136,6 +1313,68 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
             Activated: true);
     }
 
+    private static NyxIdAuthorizationCatalogSnapshot SnapshotWithGateway(
+        NyxIdAuthorizationLLMTargetEvidence gatewayTarget,
+        params NyxIdAuthorizationServiceEvidence[] services)
+    {
+        var snapshot = Snapshot(services);
+        return snapshot with
+        {
+            ContentDigest = NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(
+                snapshot.Owner,
+                snapshot.Services,
+                gatewayTarget),
+            GatewayLLMTarget = gatewayTarget,
+        };
+    }
+
+    private static NyxIdAuthorizationLLMTargetEvidence GatewayTarget(params string[] modelIds) =>
+        Target(
+            LLMRouteKind.Gateway,
+            ScheduledInvocationOwnerLLMSelectionPolicy.GatewayRoute,
+            string.Empty,
+            string.Empty,
+            modelIds);
+
+    private static NyxIdAuthorizationLLMTargetEvidence ServiceTarget(
+        string serviceId,
+        string serviceSlug,
+        params string[] modelIds) =>
+        Target(
+            LLMRouteKind.NyxIdUserService,
+            $"{ScheduledInvocationOwnerLLMSelectionPolicy.NyxIdProxyRoutePrefix}{serviceSlug}",
+            serviceId,
+            serviceSlug,
+            modelIds);
+
+    private static NyxIdAuthorizationLLMTargetEvidence Target(
+        LLMRouteKind routeKind,
+        string routeValue,
+        string serviceId,
+        string serviceSlug,
+        params string[] modelIds)
+    {
+        var target = new NyxIdAuthorizationLLMTargetEvidence
+        {
+            RouteKind = routeKind,
+            RouteValue = routeValue,
+            NyxIdUserServiceId = serviceId,
+            ServiceSlugSnapshot = serviceSlug,
+            ModelCatalog = new LLMModelCatalog
+            {
+                Certainty = LLMModelCatalogCertainty.Enumerated,
+                DefaultModelId = modelIds.FirstOrDefault() ?? string.Empty,
+            },
+            ObservedAt = Timestamp.FromDateTimeOffset(Now.AddMinutes(-1)),
+            FreshUntil = Timestamp.FromDateTimeOffset(Now.AddMinutes(15)),
+            EvaluatedAt = Timestamp.FromDateTimeOffset(Now.AddMinutes(-2)),
+            AuthorityContractVersion = "openai-models/v1",
+            AuthorityPolicyVersion = "nyxid-exact-route-models/v1",
+        };
+        target.ModelCatalog.ModelIds.Add(modelIds.Order(StringComparer.Ordinal));
+        return target;
+    }
+
     private static AuthorizationOwnerIdentity Owner() => new()
     {
         Authority = NyxIdAuthorizationAuthorities.NyxId,
@@ -1265,8 +1504,6 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
         public Task<ScheduledInvocationOwnerLLMEvidence?> GetAsync(
             string scopeId,
             CancellationToken ct = default) =>
-            Task.FromResult<ScheduledInvocationOwnerLLMEvidence?>(new ScheduledInvocationOwnerLLMEvidence(
-                0,
-                GatewaySelection()));
+            Task.FromResult<ScheduledInvocationOwnerLLMEvidence?>(null);
     }
 }
