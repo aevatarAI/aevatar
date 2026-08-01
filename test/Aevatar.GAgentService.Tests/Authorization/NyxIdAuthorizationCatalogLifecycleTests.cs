@@ -1487,7 +1487,7 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
     public void AuthorizationContracts_ShouldPublishPermissionSetsAndReserveRemovedTopologyFields()
     {
         ScheduledInvocationAuthorizationContractVersions.Schema.Should()
-            .Be("scheduled-invocation-authorization/v2");
+            .Be("scheduled-invocation-authorization/v3");
         ScheduledInvocationAuthorizationContractVersions.CredentialPolicy.Should()
             .Be("nyxid-api-key/scheduled-invocation/v2");
 

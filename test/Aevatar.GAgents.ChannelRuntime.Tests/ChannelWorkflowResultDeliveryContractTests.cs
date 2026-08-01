@@ -686,6 +686,7 @@ public sealed class ChannelWorkflowResultDeliveryContractTests
                         WorkflowName = "wf-alpha",
                         WorkflowYaml = "name: wf-alpha\nroles: []\nsteps:\n  - id: result\n    type: transform",
                         DefinitionActorId = "wf-definition-alpha",
+                        ExecutionMode = ExternalCapabilityExecutionMode.Interactive,
                     },
                 },
             };

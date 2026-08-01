@@ -112,6 +112,7 @@ public class MakerRecursiveRegressionTests
             {
                 WorkflowYaml = workflowYaml,
                 WorkflowName = "maker_regression",
+                ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
             }),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
             Propagation = new EnvelopePropagation
@@ -130,6 +131,7 @@ public class MakerRecursiveRegressionTests
                 WorkflowYaml = workflowYaml,
                 WorkflowName = "maker_regression",
                 RunId = "maker-regression-run",
+                ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
             }),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
             Propagation = new EnvelopePropagation

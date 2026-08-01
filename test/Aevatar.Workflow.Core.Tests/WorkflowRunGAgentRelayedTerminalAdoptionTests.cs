@@ -954,6 +954,7 @@ public sealed class WorkflowRunGAgentRelayedTerminalAdoptionTests
                 WorkflowYaml = workflowYaml ?? WorkflowYaml(),
                 RunId = runId,
                 ScopeId = "scope-1",
+                ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
             }));
         }
 

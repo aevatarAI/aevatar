@@ -338,7 +338,7 @@ public sealed class ScheduledAgentCreatorToolTests
         var harness = CreateHarness(authorizationSnapshot: CreateSnapshot(
             ServiceEvidence("svc-ornn", "ornn-api"),
             ServiceEvidence("svc-lark", "api-lark-bot"),
-            ServiceEvidence("svc-llm", "chrono-llm-public")));
+            ServiceEvidence("svc-llm", "chrono-llm-public", "gpt-5.5")));
 
         await WithToolContext(async () =>
         {
@@ -360,7 +360,7 @@ public sealed class ScheduledAgentCreatorToolTests
             ServiceEvidence("svc-ornn-2", "ornn-api"),
             ServiceEvidence("svc-lark", "api-lark-bot"),
             ServiceEvidence("svc-lark-failure", "api-lark-bot-inbound"),
-            ServiceEvidence("svc-llm", "chrono-llm-public")));
+            ServiceEvidence("svc-llm", "chrono-llm-public", "gpt-5.5")));
 
         await WithToolContext(async () =>
         {
@@ -444,7 +444,7 @@ public sealed class ScheduledAgentCreatorToolTests
             authorizationSnapshot: CreateSnapshot(
                 DefaultAuthorizationServices
                     .Where(static service => service.ServiceSlug != "chrono-llm-public")
-                    .Append(ServiceEvidence("svc-chrono", "chrono-llm"))
+                    .Append(ServiceEvidence("svc-chrono", "chrono-llm", "gpt-5.5"))
                     .ToArray()),
             ownerLLMQueryPort: ownerLLMQueryPort);
 
@@ -474,6 +474,9 @@ public sealed class ScheduledAgentCreatorToolTests
         var handler = CreateSuccessHandler();
         var harness = CreateHarness(
             handler: handler,
+            authorizationSnapshot: WithGatewayLLMTarget(
+                CreateSnapshot(DefaultAuthorizationServices),
+                GatewayLLMTarget("gpt-5.5")),
             ownerLLMQueryPort: new RecordingOwnerLLMEvidenceQueryPort(
                 new ScheduledInvocationOwnerLLMEvidence(
                     18,
@@ -500,7 +503,7 @@ public sealed class ScheduledAgentCreatorToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenOwnerLlmEvidenceMissing_ShouldFailBeforeKeyCreation()
+    public async Task ExecuteAsync_WhenOwnerLlmEvidenceMissing_ShouldNotInventLlmGrant()
     {
         var handler = CreateSuccessHandler();
         var harness = CreateHarness(
@@ -512,10 +515,14 @@ public sealed class ScheduledAgentCreatorToolTests
             var result = await harness.Tool.ExecuteAsync(BaseArgs);
 
             using var document = JsonDocument.Parse(result);
-            document.RootElement.GetProperty("error").GetString().Should().Be("SnapshotNotFound");
-            document.RootElement.GetProperty("detail").GetString()
-                .Should().Be("owner_llm_authorization_evidence_not_found");
-            handler.Requests.Should().BeEmpty();
+            document.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+            var createRequest = handler.Requests.Single(request =>
+                request.Method == HttpMethod.Post && request.Path == "/api/v1/api-keys");
+            using var createBody = JsonDocument.Parse(createRequest.Body!);
+            createBody.RootElement.GetProperty("allowed_service_ids")
+                .EnumerateArray()
+                .Select(static value => value.GetString())
+                .Should().BeEquivalentTo("svc-ornn", "svc-lark", "svc-lark-failure");
         });
     }
 
@@ -630,7 +637,7 @@ public sealed class ScheduledAgentCreatorToolTests
             ServiceEvidence("svc-ornn", "ornn-api"),
             viewOnly,
             ServiceEvidence("svc-lark-failure", "api-lark-bot-inbound"),
-            ServiceEvidence("svc-llm", "chrono-llm-public")));
+            ServiceEvidence("svc-llm", "chrono-llm-public", "gpt-5.5")));
 
         await WithToolContext(async () =>
         {
@@ -792,7 +799,7 @@ public sealed class ScheduledAgentCreatorToolTests
                 ServiceEvidence("svc-ornn", "ornn-api"),
                 ServiceEvidence("svc-scheduled-lark", "api-lark-bot-scheduled"),
                 ServiceEvidence("svc-lark-failure", "api-lark-bot-inbound"),
-                ServiceEvidence("svc-llm", "chrono-llm-public")));
+                ServiceEvidence("svc-llm", "chrono-llm-public", "gpt-5.5")));
         ScheduledWorkflowAgentCreateRequest? captured = null;
         harness.CreationPort.CreateAsync(
                 Arg.Do<ScheduledWorkflowAgentCreateRequest>(value => captured = value),
@@ -1046,7 +1053,7 @@ public sealed class ScheduledAgentCreatorToolTests
             authorizationSnapshot: CreateSnapshot(
                 ServiceEvidence("svc-lark-2", "api-lark-bot-2"),
                 ServiceEvidence("svc-lark-failure", "api-lark-bot-inbound"),
-                ServiceEvidence("svc-llm", "chrono-llm-public")));
+                ServiceEvidence("svc-llm", "chrono-llm-public", "gpt-5.5")));
         ScheduledWorkflowAgentCreateRequest? captured = null;
         harness.CreationPort.CreateAsync(
                 Arg.Do<ScheduledWorkflowAgentCreateRequest>(value => captured = value),
@@ -1103,7 +1110,7 @@ public sealed class ScheduledAgentCreatorToolTests
             authorizationSnapshot: CreateSnapshot(
                 ServiceEvidence("svc-lark-2", "api-lark-bot-2"),
                 ServiceEvidence("svc-lark-failure", "api-lark-bot-inbound"),
-                ServiceEvidence("svc-llm", "chrono-llm-public")));
+                ServiceEvidence("svc-llm", "chrono-llm-public", "gpt-5.5")));
 
         await WithToolContext(async () =>
         {
@@ -1283,7 +1290,7 @@ public sealed class ScheduledAgentCreatorToolTests
         ServiceEvidence("svc-ornn", "ornn-api"),
         ServiceEvidence("svc-lark", "api-lark-bot"),
         ServiceEvidence("svc-lark-failure", "api-lark-bot-inbound"),
-        ServiceEvidence("svc-llm", "chrono-llm-public"),
+        ServiceEvidence("svc-llm", "chrono-llm-public", "gpt-5.5"),
     ];
 
     private static RoutingJsonHandler CreateSuccessHandler(
@@ -1431,7 +1438,10 @@ public sealed class ScheduledAgentCreatorToolTests
             Activated: true);
     }
 
-    private static NyxIdAuthorizationServiceEvidence ServiceEvidence(string id, string slug)
+    private static NyxIdAuthorizationServiceEvidence ServiceEvidence(
+        string id,
+        string slug,
+        params string[] modelIds)
     {
         var now = DateTimeOffset.UtcNow;
         return new NyxIdAuthorizationServiceEvidence
@@ -1449,7 +1459,68 @@ public sealed class ScheduledAgentCreatorToolTests
             },
             ObservedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(now.AddMinutes(-1)),
             FreshUntil = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(now.AddMinutes(10)),
+            LlmTarget = modelIds.Length == 0 ? null : ServiceLLMTarget(id, slug, modelIds),
         };
+    }
+
+    private static NyxIdAuthorizationCatalogSnapshot WithGatewayLLMTarget(
+        NyxIdAuthorizationCatalogSnapshot snapshot,
+        NyxIdAuthorizationLLMTargetEvidence target) =>
+        snapshot with
+        {
+            ContentDigest = NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(
+                snapshot.Owner,
+                snapshot.Services,
+                target),
+            GatewayLLMTarget = target,
+        };
+
+    private static NyxIdAuthorizationLLMTargetEvidence GatewayLLMTarget(params string[] modelIds) =>
+        LLMTarget(
+            LLMRouteKind.Gateway,
+            ScheduledInvocationOwnerLLMSelectionPolicy.GatewayRoute,
+            string.Empty,
+            string.Empty,
+            modelIds);
+
+    private static NyxIdAuthorizationLLMTargetEvidence ServiceLLMTarget(
+        string serviceId,
+        string serviceSlug,
+        params string[] modelIds) =>
+        LLMTarget(
+            LLMRouteKind.NyxIdUserService,
+            $"{ScheduledInvocationOwnerLLMSelectionPolicy.NyxIdProxyRoutePrefix}{serviceSlug}",
+            serviceId,
+            serviceSlug,
+            modelIds);
+
+    private static NyxIdAuthorizationLLMTargetEvidence LLMTarget(
+        LLMRouteKind routeKind,
+        string routeValue,
+        string serviceId,
+        string serviceSlug,
+        params string[] modelIds)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var target = new NyxIdAuthorizationLLMTargetEvidence
+        {
+            RouteKind = routeKind,
+            RouteValue = routeValue,
+            NyxIdUserServiceId = serviceId,
+            ServiceSlugSnapshot = serviceSlug,
+            ModelCatalog = new LLMModelCatalog
+            {
+                Certainty = LLMModelCatalogCertainty.Enumerated,
+                DefaultModelId = modelIds.FirstOrDefault() ?? string.Empty,
+            },
+            ObservedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(now.AddMinutes(-1)),
+            FreshUntil = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(now.AddMinutes(10)),
+            EvaluatedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(now.AddMinutes(-2)),
+            AuthorityContractVersion = "openai-models/v1",
+            AuthorityPolicyVersion = "nyxid-exact-route-models/v1",
+        };
+        target.ModelCatalog.ModelIds.Add(modelIds.Order(StringComparer.Ordinal));
+        return target;
     }
 
     private sealed record CreatorHarness(

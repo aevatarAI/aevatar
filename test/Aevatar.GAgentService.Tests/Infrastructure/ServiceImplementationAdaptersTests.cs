@@ -573,6 +573,7 @@ public sealed class ServiceImplementationAdaptersTests
                 WorkflowSpec = new WorkflowServiceRevisionSpec
                 {
                     WorkflowYaml = "name: inferred-workflow",
+                    ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
                 },
             },
         });

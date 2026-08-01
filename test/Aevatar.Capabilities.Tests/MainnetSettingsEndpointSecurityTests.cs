@@ -109,7 +109,14 @@ public sealed class MainnetSettingsEndpointSecurityTests
             HttpMethod.Put,
             $"/api/user-config/llm?scopeId={CrossScopeHint}",
             ownerAToken,
-            new { routeValue = "gateway", model = OwnerAModel });
+            new
+            {
+                action = "select_gateway",
+                gateway = new
+                {
+                    model = new { kind = "explicit_model", modelId = OwnerAModel },
+                },
+            });
         using var llmWriteResponse = await host.Client.SendAsync(llmWrite);
         llmWriteResponse.StatusCode.Should().Be(
             HttpStatusCode.Accepted,
@@ -133,8 +140,10 @@ public sealed class MainnetSettingsEndpointSecurityTests
             host.Client,
             $"/api/user-config/llm?scopeId={CrossScopeHint}",
             ownerBToken);
-        ownerALlm.RootElement.GetProperty("defaultModel").GetString().Should().Be(OwnerAModel);
-        ownerBLlm.RootElement.GetProperty("defaultModel").GetString().Should().BeEmpty();
+        var ownerASelection = ownerALlm.RootElement.GetProperty("savedSelection");
+        ownerASelection.GetProperty("routeKind").GetString().Should().Be("gateway");
+        ownerASelection.GetProperty("modelSelection").GetProperty("modelId").GetString().Should().Be(OwnerAModel);
+        ownerBLlm.RootElement.TryGetProperty("savedSelection", out _).Should().BeFalse();
 
         using var ownerARuntime = await GetJsonAsync(
             host.Client,
@@ -336,7 +345,7 @@ public sealed class MainnetSettingsEndpointSecurityTests
                 builder.Services.Replace(ServiceDescriptor.Singleton<IUserConfigCommandService>(serviceProvider =>
                     serviceProvider.GetRequiredService<OwnerScopedUserConfigPort>()));
                 builder.Services.Replace(ServiceDescriptor.Singleton<IUserLlmCatalogPort>(
-                    new EmptyUserLlmCatalogPort()));
+                    new SecurityTestUserLlmCatalogPort()));
 
                 var app = builder.Build();
                 app.MapAevatarMainnetHost();
@@ -455,10 +464,28 @@ public sealed class MainnetSettingsEndpointSecurityTests
             UserConfigResourceKey.ForOwnerScope(scopeResolver.ResolveScopeIdOrDefault());
     }
 
-    private sealed class EmptyUserLlmCatalogPort : IUserLlmCatalogPort
+    private sealed class SecurityTestUserLlmCatalogPort : IUserLlmCatalogPort
     {
         public Task<NyxIdLlmServicesResult> GetServicesAsync(string bearerToken, CancellationToken ct) =>
-            Task.FromResult(new NyxIdLlmServicesResult([], SetupHint: null));
+            Task.FromResult(new NyxIdLlmServicesResult(
+                [
+                    new NyxIdLlmService(
+                        CatalogEntryId: null,
+                        ServiceSlug: "gateway",
+                        DisplayName: "Gateway",
+                        RouteValue: UserConfigLlmRouteDefaults.Gateway,
+                        ModelCatalog: new LLMModelCatalog
+                        {
+                            Certainty = LLMModelCatalogCertainty.Enumerated,
+                            DefaultModelId = OwnerAModel,
+                            ModelIds = { OwnerAModel },
+                        },
+                        Status: UserLlmRouteStatus.Ready,
+                        Source: UserLlmRouteSource.GatewayProvider,
+                        Allowed: true,
+                        Description: null),
+                ],
+                SetupHint: null));
 
         public Task<NyxIdLlmServicesResult> GetFreshServicesAsync(string bearerToken, CancellationToken ct) =>
             GetServicesAsync(bearerToken, ct);

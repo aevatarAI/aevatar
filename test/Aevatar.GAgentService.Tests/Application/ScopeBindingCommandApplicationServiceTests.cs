@@ -2161,6 +2161,8 @@ public sealed class ScopeBindingCommandApplicationServiceTests
                         DefaultOptions.DefaultServiceId),
                     AuthorizationEvidence = authorizationEvidence,
                     CapabilityAdmissionPlan = capabilityAdmissionPlan?.Clone(),
+                    ExecutionMode = capabilityAdmissionPlan?.ExecutionMode ??
+                                    ExternalCapabilityExecutionMode.Interactive,
                 },
             },
         };

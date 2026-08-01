@@ -232,6 +232,7 @@ public class WorkflowIntegrationTests
             {
                 WorkflowYaml = ResearchWorkflowYaml,
                 WorkflowName = "research_workflow",
+                ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
             }),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
             Propagation = new EnvelopePropagation
@@ -250,6 +251,7 @@ public class WorkflowIntegrationTests
                 WorkflowYaml = ResearchWorkflowYaml,
                 WorkflowName = "research_workflow",
                 RunId = runActorId,
+                ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
             }),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
             Propagation = new EnvelopePropagation
@@ -326,6 +328,7 @@ public class WorkflowIntegrationTests
             {
                 WorkflowYaml = workflowYaml,
                 WorkflowName = "public_alias_workflow",
+                ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
             }),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
             Propagation = new EnvelopePropagation { CorrelationId = Guid.NewGuid().ToString("N") },
@@ -340,6 +343,7 @@ public class WorkflowIntegrationTests
                 WorkflowYaml = workflowYaml,
                 WorkflowName = "public_alias_workflow",
                 RunId = runActorId,
+                ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
             }),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
             Propagation = new EnvelopePropagation { CorrelationId = Guid.NewGuid().ToString("N") },
