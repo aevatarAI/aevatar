@@ -2,6 +2,8 @@ syntax = "proto3";
 package aevatar.gagents.user_config;
 option csharp_namespace = "Aevatar.GAgents.UserConfig";
 
+import "LLMProviders/llm_selection.proto";
+
 // ─── State ───
 
 message UserConfigGAgentState {
@@ -12,25 +14,13 @@ message UserConfigGAgentState {
   string remote_runtime_base_url = 5;
   int32 max_tool_rounds = 6;
   string github_username = 7;
-  UserLlmSelection llm_selection = 8;
-}
-
-enum UserLlmRouteKind {
-  USER_LLM_ROUTE_KIND_UNSPECIFIED = 0;
-  USER_LLM_ROUTE_KIND_GATEWAY = 1;
-  USER_LLM_ROUTE_KIND_NYX_ID_USER_SERVICE = 2;
-}
-
-message UserLlmSelection {
-  UserLlmRouteKind route_kind = 1;
-  string route_value = 2;
-  string nyx_id_user_service_id = 3;
-  string service_slug_snapshot = 4;
+  aevatar.ai.LLMSelection llm_selection = 8;
 }
 
 message UpdateUserConfigCommand {
-  optional string default_model = 1;
-  UserLlmSelection llm_selection = 2;
+  reserved 1;
+  reserved "default_model";
+  aevatar.ai.LLMSelection llm_selection = 2;
   optional string runtime_mode = 3;
   optional string local_runtime_base_url = 4;
   optional string remote_runtime_base_url = 5;
@@ -48,7 +38,7 @@ message UserConfigUpdatedEvent {
   string remote_runtime_base_url = 5;
   int32 max_tool_rounds = 6;
   string github_username = 7;
-  UserLlmSelection llm_selection = 8;
+  aevatar.ai.LLMSelection llm_selection = 8;
 }
 
 message UserConfigGithubUsernameUpdatedEvent {

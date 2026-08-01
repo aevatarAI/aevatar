@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgents.UserConfig;
 using Aevatar.Studio.Application.Studio.Abstractions;
@@ -75,16 +76,16 @@ public sealed class ProjectionUserConfigQueryPort : IUserConfigQueryPort
             GithubUsername: null,
             LlmSelection: null);
 
-    private static UserLlmSelectionValue? MapSelection(UserLlmSelection? selection)
+    private static UserLlmSelectionValue? MapSelection(LLMSelection? selection)
     {
         if (selection is null)
             return null;
 
         var kind = selection.RouteKind switch
         {
-            UserLlmRouteKind.Unspecified => UserLlmSelectionKind.Unspecified,
-            UserLlmRouteKind.Gateway => UserLlmSelectionKind.Gateway,
-            UserLlmRouteKind.NyxIdUserService => UserLlmSelectionKind.NyxIdUserService,
+            LLMRouteKind.Unspecified => UserLlmSelectionKind.Unspecified,
+            LLMRouteKind.Gateway => UserLlmSelectionKind.Gateway,
+            LLMRouteKind.NyxIdUserService => UserLlmSelectionKind.NyxIdUserService,
             _ => throw new ArgumentOutOfRangeException(nameof(selection)),
         };
 

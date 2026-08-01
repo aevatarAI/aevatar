@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
@@ -121,12 +122,13 @@ public sealed class ProjectionScheduledInvocationAuthorityQueryPortTests
             StateVersion = 11,
             DefaultModel = "gpt-5.5",
             PreferredLlmRoute = "/api/v1/proxy/s/legacy-provider",
-            LlmSelection = new UserLlmSelection
+            LlmSelection = new LLMSelection
             {
-                RouteKind = UserLlmRouteKind.NyxIdUserService,
+                RouteKind = LLMRouteKind.NyxIdUserService,
                 RouteValue = "/api/v1/proxy/s/chrono-llm-public",
                 NyxIdUserServiceId = "us-chrono",
                 ServiceSlugSnapshot = "chrono-llm-public",
+                ModelSelection = ExplicitModel("gpt-5.5"),
             },
         });
 
@@ -150,10 +152,11 @@ public sealed class ProjectionScheduledInvocationAuthorityQueryPortTests
             StateVersion = 12,
             DefaultModel = "gpt-5.5",
             PreferredLlmRoute = "/api/v1/proxy/s/legacy-provider",
-            LlmSelection = new UserLlmSelection
+            LlmSelection = new LLMSelection
             {
-                RouteKind = UserLlmRouteKind.Gateway,
+                RouteKind = LLMRouteKind.Gateway,
                 RouteValue = "/api/v1/llm/gateway/v1",
+                ModelSelection = ExplicitModel("gpt-5.5"),
             },
         });
 
@@ -217,33 +220,33 @@ public sealed class ProjectionScheduledInvocationAuthorityQueryPortTests
     }
 
     [Theory]
-    [InlineData(UserLlmRouteKind.Unspecified, "/api/v1/llm/gateway/v1", "", "")]
-    [InlineData(UserLlmRouteKind.Gateway, "/api/v1/proxy/s/provider-alpha", "", "")]
-    [InlineData(UserLlmRouteKind.Gateway, "/api/v1/llm/gateway/v1", "us-alpha", "provider-alpha")]
-    [InlineData(UserLlmRouteKind.Gateway, " /api/v1/llm/gateway/v1", "", "")]
-    [InlineData(UserLlmRouteKind.Gateway, "/api/v1/llm/gateway/v1 ", "", "")]
-    [InlineData(UserLlmRouteKind.Gateway, "/api/v1/llm/gateway/v1/", "", "")]
-    [InlineData(UserLlmRouteKind.Gateway, "/api/v1/llm/gateway/v1", "us-alpha", "")]
-    [InlineData(UserLlmRouteKind.Gateway, "/api/v1/llm/gateway/v1", "", "provider-alpha")]
-    [InlineData(UserLlmRouteKind.Gateway, "/api/v1/llm/gateway/v1", " ", "")]
-    [InlineData(UserLlmRouteKind.Gateway, "/api/v1/llm/gateway/v1", "", " ")]
-    [InlineData(UserLlmRouteKind.NyxIdUserService, "", "us-alpha", "provider-alpha")]
-    [InlineData(UserLlmRouteKind.NyxIdUserService, " ", "us-alpha", "provider-alpha")]
-    [InlineData(UserLlmRouteKind.NyxIdUserService, "/api/v1/proxy/s/provider-alpha", "", "provider-alpha")]
-    [InlineData(UserLlmRouteKind.NyxIdUserService, "/api/v1/proxy/s/provider-alpha", " ", "provider-alpha")]
-    [InlineData(UserLlmRouteKind.NyxIdUserService, "/api/v1/proxy/s/provider-alpha", "us-alpha", "")]
-    [InlineData(UserLlmRouteKind.NyxIdUserService, "/api/v1/proxy/s/provider-alpha", "us-alpha", " ")]
-    [InlineData(UserLlmRouteKind.NyxIdUserService, " /api/v1/proxy/s/provider-alpha", "us-alpha", "provider-alpha")]
-    [InlineData(UserLlmRouteKind.NyxIdUserService, "/api/v1/proxy/s/provider-alpha ", "us-alpha", "provider-alpha")]
-    [InlineData(UserLlmRouteKind.NyxIdUserService, "/api/v1/proxy/s/provider-alpha", " us-alpha", "provider-alpha")]
-    [InlineData(UserLlmRouteKind.NyxIdUserService, "/api/v1/proxy/s/provider-alpha", "us-alpha ", "provider-alpha")]
-    [InlineData(UserLlmRouteKind.NyxIdUserService, "/api/v1/proxy/s/provider-alpha", "us-alpha", " provider-alpha")]
-    [InlineData(UserLlmRouteKind.NyxIdUserService, "/api/v1/proxy/s/provider-alpha", "us-alpha", "provider-alpha ")]
-    [InlineData(UserLlmRouteKind.NyxIdUserService, "/api/v1/proxy/s/provider-alpha/", "us-alpha", "provider-alpha")]
-    [InlineData(UserLlmRouteKind.NyxIdUserService, "/api/v1/proxy/s/provider-alpha", "us-alpha", "provider-beta")]
-    [InlineData(UserLlmRouteKind.NyxIdUserService, "/api/v1/proxy/s/provider-alpha/beta", "us-alpha", "provider-alpha/beta")]
+    [InlineData(LLMRouteKind.Unspecified, "/api/v1/llm/gateway/v1", "", "")]
+    [InlineData(LLMRouteKind.Gateway, "/api/v1/proxy/s/provider-alpha", "", "")]
+    [InlineData(LLMRouteKind.Gateway, "/api/v1/llm/gateway/v1", "us-alpha", "provider-alpha")]
+    [InlineData(LLMRouteKind.Gateway, " /api/v1/llm/gateway/v1", "", "")]
+    [InlineData(LLMRouteKind.Gateway, "/api/v1/llm/gateway/v1 ", "", "")]
+    [InlineData(LLMRouteKind.Gateway, "/api/v1/llm/gateway/v1/", "", "")]
+    [InlineData(LLMRouteKind.Gateway, "/api/v1/llm/gateway/v1", "us-alpha", "")]
+    [InlineData(LLMRouteKind.Gateway, "/api/v1/llm/gateway/v1", "", "provider-alpha")]
+    [InlineData(LLMRouteKind.Gateway, "/api/v1/llm/gateway/v1", " ", "")]
+    [InlineData(LLMRouteKind.Gateway, "/api/v1/llm/gateway/v1", "", " ")]
+    [InlineData(LLMRouteKind.NyxIdUserService, "", "us-alpha", "provider-alpha")]
+    [InlineData(LLMRouteKind.NyxIdUserService, " ", "us-alpha", "provider-alpha")]
+    [InlineData(LLMRouteKind.NyxIdUserService, "/api/v1/proxy/s/provider-alpha", "", "provider-alpha")]
+    [InlineData(LLMRouteKind.NyxIdUserService, "/api/v1/proxy/s/provider-alpha", " ", "provider-alpha")]
+    [InlineData(LLMRouteKind.NyxIdUserService, "/api/v1/proxy/s/provider-alpha", "us-alpha", "")]
+    [InlineData(LLMRouteKind.NyxIdUserService, "/api/v1/proxy/s/provider-alpha", "us-alpha", " ")]
+    [InlineData(LLMRouteKind.NyxIdUserService, " /api/v1/proxy/s/provider-alpha", "us-alpha", "provider-alpha")]
+    [InlineData(LLMRouteKind.NyxIdUserService, "/api/v1/proxy/s/provider-alpha ", "us-alpha", "provider-alpha")]
+    [InlineData(LLMRouteKind.NyxIdUserService, "/api/v1/proxy/s/provider-alpha", " us-alpha", "provider-alpha")]
+    [InlineData(LLMRouteKind.NyxIdUserService, "/api/v1/proxy/s/provider-alpha", "us-alpha ", "provider-alpha")]
+    [InlineData(LLMRouteKind.NyxIdUserService, "/api/v1/proxy/s/provider-alpha", "us-alpha", " provider-alpha")]
+    [InlineData(LLMRouteKind.NyxIdUserService, "/api/v1/proxy/s/provider-alpha", "us-alpha", "provider-alpha ")]
+    [InlineData(LLMRouteKind.NyxIdUserService, "/api/v1/proxy/s/provider-alpha/", "us-alpha", "provider-alpha")]
+    [InlineData(LLMRouteKind.NyxIdUserService, "/api/v1/proxy/s/provider-alpha", "us-alpha", "provider-beta")]
+    [InlineData(LLMRouteKind.NyxIdUserService, "/api/v1/proxy/s/provider-alpha/beta", "us-alpha", "provider-alpha/beta")]
     public async Task OwnerLlmPort_WithInvalidTypedSelection_ShouldFailClosed(
-        UserLlmRouteKind routeKind,
+        LLMRouteKind routeKind,
         string routeValue,
         string serviceId,
         string serviceSlug)
@@ -253,7 +256,7 @@ public sealed class ProjectionScheduledInvocationAuthorityQueryPortTests
             StateVersion = 15,
             DefaultModel = "gpt-5.5",
             PreferredLlmRoute = "/api/v1/proxy/s/legacy-provider",
-            LlmSelection = new UserLlmSelection
+            LlmSelection = new LLMSelection
             {
                 RouteKind = routeKind,
                 RouteValue = routeValue,
@@ -285,10 +288,11 @@ public sealed class ProjectionScheduledInvocationAuthorityQueryPortTests
         {
             StateVersion = 16,
             DefaultModel = model,
-            LlmSelection = new UserLlmSelection
+            LlmSelection = new LLMSelection
             {
-                RouteKind = UserLlmRouteKind.Gateway,
+                RouteKind = LLMRouteKind.Gateway,
                 RouteValue = "/api/v1/llm/gateway/v1",
+                ModelSelection = ExplicitModel(model),
             },
         });
 
@@ -311,12 +315,13 @@ public sealed class ProjectionScheduledInvocationAuthorityQueryPortTests
         {
             StateVersion = 17,
             DefaultModel = "gpt-5.5",
-            LlmSelection = new UserLlmSelection
+            LlmSelection = new LLMSelection
             {
-                RouteKind = UserLlmRouteKind.NyxIdUserService,
+                RouteKind = LLMRouteKind.NyxIdUserService,
                 RouteValue = "/api/v1/proxy/s/provider-alpha",
                 NyxIdUserServiceId = "us-alpha",
                 ServiceSlugSnapshot = "provider-alpha",
+                ModelSelection = ExplicitModel("gpt-5.5"),
             },
         });
 
@@ -387,6 +392,12 @@ public sealed class ProjectionScheduledInvocationAuthorityQueryPortTests
             DateTimeOffset.UtcNow,
             StateVersion: 5);
     }
+
+    private static LLMModelSelection ExplicitModel(string modelId) => new()
+    {
+        Kind = LLMModelSelectionKind.ExplicitModel,
+        ModelId = modelId,
+    };
 
     private sealed class RecordingRevisionCatalogReader(ServiceRevisionCatalogSnapshot? snapshot)
         : IServiceRevisionCatalogQueryReader

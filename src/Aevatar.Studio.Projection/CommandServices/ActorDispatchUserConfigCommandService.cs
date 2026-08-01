@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.UserConfig;
 using Aevatar.Studio.Application.Studio.Abstractions;
@@ -34,10 +35,10 @@ internal sealed class ActorDispatchUserConfigCommandService : IUserConfigCommand
         ArgumentNullException.ThrowIfNull(update);
 
         var command = new UpdateUserConfigCommand();
-        if (update.DefaultModel is not null)
-            command.DefaultModel = update.DefaultModel;
         if (update.LlmSelection is not null)
-            command.LlmSelection = MapSelection(update.LlmSelection);
+            command.LlmSelection = MapSelection(update.LlmSelection, update.DefaultModel);
+        else if (update.DefaultModel is not null)
+            throw new InvalidOperationException("An LLM model cannot be updated without its complete route selection.");
         if (update.RuntimeMode is not null)
             command.RuntimeMode = update.RuntimeMode;
         if (update.LocalRuntimeBaseUrl is not null)
@@ -53,19 +54,28 @@ internal sealed class ActorDispatchUserConfigCommandService : IUserConfigCommand
     }
 
 
-    private static UserLlmSelection MapSelection(UserLlmSelectionValue selection) =>
+    private static LLMSelection MapSelection(UserLlmSelectionValue selection, string? defaultModel) =>
         new()
         {
             RouteKind = selection.Kind switch
             {
-                UserLlmSelectionKind.Unspecified => UserLlmRouteKind.Unspecified,
-                UserLlmSelectionKind.Gateway => UserLlmRouteKind.Gateway,
-                UserLlmSelectionKind.NyxIdUserService => UserLlmRouteKind.NyxIdUserService,
+                UserLlmSelectionKind.Unspecified => LLMRouteKind.Unspecified,
+                UserLlmSelectionKind.Gateway => LLMRouteKind.Gateway,
+                UserLlmSelectionKind.NyxIdUserService => LLMRouteKind.NyxIdUserService,
                 _ => throw new ArgumentOutOfRangeException(nameof(selection)),
             },
             RouteValue = selection.RouteValue,
             NyxIdUserServiceId = selection.NyxIdUserServiceId,
             ServiceSlugSnapshot = selection.ServiceSlugSnapshot,
+            ModelSelection = new LLMModelSelection
+            {
+                Kind = selection.Kind == UserLlmSelectionKind.Unspecified
+                    ? LLMModelSelectionKind.Unspecified
+                    : string.IsNullOrEmpty(defaultModel)
+                        ? LLMModelSelectionKind.ProviderDefault
+                        : LLMModelSelectionKind.ExplicitModel,
+                ModelId = defaultModel ?? string.Empty,
+            },
         };
 
     private async Task<UserConfigSaveReceipt> DispatchAsync(

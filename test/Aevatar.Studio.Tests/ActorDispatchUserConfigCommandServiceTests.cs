@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.UserConfig;
 using Aevatar.Studio.Application.Studio.Abstractions;
@@ -48,9 +49,11 @@ public sealed class ActorDispatchUserConfigCommandServiceTests
         dispatched.Envelope.Payload.Is(UpdateUserConfigCommand.Descriptor).Should().BeTrue();
 
         var payload = dispatched.Envelope.Payload.Unpack<UpdateUserConfigCommand>();
-        payload.DefaultModel.Should().Be("gpt-5.5");
+        UpdateUserConfigCommand.Descriptor.FindFieldByName("default_model").Should().BeNull();
         payload.LlmSelection.RouteValue.Should().Be("/api/v1/proxy/s/openai-work");
         payload.LlmSelection.NyxIdUserServiceId.Should().Be("us-openai");
+        payload.LlmSelection.ModelSelection.Kind.Should().Be(LLMModelSelectionKind.ExplicitModel);
+        payload.LlmSelection.ModelSelection.ModelId.Should().Be("gpt-5.5");
         payload.RuntimeMode.Should().Be(UserConfigRuntimeDefaults.RemoteMode);
         payload.LocalRuntimeBaseUrl.Should().Be("http://127.0.0.1:5080");
         payload.RemoteRuntimeBaseUrl.Should().Be("https://runtime.example.com");
@@ -66,28 +69,24 @@ public sealed class ActorDispatchUserConfigCommandServiceTests
     }
 
     [Fact]
-    public async Task UpdateAsync_WhenDispatchAdmissionIsNotAccepted_ShouldReturnRejectedReceipt()
+    public async Task UpdateAsync_WithModelOnlyDelta_ShouldRejectBeforeDispatch()
     {
-        var ackedAt = new DateTimeOffset(2026, 5, 26, 12, 0, 0, TimeSpan.Zero);
+        var dispatch = new RecordingDispatchPort(new DispatchAdmission(
+            Accepted: false,
+            CommandId: "rejected-command",
+            AckedAt: new DateTimeOffset(2026, 5, 26, 12, 0, 0, TimeSpan.Zero),
+            ActorId: "user-config-scope-1",
+            CorrelationId: "corr-1"));
         var service = new ActorDispatchUserConfigCommandService(
             new RecordingBootstrap(),
-            new RecordingDispatchPort(new DispatchAdmission(
-                Accepted: false,
-                CommandId: "rejected-command",
-                AckedAt: ackedAt,
-                ActorId: "user-config-scope-1",
-                CorrelationId: "corr-1")));
+            dispatch);
 
-        var receipt = await service.UpdateAsync(
+        var act = () => service.UpdateAsync(
             UserConfigResourceKey.ForOwnerScope("scope-1"),
             new UserConfigUpdate(DefaultModel: "gpt-5.5"));
 
-        receipt.Accepted.Should().BeFalse();
-        receipt.CommandId.Should().Be("rejected-command");
-        receipt.AckStage.Should().Be(UserConfigCommandAckStage.AdmissionRejected);
-        receipt.ActorId.Should().Be("user-config-scope-1");
-        receipt.CorrelationId.Should().Be("corr-1");
-        receipt.AckedAtUtc.Should().Be(ackedAt);
+        await act.Should().ThrowAsync<InvalidOperationException>();
+        dispatch.Dispatches.Should().BeEmpty();
     }
 
     [Fact]
@@ -106,15 +105,15 @@ public sealed class ActorDispatchUserConfigCommandServiceTests
             new UserConfigUpdate(DefaultModel: "gpt-5.5", LlmSelection: selection));
         await service.UpdateAsync(
             UserConfigResourceKey.ForChannelBinding("alpha"),
-            new UserConfigUpdate(DefaultModel: "claude-4"));
+            new UserConfigUpdate(GithubUsername: "octocat"));
 
         dispatch.Dispatches.Select(x => x.ActorId).Should().Equal(
             "user-config-binding-alpha",
             "channel-user-config-alpha");
         var command = dispatch.Dispatches[0].Envelope.Payload.Unpack<UpdateUserConfigCommand>();
-        command.HasDefaultModel.Should().BeTrue();
         command.HasRuntimeMode.Should().BeFalse();
         command.LlmSelection.NyxIdUserServiceId.Should().Be("us-alpha");
+        command.LlmSelection.ModelSelection.ModelId.Should().Be("gpt-5.5");
     }
 
     [Fact]
@@ -124,7 +123,7 @@ public sealed class ActorDispatchUserConfigCommandServiceTests
         var service = CreateService(dispatch);
         var resource = new UserConfigResourceKey((UserConfigResourceKind)99, "unknown-alpha");
 
-        var act = () => service.UpdateAsync(resource, new UserConfigUpdate(DefaultModel: "gpt-5.5"));
+        var act = () => service.UpdateAsync(resource, new UserConfigUpdate(GithubUsername: "octocat"));
 
         await act.Should().ThrowAsync<ArgumentOutOfRangeException>();
         dispatch.Dispatches.Should().BeEmpty();

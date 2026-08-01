@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgents.UserConfig;
 using Aevatar.Studio.Application.Studio.Abstractions;
@@ -60,9 +61,9 @@ public sealed class ProjectionUserConfigQueryPortTests
             Document = new UserConfigCurrentStateDocument
             {
                 PreferredLlmRoute = "/api/v1/proxy/s/legacy",
-                LlmSelection = new UserLlmSelection
+                LlmSelection = new LLMSelection
                 {
-                    RouteKind = UserLlmRouteKind.Unspecified,
+                    RouteKind = LLMRouteKind.Unspecified,
                     RouteValue = "/api/v1/proxy/s/typed-but-ignored",
                     NyxIdUserServiceId = "us-ignored",
                     ServiceSlugSnapshot = "ignored",
@@ -86,9 +87,9 @@ public sealed class ProjectionUserConfigQueryPortTests
             Document = new UserConfigCurrentStateDocument
             {
                 PreferredLlmRoute = "/api/v1/proxy/s/legacy",
-                LlmSelection = new UserLlmSelection
+                LlmSelection = new LLMSelection
                 {
-                    RouteKind = UserLlmRouteKind.Gateway,
+                    RouteKind = LLMRouteKind.Gateway,
                     RouteValue = "/api/v1/proxy/s/typed-but-ignored",
                     NyxIdUserServiceId = "us-ignored",
                     ServiceSlugSnapshot = "ignored",
@@ -113,9 +114,9 @@ public sealed class ProjectionUserConfigQueryPortTests
             {
                 DefaultModel = "gpt-5.5",
                 PreferredLlmRoute = "/api/v1/proxy/s/legacy",
-                LlmSelection = new UserLlmSelection
+                LlmSelection = new LLMSelection
                 {
-                    RouteKind = UserLlmRouteKind.NyxIdUserService,
+                    RouteKind = LLMRouteKind.NyxIdUserService,
                     RouteValue = " route-alpha ",
                     NyxIdUserServiceId = "us-alpha",
                     ServiceSlugSnapshot = "service-alpha",
