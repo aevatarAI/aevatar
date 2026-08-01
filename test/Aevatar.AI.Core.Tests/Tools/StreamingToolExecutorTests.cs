@@ -1,0 +1,98 @@
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.Middleware;
+using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.Tools;
+using FluentAssertions;
+using Microsoft.Extensions.Logging;
+
+namespace Aevatar.AI.Core.Tests.Tools;
+
+public sealed class StreamingToolExecutorTests
+{
+    [Fact]
+    public async Task GetRemainingResultsAsync_WhenMiddlewareThrows_LogsOriginalFailureAndReturnsSafeError()
+    {
+        var tools = new ToolManager();
+        tools.Register(new FakeAgentTool("echo"));
+        var logger = new CapturingLogger();
+        var executor = new StreamingToolExecutor(
+            tools,
+            toolMiddlewares: [new ThrowingToolCallMiddleware()],
+            logger: logger);
+        using var state = executor.CreateExecutionState();
+
+        executor.AddTool(state, new ToolCall
+        {
+            Id = "call-failed-finalization",
+            Name = "echo",
+            ArgumentsJson = "{}",
+        });
+
+        var results = new List<ToolExecutionResult>();
+        await foreach (var toolResult in executor.GetRemainingResultsAsync(state, CancellationToken.None))
+            results.Add(toolResult);
+
+        results.Should().ContainSingle();
+        var failure = results.Single();
+        failure.IsError.Should().BeTrue();
+        failure.Result.Should().Be("{\"error\":\"The tool request failed.\"}");
+        failure.Receipt.Should().NotBeNull();
+        failure.Receipt!.ErrorMessage.Should().Be("The tool request failed.");
+
+        logger.Entries.Should().ContainSingle(entry =>
+            entry.Level == LogLevel.Warning &&
+            entry.Exception is InvalidOperationException &&
+            entry.Exception.Message == "middleware failed" &&
+            entry.Message.Contains("Tool execution failed before receipt finalization for tool echo and call call-failed-finalization"));
+    }
+
+    private sealed class ThrowingToolCallMiddleware : IToolCallMiddleware
+    {
+        public Task InvokeAsync(ToolCallContext context, Func<Task> next) =>
+            throw new InvalidOperationException("middleware failed");
+    }
+
+    private sealed class FakeAgentTool(string name) : IAgentTool
+    {
+        public string Name { get; } = name;
+        public string Description => "fake";
+        public string ParametersSchema => "{}";
+        public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
+        public bool IsReadOnly => true;
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult("{\"ok\":true}");
+    }
+
+    private sealed class CapturingLogger : ILogger
+    {
+        public List<LogEntry> Entries { get; } = [];
+
+        public IDisposable BeginScope<TState>(TState state)
+            where TState : notnull =>
+            NullScope.Instance;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            Entries.Add(new LogEntry(logLevel, formatter(state, exception), exception));
+        }
+    }
+
+    private sealed record LogEntry(LogLevel Level, string Message, Exception? Exception);
+
+    private sealed class NullScope : IDisposable
+    {
+        public static readonly NullScope Instance = new();
+
+        public void Dispose()
+        {
+        }
+    }
+}

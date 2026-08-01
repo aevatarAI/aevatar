@@ -510,8 +510,14 @@ public sealed class StreamingToolExecutor
                     IsError: true),
                 SchedulerFault: false);
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            _logger.LogWarning(
+                ex,
+                "Tool execution failed before receipt finalization for tool {ToolName} and call {CallId}",
+                tracked.Call.Name,
+                tracked.Call.Id);
+
             return new ToolExecutionCompletion(
                 new ToolExecutionResult(
                     tracked.Call.Id,
