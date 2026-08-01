@@ -10,6 +10,55 @@ public static class NyxIdLlmServiceCatalogParser
 {
     private const string ReadyStatus = "ready";
 
+    public static LLMModelCatalog ParseOpenAIModelsResponse(string response)
+    {
+        if (string.IsNullOrWhiteSpace(response))
+            return NotVerifiableCatalog(LLMModelCatalogDiagnosticKind.ResponseInvalid);
+
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                !root.TryGetProperty("data", out var data) ||
+                data.ValueKind != JsonValueKind.Array)
+            {
+                return NotVerifiableCatalog(LLMModelCatalogDiagnosticKind.ResponseInvalid);
+            }
+
+            if (data.GetArrayLength() > LLMSelectionPolicy.MaxModelsPerCatalog)
+                return NotVerifiableCatalog(LLMModelCatalogDiagnosticKind.ResponseTooLarge);
+
+            var modelIds = new List<string>(data.GetArrayLength());
+            foreach (var item in data.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object ||
+                    !item.TryGetProperty("id", out var id) ||
+                    id.ValueKind != JsonValueKind.String ||
+                    id.GetString() is not { } modelId)
+                {
+                    return NotVerifiableCatalog(LLMModelCatalogDiagnosticKind.ResponseInvalid);
+                }
+
+                modelIds.Add(modelId);
+            }
+
+            string? defaultModel = null;
+            if (root.TryGetProperty("default_model", out var defaultModelElement))
+            {
+                if (defaultModelElement.ValueKind == JsonValueKind.String)
+                    defaultModel = defaultModelElement.GetString();
+                else if (defaultModelElement.ValueKind != JsonValueKind.Null)
+                    return NotVerifiableCatalog(LLMModelCatalogDiagnosticKind.ResponseInvalid);
+            }
+            return BuildModelCatalog(modelIds, defaultModel, ReadyStatus, allowed: true);
+        }
+        catch (JsonException)
+        {
+            return NotVerifiableCatalog(LLMModelCatalogDiagnosticKind.ResponseInvalid);
+        }
+    }
+
     public static NyxIdLlmServicesResult ParseServicesResult(string response)
     {
         using var document = ParseSuccessDocument(response);

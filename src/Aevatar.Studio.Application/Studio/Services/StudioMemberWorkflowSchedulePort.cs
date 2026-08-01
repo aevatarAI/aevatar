@@ -876,7 +876,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             refresh = await _catalogRefreshPort.RefreshAsync(
                 authorizationRequest.Owner,
                 bearerToken,
-                requiredServices,
+                new NyxIdAuthorizationCatalogRefreshRequest(requiredServices, LLMTarget: null),
                 ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)

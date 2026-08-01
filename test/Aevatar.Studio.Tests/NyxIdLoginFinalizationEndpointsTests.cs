@@ -1237,7 +1237,7 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
         public Task<NyxIdAuthorizationCatalogRefreshResult> RefreshAsync(
             AuthorizationOwnerIdentity owner,
             string bearerToken,
-            IReadOnlyList<NyxIdUserServiceCapabilityRef> requiredServices,
+            NyxIdAuthorizationCatalogRefreshRequest request,
             CancellationToken ct = default) => throw new NotSupportedException();
     }
 
@@ -1307,7 +1307,7 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
         public Task<NyxIdAuthorizationCatalogRefreshResult> RefreshAsync(
             AuthorizationOwnerIdentity owner,
             string bearerToken,
-            IReadOnlyList<NyxIdUserServiceCapabilityRef> requiredServices,
+            NyxIdAuthorizationCatalogRefreshRequest request,
             CancellationToken ct = default) => throw new NotSupportedException();
     }
 

@@ -1,6 +1,7 @@
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
@@ -290,6 +291,77 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
             extraHeaders,
             maxBytes,
             ct);
+    }
+
+    public Task<NyxIdProxyTextResponse> GetLlmRouteModelsBoundedAsync(
+        string token,
+        LLMRouteKind routeKind,
+        string? verifiedUserServiceId,
+        string? verifiedServiceSlug,
+        long maxBytes,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(token);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxBytes);
+
+        if (routeKind == LLMRouteKind.NyxIdUserService)
+        {
+            var userServiceId = NormalizeExactRouteIdentity(
+                verifiedUserServiceId,
+                nameof(verifiedUserServiceId));
+            var serviceSlug = NormalizeExactRouteIdentity(
+                verifiedServiceSlug,
+                nameof(verifiedServiceSlug));
+            if (serviceSlug.Contains('/') || serviceSlug.Contains('\\'))
+                throw new ArgumentException("NyxID service slug cannot contain path separators.", nameof(verifiedServiceSlug));
+
+            return ProxyRequestBoundedAsync(
+                token,
+                serviceSlug,
+                userServiceId,
+                "models",
+                HttpMethod.Get.Method,
+                body: null,
+                extraHeaders: null,
+                maxBytes,
+                ct);
+        }
+
+        if (routeKind != LLMRouteKind.Gateway)
+            throw new ArgumentOutOfRangeException(nameof(routeKind), "LLM route kind is not supported.");
+        if (!string.IsNullOrWhiteSpace(verifiedUserServiceId) ||
+            !string.IsNullOrWhiteSpace(verifiedServiceSlug))
+        {
+            throw new ArgumentException("Gateway LLM routes cannot carry user-service identity.");
+        }
+
+        return GetGatewayModelsBoundedAsync(token, maxBytes, ct);
+    }
+
+    private async Task<NyxIdProxyTextResponse> GetGatewayModelsBoundedAsync(
+        string token,
+        long maxBytes,
+        CancellationToken ct)
+    {
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"{GetBaseUrl()}{LLMSelectionPolicy.GatewayRoute}/models");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        request.Headers.TryAddWithoutValidation(UserAgentHeaderName, DefaultProxyUserAgent);
+        return await SendTextResponseAsync(request, maxBytes, ct);
+    }
+
+    private static string NormalizeExactRouteIdentity(string? value, string parameterName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(value, parameterName);
+        var normalized = value.Trim();
+        if (!string.Equals(value, normalized, StringComparison.Ordinal) ||
+            normalized.Any(char.IsControl))
+        {
+            throw new ArgumentException("NyxID route identity must be canonical.", parameterName);
+        }
+
+        return normalized;
     }
 
     internal async Task<NyxIdProxyTextResponse> ProxyRequestResponseAsync(

@@ -318,6 +318,18 @@ public sealed record ScheduledInvocationOwnerLLMEvidence(
     long StateVersion,
     ScheduledInvocationOwnerLLMSelection Selection);
 
+public sealed record ScheduledInvocationLLMRefreshRequirement(
+    LLMRouteKind RouteKind,
+    string RouteValue,
+    string NyxIdUserServiceId,
+    string ServiceSlugSnapshot,
+    string ExplicitModelId,
+    long UserConfigStateVersion);
+
+public sealed record NyxIdAuthorizationCatalogRefreshRequest(
+    IReadOnlyList<NyxIdUserServiceCapabilityRef> RequiredServices,
+    ScheduledInvocationLLMRefreshRequirement? LLMTarget);
+
 public static class ScheduledInvocationOwnerLLMSelectionPolicy
 {
     public const string GatewayRoute = "/api/v1/llm/gateway/v1";
@@ -408,7 +420,7 @@ public interface INyxIdAuthorizationCatalogRefreshPort
     Task<NyxIdAuthorizationCatalogRefreshResult> RefreshAsync(
         AuthorizationOwnerIdentity owner,
         string bearerToken,
-        IReadOnlyList<NyxIdUserServiceCapabilityRef> requiredServices,
+        NyxIdAuthorizationCatalogRefreshRequest request,
         CancellationToken ct = default);
 
     Task<NyxIdAuthorizationCatalogRefreshResult> RefreshPersonalAsync(

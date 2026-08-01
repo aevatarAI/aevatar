@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
@@ -792,6 +793,175 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
     }
 
     [Fact]
+    public async Task RefreshAsync_ForExactUserService_ShouldFetchOnlyVerifiedInventoryRoute()
+    {
+        var commands = new RecordingCommandPort();
+        var handler = new RoutingJsonHandler(
+            Ok(UserServicesJson()),
+            Ok(ScopePlanJsonForServiceA()),
+            Ok(ModelsJson("gpt-5.5", "GPT-5.5")));
+
+        var result = await Create(commands, handler)
+            .RefreshAsync(Owner(), "bearer-secret", UserServiceRefreshRequest());
+
+        result.Success.Should().BeTrue();
+        handler.Requests.Select(static request => (request.Method, request.Path))
+            .Should().Equal(
+                (HttpMethod.Get, "/api/v1/user-services"),
+                (HttpMethod.Post, "/api/v1/api-keys/scope-plan"),
+                (HttpMethod.Get, "/api/v1/proxy/s/api-alpha/models?_nyxid_via=service-a"));
+        var target = commands.Observations.Should().ContainSingle().Subject.Services
+            .Should().ContainSingle().Subject.LlmTarget;
+        target.RouteKind.Should().Be(LLMRouteKind.NyxIdUserService);
+        target.RouteValue.Should().Be("/api/v1/proxy/s/api-alpha");
+        target.NyxIdUserServiceId.Should().Be("service-a");
+        target.ServiceSlugSnapshot.Should().Be("api-alpha");
+        target.ModelCatalog.Certainty.Should().Be(LLMModelCatalogCertainty.Enumerated);
+        target.ModelCatalog.ModelIds.Should().Equal("GPT-5.5", "gpt-5.5");
+        handler.AuthorizationHeaders.Should().OnlyContain(static value => value == "Bearer bearer-secret");
+        string.Join('\n', commands.Observations).Should().NotContain("bearer-secret");
+    }
+
+    [Fact]
+    public async Task RefreshAsync_ForGateway_ShouldIgnoreCallerRouteAndUseConfiguredAuthority()
+    {
+        var commands = new RecordingCommandPort();
+        var handler = new RoutingJsonHandler(Ok(ModelsJson("gpt-5.5")));
+        var request = new NyxIdAuthorizationCatalogRefreshRequest(
+            [],
+            new ScheduledInvocationLLMRefreshRequirement(
+                LLMRouteKind.Gateway,
+                "https://evil.example/models",
+                string.Empty,
+                string.Empty,
+                "gpt-5.5",
+                17));
+
+        var result = await Create(commands, handler)
+            .RefreshAsync(Owner(), "bearer-secret", request);
+
+        result.Success.Should().BeTrue();
+        handler.Requests.Should().Equal(
+            (HttpMethod.Get, "/api/v1/llm/gateway/v1/models"));
+        var observation = commands.Observations.Should().ContainSingle().Subject;
+        observation.Services.Should().BeEmpty();
+        observation.GatewayLLMTarget.Should().NotBeNull();
+        observation.GatewayLLMTarget!.RouteValue.Should().Be("/api/v1/llm/gateway/v1");
+        observation.GatewayLLMTarget.ModelCatalog.ModelIds.Should().Equal("gpt-5.5");
+    }
+
+    [Fact]
+    public async Task RefreshAsync_WhenUserServiceSlugDoesNotMatchInventory_ShouldFailBeforeModelFetch()
+    {
+        var commands = new RecordingCommandPort();
+        var handler = new RoutingJsonHandler(Ok(UserServicesJson()));
+        var request = UserServiceRefreshRequest(serviceSlug: "other-slug");
+
+        var result = await Create(commands, handler)
+            .RefreshAsync(Owner(), "bearer-secret", request);
+
+        result.Status.Should().Be(NyxIdAuthorizationCatalogRefreshStatus.CatalogUnstable);
+        result.FailureCode.Should().Be("nyxid_llm_target_inventory_mismatch");
+        handler.Requests.Should().Equal((HttpMethod.Get, "/api/v1/user-services"));
+        commands.Observations.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RefreshAsync_WhenModelsResponseExceedsBound_ShouldCommitOnlyResponseTooLargeEvidence()
+    {
+        var commands = new RecordingCommandPort();
+        var sensitiveBody = JsonSerializer.Serialize(new
+        {
+            data = new[] { new { id = "gpt-5.5" } },
+            secret = new string('x', 1024 * 1024),
+        });
+        var handler = new RoutingJsonHandler(Ok(sensitiveBody));
+
+        var result = await Create(commands, handler)
+            .RefreshAsync(Owner(), "bearer-secret", GatewayRefreshRequest());
+
+        result.Success.Should().BeTrue();
+        var catalog = commands.Observations.Single().GatewayLLMTarget!.ModelCatalog;
+        catalog.Certainty.Should().Be(LLMModelCatalogCertainty.NotVerifiable);
+        catalog.DiagnosticKind.Should().Be(LLMModelCatalogDiagnosticKind.ResponseTooLarge);
+        catalog.ModelIds.Should().BeEmpty();
+        string.Join('\n', commands.Observations).Should().NotContain(new string('x', 128));
+    }
+
+    [Theory]
+    [MemberData(nameof(InvalidModelsResponses))]
+    public async Task RefreshAsync_WhenModelsAreNotAuthoritative_ShouldCommitNotVerifiableEvidence(
+        string response,
+        LLMModelCatalogDiagnosticKind expectedDiagnostic)
+    {
+        var commands = new RecordingCommandPort();
+        var handler = new RoutingJsonHandler(Ok(response));
+
+        var result = await Create(commands, handler)
+            .RefreshAsync(Owner(), "bearer-secret", GatewayRefreshRequest());
+
+        result.Success.Should().BeTrue();
+        var catalog = commands.Observations.Single().GatewayLLMTarget!.ModelCatalog;
+        catalog.Certainty.Should().Be(LLMModelCatalogCertainty.NotVerifiable);
+        catalog.DiagnosticKind.Should().Be(expectedDiagnostic);
+        catalog.ModelIds.Should().BeEmpty();
+    }
+
+    public static TheoryData<string, LLMModelCatalogDiagnosticKind> InvalidModelsResponses => new()
+    {
+        {
+            JsonSerializer.Serialize(new
+            {
+                data = Enumerable.Range(0, 2_049).Select(index => new { id = $"model-{index}" }),
+            }),
+            LLMModelCatalogDiagnosticKind.ResponseTooLarge
+        },
+        { ModelsJson("model-*"), LLMModelCatalogDiagnosticKind.PatternOnly },
+        { ModelsJson(" model-a"), LLMModelCatalogDiagnosticKind.ResponseInvalid },
+        { "{\"models\":[]}", LLMModelCatalogDiagnosticKind.ResponseInvalid },
+    };
+
+    [Fact]
+    public async Task RefreshAsync_WhenGatewayAccessIsDenied_ShouldCommitUnavailableEvidenceWithoutBody()
+    {
+        var commands = new RecordingCommandPort();
+        var handler = new RoutingJsonHandler(
+            Error(HttpStatusCode.Forbidden, "sensitive-upstream-denial", 9004));
+
+        var result = await Create(commands, handler)
+            .RefreshAsync(Owner(), "bearer-secret", GatewayRefreshRequest());
+
+        result.Success.Should().BeTrue();
+        var catalog = commands.Observations.Single().GatewayLLMTarget!.ModelCatalog;
+        catalog.Certainty.Should().Be(LLMModelCatalogCertainty.Unavailable);
+        catalog.DiagnosticKind.Should().Be(LLMModelCatalogDiagnosticKind.AccessDenied);
+        string.Join('\n', commands.Observations).Should().NotContain("sensitive-upstream-denial");
+    }
+
+    [Fact]
+    public async Task RefreshAsync_WhenGatewayModelReadTimesOut_ShouldPreserveCommittedTarget()
+    {
+        var existingTarget = new NyxIdAuthorizationLLMTargetEvidence
+        {
+            RouteKind = LLMRouteKind.Gateway,
+            RouteValue = "/api/v1/llm/gateway/v1",
+        };
+        var commands = new RecordingCommandPort();
+        var handler = new RoutingJsonHandler(ProviderTimeout());
+        var catalogQuery = new RecordingCatalogQueryPort(
+            snapshot: CatalogWithGateway(existingTarget));
+
+        var result = await Create(commands, handler, catalogQuery: catalogQuery)
+            .RefreshAsync(Owner(), "bearer-secret", GatewayRefreshRequest());
+
+        result.Status.Should().Be(NyxIdAuthorizationCatalogRefreshStatus.Failed);
+        result.FailureCode.Should().Be("nyxid_catalog_refresh_provider_timed_out");
+        commands.Failures.Should().ContainSingle();
+        commands.Observations.Should().BeEmpty();
+        catalogQuery.Snapshot!.GatewayLLMTarget.Should().BeSameAs(existingTarget);
+    }
+
+    [Fact]
     public async Task RefreshAsync_WhenRequiredServicesAreProvided_ShouldRequestOnlyRequiredScopePlanServices()
     {
         var commands = new RecordingCommandPort();
@@ -803,7 +973,9 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
             .RefreshAsync(
                 Owner(),
                 "bearer-secret",
-                [new NyxIdUserServiceCapabilityRef { UserServiceId = "service-a" }]);
+                new NyxIdAuthorizationCatalogRefreshRequest(
+                    [new NyxIdUserServiceCapabilityRef { UserServiceId = "service-a" }],
+                    LLMTarget: null));
 
         result.Status.Should().Be(NyxIdAuthorizationCatalogRefreshStatus.Observed);
         result.FailureCode.Should().BeEmpty();
@@ -846,7 +1018,9 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
             .RefreshAsync(
                 Owner(),
                 "bearer-secret",
-                [new NyxIdUserServiceCapabilityRef { UserServiceId = "service-missing" }]);
+                new NyxIdAuthorizationCatalogRefreshRequest(
+                    [new NyxIdUserServiceCapabilityRef { UserServiceId = "service-missing" }],
+                    LLMTarget: null));
 
         result.Status.Should().Be(NyxIdAuthorizationCatalogRefreshStatus.CatalogUnstable);
         result.FailureCode.Should().Be("nyxid_required_service_not_found:service-missing");
@@ -1115,6 +1289,52 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
         OwnerKind = AuthorizationOwnerKind.Personal,
         OwnerSubject = "owner-alpha",
     };
+
+    private static NyxIdAuthorizationCatalogRefreshRequest GatewayRefreshRequest() => new(
+        [],
+        new ScheduledInvocationLLMRefreshRequirement(
+            LLMRouteKind.Gateway,
+            "/api/v1/llm/gateway/v1",
+            string.Empty,
+            string.Empty,
+            "gpt-5.5",
+            17));
+
+    private static NyxIdAuthorizationCatalogRefreshRequest UserServiceRefreshRequest(
+        string serviceSlug = "api-alpha") => new(
+        [new NyxIdUserServiceCapabilityRef
+        {
+            UserServiceId = "service-a",
+            ServiceSlugSnapshot = serviceSlug,
+        }],
+        new ScheduledInvocationLLMRefreshRequirement(
+            LLMRouteKind.NyxIdUserService,
+            $"/api/v1/proxy/s/{serviceSlug}",
+            "service-a",
+            serviceSlug,
+            "gpt-5.5",
+            17));
+
+    private static string ModelsJson(params string[] modelIds) =>
+        JsonSerializer.Serialize(new
+        {
+            @object = "list",
+            data = modelIds.Select(static modelId => new { id = modelId, @object = "model" }),
+        });
+
+    private static NyxIdAuthorizationCatalogSnapshot CatalogWithGateway(
+        NyxIdAuthorizationLLMTargetEvidence target) => new(
+        Owner(),
+        StateVersion: 19,
+        ObservedAtUtc: Now.AddMinutes(-1),
+        FreshUntilUtc: Now.AddMinutes(14),
+        ContractVersion: "1",
+        PolicyVersion: "api-key-scope-v1",
+        EvaluatedAtUtc: EvaluatedAt,
+        ContentDigest: "digest",
+        Services: [],
+        LifecycleFence: 7,
+        GatewayLLMTarget: target);
 
     private static string UserServicesJson() => """
         {
@@ -1694,10 +1914,13 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
         }
     }
 
-    private sealed class RecordingCatalogQueryPort(long? lifecycleFence = null)
+    private sealed class RecordingCatalogQueryPort(
+        long? lifecycleFence = null,
+        NyxIdAuthorizationCatalogSnapshot? snapshot = null)
         : INyxIdAuthorizationCatalogQueryPort
     {
         public List<AuthorizationOwnerIdentity> Owners { get; } = [];
+        public NyxIdAuthorizationCatalogSnapshot? Snapshot { get; } = snapshot;
 
         public Task<NyxIdAuthorizationCatalogSnapshot?> GetAsync(
             AuthorizationOwnerIdentity owner,
@@ -1705,7 +1928,7 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
         {
             ct.ThrowIfCancellationRequested();
             Owners.Add(owner.Clone());
-            return Task.FromResult(lifecycleFence.HasValue
+            return Task.FromResult(Snapshot ?? (lifecycleFence.HasValue
                 ? new NyxIdAuthorizationCatalogSnapshot(
                     owner.Clone(),
                     StateVersion: 19,
@@ -1717,7 +1940,7 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
                     ContentDigest: "digest",
                     Services: [],
                     LifecycleFence: lifecycleFence.Value)
-                : null);
+                : null));
         }
     }
 
