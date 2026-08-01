@@ -157,6 +157,9 @@ public sealed class ProjectionWorkflowActorBindingReaderTests
                 query.Filters.Should().Contain(filter =>
                     filter.FieldPath == nameof(WorkflowActorBindingDocument.DefinitionActorId) &&
                     filter.Operator == ProjectionDocumentFilterOperator.In);
+                query.Filters.Should().Contain(filter =>
+                    filter.FieldPath == nameof(WorkflowActorBindingDocument.RunId) &&
+                    filter.Operator == ProjectionDocumentFilterOperator.In);
 
                 return Task.FromResult(new ProjectionDocumentQueryResult<WorkflowActorBindingDocument>
                 {
@@ -178,7 +181,8 @@ public sealed class ProjectionWorkflowActorBindingReaderTests
             new WorkflowRunBindingQuery(
                 " scope-1 ",
                 ["definition-1", "definition-2", "definition-1", " "],
-                Take: 500),
+                Take: 500,
+                RunIds: ["run-2", "run-2", " "]),
             CancellationToken.None);
 
         result.Should().ContainSingle();

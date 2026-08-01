@@ -1,7 +1,10 @@
+using System.Text.Json;
+using Aevatar.AGUI.Contracts;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Audit;
 using Aevatar.Audit.Hosting.EndpointAudit;
+using Aevatar.Capabilities;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
@@ -19,24 +22,21 @@ using Aevatar.GAgentService.Application.Workflows;
 using Aevatar.GAgentService.Governance.Abstractions;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Abstractions.Queries;
-using Aevatar.Capabilities;
+using Aevatar.GAgentService.Hosting.Serialization;
+using Aevatar.GAgentService.Hosting.Sse;
 using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Queries;
-using Aevatar.GAgentService.Hosting.Serialization;
-using Aevatar.AGUI.Contracts;
-using Aevatar.GAgentService.Hosting.Sse;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using System.Text.Json;
 using WorkflowSagaStatus = Aevatar.Workflow.Abstractions.WorkflowSagaStatus;
 
 namespace Aevatar.GAgentService.Hosting.Endpoints;
@@ -488,7 +488,7 @@ public static class ScopeServiceEndpoints
     {
         try
         {
-            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            if (TryCreateMemberRouteAccessDeniedResult(http, scopeId, memberId, out var denied))
                 return denied;
 
             var memberResolution = await memberPublishedServiceResolver.ResolveAsync(
@@ -834,7 +834,7 @@ public static class ScopeServiceEndpoints
     {
         try
         {
-            if (await AevatarScopeAccessGuard.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
+            if (await TryWriteMemberRouteAccessDeniedAsync(http, scopeId, memberId, ct))
                 return;
 
             var memberResolution = await memberPublishedServiceResolver.ResolveAsync(
@@ -886,7 +886,7 @@ public static class ScopeServiceEndpoints
     {
         try
         {
-            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            if (TryCreateMemberRouteAccessDeniedResult(http, scopeId, memberId, out var denied))
                 return denied;
 
             var memberResolution = await memberPublishedServiceResolver.ResolveAsync(
@@ -1246,7 +1246,7 @@ public static class ScopeServiceEndpoints
     {
         try
         {
-            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            if (TryCreateMemberRouteAccessDeniedResult(http, scopeId, memberId, out var denied))
                 return denied;
 
             var memberResolution = await memberPublishedServiceResolver.ResolveAsync(
@@ -1325,7 +1325,7 @@ public static class ScopeServiceEndpoints
     {
         try
         {
-            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            if (TryCreateMemberRouteAccessDeniedResult(http, scopeId, memberId, out var denied))
                 return denied;
 
             var memberResolution = await memberPublishedServiceResolver.ResolveAsync(
@@ -1380,7 +1380,7 @@ public static class ScopeServiceEndpoints
     {
         try
         {
-            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            if (TryCreateMemberRouteAccessDeniedResult(http, scopeId, memberId, out var denied))
                 return denied;
 
             var memberResolution = await memberPublishedServiceResolver.ResolveAsync(
@@ -1447,7 +1447,7 @@ public static class ScopeServiceEndpoints
     {
         try
         {
-            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            if (TryCreateMemberRouteAccessDeniedResult(http, scopeId, memberId, out var denied))
                 return denied;
 
             var memberResolution = await memberPublishedServiceResolver.ResolveAsync(
@@ -1490,7 +1490,7 @@ public static class ScopeServiceEndpoints
     {
         try
         {
-            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            if (TryCreateMemberRouteAccessDeniedResult(http, scopeId, memberId, out var denied))
                 return denied;
 
             var memberResolution = await memberPublishedServiceResolver.ResolveAsync(
@@ -1533,7 +1533,7 @@ public static class ScopeServiceEndpoints
     {
         try
         {
-            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            if (TryCreateMemberRouteAccessDeniedResult(http, scopeId, memberId, out var denied))
                 return denied;
 
             var memberResolution = await memberPublishedServiceResolver.ResolveAsync(
@@ -1576,11 +1576,8 @@ public static class ScopeServiceEndpoints
     {
         try
         {
-            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            if (TryCreateMemberRouteAccessDeniedResult(http, scopeId, memberId, out var denied))
                 return denied;
-
-            if (AevatarMemberAccessGuard.TryCreateMemberAccessDeniedResult(http, memberId, out var memberDenied))
-                return memberDenied;
 
             var memberResolution = await memberPublishedServiceResolver.ResolveAsync(
                 new MemberPublishedServiceResolveRequest(scopeId, memberId),
@@ -4265,6 +4262,30 @@ const response = await fetch("{{invokePath}}", {
 
     private static string BuildScopeServiceRunNotFoundMessage(string scopeId, string serviceId, string runId) =>
         $"Run '{runId}' was not found on service '{serviceId}' in scope '{scopeId}'.";
+
+    private static bool TryCreateMemberRouteAccessDeniedResult(
+        HttpContext http,
+        string scopeId,
+        string memberId,
+        out IResult denied)
+    {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out denied))
+            return true;
+
+        return AevatarMemberAccessGuard.TryCreateMemberAccessDeniedResult(http, memberId, out denied);
+    }
+
+    private static async Task<bool> TryWriteMemberRouteAccessDeniedAsync(
+        HttpContext http,
+        string scopeId,
+        string memberId,
+        CancellationToken ct)
+    {
+        if (await AevatarScopeAccessGuard.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
+            return true;
+
+        return await AevatarMemberAccessGuard.TryWriteMemberAccessDeniedAsync(http, memberId, ct);
+    }
 
     private static async Task WriteJsonErrorResponseAsync(
         HttpContext http,

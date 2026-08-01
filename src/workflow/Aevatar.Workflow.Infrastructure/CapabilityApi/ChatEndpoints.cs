@@ -1,12 +1,12 @@
 using System.Net.WebSockets;
 using System.Text.Json;
-using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.RunForks;
 using Aevatar.Workflow.Application.Abstractions.Runs;
-using Aevatar.Workflow.Abstractions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
@@ -719,6 +719,13 @@ public static class WorkflowCapabilityEndpoints
                 return Results.BadRequest(new { error = "sourceRunId and startAtStepId are required." });
             }
 
+            if (http == null ||
+                !Aevatar.Capabilities.AevatarScopeAccessGuard.TryGetCallerScopeId(http, out var trustedScopeId))
+            {
+                scope.MarkResult(StatusCodes.Status401Unauthorized);
+                return Results.Unauthorized();
+            }
+
             var callerCredential = WorkflowCallerCredentialExtractor.Extract(http);
             if (!callerCredential.Succeeded)
             {
@@ -738,7 +745,7 @@ public static class WorkflowCapabilityEndpoints
                     input.Input,
                     NormalizeOptional(input.CommandId),
                     NormalizeOptional(input.CorrelationId),
-                    ScopeId: NormalizeOptional(input.ScopeId),
+                    ScopeId: trustedScopeId,
                     CallerCredential: callerCredential.Credential),
                 ct);
 
