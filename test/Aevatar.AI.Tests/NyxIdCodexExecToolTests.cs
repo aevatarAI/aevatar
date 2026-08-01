@@ -319,6 +319,9 @@ public sealed class NyxIdCodexExecToolTests
     [InlineData("not json at all")]
     [InlineData("[]")]
     [InlineData("""{"status":"running"}""")]
+    [InlineData("""{"exit_code":0}""")]
+    [InlineData("""{"exit_code":0,"timed_out":null}""")]
+    [InlineData("""{"exit_code":0,"timed_out":"false"}""")]
     [InlineData("""{"stdout":"no terminal markers"}""")]
     public void CreateResultReceipt_WhenOutcomeIsAmbiguous_StaysUnknown(string resultJson)
     {

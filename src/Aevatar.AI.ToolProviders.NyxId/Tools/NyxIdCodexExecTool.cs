@@ -120,8 +120,13 @@ public sealed class NyxIdCodexExecTool : INyxIdBuiltInTool
                     : null;
             }
 
-            if (root.TryGetProperty("timed_out", out var timedOut) &&
-                timedOut.ValueKind == JsonValueKind.True)
+            if (!root.TryGetProperty("timed_out", out var timedOut) ||
+                timedOut.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+            {
+                return null;
+            }
+
+            if (timedOut.ValueKind == JsonValueKind.True)
             {
                 return ErrorReceipt(
                     callId,
