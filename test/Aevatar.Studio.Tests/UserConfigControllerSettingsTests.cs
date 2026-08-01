@@ -39,7 +39,10 @@ public sealed class UserConfigControllerSettingsTests
             (HttpStatusCode.OK, """{"services":[]}"""))
             .RespondToUserServicesWith(PersonalUserServicesJson("us-openai", "openai-work", "OpenAI Work"));
         var controller = CreateController(
-            current: new UserConfig("gpt-5.4", "/api/v1/proxy/s/openai-work"),
+            current: new UserConfig(
+                "gpt-5.4",
+                "/api/v1/proxy/s/openai-work",
+                StateVersion: 29),
             httpHandler: httpHandler,
             bearerToken: "user-token-1");
 
@@ -51,8 +54,11 @@ public sealed class UserConfigControllerSettingsTests
         payload.SavedRoute.Should().Be("/api/v1/proxy/s/openai-work");
         payload.EffectiveRoute.Should().Be("/api/v1/proxy/s/openai-work");
         payload.DefaultModel.Should().Be("gpt-5.4");
+        payload.UserConfigStateVersion.Should().Be(29L);
         payload.RouteOptions.Should().Contain(option => option.RouteValue == UserConfigLlmRouteDefaults.Gateway);
         payload.RouteOptions.Should().Contain(option => option.UserServiceId == "us-openai" && option.Ready);
+        var userServiceOption = payload.RouteOptions.Single(option => option.UserServiceId == "us-openai");
+        userServiceOption.DefaultModel.Should().Be("gpt-5.4");
         payload.ModelGroupsByRoute.Should()
             .Contain(group => group.RouteValue == "/api/v1/proxy/s/openai-work" && group.Models.Contains("gpt-5.4"));
         httpHandler.Requests.Select(request => request.Path)
@@ -62,6 +68,34 @@ public sealed class UserConfigControllerSettingsTests
                 "/api/v1/keys",
                 "/api/v1/proxy/services?per_page=100",
                 "/api/v1/user-services");
+    }
+
+    [Fact]
+    public async Task GetLlmObservation_ShouldReadOnlyTheAuthoritativeUserConfigProjection()
+    {
+        var httpHandler = new RecordingHttpHandler("""{"services":[]}""");
+        var current = new UserConfig(
+            DefaultModel: "gpt-5.4-mini",
+            PreferredLlmRoute: "/api/v1/proxy/s/openai",
+            LlmSelection: new UserLlmSelectionValue(
+                UserLlmSelectionKind.NyxIdUserService,
+                "/api/v1/proxy/s/openai",
+                "us-beta",
+                "openai"),
+            StateVersion: 41);
+        var controller = CreateController(
+            current: current,
+            httpHandler: httpHandler,
+            bearerToken: "user-token-1");
+        var response = await controller.GetLlmObservation(CancellationToken.None);
+
+        var ok = response.Result.Should().BeOfType<OkObjectResult>().Subject;
+        var payload = ok.Value.Should().BeOfType<UserLlmSettingsObservationResponse>().Subject;
+        payload.UserConfigStateVersion.Should().Be(41L);
+        payload.SavedRouteKind.Should().Be(UserLlmSelectionKindWire.NyxIdUserService);
+        payload.SavedUserServiceId.Should().Be("us-beta");
+        payload.DefaultModel.Should().Be("gpt-5.4-mini");
+        httpHandler.Requests.Should().BeEmpty();
     }
 
     [Fact]

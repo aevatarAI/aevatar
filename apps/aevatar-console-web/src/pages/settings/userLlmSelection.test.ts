@@ -11,6 +11,7 @@ const duplicateRoute = "/api/v1/proxy/s/shared-openai";
 const routeOptions: StudioUserLlmRouteOption[] = [
   {
     routeValue: "/api/v1/llm/gateway/v1",
+    defaultModel: null,
     label: "Gateway",
     source: "gateway_provider",
     status: "ready",
@@ -22,6 +23,7 @@ const routeOptions: StudioUserLlmRouteOption[] = [
   },
   {
     routeValue: duplicateRoute,
+    defaultModel: "gpt-alpha",
     label: "Shared OpenAI alpha",
     source: "user_service",
     status: "ready",
@@ -33,6 +35,7 @@ const routeOptions: StudioUserLlmRouteOption[] = [
   },
   {
     routeValue: duplicateRoute,
+    defaultModel: "gpt-beta",
     label: "Shared OpenAI beta",
     source: "user_service",
     status: "ready",
@@ -44,6 +47,7 @@ const routeOptions: StudioUserLlmRouteOption[] = [
   },
   {
     routeValue: "/api/v1/proxy/s/diagnostic-only",
+    defaultModel: null,
     label: "Provider diagnostic",
     source: "provider_diagnostic",
     status: "ready",
@@ -67,6 +71,8 @@ describe("userLlmSelection", () => {
     expect(options.map((option) => option.label)).not.toContain(
       "Provider diagnostic",
     );
+    expect(options.find((option) => option.value === "user-service:us-beta"))
+      .toMatchObject({ defaultModel: "gpt-beta" });
     expect(
       decodeUserLlmSelectionValue("user-service:us-beta", options),
     ).toEqual({

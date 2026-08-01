@@ -44,6 +44,7 @@ public sealed class UserConfigCurrentStateProjector
                 out var stateEvent,
                 out var state) ||
             stateEvent?.EventData == null ||
+            !string.Equals(stateEvent.AgentId, context.RootActorId, StringComparison.Ordinal) ||
             state == null)
         {
             return;

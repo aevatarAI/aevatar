@@ -102,6 +102,28 @@ public sealed class UserConfigController : ControllerBase
         }
     }
 
+    [HttpGet("llm/observation")]
+    public async Task<ActionResult<UserLlmSettingsObservationResponse>> GetLlmObservation(
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var view = await _llmPreferenceService
+                .GetObservationAsync(cancellationToken)
+                .ConfigureAwait(false);
+            return Ok(UserLlmSettingsObservationResponse.FromApplication(view));
+        }
+        catch (InvalidOperationException exception)
+        {
+            return BadRequest(new { message = exception.Message });
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            _logger.LogWarning(exception, "Failed to fetch user LLM settings observation");
+            return StatusCode(502, new { message = "LLM settings observation is temporarily unavailable." });
+        }
+    }
+
     [HttpPut("llm")]
     public async Task<ActionResult<UserConfigSaveReceiptResponse>> SaveLlmSettings(
         [FromBody] SaveUserLlmSettingsRequest? request,

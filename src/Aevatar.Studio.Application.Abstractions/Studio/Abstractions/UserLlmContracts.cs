@@ -11,6 +11,7 @@ public sealed record SaveUserLlmPreferenceCommand(
     bool? Reset = null);
 
 public sealed record UserLlmSettingsView(
+    long UserConfigStateVersion,
     string SavedRoute,
     string SavedRouteLabel,
     string SavedRouteKind,
@@ -29,6 +30,7 @@ public sealed record UserLlmSettingsView(
 
 public sealed record UserLlmRouteOption(
     string RouteValue,
+    string? DefaultModel,
     string Label,
     string Source,
     string Status,
@@ -37,6 +39,13 @@ public sealed record UserLlmRouteOption(
     string? UserServiceId,
     string? ServiceSlug,
     string? Description);
+
+public sealed record UserLlmSettingsObservationView(
+    long UserConfigStateVersion,
+    string SavedRoute,
+    string SavedRouteKind,
+    string? SavedUserServiceId,
+    string DefaultModel);
 
 public sealed record UserLlmModelGroup(
     string RouteValue,
@@ -181,6 +190,8 @@ public interface IUserLlmCatalogPort
 public interface IUserLlmPreferenceService
 {
     Task<UserLlmSettingsView> GetSettingsAsync(string? bearerToken, CancellationToken ct);
+
+    Task<UserLlmSettingsObservationView> GetObservationAsync(CancellationToken ct);
 }
 
 public interface IChannelUserLlmPreferencePort

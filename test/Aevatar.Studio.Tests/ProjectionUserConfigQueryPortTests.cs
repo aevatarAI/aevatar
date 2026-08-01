@@ -33,6 +33,7 @@ public sealed class ProjectionUserConfigQueryPortTests
         {
             Document = new UserConfigCurrentStateDocument
             {
+                StateVersion = 41,
                 DefaultModel = "gpt-5.5",
                 PreferredLlmRoute = "/api/v1/proxy/s/chrono-llm-public",
                 LlmSelection = new UserLlmSelection
@@ -53,6 +54,7 @@ public sealed class ProjectionUserConfigQueryPortTests
             "/api/v1/proxy/s/chrono-llm-public",
             "us-alpha",
             "chrono-llm-public"));
+        config.StateVersion.Should().Be(41L);
     }
 
     [Fact]
@@ -64,6 +66,7 @@ public sealed class ProjectionUserConfigQueryPortTests
 
         config.LlmSelection.Should().BeNull();
         config.PreferredLlmRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
+        config.StateVersion.Should().Be(0L);
     }
 
     private static ProjectionUserConfigQueryPort CreatePort(RecordingDocumentReader reader) =>

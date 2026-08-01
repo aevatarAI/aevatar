@@ -23,6 +23,7 @@ import React from "react";
 import {
   LLM_MODEL_HEADER_KEY,
   LLM_ROUTE_HEADER_KEY,
+  USER_LLM_ROUTE_GATEWAY,
   buildConversationModelGroups,
   describeConversationRoute,
   normalizeUserLlmRoute,
@@ -37,6 +38,7 @@ import { studioApi } from "@/shared/studio/api";
 import type {
   StudioUserLlmRouteOption,
   StudioUserLlmSettings,
+  StudioUserLlmSettingsObservation,
 } from "@/shared/studio/models";
 import {
   formatStudioUserConfigRuntimeModeLabel,
@@ -77,8 +79,11 @@ type SettingsDraft = {
 };
 
 type PendingSettingsSave = {
+  readonly baseUserConfigStateVersion: number;
+  readonly draftAtSave: SettingsDraft;
   readonly revision: number;
   readonly target: SettingsDraft;
+  readonly targetLabel: string;
 };
 
 type SettingsDraftState = {
@@ -89,8 +94,11 @@ type SettingsDraftState = {
 };
 
 type SettingsSaveRequest = {
+  readonly baseUserConfigStateVersion: number;
   readonly draft: SettingsDraft;
   readonly revision: number;
+  readonly target: SettingsDraft;
+  readonly targetLabel: string;
 };
 
 type ScopeChipProps = {
@@ -110,6 +118,9 @@ type TechnicalPreviewRow = {
 
 const llmTabKey = "llm";
 const accountTabKey = "account";
+const USER_LLM_OBSERVATION_BASE_INTERVAL_MS = 1_000;
+const USER_LLM_OBSERVATION_MAX_INTERVAL_MS = 4_000;
+const USER_LLM_OBSERVATION_MAX_ATTEMPTS = 4;
 
 const tabBodyStyle: React.CSSProperties = {
   display: "flex",
@@ -227,6 +238,46 @@ function draftsEqual(left: SettingsDraft, right: SettingsDraft): boolean {
       left.preferredLlmSelection,
       right.preferredLlmSelection,
     )
+  );
+}
+
+function userLlmObservationMatchesTarget(
+  pending: PendingSettingsSave | null,
+  observation: StudioUserLlmSettingsObservation | undefined,
+): boolean {
+  if (
+    !pending ||
+    !observation ||
+    observation.userConfigStateVersion <= pending.baseUserConfigStateVersion
+  ) {
+    return false;
+  }
+
+  const targetSelection = pending.target.preferredLlmSelection;
+  if (!targetSelection) {
+    return false;
+  }
+
+  const identityMatches = targetSelection.kind === "gateway"
+    ? observation.savedRouteKind === "gateway" &&
+      normalizeUserLlmRoute(observation.savedRoute) === USER_LLM_ROUTE_GATEWAY
+    : observation.savedRouteKind === "nyx_id_user_service" &&
+      trimConversationValue(observation.savedUserServiceId) ===
+        targetSelection.userServiceId;
+
+  return identityMatches &&
+    (trimConversationValue(observation.defaultModel) ?? "") ===
+      (trimConversationValue(pending.target.defaultModel) ?? "");
+}
+
+function userLlmObservationInterval(attempts: number): number | false {
+  if (attempts >= USER_LLM_OBSERVATION_MAX_ATTEMPTS) {
+    return false;
+  }
+
+  return Math.min(
+    USER_LLM_OBSERVATION_BASE_INTERVAL_MS * 2 ** Math.max(0, attempts - 1),
+    USER_LLM_OBSERVATION_MAX_INTERVAL_MS,
   );
 }
 
@@ -463,6 +514,54 @@ const SettingsPage: React.FC = () => {
   const draft = draftState.value;
   const pendingSave = draftState.pendingSave;
   const [saveError, setSaveError] = React.useState<string | null>(null);
+  const [observationCycle, setObservationCycle] = React.useState(0);
+  const observationCycleRef = React.useRef(0);
+  const [observationAttempts, setObservationAttempts] = React.useState({
+    cycle: 0,
+    count: 0,
+  });
+  const restartObservationCycle = React.useCallback(() => {
+    const nextCycle = observationCycleRef.current + 1;
+    observationCycleRef.current = nextCycle;
+    setObservationCycle(nextCycle);
+    setObservationAttempts({ cycle: nextCycle, count: 0 });
+  }, []);
+  const observationQueryKey = React.useMemo(
+    () => [
+      "settings",
+      "user-llm-settings-observation",
+      pendingSave?.revision ?? "idle",
+      observationCycle,
+    ] as const,
+    [observationCycle, pendingSave?.revision],
+  );
+  const observationQuery = useQuery({
+    queryKey: observationQueryKey,
+    queryFn: async () => {
+      const requestCycle = observationCycle;
+      try {
+        return await studioApi.getUserLlmSettingsObservation();
+      } finally {
+        if (observationCycleRef.current === requestCycle) {
+          setObservationAttempts((current) => ({
+            cycle: requestCycle,
+            count: current.cycle === requestCycle ? current.count + 1 : 1,
+          }));
+        }
+      }
+    },
+    enabled: Boolean(pendingSave),
+    retry: false,
+    refetchInterval: (query) =>
+      userLlmObservationInterval(
+        query.state.dataUpdateCount + query.state.errorUpdateCount,
+      ),
+  });
+  const observationExhausted = Boolean(
+    pendingSave &&
+    observationAttempts.cycle === observationCycle &&
+    observationAttempts.count >= USER_LLM_OBSERVATION_MAX_ATTEMPTS,
+  );
   const draftDirty = React.useMemo(
     () => !draftsEqual(draft, draftState.baseline),
     [draft, draftState.baseline],
@@ -474,23 +573,8 @@ const SettingsPage: React.FC = () => {
     }
 
     setDraftState((current) => {
-      const currentPending = current.pendingSave;
-      if (currentPending && draftsEqual(currentPending.target, loadedDraft)) {
-        const hasNewerEdit =
-          current.revision !== currentPending.revision ||
-          !draftsEqual(current.value, currentPending.target);
-        return hasNewerEdit
-          ? {
-              ...current,
-              baseline: loadedDraft,
-              pendingSave: null,
-            }
-          : {
-              ...current,
-              baseline: loadedDraft,
-              pendingSave: null,
-              value: loadedDraft,
-            };
+      if (current.pendingSave) {
+        return current;
       }
 
       if (draftsEqual(current.value, current.baseline)) {
@@ -516,9 +600,44 @@ const SettingsPage: React.FC = () => {
     });
   }, [loadedDraft, pendingSave, userLlmSettingsQuery.isSuccess]);
 
+  React.useEffect(() => {
+    if (!userLlmObservationMatchesTarget(pendingSave, observationQuery.data)) {
+      return;
+    }
+    const visiblePending = pendingSave!;
+
+    const visibleDraft: SettingsDraft = {
+      ...visiblePending.target,
+      defaultModel: trimConversationValue(observationQuery.data?.defaultModel) ?? "",
+    };
+    setDraftState((current) => {
+      const currentPending = current.pendingSave;
+      if (
+        !currentPending ||
+        currentPending.revision !== visiblePending.revision ||
+        currentPending.baseUserConfigStateVersion !==
+          visiblePending.baseUserConfigStateVersion
+      ) {
+        return current;
+      }
+
+      const hasNewerEdit = current.revision !== currentPending.revision;
+      return {
+        ...current,
+        baseline: visibleDraft,
+        pendingSave: null,
+        value: hasNewerEdit ? current.value : visibleDraft,
+      };
+    });
+    void Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["settings", "user-llm-settings"] }),
+      queryClient.invalidateQueries({ queryKey: ["studio-user-llm-settings"] }),
+      queryClient.invalidateQueries({ queryKey: ["chat", "user-llm-settings"] }),
+    ]);
+  }, [observationQuery.data, pendingSave, queryClient]);
+
   const saveMutation = useMutation({
-    mutationFn: async ({ draft: nextDraft }: SettingsSaveRequest) => {
-      const model = trimConversationValue(nextDraft.defaultModel) ?? "";
+    mutationFn: async ({ draft: nextDraft, target }: SettingsSaveRequest) => {
       const selection = nextDraft.preferredLlmSelection;
       if (!selection) {
         throw new Error(
@@ -532,11 +651,13 @@ const SettingsPage: React.FC = () => {
       const receipt = selection.kind === "gateway"
         ? studioApi.saveUserLlmSettings({
             routeValue: selection.routeValue,
-            model,
+            model: trimConversationValue(nextDraft.defaultModel)
+              ? target.defaultModel
+              : null,
           })
         : studioApi.saveUserLlmSettings({
             userServiceId: selection.userServiceId,
-            model,
+            model: target.defaultModel,
           });
       const observedReceipt = await receipt;
       if (!observedReceipt.accepted) {
@@ -550,20 +671,19 @@ const SettingsPage: React.FC = () => {
 
       return observedReceipt;
     },
-    onSuccess: async (_receipt, request) => {
+    onSuccess: (_receipt, request) => {
       setSaveError(null);
+      restartObservationCycle();
       setDraftState((current) => ({
         ...current,
         pendingSave: {
+          baseUserConfigStateVersion: request.baseUserConfigStateVersion,
+          draftAtSave: request.draft,
           revision: request.revision,
-          target: request.draft,
+          target: request.target,
+          targetLabel: request.targetLabel,
         },
       }));
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["settings", "user-llm-settings"] }),
-        queryClient.invalidateQueries({ queryKey: ["studio-user-llm-settings"] }),
-        queryClient.invalidateQueries({ queryKey: ["chat", "user-llm-settings"] }),
-      ]);
     },
     onError: (error) => {
       setSaveError(describeError(error, "Failed to save settings."));
@@ -589,7 +709,9 @@ const SettingsPage: React.FC = () => {
     preferredSelectionOption?.ready && preferredSelectionOption.allowed,
   );
   const draftMatchesLoaded = draftsEqual(draft, loadedDraft);
-  const selectedRoute = draft.preferredLlmSelection?.routeValue;
+  const selectedRoute =
+    preferredSelectionOption?.selection.routeValue ??
+    draft.preferredLlmSelection?.routeValue;
   const effectiveRoute = React.useMemo(
     () =>
       draftMatchesLoaded
@@ -846,11 +968,40 @@ const SettingsPage: React.FC = () => {
   );
 
   const handleSave = React.useCallback(() => {
+    const explicitModel = trimConversationValue(draft.defaultModel);
+    const selection = draft.preferredLlmSelection;
+    const resolvedTargetModel = explicitModel ?? (
+      selection?.kind === "nyx_id_user_service"
+        ? preferredSelectionOption?.defaultModel ?? ""
+        : trimConversationValue(loadedDraft.defaultModel) ?? ""
+    );
     saveMutation.mutate({
+      baseUserConfigStateVersion:
+        userLlmSettingsQuery.data?.userConfigStateVersion ?? 0,
       draft,
       revision: draftState.revision,
+      target: {
+        defaultModel: resolvedTargetModel,
+        preferredLlmSelection:
+          preferredSelectionOption?.selection ?? selection,
+      },
+      targetLabel:
+        preferredSelectionOption?.label ??
+        preferredRouteLabel,
     });
-  }, [draft, draftState.revision, saveMutation]);
+  }, [
+    draft,
+    draftState.revision,
+    loadedDraft.defaultModel,
+    preferredRouteLabel,
+    preferredSelectionOption,
+    saveMutation,
+    userLlmSettingsQuery.data?.userConfigStateVersion,
+  ]);
+
+  const handleRetryObservation = React.useCallback(() => {
+    restartObservationCycle();
+  }, [restartObservationCycle]);
 
   const handleReset = React.useCallback(() => {
     setDraftState((current) => ({
@@ -1028,9 +1179,34 @@ const SettingsPage: React.FC = () => {
 
             {pendingSave ? (
               <Alert
+                action={observationExhausted ? (
+                  <Button
+                    icon={<ReloadOutlined />}
+                    onClick={handleRetryObservation}
+                    size="small"
+                  >
+                    {t(
+                      "pages.settings.index.check.target.again",
+                      "Check target again",
+                    )}
+                  </Button>
+                ) : undefined}
                 message={t(
-                  "pages.settings.index.save.accepted.awaiting.observation",
-                  "Save accepted. Waiting for the exact service and model to be observed.",
+                  draftState.revision === pendingSave.revision
+                    ? "pages.settings.index.save.accepted.awaiting.target.observation"
+                    : "pages.settings.index.save.accepted.awaiting.earlier.target.observation",
+                  draftState.revision === pendingSave.revision
+                    ? "Save accepted for {selection} / {model}. That target setting is not visible yet."
+                    : "An earlier save for {selection} / {model} was accepted, but that target setting is not visible yet. Your current draft is different.",
+                  {
+                    selection: pendingSave.targetLabel,
+                    model:
+                      trimConversationValue(pendingSave.target.defaultModel) ??
+                      t(
+                        "pages.settings.index.platform.default",
+                        "platform default",
+                      ),
+                  },
                 )}
                 showIcon
                 type="info"

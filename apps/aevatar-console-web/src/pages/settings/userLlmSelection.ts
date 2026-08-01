@@ -18,6 +18,7 @@ export type UserLlmSelectionDraft =
 
 export type UserLlmSelectionOption = {
   readonly label: string;
+  readonly defaultModel: string | null;
   readonly value: string;
   readonly selection: UserLlmSelectionDraft;
   readonly ready: boolean;
@@ -59,6 +60,7 @@ export function buildUserLlmSelectionOptions(
         label:
           option.label.trim() ||
           t("pages.settings.userllmselection.gateway", "Gateway"),
+        defaultModel: null,
         value: encodeUserLlmSelectionValue(selection),
         selection,
         ready: option.ready,
@@ -84,6 +86,7 @@ export function buildUserLlmSelectionOptions(
     };
     options.push({
       label: option.label.trim() || option.serviceSlug?.trim() || userServiceId,
+      defaultModel: trimOptional(option.defaultModel) ?? null,
       value: encodeUserLlmSelectionValue(selection),
       selection,
       ready: option.ready,

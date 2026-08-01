@@ -30,7 +30,11 @@ public sealed class UserLlmPreferenceService : IUserLlmPreferenceService
         var defaultModel = config.DefaultModel?.Trim() ?? string.Empty;
 
         if (string.IsNullOrWhiteSpace(bearerToken))
-            return _viewBuilder.BuildUnavailable(config.LlmSelection, savedRoute, defaultModel);
+            return _viewBuilder.BuildUnavailable(
+                config.LlmSelection,
+                savedRoute,
+                defaultModel,
+                config.StateVersion);
 
         try
         {
@@ -40,7 +44,12 @@ public sealed class UserLlmPreferenceService : IUserLlmPreferenceService
                 config.LlmSelection,
                 savedRoute,
                 defaultModel);
-            return _viewBuilder.BuildAvailable(result, config.LlmSelection, savedRoute, defaultModel);
+            return _viewBuilder.BuildAvailable(
+                result,
+                config.LlmSelection,
+                savedRoute,
+                defaultModel,
+                config.StateVersion);
         }
         catch (OperationCanceledException)
         {
@@ -48,8 +57,35 @@ public sealed class UserLlmPreferenceService : IUserLlmPreferenceService
         }
         catch
         {
-            return _viewBuilder.BuildUnavailable(config.LlmSelection, savedRoute, defaultModel);
+            return _viewBuilder.BuildUnavailable(
+                config.LlmSelection,
+                savedRoute,
+                defaultModel,
+                config.StateVersion);
         }
+    }
+
+    public async Task<UserLlmSettingsObservationView> GetObservationAsync(CancellationToken ct)
+    {
+        var config = await _queryPort.GetAsync(ct).ConfigureAwait(false);
+        var selection = config.LlmSelection;
+        var kind = selection?.Kind ?? UserLlmSelectionKind.Unspecified;
+        var savedRoute = kind switch
+        {
+            UserLlmSelectionKind.Gateway => UserConfigLlmRouteDefaults.Gateway,
+            UserLlmSelectionKind.NyxIdUserService => UserConfigLlmRoute.Normalize(selection!.RouteValue),
+            _ => UserConfigLlmRoute.Normalize(config.PreferredLlmRoute),
+        };
+        var savedUserServiceId = kind == UserLlmSelectionKind.NyxIdUserService
+            ? UserLlmPreferenceWriteCore.NormalizeOptional(selection!.NyxIdUserServiceId)
+            : null;
+
+        return new UserLlmSettingsObservationView(
+            UserConfigStateVersion: config.StateVersion,
+            SavedRoute: savedRoute,
+            SavedRouteKind: UserLlmSelectionKindWire.From(kind),
+            SavedUserServiceId: savedUserServiceId,
+            DefaultModel: config.DefaultModel?.Trim() ?? string.Empty);
     }
 
     private static (string SavedRoute, string DefaultModel) ResolveLegacyPrefixedModel(

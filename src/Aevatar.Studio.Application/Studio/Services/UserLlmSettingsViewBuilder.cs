@@ -15,7 +15,8 @@ internal sealed class UserLlmSettingsViewBuilder
         NyxIdLlmServicesResult result,
         UserLlmSelectionValue? savedSelection,
         string savedRoute,
-        string defaultModel)
+        string defaultModel,
+        long userConfigStateVersion = 0)
     {
         var saved = ResolveSavedSelection(savedSelection, savedRoute);
         var options = BuildRouteOptions(result.Services);
@@ -37,6 +38,7 @@ internal sealed class UserLlmSettingsViewBuilder
         var canSave = readyRoutes.Contains(UserConfigLlmRouteDefaults.Gateway) || readyRoutes.Count > 0;
 
         return new UserLlmSettingsView(
+            UserConfigStateVersion: userConfigStateVersion,
             SavedRoute: saved.Route,
             SavedRouteLabel: savedRouteLabel,
             SavedRouteKind: UserLlmSelectionKindWire.From(saved.Kind),
@@ -61,7 +63,8 @@ internal sealed class UserLlmSettingsViewBuilder
     public UserLlmSettingsView BuildUnavailable(
         UserLlmSelectionValue? savedSelection,
         string savedRoute,
-        string defaultModel)
+        string defaultModel,
+        long userConfigStateVersion = 0)
     {
         var saved = ResolveSavedSelection(savedSelection, savedRoute);
         var label = saved.Kind == UserLlmSelectionKind.Gateway
@@ -69,6 +72,7 @@ internal sealed class UserLlmSettingsViewBuilder
             : saved.ServiceSlug ?? saved.Route;
 
         return new UserLlmSettingsView(
+            UserConfigStateVersion: userConfigStateVersion,
             SavedRoute: saved.Route,
             SavedRouteLabel: label,
             SavedRouteKind: UserLlmSelectionKindWire.From(saved.Kind),
@@ -82,6 +86,7 @@ internal sealed class UserLlmSettingsViewBuilder
             [
                 new UserLlmRouteOption(
                     RouteValue: saved.Route,
+                    DefaultModel: null,
                     Label: label,
                     Source: saved.Kind == UserLlmSelectionKind.Gateway
                         ? UserLlmRouteSourceValue.GatewayProvider.ToWireValue()
@@ -137,6 +142,7 @@ internal sealed class UserLlmSettingsViewBuilder
 
             options.Add(new UserLlmRouteOption(
                 RouteValue: route,
+                DefaultModel: UserLlmPreferenceWriteCore.NormalizeOptional(service.DefaultModel),
                 Label: NormalizeDisplayName(service.DisplayName, service.ServiceSlug),
                 Source: UserLlmCatalogNormalization.NormalizeSource(service.Source).ToWireValue(),
                 Status: UserLlmCatalogNormalization.NormalizeStatus(service.Status).ToWireValue(),
@@ -164,6 +170,7 @@ internal sealed class UserLlmSettingsViewBuilder
 
         return new UserLlmRouteOption(
             RouteValue: UserConfigLlmRouteDefaults.Gateway,
+            DefaultModel: null,
             Label: _gatewayRouteLabel,
             Source: UserLlmRouteSourceValue.GatewayProvider.ToWireValue(),
             Status: status.ToWireValue(),

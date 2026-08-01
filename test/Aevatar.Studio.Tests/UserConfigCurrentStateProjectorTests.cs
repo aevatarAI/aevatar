@@ -73,6 +73,25 @@ public sealed class UserConfigCurrentStateProjectorTests
         dispatcher.Upserts[0].LlmSelection.Should().BeNull();
     }
 
+    [Fact]
+    public async Task ProjectAsync_ShouldIgnoreCommittedStateFromDifferentActor()
+    {
+        var dispatcher = new RecordingWriteDispatcher();
+        var projector = new UserConfigCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-07-22T08:00:00Z")));
+
+        await projector.ProjectAsync(
+            NewContext(),
+            WrapCommitted(
+                new UserConfigGAgentState { DefaultModel = "foreign-model" },
+                version: 99,
+                eventId: "evt-foreign",
+                agentId: "user-config-scope-other"));
+
+        dispatcher.Upserts.Should().BeEmpty();
+    }
+
     private static StudioMaterializationContext NewContext() => new()
     {
         RootActorId = RootActorId,
@@ -82,7 +101,8 @@ public sealed class UserConfigCurrentStateProjectorTests
     private static EventEnvelope WrapCommitted(
         UserConfigGAgentState state,
         long version,
-        string eventId) =>
+        string eventId,
+        string agentId = RootActorId) =>
         new()
         {
             Id = eventId,
@@ -92,6 +112,7 @@ public sealed class UserConfigCurrentStateProjectorTests
             {
                 StateEvent = new StateEvent
                 {
+                    AgentId = agentId,
                     EventId = eventId,
                     Version = version,
                     EventData = Any.Pack(new UserConfigUpdatedEvent

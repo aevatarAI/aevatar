@@ -6,6 +6,7 @@ import {
 } from "./chatConversationConfig";
 
 const llmSettings: StudioUserLlmSettings = {
+  userConfigStateVersion: 10,
   savedRoute: USER_LLM_ROUTE_GATEWAY,
   savedRouteLabel: "Company LLM Gateway",
   savedRouteKind: "gateway",
@@ -26,6 +27,7 @@ const llmSettings: StudioUserLlmSettings = {
   routeOptions: [
     {
       routeValue: USER_LLM_ROUTE_GATEWAY,
+      defaultModel: null,
       label: "Company LLM Gateway",
       source: "gateway_provider",
       status: "ready",
@@ -37,6 +39,7 @@ const llmSettings: StudioUserLlmSettings = {
     },
     {
       routeValue: "/api/v1/proxy/s/anthropic-team",
+      defaultModel: "claude-3-haiku",
       label: "Anthropic Team Service",
       source: "user_service",
       status: "ready",

@@ -1039,6 +1039,7 @@ export interface StudioUserConfig {
 
 export interface StudioUserLlmRouteOption {
   readonly routeValue: string;
+  readonly defaultModel: string | null;
   readonly label: string;
   readonly source: string;
   readonly status: string;
@@ -1069,6 +1070,7 @@ export type StudioUserLlmSavedRouteKind =
   | 'unknown';
 
 export interface StudioUserLlmSettings {
+  readonly userConfigStateVersion: number;
   readonly savedRoute: string;
   readonly savedRouteLabel: string;
   readonly savedRouteKind: StudioUserLlmSavedRouteKind;
@@ -1084,6 +1086,14 @@ export interface StudioUserLlmSettings {
   readonly capabilities: StudioUserLlmSettingsCapabilities;
   readonly defaultModel: string;
   readonly setupHint?: unknown;
+}
+
+export interface StudioUserLlmSettingsObservation {
+  readonly userConfigStateVersion: number;
+  readonly savedRoute: string;
+  readonly savedRouteKind: StudioUserLlmSavedRouteKind;
+  readonly savedUserServiceId?: string | null;
+  readonly defaultModel: string;
 }
 
 export interface StudioUserConfigSaveReceipt {

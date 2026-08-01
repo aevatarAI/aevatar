@@ -63,6 +63,7 @@ import type {
   StudioUserConfigRuntime,
   StudioUserLlmSavedRouteKind,
   StudioUserLlmSettings,
+  StudioUserLlmSettingsObservation,
   StudioWorkflowDraft,
   StudioWorkflowDraftCreateAcceptedReceipt,
   StudioWorkflowDraftSummary,
@@ -394,6 +395,11 @@ function decodeStudioUserLlmSettings(
 ): StudioUserLlmSettings {
   const record = expectRecord(value, label);
   return {
+    userConfigStateVersion: readNumber(
+      record,
+      "userConfigStateVersion",
+      `${label}.userConfigStateVersion`
+    ),
     savedRoute: readString(record, "savedRoute", `${label}.savedRoute`),
     savedRouteLabel: readString(record, "savedRouteLabel", `${label}.savedRouteLabel`),
     savedRouteKind: decodeStudioUserLlmSavedRouteKind(
@@ -422,6 +428,11 @@ function decodeStudioUserLlmSettings(
         const option = expectRecord(entry, resolvedOptionLabel);
         return {
           routeValue: readString(option, "routeValue", `${resolvedOptionLabel}.routeValue`),
+          defaultModel: readNullableString(
+            option,
+            "defaultModel",
+            `${resolvedOptionLabel}.defaultModel`
+          ),
           label: readString(option, "label", `${resolvedOptionLabel}.label`),
           source: readString(option, "source", `${resolvedOptionLabel}.source`),
           status: readString(option, "status", `${resolvedOptionLabel}.status`),
@@ -468,6 +479,31 @@ function decodeStudioUserLlmSettings(
     })(),
     defaultModel: readString(record, "defaultModel", `${label}.defaultModel`),
     setupHint: record.setupHint,
+  };
+}
+
+function decodeStudioUserLlmSettingsObservation(
+  value: unknown,
+  label = "StudioUserLlmSettingsObservation"
+): StudioUserLlmSettingsObservation {
+  const record = expectRecord(value, label);
+  return {
+    userConfigStateVersion: readNumber(
+      record,
+      "userConfigStateVersion",
+      `${label}.userConfigStateVersion`
+    ),
+    savedRoute: readString(record, "savedRoute", `${label}.savedRoute`),
+    savedRouteKind: decodeStudioUserLlmSavedRouteKind(
+      record.savedRouteKind,
+      `${label}.savedRouteKind`
+    ),
+    savedUserServiceId: readNullableString(
+      record,
+      "savedUserServiceId",
+      `${label}.savedUserServiceId`
+    ),
+    defaultModel: readString(record, "defaultModel", `${label}.defaultModel`),
   };
 }
 
@@ -3362,6 +3398,13 @@ export const studioApi = {
     );
   },
 
+  getUserLlmSettingsObservation(): Promise<StudioUserLlmSettingsObservation> {
+    return requestDecodedJson(
+      "/api/user-config/llm/observation",
+      decodeStudioUserLlmSettingsObservation
+    );
+  },
+
   saveUserLlmSettings(input: {
     userServiceId?: string | null;
     routeValue?: string | null;
@@ -3376,7 +3419,7 @@ export const studioApi = {
         body: JSON.stringify({
           userServiceId: trimOptional(input.userServiceId) ?? null,
           routeValue: input.routeValue?.trim() ?? null,
-          model: input.model?.trim() ?? "",
+          model: input.model === null ? null : input.model?.trim() ?? "",
         }),
       }
     );

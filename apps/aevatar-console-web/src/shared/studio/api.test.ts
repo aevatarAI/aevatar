@@ -169,6 +169,7 @@ describe('studioApi host-session requests', () => {
       ok: true,
       status: 200,
       json: async () => ({
+        userConfigStateVersion: 37,
         savedRoute: '/api/v1/proxy/s/openai',
         savedRouteLabel: 'OpenAI beta',
         savedRouteKind: 'nyx_id_user_service',
@@ -189,6 +190,7 @@ describe('studioApi host-session requests', () => {
         routeOptions: [
           {
             routeValue: '/api/v1/llm/gateway/v1',
+            defaultModel: null,
             label: 'Company LLM Gateway',
             source: 'gateway_provider',
             status: 'ready',
@@ -200,6 +202,7 @@ describe('studioApi host-session requests', () => {
           },
           {
             routeValue: '/api/v1/proxy/s/openai',
+            defaultModel: 'gpt-5.4',
             label: 'OpenAI',
             source: 'user_service',
             status: 'ready',
@@ -211,6 +214,7 @@ describe('studioApi host-session requests', () => {
           },
           {
             routeValue: '/api/v1/proxy/s/openai',
+            defaultModel: 'gpt-5.4-mini',
             label: 'OpenAI beta',
             source: 'user_service',
             status: 'ready',
@@ -234,6 +238,7 @@ describe('studioApi host-session requests', () => {
     global.fetch = fetchMock as typeof global.fetch;
 
     await expect(studioApi.getUserLlmSettings()).resolves.toEqual({
+      userConfigStateVersion: 37,
       savedRoute: '/api/v1/proxy/s/openai',
       savedRouteLabel: 'OpenAI beta',
       savedRouteKind: 'nyx_id_user_service',
@@ -254,6 +259,7 @@ describe('studioApi host-session requests', () => {
       routeOptions: [
         {
           routeValue: '/api/v1/llm/gateway/v1',
+          defaultModel: null,
           label: 'Company LLM Gateway',
           source: 'gateway_provider',
           status: 'ready',
@@ -265,6 +271,7 @@ describe('studioApi host-session requests', () => {
         },
         {
           routeValue: '/api/v1/proxy/s/openai',
+          defaultModel: 'gpt-5.4',
           label: 'OpenAI',
           source: 'user_service',
           status: 'ready',
@@ -276,6 +283,7 @@ describe('studioApi host-session requests', () => {
         },
         {
           routeValue: '/api/v1/proxy/s/openai',
+          defaultModel: 'gpt-5.4-mini',
           label: 'OpenAI beta',
           source: 'user_service',
           status: 'ready',
@@ -303,6 +311,7 @@ describe('studioApi host-session requests', () => {
       ok: true,
       status: 200,
       json: async () => ({
+        userConfigStateVersion: 38,
         savedRoute: '/api/v1/proxy/s/openai',
         savedRouteLabel: 'OpenAI alpha',
         savedRouteKind: 'future_selection_kind',
@@ -331,6 +340,33 @@ describe('studioApi host-session requests', () => {
       savedRouteKind: 'unknown',
       savedUserServiceId: 'us-alpha',
     });
+  });
+
+  it('decodes the lightweight user-config LLM observation view', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        userConfigStateVersion: 41,
+        savedRoute: '/api/v1/proxy/s/openai',
+        savedRouteKind: 'nyx_id_user_service',
+        savedUserServiceId: 'us-beta',
+        defaultModel: 'gpt-5.4-mini',
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+    const api = studioApi as typeof studioApi & {
+      getUserLlmSettingsObservation(): Promise<unknown>;
+    };
+
+    await expect(api.getUserLlmSettingsObservation()).resolves.toEqual({
+      userConfigStateVersion: 41,
+      savedRoute: '/api/v1/proxy/s/openai',
+      savedRouteKind: 'nyx_id_user_service',
+      savedUserServiceId: 'us-beta',
+      defaultModel: 'gpt-5.4-mini',
+    });
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/user-config/llm/observation');
   });
 
   it('saves an exact inventory-backed LLM service selection', async () => {
@@ -411,7 +447,7 @@ describe('studioApi host-session requests', () => {
         body: JSON.stringify({
           userServiceId: null,
           routeValue: '/api/v1/llm/gateway/v1',
-          model: '',
+          model: null,
         }),
       }),
     );

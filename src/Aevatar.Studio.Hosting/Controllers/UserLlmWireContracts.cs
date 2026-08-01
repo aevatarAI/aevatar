@@ -32,6 +32,7 @@ public sealed record UserConfigSaveReceiptResponse(
 }
 
 public sealed record UserLlmSettingsResponse(
+    [property: JsonPropertyName("userConfigStateVersion")] long UserConfigStateVersion,
     [property: JsonPropertyName("savedRoute")] string SavedRoute,
     [property: JsonPropertyName("savedRouteLabel")] string SavedRouteLabel,
     [property: JsonPropertyName("savedRouteKind")] string SavedRouteKind,
@@ -49,6 +50,7 @@ public sealed record UserLlmSettingsResponse(
     [property: JsonPropertyName("setupHint")] UserLlmSetupHintResponse? SetupHint)
 {
     public static UserLlmSettingsResponse FromApplication(UserLlmSettingsView view) => new(
+        view.UserConfigStateVersion,
         view.SavedRoute,
         view.SavedRouteLabel,
         view.SavedRouteKind,
@@ -66,8 +68,25 @@ public sealed record UserLlmSettingsResponse(
         view.SetupHint is null ? null : UserLlmSetupHintResponse.FromApplication(view.SetupHint));
 }
 
+public sealed record UserLlmSettingsObservationResponse(
+    [property: JsonPropertyName("userConfigStateVersion")] long UserConfigStateVersion,
+    [property: JsonPropertyName("savedRoute")] string SavedRoute,
+    [property: JsonPropertyName("savedRouteKind")] string SavedRouteKind,
+    [property: JsonPropertyName("savedUserServiceId")] string? SavedUserServiceId,
+    [property: JsonPropertyName("defaultModel")] string DefaultModel)
+{
+    public static UserLlmSettingsObservationResponse FromApplication(
+        UserLlmSettingsObservationView view) => new(
+        view.UserConfigStateVersion,
+        view.SavedRoute,
+        view.SavedRouteKind,
+        view.SavedUserServiceId,
+        view.DefaultModel);
+}
+
 public sealed record UserLlmRouteOptionResponse(
     [property: JsonPropertyName("routeValue")] string RouteValue,
+    [property: JsonPropertyName("defaultModel")] string? DefaultModel,
     [property: JsonPropertyName("label")] string Label,
     [property: JsonPropertyName("source")] string Source,
     [property: JsonPropertyName("status")] string Status,
@@ -79,6 +98,7 @@ public sealed record UserLlmRouteOptionResponse(
 {
     public static UserLlmRouteOptionResponse FromApplication(UserLlmRouteOption option) => new(
         option.RouteValue,
+        option.DefaultModel,
         option.Label,
         option.Source,
         option.Status,

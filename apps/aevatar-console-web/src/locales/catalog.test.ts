@@ -84,6 +84,16 @@ describe('console locale catalogs', () => {
     expect(zhCNMessages['pages.settings.index.model.type.for']).toBe('输入 {route} 的模型 ID');
     expect(enUSMessages['pages.settings.index.model.type']).toBe('Type a model ID');
     expect(zhCNMessages['pages.settings.index.model.type']).toBe('输入模型 ID');
+    expect(enUSMessages['pages.settings.index.save.accepted.awaiting.target.observation'])
+      .toBe('Save accepted for {selection} / {model}. That target setting is not visible yet.');
+    expect(zhCNMessages['pages.settings.index.save.accepted.awaiting.target.observation'])
+      .toBe('已接受保存目标 {selection} / {model}，但该目标设置尚未可见。');
+    expect(enUSMessages['pages.settings.index.save.accepted.awaiting.earlier.target.observation'])
+      .toBe('An earlier save for {selection} / {model} was accepted, but that target setting is not visible yet. Your current draft is different.');
+    expect(zhCNMessages['pages.settings.index.save.accepted.awaiting.earlier.target.observation'])
+      .toBe('先前的保存目标 {selection} / {model} 已被接受，但该目标设置尚未可见；当前草稿已不同。');
+    expect(enUSMessages['pages.settings.index.check.target.again']).toBe('Check target again');
+    expect(zhCNMessages['pages.settings.index.check.target.again']).toBe('重新检查目标设置');
   });
 
   it('keeps Chinese engineering and product terms from regressing to literal machine translations', () => {

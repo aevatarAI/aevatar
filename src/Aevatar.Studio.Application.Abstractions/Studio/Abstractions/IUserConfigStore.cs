@@ -217,4 +217,5 @@ public sealed record UserConfig(
     string RemoteRuntimeBaseUrl = UserConfigRuntimeDefaults.RemoteRuntimeBaseUrl,
     string? GithubUsername = null,
     int MaxToolRounds = 0,
-    UserLlmSelectionValue? LlmSelection = null);
+    UserLlmSelectionValue? LlmSelection = null,
+    long StateVersion = 0);

@@ -69,6 +69,8 @@ public sealed class UserLlmSettingsViewBuilderTests
         view.SavedRouteLabel.Should().Be("Beta service");
         view.EffectiveRoute.Should().Be(SharedRoute);
         view.RouteFallbackActive.Should().BeFalse();
+        var beta = view.RouteOptions.Single(option => option.UserServiceId == "us-beta");
+        beta.DefaultModel.Should().Be("gpt-5.5");
     }
 
     private UserLlmSettingsView Build(UserLlmSelectionValue selection) =>

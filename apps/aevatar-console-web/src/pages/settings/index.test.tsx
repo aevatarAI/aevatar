@@ -12,6 +12,7 @@ jest.mock("@/shared/studio/api", () => ({
     getAuthSession: jest.fn(),
     getUserConfigRuntime: jest.fn(),
     getUserLlmSettings: jest.fn(),
+    getUserLlmSettingsObservation: jest.fn(),
     saveUserLlmSettings: jest.fn(),
   },
 }));
@@ -23,6 +24,7 @@ const { studioApi: mockStudioApi } = jest.requireMock(
     getAuthSession: jest.Mock;
     getUserConfigRuntime: jest.Mock;
     getUserLlmSettings: jest.Mock;
+    getUserLlmSettingsObservation: jest.Mock;
     saveUserLlmSettings: jest.Mock;
   };
 };
@@ -39,6 +41,8 @@ const originalCryptoDescriptor = Object.getOwnPropertyDescriptor(
 const originalNyxIDClientId = process.env.NYXID_CLIENT_ID;
 const gatewayRoute = "/api/v1/llm/gateway/v1";
 const sharedExactServiceRoute = "/api/v1/proxy/s/shared-openai";
+const settingsObservationIntervalMs = 1_000;
+const settingsObservationMaxAttempts = 4;
 
 function installLocationAssignSpy() {
   const assign = jest.fn();
@@ -71,6 +75,7 @@ function installDeterministicCrypto() {
 
 function createLlmSettings(overrides: Record<string, unknown> = {}) {
   return {
+    userConfigStateVersion: 10,
     savedRoute: gatewayRoute,
     savedRouteLabel: "Backend saved gateway",
     savedRouteKind: "gateway",
@@ -91,6 +96,7 @@ function createLlmSettings(overrides: Record<string, unknown> = {}) {
     routeOptions: [
       {
         routeValue: gatewayRoute,
+        defaultModel: null,
         label: "Gateway route option",
         source: "gateway_provider",
         status: "ready",
@@ -102,6 +108,7 @@ function createLlmSettings(overrides: Record<string, unknown> = {}) {
       },
       {
         routeValue: "/api/v1/proxy/s/openai-team",
+        defaultModel: "gpt-4.1-mini",
         label: "OpenAI Team Service",
         source: "user_service",
         status: "ready",
@@ -113,6 +120,7 @@ function createLlmSettings(overrides: Record<string, unknown> = {}) {
       },
       {
         routeValue: "/api/v1/proxy/s/anthropic-team",
+        defaultModel: "claude-3-haiku",
         label: "Anthropic Lab Service",
         source: "user_service",
         status: "ready",
@@ -175,6 +183,7 @@ function createExactServiceSettings(
     routeOptions: [
       {
         routeValue: gatewayRoute,
+        defaultModel: null,
         label: "Gateway route option",
         source: "gateway_provider",
         status: "ready",
@@ -186,6 +195,7 @@ function createExactServiceSettings(
       },
       ...Object.entries(labels).map(([userServiceId, label]) => ({
         routeValue: sharedExactServiceRoute,
+        defaultModel,
         label,
         source: "user_service",
         status: "ready",
@@ -206,6 +216,16 @@ function createExactServiceSettings(
     ],
     ...overrides,
   });
+}
+
+function createLlmObservation(settings: ReturnType<typeof createLlmSettings>) {
+  return {
+    userConfigStateVersion: settings.userConfigStateVersion,
+    savedRoute: settings.savedRoute,
+    savedRouteKind: settings.savedRouteKind,
+    savedUserServiceId: settings.savedUserServiceId,
+    defaultModel: settings.defaultModel,
+  };
 }
 
 function selectedLlmServiceElement(): Element | null {
@@ -245,6 +265,12 @@ function createDeferred<T>() {
   return { promise, resolve };
 }
 
+async function flushAsyncWork(): Promise<void> {
+  for (let index = 0; index < 6; index += 1) {
+    await Promise.resolve();
+  }
+}
+
 describe("SettingsPage", () => {
   beforeEach(() => {
     process.env.NYXID_CLIENT_ID = "console-client-1";
@@ -255,6 +281,7 @@ describe("SettingsPage", () => {
     mockStudioApi.getAuthSession.mockReset();
     mockStudioApi.getUserConfigRuntime.mockReset();
     mockStudioApi.getUserLlmSettings.mockReset();
+    mockStudioApi.getUserLlmSettingsObservation.mockReset();
     mockStudioApi.saveUserLlmSettings.mockReset();
 
     mockStudioApi.getAuthSession.mockResolvedValue({
@@ -268,6 +295,9 @@ describe("SettingsPage", () => {
       },
     });
     mockStudioApi.getUserLlmSettings.mockResolvedValue(createLlmSettings());
+    mockStudioApi.getUserLlmSettingsObservation.mockResolvedValue(
+      createLlmObservation(createLlmSettings()),
+    );
     mockStudioApi.getUserConfigRuntime.mockResolvedValue({
       runtimeMode: "local",
       activeRuntimeBaseUrl: "http://127.0.0.1:5080",
@@ -291,6 +321,7 @@ describe("SettingsPage", () => {
   });
 
   afterEach(() => {
+    jest.useRealTimers();
     if (originalNyxIDClientId === undefined) {
       delete process.env.NYXID_CLIENT_ID;
     } else {
@@ -726,24 +757,26 @@ describe("SettingsPage", () => {
     );
   });
 
-  it("keeps an accepted exact target pending until identity and model are observed", async () => {
+  it("automatically observes an accepted exact target only after state version advances", async () => {
+    const initial = createExactServiceSettings("us-alpha", "gpt-alpha", {
+      userConfigStateVersion: 10,
+      modelGroupsByRoute: [],
+    });
+    const staleTarget = createExactServiceSettings("us-beta", "gpt-beta", {
+      userConfigStateVersion: 10,
+      modelGroupsByRoute: [],
+    });
+    const visibleTarget = createExactServiceSettings("us-beta", "gpt-beta", {
+      userConfigStateVersion: 11,
+      modelGroupsByRoute: [],
+    });
     mockStudioApi.getUserLlmSettings
-      .mockResolvedValueOnce(
-        createExactServiceSettings("us-alpha", "gpt-alpha", {
-          modelGroupsByRoute: [],
-        }),
-      )
-      .mockResolvedValueOnce(
-        createExactServiceSettings("us-beta", "gpt-alpha", {
-          modelGroupsByRoute: [],
-        }),
-      )
-      .mockResolvedValue(
-        createExactServiceSettings("us-beta", "gpt-beta", {
-          modelGroupsByRoute: [],
-        }),
-      );
-    const view = renderWithQueryClient(React.createElement(SettingsPage));
+      .mockResolvedValueOnce(initial)
+      .mockResolvedValue(visibleTarget);
+    mockStudioApi.getUserLlmSettingsObservation
+      .mockResolvedValueOnce(createLlmObservation(staleTarget))
+      .mockResolvedValue(createLlmObservation(visibleTarget));
+    renderWithQueryClient(React.createElement(SettingsPage));
 
     await waitFor(() =>
       expect(selectedLlmServiceElement()).toHaveTextContent(
@@ -753,31 +786,145 @@ describe("SettingsPage", () => {
     await selectLlmService("Shared OpenAI beta");
     await selectDefaultModel("gpt-beta");
     expect(selectedDefaultModelElement()).toHaveValue("gpt-beta");
-    fireEvent.click(screen.getByRole("button", { name: "Save config" }));
-
-    expect(
-      await screen.findByText(
-        "Save accepted. Waiting for the exact service and model to be observed.",
-      ),
-    ).toBeTruthy();
-    expect(selectedLlmServiceElement()).toHaveTextContent("Shared OpenAI beta");
-    expect(selectedDefaultModelElement()).toHaveValue("gpt-beta");
-    expect(screen.getByRole("button", { name: "Save config" })).toBeEnabled();
-
-    await act(async () => {
-      await view.queryClient.invalidateQueries({
-        queryKey: ["settings", "user-llm-settings"],
+    jest.useFakeTimers();
+    try {
+      fireEvent.click(screen.getByRole("button", { name: "Save config" }));
+      await act(async () => {
+        await flushAsyncWork();
       });
+
+      expect(mockStudioApi.getUserLlmSettings).toHaveBeenCalledTimes(1);
+      expect(mockStudioApi.getUserLlmSettingsObservation).toHaveBeenCalledTimes(1);
+      expect(
+        screen.getByText(
+          "Save accepted for Shared OpenAI beta / gpt-beta. That target setting is not visible yet.",
+        ),
+      ).toBeTruthy();
+      expect(selectedLlmServiceElement()).toHaveTextContent("Shared OpenAI beta");
+      expect(selectedDefaultModelElement()).toHaveValue("gpt-beta");
+
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(settingsObservationIntervalMs);
+        await flushAsyncWork();
+      });
+
+      await waitFor(() =>
+        expect(
+          screen.queryByText(
+            "Save accepted for Shared OpenAI beta / gpt-beta. That target setting is not visible yet.",
+          ),
+        ).toBeNull(),
+      );
+      expect(mockStudioApi.getUserLlmSettingsObservation).toHaveBeenCalledTimes(2);
+      expect(mockStudioApi.getUserLlmSettings).toHaveBeenCalledTimes(2);
+      expect(screen.getByRole("button", { name: "Save config" })).toBeDisabled();
+
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(settingsObservationIntervalMs * 3);
+        await flushAsyncWork();
+      });
+      expect(mockStudioApi.getUserLlmSettingsObservation).toHaveBeenCalledTimes(2);
+      expect(mockStudioApi.getUserLlmSettings).toHaveBeenCalledTimes(2);
+    } finally {
+      jest.clearAllTimers();
+      jest.useRealTimers();
+    }
+  });
+
+  it("bounds automatic observation and keeps the accepted target retryable", async () => {
+    const initial = createExactServiceSettings("us-alpha", "gpt-alpha", {
+      userConfigStateVersion: 40,
+      modelGroupsByRoute: [],
     });
+    const staleTarget = createExactServiceSettings("us-beta", "gpt-beta", {
+      userConfigStateVersion: 40,
+      modelGroupsByRoute: [],
+    });
+    mockStudioApi.getUserLlmSettings.mockResolvedValue(initial);
+    mockStudioApi.getUserLlmSettingsObservation.mockResolvedValue(
+      createLlmObservation(staleTarget),
+    );
+    renderWithQueryClient(React.createElement(SettingsPage));
 
     await waitFor(() =>
-      expect(
-        screen.queryByText(
-          "Save accepted. Waiting for the exact service and model to be observed.",
-        ),
-      ).toBeNull(),
+      expect(selectedLlmServiceElement()).toHaveTextContent("Shared OpenAI alpha"),
     );
-    expect(selectedLlmServiceElement()).toHaveTextContent("Shared OpenAI beta");
+    await selectLlmService("Shared OpenAI beta");
+    await selectDefaultModel("gpt-beta");
+    jest.useFakeTimers();
+    try {
+      fireEvent.click(screen.getByRole("button", { name: "Save config" }));
+      await act(async () => {
+        await flushAsyncWork();
+        await jest.advanceTimersByTimeAsync(settingsObservationIntervalMs * 16);
+        await flushAsyncWork();
+      });
+
+      expect(mockStudioApi.getUserLlmSettingsObservation)
+        .toHaveBeenCalledTimes(settingsObservationMaxAttempts);
+      expect(
+        screen.getByText(
+          "Save accepted for Shared OpenAI beta / gpt-beta. That target setting is not visible yet.",
+        ),
+      ).toBeTruthy();
+      await waitFor(() =>
+        expect(
+          screen.getByRole("button", { name: "Check target again" }),
+        ).toBeEnabled(),
+      );
+
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(settingsObservationIntervalMs * 32);
+        await flushAsyncWork();
+      });
+      expect(mockStudioApi.getUserLlmSettingsObservation)
+        .toHaveBeenCalledTimes(settingsObservationMaxAttempts);
+    } finally {
+      jest.clearAllTimers();
+      jest.useRealTimers();
+    }
+  });
+
+  it("observes a blank service default from the advanced read-model version", async () => {
+    const initialSettings = createExactServiceSettings("us-alpha", "gpt-alpha", {
+      userConfigStateVersion: 20,
+      modelGroupsByRoute: [],
+    });
+    const visibleTarget = createExactServiceSettings("us-beta", "platform-beta", {
+      userConfigStateVersion: 21,
+      modelGroupsByRoute: [],
+    });
+    mockStudioApi.getUserLlmSettings
+      .mockResolvedValueOnce({
+        ...initialSettings,
+        routeOptions: initialSettings.routeOptions.map((option) =>
+          option.userServiceId === "us-beta"
+            ? { ...option, defaultModel: "platform-beta" }
+            : option,
+        ),
+      })
+      .mockResolvedValue(visibleTarget);
+    mockStudioApi.getUserLlmSettingsObservation.mockResolvedValue(
+      createLlmObservation(visibleTarget),
+    );
+    renderWithQueryClient(React.createElement(SettingsPage));
+
+    await waitFor(() =>
+      expect(selectedLlmServiceElement()).toHaveTextContent("Shared OpenAI alpha"),
+    );
+    await selectLlmService("Shared OpenAI beta");
+    fireEvent.change(screen.getByLabelText("Default model"), {
+      target: { value: "" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save config" }));
+
+    await waitFor(() =>
+      expect(selectedDefaultModelElement()).toHaveValue("platform-beta"),
+    );
+    expect(mockStudioApi.saveUserLlmSettings).toHaveBeenCalledWith({
+      userServiceId: "us-beta",
+      model: "platform-beta",
+    });
     expect(screen.getByRole("button", { name: "Save config" })).toBeDisabled();
   });
 
@@ -825,6 +972,11 @@ describe("SettingsPage", () => {
         "Shared OpenAI gamma",
       ),
     );
+    expect(
+      screen.getByText(
+        "An earlier save for Shared OpenAI beta / gpt-shared was accepted, but that target setting is not visible yet. Your current draft is different.",
+      ),
+    ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Save config" })).toBeEnabled();
   });
 
@@ -890,6 +1042,62 @@ describe("SettingsPage", () => {
       await screen.findByRole("option", { name: "current-model" }),
     ).toBeTruthy();
     expect(screen.queryByRole("option", { name: "old-model" })).toBeNull();
+  });
+
+  it("switches model groups when the mounted exact-ID inventory route changes", async () => {
+    const oldRoute = "/api/v1/proxy/s/shared-openai-old";
+    const currentRoute = "/api/v1/proxy/s/shared-openai-current";
+    const settingsForRoute = (
+      routeValue: string,
+      routeModel: string,
+      userConfigStateVersion: number,
+    ) => {
+      const settings = createExactServiceSettings("us-alpha", "common-model");
+      return {
+        ...settings,
+        userConfigStateVersion,
+        savedRoute: routeValue,
+        effectiveRoute: routeValue,
+        routeOptions: settings.routeOptions.map((option) =>
+          option.source === "user_service"
+            ? { ...option, routeValue }
+            : option,
+        ),
+        modelGroupsByRoute: [
+          {
+            routeValue,
+            groupId: "us-alpha",
+            label: "Current exact service",
+            models: ["common-model", routeModel],
+          },
+        ],
+      };
+    };
+    mockStudioApi.getUserLlmSettings
+      .mockResolvedValueOnce(settingsForRoute(oldRoute, "old-route-only", 30))
+      .mockResolvedValue(settingsForRoute(currentRoute, "new-route-only", 31));
+    const view = renderWithQueryClient(React.createElement(SettingsPage));
+
+    fireEvent.mouseDown(
+      await screen.findByRole("combobox", { name: "Default model" }),
+    );
+    expect(
+      await screen.findByRole("option", { name: "old-route-only" }),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("option", { name: "common-model" }));
+
+    await act(async () => {
+      await view.queryClient.invalidateQueries({
+        queryKey: ["settings", "user-llm-settings"],
+      });
+    });
+    fireEvent.mouseDown(
+      await screen.findByRole("combobox", { name: "Default model" }),
+    );
+    expect(
+      await screen.findByRole("option", { name: "new-route-only" }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("option", { name: "old-route-only" })).toBeNull();
   });
 
   it("treats a saved service without an exact ID as unavailable", async () => {

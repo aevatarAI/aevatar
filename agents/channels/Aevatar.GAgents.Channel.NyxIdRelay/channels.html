@@ -384,6 +384,9 @@ const DEFAULT_LLM = { route: "chrono-llm-public", model: "gpt-5.5" };
 const USER_LLM_GATEWAY_ROUTE = "/api/v1/llm/gateway/v1";
 const USER_LLM_GATEWAY_SELECTION = "gateway";
 const USER_LLM_SERVICE_SELECTION_PREFIX = "user-service:";
+const LLM_OBSERVATION_BASE_INTERVAL_MS = 1500;
+const LLM_OBSERVATION_MAX_INTERVAL_MS = 6000;
+const LLM_OBSERVATION_MAX_ATTEMPTS = 4;
 
 function llmServiceSelectionValue(userServiceId){
   return USER_LLM_SERVICE_SELECTION_PREFIX + encodeURIComponent(userServiceId);
@@ -394,6 +397,7 @@ function buildLlmSelectionOptions(llm){
   const options = [{
     value:USER_LLM_GATEWAY_SELECTION,
     label:(gateway && gateway.label) || "NyxID Gateway",
+    defaultModel:null,
     kind:"gateway",
     routeValue:USER_LLM_GATEWAY_ROUTE,
     userServiceId:null
@@ -407,6 +411,7 @@ function buildLlmSelectionOptions(llm){
     options.push({
       value:llmServiceSelectionValue(userServiceId),
       label:String(option.label||option.serviceSlug||userServiceId),
+      defaultModel:normalizeLlmModel(option.defaultModel),
       kind:"nyx_id_user_service",
       routeValue:String(option.routeValue||"").trim(),
       userServiceId
@@ -433,10 +438,19 @@ function expectedLlmModel(option,requestedModel,llm){
   if(explicitModel) return { known:true, value:explicitModel };
   return option.kind==="gateway"
     ? { known:true, value:normalizeLlmModel(llm && llm.defaultModel) }
-    : { known:false, value:"" };
+    : { known:true, value:normalizeLlmModel(option.defaultModel) };
 }
-function llmSelectionObserved(option,llm,expectedModel){
-  if(!option || !llm) return false;
+function llmObservationDelay(attempts){
+  if(attempts>=LLM_OBSERVATION_MAX_ATTEMPTS) return null;
+  return Math.min(
+    LLM_OBSERVATION_BASE_INTERVAL_MS * Math.pow(2,Math.max(0,attempts-1)),
+    LLM_OBSERVATION_MAX_INTERVAL_MS);
+}
+function llmTargetSettingVisible(pending,llm){
+  if(!pending || !pending.target || !llm) return false;
+  const visibleVersion=Number(llm.userConfigStateVersion||0);
+  if(!Number.isFinite(visibleVersion) || visibleVersion<=pending.baseUserConfigStateVersion) return false;
+  const option=pending.target;
   let identityObserved=false;
   if(option.kind==="gateway"){
     identityObserved=llm.savedRouteKind==="gateway" &&
@@ -445,8 +459,8 @@ function llmSelectionObserved(option,llm,expectedModel){
     identityObserved=llm.savedRouteKind==="nyx_id_user_service" &&
       String(llm.savedUserServiceId||"").trim()===option.userServiceId;
   }
-  return identityObserved && expectedModel.known &&
-    normalizeLlmModel(llm.defaultModel)===expectedModel.value;
+  return identityObserved &&
+    normalizeLlmModel(llm.defaultModel)===option.model;
 }
 
 /* Lark Tier-1 minimum scopes (skill §7 — the #1 silent-bot fix). */
@@ -605,11 +619,15 @@ const state = {
   llmSaveState:"idle",               // idle | saving | accepted | observed | failed
   llmSaveError:null,
   llmSaved:false,
+  llmPendingSave:null,
+  llmObservationAttempts:0,
+  llmOperationToken:0,
   manageReg:null,                     // registration row being managed
   workflowRepairing:{},               // registrationId -> request in flight
   workflowRepairNotice:null,          // safe user-facing result message
   lights:["pending","pending"],
-  _statusTimer:null
+  _statusTimer:null,
+  _llmObservationTimer:null
 };
 
 function curTheme(){ const h=document.documentElement; return h.classList.contains("theme-light")?"light":h.classList.contains("theme-dark")?"dark":null; }
@@ -754,8 +772,86 @@ async function loadRegistrations(){
 async function loadLlm(force){
   if(state.llm && !force) return state.llm;
   try { state.llm = await apiGet("/api/user-config/llm"); }
-  catch(e){ if(e.message!=="unauthorized") console.warn("channels: llm read failed", e); state.llm = null; }
+  catch(e){
+    if(e.message!=="unauthorized") console.warn("channels: llm read failed", e);
+    if(!state.llmPendingSave) state.llm = null;
+  }
   return state.llm;
+}
+async function loadLlmObservation(){
+  return apiGet("/api/user-config/llm/observation");
+}
+function clearLlmObservationTimer(){
+  if(state._llmObservationTimer){
+    clearTimeout(state._llmObservationTimer);
+    state._llmObservationTimer=null;
+  }
+}
+function resetLlmSaveOperation(){
+  state.llmOperationToken+=1;
+  clearLlmObservationTimer();
+  state.llmPendingSave=null;
+  state.llmObservationAttempts=0;
+  state.llmSaveState="idle";
+  state.llmSaveError=null;
+  state.llmSaved=false;
+}
+function applyVisibleLlmTarget(pending,observation){
+  const current=state.llm||{};
+  const target=pending.target;
+  const routeOptions=(current.routeOptions||[]).slice();
+  if(target.kind==="nyx_id_user_service" &&
+    !routeOptions.some(option=>String(option.userServiceId||"").trim()===target.userServiceId)){
+    routeOptions.push({
+      routeValue:target.routeValue,
+      defaultModel:target.defaultModel,
+      label:target.label,
+      source:"user_service",
+      status:"ready",
+      allowed:true,
+      ready:true,
+      userServiceId:target.userServiceId,
+      serviceSlug:target.serviceSlug||null,
+      description:null
+    });
+  }
+  state.llm=Object.assign({},current,observation,{ routeOptions });
+  state.llmSel={ value:target.value, model:normalizeLlmModel(observation.defaultModel) };
+  state.llmPendingSave=null;
+  state.llmSaveState="observed";
+  state.llmSaved=true;
+  clearLlmObservationTimer();
+}
+function scheduleLlmObservation(operationToken){
+  clearLlmObservationTimer();
+  const delay=llmObservationDelay(state.llmObservationAttempts);
+  if(delay==null) return;
+  state._llmObservationTimer=setTimeout(()=>{
+    state._llmObservationTimer=null;
+    void observePendingLlmTarget(operationToken);
+  },delay);
+}
+async function observePendingLlmTarget(operationToken){
+  const pending=state.llmPendingSave;
+  if(!pending || pending.operationToken!==operationToken || state.llmOperationToken!==operationToken) return;
+  state.llmObservationAttempts+=1;
+  let observation=null;
+  try { observation=await loadLlmObservation(); }
+  catch(e){
+    if(e.message!=="unauthorized") console.warn("channels: llm observation read failed", e);
+  }
+  if(state.llmOperationToken!==operationToken || state.llmPendingSave!==pending) return;
+  if(llmTargetSettingVisible(pending,observation)) applyVisibleLlmTarget(pending,observation);
+  else scheduleLlmObservation(operationToken);
+  render();
+}
+function resumeLlmObservation(){
+  const pending=state.llmPendingSave;
+  if(!pending) return;
+  clearLlmObservationTimer();
+  state.llmObservationAttempts=0;
+  void observePendingLlmTarget(pending.operationToken);
+  render();
 }
 async function fetchStatus(regId){
   try { return await apiGet("/api/channels/registrations/" + encodeURIComponent(regId) + "/status"); }
@@ -889,15 +985,28 @@ async function doDelete(regId, after){
 async function saveLlm(){
   const option=buildLlmSelectionOptions(state.llm).find(item=>item.value===state.llmSel.value);
   if(!option) return;
+  resetLlmSaveOperation();
+  const operationToken=state.llmOperationToken;
   state.llmSaveState="saving"; state.llmSaveError=null; state.llmSaved=false; render();
   try {
     const requestedModel=normalizeLlmModel(state.llmSel.model);
     state.llmSel.model=requestedModel;
     const modelExpectation=expectedLlmModel(option,requestedModel,state.llm);
+    const target={
+      value:option.value,
+      label:option.label,
+      defaultModel:normalizeLlmModel(option.defaultModel),
+      kind:option.kind,
+      routeValue:option.routeValue,
+      userServiceId:option.userServiceId,
+      serviceSlug:option.serviceSlug||null,
+      model:modelExpectation.value
+    };
     const body=option.kind==="gateway"
       ? { routeValue:USER_LLM_GATEWAY_ROUTE, model:requestedModel||null }
-      : { userServiceId:option.userServiceId, model:requestedModel||null };
+      : { userServiceId:option.userServiceId, model:modelExpectation.value||null };
     const result=await apiSend("/api/user-config/llm", "PUT", body);
+    if(state.llmOperationToken!==operationToken) return;
     if(!result.ok || !result.data || result.data.accepted!==true){
       state.llmSaveState="failed";
       state.llmSaveError=(result.data && (result.data.error||result.data.note)) ||
@@ -906,20 +1015,22 @@ async function saveLlm(){
     }
 
     state.llmSaveState="accepted";
-    const previousLlm=state.llm;
-    const observedLlm=await loadLlm(true);
-    if(!observedLlm && previousLlm) state.llm=previousLlm;
-    if(llmSelectionObserved(option,observedLlm,modelExpectation)){
-      state.llmSaveState="observed";
-      state.llmSaved=true;
-    }
+    state.llmPendingSave={
+      operationToken,
+      baseUserConfigStateVersion:Number(state.llm && state.llm.userConfigStateVersion || 0),
+      target
+    };
+    state.llmObservationAttempts=0;
+    await observePendingLlmTarget(operationToken);
   } catch(e){
-    if(e.message!=="unauthorized"){
+    if(state.llmOperationToken===operationToken && e.message!=="unauthorized"){
       console.warn("channels: llm save failed", e);
       state.llmSaveState="failed";
       state.llmSaveError=String(e.message||e);
     }
-  } finally { render(); }
+  } finally {
+    if(state.llmOperationToken===operationToken) render();
+  }
 }
 
 /* ---- live status polling (verify step) ---- */

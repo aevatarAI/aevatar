@@ -63,7 +63,8 @@ public sealed class ProjectionUserConfigQueryPort : IUserConfigQueryPort
                 : document.RemoteRuntimeBaseUrl,
             GithubUsername: NormalizeOptional(document.GithubUsername),
             MaxToolRounds: document.MaxToolRounds,
-            LlmSelection: MapSelection(document.LlmSelection));
+            LlmSelection: MapSelection(document.LlmSelection),
+            StateVersion: document.StateVersion);
     }
 
     private UserConfig CreateDefaultConfig() =>
