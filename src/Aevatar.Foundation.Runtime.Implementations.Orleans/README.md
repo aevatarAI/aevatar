@@ -85,6 +85,7 @@ siloBuilder.AddAevatarFoundationRuntimeOrleans(options =>
 - Orleans Persistent Streams 风格的 Kafka provider backend
 - 不依赖 `MassTransit`
 - `QueueId <-> PartitionId` 一一映射
+- `ConsumerGroup` 提供 committed-offset 与 lag 的 Kafka namespace，不接管 Orleans queue ownership
 - `MessagesDeliveredAsync(...)` 之后才推进 Kafka offset commit
 
 每个 queue receiver 使用固定容量 buffer，并强制校验：
@@ -95,13 +96,17 @@ siloBuilder.AddAevatarFoundationRuntimeOrleans(options =>
   <= ReceiverBufferCapacity
 ```
 
-达到 high watermark 后，consumer owner loop 对当前 assignment 执行 `Pause`；只有 depth
+Orleans Persistent Streams queue balancer 是 receiver ownership 的唯一来源。每个
+`IQueueAdapterReceiver` 在一个生命周期内通过 `KafkaQueuePartitionMapper` 将 `QueueId` 一次性映射到
+固定 partition，并使用手动 `Assign`；它不使用 Kafka topic subscription，也不把 Kafka group rebalance
+作为第二套 queue ownership。
+
+达到 high watermark 后，consumer owner loop 对这个固定 partition 执行 `Pause`；只有 depth
 下降到 low watermark 或以下才执行 `Resume`，中间区间保持原状态，避免 pause/resume 抖动。
-pause 期间 owner loop 仍持续调用 `Consume(timeout)`，让 librdkafka 处理 poll side effects；
-backpressure active 时在每次 poll（包括 consume error）后重新对账 assignment，已 revoke
-partition 从 paused set 删除，新 assignment 立即 pause。consumer 的 create、assign、assignment
-read、pause/resume、
-consume、commit、close/dispose 都只在这个 owner loop/thread 执行。
+pause 期间 owner loop 仍每 100 ms 调用 `Consume(timeout)`，让 librdkafka 推进 broker/protocol 处理；
+这不表示手动 assignment consumer 参与 Kafka group heartbeat/rebalance。consumer 的 create、assign、
+pause/resume、consume、commit、seek、close/dispose 都只在这个 owner loop/thread 执行。Orleans 释放并
+重新获取同一个 QueueId 时，旧 consumer 完整 shutdown，新 consumer 重新 assign 同一个固定 partition。
 
 buffer 只是进程内 transport working state，不是事实源。它不改变 ACK 契约：offset 仍然只在
 `MessagesDeliveredAsync(...)` 标记 acknowledged 后，按连续 watermark commit；低水位恢复不能
@@ -145,7 +150,7 @@ Kafka 入站链路的阶段不可互换：
 | `handler-retry-scheduled` | handler 失败，但新的 typed retry envelope 已成功写入 stream 或 durable callback scheduler | 原 record 的 observer 可正常返回，之后才可进入 ACK；retry envelope 使用独立 attempt identity |
 | `handler-terminally-failed` | retry disabled/exhausted，或 actor 无法处理 envelope | 由 `failure_disposition` 决定，不能称为 handler success 或 transport ACK |
 | `messages-delivered` | Orleans 确认该 batch 已成功交付给全部目标 consumer，并调用 `MessagesDeliveredAsync(...)` | receiver 只把对应 offset 标为 acknowledged |
-| `offset-committed` | receiver 已将连续 acknowledged watermark 提交给 Kafka | 是；只有这一阶段影响 rebalance/crash 后的 Kafka 起点 |
+| `offset-committed` | receiver 已将连续 acknowledged watermark 提交给 Kafka | 是；只有这一阶段影响 receiver restart、ownership handoff 或 crash 后的 Kafka 起点 |
 
 `RuntimeActorGrain` 的默认 terminal-failure policy 是 bounded failure，而不是无限 poison retry：
 
@@ -172,7 +177,7 @@ Kafka 入站链路的阶段不可互换：
   标记为可提交，但只有连续水位实际 commit 后才是 `offset-committed`。
 - actor identity 缺失或初始化失败时，记录 `failure_reason="actor_unavailable"`。默认 disposition 为
   `returned`；显式 `PropagateFailure` 时异常穿透并保留重投能力。
-- handler 成功后、offset commit 前进程退出，或 commit 前发生 rebalance，Kafka 可以重投。重投会再次进入
+- handler 成功后、offset commit 前进程退出，或 commit 前发生 Orleans queue ownership handoff，Kafka 可以重投。重投会再次进入
   handler；业务 side effect 必须使用 actor-owned committed state 或下游权威幂等键。
 - offset 已 commit 后进程退出不会触发 Kafka 重投；业务完成事实必须由 actor committed event 表达，不能从
   offset commit 推断。

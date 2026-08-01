@@ -22,6 +22,11 @@ SPSC buffer through the same two-thread path:
 3. owner thread enqueues into the selected buffer;
 4. Orleans-shaped puller thread drains the selected buffer and checks the Kafka offset sequence.
 
+This models the production ownership boundary: Orleans Persistent Streams assigns a `QueueId` to one receiver
+lifecycle, `KafkaQueuePartitionMapper` maps that queue to one fixed partition, and that receiver manually assigns
+the partition. The backpressure path therefore pauses/resumes that fixed partition; the benchmark does not claim
+to measure Kafka subscription, group heartbeat, or group rebalance behavior.
+
 The buffer capacity equals the operation count during this measurement, and the test asserts zero rejected
 writes so CPU scheduling cannot silently turn the steady-state comparison into an overload/backpressure run.
 Each implementation is warmed up, then measured five times with alternating order; the test reports the

@@ -27,16 +27,14 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
 
     private readonly HashSet<long> _inflightOffsets = [];
     private readonly HashSet<long> _ackedOffsets = [];
-    private readonly HashSet<TopicPartition> _assignedPartitions = [];
-    private readonly HashSet<TopicPartition> _pausedPartitions = [];
     private readonly TopicPartition _topicPartition;
 
     private long _sequence;
     private long _lastCommittedOffset;
     private bool _hasCommitCursor;
     private bool _commitDirty;
-    private bool _hasAssignmentSnapshot;
     private bool _backpressureActive;
+    private bool _partitionPaused;
     private long? _pauseStartedTimestamp;
     private int _reportedPausedPartitionCount = -1;
     private int _shuttingDown;
@@ -104,7 +102,11 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
     {
         lock (_lifecycleLock)
         {
-            return _initializeTask ??= InitializeCoreAsync();
+            if (_initializeTask != null)
+                return _initializeTask;
+
+            PrepareForInitialization();
+            return _initializeTask = InitializeCoreAsync();
         }
     }
 
@@ -180,6 +182,10 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
             loopCts?.Dispose();
             _messageBuffer.Clear();
             RecordInitialBufferState();
+            lock (_lifecycleLock)
+            {
+                _initializeTask = null;
+            }
         }
     }
 
@@ -190,13 +196,14 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
         try
         {
             consumer = _consumerFactory();
+            // Orleans queue balancing owns this lifecycle; each receiver is pinned to its mapped partition.
             consumer.Assign(new TopicPartitionOffset(_topicPartition, Offset.Stored));
-            ApplyBackpressure(consumer, refreshAssignment: true);
+            ApplyBackpressure(consumer);
             loopReady.TrySetResult();
 
             while (!ct.IsCancellationRequested)
             {
-                ApplyBackpressure(consumer, refreshAssignment: false);
+                ApplyBackpressure(consumer);
 
                 ConsumeResult<Ignore, byte[]>? consumeResult = null;
                 try
@@ -205,8 +212,7 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
                 }
                 catch (ConsumeException ex)
                 {
-                    // A failed poll can still run assignment/revocation callbacks.
-                    ApplyBackpressure(consumer, refreshAssignment: true);
+                    ApplyBackpressure(consumer);
                     _logger.LogWarning(ex,
                         "Kafka consume error on partition {Partition}, will retry. Code={ErrorCode}",
                         _partitionId, ex.Error.Code);
@@ -219,8 +225,8 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
                     continue;
                 }
 
-                // Consume can run assignment/revocation callbacks on this owner thread.
-                ApplyBackpressure(consumer, refreshAssignment: true);
+                // A puller can cross the low watermark while Consume is polling.
+                ApplyBackpressure(consumer);
 
                 if (consumeResult?.Message != null)
                 {
@@ -478,14 +484,12 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
         return new ConfluentKafkaReceiverConsumer(consumerBuilder.Build());
     }
 
-    private void ApplyBackpressure(IKafkaReceiverConsumer consumer, bool refreshAssignment)
+    private void ApplyBackpressure(IKafkaReceiverConsumer consumer)
     {
         var depth = _messageBuffer.Depth;
-        var enteredBackpressure = false;
         if (!_backpressureActive && depth >= _transportOptions.ReceiverBufferHighWatermark)
         {
             _backpressureActive = true;
-            enteredBackpressure = true;
             KafkaTransportMetrics.RecordReceiverBufferSaturation(
                 _providerName,
                 _transportOptions.TopicName,
@@ -496,71 +500,57 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
             _backpressureActive = false;
         }
 
-        var requiresAssignmentReconciliation = _backpressureActive || _pausedPartitions.Count > 0;
-        if (!_hasAssignmentSnapshot || enteredBackpressure ||
-            (refreshAssignment && requiresAssignmentReconciliation))
-            RefreshAssignment(consumer);
-
-        if (_backpressureActive)
+        if (_backpressureActive && !_partitionPaused)
         {
-            var partitionsToPause = _assignedPartitions
-                .Where(partition => !_pausedPartitions.Contains(partition))
-                .ToArray();
-            if (partitionsToPause.Length > 0)
-            {
-                consumer.Pause(partitionsToPause);
-                if (_pausedPartitions.Count == 0)
-                    _pauseStartedTimestamp = Stopwatch.GetTimestamp();
-                _pausedPartitions.UnionWith(partitionsToPause);
-                KafkaTransportMetrics.RecordReceiverPauseResume(
-                    _providerName,
-                    _transportOptions.TopicName,
-                    _partitionId,
-                    KafkaTransportMetrics.PauseOperation);
-            }
+            consumer.Pause([_topicPartition]);
+            _partitionPaused = true;
+            _pauseStartedTimestamp = Stopwatch.GetTimestamp();
+            KafkaTransportMetrics.RecordReceiverPauseResume(
+                _providerName,
+                _transportOptions.TopicName,
+                _partitionId,
+                KafkaTransportMetrics.PauseOperation);
         }
-        else if (_pausedPartitions.Count > 0)
+        else if (!_backpressureActive && _partitionPaused)
         {
-            var partitionsToResume = _pausedPartitions
-                .Where(_assignedPartitions.Contains)
-                .ToArray();
-            if (partitionsToResume.Length > 0)
-            {
-                consumer.Resume(partitionsToResume);
-                KafkaTransportMetrics.RecordReceiverPauseResume(
-                    _providerName,
-                    _transportOptions.TopicName,
-                    _partitionId,
-                    KafkaTransportMetrics.ResumeOperation);
-            }
-
-            _pausedPartitions.Clear();
+            consumer.Resume([_topicPartition]);
+            _partitionPaused = false;
+            KafkaTransportMetrics.RecordReceiverPauseResume(
+                _providerName,
+                _transportOptions.TopicName,
+                _partitionId,
+                KafkaTransportMetrics.ResumeOperation);
             CompletePauseDuration();
         }
 
         RecordPausedPartitionCountIfChanged();
-    }
-
-    private void RefreshAssignment(IKafkaReceiverConsumer consumer)
-    {
-        var assignment = consumer.Assignment;
-        _assignedPartitions.Clear();
-        _assignedPartitions.UnionWith(assignment);
-        _hasAssignmentSnapshot = true;
-
-        var pausedCountBeforeReconciliation = _pausedPartitions.Count;
-        _pausedPartitions.RemoveWhere(partition => !_assignedPartitions.Contains(partition));
-        if (pausedCountBeforeReconciliation > 0 && _pausedPartitions.Count == 0)
-            CompletePauseDuration();
     }
 
     private void EndPartitionPause()
     {
-        _assignedPartitions.Clear();
-        _hasAssignmentSnapshot = false;
-        _pausedPartitions.Clear();
+        _partitionPaused = false;
         CompletePauseDuration();
         RecordPausedPartitionCountIfChanged();
+    }
+
+    private void PrepareForInitialization()
+    {
+        Interlocked.Exchange(ref _shuttingDown, 0);
+        _messageBuffer.Clear();
+        _sequence = 0;
+        _backpressureActive = false;
+        _partitionPaused = false;
+        _pauseStartedTimestamp = null;
+        _reportedPausedPartitionCount = -1;
+
+        lock (_stateLock)
+        {
+            _inflightOffsets.Clear();
+            _ackedOffsets.Clear();
+            _lastCommittedOffset = 0;
+            _hasCommitCursor = false;
+            _commitDirty = false;
+        }
     }
 
     private void CompletePauseDuration()
@@ -595,7 +585,7 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
 
     private void RecordPausedPartitionCountIfChanged()
     {
-        var pausedPartitionCount = _pausedPartitions.Count;
+        var pausedPartitionCount = _partitionPaused ? 1 : 0;
         if (_reportedPausedPartitionCount == pausedPartitionCount)
             return;
 

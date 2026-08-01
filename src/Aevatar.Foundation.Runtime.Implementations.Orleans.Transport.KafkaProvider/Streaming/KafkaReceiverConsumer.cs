@@ -4,8 +4,6 @@ namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProv
 
 internal interface IKafkaReceiverConsumer : IDisposable
 {
-    IReadOnlyList<TopicPartition> Assignment { get; }
-
     void Assign(TopicPartitionOffset partition);
 
     ConsumeResult<Ignore, byte[]>? Consume(TimeSpan timeout);
@@ -24,8 +22,6 @@ internal interface IKafkaReceiverConsumer : IDisposable
 internal sealed class ConfluentKafkaReceiverConsumer(IConsumer<Ignore, byte[]> consumer)
     : IKafkaReceiverConsumer
 {
-    public IReadOnlyList<TopicPartition> Assignment => consumer.Assignment;
-
     public void Assign(TopicPartitionOffset partition) => consumer.Assign(partition);
 
     public ConsumeResult<Ignore, byte[]>? Consume(TimeSpan timeout) => consumer.Consume(timeout);

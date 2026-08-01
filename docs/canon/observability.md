@@ -480,7 +480,10 @@ consumer-group lag 必须使用不同 instrument 和 dashboard panel。
 
 Receiver capacity、high watermark 与 low watermark 是 Host typed options，并满足
 `0 < low < high <= capacity`。`buffer_saturations` 只在进入 high-watermark backpressure
-时增加，不在每次 paused poll 时重复增加；`pause_duration` 在 paused set 清空时记录。
+时增加，不在每次 paused poll 时重复增加；`pause_duration` 在固定 receiver partition 恢复或
+receiver shutdown 时记录。Orleans queue balancer 拥有 `QueueId -> partition` receiver 生命周期；
+这里的 consumer 使用手动 `Assign`，不通过 Kafka subscription/rebalance 竞争第二套 ownership。
+pause 期间的定期 `Consume(timeout)` 仅用于推进 librdkafka broker/protocol 处理，不宣称 group heartbeat。
 这些指标只观察 transport working state，不定义 delivery 完成事实，也不改变
 `MessagesDeliveredAsync -> contiguous offset commit` 的 ACK watermark。
 
