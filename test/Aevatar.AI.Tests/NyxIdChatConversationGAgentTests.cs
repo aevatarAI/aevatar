@@ -626,6 +626,8 @@ public sealed class NyxIdChatConversationGAgentTests
         var start = CreateStartTurnCommand();
         start.ConversationActorId = conversationActorId;
         start.Prompt = "我要连接 AWS Cost Explorer";
+        start.ToolContext.Credentials.NyxIdCredentialKind =
+            AgentToolNyxIdCredentialKindPayload.SourceReadableUserBearer;
         SetOwner(start, "owner-alpha");
         await agent.HandleEventAsync(CreateEnvelope(
             conversationActorId,
@@ -657,6 +659,9 @@ public sealed class NyxIdChatConversationGAgentTests
             session,
             static (_, _) => Task.CompletedTask,
             CancellationToken.None);
+        AgentToolExecutionContextMapper.FromPayload(session.StepState!.OwnerFallbackToolContext)
+            .Credentials.NyxIdCredentialKind.Should()
+            .Be(AgentToolNyxIdCredentialKind.SourceReadableUserBearer);
         await agent.HandleEventAsync(CreateEnvelope(conversationActorId, llmExecution.Result));
         dispatch.OperationCalls.Should().HaveCount(2);
         var toolCommand = dispatch.OperationCalls[1].Envelope.Payload
@@ -689,6 +694,7 @@ public sealed class NyxIdChatConversationGAgentTests
             .Contain("Selected intent: service_connect")
             .And.Contain(selectedSkillPrompt);
         requireService.ExecutionCount.Should().Be(1);
+        requireService.SourceReadableBearerToken.Should().Be("runtime-token-alpha");
 
         var committed = await eventStore.GetEventsAsync(conversationActorId);
         var action = committed
@@ -3209,7 +3215,7 @@ public sealed class NyxIdChatConversationGAgentTests
     }
 
     [Fact]
-    public void StreamingEnvelope_ShouldDispatchTypedStartTurnCommand()
+    public void StreamingEnvelope_WithoutCredentialClassification_ShouldKeepCredentialSourceUnreadable()
     {
         var factory = new NyxIdChatCommandEnvelopeFactory();
         var command = new NyxIdChatCommand(
@@ -3241,6 +3247,9 @@ public sealed class NyxIdChatConversationGAgentTests
         start.Prompt.Should().Be("hello");
         start.LlmControl.NyxIdAccessToken.Should().Be("runtime-token-alpha");
         start.ToolContext.Credentials.NyxIdAccessToken.Should().Be("runtime-token-alpha");
+        AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(
+                AgentToolExecutionContextMapper.FromPayload(start.ToolContext).Credentials)
+            .Should().BeNull();
     }
 
     [Fact]
@@ -3785,11 +3794,14 @@ public sealed class NyxIdChatConversationGAgentTests
             "{\"type\":\"object\",\"properties\":{\"service_slug\":{\"type\":\"string\"}}}";
         public bool IsReadOnly => true;
         public int ExecutionCount { get; private set; }
+        public string? SourceReadableBearerToken { get; private set; }
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             ExecutionCount++;
+            SourceReadableBearerToken = AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(
+                AgentToolRequestContext.Current?.Credentials);
             return Task.FromResult(
                 "{\"blocked\":true,\"service_slug\":\"aws-cost-explorer\",\"reason_code\":\"NYXID_SERVICE_REGISTRATION_REQUIRED\"}");
         }

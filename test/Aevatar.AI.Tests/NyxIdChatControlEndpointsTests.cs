@@ -207,6 +207,8 @@ public sealed class NyxIdChatControlEndpointsTests
         command.LlmControl.NyxIdAccessToken.Should().Be("steering-runtime-token-alpha");
         command.ToolContext.Credentials.NyxIdAccessToken.Should().Be(
             "steering-runtime-token-alpha");
+        command.ToolContext.Credentials.NyxIdCredentialKind.Should().Be(
+            AgentToolNyxIdCredentialKindPayload.ProxyDelegation);
     }
 
     [Fact]

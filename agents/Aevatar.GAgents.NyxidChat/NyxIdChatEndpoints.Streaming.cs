@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
@@ -56,6 +57,7 @@ public static partial class NyxIdChatEndpoints
     {
         var logger = loggerFactory.CreateLogger("Aevatar.NyxId.Chat.Endpoints");
         var accessToken = string.Empty;
+        var credentials = AgentToolCredentials.Empty;
         var prompt = string.Empty;
         var streamType = request.Type?.Trim() ?? string.Empty;
         var clientRequestId = ResolveClientRequestId(http, request.ClientRequestId);
@@ -72,7 +74,8 @@ public static partial class NyxIdChatEndpoints
             if (await AevatarScopeAccessGuard.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
                 return;
 
-            accessToken = ExtractNyxIdAccessToken(http);
+            credentials = ExtractNyxIdCredentials(http) ?? AgentToolCredentials.Empty;
+            accessToken = credentials.NyxIdAccessToken ?? string.Empty;
             if (string.IsNullOrWhiteSpace(accessToken))
             {
                 http.Response.StatusCode = StatusCodes.Status401Unauthorized;
@@ -250,7 +253,8 @@ public static partial class NyxIdChatEndpoints
                         ClientRequestId: clientRequestId,
                         CreateIfMissing: createIfMissing,
                         OwnerSubject: ownerSubject,
-                        AgentProfileReference: agentProfileReference),
+                        AgentProfileReference: agentProfileReference,
+                        NyxIdCredentialKind: credentials.NyxIdCredentialKind),
                     EmitAsync,
                     null,
                     interactionCancellation.Token);

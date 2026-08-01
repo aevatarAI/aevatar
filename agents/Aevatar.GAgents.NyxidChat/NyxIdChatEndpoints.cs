@@ -1,5 +1,6 @@
 using System.IdentityModel.Tokens.Jwt;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Audit;
 using Aevatar.Audit.Hosting.EndpointAudit;
 using Aevatar.AI.ToolProviders.NyxId;
@@ -328,7 +329,10 @@ public static partial class NyxIdChatEndpoints
         return control;
     }
 
-    private static string? ExtractNyxIdAccessToken(HttpContext http)
+    private static string? ExtractNyxIdAccessToken(HttpContext http) =>
+        ExtractNyxIdCredentials(http)?.NyxIdAccessToken;
+
+    private static AgentToolCredentials? ExtractNyxIdCredentials(HttpContext http)
     {
         if (http.Request.Headers.TryGetValue("Authorization", out var authorizationValues))
         {
@@ -345,7 +349,11 @@ public static partial class NyxIdChatEndpoints
             var bearerToken = authorization["Bearer ".Length..].Trim();
             return string.IsNullOrWhiteSpace(bearerToken) || bearerToken.Any(char.IsWhiteSpace)
                 ? null
-                : bearerToken;
+                : new AgentToolCredentials(
+                    bearerToken,
+                    null,
+                    null,
+                    AgentToolNyxIdCredentialKind.SourceReadableUserBearer);
         }
 
         if (http.Request.Headers.TryGetValue(NyxIdDelegationTokenHeader, out var delegationValues))
@@ -356,7 +364,11 @@ public static partial class NyxIdChatEndpoints
             var delegationToken = delegationValues[0]?.Trim();
             return string.IsNullOrWhiteSpace(delegationToken) || delegationToken.Any(char.IsWhiteSpace)
                 ? null
-                : delegationToken;
+                : new AgentToolCredentials(
+                    delegationToken,
+                    null,
+                    null,
+                    AgentToolNyxIdCredentialKind.ProxyDelegation);
         }
 
         return null;

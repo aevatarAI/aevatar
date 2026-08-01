@@ -684,10 +684,12 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         };
         var toolContext = planToolContext with
         {
-            Credentials = new AgentToolCredentials(
-                requestControl.NyxIdAccessToken,
-                requestControl.NyxIdOrgToken,
-                requestControl.SenderNyxIdAccessToken),
+            Credentials = planToolContext.Credentials with
+            {
+                NyxIdAccessToken = requestControl.NyxIdAccessToken,
+                NyxIdOrgToken = requestControl.NyxIdOrgToken,
+                SenderNyxIdAccessToken = requestControl.SenderNyxIdAccessToken,
+            },
         };
         return (control, toolContext);
     }
@@ -937,10 +939,12 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         source = source with
         {
             SenderBinding = AgentToolSenderBindingContext.Empty,
-            Credentials = new AgentToolCredentials(
-                NormalizeOptional(ownerControl.NyxIdAccessToken),
-                NormalizeOptional(ownerControl.NyxIdOrgToken),
-                SenderNyxIdAccessToken: null),
+            Credentials = source.Credentials with
+            {
+                NyxIdAccessToken = NormalizeOptional(ownerControl.NyxIdAccessToken),
+                NyxIdOrgToken = NormalizeOptional(ownerControl.NyxIdOrgToken),
+                SenderNyxIdAccessToken = null,
+            },
             Routing = new LLMRequestRoutingContext(
                 NormalizeOptional(ownerControl.ModelOverride),
                 NormalizeOptional(ownerControl.NyxIdRoutePreference),

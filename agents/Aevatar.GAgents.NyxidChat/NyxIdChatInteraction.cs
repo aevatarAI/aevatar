@@ -30,7 +30,9 @@ public sealed record NyxIdChatCommand(
     string? ClientRequestId = null,
     bool CreateIfMissing = false,
     string? OwnerSubject = null,
-    AgentProfileReference? AgentProfileReference = null)
+    AgentProfileReference? AgentProfileReference = null,
+    AgentToolNyxIdCredentialKind NyxIdCredentialKind =
+        AgentToolNyxIdCredentialKind.Unspecified)
     : ICommandContextSeed
 {
     public IReadOnlyDictionary<string, string>? Headers => null;
@@ -532,7 +534,7 @@ internal sealed class NyxIdChatCommandEnvelopeFactory : ICommandEnvelopeFactory<
                 command.AccessToken,
                 null,
                 null,
-                AgentToolNyxIdCredentialKind.SourceReadableUserBearer),
+                command.NyxIdCredentialKind),
             Caller = new AgentToolCallerContext(
                 command.ScopeId,
                 command.OwnerSubject,

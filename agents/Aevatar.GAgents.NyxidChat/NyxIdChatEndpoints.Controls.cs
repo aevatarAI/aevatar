@@ -101,7 +101,8 @@ public static partial class NyxIdChatEndpoints
             return InvalidControlRequest();
         }
 
-        var accessToken = ExtractNyxIdAccessToken(http);
+        var credentials = ExtractNyxIdCredentials(http);
+        var accessToken = credentials?.NyxIdAccessToken;
         if (string.IsNullOrWhiteSpace(accessToken))
             return Results.Unauthorized();
         var admissionError = await AuthorizeConversationAsync(
@@ -131,7 +132,7 @@ public static partial class NyxIdChatEndpoints
                 normalizedScopeId,
                 turnId,
                 requestId,
-                accessToken,
+                credentials!,
                 control),
         };
         command.InputParts.AddRange(request.InputParts?.Select(static part => part.ToProto()) ?? []);
@@ -167,7 +168,8 @@ public static partial class NyxIdChatEndpoints
             return InvalidControlRequest();
         }
 
-        var accessToken = ExtractNyxIdAccessToken(http);
+        var credentials = ExtractNyxIdCredentials(http);
+        var accessToken = credentials?.NyxIdAccessToken;
         if (string.IsNullOrWhiteSpace(accessToken))
             return Results.Unauthorized();
         var admissionError = await AuthorizeConversationAsync(
@@ -199,7 +201,7 @@ public static partial class NyxIdChatEndpoints
                 identity.ScopeId,
                 identity.TurnId,
                 identity.RequestId,
-                accessToken,
+                credentials!,
                 control),
         }, ct).ConfigureAwait(false);
         return AcceptedControl(http, identity.ScopeId, identity.ActorId, receipt);
@@ -264,13 +266,13 @@ public static partial class NyxIdChatEndpoints
         string scopeId,
         string turnId,
         string requestId,
-        string accessToken,
+        AgentToolCredentials credentials,
         LLMControlContext control)
     {
         var context = AgentToolExecutionContext.Empty with
         {
             Request = new AgentToolRequestIdentity(requestId, null),
-            Credentials = new AgentToolCredentials(accessToken, null, null),
+            Credentials = credentials,
             Caller = new AgentToolCallerContext(scopeId, scopeId, turnId),
             Channel = new AgentToolChannelContext("nyxid-chat", null, scopeId, null, null),
         };

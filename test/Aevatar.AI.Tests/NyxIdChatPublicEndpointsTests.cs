@@ -92,6 +92,40 @@ public sealed class NyxIdChatPublicEndpointsTests
     }
 
     [Fact]
+    public async Task FirstText_WithProxyDelegation_ShouldPreserveCredentialKind()
+    {
+        var chat = new RecordingInteraction<NyxIdChatCommand>();
+        var context = CreateContext("scope-alpha", services => services
+            .AddSingleton<ICommandInteractionService<NyxIdChatCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>(chat)
+            .AddSingleton<ICommandInteractionService<NyxIdActionContinuationCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>(new RecordingInteraction<NyxIdActionContinuationCommand>())
+            .AddSingleton<IScopeResourceAdmissionPort>(new RecordingAdmissionPort()));
+        context.Request.Headers["X-NyxID-Delegation-Token"] = "proxy-delegation";
+        context.Response.Body = new MemoryStream();
+
+        await NyxIdChatEndpoints.HandlePublicChatAsync(context, Parse("""
+            {
+              "type": "text",
+              "clientRequestId": "proxy-request",
+              "prompt": "hello"
+            }
+            """));
+
+        var command = chat.Commands.Should().ContainSingle().Which;
+        var envelope = new NyxIdChatCommandEnvelopeFactory().CreateEnvelope(
+            command,
+            new CommandContext(
+                command.ActorId,
+                "command-alpha",
+                "correlation-alpha",
+                new Dictionary<string, string>()));
+        var credentials = AgentToolExecutionContextMapper.FromPayload(
+            envelope.Payload.Unpack<NyxIdChatConversationCreateCommand>().FirstTurn.ToolContext).Credentials;
+        credentials.NyxIdAccessToken.Should().Be("proxy-delegation");
+        credentials.NyxIdCredentialKind.Should().Be(AgentToolNyxIdCredentialKind.ProxyDelegation);
+        AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(credentials).Should().BeNull();
+    }
+
+    [Fact]
     public async Task ContinuedText_ShouldReuseConversationAndAuthorizeIt()
     {
         var chat = new RecordingInteraction<NyxIdChatCommand>();
