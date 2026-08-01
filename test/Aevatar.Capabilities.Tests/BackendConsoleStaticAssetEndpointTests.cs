@@ -74,9 +74,14 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         await using var app = await CreateAppAsync();
         var html = await app.GetTestClient().GetStringAsync("/admin");
 
-        html.Should().Contain("if(!AUDIT_LOADING) loadAuditTrail();");
-        html.Should().Contain("if((curParts()[0]||defaultModule())==='audit')");
-        html.Should().Contain("toast('正在刷新审计日志');");
+        // 进入模块：首访 reset 加载；重进保留已展示行、静默换新（stale-while-revalidate）
+        html.Should().Contain("if(!AUDIT_LOADING) loadAuditTrail(!AUDIT_LOADED);");
+        html.Should().Contain("async function loadAuditTrail(reset){");
+        html.Should().Contain("if(reset){ AUDIT_DATA=[]; AUDIT_CURSOR=null; AUDIT_HAS_MORE=false; AUDIT_WATERMARK=null; }");
+        // 头部 ⟳ 统一走 refreshActiveModule：audit 分支真实拉新，不再假装刷新
+        html.Should().Contain("refreshActiveModule();");
+        html.Should().Contain("if(module==='audit'){ loadAuditTrail(false); toast('正在刷新审计日志'); return; }");
+        html.Should().NotContain("toast('已刷新（最终一致 readmodel）')");
         html.Should().NotContain(
             "if(!AUDIT_LOADED||AUDIT_LOADING){ if(!AUDIT_LOADING) loadAuditTrail(); }");
     }
@@ -2302,22 +2307,54 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             vm.runInContext(`
               ${functionSource('adminRouteKey', 'readAdminViewState')}
               ${functionSource('readAdminViewState', 'writeAdminViewState')}
-              ${functionSource('writeAdminViewState', 'canReuseEmbeddedView')}
-              ${functionSource('canReuseEmbeddedView', 'adminPaneScrollTop')}
+              ${functionSource('writeAdminViewState', 'adminPaneScrollTop')}
               ${functionSource('adminPaneScrollTop', 'captureAdminViewState')}
               ${functionSource('replaceViewHtml', 'setAdminImmersive')}
               ${functionSource('setAdminImmersive', 'breadcrumb')}
+              ${functionSource('activateDockFrame', 'render')}
             `, context);
 
             vm.runInContext('writeAdminViewState', context)(storage, 'console:test:admin:view', '#/audit?result=failed', 540);
             vm.runInContext('writeAdminViewState', context)(storage, 'console:test:admin:view', '#/fleet', 80);
             assert.equal(vm.runInContext('readAdminViewState', context)(storage, 'console:test:admin:view', '#/audit?result=failed'), 540);
             assert.equal(vm.runInContext('readAdminViewState', context)(storage, 'console:test:admin:view', '#/fleet'), 80);
-            assert.equal(vm.runInContext('canReuseEmbeddedView', context)('observatory', 'observatory', true), true);
-            assert.equal(vm.runInContext('canReuseEmbeddedView', context)('observatory', 'cqrs', true), false);
-            assert.equal(vm.runInContext('canReuseEmbeddedView', context)('observatory', 'observatory', false), false);
             assert.equal(vm.runInContext('adminPaneScrollTop', context)({scrollTop:0,scrollHeight:100,clientHeight:100,getAttribute(){return '640';}}), 640);
             assert.equal(vm.runInContext('adminPaneScrollTop', context)({scrollTop:0,scrollHeight:900,clientHeight:300,getAttribute(){return '640';}}), 0);
+
+            // dock 常驻 iframe：裸路径返回不动 src（保留内部状态）；带 query 深链更新 src；切模块只翻 active，不销毁
+            function frameStub(key, src){
+              const frame = {
+                src: src,
+                attrs: {'data-persistent-view': key, 'data-frame-source': src},
+                getAttribute(name){ return frame.attrs[name] == null ? null : frame.attrs[name]; },
+                setAttribute(name, value){ frame.attrs[name] = String(value); },
+              };
+              frame.classList = { toggle(cls, on){ frame.activeFlag = !!on; } };
+              return frame;
+            }
+            const obsFrame = frameStub('observatory', '/workflow/observatory?run=abc');
+            const studioFrame = frameStub('workflow-studio', '/workflow/studio');
+            const dock = {
+              querySelector(sel){
+                if (sel.indexOf('"observatory"') >= 0) return obsFrame;
+                if (sel.indexOf('"workflow-studio"') >= 0) return studioFrame;
+                return null;
+              },
+              querySelectorAll(){ return [obsFrame, studioFrame]; },
+              insertAdjacentHTML(){ assert.fail('existing dock frames must be reused, not recreated'); }
+            };
+            const activate = vm.runInContext('activateDockFrame', context);
+            activate(dock, {persistentKey:'observatory', frameSource:'/workflow/observatory', html:''});
+            assert.equal(obsFrame.src, '/workflow/observatory?run=abc');
+            assert.equal(obsFrame.activeFlag, true);
+            assert.equal(studioFrame.activeFlag, false);
+            activate(dock, {persistentKey:'observatory', frameSource:'/workflow/observatory?run=zzz', html:''});
+            assert.equal(obsFrame.src, '/workflow/observatory?run=zzz');
+            assert.equal(obsFrame.attrs['data-frame-source'], '/workflow/observatory?run=zzz');
+            activate(dock, {persistentKey:'workflow-studio', frameSource:'/workflow/studio', html:''});
+            assert.equal(studioFrame.activeFlag, true);
+            assert.equal(obsFrame.activeFlag, false);
+            assert.equal(obsFrame.src, '/workflow/observatory?run=zzz');
 
             const oldScroll = {scrollTop:420};
             const nextScroll = {scrollTop:0};
