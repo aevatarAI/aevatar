@@ -15,6 +15,7 @@ namespace Aevatar.Foundation.Runtime.Persistence;
 public sealed class MemoryCacheDeduplicator : IEventDeduplicator
 {
     private readonly MemoryCache _cache = new(new MemoryCacheOptions());
+    private readonly Lock _reservationLock = new();
     private readonly TimeSpan _expiration = TimeSpan.FromMinutes(5);
 
     /// <summary>Attempts to record an event ID. True if first-seen, false if duplicate.</summary>
@@ -22,16 +23,23 @@ public sealed class MemoryCacheDeduplicator : IEventDeduplicator
     /// <returns>True for first record, false for duplicate.</returns>
     public Task<bool> TryRecordAsync(string eventId)
     {
-        if (_cache.TryGetValue(eventId, out _))
-            return Task.FromResult(false); // Duplicate
-        _cache.Set(eventId, true, _expiration);
-        return Task.FromResult(true); // First time
+        lock (_reservationLock)
+        {
+            if (_cache.TryGetValue(eventId, out _))
+                return Task.FromResult(false); // Duplicate
+            _cache.Set(eventId, true, _expiration);
+            return Task.FromResult(true); // First time
+        }
     }
 
     /// <inheritdoc />
     public Task ForgetAsync(string eventId)
     {
-        _cache.Remove(eventId);
+        lock (_reservationLock)
+        {
+            _cache.Remove(eventId);
+        }
+
         return Task.CompletedTask;
     }
 }

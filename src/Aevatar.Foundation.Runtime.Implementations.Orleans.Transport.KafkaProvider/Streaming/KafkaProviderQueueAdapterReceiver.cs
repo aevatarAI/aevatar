@@ -181,18 +181,8 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
 
                 if (consumeResult?.Message != null)
                 {
-                    RegisterOffset(consumeResult.Offset.Value);
-
-                    var batch = TryCreateBatch(consumeResult);
-                    if (batch == null)
-                    {
-                        MarkOffsetAcknowledged(consumeResult.Offset.Value);
-                    }
-                    else
-                    {
-                        _messages.Enqueue(batch);
-                        RecordBufferDepth();
-                    }
+                    if (!ProcessPolledRecord(consumeResult))
+                        break;
                 }
 
                 TryCommitContiguousOffsets(consumer);
@@ -214,30 +204,79 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
         }
     }
 
-    private KafkaProviderBatchContainer? TryCreateBatch(ConsumeResult<Ignore, byte[]> consumeResult)
+    internal bool ProcessPolledRecord(ConsumeResult<Ignore, byte[]> consumeResult)
+    {
+        RegisterOffset(consumeResult.Offset.Value);
+        var classification = ClassifyPolledRecord(consumeResult);
+        switch (classification.Disposition)
+        {
+            case KafkaPolledRecordDisposition.Deliver:
+            {
+                var sequence = Interlocked.Increment(ref _sequence);
+                var token = new EventSequenceTokenV2(sequence);
+                _messages.Enqueue(new KafkaProviderBatchContainer(
+                    StreamId.Create(classification.StreamNamespace!, classification.StreamId!),
+                    classification.Envelope!,
+                    token,
+                    consumeResult.Offset.Value));
+                return true;
+            }
+            case KafkaPolledRecordDisposition.AcknowledgeForeignRecord:
+                _logger.LogDebug(
+                    "Ignoring Kafka record at offset {Offset} on partition {Partition} for foreign stream namespace {StreamNamespace}",
+                    consumeResult.Offset.Value,
+                    _partitionId,
+                    classification.StreamNamespace);
+                MarkOffsetAcknowledged(consumeResult.Offset.Value);
+                return true;
+            case KafkaPolledRecordDisposition.AcknowledgeInvalidRecord:
+                _logger.LogWarning(
+                    classification.ParseException,
+                    "Invalid Kafka actor-event record at offset {Offset} on partition {Partition}. Reason={InvalidReason}; message will be skipped",
+                    consumeResult.Offset.Value,
+                    _partitionId,
+                    classification.InvalidReason);
+                AgentMetrics.RecordEnvelopeTerminalFailure(
+                    AgentMetrics.FailureReasonInvalidEnvelope,
+                    AgentMetrics.FailureDispositionReturned);
+                MarkOffsetAcknowledged(consumeResult.Offset.Value);
+                return true;
+            case KafkaPolledRecordDisposition.PreserveForRedelivery:
+                _logger.LogInformation(
+                    "Preserving polled Kafka record at offset {Offset} on partition {Partition} for redelivery during receiver shutdown",
+                    consumeResult.Offset.Value,
+                    _partitionId);
+                return false;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(classification.Disposition));
+        }
+    }
+
+    internal KafkaPolledRecordClassification ClassifyPolledRecord(
+        ConsumeResult<Ignore, byte[]> consumeResult)
     {
         if (Volatile.Read(ref _shuttingDown) == 1)
-            return null;
-
-        if (consumeResult.Message.Value is not { Length: > 0 })
-        {
-            _logger.LogWarning(
-                "Kafka message at offset {Offset} on partition {Partition} has an empty EventEnvelope payload. Message will be skipped.",
-                consumeResult.Offset.Value,
-                _partitionId);
-            AgentMetrics.RecordEnvelopeTerminalFailure(
-                AgentMetrics.FailureReasonInvalidEnvelope,
-                AgentMetrics.FailureDispositionReturned);
-            return null;
-        }
+            return KafkaPolledRecordClassification.PreserveForRedelivery();
 
         var headers = consumeResult.Message.Headers;
         var streamNamespace = TryGetHeaderValue(headers, KafkaProviderHeaderConstants.StreamNamespace);
         var streamIdValue = TryGetHeaderValue(headers, KafkaProviderHeaderConstants.StreamId);
-        if (!string.Equals(streamNamespace, _actorEventNamespace, StringComparison.Ordinal) ||
-            string.IsNullOrWhiteSpace(streamIdValue))
+        if (!string.IsNullOrWhiteSpace(streamNamespace) &&
+            !string.Equals(streamNamespace, _actorEventNamespace, StringComparison.Ordinal))
         {
-            return null;
+            return KafkaPolledRecordClassification.AcknowledgeForeignRecord(streamNamespace);
+        }
+
+        if (string.IsNullOrWhiteSpace(streamNamespace) || string.IsNullOrWhiteSpace(streamIdValue))
+        {
+            return KafkaPolledRecordClassification.AcknowledgeInvalidRecord(
+                KafkaInvalidRecordReason.MissingRoutingHeaders);
+        }
+
+        if (consumeResult.Message.Value is not { Length: > 0 })
+        {
+            return KafkaPolledRecordClassification.AcknowledgeInvalidRecord(
+                KafkaInvalidRecordReason.EmptyPayload);
         }
 
         EventEnvelope envelope;
@@ -247,19 +286,12 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex,
-                "Failed to parse EventEnvelope from Kafka message at offset {Offset} on partition {Partition}. Message will be skipped.",
-                consumeResult.Offset.Value, _partitionId);
-            AgentMetrics.RecordEnvelopeTerminalFailure(
-                AgentMetrics.FailureReasonInvalidEnvelope,
-                AgentMetrics.FailureDispositionReturned);
-            return null;
+            return KafkaPolledRecordClassification.AcknowledgeInvalidRecord(
+                KafkaInvalidRecordReason.ProtobufParseFailed,
+                ex);
         }
 
-        var streamId = StreamId.Create(streamNamespace!, streamIdValue);
-        var sequence = Interlocked.Increment(ref _sequence);
-        var token = new EventSequenceTokenV2(sequence);
-        return new KafkaProviderBatchContainer(streamId, envelope, token, consumeResult.Offset.Value);
+        return KafkaPolledRecordClassification.Deliver(streamNamespace, streamIdValue, envelope);
     }
 
     private void RegisterOffset(long offset)
@@ -353,4 +385,49 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
             _transportOptions.TopicName,
             _partitionId,
             _messages.Count);
+}
+
+internal enum KafkaPolledRecordDisposition
+{
+    Deliver,
+    AcknowledgeForeignRecord,
+    AcknowledgeInvalidRecord,
+    PreserveForRedelivery,
+}
+
+internal enum KafkaInvalidRecordReason
+{
+    None,
+    MissingRoutingHeaders,
+    EmptyPayload,
+    ProtobufParseFailed,
+}
+
+internal sealed record KafkaPolledRecordClassification(
+    KafkaPolledRecordDisposition Disposition,
+    string? StreamNamespace = null,
+    string? StreamId = null,
+    EventEnvelope? Envelope = null,
+    KafkaInvalidRecordReason InvalidReason = KafkaInvalidRecordReason.None,
+    Exception? ParseException = null)
+{
+    public static KafkaPolledRecordClassification Deliver(
+        string streamNamespace,
+        string streamId,
+        EventEnvelope envelope) =>
+        new(KafkaPolledRecordDisposition.Deliver, streamNamespace, streamId, envelope);
+
+    public static KafkaPolledRecordClassification AcknowledgeForeignRecord(string streamNamespace) =>
+        new(KafkaPolledRecordDisposition.AcknowledgeForeignRecord, StreamNamespace: streamNamespace);
+
+    public static KafkaPolledRecordClassification AcknowledgeInvalidRecord(
+        KafkaInvalidRecordReason reason,
+        Exception? parseException = null) =>
+        new(
+            KafkaPolledRecordDisposition.AcknowledgeInvalidRecord,
+            InvalidReason: reason,
+            ParseException: parseException);
+
+    public static KafkaPolledRecordClassification PreserveForRedelivery() =>
+        new(KafkaPolledRecordDisposition.PreserveForRedelivery);
 }

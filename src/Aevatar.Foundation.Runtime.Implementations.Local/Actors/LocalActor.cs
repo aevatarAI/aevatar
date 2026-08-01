@@ -190,19 +190,23 @@ public sealed class LocalActor : IActor
     {
         EventHandleScope scope = default;
         var scopeCreated = false;
+        string? dedupKey = null;
         try
         {
             if (_deduplicator != null &&
-                RuntimeEnvelopeDeduplication.TryBuildDedupKey(Id, item.Envelope, out var dedupKey) &&
-                !await _deduplicator.TryRecordAsync(dedupKey))
+                RuntimeEnvelopeDeduplication.TryBuildDedupKey(Id, item.Envelope, out var candidateDedupKey))
             {
-                _logger.LogDebug(
-                    "LocalActor {Id} dropped duplicate envelope {EnvelopeId} with dedup key {DedupKey}",
-                    Id,
-                    item.Envelope.Id,
-                    dedupKey);
-                item.Completion.SetResult();
-                return;
+                dedupKey = candidateDedupKey;
+                if (!await _deduplicator.TryRecordAsync(dedupKey))
+                {
+                    _logger.LogDebug(
+                        "LocalActor {Id} dropped duplicate envelope {EnvelopeId} with dedup key {DedupKey}",
+                        Id,
+                        item.Envelope.Id,
+                        dedupKey);
+                    item.Completion.SetResult();
+                    return;
+                }
             }
 
             scope = EventHandleScope.Begin(_logger, Id, item.Envelope, Agent.GetType().FullName ?? Agent.GetType().Name);
@@ -216,7 +220,10 @@ public sealed class LocalActor : IActor
                 scope.MarkError(ex);
             _logger.LogError(ex, "LocalActor {Id} failed to handle event", Id);
             if (item.PropagateFailure)
+            {
+                await ForgetDedupReservationAsync(dedupKey);
                 item.Completion.SetException(ex);
+            }
             else
                 item.Completion.SetResult();
         }
@@ -224,6 +231,25 @@ public sealed class LocalActor : IActor
         {
             if (scopeCreated)
                 scope.Dispose();
+        }
+    }
+
+    private async Task ForgetDedupReservationAsync(string? dedupKey)
+    {
+        if (_deduplicator == null || string.IsNullOrWhiteSpace(dedupKey))
+            return;
+
+        try
+        {
+            await _deduplicator.ForgetAsync(dedupKey);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "LocalActor {Id} failed to release provisional dedup reservation {DedupKey}",
+                Id,
+                dedupKey);
         }
     }
 

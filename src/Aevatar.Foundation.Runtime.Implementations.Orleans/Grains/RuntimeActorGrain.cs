@@ -697,7 +697,18 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         if (_deduplicator == null || string.IsNullOrWhiteSpace(dedupKey))
             return;
 
-        await _deduplicator.ForgetAsync(dedupKey);
+        try
+        {
+            await _deduplicator.ForgetAsync(dedupKey);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Runtime actor {ActorId} failed to release provisional dedup reservation {DedupKey}",
+                this.GetPrimaryKeyString(),
+                dedupKey);
+        }
     }
 
     private static string ResolveTerminalFailureDisposition(bool propagateFailure) =>

@@ -1,6 +1,9 @@
 using System.Net;
 using System.Net.Sockets;
+using System.Collections.Concurrent;
+using System.Diagnostics.Metrics;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Deduplication;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.TypeSystem;
@@ -10,6 +13,7 @@ using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains.Callbacks;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
+using Aevatar.Foundation.Runtime.Observability;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -29,6 +33,7 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
     public async Task DispatchAsync_ShouldReturn_WhenRuntimeRetryIsDisabledAndHandlerFails()
     {
         RetryAwareDirectDispatchAgent.Reset();
+        using var metricProbe = new RuntimeTerminalFailureMetricProbe();
         var actorId = $"actor-{Guid.NewGuid():N}";
         var siloPort = ReserveTcpPort();
         var gatewayPort = ReserveTcpPort();
@@ -55,6 +60,9 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
             await RetryAwareDirectDispatchAgent.WaitForAttemptAsync(envelope.Id, TimeSpan.FromSeconds(20));
             await logProbe.WaitForRuntimeHandlingFailureAsync(TimeSpan.FromSeconds(20));
             RetryAwareDirectDispatchAgent.GetAttemptCount(envelope.Id).Should().Be(1);
+            metricProbe.Measurements.Should().Contain(measurement =>
+                measurement.Reason == AgentMetrics.FailureReasonHandlerRetryExhausted &&
+                measurement.Disposition == AgentMetrics.FailureDispositionReturned);
         }
         finally
         {
@@ -316,11 +324,58 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
         }
     }
 
+    [Fact]
+    public async Task HandleEnvelopeAsync_ShouldPreserveHandlerFailure_WhenDedupReleaseFails()
+    {
+        RetryAwareDirectDispatchAgent.Reset();
+        var actorId = $"actor-{Guid.NewGuid():N}";
+        var siloPort = ReserveTcpPort();
+        var gatewayPort = ReserveTcpPort();
+        var deduplicator = new ThrowingForgetDeduplicator();
+
+        using var envScope = new EnvironmentVariableScope(new Dictionary<string, string?>
+        {
+            ["AEVATAR_RUNTIME_AUTO_RETRY_MAX_ATTEMPTS"] = "0",
+            ["AEVATAR_RUNTIME_AUTO_RETRY_DELAY_MS"] = "50",
+            ["AEVATAR_TEST_NODE_VERSION_TAG"] = "new",
+            ["AEVATAR_TEST_FAIL_EVENT_TYPE_URLS"] = string.Empty,
+        });
+
+        var host = await StartSiloHostAsync(
+            siloPort,
+            gatewayPort,
+            deduplicator: deduplicator);
+
+        try
+        {
+            await InitializeAgentByKindAsync(host, actorId);
+            var grain = host.Services.GetRequiredService<IGrainFactory>()
+                .GetGrain<IRuntimeActorGrain>(actorId);
+            var envelope = CreateEnvelope("always-fail-no-retry");
+            envelope.Runtime = new EnvelopeRuntime
+            {
+                Dispatch = new EnvelopeDispatchControl { PropagateFailure = true },
+            };
+
+            await grain.Invoking(x => x.HandleEnvelopeAsync(envelope.ToByteArray()))
+                .Should().ThrowAsync<InvalidOperationException>()
+                .WithMessage("always-fail-no-retry");
+
+            deduplicator.ForgetAttempts.Should().Be(1);
+        }
+        finally
+        {
+            await host.StopAsync();
+            host.Dispose();
+        }
+    }
+
     private static async Task<IHost> StartSiloHostAsync(
         int siloPort,
         int gatewayPort,
         ILoggerProvider? loggerProvider = null,
-        IActorRuntimeCallbackScheduler? callbackScheduler = null)
+        IActorRuntimeCallbackScheduler? callbackScheduler = null,
+        IEventDeduplicator? deduplicator = null)
     {
         var host = Host.CreateDefaultBuilder()
             .UseOrleans(siloBuilder =>
@@ -349,6 +404,11 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
                 {
                     services.Replace(
                         ServiceDescriptor.Singleton(callbackScheduler));
+                }
+                if (deduplicator != null)
+                {
+                    services.Replace(
+                        ServiceDescriptor.Singleton(deduplicator));
                 }
             })
             .Build();
@@ -527,6 +587,57 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
             public void Dispose()
             {
             }
+        }
+    }
+
+    private sealed class RuntimeTerminalFailureMetricProbe : IDisposable
+    {
+        private readonly MeterListener _listener = new();
+
+        public RuntimeTerminalFailureMetricProbe()
+        {
+            _listener.InstrumentPublished = (instrument, listener) =>
+            {
+                if (instrument.Name == AgentMetrics.RuntimeEnvelopeTerminalFailuresMetricName)
+                    listener.EnableMeasurementEvents(instrument);
+            };
+            _listener.SetMeasurementEventCallback<long>((_, _, tags, _) =>
+            {
+                string? reason = null;
+                string? disposition = null;
+                foreach (var tag in tags)
+                {
+                    if (tag.Key == AgentMetrics.FailureReasonTag)
+                        reason = tag.Value?.ToString();
+                    else if (tag.Key == AgentMetrics.FailureDispositionTag)
+                        disposition = tag.Value?.ToString();
+                }
+
+                Measurements.Enqueue((reason, disposition));
+            });
+            _listener.Start();
+        }
+
+        public ConcurrentQueue<(string? Reason, string? Disposition)> Measurements { get; } = new();
+
+        public void Dispose() => _listener.Dispose();
+    }
+
+    private sealed class ThrowingForgetDeduplicator : IEventDeduplicator
+    {
+        public int ForgetAttempts { get; private set; }
+
+        public Task<bool> TryRecordAsync(string eventId)
+        {
+            _ = eventId;
+            return Task.FromResult(true);
+        }
+
+        public Task ForgetAsync(string eventId)
+        {
+            _ = eventId;
+            ForgetAttempts++;
+            throw new InvalidOperationException("dedup release failure");
         }
     }
 
