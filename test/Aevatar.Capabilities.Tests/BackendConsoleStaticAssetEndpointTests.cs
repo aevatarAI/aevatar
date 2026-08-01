@@ -2136,6 +2136,14 @@ public sealed class BackendConsoleStaticAssetEndpointTests
                 failure:{code:'authorization_required',category:'authorization',sanitizedMessage:'Authorization required.'},
                 provenance:{chat:{surface:'nyxid_assistant',conversationId:'conversation-alpha',turnId:'turn-alpha',taskId:'task-alpha',stepId:'step-alpha',actionRequestId:null}}
               },{
+                id:'audit-tool-zeta', occurredAtUtc:'2026-08-01T00:00:02Z',
+                operationName:'search_current_state', operationKind:'Tool',
+                lifecyclePhase:'terminal', terminalOutcome:'succeeded',
+                auditActorId:'audit_actor:full-zeta', scopeId:'scope-zeta',
+                target:{kind:'tool',id:'search_current_state'},
+                correlation:{callId:'call-zeta',correlationId:'correlation-zeta'}, failure:null,
+                provenance:{chat:{surface:'workflow_chat',conversationId:'conversation-zeta-with-long-id',turnId:'turn-zeta',taskId:'task-zeta',stepId:'step-zeta',actionRequestId:null}}
+              },{
                 id:'audit-action-alpha', occurredAtUtc:'2026-08-01T00:00:01Z',
                 operationName:'chat.action.requested', operationKind:'Authorization',
                 lifecyclePhase:'accepted', terminalOutcome:null,
@@ -2164,7 +2172,8 @@ public sealed class BackendConsoleStaticAssetEndpointTests
               ${functionSource('chatActivityApplyPage','loadChatActivity')}
               ${functionSource('loadChatActivity','loadChatActivityMore')}
               ${functionSource('chatActivityKind','chatActivityShortId')}
-              ${functionSource('chatActivityShortId','chatActivityTable')}
+              ${functionSource('chatActivityShortId','chatActivityConversationGroups')}
+              ${functionSource('chatActivityConversationGroups','chatActivityTable')}
               ${functionSource('chatActivityTable','chatActivityInspector')}
               ${functionSource('chatActivityInspector','chatActivityGate')}
               ${functionSource('chatActivityFilters','chatActivityRoot')}
@@ -2197,12 +2206,23 @@ public sealed class BackendConsoleStaticAssetEndpointTests
               assert.match(table,/request_nyxid_connect/);
               assert.match(table,/failed/);
               assert.match(table,/accepted/);
+              assert.match(table,/succeeded/);
               assert.match(table,/conversation-alpha/);
+              assert.match(table,/conversation-zeta-with-long-id/);
               assert.match(table,/turn-alpha/);
               assert.match(table,/title="conversation-alpha"/);
               assert.match(table,/tabindex="0"/);
+              const groups = table.match(/<details class="chat-activity-conversation"[^>]*>/g)||[];
+              assert.equal(groups.length,2);
+              assert.match(groups[0],/data-conversation="conversation-zeta-with-long-id"/);
+              assert.match(groups[0],/ open(?: |>|$)/);
+              assert.match(groups[1],/data-conversation="conversation-alpha"/);
+              assert.doesNotMatch(groups[1],/ open(?: |>|$)/);
+              assert.match(table,/<summary class="chat-activity-conversation-summary">/);
+              assert.match(table,/2 Conversations/);
+              assert.match(table,/2 条 Activity/);
 
-              const inspector = context.chatActivityInspector(response.records[1]);
+              const inspector = context.chatActivityInspector(response.records[2]);
               assert.match(inspector,/task-alpha/);
               assert.match(inspector,/step-alpha/);
               assert.match(inspector,/action-alpha/);

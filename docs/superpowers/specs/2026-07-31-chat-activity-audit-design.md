@@ -310,7 +310,16 @@ Add Chat Activity under the existing Overview group, next to Audit Trail. It
 reuses the audit list, time formatting, outcome badges, cursor pagination,
 loading/error states, and inspector patterns already present in admin.html.
 
-The default columns are:
+Activity records are organized into Conversation disclosure groups instead of
+one flat table. Groups are ordered by their most recent loaded activity. The
+most recent Conversation is expanded by default; all other Conversations are
+collapsed by default. Each group header makes the Conversation ID prominent and
+shows its loaded activity count and latest activity time. Expanding a group
+reveals the existing activity rows and row inspector behavior. Records without a
+Conversation ID are kept in one explicit `Unattributed Conversation` group.
+Loading another page merges newly loaded records into the existing groups.
+
+The expanded-group columns are:
 
 | Column | Value |
 |---|---|
@@ -318,7 +327,6 @@ The default columns are:
 | Kind | Tool or Action |
 | Name | tool name or action kind |
 | Status | safe mapped outcome |
-| Conversation | conversation_id, shortened visually but copyable |
 | Turn | turn_id, shortened visually but copyable |
 
 The detail inspector may show task ID, step ID, call ID, action request ID,

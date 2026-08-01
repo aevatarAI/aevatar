@@ -1046,7 +1046,17 @@ body:has(#acctw) .app-header .header-right{margin-right:236px;}
 .audit-actor{display:block;font-size:12.5px;color:var(--heading);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .audit-actor-sub{font-size:10.5px;max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .audit-corr{display:block;font-size:11.5px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.chat-activity-table{min-width:900px;}
+.chat-activity-groups{display:flex;flex-direction:column;gap:10px;}
+.chat-activity-groups-head{display:flex;align-items:center;justify-content:space-between;color:var(--muted);font-size:12px;}
+.chat-activity-conversation{overflow:hidden;border:1px solid var(--border);border-radius:var(--r-panel);background:var(--surface);}
+.chat-activity-conversation[open]{border-color:var(--border-strong);box-shadow:var(--shadow-card);}
+.chat-activity-conversation-summary{display:flex;align-items:center;gap:12px;padding:12px 14px;cursor:pointer;background:var(--surface-2);}
+.chat-activity-conversation-summary:hover{background:var(--primary-weak);}
+.chat-activity-conversation-title{display:flex;align-items:baseline;gap:8px;min-width:0;}
+.chat-activity-conversation-title b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--heading);font-size:13px;}
+.chat-activity-conversation-meta{display:flex;align-items:center;gap:14px;margin-left:auto;flex:0 0 auto;color:var(--subtle);font-size:11.5px;}
+.chat-activity-conversation .audit-table-wrap{border-top:1px solid var(--border);}
+.chat-activity-table{min-width:720px;}
 .chat-activity-table .col-kind{width:82px;}
 .chat-activity-table .col-name{width:220px;}
 .chat-activity-table .col-chat-id{width:190px;}
@@ -3756,21 +3766,39 @@ async function loadChatActivityMore(){
 function chatActivityKind(r){return String((r&&r.operationName)||'').indexOf('chat.action.')===0?'Action':'Tool';}
 function chatActivityName(r){return chatActivityKind(r)==='Action'?((r.target&&r.target.id)||r.operationName||'—'):(r.operationName||'—');}
 function chatActivityShortId(value){value=String(value||'');return value.length>22?value.slice(0,10)+'…'+value.slice(-7):(value||'—');}
+function chatActivityConversationGroups(){
+  var byId=new Map(),groups=[];
+  CHAT_ACTIVITY_DATA.forEach(function(r){
+    var chat=((r.provenance||{}).chat)||{},id=String(chat.conversationId||'').trim(),key=id||'__unattributed__',group=byId.get(key);
+    if(!group){group={id:id,records:[]};byId.set(key,group);groups.push(group);}
+    group.records.push(r);
+  });
+  groups.forEach(function(group){
+    group.records.sort(function(a,b){return (Date.parse(b.occurredAtUtc||'')||0)-(Date.parse(a.occurredAtUtc||'')||0);});
+    group.latestAtUtc=group.records[0]&&group.records[0].occurredAtUtc;
+  });
+  return groups.sort(function(a,b){return (Date.parse(b.latestAtUtc||'')||0)-(Date.parse(a.latestAtUtc||'')||0);});
+}
 function chatActivityTable(){
   if(!CHAT_ACTIVITY_DATA.length)return '<div class="empty">'+ICON.empty+'<div class="et">暂无 Chat Activity</div><div class="es">当前筛选条件下没有工具调用或浏览器 action。</div></div>';
-  var rows=CHAT_ACTIVITY_DATA.map(function(r){
-    var chat=((r.provenance||{}).chat)||{},kind=chatActivityKind(r),name=chatActivityName(r);
-    return '<tr role="button" tabindex="0" data-act="chatActivityRow" data-id="'+esc(r.id)+'" aria-label="查看 '+esc(kind)+' '+esc(name)+'">'+
-      '<td><div class="audit-time"><b class="num">'+esc(auditFmtTime(r.occurredAtUtc))+'</b><span class="audit-ago faint">'+esc(auditAgo(r.occurredAtUtc))+'</span></div></td>'+
-      '<td><span class="chip">'+kind+'</span></td>'+
-      '<td><div class="audit-action"><b>'+esc(name)+'</b></div></td>'+
-      '<td>'+auditResultTag(auditResult(r))+'</td>'+
-      '<td><span class="audit-corr mono" title="'+esc(chat.conversationId||'')+'">'+esc(chatActivityShortId(chat.conversationId))+'</span></td>'+
-      '<td><span class="audit-corr mono" title="'+esc(chat.turnId||'')+'">'+esc(chatActivityShortId(chat.turnId))+'</span></td></tr>';
+  var groups=chatActivityConversationGroups(),html=groups.map(function(group,index){
+    var label=group.id||'Unattributed Conversation',rows=group.records.map(function(r){
+      var chat=((r.provenance||{}).chat)||{},kind=chatActivityKind(r),name=chatActivityName(r);
+      return '<tr role="button" tabindex="0" data-act="chatActivityRow" data-id="'+esc(r.id)+'" aria-label="查看 '+esc(kind)+' '+esc(name)+'">'+
+        '<td><div class="audit-time"><b class="num">'+esc(auditFmtTime(r.occurredAtUtc))+'</b><span class="audit-ago faint">'+esc(auditAgo(r.occurredAtUtc))+'</span></div></td>'+
+        '<td><span class="chip">'+kind+'</span></td>'+
+        '<td><div class="audit-action"><b>'+esc(name)+'</b></div></td>'+
+        '<td>'+auditResultTag(auditResult(r))+'</td>'+
+        '<td><span class="audit-corr mono" title="'+esc(chat.turnId||'')+'">'+esc(chatActivityShortId(chat.turnId))+'</span></td></tr>';
+    }).join('');
+    return '<details class="chat-activity-conversation" data-conversation="'+esc(group.id)+'"'+(index===0?' open':'')+'><summary class="chat-activity-conversation-summary">'+
+      '<span class="chat-activity-conversation-title"><span class="faint">Conversation</span><b class="mono" title="'+esc(group.id)+'">'+esc(label)+'</b></span>'+
+      '<span class="chat-activity-conversation-meta"><span>'+group.records.length+' 条 Activity</span><span>最近 '+esc(auditAgo(group.latestAtUtc))+'</span></span></summary>'+
+      '<div class="protable-wrap audit-table-wrap"><table class="protable audit-table chat-activity-table"><thead><tr>'+
+      '<th class="col-time">时间</th><th class="col-kind">类型</th><th class="col-name">名称</th><th class="col-result">状态</th><th class="col-chat-id">Turn</th>'+
+      '</tr></thead><tbody>'+rows+'</tbody></table></div></details>';
   }).join('');
-  return '<div class="protable-wrap audit-table-wrap"><table class="protable audit-table chat-activity-table"><thead><tr>'+
-    '<th class="col-time">时间</th><th class="col-kind">类型</th><th class="col-name">名称</th><th class="col-result">状态</th><th class="col-chat-id">Conversation</th><th class="col-chat-id">Turn</th>'+
-    '</tr></thead><tbody>'+rows+'</tbody></table></div>';
+  return '<div class="chat-activity-groups"><div class="chat-activity-groups-head"><b>'+groups.length+' Conversations</b><span>'+CHAT_ACTIVITY_DATA.length+' 条 Activity</span></div>'+html+'</div>';
 }
 function chatActivityInspector(r){
   var chat=((r.provenance||{}).chat)||{},correlation=r.correlation||{},target=r.target||{},failure=r.failure||{};
