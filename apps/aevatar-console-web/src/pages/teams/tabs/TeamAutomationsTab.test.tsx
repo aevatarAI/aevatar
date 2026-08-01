@@ -415,6 +415,95 @@ describe("TeamAutomationsTab canonical member authority", () => {
     );
   });
 
+  it("opens schedule-filtered runs from the row's canonical member authority", async () => {
+    const otherMember = {
+      ...member,
+      key: "m-beta",
+      memberId: "m-beta",
+      name: "Reviewer",
+      serviceId: "svc-beta",
+    };
+    (teamAutomationApi.listAll as jest.Mock).mockResolvedValue({
+      items: [
+        automationView({
+          displayName: "Reviewer review",
+          memberId: "m-beta",
+          publishedServiceId: "svc-beta",
+          scheduleId: "sch-beta",
+        }),
+      ],
+      nextCursor: null,
+      totalCount: 1,
+    });
+
+    renderTab("", [member, otherMember]);
+
+    const reviewerRow = await screen.findByRole("article", {
+      name: "Reviewer review",
+    });
+    fireEvent.click(
+      within(reviewerRow).getByRole("button", { name: "View runs" }),
+    );
+
+    expect(history.push).toHaveBeenCalledWith(
+      "/scopes/scope-alpha/teams/team-alpha/members/m-beta/runs?scheduleId=sch-beta",
+    );
+  });
+
+  it("shows the schedule timezone with next and last fire state", async () => {
+    (teamAutomationApi.listAll as jest.Mock).mockResolvedValue({
+      items: [
+        automationView({
+          lastFireAt: "2026-07-28T01:00:00Z",
+          timezone: "Asia/Singapore",
+        }),
+      ],
+      nextCursor: null,
+      totalCount: 1,
+    });
+
+    renderTab("m-alpha");
+
+    const row = await screen.findByRole("article", { name: "Daily review" });
+    expect(within(row).getByText("Asia/Singapore")).toBeInTheDocument();
+    expect(within(row).getByText(/^Next /)).toBeInTheDocument();
+    expect(within(row).getByText(/^Last /)).toBeInTheDocument();
+  });
+
+  it("keeps Run now single-flight while the accepted request is pending", async () => {
+    let resolveRunNow: ((value: unknown) => void) | undefined;
+    (teamAutomationApi.listAll as jest.Mock).mockResolvedValue({
+      items: [automationView()],
+      nextCursor: null,
+      totalCount: 1,
+    });
+    (teamAutomationApi.runNow as jest.Mock).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveRunNow = resolve;
+        }),
+    );
+    renderTab("m-alpha");
+
+    const runNow = await screen.findByRole("button", { name: "Run now" });
+    fireEvent.click(runNow);
+    fireEvent.click(runNow);
+
+    expect(teamAutomationApi.runNow).toHaveBeenCalledTimes(1);
+    expect(runNow).toBeDisabled();
+
+    await act(async () => {
+      resolveRunNow?.({
+        accepted: true,
+        commandId: "cmd-run",
+        operationId: "op-run",
+        scheduleId: "sch-alpha",
+        status: "accepted",
+      });
+      await Promise.resolve();
+    });
+  });
+
   it("opens the complete dev form directly from the Team shell", async () => {
     renderTab();
 
