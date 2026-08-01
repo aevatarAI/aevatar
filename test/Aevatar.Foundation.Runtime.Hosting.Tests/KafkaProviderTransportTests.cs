@@ -1,9 +1,13 @@
+using System.Text;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Hosting;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider.DependencyInjection;
 using Confluent.Kafka;
 using FluentAssertions;
+using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Streams;
 
@@ -200,6 +204,105 @@ public sealed class KafkaProviderTransportTests
 
         config.CompressionType.Should().Be(CompressionType.Zstd);
         config.MessageMaxBytes.Should().Be(4 * 1024 * 1024);
+    }
+
+    [Fact]
+    public void ClassifyPolledRecord_ShouldDistinguishDeliverForeignAndMalformedRecords()
+    {
+        var receiver = CreateReceiver();
+        var validEnvelope = new EventEnvelope
+        {
+            Id = "valid-envelope",
+            Payload = Any.Pack(new StringValue { Value = "ok" }),
+        };
+
+        var deliver = receiver.ClassifyPolledRecord(CreateRecord(validEnvelope.ToByteArray()));
+        var foreign = receiver.ClassifyPolledRecord(CreateRecord([], "other.events", null));
+        var missingRoute = receiver.ClassifyPolledRecord(CreateRecord(validEnvelope.ToByteArray(), null, null));
+        var emptyPayload = receiver.ClassifyPolledRecord(CreateRecord([]));
+        var invalidProtobuf = receiver.ClassifyPolledRecord(CreateRecord([0xff, 0xff]));
+
+        deliver.Disposition.Should().Be(KafkaPolledRecordDisposition.Deliver);
+        deliver.Envelope.Should().BeEquivalentTo(validEnvelope);
+        foreign.Disposition.Should().Be(KafkaPolledRecordDisposition.AcknowledgeForeignRecord);
+        foreign.InvalidReason.Should().Be(KafkaInvalidRecordReason.None);
+        missingRoute.Disposition.Should().Be(KafkaPolledRecordDisposition.AcknowledgeInvalidRecord);
+        missingRoute.InvalidReason.Should().Be(KafkaInvalidRecordReason.MissingRoutingHeaders);
+        emptyPayload.InvalidReason.Should().Be(KafkaInvalidRecordReason.EmptyPayload);
+        invalidProtobuf.InvalidReason.Should().Be(KafkaInvalidRecordReason.ProtobufParseFailed);
+        invalidProtobuf.ParseException.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task ProcessPolledRecord_AfterShutdown_ShouldPreserveValidRecordForRedelivery()
+    {
+        var receiver = CreateReceiver();
+        var envelope = new EventEnvelope
+        {
+            Id = "shutdown-race-envelope",
+            Payload = Any.Pack(new StringValue { Value = "ok" }),
+        };
+        var record = CreateRecord(envelope.ToByteArray());
+        await receiver.Shutdown(TimeSpan.Zero);
+
+        var shouldContinue = receiver.ProcessPolledRecord(record);
+
+        shouldContinue.Should().BeFalse();
+        receiver.ClassifyPolledRecord(record).Disposition
+            .Should().Be(KafkaPolledRecordDisposition.PreserveForRedelivery);
+        (await receiver.GetQueueMessagesAsync(1)).Should().BeEmpty();
+    }
+
+    private static KafkaProviderQueueAdapterReceiver CreateReceiver()
+    {
+        var options = new KafkaProviderTransportOptions
+        {
+            BootstrapServers = "localhost:19092",
+            TopicName = "kafka-provider-topic",
+            ConsumerGroup = "kafka-provider-group",
+            TopicPartitionCount = 4,
+        };
+        var mapper = new KafkaQueuePartitionMapper("kafka-provider", 4);
+        var producer = new KafkaProviderProducer(options, mapper);
+        return new KafkaProviderQueueAdapterReceiver(
+            mapper.GetQueueId(0),
+            producer,
+            options,
+            mapper,
+            "aevatar.events");
+    }
+
+    private static ConsumeResult<Ignore, byte[]> CreateRecord(
+        byte[] payload,
+        string? streamNamespace = "aevatar.events",
+        string? streamId = "actor-42")
+    {
+        var headers = new Headers();
+        if (streamNamespace != null)
+        {
+            headers.Add(
+                KafkaProviderHeaderConstants.StreamNamespace,
+                Encoding.UTF8.GetBytes(streamNamespace));
+        }
+
+        if (streamId != null)
+        {
+            headers.Add(
+                KafkaProviderHeaderConstants.StreamId,
+                Encoding.UTF8.GetBytes(streamId));
+        }
+
+        return new ConsumeResult<Ignore, byte[]>
+        {
+            Topic = "kafka-provider-topic",
+            Partition = new Partition(0),
+            Offset = new Offset(42),
+            Message = new Message<Ignore, byte[]>
+            {
+                Value = payload,
+                Headers = headers,
+            },
+        };
     }
 
 }

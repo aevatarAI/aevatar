@@ -9,6 +9,7 @@ using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider.DependencyInjection;
+using Confluent.Kafka;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -48,7 +49,7 @@ public sealed class KafkaPersistentStreamProviderRedeliveryValidationTests
         var topology = TestTopology.Create();
         OnNextAttemptRecorder.Reset();
 
-        var host = await StartSiloHostAsync(bootstrapServers, garnetConnectionString, topology);
+        IHost? host = await StartSiloHostAsync(bootstrapServers, garnetConnectionString, topology);
         try
         {
             var grainFactory = host.Services.GetRequiredService<IGrainFactory>();
@@ -65,11 +66,29 @@ public sealed class KafkaPersistentStreamProviderRedeliveryValidationTests
             OnNextAttemptRecorder.CountAttempts(envelopeId).Should().Be(
                 1,
                 "a persistent stream provider must NOT redeliver an envelope whose subscriber returned normally");
+            ReadCommittedOffset(bootstrapServers, topology).Should().Be(
+                new Offset(1),
+                "normal handler return must reach MessagesDeliveredAsync before Kafka offset commit");
+
+            await host.StopAsync();
+            host.Dispose();
+            host = await StartSiloHostAsync(
+                bootstrapServers,
+                garnetConnectionString,
+                topology.WithFreshPorts());
+            await Task.Delay(NoRedeliveryQuietPeriod);
+
+            OnNextAttemptRecorder.CountAttempts(envelopeId).Should().Be(
+                1,
+                "a committed successful delivery must not be replayed after receiver restart");
         }
         finally
         {
-            await host.StopAsync();
-            host.Dispose();
+            if (host != null)
+            {
+                await host.StopAsync();
+                host.Dispose();
+            }
         }
     }
 
@@ -80,6 +99,10 @@ public sealed class KafkaPersistentStreamProviderRedeliveryValidationTests
         var garnetConnectionString = RequireGarnetConnectionString();
         var topology = TestTopology.Create();
         OnNextAttemptRecorder.Reset();
+        using var envScope = new EnvironmentVariableScope(new Dictionary<string, string?>
+        {
+            ["AEVATAR_RUNTIME_AUTO_RETRY_MAX_ATTEMPTS"] = "0",
+        });
 
         var host = await StartSiloHostAsync(bootstrapServers, garnetConnectionString, topology);
         try
@@ -93,15 +116,143 @@ public sealed class KafkaPersistentStreamProviderRedeliveryValidationTests
             await PublishEnvelopeAsync(host, topology, envelopeId, propagateFailure: true);
 
             await OnNextAttemptRecorder.WaitForAttemptsAsync(envelopeId, expectedAttempts: 2, RedeliveryTimeout);
+            await Task.Delay(NoRedeliveryQuietPeriod);
 
             OnNextAttemptRecorder.CountAttempts(envelopeId).Should().BeGreaterThanOrEqualTo(
                 2,
                 "a persistent stream provider must redeliver an envelope whose subscriber's OnNextAsync throws (checkpoint not advanced)");
+            ReadCommittedOffset(bootstrapServers, topology).Should().Be(
+                new Offset(1),
+                "the offset may advance only after the redelivered attempt returns successfully");
         }
         finally
         {
             await host.StopAsync();
             host.Dispose();
+        }
+    }
+
+    [KafkaGarnetIntegrationFact]
+    public async Task KafkaPersistentProvider_WhenRetryExhaustedReturns_CommitsAndDoesNotRedeliverAfterRestart()
+    {
+        var bootstrapServers = RequireKafkaBootstrapServers();
+        var garnetConnectionString = RequireGarnetConnectionString();
+        var topology = TestTopology.Create();
+        OnNextAttemptRecorder.Reset();
+        using var envScope = new EnvironmentVariableScope(new Dictionary<string, string?>
+        {
+            ["AEVATAR_RUNTIME_AUTO_RETRY_MAX_ATTEMPTS"] = "0",
+        });
+
+        IHost? host = await StartSiloHostAsync(bootstrapServers, garnetConnectionString, topology);
+        try
+        {
+            var grain = host.Services.GetRequiredService<IGrainFactory>()
+                .GetGrain<IRuntimeActorGrain>(topology.ActorId);
+            (await grain.InitializeAgentByKindAsync("tests.always-fail-on-next"))
+                .Should().BeTrue();
+
+            var envelopeId = Guid.NewGuid().ToString("N");
+            await PublishEnvelopeAsync(host, topology, envelopeId, propagateFailure: false);
+            await OnNextAttemptRecorder.WaitForAttemptsAsync(envelopeId, expectedAttempts: 1, RedeliveryTimeout);
+            await Task.Delay(NoRedeliveryQuietPeriod);
+
+            OnNextAttemptRecorder.CountAttempts(envelopeId).Should().Be(1);
+            ReadCommittedOffset(bootstrapServers, topology).Should().Be(
+                new Offset(1),
+                "the bounded default terminal-failure policy returns before provider acknowledgement");
+
+            await host.StopAsync();
+            host.Dispose();
+            host = await StartSiloHostAsync(
+                bootstrapServers,
+                garnetConnectionString,
+                topology.WithFreshPorts());
+            await Task.Delay(NoRedeliveryQuietPeriod);
+
+            OnNextAttemptRecorder.CountAttempts(envelopeId).Should().Be(
+                1,
+                "a committed default terminal failure must not poison the partition after restart");
+        }
+        finally
+        {
+            if (host != null)
+            {
+                await host.StopAsync();
+                host.Dispose();
+            }
+        }
+    }
+
+    [KafkaGarnetIntegrationFact]
+    public async Task KafkaPersistentProvider_WhenActorUnavailableByDefault_CommitsOffset()
+    {
+        var bootstrapServers = RequireKafkaBootstrapServers();
+        var garnetConnectionString = RequireGarnetConnectionString();
+        var topology = TestTopology.Create();
+        var host = await StartSiloHostAsync(bootstrapServers, garnetConnectionString, topology);
+        try
+        {
+            var grain = host.Services.GetRequiredService<IGrainFactory>()
+                .GetGrain<IRuntimeActorGrain>(topology.ActorId);
+            (await grain.IsInitializedAsync()).Should().BeFalse();
+
+            await PublishEnvelopeAsync(
+                host,
+                topology,
+                Guid.NewGuid().ToString("N"),
+                propagateFailure: false);
+            await Task.Delay(NoRedeliveryQuietPeriod);
+
+            ReadCommittedOffset(bootstrapServers, topology).Should().Be(
+                new Offset(1),
+                "actor-unavailable is an explicit default terminal return, not handler success");
+        }
+        finally
+        {
+            await host.StopAsync();
+            host.Dispose();
+        }
+    }
+
+    [KafkaGarnetIntegrationFact]
+    public async Task KafkaPersistentProvider_WhenPayloadInvalid_CommitsOffsetAndRestartKeepsItCommitted()
+    {
+        var bootstrapServers = RequireKafkaBootstrapServers();
+        var garnetConnectionString = RequireGarnetConnectionString();
+        var topology = TestTopology.Create();
+        IHost? host = await StartSiloHostAsync(bootstrapServers, garnetConnectionString, topology);
+        try
+        {
+            var producer = host.Services.GetRequiredService<KafkaProviderProducer>();
+            await producer.PublishAsync(
+                topology.ActorEventNamespace,
+                topology.ActorId,
+                [0xff, 0xff],
+                CancellationToken.None);
+            await Task.Delay(NoRedeliveryQuietPeriod);
+
+            ReadCommittedOffset(bootstrapServers, topology).Should().Be(
+                new Offset(1),
+                "invalid protobuf is an explicit receiver terminal disposition");
+
+            await host.StopAsync();
+            host.Dispose();
+            host = await StartSiloHostAsync(
+                bootstrapServers,
+                garnetConnectionString,
+                topology.WithFreshPorts());
+            await Task.Delay(NoRedeliveryQuietPeriod);
+
+            ReadCommittedOffset(bootstrapServers, topology).Should().Be(new Offset(1));
+        }
+        finally
+        {
+            if (host != null)
+            {
+                await host.StopAsync();
+                host.Dispose();
+            }
         }
     }
 
@@ -161,7 +312,8 @@ public sealed class KafkaPersistentStreamProviderRedeliveryValidationTests
             {
                 services.AddAevatarAgentKindRegistry(builder => builder
                     .Register<AlwaysSucceedOnNextAgent>()
-                    .Register<ThrowOnceThenSucceedAgent>());
+                    .Register<ThrowOnceThenSucceedAgent>()
+                    .Register<AlwaysFailOnNextAgent>());
                 services.AddAevatarFoundationRuntimeOrleansKafkaProviderTransport(options =>
                 {
                     options.BootstrapServers = bootstrapServers;
@@ -183,6 +335,21 @@ public sealed class KafkaPersistentStreamProviderRedeliveryValidationTests
     private static string RequireGarnetConnectionString() =>
         Environment.GetEnvironmentVariable("AEVATAR_TEST_GARNET_CONNECTION_STRING")
         ?? throw new InvalidOperationException("Missing AEVATAR_TEST_GARNET_CONNECTION_STRING.");
+
+    private static Offset ReadCommittedOffset(string bootstrapServers, TestTopology topology)
+    {
+        using var consumer = new ConsumerBuilder<Ignore, byte[]>(new ConsumerConfig
+        {
+            BootstrapServers = bootstrapServers,
+            GroupId = topology.ConsumerGroup,
+            EnableAutoCommit = false,
+            EnableAutoOffsetStore = false,
+        }).Build();
+        var mapper = new KafkaQueuePartitionMapper(topology.StreamProviderName, 4);
+        var partition = mapper.GetPartitionId(topology.ActorEventNamespace, topology.ActorId);
+        var topicPartition = new TopicPartition(topology.TopicName, new Partition(partition));
+        return consumer.Committed([topicPartition], TimeSpan.FromSeconds(10)).Single().Offset;
+    }
 
     private static int ReserveTcpPort()
     {
@@ -215,6 +382,33 @@ public sealed class KafkaPersistentStreamProviderRedeliveryValidationTests
                 ServiceId: $"aevatar-redelivery-validator-service-{suffix}",
                 SiloPort: ReserveTcpPort(),
                 GatewayPort: ReserveTcpPort());
+        }
+
+        public TestTopology WithFreshPorts() =>
+            this with
+            {
+                SiloPort = ReserveTcpPort(),
+                GatewayPort = ReserveTcpPort(),
+            };
+    }
+
+    private sealed class EnvironmentVariableScope : IDisposable
+    {
+        private readonly Dictionary<string, string?> _originalValues = new(StringComparer.Ordinal);
+
+        public EnvironmentVariableScope(IReadOnlyDictionary<string, string?> overrides)
+        {
+            foreach (var pair in overrides)
+            {
+                _originalValues[pair.Key] = Environment.GetEnvironmentVariable(pair.Key);
+                Environment.SetEnvironmentVariable(pair.Key, pair.Value);
+            }
+        }
+
+        public void Dispose()
+        {
+            foreach (var pair in _originalValues)
+                Environment.SetEnvironmentVariable(pair.Key, pair.Value);
         }
     }
 
@@ -339,6 +533,37 @@ public sealed class KafkaPersistentStreamProviderRedeliveryValidationTests
             }
 
             return Task.CompletedTask;
+        }
+
+        public Task<string> GetDescriptionAsync() => Task.FromResult(Id);
+
+        public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() =>
+            Task.FromResult<IReadOnlyList<System.Type>>([]);
+
+        public Task ActivateAsync(CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task DeactivateAsync(CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+    }
+
+    [GAgent("tests.always-fail-on-next")]
+    public sealed class AlwaysFailOnNextAgent : IAgent
+    {
+        public string Id => "always-fail-on-next-agent";
+
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            OnNextAttemptRecorder.RecordAttempt(envelope.Id ?? string.Empty);
+            throw new InvalidOperationException(
+                $"Intentional terminal failure for envelope '{envelope.Id}'.");
         }
 
         public Task<string> GetDescriptionAsync() => Task.FromResult(Id);
