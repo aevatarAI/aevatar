@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using Aevatar.Foundation.Abstractions;
 using Confluent.Kafka;
+using Aevatar.Foundation.Runtime.Observability;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Orleans.Providers.Streams.Common;
@@ -202,9 +203,18 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
 
     private KafkaProviderBatchContainer? TryCreateBatch(ConsumeResult<Ignore, byte[]> consumeResult)
     {
-        if (Volatile.Read(ref _shuttingDown) == 1 ||
-            consumeResult.Message.Value is not { Length: > 0 })
+        if (Volatile.Read(ref _shuttingDown) == 1)
+            return null;
+
+        if (consumeResult.Message.Value is not { Length: > 0 })
         {
+            _logger.LogWarning(
+                "Kafka message at offset {Offset} on partition {Partition} has an empty EventEnvelope payload. Message will be skipped.",
+                consumeResult.Offset.Value,
+                _partitionId);
+            AgentMetrics.RecordEnvelopeTerminalFailure(
+                AgentMetrics.FailureReasonInvalidEnvelope,
+                AgentMetrics.FailureDispositionReturned);
             return null;
         }
 
@@ -227,6 +237,9 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
             _logger.LogWarning(ex,
                 "Failed to parse EventEnvelope from Kafka message at offset {Offset} on partition {Partition}. Message will be skipped.",
                 consumeResult.Offset.Value, _partitionId);
+            AgentMetrics.RecordEnvelopeTerminalFailure(
+                AgentMetrics.FailureReasonInvalidEnvelope,
+                AgentMetrics.FailureDispositionReturned);
             return null;
         }
 

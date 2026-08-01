@@ -25,7 +25,8 @@ namespace Aevatar.Foundation.Runtime.Hosting.Tests;
 /// Asserts that the Kafka-backed Orleans persistent stream provider:
 ///   1. Does NOT redeliver an envelope when the subscriber's OnNextAsync returns normally.
 ///   2. DOES redeliver an envelope when the subscriber's OnNextAsync throws and the
-///      throw is propagated (envelope.Runtime.Dispatch.PropagateFailure = true).
+///      throw is propagated (envelope.Runtime.Dispatch.PropagateFailure = true), including
+///      through Aevatar's provisional duplicate filter.
 ///
 /// Runs when AEVATAR_TEST_KAFKA_BOOTSTRAP_SERVERS and
 /// AEVATAR_TEST_GARNET_CONNECTION_STRING are set. The repository currently ships

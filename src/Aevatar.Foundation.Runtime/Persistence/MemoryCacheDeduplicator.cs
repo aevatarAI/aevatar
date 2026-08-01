@@ -8,7 +8,10 @@ using Microsoft.Extensions.Caching.Memory;
 
 namespace Aevatar.Foundation.Runtime.Persistence;
 
-/// <summary>In-memory cache deduplicator to prevent repeated handling of the same event.</summary>
+/// <summary>
+/// In-process provisional duplicate filter. This adapter does not provide durable or
+/// cross-node business idempotency.
+/// </summary>
 public sealed class MemoryCacheDeduplicator : IEventDeduplicator
 {
     private readonly MemoryCache _cache = new(new MemoryCacheOptions());
@@ -23,5 +26,12 @@ public sealed class MemoryCacheDeduplicator : IEventDeduplicator
             return Task.FromResult(false); // Duplicate
         _cache.Set(eventId, true, _expiration);
         return Task.FromResult(true); // First time
+    }
+
+    /// <inheritdoc />
+    public Task ForgetAsync(string eventId)
+    {
+        _cache.Remove(eventId);
+        return Task.CompletedTask;
     }
 }

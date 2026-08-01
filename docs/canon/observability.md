@@ -8,8 +8,8 @@ owner: eanzhao
 
 ## 1. 目的
 
-定义 aevatar 仓库内 OpenTelemetry `ActivitySource` 发出的 activity 名称、tag
-键、稳定性等级，以及 Host → browser demo 边界的 JSON wire 形式例外。
+定义 aevatar 仓库内 OpenTelemetry `ActivitySource` 发出的 activity 名称、运行时
+关键 metric、tag 键、稳定性等级，以及 Host → browser demo 边界的 JSON wire 形式例外。
 这是 aevatar 可观测面的唯一权威清单 —— 加新 activity / tag、改名、提升稳定
 性，都要先动这份文档再动代码。
 
@@ -43,6 +43,25 @@ owner: eanzhao
 ActivityListener 消费方过滤：`source.Name == "Aevatar.Agents"`（单源
 模式，对应 ADR [0022](../adr/0022-otel-aevatar-semantic-conventions.md)
 的决定）。
+
+### 2.1 Runtime terminal-failure metric
+
+`Aevatar.Agents` meter 发出
+`aevatar.runtime.envelope_terminal_failures_total` counter。它记录 runtime envelope
+已到达 terminal failure，而不是 handler success。该 counter 使用两个低基数 tag：
+
+| Tag | Values | 语义 |
+|-----|--------|------|
+| `failure_reason` | `handler_retry_exhausted` / `compatibility_retry_exhausted` / `actor_unavailable` / `invalid_envelope` | terminal 原因；不得写 exception message、actor id 或 envelope id |
+| `failure_disposition` | `returned` / `propagated` | `returned` 只表示 runtime 的 terminal-failure policy 正常返回；它不表示 Orleans 已调用 `MessagesDeliveredAsync` 或 Kafka offset 已提交。`propagated` 表示异常穿透 observer，persistent provider 应保留 redelivery 能力 |
+
+该 metric 是 retry exhausted、actor unavailable 与 malformed Kafka envelope 的告警入口。
+具体 consume → observer → handler → retry → `MessagesDeliveredAsync` → offset commit
+语义及 operator recovery 见
+[`Aevatar.Foundation.Runtime.Implementations.Orleans/README.md`](../../src/Aevatar.Foundation.Runtime.Implementations.Orleans/README.md#kafka-入站投递与失败语义)。
+当前没有通用 durable poison-envelope/DLQ owner；因此默认 terminal failure 使用
+`returned`，只有 envelope 显式请求 `PropagateFailure` 时才使用 `propagated`，
+避免永久业务错误默认无限阻塞 Kafka partition。
 
 ## 3. Activity 清单 (`Aevatar.Agents`)
 
@@ -211,6 +230,8 @@ implemented: `channel.ingress.verify`, `channel.ingress.commit`,
 | `aevatar.event.type` | `Aevatar.Agents` | stable | HandleEvent |
 | `aevatar.event.direction` | `Aevatar.Agents` | stable | HandleEvent |
 | `aevatar.event.publisher` | `Aevatar.Agents` | stable | HandleEvent |
+| `failure_reason` | `Aevatar.Agents` metric | experimental | `aevatar.runtime.envelope_terminal_failures_total` |
+| `failure_disposition` | `Aevatar.Agents` metric | experimental | `aevatar.runtime.envelope_terminal_failures_total` |
 | `aevatar.projection.name` | `Aevatar.Agents` | experimental | projection.materialize |
 | `aevatar.projection.last_event_id` | `Aevatar.Agents` | experimental | projection.materialize |
 | `aevatar.projection.state.version` | `Aevatar.Agents` | experimental | projection.materialize (success) |

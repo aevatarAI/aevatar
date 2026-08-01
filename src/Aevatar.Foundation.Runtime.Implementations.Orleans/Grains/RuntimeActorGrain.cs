@@ -172,42 +172,20 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
 
     private async Task HandleEnvelopeAsyncCore(byte[] envelopeBytes, bool propagateFailure)
     {
-        if (_agent == null)
-        {
-            // Only attempt resolution when OnActivateAsync hasn't already
-            // tried — otherwise a persistent misconfiguration (missing
-            // [GAgent] registration, etc.) amplifies into a per-envelope
-            // registry probe.
-            if (!_identityResolutionAttempted)
-                await ResumeFromPersistedIdentityAsync(CancellationToken.None);
-
-            if (_agent == null)
-            {
-                if (!string.IsNullOrWhiteSpace(_state.State.Identity?.Kind))
-                {
-                    _logger.LogWarning(
-                        "Dropping envelope for actor {ActorId}: initialization failed",
-                        this.GetPrimaryKeyString());
-                }
-                else
-                {
-                    _logger.LogDebug(
-                        "Dropping envelope for actor {ActorId}: no agent identity configured",
-                        this.GetPrimaryKeyString());
-                }
-
-                return;
-            }
-        }
-
         var envelope = EventEnvelope.Parser.ParseFrom(envelopeBytes);
         propagateFailure = propagateFailure || ShouldPropagateDirectDispatchFailure(envelope);
+
+        if (!await EnsureAgentAvailableForEnvelopeAsync(envelope, propagateFailure))
+            return;
+
         if (await TryHandleCompatibilityRetryAsync(envelope, propagateFailure))
             return;
 
+        string? dedupKey = null;
         if (_deduplicator != null &&
-            RuntimeEnvelopeDeduplication.TryBuildDedupKey(this.GetPrimaryKeyString(), envelope, out var dedupKey))
+            RuntimeEnvelopeDeduplication.TryBuildDedupKey(this.GetPrimaryKeyString(), envelope, out var candidateDedupKey))
         {
+            dedupKey = candidateDedupKey;
             if (!await _deduplicator.TryRecordAsync(dedupKey))
                 return;
         }
@@ -267,17 +245,73 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             }
         }
 
+        await HandleAgentEnvelopeAsync(envelope, dedupKey, propagateFailure);
+    }
+
+    private async Task<bool> EnsureAgentAvailableForEnvelopeAsync(
+        EventEnvelope envelope,
+        bool propagateFailure)
+    {
+        if (_agent != null)
+            return true;
+
+        // Only attempt resolution when OnActivateAsync has not already tried. Otherwise a
+        // persistent missing registration would amplify into per-envelope registry I/O.
+        if (!_identityResolutionAttempted)
+            await ResumeFromPersistedIdentityAsync(CancellationToken.None);
+
+        if (_agent != null)
+            return true;
+
+        if (!string.IsNullOrWhiteSpace(_state.State.Identity?.Kind))
+        {
+            _logger.LogWarning(
+                "Runtime actor {ActorId} is unavailable; applying terminal failure policy to the envelope",
+                this.GetPrimaryKeyString());
+        }
+        else
+        {
+            _logger.LogDebug(
+                "Runtime actor {ActorId} has no agent identity; applying terminal failure policy to the envelope",
+                this.GetPrimaryKeyString());
+        }
+
+        AgentMetrics.RecordEnvelopeTerminalFailure(
+            AgentMetrics.FailureReasonActorUnavailable,
+            ResolveTerminalFailureDisposition(propagateFailure));
+        if (propagateFailure)
+        {
+            throw new InvalidOperationException(
+                $"Runtime actor '{this.GetPrimaryKeyString()}' is unavailable for envelope '{envelope.Id}'.");
+        }
+
+        return false;
+    }
+
+    private async Task HandleAgentEnvelopeAsync(
+        EventEnvelope envelope,
+        string? dedupKey,
+        bool propagateFailure)
+    {
         using var scope = EventHandleScope.Begin(_logger, this.GetPrimaryKeyString(), envelope);
         try
         {
             using var stateBinding = _stateBindingAccessor?.Bind(_state);
-            await _agent.HandleEventAsync(envelope);
+            await _agent!.HandleEventAsync(envelope);
         }
         catch (Exception ex)
         {
             scope.MarkError(ex);
-            if (await TryScheduleRetryAsync(envelope, ex))
-                return;
+            try
+            {
+                if (await TryScheduleRetryAsync(envelope, ex))
+                    return;
+            }
+            catch
+            {
+                await ForgetDedupReservationAsync(dedupKey);
+                throw;
+            }
 
             _logger.LogError(
                 ex,
@@ -286,8 +320,14 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
                 envelope.Id,
                 envelope.Payload?.TypeUrl ?? "(none)");
 
+            AgentMetrics.RecordEnvelopeTerminalFailure(
+                AgentMetrics.FailureReasonHandlerRetryExhausted,
+                ResolveTerminalFailureDisposition(propagateFailure));
             if (propagateFailure)
+            {
+                await ForgetDedupReservationAsync(dedupKey);
                 throw;
+            }
         }
     }
 
@@ -595,6 +635,9 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             envelope.Id,
             envelope.Payload?.TypeUrl ?? "(none)");
 
+        AgentMetrics.RecordEnvelopeTerminalFailure(
+            AgentMetrics.FailureReasonCompatibilityRetryExhausted,
+            ResolveTerminalFailureDisposition(propagateFailure));
         if (propagateFailure)
             throw compatibilityException;
 
@@ -603,4 +646,17 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
 
     private static bool ShouldPropagateDirectDispatchFailure(EventEnvelope envelope) =>
         envelope.Runtime?.Dispatch?.PropagateFailure == true;
+
+    private async Task ForgetDedupReservationAsync(string? dedupKey)
+    {
+        if (_deduplicator == null || string.IsNullOrWhiteSpace(dedupKey))
+            return;
+
+        await _deduplicator.ForgetAsync(dedupKey);
+    }
+
+    private static string ResolveTerminalFailureDisposition(bool propagateFailure) =>
+        propagateFailure
+            ? AgentMetrics.FailureDispositionPropagated
+            : AgentMetrics.FailureDispositionReturned;
 }
