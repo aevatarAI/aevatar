@@ -158,6 +158,9 @@ public class AevatarActorRuntimeServiceCollectionExtensionsTests
             [$"{AevatarActorRuntimeOptions.SectionName}:KafkaBootstrapServers"] = "localhost:19092",
             [$"{AevatarActorRuntimeOptions.SectionName}:KafkaTopicName"] = "runtime-kafka-provider-events",
             [$"{AevatarActorRuntimeOptions.SectionName}:KafkaConsumerGroup"] = "runtime-kafka-provider-group",
+            [$"{AevatarActorRuntimeOptions.SectionName}:KafkaReceiverBufferCapacity"] = "96",
+            [$"{AevatarActorRuntimeOptions.SectionName}:KafkaReceiverBufferHighWatermark"] = "72",
+            [$"{AevatarActorRuntimeOptions.SectionName}:KafkaReceiverBufferLowWatermark"] = "36",
             [$"{AevatarActorRuntimeOptions.SectionName}:SecretStoreKeyringPath"] = keyringFile.Path,
         });
 
@@ -176,9 +179,15 @@ public class AevatarActorRuntimeServiceCollectionExtensionsTests
         options.KafkaBootstrapServers.Should().Be("localhost:19092");
         options.KafkaTopicName.Should().Be("runtime-kafka-provider-events");
         options.KafkaConsumerGroup.Should().Be("runtime-kafka-provider-group");
+        options.KafkaReceiverBufferCapacity.Should().Be(96);
+        options.KafkaReceiverBufferHighWatermark.Should().Be(72);
+        options.KafkaReceiverBufferLowWatermark.Should().Be(36);
         orleansOptions.QueueCount.Should().Be(6);
         orleansOptions.QueueCacheSize.Should().Be(512);
         transportOptions.TopicPartitionCount.Should().Be(6);
+        transportOptions.ReceiverBufferCapacity.Should().Be(96);
+        transportOptions.ReceiverBufferHighWatermark.Should().Be(72);
+        transportOptions.ReceiverBufferLowWatermark.Should().Be(36);
         provider.GetRequiredService<IQueueAdapterFactory>().Should().BeOfType<KafkaProviderQueueAdapterFactory>();
         provider.GetRequiredService<KafkaProviderProducer>().Should().NotBeNull();
     }

@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+using System.Diagnostics;
 using Aevatar.Foundation.Abstractions;
 using Confluent.Kafka;
 using Aevatar.Foundation.Runtime.Observability;
@@ -16,26 +16,37 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
 
     private readonly int _partitionId;
     private readonly string _providerName;
-    private readonly KafkaProviderProducer _producer;
     private readonly KafkaProviderTransportOptions _transportOptions;
     private readonly string _actorEventNamespace;
-    private readonly ConcurrentQueue<IBatchContainer> _messages = new();
+    private readonly KafkaReceiverMessageBuffer _messageBuffer;
     private readonly Lock _stateLock = new();
+    private readonly Lock _lifecycleLock = new();
     private readonly ILogger _logger;
+    private readonly Func<CancellationToken, Task> _ensureTransportReadyAsync;
+    private readonly Func<IKafkaReceiverConsumer> _consumerFactory;
 
     private readonly HashSet<long> _inflightOffsets = [];
     private readonly HashSet<long> _ackedOffsets = [];
+    private readonly HashSet<TopicPartition> _assignedPartitions = [];
+    private readonly HashSet<TopicPartition> _pausedPartitions = [];
     private readonly TopicPartition _topicPartition;
 
     private long _sequence;
     private long _lastCommittedOffset;
     private bool _hasCommitCursor;
     private bool _commitDirty;
+    private bool _hasAssignmentSnapshot;
+    private bool _backpressureActive;
+    private long? _pauseStartedTimestamp;
+    private int _reportedPausedPartitionCount = -1;
     private int _shuttingDown;
 
-    private IConsumer<Ignore, byte[]>? _consumer;
+    private Task? _initializeTask;
     private CancellationTokenSource? _consumeLoopCts;
     private Task? _consumeLoopTask;
+
+    internal int BufferedMessageCount => _messageBuffer.Depth;
+
     public KafkaProviderQueueAdapterReceiver(
         QueueId queueId,
         string providerName,
@@ -44,13 +55,42 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
         KafkaQueuePartitionMapper mapper,
         string actorEventNamespace,
         ILoggerFactory? loggerFactory = null)
+        : this(
+            queueId,
+            providerName,
+            transportOptions,
+            mapper,
+            actorEventNamespace,
+            producer.StartAsync,
+            () => CreateConsumer(transportOptions, providerName, mapper.GetPartitionId(queueId)),
+            loggerFactory)
     {
+    }
+
+    internal KafkaProviderQueueAdapterReceiver(
+        QueueId queueId,
+        string providerName,
+        KafkaProviderTransportOptions transportOptions,
+        KafkaQueuePartitionMapper mapper,
+        string actorEventNamespace,
+        Func<CancellationToken, Task> ensureTransportReadyAsync,
+        Func<IKafkaReceiverConsumer> consumerFactory,
+        ILoggerFactory? loggerFactory = null)
+    {
+        ArgumentNullException.ThrowIfNull(transportOptions);
+        ArgumentNullException.ThrowIfNull(mapper);
+        ArgumentNullException.ThrowIfNull(ensureTransportReadyAsync);
+        ArgumentNullException.ThrowIfNull(consumerFactory);
+        transportOptions.ValidateReceiverBufferWatermarks();
+
         _partitionId = mapper.GetPartitionId(queueId);
         _providerName = providerName;
-        _producer = producer;
         _transportOptions = transportOptions;
         _actorEventNamespace = actorEventNamespace;
         _topicPartition = new TopicPartition(_transportOptions.TopicName, new Partition(_partitionId));
+        _messageBuffer = new KafkaReceiverMessageBuffer(_transportOptions.ReceiverBufferCapacity);
+        _ensureTransportReadyAsync = ensureTransportReadyAsync;
+        _consumerFactory = consumerFactory;
         _logger = (loggerFactory ?? NullLoggerFactory.Instance).CreateLogger<KafkaProviderQueueAdapterReceiver>();
     }
 
@@ -62,41 +102,32 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
 
     private Task InitializeAsync()
     {
-        if (_consumer != null)
-            return Task.CompletedTask;
-
-        return InitializeCoreAsync();
+        lock (_lifecycleLock)
+        {
+            return _initializeTask ??= InitializeCoreAsync();
+        }
     }
 
     private async Task InitializeCoreAsync()
     {
-        await _producer.StartAsync();
+        await _ensureTransportReadyAsync(CancellationToken.None).ConfigureAwait(false);
 
-        var consumerBuilder = new ConsumerBuilder<Ignore, byte[]>(BuildConsumerConfig(_transportOptions));
-        if (_transportOptions.StatisticsInterval > TimeSpan.Zero)
-        {
-            consumerBuilder.SetStatisticsHandler((_, statisticsJson) =>
-                KafkaTransportMetrics.ObserveStatistics(
-                    statisticsJson,
-                    _providerName,
-                    _transportOptions.TopicName,
-                    _partitionId));
-        }
-        var consumer = consumerBuilder.Build();
+        var loopReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var loopCts = new CancellationTokenSource();
+        _consumeLoopCts = loopCts;
+        _consumeLoopTask = Task.Run(() => ConsumeLoop(loopCts.Token, loopReady));
+        await loopReady.Task.ConfigureAwait(false);
 
-        consumer.Assign(new TopicPartitionOffset(_topicPartition, Offset.Stored));
-        _consumer = consumer;
-        _consumeLoopCts = new CancellationTokenSource();
-        _consumeLoopTask = Task.Run(() => ConsumeLoopAsync(_consumeLoopCts.Token));
+        RecordInitialBufferState();
     }
 
     public Task<IList<IBatchContainer>> GetQueueMessagesAsync(int maxCount)
     {
         var count = Math.Max(1, maxCount);
         IList<IBatchContainer> result = new List<IBatchContainer>(count);
-        while (result.Count < count && _messages.TryDequeue(out var message))
+        while (result.Count < count && _messageBuffer.TryRead(out var message))
         {
-            result.Add(message);
+            result.Add(message!);
         }
         RecordBufferDepth();
 
@@ -130,42 +161,43 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
         var loopCts = Interlocked.Exchange(ref _consumeLoopCts, null);
         loopCts?.Cancel();
 
-        var loopTask = Interlocked.Exchange(ref _consumeLoopTask, null);
-        if (loopTask != null)
+        try
         {
-            try
+            var loopTask = Interlocked.Exchange(ref _consumeLoopTask, null);
+            if (loopTask != null)
             {
-                await loopTask;
-            }
-            catch (OperationCanceledException)
-            {
+                try
+                {
+                    await loopTask;
+                }
+                catch (OperationCanceledException)
+                {
+                }
             }
         }
-
-        loopCts?.Dispose();
-
-        var consumer = Interlocked.Exchange(ref _consumer, null);
-        if (consumer != null)
+        finally
         {
-            consumer.Close();
-            consumer.Dispose();
+            loopCts?.Dispose();
+            _messageBuffer.Clear();
+            RecordInitialBufferState();
         }
-
-        KafkaTransportMetrics.RecordReceiverBufferDepth(
-            _providerName,
-            _transportOptions.TopicName,
-            _partitionId,
-            0);
     }
 
-    private async Task ConsumeLoopAsync(CancellationToken ct)
+    private void ConsumeLoop(CancellationToken ct, TaskCompletionSource loopReady)
     {
-        var consumer = _consumer ?? throw new InvalidOperationException("Kafka queue receiver consumer is not initialized.");
+        IKafkaReceiverConsumer? consumer = null;
 
         try
         {
+            consumer = _consumerFactory();
+            consumer.Assign(new TopicPartitionOffset(_topicPartition, Offset.Stored));
+            ApplyBackpressure(consumer, refreshAssignment: true);
+            loopReady.TrySetResult();
+
             while (!ct.IsCancellationRequested)
             {
+                ApplyBackpressure(consumer, refreshAssignment: false);
+
                 ConsumeResult<Ignore, byte[]>? consumeResult = null;
                 try
                 {
@@ -173,39 +205,73 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
                 }
                 catch (ConsumeException ex)
                 {
+                    // A failed poll can still run assignment/revocation callbacks.
+                    ApplyBackpressure(consumer, refreshAssignment: true);
                     _logger.LogWarning(ex,
                         "Kafka consume error on partition {Partition}, will retry. Code={ErrorCode}",
                         _partitionId, ex.Error.Code);
-                    await Task.Delay(TimeSpan.FromSeconds(1), ct);
+                    KafkaTransportMetrics.RecordReceiverConsumeError(
+                        _providerName,
+                        _transportOptions.TopicName,
+                        _partitionId);
+                    if (ct.WaitHandle.WaitOne(TimeSpan.FromSeconds(1)))
+                        break;
                     continue;
                 }
 
+                // Consume can run assignment/revocation callbacks on this owner thread.
+                ApplyBackpressure(consumer, refreshAssignment: true);
+
                 if (consumeResult?.Message != null)
                 {
-                    if (!ProcessPolledRecord(consumeResult))
+                    if (!ProcessPolledRecord(consumer, consumeResult))
                         break;
                 }
 
                 TryCommitContiguousOffsets(consumer);
-                await Task.Yield();
             }
+        }
+        catch (Exception ex)
+        {
+            loopReady.TrySetException(ex);
+            _logger.LogError(ex,
+                "Kafka receiver owner loop failed on partition {Partition}.",
+                _partitionId);
+            throw;
         }
         finally
         {
-            try
+            if (consumer != null)
             {
-                TryCommitContiguousOffsets(consumer);
+                try
+                {
+                    TryCommitContiguousOffsets(consumer);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex,
+                        "Failed to commit offsets during consume loop shutdown on partition {Partition}.",
+                        _partitionId);
+                }
+
+                EndPartitionPause();
+                try
+                {
+                    consumer.Close();
+                }
+                finally
+                {
+                    consumer.Dispose();
+                }
             }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex,
-                    "Failed to commit offsets during consume loop shutdown on partition {Partition}.",
-                    _partitionId);
-            }
+
+            loopReady.TrySetCanceled(ct);
         }
     }
 
-    private bool ProcessPolledRecord(ConsumeResult<Ignore, byte[]> consumeResult)
+    private bool ProcessPolledRecord(
+        IKafkaReceiverConsumer consumer,
+        ConsumeResult<Ignore, byte[]> consumeResult)
     {
         RegisterOffset(consumeResult.Offset.Value);
         var classification = ClassifyPolledRecord(consumeResult);
@@ -215,11 +281,23 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
             {
                 var sequence = Interlocked.Increment(ref _sequence);
                 var token = new EventSequenceTokenV2(sequence);
-                _messages.Enqueue(new KafkaProviderBatchContainer(
+                var message = new KafkaProviderBatchContainer(
                     StreamId.Create(classification.StreamNamespace!, classification.StreamId!),
                     classification.Envelope!,
                     token,
-                    consumeResult.Offset.Value));
+                    consumeResult.Offset.Value);
+                if (!_messageBuffer.TryWrite(message))
+                {
+                    consumer.Seek(consumeResult.TopicPartitionOffset);
+                    _logger.LogWarning(
+                        "Kafka receiver buffer reached hard capacity {Capacity} on partition {Partition}; " +
+                        "rewound offset {Offset} until low-watermark recovery",
+                        _messageBuffer.Capacity,
+                        _partitionId,
+                        consumeResult.Offset.Value);
+                    return true;
+                }
+
                 RecordBufferDepth();
                 return true;
             }
@@ -322,7 +400,7 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
         }
     }
 
-    private void TryCommitContiguousOffsets(IConsumer<Ignore, byte[]> consumer)
+    private void TryCommitContiguousOffsets(IKafkaReceiverConsumer consumer)
     {
         long? committedInclusive = null;
 
@@ -381,12 +459,149 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
         };
     }
 
+    private static IKafkaReceiverConsumer CreateConsumer(
+        KafkaProviderTransportOptions options,
+        string providerName,
+        int partitionId)
+    {
+        var consumerBuilder = new ConsumerBuilder<Ignore, byte[]>(BuildConsumerConfig(options));
+        if (options.StatisticsInterval > TimeSpan.Zero)
+        {
+            consumerBuilder.SetStatisticsHandler((_, statisticsJson) =>
+                KafkaTransportMetrics.ObserveStatistics(
+                    statisticsJson,
+                    providerName,
+                    options.TopicName,
+                    partitionId));
+        }
+
+        return new ConfluentKafkaReceiverConsumer(consumerBuilder.Build());
+    }
+
+    private void ApplyBackpressure(IKafkaReceiverConsumer consumer, bool refreshAssignment)
+    {
+        var depth = _messageBuffer.Depth;
+        if (!_backpressureActive && depth >= _transportOptions.ReceiverBufferHighWatermark)
+        {
+            _backpressureActive = true;
+            KafkaTransportMetrics.RecordReceiverBufferSaturation(
+                _providerName,
+                _transportOptions.TopicName,
+                _partitionId);
+        }
+        else if (_backpressureActive && depth <= _transportOptions.ReceiverBufferLowWatermark)
+        {
+            _backpressureActive = false;
+        }
+
+        if (!_hasAssignmentSnapshot || (refreshAssignment && _backpressureActive))
+            RefreshAssignment(consumer);
+
+        if (_backpressureActive)
+        {
+            var partitionsToPause = _assignedPartitions
+                .Where(partition => !_pausedPartitions.Contains(partition))
+                .ToArray();
+            if (partitionsToPause.Length > 0)
+            {
+                consumer.Pause(partitionsToPause);
+                if (_pausedPartitions.Count == 0)
+                    _pauseStartedTimestamp = Stopwatch.GetTimestamp();
+                _pausedPartitions.UnionWith(partitionsToPause);
+                KafkaTransportMetrics.RecordReceiverPauseResume(
+                    _providerName,
+                    _transportOptions.TopicName,
+                    _partitionId,
+                    KafkaTransportMetrics.PauseOperation);
+            }
+        }
+        else if (_pausedPartitions.Count > 0)
+        {
+            var partitionsToResume = _pausedPartitions
+                .Where(_assignedPartitions.Contains)
+                .ToArray();
+            if (partitionsToResume.Length > 0)
+            {
+                consumer.Resume(partitionsToResume);
+                KafkaTransportMetrics.RecordReceiverPauseResume(
+                    _providerName,
+                    _transportOptions.TopicName,
+                    _partitionId,
+                    KafkaTransportMetrics.ResumeOperation);
+            }
+
+            _pausedPartitions.Clear();
+            CompletePauseDuration();
+        }
+
+        RecordPausedPartitionCountIfChanged();
+    }
+
+    private void RefreshAssignment(IKafkaReceiverConsumer consumer)
+    {
+        var assignment = consumer.Assignment;
+        _assignedPartitions.Clear();
+        _assignedPartitions.UnionWith(assignment);
+        _hasAssignmentSnapshot = true;
+
+        var pausedCountBeforeReconciliation = _pausedPartitions.Count;
+        _pausedPartitions.RemoveWhere(partition => !_assignedPartitions.Contains(partition));
+        if (pausedCountBeforeReconciliation > 0 && _pausedPartitions.Count == 0)
+            CompletePauseDuration();
+    }
+
+    private void EndPartitionPause()
+    {
+        _assignedPartitions.Clear();
+        _hasAssignmentSnapshot = false;
+        _pausedPartitions.Clear();
+        CompletePauseDuration();
+        RecordPausedPartitionCountIfChanged();
+    }
+
+    private void CompletePauseDuration()
+    {
+        if (!_pauseStartedTimestamp.HasValue)
+            return;
+
+        KafkaTransportMetrics.RecordReceiverPauseDuration(
+            _providerName,
+            _transportOptions.TopicName,
+            _partitionId,
+            Stopwatch.GetElapsedTime(_pauseStartedTimestamp.Value));
+        _pauseStartedTimestamp = null;
+    }
+
+    private void RecordInitialBufferState()
+    {
+        RecordBufferDepth();
+        KafkaTransportMetrics.RecordReceiverBufferCapacity(
+            _providerName,
+            _transportOptions.TopicName,
+            _partitionId,
+            _messageBuffer.Capacity);
+    }
+
     private void RecordBufferDepth() =>
         KafkaTransportMetrics.RecordReceiverBufferDepth(
             _providerName,
             _transportOptions.TopicName,
             _partitionId,
-            _messages.Count);
+            _messageBuffer.Depth);
+
+    private void RecordPausedPartitionCountIfChanged()
+    {
+        var pausedPartitionCount = _pausedPartitions.Count;
+        if (_reportedPausedPartitionCount == pausedPartitionCount)
+            return;
+
+        _reportedPausedPartitionCount = pausedPartitionCount;
+        KafkaTransportMetrics.RecordReceiverPausedPartitionCount(
+            _providerName,
+            _transportOptions.TopicName,
+            _partitionId,
+            pausedPartitionCount);
+    }
 
     private enum KafkaPolledRecordDisposition
     {

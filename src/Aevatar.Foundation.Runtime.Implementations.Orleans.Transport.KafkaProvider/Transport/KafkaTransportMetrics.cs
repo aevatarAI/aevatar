@@ -10,6 +10,9 @@ internal static class KafkaTransportMetrics
     internal const string ProviderTag = "provider";
     internal const string TopicTag = "topic";
     internal const string PartitionTag = "partition";
+    internal const string OperationTag = "operation";
+    internal const string PauseOperation = "pause";
+    internal const string ResumeOperation = "resume";
 
     private static readonly Meter Meter = new(MeterName, "1.0.0");
     private static readonly Gauge<long> ConsumerGroupLag = Meter.CreateGauge<long>(
@@ -18,6 +21,25 @@ internal static class KafkaTransportMetrics
     private static readonly Gauge<long> ReceiverBufferDepth = Meter.CreateGauge<long>(
         "aevatar.kafka.receiver.buffer_depth",
         description: "Messages currently buffered by the Orleans Kafka receiver.");
+    private static readonly Gauge<long> ReceiverBufferCapacity = Meter.CreateGauge<long>(
+        "aevatar.kafka.receiver.buffer_capacity",
+        description: "Configured hard message capacity of the Orleans Kafka receiver buffer.");
+    private static readonly Gauge<long> ReceiverPausedPartitions = Meter.CreateGauge<long>(
+        "aevatar.kafka.receiver.paused_partitions",
+        description: "Kafka partitions currently paused by receiver buffer backpressure.");
+    private static readonly Counter<long> ReceiverPauseResume = Meter.CreateCounter<long>(
+        "aevatar.kafka.receiver.pause_resume",
+        description: "Kafka receiver partition pause and resume operations.");
+    private static readonly Histogram<double> ReceiverPauseDuration = Meter.CreateHistogram<double>(
+        "aevatar.kafka.receiver.pause_duration",
+        unit: "ms",
+        description: "Duration of Kafka receiver partition pause intervals.");
+    private static readonly Counter<long> ReceiverBufferSaturations = Meter.CreateCounter<long>(
+        "aevatar.kafka.receiver.buffer_saturations",
+        description: "Kafka receiver transitions into high-watermark buffer saturation.");
+    private static readonly Counter<long> ReceiverConsumeErrors = Meter.CreateCounter<long>(
+        "aevatar.kafka.receiver.consume_errors",
+        description: "Kafka receiver consume errors.");
 
     internal static bool ObserveStatistics(
         string statisticsJson,
@@ -39,6 +61,58 @@ internal static class KafkaTransportMetrics
         int depth) =>
         Record(() => ReceiverBufferDepth.Record(
             Math.Max(0, depth),
+            Tags(providerName, topicName, partitionId)));
+
+    internal static void RecordReceiverBufferCapacity(
+        string providerName,
+        string topicName,
+        int partitionId,
+        int capacity) =>
+        Record(() => ReceiverBufferCapacity.Record(
+            Math.Max(0, capacity),
+            Tags(providerName, topicName, partitionId)));
+
+    internal static void RecordReceiverPausedPartitionCount(
+        string providerName,
+        string topicName,
+        int partitionId,
+        int pausedPartitionCount) =>
+        Record(() => ReceiverPausedPartitions.Record(
+            Math.Max(0, pausedPartitionCount),
+            Tags(providerName, topicName, partitionId)));
+
+    internal static void RecordReceiverPauseResume(
+        string providerName,
+        string topicName,
+        int partitionId,
+        string operation) =>
+        Record(() => ReceiverPauseResume.Add(
+            1,
+            Tags(providerName, topicName, partitionId, operation)));
+
+    internal static void RecordReceiverPauseDuration(
+        string providerName,
+        string topicName,
+        int partitionId,
+        TimeSpan duration) =>
+        Record(() => ReceiverPauseDuration.Record(
+            Math.Max(0, duration.TotalMilliseconds),
+            Tags(providerName, topicName, partitionId)));
+
+    internal static void RecordReceiverBufferSaturation(
+        string providerName,
+        string topicName,
+        int partitionId) =>
+        Record(() => ReceiverBufferSaturations.Add(
+            1,
+            Tags(providerName, topicName, partitionId)));
+
+    internal static void RecordReceiverConsumeError(
+        string providerName,
+        string topicName,
+        int partitionId) =>
+        Record(() => ReceiverConsumeErrors.Add(
+            1,
             Tags(providerName, topicName, partitionId)));
 
     internal static bool TryReadConsumerLag(
@@ -82,6 +156,17 @@ internal static class KafkaTransportMetrics
             { TopicTag, Normalize(topicName) },
             { PartitionTag, partitionId },
         };
+
+    private static TagList Tags(
+        string providerName,
+        string topicName,
+        int partitionId,
+        string operation)
+    {
+        var tags = Tags(providerName, topicName, partitionId);
+        tags.Add(OperationTag, Normalize(operation));
+        return tags;
+    }
 
     private static string Normalize(string value) =>
         string.IsNullOrWhiteSpace(value) ? "unknown" : value;

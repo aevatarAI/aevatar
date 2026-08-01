@@ -67,6 +67,9 @@ services.AddAevatarFoundationRuntimeOrleansKafkaProviderTransport(options =>
     options.TopicName = "aevatar-orleans-kafka-provider";
     options.ConsumerGroup = "aevatar-orleans-kafka-provider";
     options.TopicPartitionCount = 8;
+    options.ReceiverBufferCapacity = 1024;
+    options.ReceiverBufferHighWatermark = 768;
+    options.ReceiverBufferLowWatermark = 512;
 });
 
 siloBuilder.AddAevatarFoundationRuntimeOrleans(options =>
@@ -83,6 +86,52 @@ siloBuilder.AddAevatarFoundationRuntimeOrleans(options =>
 - 不依赖 `MassTransit`
 - `QueueId <-> PartitionId` 一一映射
 - `MessagesDeliveredAsync(...)` 之后才推进 Kafka offset commit
+
+每个 queue receiver 使用固定容量 buffer，并强制校验：
+
+```text
+0 < ReceiverBufferLowWatermark
+  < ReceiverBufferHighWatermark
+  <= ReceiverBufferCapacity
+```
+
+达到 high watermark 后，consumer owner loop 对当前 assignment 执行 `Pause`；只有 depth
+下降到 low watermark 或以下才执行 `Resume`，中间区间保持原状态，避免 pause/resume 抖动。
+pause 期间 owner loop 仍持续调用 `Consume(timeout)`，让 librdkafka 处理 poll side effects；
+backpressure active 时在每次 poll（包括 consume error）后重新对账 assignment，已 revoke
+partition 从 paused set 删除，新 assignment 立即 pause。consumer 的 create、assign、assignment
+read、pause/resume、
+consume、commit、close/dispose 都只在这个 owner loop/thread 执行。
+
+buffer 只是进程内 transport working state，不是事实源。它不改变 ACK 契约：offset 仍然只在
+`MessagesDeliveredAsync(...)` 标记 acknowledged 后，按连续 watermark commit；低水位恢复不能
+越过尚未 ACK 的 offset hole。
+
+### Buffer 基准
+
+`KafkaReceiverBackpressureTests` 包含 receiver-shape steady-state 对照与 overload
+retained-memory harness。receiver-shape 对照让旧无界 queue 与新有界 buffer 执行相同的 fake
+`Consume`、routing header 解码、Protobuf parse、`StreamId` / batch 构造和 puller drain，只替换
+buffer 实现；5 轮交错测量取中位数，并要求新路径吞吐不低于旧路径的 80%。2026-08-02 在
+.NET 10 Debug、本地 arm64 的独立测试进程测量结果：
+
+| 实现 | receiver-shape msg/s | CPU us/msg | allocation B/msg |
+| --- | ---: | ---: | ---: |
+| 旧 `ConcurrentQueue`（无界） | 1,680,763 | 0.86 | 969.3 |
+| 新 fixed-capacity SPSC buffer | 1,714,143 | 0.96 | 968.0 |
+
+本次 receiver-shape 新/旧吞吐比为 102.0%，通过 80% 相对回归门槛；另两次独立运行测得
+120.3% 与 171.8%。测试显式断言零 rejected write，避免把 CPU 调度造成的 saturation 混入稳态结果。
+纯 buffer 热路径诊断仍显示 ring 的孤立操作速度低于 `ConcurrentQueue`，因此不把绝对阈值冒充
+“无回退”证据。真实 receiver 形态中，共同的 decode/parse/batch 工作占主导，未观察到明显吞吐、
+CPU 或 allocation 回退。
+
+overload 曲线中，无界 queue 在 backlog 32,768 时 retained 32,768 条并新增分配 1,052,032 B；
+capacity 1,024 的新 buffer retained 1,024 条且预分配后 overload 新增分配为 0。完整方法、重复
+运行、纯 buffer 诊断和 `256 / 1,024 / 4,096 / 16,384 / 32,768` backlog 曲线见
+[`docs/raw/2026-08-02-kafka-receiver-backpressure-benchmark.md`](../../docs/raw/2026-08-02-kafka-receiver-backpressure-benchmark.md)。
+回归测试另以 capacity 64 用独立 owner/puller 线程传递 50,000 条消息，验证无丢失且观测 depth
+不超过 capacity。
 
 ## Kafka 入站投递与失败语义
 

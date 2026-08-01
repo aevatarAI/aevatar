@@ -37,9 +37,9 @@ public sealed class KafkaProviderTransportTests
     }
 
     [Fact]
-    public void KafkaTransportMetrics_KeepLagAndReceiverDepthSeparateWithInfrastructureLabelsOnly()
+    public void KafkaTransportMetrics_ShouldExposeReceiverBackpressureWithLowCardinalityLabelsOnly()
     {
-        var measurements = new List<(string Instrument, long Value, string[] TagKeys)>();
+        var measurements = new List<(string Instrument, double Value, string[] TagKeys)>();
         using var listener = new MeterListener();
         listener.InstrumentPublished = (instrument, meterListener) =>
         {
@@ -47,6 +47,8 @@ public sealed class KafkaProviderTransportTests
                 meterListener.EnableMeasurementEvents(instrument);
         };
         listener.SetMeasurementEventCallback<long>((instrument, value, tags, _) =>
+            measurements.Add((instrument.Name, value, tags.ToArray().Select(tag => tag.Key).ToArray())));
+        listener.SetMeasurementEventCallback<double>((instrument, value, tags, _) =>
             measurements.Add((instrument.Name, value, tags.ToArray().Select(tag => tag.Key).ToArray())));
         listener.Start();
 
@@ -56,15 +58,36 @@ public sealed class KafkaProviderTransportTests
             "events-alpha",
             1).Should().BeTrue();
         KafkaTransportMetrics.RecordReceiverBufferDepth("kafka-provider", "events-alpha", 1, 4);
+        KafkaTransportMetrics.RecordReceiverBufferCapacity("kafka-provider", "events-alpha", 1, 16);
+        KafkaTransportMetrics.RecordReceiverPausedPartitionCount("kafka-provider", "events-alpha", 1, 1);
+        KafkaTransportMetrics.RecordReceiverPauseResume(
+            "kafka-provider", "events-alpha", 1, KafkaTransportMetrics.PauseOperation);
+        KafkaTransportMetrics.RecordReceiverPauseDuration(
+            "kafka-provider", "events-alpha", 1, TimeSpan.FromMilliseconds(25));
+        KafkaTransportMetrics.RecordReceiverBufferSaturation("kafka-provider", "events-alpha", 1);
+        KafkaTransportMetrics.RecordReceiverConsumeError("kafka-provider", "events-alpha", 1);
 
         measurements.Should().Contain(measurement =>
             measurement.Instrument == "aevatar.kafka.consumer_group.lag" && measurement.Value == 9);
         measurements.Should().Contain(measurement =>
             measurement.Instrument == "aevatar.kafka.receiver.buffer_depth" && measurement.Value == 4);
+        measurements.Should().Contain(measurement =>
+            measurement.Instrument == "aevatar.kafka.receiver.buffer_capacity" && measurement.Value == 16);
+        measurements.Should().Contain(measurement =>
+            measurement.Instrument == "aevatar.kafka.receiver.paused_partitions" && measurement.Value == 1);
+        measurements.Should().Contain(measurement =>
+            measurement.Instrument == "aevatar.kafka.receiver.pause_resume" && measurement.Value == 1);
+        measurements.Should().Contain(measurement =>
+            measurement.Instrument == "aevatar.kafka.receiver.pause_duration" && measurement.Value == 25);
+        measurements.Should().Contain(measurement =>
+            measurement.Instrument == "aevatar.kafka.receiver.buffer_saturations" && measurement.Value == 1);
+        measurements.Should().Contain(measurement =>
+            measurement.Instrument == "aevatar.kafka.receiver.consume_errors" && measurement.Value == 1);
         measurements.SelectMany(measurement => measurement.TagKeys).Should().OnlyContain(key =>
             key == KafkaTransportMetrics.ProviderTag ||
             key == KafkaTransportMetrics.TopicTag ||
-            key == KafkaTransportMetrics.PartitionTag);
+            key == KafkaTransportMetrics.PartitionTag ||
+            key == KafkaTransportMetrics.OperationTag);
     }
 
     [Fact]
@@ -112,13 +135,20 @@ public sealed class KafkaProviderTransportTests
             options.TopicName = "kafka-provider-topic";
             options.ConsumerGroup = "kafka-provider-group";
             options.TopicPartitionCount = 4;
+            options.ReceiverBufferCapacity = 64;
+            options.ReceiverBufferHighWatermark = 48;
+            options.ReceiverBufferLowWatermark = 24;
         });
 
         await using var provider = services.BuildServiceProvider();
 
         provider.GetRequiredService<IQueueAdapterFactory>().Should().BeOfType<KafkaProviderQueueAdapterFactory>();
         provider.GetRequiredService<KafkaProviderProducer>().Should().NotBeNull();
-        provider.GetRequiredService<KafkaProviderTransportOptions>().TopicPartitionCount.Should().Be(4);
+        var transportOptions = provider.GetRequiredService<KafkaProviderTransportOptions>();
+        transportOptions.TopicPartitionCount.Should().Be(4);
+        transportOptions.ReceiverBufferCapacity.Should().Be(64);
+        transportOptions.ReceiverBufferHighWatermark.Should().Be(48);
+        transportOptions.ReceiverBufferLowWatermark.Should().Be(24);
     }
 
     [Fact]
@@ -166,6 +196,22 @@ public sealed class KafkaProviderTransportTests
         });
 
         act.Should().Throw<ArgumentException>();
+    }
+
+    [Fact]
+    public void AddAevatarFoundationRuntimeOrleansKafkaProviderTransport_WhenWatermarksInvalid_ShouldFailRegistration()
+    {
+        var services = new ServiceCollection();
+
+        var act = () => services.AddAevatarFoundationRuntimeOrleansKafkaProviderTransport(options =>
+        {
+            options.ReceiverBufferCapacity = 32;
+            options.ReceiverBufferHighWatermark = 24;
+            options.ReceiverBufferLowWatermark = 24;
+        });
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*0 < ReceiverBufferLowWatermark < ReceiverBufferHighWatermark <= ReceiverBufferCapacity*");
     }
 
     [Fact]

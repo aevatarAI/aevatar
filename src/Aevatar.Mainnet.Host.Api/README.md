@@ -33,6 +33,9 @@ ASPNETCORE_ENVIRONMENT=Distributed dotnet run --project src/Aevatar.Mainnet.Host
 - `ActorRuntime:Provider=Orleans`
 - `ActorRuntime:OrleansStreamBackend=KafkaProvider`
 - `ActorRuntime:OrleansPersistenceBackend=Garnet`
+- `ActorRuntime:KafkaReceiverBufferCapacity=1024`
+- `ActorRuntime:KafkaReceiverBufferHighWatermark=768`
+- `ActorRuntime:KafkaReceiverBufferLowWatermark=512`
 - `Orleans:ClusteringMode=Garnet`
 
 在上述配置下，Event Sourcing 的 `IEventStore` 会自动使用 `GarnetEventStore`（连接串复用 `ActorRuntime:OrleansGarnetConnectionString`）。
@@ -52,6 +55,9 @@ ASPNETCORE_ENVIRONMENT=Distributed dotnet run --project src/Aevatar.Mainnet.Host
 
 ```bash
 export AEVATAR_ActorRuntime__KafkaBootstrapServers=localhost:9092
+export AEVATAR_ActorRuntime__KafkaReceiverBufferCapacity=1024
+export AEVATAR_ActorRuntime__KafkaReceiverBufferHighWatermark=768
+export AEVATAR_ActorRuntime__KafkaReceiverBufferLowWatermark=512
 export AEVATAR_ActorRuntime__OrleansPersistenceBackend=Garnet
 export AEVATAR_ActorRuntime__OrleansGarnetConnectionString=localhost:6379
 export AEVATAR_Orleans__SiloPort=11111

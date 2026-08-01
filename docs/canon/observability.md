@@ -467,10 +467,22 @@ failure、当前 `retryExhaustedFailureCount`、处理计数和 oldest age，不
 |------------|------|------|----------------|
 | `aevatar.kafka.consumer_group.lag` | Gauge | messages | `provider`, `topic`, `partition` |
 | `aevatar.kafka.receiver.buffer_depth` | Gauge | messages | `provider`, `topic`, `partition` |
+| `aevatar.kafka.receiver.buffer_capacity` | Gauge | messages | `provider`, `topic`, `partition` |
+| `aevatar.kafka.receiver.paused_partitions` | Gauge | partitions | `provider`, `topic`, `partition` |
+| `aevatar.kafka.receiver.pause_resume` | Counter | operations | `provider`, `topic`, `partition`, `operation` (`pause` / `resume`) |
+| `aevatar.kafka.receiver.pause_duration` | Histogram | ms | `provider`, `topic`, `partition` |
+| `aevatar.kafka.receiver.buffer_saturations` | Counter | transitions | `provider`, `topic`, `partition` |
+| `aevatar.kafka.receiver.consume_errors` | Counter | errors | `provider`, `topic`, `partition` |
 
 当 statistics disabled、provider unavailable、partition 缺失或 `consumer_lag` 无效时，
 不 emit Kafka lag sample；这表示 unavailable，而不是 0。receiver buffer depth 与
 consumer-group lag 必须使用不同 instrument 和 dashboard panel。
+
+Receiver capacity、high watermark 与 low watermark 是 Host typed options，并满足
+`0 < low < high <= capacity`。`buffer_saturations` 只在进入 high-watermark backpressure
+时增加，不在每次 paused poll 时重复增加；`pause_duration` 在 paused set 清空时记录。
+这些指标只观察 transport working state，不定义 delivery 完成事实，也不改变
+`MessagesDeliveredAsync -> contiguous offset commit` 的 ACK watermark。
 
 ### 12.3 Cardinality 与 Host 注册
 
