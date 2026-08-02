@@ -1019,10 +1019,53 @@ function getToken(){ const raw=localStorage.getItem(TOKEN_KEY); if(!raw) return 
 function setToken(t){ localStorage.setItem(TOKEN_KEY, JSON.stringify(t)); }
 function clearToken(){ localStorage.removeItem(TOKEN_KEY); }
 function isEmbeddedInAdmin(){ try { return window.parent && window.parent !== window && window.frameElement && window.frameElement.getAttribute("data-console-frame") === "1"; } catch(e){ return false; } }
-function notifyAdminShellAuth(type, reason){
+function notifyAdminShellAuth(type, reason, rejectedAccessToken){
   if(!isEmbeddedInAdmin()) return false;
-  window.parent.postMessage({ source:"aevatar-backend-console-suite", type, reason: reason || "" }, location.origin);
+  window.parent.postMessage({ source:"aevatar-backend-console-suite", type, reason: reason || "", rejectedAccessToken:rejectedAccessToken || "" }, location.origin);
   return true;
+}
+function replacementToken(rejectedAccessToken){
+  const current=getToken();
+  return current&&current.access_token&&current.access_token!==rejectedAccessToken ? current : null;
+}
+async function requestAdminShellTokenRefresh(rejectedAccessToken){
+  const existing=replacementToken(rejectedAccessToken); if(existing) return existing;
+  if(!isEmbeddedInAdmin()) return null;
+  const requestId="auth-"+Date.now().toString(36)+"-"+randomString(10);
+  return await new Promise(resolve=>{
+    let timer=null,settled=false;
+    function finish(){
+      if(settled) return; settled=true;
+      window.removeEventListener("message",onMessage);
+      if(timer!==null) clearTimeout(timer);
+      resolve(replacementToken(rejectedAccessToken));
+    }
+    function onMessage(ev){
+      const msg=ev.data||{};
+      if(ev.origin===location.origin&&ev.source===window.parent&&msg.source==="aevatar-backend-console-suite"&&msg.type==="auth-refresh-result"&&msg.requestId===requestId) finish();
+    }
+    window.addEventListener("message",onMessage);
+    timer=setTimeout(finish,10000);
+    window.parent.postMessage({source:"aevatar-backend-console-suite",type:"auth-refresh-request",requestId,rejectedAccessToken},location.origin);
+  });
+}
+async function fetchWithConsoleAuth(path,options){
+  let token=getToken(); if(!token||!token.access_token) throw new Error("not-authenticated");
+  options=options||{};
+  function request(activeToken){
+    const headers=Object.assign({},options.headers||{},{Authorization:"Bearer "+activeToken.access_token});
+    return fetch(path,Object.assign({},options,{headers}));
+  }
+  let res=await request(token);
+  if(res.status!==401) return res;
+  let replacement=replacementToken(token.access_token);
+  if(!replacement) replacement=await requestAdminShellTokenRefresh(token.access_token);
+  if(replacement&&replacement.access_token!==token.access_token){
+    token=replacement; res=await request(token);
+    if(res.status!==401) return res;
+  }
+  signOutSilent(token.access_token);
+  const error=new Error("unauthorized"); error.status=401; throw error;
 }
 function navigateAdminShell(module, query){
   const message={source:"aevatar-backend-console-suite",type:"navigate",module,query:query||{}};
@@ -1082,11 +1125,8 @@ async function fetchUserInfo(){
 function toAccount(info){ return info ? { label: info.email || info.preferred_username || info.sub || "已登录" } : null; }
 
 async function apiRequest(path, options){
-  const token = getToken(); if(!token) throw new Error("not-authenticated");
   options = options || {};
-  const headers = Object.assign({}, options.headers || {}, { Authorization:"Bearer " + token.access_token });
-  const res = await fetch(path, Object.assign({}, options, { headers }));
-  if(res.status === 401){ signOutSilent(); throw new Error("unauthorized"); }
+  const res = await fetchWithConsoleAuth(path, options);
   if(res.status === 404) return null;
   if(!res.ok){
     let reason = "api-error-" + res.status;
@@ -1321,7 +1361,10 @@ function clearSession(){
   adminState.currentScope=null; adminState.inputDraft=""; adminState.runIdDraft=""; adminState.candidates=null; adminState.message="";
 }
 function signOut(){ clearToken(); clearSession(); if(notifyAdminShellAuth("auth-required", "已登出 NyxID，请重新登录。")) return; beginLogin(); }
-function signOutSilent(){ clearToken(); clearSession(); state.signedIn=false; state.scenario="login"; if(notifyAdminShellAuth("auth-required", "登录已过期，请重新使用 NyxID 登录。")) return; render(); }
+function signOutSilent(rejectedAccessToken){ const current=getToken(); if(rejectedAccessToken&&current&&current.access_token!==rejectedAccessToken) return false;
+  if(notifyAdminShellAuth("auth-required", "登录已过期，请重新使用 NyxID 登录。",rejectedAccessToken)) return true;
+  clearToken(); clearSession(); state.signedIn=false; state.scenario="login";
+  render(); return true; }
 
 /* The API graph carries only nodes/edges; per-node status is reconstructed from the
    committed timeline (never invented) so the DAG can show real progress honestly. */

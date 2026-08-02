@@ -348,6 +348,36 @@ function randomString(n){ const a=new Uint8Array(n); crypto.getRandomValues(a); 
 function getToken(){ const r=localStorage.getItem(TOKEN_KEY); if(!r)return null; try{return JSON.parse(r);}catch(e){return null;} }
 function setToken(t){ localStorage.setItem(TOKEN_KEY,JSON.stringify(t)); }
 function clearToken(){ localStorage.removeItem(TOKEN_KEY); }
+function isEmbeddedInAdmin(){ try{return window.parent&&window.parent!==window&&window.frameElement&&window.frameElement.getAttribute("data-console-frame")==="1";}catch(e){return false;} }
+function replacementToken(rejectedAccessToken){ const current=getToken(); return current&&current.access_token&&current.access_token!==rejectedAccessToken?current:null; }
+async function requestAdminShellTokenRefresh(rejectedAccessToken){
+  const existing=replacementToken(rejectedAccessToken); if(existing)return existing;
+  if(!isEmbeddedInAdmin())return null;
+  const requestId="auth-"+Date.now().toString(36)+"-"+randomString(10);
+  return await new Promise(resolve=>{
+    let timer=null,settled=false;
+    function finish(){ if(settled)return; settled=true; window.removeEventListener("message",onMessage); if(timer!==null)clearTimeout(timer); resolve(replacementToken(rejectedAccessToken)); }
+    function onMessage(ev){ const msg=ev.data||{}; if(ev.origin===location.origin&&ev.source===window.parent&&msg.source==="aevatar-backend-console-suite"&&msg.type==="auth-refresh-result"&&msg.requestId===requestId)finish(); }
+    window.addEventListener("message",onMessage); timer=setTimeout(finish,10000);
+    window.parent.postMessage({source:"aevatar-backend-console-suite",type:"auth-refresh-request",requestId,rejectedAccessToken},location.origin);
+  });
+}
+function signOutSilent(rejectedAccessToken){
+  const current=getToken(); if(rejectedAccessToken&&current&&current.access_token!==rejectedAccessToken)return false;
+  if(isEmbeddedInAdmin()){ window.parent.postMessage({source:"aevatar-backend-console-suite",type:"auth-required",reason:"登录已过期，请重新使用 NyxID 登录。",rejectedAccessToken:rejectedAccessToken||""},location.origin); return true; }
+  clearToken(); state.authed=false; state.listState="signedout";
+  render();
+  return true;
+}
+async function fetchWithConsoleAuth(path,opt){
+  let token=getToken(); if(!token||!token.access_token)throw apiError(401,"not-authenticated");
+  opt=opt||{};
+  function request(activeToken){ const headers=Object.assign({},opt.headers||{},{Authorization:"Bearer "+activeToken.access_token}); return fetch(path,Object.assign({},opt,{headers})); }
+  let res=await request(token); if(res.status!==401)return res;
+  let replacement=replacementToken(token.access_token); if(!replacement)replacement=await requestAdminShellTokenRefresh(token.access_token);
+  if(replacement&&replacement.access_token!==token.access_token){ token=replacement; res=await request(token); if(res.status!==401)return res; }
+  signOutSilent(token.access_token); throw apiError(401,"未登录或登录已过期");
+}
 async function beginLogin(){
   const v=randomString(64), st=randomString(32), ch=await sha256(v);
   sessionStorage.setItem(PKCE_KEY,JSON.stringify({verifier:v,state:st,returnTo:location.pathname}));
@@ -378,10 +408,7 @@ function mergeAccount(info){ const next=toAccount(info); if(!next)return; ACCOUN
 function accountScope(){ return (ACCOUNT&&ACCOUNT.scope)?String(ACCOUNT.scope).trim():""; }
 function apiError(status,message,body){ const e=new Error(message); e.status=status; e.body=body; return e; }
 async function api(path,opt){
-  const t=getToken(); if(!t)throw apiError(401,"not-authenticated");
-  const headers=Object.assign({Authorization:"Bearer "+t.access_token},(opt&&opt.headers)||{});
-  const res=await fetch(path,Object.assign({},opt||{},{headers}));
-  if(res.status===401){ clearToken(); state.authed=false; state.listState="signedout"; render(); throw apiError(401,"未登录或登录已过期"); }
+  const res=await fetchWithConsoleAuth(path,opt);
   const txt=await res.text(); let body=null; try{ body=txt?JSON.parse(txt):null; }catch(_){ body=txt; }
   if(!res.ok) throw apiError(res.status,(body&&(body.message||body.error||body.code))||("HTTP "+res.status),body);
   return body;

@@ -62,6 +62,9 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         else
         {
             html.Should().Contain("searchParams.append(\"resource\"");
+            html.Should().Contain("async function fetchWithConsoleAuth(");
+            html.Should().Contain("requestAdminShellTokenRefresh(");
+            html.Should().Contain("rejectedAccessToken");
             html.Should().Contain(path == "/workflow/skills"
                 ? "f.append(\"resource\""
                 : "form.append(\"resource\"");
@@ -2653,11 +2656,17 @@ public sealed class BackendConsoleStaticAssetEndpointTests
                     });
                   }
                   return response(200, {
-                    access_token: phase === 'proactive' ? 'proactive-access' : 'retry-access',
-                    refresh_token: phase === 'proactive' ? 'proactive-refresh' : 'retry-refresh',
+                    access_token: phase === 'proactive' ? 'proactive-access' : phase === 'embedded' ? 'embedded-access' : 'retry-access',
+                    refresh_token: phase === 'proactive' ? 'proactive-refresh' : phase === 'embedded' ? 'embedded-refresh' : 'retry-refresh',
                     expires_in: 900,
                     token_type: 'Bearer',
                   });
+                }
+                if(phase === 'stale' && calls.filter(call => call.input === '/api/probe').length === 1) {
+                  stored.set('console:test:token', JSON.stringify({
+                    access_token:'already-refreshed-access',refresh_token:'already-refreshed-refresh',expires_in:900,obtained_at:Date.now()
+                  }));
+                  return response(401, {});
                 }
                 if(phase === 'retry' && calls.filter(call => call.input === '/api/probe').length === 1) {
                   return response(401, {});
@@ -2667,6 +2676,8 @@ public sealed class BackendConsoleStaticAssetEndpointTests
               setTimeout: () => 1,
               clearTimeout() {},
               document: {getElementById:()=>null,body:{appendChild(){}},createElement:()=>({classList:{add(){},remove(){}},innerHTML:''})},
+              renderAcctW() {},
+              renderLoginGate() {},
               crypto: {getRandomValues(){},subtle:{}},
               alert() {},
               URL,
@@ -2699,6 +2710,31 @@ public sealed class BackendConsoleStaticAssetEndpointTests
               assert.equal(calls[1].input, 'https://id.example.test/oauth/token');
               assert.equal(calls[2].init.headers.Authorization, 'Bearer retry-access');
               assert.equal(JSON.parse(stored.get('console:test:token')).refresh_token, 'retry-refresh');
+
+              phase = 'stale';
+              calls.length = 0;
+              context.setToken({access_token:'stale-access',refresh_token:'stale-refresh',expires_in:3600,obtained_at:Date.now()});
+              const staleRetried = await context.adminApi('/api/probe');
+              assert.equal(staleRetried.status, 200);
+              assert.equal(calls.length, 2, 'a stale 401 retries directly with the token already in storage');
+              assert.equal(calls[1].init.headers.Authorization, 'Bearer already-refreshed-access');
+              assert.equal(JSON.parse(stored.get('console:test:token')).access_token, 'already-refreshed-access');
+
+              phase = 'embedded';
+              calls.length = 0;
+              const posted = [];
+              context.setToken({access_token:'embedded-old',refresh_token:'embedded-old-refresh',expires_in:3600,obtained_at:Date.now()});
+              await context.handleEmbeddedAuthRefresh({origin:'https://console.example.test',source:{postMessage(message,origin){posted.push({message,origin});}}},
+                {requestId:'request-alpha',rejectedAccessToken:'embedded-old'});
+              assert.equal(posted.length, 1);
+              assert.equal(posted[0].message.type, 'auth-refresh-result');
+              assert.equal(posted[0].message.refreshed, true);
+              assert.equal(JSON.parse(stored.get('console:test:token')).access_token, 'embedded-access');
+
+              assert.equal(context.showLoginGate('stale rejection', 'embedded-old'), false);
+              assert.equal(JSON.parse(stored.get('console:test:token')).access_token, 'embedded-access', 'stale auth-required must preserve the new token');
+              assert.equal(context.showLoginGate('current rejection', 'embedded-access'), true);
+              assert.equal(stored.has('console:test:token'), false, 'only the currently rejected token may be cleared');
 
               phase = 'logout';
               context.setToken({access_token:'logout-access',refresh_token:'logout-refresh',expires_in:3600,obtained_at:Date.now()});

@@ -1354,6 +1354,22 @@ async function ensureAccessToken(){ var current=getToken(); if(!current) return 
   }
   scheduleTokenRefresh(current); return current;
 }
+async function refreshEmbeddedAccessToken(rejectedAccessToken){
+  var current=getToken();
+  if(!current||!current.access_token) return false;
+  if(rejectedAccessToken&&current.access_token!==rejectedAccessToken) return true;
+  try{ await refreshAccessToken(true); }catch(e){}
+  var latest=getToken();
+  return !!(latest&&latest.access_token&&latest.access_token!==rejectedAccessToken);
+}
+async function handleEmbeddedAuthRefresh(ev,msg){
+  var requestId=typeof msg.requestId==='string'?msg.requestId:'';
+  var rejectedAccessToken=typeof msg.rejectedAccessToken==='string'?msg.rejectedAccessToken:'';
+  var refreshed=await refreshEmbeddedAccessToken(rejectedAccessToken);
+  try{ if(ev.source&&requestId) ev.source.postMessage({
+    source:'aevatar-backend-console-suite',type:'auth-refresh-result',requestId:requestId,refreshed:refreshed
+  },ev.origin); }catch(e){}
+}
 function loginResources(requested){
   var merged=[];
   [OIDC.resources,Array.isArray(requested)?requested:[]].forEach(function(group){ group.forEach(function(value){ var resource=typeof value==='string'?value.trim():''; if(resource&&merged.indexOf(resource)<0) merged.push(resource); }); });
@@ -1372,8 +1388,11 @@ function loginReturnTo(){
   var h=(location.hash&&location.hash.indexOf('#/')===0&&/^#[A-Za-z0-9._~!$&'()*+,;=:@/?%-]*$/.test(location.hash))?location.hash:'';
   return location.pathname + h;
 }
-function showLoginGate(reason){
+function showLoginGate(reason,rejectedAccessToken){
+  var current=getToken();
+  if(rejectedAccessToken&&current&&current.access_token!==rejectedAccessToken) return false;
   clearToken(); ACCOUNT=null; renderAcctW(); renderLoginGate(reason||'');
+  return true;
 }
 function logout(){ showLoginGate('已登出 NyxID，请重新登录。'); }
 function _b64url(buf){ var s=btoa(String.fromCharCode.apply(null,new Uint8Array(buf))); return s.replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); }
@@ -1411,20 +1430,25 @@ function netProgressPop(){ NET_INFLIGHT=Math.max(0,NET_INFLIGHT-1);
 /* 统一带 Bearer 请求：到期前续期；401→强制续期并重试一次，仍失败才清 token 回登录；
    403→返回 {forbidden:true} 供模块诚实降级（不展示伪造数据）。
    opts.silentProgress=true 供后台轮询使用，不驱动顶部进度条。 */
-async function adminApi(path,opts){ opts=opts||{}; var token=await ensureAccessToken();
+async function adminApi(path,opts){ opts=opts||{}; var token=await ensureAccessToken(),activeToken=token;
   var silent=!!opts.silentProgress;
   function requestInit(activeToken){ var h=Object.assign({},opts.headers||{});
     if(activeToken&&activeToken.access_token) h['Authorization']='Bearer '+activeToken.access_token;
     var init=Object.assign({},opts,{headers:h}); delete init.silentProgress; return init; }
   if(!silent) netProgressPush();
   var res;
-  try{ res=await fetch(path,requestInit(token));
-    if(res.status===401&&token&&token.refresh_token){ var refreshed=null;
-      try{ refreshed=await refreshAccessToken(true); }catch(e){}
-      if(refreshed&&refreshed.access_token&&refreshed.access_token!==token.access_token) res=await fetch(path,requestInit(refreshed)); }
+  try{ res=await fetch(path,requestInit(activeToken));
+    if(res.status===401&&activeToken){ var replacement=getToken();
+      if(!replacement||replacement.access_token===activeToken.access_token){
+        try{ replacement=activeToken.refresh_token?await refreshAccessToken(true):null; }catch(e){ replacement=null; }
+      }
+      if(replacement&&replacement.access_token&&replacement.access_token!==activeToken.access_token){
+        activeToken=replacement; res=await fetch(path,requestInit(activeToken));
+      }
+    }
   }
   finally{ if(!silent) netProgressPop(); }
-  if(res.status===401){ showLoginGate('登录已过期，请重新使用 NyxID 登录。'); throw {unauthorized:true}; }
+  if(res.status===401){ showLoginGate('登录已过期，请重新使用 NyxID 登录。',activeToken&&activeToken.access_token); throw {unauthorized:true}; }
   if(res.status===403){ return {forbidden:true,status:403}; }
   return res; }
 async function adminJson(path,opts){ var res=await adminApi(path,opts); if(res&&res.forbidden) return res;
@@ -4226,7 +4250,8 @@ function bindEvents(){
     if(ev.origin!==location.origin) return;
     var msg=ev.data||{};
     if(!msg || msg.source!=='aevatar-backend-console-suite') return;
-    if(msg.type==='auth-required'){ showLoginGate(msg.reason||'登录已过期，请重新使用 NyxID 登录。'); return; }
+    if(msg.type==='auth-refresh-request'){ handleEmbeddedAuthRefresh(ev,msg); return; }
+    if(msg.type==='auth-required'){ showLoginGate(msg.reason||'登录已过期，请重新使用 NyxID 登录。',msg.rejectedAccessToken||''); return; }
     if(msg.type==='login-request'){ beginLogin(msg.resources,msg.tokenPurpose); }
     if(msg.type==='observatory-route'){ syncObservatoryHash(msg.query||{}); }
     if(msg.type==='observatory-immersive'){ setAdminImmersive(msg.enabled); }
