@@ -107,6 +107,9 @@ pause 期间 owner loop 仍每 100 ms 调用 `Consume(timeout)`，让 librdkafka
 这不表示手动 assignment consumer 参与 Kafka group heartbeat/rebalance。consumer 的 create、assign、
 pause/resume、consume、commit、seek、close/dispose 都只在这个 owner loop/thread 执行。Orleans 释放并
 重新获取同一个 QueueId 时，旧 consumer 完整 shutdown，新 consumer 重新 assign 同一个固定 partition。
+非 fatal `ConsumeException` 会记录 consume-error metric，并在同一个 owner loop 上退避重试；fatal
+`ConsumeException` 会终止 owner loop，且 `GetQueueMessagesAsync`、`MessagesDeliveredAsync` 和
+`Shutdown` 都传播同一个 lifecycle fault。只有显式 shutdown/reinitialize 创建新 consumer 后才恢复。
 
 buffer 只是进程内 transport working state，不是事实源。它不改变 ACK 契约：offset 仍然只在
 `MessagesDeliveredAsync(...)` 标记 acknowledged 后，按连续 watermark commit；低水位恢复不能

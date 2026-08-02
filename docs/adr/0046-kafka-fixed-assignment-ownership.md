@@ -42,6 +42,10 @@ authority for this provider:
 6. During backpressure the owner loop continues bounded polling while the fixed
    partition is paused. This keeps librdkafka protocol processing alive without
    claiming Kafka group-heartbeat semantics.
+7. A non-fatal librdkafka consume error is observable and retried on the same
+   owner loop. A fatal consume error terminates that loop and is surfaced by
+   receiver read, acknowledgement, and shutdown operations until Orleans
+   explicitly rebuilds the receiver lifecycle with a new consumer.
 
 Receiver handoff can produce at-least-once redelivery around failures or
 overlap. Kafka committed offsets are the restart cursor, while delivery success

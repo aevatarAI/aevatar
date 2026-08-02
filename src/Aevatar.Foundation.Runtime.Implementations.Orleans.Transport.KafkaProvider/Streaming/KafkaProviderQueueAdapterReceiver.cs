@@ -219,14 +219,22 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
                 }
                 catch (ConsumeException ex)
                 {
-                    ApplyBackpressure(consumer);
-                    _logger.LogWarning(ex,
-                        "Kafka consume error on partition {Partition}, will retry. Code={ErrorCode}",
-                        _partitionId, ex.Error.Code);
                     KafkaTransportMetrics.RecordReceiverConsumeError(
                         _providerName,
                         _transportOptions.TopicName,
                         _partitionId);
+                    if (ex.Error.IsFatal)
+                    {
+                        _logger.LogError(ex,
+                            "Fatal Kafka consume error on partition {Partition}; terminating the receiver owner loop. Code={ErrorCode}",
+                            _partitionId, ex.Error.Code);
+                        throw;
+                    }
+
+                    ApplyBackpressure(consumer);
+                    _logger.LogWarning(ex,
+                        "Kafka consume error on partition {Partition}, will retry. Code={ErrorCode}",
+                        _partitionId, ex.Error.Code);
                     if (ct.WaitHandle.WaitOne(TimeSpan.FromSeconds(1)))
                         break;
                     continue;

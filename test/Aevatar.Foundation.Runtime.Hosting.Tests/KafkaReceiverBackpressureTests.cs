@@ -360,6 +360,88 @@ public sealed class KafkaReceiverBackpressureTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public async Task KafkaReceiver_WhenConsumeErrorIsNonFatal_ShouldRetryAndContinueDelivery()
+    {
+        var harness = CreateHarness(capacity: 3, highWatermark: 2, lowWatermark: 1);
+        await harness.Receiver.Initialize(TestTimeout);
+        var consumeFailure = CreateConsumeException(isFatal: false);
+
+        try
+        {
+            harness.Consumer.FailNextConsume(consumeFailure);
+            harness.Consumer.AddRecord(0);
+            harness.Consumer.AddRecord(1);
+
+            _ = await harness.Consumer.ReadPauseAsync();
+            var delivered = await harness.Receiver.GetQueueMessagesAsync(1);
+
+            delivered.Should().ContainSingle();
+            harness.Consumer.ConsumeCount.Should().BeGreaterThanOrEqualTo(3,
+                "a non-fatal consume error must leave the owner loop available for retry");
+            harness.Consumer.DisposeCallCount.Should().Be(0);
+        }
+        finally
+        {
+            await harness.Receiver.Shutdown(TestTimeout);
+        }
+    }
+
+    [Fact]
+    public async Task KafkaReceiver_WhenConsumeErrorIsFatal_ShouldSurfaceFaultAndRebuildWithNewConsumer()
+    {
+        var options = CreateOptions(capacity: 3, highWatermark: 2, lowWatermark: 1);
+        var mapper = new KafkaQueuePartitionMapper("backpressure-provider", 2);
+        var queueId = mapper.GetAllQueues().First();
+        var topicPartition = new TopicPartition(options.TopicName, new Partition(mapper.GetPartitionId(queueId)));
+        var firstConsumer = CreateDeterministicConsumer(options);
+        var secondConsumer = CreateDeterministicConsumer(options);
+        var consumers = new ConcurrentQueue<IKafkaReceiverConsumer>(
+            new IKafkaReceiverConsumer[] { firstConsumer, secondConsumer });
+        var receiver = new KafkaProviderQueueAdapterReceiver(
+            queueId,
+            "backpressure-provider",
+            options,
+            mapper,
+            "aevatar.events",
+            _ => Task.CompletedTask,
+            () => consumers.TryDequeue(out var consumer)
+                ? consumer
+                : throw new InvalidOperationException("No deterministic consumer remains for initialization."));
+        var consumeFailure = CreateConsumeException(isFatal: true);
+
+        await receiver.Initialize(TestTimeout);
+        firstConsumer.FailNextConsume(consumeFailure);
+        await firstConsumer.AwaitDisposedAsync();
+
+        Func<Task> read = async () => _ = await receiver.GetQueueMessagesAsync(1);
+        var readFailure = await read.Should().ThrowAsync<InvalidOperationException>();
+        readFailure.Which.InnerException.Should().BeSameAs(consumeFailure);
+
+        Func<Task> acknowledge = () => receiver.MessagesDeliveredAsync([]);
+        var acknowledgementFailure = await acknowledge.Should().ThrowAsync<InvalidOperationException>();
+        acknowledgementFailure.Which.Should().BeSameAs(readFailure.Which);
+
+        Func<Task> shutdown = () => receiver.Shutdown(TestTimeout);
+        var shutdownFailure = await shutdown.Should().ThrowAsync<InvalidOperationException>();
+        shutdownFailure.Which.Should().BeSameAs(readFailure.Which);
+
+        await receiver.Initialize(TestTimeout);
+        try
+        {
+            secondConsumer.AssignedPartition.Should().Be(topicPartition);
+            secondConsumer.AddRecord(0);
+            secondConsumer.AddRecord(1);
+            _ = await secondConsumer.ReadPauseAsync();
+            (await receiver.GetQueueMessagesAsync(1)).Should().ContainSingle(
+                "explicit reinitialization must replace the failed owner loop and clear its lifecycle fault");
+        }
+        finally
+        {
+            await receiver.Shutdown(TestTimeout);
+        }
+    }
+
+    [Fact]
     public async Task KafkaReceiverMessageBuffer_ShouldBoundRetentionAndRetainTransportHeadroom()
     {
         const int operationCount = 1_000_000;
@@ -514,6 +596,14 @@ public sealed class KafkaReceiverBackpressureTests(ITestOutputHelper output)
             ReceiverBufferHighWatermark = highWatermark,
             ReceiverBufferLowWatermark = lowWatermark,
         };
+
+    private static ConsumeException CreateConsumeException(bool isFatal) =>
+        new(
+            new ConsumeResult<byte[], byte[]>(),
+            new Error(
+                isFatal ? Confluent.Kafka.ErrorCode.Local_Fatal : Confluent.Kafka.ErrorCode.Local_TimedOut,
+                isFatal ? "fatal consume failure" : "transient consume failure",
+                isFatal));
 
     private static async Task<TimeSpan> MeasureConcurrentUnboundedQueueAsync(
         IBatchContainer message,
@@ -942,6 +1032,12 @@ public sealed class KafkaReceiverBackpressureTests(ITestOutputHelper output)
         public void AddRecord(long offset)
         {
             AddConsumeStep(() => CreateRecord(offset, GetAssignedPartition()));
+        }
+
+        public void FailNextConsume(ConsumeException failure)
+        {
+            ArgumentNullException.ThrowIfNull(failure);
+            AddConsumeStep(() => throw failure);
         }
 
         public void FailNextResume(Exception failure)
