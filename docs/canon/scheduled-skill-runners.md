@@ -104,8 +104,8 @@ actor address, an `EventEnvelope`, or an equivalent raw dispatch payload.
 The authenticated request scope must equal the resolved target tenant. A
 target in another tenant is rejected before Application admission, even when
 the caller can name that service. `actorId` is an opaque runtime address and
-raw `EventEnvelope` is an internal transport shape; neither is exposed by a
-public schedule request, response, or lifecycle operation.
+raw `EventEnvelope` is an internal transport shape; the public schedule target
+input does not accept either as a caller-supplied value.
 
 Legacy persisted envelope schedules remain readable only by the actor and
 projection paths needed to retire them. Application hides those rows from

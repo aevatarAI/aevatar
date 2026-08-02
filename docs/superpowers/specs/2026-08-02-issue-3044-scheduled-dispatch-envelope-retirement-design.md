@@ -2,7 +2,8 @@
 
 ## Context
 
-`POST /api/schedules` and `PUT /api/schedules/{scheduleId}` currently accept
+Before this change, `POST /api/schedules` and
+`PUT /api/schedules/{scheduleId}` accepted
 an `envelope` target containing a caller-selected actor ID and arbitrary
 `EventEnvelope` payload. The target preparation path rewrites routing but
 preserves both authority-bearing inputs. An authenticated caller can therefore
@@ -20,8 +21,9 @@ Retire raw-envelope scheduling instead of adding a payload allowlist. Public
 scheduling accepts only a typed `serviceInvocation` target that is resolved
 through the service catalog and revision catalog. The HTTP boundary requires
 the resolved target tenant to equal the authenticated request scope before
-calling the Application service. It does not expose `actorId`, raw
-`EventEnvelope`, or the internal authority marker.
+calling the Application service. The public schedule target input does not
+accept a caller-supplied `actorId`, raw `EventEnvelope`, or internal authority
+marker.
 
 The retirement is enforced at three independent boundaries:
 
@@ -41,10 +43,12 @@ The retirement is enforced at three independent boundaries:
    tests. `TrustedInternal` is not surfaced by Hosting or Application and does
    not authorize a public or administrator raw-envelope API.
 
-Legacy Protobuf/state fields and enum values remain readable only so existing
-actors and projections can recognize the retired target and fail closed. The
-new Protobuf authority enum is not exposed through Hosting or Application, and
-no administrator/raw-envelope API is introduced.
+At the Hosting/Application boundary, legacy Protobuf/state fields and enum
+values are retired and read only: they remain available only to recognize and
+hide legacy rows. Core retains the legacy representation for retirement and
+fail-closed activation, and retains the typed Protobuf `TrustedInternal`
+actor-only write protocol. The authority marker is not surfaced through
+Hosting or Application, and no administrator/raw-envelope API is introduced.
 
 ## Alternatives
 
@@ -63,10 +67,11 @@ recognition is safer and more explicit.
 
 ### Payload Allowlist and Actor Ownership Lookup
 
-An allowlist still exposes actor addresses and creates a second authorization
-system beside typed service invocation. Every future message type would reopen
-the injection surface. The repository already has the correct typed,
-server-resolved path, so a second public path is unnecessary.
+An allowlist would retain caller control over actor addresses and create a
+second authorization system beside typed service invocation. Every future
+message type would reopen the injection surface. The repository already has
+the correct typed, server-resolved path, so a second public path is
+unnecessary.
 
 ## Data Flow
 
