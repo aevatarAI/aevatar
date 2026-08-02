@@ -138,6 +138,33 @@ public sealed class WorkflowInfrastructureCoverageTests
     }
 
     [Fact]
+    public async Task WorkflowDefinitionParser_ShouldClassifyYamlResourceLimit()
+    {
+        using var provider = BuildWorkflowInfrastructureProvider();
+        var parser = provider.GetRequiredService<IWorkflowDefinitionParser>();
+
+        var result = await parser.ParseWorkflowYamlAsync(BuildNestedWorkflowYaml(childLinks: 31));
+
+        result.Succeeded.Should().BeFalse();
+        result.ErrorCode.Should().Be(WorkflowYamlParseErrorCode.ResourceLimit);
+        result.Error.Should().Contain("nesting depth");
+    }
+
+    [Fact]
+    public async Task WorkflowDefinitionParser_ShouldPropagateResourceLimitFromInlineBundle()
+    {
+        using var provider = BuildWorkflowInfrastructureProvider();
+        var parser = provider.GetRequiredService<IWorkflowDefinitionParser>();
+
+        var result = await parser.ParseInlineWorkflowBundleAsync(
+            [new WorkflowChatInlineYamlDocument(string.Empty, BuildNestedWorkflowYaml(childLinks: 31))]);
+
+        result.Succeeded.Should().BeFalse();
+        result.ErrorCode.Should().Be(WorkflowYamlParseErrorCode.ResourceLimit);
+        result.Error.Should().Contain("nesting depth");
+    }
+
+    [Fact]
     public void AddWorkflowDefinitionFileSource_ShouldRegisterLoaderAndHostedService()
     {
         var services = new ServiceCollection();
@@ -1547,6 +1574,35 @@ public sealed class WorkflowInfrastructureCoverageTests
                 RoleReplyCount = 0,
             },
         };
+    }
+
+    private static ServiceProvider BuildWorkflowInfrastructureProvider()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddAevatarWorkflow();
+        services.AddWorkflowInfrastructure();
+        return services.BuildServiceProvider();
+    }
+
+    private static string BuildNestedWorkflowYaml(int childLinks)
+    {
+        var yaml = new StringBuilder()
+            .AppendLine("name: nested")
+            .AppendLine("roles: []")
+            .AppendLine("steps:");
+
+        for (var index = 0; index <= childLinks; index++)
+        {
+            var itemIndent = new string(' ', 2 + (index * 4));
+            var propertyIndent = new string(' ', 4 + (index * 4));
+            yaml.Append(itemIndent).Append("- id: step_").AppendLine(index.ToString());
+            yaml.Append(propertyIndent).AppendLine("type: assign");
+            if (index < childLinks)
+                yaml.Append(propertyIndent).AppendLine("children:");
+        }
+
+        return yaml.ToString();
     }
 
     private static void TryDeleteDirectory(string path)

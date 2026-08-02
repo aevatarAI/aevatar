@@ -159,9 +159,21 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
 
         success.Succeeded.Should().BeTrue();
         success.WorkflowName.Should().Be("workflow-1");
+        success.ErrorCode.Should().Be(WorkflowYamlParseErrorCode.None);
         invalid.Succeeded.Should().BeFalse();
         invalid.Error.Should().Be("Workflow YAML is invalid.");
+        invalid.ErrorCode.Should().Be(WorkflowYamlParseErrorCode.InvalidYaml);
         whitespace.Succeeded.Should().BeTrue();
+        whitespace.ErrorCode.Should().Be(WorkflowYamlParseErrorCode.None);
+
+        var inlineSuccess = WorkflowInlineYamlBundleParseResult.Success(
+            "workflow-1",
+            "name: workflow-1",
+            new Dictionary<string, string>());
+        var inlineInvalid = WorkflowInlineYamlBundleParseResult.Invalid(null!);
+
+        inlineSuccess.ErrorCode.Should().Be(WorkflowYamlParseErrorCode.None);
+        inlineInvalid.ErrorCode.Should().Be(WorkflowYamlParseErrorCode.InvalidYaml);
     }
 
     [Fact]
