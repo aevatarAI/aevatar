@@ -653,7 +653,7 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
         [Fact]
         public async Task WorkflowRoleGAgent_WhenCheckpointRecoveryContinues_ShouldRetainRequestLocalToolCatalog()
         {
-            var eventStore = new FailOnceCompletionCheckpointEventStore();
+            var eventStore = new FailCompletionCheckpointEventStore();
             var llm = new ToolCallWorkflowIntentLlmProvider();
             var tool = new SuccessfulWorkflowTool("lookup");
             var registry = new FixedToolSetRegistry(
@@ -1779,6 +1779,79 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
         }
 
         [Fact]
+        public async Task WorkflowRoleGAgent_WhenOnlyTargetRecoveryRuns_ShouldTerminalizeTargetAndSourceOnce()
+        {
+            const string continuationSessionId = "approval-target-recovery";
+            var eventStore = new FailCompletionCheckpointEventStore(failureOrdinal: 2);
+            var approvalTool = new ApprovalRequiredWorkflowTool();
+            var continuationTool = new SuccessfulWorkflowTool("lookup_after_approval");
+            var llm = new ApprovalThenToolWorkflowIntentLlmProvider(
+                approvalTool.Name,
+                continuationTool.Name);
+            var registry = new FixedToolSetRegistry(
+                "studio.write",
+                new FixedToolSource(approvalTool, continuationTool));
+            var (agent, publisher) = await CreateActivatedWorkflowRoleAgentAsync(
+                eventStore,
+                llm,
+                "workflow-role-agent-target-only-recovery",
+                toolSetRegistry: registry,
+                callerAccessTokenProvider: new RotatingWorkflowCallerAccessTokenProvider());
+            var intent = ApprovalIntent(approvalTool.Name);
+            intent.AgentToolScope.AllowedToolNames.Add(continuationTool.Name);
+
+            await agent.HandleWorkflowLlmExecutionIntent(intent);
+            await agent.HandleToolApprovalDecision(new ToolApprovalDecisionEvent
+            {
+                RequestId = agent.State.PendingApproval.RequestId,
+                Approved = true,
+                ContinuationTurnId = continuationSessionId,
+            });
+            var sourceRecovery = publisher.Published
+                .Select(static item => item.evt)
+                .OfType<RoleChatRecoveryContinuationRequested>()
+                .Should().ContainSingle().Which;
+
+            await agent.HandleChatRecoveryContinuationRequestedAsync(sourceRecovery);
+
+            approvalTool.ExecuteCount.Should().Be(1);
+            continuationTool.ExecuteCount.Should().Be(1);
+            llm.CallCount.Should().Be(2);
+            agent.State.Sessions["session-approval"].RecoveryCheckpoint!.Stage.Should()
+                .Be(RoleChatRecoveryCheckpointStage.ContinuationPrepared);
+            agent.State.Sessions[continuationSessionId].RecoveryCheckpoint!.Stage.Should()
+                .Be(RoleChatRecoveryCheckpointStage.ToolBatchPrepared);
+            agent.State.Sessions["session-approval"].Completed.Should().BeFalse();
+            agent.State.Sessions[continuationSessionId].Completed.Should().BeFalse();
+            var targetRecovery = publisher.Published
+                .Select(static item => item.evt)
+                .OfType<RoleChatRecoveryContinuationRequested>()
+                .Should().HaveCount(2).And.ContainSingle(item =>
+                    item.SessionId == continuationSessionId).Which;
+
+            await agent.HandleChatRecoveryContinuationRequestedAsync(targetRecovery);
+
+            approvalTool.ExecuteCount.Should().Be(1,
+                "source recovery must adopt the approved result");
+            continuationTool.ExecuteCount.Should().Be(1,
+                "target recovery must adopt the sealed external result");
+            llm.CallCount.Should().Be(3);
+            var targetTerminal = agent.State.Sessions[continuationSessionId];
+            targetTerminal.Completed.Should().BeTrue();
+            targetTerminal.Outcome.Should().Be(RoleChatSessionOutcome.Completed);
+            targetTerminal.FinalContent.Should().Be("recovered approval completion");
+            var sourceTerminal = agent.State.Sessions["session-approval"];
+            sourceTerminal.Completed.Should().BeTrue();
+            sourceTerminal.Outcome.Should().Be(RoleChatSessionOutcome.Completed);
+            sourceTerminal.ToolResults.Should().HaveCount(2);
+            sourceTerminal.ToolResults.Should().OnlyContain(static result => result.Success);
+            publisher.Published.Select(static item => item.evt)
+                .OfType<WorkflowLlmInvocationCompletedEvent>()
+                .Should().ContainSingle(completed =>
+                    completed.Success && completed.SessionId == "session-approval");
+        }
+
+        [Fact]
         public async Task WorkflowRoleGAgent_WhenApprovalRecoveryFails_ShouldTerminalizeSourceWithoutRerun()
         {
             var eventStore = new InMemoryEventStore();
@@ -2625,10 +2698,10 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
                 RoleChatSessionOutcome.Completed;
         }
 
-        private sealed class FailOnceCompletionCheckpointEventStore : IEventStore
+        private sealed class FailCompletionCheckpointEventStore(int failureOrdinal = 1) : IEventStore
         {
             private readonly InMemoryEventStore _inner = new();
-            private int _failed;
+            private int _completionCheckpointAppends;
 
             public Task<EventStoreCommitResult> AppendAsync(
                 string agentId,
@@ -2641,7 +2714,7 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
                         stateEvent.EventData.Is(RoleChatRecoveryCheckpointUpdatedEvent.Descriptor) &&
                         stateEvent.EventData.Unpack<RoleChatRecoveryCheckpointUpdatedEvent>()
                             .Checkpoint.ToolCompletions.Count > 0) &&
-                    Interlocked.CompareExchange(ref _failed, 1, 0) == 0)
+                    Interlocked.Increment(ref _completionCheckpointAppends) == failureOrdinal)
                 {
                     throw new InvalidOperationException("completion checkpoint append failed");
                 }
@@ -2867,6 +2940,42 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
                     DeltaContent = "approved completion",
                     Usage = new TokenUsage(11, 7, 18),
                 };
+                yield return new LLMStreamChunk { IsLast = true, FinishReason = "stop" };
+                await Task.CompletedTask;
+            }
+        }
+
+        private sealed class ApprovalThenToolWorkflowIntentLlmProvider(
+            string approvalToolName,
+            string continuationToolName) : WorkflowIntentLlmProviderBase
+        {
+            private int _calls;
+
+            public int CallCount => Volatile.Read(ref _calls);
+
+            public override async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+                LLMRequest request,
+                [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+            {
+                _ = request;
+                ct.ThrowIfCancellationRequested();
+                var call = Interlocked.Increment(ref _calls);
+                if (call <= 2)
+                {
+                    yield return new LLMStreamChunk
+                    {
+                        DeltaToolCall = new ToolCall
+                        {
+                            Id = call == 1 ? "call-approval-target" : "call-target-recovery",
+                            Name = call == 1 ? approvalToolName : continuationToolName,
+                            ArgumentsJson = "{}",
+                        },
+                    };
+                    yield return new LLMStreamChunk { IsLast = true, FinishReason = "tool_calls" };
+                    yield break;
+                }
+
+                yield return new LLMStreamChunk { DeltaContent = "recovered approval completion" };
                 yield return new LLMStreamChunk { IsLast = true, FinishReason = "stop" };
                 await Task.CompletedTask;
             }
