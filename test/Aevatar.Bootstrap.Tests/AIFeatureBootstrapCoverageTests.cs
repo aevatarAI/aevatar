@@ -202,6 +202,7 @@ public class AIFeatureBootstrapCoverageTests
     public void AddAevatarAIFeatures_WhenFailoverEnabled_ShouldRegisterFailoverFactory()
     {
         var services = new ServiceCollection();
+        VoicePresenceBootstrapTests.AddToolExecutionAuditDependencies(services);
         var config = new ConfigurationBuilder().Build();
 
         services.AddAevatarAIFeatures(config, options =>
@@ -347,6 +348,7 @@ public class AIFeatureBootstrapCoverageTests
     public void AddAevatarAIFeatures_WhenFailoverDisabled_ShouldRegisterMEAIFactory()
     {
         var services = new ServiceCollection();
+        VoicePresenceBootstrapTests.AddToolExecutionAuditDependencies(services);
         var config = new ConfigurationBuilder().Build();
 
         services.AddAevatarAIFeatures(config, options =>
@@ -375,6 +377,7 @@ public class AIFeatureBootstrapCoverageTests
         });
 
         var services = new ServiceCollection();
+        VoicePresenceBootstrapTests.AddToolExecutionAuditDependencies(services);
         var config = new ConfigurationBuilder().Build();
 
         services.AddAevatarAIFeatures(config, options =>
@@ -401,6 +404,7 @@ public class AIFeatureBootstrapCoverageTests
         });
 
         var services = new ServiceCollection();
+        VoicePresenceBootstrapTests.AddToolExecutionAuditDependencies(services);
         var config = new ConfigurationBuilder().Build();
 
         services.AddAevatarAIFeatures(config, options =>
@@ -462,6 +466,7 @@ public class AIFeatureBootstrapCoverageTests
                 });
 
             var services = new ServiceCollection();
+            VoicePresenceBootstrapTests.AddToolExecutionAuditDependencies(services);
             var config = new ConfigurationBuilder().Build();
             services.AddAevatarAIFeatures(config, options =>
             {
@@ -499,6 +504,7 @@ public class AIFeatureBootstrapCoverageTests
     public void AddAevatarAIFeatures_WhenOnlyNyxIdProviderConfigured_ShouldRegisterNyxIdDefaultProvider()
     {
         var services = new ServiceCollection();
+        VoicePresenceBootstrapTests.AddToolExecutionAuditDependencies(services);
         var config = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
@@ -541,6 +547,7 @@ public class AIFeatureBootstrapCoverageTests
             ["LLMProviders:Default"] = "deepseek",
         });
         var services = new ServiceCollection();
+        VoicePresenceBootstrapTests.AddToolExecutionAuditDependencies(services);
         services.AddSingleton<IAevatarSecretsStore>(diRegistered);
         var config = new ConfigurationBuilder().Build();
 
