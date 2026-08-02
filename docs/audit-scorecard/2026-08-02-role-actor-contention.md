@@ -1,10 +1,10 @@
 ---
-title: Role actor contention inventory and pre-3135 baseline
-status: draft
+title: Role actor contention inventory and post-3135 decision
+status: complete
 owner: Aevatar Runtime
 ---
 
-# Role actor contention inventory and pre-3135 baseline
+# Role actor contention inventory and post-3135 decision
 
 ## Scope and comparison contract
 
@@ -18,11 +18,13 @@ before #3135 is integrated.
 The raw baseline is
 [`raw/2026-08-02-role-actor-contention-baseline-pre-3135.json`](raw/2026-08-02-role-actor-contention-baseline-pre-3135.json).
 It was produced by harness commit
-`618ba214166df2dd794bbe6d5a5eb2a75ae0dc98`; its config digest is
-`AA835BE81AF3B7FBD4184E083380C8B47CDD33DD500A51739D822263A16BB739`.
-A post-#3135 result does not exist yet. It must be produced from an aggregate
-that contains #3135 using the same config digest; this report does not infer or
-fabricate that result.
+`618ba214166df2dd794bbe6d5a5eb2a75ae0dc98`. The raw post-#3135 result is
+[`raw/2026-08-02-role-actor-contention-post-3135.json`](raw/2026-08-02-role-actor-contention-post-3135.json).
+It was produced from aggregate commit
+`8d3d51c40b813455db4a41c5a4f0b1a8b8d91e98`, which contains #3135 and
+#3137. Both results use config digest
+`AA835BE81AF3B7FBD4184E083380C8B47CDD33DD500A51739D822263A16BB739`,
+so they satisfy the comparison contract.
 
 ## Entrypoint inventory
 
@@ -87,14 +89,64 @@ the synthetic delta to single-inbox head-of-line blocking rather than event
 store payload size or transport backlog. Distinct actors trade that isolation
 for nine activations and higher aggregate state bytes.
 
-## Decision
+## Post-3135 result
 
-The baseline proves the expected mechanism for the explicit `scoped_role`
-reuse option, but it does not prove a production hotspot. No production
-concurrency distribution, provider throttling trace, or mailbox SLO was
-available, and #3135 has not yet been applied to the comparison branch.
-Therefore this evidence does not authorize a new session actor or a global
-`RoleGAgent` refactor.
+The same workload and config produced the following result after #3135.
+
+| Metric | `same_actor` p50/p95/p99 | `distinct_actor` p50/p95/p99 | same - distinct p50/p95/p99 |
+| --- | ---: | ---: | ---: |
+| Fast mailbox queue | 49.119 / 86.868 / 90.055 | 0.046 / 0.131 / 0.222 | 49.073 / 86.737 / 89.833 |
+| Fast completion latency | 49.491 / 87.250 / 90.540 | 0.593 / 2.486 / 2.633 | 48.898 / 84.765 / 87.907 |
+| Slow service time | 45.430 / 85.827 / 85.827 | 44.414 / 76.927 / 76.927 | not used for a gate |
+
+| Lifecycle/state observation | `same_actor` | `distinct_actor` |
+| --- | ---: | ---: |
+| Maximum queue depth per actor | 8 | 1 |
+| Activations per iteration | 1 | 9 |
+| Actor protobuf state bytes p50 | 2,207 | 324 |
+| Aggregate protobuf state bytes p50 | 2,207 | 3,251 |
+| Cleanup failures | 0 | 0 |
+| Active actor orphans after cleanup | 0 | 0 |
+
+The head-of-line delta changed as follows. Positive values mean the post run
+was higher than the baseline; this diagnostic has no latency pass/fail
+threshold.
+
+| Head-of-line delta | Baseline p50/p95/p99 | Post-#3135 p50/p95/p99 | Post - baseline p50/p95/p99 |
+| --- | ---: | ---: | ---: |
+| Fast mailbox queue | 55.337 / 82.258 / 82.871 | 49.073 / 86.737 / 89.833 | -6.265 / +4.478 / +6.961 |
+| Fast completion latency | 55.129 / 80.404 / 82.677 | 48.898 / 84.765 / 87.907 | -6.232 / +4.361 / +5.230 |
+
+#3135 bounds the maximum turn duration and makes deadline cancellation
+terminally observable; it does not make a single-reader actor execute two turns
+concurrently. This workload releases the controlled slow provider before the
+host cap, so the deadline is not expected to reduce its queue time. The mixed
+p50 and tail movement is consistent with scheduler variation from the fixed
+async-yield budget and is not evidence of either a capacity improvement or a
+regression.
+
+The bottleneck attribution remains unchanged: fast service time stays small,
+distinct-actor queue time stays near zero, lifecycle/state sizes are unchanged,
+and every measured turn completed with zero cleanup failures or active actor
+orphans. The synthetic delay is therefore the reused actor's single inbox, not
+event-store payload, transport backlog, retained-session state, or cleanup.
+The measurement still does not establish production severity because no
+production concurrency distribution, provider-throttling trace, or mailbox SLO
+was supplied.
+
+## Go/no-go decision
+
+**Go:** close #3143 as a completed measurement and architecture decision. Keep
+#3135's host-owned finite deadline as the reliability bound for every shared
+actor turn.
+
+**No-go:** do not add a session actor, globally refactor `RoleGAgent`, or open
+an implementation issue from this synthetic result alone. The explicit
+`scoped_role` reuse option is a concrete shared-inbox surface and the harness
+proves its head-of-line mechanism, but the decision threshold is not fully met:
+there is no production-representative hotspot evidence and no justified new
+fact owner, server-sealed typed snapshot/reference, lifecycle contract, reuse
+key, upgrade-forward rule, or cleanup owner.
 
 `MaxTrackedSessions = 128` remains a bounded retained-session-state policy on
 `RoleGAgent`; it is not mailbox admission or cross-session capacity control.
@@ -102,11 +154,9 @@ Run/turn-scoped entrypoints do not need a copied capacity layer. For explicit
 scoped-role reuse, the limit only bounds retained session records after turns
 have already shared the inbox.
 
-The next required action is exactly one post-#3135 rerun with the same config.
-Only after that result and production-representative traffic evidence exist can
-a follow-up issue decide whether the explicit scoped-role owner needs a
-server-sealed run snapshot and a narrower execution actor. Until then, the
-architecture remains unchanged.
+Only future production evidence that satisfies every issue decision threshold
+can justify a narrowly scoped follow-up for the explicit `scoped_role` owner.
+Until then, the architecture remains unchanged.
 
 ## Reproduction
 
@@ -115,7 +165,7 @@ bash tools/measurements/Aevatar.RoleStreamingWriteAmplification/run-contention.s
   baseline-pre-3135
 ```
 
-After #3135 is present in the aggregate:
+From the aggregate containing #3135 and #3137:
 
 ```bash
 bash tools/measurements/Aevatar.RoleStreamingWriteAmplification/run-contention.sh \
