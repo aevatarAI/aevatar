@@ -70,6 +70,31 @@ public sealed class ScheduledDispatchServiceInvocationTests
     }
 
     [Fact]
+    public async Task PrepareAsync_ShouldRejectRawEnvelopeTarget()
+    {
+        var service = new ScheduledDispatchTargetPreparationService();
+        var rawEnvelopeConfiguration = new ScheduledDispatchConfiguration(
+            "schedule-raw-envelope",
+            string.Empty,
+            new ScheduledDispatchTargetDescriptor(
+                ScheduledDispatchTargetKind.Envelope,
+                ActorId: "actor-cross-owner",
+                Envelope: new EventEnvelope { Payload = Any.Pack(new Empty()) }),
+            "0 9 * * *",
+            "UTC",
+            true,
+            new Dictionary<string, string>());
+
+        var act = () => service.PrepareAsync(
+            rawEnvelopeConfiguration,
+            "cmd-raw-envelope",
+            "corr-raw-envelope");
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*raw envelope*not supported*");
+    }
+
+    [Fact]
     public async Task PrepareAsync_ShouldPreserveDurableLlmControlAndStripCredentials()
     {
         var service = new ScheduledDispatchTargetPreparationService();
@@ -258,20 +283,8 @@ public sealed class ScheduledDispatchServiceInvocationTests
     }
 
     [Fact]
-    public void ScheduledDispatchHttpRequest_ShouldRejectExternalCallerDurableCredential()
+    public void ScheduledDispatchServiceInvocationHttpRequest_ShouldRejectExternalCallerDurableCredential()
     {
-        var envelopeTarget = new ScheduledDispatchEnvelopeTargetHttpRequest
-        {
-            ActorId = "target",
-            Envelope = new EventEnvelope
-            {
-                Payload = Any.Pack(new ChatRequestEvent
-                {
-                    Prompt = "hello",
-                    CallerDurableCredential = CreateDurableCallerCredentialRef(),
-                }),
-            },
-        };
         var serviceTarget = new ScheduledDispatchServiceInvocationTargetHttpRequest
         {
             Identity = new ServiceIdentity { TenantId = "tenant", ServiceId = "svc" },
@@ -279,10 +292,6 @@ public sealed class ScheduledDispatchServiceInvocationTests
             PayloadTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
         };
 
-        FluentActions.Invoking(() => envelopeTarget.ToTarget())
-            .Should()
-            .Throw<ArgumentException>()
-            .WithMessage("*caller_durable_credential*trusted-only*");
         FluentActions.Invoking(() => serviceTarget.ToTarget(
                 Any.Pack(new ChatRequestEvent
                 {

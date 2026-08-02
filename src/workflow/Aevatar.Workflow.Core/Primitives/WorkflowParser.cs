@@ -86,6 +86,7 @@ public sealed class WorkflowParser
     /// <exception cref="InvalidOperationException">YAML 为空或缺少必填字段时抛出。</exception>
     public WorkflowDefinition Parse(string yaml)
     {
+        WorkflowYamlResourceGuard.Validate(yaml);
         ValidateRootSchema(yaml);
         var raw = D.Deserialize<Raw>(yaml) ?? throw new InvalidOperationException("YAML 为空");
         return new WorkflowDefinition

@@ -2,11 +2,19 @@ using Aevatar.Workflow.Abstractions;
 
 namespace Aevatar.Workflow.Application.Abstractions.Runs;
 
+public enum WorkflowYamlParseErrorCode
+{
+    None = 0,
+    InvalidYaml = 1,
+    ResourceLimit = 2,
+}
+
 public sealed record WorkflowYamlParseResult(
     string WorkflowName,
     string Error,
     WorkflowAuthorizationDependencies? AuthorizationDependencies = null,
-    ExternalCapabilityReadiness? ExternalCapabilityReadiness = null)
+    ExternalCapabilityReadiness? ExternalCapabilityReadiness = null,
+    WorkflowYamlParseErrorCode ErrorCode = WorkflowYamlParseErrorCode.None)
 {
     public bool Succeeded => string.IsNullOrWhiteSpace(Error);
 
@@ -17,12 +25,14 @@ public sealed record WorkflowYamlParseResult(
 
     public static WorkflowYamlParseResult Invalid(
         string error,
-        ExternalCapabilityReadiness? externalCapabilityReadiness = null) =>
+        ExternalCapabilityReadiness? externalCapabilityReadiness = null,
+        WorkflowYamlParseErrorCode errorCode = WorkflowYamlParseErrorCode.InvalidYaml) =>
         new(
             string.Empty,
             error ?? "Workflow YAML is invalid.",
             null,
-            externalCapabilityReadiness?.Clone());
+            externalCapabilityReadiness?.Clone(),
+            errorCode);
 }
 
 public sealed record WorkflowInlineYamlBundleParseResult(
@@ -30,7 +40,8 @@ public sealed record WorkflowInlineYamlBundleParseResult(
     string EntryWorkflowYaml,
     IReadOnlyDictionary<string, string> WorkflowYamlsByName,
     string Error,
-    ExternalCapabilityReadiness? ExternalCapabilityReadiness = null)
+    ExternalCapabilityReadiness? ExternalCapabilityReadiness = null,
+    WorkflowYamlParseErrorCode ErrorCode = WorkflowYamlParseErrorCode.None)
 {
     public bool Succeeded => string.IsNullOrWhiteSpace(Error);
 
@@ -46,13 +57,15 @@ public sealed record WorkflowInlineYamlBundleParseResult(
 
     public static WorkflowInlineYamlBundleParseResult Invalid(
         string error,
-        ExternalCapabilityReadiness? externalCapabilityReadiness = null) =>
+        ExternalCapabilityReadiness? externalCapabilityReadiness = null,
+        WorkflowYamlParseErrorCode errorCode = WorkflowYamlParseErrorCode.InvalidYaml) =>
         new(
             string.Empty,
             string.Empty,
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
             string.IsNullOrWhiteSpace(error) ? "Workflow YAML is invalid." : error,
-            externalCapabilityReadiness?.Clone());
+            externalCapabilityReadiness?.Clone(),
+            errorCode);
 }
 
 public enum WorkflowActorKind
