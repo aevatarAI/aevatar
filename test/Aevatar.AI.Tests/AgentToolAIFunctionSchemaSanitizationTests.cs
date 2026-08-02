@@ -207,6 +207,92 @@ public sealed class AgentToolAIFunctionSchemaSanitizationTests
         tool.ExecutionCalls.Should().Be(0);
     }
 
+    [Fact]
+    public async Task InvokeAsync_WithFunctionInvocationContext_ShouldUseProviderFunctionCallId()
+    {
+        const string safeResult = "{\"ok\":true}";
+        var tool = new SchemaStubTool("test_tool", "{}");
+        var executionPort = new RecordingExecutionPort(CreateOutcome(
+            AgentToolExecutionOutcomeKind.Executed,
+            AgentToolReceiptStatus.Success,
+            safeResult));
+        var function = CreateFunction(tool, executionPort);
+        using var _ = AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity("request-alpha", "ambient-call"),
+            ExecutionOwner = AgentToolExecutionOwners.Actor("actor-alpha"),
+        });
+        var previousContext = FunctionInvokingChatClient.CurrentContext;
+        try
+        {
+            SetFunctionInvocationContext(new FunctionInvocationContext
+            {
+                CallContent = new FunctionCallContent("provider-call", "test_tool", new Dictionary<string, object>()),
+            });
+
+            var result = await function.InvokeAsync(new AIFunctionArguments());
+
+            result.Should().Be(safeResult);
+            var request = executionPort.Requests.Should().ContainSingle().Subject;
+            request.ExecutionContext.Request.RequestId.Should().Be("request-alpha");
+            request.ExecutionContext.Request.CallId.Should().Be("provider-call");
+            request.ExecutionOwner.OwnerId.Should().Be("actor-alpha");
+        }
+        finally
+        {
+            SetFunctionInvocationContext(previousContext);
+        }
+    }
+
+    [Fact]
+    public async Task InvokeAsync_WithProviderInvocationContextWithoutCallId_ShouldSynthesizeDistinctCallIds()
+    {
+        const string safeResult = "{\"ok\":true}";
+        var tool = new SchemaStubTool("test_tool", "{}");
+        var executionPort = new RecordingExecutionPort(CreateOutcome(
+            AgentToolExecutionOutcomeKind.Executed,
+            AgentToolReceiptStatus.Success,
+            safeResult));
+        var function = CreateFunction(tool, executionPort);
+        using var _ = AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity("request-alpha", "ambient-round-call"),
+            ExecutionOwner = AgentToolExecutionOwners.Actor("actor-alpha"),
+        });
+        var previousContext = FunctionInvokingChatClient.CurrentContext;
+        try
+        {
+            SetFunctionInvocationContext(new FunctionInvocationContext
+            {
+                CallContent = new FunctionCallContent("", "test_tool", new Dictionary<string, object>()),
+                Iteration = 2,
+                FunctionCallIndex = 0,
+                FunctionCount = 2,
+            });
+            await function.InvokeAsync(new AIFunctionArguments());
+
+            SetFunctionInvocationContext(new FunctionInvocationContext
+            {
+                CallContent = new FunctionCallContent("", "test_tool", new Dictionary<string, object>()),
+                Iteration = 2,
+                FunctionCallIndex = 1,
+                FunctionCount = 2,
+            });
+            await function.InvokeAsync(new AIFunctionArguments());
+
+            executionPort.Requests.Select(request => request.ExecutionContext.Request.CallId)
+                .Should().Equal(
+                    "meai-request-alpha-iteration-2-function-0",
+                    "meai-request-alpha-iteration-2-function-1");
+            executionPort.Requests.Select(request => request.ExecutionContext.Request.CallId)
+                .Should().NotContain("ambient-round-call");
+        }
+        finally
+        {
+            SetFunctionInvocationContext(previousContext);
+        }
+    }
+
     [Theory]
     [InlineData(AgentToolExecutionOutcomeKind.Denied, AgentToolReceiptStatus.Denied)]
     [InlineData(AgentToolExecutionOutcomeKind.Failed, AgentToolReceiptStatus.Error)]
@@ -229,6 +315,15 @@ public sealed class AgentToolAIFunctionSchemaSanitizationTests
         result.Should().Be(safeResult);
         executionPort.Requests.Should().ContainSingle();
         tool.ExecutionCalls.Should().Be(0);
+    }
+
+    private static void SetFunctionInvocationContext(FunctionInvocationContext? context)
+    {
+        var setter = typeof(FunctionInvokingChatClient)
+            .GetProperty(nameof(FunctionInvokingChatClient.CurrentContext))!
+            .GetSetMethod(nonPublic: true);
+        setter.Should().NotBeNull();
+        setter!.Invoke(null, [context]);
     }
 
     private static AIFunction CreateFunction(

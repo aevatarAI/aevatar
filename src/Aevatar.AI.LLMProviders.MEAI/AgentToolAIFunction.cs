@@ -49,14 +49,19 @@ internal sealed class AgentToolAIFunction : AIFunction
         var ambientContext = AgentToolRequestContext.Current
             ?? throw new InvalidOperationException(
                 "MEAI function invocation requires a stable tool execution context.");
-        if (string.IsNullOrWhiteSpace(ambientContext.Request.RequestId) ||
-            string.IsNullOrWhiteSpace(ambientContext.Request.CallId))
+        var invocationContext = FunctionInvokingChatClient.CurrentContext;
+        var effectiveCallId = ResolveEffectiveCallId(ambientContext, invocationContext);
+        var executionContext = string.Equals(effectiveCallId, ambientContext.Request.CallId, StringComparison.Ordinal)
+            ? ambientContext
+            : ambientContext.WithCallId(effectiveCallId);
+        if (string.IsNullOrWhiteSpace(executionContext.Request.RequestId) ||
+            string.IsNullOrWhiteSpace(executionContext.Request.CallId))
         {
             throw new InvalidOperationException(
                 "MEAI function invocation requires stable request and function-call identities.");
         }
-        if (ambientContext.ExecutionOwner.Kind == AgentToolExecutionOwnerKind.Unspecified ||
-            string.IsNullOrWhiteSpace(ambientContext.ExecutionOwner.OwnerId))
+        if (executionContext.ExecutionOwner.Kind == AgentToolExecutionOwnerKind.Unspecified ||
+            string.IsNullOrWhiteSpace(executionContext.ExecutionOwner.OwnerId))
         {
             throw new InvalidOperationException(
                 "MEAI function invocation requires a stable execution owner.");
@@ -66,12 +71,32 @@ internal sealed class AgentToolAIFunction : AIFunction
             new AgentToolExecutionRequest(
                 _tool,
                 argsJson,
-                ambientContext,
+                executionContext,
                 AgentToolApprovalContinuationMode.None,
                 null),
             cancellationToken).ConfigureAwait(false);
         return outcome.ResultJson;
     }
+
+    private static string? ResolveEffectiveCallId(
+        AgentToolExecutionContext ambientContext,
+        FunctionInvocationContext? invocationContext)
+    {
+        if (invocationContext is null)
+            return ambientContext.Request.CallId;
+
+        var invocationCallId = Normalize(invocationContext.CallContent?.CallId);
+        if (invocationCallId is not null)
+            return invocationCallId;
+
+        var requestId = Normalize(ambientContext.Request.RequestId)
+            ?? throw new InvalidOperationException(
+                "MEAI function invocation requires stable request and function-call identities.");
+        return $"meai-{requestId}-iteration-{invocationContext.Iteration}-function-{invocationContext.FunctionCallIndex}";
+    }
+
+    private static string? Normalize(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private static JsonElement ParseSchema(string? schema)
     {

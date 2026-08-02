@@ -1066,6 +1066,7 @@ public sealed class ChatRuntime
                 ? new StreamingToolCallAccumulator(toolCall => completedToolCalls.Enqueue(toolCall))
                 : new StreamingToolCallAccumulator();
 
+            using var toolContextScope = AgentToolContextScope.Push(authorizedToolContext);
             await using var providerEnumerator = provider.ChatStreamAsync(llmCallContext.Request, ct)
                 .GetAsyncEnumerator(ct);
             while (true)
