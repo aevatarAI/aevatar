@@ -109,9 +109,11 @@ pause/resume、consume、commit、seek、close/dispose 都只在这个 owner loo
 重新获取同一个 QueueId 时，旧 consumer 完整 shutdown，新 consumer 重新 assign 同一个固定 partition。
 非 fatal `ConsumeException` 会记录 consume-error metric，并在同一个 owner loop 上退避重试；fatal
 `ConsumeException` 会终止 owner loop，且 `GetQueueMessagesAsync`、`MessagesDeliveredAsync` 和
-`Shutdown` 都传播同一个 lifecycle fault。同一 lifecycle 的重复或并发 `Shutdown` 共享同一个 cleanup
-task，因此观察到同一成功或失败结果；shutdown cleanup 完成后，只有显式 reinitialize 创建新 consumer
-才清理旧 task/fault 并恢复。
+`Shutdown` 都传播同一个 lifecycle fault。每一代 lifecycle 独立拥有 CTS、initialize task、owner-loop
+task、shutdown task 和 fault。同一代的重复或并发 `Initialize` / `Shutdown` 分别共享同一个 task；shutdown
+先发布 cleanup task，再取消并等待 in-flight initialize，最后停止 owner loop。shutdown 期间发起的
+initialize 只发布一代 successor，并等待 predecessor cleanup 完成后才进入 transport-ready。旧代 continuation
+在创建 consumer 前必须重新核对 cancellation 和 generation identity，因此不会在 shutdown 后越界启动 consumer。
 
 buffer 只是进程内 transport working state，不是事实源。它不改变 ACK 契约：offset 仍然只在
 `MessagesDeliveredAsync(...)` 标记 acknowledged 后，按连续 watermark commit；低水位恢复不能
@@ -119,24 +121,24 @@ buffer 只是进程内 transport working state，不是事实源。它不改变 
 
 ### Buffer 基准
 
-`KafkaReceiverBackpressureTests` 包含 receiver-shape steady-state 对照与 overload
-retained-memory harness。receiver-shape 对照让旧无界 queue 与新有界 buffer 执行相同的 fake
+普通 `KafkaReceiverBackpressureTests` 只硬断言 fixed capacity、并发传递无丢失、零 rejected write、
+offset checksum 和 pause/resume 等确定性语义，不使用 wall-clock 阈值作为 CI 门禁。receiver-shape
+性能对照保留为显式 opt-in 的 controlled diagnostic：旧无界 queue 与新有界 buffer 执行相同的 fake
 `Consume`、routing header 解码、Protobuf parse、`StreamId` / batch 构造和 puller drain，只替换
-buffer 实现；5 轮交错测量取中位数，并要求新路径吞吐不低于旧路径的 80%。2026-08-02 在
-.NET 10 Debug、本地 arm64 的独立测试进程测量结果：
+buffer 实现；独立进程做 3 次 warmup、9 轮交错原始采样并输出中位数，但不据此判定单次测试 pass/fail。
+2026-08-02 在 .NET 10 Debug、本地 arm64 的一次受控运行中，中位数为：
 
 | 实现 | receiver-shape msg/s | CPU us/msg | allocation B/msg |
 | --- | ---: | ---: | ---: |
-| 旧 `ConcurrentQueue`（无界） | 1,680,763 | 0.86 | 969.3 |
-| 新 fixed-capacity SPSC buffer | 1,714,143 | 0.96 | 968.0 |
+| 旧 `ConcurrentQueue`（无界） | 284,001 | 1.15 | 972.2 |
+| 新 fixed-capacity SPSC buffer | 426,349 | 1.16 | 968.0 |
 
-本次 receiver-shape 新/旧吞吐比为 102.0%，通过 80% 相对回归门槛；另两次独立运行测得
-120.3% 与 171.8%。测试显式断言零 rejected write，避免把 CPU 调度造成的 saturation 混入稳态结果。
-纯 buffer 热路径诊断仍显示 ring 的孤立操作速度低于 `ConcurrentQueue`，因此不把绝对阈值冒充
-“无回退”证据。真实 receiver 形态中，共同的 decode/parse/batch 工作占主导，未观察到明显吞吐、
-CPU 或 allocation 回退。
+本次中位数比值为 150.1%，但 9 个单样本比值分布在 45.9% 到 313.4%，明确说明本地 wall-clock
+比较不具备稳定 CI 判定能力。诊断仍硬校验两条路径均零 rejected write 且 offset checksum 相同；
+吞吐、CPU 和 allocation 只作为原始观测。纯 buffer 热路径也只输出诊断，不再保留 500,000 pairs/s
+绝对门槛。
 
-overload 曲线中，无界 queue 在 backlog 32,768 时 retained 32,768 条并新增分配 1,052,032 B；
+同一次 controlled diagnostic 的 overload 曲线中，无界 queue 在 backlog 32,768 时 retained 32,768 条并新增分配 1,052,032 B；
 capacity 1,024 的新 buffer retained 1,024 条且预分配后 overload 新增分配为 0。完整方法、重复
 运行、纯 buffer 诊断和 `256 / 1,024 / 4,096 / 16,384 / 32,768` backlog 曲线见
 [`docs/raw/2026-08-02-kafka-receiver-backpressure-benchmark.md`](../../docs/raw/2026-08-02-kafka-receiver-backpressure-benchmark.md)。

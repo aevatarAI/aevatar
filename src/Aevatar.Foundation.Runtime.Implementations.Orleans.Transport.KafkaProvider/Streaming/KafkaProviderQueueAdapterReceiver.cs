@@ -39,11 +39,7 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
     private int _reportedPausedPartitionCount = -1;
     private int _shuttingDown;
 
-    private Task? _initializeTask;
-    private Task? _shutdownTask;
-    private CancellationTokenSource? _consumeLoopCts;
-    private Task? _consumeLoopTask;
-    private Exception? _ownerLoopFault;
+    private ReceiverLifecycleGeneration? _currentGeneration;
 
     internal int BufferedMessageCount => _messageBuffer.Depth;
 
@@ -97,37 +93,94 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
     public Task Initialize(TimeSpan timeout)
     {
         _ = timeout;
-        return InitializeAsync();
-    }
-
-    private Task InitializeAsync()
-    {
+        ReceiverLifecycleGeneration? generationToStart = null;
         lock (_lifecycleLock)
         {
-            if (_initializeTask != null)
-                return _initializeTask;
+            if (_currentGeneration is { ShutdownTask: null } currentGeneration)
+                return currentGeneration.InitializeTask;
 
-            PrepareForInitialization();
-            return _initializeTask = InitializeCoreAsync();
+            var predecessorShutdownTask = _currentGeneration?.ShutdownTask ?? Task.CompletedTask;
+            generationToStart = new ReceiverLifecycleGeneration(predecessorShutdownTask);
+            _currentGeneration = generationToStart;
+        }
+
+        _ = CompleteInitializationAsync(generationToStart);
+        return generationToStart.InitializeTask;
+    }
+
+    private async Task CompleteInitializationAsync(ReceiverLifecycleGeneration generation)
+    {
+        try
+        {
+            await AwaitCompletionAsync(generation.PredecessorShutdownTask).ConfigureAwait(false);
+            generation.LifecycleCts.Token.ThrowIfCancellationRequested();
+
+            lock (_lifecycleLock)
+            {
+                EnsureGenerationCanStart(generation);
+                PrepareForInitialization();
+            }
+
+            await _ensureTransportReadyAsync(generation.LifecycleCts.Token).ConfigureAwait(false);
+            generation.LifecycleCts.Token.ThrowIfCancellationRequested();
+
+            var loopReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            lock (_lifecycleLock)
+            {
+                EnsureGenerationCanStart(generation);
+                var loopCts = CancellationTokenSource.CreateLinkedTokenSource(generation.LifecycleCts.Token);
+                generation.ConsumeLoopCts = loopCts;
+                generation.ConsumeLoopTask = Task.Run(
+                    () => ConsumeLoop(generation, loopCts.Token, loopReady));
+            }
+
+            await loopReady.Task.ConfigureAwait(false);
+            generation.LifecycleCts.Token.ThrowIfCancellationRequested();
+
+            RecordInitialBufferState();
+            generation.InitializeCompletion.TrySetResult();
+        }
+        catch (OperationCanceledException) when (generation.LifecycleCts.IsCancellationRequested)
+        {
+            generation.InitializeCompletion.TrySetCanceled(generation.LifecycleCts.Token);
+        }
+        catch (Exception ex)
+        {
+            generation.InitializeCompletion.TrySetException(ex);
         }
     }
 
-    private async Task InitializeCoreAsync()
+    private void EnsureGenerationCanStart(ReceiverLifecycleGeneration generation)
     {
-        await _ensureTransportReadyAsync(CancellationToken.None).ConfigureAwait(false);
+        generation.LifecycleCts.Token.ThrowIfCancellationRequested();
+        if (!ReferenceEquals(_currentGeneration, generation) || generation.ShutdownTask != null)
+            throw new OperationCanceledException(generation.LifecycleCts.Token);
+    }
 
-        var loopReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var loopCts = new CancellationTokenSource();
-        _consumeLoopCts = loopCts;
-        _consumeLoopTask = Task.Run(() => ConsumeLoop(loopCts.Token, loopReady));
-        await loopReady.Task.ConfigureAwait(false);
+    private async Task AwaitCompletionAsync(Task task)
+    {
+        try
+        {
+            await task.ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Kafka receiver successor generation observed predecessor cleanup failure on partition " +
+                "{Partition}; the explicit generation rebuild will proceed after cleanup.",
+                _partitionId);
+        }
+    }
 
-        RecordInitialBufferState();
+    private Exception? ReadOwnerLoopFault()
+    {
+        var generation = Volatile.Read(ref _currentGeneration);
+        return generation == null ? null : Volatile.Read(ref generation.OwnerLoopFault);
     }
 
     public Task<IList<IBatchContainer>> GetQueueMessagesAsync(int maxCount)
     {
-        if (Volatile.Read(ref _ownerLoopFault) is { } ownerLoopFault)
+        if (ReadOwnerLoopFault() is { } ownerLoopFault)
             return Task.FromException<IList<IBatchContainer>>(ownerLoopFault);
 
         var count = Math.Max(1, maxCount);
@@ -143,7 +196,7 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
 
     public Task MessagesDeliveredAsync(IList<IBatchContainer> messages)
     {
-        if (Volatile.Read(ref _ownerLoopFault) is { } ownerLoopFault)
+        if (ReadOwnerLoopFault() is { } ownerLoopFault)
             return Task.FromException(ownerLoopFault);
 
         foreach (var message in messages.OfType<KafkaProviderBatchContainer>())
@@ -165,49 +218,85 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
     {
         _ = timeout;
 
+        ReceiverLifecycleGeneration generation;
         TaskCompletionSource? shutdownCompletion = null;
-        Task shutdownTask;
         lock (_lifecycleLock)
         {
-            if (_shutdownTask != null)
-                return _shutdownTask;
+            generation = _currentGeneration ??= ReceiverLifecycleGeneration.CreateUninitialized();
+            if (generation.ShutdownTask != null)
+                return generation.ShutdownTask;
 
             shutdownCompletion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            shutdownTask = shutdownCompletion.Task;
-            _shutdownTask = shutdownTask;
+            generation.ShutdownTask = shutdownCompletion.Task;
         }
 
-        _ = CompleteShutdownAsync(shutdownCompletion);
-        return shutdownTask;
+        _ = CompleteShutdownAsync(generation, shutdownCompletion);
+        return generation.ShutdownTask;
     }
 
-    private async Task CompleteShutdownAsync(TaskCompletionSource shutdownCompletion)
+    private async Task CompleteShutdownAsync(
+        ReceiverLifecycleGeneration generation,
+        TaskCompletionSource shutdownCompletion)
     {
         Exception? shutdownFailure = null;
-        CancellationTokenSource? loopCts = null;
 
         Interlocked.Exchange(ref _shuttingDown, 1);
 
         try
         {
-            loopCts = Interlocked.Exchange(ref _consumeLoopCts, null);
-            loopCts?.Cancel();
-            var loopTask = Interlocked.Exchange(ref _consumeLoopTask, null);
+            try
+            {
+                generation.LifecycleCts.Cancel();
+            }
+            catch (Exception ex)
+            {
+                shutdownFailure = ex;
+                _logger.LogError(ex,
+                    "Kafka receiver lifecycle cancellation failed on partition {Partition}.",
+                    _partitionId);
+            }
+
+            try
+            {
+                await generation.InitializeTask.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (generation.LifecycleCts.IsCancellationRequested)
+            {
+            }
+            catch (Exception ex)
+            {
+                shutdownFailure = Volatile.Read(ref generation.OwnerLoopFault) ?? ex;
+            }
+
+            try
+            {
+                generation.ConsumeLoopCts?.Cancel();
+            }
+            catch (Exception ex)
+            {
+                shutdownFailure ??= ex;
+                _logger.LogError(ex,
+                    "Kafka receiver owner-loop cancellation failed on partition {Partition}.",
+                    _partitionId);
+            }
+
+            var loopTask = generation.ConsumeLoopTask;
             if (loopTask != null)
                 await loopTask.ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (Volatile.Read(ref _ownerLoopFault) == null)
+        catch (OperationCanceledException) when (Volatile.Read(ref generation.OwnerLoopFault) == null)
         {
         }
         catch (Exception ex)
         {
-            shutdownFailure = Volatile.Read(ref _ownerLoopFault) ?? ex;
+            shutdownFailure = Volatile.Read(ref generation.OwnerLoopFault) ?? ex;
         }
         finally
         {
             try
             {
-                loopCts?.Dispose();
+                generation.ConsumeLoopCts?.Dispose();
+                generation.LifecycleCts.Dispose();
                 _messageBuffer.Clear();
                 RecordInitialBufferState();
             }
@@ -218,14 +307,6 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
                     "Kafka receiver shutdown cleanup failed on partition {Partition}.",
                     _partitionId);
             }
-            finally
-            {
-                lock (_lifecycleLock)
-                {
-                    _initializeTask = null;
-                }
-            }
-
             if (shutdownFailure == null)
                 shutdownCompletion.TrySetResult();
             else
@@ -233,7 +314,10 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
         }
     }
 
-    private void ConsumeLoop(CancellationToken ct, TaskCompletionSource loopReady)
+    private void ConsumeLoop(
+        ReceiverLifecycleGeneration generation,
+        CancellationToken ct,
+        TaskCompletionSource loopReady)
     {
         IKafkaReceiverConsumer? consumer = null;
 
@@ -303,7 +387,7 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
             var ownerLoopFault = new InvalidOperationException(
                 $"Kafka receiver owner loop failed on partition {_partitionId}.",
                 ex);
-            Volatile.Write(ref _ownerLoopFault, ownerLoopFault);
+            Volatile.Write(ref generation.OwnerLoopFault, ownerLoopFault);
             loopReady.TrySetException(ownerLoopFault);
             _logger.LogError(ownerLoopFault,
                 "Kafka receiver owner loop failed on partition {Partition}.",
@@ -606,14 +690,12 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
     private void PrepareForInitialization()
     {
         Interlocked.Exchange(ref _shuttingDown, 0);
-        _shutdownTask = null;
         _messageBuffer.Clear();
         _sequence = 0;
         _backpressureActive = false;
         _partitionPaused = false;
         _pauseStartedTimestamp = null;
         _reportedPausedPartitionCount = -1;
-        Volatile.Write(ref _ownerLoopFault, null);
 
         lock (_stateLock)
         {
@@ -667,6 +749,33 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
             _transportOptions.TopicName,
             _partitionId,
             pausedPartitionCount);
+    }
+
+    private sealed class ReceiverLifecycleGeneration(Task predecessorShutdownTask)
+    {
+        public CancellationTokenSource LifecycleCts { get; } = new();
+
+        public TaskCompletionSource InitializeCompletion { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task InitializeTask => InitializeCompletion.Task;
+
+        public Task PredecessorShutdownTask { get; } = predecessorShutdownTask;
+
+        public Task? ShutdownTask { get; set; }
+
+        public CancellationTokenSource? ConsumeLoopCts { get; set; }
+
+        public Task? ConsumeLoopTask { get; set; }
+
+        public Exception? OwnerLoopFault;
+
+        public static ReceiverLifecycleGeneration CreateUninitialized()
+        {
+            var generation = new ReceiverLifecycleGeneration(Task.CompletedTask);
+            generation.InitializeCompletion.TrySetResult();
+            return generation;
+        }
     }
 
     private enum KafkaPolledRecordDisposition

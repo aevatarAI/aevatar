@@ -45,10 +45,16 @@ authority for this provider:
 7. A non-fatal librdkafka consume error is observable and retried on the same
    owner loop. A fatal consume error terminates that loop and is surfaced by
    receiver read, acknowledgement, and shutdown operations until Orleans
-   explicitly rebuilds the receiver lifecycle with a new consumer. Concurrent
-   and repeated shutdown callers for one lifecycle share the same cleanup task
-   and therefore observe the same completion or fault; only a new initialize
-   call starts another lifecycle generation and clears that task and fault.
+   explicitly rebuilds the receiver lifecycle with a new consumer. Each
+   lifecycle generation owns its cancellation source, initialization task,
+   owner-loop task, shutdown task, and fault. Shutdown publishes one shared
+   cleanup task, cancels and awaits in-flight initialization, and then stops the
+   owner loop. Initialization which overlaps shutdown publishes one shared
+   successor generation but does not enter transport readiness until predecessor
+   cleanup completes. The predecessor continuation rechecks generation identity
+   and cancellation before it may create a consumer, so it cannot start one
+   after shutdown. Only explicit initialization starts a successor generation
+   and leaves the predecessor task and fault behind.
 
 Receiver handoff can produce at-least-once redelivery around failures or
 overlap. Kafka committed offsets are the restart cursor, while delivery success
@@ -74,7 +80,9 @@ the canonical queue/partition mapping. Those decisions are unchanged.
   provider and reserve Kafka rebalance/revoke terminology for `Subscribe`-based
   consumers.
 - Tests model shutdown and reinitialization of a fixed receiver instead of fake
-  assignment changes.
+  assignment changes. Gated transport-readiness tests cover shutdown during
+  initialization, initialization during shutdown, and concurrent callers on
+  both lifecycle operations.
 - Receiver owner-loop failure must surface through `IQueueAdapterReceiver`
   operations so Orleans can observe lifecycle failure; an unsupervised failed
   task must not masquerade as a healthy empty queue.

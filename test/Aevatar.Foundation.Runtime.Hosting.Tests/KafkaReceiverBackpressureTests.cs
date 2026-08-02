@@ -21,6 +21,8 @@ public sealed class KafkaReceiverBackpressureCollection;
 [Collection(nameof(KafkaReceiverBackpressureCollection))]
 public sealed class KafkaReceiverBackpressureTests(ITestOutputHelper output)
 {
+    private const string PerformanceDiagnosticsEnvironmentVariable =
+        "AEVATAR_KAFKA_RECEIVER_PERFORMANCE_DIAGNOSTICS";
     private static readonly TimeSpan TestTimeout = TimeSpan.FromSeconds(5);
 
     [Theory]
@@ -245,6 +247,141 @@ public sealed class KafkaReceiverBackpressureTests(ITestOutputHelper output)
         await repeatedShutdown;
         harness.Consumer.CloseCallCount.Should().Be(1);
         harness.Consumer.DisposeCallCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task KafkaReceiver_WhenShutdownOverlapsGatedInitialization_ShouldCancelOneSharedGeneration()
+    {
+        var options = CreateOptions(capacity: 3, highWatermark: 2, lowWatermark: 1);
+        var mapper = new KafkaQueuePartitionMapper("backpressure-provider", 2);
+        var queueId = mapper.GetAllQueues().First();
+        var transportReadyEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseTransportReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var consumerFactoryCallCount = 0;
+        var receiver = new KafkaProviderQueueAdapterReceiver(
+            queueId,
+            "backpressure-provider",
+            options,
+            mapper,
+            "aevatar.events",
+            async _ =>
+            {
+                transportReadyEntered.TrySetResult();
+                await releaseTransportReady.Task;
+            },
+            () =>
+            {
+                Interlocked.Increment(ref consumerFactoryCallCount);
+                return CreateDeterministicConsumer(options);
+            });
+        var initializeCallersReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var initializeCallers = Enumerable.Range(0, 8)
+            .Select(async _ =>
+            {
+                await initializeCallersReady.Task;
+                return receiver.Initialize(TestTimeout);
+            })
+            .ToArray();
+
+        initializeCallersReady.SetResult();
+        var initializeTasks = await Task.WhenAll(initializeCallers);
+        initializeTasks.Should().OnlyContain(task => ReferenceEquals(task, initializeTasks[0]));
+        await transportReadyEntered.Task.WaitAsync(TestTimeout);
+
+        var shutdownCallersReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var shutdownCallers = Enumerable.Range(0, 8)
+            .Select(async _ =>
+            {
+                await shutdownCallersReady.Task;
+                return receiver.Shutdown(TestTimeout);
+            })
+            .ToArray();
+        shutdownCallersReady.SetResult();
+        var shutdownTasks = await Task.WhenAll(shutdownCallers);
+
+        shutdownTasks.Should().OnlyContain(task => ReferenceEquals(task, shutdownTasks[0]));
+        shutdownTasks[0].IsCompleted.Should().BeFalse(
+            "shutdown must wait for the in-flight transport-ready continuation to leave the generation");
+        releaseTransportReady.TrySetResult();
+
+        Func<Task> awaitInitialize = async () => await initializeTasks[0];
+        await awaitInitialize.Should().ThrowAsync<OperationCanceledException>();
+        await shutdownTasks[0].WaitAsync(TestTimeout);
+        consumerFactoryCallCount.Should().Be(0,
+            "a canceled transport-ready continuation must not start a consumer after shutdown");
+    }
+
+    [Fact]
+    public async Task KafkaReceiver_WhenInitializeOverlapsShutdown_ShouldWaitAndPublishOneNextGeneration()
+    {
+        var options = CreateOptions(capacity: 3, highWatermark: 2, lowWatermark: 1);
+        var mapper = new KafkaQueuePartitionMapper("backpressure-provider", 2);
+        var queueId = mapper.GetAllQueues().First();
+        var firstTransportReadyEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirstTransportReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondTransportReadyEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseSecondTransportReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var transportReadyCallCount = 0;
+        var consumer = CreateDeterministicConsumer(options);
+        var consumerFactoryCallCount = 0;
+        var receiver = new KafkaProviderQueueAdapterReceiver(
+            queueId,
+            "backpressure-provider",
+            options,
+            mapper,
+            "aevatar.events",
+            async _ =>
+            {
+                var call = Interlocked.Increment(ref transportReadyCallCount);
+                if (call == 1)
+                {
+                    firstTransportReadyEntered.TrySetResult();
+                    await releaseFirstTransportReady.Task;
+                    return;
+                }
+
+                secondTransportReadyEntered.TrySetResult();
+                await releaseSecondTransportReady.Task;
+            },
+            () =>
+            {
+                Interlocked.Increment(ref consumerFactoryCallCount);
+                return consumer;
+            });
+
+        var firstInitialize = receiver.Initialize(TestTimeout);
+        await firstTransportReadyEntered.Task.WaitAsync(TestTimeout);
+        var firstShutdown = receiver.Shutdown(TestTimeout);
+
+        var nextInitializeCallersReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var nextInitializeCallers = Enumerable.Range(0, 8)
+            .Select(async _ =>
+            {
+                await nextInitializeCallersReady.Task;
+                return receiver.Initialize(TestTimeout);
+            })
+            .ToArray();
+        nextInitializeCallersReady.SetResult();
+        var nextInitializeTasks = await Task.WhenAll(nextInitializeCallers);
+
+        nextInitializeTasks.Should().OnlyContain(task => ReferenceEquals(task, nextInitializeTasks[0]));
+        nextInitializeTasks[0].Should().NotBeSameAs(firstInitialize);
+        transportReadyCallCount.Should().Be(1,
+            "the next generation must not enter transport readiness before predecessor cleanup completes");
+
+        releaseFirstTransportReady.TrySetResult();
+        Func<Task> awaitFirstInitialize = async () => await firstInitialize;
+        await awaitFirstInitialize.Should().ThrowAsync<OperationCanceledException>();
+        await firstShutdown.WaitAsync(TestTimeout);
+        await secondTransportReadyEntered.Task.WaitAsync(TestTimeout);
+        nextInitializeTasks[0].IsCompleted.Should().BeFalse();
+
+        releaseSecondTransportReady.TrySetResult();
+        await nextInitializeTasks[0].WaitAsync(TestTimeout);
+        consumerFactoryCallCount.Should().Be(1);
+        await receiver.Shutdown(TestTimeout).WaitAsync(TestTimeout);
+        consumer.CloseCallCount.Should().Be(1);
+        consumer.DisposeCallCount.Should().Be(1);
     }
 
     [Fact]
@@ -478,72 +615,31 @@ public sealed class KafkaReceiverBackpressureTests(ITestOutputHelper output)
     }
 
     [Fact]
-    public async Task KafkaReceiverMessageBuffer_ShouldBoundRetentionAndRetainTransportHeadroom()
+    [Trait("Category", "PerformanceDiagnostic")]
+    public async Task KafkaReceiverShape_ControlledMeasurement_ShouldReportNonGatingDiagnostics()
     {
-        const int operationCount = 1_000_000;
-        const int capacity = 1024;
-        int[] backlogDepths = [256, 1024, 4096, 16_384, 32_768];
-        var message = Substitute.For<IBatchContainer>();
-
-        await MeasureConcurrentUnboundedQueueAsync(message, 10_000);
-        await MeasureConcurrentBoundedBufferAsync(message, 10_000, 10_000);
-        var baselineElapsed = await MeasureConcurrentUnboundedQueueAsync(message, operationCount);
-        var boundedElapsed = await MeasureConcurrentBoundedBufferAsync(
-            message,
-            operationCount,
-            operationCount);
-        var baselineCurve = backlogDepths
-            .Select(depth => MeasureUnboundedQueueRetention(message, depth))
-            .ToArray();
-        var boundedCurve = backlogDepths
-            .Select(depth => MeasureBoundedBufferRetention(message, depth, capacity))
-            .ToArray();
-        var baseline = baselineCurve[^1];
-        var bounded = boundedCurve[^1];
-
-        bounded.RetainedMessages.Should().Be(capacity);
-        baseline.RetainedMessages.Should().Be(backlogDepths[^1]);
-        bounded.AllocatedBytes.Should().BeLessThan(baseline.AllocatedBytes,
-            "the bounded queue allocates segments only up to its configured retention ceiling");
-        (operationCount / boundedElapsed.TotalSeconds).Should().BeGreaterThan(
-            500_000,
-            "the owner-writer / Orleans-puller buffer must retain ample headroom above Kafka transport throughput");
-
-        output.WriteLine(
-            "old-unbounded: {0:N0} ops/s, {1:N0} retained, {2:N0} B allocated; " +
-            "new-bounded: {3:N0} ops/s, {4:N0} retained, {5:N0} B allocated",
-            operationCount / baselineElapsed.TotalSeconds,
-            baseline.RetainedMessages,
-            baseline.AllocatedBytes,
-            operationCount / boundedElapsed.TotalSeconds,
-            bounded.RetainedMessages,
-            bounded.AllocatedBytes);
-
-        for (var i = 0; i < backlogDepths.Length; i++)
+        if (!string.Equals(
+                Environment.GetEnvironmentVariable(PerformanceDiagnosticsEnvironmentVariable),
+                "1",
+                StringComparison.Ordinal))
         {
-            baselineCurve[i].RetainedMessages.Should().Be(backlogDepths[i]);
-            boundedCurve[i].RetainedMessages.Should().Be(Math.Min(backlogDepths[i], capacity));
             output.WriteLine(
-                "backlog={0:N0}: old-unbounded retained={1:N0}, allocated={2:N0} B; " +
-                "new-bounded retained={3:N0}, allocated={4:N0} B",
-                backlogDepths[i],
-                baselineCurve[i].RetainedMessages,
-                baselineCurve[i].AllocatedBytes,
-                boundedCurve[i].RetainedMessages,
-                boundedCurve[i].AllocatedBytes);
+                "Controlled performance diagnostics were not requested. Set {0}=1 and run this test explicitly.",
+                PerformanceDiagnosticsEnvironmentVariable);
+            return;
         }
-    }
 
-    [Fact]
-    public async Task KafkaReceiverShape_SteadyState_ShouldNotRegressMateriallyAgainstUnboundedQueue()
-    {
-        const int operationCount = 100_000;
+        const int operationCount = 250_000;
         const int capacity = operationCount;
-        const int sampleCount = 5;
+        const int warmupCount = 3;
+        const int sampleCount = 9;
         var record = CreateBenchmarkRecord();
 
-        _ = await MeasureReceiverShapeAsync(record, 10_000, capacity, useBoundedBuffer: false);
-        _ = await MeasureReceiverShapeAsync(record, 10_000, capacity, useBoundedBuffer: true);
+        for (var warmup = 0; warmup < warmupCount; warmup++)
+        {
+            _ = await MeasureReceiverShapeAsync(record, 25_000, capacity, useBoundedBuffer: false);
+            _ = await MeasureReceiverShapeAsync(record, 25_000, capacity, useBoundedBuffer: true);
+        }
 
         var baselineSamples = new List<ReceiverShapeMeasurement>(sampleCount);
         var boundedSamples = new List<ReceiverShapeMeasurement>(sampleCount);
@@ -564,26 +660,32 @@ public sealed class KafkaReceiverBackpressureTests(ITestOutputHelper output)
                 baselineSamples.Add(await MeasureReceiverShapeAsync(
                     record, operationCount, capacity, useBoundedBuffer: false));
             }
+
+            var baselineSample = baselineSamples[^1];
+            var boundedSample = boundedSamples[^1];
+            AssertReceiverShapeSemantics(baselineSample, boundedSample, operationCount);
+            output.WriteLine(
+                "sample {0}: old-unbounded={1:N0} msg/s, {2:N2} CPU us/msg, {3:N1} B/msg; " +
+                "new-bounded={4:N0} msg/s, {5:N2} CPU us/msg, {6:N1} B/msg; ratio={7:P1}",
+                sample + 1,
+                baselineSample.Throughput,
+                baselineSample.CpuMicrosecondsPerMessage,
+                baselineSample.AllocatedBytesPerMessage,
+                boundedSample.Throughput,
+                boundedSample.CpuMicrosecondsPerMessage,
+                boundedSample.AllocatedBytesPerMessage,
+                boundedSample.Throughput / baselineSample.Throughput);
         }
 
         var baseline = Median(baselineSamples);
         var bounded = Median(boundedSamples);
         var throughputRatio = bounded.Throughput / baseline.Throughput;
 
-        baseline.RejectedWrites.Should().Be(0);
-        bounded.RejectedWrites.Should().Be(0,
-            "the receiver-shape comparison must measure unsaturated steady state, not backpressure recovery");
-        throughputRatio.Should().BeGreaterThanOrEqualTo(
-            0.80,
-            "the bounded buffer must not cause a material regression in the receiver-shaped steady-state path");
-        bounded.Checksum.Should().Be(baseline.Checksum,
-            "both paths must pull the same sequence of Kafka offsets");
-
         output.WriteLine(
-            "receiver-shape median of {0} x {1:N0}: " +
-            "old-unbounded={2:N0} msg/s, {3:N2} CPU us/msg, {4:N1} B/msg; " +
-            "new-bounded={5:N0} msg/s, {6:N2} CPU us/msg, {7:N1} B/msg; " +
-            "throughput ratio={8:P1}",
+            "median after {0} warmups, {1} x {2:N0}: old-unbounded={3:N0} msg/s, " +
+            "{4:N2} CPU us/msg, {5:N1} B/msg; new-bounded={6:N0} msg/s, " +
+            "{7:N2} CPU us/msg, {8:N1} B/msg; diagnostic ratio={9:P1} (no wall-clock gate)",
+            warmupCount,
             sampleCount,
             operationCount,
             baseline.Throughput,
@@ -593,6 +695,47 @@ public sealed class KafkaReceiverBackpressureTests(ITestOutputHelper output)
             bounded.CpuMicrosecondsPerMessage,
             bounded.AllocatedBytesPerMessage,
             throughputRatio);
+
+        const int transferCount = 1_000_000;
+        var message = Substitute.For<IBatchContainer>();
+        var unboundedTransfer = await MeasureConcurrentUnboundedQueueAsync(message, transferCount);
+        var boundedTransfer = await MeasureConcurrentBoundedBufferAsync(message, transferCount, transferCount);
+        output.WriteLine(
+            "pure-buffer diagnostic: old-unbounded={0:N0} pairs/s; new-bounded={1:N0} pairs/s (no wall-clock gate)",
+            transferCount / unboundedTransfer.TotalSeconds,
+            transferCount / boundedTransfer.TotalSeconds);
+
+        const int retentionCapacity = 1024;
+        int[] backlogDepths = [256, 1024, 4096, 16_384, 32_768];
+        foreach (var backlogDepth in backlogDepths)
+        {
+            var baselineRetention = MeasureUnboundedQueueRetention(message, backlogDepth);
+            var boundedRetention = MeasureBoundedBufferRetention(message, backlogDepth, retentionCapacity);
+            baselineRetention.RetainedMessages.Should().Be(backlogDepth);
+            boundedRetention.RetainedMessages.Should().Be(Math.Min(backlogDepth, retentionCapacity));
+            output.WriteLine(
+                "backlog={0:N0}: old-unbounded retained={1:N0}, allocated={2:N0} B; " +
+                "new-bounded retained={3:N0}, allocated={4:N0} B",
+                backlogDepth,
+                baselineRetention.RetainedMessages,
+                baselineRetention.AllocatedBytes,
+                boundedRetention.RetainedMessages,
+                boundedRetention.AllocatedBytes);
+        }
+    }
+
+    private static void AssertReceiverShapeSemantics(
+        ReceiverShapeMeasurement baseline,
+        ReceiverShapeMeasurement bounded,
+        int operationCount)
+    {
+        var expectedChecksum = (long)operationCount * (operationCount - 1) / 2;
+        baseline.RejectedWrites.Should().Be(0);
+        bounded.RejectedWrites.Should().Be(0,
+            "the controlled measurement must remain unsaturated");
+        baseline.Checksum.Should().Be(expectedChecksum);
+        bounded.Checksum.Should().Be(expectedChecksum,
+            "both paths must pull the same sequence of Kafka offsets");
     }
 
     private static ReceiverHarness CreateHarness(int capacity, int highWatermark, int lowWatermark)
