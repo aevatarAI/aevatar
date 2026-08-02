@@ -25,6 +25,7 @@ using Aevatar.AI.ToolProviders.Web;
 using Aevatar.Audit.Abstractions.Identity;
 using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.AI.ToolProviders.Workflow;
+using Aevatar.Authentication.Abstractions;
 using Aevatar.Audit.Core.Identity;
 using Aevatar.Audit.Core.DependencyInjection;
 using Aevatar.Bootstrap.Extensions.AI;
@@ -1223,6 +1224,29 @@ public sealed class MainnetHostCompositionTests
         var descriptor = builder.Services.Last(service =>
             service.ServiceType == typeof(IIdentityAssertionReplayGuard));
         descriptor.ImplementationType.Should().Be(typeof(DistributedIdentityAssertionReplayGuard));
+    }
+
+    [Theory]
+    [InlineData(" ", MainnetHostBuilderExtensions.DefaultAuthenticationAudience)]
+    [InlineData("urn:custom:aevatar-api", "urn:custom:aevatar-api")]
+    public void AddAevatarMainnetHost_ShouldOwnAuthenticationAudienceWhenDeploymentOmitsIt(
+        string configuredAudience,
+        string expectedAudience)
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        using var audience = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__Authentication__Audience",
+            configuredAudience);
+        var audienceKey = $"{AevatarAuthenticationOptions.SectionName}:Audience";
+        var builder = CreateBuilder(environmentName: Environments.Production);
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        builder.Configuration[audienceKey].Should().Be(expectedAudience);
     }
 
     [Theory]
