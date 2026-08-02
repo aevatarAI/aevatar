@@ -42,6 +42,9 @@ internal static class AuditTrailDocumentFactory
             Subject = Text(record.Subject),
             Source = Text(record.Source),
             TraceId = Text(record.Correlation?.TraceId),
+            ToolArgumentsSha256 = Text(record.ToolExecution?.ArgumentsSha256),
+            ToolIsMutation = record.ToolExecution?.IsMutation ?? false,
+            ToolExecutionPhase = record.ToolExecution?.ExecutionPhase ?? Audit.AuditToolExecutionPhase.Unspecified,
         };
 
     private static string Text(string? value) => value ?? string.Empty;

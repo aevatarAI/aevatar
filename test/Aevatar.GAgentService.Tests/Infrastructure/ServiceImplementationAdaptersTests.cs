@@ -573,6 +573,7 @@ public sealed class ServiceImplementationAdaptersTests
                 WorkflowSpec = new WorkflowServiceRevisionSpec
                 {
                     WorkflowYaml = "name: inferred-workflow",
+                    ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
                 },
             },
         });
@@ -806,6 +807,7 @@ public sealed class ServiceImplementationAdaptersTests
                 ImplementationKind = ServiceImplementationKind.Workflow,
                 WorkflowSpec = new WorkflowServiceRevisionSpec
                 {
+                    WorkflowId = "wf-alpha",
                     WorkflowYaml = workflowYaml,
                     CapabilityAdmissionPlan = persistedPlan,
                     ExpectedExecutionMode = ExternalCapabilityExecutionMode.Durable,
@@ -820,6 +822,8 @@ public sealed class ServiceImplementationAdaptersTests
             .GetProperty(nameof(WorkflowExternalCapabilityAdmissionRequest.Access))
             .Should().BeNull();
         persistedRequest.ExpectedExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Durable);
+        persistedRequest.WorkflowId.Should().Be("wf-alpha");
+        persistedRequest.RevisionId.Should().Be("r-persisted");
         persistedRequest.Plan.DurableAuthorizationOwner.OwnerSubject.Should().Be("caller-alpha");
         persistedRequest.Plan.DurableAuthorizationOwner.OwnerSubject.Should().NotBe("app-beta");
         persistedRequest.Plan.DurableAuthorizationOwner.OwnerSubject.Should().NotBe("svc-gamma");
@@ -1175,10 +1179,13 @@ public sealed class ServiceImplementationAdaptersTests
             string actorId,
             string workflowYaml,
             string workflowName,
-            IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
-            string? scopeId = null,
-            string? sourceKind = null,
-            WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan = null,
+            IReadOnlyDictionary<string, string>? inlineWorkflowYamls,
+            string? scopeId,
+            string? sourceKind,
+            WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan,
+            string? workflowId,
+            string? revisionId,
+            ExternalCapabilityExecutionMode expectedExecutionMode,
             CancellationToken ct = default) =>
             Task.CompletedTask;
 

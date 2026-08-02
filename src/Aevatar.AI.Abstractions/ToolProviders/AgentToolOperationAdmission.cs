@@ -1,15 +1,16 @@
 namespace Aevatar.AI.Abstractions.ToolProviders;
 
 /// <summary>
-/// Server-generated proof that the current tool call site may invoke exactly one published
-/// connected-service operation. It is a provider-neutral projection of an admission decision made
+/// Server-generated proof that the current tool call site may invoke exactly one admitted
+/// connected-service request. It is a provider-neutral projection of an admission decision made
 /// before dispatch; a tool must build its request from this contract instead of caller-supplied
 /// route fields. Absent proof means the caller is not an admitted call site.
 /// </summary>
 public sealed record AgentToolOperationAdmission(
     string ServiceInstanceId,
     string ServiceSlug,
-    string OperationId,
+    AgentToolOperationIdentity Identity,
+    AgentToolOperationAuthorizationBasis AuthorizationBasis,
     string HttpMethod,
     string PathTemplate,
     string ContractDigest,
@@ -26,6 +27,23 @@ public sealed record AgentToolOperationAdmission(
 
     public IEnumerable<AgentToolOperationParameter> HeaderParameters =>
         Parameters.Where(static parameter => parameter.Location == AgentToolOperationParameterLocation.Header);
+}
+
+public abstract record AgentToolOperationIdentity
+{
+    private AgentToolOperationIdentity()
+    {
+    }
+
+    public sealed record PublishedEndpoint(string EndpointId) : AgentToolOperationIdentity;
+
+    public sealed record AuthoredRequest(string RequestContractDigest) : AgentToolOperationIdentity;
+}
+
+public enum AgentToolOperationAuthorizationBasis
+{
+    PublishedContract = 1,
+    ExplicitRequest = 2,
 }
 
 public enum AgentToolOperationRisk

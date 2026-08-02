@@ -6,6 +6,8 @@ public static class CredentialSecretPurposes
     public const string ScheduledInvocationAgentKey = "scheduled.invocation-agent-key";
     public const string WorkflowCallerDurableBearerToken = "workflow.caller-durable-bearer-token";
     public const string WorkflowCallerBearerToken = "workflow.caller-bearer-token";
+    public const string WorkflowCallerSourceReadableUserBearerToken =
+        "workflow.caller-source-readable-user-bearer-token";
     public const string WorkflowSecureInputValue = "workflow.secure-input-value";
     public const string WorkflowConnectorExternalActionMaterial = "workflow.connector-external-action-material";
     public const string WorkflowConnectorExternalActionCompletion = "workflow.connector-external-action-completion";

@@ -80,6 +80,7 @@ public sealed class ChatHistoryCreateRecoveryCurrentStateProjector
             ChatTurnHistoryDeliveryStatus.Failed => "failed",
             ChatTurnHistoryDeliveryStatus.AppendCommitted => "append_committed",
             ChatTurnHistoryDeliveryStatus.AppendRejected => "append_rejected",
+            ChatTurnHistoryDeliveryStatus.TerminalReconciliationPrepared => "terminal_reconciliation_prepared",
             _ => string.Empty,
         };
 }

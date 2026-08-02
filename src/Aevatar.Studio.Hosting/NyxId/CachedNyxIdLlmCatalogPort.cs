@@ -71,6 +71,19 @@ internal sealed class CachedNyxIdLlmCatalogPort : IUserLlmCatalogPort, IDisposab
         return result;
     }
 
+    public async Task<NyxIdLlmServicesResult> GetFreshServicesAsync(
+        string bearerToken,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(bearerToken);
+
+        var result = await _inner.GetFreshServicesAsync(bearerToken, ct).ConfigureAwait(false);
+        var options = NormalizeOptions(_options.CurrentValue);
+        if (options.Enabled)
+            Store(BuildKey(bearerToken), result, options);
+        return result;
+    }
+
     public async Task<NyxIdLlmService> ProvisionAsync(
         string bearerToken,
         string provisionEndpointId,

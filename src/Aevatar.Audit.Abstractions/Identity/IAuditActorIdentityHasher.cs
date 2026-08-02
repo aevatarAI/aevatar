@@ -6,5 +6,8 @@ public interface IAuditActorIdentityHasher
 {
     AuditActorIdentity Hash(string canonicalActorKey);
 
+    IReadOnlyList<AuditActorIdentity> HashAll(string canonicalActorKey) =>
+        [Hash(canonicalActorKey)];
+
     bool Verify(string canonicalActorKey, string auditActorId, string identityKeyId);
 }

@@ -21,11 +21,13 @@ namespace Aevatar.AI.LLMProviders.MEAI;
 internal sealed class AgentToolAIFunction : AIFunction
 {
     private readonly IAgentTool _tool;
+    private readonly IAgentToolExecutionPort _toolExecutionPort;
     private readonly JsonElement _jsonSchema;
 
-    public AgentToolAIFunction(IAgentTool tool)
+    public AgentToolAIFunction(IAgentTool tool, IAgentToolExecutionPort toolExecutionPort)
     {
-        _tool = tool;
+        _tool = tool ?? throw new ArgumentNullException(nameof(tool));
+        _toolExecutionPort = toolExecutionPort ?? throw new ArgumentNullException(nameof(toolExecutionPort));
         _jsonSchema = ParseSchema(tool.ParametersSchema);
     }
 
@@ -44,8 +46,57 @@ internal sealed class AgentToolAIFunction : AIFunction
                 kvp => kvp.Value))
             : "{}";
 
-        return await _tool.ExecuteAsync(argsJson, cancellationToken);
+        var ambientContext = AgentToolRequestContext.Current
+            ?? throw new InvalidOperationException(
+                "MEAI function invocation requires a stable tool execution context.");
+        var invocationContext = FunctionInvokingChatClient.CurrentContext;
+        var effectiveCallId = ResolveEffectiveCallId(ambientContext, invocationContext);
+        var executionContext = string.Equals(effectiveCallId, ambientContext.Request.CallId, StringComparison.Ordinal)
+            ? ambientContext
+            : ambientContext.WithCallId(effectiveCallId);
+        if (string.IsNullOrWhiteSpace(executionContext.Request.RequestId) ||
+            string.IsNullOrWhiteSpace(executionContext.Request.CallId))
+        {
+            throw new InvalidOperationException(
+                "MEAI function invocation requires stable request and function-call identities.");
+        }
+        if (executionContext.ExecutionOwner.Kind == AgentToolExecutionOwnerKind.Unspecified ||
+            string.IsNullOrWhiteSpace(executionContext.ExecutionOwner.OwnerId))
+        {
+            throw new InvalidOperationException(
+                "MEAI function invocation requires a stable execution owner.");
+        }
+
+        var outcome = await _toolExecutionPort.ExecuteAsync(
+            new AgentToolExecutionRequest(
+                _tool,
+                argsJson,
+                executionContext,
+                AgentToolApprovalContinuationMode.None,
+                null),
+            cancellationToken).ConfigureAwait(false);
+        return outcome.ResultJson;
     }
+
+    private static string? ResolveEffectiveCallId(
+        AgentToolExecutionContext ambientContext,
+        FunctionInvocationContext? invocationContext)
+    {
+        if (invocationContext is null)
+            return ambientContext.Request.CallId;
+
+        var invocationCallId = Normalize(invocationContext.CallContent?.CallId);
+        if (invocationCallId is not null)
+            return invocationCallId;
+
+        var requestId = Normalize(ambientContext.Request.RequestId)
+            ?? throw new InvalidOperationException(
+                "MEAI function invocation requires stable request and function-call identities.");
+        return $"meai-{requestId}-iteration-{invocationContext.Iteration}-function-{invocationContext.FunctionCallIndex}";
+    }
+
+    private static string? Normalize(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private static JsonElement ParseSchema(string? schema)
     {

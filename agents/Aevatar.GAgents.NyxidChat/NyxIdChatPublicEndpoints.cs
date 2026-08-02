@@ -58,7 +58,14 @@ public static partial class NyxIdChatEndpoints
                     await HandlePublicStreamAsync(http, scopeId, body, ct);
                     break;
                 case "approval.resolve":
-                    await HandlePublicApprovalAsync(http, scopeId, body, ct);
+                    await ExecutePublicResultAsync(
+                        http,
+                        await HandlePublicApprovalAsync(http, scopeId, body, ct));
+                    break;
+                case "input.resolve":
+                    await ExecutePublicResultAsync(
+                        http,
+                        await HandlePublicInputAsync(http, scopeId, body, ct));
                     break;
                 case "task.stop":
                     await ExecutePublicResultAsync(http, await HandlePublicStopAsync(http, scopeId, body, ct));
@@ -90,6 +97,7 @@ public static partial class NyxIdChatEndpoints
         int? pageSize,
         string? cursor,
         [FromServices] IChatHistoryQueryPort queryPort,
+        [FromServices] INyxIdChatConversationStateQueryPort stateQueryPort,
         CancellationToken ct)
     {
         if (!TryGetPublicScope(http, out var scopeId))
@@ -98,13 +106,30 @@ public static partial class NyxIdChatEndpoints
         var page = await queryPort.GetIndexAsync(
             new ChatHistoryIndexPageRequest(scopeId, pageSize ?? 50, cursor),
             ct);
+        var conversations = page.Conversations
+            .Where(static conversation => string.Equals(
+                conversation.ServiceKind,
+                NyxIdChatServiceDefaults.GAgentKind,
+                StringComparison.Ordinal))
+            .ToList();
+        var attention = await stateQueryPort.GetAttentionSummariesAsync(
+            scopeId,
+            conversations.Select(static conversation => conversation.Id).ToArray(),
+            ct);
         return Results.Ok(new ChatHistoryIndexPage(
-            page.Conversations
-                .Where(static conversation => string.Equals(
-                    conversation.ServiceKind,
-                    NyxIdChatServiceDefaults.GAgentKind,
-                    StringComparison.Ordinal))
-                .ToList(),
+            conversations.Select(conversation =>
+            {
+                if (!attention.TryGetValue(conversation.Id, out var summary))
+                    return conversation;
+                return conversation with
+                {
+                    TaskStatus = summary.TaskStatus,
+                    AttentionKind = summary.AttentionKind,
+                    AttentionSince = summary.AttentionSince,
+                    ActiveStepSummary = summary.ActiveStepSummary,
+                    StateVersion = summary.StateVersion,
+                };
+            }).ToList(),
             page.NextCursor));
     }
 
@@ -222,7 +247,8 @@ public static partial class NyxIdChatEndpoints
             ClientRequestId: clientRequestId,
             Type: streamType,
             OriginTurnId: request.OriginTurnId,
-            Actions: request.Actions);
+            Actions: request.Actions,
+            AgentProfile: request.AgentProfile);
         await HandleStreamMessageCoreAsync(
             http,
             scopeId,
@@ -236,7 +262,7 @@ public static partial class NyxIdChatEndpoints
             ct);
     }
 
-    private static async Task HandlePublicApprovalAsync(
+    private static Task<IResult> HandlePublicApprovalAsync(
         HttpContext http,
         string scopeId,
         JsonElement body,
@@ -245,28 +271,46 @@ public static partial class NyxIdChatEndpoints
         var request = Deserialize<PublicApprovalRequest>(body);
         if (!request.Approved.HasValue)
         {
-            await WritePublicErrorAsync(http, StatusCodes.Status400BadRequest, "APPROVAL_DECISION_REQUIRED",
-                "approved must be explicitly set to true or false.", ct);
-            return;
+            return Task.FromResult(Results.Json(new
+            {
+                code = "APPROVAL_DECISION_REQUIRED",
+                message = "approved must be explicitly set to true or false.",
+            }, statusCode: StatusCodes.Status400BadRequest));
         }
 
-        var clientRequestId = ResolveClientRequestId(http, request.ClientRequestId);
-        if (!TryValidateControlIdentity(clientRequestId, out clientRequestId))
-        {
-            await WritePublicErrorAsync(http, StatusCodes.Status400BadRequest, "CLIENT_REQUEST_ID_REQUIRED",
-                "clientRequestId or Idempotency-Key is required.", ct);
-            return;
-        }
-
-        await HandleApproveCoreAsync(
+        return HandleApprovalResolveControlAsync(
             http,
             scopeId,
             request.ConversationId ?? string.Empty,
-            new NyxIdApprovalRequest(request.RequestId, request.Approved.Value, request.Reason),
+            new NyxIdChatApprovalResolveRequest(
+                request.RequestId,
+                ResolveClientRequestId(http, request.ClientRequestId),
+                request.Approved.Value,
+                request.Reason,
+                request.ExpectedStateVersion),
             http.RequestServices.GetRequiredService<IScopeResourceAdmissionPort>(),
-            http.RequestServices.GetRequiredService<ICommandInteractionService<NyxIdApprovalCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>(),
-            http.RequestServices.GetRequiredService<ILoggerFactory>(),
-            clientRequestId,
+            http.RequestServices.GetRequiredService<INyxIdChatControlCommandPort>(),
+            ct);
+    }
+
+    private static Task<IResult> HandlePublicInputAsync(
+        HttpContext http,
+        string scopeId,
+        JsonElement body,
+        CancellationToken ct)
+    {
+        var request = Deserialize<PublicInputRequest>(body);
+        return HandleInputResolveControlAsync(
+            http,
+            scopeId,
+            request.ConversationId ?? string.Empty,
+            new NyxIdChatInputResolveRequest(
+                request.RequestId,
+                ResolveClientRequestId(http, request.ClientRequestId),
+                request.Answer,
+                request.ExpectedStateVersion),
+            http.RequestServices.GetRequiredService<IScopeResourceAdmissionPort>(),
+            http.RequestServices.GetRequiredService<INyxIdChatControlCommandPort>(),
             ct);
     }
 
@@ -344,11 +388,18 @@ public static partial class NyxIdChatEndpoints
         string? Prompt,
         IReadOnlyList<ContentPartDto>? InputParts,
         string? OriginTurnId,
-        IReadOnlyList<NyxIdChatActionReportDto>? Actions);
+        IReadOnlyList<NyxIdChatActionReportDto>? Actions,
+        NyxIdChatAgentProfileReferenceDto? AgentProfile);
 
     [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
     private sealed record PublicApprovalRequest(
-        string? Type, string? ConversationId, string? ClientRequestId, string? RequestId, bool? Approved, string? Reason = null);
+        string? Type, string? ConversationId, string? ClientRequestId, string? RequestId,
+        bool? Approved, string? Reason = null, long ExpectedStateVersion = 0);
+
+    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+    private sealed record PublicInputRequest(
+        string? Type, string? ConversationId, string? ClientRequestId, string? RequestId,
+        NyxIdChatInputAnswerRequest? Answer, long ExpectedStateVersion = 0);
 
     [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
     private sealed record PublicStopRequest(

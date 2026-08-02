@@ -4,6 +4,7 @@ package aevatar.gagentservice.schedules.authorization;
 option csharp_namespace = "Aevatar.GAgentService.Abstractions.Schedules.Authorization";
 
 import "google/protobuf/timestamp.proto";
+import "llm_selection.proto";
 import "scheduled_invocation_authorization_evidence.proto";
 
 enum NyxIdCredentialScope {
@@ -51,12 +52,9 @@ enum ScheduledInvocationAuthorizationFailureCode {
   SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_AUTHORIZATION_PLAN_CHANGED = 12;
   SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_DURABLE_AUTHORIZATION_UNAVAILABLE = 13;
   SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_CATALOG_PROJECTION_PENDING = 14;
-}
-
-enum ScheduledInvocationOwnerLLMRouteKind {
-  SCHEDULED_INVOCATION_OWNER_LLM_ROUTE_KIND_UNSPECIFIED = 0;
-  SCHEDULED_INVOCATION_OWNER_LLM_ROUTE_KIND_GATEWAY = 1;
-  SCHEDULED_INVOCATION_OWNER_LLM_ROUTE_KIND_NYX_ID_USER_SERVICE = 2;
+  SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_OWNER_LLM_ROUTE_UNAVAILABLE = 15;
+  SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_OWNER_LLM_MODEL_NOT_VERIFIABLE = 16;
+  SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_OWNER_LLM_MODEL_UNAVAILABLE = 17;
 }
 
 message StudioMemberInvocationTarget {
@@ -127,7 +125,7 @@ message ScheduledInvocationCredentialPolicy {
 }
 
 message ScheduledInvocationOwnerLLMSelection {
-  ScheduledInvocationOwnerLLMRouteKind route_kind = 1;
+  aevatar.ai.LLMRouteKind route_kind = 1;
   string route_value = 2;
   string nyx_id_user_service_id = 3;
   string service_slug_snapshot = 4;

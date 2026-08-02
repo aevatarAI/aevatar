@@ -23,6 +23,10 @@ public sealed class AuthenticationHttpPipelineTests
     private const string Authority = "https://nyxid.example.com";
     private const string DiscoveredIssuer = "https://nyx-api.example.com";
     private const string Audience = "aevatar-api";
+    private const string ScopeIssuer = "https://scope.example.com";
+    private const string ScopeAudience = "aevatar-scope-services";
+    private const string ScopeKeyId = "scope-key";
+    private const string ScopeSigningKey = "0123456789abcdef0123456789abcdef";
     private const string ResourceUri = "https://api.example.com/resource";
 
     [Fact]
@@ -89,6 +93,60 @@ public sealed class AuthenticationHttpPipelineTests
             .WithMessage("*shared IDPoPReplayGuard*");
     }
 
+    [Theory]
+    [InlineData(false, false, Audience, HttpStatusCode.OK)]
+    [InlineData(false, false, "another-api", HttpStatusCode.Unauthorized)]
+    [InlineData(true, false, Audience, HttpStatusCode.OK)]
+    [InlineData(true, false, ScopeAudience, HttpStatusCode.Unauthorized)]
+    [InlineData(true, true, ScopeAudience, HttpStatusCode.OK)]
+    [InlineData(true, true, Audience, HttpStatusCode.Unauthorized)]
+    public async Task BearerAuthorization_ShouldBindAudienceToTokenIssuer(
+        bool scopeTokensEnabled,
+        bool issueScopeToken,
+        string tokenAudience,
+        HttpStatusCode expectedStatusCode)
+    {
+        using var authorityKey = RSA.Create(2048);
+        var discovery = new DiscoveryDocumentHandler(authorityKey);
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            EnvironmentName = Environments.Production,
+        });
+        builder.WebHost.UseTestServer();
+        ConfigureAuthentication(builder, dpopEnabled: false, scopeTokensEnabled);
+        builder.AddAevatarAuthentication();
+        builder.Services.PostConfigure<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme, jwt =>
+        {
+            var retriever = new HttpDocumentRetriever(new HttpClient(discovery))
+            {
+                RequireHttps = true,
+            };
+            jwt.ConfigurationManager = new ConfigurationManager<OpenIdConnectConfiguration>(
+                $"{Authority}/.well-known/openid-configuration",
+                new OpenIdConnectConfigurationRetriever(),
+                retriever);
+        });
+
+        await using var app = builder.Build();
+        app.UseAuthentication();
+        app.UseAuthorization();
+        app.MapGet("/resource", () => "ok").RequireAuthorization();
+        await app.StartAsync();
+
+        var accessToken = issueScopeToken
+            ? CreateScopeAccessToken(tokenAudience)
+            : CreateAccessToken(
+                authorityKey,
+                confirmationThumbprint: null,
+                audience: tokenAudience);
+        using var request = new HttpRequestMessage(HttpMethod.Get, ResourceUri);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+
+        using var response = await app.GetTestClient().SendAsync(request);
+
+        response.StatusCode.Should().Be(expectedStatusCode);
+    }
+
     private static void ConfigureAuthentication(
         WebApplicationBuilder builder,
         bool dpopEnabled,
@@ -104,18 +162,21 @@ public sealed class AuthenticationHttpPipelineTests
             return;
 
         builder.Configuration["Aevatar:Authentication:ScopeServiceTokens:Issuer"] =
-            "https://scope.example.com";
+            ScopeIssuer;
         builder.Configuration["Aevatar:Authentication:ScopeServiceTokens:Audience"] =
-            "aevatar-scope-services";
+            ScopeAudience;
         builder.Configuration["Aevatar:Authentication:ScopeServiceTokens:SigningKeys:0:Kid"] =
-            "scope-key";
+            ScopeKeyId;
         builder.Configuration["Aevatar:Authentication:ScopeServiceTokens:SigningKeys:0:Algorithm"] =
             "HS256";
         builder.Configuration["Aevatar:Authentication:ScopeServiceTokens:SigningKeys:0:Key"] =
-            "0123456789abcdef0123456789abcdef";
+            ScopeSigningKey;
     }
 
-    private static string CreateAccessToken(RSA authorityKey, string jkt)
+    private static string CreateAccessToken(
+        RSA authorityKey,
+        string? confirmationThumbprint,
+        string audience = Audience)
     {
         var header = new JwtHeader(new SigningCredentials(
             new RsaSecurityKey(authorityKey) { KeyId = DiscoveryDocumentHandler.KeyId },
@@ -124,12 +185,32 @@ public sealed class AuthenticationHttpPipelineTests
         var payload = new JwtPayload
         {
             [JwtRegisteredClaimNames.Iss] = DiscoveredIssuer,
-            [JwtRegisteredClaimNames.Aud] = Audience,
+            [JwtRegisteredClaimNames.Aud] = audience,
             [JwtRegisteredClaimNames.Sub] = "user-alpha",
             [JwtRegisteredClaimNames.Iat] = now.ToUnixTimeSeconds(),
             [JwtRegisteredClaimNames.Exp] = now.AddMinutes(5).ToUnixTimeSeconds(),
-            ["cnf"] = new Dictionary<string, object> { ["jkt"] = jkt },
         };
+        if (!string.IsNullOrWhiteSpace(confirmationThumbprint))
+            payload["cnf"] = new Dictionary<string, object> { ["jkt"] = confirmationThumbprint };
+
+        return new JwtSecurityTokenHandler().WriteToken(new JwtSecurityToken(header, payload));
+    }
+
+    private static string CreateScopeAccessToken(string audience)
+    {
+        var header = new JwtHeader(new SigningCredentials(
+            new SymmetricSecurityKey(Encoding.UTF8.GetBytes(ScopeSigningKey)) { KeyId = ScopeKeyId },
+            SecurityAlgorithms.HmacSha256));
+        var now = DateTimeOffset.UtcNow;
+        var payload = new JwtPayload
+        {
+            [JwtRegisteredClaimNames.Iss] = ScopeIssuer,
+            [JwtRegisteredClaimNames.Aud] = audience,
+            [JwtRegisteredClaimNames.Sub] = "scope-alpha",
+            [JwtRegisteredClaimNames.Iat] = now.ToUnixTimeSeconds(),
+            [JwtRegisteredClaimNames.Exp] = now.AddMinutes(5).ToUnixTimeSeconds(),
+        };
+
         return new JwtSecurityTokenHandler().WriteToken(new JwtSecurityToken(header, payload));
     }
 

@@ -343,7 +343,12 @@ internal sealed class GAgentApprovalCompletionPolicy
                 completion = GAgentApprovalCompletionStatus.RunFinished;
                 return true;
             case AGUIEvent.EventOneofCase.RunError:
-                completion = GAgentApprovalCompletionStatus.Failed;
+                completion = string.Equals(
+                    evt.RunError.Code,
+                    GAgentRunFailureCodes.OutcomeUncertain,
+                    StringComparison.Ordinal)
+                    ? GAgentApprovalCompletionStatus.OutcomeUncertain
+                    : GAgentApprovalCompletionStatus.Failed;
                 return true;
             default:
                 return false;
@@ -435,6 +440,7 @@ internal sealed class GAgentApprovalDurableCompletionResolver
             GAgentRunTerminalStatus.TextMessageCompleted => new(true, GAgentApprovalCompletionStatus.TextMessageCompleted),
             GAgentRunTerminalStatus.RunFinished => new(true, GAgentApprovalCompletionStatus.RunFinished),
             GAgentRunTerminalStatus.Failed => new(true, GAgentApprovalCompletionStatus.Failed),
+            GAgentRunTerminalStatus.OutcomeUncertain => new(true, GAgentApprovalCompletionStatus.OutcomeUncertain),
             _ => CommandDurableCompletionObservation<GAgentApprovalCompletionStatus>.Incomplete,
         };
 }

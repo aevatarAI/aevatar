@@ -93,6 +93,42 @@ public sealed class ExternalWorkflowCapabilityReadinessServiceTests
     }
 
     [Fact]
+    public async Task ListAsync_ShouldOrderExplicitRequestsByExactRequestIdentity()
+    {
+        var source = new StubSource(
+            ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdRequest,
+            [
+                Descriptor(NyxIdRequestSelector("usvc-zeta", "/api/zeta")),
+                Descriptor(NyxIdRequestSelector("usvc-alpha", "/api/alpha")),
+            ]);
+        var service = new ExternalWorkflowCapabilityReadinessService([source]);
+
+        var result = await service.ListAsync(
+            new ListExternalWorkflowCapabilitiesRequest(Access()),
+            CancellationToken.None);
+
+        result.Capabilities.Select(static descriptor =>
+                descriptor.Selector.NyxIdRequest.UserServiceId)
+            .Should().Equal("usvc-alpha", "usvc-zeta");
+    }
+
+    [Fact]
+    public async Task ListAsync_ShouldFailClosedForUnknownSelectorVariant()
+    {
+        var source = new StubSource(
+            ExternalWorkflowCapabilitySelector.SelectorOneofCase.None,
+            [Descriptor(new ExternalWorkflowCapabilitySelector())]);
+        var service = new ExternalWorkflowCapabilityReadinessService([source]);
+
+        var action = () => service.ListAsync(
+            new ListExternalWorkflowCapabilitiesRequest(Access()),
+            CancellationToken.None);
+
+        await action.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*selector*");
+    }
+
+    [Fact]
     public void DiscoveryDescriptor_ShouldNeverPublishServerDerivedProofAsAuthorInput()
     {
         var descriptor = Descriptor(NyxIdSelector());
@@ -173,7 +209,8 @@ public sealed class ExternalWorkflowCapabilityReadinessServiceTests
         var access = new ExternalWorkflowCapabilityAccessContext(
             "scope-alpha",
             "caller-alpha",
-            "runtime-caller-credential",
+            NyxIdCallerCredentialSelection.SourceReadableUserBearer(
+                "runtime-caller-credential"),
             "runtime-organization-credential");
 
         access.ToString().Should()
@@ -184,7 +221,11 @@ public sealed class ExternalWorkflowCapabilityReadinessServiceTests
     }
 
     private static ExternalWorkflowCapabilityAccessContext Access() =>
-        new("scope-alpha", "caller-alpha", "runtime-caller-credential");
+        new(
+            "scope-alpha",
+            "caller-alpha",
+            NyxIdCallerCredentialSelection.SourceReadableUserBearer(
+                "runtime-caller-credential"));
 
     private static ExternalWorkflowCapabilitySelector NyxIdSelector() =>
         new()
@@ -193,6 +234,21 @@ public sealed class ExternalWorkflowCapabilityReadinessServiceTests
             {
                 UserServiceId = "us-home-alpha",
                 EndpointId = "get-state",
+            },
+        };
+
+    private static ExternalWorkflowCapabilitySelector NyxIdRequestSelector(
+        string userServiceId,
+        string pathTemplate) =>
+        new()
+        {
+            NyxIdRequest = new NyxIdRequestSelector
+            {
+                UserServiceId = userServiceId,
+                Method = NyxIdRequestMethod.Get,
+                PathTemplate = pathTemplate,
+                BodyMode = NyxIdRequestBodyMode.None,
+                ResponseMode = NyxIdRequestResponseMode.Text,
             },
         };
 

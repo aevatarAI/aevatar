@@ -36,7 +36,6 @@ public sealed class ToolProviderHttpClientRegistrationTests
             .NotBeNull();
         provider.GetRequiredService<IRemoteToolApprovalPort>().Should()
             .BeOfType<NyxIdRemoteToolApprovalPort>();
-        provider.GetServices<IToolApprovalHandler>().Should().BeEmpty();
     }
 
     [Fact]
@@ -185,7 +184,7 @@ public sealed class ToolProviderHttpClientRegistrationTests
     }
 
     [Fact]
-    public async Task NyxIdRequireServiceTool_ShouldNotBlock_WhenServiceIsAlreadyVisible()
+    public async Task NyxIdRequireServiceTool_ShouldCreateSuccessReceipt_WhenServiceIsAlreadyVisible()
     {
         var handler = new StubUserServiceListHandler("""{ "keys": [{ "id": "us-github-alpha", "slug": "api-github" }] }""");
         var tool = CreateRequireServiceTool(handler);
@@ -196,9 +195,13 @@ public sealed class ToolProviderHttpClientRegistrationTests
         try
         {
             var result = await tool.ExecuteAsync(arguments);
+            var receipt = tool.CreateResultReceipt("call-1", tool.Name, arguments, result);
 
             result.Should().Contain("\"blocked\":false");
-            tool.CreateResultReceipt("call-1", tool.Name, arguments, result).Should().BeNull();
+            receipt.Should().NotBeNull();
+            receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+            receipt.ResultJson.Should().Be(result);
+            receipt.AuthorizationRequired.Should().BeNull();
         }
         finally
         {
@@ -229,6 +232,37 @@ public sealed class ToolProviderHttpClientRegistrationTests
             receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
             receipt.ErrorCode.Should().Be("NYXID_REQUIRE_SERVICE_CONTEXT_UNAVAILABLE");
             receipt.AuthorizationRequired.Should().BeNull();
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = previous;
+        }
+    }
+
+    [Theory]
+    [InlineData(AgentToolNyxIdCredentialKind.ProxyDelegation)]
+    [InlineData(AgentToolNyxIdCredentialKind.Unspecified)]
+    public async Task NyxIdRequireServiceTool_WhenCredentialIsNotSourceReadable_ShouldNotReadNyxIdSource(
+        AgentToolNyxIdCredentialKind credentialKind)
+    {
+        var handler = new StubUserServiceListHandler("""{ "keys": [] }""");
+        var tool = CreateRequireServiceTool(handler);
+        var previous = AgentToolRequestContext.Current;
+        AgentToolRequestContext.Current = CapabilityContext() with
+        {
+            Credentials = new AgentToolCredentials(
+                "runtime-caller-credential",
+                null,
+                null,
+                credentialKind),
+        };
+
+        try
+        {
+            var result = await tool.ExecuteAsync("""{"service_slug":"api-github"}""");
+
+            result.Should().Contain("NYXID_SOURCE_UNAVAILABLE");
+            handler.Requests.Should().BeEmpty();
         }
         finally
         {
@@ -370,7 +404,8 @@ public sealed class ToolProviderHttpClientRegistrationTests
             Credentials = new AgentToolCredentials(
                 "runtime-caller-credential",
                 "runtime-organization-credential",
-                null),
+                null,
+                AgentToolNyxIdCredentialKind.SourceReadableUserBearer),
             NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
                 "nyxid",
                 string.Empty,
@@ -419,7 +454,7 @@ public sealed class ToolProviderHttpClientRegistrationTests
     }
 
     [Fact]
-    public async Task AddNyxIdTools_WithSshBypass_DiscoversSshExecWithoutLocalApprovalHandler()
+    public async Task AddNyxIdTools_WithSshOptIn_DiscoversToolsThatAlwaysRequireApproval()
     {
         var services = new ServiceCollection();
 
@@ -427,21 +462,22 @@ public sealed class ToolProviderHttpClientRegistrationTests
         {
             options.BaseUrl = "https://nyx.test";
             options.EnableSshExecTool = true;
-            options.BypassSshExecApproval = true;
         });
 
         await using var provider = services.BuildServiceProvider();
-        provider.GetServices<IToolApprovalHandler>().Should().BeEmpty();
         var source = provider.GetServices<IAgentToolSource>().OfType<NyxIdAgentToolSource>().Single();
 
         var tools = await source.DiscoverToolsAsync();
         var sshExec = tools.Should().ContainSingle(tool => tool is NyxIdSshExecTool).Subject;
         var codexExec = tools.Should().ContainSingle(tool => tool is NyxIdCodexExecTool).Subject;
         codexExec.Name.Should().Be("codex_exec");
-        sshExec.RequiresApproval("""{"service":"host","command":"uptime","principal":"ubuntu"}""")
-            .Should()
-            .BeFalse();
+        sshExec.ApprovalMode.Should().Be(ToolApprovalMode.AlwaysRequire);
+        sshExec.IsDestructive.Should().BeTrue();
+        codexExec.ApprovalMode.Should().Be(ToolApprovalMode.AlwaysRequire);
         codexExec.RequiresApproval("""{"target":{"kind":"private_ssh","private_ssh":{"service":"host","principal":"ubuntu"}},"prompt":"check"}""")
+            .Should()
+            .BeTrue();
+        codexExec.RequiresApproval("""{"target":{"kind":"managed_sandbox"},"workspace":{"kind":"empty_git"},"prompt":"check"}""")
             .Should()
             .BeFalse();
     }

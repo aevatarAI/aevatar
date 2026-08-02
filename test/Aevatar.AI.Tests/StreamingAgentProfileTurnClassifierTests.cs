@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.GAgents.NyxidChat.AgentProfiles;
@@ -30,6 +31,69 @@ public sealed class StreamingAgentProfileTurnClassifierTests
     }
 
     [Fact]
+    public async Task ClassifyAsync_ShouldSendTypedSideEffectClassToProvider()
+    {
+        var provider = new StubProvider([
+            new LLMStreamChunk { DeltaContent = "{\"status\":\"matched\",\"intent_id\":\"service_connect\"}" },
+        ]);
+        var classifier = new StreamingAgentProfileTurnClassifier(new StubProviderFactory(provider));
+        var request = new AgentProfileTurnClassificationRequest(
+            "我要连接 AWS Cost Explorer",
+            [
+                new AgentProfileTurnClassificationCandidate(
+                    "service_discovery",
+                    "Browse available services.",
+                    AgentProfileSideEffectClass.ReadOnly),
+                new AgentProfileTurnClassificationCandidate(
+                    "service_connect",
+                    "Connect a requested service.",
+                    AgentProfileSideEffectClass.ExternalHandoff),
+            ],
+            TimeSpan.FromSeconds(1));
+
+        await classifier.ClassifyAsync(request);
+
+        var userMessage = provider.Requests.Should().ContainSingle().Which.Messages
+            .Single(message => message.Role == "user").Content;
+        using var document = JsonDocument.Parse(userMessage!);
+        document.RootElement.GetProperty("intents")[0]
+            .GetProperty("side_effect_class").GetString().Should().Be("read_only");
+        document.RootElement.GetProperty("intents")[1]
+            .GetProperty("side_effect_class").GetString().Should().Be("external_handoff");
+    }
+
+    [Fact]
+    public async Task ClassifyAsync_ShouldSelectTheFinalOutcomeInsteadOfDiscoveryPrerequisites()
+    {
+        var provider = new StubProvider([
+            new LLMStreamChunk { DeltaContent = "{\"status\":\"matched\",\"intent_id\":\"service_connect\"}" },
+        ]);
+        var classifier = new StreamingAgentProfileTurnClassifier(new StubProviderFactory(provider));
+        var request = new AgentProfileTurnClassificationRequest(
+            "我要连接 AWS Cost Explorer",
+            [
+                new AgentProfileTurnClassificationCandidate(
+                    "service_discovery",
+                    "Browse available services.",
+                    AgentProfileSideEffectClass.ReadOnly),
+                new AgentProfileTurnClassificationCandidate(
+                    "service_connect",
+                    "Connect a requested service.",
+                    AgentProfileSideEffectClass.ExternalHandoff),
+            ],
+            TimeSpan.FromSeconds(1));
+
+        await classifier.ClassifyAsync(request);
+
+        var systemMessage = provider.Requests.Should().ContainSingle().Which.Messages
+            .Single(message => message.Role == "system").Content;
+        systemMessage.Should().Contain("final requested outcome")
+            .And.Contain("not an intermediate prerequisite or discovery step")
+            .And.Contain("external_handoff")
+            .And.Contain("read_only");
+    }
+
+    [Fact]
     public async Task ClassifyAsync_ShouldAcceptOnlyUnambiguousNoMatchOutput()
     {
         var noMatch = new StubProvider([
@@ -54,7 +118,10 @@ public sealed class StreamingAgentProfileTurnClassifierTests
         var provider = new StubProvider([]);
         var classifier = new StreamingAgentProfileTurnClassifier(new StubProviderFactory(provider));
         var tooManyCandidates = Enumerable.Range(0, StreamingAgentProfileTurnClassifier.MaximumCandidates + 1)
-            .Select(index => new AgentProfileTurnClassificationCandidate($"intent-{index}", "route"))
+            .Select(index => new AgentProfileTurnClassificationCandidate(
+                $"intent-{index}",
+                "route",
+                AgentProfileSideEffectClass.ReadOnly))
             .ToArray();
 
         var countResult = await classifier.ClassifyAsync(new AgentProfileTurnClassificationRequest(
@@ -63,7 +130,10 @@ public sealed class StreamingAgentProfileTurnClassifierTests
             TimeSpan.FromSeconds(1)));
         var sizeResult = await classifier.ClassifyAsync(new AgentProfileTurnClassificationRequest(
             new string('x', StreamingAgentProfileTurnClassifier.MaximumInputUtf8Bytes + 1),
-            [new AgentProfileTurnClassificationCandidate("intent-a", "route")],
+            [new AgentProfileTurnClassificationCandidate(
+                "intent-a",
+                "route",
+                AgentProfileSideEffectClass.ReadOnly)],
             TimeSpan.FromSeconds(1)));
 
         countResult.FailureCode.Should().Be("candidate_count_out_of_bounds");
@@ -216,7 +286,10 @@ public sealed class StreamingAgentProfileTurnClassifierTests
     private static AgentProfileTurnClassificationRequest NewRequest() =>
         new(
             "please route this",
-            [new AgentProfileTurnClassificationCandidate("intent-a", "Route A")],
+            [new AgentProfileTurnClassificationCandidate(
+                "intent-a",
+                "Route A",
+                AgentProfileSideEffectClass.ReadOnly)],
             TimeSpan.FromSeconds(1));
 
     private sealed class StubProviderFactory(ILLMProvider provider) : ILLMProviderFactory

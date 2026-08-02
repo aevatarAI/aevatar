@@ -862,7 +862,14 @@ public static class NyxIdChatControlCommands
         return new NyxIdChatOperationDispatchCommand
         {
             Key = step.Operation.Key.Clone(),
-            Llm = new NyxIdChatLLMOperationInput { Request = request },
+            Llm = new NyxIdChatLLMOperationInput
+            {
+                Request = request,
+                AgentProfile = state.ActiveTurn.AgentProfileTurnAuthority is null
+                    ? null
+                    : state.AgentProfile?.Clone(),
+                AgentProfileTurnAuthority = state.ActiveTurn.AgentProfileTurnAuthority?.Clone(),
+            },
         };
     }
 
@@ -924,6 +931,8 @@ public static class NyxIdChatControlCommands
         next.ControlFence = fence.Clone();
         next.LatestControlResult = fence.Clone();
         next.PendingApproval = null;
+        next.PendingInput = null;
+        next.PendingInputRequest = null;
 
         var step = ResolveActiveStep(next);
         if (step is not null)

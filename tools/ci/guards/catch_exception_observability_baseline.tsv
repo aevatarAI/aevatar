@@ -8,10 +8,6 @@ src/Aevatar.AI.ToolProviders.ChronoStorage/Tools/ChronoFileWriteTool.cs	60	empty
 src/Aevatar.AI.ToolProviders.ChronoStorage/Tools/ChronoGlobTool.cs	51	empty broad catch block
 src/Aevatar.AI.ToolProviders.ChronoStorage/Tools/ChronoGrepTool.cs	65	empty broad catch block
 src/Aevatar.AI.ToolProviders.ChronoStorage/Tools/ChronoTreeTool.cs	70	empty broad catch block
-src/Aevatar.AI.ToolProviders.MCP/MCPConnector.cs	209	empty broad catch block
-src/Aevatar.AI.ToolProviders.NyxId/Tools/NyxIdApiKeysTool.cs	182	empty broad catch block
-src/Aevatar.AI.ToolProviders.NyxId/Tools/NyxIdApiKeysTool.cs	209	empty broad catch block
-src/Aevatar.AI.ToolProviders.NyxId/Tools/NyxIdServicesTool.cs	151	empty broad catch block
 src/Aevatar.AI.ToolProviders.ServiceInvoke/Schema/EndpointSchemaProvider.cs	92	broad catch returns null without visible failure signal
 src/Aevatar.AI.ToolProviders.ServiceInvoke/Schema/EndpointSchemaProvider.cs	153	empty broad catch block
 src/Aevatar.AI.ToolProviders.ServiceInvoke/Tools/ListServicesTool.cs	157	empty broad catch block
@@ -32,7 +28,6 @@ src/Aevatar.Scripting.Infrastructure/Compilation/CachedScriptBehaviorArtifactRes
 src/Aevatar.Scripting.Infrastructure/Compilation/GrpcToolsScriptProtoCompiler.cs	131	empty broad catch block
 src/Aevatar.Studio.Application/AppScopedScriptService.cs	404	empty broad catch block
 src/Aevatar.Studio.Application/Studio/Services/ExecutionService.cs	270	empty broad catch block
-src/Aevatar.Studio.Hosting/Endpoints/StudioEndpoints.cs	1288	empty broad catch block
 src/Aevatar.Studio.Infrastructure/Storage/ChronoStorageMasterKeyResolver.cs	76	empty broad catch block
 src/Aevatar.Studio.Infrastructure/Storage/ChronoStorageMasterKeyResolver.cs	102	empty broad catch block
 src/Aevatar.Studio.Infrastructure/Storage/ChronoStorageMasterKeyResolver.cs	140	empty broad catch block

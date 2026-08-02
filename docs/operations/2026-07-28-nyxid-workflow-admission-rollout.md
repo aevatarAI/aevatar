@@ -34,17 +34,20 @@ The typed configuration key is:
 Aevatar:NyxId:ManagedWorkflowAdmissionMode = Shadow | Enforce
 ```
 
-The environment-variable form is:
+The Mainnet deployment environment-variable form is:
 
 ```text
-Aevatar__NyxId__ManagedWorkflowAdmissionMode=Shadow
+AEVATAR_Aevatar__NyxId__ManagedWorkflowAdmissionMode=Shadow
 ```
 
-`Shadow` is the default. It records the decision and keeps the legacy raw proxy
-path. `Enforce` returns `NYXID_OPERATION_ADMISSION_REQUIRED` before token
-resolution, exact-service reads, file ingress, or proxy HTTP when a managed call
-lacks a valid proof. Ordinary non-workflow human sessions keep their existing raw
-proxy behavior.
+`Shadow` remains the provider default for non-Mainnet hosts. The Mainnet image
+loads `appsettings.Distributed.json`, which explicitly selects `Enforce`; a
+deployment can use the environment key above for same-binary rollback. Both the
+proxy tool and startup inventory guard consume the same configured
+`NyxIdToolOptions` singleton. `Enforce` returns
+`NYXID_OPERATION_ADMISSION_REQUIRED` before token resolution, exact-service reads,
+file ingress, or proxy HTTP when a managed call lacks a valid proof. Ordinary
+non-workflow human sessions keep their existing raw proxy behavior.
 
 ## Bounded telemetry
 
@@ -215,7 +218,7 @@ zero downstream interaction.
 Rollback is `Enforce -> Shadow` on the same v3-capable binary. Do not downgrade
 to a binary that cannot deserialize or validate v3 state.
 
-1. Set `Aevatar__NyxId__ManagedWorkflowAdmissionMode=Shadow`.
+1. Set `AEVATAR_Aevatar__NyxId__ManagedWorkflowAdmissionMode=Shadow`.
 2. Roll the same image/digest.
 3. Confirm readiness and `mode=shadow` telemetry.
 4. Keep v3 definitions, revisions, serving targets, and schedules in place. Do

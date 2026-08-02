@@ -9,19 +9,33 @@ namespace Aevatar.Workflow.Integration.AI;
 /// </summary>
 public static class WorkflowOperationAdmissionToolContextMapper
 {
-    public static AgentToolOperationAdmission? Map(ExternalWorkflowCapabilityRef? capability)
+    public static AgentToolOperationAdmission? Map(WorkflowCapabilityInvocationAdmission? admission)
     {
-        if (capability?.CapabilityCase !=
-            ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService)
-        {
+        if (admission is null)
             return null;
-        }
 
-        var proof = capability.NyxIdUserService;
+        WorkflowCapabilityAdmissionPlanIntegrity
+            .ValidateInvocationAdmissionIntrinsicIntegrity(admission);
+
+        return admission.Capability.CapabilityCase switch
+        {
+            ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService =>
+                MapPublished(admission),
+            ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest =>
+                MapAuthored(admission),
+            _ => null,
+        };
+    }
+
+    private static AgentToolOperationAdmission MapPublished(
+        WorkflowCapabilityInvocationAdmission admission)
+    {
+        var proof = admission.Capability.NyxIdUserService;
         return new AgentToolOperationAdmission(
             proof.UserServiceId,
             proof.ServiceSlugSnapshot,
-            proof.EndpointId,
+            new AgentToolOperationIdentity.PublishedEndpoint(proof.EndpointId),
+            AgentToolOperationAuthorizationBasis.PublishedContract,
             proof.HttpMethod,
             proof.PathTemplate,
             proof.ContractDigest,
@@ -30,6 +44,76 @@ public static class WorkflowOperationAdmissionToolContextMapper
             MapResponsePolicy(proof.ResponsePolicy),
             MapExecutionPolicy(proof.ExecutionPolicy));
     }
+
+    private static AgentToolOperationAdmission MapAuthored(
+        WorkflowCapabilityInvocationAdmission admission)
+    {
+        var proof = admission.Capability.NyxIdUserRequest;
+        var request = proof.Request;
+        var requestContractDigest = WorkflowCapabilityAdmissionPlanIntegrity
+            .ComputeNyxIdRequestContractDigest(request);
+
+        var parameters = NyxIdRequestSelectorContract.PathParameters(request)
+            .Select(static name => new AgentToolOperationParameter(
+                name,
+                AgentToolOperationParameterLocation.Path,
+                true,
+                AgentToolOperationValueSchema.Text))
+            .Concat(request.QueryParameters.Select(static name => new AgentToolOperationParameter(
+                name,
+                AgentToolOperationParameterLocation.Query,
+                false,
+                AgentToolOperationValueSchema.Text)))
+            .Concat(request.HeaderParameters.Select(static name => new AgentToolOperationParameter(
+                name,
+                AgentToolOperationParameterLocation.Header,
+                false,
+                AgentToolOperationValueSchema.Text)))
+            .ToArray();
+
+        return new AgentToolOperationAdmission(
+            request.UserServiceId,
+            proof.ServiceSlugSnapshot,
+            new AgentToolOperationIdentity.AuthoredRequest(requestContractDigest),
+            AgentToolOperationAuthorizationBasis.ExplicitRequest,
+            NyxIdRequestSelectorContract.MethodName(request.Method),
+            request.PathTemplate,
+            proof.ContractDigest,
+            parameters,
+            MapRequestBody(request),
+            MapResponsePolicy(request.ResponseMode),
+            MapExecutionPolicy(proof.ExecutionPolicy));
+    }
+
+    private static AgentToolOperationRequestBody? MapRequestBody(
+        NyxIdRequestSelector request) =>
+        request.BodyMode switch
+        {
+            NyxIdRequestBodyMode.None => null,
+            NyxIdRequestBodyMode.Json => new AgentToolOperationRequestBody(
+                request.BodyRequired,
+                "application/json",
+                new AgentToolOperationValueSchema(
+                    AgentToolOperationValueKind.Object,
+                    [],
+                    new HashSet<string>(StringComparer.Ordinal),
+                    null,
+                    [],
+                    true)),
+            _ => throw new InvalidOperationException(
+                "Workflow NyxID explicit request body mode is invalid."),
+        };
+
+    private static AgentToolOperationResponsePolicy MapResponsePolicy(
+        NyxIdRequestResponseMode responseMode) =>
+        responseMode switch
+        {
+            NyxIdRequestResponseMode.Text => AgentToolOperationResponsePolicy.TextOnly,
+            NyxIdRequestResponseMode.FileArtifact =>
+                new AgentToolOperationResponsePolicy(false, true, []),
+            _ => throw new InvalidOperationException(
+                "Workflow NyxID explicit request response mode is invalid."),
+        };
 
     private static AgentToolOperationParameter MapParameter(NyxIdOperationParameterContract parameter) =>
         new(

@@ -1,7 +1,7 @@
 # Admin Observatory UI Design
 
 - **Date:** 2026-07-24
-- **Status:** Approved in conversation; awaiting written-spec review
+- **Status:** Implemented; immersive mode and position restoration restored on 2026-08-01
 - **Surface:** `/admin#/observatory`
 - **Owner:** Aevatar Mainnet Backend Console
 

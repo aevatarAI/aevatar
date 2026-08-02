@@ -15,6 +15,10 @@ import {
 } from "@/shared/navigation/history";
 import { t } from "@/shared/i18n/messages";
 import {
+  confirmInteractiveExplicitRequestPreview,
+  createWorkflowRevisionIdentityCandidate,
+} from "@/shared/studio/explicitRequestConfirmation";
+import {
   buildTeamDetailHref,
   buildTeamMemberAutomationsHref,
   buildTeamMemberInvokeHref,
@@ -1019,6 +1023,25 @@ async function saveAndBindPublishedWorkflowDraft(input: {
     availableStepTypes: AVAILABLE_STEP_TYPES,
   });
   assertNoBlockingFindings(serialized.findings);
+  const workflowYamlForPublication = serialized.yaml;
+  const revisionIdentityCandidate = createWorkflowRevisionIdentityCandidate();
+  const explicitRequestPreview = await studioApi.previewExplicitRequests({
+    scopeId: routeScopeId,
+    workflowId,
+    workflowYaml: workflowYamlForPublication,
+    executionMode: "interactive",
+    inlineWorkflowYamls: {},
+    revisionId: revisionIdentityCandidate,
+  });
+  const explicitRequestConfirmations = await confirmInteractiveExplicitRequestPreview(
+    explicitRequestPreview,
+  );
+  if (explicitRequestConfirmations === null) {
+    throw new PublishWorkflowStatusError(
+      "Explicit request confirmation was cancelled.",
+      false,
+    );
+  }
   const savedDocument =
     cloneWorkflowDocument(serialized.document) ?? documentWithTitle;
   const graphForLayout = buildStudioGraphElements(savedDocument, layout);
@@ -1030,17 +1053,21 @@ async function saveAndBindPublishedWorkflowDraft(input: {
   const result = await studioApi.saveAndBindWorkflow({
     scopeId: routeScopeId,
     workflowId,
-    workflowYaml: serialized.yaml,
+    revisionId: explicitRequestPreview.revisionId,
+    workflowYaml: workflowYamlForPublication,
     workflowName: normalizedTitle,
     displayName: normalizedTitle,
     inlineWorkflowYamls: {},
     appId: "studio",
     serviceId,
     exposureDesired: true,
+    ...(explicitRequestConfirmations.length > 0
+      ? { explicitRequestConfirmations }
+      : {}),
   });
   const resultWorkflowId = trimOptional(result.workflowId) || workflowId;
   const materializedWorkflow = await waitForSaveAndBindWorkflowMaterialized({
-    expectedYaml: serialized.yaml,
+    expectedYaml: workflowYamlForPublication,
     scopeId: routeScopeId,
     workflowId: resultWorkflowId,
   });
@@ -1055,7 +1082,7 @@ async function saveAndBindPublishedWorkflowDraft(input: {
         ...workflow,
         workflowId: resultWorkflowId,
         name: normalizedTitle,
-        yaml: serialized.yaml,
+        yaml: workflowYamlForPublication,
         layout: nextLayout,
         document: savedDocument,
         findings: [],
@@ -1713,11 +1740,13 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       return savedAndBound;
     },
     onError: (error) => {
-      void message.error(
-        error instanceof Error
-          ? error.message
-          : "Failed to save and publish workflow.",
-      );
+      if (!(error instanceof PublishWorkflowStatusError && !error.showAsError)) {
+        void message.error(
+          error instanceof Error
+            ? error.message
+            : "Failed to save and publish workflow.",
+        );
+      }
     },
     onSuccess: ({ materializedWorkflow, savedDraft }, variables) => {
       markSavedDraft(savedDraft, ["published"], variables.draftRevision);
@@ -2422,13 +2451,36 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         availableStepTypes: AVAILABLE_STEP_TYPES,
       });
       assertNoBlockingFindings(serialized.findings);
+      const workflowYamlForPublication = serialized.yaml;
+      const revisionIdentityCandidate = createWorkflowRevisionIdentityCandidate();
+      const explicitRequestPreview = await studioApi.previewExplicitRequests({
+        scopeId: route.scopeId,
+        workflowId: workflowIdForPublish,
+        workflowYaml: workflowYamlForPublication,
+        executionMode: "interactive",
+        inlineWorkflowYamls: {},
+        revisionId: revisionIdentityCandidate,
+      });
+      const explicitRequestConfirmations = await confirmInteractiveExplicitRequestPreview(
+        explicitRequestPreview,
+      );
+      if (explicitRequestConfirmations === null) {
+        throw new PublishWorkflowStatusError(
+          "Explicit request confirmation was cancelled.",
+          false,
+        );
+      }
       await renameExistingMemberFromTitle(titleForPublish);
       const receipt = await studioApi.bindMemberWorkflow({
         scopeId: route.scopeId,
         memberId: route.memberId,
         displayName: titleForPublish,
         workflowId: workflowIdForPublish,
-        workflowYamls: [serialized.yaml],
+        revisionId: explicitRequestPreview.revisionId,
+        workflowYamls: [workflowYamlForPublication],
+        ...(explicitRequestConfirmations.length > 0
+          ? { explicitRequestConfirmations }
+          : {}),
       });
 
       let lastRun: StudioMemberBindingRunStatusResponse | null = null;
@@ -2463,9 +2515,13 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       };
     },
     onError: (error) => {
-      setPublishErrorVisible(
-        !(error instanceof PublishWorkflowStatusError && !error.showAsError),
-      );
+      if (error instanceof PublishWorkflowStatusError && !error.showAsError) {
+        setPublishError("");
+        setPublishErrorVisible(false);
+        return;
+      }
+
+      setPublishErrorVisible(true);
       setPublishError(
         error instanceof Error ? error.message : "Failed to publish workflow member.",
       );

@@ -41,17 +41,7 @@ public sealed class UserConfigService : IUserConfigService
         ArgumentNullException.ThrowIfNull(command);
 
         _ = bearerToken;
-        var defaultModel = command.DefaultModel is null
-            ? null
-            : command.DefaultModel.Trim();
-        if (UserConfigLlmModel.TryParseRouteModel(defaultModel) is not null)
-        {
-            throw new InvalidOperationException(
-                "Route-prefixed models require /api/user-config/llm with an exact userServiceId.");
-        }
-
         var update = new UserConfigUpdate(
-            DefaultModel: defaultModel,
             RuntimeMode: command.RuntimeMode is null
                 ? null
                 : UserConfigRuntime.NormalizeConfiguredMode(command.RuntimeMode),
@@ -75,9 +65,9 @@ public sealed class UserConfigService : IUserConfigService
 
     public Task<UserConfigSaveReceipt> SaveLlmPreferenceAsync(
         string? bearerToken,
-        SaveUserLlmPreferenceCommand command,
+        UserLlmPreferenceIntent intent,
         CancellationToken ct = default) =>
-        _llmPreferenceWriter.SaveAsync(ResolveOwnerResource(), bearerToken, command, ct);
+        _llmPreferenceWriter.SaveAsync(ResolveOwnerResource(), bearerToken, intent, ct);
 
     private UserConfigResourceKey ResolveOwnerResource() =>
         UserConfigResourceKey.ForOwnerScope(_scopeResolver.ResolveScopeIdOrDefault());

@@ -240,7 +240,13 @@ public sealed class OrnnSkillClient
                 if (proxyError.Status == 403)
                     throw RemoteSkillFetchException.AccessDenied(idOrName, proxyError.Detail, proxyError.Status);
 
-                return null;
+                if (proxyError.Status == 404)
+                    return null;
+
+                throw RemoteSkillFetchException.Unavailable(
+                    idOrName,
+                    proxyError.Detail,
+                    proxyError.Status);
             }
 
             var envelope = JsonSerializer.Deserialize<OrnnApiResponse<OrnnSkillJson>>(response, JsonOptions);
@@ -260,7 +266,9 @@ public sealed class OrnnSkillClient
                 "Ornn get skill exceeded {TimeoutSeconds}s per-call budget for '{IdOrName}'",
                 (int)_perCallTimeout.TotalSeconds,
                 idOrName);
-            return null;
+            throw RemoteSkillFetchException.Unavailable(
+                idOrName,
+                $"Remote skill '{idOrName}' timed out while loading.");
         }
         catch (RemoteSkillFetchException)
         {
@@ -269,7 +277,7 @@ public sealed class OrnnSkillClient
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Ornn get skill failed for '{IdOrName}'", idOrName);
-            return null;
+            throw RemoteSkillFetchException.Unavailable(idOrName, string.Empty);
         }
     }
 

@@ -56,7 +56,7 @@ public class LocalActorRuntimeTests : IAsyncLifetime
 
     public async Task DisposeAsync()
     {
-        foreach (var id in new[] { "parent-1", "child-1", "child-2", "restored-1", "restored-2", "root-t", "mid-t", "leaf-t", "collector-dedup" })
+        foreach (var id in new[] { "parent-1", "child-1", "child-2", "restored-1", "restored-2", "root-t", "mid-t", "leaf-t", "collector-redelivery" })
             await _runtime.DestroyAsync(id);
 
         _serviceProvider.Dispose();
@@ -220,22 +220,22 @@ public class LocalActorRuntimeTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HandleEventAsync_ShouldDeduplicateByStableOriginId_ForSameActor()
+    public async Task HandleEventAsync_ShouldDeliverRepeatedOperationIdentityToAuthoritativeActor()
     {
-        const string actorId = "collector-dedup";
+        const string actorId = "collector-redelivery";
         var actor = await _runtime.CreateAsync<CollectorAgent>(actorId);
         var collector = (CollectorAgent)actor.Agent;
-        var first = TestHelper.Envelope(new PingEvent { Message = "dup" }, publisherId: "source-1");
+        var first = TestHelper.Envelope(new PingEvent { Message = "redelivery" }, publisherId: "source-1");
         first.Id = "env-1";
-        first.EnsureRuntime().EnsureDeduplication().OperationId = "logical-dedup-1";
+        first.EnsureRuntime().EnsureDeliveryIdentity().OperationId = "logical-operation-1";
 
-        var second = TestHelper.Envelope(new PingEvent { Message = "dup" }, publisherId: "source-1");
+        var second = TestHelper.Envelope(new PingEvent { Message = "redelivery" }, publisherId: "source-1");
         second.Id = "env-2";
-        second.EnsureRuntime().EnsureDeduplication().OperationId = "logical-dedup-1";
+        second.EnsureRuntime().EnsureDeliveryIdentity().OperationId = "logical-operation-1";
 
         await actor.HandleEventAsync(first);
         await actor.HandleEventAsync(second);
 
-        collector.ReceivedMessages.Should().ContainSingle().Which.Should().Be("dup");
+        collector.ReceivedMessages.Should().Equal("redelivery", "redelivery");
     }
 }

@@ -43,7 +43,9 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
     [Fact]
     public async Task InvokeAsync_ShouldRegisterStaticRunWithGAgentCommandId()
     {
+        const long issuedAtUnixMs = 1_785_000_000_000;
         var identity = GAgentServiceTestKit.CreateIdentity();
+        var toolContext = NewToolContext(issuedAtUnixMs);
         var receipt = new GAgentDraftRunAcceptedReceipt(
             ActorId: "gagent-actor-1",
             DiagnosticClrTypeName: typeof(TestStaticServiceAgent).AssemblyQualifiedName!,
@@ -81,7 +83,7 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
                             Text = "part-1",
                         },
                     ],
-                    ToolContext: NewToolContext(),
+                    ToolContext: toolContext,
                     LlmControl: NewLlmControl())),
             (_, _) => ValueTask.CompletedTask,
             (receipt, _) =>
@@ -127,7 +129,8 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
         delegated.UseCorrelationIdAsFallbackSessionId.Should().BeFalse();
         delegated.InputParts.Should().ContainSingle()
             .Which.Text.Should().Be("part-1");
-        delegated.ToolContext.Should().BeEquivalentTo(NewToolContext());
+        delegated.ToolContext.Should().BeEquivalentTo(toolContext);
+        delegated.ToolContext.Request.IssuedAtUnixMs.Should().Be(issuedAtUnixMs);
         delegated.LlmControl.Should().BeEquivalentTo(NewLlmControl());
     }
 
@@ -236,6 +239,71 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
         result.Succeeded.Should().BeTrue();
         registration.StatusUpdates.Should().ContainSingle()
             .Which.Should().Be(("service-run-actor", "cmd-default", ServiceRunStatus.Failed, string.Empty, "static failed"));
+    }
+
+    [Fact]
+    public async Task InvokeAsync_ShouldPersistOutcomeUncertain_WhenDurableCompletionHasNoLiveFrame()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var interaction = new RecordingGAgentDraftRunInteractionService
+        {
+            Completion = GAgentDraftRunCompletionStatus.OutcomeUncertain,
+        };
+        var registration = new RecordingServiceRunRegistrationPort();
+        var service = await CreateServiceAsync(
+            identity,
+            CreateArtifact(identity, ServiceImplementationKind.Static),
+            interaction,
+            registration);
+
+        var result = await service.InvokeAsync(
+            NewRequest(identity),
+            (_, _) => ValueTask.CompletedTask);
+
+        result.CompletionStatus.Should().Be(GAgentDraftRunCompletionStatus.OutcomeUncertain);
+        registration.StatusUpdates.Should().ContainSingle()
+            .Which.Should().Be(("service-run-actor", "cmd-default", ServiceRunStatus.OutcomeUncertain, string.Empty, string.Empty));
+    }
+
+    [Fact]
+    public async Task InvokeAsync_ShouldNotOverwriteOutcomeUncertain_WithLaterSyntheticTerminalFrames()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var interaction = new RecordingGAgentDraftRunInteractionService
+        {
+            Completion = GAgentDraftRunCompletionStatus.OutcomeUncertain,
+            Frames =
+            [
+                new AGUIEvent
+                {
+                    RunError = new RunErrorEvent
+                    {
+                        Code = GAgentRunFailureCodes.OutcomeUncertain,
+                        Message = "The interrupted session may have produced side effects.",
+                    },
+                },
+                new AGUIEvent { RunError = new RunErrorEvent { Message = "synthetic failure" } },
+                new AGUIEvent { RunFinished = new RunFinishedEvent() },
+            ],
+        };
+        var registration = new RecordingServiceRunRegistrationPort();
+        var service = await CreateServiceAsync(
+            identity,
+            CreateArtifact(identity, ServiceImplementationKind.Static),
+            interaction,
+            registration);
+
+        await service.InvokeAsync(
+            NewRequest(identity),
+            (_, _) => ValueTask.CompletedTask);
+
+        registration.StatusUpdates.Should().ContainSingle()
+            .Which.Should().Be((
+                "service-run-actor",
+                "cmd-default",
+                ServiceRunStatus.OutcomeUncertain,
+                string.Empty,
+                "The interrupted session may have produced side effects."));
     }
 
     [Fact]
@@ -391,9 +459,9 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
             "chat",
             input ?? new StaticGAgentStreamInvocationInput("hello"));
 
-    private static AgentToolExecutionContext NewToolContext() =>
+    private static AgentToolExecutionContext NewToolContext(long issuedAtUnixMs) =>
         new(
-            new AgentToolRequestIdentity("request-1", "call-1"),
+            new AgentToolRequestIdentity("request-1", "call-1", null, issuedAtUnixMs),
             new AgentToolCredentials("access-token", "org-token", "sender-token"),
             new AgentToolCallerContext("scope-a", "owner-a", "response-1"),
             new AgentToolChannelContext("telegram", "sender-1", "registration-scope-1", "message-1", "platform-message-1"),

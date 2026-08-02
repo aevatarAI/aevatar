@@ -69,6 +69,42 @@ public class InMemoryEventStoreTests
     }
 
     [Fact]
+    public async Task AppendAsync_WhenTokenCancelsAfterAdmission_ShouldReturnCommittedResult()
+    {
+        var store = new InMemoryEventStore();
+        using var deadline = new CancellationTokenSource();
+
+        IEnumerable<StateEvent> AdmittedBatch()
+        {
+            deadline.Cancel();
+            yield return new StateEvent { EventId = "e1", Version = 1, AgentId = "agent-1" };
+        }
+
+        var result = await store.AppendAsync("agent-1", AdmittedBatch(), 0, deadline.Token);
+
+        deadline.IsCancellationRequested.ShouldBeTrue();
+        result.LatestVersion.ShouldBe(1);
+        (await store.GetVersionAsync("agent-1")).ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task AppendAsync_WhenCanceledBeforeAdmission_ShouldCommitNothing()
+    {
+        var store = new InMemoryEventStore();
+        using var deadline = new CancellationTokenSource();
+        deadline.Cancel();
+
+        var append = () => store.AppendAsync(
+            "agent-1",
+            [new StateEvent { EventId = "e1", Version = 1, AgentId = "agent-1" }],
+            0,
+            deadline.Token);
+
+        await Should.ThrowAsync<OperationCanceledException>(append);
+        (await store.GetVersionAsync("agent-1")).ShouldBe(0);
+    }
+
+    [Fact]
     public async Task GetVersion_ReturnsLatest()
     {
         var store = new InMemoryEventStore();

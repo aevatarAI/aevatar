@@ -9,6 +9,10 @@ using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.Tools;
+using Aevatar.Audit;
+using Aevatar.Audit.Abstractions.Identity;
+using Aevatar.Audit.Abstractions.Models;
+using Aevatar.Audit.Abstractions.Ports;
 using FluentAssertions;
 
 namespace Aevatar.AI.Tests;
@@ -123,7 +127,7 @@ public sealed class AgentProfileTurnRuntimeTests
         await executor.ExecuteToolStepAsync(
             [new ToolCall { Id = "route-call", Name = "route-only", ArgumentsJson = "{}" }],
             requestMetadata: null,
-            toolContext: null,
+            toolContext: TestToolContext("route-only-step"),
             CancellationToken.None);
 
         request.Tools.Should().ContainSingle().Which.Should().BeSameAs(routeOnlyExactTool);
@@ -152,7 +156,7 @@ public sealed class AgentProfileTurnRuntimeTests
     }
 
     [Fact]
-    public async Task StepTurn_ShouldUseSameSchemaAndExecutionAdmission()
+    public async Task StepTurn_RejectedToolShouldFailClosedBeforeLaterAllowedTool()
     {
         var visible = new CountingTool("visible");
         var hidden = new CountingTool("hidden");
@@ -161,18 +165,21 @@ public sealed class AgentProfileTurnRuntimeTests
         var executor = runtime.CreateStepExecutor(NewCatalog(["visible"]));
 
         var request = executor.BuildBaseRequest(null, null, null, null);
-        await executor.ExecuteToolStepAsync(
+        var results = await executor.ExecuteToolStepAsync(
             [
                 new ToolCall { Id = "hidden-call", Name = "hidden", ArgumentsJson = "{}" },
                 new ToolCall { Id = "visible-call", Name = "visible", ArgumentsJson = "{}" },
             ],
             requestMetadata: null,
-            toolContext: null,
+            toolContext: TestToolContext("catalog-admission-step"),
             CancellationToken.None);
 
         request.Tools.Should().ContainSingle().Which.Name.Should().Be("visible");
+        results.Should().HaveCount(2);
+        results.Should().OnlyContain(result => result.IsError);
         hidden.ExecuteCount.Should().Be(0);
-        visible.ExecuteCount.Should().Be(1);
+        visible.ExecuteCount.Should().Be(0,
+            "the ordered batch must not execute later calls after a forged call fails admission");
     }
 
     [Fact]
@@ -251,13 +258,13 @@ public sealed class AgentProfileTurnRuntimeTests
         var runtime = new ChatRuntime(
             () => new RecordingProvider(),
             history,
-            new ToolCallLoop(tools),
+            NewToolCallLoop(tools),
             hooks: null,
             requestBuilder: _ => new LLMRequest
             {
                 Messages = history.BuildMessages("system"),
                 Tools = null,
-                ToolContext = AgentToolExecutionContext.Empty with
+                ToolContext = TestToolContext("skill-recovery-initial") with
                 {
                     SkillRecovery = InitialSkillRecovery(),
                 },
@@ -277,13 +284,13 @@ public sealed class AgentProfileTurnRuntimeTests
         var runtime = new ChatRuntime(
             () => new RecordingProvider(),
             history,
-            new ToolCallLoop(NewToolManager(globalTool)),
+            NewToolCallLoop(NewToolManager(globalTool)),
             hooks: null,
             requestBuilder: _ => new LLMRequest
             {
                 Messages = history.BuildMessages("system"),
                 Tools = [requestExactTool],
-                ToolContext = AgentToolExecutionContext.Empty with
+                ToolContext = TestToolContext("skill-recovery-exact") with
                 {
                     SkillRecovery = InitialSkillRecovery(),
                 },
@@ -303,13 +310,13 @@ public sealed class AgentProfileTurnRuntimeTests
         var runtime = new ChatRuntime(
             () => new RecordingProvider(),
             history,
-            new ToolCallLoop(NewToolManager(globalTool)),
+            NewToolCallLoop(NewToolManager(globalTool)),
             hooks: null,
             requestBuilder: _ => new LLMRequest
             {
                 Messages = history.BuildMessages("system"),
                 Tools = null,
-                ToolContext = AgentToolExecutionContext.Empty with
+                ToolContext = TestToolContext("skill-recovery-final") with
                 {
                     SkillRecovery = FinalSkillRecovery(),
                 },
@@ -329,13 +336,13 @@ public sealed class AgentProfileTurnRuntimeTests
         var runtime = new ChatRuntime(
             () => new RecordingProvider(),
             history,
-            new ToolCallLoop(NewToolManager(globalTool)),
+            NewToolCallLoop(NewToolManager(globalTool)),
             hooks: null,
             requestBuilder: _ => new LLMRequest
             {
                 Messages = history.BuildMessages("system"),
                 Tools = [requestExactTool],
-                ToolContext = AgentToolExecutionContext.Empty with
+                ToolContext = TestToolContext("skill-recovery-final-exact") with
                 {
                     SkillRecovery = FinalSkillRecovery(),
                 },
@@ -357,12 +364,13 @@ public sealed class AgentProfileTurnRuntimeTests
         var runtime = new ChatRuntime(
             () => provider,
             history,
-            new ToolCallLoop(NewToolManager(globalMutatingTool)),
+            NewToolCallLoop(NewToolManager(globalMutatingTool)),
             hooks: null,
             requestBuilder: _ => new LLMRequest
             {
                 Messages = history.BuildMessages("system"),
                 Tools = [requestReadOnlyTool],
+                ToolContext = TestToolContext("tool-outcome-classification"),
             });
 
         await DrainAsync(runtime.ChatStreamAsync(
@@ -574,12 +582,13 @@ public sealed class AgentProfileTurnRuntimeTests
         return new ChatRuntime(
             () => provider,
             history,
-            new ToolCallLoop(tools),
+            NewToolCallLoop(tools),
             hooks,
             requestBuilder: _ => new LLMRequest
             {
                 Messages = history.BuildMessages("system"),
                 Tools = tools.GetAll(),
+                ToolContext = TestToolContext("profile-turn-runtime"),
             },
             llmMiddlewares: llmMiddlewares);
     }
@@ -591,6 +600,22 @@ public sealed class AgentProfileTurnRuntimeTests
         }
     }
 
+    private static ToolCallLoop NewToolCallLoop(ToolManager tools) =>
+        new(tools, toolExecutionPort: CreateExecutionPort());
+
+    private static IAgentToolExecutionPort CreateExecutionPort() =>
+        new AdmittedAgentToolExecutor(
+            AlwaysStartingAgentToolAdmissionLedger.Instance,
+            new AppendedAuditTrail(),
+            new StableIdentityHasher());
+
+    private static AgentToolExecutionContext TestToolContext(string requestId) =>
+        AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity(requestId, null),
+            ExecutionOwner = AgentToolExecutionOwners.HostService(nameof(AgentProfileTurnRuntimeTests)),
+        };
+
     private sealed class CountingTool(string name, bool isReadOnly = false) : IAgentTool
     {
         public int ExecuteCount { get; private set; }
@@ -598,12 +623,28 @@ public sealed class AgentProfileTurnRuntimeTests
         public string Description => name;
         public string ParametersSchema => "{}";
         public bool IsReadOnly => isReadOnly;
+        public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
         {
             ExecuteCount++;
             return Task.FromResult("{}");
         }
+    }
+
+    private sealed class AppendedAuditTrail : IAuditTrailAppender
+    {
+        public Task<AuditTrailAppendResult> AppendAsync(
+            AuditRecord record,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(AuditTrailAppendResult.Appended(record.AuditId));
+    }
+
+    private sealed class StableIdentityHasher : IAuditActorIdentityHasher
+    {
+        public AuditActorIdentity Hash(string canonicalActorKey) => new("actor-hash", "key-1");
+
+        public bool Verify(string canonicalActorKey, string auditActorId, string identityKeyId) => true;
     }
 
     private sealed class RecordingProvider : ILLMProvider

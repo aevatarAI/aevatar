@@ -5,6 +5,7 @@ using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Foundation.Abstractions;
@@ -733,11 +734,14 @@ public sealed class ScopeGAgentEndpointsTests
     {
         const string prefixedModel = "chrono-llm/gpt-5.5";
         var selection = useUnspecifiedSelection
-            ? new UserLlmSelectionValue(
-                UserLlmSelectionKind.Unspecified,
-                "/api/v1/proxy/s/typed-but-ignored",
-                "us-ignored",
-                "ignored")
+            ? new LLMSelection
+            {
+                RouteKind = LLMRouteKind.Unspecified,
+                RouteValue = "/api/v1/proxy/s/typed-but-ignored",
+                NyxIdUserServiceId = "us-ignored",
+                ServiceSlugSnapshot = "ignored",
+                ModelSelection = new LLMModelSelection { Kind = LLMModelSelectionKind.Unspecified },
+            }
             : null;
         var interactionPort = new FakeGAgentDraftRunInteractionPort();
         var context = CreateDraftRunContext(
@@ -767,11 +771,14 @@ public sealed class ScopeGAgentEndpointsTests
             userConfigQueryPort: new StubUserConfigStore(new UserConfig(
                 DefaultModel: "gpt-5.5",
                 PreferredLlmRoute: "/api/v1/proxy/s/legacy",
-                LlmSelection: new UserLlmSelectionValue(
-                    UserLlmSelectionKind.Gateway,
-                    "/api/v1/proxy/s/typed-but-ignored",
-                    "us-ignored",
-                    "ignored"))));
+                LlmSelection: new LLMSelection
+                {
+                    RouteKind = LLMRouteKind.Gateway,
+                    RouteValue = "/api/v1/proxy/s/typed-but-ignored",
+                    NyxIdUserServiceId = "us-ignored",
+                    ServiceSlugSnapshot = "ignored",
+                    ModelSelection = new LLMModelSelection { Kind = LLMModelSelectionKind.ProviderDefault },
+                })));
 
         await InvokeHandleDraftRunAsync(
             context,
@@ -793,11 +800,14 @@ public sealed class ScopeGAgentEndpointsTests
             userConfigQueryPort: new StubUserConfigStore(new UserConfig(
                 DefaultModel: "gpt-5.5",
                 PreferredLlmRoute: "/api/v1/proxy/s/legacy",
-                LlmSelection: new UserLlmSelectionValue(
-                    UserLlmSelectionKind.NyxIdUserService,
-                    " route-alpha ",
-                    "us-alpha",
-                    "service-alpha"))));
+                LlmSelection: new LLMSelection
+                {
+                    RouteKind = LLMRouteKind.NyxIdUserService,
+                    RouteValue = " route-alpha ",
+                    NyxIdUserServiceId = "us-alpha",
+                    ServiceSlugSnapshot = "service-alpha",
+                    ModelSelection = new LLMModelSelection { Kind = LLMModelSelectionKind.ProviderDefault },
+                })));
 
         await InvokeHandleDraftRunAsync(
             context,

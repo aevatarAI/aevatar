@@ -85,6 +85,7 @@ public sealed class StudioMemberAutomationEndpointsTests
                 true),
             new StubSchedules(),
             new StubBindingQuery { Binding = null },
+            NullLoggerFactory.Instance,
             CancellationToken.None);
 
         StatusCode(result).Should().Be(StatusCodes.Status409Conflict);
@@ -157,15 +158,95 @@ public sealed class StudioMemberAutomationEndpointsTests
                 true),
             schedules,
             new StubBindingQuery(),
+            NullLoggerFactory.Instance,
             CancellationToken.None);
 
         StatusCode(result).Should().Be(StatusCodes.Status200OK);
+        schedules.WritePreflightCalls.Should().Be(1);
         schedules.LastPreflight.Should().NotBeNull();
         schedules.LastPreflight!.ScopeId.Should().Be(ScopeId);
         schedules.LastPreflight.TeamId.Should().Be(TeamId);
         schedules.LastPreflight.MemberId.Should().Be(MemberId);
         schedules.LastPreflight.ProvisioningBearerToken.Should().Be("fresh-owner-bearer");
         schedules.LastPreflight.AuthenticatedOwner.Owner.OwnerSubject.Should().Be("nyx-owner-alpha");
+    }
+
+    [Fact]
+    public async Task Preflight_WhenPlannerDeniesService_ShouldReturnSanitizedTypedForbidden()
+    {
+        var schedules = new StubSchedules
+        {
+            PreflightResult = new StudioMemberWorkflowAuthorizationResult(
+                false,
+                null,
+                ScheduledInvocationAuthorizationFailureCode.ServiceAccessDenied,
+                "private-service-id"),
+        };
+
+        var result = await StudioMemberAutomationEndpoints.HandlePreflightAsync(
+            CreateContext(ScopeId),
+            ScopeId,
+            TeamId,
+            MemberId,
+            new StudioMemberAutomationPreflightRequest(
+                "0 9 * * *",
+                "UTC",
+                "run daily digest",
+                "Daily digest",
+                true),
+            schedules,
+            new StubBindingQuery(),
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        StatusCode(result).Should().Be(StatusCodes.Status403Forbidden);
+        var value = Value(result);
+        StringProperty(value, "code").Should().Be(
+            "TEAM_AUTOMATION_AUTHORIZATION_SERVICE_ACCESS_DENIED");
+        StringProperty(value, "message").Should().Be(
+            "This automation is not authorized to use one or more required services.");
+        value.GetType().GetProperty("retryable")?.GetValue(value).Should().Be(false);
+        JsonSerializer.Serialize(value).Should().NotContain("private-service-id");
+        AssertNoCredentialMaterial(value);
+    }
+
+    [Fact]
+    public async Task Preflight_WhenPlannerAuthorizationIsUnavailable_ShouldReturnRetryableTypedUnavailable()
+    {
+        var schedules = new StubSchedules
+        {
+            PreflightResult = new StudioMemberWorkflowAuthorizationResult(
+                false,
+                null,
+                ScheduledInvocationAuthorizationFailureCode.DurableAuthorizationUnavailable,
+                "private-catalog-detail"),
+        };
+
+        var result = await StudioMemberAutomationEndpoints.HandlePreflightAsync(
+            CreateContext(ScopeId),
+            ScopeId,
+            TeamId,
+            MemberId,
+            new StudioMemberAutomationPreflightRequest(
+                "0 9 * * *",
+                "UTC",
+                "run daily digest",
+                "Daily digest",
+                true),
+            schedules,
+            new StubBindingQuery(),
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        StatusCode(result).Should().Be(StatusCodes.Status503ServiceUnavailable);
+        var value = Value(result);
+        StringProperty(value, "code").Should().Be(
+            "TEAM_AUTOMATION_AUTHORIZATION_DURABLE_AUTHORIZATION_UNAVAILABLE");
+        StringProperty(value, "message").Should().Be(
+            "Authorization is temporarily unavailable. Retry this request.");
+        value.GetType().GetProperty("retryable")?.GetValue(value).Should().Be(true);
+        JsonSerializer.Serialize(value).Should().NotContain("private-catalog-detail");
+        AssertNoCredentialMaterial(value);
     }
 
     [Fact]
@@ -185,6 +266,7 @@ public sealed class StudioMemberAutomationEndpointsTests
                 true),
             schedules,
             new StubBindingQuery { Binding = null },
+            NullLoggerFactory.Instance,
             CancellationToken.None);
 
         StatusCode(result).Should().Be(StatusCodes.Status409Conflict);
@@ -218,6 +300,7 @@ public sealed class StudioMemberAutomationEndpointsTests
                 true),
             schedules,
             new StubBindingQuery(),
+            NullLoggerFactory.Instance,
             CancellationToken.None);
 
         StatusCode(result).Should().Be(StatusCodes.Status401Unauthorized);
@@ -809,8 +892,15 @@ public sealed class StudioMemberAutomationEndpointsTests
     private sealed class StubSchedules : IStudioMemberWorkflowSchedulePort
     {
         public Exception? Exception { get; init; }
+        public StudioMemberWorkflowAuthorizationResult PreflightResult { get; init; } =
+            new(
+                true,
+                new ScheduledInvocationAuthorizationPlan(),
+                ScheduledInvocationAuthorizationFailureCode.Unspecified,
+                string.Empty);
         public int ListCalls { get; private set; }
         public int ScheduleMutationCalls { get; private set; }
+        public int WritePreflightCalls { get; private set; }
         public StudioMemberAutomationView? View { get; init; }
         public StudioMemberWorkflowScheduleRequest? LastPreflight { get; private set; }
         public StudioMemberWorkflowScheduleRequest? LastCreate { get; private set; }
@@ -822,7 +912,7 @@ public sealed class StudioMemberAutomationEndpointsTests
         public string? LastActionName { get; private set; }
         public StudioMemberAutomationActionCommand? LastDelete { get; private set; }
         public StudioMemberAutomationRetryRevocationCommand? LastRetryRevocation { get; private set; }
-        public (string ScopeId, string TeamId, string MemberId, int Take, string? Cursor)? LastList { get; private set; }
+        public (string ScopeId, string TeamId, string? MemberId, int Take, string? Cursor)? LastList { get; private set; }
         public (string ScopeId, string TeamId, string MemberId, string ScheduleId)? LastGet { get; private set; }
 
         public Task<StudioMemberWorkflowAuthorizationResult> PreflightAsync(
@@ -830,17 +920,16 @@ public sealed class StudioMemberAutomationEndpointsTests
             CancellationToken ct = default)
         {
             LastPreflight = request;
-            return Result(new StudioMemberWorkflowAuthorizationResult(
-                false,
-                null,
-                ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
-                "not_configured"));
+            return Result(PreflightResult);
         }
 
         public Task<StudioMemberWorkflowAuthorizationResult> PreflightForWriteAsync(
             StudioMemberWorkflowScheduleRequest request,
-            CancellationToken ct = default) =>
-            PreflightAsync(request, ct);
+            CancellationToken ct = default)
+        {
+            WritePreflightCalls++;
+            return PreflightAsync(request, ct);
+        }
 
         public Task<StudioMemberWorkflowScheduleResult> CreateAsync(
             StudioMemberWorkflowScheduleRequest request,
@@ -879,7 +968,7 @@ public sealed class StudioMemberAutomationEndpointsTests
         public Task<StudioMemberAutomationListResponse> ListAsync(
             string scopeId,
             string teamId,
-            string memberId,
+            string? memberId,
             int take = 50,
             string? cursor = null,
             bool includeTotalCount = false,

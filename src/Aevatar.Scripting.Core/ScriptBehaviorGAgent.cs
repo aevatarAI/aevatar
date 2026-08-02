@@ -661,7 +661,7 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
                 {
                     Delivery = new EventEnvelopeDeliveryOptions
                     {
-                        DeduplicationOperationId = $"script-run-terminal:{delivery.DeliveryId}",
+                        OperationId = $"script-run-terminal:{delivery.DeliveryId}",
                     },
                 });
         }
@@ -838,7 +838,7 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
         {
             Delivery = new EventEnvelopeDeliveryOptions
             {
-                DeduplicationOperationId = RuntimeCallbackKeyComposer.BuildCallbackId(
+                OperationId = RuntimeCallbackKeyComposer.BuildCallbackId(
                     callbackId,
                     attempt.ToString(CultureInfo.InvariantCulture)),
             },

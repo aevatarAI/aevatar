@@ -9,6 +9,8 @@ using System.Text.Json;
 using ApplicationFileArtifactRef = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactRef;
 using ApplicationFileArtifactSourceKind = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactSourceKind;
 using ProtoWorkflowCallerCredential = Aevatar.Workflow.Abstractions.WorkflowCallerCredential;
+using ProtoWorkflowFileRef = Aevatar.Workflow.Abstractions.WorkflowFileRef;
+using ProtoWorkflowFileSourceKind = Aevatar.Workflow.Abstractions.WorkflowFileSourceKind;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
@@ -101,7 +103,7 @@ public sealed class WorkflowDocumentExtractToolTests
             var tool = await GetDocumentExtractToolAsync(port, llmProvider);
 
             var output = await tool.ExecuteAsync(new WorkflowToolExecutionRequest(
-                BuildSchemaBoundDocumentExtractArguments(
+                ArgumentsJson: BuildSchemaBoundDocumentExtractArguments(
                     result.FileRef,
                     """
                     {
@@ -116,12 +118,21 @@ public sealed class WorkflowDocumentExtractToolTests
                       }
                     }
                     """),
-                "run-1",
-                "extract",
-                "exec-1",
-                "call-1",
-                "scope-1",
-                new ProtoWorkflowCallerCredential()));
+                RunId: "run-1",
+                StepId: "extract",
+                ExecutionId: "exec-1",
+                CallId: "call-1",
+                ScopeId: "scope-1",
+                CallerCredential: new ProtoWorkflowCallerCredential { BearerToken = "caller-alpha" },
+                RuntimeContext: WorkflowToolRuntimeContext.Empty,
+                LlmControl: new Aevatar.Workflow.Abstractions.WorkflowLlmControlContext
+                {
+                    ModelOverride = "model-alpha",
+                    RoutePreference = "route-alpha",
+                    MaxToolRoundsOverride = 5,
+                    UserMemoryPrompt = "memory-alpha",
+                    SenderNyxIdAccessToken = "sender-alpha",
+                }));
 
             using var document = JsonDocument.Parse(output.ResultJson);
             var rootElement = document.RootElement;
@@ -132,10 +143,12 @@ public sealed class WorkflowDocumentExtractToolTests
             output.ResultJson.Contains("data:image", StringComparison.OrdinalIgnoreCase).Should().BeFalse();
 
             llmProvider.Requests.Should().ContainSingle();
-            llmProvider.Requests.Single().Messages[1].ContentParts.Should().ContainSingle(part =>
+            var request = llmProvider.Requests.Single();
+            request.Messages[1].ContentParts.Should().ContainSingle(part =>
                 part.Kind == ContentPartKind.Image &&
                 part.MediaType == "image/png" &&
                 part.DataBase64 == Convert.ToBase64String(imageBytes));
+            AssertWorkflowLlmContext(request);
         }
         finally
         {
@@ -771,6 +784,78 @@ public sealed class WorkflowDocumentExtractToolTests
     }
 
     [Fact]
+    public async Task WorkflowDocumentExtractTool_ShouldUseSingleInputFileRefWhenArgumentsOmitFileRef()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "aevatar-workflow-document-extract-input-file-ref-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var port = CreateFileArtifactPort(root);
+            var result = await port.IngestAsync(new FileArtifactIngressRequest(
+                System.Text.Encoding.UTF8.GetBytes("invoice total 42"),
+                ApplicationFileArtifactSourceKind.ChatInput,
+                FileName: "invoice.txt",
+                MediaType: "text/plain"));
+            var tool = await GetDocumentExtractToolAsync(port);
+
+            var output = await tool.ExecuteAsync(new WorkflowToolExecutionRequest(
+                "{}",
+                "run-1",
+                "extract",
+                "exec-1",
+                "call-1",
+                "scope-1",
+                new ProtoWorkflowCallerCredential(),
+                [ToProtoInputFileRef(result.FileRef)]));
+
+            using var document = JsonDocument.Parse(output.ResultJson);
+            var rootElement = document.RootElement;
+            rootElement.GetProperty("extraction_kind").GetString().Should().Be("utf8_text");
+            rootElement.GetProperty("media_type").GetString().Should().Be("text/plain");
+            rootElement.GetProperty("file").GetProperty("file_id").GetString().Should().Be(result.FileRef.FileId);
+            rootElement.GetProperty("text").GetString().Should().Be("invoice total 42");
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task WorkflowDocumentExtractTool_ShouldNotTreatAttachmentRefAsFileIdentity()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "aevatar-workflow-document-extract-attachment-ref-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var port = CreateFileArtifactPort(root);
+            var tool = await GetDocumentExtractToolAsync(port);
+
+            var output = await tool.ExecuteAsync(new WorkflowToolExecutionRequest(
+                """
+                {
+                  "attachment_ref": "file_v3_1"
+                }
+                """,
+                "run-1",
+                "extract",
+                "exec-1",
+                "call-1",
+                "scope-1",
+                new ProtoWorkflowCallerCredential()));
+
+            using var document = JsonDocument.Parse(output.ResultJson);
+            document.RootElement.GetProperty("error").GetString().Should().Be("invalid_arguments");
+            document.RootElement.GetProperty("detail").GetString()
+                .Should().Contain("fileRef object or exactly one input file ref");
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task AddWorkflowInfrastructure_ShouldWireDocumentExtractImageProviderFromLlmFactory()
     {
         var root = Path.Combine(Path.GetTempPath(), "aevatar-workflow-document-extract-di-image-tests", Guid.NewGuid().ToString("N"));
@@ -838,13 +923,22 @@ public sealed class WorkflowDocumentExtractToolTests
             var tool = await GetDocumentExtractToolAsync(port, llmProvider);
 
             var output = await tool.ExecuteAsync(new WorkflowToolExecutionRequest(
-                BuildDocumentExtractArguments(result.FileRef),
-                "run-1",
-                "extract",
-                "exec-1",
-                "call-1",
-                "scope-1",
-                new ProtoWorkflowCallerCredential()));
+                ArgumentsJson: BuildDocumentExtractArguments(result.FileRef),
+                RunId: "run-1",
+                StepId: "extract",
+                ExecutionId: "exec-1",
+                CallId: "call-1",
+                ScopeId: "scope-1",
+                CallerCredential: new ProtoWorkflowCallerCredential { BearerToken = "caller-alpha" },
+                RuntimeContext: WorkflowToolRuntimeContext.Empty,
+                LlmControl: new Aevatar.Workflow.Abstractions.WorkflowLlmControlContext
+                {
+                    ModelOverride = "model-alpha",
+                    RoutePreference = "route-alpha",
+                    MaxToolRoundsOverride = 5,
+                    UserMemoryPrompt = "memory-alpha",
+                    SenderNyxIdAccessToken = "sender-alpha",
+                }));
 
             using var document = JsonDocument.Parse(output.ResultJson);
             var rootElement = document.RootElement;
@@ -867,6 +961,7 @@ public sealed class WorkflowDocumentExtractToolTests
                 part.MediaType == mediaType &&
                 part.Name == result.FileRef.FileName &&
                 part.DataBase64 == Convert.ToBase64String(imageBytes));
+            AssertWorkflowLlmContext(request);
         }
         finally
         {
@@ -1187,6 +1282,32 @@ public sealed class WorkflowDocumentExtractToolTests
         return tools.Should().ContainSingle(x => x.Name == "document_extract").Subject;
     }
 
+    private static ProtoWorkflowFileRef ToProtoInputFileRef(ApplicationFileArtifactRef fileRef) =>
+        new()
+        {
+            FileId = fileRef.FileId ?? string.Empty,
+            ArtifactId = fileRef.ArtifactId ?? string.Empty,
+            SourceKind = fileRef.SourceKind switch
+            {
+                ApplicationFileArtifactSourceKind.ChatInput => ProtoWorkflowFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.FormUpload => ProtoWorkflowFileSourceKind.FormUpload,
+                ApplicationFileArtifactSourceKind.ConnectedServiceResource => ProtoWorkflowFileSourceKind.ConnectedServiceResource,
+                ApplicationFileArtifactSourceKind.ExternalResource => ProtoWorkflowFileSourceKind.ExternalResource,
+                ApplicationFileArtifactSourceKind.Generated => ProtoWorkflowFileSourceKind.Generated,
+                _ => ProtoWorkflowFileSourceKind.Unspecified,
+            },
+            SourceMessageId = fileRef.SourceMessageId ?? string.Empty,
+            SourceResourceKey = fileRef.SourceResourceKey ?? string.Empty,
+            FileName = fileRef.FileName ?? string.Empty,
+            MediaType = fileRef.MediaType ?? string.Empty,
+            SizeBytes = fileRef.SizeBytes,
+            Sha256 = fileRef.Sha256 ?? string.Empty,
+            CreatedAtUnixMs = fileRef.CreatedAtUnixMs,
+            ExpiresAtUnixMs = fileRef.ExpiresAtUnixMs,
+            OwnerRunId = fileRef.OwnerRunId ?? string.Empty,
+            OwnerScopeId = fileRef.OwnerScopeId ?? string.Empty,
+        };
+
     private static string BuildDocumentExtractArguments(
         ApplicationFileArtifactRef fileRef,
         int? maxChars = null,
@@ -1242,6 +1363,21 @@ public sealed class WorkflowDocumentExtractToolTests
             payload["schema_contract"] = schemaContract.RootElement.Clone();
 
         return JsonSerializer.Serialize(payload);
+    }
+
+    private static void AssertWorkflowLlmContext(LLMRequest request)
+    {
+        request.CallerContext.Should().NotBeNull();
+        request.CallerContext!.ScopeId.Should().Be("scope-1");
+        request.CallerContext.OwnerSubject.Should().Be("scope-1");
+        request.CallerContext.Credentials.Should().NotBeNull();
+        request.CallerContext.Credentials!.NyxIdBearer.Should().Be("caller-alpha");
+        request.LlmControl.Should().NotBeNull();
+        request.LlmControl!.ModelOverride.Should().Be("model-alpha");
+        request.LlmControl.NyxIdRoutePreference.Should().Be("route-alpha");
+        request.LlmControl.MaxToolRoundsOverride.Should().Be(5);
+        request.LlmControl.UserMemoryPrompt.Should().Be("memory-alpha");
+        request.LlmControl.SenderNyxIdAccessToken.Should().Be("sender-alpha");
     }
 
     private sealed class StaticWorkflowFileArtifactReadPort(

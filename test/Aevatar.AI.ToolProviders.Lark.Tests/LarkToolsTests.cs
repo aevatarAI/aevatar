@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Tools;
@@ -1691,7 +1692,9 @@ public class LarkToolsTests
             },
         };
 
-        await new ToolCallLoop(tools).ExecuteAsync(
+        await new ToolCallLoop(
+            tools,
+            toolExecutionPort: new PassthroughAgentToolExecutionPort()).ExecuteAsync(
             provider,
             [ChatMessage.User("approve the task")],
             request,
@@ -2482,6 +2485,36 @@ public class LarkToolsTests
                 FinishReason = response.FinishReason,
             };
             await Task.CompletedTask;
+        }
+    }
+
+    private sealed class PassthroughAgentToolExecutionPort : IAgentToolExecutionPort
+    {
+        public async Task<AgentToolExecutionOutcome> ExecuteAsync(
+            AgentToolExecutionRequest request,
+            CancellationToken ct = default)
+        {
+            var safety = request.Tool.GetCallSafety(request.ArgumentsJson)
+                ?? new AgentToolCallSafety(true, false, true);
+            var result = await request.Tool.ExecuteAsync(request.ArgumentsJson, ct);
+            var receipt = new AgentToolReceipt
+            {
+                CallId = request.ExecutionContext.Request.CallId ?? string.Empty,
+                ToolName = request.Tool.Name,
+                Status = AgentToolReceiptStatus.Success,
+                ResultJson = result,
+            };
+            return new AgentToolExecutionOutcome(
+                AgentToolExecutionOutcomeKind.Executed,
+                result,
+                receipt,
+                !safety.IsReadOnly,
+                string.Empty,
+                string.Empty,
+                AgentToolExecutionFailureStage.None,
+                TerminalInvoked: true,
+                Retryable: false,
+                AuditCompleted: true);
         }
     }
 

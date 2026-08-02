@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.Studio.Application.Studio.Abstractions;
 
 namespace Aevatar.Studio.Application.Studio.Services;
@@ -18,164 +19,109 @@ public sealed class UserLlmPreferenceWriter
     public async Task<UserConfigSaveReceipt> SaveAsync(
         UserConfigResourceKey resource,
         string? bearerToken,
-        SaveUserLlmPreferenceCommand command,
+        UserLlmPreferenceIntent intent,
         CancellationToken ct)
     {
-        ArgumentNullException.ThrowIfNull(command);
-        var update = await BuildUpdateAsync(bearerToken, command, ct).ConfigureAwait(false);
-        return await _commandService.UpdateAsync(resource, update, ct).ConfigureAwait(false);
-    }
-
-    public Task<UserConfigSaveReceipt> SaveSelectedOptionAsync(
-        UserConfigResourceKey resource,
-        UserLlmOption option,
-        string? model,
-        bool preserveCurrentModelWhenMissing,
-        CancellationToken ct)
-    {
-        ArgumentNullException.ThrowIfNull(option);
-        return _commandService.UpdateAsync(
+        ArgumentNullException.ThrowIfNull(intent);
+        var selection = await BuildSelectionAsync(bearerToken, intent, ct).ConfigureAwait(false);
+        return await _commandService.UpdateAsync(
             resource,
-            BuildSelectedOptionUpdate(option, model, preserveCurrentModelWhenMissing),
-            ct);
+            new UserConfigUpdate(LlmSelection: selection),
+            ct).ConfigureAwait(false);
     }
 
-    private async Task<UserConfigUpdate> BuildUpdateAsync(
+    // Channel callers are migrated to typed intents in the atomic Channel task.
+    public Task<UserConfigSaveReceipt> SaveAsync(
+        UserConfigResourceKey resource,
         string? bearerToken,
         SaveUserLlmPreferenceCommand command,
-        CancellationToken ct)
-    {
-        var userServiceId = UserLlmPreferenceWriteCore.NormalizeOptional(command.UserServiceId);
-        var normalizedModel = UserLlmPreferenceWriteCore.NormalizeOptional(command.Model);
-        var prefixedModel = UserConfigLlmModel.TryParseRouteModel(normalizedModel);
+        CancellationToken ct) =>
+        SaveAsync(resource, bearerToken, ToIntent(command), ct);
 
-        if (command.Reset == true)
-        {
-            return new UserConfigUpdate(
-                DefaultModel: string.Empty,
-                LlmSelection: UserLlmPreferenceWriteCore.BuildGatewaySelection());
-        }
-
-        if (userServiceId is not null)
-        {
-            if (command.RouteValue is not null &&
-                UserLlmPreferenceWriteCore.IsGatewayWriteAlias(command.RouteValue))
-            {
-                throw new InvalidOperationException("userServiceId cannot be combined with the Gateway route.");
-            }
-
-            var option = UserLlmPreferenceWriteCore.RequireInventoryOption(
-                await LoadOptionsAsync(bearerToken, ct).ConfigureAwait(false),
-                userServiceId);
-            return BuildSelectedOptionUpdate(
-                option,
-                command.Model,
-                preserveCurrentModelWhenMissing: false);
-        }
-
-        if (command.RouteValue is not null)
-        {
-            if (!UserLlmPreferenceWriteCore.IsGatewayWriteAlias(command.RouteValue))
-                throw new InvalidOperationException("userServiceId is required for a NyxID service selection.");
-            if (prefixedModel is not null)
-                throw new InvalidOperationException("userServiceId is required for a route-prefixed model selection.");
-
-            return new UserConfigUpdate(
-                DefaultModel: command.Model is null ? null : normalizedModel ?? string.Empty,
-                LlmSelection: UserLlmPreferenceWriteCore.BuildGatewaySelection());
-        }
-
-        if (!string.IsNullOrWhiteSpace(command.PresetId))
-        {
-            var option = await ActivatePresetAsync(bearerToken, command.PresetId, ct).ConfigureAwait(false);
-            return BuildSelectedOptionUpdate(
-                option,
-                command.Model,
-                preserveCurrentModelWhenMissing: true);
-        }
-
-        if (command.Model is not null)
-        {
-            if (prefixedModel is not null)
-                throw new InvalidOperationException("userServiceId is required for a route-prefixed model selection.");
-
-            return new UserConfigUpdate(DefaultModel: normalizedModel ?? string.Empty);
-        }
-
-        throw new InvalidOperationException("Specify userServiceId, routeValue, presetId, model, or reset.");
-    }
-
-    private static UserConfigUpdate BuildSelectedOptionUpdate(
-        UserLlmOption option,
-        string? model,
-        bool preserveCurrentModelWhenMissing)
-    {
-        var requestedModel = UserLlmPreferenceWriteCore.NormalizeModelForRoute(model, option);
-        var defaultModel = requestedModel ?? option.DefaultModel;
-        if (defaultModel is null && !preserveCurrentModelWhenMissing)
-            defaultModel = string.Empty;
-
-        return new UserConfigUpdate(
-            DefaultModel: defaultModel,
-            LlmSelection: UserLlmPreferenceWriteCore.BuildInventorySelection(option));
-    }
-
-    private async Task<IReadOnlyList<UserLlmOption>> LoadOptionsAsync(
+    private async Task<LLMSelection> BuildSelectionAsync(
         string? bearerToken,
+        UserLlmPreferenceIntent intent,
+        CancellationToken ct) => intent switch
+        {
+            ResetUserLlmPreferenceIntent => UserLlmPreferenceWriteCore.BuildResetSelection(),
+            SelectGatewayUserLlmPreferenceIntent gateway => await BuildGatewaySelectionAsync(
+                bearerToken,
+                gateway.ModelSelection,
+                ct).ConfigureAwait(false),
+            SelectUserServiceUserLlmPreferenceIntent service => await BuildUserServiceSelectionAsync(
+                bearerToken,
+                service.UserServiceId,
+                service.ModelSelection,
+                ct).ConfigureAwait(false),
+            ActivateUserLlmPresetIntent preset => await BuildPresetSelectionAsync(
+                bearerToken,
+                preset.PresetId,
+                ct).ConfigureAwait(false),
+            _ => throw new InvalidOperationException("Unsupported LLM preference intent."),
+        };
+
+    private async Task<LLMSelection> BuildGatewaySelectionAsync(
+        string? bearerToken,
+        LLMModelSelection modelSelection,
         CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(bearerToken))
-            throw new InvalidOperationException("Bearer token is required to read LLM services.");
-
-        var result = await _catalogPort.GetServicesAsync(bearerToken, ct).ConfigureAwait(false);
-        return result.Services.Select(NyxIdLlmServiceMapping.ToOption).ToArray();
+        var result = await LoadFreshCatalogAsync(bearerToken, ct).ConfigureAwait(false);
+        var option = RequireGatewayOption(result.Services.Select(NyxIdLlmServiceMapping.ToOption).ToArray());
+        ValidateModelSelection(option, modelSelection);
+        return UserLlmPreferenceWriteCore.BuildGatewaySelection(modelSelection);
     }
 
-    private async Task<UserLlmOption> ActivatePresetAsync(
+    private async Task<LLMSelection> BuildUserServiceSelectionAsync(
+        string? bearerToken,
+        string userServiceId,
+        LLMModelSelection modelSelection,
+        CancellationToken ct)
+    {
+        var options = await LoadFreshOptionsAsync(bearerToken, ct).ConfigureAwait(false);
+        var option = UserLlmPreferenceWriteCore.RequireInventoryOption(options, userServiceId);
+        ValidateModelSelection(option, modelSelection);
+        return UserLlmPreferenceWriteCore.BuildInventorySelection(option, modelSelection);
+    }
+
+    private async Task<LLMSelection> BuildPresetSelectionAsync(
         string? bearerToken,
         string presetId,
         CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(bearerToken))
-            throw new InvalidOperationException("Bearer token is required to activate an LLM preset.");
-
-        var result = await _catalogPort.GetServicesAsync(bearerToken, ct).ConfigureAwait(false);
-        var preset = result.SetupHint?.Presets.FirstOrDefault(candidate =>
-            string.Equals(candidate.Id, presetId.Trim(), StringComparison.OrdinalIgnoreCase));
+        var normalizedPresetId = UserLlmPreferenceWriteCore.NormalizeOptional(presetId) ??
+                                 throw new InvalidOperationException("LLM preset ID is required.");
+        var token = RequireBearer(bearerToken, "activate an LLM preset");
+        var result = await _catalogPort.GetFreshServicesAsync(token, ct).ConfigureAwait(false);
+        var preset = result.SetupHint?.Presets.SingleOrDefault(candidate =>
+            string.Equals(candidate.Id, normalizedPresetId, StringComparison.Ordinal));
         if (preset is null)
-            throw new InvalidOperationException($"LLM preset '{presetId}' is not available.");
+            throw new InvalidOperationException($"LLM preset '{normalizedPresetId}' is not available.");
 
         return preset.Activation switch
         {
-            UseExistingService existing => ActivateExistingPreset(
-                result.Services.Select(NyxIdLlmServiceMapping.ToOption).ToArray(),
-                existing),
-            ProvisionThenUse provisioning => await ActivateProvisioningPresetAsync(
-                bearerToken,
+            UseExistingService existing => BuildExistingPresetSelection(result, existing),
+            ProvisionThenUse provisioning => await BuildProvisionedPresetSelectionAsync(
+                token,
                 provisioning.ProvisionEndpointId,
                 ct).ConfigureAwait(false),
-            _ => throw new InvalidOperationException($"Unsupported LLM preset activation for '{preset.Id}'."),
+            _ => throw new InvalidOperationException(
+                $"Unsupported LLM preset activation for '{normalizedPresetId}'."),
         };
     }
 
-    private static UserLlmOption ActivateExistingPreset(
-        IReadOnlyList<UserLlmOption> options,
+    private static LLMSelection BuildExistingPresetSelection(
+        NyxIdLlmServicesResult result,
         UseExistingService existing)
     {
-        try
-        {
-            var option = UserLlmPreferenceWriteCore.RequireInventoryOption(options, existing.UserServiceId);
-            UserLlmPreferenceWriteCore.EnsureSelectable(option);
-            return option with { DefaultModel = existing.DefaultModel ?? option.DefaultModel };
-        }
-        catch (InvalidOperationException)
-        {
-            throw new InvalidOperationException(
-                $"LLM preset user service '{existing.UserServiceId}' is not selectable for this user.");
-        }
+        var option = UserLlmPreferenceWriteCore.RequireInventoryOption(
+            result.Services.Select(NyxIdLlmServiceMapping.ToOption).ToArray(),
+            existing.UserServiceId);
+        var modelSelection = ToModelSelection(existing.DefaultModel);
+        ValidateModelSelection(option, modelSelection);
+        return UserLlmPreferenceWriteCore.BuildInventorySelection(option, modelSelection);
     }
 
-    private async Task<UserLlmOption> ActivateProvisioningPresetAsync(
+    private async Task<LLMSelection> BuildProvisionedPresetSelectionAsync(
         string bearerToken,
         string provisionEndpointId,
         CancellationToken ct)
@@ -186,8 +132,119 @@ public sealed class UserLlmPreferenceWriter
         var userServiceId = UserLlmPreferenceWriteCore.NormalizeOptional(provisioned.CatalogEntryId) ??
                             throw new InvalidOperationException(
                                 "Provisioned LLM service did not return a user service ID candidate.");
-
-        var refreshed = await LoadOptionsAsync(bearerToken, ct).ConfigureAwait(false);
-        return UserLlmPreferenceWriteCore.RequireInventoryOption(refreshed, userServiceId);
+        var options = await LoadFreshOptionsAsync(bearerToken, ct).ConfigureAwait(false);
+        var option = UserLlmPreferenceWriteCore.RequireInventoryOption(options, userServiceId);
+        var modelSelection = new LLMModelSelection { Kind = LLMModelSelectionKind.ProviderDefault };
+        ValidateModelSelection(option, modelSelection);
+        return UserLlmPreferenceWriteCore.BuildInventorySelection(option, modelSelection);
     }
+
+    private async Task<NyxIdLlmServicesResult> LoadFreshCatalogAsync(
+        string? bearerToken,
+        CancellationToken ct)
+    {
+        var token = RequireBearer(bearerToken, "read LLM services");
+        return await _catalogPort.GetFreshServicesAsync(token, ct).ConfigureAwait(false);
+    }
+
+    private async Task<IReadOnlyList<UserLlmOption>> LoadFreshOptionsAsync(
+        string? bearerToken,
+        CancellationToken ct)
+    {
+        var result = await LoadFreshCatalogAsync(bearerToken, ct).ConfigureAwait(false);
+        return result.Services.Select(NyxIdLlmServiceMapping.ToOption).ToArray();
+    }
+
+    private static UserLlmOption RequireGatewayOption(IReadOnlyList<UserLlmOption> options)
+    {
+        var matches = options.Where(option =>
+            string.Equals(option.RouteValue, UserConfigLlmRouteDefaults.Gateway, StringComparison.Ordinal) &&
+            string.Equals(
+                UserLlmCatalogNormalization.NormalizeSource(option.Source).ToWireValue(),
+                UserLlmRouteSource.GatewayProvider,
+                StringComparison.Ordinal)).ToArray();
+        if (matches.Length != 1)
+            throw new InvalidOperationException("LLM Gateway is not selectable.");
+
+        UserLlmPreferenceWriteCore.EnsureSelectable(matches[0]);
+        return matches[0];
+    }
+
+    private static void ValidateModelSelection(UserLlmOption option, LLMModelSelection modelSelection)
+    {
+        ArgumentNullException.ThrowIfNull(modelSelection);
+        switch (modelSelection.Kind)
+        {
+            case LLMModelSelectionKind.ProviderDefault when string.IsNullOrEmpty(modelSelection.ModelId):
+                if (option.ModelCatalog.Certainty is
+                    LLMModelCatalogCertainty.Enumerated or
+                    LLMModelCatalogCertainty.NotVerifiable)
+                {
+                    return;
+                }
+
+                break;
+            case LLMModelSelectionKind.ExplicitModel:
+                if (option.ModelCatalog.Certainty != LLMModelCatalogCertainty.Enumerated ||
+                    !option.ModelCatalog.ModelIds.Contains(modelSelection.ModelId, StringComparer.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        $"LLM model '{modelSelection.ModelId}' is not available for the selected route.");
+                }
+
+                return;
+        }
+
+
+        throw new InvalidOperationException("Select a verifiable provider default or one explicit LLM model.");
+    }
+
+    private static LLMModelSelection ToModelSelection(string? model)
+    {
+        var normalized = UserLlmPreferenceWriteCore.NormalizeOptional(model);
+        var selection = new LLMModelSelection
+        {
+            Kind = normalized is null
+                ? LLMModelSelectionKind.ProviderDefault
+                : LLMModelSelectionKind.ExplicitModel,
+            ModelId = normalized ?? string.Empty,
+        };
+        _ = UserLlmPreferenceWriteCore.BuildGatewaySelection(selection);
+        return selection;
+    }
+
+    private static UserLlmPreferenceIntent ToIntent(SaveUserLlmPreferenceCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (command.Reset == true)
+            return new ResetUserLlmPreferenceIntent();
+
+        var userServiceId = UserLlmPreferenceWriteCore.NormalizeOptional(command.UserServiceId);
+        if (userServiceId is not null)
+        {
+            if (command.RouteValue is not null)
+                throw new InvalidOperationException("userServiceId cannot be combined with routeValue.");
+            return new SelectUserServiceUserLlmPreferenceIntent(
+                userServiceId,
+                ToModelSelection(command.Model));
+        }
+
+        if (command.RouteValue is not null)
+        {
+            if (!UserLlmPreferenceWriteCore.IsGatewayWriteAlias(command.RouteValue))
+                throw new InvalidOperationException("userServiceId is required for a NyxID service selection.");
+            return new SelectGatewayUserLlmPreferenceIntent(ToModelSelection(command.Model));
+        }
+
+        var presetId = UserLlmPreferenceWriteCore.NormalizeOptional(command.PresetId);
+        if (presetId is not null)
+            return new ActivateUserLlmPresetIntent(presetId);
+
+        throw new InvalidOperationException("A complete LLM route selection is required.");
+    }
+
+    private static string RequireBearer(string? bearerToken, string operation) =>
+        !string.IsNullOrWhiteSpace(bearerToken)
+            ? bearerToken
+            : throw new InvalidOperationException($"Bearer token is required to {operation}.");
 }

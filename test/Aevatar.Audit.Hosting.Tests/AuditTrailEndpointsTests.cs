@@ -29,6 +29,234 @@ public sealed class AuditTrailEndpointsTests
 {
     private const string CallerScope = "scope-alice";
     private const string OtherScope = "scope-bob";
+    private const string CallerSubject = "user-audit-alpha";
+
+    [Fact]
+    public async Task QueryChatActivity_DefaultsToPersonalScopeAndAllRetainedActorKeys()
+    {
+        var queryPort = new RecordingAuditTrailQueryPort();
+        var hasher = new RecordingHasher
+        {
+            Identities =
+            [
+                new AuditActorIdentity("actor-key-2", "key-2"),
+                new AuditActorIdentity("actor-key-1", "key-1"),
+            ],
+        };
+        var authorizer = new FakeAuthorizer(elevated: true);
+        var http = BuildHttpContext(CallerScope, "token", queryPort, authorizer, subject: CallerSubject);
+
+        var result = await AuditTrailEndpoints.QueryChatActivity(
+            http,
+            BuildEndpointDependencies(queryPort, hasher, authorizer),
+            NullLoggerFactory.Instance,
+            take: 500);
+        var (status, body) = await ExecuteWithBodyAsync(result, http);
+
+        status.Should().Be(StatusCodes.Status200OK);
+        var query = queryPort.Queries.Should().ContainSingle().Which;
+        query.ScopeId.Should().Be(CallerScope);
+        query.AuditActorId.Should().BeNull();
+        query.AuditActorIds.Should().Equal("actor-key-2", "actor-key-1");
+        query.RequireChatProvenance.Should().BeTrue();
+        query.Take.Should().Be(200);
+        hasher.CanonicalActorKeys.Should().Equal("nyxid:user-audit-alpha");
+        authorizer.Calls.Should().Be(0);
+        body.Should().Contain("conversation-alpha").And.Contain("continuationCursor");
+        body.Should().NotContain(CallerSubject)
+            .And.NotContain("prompt-secret")
+            .And.NotContain("argument-secret")
+            .And.NotContain("result-secret")
+            .And.NotContain("action-params-secret");
+    }
+
+    [Fact]
+    public async Task QueryChatActivity_MapsTypedFiltersAndUsesChatDefaultTake()
+    {
+        var queryPort = new RecordingAuditTrailQueryPort();
+        var hasher = new RecordingHasher();
+        var http = BuildHttpContext(CallerScope, "token", queryPort, subject: CallerSubject);
+
+        var result = await AuditTrailEndpoints.QueryChatActivity(
+            http,
+            BuildEndpointDependencies(queryPort, hasher),
+            NullLoggerFactory.Instance,
+            cursor: " cursor-alpha ",
+            from: DateTimeOffset.Parse("2026-08-01T00:00:00Z"),
+            to: DateTimeOffset.Parse("2026-08-02T00:00:00Z"),
+            surface: " workflow_chat ",
+            conversationId: " conversation-alpha ",
+            outcome: " failed ");
+        var status = await ExecuteAsync(result, http);
+
+        status.Should().Be(StatusCodes.Status200OK);
+        var query = queryPort.Queries.Should().ContainSingle().Which;
+        query.Cursor.Should().Be("cursor-alpha");
+        query.ChatSurface.Should().Be(AuditChatSurface.WorkflowChat);
+        query.ChatConversationId.Should().Be("conversation-alpha");
+        query.TerminalOutcome.Should().Be(AuditTerminalOutcome.Failed);
+        query.Take.Should().Be(50);
+    }
+
+    [Theory]
+    [InlineData("scope")]
+    [InlineData("auditActorId")]
+    [InlineData("identityKeyId")]
+    [InlineData("surface")]
+    [InlineData("outcome")]
+    public async Task QueryChatActivity_InvalidOrPersonalOnlyFiltersFailBeforeQuery(string filter)
+    {
+        var queryPort = new RecordingAuditTrailQueryPort();
+        var hasher = new RecordingHasher();
+        var http = BuildHttpContext(CallerScope, "token", queryPort, subject: CallerSubject);
+
+        var result = await AuditTrailEndpoints.QueryChatActivity(
+            http,
+            BuildEndpointDependencies(queryPort, hasher),
+            NullLoggerFactory.Instance,
+            scope: filter == "scope" ? CallerScope : null,
+            auditActorId: filter == "auditActorId" ? "actor-other" : null,
+            identityKeyId: filter == "identityKeyId" ? "key-1" : null,
+            surface: filter == "surface" ? "unknown" : null,
+            outcome: filter == "outcome" ? "unknown" : null);
+        var status = await ExecuteAsync(result, http);
+
+        status.Should().Be(StatusCodes.Status400BadRequest);
+        queryPort.Queries.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("missing_scope")]
+    [InlineData("missing_subject")]
+    [InlineData("conflicting_subject")]
+    public async Task QueryChatActivity_MissingOrAmbiguousIdentityFailsBeforeQuery(string failure)
+    {
+        var queryPort = new RecordingAuditTrailQueryPort();
+        var claims = new List<Claim>();
+        if (failure != "missing_scope")
+            claims.Add(new Claim("scope_id", CallerScope));
+        if (failure != "missing_subject")
+            claims.Add(new Claim("uid", CallerSubject));
+        if (failure == "conflicting_subject")
+            claims.Add(new Claim("sub", "user-audit-beta"));
+        var http = BuildHttpContext(null, "token", queryPort, scopeClaims: claims);
+
+        var result = await AuditTrailEndpoints.QueryChatActivity(
+            http,
+            BuildEndpointDependencies(queryPort, new RecordingHasher()),
+            NullLoggerFactory.Instance);
+        var status = await ExecuteAsync(result, http);
+
+        status.Should().Be(StatusCodes.Status401Unauthorized);
+        queryPort.Queries.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task QueryChatActivity_AdminAllModeRequiresExplicitSelection()
+    {
+        var queryPort = new RecordingAuditTrailQueryPort();
+        var authorizer = new FakeAuthorizer(elevated: true);
+        var http = BuildHttpContext(CallerScope, "token", queryPort, authorizer, subject: CallerSubject);
+
+        var result = await AuditTrailEndpoints.QueryChatActivity(
+            http,
+            BuildEndpointDependencies(queryPort, authorizer: authorizer),
+            NullLoggerFactory.Instance,
+            scope: "__all__",
+            auditActorId: " actor-key-exact ");
+        var status = await ExecuteAsync(result, http);
+
+        status.Should().Be(StatusCodes.Status200OK);
+        var query = queryPort.Queries.Should().ContainSingle().Which;
+        query.ScopeId.Should().BeNull();
+        query.AuditActorIds.Should().BeNull();
+        query.AuditActorId.Should().Be("actor-key-exact");
+        query.RequireChatProvenance.Should().BeTrue();
+        authorizer.Calls.Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData(false, true, StatusCodes.Status403Forbidden, "SCOPE_ACCESS_DENIED")]
+    [InlineData(true, false, StatusCodes.Status503ServiceUnavailable, "AUDIT_ADMIN_AUTH_UNAVAILABLE")]
+    public async Task QueryChatActivity_AdminAllModeFailsClosed(
+        bool elevated,
+        bool includeAuthorizer,
+        int expectedStatus,
+        string expectedCode)
+    {
+        var queryPort = new RecordingAuditTrailQueryPort();
+        var authorizer = new FakeAuthorizer(elevated);
+        var http = BuildHttpContext(CallerScope, "token", queryPort, authorizer, subject: CallerSubject);
+
+        var result = await AuditTrailEndpoints.QueryChatActivity(
+            http,
+            BuildEndpointDependencies(queryPort, authorizer: includeAuthorizer ? authorizer : null),
+            NullLoggerFactory.Instance,
+            scope: "__all__");
+        var (status, body) = await ExecuteWithBodyAsync(result, http);
+
+        status.Should().Be(expectedStatus);
+        body.Should().Contain(expectedCode);
+        queryPort.Queries.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("hasher", "AUDIT_ACTOR_HASHER_UNAVAILABLE")]
+    [InlineData("query", "AUDIT_QUERY_UNAVAILABLE")]
+    [InlineData("throw", "AUDIT_QUERY_UNAVAILABLE")]
+    public async Task QueryChatActivity_UnavailableDependencyReturnsSanitizedServiceUnavailable(
+        string dependency,
+        string expectedCode)
+    {
+        IAuditTrailQueryPort? queryPort = dependency switch
+        {
+            "query" => null,
+            "throw" => new ThrowingAuditTrailQueryPort("https://elastic-secret.example bearer secret"),
+            _ => new RecordingAuditTrailQueryPort(),
+        };
+        var hasher = dependency == "hasher" ? null : new RecordingHasher();
+        var http = BuildHttpContext(CallerScope, "token", queryPort, subject: CallerSubject);
+
+        var result = await AuditTrailEndpoints.QueryChatActivity(
+            http,
+            BuildEndpointDependencies(queryPort, hasher),
+            NullLoggerFactory.Instance);
+        var (status, body) = await ExecuteWithBodyAsync(result, http);
+
+        status.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        body.Should().Contain(expectedCode).And.NotContain("elastic-secret");
+    }
+
+    [Theory]
+    [InlineData(AuditToolExecutionPhase.Running, "running")]
+    [InlineData(AuditToolExecutionPhase.WaitingApproval, "waiting_approval")]
+    [InlineData(AuditToolExecutionPhase.Terminal, "terminal")]
+    [InlineData(AuditToolExecutionPhase.Unspecified, "unspecified")]
+    public void ToRecordResponse_ToolExecutionPhase_ShouldExposeTypedSafeDetails(
+        AuditToolExecutionPhase executionPhase,
+        string expectedPhase)
+    {
+        var response = AuditTrailResponseMapper.ToRecordResponse(new AuditRecord
+        {
+            AuditId = "audit-tool",
+            EventKind = "tool.execute",
+            Subject = "tool/test_tool",
+            Source = "urn:aevatar:audit:tool-execution",
+            SchemaVersion = "1.0",
+            OperationName = "test_tool",
+            ToolExecution = new AuditToolExecution
+            {
+                ArgumentsSha256 = new string('a', 64),
+                ExecutionPhase = executionPhase,
+                IsMutation = true,
+            },
+        });
+
+        response.ToolExecution.Should().BeEquivalentTo(new AuditToolExecutionResponse(
+            new string('a', 64),
+            expectedPhase,
+            IsMutation: true));
+    }
 
     [Fact]
     public async Task QueryAuditTrail_WhenScopeOmitted_UsesCallerScopeWithoutAdminAuthorization()
@@ -57,6 +285,20 @@ public sealed class AuditTrailEndpointsTests
         authorizer.Calls.Should().Be(0);
         body.Should().Contain("coverage").And.Contain("ingestionWatermark").And.Contain("identityKeyId");
         body.Should().Contain("continuationCursor").And.Contain("lifecyclePhase").And.Contain("terminalOutcome");
+        using var json = JsonDocument.Parse(body);
+        var chat = json.RootElement.GetProperty("records")[0]
+            .GetProperty("provenance").GetProperty("chat");
+        chat.GetProperty("surface").GetString().Should().Be("nyxid_assistant");
+        chat.GetProperty("conversationId").GetString().Should().Be("conversation-alpha");
+        chat.GetProperty("turnId").GetString().Should().Be("turn-alpha");
+        chat.GetProperty("taskId").GetString().Should().Be("task-alpha");
+        chat.GetProperty("stepId").GetString().Should().Be("step-alpha");
+        chat.GetProperty("actionRequestId").GetString().Should().Be("action-alpha");
+        body.Should().NotContain("ownerSubject")
+            .And.NotContain("prompt-secret")
+            .And.NotContain("argument-secret")
+            .And.NotContain("result-secret")
+            .And.NotContain("action-params-secret");
     }
 
     [Fact]
@@ -620,7 +862,7 @@ public sealed class AuditTrailEndpointsTests
             .ToArray();
         routeEndpoints.Select(static endpoint => endpoint.RoutePattern.RawText)
             .Should()
-            .Contain(["/api/audit/trail", "/api/audit/trail/cloudevents", "/api/audit/actor-resolutions"]);
+            .Contain(["/api/audit/trail", "/api/audit/chat-activity", "/api/audit/trail/cloudevents", "/api/audit/actor-resolutions"]);
         routeEndpoints.Single(static endpoint => endpoint.RoutePattern.RawText == "/api/audit/trail")
             .Metadata
             .GetMetadata<AuditTrailEndpointAuditMetadata>()
@@ -688,13 +930,17 @@ public sealed class AuditTrailEndpointsTests
         string? bearer,
         IAuditTrailQueryPort? queryPort,
         IPlatformAdminAuthorizer? authorizer = null,
-        IReadOnlyCollection<Claim>? scopeClaims = null)
+        IReadOnlyCollection<Claim>? scopeClaims = null,
+        string? subject = null)
     {
         var context = new DefaultHttpContext
         {
             RequestServices = BuildServiceProvider(queryPort, hasher: null, authorizer),
         };
-        context.User = new ClaimsPrincipal(new ClaimsIdentity(scopeClaims ?? BuildScopeClaims(scopeClaim), "Test"));
+        var claims = (scopeClaims ?? BuildScopeClaims(scopeClaim)).ToList();
+        if (subject is not null)
+            claims.Add(new Claim("uid", subject));
+        context.User = new ClaimsPrincipal(new ClaimsIdentity(claims, "Test"));
         if (bearer is not null)
             context.Request.Headers.Authorization = $"Bearer {bearer}";
 
@@ -796,6 +1042,15 @@ public sealed class AuditTrailEndpointsTests
                     ScopeId = query.ScopeId ?? "scope-from-store",
                     RunId = "run-1",
                     CorrelationId = "correlation-1",
+                    Chat = new AuditChatProvenance
+                    {
+                        Surface = AuditChatSurface.NyxidAssistant,
+                        ConversationId = "conversation-alpha",
+                        TurnId = "turn-alpha",
+                        TaskId = "task-alpha",
+                        StepId = "step-alpha",
+                        ActionRequestId = "action-alpha",
+                    },
                 },
                 Redaction = new AuditRedaction
                 {
@@ -880,12 +1135,20 @@ public sealed class AuditTrailEndpointsTests
     {
         public AuditActorIdentity Identity { get; init; } = new("audit_actor:test", "key-test");
 
+        public IReadOnlyList<AuditActorIdentity>? Identities { get; init; }
+
         public List<string> CanonicalActorKeys { get; } = [];
 
         public AuditActorIdentity Hash(string canonicalActorKey)
         {
             CanonicalActorKeys.Add(canonicalActorKey);
             return Identity;
+        }
+
+        public IReadOnlyList<AuditActorIdentity> HashAll(string canonicalActorKey)
+        {
+            CanonicalActorKeys.Add(canonicalActorKey);
+            return Identities ?? [Identity];
         }
 
         public bool Verify(string canonicalActorKey, string auditActorId, string identityKeyId)

@@ -5,7 +5,9 @@ using Aevatar.CQRS.Core.Interactions;
 using Aevatar.CQRS.Core.Streaming;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Queries;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using WorkflowCallerCredential = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential;
 using Aevatar.Workflow.Application.Runs;
 using FluentAssertions;
 
@@ -25,7 +27,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             inner);
 
         var result = await service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct"), ExternalCapabilityExecutionMode.Interactive),
             static (_, _) => ValueTask.CompletedTask);
 
         result.Succeeded.Should().BeFalse();
@@ -51,6 +53,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             new WorkflowChatRunRequest(
                 "hello",
                 WorkflowChatSource.CatalogWorkflow("direct"),
+                ExternalCapabilityExecutionMode.Interactive,
                 CallerCredential: new WorkflowCallerCredential("Bearer token-123")),
             static (_, _) => ValueTask.CompletedTask);
 
@@ -89,7 +92,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             inner);
 
         var result = await service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", WorkflowChatSource.InlineYamlBundle(["bad"])),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.InlineYamlBundle(["bad"]), ExternalCapabilityExecutionMode.Interactive),
             static (_, _) => ValueTask.CompletedTask);
 
         result.Succeeded.Should().BeFalse();
@@ -124,7 +127,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             inner);
 
         var result = await service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct"), Headers: headers),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct"), ExternalCapabilityExecutionMode.Interactive, Headers: headers),
             static (_, _) => ValueTask.CompletedTask,
             (receipt, _) =>
             {
@@ -172,6 +175,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             new WorkflowChatRunRequest(
                 "hello",
                 WorkflowChatSource.CatalogWorkflow("direct"),
+                ExternalCapabilityExecutionMode.Interactive,
                 CommandIdSeed: "caller-command",
                 CorrelationIdSeed: "caller-correlation"),
             static (_, _) => ValueTask.CompletedTask);
@@ -191,6 +195,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
         var request = new WorkflowChatRunRequest(
             "execution prompt",
             WorkflowChatSource.Direct(),
+            ExternalCapabilityExecutionMode.Interactive,
             ScopeId: "scope-a",
             CommandIdSeed: "create-command-1",
             ChatConversation: WorkflowChatConversationIntent.Create());
@@ -260,6 +265,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             new WorkflowChatRunRequest(
                 "execution prompt",
                 WorkflowChatSource.Direct(),
+                ExternalCapabilityExecutionMode.Interactive,
                 ScopeId: "scope-a",
                 CommandIdSeed: "create-command-1",
                 ChatConversation: WorkflowChatConversationIntent.Create()),
@@ -297,6 +303,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             new WorkflowChatRunRequest(
                 "execution prompt with transcript",
                 WorkflowChatSource.CatalogWorkflow("direct"),
+                ExternalCapabilityExecutionMode.Interactive,
                 ScopeId: "scope-a",
                 ChatConversation: WorkflowChatConversationIntent.Create()),
             static (_, _) => ValueTask.CompletedTask);
@@ -358,6 +365,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             new WorkflowChatRunRequest(
                 "next turn",
                 WorkflowChatSource.CatalogWorkflow("direct"),
+                ExternalCapabilityExecutionMode.Interactive,
                 ScopeId: "scope-a",
                 ChatConversation: WorkflowChatConversationIntent.Continue(
                     "conversation-existing",
@@ -420,6 +428,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             new WorkflowChatRunRequest(
                 "team01",
                 WorkflowChatSource.CatalogWorkflow("direct"),
+                ExternalCapabilityExecutionMode.Interactive,
                 ScopeId: "scope-a",
                 ChatConversation: WorkflowChatConversationIntent.Continue(
                     "conversation-existing",
@@ -459,6 +468,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             new WorkflowChatRunRequest(
                 "team01",
                 WorkflowChatSource.CatalogWorkflow("direct"),
+                ExternalCapabilityExecutionMode.Interactive,
                 ScopeId: "scope-a",
                 ChatConversation: WorkflowChatConversationIntent.Continue(
                     "conversation-existing",
@@ -487,6 +497,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             new WorkflowChatRunRequest(
                 "team01",
                 WorkflowChatSource.CatalogWorkflow("direct"),
+                ExternalCapabilityExecutionMode.Interactive,
                 ScopeId: "scope-a",
                 ChatConversation: WorkflowChatConversationIntent.Continue("conversation-existing")),
             static (_, _) => ValueTask.CompletedTask);
@@ -524,6 +535,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             new WorkflowChatRunRequest(
                 "hello",
                 WorkflowChatSource.CatalogWorkflow("direct"),
+                ExternalCapabilityExecutionMode.Interactive,
                 ScopeId: "scope-a",
                 ChatConversation: WorkflowChatConversationIntent.None()),
             static (_, _) => ValueTask.CompletedTask);
@@ -561,6 +573,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             new WorkflowChatRunRequest(
                 "hello",
                 WorkflowChatSource.CatalogWorkflow("direct"),
+                ExternalCapabilityExecutionMode.Interactive,
                 ScopeId: "scope-a",
                 ChatConversation: WorkflowChatConversationIntent.Continue("  ")),
             static (_, _) => ValueTask.CompletedTask);
@@ -597,6 +610,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             new WorkflowChatRunRequest(
                 "hello",
                 WorkflowChatSource.CatalogWorkflow("direct"),
+                ExternalCapabilityExecutionMode.Interactive,
                 ScopeId: "scope-a",
                 ChatConversation: WorkflowChatConversationIntent.Create()),
             static (_, _) => ValueTask.CompletedTask);
@@ -637,6 +651,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             new WorkflowChatRunRequest(
                 "execution prompt",
                 WorkflowChatSource.CatalogWorkflow("direct"),
+                ExternalCapabilityExecutionMode.Interactive,
                 ScopeId: "scope-a",
                 ChatConversation: WorkflowChatConversationIntent.Create()),
             static (_, _) => ValueTask.CompletedTask);
@@ -680,6 +695,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             new WorkflowChatRunRequest(
                 "execution prompt",
                 WorkflowChatSource.CatalogWorkflow("direct"),
+                ExternalCapabilityExecutionMode.Interactive,
                 ScopeId: "scope-a",
                 ChatConversation: WorkflowChatConversationIntent.Create()),
             static (_, _) => ValueTask.CompletedTask);
@@ -723,6 +739,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             new WorkflowChatRunRequest(
                 "execution prompt",
                 WorkflowChatSource.CatalogWorkflow("direct"),
+                ExternalCapabilityExecutionMode.Interactive,
                 ScopeId: "scope-a",
                 ChatConversation: WorkflowChatConversationIntent.Continue(
                     "conversation-missing",
@@ -768,6 +785,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             new WorkflowChatRunRequest(
                 "hello",
                 WorkflowChatSource.CatalogWorkflow("direct"),
+                ExternalCapabilityExecutionMode.Interactive,
                 ScopeId: "scope-a",
                 ChatConversation: WorkflowChatConversationIntent.Create()),
             static (_, _) => ValueTask.CompletedTask);
@@ -805,7 +823,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             inner);
 
         var result = await service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct"), ExternalCapabilityExecutionMode.Interactive),
             static (_, _) => ValueTask.CompletedTask);
 
         result.Succeeded.Should().BeFalse();
@@ -840,7 +858,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             inner);
 
         var result = await service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct"), ExternalCapabilityExecutionMode.Interactive),
             static (_, _) => ValueTask.CompletedTask);
 
         result.Succeeded.Should().BeFalse();
@@ -874,7 +892,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             inner);
 
         var result = await service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct"), ExternalCapabilityExecutionMode.Interactive),
             static (_, _) => ValueTask.CompletedTask);
 
         result.Succeeded.Should().BeFalse();
@@ -910,7 +928,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             inner);
 
         var act = () => service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct"), ExternalCapabilityExecutionMode.Interactive),
             static (_, _) => ValueTask.CompletedTask);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -943,7 +961,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             inner);
 
         var act = () => service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct"), ExternalCapabilityExecutionMode.Interactive),
             static (_, _) => ValueTask.CompletedTask);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -980,7 +998,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             inner);
 
         var result = await service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct"), ExternalCapabilityExecutionMode.Interactive),
             static (_, _) => ValueTask.CompletedTask);
 
         result.Succeeded.Should().BeFalse();
@@ -1012,7 +1030,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             inner);
 
         var act = () => service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct"), ExternalCapabilityExecutionMode.Interactive),
             static (_, _) => ValueTask.CompletedTask);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -1047,7 +1065,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             inner);
 
         var result = await service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", WorkflowChatSource.DefinitionActor("actor-auto", "auto")),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.DefinitionActor("actor-auto", "auto"), ExternalCapabilityExecutionMode.Interactive),
             static (_, _) => ValueTask.CompletedTask);
 
         result.Succeeded.Should().BeTrue();
@@ -1087,7 +1105,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             inner);
 
         var act = () => service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", WorkflowChatSource.DefinitionActor("actor-auto", "auto")),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.DefinitionActor("actor-auto", "auto"), ExternalCapabilityExecutionMode.Interactive),
             static (_, _) => ValueTask.CompletedTask);
 
         await act.Should().ThrowAsync<OperationCanceledException>();

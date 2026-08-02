@@ -1,8 +1,13 @@
 using System.Net;
 using System.Text;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.Tools;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.Tools;
+using Aevatar.Audit;
+using Aevatar.Audit.Abstractions.Identity;
+using Aevatar.Audit.Abstractions.Models;
+using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
@@ -134,7 +139,12 @@ public sealed class WorkflowTuringCompletenessTests : WorkflowGAgentTestBase
         var nyxIdTool = new NyxIdProxyTool(new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.test" },
             new HttpClient(requestHandler)));
-        var adapter = new AgentWorkflowToolSourceAdapter([new SingleAgentToolSource(nyxIdTool)]);
+        var adapter = new AgentWorkflowToolSourceAdapter(
+            [new SingleAgentToolSource(nyxIdTool)],
+            new AdmittedAgentToolExecutor(
+                AlwaysStartingAgentToolAdmissionLedger.Instance,
+                new AlwaysAppendingAuditTrailAppender(),
+                new StableAuditActorIdentityHasher()));
         var toolCallModule = new ToolCallModule([adapter], NullLogger<ToolCallModule>.Instance);
         var requestedStepIds = new List<string>();
 
@@ -156,7 +166,7 @@ public sealed class WorkflowTuringCompletenessTests : WorkflowGAgentTestBase
         SetAgentId(runAgent, "workflow-run-nyxid-failure");
         runAgent.EventPublisher = committedPublisher;
         runAgent.CommittedStateEventPublisher = committedPublisher;
-        await runAgent.BindWorkflowRunDefinitionAsync(
+            await BindInteractiveWorkflowRunDefinitionAsync(runAgent,
             "definition-nyxid-failure",
             """
             name: nyxid_failure
@@ -531,6 +541,21 @@ public sealed class WorkflowTuringCompletenessTests : WorkflowGAgentTestBase
             ct.ThrowIfCancellationRequested();
             return Task.FromResult<IReadOnlyList<IAgentTool>>([tool]);
         }
+    }
+
+    private sealed class AlwaysAppendingAuditTrailAppender : IAuditTrailAppender
+    {
+        public Task<AuditTrailAppendResult> AppendAsync(
+            AuditRecord record,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(AuditTrailAppendResult.Appended(record.AuditId));
+    }
+
+    private sealed class StableAuditActorIdentityHasher : IAuditActorIdentityHasher
+    {
+        public AuditActorIdentity Hash(string canonicalActorKey) => new("actor-hash", "key-1");
+
+        public bool Verify(string canonicalActorKey, string auditActorId, string identityKeyId) => true;
     }
 
     private sealed class CountingHandler : HttpMessageHandler

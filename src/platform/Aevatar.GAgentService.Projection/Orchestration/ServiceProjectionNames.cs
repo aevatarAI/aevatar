@@ -22,4 +22,6 @@ internal static class ServiceProjectionKinds
     public const string NyxIdAuthorizationCatalog = "nyxid-authorization-catalog";
     public const string NyxIdAuthorizationCatalogRefreshObservation =
         "nyxid-authorization-catalog-refresh-observation";
+    public const string AgentProfileCatalog = "agent-profile-catalog";
+    public const string AgentProfileCurrentState = "agent-profile-current-state";
 }

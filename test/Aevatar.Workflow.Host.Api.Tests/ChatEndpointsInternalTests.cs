@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
+using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.Workflow.Abstractions;
@@ -12,7 +13,6 @@ using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Aevatar.Workflow.Infrastructure.DependencyInjection;
-using Aevatar.Foundation.Abstractions.Connectors;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
@@ -20,11 +20,11 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Options;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Primitives;
 using ApplicationFileArtifactRef = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactRef;
 using ApplicationFileArtifactSourceKind = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactSourceKind;
@@ -76,6 +76,8 @@ public sealed class ChatEndpointsInternalTests
                     new DateTimeOffset(2026, 6, 8, 0, 0, 0, TimeSpan.Zero))),
         };
 
+        var requestHttp = CreateHttpContext();
+        requestHttp.User = AuthenticatedScopePrincipal("attacker-scope");
         var result = await WorkflowCapabilityEndpoints.HandleForkRun(
             new WorkflowForkRunInput
             {
@@ -84,13 +86,13 @@ public sealed class ChatEndpointsInternalTests
                 Input = "resume input",
                 CommandId = " cmd-1 ",
                 CorrelationId = " corr-1 ",
-                ScopeId = " scope-1 ",
                 VariableOverrides = new Dictionary<string, string>
                 {
                     [" topic "] = "override",
                 },
             },
             service,
+            requestHttp,
             ct: CancellationToken.None);
 
         var http = CreateHttpContext();
@@ -101,12 +103,18 @@ public sealed class ChatEndpointsInternalTests
         var command = service.Commands[0];
         command.SourceRunId.Should().Be("source-run");
         command.StartAtStepId.Should().Be("step-b");
-        command.ScopeId.Should().Be("scope-1");
+        command.ScopeId.Should().Be("attacker-scope");
         command.VariableOverrides.Should().Contain("topic", "override");
         http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
         body.Should().Contain("new-run-actor");
         body.Should().Contain("cmd-1");
         body.Should().Contain("corr-1");
+    }
+
+    [Fact]
+    public void WorkflowForkRunInput_ShouldNotExposeScopeId()
+    {
+        typeof(WorkflowForkRunInput).GetProperty("ScopeId").Should().BeNull();
     }
 
     [Fact]
@@ -125,6 +133,7 @@ public sealed class ChatEndpointsInternalTests
                 StartAtStepId = "step-b",
             },
             service,
+            CreateAuthenticatedScopeHttpContext("scope-1"),
             ct: CancellationToken.None);
 
         var http = CreateHttpContext();
@@ -765,6 +774,7 @@ public sealed class ChatEndpointsInternalTests
         capturedCommand.Should().NotBeNull();
         capturedCommand!.ScopeId.Should().Be("caller-scope");
         capturedCommand.CallerCredential!.BearerToken.Should().Be("delegation-token");
+        capturedCommand.CallerCredential.Kind.Should().Be(NyxIdCallerCredentialKind.ProxyDelegation);
         capturedCommand.CallerCredential.NyxIdAuthority.Should().BeEquivalentTo(
             new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerNyxIdAuthority(
                 "nyxid",
@@ -1608,6 +1618,9 @@ public sealed class ChatEndpointsInternalTests
         missing.Credential.Should().BeNull();
         valid.Succeeded.Should().BeTrue();
         valid.Credential!.BearerToken.Should().Be("token-123");
+        valid.Credential.Kind.Should().Be(NyxIdCallerCredentialKind.SourceReadableUserBearer);
+        valid.NyxIdCredentialSelection!.Kind.Should().Be(
+            NyxIdCallerCredentialKind.SourceReadableUserBearer);
         bareBearer.Succeeded.Should().BeFalse();
         bareBearer.Error.Should().Be(WorkflowChatRunStartError.InvalidCallerCredential);
         bareBearer.Credential.Should().BeNull();
@@ -1615,18 +1628,26 @@ public sealed class ChatEndpointsInternalTests
         invalid.Error.Should().Be(WorkflowChatRunStartError.InvalidCallerCredential);
         invalid.Credential.Should().BeNull();
         bothValid.Succeeded.Should().BeTrue();
-        bothValid.Credential!.BearerToken.Should().Be("forwarded-token");
+        bothValid.Credential!.BearerToken.Should().Be("delegation-token");
+        bothValid.Credential.Kind.Should().Be(NyxIdCallerCredentialKind.ProxyDelegation);
+        bothValid.Credential.SourceReadableUserBearerToken.Should().Be("forwarded-token");
+        bothValid.NyxIdCredentialSelection!.Kind.Should().Be(
+            NyxIdCallerCredentialKind.SourceReadableUserBearer);
+        bothValid.NyxIdCredentialSelection.SourceReadableUserBearerToken.Should().Be("forwarded-token");
         unsupportedScheme.Succeeded.Should().BeFalse();
         unsupportedScheme.Error.Should().Be(WorkflowChatRunStartError.InvalidCallerCredential);
         unsupportedScheme.Credential.Should().BeNull();
         delegationOnly.Succeeded.Should().BeTrue();
         delegationOnly.Credential!.BearerToken.Should().Be("delegation-token");
+        delegationOnly.Credential.Kind.Should().Be(NyxIdCallerCredentialKind.ProxyDelegation);
+        delegationOnly.NyxIdCredentialSelection!.Kind.Should().Be(
+            NyxIdCallerCredentialKind.ProxyDelegation);
         malformedAuthorizationWithDelegation.Succeeded.Should().BeFalse();
         malformedAuthorizationWithDelegation.Error.Should().Be(
             WorkflowChatRunStartError.InvalidCallerCredential);
-        validAuthorizationWithMalformedDelegation.Succeeded.Should().BeTrue();
-        validAuthorizationWithMalformedDelegation.Credential!.BearerToken.Should().Be(
-            "forwarded-token");
+        validAuthorizationWithMalformedDelegation.Succeeded.Should().BeFalse();
+        validAuthorizationWithMalformedDelegation.Error.Should().Be(
+            WorkflowChatRunStartError.InvalidCallerCredential);
         identityOnly.Succeeded.Should().BeTrue();
         identityOnly.Credential.Should().BeNull();
         malformedDelegationOnly.Succeeded.Should().BeFalse();
@@ -2406,12 +2427,11 @@ public sealed class ChatEndpointsInternalTests
                     [" topic "] = "recovered",
                 },
                 Input = "resume input",
-                ScopeId = " scope-1 ",
                 CommandId = " cmd-1 ",
                 CorrelationId = " corr-1 ",
             },
             service,
-            CreateHttpContext("Bearer trusted-token"),
+            CreateAuthenticatedScopeHttpContext("scope-1", "Bearer trusted-token"),
             CancellationToken.None);
 
         var http = CreateHttpContext();
@@ -2448,7 +2468,7 @@ public sealed class ChatEndpointsInternalTests
                 StartAtStepId = "step-b",
             },
             service,
-            CreateHttpContext("Bearer token 123"),
+            CreateAuthenticatedScopeHttpContext("scope-1", "Bearer token 123"),
             CancellationToken.None);
 
         var http = CreateHttpContext();
@@ -2473,7 +2493,7 @@ public sealed class ChatEndpointsInternalTests
                 StartAtStepId = startAtStepId,
             },
             service,
-            null,
+            CreateAuthenticatedScopeHttpContext("scope-1"),
             CancellationToken.None);
 
         var http = CreateHttpContext();
@@ -2501,7 +2521,7 @@ public sealed class ChatEndpointsInternalTests
                 StartAtStepId = "missing-step",
             },
             service,
-            null,
+            CreateAuthenticatedScopeHttpContext("scope-1"),
             CancellationToken.None);
 
         var http = CreateHttpContext();
@@ -2511,6 +2531,28 @@ public sealed class ChatEndpointsInternalTests
         http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
         body.Should().Contain("Start step 'missing-step' was not found");
         service.Commands.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task HandleForkRun_ShouldRejectMissingTrustedScopeBeforeDispatch()
+    {
+        var service = new RecordingDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>();
+
+        var result = await WorkflowCapabilityEndpoints.HandleForkRun(
+            new WorkflowForkRunInput
+            {
+                SourceRunId = "source-run",
+                StartAtStepId = "step-b",
+            },
+            service,
+            CreateHttpContext(),
+            CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
+        service.Commands.Should().BeEmpty();
     }
 
     [Fact]
@@ -2594,6 +2636,15 @@ public sealed class ChatEndpointsInternalTests
         if (!string.IsNullOrWhiteSpace(authorization))
             http.Request.Headers.Authorization = authorization;
         http.Response.Body = new MemoryStream();
+        return http;
+    }
+
+    private static DefaultHttpContext CreateAuthenticatedScopeHttpContext(
+        string scopeId,
+        string? authorization = null)
+    {
+        var http = CreateHttpContext(authorization);
+        http.User = AuthenticatedScopePrincipal(scopeId);
         return http;
     }
 

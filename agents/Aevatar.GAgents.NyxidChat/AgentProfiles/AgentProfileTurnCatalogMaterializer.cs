@@ -1,4 +1,5 @@
 using System.Text;
+using System.Security.Cryptography;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.Prompting;
 using Aevatar.AI.Abstractions.ToolProviders;
@@ -356,7 +357,8 @@ public sealed class AgentProfileTurnCatalogMaterializer
                     profile.Members.Take(32)
                         .Select(static member => new AgentProfileTurnClassificationCandidate(
                             member.IntentId,
-                            member.RoutingDescription))
+                            member.RoutingDescription,
+                            member.SideEffectClass))
                         .ToArray(),
                     TimeSpan.FromMilliseconds(profile.ClassifierTimeoutMs)),
                 ct);
@@ -462,7 +464,12 @@ public sealed class AgentProfileTurnCatalogMaterializer
             !string.Equals(fetchResult.LiteralVersion, candidate.SkillRef.LiteralVersion, StringComparison.Ordinal) ||
             !string.Equals(fetchResult.Name, candidate.ExpectedSkillName, StringComparison.Ordinal) ||
             !string.Equals(fetchResult.PublisherId, candidate.ReviewedPublisherId, StringComparison.Ordinal) ||
-            string.IsNullOrWhiteSpace(fetchResult.SkillHash))
+            fetchResult.SkillSha256 is null ||
+            fetchResult.SkillSha256.Length != 32 ||
+            candidate.SealedSkillSha256.Length != 32 ||
+            !CryptographicOperations.FixedTimeEquals(
+                fetchResult.SkillSha256.Span,
+                candidate.SealedSkillSha256.Span))
         {
             diagnostics.Add(new AgentProfileTurnDiagnostic(
                 AgentProfileTurnDiagnosticCode.ExactSkillIdentityMismatch,
@@ -535,7 +542,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
         ToolSetResolveResult resolved;
         try
         {
-            resolved = _toolSetRegistry.Resolve(new ChatRouteToolSetRef { Name = toolSetName ?? string.Empty });
+            resolved = _toolSetRegistry.Resolve(toolSetName);
         }
         catch (Exception)
         {
@@ -556,6 +563,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
         }
 
         var discovered = new List<IAgentTool>();
+        using var toolContextScope = AgentToolContextScope.Push(toolContext);
         foreach (var source in resolved.Sources)
         {
             try
@@ -600,6 +608,9 @@ public sealed class AgentProfileTurnCatalogMaterializer
                     group.Key));
                 continue;
             }
+
+            if (DeclaresCapability(tool, AgentToolCapabilities.ExcludeFromNyxIdChat))
+                continue;
 
             if (!IsEligible(tool, toolContext))
             {
@@ -687,6 +698,10 @@ public sealed class AgentProfileTurnCatalogMaterializer
                    StringComparer.Ordinal) ||
                !string.IsNullOrWhiteSpace(toolContext.Credentials.NyxIdAccessToken);
     }
+
+    private static bool DeclaresCapability(IAgentTool tool, string capability) =>
+        tool is IAgentToolCapabilityDescriptor descriptor &&
+        descriptor.Capabilities.Contains(capability, StringComparer.Ordinal);
 
     private static AgentProfileTurnAuthorityPreparation CreatePreparation(
         string sessionId,

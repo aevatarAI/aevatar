@@ -3,6 +3,7 @@ using System.Text;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
+using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
@@ -103,44 +104,53 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         var teamId = NormalizeRequired(request.TeamId, "teamId");
         var displayName = NormalizeRequired(request.DisplayName, nameof(request.DisplayName));
         var workflowYaml = NormalizeRequired(request.WorkflowYaml, nameof(request.WorkflowYaml));
+        var provisionKey = BuildProvisionKey(normalizedScopeId, teamId, displayName);
+        var workflowId = $"workflow-{provisionKey}";
+        var revisionId = $"revision-{provisionKey}";
 
         var suppliedAdmission = request.CapabilityAdmission;
+        var callerId = suppliedAdmission?.CallerId ?? string.Empty;
+        var nyxIdCallerCredentialSelection = suppliedAdmission?.NyxIdCallerCredential;
+        var organizationBearerToken = suppliedAdmission?.NyxIdOrganizationBearerToken;
+        var existingPlan = suppliedAdmission?.ExistingPlan?.Clone();
+        var explicitRequestConfirmations = suppliedAdmission?.ExplicitRequestConfirmations ?? [];
         var executionMode = ShouldSchedule(request)
             ? ExternalCapabilityExecutionMode.Durable
             : ExternalCapabilityExecutionMode.Interactive;
-        var capabilityAdmissionPlan = suppliedAdmission?.ExistingPlan is { } existingPlan
+        var capabilityAdmissionPlan = existingPlan is not null
             ? await _capabilityAdmissionService.RevalidatePersistedAsync(
                 new PersistedWorkflowCapabilityAdmissionRequest(
                     existingPlan,
                     workflowYaml,
                     new Dictionary<string, string>(),
                     "studio_workflow_provisioning",
-                    executionMode),
+                    executionMode,
+                    workflowId,
+                    revisionId),
                 ct)
             : await _capabilityAdmissionService.AdmitAsync(
                 new WorkflowExternalCapabilityAdmissionRequest(
                 new ExternalWorkflowCapabilityAccessContext(
                     normalizedScopeId,
-                    suppliedAdmission?.CallerId ?? string.Empty,
-                    suppliedAdmission?.NyxIdCallerBearerToken,
-                    suppliedAdmission?.NyxIdOrganizationBearerToken),
+                    callerId,
+                    nyxIdCallerCredentialSelection,
+                    organizationBearerToken),
                 workflowYaml,
                 new Dictionary<string, string>(),
                 "studio_workflow_provisioning",
-                executionMode),
+                executionMode,
+                explicitRequestConfirmations,
+                workflowId,
+                revisionId),
                 ct);
         var trustedAdmission = new WorkflowCapabilityAdmissionContext(
-            suppliedAdmission?.CallerId ?? string.Empty,
-            suppliedAdmission?.NyxIdCallerBearerToken,
-            suppliedAdmission?.NyxIdOrganizationBearerToken,
-            executionMode,
-            capabilityAdmissionPlan);
+            callerId,
+            executionMode: executionMode,
+            existingPlan: capabilityAdmissionPlan);
 
         // Provision identity: one (scope, team, display name) tuple owns exactly
         // one member + workflow id + schedule, so retries converge on the same
         // Team-owned resources instead of leaving an orphan pair per attempt.
-        var provisionKey = BuildProvisionKey(normalizedScopeId, teamId, displayName);
-
         // 1. Resolve the member: reuse the existing one for this (scope, display
         //    name), else create it. The deterministic id is the member's identity;
         //    its display name is a mutable label — re-creating after a rename
@@ -155,8 +165,6 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         //    bind contract requires; deriving it from the provision key keeps one
         //    logical workflow identity across re-binds of the same member.
         //    The bind is asynchronous — we do NOT poll it to completion.
-        var workflowId = $"workflow-{provisionKey}";
-        var revisionId = $"revision-{provisionKey}";
         var bindReceipt = await _bindingPort.BindAsync(
             new StudioMemberWorkflowBindingRequest(
                 normalizedScopeId,
@@ -369,10 +377,7 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
             StateVersion: 0,
             ExternalCapabilities: admittedCapabilities,
             OwnerLLMRouteRequired: authorizationDependencies.OwnerLlmRouteRequired,
-            ServiceGrantRequirement: admittedCapabilities.Any(static capability =>
-                capability.CapabilityCase == ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService)
-                    ? AuthorizationGrantRequirement.Required
-                    : AuthorizationGrantRequirement.NotRequired);
+            ServiceGrantRequirement: WorkflowServiceGrantRequirementClassifier.Classify(admittedCapabilities));
     }
 
     /// <summary>
@@ -446,7 +451,7 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         string OperationId,
         string IdempotencyKey);
 
-    private static string BuildStudioUrl(string scopeId, string teamId, string memberId) =>
+    internal static string BuildStudioUrl(string scopeId, string teamId, string memberId) =>
         $"/scopes/{Uri.EscapeDataString(scopeId)}/teams/{Uri.EscapeDataString(teamId)}/members/{Uri.EscapeDataString(memberId)}/workflow";
 
     private static AuthenticatedAuthorizationOwnerContext BuildLegacyUnauthenticatedOwner(
@@ -472,7 +477,7 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
     /// chars) satisfies the member-id slug pattern and length cap while retries
     /// with the same display name land on the same member/workflow/schedule.
     /// </summary>
-    private static string BuildProvisionKey(string scopeId, string teamId, string displayName)
+    internal static string BuildProvisionKey(string scopeId, string teamId, string displayName)
     {
         var identity = Encoding.UTF8.GetBytes($"{scopeId}\n{teamId}\n{displayName}");
         var hash = SHA256.HashData(identity);

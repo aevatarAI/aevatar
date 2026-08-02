@@ -27,6 +27,7 @@
     <ProjectReference Include="..\Aevatar.Scripting.Projection\Aevatar.Scripting.Projection.csproj" />
     <ProjectReference Include="..\Aevatar.Studio.Projection\Aevatar.Studio.Projection.csproj" />
     <ProjectReference Include="..\workflow\Aevatar.Workflow.Application.Abstractions\Aevatar.Workflow.Application.Abstractions.csproj" />
+    <ProjectReference Include="..\workflow\Aevatar.Workflow.Core\Aevatar.Workflow.Core.csproj" />
   </ItemGroup>
 
   <ItemGroup>

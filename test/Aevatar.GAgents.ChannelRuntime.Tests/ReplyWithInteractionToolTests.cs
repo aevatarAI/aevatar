@@ -1,3 +1,5 @@
+using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.Channel;
 using Aevatar.GAgents.Channel.Abstractions;
 using FluentAssertions;
@@ -7,6 +9,51 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
 public sealed class ReplyWithInteractionToolTests
 {
+    [Fact]
+    public void CreateResultReceipt_QueuedResult_ShouldReturnTypedSuccess()
+    {
+        var tool = new ReplyWithInteractionTool(new AsyncLocalInteractiveReplyCollector());
+
+        var receipt = ((IAgentTool)tool).CreateResultReceipt(
+            "call-1",
+            tool.Name,
+            "{}",
+            "{\"status\":\"queued\"}");
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+    }
+
+    [Fact]
+    public void CreateResultReceipt_ErrorResult_ShouldReturnTypedFailure()
+    {
+        var tool = new ReplyWithInteractionTool(new AsyncLocalInteractiveReplyCollector());
+
+        var receipt = ((IAgentTool)tool).CreateResultReceipt(
+            "call-1",
+            tool.Name,
+            "{}",
+            "{\"error\":\"no_active_interactive_scope\"}");
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ErrorCode.Should().Be("no_active_interactive_scope");
+    }
+
+    [Fact]
+    public void CreateResultReceipt_UnknownErrorCode_ShouldLeaveOutcomeUnverified()
+    {
+        var tool = new ReplyWithInteractionTool(new AsyncLocalInteractiveReplyCollector());
+
+        var receipt = ((IAgentTool)tool).CreateResultReceipt(
+            "call-1",
+            tool.Name,
+            "{}",
+            "{\"error\":\"unexpected_provider_error\"}");
+
+        receipt.Should().BeNull();
+    }
+
     [Fact]
     public async Task ExecuteAsync_captures_simple_text_into_collector()
     {

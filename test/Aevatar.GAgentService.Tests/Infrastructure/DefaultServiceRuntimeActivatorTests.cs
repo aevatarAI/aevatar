@@ -62,7 +62,12 @@ public sealed class DefaultServiceRuntimeActivatorTests
                 {
                     WorkflowName = "workflow",
                     WorkflowYaml = "name: workflow",
+                    ExecutionMode = ExternalCapabilityExecutionMode.Durable,
                     DefinitionActorId = "workflow-definition-1",
+                    CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+                    {
+                        ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+                    },
                 },
             },
         };
@@ -195,7 +200,12 @@ public sealed class DefaultServiceRuntimeActivatorTests
                 {
                     WorkflowName = "workflow",
                     WorkflowYaml = "name: workflow",
+                    ExecutionMode = ExternalCapabilityExecutionMode.Durable,
                     DefinitionActorId = string.Empty,
+                    CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+                    {
+                        ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+                    },
                 },
             },
         };
@@ -210,7 +220,59 @@ public sealed class DefaultServiceRuntimeActivatorTests
         result.PrimaryActorId.Should().Be("gagent-service:workflow-definition:deployment-actor:r1");
         workflowPort.CreateDefinitionCalls.Should().ContainSingle("gagent-service:workflow-definition:deployment-actor:r1");
         workflowPort.BindCalls.Should().ContainSingle();
+        workflowPort.DefinitionBindings.Should().ContainSingle()
+            .Which.RevisionId.Should().Be("r1");
         workflowPort.ExplicitBindCalls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ActivateAsync_ShouldRejectWorkflowArtifactRevisionMismatch()
+    {
+        var workflowPort = new RecordingWorkflowRunActorPort();
+        var activator = new DefaultServiceRuntimeActivator(
+            new RecordingActorRuntime(),
+            new RecordingScriptDefinitionSnapshotPort(),
+            new RecordingScriptRuntimeProvisioningPort(),
+            workflowPort);
+        var artifact = CreateExplicitWorkflowArtifact(
+            artifactRevisionId: "rev-artifact-alpha",
+            planRevisionId: "rev-artifact-alpha");
+
+        var act = () => activator.ActivateAsync(
+            new ServiceRuntimeActivationRequest(
+                GAgentServiceTestKit.CreateIdentity(),
+                artifact,
+                "rev-request-beta",
+                "deployment-actor"));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*artifact revision_id*");
+        workflowPort.DefinitionBindings.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ActivateAsync_ShouldRejectWorkflowPlanRevisionMismatch()
+    {
+        var workflowPort = new RecordingWorkflowRunActorPort();
+        var activator = new DefaultServiceRuntimeActivator(
+            new RecordingActorRuntime(),
+            new RecordingScriptDefinitionSnapshotPort(),
+            new RecordingScriptRuntimeProvisioningPort(),
+            workflowPort);
+        var artifact = CreateExplicitWorkflowArtifact(
+            artifactRevisionId: "rev-request-alpha",
+            planRevisionId: "rev-plan-beta");
+
+        var act = () => activator.ActivateAsync(
+            new ServiceRuntimeActivationRequest(
+                GAgentServiceTestKit.CreateIdentity(),
+                artifact,
+                "rev-request-alpha",
+                "deployment-actor"));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*workflow plan revision_id*");
+        workflowPort.DefinitionBindings.Should().BeEmpty();
     }
 
     [Fact]
@@ -226,13 +288,13 @@ public sealed class DefaultServiceRuntimeActivatorTests
         var capabilityAdmissionPlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
             "name: workflow",
             new Dictionary<string, string> { ["child"] = "name: child" },
-            ExternalCapabilityExecutionMode.Interactive,
+            ExternalCapabilityExecutionMode.Durable,
             [],
             []);
         var artifact = new PreparedServiceRevisionArtifact
         {
             Identity = GAgentServiceTestKit.CreateIdentity(),
-            RevisionId = "r1",
+            RevisionId = "rev-activation-alpha",
             ImplementationKind = ServiceImplementationKind.Workflow,
             DeploymentPlan = new ServiceDeploymentPlan
             {
@@ -240,7 +302,10 @@ public sealed class DefaultServiceRuntimeActivatorTests
                 {
                     WorkflowName = "workflow",
                     WorkflowYaml = "name: workflow",
+                    ExecutionMode = ExternalCapabilityExecutionMode.Durable,
                     DefinitionActorId = "workflow-definition-1",
+                    WorkflowId = "wf-activation-alpha",
+                    RevisionId = "rev-activation-alpha",
                     InlineWorkflowYamls =
                     {
                         ["child"] = "name: child",
@@ -254,7 +319,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
             new ServiceRuntimeActivationRequest(
                 GAgentServiceTestKit.CreateIdentity(),
                 artifact,
-                "r1",
+                "rev-activation-alpha",
                 "deployment-actor"));
 
         workflowPort.BindCalls.Should().ContainSingle();
@@ -263,6 +328,8 @@ public sealed class DefaultServiceRuntimeActivatorTests
         workflowPort.DefinitionBindings.Should().ContainSingle();
         workflowPort.DefinitionBindings[0].CapabilityAdmissionPlan!.AdmissionDigest.Should()
             .Be(capabilityAdmissionPlan.AdmissionDigest);
+        workflowPort.DefinitionBindings[0].WorkflowId.Should().Be("wf-activation-alpha");
+        workflowPort.DefinitionBindings[0].RevisionId.Should().Be("rev-activation-alpha");
         workflowPort.ExplicitBindCalls.Should().BeEmpty();
     }
 
@@ -288,7 +355,12 @@ public sealed class DefaultServiceRuntimeActivatorTests
                 {
                     WorkflowName = "workflow",
                     WorkflowYaml = "name: workflow",
+                    ExecutionMode = ExternalCapabilityExecutionMode.Durable,
                     DefinitionActorId = "workflow-definition-1",
+                    CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+                    {
+                        ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+                    },
                 },
             },
         };
@@ -514,10 +586,13 @@ public sealed class DefaultServiceRuntimeActivatorTests
             string actorId,
             string workflowYaml,
             string workflowName,
-            IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
-            string? scopeId = null,
-            string? sourceKind = null,
-            WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan = null,
+            IReadOnlyDictionary<string, string>? inlineWorkflowYamls,
+            string? scopeId,
+            string? sourceKind,
+            WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan,
+            string? workflowId,
+            string? revisionId,
+            ExternalCapabilityExecutionMode expectedExecutionMode,
             CancellationToken ct = default)
         {
             RecordBind(actorId, workflowYaml, workflowName, inlineWorkflowYamls, ExplicitBindCalls);
@@ -552,6 +627,37 @@ public sealed class DefaultServiceRuntimeActivatorTests
                 inlineWorkflowYamls?.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal)
                 ?? new Dictionary<string, string>(StringComparer.Ordinal)));
         }
+    }
+
+    private static PreparedServiceRevisionArtifact CreateExplicitWorkflowArtifact(
+        string artifactRevisionId,
+        string planRevisionId)
+    {
+        var admissionPlan = new WorkflowCapabilityAdmissionPlan();
+        admissionPlan.ExecutionMode = ExternalCapabilityExecutionMode.Durable;
+        admissionPlan.InvocationAdmissions.Add(new WorkflowCapabilityInvocationAdmission
+        {
+            CallSiteId = "workflow/request-alpha",
+            NyxIdExplicitRequestGrant = new NyxIdExplicitRequestGrant(),
+        });
+        return new PreparedServiceRevisionArtifact
+        {
+            Identity = GAgentServiceTestKit.CreateIdentity(),
+            RevisionId = artifactRevisionId,
+            ImplementationKind = ServiceImplementationKind.Workflow,
+            DeploymentPlan = new ServiceDeploymentPlan
+            {
+                WorkflowPlan = new WorkflowServiceDeploymentPlan
+                {
+                    WorkflowName = "workflow",
+                    WorkflowYaml = "name: workflow",
+                    ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+                    WorkflowId = "wf-activation-alpha",
+                    RevisionId = planRevisionId,
+                    CapabilityAdmissionPlan = admissionPlan,
+                },
+            },
+        };
     }
 
     private sealed class RecordingActor : IActor

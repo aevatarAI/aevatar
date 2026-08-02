@@ -63,6 +63,17 @@ public sealed class NyxIdChatCommittedStateProjectionActivationPlanProvider
         if (eventData.Is(NyxIdChatActionRequestedEvent.Descriptor))
             return eventData.Unpack<NyxIdChatActionRequestedEvent>().Request?.OriginTurnId;
 
+        if (eventData.Is(NyxIdChatInputRequestedEvent.Descriptor))
+            return eventData.Unpack<NyxIdChatInputRequestedEvent>().PendingInput?.TurnId;
+
+        if (eventData.Is(NyxIdChatInputResolutionCommittedEvent.Descriptor))
+            return eventData.Unpack<NyxIdChatInputResolutionCommittedEvent>()
+                .State?.ActiveTurn?.TurnId;
+
+        if (eventData.Is(NyxIdChatApprovalResolutionCommittedEvent.Descriptor))
+            return eventData.Unpack<NyxIdChatApprovalResolutionCommittedEvent>()
+                .State?.ActiveTurn?.TurnId;
+
         if (eventData.Is(NyxIdChatContinuationAdmissionCommittedEvent.Descriptor))
             return eventData.Unpack<NyxIdChatContinuationAdmissionCommittedEvent>()
                 .Admission?.OriginTurnId;

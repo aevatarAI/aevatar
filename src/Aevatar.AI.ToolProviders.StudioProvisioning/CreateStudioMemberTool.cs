@@ -1,11 +1,12 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Studio.Application.Provisioning;
 
 namespace Aevatar.AI.ToolProviders.StudioProvisioning;
 
-internal sealed class CreateStudioMemberTool : IAgentTool
+internal sealed class CreateStudioMemberTool : IStudioMutationReceiptTool
 {
     private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
@@ -64,6 +65,18 @@ internal sealed class CreateStudioMemberTool : IAgentTool
     public bool IsReadOnly => false;
     public bool IsDestructive => false;
     public string SideEffectKind => "studio.member.create";
+    public string SubjectKind => "studio_member";
+    public string SubjectIdPropertyName => "member_id";
+
+    public IReadOnlyList<StudioQueryToolJson.ResultPropertyRequirement> ResultRequirements { get; } = new[]
+    {
+        StudioQueryToolJson.StringProperty("scope_id"),
+        StudioQueryToolJson.StringProperty("display_name"),
+        StudioQueryToolJson.StringProperty("implementation_kind"),
+        StudioQueryToolJson.StringProperty("lifecycle_stage"),
+        StudioQueryToolJson.StringProperty("published_service_id"),
+        StudioQueryToolJson.StringProperty("member_url"),
+    };
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {

@@ -54,7 +54,7 @@ public sealed class WorkflowGAgentWorkflowCallContractTests : WorkflowGAgentTest
             });
             agent.State.PendingSubWorkflowInvocationIndexByChildRunId["invoke-reset"] = 0;
 
-            await agent.BindWorkflowRunDefinitionAsync(
+            await BindInteractiveWorkflowRunDefinitionAsync(agent,
                 "definition-1",
                 BuildValidWorkflowYaml("role_a", "RoleA"),
                 "wf_valid",
@@ -72,7 +72,7 @@ public sealed class WorkflowGAgentWorkflowCallContractTests : WorkflowGAgentTest
             var runtime = new RecordingActorRuntime();
             var agent = CreateRunAgent(runtime: runtime);
             SetAgentId(agent, "workflow-run-replace-reset");
-            await agent.BindWorkflowRunDefinitionAsync(
+            await BindInteractiveWorkflowRunDefinitionAsync(agent,
                 "definition-1",
                 BuildValidWorkflowYaml("role_a", "RoleA"),
                 "wf_valid",

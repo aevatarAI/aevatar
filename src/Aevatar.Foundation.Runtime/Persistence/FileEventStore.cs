@@ -307,6 +307,9 @@ public sealed class FileEventStore : IEventStore, IEventStoreMaintenance
             }
         }
 
+        // File.Move is the atomic commit point. A canceled token may reject admission
+        // before it, but must never turn an already replaced stream into cancellation.
+        ct.ThrowIfCancellationRequested();
         File.Move(tempPath, path, overwrite: true);
     }
 

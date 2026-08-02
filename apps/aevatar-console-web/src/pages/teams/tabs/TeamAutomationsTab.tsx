@@ -154,6 +154,9 @@ const pendingPollIntervalMs = 2_000;
 const pendingPollDurationMs = 6_000;
 const retryablePreflightCodes = new Set([
   "TEAM_AUTOMATION_AUTHORIZATION_PROJECTION_PENDING",
+  "TEAM_AUTOMATION_AUTHORIZATION_SNAPSHOT_NOT_FOUND",
+  "TEAM_AUTOMATION_AUTHORIZATION_SNAPSHOT_STALE",
+  "TEAM_AUTOMATION_AUTHORIZATION_DURABLE_AUTHORIZATION_UNAVAILABLE",
   "TEAM_AUTOMATION_AUTHORIZATION_REFRESH_SUPERSEDED",
   "TEAM_AUTOMATION_AUTHORIZATION_REFRESH_UNAVAILABLE",
 ]);
@@ -890,10 +893,21 @@ const TeamAutomationsTab: React.FC<Props> = ({
             return;
           }
         }
-        void message.error(copy(
-          "teams.automations.authorization.error",
-          "Authorization could not continue",
-        ));
+        if (
+          error instanceof TeamAutomationApiError &&
+          error.code === "TEAM_AUTOMATION_AUTHORIZATION_PLAN_CHANGED"
+        ) {
+          setAuthorizationFlow({ state: "plan_changed", draft: nextDraft, mode, scheduleId });
+          return;
+        }
+        void message.error(
+          error instanceof TeamAutomationApiError
+            ? error.message
+            : copy(
+                "teams.automations.authorization.error",
+                "Authorization could not continue",
+              ),
+        );
         setAuthorizationFlow({ state: "idle" });
       }
     },

@@ -19,6 +19,8 @@ public static class AuditTrailEndpoints
     private const string AdminAccessLevel = "ADMIN";
     private const int DefaultTake = 100;
     private const int MaxTake = 500;
+    private const int DefaultChatActivityTake = 50;
+    private const int MaxChatActivityTake = 200;
 
     // Cross-scope wildcard, mirroring the run observatory's AllScopesToken convention. When the
     // caller passes this value the audit read becomes a platform-admin-only aggregate query across
@@ -38,6 +40,11 @@ public static class AuditTrailEndpoints
             .RequireAuthorization()
             .WithMetadata(new AuditTrailEndpointAuditMetadata("audit-trail", "query-cross-scope", AdminAccessLevel));
 
+        data.MapGet("/chat-activity", QueryChatActivity)
+            .WithName("QueryChatActivity")
+            .WithSummary("Query the caller's chat tool and browser-action activity; all-user reads require explicit aevatar admin access.")
+            .RequireAuthorization();
+
         data.MapGet("/trail/cloudevents", ExportAuditTrailCloudEvents)
             .WithName("ExportAuditTrailCloudEvents")
             .WithSummary("Export audit trail records as a CloudEvents 1.0 JSON batch.")
@@ -51,6 +58,128 @@ public static class AuditTrailEndpoints
             .WithMetadata(new AuditTrailEndpointAuditMetadata("audit-trail", "resolve-actor", AdminAccessLevel));
 
         return app;
+    }
+
+    internal static async Task<IResult> QueryChatActivity(
+        HttpContext http,
+        [FromServices] AuditTrailEndpointDependencies dependencies,
+        [FromServices] ILoggerFactory loggerFactory,
+        string? cursor = null,
+        DateTimeOffset? from = null,
+        DateTimeOffset? to = null,
+        int take = DefaultChatActivityTake,
+        string? surface = null,
+        string? conversationId = null,
+        string? outcome = null,
+        string? scope = null,
+        string? auditActorId = null,
+        string? identityKeyId = null,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(http);
+
+        if (!AevatarScopeAccessGuard.TryGetCallerScopeId(http, out var callerScopeId) ||
+            !AevatarPrincipalSubjectResolver.TryResolveNyxIdSubject(http.User, out var subject))
+        {
+            return Results.Unauthorized();
+        }
+
+        var normalizedScope = NormalizeOptional(scope);
+        var allUsers = string.Equals(normalizedScope, AllScopesToken, StringComparison.Ordinal);
+        if (scope is not null && !allUsers)
+            return InvalidChatActivityFilter("scope is only accepted as '__all__'.");
+        if (identityKeyId is not null)
+            return InvalidChatActivityFilter("identityKeyId is not accepted.");
+        if (!allUsers && auditActorId is not null)
+            return InvalidChatActivityFilter("auditActorId is only accepted with scope=__all__.");
+        if (!TryParseChatSurface(surface, out var chatSurface) ||
+            !TryParseTerminalOutcome(outcome, out var terminalOutcome))
+        {
+            return InvalidChatActivityFilter("surface or outcome is invalid.");
+        }
+
+        var logger = loggerFactory.CreateLogger(AuditLoggerCategory);
+        IReadOnlyList<string>? auditActorIds = null;
+        if (allUsers)
+        {
+            if (dependencies.AdminAuthorizer is not { } authorizer)
+                return AdminAuthorizationUnavailable();
+
+            var denied = await AuthorizeAdminReadAsync(
+                http,
+                authorizer,
+                logger,
+                callerScopeId,
+                AllScopesToken,
+                "query-chat-activity-all-users",
+                ct);
+            if (denied is not null)
+                return denied;
+        }
+        else
+        {
+            if (dependencies.ActorIdentityHasher is not { } hasher)
+                return HasherUnavailable();
+            if (!TryBuildCanonicalActorKey("nyxid", subject, out var canonicalActorKey))
+                return Results.Unauthorized();
+
+            try
+            {
+                auditActorIds = hasher.HashAll(canonicalActorKey)
+                    .Select(static identity => identity.AuditActorId?.Trim())
+                    .Where(static id => !string.IsNullOrWhiteSpace(id))
+                    .Distinct(StringComparer.Ordinal)
+                    .Cast<string>()
+                    .ToArray();
+            }
+            catch (Exception exception)
+            {
+                logger.LogError(
+                    "Audit actor identity hashing unavailable. errorType={ErrorType} correlationId={CorrelationId}",
+                    exception.GetType().Name,
+                    http.TraceIdentifier);
+                return HasherUnavailable();
+            }
+
+            if (auditActorIds.Count == 0)
+                return HasherUnavailable();
+        }
+
+        if (dependencies.QueryPort is not { } queryPort)
+            return QueryUnavailable();
+
+        var query = new AuditTrailQuery
+        {
+            ScopeId = allUsers ? null : callerScopeId,
+            AuditActorId = allUsers ? NormalizeOptional(auditActorId) : null,
+            AuditActorIds = auditActorIds,
+            RequireChatProvenance = true,
+            ChatSurface = chatSurface,
+            ChatConversationId = NormalizeOptional(conversationId),
+            TerminalOutcome = terminalOutcome,
+            Cursor = NormalizeOptional(cursor),
+            OccurredFrom = from,
+            OccurredTo = to,
+            Take = NormalizeChatActivityTake(take),
+        };
+
+        try
+        {
+            var page = await queryPort.QueryAsync(query, ct);
+            return Results.Json(AuditTrailResponseMapper.ToResponse(page));
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(
+                "Chat activity audit query unavailable. errorType={ErrorType} correlationId={CorrelationId}",
+                exception.GetType().Name,
+                http.TraceIdentifier);
+            return QueryExecutionUnavailable();
+        }
     }
 
     internal static async Task<IResult> QueryAuditTrail(
@@ -325,12 +454,56 @@ public static class AuditTrailEndpoints
             new { code = "AUDIT_ACTOR_HASHER_UNAVAILABLE", message = "Audit actor identity hasher is not configured." },
             statusCode: StatusCodes.Status503ServiceUnavailable);
 
+    private static IResult InvalidChatActivityFilter(string message) =>
+        Results.Json(
+            new { code = "AUDIT_CHAT_ACTIVITY_FILTER_INVALID", message },
+            statusCode: StatusCodes.Status400BadRequest);
+
     private static int NormalizeTake(int take)
     {
         if (take <= 0)
             return DefaultTake;
 
         return Math.Min(take, MaxTake);
+    }
+
+    private static int NormalizeChatActivityTake(int take)
+    {
+        return take <= 0 ? DefaultChatActivityTake : Math.Min(take, MaxChatActivityTake);
+    }
+
+    private static bool TryParseChatSurface(string? value, out AuditChatSurface? surface)
+    {
+        surface = NormalizeOptional(value)?.ToLowerInvariant() switch
+        {
+            null => null,
+            "nyxid_assistant" => AuditChatSurface.NyxidAssistant,
+            "workflow_chat" => AuditChatSurface.WorkflowChat,
+            _ => (AuditChatSurface?)AuditChatSurface.Unspecified,
+        };
+        if (surface != AuditChatSurface.Unspecified)
+            return true;
+
+        surface = null;
+        return false;
+    }
+
+    private static bool TryParseTerminalOutcome(string? value, out AuditTerminalOutcome? outcome)
+    {
+        outcome = NormalizeOptional(value)?.ToLowerInvariant() switch
+        {
+            null => null,
+            "succeeded" => AuditTerminalOutcome.Succeeded,
+            "failed" => AuditTerminalOutcome.Failed,
+            "cancelled" => AuditTerminalOutcome.Cancelled,
+            "timed_out" => AuditTerminalOutcome.TimedOut,
+            _ => (AuditTerminalOutcome?)AuditTerminalOutcome.Unspecified,
+        };
+        if (outcome != AuditTerminalOutcome.Unspecified)
+            return true;
+
+        outcome = null;
+        return false;
     }
 
     private static string? NormalizeOptional(string? value)

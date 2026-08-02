@@ -30,6 +30,21 @@ public sealed record UserSkillDetail(
 
 public sealed record UserSkillInputField(string Name, string Label, bool Required, string Description);
 
+public sealed record UserExactSkillDetail(
+    string Guid,
+    string Name,
+    string LiteralVersion,
+    string Publisher,
+    string SkillHash,
+    IReadOnlyList<string> DeclaredToolNames);
+
+public sealed record UserExactSkillReadResult(
+    UserExactSkillDetail? Detail,
+    string? Error,
+    int? UpstreamStatus = null);
+
+public sealed record AgentProfileExactSkillError(string Code, string Message);
+
 // Lists the caller's invocable ornn skills. The access token is an INPUT parameter (never read from
 // HttpContext in the service), mirroring the observatory query-port seam; it scopes visibility to the
 // caller's NyxID identity (Ornn "mixed" scope = the caller's full accessible set).
@@ -45,5 +60,11 @@ internal interface IUserSkillCatalogQueryService
     Task<UserSkillDetail?> GetSkillAsync(
         string accessToken,
         string guid,
+        CancellationToken ct = default);
+
+    Task<UserExactSkillReadResult> GetExactSkillAsync(
+        string accessToken,
+        string guid,
+        string? literalVersion,
         CancellationToken ct = default);
 }

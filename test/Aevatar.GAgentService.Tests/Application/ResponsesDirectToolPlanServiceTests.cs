@@ -94,7 +94,7 @@ public sealed class ResponsesDirectToolPlanServiceTests
     {
         public IReadOnlyList<string> GetRegisteredNames() => ["workspace.default"];
 
-        public ToolSetResolveResult Resolve(ChatRouteToolSetRef? toolSetRef) =>
+        public ToolSetResolveResult Resolve(string? name) =>
             ToolSetResolveResult.Success("workspace.default", sources);
     }
 

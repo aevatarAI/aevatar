@@ -39,12 +39,12 @@ public sealed class WorkOrderCommandServiceTests
         dispatchPort.Envelopes.Select(static envelope => envelope.Id).Should().OnlyContain(
             commandId => commandId == first.CommandId);
         dispatchPort.Envelopes.Select(static envelope =>
-                envelope.EnsureRuntime().EnsureDeduplication().OperationId)
+                envelope.EnsureRuntime().EnsureDeliveryIdentity().OperationId)
             .Should().OnlyContain(operationId => operationId == first.CommandId);
     }
 
     [Fact]
-    public async Task MateriallyDifferentCreateRequests_ShouldNotShareRuntimeDedupIdentity()
+    public async Task MateriallyDifferentCreateRequests_ShouldNotShareRuntimeDeliveryIdentity()
     {
         var dispatchPort = new RecordingDispatchPort();
         var service = new ActorDispatchWorkOrderCommandService(
@@ -61,7 +61,7 @@ public sealed class WorkOrderCommandServiceTests
         dispatchPort.Envelopes.Select(static envelope => envelope.Id)
             .Should().OnlyHaveUniqueItems();
         dispatchPort.Envelopes.Select(static envelope =>
-                envelope.EnsureRuntime().EnsureDeduplication().OperationId)
+                envelope.EnsureRuntime().EnsureDeliveryIdentity().OperationId)
             .Should().OnlyHaveUniqueItems();
     }
 

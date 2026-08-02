@@ -205,12 +205,12 @@ internal sealed class ActorBackedChatHistoryStore :
             return ChatHistoryDeleteResult.NotFound();
 
         var conversationActor = await EnsureConversationActorAsync(resolved.Value.ActorId, ct);
-        var deleteEvt = new ConversationDeletedEvent
+        var command = new DeleteConversationCommand
         {
             ConversationId = resolved.Value.Document.ConversationId,
             ScopeId = resolved.Value.Document.ScopeId,
         };
-        await _commandDispatch.DispatchAsync(conversationActor, deleteEvt, PublisherId, ct);
+        await _commandDispatch.DispatchAsync(conversationActor, command, PublisherId, ct);
         return ChatHistoryDeleteResult.Accepted();
     }
 
@@ -361,6 +361,7 @@ internal sealed class ActorBackedChatHistoryStore :
             {
                 "error" => "error",
                 "blocked" => "blocked",
+                "outcome_uncertain" => "outcome_uncertain",
                 _ => "complete",
             },
             Error: string.IsNullOrEmpty(turn.SanitizedError) ? null : turn.SanitizedError,
@@ -398,6 +399,7 @@ internal sealed class ActorBackedChatHistoryStore :
                 {
                     "error" => ChatTurnTerminalStatus.Failed,
                     "blocked" => ChatTurnTerminalStatus.Blocked,
+                    "outcome_uncertain" => ChatTurnTerminalStatus.OutcomeUncertain,
                     _ => ChatTurnTerminalStatus.Completed,
                 },
                 SanitizedError = assistant.Error ?? string.Empty,
@@ -433,6 +435,7 @@ internal sealed class ActorBackedChatHistoryStore :
             ChatHistoryTurnTerminalStatus.Failed => ChatTurnTerminalStatus.Failed,
             ChatHistoryTurnTerminalStatus.Stopped => ChatTurnTerminalStatus.Stopped,
             ChatHistoryTurnTerminalStatus.Blocked => ChatTurnTerminalStatus.Blocked,
+            ChatHistoryTurnTerminalStatus.OutcomeUncertain => ChatTurnTerminalStatus.OutcomeUncertain,
             _ => throw new ArgumentOutOfRangeException(nameof(status), status, "Terminal status must be closed."),
         };
 
@@ -449,6 +452,7 @@ internal sealed class ActorBackedChatHistoryStore :
             "failed" => ChatHistoryCreateRecoveryStatus.Failed,
             "append_committed" => ChatHistoryCreateRecoveryStatus.AppendCommitted,
             "append_rejected" => ChatHistoryCreateRecoveryStatus.AppendRejected,
+            "terminal_reconciliation_prepared" => ChatHistoryCreateRecoveryStatus.TerminalReconciliationPrepared,
             _ => ChatHistoryCreateRecoveryStatus.NotFound,
         };
 
@@ -463,6 +467,8 @@ internal sealed class ActorBackedChatHistoryStore :
             ChatHistoryCreateRecoveryStatus.Failed => WorkflowChatHistoryCreateRecoveryStatus.Failed,
             ChatHistoryCreateRecoveryStatus.AppendCommitted => WorkflowChatHistoryCreateRecoveryStatus.AppendCommitted,
             ChatHistoryCreateRecoveryStatus.AppendRejected => WorkflowChatHistoryCreateRecoveryStatus.AppendRejected,
+            ChatHistoryCreateRecoveryStatus.TerminalReconciliationPrepared =>
+                WorkflowChatHistoryCreateRecoveryStatus.TerminalReconciliationPrepared,
             _ => WorkflowChatHistoryCreateRecoveryStatus.NotFound,
         };
 

@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Chat;
@@ -93,7 +94,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 replyRequest.PriorHistory.ToArray(),
                 BuildAttachmentInputContext(replyRequest, generationContext.LlmControl),
                 forceDisableTools: false,
-                metadataCts.Token)
+                metadataCts.Token,
+                request.TurnCatalog)
                 .ConfigureAwait(false);
             var ownerFallbackControl = ResolveInitialOwnerFallbackControl(
                 generationContext.OwnerFallbackLlmControl,
@@ -168,7 +170,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 priorHistory: null,
                 attachmentContext: null,
                 forceDisableTools: workItem.StepState.FinalNoToolsStep,
-                ct: ct)
+                ct: ct,
+                turnCatalog: workItem.TurnCatalog)
             .ConfigureAwait(false);
         var messages = workItem.StepState.Messages.Select(AgentRunReplyStepMappers.FromProto).ToList();
         var llmRequest = plan.StepExecutor.BuildLlmStepRequest(
@@ -287,14 +290,16 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 workItem.Attempt,
                 continuation.StepIndex,
                 result.ToolCalls.ToArray(),
-                async token =>
+                capturedToolContext,
+                async (executionContext, approvalGrant, token) =>
                 {
                     using var toolScope = TryBeginInteractiveScope(request);
                     var toolResults = await plan.StepExecutor.ExecuteAuthorizedToolStepAsync(
                             capturedToolCalls,
                             capturedTools,
-                            capturedToolContext,
-                            token)
+                            executionContext,
+                            token,
+                            approvalGrant)
                         .ConfigureAwait(false);
                     var toolStepResult = BuildToolStepResult(toolResults);
                     if (TryTakeOutboundIntent(generator) is { } toolOutboundIntent)
@@ -397,15 +402,16 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         }
         else
         {
-            var deniedTools = new ToolManager();
             var deniedResults = new List<ToolExecutionResult>(toolCalls.Length);
             foreach (var toolCall in toolCalls)
             {
-                var (denial, _) = await deniedTools.ExecuteToolCallRawAsync(toolCall, ct).ConfigureAwait(false);
                 deniedResults.Add(new ToolExecutionResult(
                     toolCall.Id,
                     toolCall.Name,
-                    denial,
+                    JsonSerializer.Serialize(new
+                    {
+                        error = $"Tool '{toolCall.Name}' is not authorized for this actor-owned step.",
+                    }),
                     IsError: true));
             }
             toolStepResult = BuildToolStepResult(deniedResults);
@@ -681,10 +687,12 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         };
         var toolContext = planToolContext with
         {
-            Credentials = new AgentToolCredentials(
-                requestControl.NyxIdAccessToken,
-                requestControl.NyxIdOrgToken,
-                requestControl.SenderNyxIdAccessToken),
+            Credentials = planToolContext.Credentials with
+            {
+                NyxIdAccessToken = requestControl.NyxIdAccessToken,
+                NyxIdOrgToken = requestControl.NyxIdOrgToken,
+                SenderNyxIdAccessToken = requestControl.SenderNyxIdAccessToken,
+            },
         };
         return (control, toolContext);
     }
@@ -813,27 +821,26 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             var config = await _userConfigQueryPort
                 .GetAsync(UserConfigResourceKey.ForOwnerScope(scopeId), ct)
                 .ConfigureAwait(false);
-            control = control with
-            {
-                ModelOverride = string.IsNullOrWhiteSpace(config.DefaultModel)
-                    ? control.ModelOverride
-                    : config.DefaultModel.Trim(),
-                NyxIdRoutePreference = string.IsNullOrWhiteSpace(config.PreferredLlmRoute)
-                    ? control.NyxIdRoutePreference
-                    : config.PreferredLlmRoute.Trim(),
-                MaxToolRoundsOverride = config.MaxToolRounds > 0
-                    ? config.MaxToolRounds
-                    : control.MaxToolRoundsOverride,
-            };
+            var ownerConfig = new OwnerLlmConfig(
+                config.LlmSelection?.Clone() ?? LLMSelectionPolicy.SystemDefaultSelection(),
+                LLMSelectionPolicy.ClassifyPersisted(
+                    config.LlmSelection,
+                    config.PreferredLlmRoute,
+                    config.DefaultModel),
+                config.MaxToolRounds);
+            control = ownerConfig.ApplyTo(control);
 
             _logger.LogInformation(
-                "Applied bot owner LLM config: correlation={CorrelationId} scopeId={ScopeId} model={Model} route={Route}",
+                "Applied bot owner LLM config: correlation={CorrelationId} scopeId={ScopeId} status={Status}",
                 request.CorrelationId,
                 scopeId,
-                string.IsNullOrWhiteSpace(config.DefaultModel) ? "<server-default>" : config.DefaultModel,
-                string.IsNullOrWhiteSpace(config.PreferredLlmRoute) ? "<server-default>" : config.PreferredLlmRoute);
+                ownerConfig.Status);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (LLMSelectionRepairRequiredException)
         {
             throw;
         }
@@ -934,10 +941,12 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         source = source with
         {
             SenderBinding = AgentToolSenderBindingContext.Empty,
-            Credentials = new AgentToolCredentials(
-                NormalizeOptional(ownerControl.NyxIdAccessToken),
-                NormalizeOptional(ownerControl.NyxIdOrgToken),
-                SenderNyxIdAccessToken: null),
+            Credentials = source.Credentials with
+            {
+                NyxIdAccessToken = NormalizeOptional(ownerControl.NyxIdAccessToken),
+                NyxIdOrgToken = NormalizeOptional(ownerControl.NyxIdOrgToken),
+                SenderNyxIdAccessToken = null,
+            },
             Routing = new LLMRequestRoutingContext(
                 NormalizeOptional(ownerControl.ModelOverride),
                 NormalizeOptional(ownerControl.NyxIdRoutePreference),

@@ -38,8 +38,11 @@ owner: eanzhao
 flowchart LR
     API["Host API"] --> APP["Application Service"]
     APP --> ACT["Actor/GAgent"]
-    ACT --> EVT["Actor Envelope Stream"]
-    ACT --> ES["EventStore"]
+    ACT -->|"Append domain event"| ES["Committed EventStore"]
+    ES -->|"Committed event identity + version"| ACT
+    ACT -->|"CommittedStateEventPublished"| EVT["Actor Envelope Stream"]
+    ACT -->|"Accepted version"| CP["Runtime publication checkpoint"]
+    CP -.->|"Activation recovery watermark"| ACT
     EVT --> PROJ["Projection Pipeline"]
     PROJ --> RM["ReadModel"]
     RM --> Q["Query API / SSE / WS"]
@@ -51,6 +54,8 @@ flowchart LR
 2. Command 进入 Application 后，会被包装成 `EventEnvelope` 投递到目标 Actor 邮箱。
 3. Actor 在自己的串行上下文里做决策，只有显式持久化的领域事件才进入 `EventStore`。
 4. Projection 当前消费的是 Actor envelope 流，并把其中有业务语义的 payload 映射为 read model 与实时输出。
+5. committed domain event 必须先进入 EventStore，再以 `EventEnvelope<CommittedStateEventPublished>` 进入同一 projection 主链；Runtime publication checkpoint 只记录投递进度，不定义业务事实。
+6. activation 可在 checkpoint 后补发 committed fact；这是 write/runtime recovery，不是 query-time replay 或 projector 计算。
 
 ### 4.1 CQRS Core 统一命令骨架
 
@@ -112,6 +117,7 @@ CQRS 不应只提供零散 helper，而应定义所有 capability 复用的标�
 7. Host 组合层按配置仅注册所需 provider 组合，不允许无条件并列注册 InMemory/Elasticsearch/Neo4j。
 8. 持久投影 scope 的激活由 committed-state publication owner hook 触发：Actor 完成 domain event commit 并构造 `EventEnvelope<CommittedStateEventPublished>` 前，Foundation 调用 `ICommittedStatePublicationHook`，Projection Core 根据精确的 actor type 与 state event descriptor 生成 `ProjectionScopeStartRequest` 并分发给已有 `IProjectionScopeActivationService<TLease>`。命令入口不得同步调用 projection activation facade，也不得新增 actor/lifecycle phase 来“预热”读模型。
 9. Elasticsearch projection schema-drift 的唯一权威是 provider 生成的 augmented mapping fingerprint 与稳定 alias lifecycle。query resolver / query reader / consistency probe 不得读取 live ES mapping 作为第二真相，也不得触发 repair / reindex；write-side `UpsertAsync -> EnsureIndexAsync` 只处理 greenfield / legacy bare lifecycle，遇到单一旧 fingerprint 或多 backing drift 必须 fail closed，不能 `_reindex` 或切 alias。alias 指向单一旧 fingerprint physical index 的 clean migration 只能由静态 provider-local startup reconcile（`IProjectionIndexReconcileTarget.ReconcileIndexAsync`）创建 expected physical、执行 old-to-new reindex、确认无 failures / timeout 后用一次 `_aliases` 原子切换；dynamic index scope 不参与 startup reconcile，不获得 clean drift migration。alias 多 backing、source 缺失、不兼容 mapping、reindex failure / timeout、partial copy 或非 static reconcile 路径仍必须 fail closed。
+10. commit publication 是 at-least-once：current-state projector 必须以 `actorId + authoritative StateVersion` 做单调幂等覆盖，artifact/audit consumer 必须以 committed event identity 做幂等键；不得依赖 envelope 只出现一次。
 
 ### 5.1 Projection-driven Split / Merge / Re-key
 

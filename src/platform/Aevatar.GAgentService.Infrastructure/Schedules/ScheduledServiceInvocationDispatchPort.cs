@@ -6,6 +6,7 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
@@ -75,6 +76,13 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
                 receipt.TargetActorId ?? string.Empty,
                 receipt.CorrelationId ?? string.Empty);
         }
+        catch (WorkflowExternalCapabilityAdmissionException ex)
+        {
+            await TryRevokeProjectedCredentialAsync(
+                prepared.DurableCallerCredential,
+                "scheduled-workflow-dispatch-failed");
+            throw new ScheduledWorkflowAdmissionException(ex.StableCode, ex.SafeMessage);
+        }
         catch
         {
             await TryRevokeProjectedCredentialAsync(
@@ -130,7 +138,10 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         authority.CatalogEvaluatedAt == default;
 
     private static bool RequiresCatalogAuthority(ScheduledInvocationAuthorizationFact fact) =>
-        !fact.ServiceGrantsNotRequired || fact.ServiceGrants.Count > 0;
+        !fact.ServiceGrantsNotRequired ||
+        fact.ServiceGrants.Count > 0 ||
+        fact.Authority.OwnerLlmStateVersion > 0 ||
+        fact.OwnerLLMSelection != null;
 
     private static bool AreServiceGrantsInvalid(ScheduledInvocationAuthorizationFact fact) =>
         fact.ServiceGrants.Count == 0 && !fact.ServiceGrantsNotRequired ||
@@ -209,8 +220,8 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         }
 
         var selection = fact.OwnerLLMSelection;
-        if (!ScheduledInvocationOwnerLLMSelectionPolicy.IsDurableSelectionValid(selection) ||
-            (selection!.RouteKind == ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService &&
+        if (!IsValidExplicitOwnerLLMSelection(selection) ||
+            (selection!.RouteKind == LLMRouteKind.NyxIdUserService &&
              !fact.ServiceGrants.Any(grant => string.Equals(
                  grant.ServiceId,
                  selection.NyxIdUserServiceId,
@@ -225,6 +236,34 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
             !string.Equals(model, selection.Model, StringComparison.Ordinal))
         {
             ThrowOwnerLLMPayloadMismatch();
+        }
+    }
+
+    private static bool IsValidExplicitOwnerLLMSelection(
+        ScheduledInvocationOwnerLLMSelection? selection)
+    {
+        if (!ScheduledInvocationOwnerLLMSelectionPolicy.IsDurableSelectionValid(selection))
+            return false;
+
+        try
+        {
+            LLMSelectionPolicy.ValidateSelection(new LLMSelection
+            {
+                RouteKind = selection!.RouteKind,
+                RouteValue = selection.RouteValue,
+                NyxIdUserServiceId = selection.NyxIdUserServiceId,
+                ServiceSlugSnapshot = selection.ServiceSlugSnapshot,
+                ModelSelection = new LLMModelSelection
+                {
+                    Kind = LLMModelSelectionKind.ExplicitModel,
+                    ModelId = selection.Model,
+                },
+            });
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
         }
     }
 

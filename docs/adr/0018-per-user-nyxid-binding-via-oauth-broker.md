@@ -20,7 +20,7 @@ owner: eanzhao
 - owner 不同则拒绝并撤销新 binding。切换 NyxID 账号仍必须显式 `/unbind` 后再 `/init`，禁止 `/init` 静默换号。
 - callback 继续兼容 NyxID 返回 `binding_updated=true` 的旧请求，但正常 channel `/init` 不再发起该协议。
 
-普通 runtime turn 继续通过严格 binding token-exchange 获得覆盖配置化必需 services 的 request-local user capability。自然语言“我连接了哪些服务”进入普通 `LlmReplyRequested / AgentRun`，以 `ChatStreamAsync` 先执行只读 `use_skill(skill="nyxid")`，再执行 `nyxid_service_inventory`；后者只在工具执行阶段签发独立的窄 inventory capability，并以 current sender 身份读取 `GET /api/v1/keys`，最终答案沿既有 CardKit streaming lifecycle 输出。remote skill read 与 inventory read 使用两个独立 issuer，均不得回退 bot owner token、持久化 bearer 或从 channel 字段猜 NyxID authority。该路径不运行 `code_execute` 或 `nyxid service list`。inventory read 失败只代表本次读取失败，不代表 binding 缺失；除非 typed binding 明确缺失或撤销，不得无条件建议 `/init`。省略 `mount_workflows` 或传 `false` 的 `use_skill` 只加载说明，只有显式 `mount_workflows=true` 才可能写 workflow。
+普通 runtime turn 继续通过严格 binding token-exchange 获得覆盖配置化必需 services 的 request-local user capability。自然语言“我连接了哪些服务”进入普通 `LlmReplyRequested / AgentRun`，以 `ChatStreamAsync` 先执行只读 `use_skill(skill="nyxid-service-discovery")`，再执行 `nyxid_service_inventory`；连接、维护与调用请求分别加载 `nyxid-service-connect`、`nyxid-service-maintenance` 与 `nyxid-service-call`，禁止依赖已退役的通用 `nyxid` skill 名。inventory 工具只在执行阶段签发独立的窄 capability，并以 current sender 身份读取 `GET /api/v1/keys`，最终答案沿既有 CardKit streaming lifecycle 输出。remote skill read 与 inventory read 使用两个独立 issuer，均不得回退 bot owner token、持久化 bearer 或从 channel 字段猜 NyxID authority。该路径不运行 `code_execute` 或 `nyxid service list`。inventory read 失败只代表本次读取失败，不代表 binding 缺失；除非 typed binding 明确缺失或撤销，不得无条件建议 `/init`。省略 `mount_workflows` 或传 `false` 的 `use_skill` 只加载说明，只有显式 `mount_workflows=true` 才可能写 workflow。
 
 ## Update 2026-07-17 - 浏览器选择与 NyxID 授权事实分离
 

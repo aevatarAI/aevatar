@@ -98,7 +98,7 @@ public sealed class DeviceCommandFacadeTests
         capturedEnvelope.Should().NotBeNull();
         capturedEnvelope!.Id.Should().Be("nxmsg-1");
         capturedEnvelope.Timestamp.ToDateTimeOffset().Should().Be(admission.OccurredAt);
-        capturedEnvelope.Runtime.Deduplication.OperationId.Should().Be("device-event:reg-1:evt-3");
+        capturedEnvelope.Runtime.DeliveryIdentity.OperationId.Should().Be("device-event:reg-1:evt-3");
     }
 
     [Fact]
@@ -143,7 +143,7 @@ public sealed class DeviceCommandFacadeTests
         result.Succeeded.Should().BeTrue();
         admission.DeliveryId.Should().Be("ha-corr-2");
         capturedEnvelope.Should().NotBeNull();
-        capturedEnvelope!.Runtime.Deduplication.OperationId.Should().Be("device-event:reg-1:ha-corr-2");
+        capturedEnvelope!.Runtime.DeliveryIdentity.OperationId.Should().Be("device-event:reg-1:ha-corr-2");
     }
 
     [Fact]

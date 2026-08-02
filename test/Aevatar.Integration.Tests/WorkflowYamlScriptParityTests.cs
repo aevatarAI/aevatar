@@ -1,4 +1,5 @@
 using Aevatar.AI.Core;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core.TypeSystem;
@@ -10,6 +11,7 @@ using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Application.Queries;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Hosting.DependencyInjection;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Integration.AI;
 using FluentAssertions;
@@ -52,6 +54,8 @@ public class WorkflowYamlScriptParityTests
         var services = new ServiceCollection();
         services.AddAevatarRuntime();
         services.AddAevatarWorkflow();
+        services.AddSingleton<IAgentToolExecutionPort>(
+            WorkflowGAgentTestBase.UnexpectedAgentToolExecutionPort.Instance);
         services.AddAevatarAgentKindRegistry(RegisterAssistantRoleKind);
         await using var provider = services.BuildServiceProvider();
         var runtime = provider.GetRequiredService<IActorRuntime>();
@@ -67,6 +71,7 @@ public class WorkflowYamlScriptParityTests
             {
                 WorkflowYaml = BuildParityWorkflowYaml(),
                 WorkflowName = "yaml_script_parity",
+                ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
             }),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
             Propagation = new EnvelopePropagation
@@ -85,6 +90,7 @@ public class WorkflowYamlScriptParityTests
                 WorkflowYaml = BuildParityWorkflowYaml(),
                 WorkflowName = "yaml_script_parity",
                 RunId = "yaml-script-parity-run",
+                ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
             }),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
             Propagation = new EnvelopePropagation

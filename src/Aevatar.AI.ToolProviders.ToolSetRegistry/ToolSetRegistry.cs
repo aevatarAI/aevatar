@@ -1,5 +1,4 @@
 using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.ChatRouting.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace Aevatar.AI.ToolProviders.ToolSetRegistry;
@@ -37,9 +36,9 @@ public sealed class ToolSetRegistry : IToolSetRegistry
 
     public IReadOnlyList<string> GetRegisteredNames() => _registeredNames;
 
-    public ToolSetResolveResult Resolve(ChatRouteToolSetRef? toolSetRef)
+    public ToolSetResolveResult Resolve(string? name)
     {
-        var name = toolSetRef?.Name?.Trim() ?? string.Empty;
+        name = name?.Trim() ?? string.Empty;
         if (string.IsNullOrWhiteSpace(name))
         {
             return ToolSetResolveResult.Failure(new ToolSetResolveError(

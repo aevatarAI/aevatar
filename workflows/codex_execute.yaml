@@ -7,4 +7,4 @@ steps:
     timeout_ms: 320000
     parameters:
       tool: codex_exec
-      arguments: '{"service":"${json(input.service)}","principal":"${json(input.principal)}","prompt":"${json(input.prompt)}","timeout_secs":300}'
+      arguments: '{"target":{"kind":"private_ssh","private_ssh":{"service":"${json(input.service)}","principal":"${json(input.principal)}"}},"prompt":"${json(input.prompt)}","timeout_secs":300}'

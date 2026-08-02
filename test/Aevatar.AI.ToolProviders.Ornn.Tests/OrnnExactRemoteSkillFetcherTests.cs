@@ -3,6 +3,7 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.ToolProviders.NyxId;
 using FluentAssertions;
+using Google.Protobuf;
 using Microsoft.Extensions.Time.Testing;
 
 namespace Aevatar.AI.ToolProviders.Ornn.Tests;
@@ -11,6 +12,9 @@ public sealed class OrnnExactRemoteSkillFetcherTests
 {
     private const string SkillGuid = "11111111-1111-1111-1111-111111111111";
     private const string LiteralVersion = "1.2";
+    private const string HashHex = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
+    private static readonly ByteString HashBytes =
+        ByteString.CopyFrom(Enumerable.Range(0, 32).Select(static value => (byte)value).ToArray());
 
     [Fact]
     public async Task FetchAsync_ShouldReadOnlyVersionPinnedGuidDetailAndJson()
@@ -26,13 +30,27 @@ public sealed class OrnnExactRemoteSkillFetcherTests
             LiteralVersion,
             "skill-alpha",
             "publisher-alpha",
-            "hash-alpha",
+            HashBytes,
             "# Skill Alpha\n\nInstructions."));
         handler.Requests.Select(request => request.RequestUri!.AbsoluteUri).Should().Equal(
             $"https://nyx.example/api/v1/proxy/s/ornn/api/v1/skills/{SkillGuid}?version=1.2",
             $"https://nyx.example/api/v1/proxy/s/ornn/api/v1/skills/{SkillGuid}/json?version=1.2");
         handler.Requests.Should().OnlyContain(request =>
             request.Method == HttpMethod.Get && request.Authorization!.Parameter == "token");
+    }
+
+    [Fact]
+    public async Task FetchAsync_ShouldReadSkillMarkdownInsideSinglePackageDirectory()
+    {
+        var handler = new OrnnTestHttpMessageHandler(
+            _ => OrnnTestHttpMessageHandler.JsonResponse(DetailJson()),
+            _ => OrnnTestHttpMessageHandler.JsonResponse(SkillJson(
+                filesJson: "{\"skill-alpha/SKILL.md\":\"# Skill Alpha\\n\\nInstructions.\"}")));
+
+        var result = await CreateFetcher(handler).FetchAsync("token", ExactRef());
+
+        result.IsSuccess.Should().BeTrue();
+        result.SkillMarkdown.Should().Be("# Skill Alpha\n\nInstructions.");
     }
 
     [Fact]
@@ -96,6 +114,7 @@ public sealed class OrnnExactRemoteSkillFetcherTests
         {
             DetailJson(publisher: ""),
             DetailJson(hash: ""),
+            DetailJson(hash: "not-a-sha256"),
         };
 
         foreach (var detailJson in cases)
@@ -252,7 +271,7 @@ public sealed class OrnnExactRemoteSkillFetcherTests
         string guid = SkillGuid,
         string name = "skill-alpha",
         string publisher = "publisher-alpha",
-        string hash = "hash-alpha") =>
+        string hash = HashHex) =>
         "{\"data\":{\"guid\":\"" + guid +
         "\",\"name\":\"" + name + "\",\"skillHash\":\"" + hash +
         "\",\"createdBy\":\"" + publisher + "\"}}";

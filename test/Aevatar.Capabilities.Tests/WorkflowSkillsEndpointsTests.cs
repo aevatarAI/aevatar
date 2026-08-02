@@ -50,7 +50,8 @@ public sealed class WorkflowSkillsEndpointsTests
                 string.Empty,
                 "nyx-user-alpha",
                 "proxy",
-                "binding-alpha")));
+                "binding-alpha"),
+            Aevatar.Workflow.Abstractions.NyxIdCallerCredentialKind.SourceReadableUserBearer));
         runService.ScopeId.Should().Be("scope-alpha");
         bindingSubject.Should().BeEquivalentTo(new ExternalSubjectRef
         {

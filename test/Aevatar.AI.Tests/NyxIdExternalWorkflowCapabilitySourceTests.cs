@@ -12,6 +12,9 @@ namespace Aevatar.AI.Tests;
 
 public sealed class NyxIdExternalWorkflowCapabilitySourceTests
 {
+    private const string CatalogDigest =
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
     [Fact]
     public void AddNyxIdTools_ShouldRegisterNyxIdCapabilitySource()
     {
@@ -52,7 +55,7 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
             item.Source.SourceKind == ExternalCapabilitySourceKind.NyxIdMcpConfig &&
             item.Source.SourceId == "nyxid-mcp-config:caller:nyx-user-alpha" &&
             item.Source.SourceVersion == 0 &&
-            item.Source.ContentDigest.Length > 0);
+            item.Source.ContentDigest == CatalogDigest);
         handler.Requests.Should().ContainSingle().Which.Should().Be(
             new RequestRecord("/api/v1/mcp/config", "runtime-caller-credential"));
     }
@@ -71,8 +74,25 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
             request.Path == "/api/v1/mcp/config");
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("sha256:ABCDEF")]
+    [InlineData("sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")]
+    public async Task ListAsync_ShouldRejectInvalidNyxIdCatalogDigest(string catalogDigest)
+    {
+        var config = JsonNode.Parse(Config(Service()))!.AsObject();
+        config["catalog_digest"] = catalogDigest;
+        var source = CreateSource(new CatalogHandler { Body = config.ToJsonString() });
+
+        var result = await source.ListAsync(Access(), CancellationToken.None);
+
+        result.Capabilities.Should().BeEmpty();
+        result.Diagnostics.Should().ContainSingle().Which.Code.Should()
+            .Be(ExternalCapabilityDiscoveryDiagnosticCode.SourceUnavailable);
+    }
+
     [Fact]
-    public async Task InspectAsync_ShouldBuildTextOnlyProofFromExactEndpoint()
+    public async Task InspectAsync_ShouldUseTypedTextResponseInsteadOfFreeFormDescription()
     {
         var endpoint = Endpoint();
         endpoint["response_description"] = "application/pdf download";
@@ -103,10 +123,88 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
             parameter.Required);
         proof.ResponsePolicy.TextAllowed.Should().BeTrue();
         proof.ResponsePolicy.FileArtifactAllowed.Should().BeFalse();
-        proof.ResponsePolicy.MediaTypes.Should().BeEmpty(
-            "free-form response_description is not a trusted media-type contract");
+        proof.ResponsePolicy.MediaTypes.Should().Equal("application/json");
         result.Sources.Should().ContainSingle().Which.SourceKind.Should()
             .Be(ExternalCapabilitySourceKind.NyxIdMcpConfig);
+    }
+
+    [Fact]
+    public async Task InspectAsync_ShouldBuildFileArtifactProofFromTypedBinaryResponse()
+    {
+        var endpoint = Endpoint();
+        endpoint["response"] = Response(true, "application/pdf", "application/octet-stream");
+        var source = CreateSource(new CatalogHandler
+        {
+            Body = Config(Service(endpoints: [endpoint])),
+        });
+
+        var result = await source.InspectAsync(
+            Access(),
+            Selector(),
+            ExternalCapabilityExecutionMode.Interactive,
+            CancellationToken.None);
+
+        result.Status.Should().Be(ExternalCapabilityReadinessStatus.Ready);
+        var policy = result.SelectedCapability.NyxIdUserService.ResponsePolicy;
+        policy.TextAllowed.Should().BeFalse();
+        policy.FileArtifactAllowed.Should().BeTrue();
+        policy.MediaTypes.Should().Equal("application/octet-stream", "application/pdf");
+    }
+
+    [Fact]
+    public async Task ListAsync_ShouldRejectTypedBinaryResponseForNonGetOperation()
+    {
+        var endpoint = Endpoint(method: "POST", path: "/items");
+        endpoint["response"] = Response(true, "application/octet-stream");
+        var source = CreateSource(new CatalogHandler
+        {
+            Body = Config(Service(endpoints: [endpoint])),
+        });
+
+        var result = await source.ListAsync(Access(), CancellationToken.None);
+
+        result.Capabilities.Should().BeEmpty();
+        result.RejectedCount.Should().Be(1);
+        result.Diagnostics.Should().ContainSingle(item =>
+            item.Code == ExternalCapabilityDiscoveryDiagnosticCode.UnsupportedResponse);
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("invalid_content_types")]
+    [InlineData("invalid_binary_flag")]
+    [InlineData("invalid_media_type")]
+    public async Task ListAsync_ShouldRejectMissingOrMalformedTypedResponse(string scenario)
+    {
+        var endpoint = Endpoint();
+        switch (scenario)
+        {
+            case "missing":
+                endpoint.Remove("response");
+                break;
+            case "invalid_content_types":
+                endpoint["response"]!["content_types"] = "application/json";
+                break;
+            case "invalid_binary_flag":
+                endpoint["response"]!["binary_artifact"] = "false";
+                break;
+            case "invalid_media_type":
+                endpoint["response"]!["content_types"] = new JsonArray("bad\r\nmedia");
+                break;
+            default:
+                throw new InvalidOperationException($"Unknown scenario: {scenario}");
+        }
+        var source = CreateSource(new CatalogHandler
+        {
+            Body = Config(Service(endpoints: [endpoint])),
+        });
+
+        var result = await source.ListAsync(Access(), CancellationToken.None);
+
+        result.Capabilities.Should().BeEmpty();
+        result.RejectedCount.Should().Be(1);
+        result.Diagnostics.Should().ContainSingle(item =>
+            item.Code == ExternalCapabilityDiscoveryDiagnosticCode.UnsupportedResponse);
     }
 
     [Theory]
@@ -717,13 +815,16 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
     }
 
     private static ExternalWorkflowCapabilityAccessContext Access() =>
-        new("scope-owner-alpha", "nyx-caller-alpha", "runtime-caller-credential");
+        new(
+            "scope-owner-alpha",
+            "nyx-caller-alpha",
+            NyxIdCallerCredentialSelection.SourceReadableUserBearer("runtime-caller-credential"));
 
     private static ExternalWorkflowCapabilityAccessContext AccessWithOrganization() =>
         new(
             "scope-owner-alpha",
             "nyx-caller-alpha",
-            "runtime-caller-credential",
+            NyxIdCallerCredentialSelection.SourceReadableUserBearer("runtime-caller-credential"),
             "runtime-organization-credential");
 
     private static ExternalWorkflowCapabilitySelector Selector(
@@ -743,6 +844,8 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
         var serviceArray = new JsonArray(services.Select(static service => service.DeepClone()).ToArray());
         return new JsonObject
         {
+            ["contract_version"] = "1.0",
+            ["catalog_digest"] = CatalogDigest,
             ["user_id"] = "nyx-user-alpha",
             ["proxy_base_url"] = "https://nyxid.invalid/api/v1/proxy",
             ["services"] = serviceArray,
@@ -794,11 +897,22 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
             ["request_content_type"] = null,
             ["request_body_required"] = false,
             ["response_description"] = "200 OK",
+            ["response"] = Response(false, "application/json"),
         };
         if (id is not null)
             endpoint["endpoint_id"] = id;
         return endpoint;
     }
+
+    private static JsonObject Response(bool? binaryArtifact, params string[] contentTypes) =>
+        new()
+        {
+            ["content_types"] = new JsonArray(
+                contentTypes.Select(static value => JsonValue.Create(value)).ToArray()),
+            ["binary_artifact"] = binaryArtifact is null
+                ? null
+                : JsonValue.Create(binaryArtifact.Value),
+        };
 
     private static JsonObject Parameter(
         string name,

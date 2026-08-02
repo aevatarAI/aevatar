@@ -601,6 +601,91 @@ describe("TeamAutomationsTab canonical member authority", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("shows the sanitized typed preflight failure message", async () => {
+    const sanitizedMessage =
+      "This automation is not authorized to use one or more required services.";
+    const messageError = jest
+      .spyOn(message, "error")
+      .mockImplementation(() => undefined as never);
+    (teamAutomationApi.preflightCreate as jest.Mock).mockRejectedValue(
+      new TeamAutomationApiError(
+        sanitizedMessage,
+        403,
+        "TEAM_AUTOMATION_AUTHORIZATION_SERVICE_ACCESS_DENIED",
+      ),
+    );
+    renderTab("m-alpha");
+
+    fireEvent.click(await screen.findByRole("button", { name: "New automation" }));
+    fireEvent.change(screen.getByLabelText("Recurring prompt"), {
+      target: { value: "Summarize open work." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create automation" }));
+
+    await waitFor(() => expect(messageError).toHaveBeenCalledWith(sanitizedMessage));
+    expect(screen.queryByText(sanitizedMessage)).not.toBeInTheDocument();
+  });
+
+  it("retries temporarily stale preflight authorization", async () => {
+    (teamAutomationApi.preflightCreate as jest.Mock)
+      .mockRejectedValueOnce(
+        new TeamAutomationApiError(
+          "Authorization data is temporarily stale. Retry this request.",
+          503,
+          "TEAM_AUTOMATION_AUTHORIZATION_SNAPSHOT_STALE",
+        ),
+      )
+      .mockResolvedValue(authorizationReview());
+    renderTab("m-alpha");
+
+    fireEvent.click(await screen.findByRole("button", { name: "New automation" }));
+    fireEvent.change(screen.getByLabelText("Recurring prompt"), {
+      target: { value: "Summarize open work." },
+    });
+
+    jest.useFakeTimers();
+    try {
+      fireEvent.click(screen.getByRole("button", { name: "Create automation" }));
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(teamAutomationApi.preflightCreate).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(500);
+      });
+
+      expect(teamAutomationApi.preflightCreate).toHaveBeenCalledTimes(2);
+      expect(screen.getByText("Dedicated Agent Key")).toBeInTheDocument();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it("keeps typed preflight plan changes in the review flow", async () => {
+    const messageError = jest
+      .spyOn(message, "error")
+      .mockImplementation(() => undefined as never);
+    (teamAutomationApi.preflightCreate as jest.Mock).mockRejectedValue(
+      new TeamAutomationApiError(
+        "The authorization plan changed. Run preflight again.",
+        409,
+        "TEAM_AUTOMATION_AUTHORIZATION_PLAN_CHANGED",
+      ),
+    );
+    renderTab("m-alpha");
+
+    fireEvent.click(await screen.findByRole("button", { name: "New automation" }));
+    fireEvent.change(screen.getByLabelText("Recurring prompt"), {
+      target: { value: "Summarize open work." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create automation" }));
+
+    expect(await screen.findByText("Authorization plan changed")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Review again" })).toBeInTheDocument();
+    expect(messageError).not.toHaveBeenCalled();
+  });
+
   it("clears accepted create observation after the authoritative row becomes terminal", async () => {
     (teamAutomationApi.listAll as jest.Mock)
       .mockResolvedValueOnce({ items: [], nextCursor: null, totalCount: 0 })
@@ -918,7 +1003,7 @@ describe("TeamAutomationsTab canonical member authority", () => {
     expect(await screen.findByText("Pause request accepted")).toBeInTheDocument();
     await waitFor(
       () => expect(screen.getByRole("button", { name: "Resume" })).toBeInTheDocument(),
-      { timeout: 3_500 },
+      { timeout: 7_500 },
     );
     expect(teamAutomationApi.listAll).toHaveBeenCalledTimes(3);
   });

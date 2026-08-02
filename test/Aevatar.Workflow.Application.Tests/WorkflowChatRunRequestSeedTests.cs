@@ -21,6 +21,7 @@ public sealed class WorkflowChatRunRequestSeedTests
         var request = new WorkflowChatRunRequest(
             Prompt: "hello",
             Source: WorkflowChatSource.CatalogWorkflow("direct"),
+            ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
             Headers: headers,
             CommandIdSeed: "cmd-1",
             CorrelationIdSeed: "corr-1");
@@ -38,6 +39,7 @@ public sealed class WorkflowChatRunRequestSeedTests
         var request = new WorkflowChatRunRequest(
             Prompt: "hello",
             Source: WorkflowChatSource.CatalogWorkflow("direct"),
+            ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
             TargetSeed: new WorkflowRunTargetSeed(
                 ActorId: "run-1",
                 WorkflowNameForRun: "direct",
@@ -63,6 +65,7 @@ public sealed class WorkflowChatRunRequestSeedTests
         var request = new WorkflowChatRunRequest(
             Prompt: "hello",
             Source: WorkflowChatSource.CatalogWorkflow("direct"),
+            ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
             ExternalIngress: new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowExternalIngressContext(
                 RouteKey: "invoice",
                 SourceId: "lark",
@@ -100,6 +103,7 @@ public sealed class WorkflowChatRunRequestSeedTests
         var request = new WorkflowChatRunRequest(
             Prompt: "hello",
             Source: WorkflowChatSource.CatalogWorkflow("direct"),
+            ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
             CompletionNotificationTarget: new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCompletionNotificationTarget(
                 ActorId: "delivery-actor-1",
                 DeliveryId: "delivery-1",
@@ -127,6 +131,7 @@ public sealed class WorkflowChatRunRequestSeedTests
         var request = new WorkflowChatRunRequest(
             Prompt: "team01",
             Source: WorkflowChatSource.CatalogWorkflow("direct"),
+            ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
             ConversationContext: new WorkflowConversationExecutionContext(
                 ScopeId: "scope-a",
                 ConversationId: "conversation-alpha",

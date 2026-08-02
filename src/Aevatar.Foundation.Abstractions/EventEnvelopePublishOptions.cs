@@ -51,11 +51,11 @@ public sealed class EventEnvelopePropagationOverrides
 /// </summary>
 public sealed class EventEnvelopeDeliveryOptions
 {
-    public string? DeduplicationOperationId { get; init; }
+    public string? OperationId { get; init; }
 
     public EventEnvelopeDeliveryOptions DeepClone() =>
         new()
         {
-            DeduplicationOperationId = DeduplicationOperationId,
+            OperationId = OperationId,
         };
 }

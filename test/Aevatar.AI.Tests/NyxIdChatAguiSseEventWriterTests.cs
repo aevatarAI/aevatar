@@ -234,6 +234,63 @@ public class NyxIdChatAguiSseEventWriterTests
     }
 
     [Fact]
+    public async Task WriteAsync_ShouldMapNeedsYouCustomEventsToStableJson()
+    {
+        var sink = new SseFrameSink();
+
+        await sink.WriteAsync(new AGUIEvent
+        {
+            Sequence = 23,
+            Custom = new CustomEvent
+            {
+                Name = NyxIdChatConversationAguiFrameBuilder.ApprovalRequestEventName,
+                Payload = Any.Pack(new NyxIdChatPendingApprovalState
+                {
+                    ApprovalRequestId = "approval-alpha",
+                    TurnId = "turn-alpha",
+                    TaskId = "task-alpha",
+                    StepId = "step-alpha",
+                    ToolName = "repository_delete",
+                    Presentation = new NyxIdChatApprovalPresentation
+                    {
+                        Action = "delete",
+                        Target = "repository:repo-alpha",
+                        ActorLabel = "Aevatar Assistant",
+                        Reversibility = NyxIdChatApprovalReversibility.Irreversible,
+                        GrantBoundary = "within_grant",
+                    },
+                }),
+            },
+        }, "turn-alpha");
+        await sink.WriteAsync(new AGUIEvent
+        {
+            Sequence = 24,
+            Custom = new CustomEvent
+            {
+                Name = NyxIdChatConversationAguiFrameBuilder.InputChangedEventName,
+                Payload = Any.Pack(new NyxIdChatInputResolutionState
+                {
+                    RequestId = "input-alpha",
+                    ClientRequestId = "client-input-alpha",
+                    Outcome = NyxIdChatNeedsYouResolutionOutcome.Accepted,
+                }),
+            },
+        }, "turn-alpha");
+
+        var frames = sink.ReadFrames();
+        var approval = frames[0].GetProperty("custom");
+        approval.GetProperty("name").GetString().Should().Be("nyxid.approval.request");
+        approval.GetProperty("payload").GetProperty("presentation")
+            .GetProperty("reversibility").GetString().Should().Be("irreversible");
+        approval.GetProperty("payload").GetProperty("presentation")
+            .GetProperty("grantBoundary").GetString().Should().Be("within_grant");
+
+        var changed = frames[1].GetProperty("custom");
+        changed.GetProperty("name").GetString().Should().Be("nyxid.input.changed");
+        changed.GetProperty("payload").GetProperty("outcome").GetString().Should().Be("accepted");
+    }
+
+    [Fact]
     public async Task WriteAsync_ShouldMapActionRequestToExactSchemaV4WirePayload()
     {
         var committed = new NyxIdChatActionRequestedEvent

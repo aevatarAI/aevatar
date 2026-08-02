@@ -5,6 +5,27 @@ using Google.Protobuf;
 
 namespace Aevatar.Workflow.Abstractions;
 
+public enum WorkflowCapabilityAdmissionCompatibilityFailure
+{
+    None = 0,
+    RebindRequiredSchema = 1,
+    SchemaMismatch = 2,
+    ExecutionModeMismatch = 3,
+    DefinitionDigestMismatch = 4,
+    InvocationMismatch = 5,
+    InvocationOrderingInvalid = 6,
+    AdmissionProofInvalid = 7,
+    DurableOwnerInvalid = 8,
+    RequiredSourceMissing = 9,
+    AdmissionDigestMismatch = 10,
+}
+
+public sealed record WorkflowCapabilityAdmissionCompatibilityResult(
+    WorkflowCapabilityAdmissionCompatibilityFailure Failure)
+{
+    public bool Succeeded => Failure == WorkflowCapabilityAdmissionCompatibilityFailure.None;
+}
+
 public static class WorkflowCapabilityAdmissionPlanIntegrity
 {
     public const string SchemaVersion = "external-capability-admission.v4";
@@ -13,18 +34,22 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
     public const string RebindRequiredCode = "CAPABILITY_ADMISSION_REBIND_REQUIRED";
     public const string NyxIdAuthority = "nyxid";
 
+    public static bool RequiresExplicitRequestBindingIdentity(WorkflowCapabilityAdmissionPlan? plan) =>
+        plan?.InvocationAdmissions.Any(static admission => admission.NyxIdExplicitRequestGrant is not null) == true;
+
     public static WorkflowCapabilityAdmissionPlan Create(
         string workflowYaml,
         IReadOnlyDictionary<string, string>? inlineWorkflowYamls,
         ExternalCapabilityExecutionMode executionMode,
         IEnumerable<WorkflowCapabilityInvocationAdmission> invocationAdmissions,
         IEnumerable<ExternalCapabilitySourceStamp> sourceStamps,
-        ExternalCapabilityAuthorizationOwner? durableAuthorizationOwner = null)
+        ExternalCapabilityAuthorizationOwner? durableAuthorizationOwner = null,
+        string? workflowId = null,
+        string? revisionId = null)
     {
         var plan = new WorkflowCapabilityAdmissionPlan
         {
             SchemaVersion = SchemaVersion,
-            DefinitionDigest = ComputeDefinitionDigest(workflowYaml, inlineWorkflowYamls),
             ExecutionMode = executionMode,
             DurableAuthorizationOwner = durableAuthorizationOwner?.Clone(),
         };
@@ -33,6 +58,17 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
             .OrderBy(static admission => admission.CallSiteId, StringComparer.Ordinal)
             .ToArray();
         ValidateInvocationAdmissions(admissions, executionMode);
+        var bindingIdentity = ResolveExplicitRequestBindingIdentity(
+            admissions,
+            workflowId,
+            revisionId);
+        plan.DefinitionDigest = bindingIdentity is null
+            ? ComputeDefinitionDigest(workflowYaml, inlineWorkflowYamls)
+            : ComputeDefinitionDigest(
+                workflowYaml,
+                inlineWorkflowYamls,
+                bindingIdentity.Value.WorkflowId,
+                bindingIdentity.Value.RevisionId);
         plan.InvocationAdmissions.Add(admissions);
         plan.SourceStamps.Add(
             sourceStamps
@@ -63,6 +99,31 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
         return ComputeLengthPrefixedDigest(components);
     }
 
+    public static string ComputeDefinitionDigest(
+        string workflowYaml,
+        IReadOnlyDictionary<string, string>? inlineWorkflowYamls,
+        string workflowId,
+        string revisionId)
+    {
+        ValidateBindingIdentity(workflowId, nameof(workflowId));
+        ValidateBindingIdentity(revisionId, nameof(revisionId));
+        var components = new List<string?>
+        {
+            "workflow-definition.v2",
+            workflowId,
+            revisionId,
+            workflowYaml ?? string.Empty,
+        };
+        foreach (var (name, yaml) in (inlineWorkflowYamls ?? new Dictionary<string, string>())
+                     .OrderBy(static item => item.Key, StringComparer.Ordinal))
+        {
+            components.Add(name);
+            components.Add(yaml);
+        }
+
+        return ComputeLengthPrefixedDigest(components);
+    }
+
     public static string ComputeAdmissionDigest(WorkflowCapabilityAdmissionPlan plan)
     {
         ArgumentNullException.ThrowIfNull(plan);
@@ -76,44 +137,175 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
         string workflowYaml,
         IReadOnlyDictionary<string, string>? inlineWorkflowYamls,
         ExternalCapabilityExecutionMode executionMode,
-        IEnumerable<ExternalToolInvocationSpec> expectedInvocations)
+        IEnumerable<ExternalToolInvocationSpec> expectedInvocations,
+        string? workflowId = null,
+        string? revisionId = null)
+    {
+        var evaluation = EvaluateCompatibility(
+            plan,
+            workflowYaml,
+            inlineWorkflowYamls,
+            executionMode,
+            expectedInvocations,
+            workflowId,
+            revisionId);
+        if (evaluation.Result.Succeeded)
+            return;
+        throw evaluation.Exception ??
+              new InvalidOperationException("Workflow capability admission compatibility validation failed.");
+    }
+
+    public static WorkflowCapabilityAdmissionCompatibilityResult CheckCompatibility(
+        WorkflowCapabilityAdmissionPlan plan,
+        string workflowYaml,
+        IReadOnlyDictionary<string, string>? inlineWorkflowYamls,
+        ExternalCapabilityExecutionMode executionMode,
+        IEnumerable<ExternalToolInvocationSpec> expectedInvocations,
+        string? workflowId = null,
+        string? revisionId = null) =>
+        EvaluateCompatibility(
+            plan,
+            workflowYaml,
+            inlineWorkflowYamls,
+            executionMode,
+            expectedInvocations,
+            workflowId,
+            revisionId).Result;
+
+    private static CompatibilityEvaluation EvaluateCompatibility(
+        WorkflowCapabilityAdmissionPlan plan,
+        string workflowYaml,
+        IReadOnlyDictionary<string, string>? inlineWorkflowYamls,
+        ExternalCapabilityExecutionMode executionMode,
+        IEnumerable<ExternalToolInvocationSpec> expectedInvocations,
+        string? workflowId,
+        string? revisionId)
     {
         ArgumentNullException.ThrowIfNull(plan);
         if (RequiresRebind(plan.SchemaVersion))
-            throw new WorkflowCapabilityAdmissionRebindRequiredException();
+        {
+            return Failed(
+                WorkflowCapabilityAdmissionCompatibilityFailure.RebindRequiredSchema,
+                new WorkflowCapabilityAdmissionRebindRequiredException());
+        }
         if (!string.Equals(plan.SchemaVersion, SchemaVersion, StringComparison.Ordinal))
-            throw new InvalidOperationException("Workflow capability admission schema version is invalid.");
+        {
+            return Failed(
+                WorkflowCapabilityAdmissionCompatibilityFailure.SchemaMismatch,
+                new InvalidOperationException("Workflow capability admission schema version is invalid."));
+        }
         if (plan.ExternalCapabilities.Count != 0)
-            throw new InvalidOperationException("Workflow capability admission v4 cannot contain legacy external capabilities.");
-
-        var expectedDefinitionDigest = ComputeDefinitionDigest(workflowYaml, inlineWorkflowYamls);
-        if (!FixedTimeEquals(plan.DefinitionDigest, expectedDefinitionDigest))
-            throw new InvalidOperationException("Workflow capability admission definition digest does not match the bound definition.");
+        {
+            return Failed(
+                WorkflowCapabilityAdmissionCompatibilityFailure.SchemaMismatch,
+                new InvalidOperationException(
+                    "Workflow capability admission v4 cannot contain legacy external capabilities."));
+        }
 
         if (executionMode == ExternalCapabilityExecutionMode.Unspecified ||
             plan.ExecutionMode != executionMode)
         {
-            throw new InvalidOperationException("Workflow capability admission execution mode does not match the binding request.");
+            return Failed(
+                WorkflowCapabilityAdmissionCompatibilityFailure.ExecutionModeMismatch,
+                new InvalidOperationException(
+                    "Workflow capability admission execution mode does not match the binding request."));
         }
 
-        var expected = expectedInvocations
+        var expected = (expectedInvocations ?? throw new ArgumentNullException(nameof(expectedInvocations)))
             .Select(static invocation => invocation.Clone())
             .OrderBy(static invocation => invocation.CallSiteId, StringComparer.Ordinal)
             .ToArray();
-        ValidateExternalInvocations(expected);
+        try
+        {
+            ValidateExternalInvocations(expected);
+        }
+        catch (Exception exception) when (IsStructuralValidationException(exception))
+        {
+            return Failed(
+                WorkflowCapabilityAdmissionCompatibilityFailure.InvocationMismatch,
+                exception);
+        }
+
         var actual = plan.InvocationAdmissions.ToArray();
-        ValidateInvocationAdmissions(actual, executionMode);
+        try
+        {
+            ValidateInvocationAdmissions(actual, executionMode);
+        }
+        catch (Exception exception) when (IsStructuralValidationException(exception))
+        {
+            return Failed(
+                WorkflowCapabilityAdmissionCompatibilityFailure.AdmissionProofInvalid,
+                exception);
+        }
+
+        (string WorkflowId, string RevisionId)? bindingIdentity;
+        try
+        {
+            bindingIdentity = ResolveExplicitRequestBindingIdentity(actual, workflowId, revisionId);
+        }
+        catch (Exception exception) when (IsStructuralValidationException(exception))
+        {
+            return Failed(
+                WorkflowCapabilityAdmissionCompatibilityFailure.AdmissionProofInvalid,
+                exception);
+        }
+
+        var expectedDefinitionDigest = bindingIdentity is null
+            ? ComputeDefinitionDigest(workflowYaml, inlineWorkflowYamls)
+            : ComputeDefinitionDigest(
+                workflowYaml,
+                inlineWorkflowYamls,
+                bindingIdentity.Value.WorkflowId,
+                bindingIdentity.Value.RevisionId);
+        if (!FixedTimeEquals(plan.DefinitionDigest, expectedDefinitionDigest))
+        {
+            return Failed(
+                WorkflowCapabilityAdmissionCompatibilityFailure.DefinitionDigestMismatch,
+                new InvalidOperationException(
+                    "Workflow capability admission definition digest does not match the bound definition."));
+        }
         if (!IsSortedByCallSite(actual))
-            throw new InvalidOperationException("Workflow capability invocation admissions are not canonically ordered.");
+        {
+            return Failed(
+                WorkflowCapabilityAdmissionCompatibilityFailure.InvocationOrderingInvalid,
+                new InvalidOperationException(
+                    "Workflow capability invocation admissions are not canonically ordered."));
+        }
+        if (!IsSortedBySourceStamp(plan.SourceStamps))
+        {
+            return Failed(
+                WorkflowCapabilityAdmissionCompatibilityFailure.InvocationOrderingInvalid,
+                new InvalidOperationException(
+                    "Workflow capability admission source stamps are not canonically ordered."));
+        }
         if (expected.Length != actual.Length)
-            throw new InvalidOperationException("Workflow capability invocation admissions do not match the bound definition.");
+        {
+            return Failed(
+                WorkflowCapabilityAdmissionCompatibilityFailure.InvocationMismatch,
+                new InvalidOperationException(
+                    "Workflow capability invocation admissions do not match the bound definition."));
+        }
         for (var index = 0; index < expected.Length; index++)
         {
-            if (!string.Equals(expected[index].CallSiteId, actual[index].CallSiteId, StringComparison.Ordinal) ||
-                !SelectorMatchesCapability(expected[index].Selector, actual[index].Capability))
+            bool selectorMatches;
+            try
             {
-                throw new InvalidOperationException(
-                    "Workflow capability invocation admissions do not match the bound definition.");
+                selectorMatches = SelectorMatchesCapability(expected[index].Selector, actual[index].Capability);
+            }
+            catch (Exception exception) when (IsStructuralValidationException(exception))
+            {
+                return Failed(
+                    WorkflowCapabilityAdmissionCompatibilityFailure.InvocationMismatch,
+                    exception);
+            }
+
+            if (!string.Equals(expected[index].CallSiteId, actual[index].CallSiteId, StringComparison.Ordinal) ||
+                !selectorMatches)
+            {
+                return Failed(
+                    WorkflowCapabilityAdmissionCompatibilityFailure.InvocationMismatch,
+                    new InvalidOperationException(
+                        "Workflow capability invocation admissions do not match the bound definition."));
             }
         }
 
@@ -121,35 +313,53 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
             .Select(static admission => admission.Capability)
             .ToArray();
 
-        if (actual.Length > 0 && plan.SourceStamps.Count == 0)
-            throw new InvalidOperationException("Workflow capability admission source evidence is required.");
         var requiresDurableAuthorizationCatalog = RequiresDurableAuthorizationCatalog(
             executionMode,
             expectedCapabilityArray);
         if (requiresDurableAuthorizationCatalog &&
             !HasDurableAuthorizationCatalogSource(plan.SourceStamps))
         {
-            throw new InvalidOperationException(
-                "Workflow capability admission durable authorization catalog source is required.");
+            return Failed(
+                WorkflowCapabilityAdmissionCompatibilityFailure.RequiredSourceMissing,
+                new InvalidOperationException(
+                    "Workflow capability admission durable authorization catalog source is required."));
         }
         if (!HasRequiredSourceEvidence(executionMode, expectedCapabilityArray, plan.SourceStamps))
-            throw new InvalidOperationException("Workflow capability admission required source evidence is invalid.");
+        {
+            return Failed(
+                WorkflowCapabilityAdmissionCompatibilityFailure.RequiredSourceMissing,
+                new InvalidOperationException(
+                    "Workflow capability admission required source evidence is invalid."));
+        }
         if (requiresDurableAuthorizationCatalog)
         {
             if (!IsCanonicalDurableAuthorizationOwner(plan.DurableAuthorizationOwner))
             {
-                throw new InvalidOperationException(
-                    "Workflow capability admission durable authorization owner is invalid.");
+                return Failed(
+                    WorkflowCapabilityAdmissionCompatibilityFailure.DurableOwnerInvalid,
+                    new InvalidOperationException(
+                        "Workflow capability admission durable authorization owner is invalid."));
             }
         }
         else if (plan.DurableAuthorizationOwner is not null)
         {
-            throw new InvalidOperationException(
-                "Workflow capability admission durable authorization owner is not applicable.");
+            return Failed(
+                WorkflowCapabilityAdmissionCompatibilityFailure.DurableOwnerInvalid,
+                new InvalidOperationException(
+                    "Workflow capability admission durable authorization owner is not applicable."));
         }
 
         if (!FixedTimeEquals(plan.AdmissionDigest, ComputeAdmissionDigest(plan)))
-            throw new InvalidOperationException("Workflow capability admission digest is invalid.");
+        {
+            return Failed(
+                WorkflowCapabilityAdmissionCompatibilityFailure.AdmissionDigestMismatch,
+                new InvalidOperationException("Workflow capability admission digest is invalid."));
+        }
+
+        return new CompatibilityEvaluation(
+            new WorkflowCapabilityAdmissionCompatibilityResult(
+                WorkflowCapabilityAdmissionCompatibilityFailure.None),
+            null);
     }
 
     public static IReadOnlyList<ExternalWorkflowCapabilityRef> DistinctCapabilities(
@@ -181,8 +391,63 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
                 "nyxid",
                 selector.NyxIdOperation.UserServiceId,
                 selector.NyxIdOperation.EndpointId),
+            ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdRequest => string.Join(
+                "\n",
+                "nyxid-request",
+                ComputeNyxIdRequestContractDigest(selector.NyxIdRequest)),
             _ => "none",
         };
+    }
+
+    public static string ComputeNyxIdRequestContractDigest(NyxIdRequestSelector selector)
+    {
+        ArgumentNullException.ThrowIfNull(selector);
+        if (!NyxIdRequestSelectorContract.TryNormalize(selector, out var normalized, out var error))
+            throw new InvalidOperationException($"Workflow NyxID {error}.");
+
+        return ComputeLengthPrefixedDigest([
+            "nyxid-explicit-request-contract.v1",
+            normalized.UserServiceId,
+            ((int)normalized.Method).ToString(System.Globalization.CultureInfo.InvariantCulture),
+            normalized.PathTemplate,
+            string.Join("\n", NyxIdRequestSelectorContract.PathParameters(normalized).Order(StringComparer.Ordinal)),
+            string.Join("\n", normalized.QueryParameters),
+            string.Join("\n", normalized.HeaderParameters
+                .Select(static value => value.ToLowerInvariant())
+                .Order(StringComparer.Ordinal)),
+            ((int)normalized.BodyMode).ToString(System.Globalization.CultureInfo.InvariantCulture),
+            normalized.BodyRequired.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ((int)normalized.ResponseMode).ToString(System.Globalization.CultureInfo.InvariantCulture),
+        ]);
+    }
+
+    public static string ComputeNyxIdExplicitRequestProofDigest(
+        string requestContractDigest,
+        string serviceSlugSnapshot) =>
+        ComputeLengthPrefixedDigest([
+            "nyxid-explicit-request-proof.v1",
+            requestContractDigest,
+            serviceSlugSnapshot,
+        ]);
+
+    public static string ComputeNyxIdExplicitRequestGrantDigest(NyxIdExplicitRequestGrant grant)
+    {
+        ArgumentNullException.ThrowIfNull(grant);
+        return ComputeLengthPrefixedDigest([
+            "nyxid-explicit-request-grant.v2",
+            grant.WorkflowId,
+            grant.RevisionId,
+            grant.CallSiteId,
+            grant.RequestContractDigest,
+            ((int)grant.GrantorAuthority).ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ((int)grant.GrantorOwnerKind).ToString(System.Globalization.CultureInfo.InvariantCulture),
+            grant.GrantorOwnerSubject,
+            ((int)grant.Risk).ToString(System.Globalization.CultureInfo.InvariantCulture),
+            string.Join("\n", grant.AllowedExecutionModes
+                .Select(static mode => (int)mode)
+                .Order()
+                .Select(static mode => mode.ToString(System.Globalization.CultureInfo.InvariantCulture))),
+        ]);
     }
 
     public static bool SelectorMatchesCapability(
@@ -213,6 +478,13 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
                     selector.NyxIdOperation.EndpointId,
                     capability.NyxIdUserService.EndpointId,
                     StringComparison.Ordinal),
+            (ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdRequest,
+                ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest) =>
+                capability.NyxIdUserRequest.Request is not null &&
+                string.Equals(
+                    ComputeNyxIdRequestContractDigest(selector.NyxIdRequest),
+                    ComputeNyxIdRequestContractDigest(capability.NyxIdUserRequest.Request),
+                    StringComparison.Ordinal),
             _ => false,
         };
     }
@@ -237,6 +509,14 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
                 capability.NyxIdUserService.HttpMethod,
                 capability.NyxIdUserService.PathTemplate,
                 capability.NyxIdUserService.ContractDigest),
+            ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest => string.Join(
+                "\n",
+                "nyxid-request",
+                ComputeNyxIdRequestContractDigest(capability.NyxIdUserRequest.Request),
+                capability.NyxIdUserRequest.ServiceSlugSnapshot,
+                capability.NyxIdUserRequest.ContractDigest,
+                capability.NyxIdUserRequest.ExplicitRequestGrantDigest,
+                NyxIdExecutionPolicyKey(capability.NyxIdUserRequest.ExecutionPolicy)),
             _ => "none",
         };
     }
@@ -263,27 +543,172 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
     {
         foreach (var admission in admissions)
         {
-            ValidateCallSiteId(admission.CallSiteId);
-            if (admission.Capability is null ||
-                admission.Capability.CapabilityCase ==
-                ExternalWorkflowCapabilityRef.CapabilityOneofCase.None)
-            {
-                throw new InvalidOperationException("Workflow capability invocation admission proof is required.");
-            }
-
-            if (admission.Capability.CapabilityCase ==
-                ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService)
-            {
-                var policy = admission.Capability.NyxIdUserService.ExecutionPolicy;
-                ValidateNyxIdExecutionPolicy(policy);
-                if (!policy.AllowedExecutionModes.Contains(executionMode))
-                {
-                    throw new InvalidOperationException(
-                        "Workflow capability admission execution mode is not allowed by the NyxID operation execution policy.");
-                }
-            }
+            ValidateInvocationAdmissionIntrinsicIntegrity(admission);
+            ValidateInvocationAdmissionExecutionMode(admission, executionMode);
         }
         EnsureUniqueCallSites(admissions.Select(static admission => admission.CallSiteId));
+    }
+
+    /// <summary>
+    /// Validates one admission's mode-independent internal consistency. This does not establish
+    /// that the admission is allowed for any particular plan execution mode.
+    /// </summary>
+    public static void ValidateInvocationAdmissionIntrinsicIntegrity(
+        WorkflowCapabilityInvocationAdmission admission)
+    {
+        ArgumentNullException.ThrowIfNull(admission);
+        ValidateCallSiteId(admission.CallSiteId);
+        if (admission.Capability is null ||
+            admission.Capability.CapabilityCase ==
+            ExternalWorkflowCapabilityRef.CapabilityOneofCase.None)
+        {
+            throw new InvalidOperationException(
+                "Workflow capability invocation admission proof is required.");
+        }
+
+        switch (admission.Capability.CapabilityCase)
+        {
+            case ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService:
+                ValidateNyxIdPublishedOperationAdmissionIntrinsicIntegrity(admission);
+                break;
+            case ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest:
+                ValidateNyxIdExplicitRequestAdmissionIntrinsicIntegrity(admission);
+                break;
+            default:
+                if (admission.NyxIdExplicitRequestGrant is not null)
+                {
+                    throw new InvalidOperationException(
+                        "Workflow NyxID explicit request grant is not applicable to this capability.");
+                }
+                break;
+        }
+    }
+
+    private static void ValidateNyxIdPublishedOperationAdmissionIntrinsicIntegrity(
+        WorkflowCapabilityInvocationAdmission admission)
+    {
+        if (admission.NyxIdExplicitRequestGrant is not null)
+        {
+            throw new InvalidOperationException(
+                "Workflow NyxID explicit request grant is not applicable to a published operation proof.");
+        }
+
+        var proof = admission.Capability.NyxIdUserService;
+        if (string.IsNullOrWhiteSpace(proof.EndpointId) ||
+            !string.Equals(proof.EndpointId, proof.EndpointId.Trim(), StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Workflow NyxID published endpoint identity is invalid.");
+        }
+        ValidateNyxIdExecutionPolicy(proof.ExecutionPolicy);
+    }
+
+    private static void ValidateNyxIdExplicitRequestAdmissionIntrinsicIntegrity(
+        WorkflowCapabilityInvocationAdmission admission)
+    {
+        var proof = admission.Capability.NyxIdUserRequest;
+        var grant = admission.NyxIdExplicitRequestGrant;
+        if (grant is null)
+            throw new InvalidOperationException("Workflow NyxID explicit request grant is required.");
+        if (proof.Request is null)
+            throw new InvalidOperationException("Workflow NyxID explicit request proof request is required.");
+
+        ValidateCanonicalNyxIdRequest(proof.Request);
+        if (string.IsNullOrWhiteSpace(proof.ServiceSlugSnapshot) ||
+            !string.Equals(proof.ServiceSlugSnapshot, proof.ServiceSlugSnapshot.Trim(), StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Workflow NyxID explicit request service slug is invalid.");
+        }
+
+        var requestContractDigest = ComputeNyxIdRequestContractDigest(proof.Request);
+        if (!FixedTimeEquals(
+                proof.ContractDigest,
+                ComputeNyxIdExplicitRequestProofDigest(requestContractDigest, proof.ServiceSlugSnapshot)))
+        {
+            throw new InvalidOperationException("Workflow NyxID explicit request proof digest is invalid.");
+        }
+        if (!string.Equals(grant.CallSiteId, admission.CallSiteId, StringComparison.Ordinal) ||
+            !FixedTimeEquals(grant.RequestContractDigest, requestContractDigest))
+        {
+            throw new InvalidOperationException("Workflow NyxID explicit request grant scope is invalid.");
+        }
+        ValidateBindingIdentity(grant.WorkflowId, nameof(grant.WorkflowId));
+        ValidateBindingIdentity(grant.RevisionId, nameof(grant.RevisionId));
+        if (grant.GrantorAuthority != NyxIdExplicitRequestGrantorAuthority.AevatarWorkflowBinder ||
+            grant.GrantorOwnerKind == ExternalCapabilityAuthorizationOwnerKind.Unspecified ||
+            !System.Enum.IsDefined(grant.GrantorOwnerKind) ||
+            string.IsNullOrWhiteSpace(grant.GrantorOwnerSubject) ||
+            !string.Equals(grant.GrantorOwnerSubject, grant.GrantorOwnerSubject.Trim(), StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Workflow NyxID explicit request grantor is invalid.");
+        }
+        if (grant.Risk is not (NyxIdOperationRisk.ReadOnly or NyxIdOperationRisk.Write or
+                NyxIdOperationRisk.Destructive) ||
+            grant.AllowedExecutionModes.Count == 0 ||
+            !grant.AllowedExecutionModes.Contains(ExternalCapabilityExecutionMode.Interactive) ||
+            grant.AllowedExecutionModes.Any(static mode =>
+                mode is not (ExternalCapabilityExecutionMode.Interactive or
+                    ExternalCapabilityExecutionMode.Durable)) ||
+            grant.AllowedExecutionModes.Distinct().Count() != grant.AllowedExecutionModes.Count)
+        {
+            throw new InvalidOperationException("Workflow NyxID explicit request grant policy is invalid.");
+        }
+
+        ValidateExplicitRequestRisk(proof.Request.Method, grant.Risk);
+        if (grant.Risk is NyxIdOperationRisk.Write or NyxIdOperationRisk.Destructive &&
+            grant.AllowedExecutionModes.Contains(ExternalCapabilityExecutionMode.Durable))
+        {
+            throw new InvalidOperationException(
+                "Workflow NyxID explicit request durable admission is limited to read-only grants.");
+        }
+
+        ValidateNyxIdExecutionPolicy(proof.ExecutionPolicy);
+        if (proof.ExecutionPolicy.Risk != grant.Risk ||
+            !proof.ExecutionPolicy.AllowedExecutionModes.Order()
+                .SequenceEqual(grant.AllowedExecutionModes.Order()))
+        {
+            throw new InvalidOperationException(
+                "Workflow NyxID explicit request proof policy does not match its grant.");
+        }
+        if (!FixedTimeEquals(
+                proof.ExplicitRequestGrantDigest,
+                ComputeNyxIdExplicitRequestGrantDigest(grant)))
+        {
+            throw new InvalidOperationException("Workflow NyxID explicit request grant digest is invalid.");
+        }
+    }
+
+    private static void ValidateInvocationAdmissionExecutionMode(
+        WorkflowCapabilityInvocationAdmission admission,
+        ExternalCapabilityExecutionMode executionMode)
+    {
+        var policy = admission.Capability.CapabilityCase switch
+        {
+            ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService =>
+                admission.Capability.NyxIdUserService.ExecutionPolicy,
+            ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest =>
+                admission.Capability.NyxIdUserRequest.ExecutionPolicy,
+            _ => null,
+        };
+        if (policy is not null && !policy.AllowedExecutionModes.Contains(executionMode))
+        {
+            throw new InvalidOperationException(
+                "Workflow capability admission execution mode is not allowed by the NyxID operation execution policy.");
+        }
+    }
+
+    private static void ValidateExplicitRequestRisk(NyxIdRequestMethod method, NyxIdOperationRisk risk)
+    {
+        var isValid = method switch
+        {
+            NyxIdRequestMethod.Get or NyxIdRequestMethod.Head or NyxIdRequestMethod.Options => true,
+            NyxIdRequestMethod.Post or NyxIdRequestMethod.Put or NyxIdRequestMethod.Patch =>
+                risk is NyxIdOperationRisk.Write or NyxIdOperationRisk.Destructive,
+            NyxIdRequestMethod.Delete => risk == NyxIdOperationRisk.Destructive,
+            _ => false,
+        };
+        if (!isValid)
+            throw new InvalidOperationException("Workflow NyxID explicit request grant risk is below the method floor.");
     }
 
     public static bool IsValidNyxIdExecutionPolicy(NyxIdOperationExecutionPolicy? policy)
@@ -351,6 +776,17 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
         {
             throw new InvalidOperationException("Workflow external invocation selector identity is invalid.");
         }
+
+        if (selector.SelectorCase == ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdRequest)
+            ValidateCanonicalNyxIdRequest(selector.NyxIdRequest);
+    }
+
+    private static void ValidateCanonicalNyxIdRequest(NyxIdRequestSelector selector)
+    {
+        if (!NyxIdRequestSelectorContract.TryNormalize(selector, out var normalized, out var error))
+            throw new InvalidOperationException($"Workflow NyxID {error}.");
+        if (!selector.Equals(normalized))
+            throw new InvalidOperationException("Workflow NyxID explicit request selector is not canonical.");
     }
 
     private static void ValidateCallSiteId(string? callSiteId)
@@ -380,12 +816,33 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
                     .OrderBy(static id => id, StringComparer.Ordinal),
                 StringComparer.Ordinal);
 
+    private static bool IsSortedBySourceStamp(
+        IEnumerable<ExternalCapabilitySourceStamp> sourceStamps)
+    {
+        var keys = sourceStamps.Select(SourceKey).ToArray();
+        return keys.SequenceEqual(keys.Order(StringComparer.Ordinal), StringComparer.Ordinal);
+    }
+
+    private static bool IsStructuralValidationException(Exception exception) =>
+        exception is InvalidOperationException or ArgumentException;
+
+    private static CompatibilityEvaluation Failed(
+        WorkflowCapabilityAdmissionCompatibilityFailure failure,
+        Exception exception) =>
+        new(new WorkflowCapabilityAdmissionCompatibilityResult(failure), exception);
+
+    private sealed record CompatibilityEvaluation(
+        WorkflowCapabilityAdmissionCompatibilityResult Result,
+        Exception? Exception);
+
     public static bool RequiresDurableAuthorizationCatalog(
         ExternalCapabilityExecutionMode executionMode,
         IEnumerable<ExternalWorkflowCapabilityRef> capabilities) =>
         executionMode == ExternalCapabilityExecutionMode.Durable &&
         capabilities.Any(static capability =>
-            capability.CapabilityCase == ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService);
+            capability.CapabilityCase is
+                ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService or
+                ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest);
 
     public static bool HasDurableAuthorizationCatalogSource(
         IEnumerable<ExternalCapabilitySourceStamp> sourceStamps,
@@ -418,6 +875,10 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
                     break;
                 case ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService:
                     if (!HasSource(sources, ExternalCapabilitySourceKind.NyxIdMcpConfig))
+                        return false;
+                    break;
+                case ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest:
+                    if (!HasSource(sources, ExternalCapabilitySourceKind.NyxIdUserServices))
                         return false;
                     break;
                 default:
@@ -480,6 +941,68 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
             source.SourceId,
             source.SourceVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
             source.ContentDigest);
+
+    private static string NyxIdExecutionPolicyKey(NyxIdOperationExecutionPolicy? policy) =>
+        policy is null
+            ? "none"
+            : string.Join(
+                "\n",
+                ((int)policy.Risk).ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ((int)policy.Approval).ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ((int)policy.EnforcementOwner).ToString(System.Globalization.CultureInfo.InvariantCulture),
+                string.Join("\n", policy.AllowedExecutionModes
+                    .Select(static mode => (int)mode)
+                    .Order()
+                    .Select(static mode => mode.ToString(System.Globalization.CultureInfo.InvariantCulture))));
+
+    private static (string WorkflowId, string RevisionId)? ResolveExplicitRequestBindingIdentity(
+        IReadOnlyList<WorkflowCapabilityInvocationAdmission> admissions,
+        string? expectedWorkflowId,
+        string? expectedRevisionId)
+    {
+        var grants = admissions
+            .Where(static admission => admission.NyxIdExplicitRequestGrant is not null)
+            .Select(static admission => admission.NyxIdExplicitRequestGrant)
+            .ToArray();
+        if (grants.Length == 0)
+            return null;
+
+        var workflowId = grants[0].WorkflowId;
+        var revisionId = grants[0].RevisionId;
+        if (grants.Any(grant =>
+                !string.Equals(grant.WorkflowId, workflowId, StringComparison.Ordinal) ||
+                !string.Equals(grant.RevisionId, revisionId, StringComparison.Ordinal)))
+        {
+            throw new InvalidOperationException(
+                "Workflow NyxID explicit request grants do not share one workflow revision identity.");
+        }
+
+        if (string.IsNullOrWhiteSpace(expectedWorkflowId) ||
+            string.IsNullOrWhiteSpace(expectedRevisionId))
+        {
+            throw new InvalidOperationException(
+                "Workflow NyxID explicit request binding identity is required.");
+        }
+        ValidateBindingIdentity(expectedWorkflowId, nameof(expectedWorkflowId));
+        ValidateBindingIdentity(expectedRevisionId, nameof(expectedRevisionId));
+        if (!string.Equals(workflowId, expectedWorkflowId, StringComparison.Ordinal) ||
+            !string.Equals(revisionId, expectedRevisionId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Workflow NyxID explicit request grant does not match the bound workflow revision.");
+        }
+
+        return (workflowId, revisionId);
+    }
+
+    private static void ValidateBindingIdentity(string? value, string parameterName)
+    {
+        if (string.IsNullOrWhiteSpace(value) ||
+            !string.Equals(value, value.Trim(), StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException($"Workflow binding {parameterName} is invalid.");
+        }
+    }
 
     private static string ComputeLengthPrefixedDigest(IEnumerable<string?> components)
     {

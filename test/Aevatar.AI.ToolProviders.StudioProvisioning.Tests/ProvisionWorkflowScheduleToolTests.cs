@@ -2,6 +2,11 @@ using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.Tools;
+using Aevatar.Audit;
+using Aevatar.Audit.Abstractions.Identity;
+using Aevatar.Audit.Abstractions.Models;
+using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
@@ -23,6 +28,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
     private const string ListTeamsToolName = "aevatar_list_teams";
     private const string GetTeamToolName = "aevatar_get_team";
     private const string CreateMemberToolName = "aevatar_create_member";
+    private const string CreateMemberWorkflowDraftToolName = "aevatar_create_member_workflow_draft";
     private const string ListMembersToolName = "aevatar_list_members";
     private const string GetMemberToolName = "aevatar_get_member";
     private const string ListWorkflowsToolName = "aevatar_list_workflows";
@@ -73,6 +79,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         services.AddSingleton<IStudioTeamProvisioningPort, RecordingTeamProvisioningPort>();
         services.AddSingleton<IStudioTeamQueryPort, RecordingTeamQueryPort>();
         services.AddSingleton<IStudioMemberProvisioningPort, RecordingMemberProvisioningPort>();
+        services.AddSingleton<IStudioMemberWorkflowDraftProvisioningPort, RecordingMemberWorkflowDraftProvisioningPort>();
         services.AddSingleton<IStudioMemberQueryPort, RecordingMemberQueryPort>();
         services.AddSingleton<IStudioMemberAutomationQueryPort, RecordingMemberAutomationQueryPort>();
         services.AddSingleton<IStudioMemberWorkflowBindingPort, RecordingMemberWorkflowBindingPort>();
@@ -93,6 +100,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         toolNames.Should().Contain(ListTeamsToolName);
         toolNames.Should().Contain(GetTeamToolName);
         toolNames.Should().Contain(CreateMemberToolName);
+        toolNames.Should().Contain(CreateMemberWorkflowDraftToolName);
         toolNames.Should().Contain(ListMembersToolName);
         toolNames.Should().Contain(GetMemberToolName);
         toolNames.Should().Contain(ListWorkflowsToolName);
@@ -430,6 +438,243 @@ public sealed class ProvisionWorkflowScheduleToolTests
     }
 
     [Fact]
+    public async Task CreateTeam_ThroughStreamingExecutor_ShouldKeepVerifiedMutationSuccess()
+    {
+        var teamPort = new RecordingTeamProvisioningPort();
+        var tool = await DiscoverCreateTeamToolAsync(teamPort);
+
+        using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
+        var toolResult = await ExecuteToolThroughExecutorAsync(
+            tool,
+            "tc-create-team",
+            CreateTeamToolName,
+            """{"display_name":"Alpha Team","team_id":"team-alpha"}""");
+
+        toolResult.IsError.Should().BeFalse();
+        toolResult.Result.Should().Contain("\"team_id\":\"team-alpha\"");
+        toolResult.Result.Should().NotBe("""{"status":"unknown","message":"The tool outcome could not be verified."}""");
+        var receipt = toolResult.Receipt;
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        receipt.ApprovalMode.Should().Be(AgentToolReceiptApprovalMode.NeverRequire);
+        receipt.SideEffectKind.Should().Be("studio.team.create");
+        receipt.SubjectKind.Should().Be("studio_team");
+        receipt.SubjectId.Should().Be("team-alpha");
+        receipt.ResultJson.Should().Be(toolResult.Result);
+        teamPort.LastRequest.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task CreateTeam_ThroughStreamingExecutor_ShouldKeepStructuredMutationError()
+    {
+        var teamPort = new RecordingTeamProvisioningPort();
+        var tool = await DiscoverCreateTeamToolAsync(teamPort);
+
+        using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
+        var toolResult = await ExecuteToolThroughExecutorAsync(
+            tool,
+            "tc-create-team-error",
+            CreateTeamToolName,
+            """{"scope_id":"scope-model","display_name":"Alpha Team"}""");
+
+        toolResult.IsError.Should().BeTrue();
+        toolResult.Result.Should().Contain("invalid_arguments");
+        toolResult.Result.Should().NotBe("""{"status":"unknown","message":"The tool outcome could not be verified."}""");
+        var receipt = toolResult.Receipt;
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ErrorCode.Should().Be("invalid_arguments");
+        receipt.SideEffectKind.Should().Be("studio.team.create");
+        receipt.ResultJson.Should().Be(toolResult.Result);
+        teamPort.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task CreateTeam_CreateResultReceipt_WithPartialMutationJson_ShouldReturnNull()
+    {
+        var tool = await DiscoverCreateTeamToolAsync(new RecordingTeamProvisioningPort());
+
+        var receipt = tool.CreateResultReceipt(
+            "call-1",
+            CreateTeamToolName,
+            "{}",
+            """{"team_id":"team-alpha"}""");
+
+        receipt.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task CreateTeam_CreateResultReceipt_WithSuccessButPartialMutationJson_ShouldReturnNull()
+    {
+        var tool = await DiscoverCreateTeamToolAsync(new RecordingTeamProvisioningPort());
+
+        var receipt = tool.CreateResultReceipt(
+            "call-1",
+            CreateTeamToolName,
+            "{}",
+            """{"success":true,"team_id":"team-alpha"}""");
+
+        receipt.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task CreateTeam_CreateResultReceipt_WithSuccessButWrongMutationJsonKind_ShouldReturnNull()
+    {
+        var tool = await DiscoverCreateTeamToolAsync(new RecordingTeamProvisioningPort());
+
+        var receipt = tool.CreateResultReceipt(
+            "call-1",
+            CreateTeamToolName,
+            "{}",
+            """{"success":true,"team_id":"team-alpha","scope_id":123,"display_name":"Alpha Team","lifecycle_stage":"active","team_url":"/teams/team-alpha"}""");
+
+        receipt.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task CreateTeam_CreateResultReceipt_WithMalformedMutationJson_ShouldReturnNull()
+    {
+        var tool = await DiscoverCreateTeamToolAsync(new RecordingTeamProvisioningPort());
+
+        var receipt = tool.CreateResultReceipt(
+            "call-1",
+            CreateTeamToolName,
+            "{}",
+            "{");
+
+        receipt.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task CreateMember_ThroughStreamingExecutor_ShouldKeepVerifiedMutationSuccess()
+    {
+        var memberPort = new RecordingMemberProvisioningPort();
+        var tool = await DiscoverCreateMemberToolAsync(memberPort);
+
+        using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
+        var toolResult = await ExecuteToolThroughExecutorAsync(
+            tool,
+            "tc-create-member",
+            CreateMemberToolName,
+            """{"display_name":"Alpha Member","implementation_kind":"workflow","member_id":"member-alpha","team_id":"team-alpha"}""");
+
+        toolResult.IsError.Should().BeFalse();
+        toolResult.Result.Should().Contain("\"member_id\":\"member-alpha\"");
+        toolResult.Result.Should().NotBe("""{"status":"unknown","message":"The tool outcome could not be verified."}""");
+        var receipt = toolResult.Receipt;
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        receipt.SideEffectKind.Should().Be("studio.member.create");
+        receipt.SubjectKind.Should().Be("studio_member");
+        receipt.SubjectId.Should().Be("member-alpha");
+        receipt.ResultJson.Should().Be(toolResult.Result);
+    }
+
+    [Fact]
+    public async Task CreateMemberWorkflowDraft_CreateResultReceipt_WithAcceptedDraftAck_ShouldReturnNull()
+    {
+        var tool = await DiscoverCreateMemberWorkflowDraftToolAsync(new RecordingMemberWorkflowDraftProvisioningPort());
+
+        var receipt = tool.CreateResultReceipt(
+            "call-1",
+            CreateMemberWorkflowDraftToolName,
+            "{}",
+            """{"status":"draft_save_accepted","runnable":false,"binding_status":"not_bound","scope_id":"scope-current","team_id":"team-alpha","member_id":"member-alpha","workflow_id":"workflow-alpha","studio_url":"/studio/workflows/workflow-alpha","command_id":"command-alpha","ack_stage":"dispatch_accepted","actor_id":"actor-alpha","workspace_id":"workspace-alpha","acked_at_utc":"2026-07-01T00:00:00Z","readiness":{"readable":true,"stage":"draft_saved","message":"Draft saved."},"blockers":[]}""");
+
+        receipt.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task CreateMemberWorkflowDraft_CreateResultReceipt_WithStructuredError_ShouldReturnErrorReceipt()
+    {
+        var tool = await DiscoverCreateMemberWorkflowDraftToolAsync(new RecordingMemberWorkflowDraftProvisioningPort());
+
+        var receipt = tool.CreateResultReceipt(
+            "call-1",
+            CreateMemberWorkflowDraftToolName,
+            "{}",
+            """{"error":{"code":"invalid_arguments","message":"workflow_yaml is required."}}""");
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.SideEffectKind.Should().Be("studio.workflow_draft.create");
+        receipt.ErrorCode.Should().Be("invalid_arguments");
+        receipt.ResultJson.Should().Contain("workflow_yaml is required");
+    }
+
+    [Fact]
+    public async Task CreateMemberWorkflowDraft_CreateResultReceipt_WithSuccessButNoDraftStatus_ShouldReturnNull()
+    {
+        var tool = await DiscoverCreateMemberWorkflowDraftToolAsync(new RecordingMemberWorkflowDraftProvisioningPort());
+
+        var receipt = tool.CreateResultReceipt(
+            "call-1",
+            CreateMemberWorkflowDraftToolName,
+            "{}",
+            """{"success":true,"workflow_id":"workflow-alpha"}""");
+
+        receipt.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task BindMemberWorkflow_ThroughStreamingExecutor_ShouldKeepVerifiedMutationSuccess()
+    {
+        var bindingPort = new RecordingMemberWorkflowBindingPort();
+        var tool = await DiscoverBindMemberWorkflowToolAsync(bindingPort);
+
+        using var _ = PushContext(
+            scopeId: "scope-current",
+            ownerSubject: "owner-1",
+            accessToken: "access-token-1",
+            nyxIdAuthority: new AgentToolNyxIdAuthorityContext("nyxid", "tenant-alpha", "nyx-user-alpha"));
+        var toolResult = await ExecuteToolThroughExecutorAsync(
+            tool,
+            "tc-bind-member-workflow",
+            BindMemberWorkflowToolName,
+            """{"member_id":"member-alpha","workflow_yaml":"name: demo\n","workflow_id":"workflow-alpha"}""");
+
+        toolResult.IsError.Should().BeFalse();
+        toolResult.Result.Should().Contain("\"member_id\":\"member-alpha\"");
+        toolResult.Result.Should().NotBe("""{"status":"unknown","message":"The tool outcome could not be verified."}""");
+        var receipt = toolResult.Receipt;
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        receipt.SideEffectKind.Should().Be("studio.member.workflow.bind");
+        receipt.SubjectKind.Should().Be("studio_member_workflow_binding");
+        receipt.SubjectId.Should().Be("member-alpha");
+        receipt.ResultJson.Should().Be(toolResult.Result);
+    }
+
+    [Fact]
+    public async Task ScheduleMemberWorkflow_ThroughStreamingExecutor_ShouldKeepVerifiedMutationSuccess()
+    {
+        var schedulePort = new RecordingMemberWorkflowSchedulePort();
+        var tool = await DiscoverScheduleMemberWorkflowToolAsync(schedulePort);
+
+        using var _ = PushContext(
+            scopeId: "scope-current",
+            ownerSubject: "owner-1",
+            accessToken: "access-token-1",
+            nyxIdAuthority: new AgentToolNyxIdAuthorityContext("nyxid", "tenant-alpha", "nyx-user-alpha"));
+        var toolResult = await ExecuteToolThroughExecutorAsync(
+            tool,
+            "tc-schedule-member-workflow",
+            ScheduleMemberWorkflowToolName,
+            """{"member_id":"member-alpha","schedule_cron":"0 9 * * *","schedule_timezone":"Asia/Shanghai"}""");
+
+        toolResult.IsError.Should().BeFalse();
+        toolResult.Result.Should().Contain("\"schedule_id\":\"schedule-member-1\"");
+        toolResult.Result.Should().NotBe("""{"status":"unknown","message":"The tool outcome could not be verified."}""");
+        var receipt = toolResult.Receipt;
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        receipt.SideEffectKind.Should().Be("studio.member.workflow.schedule");
+        receipt.SubjectKind.Should().Be("studio_member_workflow_schedule");
+        receipt.SubjectId.Should().Be("schedule-member-1");
+        receipt.ResultJson.Should().Be(toolResult.Result);
+    }
+
+    [Fact]
     public async Task ListTeams_ShouldCallReadPortWithCallerScopeAndPage()
     {
         var teamQueryPort = new RecordingTeamQueryPort();
@@ -453,6 +698,168 @@ public sealed class ProvisionWorkflowScheduleToolTests
         root.GetProperty("teams")[0].GetProperty("team_url").GetString()
             .Should().Be("/api/scopes/scope-current/teams/team-alpha");
         root.GetProperty("next_page_token").GetString().Should().Be("next-page");
+    }
+
+    [Fact]
+    public async Task ListTeams_ThroughStreamingExecutor_ShouldKeepVerifiedReadOnlySuccess()
+    {
+        var teamQueryPort = new RecordingTeamQueryPort();
+        var tool = await DiscoverListTeamsToolAsync(teamQueryPort);
+        var tools = new ToolManager();
+        tools.Register(tool);
+        var executor = new StreamingToolExecutor(
+            tools,
+            toolExecutionPort: CreateToolExecutionPort());
+        using var executionState = executor.CreateExecutionState();
+
+        using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
+        var prepared = await executor.PrepareBatchAsync(
+            "studio-provisioning-test:tc-list-teams",
+            round: 0,
+            [new ToolCall
+            {
+                Id = "tc-list-teams",
+                Name = ListTeamsToolName,
+                ArgumentsJson = "{}",
+            }]);
+        executor.AddTool(executionState, prepared.Single());
+
+        var results = new List<ToolExecutionResult>();
+        await foreach (var result in executor.GetRemainingResultsAsync(executionState, CancellationToken.None))
+            results.Add(result);
+
+        var toolResult = results.Should().ContainSingle().Which;
+        toolResult.IsError.Should().BeFalse();
+        toolResult.Result.Should().Contain("\"teams\"");
+        toolResult.Result.Should().NotBe("""{"status":"unknown","message":"The tool outcome could not be verified."}""");
+        var receipt = toolResult.Receipt;
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        receipt.ApprovalMode.Should().Be(AgentToolReceiptApprovalMode.NeverRequire);
+        receipt.IsDestructive.Should().BeFalse();
+        receipt.SideEffectKind.Should().BeEmpty();
+        receipt.ResultJson.Should().Be(toolResult.Result);
+    }
+
+    [Fact]
+    public async Task ListTeams_CreateResultReceipt_WithPartialReadOnlyJson_ShouldReturnNull()
+    {
+        var tool = await DiscoverListTeamsToolAsync(new RecordingTeamQueryPort());
+
+        var receipt = tool.CreateResultReceipt(
+            "call-1",
+            ListTeamsToolName,
+            "{}",
+            """{"scope_id":"scope-current"}""");
+
+        receipt.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ListTeams_CreateResultReceipt_WithWrongReadOnlyJsonKind_ShouldReturnNull()
+    {
+        var tool = await DiscoverListTeamsToolAsync(new RecordingTeamQueryPort());
+
+        var receipt = tool.CreateResultReceipt(
+            "call-1",
+            ListTeamsToolName,
+            "{}",
+            """{"scope_id":"scope-current","teams":null}""");
+
+        receipt.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ListTeams_CreateResultReceipt_WithMalformedReadOnlyJson_ShouldReturnNull()
+    {
+        var tool = await DiscoverListTeamsToolAsync(new RecordingTeamQueryPort());
+
+        var receipt = tool.CreateResultReceipt(
+            "call-1",
+            ListTeamsToolName,
+            "{}",
+            "{");
+
+        receipt.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ListTeams_ThroughStreamingExecutor_ShouldKeepStructuredReadOnlyError()
+    {
+        var teamQueryPort = new RecordingTeamQueryPort();
+        var tool = await DiscoverListTeamsToolAsync(teamQueryPort);
+        var tools = new ToolManager();
+        tools.Register(tool);
+        var executor = new StreamingToolExecutor(
+            tools,
+            toolExecutionPort: CreateToolExecutionPort());
+        using var executionState = executor.CreateExecutionState();
+
+        using var _ = PushContext(scopeId: "scope-context", ownerSubject: "owner-1", accessToken: "access-token-1");
+        var prepared = await executor.PrepareBatchAsync(
+            "studio-provisioning-test:tc-list-teams-error",
+            round: 0,
+            [new ToolCall
+            {
+                Id = "tc-list-teams-error",
+                Name = ListTeamsToolName,
+                ArgumentsJson = """{"scope_id":"scope-model"}""",
+            }]);
+        executor.AddTool(executionState, prepared.Single());
+
+        var results = new List<ToolExecutionResult>();
+        await foreach (var result in executor.GetRemainingResultsAsync(executionState, CancellationToken.None))
+            results.Add(result);
+
+        var toolResult = results.Should().ContainSingle().Which;
+        toolResult.IsError.Should().BeTrue();
+        toolResult.Result.Should().Contain("invalid_arguments");
+        toolResult.Result.Should().NotBe("""{"status":"unknown","message":"The tool outcome could not be verified."}""");
+        var receipt = toolResult.Receipt;
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ErrorCode.Should().Be("invalid_arguments");
+        receipt.ResultJson.Should().Be(toolResult.Result);
+        teamQueryPort.ListCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ListWorkflows_ThroughStreamingExecutor_ShouldKeepVerifiedReadOnlySuccess()
+    {
+        var memberQueryPort = new RecordingMemberQueryPort();
+        var tool = await DiscoverListWorkflowsToolAsync(memberQueryPort);
+        var tools = new ToolManager();
+        tools.Register(tool);
+        var executor = new StreamingToolExecutor(
+            tools,
+            toolExecutionPort: CreateToolExecutionPort());
+        using var executionState = executor.CreateExecutionState();
+
+        using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
+        var prepared = await executor.PrepareBatchAsync(
+            "studio-provisioning-test:tc-list-workflows",
+            round: 0,
+            [new ToolCall
+            {
+                Id = "tc-list-workflows",
+                Name = ListWorkflowsToolName,
+                ArgumentsJson = "{}",
+            }]);
+        executor.AddTool(executionState, prepared.Single());
+
+        var results = new List<ToolExecutionResult>();
+        await foreach (var result in executor.GetRemainingResultsAsync(executionState, CancellationToken.None))
+            results.Add(result);
+
+        var toolResult = results.Should().ContainSingle().Which;
+        toolResult.IsError.Should().BeFalse();
+        toolResult.Result.Should().Contain("\"workflows\"");
+        toolResult.Result.Should().NotBe("""{"status":"unknown","message":"The tool outcome could not be verified."}""");
+        var receipt = toolResult.Receipt;
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        receipt.ResultJson.Should().Be(toolResult.Result);
+        memberQueryPort.LastListScopeId.Should().Be("scope-current");
     }
 
     [Fact]
@@ -691,6 +1098,20 @@ public sealed class ProvisionWorkflowScheduleToolTests
     }
 
     [Fact]
+    public async Task GetSchedule_WhenMemberIdMissing_ShouldReturnInvalidArgumentsAndNotCallPort()
+    {
+        var port = new RecordingMemberAutomationQueryPort();
+        var tool = await DiscoverGetScheduleToolAsync(port);
+
+        using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
+        var output = await tool.ExecuteAsync("""{"team_id":"team-alpha","schedule_id":"sched-alpha"}""");
+
+        ErrorCode(output).Should().Be("invalid_arguments");
+        ErrorMessage(output).Should().Be("member_id is required.");
+        port.GetCallCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task ListSchedules_WhenTeamIdMissing_ShouldReturnInvalidArgumentsAndNotCallPort()
     {
         var port = new RecordingMemberAutomationQueryPort();
@@ -705,7 +1126,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
     }
 
     [Fact]
-    public async Task ListSchedules_WhenMemberIdMissing_ShouldReturnInvalidArgumentsAndNotCallPort()
+    public async Task ListSchedules_WhenMemberIdMissing_ShouldListTeamWideSchedules()
     {
         var port = new RecordingMemberAutomationQueryPort();
         var tool = await DiscoverListSchedulesToolAsync(port);
@@ -713,9 +1134,15 @@ public sealed class ProvisionWorkflowScheduleToolTests
         using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
         var output = await tool.ExecuteAsync("""{"team_id":"team-alpha"}""");
 
-        ErrorCode(output).Should().Be("invalid_arguments");
-        ErrorMessage(output).Should().Be("member_id is required.");
-        port.ListCallCount.Should().Be(0);
+        port.LastScopeId.Should().Be("scope-current");
+        port.LastTeamId.Should().Be("team-alpha");
+        port.LastMemberId.Should().BeNull();
+
+        using var document = JsonDocument.Parse(output);
+        var root = document.RootElement;
+        root.TryGetProperty("member_id", out var memberIdProperty).Should().BeFalse();
+        var schedule = root.GetProperty("schedules")[0];
+        schedule.GetProperty("member_id").GetString().Should().Be("m-alpha");
     }
 
     [Fact]
@@ -840,7 +1267,8 @@ public sealed class ProvisionWorkflowScheduleToolTests
         bindingPort.LastRequest.WorkflowId.Should().Be("workflow-alpha");
         bindingPort.LastRequest.CapabilityAdmission.Should().NotBeNull();
         bindingPort.LastRequest.CapabilityAdmission!.CallerId.Should().Be("nyx-user-alpha");
-        bindingPort.LastRequest.CapabilityAdmission.NyxIdCallerBearerToken.Should().Be("access-token-1");
+        bindingPort.LastRequest.CapabilityAdmission.NyxIdCallerCredential?.SourceReadableUserBearerToken
+            .Should().Be("access-token-1");
         bindingPort.LastRequest.CapabilityAdmission.NyxIdOrganizationBearerToken.Should().Be("org-token");
         bindingPort.LastRequest.CapabilityAdmission.ExecutionMode.Should()
             .Be(ExternalCapabilityExecutionMode.Interactive);
@@ -1658,6 +2086,51 @@ public sealed class ProvisionWorkflowScheduleToolTests
     }
 
     [Fact]
+    public async Task CreateResultReceipt_WithAcceptedSchedule_ShouldReturnSuccessReceipt()
+    {
+        var tool = await DiscoverToolAsync(new RecordingProvisioningPort());
+        var resultJson = JsonSerializer.Serialize(new
+        {
+            status = "accepted",
+            member_id = "member-1",
+            scope_id = "scope-1",
+            team_id = "team-alpha",
+            schedule_id = "schedule-1",
+            studio_url = "/scopes/scope-1/teams/team-alpha/members/member-1/workflow",
+            observatory_url = "/workflow/observatory",
+        });
+
+        var receipt = tool.CreateResultReceipt("call-1", ScheduleToolName, "{}", resultJson);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        receipt.CallId.Should().Be("call-1");
+        receipt.ToolName.Should().Be(ScheduleToolName);
+        receipt.SideEffectKind.Should().Be("studio.workflow.schedule.provision");
+        receipt.SubjectKind.Should().Be("studio_member_workflow_schedule");
+        receipt.SubjectId.Should().Be("schedule-1");
+        receipt.ResultJson.Should().Be(resultJson);
+    }
+
+    [Fact]
+    public async Task CreateResultReceipt_WithToolError_ShouldReturnErrorReceipt()
+    {
+        var tool = await DiscoverToolAsync(new RecordingProvisioningPort());
+        var resultJson = """
+            {"error":{"code":"caller_identity_unavailable","message":"Verified NyxID caller identity is required in AgentToolRequestContext."}}
+            """;
+
+        var receipt = tool.CreateResultReceipt("call-1", ScheduleToolName, "{}", resultJson);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ErrorCode.Should().Be("caller_identity_unavailable");
+        receipt.ErrorMessage.Should().Be("Verified NyxID caller identity is required in AgentToolRequestContext.");
+        receipt.SideEffectKind.Should().Be("studio.workflow.schedule.provision");
+        receipt.ResultJson.Should().Be(resultJson);
+    }
+
+    [Fact]
     public async Task Execute_ShouldMapArgumentsAndContextOntoProvisioningRequest()
     {
         var port = new RecordingProvisioningPort(new WorkflowScheduleProvisioningResult(
@@ -1704,10 +2177,17 @@ public sealed class ProvisionWorkflowScheduleToolTests
         request.CallerSubjectExternalUserId.Should().Be("nyx-user-alpha");
         request.CapabilityAdmission.Should().NotBeNull();
         request.CapabilityAdmission!.CallerId.Should().Be("nyx-user-alpha");
-        request.CapabilityAdmission.NyxIdCallerBearerToken.Should().Be("access-token-1");
+        request.CapabilityAdmission.NyxIdCallerCredential?.SourceReadableUserBearerToken
+            .Should().Be("access-token-1");
         request.CapabilityAdmission.NyxIdOrganizationBearerToken.Should().Be("org-token");
         request.CapabilityAdmission.ExecutionMode.Should()
             .Be(ExternalCapabilityExecutionMode.Durable);
+        request.AuthenticatedOwner.Should().NotBeNull();
+        request.ProvisioningBearerToken.Should().Be("access-token-1");
+        request.ScheduleOperationId.Should()
+            .MatchRegex("^studio-workflow-provision-create:[0-9a-f]{64}$");
+        request.ScheduleIdempotencyKey.Should()
+            .MatchRegex("^studio-workflow-provision-schedule:[0-9a-f]{64}$");
 
         // Result surfaces the schedule + Observatory link.
         using var document = JsonDocument.Parse(output);
@@ -1719,6 +2199,38 @@ public sealed class ProvisionWorkflowScheduleToolTests
         root.GetProperty("studio_url").GetString().Should()
             .Be("/scopes/scope-1/teams/team-alpha/members/member-1/workflow");
         root.GetProperty("observatory_url").GetString().Should().Be("/workflow/observatory");
+    }
+
+    [Theory]
+    [InlineData(AgentToolNyxIdCredentialKind.ProxyDelegation)]
+    [InlineData(AgentToolNyxIdCredentialKind.Unspecified)]
+    public async Task Execute_WhenCredentialIsNotSourceReadable_ShouldOmitCapabilityCallerCredential(
+        AgentToolNyxIdCredentialKind credentialKind)
+    {
+        var port = new RecordingProvisioningPort();
+        var tool = await DiscoverToolAsync(port);
+
+        using var _ = PushContext(
+            scopeId: "scope-alpha",
+            ownerSubject: "owner-alpha",
+            accessToken: "caller-token",
+            nyxIdAuthority: new AgentToolNyxIdAuthorityContext("nyxid", "tenant-alpha", "nyx-user-alpha"),
+            nyxIdCredentialKind: credentialKind);
+        await tool.ExecuteAsync("""
+            {
+              "team_id": "team-alpha",
+              "workflow_yaml": "name: daily-tech-news\nroles: []\n",
+              "display_name": "Daily Tech News",
+              "prompt": "summarize today's tech news",
+              "schedule_cron": "0 9 * * *",
+              "schedule_timezone": "Asia/Shanghai",
+              "run_immediately": false
+            }
+            """);
+
+        port.LastRequest.Should().NotBeNull();
+        port.LastRequest!.CapabilityAdmission.Should().NotBeNull();
+        port.LastRequest.CapabilityAdmission!.NyxIdCallerCredential.Should().BeNull();
     }
 
     [Fact]
@@ -1775,6 +2287,8 @@ public sealed class ProvisionWorkflowScheduleToolTests
 
         port.LastRequest.Should().NotBeNull();
         port.LastRequest!.RunImmediately.Should().BeTrue();
+        port.LastRequest.ScheduleOperationId.Should().BeNull();
+        port.LastRequest.ScheduleIdempotencyKey.Should().BeNull();
     }
 
     [Fact]
@@ -1908,7 +2422,11 @@ public sealed class ProvisionWorkflowScheduleToolTests
         });
         var tool = await DiscoverToolAsync(port);
 
-        using var _ = PushContext(scopeId: "scope-1", ownerSubject: "owner-1", accessToken: "access-token-1");
+        using var _ = PushContext(
+            scopeId: "scope-1",
+            ownerSubject: "owner-1",
+            accessToken: "access-token-1",
+            nyxIdAuthority: new AgentToolNyxIdAuthorityContext("nyxid", "tenant-alpha", "nyx-user-alpha"));
         var output = await tool.ExecuteAsync("""
             {
               "team_id": "team-alpha",
@@ -1917,6 +2435,9 @@ public sealed class ProvisionWorkflowScheduleToolTests
             }
             """);
 
+        ErrorCode(output).Should().BeNull();
+        using var document = JsonDocument.Parse(output);
+        document.RootElement.GetProperty("status").GetString().Should().Be("accepted");
         var lower = output.ToLowerInvariant();
         lower.Should().NotContain("lark");
         lower.Should().NotContain("feishu");
@@ -1961,6 +2482,14 @@ public sealed class ProvisionWorkflowScheduleToolTests
         return tools.Single(tool => tool.Name == CreateMemberToolName);
     }
 
+    private static async Task<IAgentTool> DiscoverCreateMemberWorkflowDraftToolAsync(
+        IStudioMemberWorkflowDraftProvisioningPort draftPort)
+    {
+        var source = new CreateStudioMemberWorkflowDraftToolSource(draftPort);
+        var tools = await source.DiscoverToolsAsync();
+        return tools.Single(tool => tool.Name == CreateMemberWorkflowDraftToolName);
+    }
+
     private static async Task<IAgentTool> DiscoverListMembersToolAsync(IStudioMemberQueryPort memberQueryPort)
     {
         var source = new StudioMemberQueryToolSource(memberQueryPort);
@@ -1973,6 +2502,13 @@ public sealed class ProvisionWorkflowScheduleToolTests
         var source = new StudioMemberQueryToolSource(memberQueryPort);
         var tools = await source.DiscoverToolsAsync();
         return tools.Single(tool => tool.Name == GetMemberToolName);
+    }
+
+    private static async Task<IAgentTool> DiscoverListWorkflowsToolAsync(IStudioMemberQueryPort memberQueryPort)
+    {
+        var source = new StudioWorkflowQueryToolSource(memberQueryPort);
+        var tools = await source.DiscoverToolsAsync();
+        return tools.Single(tool => tool.Name == ListWorkflowsToolName);
     }
 
     private static async Task<IAgentTool> DiscoverListSchedulesToolAsync(
@@ -2009,6 +2545,42 @@ public sealed class ProvisionWorkflowScheduleToolTests
         var tools = await source.DiscoverToolsAsync();
         return tools.Single(tool => tool.Name == ScheduleMemberWorkflowToolName);
     }
+
+    private static async Task<ToolExecutionResult> ExecuteToolThroughExecutorAsync(
+        IAgentTool tool,
+        string toolCallId,
+        string toolName,
+        string argumentsJson)
+    {
+        var tools = new ToolManager();
+        tools.Register(tool);
+        var executor = new StreamingToolExecutor(
+            tools,
+            toolExecutionPort: CreateToolExecutionPort());
+        using var executionState = executor.CreateExecutionState();
+        var prepared = await executor.PrepareBatchAsync(
+            $"studio-provisioning-test:{toolCallId}",
+            round: 0,
+            [new ToolCall
+            {
+                Id = toolCallId,
+                Name = toolName,
+                ArgumentsJson = argumentsJson,
+            }]);
+        executor.AddTool(executionState, prepared.Single());
+
+        var results = new List<ToolExecutionResult>();
+        await foreach (var result in executor.GetRemainingResultsAsync(executionState, CancellationToken.None))
+            results.Add(result);
+
+        return results.Should().ContainSingle().Which;
+    }
+
+    private static IAgentToolExecutionPort CreateToolExecutionPort() =>
+        new AdmittedAgentToolExecutor(
+            new StartingAdmissionLedger(),
+            new AppendedAuditTrail(),
+            new StableAuditIdentityHasher());
 
     private static async Task ExecuteScheduleMemberWorkflowAsync(
         RecordingMemberWorkflowSchedulePort schedulePort,
@@ -2052,11 +2624,12 @@ public sealed class ProvisionWorkflowScheduleToolTests
         string? senderTenant = null,
         string? channelPlatform = null,
         string? channelSenderId = null,
-        string? channelRegistrationScopeId = null)
+        string? channelRegistrationScopeId = null,
+        AgentToolNyxIdCredentialKind nyxIdCredentialKind = AgentToolNyxIdCredentialKind.SourceReadableUserBearer)
     {
         return AgentToolContextScope.Push(new AgentToolExecutionContext(
             new AgentToolRequestIdentity(requestId, callId, idempotencyKey),
-            new AgentToolCredentials(accessToken, "org-token", "sender-token"),
+            new AgentToolCredentials(accessToken, "org-token", "sender-token", nyxIdCredentialKind),
             new AgentToolCallerContext(scopeId, ownerSubject, "response-1", ownerScopeId),
             new AgentToolChannelContext(channelPlatform, channelSenderId, channelRegistrationScopeId, null, null),
             new AgentToolSenderBindingContext(senderBindingId, senderNyxUserId, senderTenant),
@@ -2066,7 +2639,31 @@ public sealed class ProvisionWorkflowScheduleToolTests
             new Dictionary<string, string>(StringComparer.Ordinal))
         {
             NyxIdAuthority = nyxIdAuthority ?? AgentToolNyxIdAuthorityContext.Empty,
+            ExecutionOwner = AgentToolExecutionOwners.HostService(nameof(ProvisionWorkflowScheduleToolTests)),
         });
+    }
+
+    private sealed class StartingAdmissionLedger : IAgentToolAdmissionLedger
+    {
+        public Task<AgentToolAdmissionResult> TryStartAsync(
+            AgentToolAdmissionFact fact,
+            CancellationToken ct = default) =>
+            Task.FromResult(new AgentToolAdmissionResult(AgentToolAdmissionStatus.Started));
+    }
+
+    private sealed class AppendedAuditTrail : IAuditTrailAppender
+    {
+        public Task<AuditTrailAppendResult> AppendAsync(
+            AuditRecord record,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(AuditTrailAppendResult.Appended(record.AuditId));
+    }
+
+    private sealed class StableAuditIdentityHasher : IAuditActorIdentityHasher
+    {
+        public AuditActorIdentity Hash(string canonicalActorKey) => new("actor-hash", "key-1");
+
+        public bool Verify(string canonicalActorKey, string auditActorId, string identityKeyId) => true;
     }
 
     public static TheoryData<Exception, string, string> ScheduleMemberWorkflowWritePreflightExceptionCases() => new()
@@ -2275,6 +2872,39 @@ public sealed class ProvisionWorkflowScheduleToolTests
         }
     }
 
+    private sealed class RecordingMemberWorkflowDraftProvisioningPort :
+        IStudioMemberWorkflowDraftProvisioningPort
+    {
+        public StudioMemberWorkflowDraftProvisioningRequest? LastRequest { get; private set; }
+
+        public Task<StudioMemberWorkflowDraftProvisioningResult> SaveAsync(
+            StudioMemberWorkflowDraftProvisioningRequest request,
+            CancellationToken ct = default)
+        {
+            LastRequest = request;
+            return Task.FromResult(new StudioMemberWorkflowDraftProvisioningResult(
+                StudioMemberWorkflowDraftStatusNames.SaveAccepted,
+                Runnable: false,
+                StudioMemberWorkflowDraftStatusNames.NotBound,
+                request.ScopeId,
+                request.TeamId,
+                request.MemberId ?? "member-generated",
+                request.WorkflowId ?? "workflow-generated",
+                "/studio/workflows/workflow-alpha",
+                "command-alpha",
+                "dispatch_accepted",
+                "actor-alpha",
+                "workspace-alpha",
+                7,
+                DateTimeOffset.Parse("2026-07-01T00:00:00Z"),
+                new StudioMemberWorkflowDraftReadiness(
+                    Readable: true,
+                    Stage: "draft_saved",
+                    Message: "Draft saved."),
+                []));
+        }
+    }
+
     private sealed class RecordingMemberQueryPort : IStudioMemberQueryPort
     {
         public string? LastListScopeId { get; private set; }
@@ -2383,7 +3013,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         public Task<StudioMemberAutomationListResponse> ListAsync(
             string scopeId,
             string teamId,
-            string memberId,
+            string? memberId,
             int take = 50,
             string? cursor = null,
             bool includeTotalCount = false,
@@ -2400,7 +3030,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
                 throw Failure;
 
             return Task.FromResult(new StudioMemberAutomationListResponse(
-                [DefaultView() with { ScopeId = scopeId, TeamId = teamId, MemberId = memberId }],
+                [DefaultView() with { ScopeId = scopeId, TeamId = teamId, MemberId = memberId ?? "m-alpha" }],
                 "next-schedules",
                 1));
         }
@@ -2544,7 +3174,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         public Task<StudioMemberAutomationListResponse> ListAsync(
             string scopeId,
             string teamId,
-            string memberId,
+            string? memberId,
             int take = 50,
             string? cursor = null,
             bool includeTotalCount = false,

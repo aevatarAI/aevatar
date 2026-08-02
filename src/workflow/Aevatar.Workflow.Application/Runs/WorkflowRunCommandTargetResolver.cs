@@ -41,7 +41,10 @@ internal sealed class WorkflowRunCommandTargetResolver
             return CommandTargetResolution<WorkflowRunCommandTarget, WorkflowChatRunStartError>.Failure(
                 WorkflowChatRunStartError.ProjectionDisabled);
 
-        if (WorkflowCallerCredentialTokens.ParseOptional(command.CallerCredential?.BearerToken).IsInvalid)
+        if (WorkflowCallerCredentialTokens.IsInvalidCredentialSet(
+                command.CallerCredential?.BearerToken,
+                command.CallerCredential?.Kind ?? NyxIdCallerCredentialKind.Unspecified,
+                command.CallerCredential?.SourceReadableUserBearerToken))
             return CommandTargetResolution<WorkflowRunCommandTarget, WorkflowChatRunStartError>.Failure(
                 WorkflowChatRunStartError.InvalidCallerCredential);
 

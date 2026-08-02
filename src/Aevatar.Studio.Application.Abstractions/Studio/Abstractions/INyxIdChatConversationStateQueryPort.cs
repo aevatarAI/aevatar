@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Aevatar.Studio.Application.Studio.Abstractions;
 
 /// <summary>
@@ -10,7 +12,21 @@ public interface INyxIdChatConversationStateQueryPort
     Task<NyxIdChatConversationStateQueryResult> GetAsync(
         NyxIdChatConversationStateQuery query,
         CancellationToken ct = default);
+
+    Task<IReadOnlyDictionary<string, NyxIdChatConversationAttentionSummary>>
+        GetAttentionSummariesAsync(
+            string scopeId,
+            IReadOnlyCollection<string> actorIds,
+            CancellationToken ct = default);
 }
+
+public sealed record NyxIdChatConversationAttentionSummary(
+    string ActorId,
+    string TaskStatus,
+    string AttentionKind,
+    DateTimeOffset? AttentionSince,
+    string? ActiveStepSummary,
+    long StateVersion);
 
 public sealed record NyxIdChatConversationStateQuery(
     string ScopeId,
@@ -94,7 +110,14 @@ public sealed record NyxIdChatConversationStateSnapshot(
     IReadOnlyList<NyxIdChatActionSnapshot> PendingActions,
     NyxIdChatControlFenceSnapshot? ControlFence,
     NyxIdChatControlFenceSnapshot? LatestControlResult,
-    NyxIdChatContinuationAdmissionSnapshot? ContinuationAdmission);
+    NyxIdChatContinuationAdmissionSnapshot? ContinuationAdmission,
+    NyxIdChatPendingInputSnapshot? PendingInput = null,
+    NyxIdChatInputResolutionSnapshot? LatestInputResolution = null,
+    NyxIdChatApprovalResolutionSnapshot? LatestApprovalResolution = null,
+    string? TaskStatus = null,
+    string? AttentionKind = null,
+    DateTimeOffset? AttentionSince = null,
+    string? ActiveStepSummary = null);
 
 public sealed record NyxIdChatConversationTurnSnapshot(
     string TurnId,
@@ -103,7 +126,8 @@ public sealed record NyxIdChatConversationTurnSnapshot(
     string? FailureCode,
     string? SafeMessage,
     DateTimeOffset? CreatedAt,
-    DateTimeOffset? TerminalAt);
+    DateTimeOffset? TerminalAt,
+    string? CommandId = null);
 
 public sealed record NyxIdChatConversationTaskSnapshot(
     string TaskId,
@@ -164,7 +188,43 @@ public sealed record NyxIdChatPendingApprovalSnapshot(
     string TaskId,
     string StepId,
     string ToolName,
-    DateTimeOffset? ExpiresAt);
+    DateTimeOffset? ExpiresAt,
+    DateTimeOffset? AskedAt = null,
+    string? Action = null,
+    string? Target = null,
+    string? ActorLabel = null,
+    string? Reversibility = null,
+    string? GrantBoundary = null,
+    [property: JsonPropertyName("nyxidRequestId")] string? NyxIdRequestId = null);
+
+public sealed record NyxIdChatInputOptionSnapshot(
+    string OptionId,
+    string Label,
+    string? Description);
+
+public sealed record NyxIdChatPendingInputSnapshot(
+    string RequestId,
+    string TurnId,
+    string TaskId,
+    string StepId,
+    string Prompt,
+    IReadOnlyList<NyxIdChatInputOptionSnapshot> Options,
+    DateTimeOffset? AskedAt,
+    bool AllowFreeText,
+    bool MultiSelect);
+
+public sealed record NyxIdChatInputResolutionSnapshot(
+    string RequestId,
+    string ClientRequestId,
+    string Outcome,
+    DateTimeOffset? CommittedAt);
+
+public sealed record NyxIdChatApprovalResolutionSnapshot(
+    string RequestId,
+    string ClientRequestId,
+    string Outcome,
+    bool Approved,
+    DateTimeOffset? CommittedAt);
 
 public sealed record NyxIdChatControlFenceSnapshot(
     string Kind,

@@ -89,7 +89,7 @@ public class RoleGAgentAppStateAndConfigContractTests
 
     private static RoleGAgent CreateRoleAgent(IServiceProvider provider, string actorId)
     {
-        var agent = new RoleGAgent
+        var agent = new RoleGAgent(TestAgentToolExecutionPort.Instance)
         {
             Services = provider,
             EventSourcingBehaviorFactory = provider.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),

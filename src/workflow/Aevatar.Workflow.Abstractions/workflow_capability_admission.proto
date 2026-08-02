@@ -80,10 +80,45 @@ message NyxIdOperationSelector {
   string endpoint_id = 3;
 }
 
+enum NyxIdRequestMethod {
+  NYX_ID_REQUEST_METHOD_UNSPECIFIED = 0;
+  NYX_ID_REQUEST_METHOD_GET = 1;
+  NYX_ID_REQUEST_METHOD_HEAD = 2;
+  NYX_ID_REQUEST_METHOD_OPTIONS = 3;
+  NYX_ID_REQUEST_METHOD_POST = 4;
+  NYX_ID_REQUEST_METHOD_PUT = 5;
+  NYX_ID_REQUEST_METHOD_PATCH = 6;
+  NYX_ID_REQUEST_METHOD_DELETE = 7;
+}
+
+enum NyxIdRequestBodyMode {
+  NYX_ID_REQUEST_BODY_MODE_UNSPECIFIED = 0;
+  NYX_ID_REQUEST_BODY_MODE_NONE = 1;
+  NYX_ID_REQUEST_BODY_MODE_JSON = 2;
+}
+
+enum NyxIdRequestResponseMode {
+  NYX_ID_REQUEST_RESPONSE_MODE_UNSPECIFIED = 0;
+  NYX_ID_REQUEST_RESPONSE_MODE_TEXT = 1;
+  NYX_ID_REQUEST_RESPONSE_MODE_FILE_ARTIFACT = 2;
+}
+
+message NyxIdRequestSelector {
+  string user_service_id = 1;
+  NyxIdRequestMethod method = 2;
+  string path_template = 3;
+  repeated string query_parameters = 4;
+  repeated string header_parameters = 5;
+  NyxIdRequestBodyMode body_mode = 6;
+  NyxIdRequestResponseMode response_mode = 7;
+  bool body_required = 8;
+}
+
 message ExternalWorkflowCapabilitySelector {
   oneof selector {
     HostConnectorCapabilityRef host_connector = 1;
     NyxIdOperationSelector nyx_id_operation = 2;
+    NyxIdRequestSelector nyx_id_request = 3;
   }
 }
 
@@ -106,6 +141,14 @@ message NyxIdUserServiceCapabilityRef {
   NyxIdOperationResponsePolicy response_policy = 9;
   NyxIdOperationExecutionPolicy execution_policy = 10;
   string endpoint_id = 11;
+}
+
+message NyxIdUserRequestCapabilityRef {
+  NyxIdRequestSelector request = 1;
+  string service_slug_snapshot = 2;
+  string contract_digest = 3;
+  NyxIdOperationExecutionPolicy execution_policy = 4;
+  string explicit_request_grant_digest = 5;
 }
 
 enum NyxIdOperationRisk {
@@ -132,6 +175,31 @@ message NyxIdOperationExecutionPolicy {
   NyxIdOperationApproval approval = 2;
   NyxIdOperationEnforcementOwner enforcement_owner = 3;
   repeated ExternalCapabilityExecutionMode allowed_execution_modes = 4;
+}
+
+enum NyxIdExplicitRequestGrantorAuthority {
+  NYX_ID_EXPLICIT_REQUEST_GRANTOR_AUTHORITY_UNSPECIFIED = 0;
+  NYX_ID_EXPLICIT_REQUEST_GRANTOR_AUTHORITY_AEVATAR_WORKFLOW_BINDER = 1;
+}
+
+message NyxIdExplicitRequestGrant {
+  string call_site_id = 1;
+  string request_contract_digest = 2;
+  NyxIdExplicitRequestGrantorAuthority grantor_authority = 3;
+  ExternalCapabilityAuthorizationOwnerKind grantor_owner_kind = 4;
+  string grantor_owner_subject = 5;
+  NyxIdOperationRisk risk = 6;
+  repeated ExternalCapabilityExecutionMode allowed_execution_modes = 7;
+  string workflow_id = 8;
+  string revision_id = 9;
+}
+
+message NyxIdExplicitRequestConfirmation {
+  string call_site_id = 1;
+  string request_contract_digest = 2;
+  NyxIdOperationRisk attested_risk = 3;
+  string workflow_id = 4;
+  string revision_id = 5;
 }
 
 enum NyxIdOperationParameterLocation {
@@ -188,12 +256,14 @@ message ExternalWorkflowCapabilityRef {
   oneof capability {
     HostConnectorCapabilityRef host_connector = 1;
     NyxIdUserServiceCapabilityRef nyx_id_user_service = 2;
+    NyxIdUserRequestCapabilityRef nyx_id_user_request = 3;
   }
 }
 
 message WorkflowCapabilityInvocationAdmission {
   string call_site_id = 1;
   ExternalWorkflowCapabilityRef capability = 2;
+  NyxIdExplicitRequestGrant nyx_id_explicit_request_grant = 3;
 }
 
 message ExternalCapabilityBlocker {
@@ -238,6 +308,7 @@ enum ExternalCapabilityDiscoveryDiagnosticCode {
   EXTERNAL_CAPABILITY_DISCOVERY_DIAGNOSTIC_CODE_UNSUPPORTED_PARAMETER = 8;
   EXTERNAL_CAPABILITY_DISCOVERY_DIAGNOSTIC_CODE_UNSUPPORTED_REQUEST_BODY = 9;
   EXTERNAL_CAPABILITY_DISCOVERY_DIAGNOSTIC_CODE_UNSUPPORTED_SCHEMA = 10;
+  EXTERNAL_CAPABILITY_DISCOVERY_DIAGNOSTIC_CODE_UNSUPPORTED_RESPONSE = 11;
 }
 
 message ExternalCapabilityDiscoveryDiagnostic {

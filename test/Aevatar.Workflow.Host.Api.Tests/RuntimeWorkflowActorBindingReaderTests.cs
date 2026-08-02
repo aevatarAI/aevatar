@@ -10,6 +10,14 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 public sealed class ProjectionWorkflowActorBindingReaderTests
 {
     [Fact]
+    public void WorkflowActorBindingContract_ShouldExposeBoundWorkflowRevisionIdentity()
+    {
+        typeof(WorkflowActorBinding).GetProperty("WorkflowId").Should().NotBeNull();
+        typeof(WorkflowActorBinding).GetProperty("RevisionId").Should().NotBeNull();
+        typeof(WorkflowActorBinding).GetProperty("ExpectedExecutionMode").Should().NotBeNull();
+    }
+
+    [Fact]
     public async Task GetAsync_ShouldThrow_WhenActorIdBlank()
     {
         var reader = CreateReader();
@@ -48,6 +56,9 @@ public sealed class ProjectionWorkflowActorBindingReaderTests
                 WorkflowName = "direct",
                 WorkflowYaml = "yaml",
                 SourceKind = "service_revision",
+                WorkflowId = "wf-alpha",
+                RevisionId = "rev-alpha",
+                ExpectedExecutionMode = ExternalCapabilityExecutionMode.Durable,
                 CapabilityAdmissionPlan = capabilityAdmissionPlan,
                 InlineWorkflowYamls = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
                 {
@@ -66,6 +77,9 @@ public sealed class ProjectionWorkflowActorBindingReaderTests
         result.WorkflowYaml.Should().Be("yaml");
         result.InlineWorkflowYamls.Should().ContainKey("child").WhoseValue.Should().Be("yaml-child");
         result.SourceKind.Should().Be("service_revision");
+        result.WorkflowId.Should().Be("wf-alpha");
+        result.RevisionId.Should().Be("rev-alpha");
+        result.ExpectedExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Durable);
         result.CapabilityAdmissionPlan!.AdmissionDigest.Should().Be(capabilityAdmissionPlan.AdmissionDigest);
     }
 
@@ -146,6 +160,9 @@ public sealed class ProjectionWorkflowActorBindingReaderTests
                 query.Filters.Should().Contain(filter =>
                     filter.FieldPath == nameof(WorkflowActorBindingDocument.DefinitionActorId) &&
                     filter.Operator == ProjectionDocumentFilterOperator.In);
+                query.Filters.Should().Contain(filter =>
+                    filter.FieldPath == nameof(WorkflowActorBindingDocument.RunId) &&
+                    filter.Operator == ProjectionDocumentFilterOperator.In);
 
                 return Task.FromResult(new ProjectionDocumentQueryResult<WorkflowActorBindingDocument>
                 {
@@ -167,7 +184,8 @@ public sealed class ProjectionWorkflowActorBindingReaderTests
             new WorkflowRunBindingQuery(
                 " scope-1 ",
                 ["definition-1", "definition-2", "definition-1", " "],
-                Take: 500),
+                Take: 500,
+                RunIds: ["run-2", "run-2", " "]),
             CancellationToken.None);
 
         result.Should().ContainSingle();

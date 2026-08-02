@@ -135,6 +135,16 @@ public static class ChatRunStartErrorMapper
                         operationId = (string?)null,
                         connectorCapabilityRef = (string?)null,
                     };
+                case ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdRequest:
+                    return new
+                    {
+                        userServiceId = readiness.SelectedSelector.NyxIdRequest.UserServiceId,
+                        requestContractDigest = WorkflowCapabilityAdmissionPlanIntegrity
+                            .ComputeNyxIdRequestContractDigest(readiness.SelectedSelector.NyxIdRequest),
+                        endpointId = (string?)null,
+                        operationId = (string?)null,
+                        connectorCapabilityRef = (string?)null,
+                    };
                 case ExternalWorkflowCapabilitySelector.SelectorOneofCase.HostConnector:
                     return new
                     {
@@ -152,6 +162,15 @@ public static class ChatRunStartErrorMapper
             {
                 userServiceId = (string?)readiness.SelectedCapability.NyxIdUserService.UserServiceId,
                 endpointId = (string?)readiness.SelectedCapability.NyxIdUserService.EndpointId,
+                operationId = (string?)null,
+                connectorCapabilityRef = (string?)null,
+            },
+            ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest => new
+            {
+                userServiceId = (string?)readiness.SelectedCapability.NyxIdUserRequest.Request.UserServiceId,
+                requestContractDigest = (string?)WorkflowCapabilityAdmissionPlanIntegrity
+                    .ComputeNyxIdRequestContractDigest(readiness.SelectedCapability.NyxIdUserRequest.Request),
+                endpointId = (string?)null,
                 operationId = (string?)null,
                 connectorCapabilityRef = (string?)null,
             },

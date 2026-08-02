@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.Skills;
@@ -193,9 +194,14 @@ public sealed class LocalSkillCatalogTests
             [LLMRequestMetadataKeys.OwnerSubject] = "owner-alpha",
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-a",
         }, nyxIdUserId: "nyx-user-alpha");
-        var result = await tool.ExecuteAsync("""{"skill":"workflow-skill"}""");
+        const string argumentsJson = """{"skill":"workflow-skill"}""";
+        var result = await tool.ExecuteAsync(argumentsJson);
 
         ExtractLoaded(result).Should().BeTrue();
+        var receipt = ((IAgentTool)tool).CreateResultReceipt(
+            "call-load", tool.Name, argumentsJson, result);
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
         mountPort.Requests.Should().BeEmpty();
         ExtractWorkflowMount(result).Should().BeNull();
         ((IAgentTool)tool).GetCallSafety("""{"skill":"workflow-skill"}""").Should().Be(
@@ -228,9 +234,15 @@ public sealed class LocalSkillCatalogTests
             [LLMRequestMetadataKeys.OwnerSubject] = "owner-alpha",
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-a",
         }, nyxIdUserId: "nyx-user-alpha");
-        var result = await tool.ExecuteAsync("""{"skill":"workflow-skill","mount_workflows":true}""");
+        const string argumentsJson =
+            """{"skill":"workflow-skill","mount_workflows":true}""";
+        var result = await tool.ExecuteAsync(argumentsJson);
 
         ExtractLoaded(result).Should().BeTrue();
+        var receipt = ((IAgentTool)tool).CreateResultReceipt(
+            "call-mount", tool.Name, argumentsJson, result);
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
         mountPort.Requests.Should().ContainSingle();
         mountPort.Requests[0].ScopeId.Should().Be("scope-alpha");
         mountPort.Requests[0].CallerId.Should().Be("nyx-user-alpha");
@@ -266,9 +278,16 @@ public sealed class LocalSkillCatalogTests
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-a",
         });
-        var result = await tool.ExecuteAsync("""{"skill":"workflow-skill","mount_workflows":true}""");
+        const string argumentsJson =
+            """{"skill":"workflow-skill","mount_workflows":true}""";
+        var result = await tool.ExecuteAsync(argumentsJson);
 
         ExtractLoaded(result).Should().BeTrue();
+        var receipt = ((IAgentTool)tool).CreateResultReceipt(
+            "call-mount", tool.Name, argumentsJson, result);
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ErrorCode.Should().Be("USE_SKILL_MOUNT_MISSING_SCOPE");
         mountPort.Requests.Should().BeEmpty();
 
         using var document = JsonDocument.Parse(result);

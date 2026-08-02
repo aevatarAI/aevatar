@@ -1806,6 +1806,76 @@ public sealed class ConversationGAgentDedupTests
     }
 
     [Fact]
+    public async Task HandleLlmReplyReadyAsync_ResolvesDurableTerminalCredentialReferences()
+    {
+        const string runId = "workflow-draft-run-secret-ref";
+        const string correlationId = "corr-workflow-secret-ref";
+        const string replyToken = "durable-terminal-reply-token";
+        const string userAccessToken = "durable-terminal-user-token";
+        var runtimeSecretStore = new InMemoryRuntimeSecretStore();
+        var replyReference = (await runtimeSecretStore.PutAsync(new StoreRuntimeSecretRequest(
+            "channel-relay-reply-token",
+            runId,
+            correlationId,
+            replyToken,
+            TimeSpan.FromMinutes(10),
+            ConsumeOnce: false,
+            AuditReason: "test durable terminal reply credential"))).Reference;
+        var userReference = (await runtimeSecretStore.PutAsync(new StoreRuntimeSecretRequest(
+            "channel-relay-user-access-token",
+            runId,
+            correlationId,
+            userAccessToken,
+            TimeSpan.FromMinutes(10),
+            ConsumeOnce: false,
+            AuditReason: "test durable terminal user credential"))).Reference;
+        ConversationTurnRuntimeContext? observedContext = null;
+        var runner = new RecordingTurnRunner
+        {
+            LlmReplyResultFactory = reply => ConversationTurnResult.Sent(
+                "sent:" + reply.CorrelationId,
+                new MessageContent { Text = "ack" },
+                "bot",
+                new OutboundDeliveryContext
+                {
+                    ReplyMessageId = reply.Activity?.OutboundDelivery?.ReplyMessageId ?? string.Empty,
+                    CorrelationId = reply.CorrelationId,
+                }),
+            LlmReplyContextObserver = context => observedContext = context,
+        };
+        var (agent, _) = await CreateAgentAsync(
+            runner,
+            "conv-workflow-secret-ref",
+            runtimeSecretStore: runtimeSecretStore);
+        var activity = CreateActivity("act-workflow-secret-ref", "conv:slack:C1");
+        activity.OutboundDelivery = new OutboundDeliveryContext
+        {
+            ReplyMessageId = "relay-msg-workflow-secret-ref",
+            CorrelationId = correlationId,
+        };
+
+        await agent.HandleLlmReplyReadyAsync(new LlmReplyReadyEvent
+        {
+            CorrelationId = correlationId,
+            RegistrationId = "reg-1",
+            RunId = runId,
+            SourceActorId = "workflow-draft-run-actor-1",
+            Activity = activity,
+            Outbound = new MessageContent { Text = "workflow complete" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReadyAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            RelayReplyTokenRef = replyReference,
+            RelayUserAccessTokenRef = userReference,
+        });
+
+        observedContext.ShouldNotBeNull();
+        observedContext!.NyxRelayReplyToken.ShouldNotBeNull();
+        observedContext.NyxRelayReplyToken!.ReplyToken.ShouldBe(replyToken);
+        observedContext.NyxRelayReplyToken.CorrelationId.ShouldBe(correlationId);
+        observedContext.NyxUserAccessToken.ShouldBe(userAccessToken);
+    }
+
+    [Fact]
     public async Task HandleDeferredLlmReplyDroppedAsync_RetiresPendingRequestWithNotRetryableFailure()
     {
         // Run actor gates (stale-age, missing relay credential, malformed payload) need

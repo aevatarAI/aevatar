@@ -35,11 +35,13 @@ enum ChatTurnTerminalStatus {
   CHAT_TURN_TERMINAL_STATUS_FAILED = 2;
   CHAT_TURN_TERMINAL_STATUS_STOPPED = 3;
   CHAT_TURN_TERMINAL_STATUS_BLOCKED = 4;
+  CHAT_TURN_TERMINAL_STATUS_OUTCOME_UNCERTAIN = 5;
 }
 
 enum ChatTurnAppendRejectionReason {
   CHAT_TURN_APPEND_REJECTION_REASON_UNSPECIFIED = 0;
   CHAT_TURN_APPEND_REJECTION_REASON_CONFLICT = 1;
+  // Historical committed fact. New appends no longer enforce a turn limit.
   CHAT_TURN_APPEND_REJECTION_REASON_MAX_TURNS_EXCEEDED = 2;
   CHAT_TURN_APPEND_REJECTION_REASON_INVALID = 3;
 }
@@ -88,6 +90,7 @@ message ChatConversationState {
   bool deleted = 11;
   ChatTurnAppendRejection last_rejected_append = 12;
   ChatConversationInitialization initialization = 13;
+  int32 next_turn_sequence = 14;
 }
 
 // ─── ChatConversationGAgent Events ───
@@ -131,6 +134,13 @@ message ChatTurnAppendedEvent {
   ChatTurn turn = 6;
 }
 
+message ChatTurnTerminalReconciledEvent {
+  string scope_id = 1;
+  string conversation_id = 2;
+  ChatTurnTerminalStatus previous_status = 3;
+  ChatTurn turn = 4;
+}
+
 message ChatTurnAppendRejectedEvent {
   string scope_id = 1;
   string conversation_id = 2;
@@ -139,9 +149,15 @@ message ChatTurnAppendRejectedEvent {
   google.protobuf.Timestamp rejected_at = 5;
 }
 
+message DeleteConversationCommand {
+  string conversation_id = 1;
+  string scope_id = 2;
+}
+
 message ConversationDeletedEvent {
   string conversation_id = 1;
   string scope_id = 2;
+  google.protobuf.Timestamp deleted_at = 3;
 }
 
 // ─── ChatTurnHistoryDeliveryGAgent State ───
@@ -155,6 +171,7 @@ enum ChatTurnHistoryDeliveryStatus {
   CHAT_TURN_HISTORY_DELIVERY_STATUS_FAILED = 5;
   CHAT_TURN_HISTORY_DELIVERY_STATUS_APPEND_COMMITTED = 6;
   CHAT_TURN_HISTORY_DELIVERY_STATUS_APPEND_REJECTED = 7;
+  CHAT_TURN_HISTORY_DELIVERY_STATUS_TERMINAL_RECONCILIATION_PREPARED = 8;
 }
 
 message ChatTurnHistoryDeliveryState {
@@ -235,6 +252,17 @@ message ChatTurnHistoryDeliveryTerminalFrameObserved {
   string text = 5;
   string error_code = 6;
   int64 observed_at_unix_ms = 7;
+}
+
+message ChatTurnHistoryDeliveryTerminalReconciledEvent {
+  string delivery_id = 1;
+  string source_actor_id = 2;
+  string source_command_id = 3;
+  ChatTurnTerminalStatus previous_status = 4;
+  ChatTurnTerminalStatus status = 5;
+  string text = 6;
+  string error_code = 7;
+  int64 observed_at_unix_ms = 8;
 }
 
 message ChatTurnHistoryDeliveryAppendDispatchedEvent {

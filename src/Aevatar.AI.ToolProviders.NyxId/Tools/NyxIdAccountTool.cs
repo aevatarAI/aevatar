@@ -19,6 +19,8 @@ public sealed class NyxIdAccountTool : INyxIdBuiltInTool, IAgentToolCapabilityDe
 
     public string ParametersSchema => """{"type":"object","properties":{}}""";
 
+    public bool IsReadOnly => true;
+
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
         var token = AgentToolRequestContext.NyxIdAccessToken;

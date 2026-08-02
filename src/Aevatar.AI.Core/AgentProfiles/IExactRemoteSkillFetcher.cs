@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions;
+using Google.Protobuf;
 
 namespace Aevatar.AI.Core.AgentProfiles;
 
@@ -21,7 +22,7 @@ public sealed record ExactRemoteSkillFetchResult(
     string? LiteralVersion,
     string? Name,
     string? PublisherId,
-    string? SkillHash,
+    ByteString? SkillSha256,
     string? SkillMarkdown,
     ExactRemoteSkillFetchFailureCode? FailureCode,
     string? FailureDetail)
@@ -31,9 +32,9 @@ public sealed record ExactRemoteSkillFetchResult(
         string literalVersion,
         string name,
         string publisherId,
-        string skillHash,
+        ByteString skillSha256,
         string skillMarkdown) =>
-        new(true, guid, literalVersion, name, publisherId, skillHash, skillMarkdown, null, null);
+        new(true, guid, literalVersion, name, publisherId, skillSha256, skillMarkdown, null, null);
 
     public static ExactRemoteSkillFetchResult Failed(
         ExactRemoteSkillFetchFailureCode failureCode,

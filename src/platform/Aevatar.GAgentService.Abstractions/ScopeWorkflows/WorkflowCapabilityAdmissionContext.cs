@@ -8,29 +8,36 @@ namespace Aevatar.GAgentService.Abstractions;
 /// </summary>
 public sealed class WorkflowCapabilityAdmissionContext
 {
+    private readonly IReadOnlyList<NyxIdExplicitRequestConfirmation> _explicitRequestConfirmations;
+
     public WorkflowCapabilityAdmissionContext(
         string callerId,
-        string? nyxIdCallerBearerToken = null,
+        NyxIdCallerCredentialSelection? nyxIdCallerCredential = null,
         string? nyxIdOrganizationBearerToken = null,
         ExternalCapabilityExecutionMode executionMode = ExternalCapabilityExecutionMode.Interactive,
-        WorkflowCapabilityAdmissionPlan? existingPlan = null)
+        WorkflowCapabilityAdmissionPlan? existingPlan = null,
+        IEnumerable<NyxIdExplicitRequestConfirmation>? explicitRequestConfirmations = null)
     {
         CallerId = Normalize(callerId);
-        NyxIdCallerBearerToken = NormalizeOptional(nyxIdCallerBearerToken);
+        NyxIdCallerCredential = nyxIdCallerCredential;
         NyxIdOrganizationBearerToken = NormalizeOptional(nyxIdOrganizationBearerToken);
         ExecutionMode = executionMode;
         ExistingPlan = existingPlan?.Clone();
+        _explicitRequestConfirmations = CloneConfirmations(explicitRequestConfirmations);
     }
 
     public string CallerId { get; }
 
-    public string? NyxIdCallerBearerToken { get; }
+    public NyxIdCallerCredentialSelection? NyxIdCallerCredential { get; }
 
     public string? NyxIdOrganizationBearerToken { get; }
 
     public ExternalCapabilityExecutionMode ExecutionMode { get; }
 
     public WorkflowCapabilityAdmissionPlan? ExistingPlan { get; }
+
+    public IReadOnlyList<NyxIdExplicitRequestConfirmation> ExplicitRequestConfirmations =>
+        CloneConfirmations(_explicitRequestConfirmations);
 
     public override string ToString() =>
         $"{nameof(WorkflowCapabilityAdmissionContext)} {{ CallerId = {CallerId}, ExecutionMode = {ExecutionMode}, Credentials = [REDACTED] }}";
@@ -39,4 +46,12 @@ public sealed class WorkflowCapabilityAdmissionContext
 
     private static string? NormalizeOptional(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static IReadOnlyList<NyxIdExplicitRequestConfirmation> CloneConfirmations(
+        IEnumerable<NyxIdExplicitRequestConfirmation>? confirmations) =>
+        confirmations?.Select(static confirmation =>
+                confirmation?.Clone() ?? throw new ArgumentException(
+                    "Explicit request confirmations cannot contain null values.",
+                    nameof(confirmations)))
+            .ToArray() ?? [];
 }

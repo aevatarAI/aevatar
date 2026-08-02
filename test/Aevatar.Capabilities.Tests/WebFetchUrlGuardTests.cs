@@ -262,9 +262,12 @@ public sealed class WebFetchUrlGuardTests
         var result = await client.FetchUrlAsync(string.Empty, "http://8.8.8.8/start", CancellationToken.None);
 
         result.StatusCode.Should().Be(302);
-        result.Body.Should().Be("blocked_private_address");
-        result.RedirectUrl.Should().Be("http://127.0.0.1/private");
+        result.Body.Should().BeNull();
+        result.RedirectUrl.Should().BeNull();
         result.OriginalUrl.Should().Be("http://8.8.8.8/start");
+        result.Error.Should().Be(new WebToolError(
+            "WEB_FETCH_URL_REJECTED",
+            "The web URL was rejected."));
     }
 
     [Fact]
@@ -279,13 +282,16 @@ public sealed class WebFetchUrlGuardTests
         var result = await client.FetchUrlAsync(string.Empty, "http://8.8.8.8/start", CancellationToken.None);
 
         result.StatusCode.Should().Be(0);
-        result.ContentType.Should().Be("redirect");
-        result.Body.Should().Be("Too many redirects");
+        result.ContentType.Should().Be("error");
+        result.Body.Should().BeNull();
+        result.Error.Should().Be(new WebToolError(
+            "WEB_FETCH_TRANSPORT_FAILURE",
+            "The web request failed."));
         handler.RequestUrls.Should().HaveCount(5);
     }
 
     [Fact]
-    public async Task FetchUrlAsync_ShouldReturnErrorBody_ForNonSuccessResponse()
+    public async Task FetchUrlAsync_ShouldReturnTypedError_ForNonSuccessResponse()
     {
         var handler = new RecordingHandler
         {
@@ -299,8 +305,11 @@ public sealed class WebFetchUrlGuardTests
         var result = await client.FetchUrlAsync(string.Empty, "http://8.8.8.8/fail", CancellationToken.None);
 
         result.StatusCode.Should().Be(502);
-        result.Body.Should().Be("upstream failed");
+        result.Body.Should().BeNull();
         result.RedirectUrl.Should().BeNull();
+        result.Error.Should().Be(new WebToolError(
+            "WEB_FETCH_HTTP_502",
+            "The web request failed."));
     }
 
     [Fact]
@@ -312,8 +321,11 @@ public sealed class WebFetchUrlGuardTests
         var result = await client.FetchUrlAsync(string.Empty, "http://127.0.0.1/private", CancellationToken.None);
 
         result.StatusCode.Should().Be(0);
-        result.ContentType.Should().Be("rejected");
-        result.Body.Should().Be("blocked_private_address");
+        result.ContentType.Should().Be("error");
+        result.Body.Should().BeNull();
+        result.Error.Should().Be(new WebToolError(
+            "WEB_FETCH_URL_REJECTED",
+            "The web URL was rejected."));
         handler.RequestUrls.Should().BeEmpty();
     }
 

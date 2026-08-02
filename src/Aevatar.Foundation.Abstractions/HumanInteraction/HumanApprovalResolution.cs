@@ -8,6 +8,10 @@ public sealed record HumanApprovalResolution
 
     public required string StepId { get; init; }
 
+    public required string SourceEventId { get; init; }
+
+    public long IssuedAtUnixMs { get; init; }
+
     public bool Approved { get; init; }
 
     public string? UserInput { get; init; }

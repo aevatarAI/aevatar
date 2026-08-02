@@ -175,6 +175,22 @@ public sealed class AuditRecordSanitizerTests
     }
 
     [Fact]
+    public void Sanitize_RequiresSpecifiedSurfaceWhenChatProvenanceIsPresent()
+    {
+        var record = CreateRecord();
+        record.Provenance.Chat = new AuditChatProvenance
+        {
+            ConversationId = "conversation-alpha",
+        };
+
+        Should.Throw<ArgumentException>(() => new AuditRecordSanitizer().Sanitize(record));
+
+        record.Provenance.Chat.Surface = AuditChatSurface.NyxidAssistant;
+        new AuditRecordSanitizer().Sanitize(record).Provenance.Chat.Surface
+            .ShouldBe(AuditChatSurface.NyxidAssistant);
+    }
+
+    [Fact]
     public void Sanitize_RejectsSecretBearingStructuredFailure()
     {
         var record = CreateRecord();

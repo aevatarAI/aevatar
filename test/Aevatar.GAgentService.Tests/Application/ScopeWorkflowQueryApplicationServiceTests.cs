@@ -3,6 +3,7 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Workflows;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 using Microsoft.Extensions.Options;
@@ -51,7 +52,8 @@ public sealed class ScopeWorkflowQueryApplicationServiceTests
                 RunId: "",
                 WorkflowName: "enriched-workflow-name",
                 WorkflowYaml: "yaml: true",
-                InlineWorkflowYamls: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+                InlineWorkflowYamls: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive),
         });
         var service = CreateService(lifecyclePort, bindingReader);
 
@@ -198,7 +200,8 @@ public sealed class ScopeWorkflowQueryApplicationServiceTests
                 RunId: "run-1",
                 WorkflowName: "my-wf",
                 WorkflowYaml: "",
-                InlineWorkflowYamls: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+                InlineWorkflowYamls: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive),
             ["definition-actor-id"] = new(
                 ActorKind: WorkflowActorKind.Definition,
                 ActorId: "definition-actor-id",
@@ -206,7 +209,8 @@ public sealed class ScopeWorkflowQueryApplicationServiceTests
                 RunId: "",
                 WorkflowName: "my-wf",
                 WorkflowYaml: "yaml: true",
-                InlineWorkflowYamls: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+                InlineWorkflowYamls: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive),
         });
         var service = CreateService(lifecyclePort, bindingReader);
 
@@ -279,7 +283,8 @@ public sealed class ScopeWorkflowQueryApplicationServiceTests
                 RunId: string.Empty,
                 WorkflowName: workflowName,
                 WorkflowYaml: "yaml: true",
-                InlineWorkflowYamls: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+                InlineWorkflowYamls: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive),
         };
 
     private sealed class FakeServiceLifecycleQueryPort : IServiceLifecycleQueryPort

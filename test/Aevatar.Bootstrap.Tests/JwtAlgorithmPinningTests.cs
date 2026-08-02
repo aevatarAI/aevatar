@@ -80,6 +80,7 @@ public sealed class JwtAlgorithmPinningTests
         builder.Configuration["Aevatar:Authentication:Authority"] = "https://nyxid.example.com/";
         builder.Configuration["Aevatar:Authentication:ScopeServiceTokens:Enabled"] = "true";
         builder.Configuration["Aevatar:Authentication:ScopeServiceTokens:Issuer"] = "https://aevatar.example.com";
+        builder.Configuration["Aevatar:Authentication:ScopeServiceTokens:Audience"] = "aevatar-scope-services";
         builder.Configuration["Aevatar:Authentication:ScopeServiceTokens:SigningKeys:0:Kid"] = "scope-kid-1";
         builder.Configuration["Aevatar:Authentication:ScopeServiceTokens:SigningKeys:0:Algorithm"] = "HS256";
         builder.Configuration["Aevatar:Authentication:ScopeServiceTokens:SigningKeys:0:Key"] =

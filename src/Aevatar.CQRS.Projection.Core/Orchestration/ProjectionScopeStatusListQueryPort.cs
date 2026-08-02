@@ -72,14 +72,23 @@ public sealed class ProjectionScopeStatusListQueryPort : IProjectionScopeStatusL
 
     private static ProjectionScopeStatusSnapshot Map(ProjectionScopeStatusDocument document)
     {
-        var lag = document.LastObservedVersion - document.LastSuccessfulVersion;
+        var singleSourceVersionGap = document.SourceVersions.Count == 1
+            ? document.SourceVersions[0].VersionGap
+            : (long?)null;
         return new ProjectionScopeStatusSnapshot(
             ScopeActorId: document.ScopeActorId,
             Active: document.Active,
-            LastObservedVersion: document.LastObservedVersion,
-            LastSuccessfulVersion: document.LastSuccessfulVersion,
-            FailureCount: document.FailureCount,
-            Lag: lag > 0 ? lag : 0,
+            ReceivedEnvelopeTotal: document.ReceivedEnvelopeTotal,
+            AttemptedEnvelopeTotal: document.AttemptedEnvelopeTotal,
+            SuccessfulMaterializationTotal: document.SuccessfulMaterializationTotal,
+            FailedAttemptTotal: document.FailedAttemptTotal,
+            RetryExhaustedTotal: document.RetryExhaustedTotal,
+            RetryExhaustedFailureCount: document.RetryExhaustedFailureCount,
+            UnresolvedFailureCount: document.UnresolvedFailureCount,
+            OldestUnresolvedFailureAt: document.OldestUnresolvedFailureAtUtc?.ToDateTimeOffset(),
+            FailureDiagnosticDroppedTotal: document.FailureDiagnosticDroppedTotal,
+            SourceActorCount: document.SourceVersions.Count,
+            SingleSourceVersionGap: singleSourceVersionGap,
             UpdatedAt: document.UpdatedAt);
     }
 }

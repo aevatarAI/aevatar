@@ -1126,13 +1126,13 @@ adapter 在构造 `ChatActivity` 时**必须**：
 
 **业务 GAgent（集成点现状）**：
 - `Aevatar.GAgents.Household` —— 命名约定 / 文件数 / 职责单一度 的正面范本，物理拆包时对标
-- `Aevatar.GAgents.ChatHistory` —— 独立 GAgent（`ChatConversationGAgent` / `ChatHistoryIndexGAgent`）。**但当前 ChannelRuntime 未集成它**；对话历史实际上是 `AIGAgentBase` 里的进程内 `ChatHistory`（见 `src/Aevatar.AI.Core/AIGAgentBase.cs`）。`ConversationGAgent` 要集成它是**新工作**，不是"复用现有集成"
-- `Aevatar.GAgents.UserMemory` —— 同样独立 GAgent 存在，但当前无集成。`ConversationGAgent` 的 long-term memory 集成是新工作
+- `Aevatar.GAgents.ChatHistory` —— 独立 GAgent（`ChatConversationGAgent` / `ChatHistoryIndexGAgent`），拥有 committed transcript；`Aevatar.AI.Core.Chat.ChatHistory` 只是有界 prompt working set，二者边界见 [conversation-context-and-memory.md](conversation-context-and-memory.md)
+- `Aevatar.GAgents.UserMemory` —— 独立、按用户 scope 的跨 conversation 事实 owner；NyxID prompt-context provider 只读其 current-state readmodel，channel conversation actor 不直接拥有或抽取 user memory
 - `Aevatar.GAgents.ChatbotClassifier` —— 按需包成 `ClassificationMiddleware`
 - `Aevatar.GAgents.StreamingProxy` / `StreamingProxyParticipant` —— deprecated compatibility surface only. It is not reusable LLM streaming infrastructure for new channel work; direct model streaming should use `/v1/responses`, while room/fan-out semantics require a named room contract.
 - `Aevatar.GAgents.Registry` —— 平台级 GAgent registry，和拟改名的 `UserAgentCatalog` 各司其职（platform actor routing vs user agent metadata）
 
-**诚实承认**：早期 RFC 版本措辞是 "必须调用 ChatHistory / UserMemory，不重复存"——暗示已有集成。实际上这些是**未来集成目标**，不是现状复用。本 RFC 实施时需要把这层集成**新建**出来，不要误以为是捡现成。
+**语义校正**：ChatHistory transcript、执行期 prompt working set 与 UserMemory 是不同 owner。任何 channel 集成都必须走各自 typed command/query 和 projection 主链，不能让 `ConversationGAgent` 复制事实或建立统一 memory module。
 
 **已合入的 PR 代码资产**：
 - PR #174 / #177 的 webhook 安全 + durable dedup —— 迁进 Lark adapter transport 内部
@@ -1557,7 +1557,7 @@ agents/                                ← production code
 ├── Aevatar.GAgents.RoleCatalog/
 ├── Aevatar.GAgents.StreamingProxy/    ← deprecated compatibility surface; no new channel consumer
 ├── Aevatar.GAgents.UserConfig/
-└── Aevatar.GAgents.UserMemory/        ← ConversationGAgent 与其集成
+└── Aevatar.GAgents.UserMemory/        ← 独立 user-memory owner；prompt context 只读其 readmodel
 
 test/
 ├── Aevatar.GAgents.Channel.Testing/           ← Conformance + Composer 测试基类库
@@ -1602,15 +1602,15 @@ aevatar 仓库按 slnf 分片构建（`aevatar.foundation.slnf` / `aevatar.ai.sl
 
 ### 9.2 为什么拆而不是保持 megamodule
 
-- **依赖方向**：今天 ChannelRuntime 既被平台 caller 依赖，又依赖 ChatHistory / UserMemory / Classifier / Registry。拆包后 Authoring / Scheduled / Device 的依赖方向明确，循环依赖在 csproj 层就报错，而不是到运行期才显现
+- **依赖方向**：Channel runtime 与平台 adapter 不得反向拥有 ChatHistory transcript 或 UserMemory；拆包后 Authoring / Scheduled / Device 的依赖方向明确，循环依赖在 csproj 层就报错，而不是到运行期才显现
 - **独立演化**：Authoring（agent 创作流）和 Scheduled（调度执行）本质是两个独立业务方向，放一起改 A 影响 B 的风险一直存在
 - **Conformance Suite 定位**：Suite 放在 `test/Aevatar.GAgents.Channel.Testing/` 作为独立 test assembly，**不能**和 production abstractions 在同一包——否则 production 代码依赖测试框架，包污染
 - **Device 和 Channel 的分离**：`DeviceRegistration` 虽然 transport 也是 webhook，但**业务语义是 sensor event，不是对话**。强行套 `IChannelTransport` + `IChannelOutboundPort` 会让 channel 抽象失焦。独立成 `Aevatar.GAgents.Device` 让两边各自清晰
 
 ### 9.3 集成契约（新包不能违反）
 
-- `ConversationGAgent` 持久化对话历史**调用 `Aevatar.GAgents.ChatHistory`**（新集成，非现状复用）
-- `ConversationGAgent` 用户长期记忆**调用 `Aevatar.GAgents.UserMemory`**（新集成）
+- Conversation transcript 必须通过 typed delivery command 进入 `Aevatar.GAgents.ChatHistory`，不得由 channel adapter 或 prompt buffer 重复持有
+- 跨 conversation user memory 只能通过 `Aevatar.GAgents.UserMemory` typed command 写入；prompt context 只能通过窄 query port 读取其 current-state readmodel
 - `ChatbotClassifier` 按需挂 `IChannelMiddleware`
 
 ### 9.4 Authoring ownership split
@@ -1682,7 +1682,7 @@ webhook / gateway 收到事件时，**必须**先把事件 commit 到**持久化
    - **Workflow side-effect idempotency 限制**：workflow `tool_call` / `connector_call` 同样是 at-least-once。`WorkflowExecutionKernel` 在 `StepRequestEvent` dispatch seam 解析 typed logical-effect `idempotency_key` 并持久化到 actor-owned state；pending replay、tool approval replay、connector physical retry、fork-retry 和 compensation re-delivery 复用该 key 并透传到 tool / connector / adapter invocation envelope。经 NyxID proxy 路由的 side-effecting `tool_call` 会 advisory-forward engine idempotency key 为 `Idempotency-Key` header，语义仍是 at-least-once + callee-side 幂等，不是 exactly-once。该 key 只给 callee-side dedup 使用，workflow engine 不承诺 dedup 或 exactly-once。
    - **`ConversationTurnCompletedEvent` 必须进入 Projection 主链**（`AGENTS.md` 强制）：作为 committed domain event，`ConversationTurnCompletedEvent` 必须通过统一 `EventEnvelope<CommittedStateEventPublished>` 送入 aevatar Projection Pipeline（和其他 committed events 一致）。下游消费者按需订阅：
      - `ChatHistory` projection 物化对话历史（见 §6 集成契约）
-     - `UserMemory` projection 做长期记忆抽取
+     - `UserMemory` projection 只物化 `UserMemoryGAgent` 自身 committed state；它不从 conversation event 抽取第二套 user facts
      - metrics / observability projection 聚合 `channel.bot.turn` 成功率和 latency
      - 审计 / 合规 projection 记录 bot outbound
 
@@ -2388,7 +2388,7 @@ v1 cutover step 2 细化为：
 1. ~~`IProjectionWriteDispatcher<T>` + `IProjectionWriteSink<T>` 加 `DeleteAsync`~~ — **已完成**（Codex v11 校对）
 2. Per-entry current-state base class **继承已有 `ICurrentStateProjectionMaterializer<TContext>`**（不另起 `TState→TDocument` 宇宙——那会脱离 projection runtime，违背"贴已有抽象"原则）
 3. Read model 继续用 `IProjectionReadModel`（`src/Aevatar.CQRS.Projection.Stores.Abstractions/.../IProjectionReadModel.cs:5-15`，带 `Id / ActorId / StateVersion`）
-4. **Tombstone 清理不引入新 watermark**——复用 `ProjectionScopeWatermarkAdvancedEvent` + `last_observed_version` / `last_successful_version`，并通过 `ProjectionScopeStatusDocument` readmodel 提供 compaction 查询入口。物理清理条件：scope status readmodel 的 watermark **跨过 state 版本** AND **超过 projector lag + safety margin**；查询端口不得回读或重放 event store。
+4. **Tombstone 清理不引入新 watermark**——复用 `ProjectionScopeWatermarkAdvancedEvent`、`last_successful_versions_by_actor` 与 durable unresolved-failure backlog，并通过 `ProjectionScopeStatusDocument` readmodel 提供 compaction 查询入口。物理清理条件：所有相关 projector 在同一个 authoritative source actor 版本轴上的 successful watermark **跨过 tombstone state 版本**、该版本及更早版本没有 unresolved failure，且超过 safety margin；禁止用跨 actor 的 `observed - successful` 聚合值判断安全边界，查询端口不得回读或重放 event store。
 
 **Phase 0 前置（修正）**：`DeleteAsync` 已合入，Phase 0 实际 delta = **§7.1 `PerEntryDocumentProjector` 基类抽取 + 3 个 existing projector（ChannelBotRegistration / DeviceRegistration / UserAgentCatalog）refactor 到基类**。预估 ~150 行（比原 200 行估值下调，因接口改动已不在范围内），**不再是独立 PR 前置**，可随本 RFC §7.1 实现一起落地。
 
@@ -2544,7 +2544,7 @@ VoicePresence 里（`src/Aevatar.Foundation.VoicePresence/VoicePresenceStateMach
 3. **真正缺口更窄**——仅在"HTTP ack 之前缺 durable receipt"：
    - `ChannelCallbackEndpoints.cs:113-131` 只用 `IMemoryCache` 做 dedup（代码注释里承认 phase 2 才做 durable）
    - `DeviceEventEndpoints.cs:100-112` 同步 dispatch 后回 202/502
-   - `MemoryCacheDeduplicator.cs:11-25` 内存 dedup
+   - runtime process-local envelope filter 已删除；ingress receipt 与业务幂等仍由各自 owner 的 durable contract 负责
    - 窄口已由 RFC §9.5 durable inbox 契约 + §9.5.2.1 pre-ack journal 覆盖——**是 chat / ingress layer 的事**，不需要平台新起 inbox 子系统
 
 4. **做了会三层语义叠加** = ownership / idempotency 责任模糊：

@@ -10,6 +10,8 @@ using Aevatar.Capabilities;
 using Aevatar.AGUI.Contracts;
 using Aevatar.GAgentService.Hosting.Sse;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Microsoft.AspNetCore.Builder;
@@ -34,6 +36,9 @@ public static class ScopeWorkflowEndpoints
             .Produces(StatusCodes.Status400BadRequest);
         group.MapPost("/{scopeId}/workflows:save-and-bind", HandleSaveAndBindWorkflowAsync)
             .Produces<ScopeWorkflowSaveAndBindResult>(StatusCodes.Status202Accepted)
+            .Produces(StatusCodes.Status400BadRequest);
+        group.MapPost("/{scopeId}/workflows:explicit-request-preview", HandleExplicitRequestPreviewAsync)
+            .Produces<ExplicitRequestPreviewHttpResult>(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status400BadRequest);
         group.MapGet("/{scopeId}/workflows", HandleListWorkflowsAsync)
             .Produces(StatusCodes.Status200OK)
@@ -61,6 +66,14 @@ public static class ScopeWorkflowEndpoints
         [FromServices] IScopeWorkflowSaveAndBindPort saveAndBindPort,
         CancellationToken ct)
         => await HandleSaveAndBindWorkflowAsyncCore(http, scopeId, request, saveAndBindPort, ct);
+
+    internal static async Task<IResult> HandleExplicitRequestPreviewAsync(
+        HttpContext http,
+        string scopeId,
+        ExplicitRequestPreviewHttpRequest request,
+        [FromServices] IWorkflowExplicitRequestPreviewService previewService,
+        CancellationToken ct)
+        => await HandleExplicitRequestPreviewAsyncCore(http, scopeId, request, previewService, ct);
 
     internal static async Task<IResult> HandleListWorkflowsAsync(
         HttpContext http,
@@ -125,9 +138,19 @@ public static class ScopeWorkflowEndpoints
                 request.InlineWorkflowYamls,
                 request.RevisionId)
             {
-                CapabilityAdmission = WorkflowCapabilityAdmissionHttpContext.Create(http),
+                CapabilityAdmission = WorkflowCapabilityAdmissionHttpContext.Create(
+                    http,
+                    explicitRequestConfirmations: request.ExplicitRequestConfirmations),
             }, ct);
             return Results.Accepted(result.ReadModelUrl, result);
+        }
+        catch (NyxIdExplicitRequestConfirmationInputException ex)
+        {
+            return ExplicitRequestConfirmationBadRequest(ex);
+        }
+        catch (WorkflowCallerCredentialSelectionException)
+        {
+            return CallerCredentialBadRequest();
         }
         catch (InvalidOperationException ex)
         {
@@ -161,12 +184,23 @@ public static class ScopeWorkflowEndpoints
                     request.InlineWorkflowYamls,
                     request.AppId,
                     request.ServiceId,
-                    request.ExposureDesired)
+                    request.ExposureDesired,
+                    request.RevisionId)
                 {
-                    CapabilityAdmission = WorkflowCapabilityAdmissionHttpContext.Create(http),
+                    CapabilityAdmission = WorkflowCapabilityAdmissionHttpContext.Create(
+                        http,
+                        explicitRequestConfirmations: request.ExplicitRequestConfirmations),
                 },
                 ct);
             return Results.Accepted(result.Workflow.ReadModelUrl, result);
+        }
+        catch (NyxIdExplicitRequestConfirmationInputException ex)
+        {
+            return ExplicitRequestConfirmationBadRequest(ex);
+        }
+        catch (WorkflowCallerCredentialSelectionException)
+        {
+            return CallerCredentialBadRequest();
         }
         catch (InvalidOperationException ex)
         {
@@ -177,6 +211,133 @@ public static class ScopeWorkflowEndpoints
             });
         }
     }
+
+    private static IResult ExplicitRequestConfirmationBadRequest(
+        NyxIdExplicitRequestConfirmationInputException exception) =>
+        Results.BadRequest(new
+        {
+            code = NyxIdExplicitRequestConfirmationInputException.ErrorCode,
+            message = exception.Message,
+        });
+
+    private static IResult CallerCredentialBadRequest() =>
+        Results.BadRequest(new
+        {
+            code = WorkflowCallerCredentialSelectionException.ErrorCode,
+            message = WorkflowCallerCredentialSelectionException.SafeMessage,
+        });
+
+    private static async Task<IResult> HandleExplicitRequestPreviewAsyncCore(
+        HttpContext http,
+        string scopeId,
+        ExplicitRequestPreviewHttpRequest request,
+        IWorkflowExplicitRequestPreviewService previewService,
+        CancellationToken ct)
+    {
+        try
+        {
+            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+                return denied;
+
+            var executionMode = ParseExplicitRequestPreviewExecutionMode(request.ExecutionMode);
+            var admissionContext = WorkflowCapabilityAdmissionHttpContext.Create(http, executionMode);
+            var result = await previewService.PreviewAsync(
+                new WorkflowExplicitRequestPreviewRequest(
+                    new ExternalWorkflowCapabilityAccessContext(
+                        scopeId,
+                        admissionContext.CallerId,
+                        admissionContext.NyxIdCallerCredential,
+                        admissionContext.NyxIdOrganizationBearerToken),
+                    request.WorkflowYaml,
+                    request.InlineWorkflowYamls,
+                    executionMode,
+                    request.WorkflowId,
+                    request.RevisionId),
+                ct);
+
+            return Results.Ok(new ExplicitRequestPreviewHttpResult(
+                result.WorkflowId,
+                result.RevisionId,
+                result.Items.Select(ToExplicitRequestPreviewHttpItem).ToArray()));
+        }
+        catch (WorkflowCallerCredentialSelectionException)
+        {
+            return CallerCredentialBadRequest();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new
+            {
+                code = "INVALID_USER_WORKFLOW_REQUEST",
+                message = ex.Message,
+            });
+        }
+    }
+
+    private static ExternalCapabilityExecutionMode ParseExplicitRequestPreviewExecutionMode(string? value) =>
+        value?.Trim() switch
+        {
+            "interactive" => ExternalCapabilityExecutionMode.Interactive,
+            "durable" => ExternalCapabilityExecutionMode.Durable,
+            _ => throw new InvalidOperationException(
+                "ExecutionMode must be either 'interactive' or 'durable'."),
+        };
+
+    private static ExplicitRequestPreviewHttpItem ToExplicitRequestPreviewHttpItem(
+        WorkflowExplicitRequestPreviewItem item) =>
+        new(
+            item.CallSiteId,
+            item.RequestContractDigest,
+            item.UserServiceId,
+            ToWireValue(item.Method),
+            item.PathTemplate,
+            ToWireValue(item.BodyMode),
+            item.BodyRequired,
+            ToWireValue(item.ResponseMode),
+            ToWireValue(item.EffectiveRisk),
+            item.ApprovalRequired,
+            item.AllowedExecutionModes.Select(ToWireValue).ToArray());
+
+    private static string ToWireValue(NyxIdRequestMethod value) => value switch
+    {
+        NyxIdRequestMethod.Get => "get",
+        NyxIdRequestMethod.Head => "head",
+        NyxIdRequestMethod.Options => "options",
+        NyxIdRequestMethod.Post => "post",
+        NyxIdRequestMethod.Put => "put",
+        NyxIdRequestMethod.Patch => "patch",
+        NyxIdRequestMethod.Delete => "delete",
+        _ => "unspecified",
+    };
+
+    private static string ToWireValue(NyxIdRequestBodyMode value) => value switch
+    {
+        NyxIdRequestBodyMode.None => "none",
+        NyxIdRequestBodyMode.Json => "json",
+        _ => "unspecified",
+    };
+
+    private static string ToWireValue(NyxIdRequestResponseMode value) => value switch
+    {
+        NyxIdRequestResponseMode.Text => "text",
+        NyxIdRequestResponseMode.FileArtifact => "file_artifact",
+        _ => "unspecified",
+    };
+
+    private static string ToWireValue(NyxIdOperationRisk value) => value switch
+    {
+        NyxIdOperationRisk.ReadOnly => "read_only",
+        NyxIdOperationRisk.Write => "write",
+        NyxIdOperationRisk.Destructive => "destructive",
+        _ => "unspecified",
+    };
+
+    private static string ToWireValue(ExternalCapabilityExecutionMode value) => value switch
+    {
+        ExternalCapabilityExecutionMode.Interactive => "interactive",
+        ExternalCapabilityExecutionMode.Durable => "durable",
+        _ => "unspecified",
+    };
 
     private static async Task<IResult> HandleListWorkflowsAsyncCore(
         HttpContext http,
@@ -520,6 +681,7 @@ public static class ScopeWorkflowEndpoints
             new WorkflowChatRunRequest(
                 prompt,
                 WorkflowChatSource.DefinitionActor(workflow.ActorId, workflow.WorkflowName),
+                ExternalCapabilityExecutionMode.Interactive,
                 sessionId,
                 Metadata: headers,
                 ScopeId: NormalizeRequired(scopeId, nameof(scopeId)),
@@ -799,7 +961,8 @@ public static class ScopeWorkflowEndpoints
         string? WorkflowName = null,
         string? DisplayName = null,
         Dictionary<string, string>? InlineWorkflowYamls = null,
-        string? RevisionId = null);
+        string? RevisionId = null,
+        IReadOnlyList<NyxIdExplicitRequestConfirmationInput>? ExplicitRequestConfirmations = null);
 
     public sealed record SaveAndBindScopeWorkflowHttpRequest(
         string? WorkflowId,
@@ -809,7 +972,34 @@ public static class ScopeWorkflowEndpoints
         Dictionary<string, string>? InlineWorkflowYamls = null,
         string? AppId = null,
         string? ServiceId = null,
-        bool? ExposureDesired = null);
+        bool? ExposureDesired = null,
+        string? RevisionId = null,
+        IReadOnlyList<NyxIdExplicitRequestConfirmationInput>? ExplicitRequestConfirmations = null);
+
+    public sealed record ExplicitRequestPreviewHttpRequest(
+        string WorkflowYaml,
+        string ExecutionMode,
+        Dictionary<string, string>? InlineWorkflowYamls = null,
+        string? WorkflowId = null,
+        string? RevisionId = null);
+
+    public sealed record ExplicitRequestPreviewHttpResult(
+        string WorkflowId,
+        string RevisionId,
+        IReadOnlyList<ExplicitRequestPreviewHttpItem> Items);
+
+    public sealed record ExplicitRequestPreviewHttpItem(
+        string CallSiteId,
+        string RequestContractDigest,
+        string UserServiceId,
+        string Method,
+        string PathTemplate,
+        string BodyMode,
+        bool BodyRequired,
+        string ResponseMode,
+        string EffectiveRisk,
+        bool ApprovalRequired,
+        IReadOnlyList<string> AllowedExecutionModes);
 
     public sealed record RunScopeWorkflowByIdStreamHttpRequest(
         string Prompt,

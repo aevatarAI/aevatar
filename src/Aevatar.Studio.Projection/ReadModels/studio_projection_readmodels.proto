@@ -4,7 +4,7 @@ option csharp_namespace = "Aevatar.Studio.Projection.ReadModels";
 
 import "google/protobuf/any.proto";
 import "google/protobuf/timestamp.proto";
-import "user_config_messages.proto";
+import "llm_selection.proto";
 
 message ContentArtifactCitationDocument {
   string citation_id = 1;
@@ -223,7 +223,7 @@ message UserConfigCurrentStateDocument {
   string remote_runtime_base_url = 14;
   int32 max_tool_rounds = 15;
   string github_username = 16;
-  aevatar.gagents.user_config.UserLlmSelection llm_selection = 17;
+  aevatar.ai.LLMSelection llm_selection = 17;
 }
 
 // ─── GAgentRegistry Current State ReadModel ───
@@ -318,6 +318,7 @@ message NyxIdChatConversationTurnDocument {
   string safe_message = 5;
   google.protobuf.Timestamp created_at = 6;
   google.protobuf.Timestamp terminal_at = 7;
+  string command_id = 8;
 }
 
 message NyxIdChatConversationAvailableActionsDocument {
@@ -384,6 +385,46 @@ message NyxIdChatConversationPendingApprovalDocument {
   string step_id = 4;
   string tool_name = 5;
   google.protobuf.Timestamp expires_at = 6;
+  google.protobuf.Timestamp asked_at = 7;
+  string action = 8;
+  string target = 9;
+  string actor_label = 10;
+  string reversibility = 11;
+  string grant_boundary = 12;
+  string nyxid_request_id = 13;
+}
+
+message NyxIdChatConversationInputOptionDocument {
+  string label = 1;
+  string description = 2;
+  string option_id = 3;
+}
+
+message NyxIdChatConversationPendingInputDocument {
+  string request_id = 1;
+  string turn_id = 2;
+  string task_id = 3;
+  string step_id = 4;
+  string prompt = 5;
+  repeated NyxIdChatConversationInputOptionDocument options = 6;
+  google.protobuf.Timestamp asked_at = 7;
+  bool allow_free_text = 8;
+  bool multi_select = 9;
+}
+
+message NyxIdChatConversationInputResolutionDocument {
+  string request_id = 1;
+  string client_request_id = 2;
+  string outcome = 3;
+  google.protobuf.Timestamp committed_at = 4;
+}
+
+message NyxIdChatConversationApprovalResolutionDocument {
+  string request_id = 1;
+  string client_request_id = 2;
+  string outcome = 3;
+  bool approved = 4;
+  google.protobuf.Timestamp committed_at = 5;
 }
 
 message NyxIdChatConversationControlFenceDocument {
@@ -471,6 +512,13 @@ message NyxIdChatConversationCurrentStateDocument {
   NyxIdChatConversationControlFenceDocument control_fence = 29;
   NyxIdChatConversationControlFenceDocument latest_control_result = 30;
   NyxIdChatConversationContinuationAdmissionDocument continuation_admission = 31;
+  NyxIdChatConversationPendingInputDocument pending_input = 32;
+  NyxIdChatConversationInputResolutionDocument latest_input_resolution = 33;
+  NyxIdChatConversationApprovalResolutionDocument latest_approval_resolution = 34;
+  string task_status = 35;
+  string attention_kind = 36;
+  google.protobuf.Timestamp attention_since = 37;
+  string active_step_summary = 38;
 }
 
 // ─── Chat History Create Recovery Current State ReadModel ───

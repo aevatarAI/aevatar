@@ -612,14 +612,19 @@ public sealed class StudioMemberBindingRunGAgentStateTests
     private sealed class RecordingEventSourcing(StudioMemberBindingRunState replayState)
         : IEventSourcingBehavior<StudioMemberBindingRunState>
     {
-        public long CurrentVersion => 0;
+        private readonly List<IMessage> _pending = [];
+        public long CurrentVersion { get; private set; }
 
-        public void RaiseEvent<TEvent>(TEvent evt) where TEvent : IMessage
+        public void RaiseEvent<TEvent>(TEvent evt) where TEvent : IMessage =>
+            _pending.Add(evt);
+
+        public Task<EventStoreCommitResult> ConfirmEventsAsync(CancellationToken ct = default)
         {
+            var result = EventSourcingTestCommit.From(_pending, CurrentVersion);
+            CurrentVersion = result.LatestVersion;
+            _pending.Clear();
+            return Task.FromResult(result);
         }
-
-        public Task<EventStoreCommitResult> ConfirmEventsAsync(CancellationToken ct = default) =>
-            Task.FromResult(new EventStoreCommitResult());
 
         public Task PersistSnapshotAsync(StudioMemberBindingRunState currentState, CancellationToken ct = default) =>
             Task.CompletedTask;
@@ -629,6 +634,7 @@ public sealed class StudioMemberBindingRunGAgentStateTests
 
         public void DiscardPendingEvents()
         {
+            _pending.Clear();
         }
 
         public StudioMemberBindingRunState TransitionState(StudioMemberBindingRunState current, IMessage evt) =>

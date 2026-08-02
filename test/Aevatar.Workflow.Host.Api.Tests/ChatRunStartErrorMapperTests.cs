@@ -41,6 +41,10 @@ public class ChatRunStartErrorMapperTests
         mapped.Code.Should().Be("WORKFLOW_NOT_FOUND");
         mapped.Message.Should().Be(WorkflowChatRunStartErrorGuidance.WorkflowNotFound);
         mapped.Message.Should().Contain("current scope catalog");
+        mapped.Message.Should().Contain("list the current scope workflows");
+        mapped.Message.Should().Contain("actor_id");
+        mapped.Message.Should().Contain("descriptor's workflow name");
+        mapped.Message.Should().Contain("not the stable scope workflow_id");
         mapped.Message.Should().Contain("list_external_workflow_capabilities");
         mapped.Message.Should().Contain("exact typed selector");
         mapped.Message.Should().Contain("structured descriptor");
@@ -187,5 +191,114 @@ public class ChatRunStartErrorMapperTests
         selected.GetProperty("endpointId").GetString().Should().Be("endpoint-alpha");
         selected.GetProperty("operationId").ValueKind.Should().Be(JsonValueKind.Null);
         selected.GetProperty("connectorCapabilityRef").ValueKind.Should().Be(JsonValueKind.Null);
+        selected.TryGetProperty("requestContractDigest", out _).Should().BeFalse();
     }
+
+    [Fact]
+    public void ToErrorBody_ShouldKeepPublishedCapabilityJsonShapeUnchanged()
+    {
+        var readiness = new ExternalCapabilityReadiness
+        {
+            Status = ExternalCapabilityReadinessStatus.ContractDrift,
+            SelectedCapability = new ExternalWorkflowCapabilityRef
+            {
+                NyxIdUserService = new NyxIdUserServiceCapabilityRef
+                {
+                    UserServiceId = "usvc-published-alpha",
+                    EndpointId = "endpoint-published-alpha",
+                },
+            },
+        };
+        var detail = WorkflowChatRunStartFailureDetail.Create(
+            WorkflowChatRunStartError.InvalidWorkflowYaml,
+            "External workflow capability admission failed.",
+            readiness);
+
+        using var json = JsonDocument.Parse(JsonSerializer.Serialize(ChatRunStartErrorMapper.ToErrorBody(detail)));
+        var selected = json.RootElement.GetProperty("externalCapabilityReadiness")
+            .GetProperty("selectedCapability");
+
+        selected.GetProperty("userServiceId").GetString().Should().Be("usvc-published-alpha");
+        selected.GetProperty("endpointId").GetString().Should().Be("endpoint-published-alpha");
+        selected.TryGetProperty("requestContractDigest", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public void ToErrorBody_ShouldMapExplicitRequestSelectorToSafeExactIdentity()
+    {
+        var request = ExplicitRequest("usvc-explicit-alpha");
+        request.HeaderParameters.Add("If-Match");
+        var readiness = new ExternalCapabilityReadiness
+        {
+            Status = ExternalCapabilityReadinessStatus.ContractDrift,
+            SelectedSelector = new ExternalWorkflowCapabilitySelector
+            {
+                NyxIdRequest = request,
+            },
+        };
+        var detail = WorkflowChatRunStartFailureDetail.Create(
+            WorkflowChatRunStartError.InvalidWorkflowYaml,
+            "External workflow capability admission failed.",
+            readiness);
+
+        var serialized = JsonSerializer.Serialize(ChatRunStartErrorMapper.ToErrorBody(detail));
+        using var json = JsonDocument.Parse(serialized);
+        var selected = json.RootElement.GetProperty("externalCapabilityReadiness")
+            .GetProperty("selectedCapability");
+
+        selected.GetProperty("userServiceId").GetString().Should().Be("usvc-explicit-alpha");
+        selected.GetProperty("requestContractDigest").GetString().Should().Be(
+            WorkflowCapabilityAdmissionPlanIntegrity.ComputeNyxIdRequestContractDigest(request));
+        selected.GetProperty("endpointId").ValueKind.Should().Be(JsonValueKind.Null);
+        selected.GetProperty("operationId").ValueKind.Should().Be(JsonValueKind.Null);
+        selected.GetProperty("connectorCapabilityRef").ValueKind.Should().Be(JsonValueKind.Null);
+        serialized.Should().NotContain("/api/private/{resource_id}");
+        serialized.Should().NotContain("If-Match");
+    }
+
+    [Fact]
+    public void ToErrorBody_ShouldMapExplicitRequestCapabilityToAuthoredRequestIdentity()
+    {
+        var request = ExplicitRequest("usvc-capability-alpha");
+        var readiness = new ExternalCapabilityReadiness
+        {
+            Status = ExternalCapabilityReadinessStatus.ContractDrift,
+            SelectedCapability = new ExternalWorkflowCapabilityRef
+            {
+                NyxIdUserRequest = new NyxIdUserRequestCapabilityRef
+                {
+                    Request = request,
+                    ServiceSlugSnapshot = "server-slug-must-not-be-identity",
+                    ContractDigest = "server-proof-digest-must-not-be-operation-id",
+                },
+            },
+        };
+        var detail = WorkflowChatRunStartFailureDetail.Create(
+            WorkflowChatRunStartError.InvalidWorkflowYaml,
+            "External workflow capability admission failed.",
+            readiness);
+
+        var serialized = JsonSerializer.Serialize(ChatRunStartErrorMapper.ToErrorBody(detail));
+        using var json = JsonDocument.Parse(serialized);
+        var selected = json.RootElement.GetProperty("externalCapabilityReadiness")
+            .GetProperty("selectedCapability");
+
+        selected.GetProperty("userServiceId").GetString().Should().Be("usvc-capability-alpha");
+        selected.GetProperty("requestContractDigest").GetString().Should().Be(
+            WorkflowCapabilityAdmissionPlanIntegrity.ComputeNyxIdRequestContractDigest(request));
+        selected.GetProperty("endpointId").ValueKind.Should().Be(JsonValueKind.Null);
+        selected.GetProperty("operationId").ValueKind.Should().Be(JsonValueKind.Null);
+        serialized.Should().NotContain("server-slug-must-not-be-identity");
+        serialized.Should().NotContain("server-proof-digest-must-not-be-operation-id");
+    }
+
+    private static NyxIdRequestSelector ExplicitRequest(string userServiceId) =>
+        new()
+        {
+            UserServiceId = userServiceId,
+            Method = NyxIdRequestMethod.Get,
+            PathTemplate = "/api/private/{resource_id}",
+            BodyMode = NyxIdRequestBodyMode.None,
+            ResponseMode = NyxIdRequestResponseMode.Text,
+        };
 }

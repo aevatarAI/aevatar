@@ -156,13 +156,13 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         options.DirectFallbackWorkflowWhitelist.Should().ContainSingle().Which.Should().Be("analysis");
         options.DirectFallbackExceptionWhitelist.Should().ContainSingle().Which.Should().Be(typeof(TimeoutException));
 
-        policy.ShouldFallback(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("analysis")), new TimeoutException("timeout"))
+        policy.ShouldFallback(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("analysis"), ExternalCapabilityExecutionMode.Interactive), new TimeoutException("timeout"))
             .Should().BeTrue();
         policy.ShouldFallback(
-                new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("analysis")),
+                new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("analysis"), ExternalCapabilityExecutionMode.Interactive),
                 new WorkflowDirectFallbackTriggerException("boom"))
             .Should().BeFalse();
-        policy.ShouldFallback(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("analysis")), new InvalidOperationException("boom"))
+        policy.ShouldFallback(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("analysis"), ExternalCapabilityExecutionMode.Interactive), new InvalidOperationException("boom"))
             .Should().BeFalse();
     }
 
@@ -342,6 +342,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         var command = new WorkflowChatRunRequest(
             "hello",
             WorkflowChatSource.DefinitionActor("actor-1", "direct"),
+            ExternalCapabilityExecutionMode.Interactive,
             SessionId: "session-42",
             Metadata: new Dictionary<string, string>(StringComparer.Ordinal)
             {
@@ -382,6 +383,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         var command = new WorkflowChatRunRequest(
             "hello",
             WorkflowChatSource.DefinitionActor("actor-1", "direct"),
+            ExternalCapabilityExecutionMode.Interactive,
             LlmControl: new WorkflowLlmControl(
                 ModelOverride: " model-a ",
                 MaxToolRoundsOverride: 3,
@@ -411,6 +413,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         var command = new WorkflowChatRunRequest(
             "resume-input",
             WorkflowChatSource.DefinitionActor("actor-1", "direct"),
+            ExternalCapabilityExecutionMode.Interactive,
             ForkSeed: new WorkflowChatRunForkSeed(
                 "source-run",
                 "step-b",
@@ -444,6 +447,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         var command = new WorkflowChatRunRequest(
             "resume-input",
             WorkflowChatSource.DefinitionActor("actor-1", "direct"),
+            ExternalCapabilityExecutionMode.Interactive,
             ForkSeed: new WorkflowChatRunForkSeed(
                 "source-run",
                 "step-b",
@@ -488,6 +492,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         var command = new WorkflowChatRunRequest(
             "hello",
             WorkflowChatSource.DefinitionActor("actor-1", "direct"),
+            ExternalCapabilityExecutionMode.Interactive,
             Metadata: new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 [WorkflowRunCommandMetadataKeys.ScopeId] = "evil-scope",
@@ -506,7 +511,8 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
                     "nyxid",
                     string.Empty,
                     "nyx-user-42",
-                    "proxy")));
+                    "proxy"),
+                Aevatar.Workflow.Abstractions.NyxIdCallerCredentialKind.ProxyDelegation));
 
         var envelope = factory.CreateEnvelope(command, new CommandContext(
             "actor-1",
@@ -521,6 +527,8 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         request.LlmControl.UserMemoryPrompt.Should().Be("memory");
         request.LlmControl.RoutePreference.Should().Be("route-a");
         request.CallerCredential.BearerToken.Should().Be("trusted-token");
+        request.CallerCredential.Kind.Should().Be(
+            Aevatar.Workflow.Abstractions.NyxIdCallerCredentialKind.ProxyDelegation);
         request.CallerCredential.NyxIdAuthority.Should().BeEquivalentTo(
             new Aevatar.Workflow.Abstractions.WorkflowCallerNyxIdAuthority
             {
@@ -543,6 +551,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         var command = new WorkflowChatRunRequest(
             "hello",
             WorkflowChatSource.DefinitionActor("actor-1", "direct"),
+            ExternalCapabilityExecutionMode.Interactive,
             CallerCredential: new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential("Bearer token-123"));
 
         FluentActions.Invoking(() => factory.CreateEnvelope(command, new CommandContext(
@@ -565,6 +574,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         var command = new WorkflowChatRunRequest(
             "describe this",
             WorkflowChatSource.DefinitionActor("actor-1"),
+            ExternalCapabilityExecutionMode.Interactive,
             InputParts:
             [
                 new WorkflowChatInputPart
@@ -629,7 +639,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         services.AddWorkflowApplication();
         using var provider = services.BuildServiceProvider();
         var factory = provider.GetRequiredService<ICommandEnvelopeFactory<WorkflowChatRunRequest>>();
-        var command = new WorkflowChatRunRequest("hello", WorkflowChatSource.Direct());
+        var command = new WorkflowChatRunRequest("hello", WorkflowChatSource.Direct(), ExternalCapabilityExecutionMode.Interactive);
 
         var noMetadata = factory.CreateEnvelope(command, new CommandContext(
             "actor-2",
@@ -638,7 +648,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             new Dictionary<string, string>()));
         noMetadata.Payload.Unpack<WorkflowChatRequestEvent>().SessionId.Should().Be("corr-2");
 
-        var whiteSpaceSession = factory.CreateEnvelope(new WorkflowChatRunRequest("hello", WorkflowChatSource.Direct(), SessionId: "   "), new CommandContext(
+        var whiteSpaceSession = factory.CreateEnvelope(new WorkflowChatRunRequest("hello", WorkflowChatSource.Direct(), ExternalCapabilityExecutionMode.Interactive, SessionId: "   "), new CommandContext(
             "actor-3",
             "cmd-3",
             "corr-3",

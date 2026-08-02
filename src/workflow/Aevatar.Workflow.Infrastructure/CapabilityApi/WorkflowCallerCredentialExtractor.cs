@@ -17,12 +17,12 @@ public static class WorkflowCallerCredentialExtractor
 
     public static WorkflowCallerCredentialExtractionResult Extract(HttpContext? http)
     {
-        var token = ExtractCredentialToken(http);
-        if (!token.Succeeded)
+        var tokens = ExtractCredentialTokens(http);
+        if (!tokens.Succeeded)
             return Invalid();
-        return token.RawToken == null
+        return tokens.ExecutionRawToken == null
             ? WorkflowCallerCredentialExtractionResult.Success(null)
-            : ParseCredential(token.RawToken, http);
+            : ParseCredential(tokens, http);
     }
 
     public static ValueTask<WorkflowCallerCredentialExtractionResult> ExtractAsync(
@@ -31,20 +31,21 @@ public static class WorkflowCallerCredentialExtractor
         ILogger? logger = null,
         CancellationToken ct = default)
     {
-        var token = ExtractCredentialToken(http);
-        if (!token.Succeeded)
+        var tokens = ExtractCredentialTokens(http);
+        if (!tokens.Succeeded)
             return ValueTask.FromResult(Invalid());
-        return token.RawToken == null
+        return tokens.ExecutionRawToken == null
             ? ValueTask.FromResult(WorkflowCallerCredentialExtractionResult.Success(null))
-            : ParseCredentialAsync(token.RawToken, http, bindingQueryPort, logger, ct);
+            : ParseCredentialAsync(tokens, http, bindingQueryPort, logger, ct);
     }
 
-    private static CallerCredentialTokenExtractionResult ExtractCredentialToken(HttpContext? http)
+    private static CallerCredentialTokensExtractionResult ExtractCredentialTokens(HttpContext? http)
     {
+        string? sourceReadableRawToken = null;
         if (http?.Request.Headers.TryGetValue("Authorization", out var authorizationValues) == true)
         {
             if (authorizationValues.Count != 1)
-                return CallerCredentialTokenExtractionResult.Invalid;
+                return CallerCredentialTokensExtractionResult.Invalid;
 
             var authorization = authorizationValues[0];
             if (string.Equals(
@@ -52,59 +53,83 @@ public static class WorkflowCallerCredentialExtractor
                     "Bearer",
                     StringComparison.OrdinalIgnoreCase))
             {
-                return CallerCredentialTokenExtractionResult.Invalid;
+                return CallerCredentialTokensExtractionResult.Invalid;
             }
 
-            return authorization?.StartsWith(
-                       BearerPrefix,
-                       StringComparison.OrdinalIgnoreCase) == true
-                ? CallerCredentialTokenExtractionResult.Success(
-                    authorization[BearerPrefix.Length..])
-                : CallerCredentialTokenExtractionResult.Invalid;
+            if (authorization?.StartsWith(BearerPrefix, StringComparison.OrdinalIgnoreCase) != true)
+                return CallerCredentialTokensExtractionResult.Invalid;
+
+            sourceReadableRawToken = authorization[BearerPrefix.Length..];
         }
 
+        string? delegationRawToken = null;
         if (http?.Request.Headers.TryGetValue(
                 NyxIdDelegationTokenHeader,
                 out var delegationValues) == true)
         {
-            return delegationValues.Count != 1
-                ? CallerCredentialTokenExtractionResult.Invalid
-                : CallerCredentialTokenExtractionResult.Success(delegationValues[0]);
+            if (delegationValues.Count != 1)
+                return CallerCredentialTokensExtractionResult.Invalid;
+            delegationRawToken = delegationValues[0];
         }
 
-        return CallerCredentialTokenExtractionResult.Missing;
+        if (delegationRawToken != null)
+        {
+            return CallerCredentialTokensExtractionResult.Success(
+                delegationRawToken,
+                WorkflowProtocol.NyxIdCallerCredentialKind.ProxyDelegation,
+                sourceReadableRawToken);
+        }
+
+        return sourceReadableRawToken == null
+            ? CallerCredentialTokensExtractionResult.Missing
+            : CallerCredentialTokensExtractionResult.Success(
+                sourceReadableRawToken,
+                WorkflowProtocol.NyxIdCallerCredentialKind.SourceReadableUserBearer,
+                null);
     }
 
     private static WorkflowCallerCredentialExtractionResult ParseCredential(
-        string? rawToken,
+        CallerCredentialTokensExtractionResult tokens,
         HttpContext? http)
     {
-        var parsed = WorkflowProtocol.WorkflowCallerCredentialTokens.ParseOptional(rawToken);
-        if (parsed.IsValid)
+        var execution = WorkflowProtocol.WorkflowCallerCredentialTokens.ParseOptional(tokens.ExecutionRawToken);
+        var sourceReadable = WorkflowProtocol.WorkflowCallerCredentialTokens.ParseOptional(
+            tokens.SourceReadableRawToken);
+        if (execution.IsValid && !sourceReadable.IsInvalid)
         {
+            var selection = CreateAdmissionSelection(tokens, execution, sourceReadable);
             return WorkflowCallerCredentialExtractionResult.Success(
                 new WorkflowCallerCredential(
-                    parsed.NormalizedBearerToken,
-                    ResolveAuthenticatedNyxIdAuthority(http)));
+                    execution.NormalizedBearerToken,
+                    ResolveAuthenticatedNyxIdAuthority(http),
+                    tokens.ExecutionKind,
+                    sourceReadable.NormalizedBearerToken),
+                selection);
         }
 
         return Invalid();
     }
 
     private static async ValueTask<WorkflowCallerCredentialExtractionResult> ParseCredentialAsync(
-        string? rawToken,
+        CallerCredentialTokensExtractionResult tokens,
         HttpContext? http,
         IExternalIdentityBindingQueryPort? bindingQueryPort,
         ILogger? logger,
         CancellationToken ct)
     {
-        var parsed = WorkflowProtocol.WorkflowCallerCredentialTokens.ParseOptional(rawToken);
-        if (parsed.IsValid)
+        var execution = WorkflowProtocol.WorkflowCallerCredentialTokens.ParseOptional(tokens.ExecutionRawToken);
+        var sourceReadable = WorkflowProtocol.WorkflowCallerCredentialTokens.ParseOptional(
+            tokens.SourceReadableRawToken);
+        if (execution.IsValid && !sourceReadable.IsInvalid)
         {
+            var selection = CreateAdmissionSelection(tokens, execution, sourceReadable);
             return WorkflowCallerCredentialExtractionResult.Success(
                 new WorkflowCallerCredential(
-                    parsed.NormalizedBearerToken,
-                    await ResolveAuthenticatedNyxIdAuthorityAsync(http, bindingQueryPort, logger, ct)));
+                    execution.NormalizedBearerToken,
+                    await ResolveAuthenticatedNyxIdAuthorityAsync(http, bindingQueryPort, logger, ct),
+                    tokens.ExecutionKind,
+                    sourceReadable.NormalizedBearerToken),
+                selection);
         }
 
         return Invalid();
@@ -214,24 +239,73 @@ public static class WorkflowCallerCredentialExtractor
 
     private static WorkflowCallerCredentialExtractionResult Invalid() =>
         WorkflowCallerCredentialExtractionResult.Failure(WorkflowChatRunStartError.InvalidCallerCredential);
+
+    private static WorkflowProtocol.NyxIdCallerCredentialSelection CreateSelection(
+        WorkflowProtocol.NyxIdCallerCredentialKind kind,
+        string bearerToken) => kind switch
+        {
+            WorkflowProtocol.NyxIdCallerCredentialKind.SourceReadableUserBearer =>
+                WorkflowProtocol.NyxIdCallerCredentialSelection.SourceReadableUserBearer(bearerToken),
+            WorkflowProtocol.NyxIdCallerCredentialKind.ProxyDelegation =>
+                WorkflowProtocol.NyxIdCallerCredentialSelection.ProxyDelegation(bearerToken),
+            _ => throw new InvalidOperationException("Caller credential kind is invalid."),
+        };
+
+    private static WorkflowProtocol.NyxIdCallerCredentialSelection CreateAdmissionSelection(
+        CallerCredentialTokensExtractionResult tokens,
+        WorkflowProtocol.WorkflowCallerCredentialTokenParseResult execution,
+        WorkflowProtocol.WorkflowCallerCredentialTokenParseResult sourceReadable) =>
+        sourceReadable.IsValid
+            ? WorkflowProtocol.NyxIdCallerCredentialSelection.SourceReadableUserBearer(
+                sourceReadable.NormalizedBearerToken!)
+            : CreateSelection(tokens.ExecutionKind, execution.NormalizedBearerToken!);
 }
 
-readonly record struct CallerCredentialTokenExtractionResult(string? RawToken, bool Succeeded)
+readonly record struct CallerCredentialTokensExtractionResult(
+    string? ExecutionRawToken,
+    WorkflowProtocol.NyxIdCallerCredentialKind ExecutionKind,
+    string? SourceReadableRawToken,
+    bool Succeeded)
 {
-    public static CallerCredentialTokenExtractionResult Missing => new(null, true);
-    public static CallerCredentialTokenExtractionResult Invalid => new(null, false);
-    public static CallerCredentialTokenExtractionResult Success(string? rawToken) => new(rawToken, true);
+    public static CallerCredentialTokensExtractionResult Missing =>
+        new(null, WorkflowProtocol.NyxIdCallerCredentialKind.Unspecified, null, true);
+
+    public static CallerCredentialTokensExtractionResult Invalid =>
+        new(null, WorkflowProtocol.NyxIdCallerCredentialKind.Unspecified, null, false);
+
+    public static CallerCredentialTokensExtractionResult Success(
+        string executionRawToken,
+        WorkflowProtocol.NyxIdCallerCredentialKind executionKind,
+        string? sourceReadableRawToken) =>
+        new(executionRawToken, executionKind, sourceReadableRawToken, true);
 }
 
 public readonly record struct WorkflowCallerCredentialExtractionResult(
     WorkflowCallerCredential? Credential,
+    WorkflowProtocol.NyxIdCallerCredentialSelection? NyxIdCredentialSelection,
     WorkflowChatRunStartError Error)
 {
     public bool Succeeded => Error == WorkflowChatRunStartError.None;
 
     public static WorkflowCallerCredentialExtractionResult Success(WorkflowCallerCredential? credential) =>
-        new(credential, WorkflowChatRunStartError.None);
+        new(credential, null, WorkflowChatRunStartError.None);
+
+    public static WorkflowCallerCredentialExtractionResult Success(
+        WorkflowCallerCredential credential,
+        WorkflowProtocol.NyxIdCallerCredentialSelection nyxIdCredentialSelection) =>
+        new(credential, nyxIdCredentialSelection, WorkflowChatRunStartError.None);
 
     public static WorkflowCallerCredentialExtractionResult Failure(WorkflowChatRunStartError error) =>
-        new(null, error);
+        new(null, null, error);
+}
+
+public sealed class WorkflowCallerCredentialSelectionException : InvalidOperationException
+{
+    public const string ErrorCode = "INVALID_WORKFLOW_CALLER_CREDENTIAL";
+    public const string SafeMessage = "Caller credential selection is invalid.";
+
+    public WorkflowCallerCredentialSelectionException()
+        : base(SafeMessage)
+    {
+    }
 }
