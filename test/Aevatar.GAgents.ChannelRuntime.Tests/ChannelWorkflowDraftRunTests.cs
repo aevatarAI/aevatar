@@ -1,5 +1,8 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
@@ -15,12 +18,16 @@ using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 using NSubstitute;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
 public sealed class ChannelWorkflowDraftRunTests
 {
+    private static readonly DateTimeOffset WorkflowDraftRunNow =
+        DateTimeOffset.Parse("2026-08-02T00:00:00Z");
+
     [Theory]
     [InlineData("/workflow run daily-greeting", "daily-greeting")]
     [InlineData("/run-workflow daily.greeting", "daily.greeting")]
@@ -711,7 +718,8 @@ public sealed class ChannelWorkflowDraftRunTests
         ready.RunId.Should().Be("workflow-draft-run-1");
         ready.TerminalState.Should().Be(LlmReplyTerminalState.Completed);
         ready.Outbound.Text.Should().Be("hello world");
-        ready.ReplyToken.Should().Be("reply-token-1");
+        ready.ReplyToken.Should().BeEmpty();
+        ready.RelayReplyTokenRef.Ref.Should().NotBeNullOrWhiteSpace();
 
         agent.State.Status.Should().Be(ChannelWorkflowDraftRunStatus.ReplyHandedOff);
         agent.State.RunId.Should().Be("workflow-draft-run-1");
@@ -719,14 +727,16 @@ public sealed class ChannelWorkflowDraftRunTests
     }
 
     [Fact]
-    public async Task WorkflowDraftRunGAgent_ShouldIgnoreDuplicateInFlightStartWithoutDispatchingAgain()
+    public async Task WorkflowDraftRunGAgent_ShouldRepairTimeoutWithoutDispatchingDuplicateInFlightStart()
     {
         var workflow = new RecordingWorkflowDraftRunInteractionPort();
         var dispatch = new RecordingActorDispatchPort();
-        var agent = await CreateWorkflowDraftRunAgentAsync(dispatch, workflow);
-        agent.State.Status = ChannelWorkflowDraftRunStatus.Started;
-        agent.State.RunId = "workflow-draft-run-1";
-        agent.State.CorrelationId = "msg-1";
+        var scheduler = new RecordingCallbackScheduler();
+        var agent = await CreateWorkflowDraftRunAgentAsync(
+            dispatch,
+            workflow,
+            callbackScheduler: scheduler,
+            timeProvider: new FakeTimeProvider(WorkflowDraftRunNow));
         var request = BuildWorkflowRequest();
 
         await agent.HandleStartAsync(new ChannelWorkflowDraftRunStartRequested
@@ -734,12 +744,334 @@ public sealed class ChannelWorkflowDraftRunTests
             Request = request.Clone(),
             RunId = request.RunId,
         });
+        await agent.HandleStartAsync(new ChannelWorkflowDraftRunStartRequested
+        {
+            Request = request.Clone(),
+            RunId = request.RunId,
+        });
 
-        workflow.Started.Should().BeEmpty();
+        workflow.Started.Should().ContainSingle();
+        scheduler.Timeouts.Should().HaveCount(2);
+        scheduler.Timeouts.Select(x => x.CallbackId).Distinct().Should().ContainSingle();
         dispatch.Envelopes.Should().BeEmpty();
         agent.State.Status.Should().Be(ChannelWorkflowDraftRunStatus.Started);
         agent.State.RunId.Should().Be("workflow-draft-run-1");
         agent.State.CorrelationId.Should().Be("msg-1");
+    }
+
+    [Fact]
+    public async Task WorkflowDraftRunGAgent_ShouldFailRehydratedStartedRunAfterDurableRecoveryTimeout()
+    {
+        var eventStore = new InMemoryEventStore();
+        var timeProvider = new FakeTimeProvider(WorkflowDraftRunNow);
+        var firstScheduler = new RecordingCallbackScheduler();
+        var firstWorkflow = new RecordingWorkflowDraftRunInteractionPort();
+        var firstDispatch = new RecordingActorDispatchPort();
+        var firstAgent = await CreateWorkflowDraftRunAgentAsync(
+            firstDispatch,
+            firstWorkflow,
+            eventStore,
+            firstScheduler,
+            timeProvider);
+        var request = BuildWorkflowRequest();
+        request.Activity.TransportExtras = new TransportExtras
+        {
+            NyxUserAccessToken = "activity-user-token",
+        };
+
+        await firstAgent.HandleStartAsync(new ChannelWorkflowDraftRunStartRequested
+        {
+            Request = request.Clone(),
+            RunId = request.RunId,
+        });
+
+        firstAgent.State.Status.Should().Be(ChannelWorkflowDraftRunStatus.Started);
+        firstWorkflow.Started.Should().ContainSingle();
+        firstScheduler.Timeouts.Should().ContainSingle();
+        firstAgent.State.RecoveryRequest.ReplyToken.Should().BeEmpty();
+        firstAgent.State.RecoveryRequest.ReplyTokenExpiresAtUnixMs.Should().Be(0);
+        firstAgent.State.RecoveryRequest.NyxUserAccessToken.Should().BeEmpty();
+        firstAgent.State.RecoveryRequest.Activity.TransportExtras.NyxUserAccessToken.Should().BeEmpty();
+
+        var startedEvents = (await eventStore.GetEventsAsync(firstAgent.Id))
+            .Where(x => x.EventData.Is(ChannelWorkflowDraftRunStartedEvent.Descriptor))
+            .Select(x => x.EventData.Unpack<ChannelWorkflowDraftRunStartedEvent>())
+            .ToArray();
+        startedEvents.Should().ContainSingle();
+        startedEvents[0].RecoveryRequest.ReplyToken.Should().BeEmpty();
+        startedEvents[0].RecoveryRequest.NyxUserAccessToken.Should().BeEmpty();
+
+        var rehydratedScheduler = new RecordingCallbackScheduler();
+        var rehydratedWorkflow = new RecordingWorkflowDraftRunInteractionPort();
+        var rehydratedDispatch = new RecordingActorDispatchPort();
+        var rehydrated = await CreateWorkflowDraftRunAgentAsync(
+            rehydratedDispatch,
+            rehydratedWorkflow,
+            eventStore,
+            rehydratedScheduler,
+            timeProvider);
+
+        rehydrated.State.Status.Should().Be(ChannelWorkflowDraftRunStatus.Started);
+        rehydratedWorkflow.Started.Should().BeEmpty();
+        rehydratedScheduler.Timeouts.Should().ContainSingle();
+        rehydratedScheduler.Timeouts[0].CallbackId.Should().Be(firstScheduler.Timeouts[0].CallbackId);
+        var timeout = rehydratedScheduler.Timeouts[0]
+            .TriggerEnvelope.Payload.Unpack<ChannelWorkflowDraftRunRecoveryTimeoutElapsed>();
+        timeout.RunId.Should().Be(request.RunId);
+        timeout.CorrelationId.Should().Be(request.CorrelationId);
+        timeout.RecoveryDeadlineUnixMs.Should().Be(rehydrated.State.RecoveryDeadlineUnixMs);
+
+        timeProvider.Advance(
+            DateTimeOffset.FromUnixTimeMilliseconds(rehydrated.State.RecoveryDeadlineUnixMs) -
+            timeProvider.GetUtcNow() +
+            TimeSpan.FromMilliseconds(1));
+        await rehydrated.HandleRecoveryTimeoutAsync(timeout);
+
+        rehydratedDispatch.Envelopes.Should().ContainSingle();
+        var terminalEnvelope = rehydratedDispatch.Envelopes[0].Envelope;
+        terminalEnvelope.Id.Should().Be("workflow-draft-run-terminal:workflow-draft-run-1");
+        terminalEnvelope.Runtime.DeliveryIdentity.OperationId.Should()
+            .Be("workflow-draft-run-terminal:workflow-draft-run-1");
+        var failure = terminalEnvelope.Payload.Unpack<LlmReplyReadyEvent>();
+        failure.RunId.Should().Be(request.RunId);
+        failure.TerminalState.Should().Be(LlmReplyTerminalState.Failed);
+        failure.ErrorCode.Should().Be("workflow_draft_run_recovery_timeout");
+        failure.ReplyToken.Should().BeEmpty();
+        rehydrated.State.Status.Should().Be(ChannelWorkflowDraftRunStatus.Failed);
+        rehydratedScheduler.PurgedActorIds.Should().Contain(rehydrated.Id);
+
+        await rehydrated.HandleWorkflowInteractionCompletedAsync(new ChannelWorkflowDraftRunInteractionCompleted
+        {
+            Request = request.Clone(),
+            Succeeded = true,
+            Completed = true,
+        });
+
+        rehydratedDispatch.Envelopes.Should().ContainSingle();
+        rehydratedWorkflow.Started.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task WorkflowDraftRunGAgent_ShouldReserveTerminalHandoffWindowBeforeReplyTokenExpires()
+    {
+        var eventStore = new InMemoryEventStore();
+        var timeProvider = new FakeTimeProvider(WorkflowDraftRunNow);
+        var secretClock = new ManualRuntimeSecretClock(WorkflowDraftRunNow.ToUnixTimeMilliseconds());
+        var secretStore = new InMemoryRuntimeSecretStore(secretClock);
+        var scheduler = new RecordingCallbackScheduler();
+        var dispatch = new RecordingActorDispatchPort();
+        var agent = await CreateWorkflowDraftRunAgentAsync(
+            dispatch,
+            new RecordingWorkflowDraftRunInteractionPort(),
+            eventStore,
+            scheduler,
+            timeProvider,
+            secretStore);
+        var request = BuildWorkflowRequest();
+        var replyTokenExpiresAt = WorkflowDraftRunNow.AddMinutes(30);
+        request.ReplyTokenExpiresAtUnixMs = replyTokenExpiresAt.ToUnixTimeMilliseconds();
+
+        await agent.HandleStartAsync(new ChannelWorkflowDraftRunStartRequested
+        {
+            Request = request.Clone(),
+            RunId = request.RunId,
+        });
+
+        var expectedDeadline = replyTokenExpiresAt.AddMinutes(-1);
+        DateTimeOffset.FromUnixTimeMilliseconds(agent.State.RecoveryDeadlineUnixMs)
+            .Should().Be(expectedDeadline);
+        scheduler.Timeouts.Should().ContainSingle();
+        scheduler.Timeouts[0].DueTime.Should().Be(TimeSpan.FromMinutes(29));
+
+        var timeout = scheduler.Timeouts[0]
+            .TriggerEnvelope.Payload.Unpack<ChannelWorkflowDraftRunRecoveryTimeoutElapsed>();
+        var elapsed = expectedDeadline - WorkflowDraftRunNow + TimeSpan.FromMilliseconds(1);
+        timeProvider.Advance(elapsed);
+        secretClock.Advance(elapsed);
+
+        await agent.HandleRecoveryTimeoutAsync(timeout);
+
+        var terminal = dispatch.Envelopes.Should().ContainSingle().Subject.Envelope.Payload
+            .Unpack<LlmReplyReadyEvent>();
+        terminal.RelayReplyTokenRef.ExpiresAtUnixMs.Should().Be(replyTokenExpiresAt.ToUnixTimeMilliseconds());
+        var resolved = await secretStore.ResolveAsync(new ResolveRuntimeSecretRequest(
+            terminal.RelayReplyTokenRef.Ref,
+            "channel-relay-reply-token",
+            request.RunId,
+            request.CorrelationId,
+            "Verify recovery terminal credential remains available at handoff."));
+        resolved.Secret.Should().Be(request.ReplyToken);
+    }
+
+    [Fact]
+    public async Task WorkflowDraftRunGAgent_ShouldReplayPersistedTerminalAfterDispatchAdmissionFailure()
+    {
+        var eventStore = new InMemoryEventStore();
+        var timeProvider = new FakeTimeProvider(WorkflowDraftRunNow);
+        var firstScheduler = new RecordingCallbackScheduler();
+        var firstDispatch = new RecordingActorDispatchPort(failuresRemaining: 1);
+        var firstAgent = await CreateWorkflowDraftRunAgentAsync(
+            firstDispatch,
+            new RecordingWorkflowDraftRunInteractionPort(),
+            eventStore,
+            firstScheduler,
+            timeProvider);
+        var request = BuildWorkflowRequest();
+
+        await firstAgent.HandleStartAsync(new ChannelWorkflowDraftRunStartRequested
+        {
+            Request = request.Clone(),
+            RunId = request.RunId,
+        });
+        await firstAgent.HandleWorkflowInteractionCompletedAsync(new ChannelWorkflowDraftRunInteractionCompleted
+        {
+            Request = request.Clone(),
+            Succeeded = true,
+            Completed = true,
+        });
+
+        firstAgent.State.Status.Should().Be(ChannelWorkflowDraftRunStatus.TerminalProduced);
+        firstAgent.State.ProducedTerminalReply.Should().NotBeNull();
+        firstAgent.State.ProducedTerminalReply.ReplyToken.Should().BeEmpty();
+        firstAgent.State.TerminalOperationId.Should().Be("workflow-draft-run-terminal:workflow-draft-run-1");
+        firstScheduler.PurgedActorIds.Should().BeEmpty();
+        var attemptedEnvelope = firstDispatch.Envelopes.Should().ContainSingle().Subject.Envelope;
+        var persistedPayload = firstAgent.State.ProducedTerminalReply.ToByteArray();
+
+        var rehydratedScheduler = new RecordingCallbackScheduler();
+        var rehydratedDispatch = new RecordingActorDispatchPort();
+        var rehydratedWorkflow = new RecordingWorkflowDraftRunInteractionPort();
+        var rehydrated = await CreateWorkflowDraftRunAgentAsync(
+            rehydratedDispatch,
+            rehydratedWorkflow,
+            eventStore,
+            rehydratedScheduler,
+            timeProvider);
+
+        rehydrated.State.Status.Should().Be(ChannelWorkflowDraftRunStatus.TerminalProduced);
+        rehydrated.State.ProducedTerminalReply.ToByteArray().Should().Equal(persistedPayload);
+        rehydratedWorkflow.Started.Should().BeEmpty();
+        var retryRequest = rehydratedScheduler.Timeouts
+            .Select(x => x.TriggerEnvelope.Payload)
+            .Single(x => x.Is(ChannelWorkflowDraftRunTerminalHandoffRetryElapsed.Descriptor))
+            .Unpack<ChannelWorkflowDraftRunTerminalHandoffRetryElapsed>();
+
+        await rehydrated.HandleTerminalHandoffRetryAsync(retryRequest);
+
+        rehydratedDispatch.Envelopes.Should().ContainSingle();
+        var replayedEnvelope = rehydratedDispatch.Envelopes[0].Envelope;
+        replayedEnvelope.Id.Should().Be(attemptedEnvelope.Id);
+        replayedEnvelope.Runtime.DeliveryIdentity.OperationId.Should()
+            .Be(attemptedEnvelope.Runtime.DeliveryIdentity.OperationId);
+        replayedEnvelope.Payload.Value.ToByteArray().Should().Equal(attemptedEnvelope.Payload.Value.ToByteArray());
+        rehydrated.State.Status.Should().Be(ChannelWorkflowDraftRunStatus.ReplyHandedOff);
+        rehydratedScheduler.PurgedActorIds.Should().Contain(rehydrated.Id);
+    }
+
+    [Fact]
+    public async Task WorkflowDraftRunGAgent_ShouldReplayPersistedTerminalWhenFinalAppendFailsAfterAdmission()
+    {
+        var eventStore = new InMemoryEventStore();
+        var timeProvider = new FakeTimeProvider(WorkflowDraftRunNow);
+        var firstScheduler = new RecordingCallbackScheduler();
+        var firstDispatch = new RecordingActorDispatchPort();
+        var firstAgent = await CreateWorkflowDraftRunAgentAsync(
+            firstDispatch,
+            new RecordingWorkflowDraftRunInteractionPort(),
+            eventStore,
+            firstScheduler,
+            timeProvider);
+        var request = BuildWorkflowRequest();
+
+        await firstAgent.HandleStartAsync(new ChannelWorkflowDraftRunStartRequested
+        {
+            Request = request.Clone(),
+            RunId = request.RunId,
+        });
+        eventStore.FailNextAppend<ChannelWorkflowDraftRunReplyHandedOffEvent>();
+
+        await firstAgent.HandleWorkflowInteractionCompletedAsync(new ChannelWorkflowDraftRunInteractionCompleted
+        {
+            Request = request.Clone(),
+            Succeeded = true,
+            Completed = true,
+        });
+
+        firstAgent.State.Status.Should().Be(ChannelWorkflowDraftRunStatus.TerminalProduced);
+        firstScheduler.PurgedActorIds.Should().BeEmpty();
+        var admittedEnvelope = firstDispatch.Envelopes.Should().ContainSingle().Subject.Envelope;
+
+        var rehydratedScheduler = new RecordingCallbackScheduler();
+        var rehydratedDispatch = new RecordingActorDispatchPort();
+        var rehydrated = await CreateWorkflowDraftRunAgentAsync(
+            rehydratedDispatch,
+            new RecordingWorkflowDraftRunInteractionPort(),
+            eventStore,
+            rehydratedScheduler,
+            timeProvider);
+        var retryRequest = rehydratedScheduler.Timeouts
+            .Select(x => x.TriggerEnvelope.Payload)
+            .Single(x => x.Is(ChannelWorkflowDraftRunTerminalHandoffRetryElapsed.Descriptor))
+            .Unpack<ChannelWorkflowDraftRunTerminalHandoffRetryElapsed>();
+
+        await rehydrated.HandleTerminalHandoffRetryAsync(retryRequest);
+
+        rehydratedDispatch.Envelopes.Should().ContainSingle();
+        var replayedEnvelope = rehydratedDispatch.Envelopes[0].Envelope;
+        replayedEnvelope.Id.Should().Be(admittedEnvelope.Id);
+        replayedEnvelope.Payload.Value.ToByteArray().Should().Equal(admittedEnvelope.Payload.Value.ToByteArray());
+        rehydrated.State.Status.Should().Be(ChannelWorkflowDraftRunStatus.ReplyHandedOff);
+        rehydratedScheduler.PurgedActorIds.Should().Contain(rehydrated.Id);
+    }
+
+    [Fact]
+    public async Task WorkflowDraftRunGAgent_ShouldFailClosedWhenLegacyStartedStateHasNoRecoveryContext()
+    {
+        const string actorId = "channel-workflow-draft-run:workflow-draft-run-1";
+        var eventStore = new InMemoryEventStore();
+        var now = new FakeTimeProvider(WorkflowDraftRunNow);
+        await eventStore.AppendAsync(
+            actorId,
+            [new StateEvent
+            {
+                EventId = "legacy-workflow-draft-run-started",
+                Timestamp = Timestamp.FromDateTimeOffset(now.GetUtcNow()),
+                Version = 1,
+                EventType = ChannelWorkflowDraftRunStartedEvent.Descriptor.FullName,
+                EventData = Any.Pack(new ChannelWorkflowDraftRunStartedEvent
+                {
+                    RunId = "workflow-draft-run-1",
+                    CorrelationId = "msg-1",
+                    TargetActorId = "conversation-1",
+                    StartedAtUnixMs = now.GetUtcNow().ToUnixTimeMilliseconds(),
+                }),
+                AgentId = actorId,
+            }],
+            expectedVersion: 0);
+        var scheduler = new RecordingCallbackScheduler();
+        var workflow = new RecordingWorkflowDraftRunInteractionPort();
+        var dispatch = new RecordingActorDispatchPort();
+
+        var agent = await CreateWorkflowDraftRunAgentAsync(
+            dispatch,
+            workflow,
+            eventStore,
+            scheduler,
+            now);
+
+        workflow.Started.Should().BeEmpty();
+        scheduler.Timeouts.Should().ContainSingle();
+        var timeout = scheduler.Timeouts[0]
+            .TriggerEnvelope.Payload.Unpack<ChannelWorkflowDraftRunRecoveryTimeoutElapsed>();
+        timeout.RecoveryDeadlineUnixMs.Should().Be(0);
+
+        await agent.HandleRecoveryTimeoutAsync(timeout);
+
+        dispatch.Envelopes.Should().ContainSingle();
+        var failure = dispatch.Envelopes[0].Envelope.Payload.Unpack<LlmReplyReadyEvent>();
+        failure.ErrorCode.Should().Be("workflow_draft_run_recovery_context_missing");
+        agent.State.Status.Should().Be(ChannelWorkflowDraftRunStatus.Failed);
+        scheduler.PurgedActorIds.Should().Contain(actorId);
     }
 
     [Fact]
@@ -1073,10 +1405,19 @@ public sealed class ChannelWorkflowDraftRunTests
 
     private static async Task<ChannelWorkflowDraftRunGAgent> CreateWorkflowDraftRunAgentAsync(
         IActorDispatchPort dispatchPort,
-        IChannelWorkflowDraftRunInteractionPort? workflowInteractionPort)
+        IChannelWorkflowDraftRunInteractionPort? workflowInteractionPort,
+        IEventStore? eventStore = null,
+        IActorRuntimeCallbackScheduler? callbackScheduler = null,
+        TimeProvider? timeProvider = null,
+        IRuntimeSecretStore? runtimeSecretStore = null)
     {
+        eventStore ??= new InMemoryEventStore();
+        callbackScheduler ??= new RecordingCallbackScheduler();
+        runtimeSecretStore ??= new InMemoryRuntimeSecretStore();
         var services = new Microsoft.Extensions.DependencyInjection.ServiceCollection()
-            .AddSingleton<IEventStore, InMemoryEventStore>()
+            .AddSingleton(eventStore)
+            .AddSingleton(callbackScheduler)
+            .AddSingleton(runtimeSecretStore)
             .AddSingleton<EventSourcingRuntimeOptions>()
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
             .BuildServiceProvider();
@@ -1086,7 +1427,7 @@ public sealed class ChannelWorkflowDraftRunTests
             new WorkflowDraftRunReplyRenderer(),
             NullLogger<ChannelWorkflowDraftRunGAgent>.Instance,
             workflowInteractionPort,
-            TimeProvider.System)
+            timeProvider ?? TimeProvider.System)
         {
             Services = services,
             EventSourcingBehaviorFactory =
@@ -1270,10 +1611,45 @@ public sealed class ChannelWorkflowDraftRunTests
         public Task UnlinkAsync(string childId, CancellationToken ct = default) => Task.CompletedTask;
     }
 
-    private sealed class RecordingActorDispatchPort : IActorDispatchPort
+    private sealed class RecordingCallbackScheduler : IActorRuntimeCallbackScheduler
+    {
+        public List<RuntimeCallbackTimeoutRequest> Timeouts { get; } = [];
+        public List<string> PurgedActorIds { get; } = [];
+
+        public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
+            RuntimeCallbackTimeoutRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Timeouts.Add(request);
+            return Task.FromResult(new RuntimeCallbackLease(
+                request.ActorId,
+                request.CallbackId,
+                Timeouts.Count,
+                RuntimeCallbackBackend.InMemory));
+        }
+
+        public Task<RuntimeCallbackLease> ScheduleTimerAsync(
+            RuntimeCallbackTimerRequest request,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task CancelAsync(RuntimeCallbackLease lease, CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task PurgeActorAsync(string actorId, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            PurgedActorIds.Add(actorId);
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingActorDispatchPort(int failuresRemaining = 0) : IActorDispatchPort
     {
         private readonly object _gate = new();
         private readonly Dictionary<int, TaskCompletionSource<IReadOnlyList<(string ActorId, EventEnvelope Envelope)>>> _countWaiters = [];
+        private int _failuresRemaining = failuresRemaining;
 
         public List<(string ActorId, EventEnvelope Envelope)> Envelopes { get; } = [];
 
@@ -1289,6 +1665,9 @@ public sealed class ChannelWorkflowDraftRunTests
                     waiter.Value.TrySetResult(Envelopes.Select(CloneDispatch).ToList());
                 }
             }
+
+            if (Interlocked.Decrement(ref _failuresRemaining) >= 0)
+                throw new InvalidOperationException("Simulated actor dispatch admission failure.");
 
             return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
@@ -1327,6 +1706,11 @@ public sealed class ChannelWorkflowDraftRunTests
     private sealed class InMemoryEventStore : IEventStore
     {
         private readonly Dictionary<string, List<StateEvent>> _events = new(StringComparer.Ordinal);
+        private string? _failNextEventType;
+
+        public void FailNextAppend<TEvent>()
+            where TEvent : IMessage<TEvent>, new() =>
+            _failNextEventType = new TEvent().Descriptor.FullName;
 
         public Task<EventStoreCommitResult> AppendAsync(
             string agentId,
@@ -1346,6 +1730,12 @@ public sealed class ChannelWorkflowDraftRunTests
                 throw new EventStoreOptimisticConcurrencyException(agentId, expectedVersion, currentVersion);
 
             var appended = events.Select(x => x.Clone()).ToList();
+            if (_failNextEventType is { } failedType && appended.Any(x => x.EventType == failedType))
+            {
+                _failNextEventType = null;
+                throw new InvalidOperationException($"Simulated event-store append failure for '{failedType}'.");
+            }
+
             stream.AddRange(appended);
             return Task.FromResult(new EventStoreCommitResult
             {
