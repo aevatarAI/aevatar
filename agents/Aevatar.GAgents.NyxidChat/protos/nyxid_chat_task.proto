@@ -329,6 +329,7 @@ message NyxIdChatPendingApprovalState {
   google.protobuf.Timestamp expires_at = 6;
   google.protobuf.Timestamp asked_at = 7;
   NyxIdChatApprovalPresentation presentation = 8;
+  string tool_call_id = 9;
 }
 
 message NyxIdChatApprovalPresentation {
@@ -343,6 +344,18 @@ message NyxIdChatApprovalPresentation {
 message NyxIdChatInputOption {
   string label = 1;
   string description = 2;
+  string option_id = 3;
+}
+
+message NyxIdChatInputSelectionAnswer {
+  repeated string option_ids = 1;
+}
+
+message NyxIdChatInputAnswer {
+  oneof answer {
+    string free_text = 1;
+    NyxIdChatInputSelectionAnswer selection = 2;
+  }
 }
 
 message NyxIdChatPendingInputState {
@@ -355,6 +368,7 @@ message NyxIdChatPendingInputState {
   google.protobuf.Timestamp asked_at = 7;
   bool allow_free_text = 8;
   bool multi_select = 9;
+  string tool_call_id = 10;
 }
 
 message NyxIdChatInputResolutionState {
@@ -674,6 +688,9 @@ message NyxIdChatConversationGAgentState {
   NyxIdChatInputResolutionState latest_input_resolution = 27;
   NyxIdChatApprovalResolutionState latest_approval_resolution = 28;
   NyxIdChatConversationAttentionState attention = 29;
+  // Durable, secret-free outbox for the self-message that materializes an
+  // ask_user tool call as the exact actor-owned pending input fact.
+  NyxIdChatInputRequestCommand pending_input_request = 30;
 }
 
 message NyxIdChatHistoryInitializationOutbox {
@@ -856,12 +873,31 @@ message NyxIdChatActionPostconditionInput {
   NyxIdAssistantActionParams params = 8;
 }
 
+// Transient continuation payloads. Raw user input and credentials are carried
+// only to the turn actor inbox and are never copied into committed state.
+message NyxIdChatInputContinuationInput {
+  string request_id = 1;
+  string tool_call_id = 2;
+  NyxIdChatInputAnswer answer = 3;
+  repeated NyxIdChatInputOption selected_options = 4;
+  aevatar.ai.AgentToolExecutionContextPayload tool_context = 5;
+}
+
+message NyxIdChatToolApprovalContinuationInput {
+  string approval_request_id = 1;
+  bool approved = 2;
+  aevatar.ai.AgentToolExecutionContextPayload tool_context = 3;
+  bool may_change_external_state = 4;
+}
+
 message NyxIdChatOperationDispatchCommand {
   NyxIdChatOperationKey key = 1;
   oneof input {
     NyxIdChatLLMOperationInput llm = 10;
     NyxIdChatToolOperationInput tool = 11;
     NyxIdChatActionPostconditionInput action_postcondition = 12;
+    NyxIdChatInputContinuationInput input_continuation = 13;
+    NyxIdChatToolApprovalContinuationInput tool_approval_continuation = 14;
   }
 }
 
@@ -1038,6 +1074,7 @@ message NyxIdChatInputRequestCommand {
   repeated NyxIdChatInputOption options = 8;
   bool allow_free_text = 9;
   bool multi_select = 10;
+  string tool_call_id = 11;
 }
 
 message NyxIdChatInputResolveCommand {
@@ -1045,10 +1082,11 @@ message NyxIdChatInputResolveCommand {
   string conversation_actor_id = 2;
   string request_id = 3;
   string client_request_id = 4;
-  string answer = 5;
+  NyxIdChatInputAnswer answer = 5;
   int64 expected_state_version = 6;
   string command_id = 7;
   string correlation_id = 8;
+  aevatar.ai.AgentToolExecutionContextPayload tool_context = 9;
 }
 
 message NyxIdChatApprovalResolveCommand {
@@ -1061,6 +1099,7 @@ message NyxIdChatApprovalResolveCommand {
   int64 expected_state_version = 7;
   string command_id = 8;
   string correlation_id = 9;
+  aevatar.ai.AgentToolExecutionContextPayload tool_context = 10;
 }
 
 message NyxIdChatActionContinueCommand {

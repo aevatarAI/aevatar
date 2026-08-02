@@ -19,6 +19,7 @@ using Aevatar.AI.ToolProviders.Telegram;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.AI.ToolProviders.Web;
 using Aevatar.AI.ToolProviders.Workflow;
+using Aevatar.Authentication.Abstractions;
 using Aevatar.Authentication.Hosting;
 using Aevatar.Authentication.Providers.NyxId;
 using Aevatar.Authentication.ScopeServiceTokens;
@@ -99,6 +100,7 @@ public static class MainnetHostBuilderExtensions
         "AgentToolAdmission:KeyPrefix";
     internal const string DefaultAgentToolAdmissionKeyPrefix =
         "aevatar:mainnet:agent-tool-admission:v1:";
+    internal const string DefaultAuthenticationAudience = "urn:aevatar:api";
     private const string DeviceInboundDirectExternalEventTypeUrl =
         "type.googleapis.com/aevatar.gagents.household.DeviceInbound";
 
@@ -186,6 +188,7 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddSingleton<IUserSkillRunService, UserSkillRunService>();
 
         // Authentication: config-driven, provider-agnostic
+        ConfigureMainnetAuthenticationAudience(builder);
         builder.Services.AddNyxIdAuthentication();
         builder.AddAevatarAuthentication();
         builder.AddNyxIdIdentityAssertionAuthentication();
@@ -510,6 +513,18 @@ public static class MainnetHostBuilderExtensions
         }
 
         return app;
+    }
+
+    private static void ConfigureMainnetAuthenticationAudience(WebApplicationBuilder builder)
+    {
+        var audienceKey = $"{AevatarAuthenticationOptions.SectionName}:Audience";
+        if (!string.IsNullOrWhiteSpace(builder.Configuration[audienceKey]))
+            return;
+
+        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            [audienceKey] = DefaultAuthenticationAudience,
+        });
     }
 
     private static void ConfigureMainnetListenUrls(WebApplicationBuilder builder)

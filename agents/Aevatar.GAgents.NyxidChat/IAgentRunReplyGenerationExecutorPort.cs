@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.AgentProfiles;
@@ -40,7 +41,10 @@ public sealed class AgentRunAuthorizedToolStep
 {
     private readonly AgentRunToolCall[] _toolCalls;
     private readonly AgentToolExecutionContext _toolContext;
-    private readonly Func<AgentToolExecutionContext, CancellationToken, Task<AgentRunToolStepResult>> _executeAsync;
+    private readonly Func<AgentToolExecutionContext, AgentToolApprovalGrant?, CancellationToken,
+        Task<AgentRunToolStepResult>> _executeAsync;
+    private readonly AgentToolApprovalGrant? _approvalGrant;
+    private readonly AgentToolCredentialsPayload? _refreshedCredentials;
 
     internal AgentRunAuthorizedToolStep(
         string runId,
@@ -56,7 +60,9 @@ public sealed class AgentRunAuthorizedToolStep
             stepIndex,
             toolCalls,
             AgentToolExecutionContext.Empty,
-            (_, token) => executeAsync(token))
+            (_, _, token) => executeAsync(token),
+            approvalGrant: null,
+            refreshedCredentials: null)
     {
     }
 
@@ -68,6 +74,52 @@ public sealed class AgentRunAuthorizedToolStep
         IReadOnlyList<AgentRunToolCall> toolCalls,
         AgentToolExecutionContext toolContext,
         Func<AgentToolExecutionContext, CancellationToken, Task<AgentRunToolStepResult>> executeAsync)
+        : this(
+            runId,
+            correlationId,
+            attempt,
+            stepIndex,
+            toolCalls,
+            toolContext,
+            (context, _, token) => executeAsync(context, token),
+            approvalGrant: null,
+            refreshedCredentials: null)
+    {
+    }
+
+    internal AgentRunAuthorizedToolStep(
+        string runId,
+        string correlationId,
+        int attempt,
+        int stepIndex,
+        IReadOnlyList<AgentRunToolCall> toolCalls,
+        AgentToolExecutionContext toolContext,
+        Func<AgentToolExecutionContext, AgentToolApprovalGrant?, CancellationToken,
+            Task<AgentRunToolStepResult>> executeAsync)
+        : this(
+            runId,
+            correlationId,
+            attempt,
+            stepIndex,
+            toolCalls,
+            toolContext,
+            executeAsync,
+            approvalGrant: null,
+            refreshedCredentials: null)
+    {
+    }
+
+    private AgentRunAuthorizedToolStep(
+        string runId,
+        string correlationId,
+        int attempt,
+        int stepIndex,
+        IReadOnlyList<AgentRunToolCall> toolCalls,
+        AgentToolExecutionContext toolContext,
+        Func<AgentToolExecutionContext, AgentToolApprovalGrant?, CancellationToken,
+            Task<AgentRunToolStepResult>> executeAsync,
+        AgentToolApprovalGrant? approvalGrant,
+        AgentToolCredentialsPayload? refreshedCredentials)
     {
         RunId = runId;
         CorrelationId = correlationId;
@@ -76,6 +128,8 @@ public sealed class AgentRunAuthorizedToolStep
         _toolCalls = toolCalls.Select(static call => call.Clone()).ToArray();
         _toolContext = toolContext ?? throw new ArgumentNullException(nameof(toolContext));
         _executeAsync = executeAsync ?? throw new ArgumentNullException(nameof(executeAsync));
+        _approvalGrant = approvalGrant;
+        _refreshedCredentials = refreshedCredentials?.Clone();
     }
 
     internal string RunId { get; }
@@ -120,11 +174,56 @@ public sealed class AgentRunAuthorizedToolStep
                     StepId = Normalize(key.StepId),
                 },
             },
-            _executeAsync);
+            _executeAsync,
+            _approvalGrant,
+            _refreshedCredentials);
     }
 
-    internal Task<AgentRunToolStepResult> ExecuteAsync(CancellationToken ct) =>
-        _executeAsync(_toolContext, ct);
+    internal AgentRunAuthorizedToolStep WithApprovalGrant(
+        string approvalRequestId,
+        AgentToolCredentialsPayload? refreshedCredentials)
+    {
+        if (_toolCalls.Length != 1 ||
+            string.IsNullOrWhiteSpace(approvalRequestId) ||
+            string.IsNullOrWhiteSpace(_toolContext.Request.RequestId))
+        {
+            throw new InvalidOperationException("The exact approved tool call is unavailable.");
+        }
+
+        var call = _toolCalls[0];
+        var grant = new AgentToolApprovalGrant(
+            _toolContext.ExecutionOwner.Clone(),
+            approvalRequestId.Trim(),
+            _toolContext.Request.RequestId!,
+            call.Name,
+            call.Id,
+            AgentToolArgumentsDigest.ComputeSha256(call.ArgumentsJson));
+        return new AgentRunAuthorizedToolStep(
+            RunId,
+            CorrelationId,
+            Attempt,
+            StepIndex,
+            _toolCalls,
+            _toolContext,
+            _executeAsync,
+            grant,
+            refreshedCredentials);
+    }
+
+    internal Task<AgentRunToolStepResult> ExecuteAsync(CancellationToken ct)
+    {
+        var context = _toolContext;
+        if (_refreshedCredentials is not null)
+        {
+            var refreshed = AgentToolExecutionContextMapper.FromPayload(
+                new AgentToolExecutionContextPayload
+                {
+                    Credentials = _refreshedCredentials.Clone(),
+                });
+            context = context with { Credentials = refreshed.Credentials };
+        }
+        return _executeAsync(context, _approvalGrant, ct);
+    }
 
     private static string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

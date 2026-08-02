@@ -1,0 +1,110 @@
+[
+  {
+    "scenario": "input-request",
+    "status": "current",
+    "stateVersion": 23,
+    "snapshot": {
+      "progressSequence": 23,
+      "pendingInput": {
+        "requestId": "input-alpha",
+        "turnId": "turn-alpha",
+        "taskId": "task-alpha",
+        "stepId": "step-input-alpha",
+        "prompt": "Select the deployment regions.",
+        "options": [
+          {
+            "optionId": "option-singapore",
+            "label": "Singapore",
+            "description": "Deploy to the Singapore region."
+          },
+          {
+            "optionId": "option-frankfurt",
+            "label": "Frankfurt",
+            "description": "Deploy to the Frankfurt region."
+          }
+        ],
+        "askedAt": "2026-08-01T12:00:00+00:00",
+        "allowFreeText": false,
+        "multiSelect": true
+      },
+      "pendingApproval": null,
+      "latestInputResolution": null,
+      "latestApprovalResolution": null,
+      "taskStatus": "active",
+      "attentionKind": "input",
+      "attentionSince": "2026-08-01T12:00:00+00:00",
+      "activeStepSummary": "Select the deployment regions."
+    }
+  },
+  {
+    "scenario": "input-changed",
+    "status": "current",
+    "stateVersion": 24,
+    "snapshot": {
+      "progressSequence": 24,
+      "pendingInput": null,
+      "pendingApproval": null,
+      "latestInputResolution": {
+        "requestId": "input-alpha",
+        "clientRequestId": "client-input-alpha",
+        "outcome": "accepted",
+        "committedAt": "2026-08-01T12:01:00+00:00"
+      },
+      "latestApprovalResolution": null,
+      "taskStatus": "active",
+      "attentionKind": "none",
+      "attentionSince": null,
+      "activeStepSummary": "Continue the assistant response with the selected user input."
+    }
+  },
+  {
+    "scenario": "approval-request",
+    "status": "current",
+    "stateVersion": 31,
+    "snapshot": {
+      "progressSequence": 31,
+      "pendingInput": null,
+      "pendingApproval": {
+        "approvalRequestId": "approval-alpha",
+        "turnId": "turn-alpha",
+        "taskId": "task-alpha",
+        "stepId": "step-tool-alpha",
+        "toolName": "repository_delete",
+        "askedAt": "2026-08-01T12:05:00+00:00",
+        "action": "repository.delete",
+        "target": "repository:repo-alpha",
+        "actorLabel": "Aevatar Assistant",
+        "reversibility": "irreversible",
+        "grantBoundary": "within_grant"
+      },
+      "latestInputResolution": null,
+      "latestApprovalResolution": null,
+      "taskStatus": "active",
+      "attentionKind": "approval",
+      "attentionSince": "2026-08-01T12:05:00+00:00",
+      "activeStepSummary": "Delete repository."
+    }
+  },
+  {
+    "scenario": "approval-changed",
+    "status": "current",
+    "stateVersion": 32,
+    "snapshot": {
+      "progressSequence": 32,
+      "pendingInput": null,
+      "pendingApproval": null,
+      "latestInputResolution": null,
+      "latestApprovalResolution": {
+        "requestId": "approval-alpha",
+        "clientRequestId": "client-approval-alpha",
+        "outcome": "accepted",
+        "approved": true,
+        "committedAt": "2026-08-01T12:06:00+00:00"
+      },
+      "taskStatus": "active",
+      "attentionKind": "none",
+      "attentionSince": null,
+      "activeStepSummary": "Delete repository."
+    }
+  }
+]

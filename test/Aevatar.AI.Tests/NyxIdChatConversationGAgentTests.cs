@@ -3337,6 +3337,238 @@ public sealed class NyxIdChatConversationGAgentTests
         ]);
     }
 
+    [Fact]
+    public async Task AskUserToolCall_ShouldMaterializePendingInputAndResumeAfterReload()
+    {
+        const string conversationActorId = "conversation-alpha";
+        const string refreshedToken = "refreshed-token-sentinel";
+        var eventStore = new InMemoryEventStoreForTests();
+        var dispatch = new RecordingActorDispatchPort([], static (_, _) => Task.CompletedTask);
+        using var services = BuildEventSourcingServices(eventStore);
+        var initial = CreateController(services, conversationActorId, dispatch);
+        await initial.ActivateAsync();
+        await initial.HandleEventAsync(CreateEnvelope(
+            conversationActorId,
+            CreateStartTurnCommand()));
+        var llmKey = initial.State.ActiveTask.Steps.Single().Operation.Key.Clone();
+        await initial.HandleEventAsync(CreateEnvelope(
+            conversationActorId,
+            new NyxIdChatOperationResultSignal
+            {
+                Key = llmKey,
+                Llm = new NyxIdChatLLMOperationResult
+                {
+                    ToolCalls =
+                    {
+                        new NyxIdChatToolCall
+                        {
+                            CallId = "call-ask-user-alpha",
+                            ToolName = "ask_user",
+                            ArgumentsJson = """
+                                {
+                                  "question": "Choose deployment regions.",
+                                  "options": [
+                                    {"label": "Singapore", "description": "Asia region"},
+                                    {"label": "Frankfurt", "description": "Europe region"}
+                                  ],
+                                  "multi_select": true
+                                }
+                                """,
+                            Safety = new NyxIdChatToolCallSafety
+                            {
+                                IsReadOnly = true,
+                                MayChangeExternalState = false,
+                            },
+                        },
+                    },
+                },
+            }));
+
+        initial.State.PendingInput.Should().BeNull();
+        initial.State.PendingInputRequest.Should().NotBeNull();
+        var selfRequest = dispatch.Calls.Should().ContainSingle(call =>
+                call.Envelope.Payload.Is(NyxIdChatInputRequestCommand.Descriptor))
+            .Which.Envelope.Clone();
+        await initial.HandleEventAsync(selfRequest);
+
+        initial.State.PendingInput.Should().NotBeNull();
+        var pending = initial.State.PendingInput!;
+        pending.ToolCallId.Should().Be("call-ask-user-alpha");
+        pending.MultiSelect.Should().BeTrue();
+        pending.Options.Should().HaveCount(2);
+        pending.Options.Should().OnlyContain(static option =>
+            option.OptionId.StartsWith("option-", StringComparison.Ordinal));
+        initial.State.PendingInputRequest.Should().BeNull();
+
+        var recoveryDispatch = new RecordingActorDispatchPort([], static (_, _) => Task.CompletedTask);
+        var recovered = CreateController(services, conversationActorId, recoveryDispatch);
+        await recovered.ActivateAsync();
+        recovered.State.PendingInput.Should().BeEquivalentTo(pending);
+        recoveryDispatch.Calls.Should().BeEmpty(
+            "a committed pending input must not rematerialize the outbox self-message");
+
+        var answer = new NyxIdChatInputAnswer
+        {
+            Selection = new NyxIdChatInputSelectionAnswer(),
+        };
+        answer.Selection.OptionIds.AddRange(pending.Options.Select(static option => option.OptionId));
+        var committedBeforeResolution = await eventStore.GetEventsAsync(conversationActorId);
+        await recovered.HandleEventAsync(CreateEnvelope(
+            conversationActorId,
+            new NyxIdChatInputResolveCommand
+            {
+                ScopeId = "scope-alpha",
+                ConversationActorId = conversationActorId,
+                RequestId = pending.RequestId,
+                ClientRequestId = "client-input-alpha",
+                Answer = answer,
+                ExpectedStateVersion = committedBeforeResolution.Count,
+                CommandId = "command-input-alpha",
+                CorrelationId = "correlation-input-alpha",
+                ToolContext = new AgentToolExecutionContextPayload
+                {
+                    Credentials = new AgentToolCredentialsPayload
+                    {
+                        NyxIdAccessToken = refreshedToken,
+                    },
+                },
+            }));
+
+        recovered.State.PendingInput.Should().BeNull();
+        recovered.State.ActiveTask.Steps.Single(step => step.Kind == NyxIdChatStepKind.Input)
+            .Status.Should().Be(NyxIdChatStepStatus.Done);
+        recovered.State.ActiveTask.Steps.Last().Kind.Should().Be(NyxIdChatStepKind.Llm);
+        recovered.State.ActiveTask.Steps.Last().Status.Should().Be(NyxIdChatStepStatus.Running);
+        var continuation = recoveryDispatch.OperationCalls.Should().ContainSingle().Which.Envelope.Payload
+            .Unpack<NyxIdChatOperationDispatchCommand>();
+        continuation.InputCase.Should().Be(
+            NyxIdChatOperationDispatchCommand.InputOneofCase.InputContinuation);
+        continuation.InputContinuation.Answer.Selection.OptionIds.Should()
+            .Equal(answer.Selection.OptionIds);
+        continuation.InputContinuation.ToolContext.Credentials.NyxIdAccessToken.Should().Be(refreshedToken);
+
+        var committed = await eventStore.GetEventsAsync(conversationActorId);
+        var resolution = committed.Should().ContainSingle(item =>
+                item.EventData.Is(NyxIdChatInputResolutionCommittedEvent.Descriptor))
+            .Which.EventData.Unpack<NyxIdChatInputResolutionCommittedEvent>();
+        resolution.Resolution.AnswerSha256.Should().NotBeEmpty();
+        resolution.ToString().Should().NotContain(refreshedToken);
+        committed.Should().OnlyContain(item =>
+            !item.EventData.ToString().Contains(refreshedToken, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task InputResolution_WhenContinuationDispatchFails_ShouldCommitSafeTerminal()
+    {
+        const string conversationActorId = "conversation-alpha";
+        const string refreshedToken = "dispatch-failure-token-sentinel";
+        var failInputContinuation = false;
+        var eventStore = new InMemoryEventStoreForTests();
+        var dispatch = new RecordingActorDispatchPort(
+            [],
+            (_, envelope) =>
+            {
+                if (failInputContinuation &&
+                    envelope.Payload.Is(NyxIdChatOperationDispatchCommand.Descriptor) &&
+                    envelope.Payload.Unpack<NyxIdChatOperationDispatchCommand>().InputCase ==
+                    NyxIdChatOperationDispatchCommand.InputOneofCase.InputContinuation)
+                {
+                    throw new InvalidOperationException("dispatch failed with bearer-secret");
+                }
+
+                return Task.CompletedTask;
+            });
+        using var services = BuildEventSourcingServices(eventStore);
+        var controller = CreateController(services, conversationActorId, dispatch);
+        await controller.ActivateAsync();
+        await controller.HandleEventAsync(CreateEnvelope(
+            conversationActorId,
+            CreateStartTurnCommand()));
+        var llmKey = controller.State.ActiveTask.Steps.Single().Operation.Key.Clone();
+        await controller.HandleEventAsync(CreateEnvelope(
+            conversationActorId,
+            new NyxIdChatOperationResultSignal
+            {
+                Key = llmKey,
+                Llm = new NyxIdChatLLMOperationResult
+                {
+                    ToolCalls =
+                    {
+                        new NyxIdChatToolCall
+                        {
+                            CallId = "call-ask-user-alpha",
+                            ToolName = "ask_user",
+                            ArgumentsJson = """
+                                {
+                                  "question": "Choose a deployment region.",
+                                  "options": [
+                                    {"label": "Singapore"},
+                                    {"label": "Frankfurt"}
+                                  ]
+                                }
+                                """,
+                            Safety = new NyxIdChatToolCallSafety
+                            {
+                                IsReadOnly = true,
+                                MayChangeExternalState = false,
+                            },
+                        },
+                    },
+                },
+            }));
+        var selfRequest = dispatch.Calls.Should().ContainSingle(call =>
+                call.Envelope.Payload.Is(NyxIdChatInputRequestCommand.Descriptor))
+            .Which.Envelope.Clone();
+        await controller.HandleEventAsync(selfRequest);
+
+        var pending = controller.State.PendingInput!;
+        var answer = new NyxIdChatInputAnswer
+        {
+            Selection = new NyxIdChatInputSelectionAnswer(),
+        };
+        answer.Selection.OptionIds.Add(pending.Options[0].OptionId);
+        var committedBeforeResolution = await eventStore.GetEventsAsync(conversationActorId);
+        failInputContinuation = true;
+
+        await controller.HandleEventAsync(CreateEnvelope(
+            conversationActorId,
+            new NyxIdChatInputResolveCommand
+            {
+                ScopeId = "scope-alpha",
+                ConversationActorId = conversationActorId,
+                RequestId = pending.RequestId,
+                ClientRequestId = "client-input-dispatch-failure",
+                Answer = answer,
+                ExpectedStateVersion = committedBeforeResolution.Count,
+                CommandId = "command-input-dispatch-failure",
+                CorrelationId = "correlation-input-dispatch-failure",
+                ToolContext = new AgentToolExecutionContextPayload
+                {
+                    Credentials = new AgentToolCredentialsPayload
+                    {
+                        NyxIdAccessToken = refreshedToken,
+                    },
+                },
+            }));
+
+        controller.State.PendingInput.Should().BeNull();
+        controller.State.LatestInputResolution.Outcome.Should().Be(
+            NyxIdChatNeedsYouResolutionOutcome.Accepted);
+        controller.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Failed);
+        controller.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Failed);
+        controller.State.ActiveTask.FailureCode.Should().Be("NYXID_CHAT_OPERATION_DISPATCH_FAILED");
+        controller.State.ActiveTask.Steps.Should().OnlyContain(step =>
+            step.Status != NyxIdChatStepStatus.Waiting &&
+            step.Status != NyxIdChatStepStatus.Running);
+        var committed = await eventStore.GetEventsAsync(conversationActorId);
+        committed.Should().Contain(item =>
+            item.EventData.Is(NyxIdChatInputResolutionCommittedEvent.Descriptor));
+        committed.Should().Contain(item =>
+            item.EventData.Is(NyxIdChatOperationReconciledEvent.Descriptor));
+        committed.Should().OnlyContain(item =>
+            !item.EventData.ToString().Contains(refreshedToken, StringComparison.Ordinal));
+    }
+
     private static NyxIdChatStartTurnCommand CreateStartTurnCommand() => new()
     {
         ScopeId = "scope-alpha",

@@ -2539,8 +2539,11 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         var streamCt = timeoutCts.Token;
         var useWorkflowFailureMarker = request.TimeoutMs > 0;
         var llmControl = recoveryLlmControl ?? LLMControlContextMapper.FromPayload(request.LlmControl);
-        var toolContext = recoveryToolContext ??
-                          llmControl.ToToolContext(AgentToolExecutionContextMapper.FromPayload(request.ToolContext));
+        var toolContext = ResolveTurnToolContext(
+            request,
+            recoveryToolContext ??
+            llmControl.ToToolContext(AgentToolExecutionContextMapper.FromPayload(request.ToolContext)),
+            Id);
         SessionReplayRecord replayRecord;
         try
         {
@@ -2849,6 +2852,26 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
 
     private static string SanitizeFailureMessage(string? message) =>
         string.IsNullOrWhiteSpace(message) ? "LLM request failed." : message.Trim();
+
+    private static AgentToolExecutionContext ResolveTurnToolContext(
+        ChatRequestEvent request,
+        AgentToolExecutionContext context,
+        string? actorId)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(context);
+
+        return context with
+        {
+            Request = context.Request with
+            {
+                RequestId = NormalizeToolContextValue(request.SessionId) ?? context.Request.RequestId,
+            },
+            ExecutionOwner = string.IsNullOrWhiteSpace(actorId)
+                ? context.ExecutionOwner
+                : AgentToolExecutionOwners.Actor(actorId),
+        };
+    }
 
     protected async Task<AgentProfileTurnAuthorityState?> EstablishTurnAuthorityAsync(
         ChatRequestEvent request,

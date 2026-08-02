@@ -6,7 +6,7 @@ owner: eanzhao
 
 # NyxID Assistant Chat v1 Contract
 
-This document is the canonical Aevatar contract for NyxID Assistant Chat v1. It covers conversation and turn identity, actor-owned task execution, live AGUI observation, pending input and approval decisions, stop and steering controls, browser-action handoff, conditional current-state reads, recovery, and the secret boundary. The needs-you contract is implemented by [Aevatar #3131](https://github.com/aevatarAI/aevatar/issues/3131) for the upstream [nyxid-chat #6](https://github.com/eanz17/nyxid-chat/issues/6) milestone requirement.
+This document is the canonical Aevatar contract for NyxID Assistant Chat v1. It covers conversation and turn identity, actor-owned task execution, live AGUI observation, pending input and approval decisions, stop and steering controls, browser-action handoff, conditional current-state reads, recovery, and the secret boundary. The needs-you contract is implemented by [Aevatar #3131](https://github.com/aevatarAI/aevatar/issues/3131) and its authoritative continuation completion [Aevatar #3154](https://github.com/aevatarAI/aevatar/issues/3154) for the upstream [nyxid-chat #6](https://github.com/eanz17/nyxid-chat/issues/6) milestone requirement.
 
 The ownership and retention distinction between execution state, derived prompt context,
 conversation transcript, and cross-conversation user memory is canonical in
@@ -233,7 +233,7 @@ Retry and skip validate the body `conversationId`, `turnId`, `taskId`, `stepId`,
 
 ## Pending input and tool approval
 
-Pending input is an actor-owned protobuf fact containing `requestId`, `turnId`, `taskId`, `stepId`, `prompt`, typed `options`, `askedAt`, `allowFreeText`, and `multiSelect`. The actor accepts a request only for the exact active turn/task/step and commits `nyxid.input.request`; the projection session then publishes that committed fact as a live frame. It is not reconstructed from LLM text or browser state.
+Pending input is an actor-owned protobuf fact containing `requestId`, `turnId`, `taskId`, `stepId`, `prompt`, typed `options`, `askedAt`, `allowFreeText`, and `multiSelect`. Each option has an opaque stable `optionId` plus its display `label` and optional `description`. A production `ask_user` tool call authors the request for the exact active input step; a secret-free actor outbox retains that self-message until the pending fact commits. The actor then emits `nyxid.input.request`, and the projection session publishes that committed fact as a live frame. The request is not reconstructed from LLM text or browser state, and controller reload cannot lose it.
 
 The caller resolves input through the same public command surface:
 
@@ -243,12 +243,21 @@ The caller resolves input through the same public command surface:
   "conversationId": "conversation-alpha",
   "requestId": "input-alpha",
   "clientRequestId": "client-input-alpha",
-  "answer": "Singapore",
+  "answer": {
+    "selectedOptionIds": [
+      "option-82f422e6c6ca11c8",
+      "option-abd8c07fe8728547"
+    ]
+  },
   "expectedStateVersion": 23
 }
 ```
 
-An accepted dispatch returns `202 Accepted` with `requestId`, `commandId`, `correlationId`, and `stateUrl`. This proves transport acceptance only. The first matching decision committed at the expected actor version wins and emits `nyxid.input.changed`; an exact duplicate is idempotent, while a stale version, unknown request, or conflicting reuse cannot advance actor state. The actor persists only the decision fingerprint and safe resolution facts, not the submitted answer.
+`answer` is a closed typed union. Send exactly one of `{"freeText":"..."}` or `{"selectedOptionIds":["option-..."]}`. A single-select answer contains exactly one ID; a multi-select answer contains one or more distinct IDs from the observed pending options. Labels are presentation and must never be submitted as identities.
+
+An accepted dispatch returns `202 Accepted` with `requestId`, `commandId`, `correlationId`, and `stateUrl`. This proves transport acceptance only. The first matching decision committed at the expected actor version wins and emits `nyxid.input.changed`; an exact duplicate is idempotent, while a stale version, unknown request, invalid option ID, or conflicting reuse cannot advance actor state. Acceptance completes the exact waiting input step, appends one LLM continuation step, injects the typed answer as the matching `ask_user` tool result, and resumes that exact transient turn session.
+
+The actor persists only the answer fingerprint and safe resolution facts. Raw free text, selected option IDs, fresh NyxID credentials, and the resulting tool message exist only in the transient continuation. If that turn capability was lost through passivation, or if the continuation cannot be accepted for dispatch, the operation fails closed and terminalizes the task; it is never left as an orphaned waiting or running step.
 
 Pending approval carries the exact `requestId / turnId / taskId / stepId / toolName / askedAt` correlation plus optional `expiresAt` when an authoritative approval source supplies an expiry, and a safe `presentation`:
 
@@ -269,7 +278,9 @@ These are separate products and identities:
 - an authorization/browser-action blocked turn cannot be continued via `approval.resolve`;
 - neither route reuses the old turn ID.
 
-`approval.resolve` includes `conversationId`, `clientRequestId`, the actor-owned approval `requestId`, required explicit boolean `approved`, optional safe `reason`, and `expectedStateVersion`. Omitting `approved` returns `400 APPROVAL_DECISION_REQUIRED`. An accepted dispatch returns the same transport-only `202` receipt shape as `input.resolve`; business commit and read-model visibility are observed through `nyxid.approval.changed` or the current-state query. The first matching decision wins, an exact duplicate is idempotent, and unknown requests, stale versions, or conflicting decisions do not advance actor state. The actor persists only the decision fingerprint and safe resolution facts, not the submitted reason.
+`approval.resolve` includes `conversationId`, `clientRequestId`, the actor-owned approval `requestId`, required explicit boolean `approved`, optional safe `reason`, and `expectedStateVersion`. Omitting `approved` returns `400 APPROVAL_DECISION_REQUIRED`. The request must carry fresh NyxID authentication; neither the original turn credential nor an approval card grants execution authority. An accepted dispatch returns the same transport-only `202` receipt shape as `input.resolve`; business commit and read-model visibility are observed through `nyxid.approval.changed` or the current-state query. The first matching decision wins, an exact duplicate is idempotent, and unknown requests, stale versions, or conflicting decisions do not advance actor state.
+
+Approval advances the exact waiting tool step to operation generation `N+1` and re-enters the real tool execution path with an exact grant bound to execution owner, approval request, tool request, tool name, call ID, and arguments digest. Denial does not execute the tool again; it produces a typed denied receipt and terminalizes the required step. The actor persists only the decision fingerprint and safe resolution facts, not the submitted reason or credentials. If the transient authorized tool capability has been lost, the continuation fails closed and terminalizes the task instead of reconstructing arguments or authority from durable state.
 
 ## NyxID browser-action handoff: schema v4
 

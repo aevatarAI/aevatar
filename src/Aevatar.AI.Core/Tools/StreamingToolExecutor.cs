@@ -55,6 +55,7 @@ public sealed class StreamingToolExecutor
     private readonly IAgentToolExecutionPort? _toolExecutionPort;
     private readonly IChatToolCheckpointPort _checkpointPort;
     private readonly AgentToolApprovalContinuationMode _approvalContinuationMode;
+    private readonly AgentToolApprovalGrant? _approvalGrant;
     private readonly ILogger _logger;
 
     public StreamingToolExecutor(
@@ -65,6 +66,7 @@ public sealed class StreamingToolExecutor
         IAgentToolExecutionPort? toolExecutionPort = null,
         IChatToolCheckpointPort? checkpointPort = null,
         AgentToolApprovalContinuationMode approvalContinuationMode = AgentToolApprovalContinuationMode.None,
+        AgentToolApprovalGrant? approvalGrant = null,
         ILogger? logger = null)
     {
         // Refactor (issue1574): Old pattern: streaming tool execution promoted request Metadata into tool control.
@@ -74,6 +76,7 @@ public sealed class StreamingToolExecutor
         _toolExecutionPort = toolExecutionPort;
         _checkpointPort = checkpointPort ?? NoOpChatToolCheckpointPort.Instance;
         _approvalContinuationMode = approvalContinuationMode;
+        _approvalGrant = approvalGrant;
         _logger = logger ?? NullLogger.Instance;
         _toolContext = toolContext
             ?? AgentToolRequestContext.Current
@@ -481,7 +484,7 @@ public sealed class StreamingToolExecutor
                     call.ArgumentsJson,
                     executionContext,
                     _approvalContinuationMode,
-                    null,
+                    _approvalGrant,
                     tracked.Operation.ExecutionAttemptKind),
                 ct).ConfigureAwait(false);
             var toolResult = outcome.ResultJson;

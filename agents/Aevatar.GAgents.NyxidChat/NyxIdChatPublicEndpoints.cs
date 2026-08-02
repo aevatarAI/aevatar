@@ -399,7 +399,7 @@ public static partial class NyxIdChatEndpoints
     [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
     private sealed record PublicInputRequest(
         string? Type, string? ConversationId, string? ClientRequestId, string? RequestId,
-        string? Answer, long ExpectedStateVersion = 0);
+        NyxIdChatInputAnswerRequest? Answer, long ExpectedStateVersion = 0);
 
     [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
     private sealed record PublicStopRequest(

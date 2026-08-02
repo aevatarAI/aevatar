@@ -67,6 +67,7 @@ OpenAI realtime broker path:
 export AEVATAR_Aevatar__NyxId__Authority="$NYXID_OIDC_AUTHORITY"
 export AEVATAR_Aevatar__NyxId__ApiBaseUrl="$NYXID_API_BASE_URL"
 export AEVATAR_Aevatar__Authentication__Authority="$NYXID_OIDC_AUTHORITY"
+export AEVATAR_Aevatar__Authentication__Audience="urn:aevatar:api"
 
 export AEVATAR_Aevatar__VoicePresence__OpenAI__Nyxid__ServiceSlug="openai-realtime"
 export AEVATAR_Aevatar__VoicePresence__OpenAI__Nyxid__MintPath="v1/realtime/client_secrets"
@@ -76,6 +77,10 @@ export AEVATAR_Aevatar__VoicePresence__OpenAI__Model="gpt-realtime"
 export AEVATAR_Aevatar__VoicePresence__OpenAI__Voice="alloy"
 export AEVATAR_Aevatar__VoicePresence__OpenAI__Instructions="你是一个简短自然的语音助手。"
 ```
+
+Every non-Development host with authentication enabled must set the external
+JWT audience. Startup fails when this value is empty; the scope-service-token
+audience is a separate setting and does not satisfy this requirement.
 
 `ServiceSlug` defaults to `openai-realtime` in code, but set it explicitly in
 production so redeploys are easy to audit. The NyxID service endpoint for that

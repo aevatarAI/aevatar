@@ -14,3 +14,13 @@ Contract evidence:
 
 HTTP command acceptance remains transport-only. These fixtures represent
 committed projection/read-model visibility, not the response to dispatch.
+
+`needs-you-live-frames.json`, `needs-you-current-states.json`, and
+`needs-you-conversation-summaries.json` freeze all four committed needs-you
+transitions. The request scenarios retain their pending fact and matching
+attention. The changed scenarios clear that fact, expose the matching latest
+resolution, and remove attention while the exact resumed step is running.
+
+Additional contract evidence:
+
+- [Aevatar issue #3154](https://github.com/aevatarAI/aevatar/issues/3154)

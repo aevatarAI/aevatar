@@ -48,6 +48,67 @@ public sealed class NyxIdChatFixtureConvergenceTests
             .Be(snapshot.GetProperty("progressSequence").GetInt64());
     }
 
+    [Theory]
+    [InlineData("input-request", "nyxid.input.request", "input", "pendingInput", null)]
+    [InlineData("input-changed", "nyxid.input.changed", "none", null, "latestInputResolution")]
+    [InlineData("approval-request", "nyxid.approval.request", "approval", "pendingApproval", null)]
+    [InlineData("approval-changed", "nyxid.approval.changed", "none", null, "latestApprovalResolution")]
+    public void VersionOneNeedsYouFixtures_ShouldConvergeAcrossAllCommittedShapes(
+        string scenario,
+        string eventName,
+        string attentionKind,
+        string? pendingProperty,
+        string? resolutionProperty)
+    {
+        using var liveFrames = ReadFixture("needs-you-live-frames.json");
+        using var currentStates = ReadFixture("needs-you-current-states.json");
+        using var summaries = ReadFixture("needs-you-conversation-summaries.json");
+        var frame = FindScenario(liveFrames.RootElement, scenario);
+        var state = FindScenario(currentStates.RootElement, scenario);
+        var summary = FindScenario(summaries.RootElement, scenario);
+        var snapshot = state.GetProperty("snapshot");
+        var payload = frame.GetProperty("custom").GetProperty("payload");
+
+        frame.GetProperty("custom").GetProperty("name").GetString().Should().Be(eventName);
+        frame.GetProperty("sequence").GetInt64().Should().Be(
+            snapshot.GetProperty("progressSequence").GetInt64());
+        state.GetProperty("stateVersion").GetInt64().Should().Be(
+            summary.GetProperty("stateVersion").GetInt64());
+        snapshot.GetProperty("attentionKind").GetString().Should().Be(attentionKind);
+        summary.GetProperty("attentionKind").GetString().Should().Be(attentionKind);
+        snapshot.GetProperty("taskStatus").GetString().Should().Be(
+            summary.GetProperty("taskStatus").GetString());
+
+        if (pendingProperty is not null)
+        {
+            var pending = snapshot.GetProperty(pendingProperty);
+            var requestProperty = pendingProperty == "pendingInput"
+                ? "requestId"
+                : "approvalRequestId";
+            payload.GetProperty(requestProperty).GetString().Should().Be(
+                pending.GetProperty(requestProperty).GetString());
+            var latestProperty = pendingProperty == "pendingInput"
+                ? "latestInputResolution"
+                : "latestApprovalResolution";
+            snapshot.GetProperty(latestProperty).ValueKind.Should().Be(JsonValueKind.Null);
+        }
+
+        if (resolutionProperty is not null)
+        {
+            snapshot.GetProperty("pendingInput").ValueKind.Should().Be(JsonValueKind.Null);
+            snapshot.GetProperty("pendingApproval").ValueKind.Should().Be(JsonValueKind.Null);
+            var latest = snapshot.GetProperty(resolutionProperty);
+            latest.GetProperty("requestId").GetString().Should()
+                .Be(payload.GetProperty("requestId").GetString());
+            latest.GetProperty("clientRequestId").GetString().Should()
+                .Be(payload.GetProperty("clientRequestId").GetString());
+            latest.GetProperty("outcome").GetString().Should()
+                .Be(payload.GetProperty("outcome").GetString());
+            ParseInstant(latest.GetProperty("committedAt")).Should()
+                .Be(ParseInstant(payload.GetProperty("committedAt")));
+        }
+    }
+
     private static void AssertPendingInputEquivalent(JsonElement live, JsonElement current)
     {
         foreach (var propertyName in new[]
@@ -71,6 +132,8 @@ public sealed class NyxIdChatFixtureConvergenceTests
         liveOptions.Should().HaveSameCount(currentOptions);
         for (var index = 0; index < liveOptions.Length; index++)
         {
+            liveOptions[index].GetProperty("optionId").GetString().Should()
+                .Be(currentOptions[index].GetProperty("optionId").GetString());
             liveOptions[index].GetProperty("label").GetString().Should()
                 .Be(currentOptions[index].GetProperty("label").GetString());
             liveOptions[index].GetProperty("description").GetString().Should()
@@ -86,4 +149,8 @@ public sealed class NyxIdChatFixtureConvergenceTests
 
     private static JsonDocument ReadFixture(string fileName) =>
         JsonDocument.Parse(File.ReadAllText(Path.Combine(FixtureDirectory, fileName)));
+
+    private static JsonElement FindScenario(JsonElement root, string scenario) =>
+        root.EnumerateArray().Single(item =>
+            item.GetProperty("scenario").GetString() == scenario);
 }

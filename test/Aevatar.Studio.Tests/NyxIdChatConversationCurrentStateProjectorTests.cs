@@ -212,11 +212,13 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
             {
                 new NyxIdChatInputOption
                 {
+                    OptionId = "option-singapore",
                     Label = "Singapore",
                     Description = "Use the Singapore region.",
                 },
                 new NyxIdChatInputOption
                 {
+                    OptionId = "option-frankfurt",
                     Label = "Frankfurt",
                     Description = "Use the Frankfurt region.",
                 },

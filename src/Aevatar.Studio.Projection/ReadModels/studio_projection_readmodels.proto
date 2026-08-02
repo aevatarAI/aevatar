@@ -397,6 +397,7 @@ message NyxIdChatConversationPendingApprovalDocument {
 message NyxIdChatConversationInputOptionDocument {
   string label = 1;
   string description = 2;
+  string option_id = 3;
 }
 
 message NyxIdChatConversationPendingInputDocument {

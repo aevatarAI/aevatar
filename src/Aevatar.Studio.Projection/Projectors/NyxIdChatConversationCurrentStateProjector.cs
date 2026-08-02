@@ -249,6 +249,7 @@ public sealed class NyxIdChatConversationCurrentStateProjector
         document.Options.AddRange(input.Options.Select(static option =>
             new NyxIdChatConversationInputOptionDocument
             {
+                OptionId = option.OptionId,
                 Label = option.Label,
                 Description = option.Description,
             }));

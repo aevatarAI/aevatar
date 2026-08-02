@@ -1164,6 +1164,7 @@ public sealed class ChatRuntime
                 ? new StreamingToolCallAccumulator(toolCall => completedToolCalls.Enqueue(toolCall))
                 : new StreamingToolCallAccumulator();
 
+            using var toolContextScope = AgentToolContextScope.Push(authorizedToolContext);
             await using var providerEnumerator = provider.ChatStreamAsync(llmCallContext.Request, ct)
                 .GetAsyncEnumerator(ct);
             while (true)
@@ -1288,7 +1289,8 @@ public sealed class ChatRuntime
         IReadOnlyList<ToolCall> toolCalls,
         IReadOnlyList<IAgentTool>? tools,
         AgentToolExecutionContext? toolContext,
-        CancellationToken ct)
+        CancellationToken ct,
+        AgentToolApprovalGrant? approvalGrant = null)
     {
         var executor = new StreamingToolExecutor(
             ToolCallLoop.CreateRequestToolManager(tools),
@@ -1297,6 +1299,7 @@ public sealed class ChatRuntime
             toolExecutionPort: _toolLoop.ToolExecutionPort,
             checkpointPort: _toolCheckpointPort,
             approvalContinuationMode: _toolLoop.ApprovalContinuationMode,
+            approvalGrant: approvalGrant,
             logger: _logger);
         using var toolState = executor.CreateExecutionState();
         var prepared = await executor.PrepareBatchAsync(

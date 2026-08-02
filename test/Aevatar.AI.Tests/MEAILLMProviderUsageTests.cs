@@ -1,5 +1,7 @@
 using System.ClientModel.Primitives;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.LLMProviders.MEAI;
 using FluentAssertions;
 using Microsoft.Extensions.AI;
@@ -68,6 +70,44 @@ public sealed class MEAILLMProviderUsageTests
         last.Usage.Should().BeNull();
         string.Concat(chunks.Where(chunk => chunk.DeltaContent != null).Select(chunk => chunk.DeltaContent))
             .Should().Be("only text");
+    }
+
+    [Fact]
+    public async Task ChatStreamAsync_WhenStreamingFallbackInvokesTool_ShouldCarryStableToolIdentity()
+    {
+        var innerClient = new FallbackFunctionCallChatClient();
+        var executionPort = new RecordingExecutionPort();
+        var provider = new MEAILLMProvider(
+            "meai-usage",
+            new FunctionInvokingChatClient(innerClient),
+            toolExecutionPort: executionPort);
+        using var _ = AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity("request-alpha", "ambient-round-call"),
+            ExecutionOwner = AgentToolExecutionOwners.Actor("actor-alpha"),
+        });
+        var request = new LLMRequest
+        {
+            Messages = [new AevatarChatMessage { Role = "user", Content = "hi" }],
+            Model = "gpt-test",
+            Tools = [new FakeAgentTool("test_tool")],
+        };
+
+        var chunks = new List<LLMStreamChunk>();
+        await foreach (var chunk in provider.ChatStreamAsync(request))
+            chunks.Add(chunk);
+
+        innerClient.StreamingCalls.Should().Be(1);
+        innerClient.ResponseCalls.Should().Be(2);
+        chunks.Where(chunk => chunk.DeltaContent != null).Select(chunk => chunk.DeltaContent)
+            .Should().ContainSingle().Which.Should().Be("done");
+        var executionRequest = executionPort.Requests.Should().ContainSingle().Subject;
+        executionRequest.ExecutionContext.Request.RequestId.Should().Be("request-alpha");
+        executionRequest.ExecutionContext.Request.CallId.Should().Be("meai-request-alpha-iteration-0-function-0");
+        executionRequest.ExecutionContext.Request.CallId.Should().NotBe("ambient-round-call");
+        executionRequest.ExecutionOwner.Kind.Should().Be(AgentToolExecutionOwnerKind.Actor);
+        executionRequest.ExecutionOwner.OwnerId.Should().Be("actor-alpha");
+        executionRequest.ArgumentsJson.Should().Be("{\"city\":\"Paris\"}");
     }
 
     [Fact]
@@ -151,6 +191,91 @@ public sealed class MEAILLMProviderUsageTests
     {
         await Task.CompletedTask;
         yield break;
+    }
+
+    private sealed class FallbackFunctionCallChatClient : IChatClient
+    {
+        public int StreamingCalls { get; private set; }
+        public int ResponseCalls { get; private set; }
+
+        public Task<ChatResponse> GetResponseAsync(
+            IEnumerable<MeaiChatMessage> messages,
+            ChatOptions? options = null,
+            CancellationToken cancellationToken = default)
+        {
+            ResponseCalls++;
+            if (ResponseCalls == 1)
+            {
+                return Task.FromResult(new ChatResponse(new MeaiChatMessage(
+                    ChatRole.Assistant,
+                    [new FunctionCallContent("", "test_tool", new Dictionary<string, object?>
+                    {
+                        ["city"] = "Paris",
+                    })])));
+            }
+
+            return Task.FromResult(new ChatResponse(new MeaiChatMessage(ChatRole.Assistant, "done")));
+        }
+
+        public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<MeaiChatMessage> messages,
+            ChatOptions? options = null,
+            CancellationToken cancellationToken = default)
+        {
+            StreamingCalls++;
+            return EmptyStream();
+        }
+
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
+
+        public void Dispose()
+        {
+        }
+    }
+
+    private sealed class FakeAgentTool(string name) : IAgentTool
+    {
+        public string Name { get; } = name;
+        public string Description => "fake";
+        public string ParametersSchema =>
+            """{"type":"object","properties":{"city":{"type":"string"}},"required":["city"],"additionalProperties":false}""";
+        public int ExecutionCalls { get; private set; }
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        {
+            ExecutionCalls++;
+            return Task.FromResult("{}");
+        }
+    }
+
+    private sealed class RecordingExecutionPort : IAgentToolExecutionPort
+    {
+        public List<AgentToolExecutionRequest> Requests { get; } = [];
+
+        public Task<AgentToolExecutionOutcome> ExecuteAsync(
+            AgentToolExecutionRequest request,
+            CancellationToken ct = default)
+        {
+            Requests.Add(request);
+            const string resultJson = "{\"ok\":true}";
+            return Task.FromResult(new AgentToolExecutionOutcome(
+                AgentToolExecutionOutcomeKind.Executed,
+                resultJson,
+                new AgentToolReceipt
+                {
+                    CallId = request.ExecutionContext.Request.CallId ?? string.Empty,
+                    ToolName = request.Tool.Name,
+                    Status = AgentToolReceiptStatus.Success,
+                    ResultJson = resultJson,
+                },
+                IsMutation: false,
+                FailureCode: string.Empty,
+                SafeMessage: string.Empty,
+                AgentToolExecutionFailureStage.None,
+                TerminalInvoked: true,
+                Retryable: false,
+                AuditCompleted: true));
+        }
     }
 
     private sealed class UsageCapturingChatClient : IChatClient
