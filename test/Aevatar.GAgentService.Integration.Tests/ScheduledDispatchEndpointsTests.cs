@@ -74,10 +74,37 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
-    public async Task Create_ShouldAcceptEnvelopeTargetAndForwardConfiguration()
+    public async Task Create_HttpRoute_ShouldRejectRawEnvelopeTarget()
+    {
+        await using var host = await ScheduleEndpointTestHost.StartAsync();
+
+        var response = await host.Client.PostAsJsonAsync("/api/schedules", new
+        {
+            scheduleId = "schedule-alpha",
+            cronExpression = "0 9 * * *",
+            envelope = new
+            {
+                actorId = "actor-cross-owner",
+                envelope = new
+                {
+                    payload = new
+                    {
+                        typeUrl = "type.googleapis.com/aevatar.workflow.WorkflowStoppedEvent",
+                        value = Convert.ToBase64String(Array.Empty<byte>()),
+                    },
+                },
+            },
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        host.Schedules.Created.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Create_ShouldAcceptServiceInvocationTargetAndForwardConfiguration()
     {
         var service = new RecordingScheduledDispatchApplicationService();
-        var request = CreateEnvelopeRequest(scheduleId: "schedule-1");
+        var request = CreateServiceInvocationRequest(scheduleId: "schedule-1");
 
         var result = await CreateAsync(request, service);
 
@@ -85,28 +112,18 @@ public sealed class ScheduledDispatchEndpointsTests
         await result.ExecuteAsync(http);
 
         http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
-        service.Created.Should().ContainSingle().Which.Should().BeEquivalentTo(
-            new ScheduledDispatchConfiguration(
-                "schedule-1",
-                "Daily",
-                new ScheduledDispatchTargetDescriptor(
-                    ScheduledDispatchTargetKind.Envelope,
-                    ActorId: "actor-1",
-                    Envelope: request.Envelope!.Envelope),
-                "0 9 * * *",
-                "UTC",
-                true,
-                new Dictionary<string, string> { ["trace"] = "1" })
-            {
-                CredentialRequirementTargetKind = ScheduledDispatchCredentialRequirementTargetKind.Envelope,
-            });
+        var configuration = service.Created.Should().ContainSingle().Which;
+        configuration.ScheduleId.Should().Be("schedule-1");
+        configuration.Target.Kind.Should().Be(ScheduledDispatchTargetKind.ServiceInvocation);
+        configuration.Target.ServiceInvocation!.Identity.TenantId.Should().Be("tenant");
+        configuration.Target.ServiceInvocation.EndpointId.Should().Be("run");
     }
 
     [Fact]
     public async Task Create_ShouldForwardTypedStudioMemberAutomationOwner()
     {
         var service = new RecordingScheduledDispatchApplicationService();
-        var request = CreateEnvelopeRequest(scheduleId: "sch-alpha") with
+        var request = CreateServiceInvocationRequest(scheduleId: "sch-alpha") with
         {
             Owner = StudioMemberAutomationOwnerRequest(),
         };
@@ -128,7 +145,7 @@ public sealed class ScheduledDispatchEndpointsTests
     public async Task Create_ShouldRejectTypedOwnerWhenAuthenticatedScopeDiffers()
     {
         var service = new RecordingScheduledDispatchApplicationService();
-        var request = CreateEnvelopeRequest(scheduleId: "sch-alpha") with
+        var request = CreateServiceInvocationRequest(scheduleId: "sch-alpha") with
         {
             Owner = StudioMemberAutomationOwnerRequest(),
         };
@@ -272,7 +289,7 @@ public sealed class ScheduledDispatchEndpointsTests
             CreateException = new ScheduledDispatchConflictException("schedule-1", "Schedule target cannot be prepared."),
         };
 
-        var result = await CreateAsync(CreateEnvelopeRequest(scheduleId: "schedule-1"), service);
+        var result = await CreateAsync(CreateServiceInvocationRequest(scheduleId: "schedule-1"), service);
 
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
@@ -288,7 +305,7 @@ public sealed class ScheduledDispatchEndpointsTests
             CreateException = new InvalidOperationException("dispatch runtime failure"),
         };
 
-        var act = () => CreateAsync(CreateEnvelopeRequest(scheduleId: "schedule-1"), service);
+        var act = () => CreateAsync(CreateServiceInvocationRequest(scheduleId: "schedule-1"), service);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("dispatch runtime failure");
@@ -301,7 +318,7 @@ public sealed class ScheduledDispatchEndpointsTests
 
         var result = await UpdateAsync(
             "route-schedule",
-            CreateEnvelopeRequest(scheduleId: null),
+            CreateServiceInvocationRequest(scheduleId: null),
             service);
 
         var http = CreateHttpContext();
@@ -360,6 +377,56 @@ public sealed class ScheduledDispatchEndpointsTests
         configuration.Target.ServiceInvocation.Payload.Should().Be(payload);
         configuration.Target.ServiceInvocation.RevisionId.Should().Be("rev-1");
         configuration.Enabled.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Create_ShouldRejectServiceInvocationTargetOutsideAuthenticatedScope()
+    {
+        var service = new RecordingScheduledDispatchApplicationService();
+        var result = await CreateAsync(
+            CreateServiceInvocationRequest("schedule-alpha", "scope-beta"),
+            service,
+            CreateHttpContext(scopeId: "scope-alpha", authenticationEnabled: true));
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
+        service.Created.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Update_ShouldRejectServiceInvocationTargetOutsideAuthenticatedScope()
+    {
+        var service = new RecordingScheduledDispatchApplicationService();
+        var result = await UpdateAsync(
+            "schedule-alpha",
+            CreateServiceInvocationRequest("schedule-alpha", "scope-beta"),
+            service,
+            CreateHttpContext(scopeId: "scope-alpha", authenticationEnabled: true));
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
+        service.Updated.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Create_ShouldForwardServiceInvocationTargetWithinAuthenticatedScope()
+    {
+        var service = new RecordingScheduledDispatchApplicationService();
+        var result = await CreateAsync(
+            CreateServiceInvocationRequest("schedule-alpha", "scope-alpha"),
+            service,
+            CreateHttpContext(scopeId: "scope-alpha", authenticationEnabled: true));
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        service.Created.Should().ContainSingle()
+            .Which.Target.ServiceInvocation!.Identity.TenantId.Should().Be("scope-alpha");
     }
 
     [Fact]
@@ -636,7 +703,7 @@ public sealed class ScheduledDispatchEndpointsTests
     {
         var service = new RecordingScheduledDispatchApplicationService();
 
-        var result = await CreateAsync(CreateEnvelopeRequest(scheduleId: "schedule-1"), service);
+        var result = await CreateAsync(CreateServiceInvocationRequest(scheduleId: "schedule-1"), service);
 
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
@@ -2031,24 +2098,6 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
-    public async Task Create_WithWorkflowScheduleKindAndEnvelopeTarget_ShouldReturnBadRequest()
-    {
-        var service = new RecordingScheduledDispatchApplicationService();
-        var request = CreateEnvelopeRequest(scheduleId: "schedule-1") with
-        {
-            ScheduleKind = ScheduledDispatchScheduleKind.Workflow,
-        };
-
-        var result = await CreateAsync(request, service);
-
-        var http = CreateHttpContext();
-        await result.ExecuteAsync(http);
-
-        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
-        service.Created.Should().BeEmpty();
-    }
-
-    [Fact]
     public async Task Create_WithStaticServiceInvocationAndOmittedAuth_ShouldNotDefaultAuth()
     {
         await using var host = await ScheduleEndpointTestHost.StartAsync();
@@ -2460,7 +2509,7 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
-    public async Task Create_WithNoOrMultipleTargets_ShouldKeepExactlyOneTargetValidation()
+    public async Task Create_WithNoTargetOrRawEnvelopeTarget_ShouldReturnBadRequest()
     {
         await using var host = await ScheduleEndpointTestHost.StartAsync();
 
@@ -2510,7 +2559,9 @@ public sealed class ScheduledDispatchEndpointsTests
         host.Schedules.Created.Should().BeEmpty();
     }
 
-    private static ScheduledDispatchConfigurationHttpRequest CreateEnvelopeRequest(string? scheduleId) =>
+    private static ScheduledDispatchConfigurationHttpRequest CreateServiceInvocationRequest(
+        string? scheduleId,
+        string scopeId = "tenant") =>
         new()
         {
             ScheduleId = scheduleId,
@@ -2519,14 +2570,18 @@ public sealed class ScheduledDispatchEndpointsTests
             Timezone = "UTC",
             Enabled = true,
             Headers = new Dictionary<string, string> { ["trace"] = "1" },
-            Envelope = new ScheduledDispatchEnvelopeTargetHttpRequest
+            ServiceInvocation = new ScheduledDispatchServiceInvocationTargetHttpRequest
             {
-                ActorId = "actor-1",
-                Envelope = new EventEnvelope
+                Identity = new ServiceIdentity
                 {
-                    Id = "template",
-                    Payload = Any.Pack(new StringValue { Value = "run" }),
+                    TenantId = scopeId,
+                    AppId = "app",
+                    Namespace = "default",
+                    ServiceId = "svc",
                 },
+                EndpointId = "run",
+                PayloadTypeUrl = Any.Pack(new StringValue()).TypeUrl,
+                PayloadBase64 = Convert.ToBase64String(new StringValue { Value = "run" }.ToByteArray()),
             },
         };
 
