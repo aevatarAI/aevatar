@@ -86,6 +86,36 @@ public sealed class WorkflowYamlResourceGuardTests
     }
 
     [Fact]
+    public void Validate_WhenForwardCollectionAliasesCreateCycle_ShouldRejectWithDepthLimit()
+    {
+        const string yaml = """
+                            root: *a
+                            first: &a
+                              child: *b
+                            second: &b
+                              child: *a
+                            """;
+
+        var act = () => WorkflowYamlResourceGuard.Validate(yaml);
+
+        var exception = act.Should().Throw<WorkflowYamlResourceLimitException>().Which;
+        exception.LimitKind.Should().Be(WorkflowYamlResourceLimitKind.NestingDepth);
+        exception.Actual.Should().Be(WorkflowYamlResourceGuard.MaxNestingDepth + 1);
+    }
+
+    [Fact]
+    public void Validate_WhenForwardAliasesExpandBeyondNodeLimit_ShouldRejectWithNodeLimit()
+    {
+        var yaml = BuildForwardAliasExpansionYaml(levels: 14);
+
+        var act = () => WorkflowYamlResourceGuard.Validate(yaml);
+
+        var exception = act.Should().Throw<WorkflowYamlResourceLimitException>().Which;
+        exception.LimitKind.Should().Be(WorkflowYamlResourceLimitKind.Nodes);
+        exception.Actual.Should().Be(WorkflowYamlResourceGuard.MaxNodes + 1);
+    }
+
+    [Fact]
     public void Parse_WhenWorkflowChildrenAliasCreatesCycle_ShouldRejectBeforeDeserialization()
     {
         const string yaml = """
@@ -202,6 +232,20 @@ public sealed class WorkflowYamlResourceGuardTests
         }
 
         return yaml.Append("root: *level_").AppendLine(levels.ToString()).ToString();
+    }
+
+    private static string BuildForwardAliasExpansionYaml(int levels)
+    {
+        var yaml = new StringBuilder()
+            .Append("root: *level_").AppendLine(levels.ToString());
+        for (var level = levels; level > 0; level--)
+        {
+            yaml.Append("level_").Append(level).Append(": &level_").Append(level)
+                .Append(" [*level_").Append(level - 1).Append(", *level_")
+                .Append(level - 1).AppendLine("]");
+        }
+
+        return yaml.AppendLine("level_0: &level_0 [value]").ToString();
     }
 
     private static string BuildScalarSequenceYaml(int scalarCount)

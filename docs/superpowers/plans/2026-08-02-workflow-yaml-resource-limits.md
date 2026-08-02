@@ -394,6 +394,12 @@ bounded anchor graph, iterative expanded-limit validation, exact inclusive-bound
 tests, cyclic and exponential alias tests, and ingress coverage for runtime,
 Infrastructure, Studio, and dynamic workflow parsing.
 
+The second review found that aliases seen before their anchors were left unresolved by
+the guard even though Studio's `YamlStream` resolves them at document completion. The
+follow-up fix retains unresolved aliases per document, resolves them at `DocumentEnd`,
+and adds forward-cycle and forward-expansion regressions across the guard, Runtime parse
+classification, and Studio ingress.
+
 - [ ] **Step 4: Re-run verification after review fixes**
 
 Repeat all commands from Step 2 and the focused tests from Tasks 1-3. Expected: every command exits 0 with a clean working tree after the final commit.

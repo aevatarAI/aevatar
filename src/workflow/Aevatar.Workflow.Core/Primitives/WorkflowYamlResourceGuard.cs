@@ -63,6 +63,9 @@ public static class WorkflowYamlResourceGuard
                 case DocumentStart:
                     resourceGraph.BeginDocument();
                     break;
+                case DocumentEnd:
+                    resourceGraph.EndDocument();
+                    break;
                 case MappingStart mapping:
                     ThrowIfExceeded(WorkflowYamlResourceLimitKind.Nodes, ++nodes, MaxNodes);
                     ThrowIfExceeded(WorkflowYamlResourceLimitKind.NestingDepth, ++depth, MaxNestingDepth);
@@ -104,10 +107,18 @@ public static class WorkflowYamlResourceGuard
         private readonly List<int> _roots = [];
         private readonly Stack<int> _collections = new();
         private readonly Dictionary<string, int> _anchors = new(StringComparer.Ordinal);
+        private readonly List<UnresolvedAlias> _unresolvedAliases = [];
 
         public void BeginDocument()
         {
             _anchors.Clear();
+            _unresolvedAliases.Clear();
+        }
+
+        public void EndDocument()
+        {
+            ResolveForwardAliases();
+            _unresolvedAliases.Clear();
         }
 
         public void AddCollection(AnchorName anchor)
@@ -123,8 +134,14 @@ public static class WorkflowYamlResourceGuard
 
         public void AddAlias(AnchorName alias)
         {
-            var target = _anchors.TryGetValue(alias.Value, out var index) ? index : -1;
-            AddNode(ResourceNode.Alias(target), AnchorName.Empty);
+            if (_anchors.TryGetValue(alias.Value, out var target))
+            {
+                AddNode(ResourceNode.Alias(target), AnchorName.Empty);
+                return;
+            }
+
+            var index = AddNode(ResourceNode.Alias(), AnchorName.Empty);
+            _unresolvedAliases.Add(new UnresolvedAlias(index, alias.Value));
         }
 
         public void EndCollection()
@@ -198,6 +215,15 @@ public static class WorkflowYamlResourceGuard
                 _anchors[anchor.Value] = index;
             return index;
         }
+
+        private void ResolveForwardAliases()
+        {
+            foreach (var alias in _unresolvedAliases)
+            {
+                if (_anchors.TryGetValue(alias.Anchor, out var target))
+                    _nodes[alias.NodeIndex].ResolveAlias(target);
+            }
+        }
     }
 
     private enum ResourceNodeKind
@@ -218,7 +244,7 @@ public static class WorkflowYamlResourceGuard
 
         public ResourceNodeKind Kind { get; }
 
-        public int AliasTarget { get; }
+        public int AliasTarget { get; private set; }
 
         public List<int>? Children { get; }
 
@@ -226,8 +252,15 @@ public static class WorkflowYamlResourceGuard
 
         public static ResourceNode Collection() => new(ResourceNodeKind.Collection);
 
-        public static ResourceNode Alias(int target) => new(ResourceNodeKind.Alias, target);
+        public static ResourceNode Alias(int target = -1) => new(ResourceNodeKind.Alias, target);
+
+        public void ResolveAlias(int target)
+        {
+            AliasTarget = target;
+        }
     }
+
+    private readonly record struct UnresolvedAlias(int NodeIndex, string Anchor);
 
     private readonly record struct TraversalFrame(int NodeIndex, int Depth, bool IsExit)
     {

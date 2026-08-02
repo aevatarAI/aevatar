@@ -66,6 +66,12 @@ four checks in order:
 4. Record a bounded node/anchor graph and iteratively evaluate alias-expanded node
    count and collection depth before any object graph is created.
 
+Unresolved alias events are retained until the end of their YAML document, then
+resolved against that document's final anchor table. This covers forward aliases while
+preserving encounter-time targets for aliases whose anchors were already known. Anchor
+tables never cross document boundaries, and genuinely missing anchors remain unresolved
+so existing YamlDotNet syntax handling remains authoritative.
+
 The guard stops at the first exceeded limit. Its compact graph can contain at most
 10,000 syntactic nodes, and expanded traversal stops at node 10,001. It does not build
 a `YamlStream`, create a typed object graph, or recursively walk YAML nodes. YAML syntax
@@ -141,7 +147,9 @@ Core parser tests:
 - exact boundary values remain accepted where a syntactically valid fixture can express
   them cheaply.
 - a cyclic collection alias fails before runtime or Studio recursive mapping;
+- a forward-alias cycle fails before runtime or Studio recursive mapping;
 - an acyclic alias graph whose expansion exceeds 10,000 nodes fails as `Nodes`;
+- a forward acyclic alias graph whose expansion exceeds 10,000 nodes fails as `Nodes`;
 - scalar aliases remain valid, malformed YAML remains a syntax error, and node counts
   accumulate across YAML documents.
 

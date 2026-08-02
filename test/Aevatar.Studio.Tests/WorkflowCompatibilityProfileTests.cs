@@ -112,6 +112,30 @@ public sealed class WorkflowCompatibilityProfileTests
     }
 
     [Fact]
+    public void Parse_WhenForwardCollectionAliasesCreateCycle_ShouldRejectBeforeLoadingDocument()
+    {
+        var service = new YamlWorkflowDocumentService(_profile);
+        const string yaml = """
+                            name: forward-cycle
+                            steps: *a
+                            roles: &a
+                              - id: a
+                                type: assign
+                                children: *b
+                            configuration: &b
+                              - id: b
+                                type: assign
+                                children: *a
+                            """;
+
+        var result = service.Parse(yaml);
+
+        result.Document.Should().BeNull();
+        result.Findings.Should().ContainSingle(finding =>
+            finding.Path == "/" && finding.Code == "yaml_resource_limit");
+    }
+
+    [Fact]
     public void Parse_WhenRuntimeAllowedToolsFieldsDeclared_ShouldAcceptTypedFieldsAndRoundTripToRuntime()
     {
         var service = new YamlWorkflowDocumentService(_profile);
