@@ -80,6 +80,50 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
+    public async Task UpdateAsync_ShouldRejectRawEnvelopeBeforeQueryReadActorResolutionAndDispatch()
+    {
+        var actorPort = new RecordingScheduledDispatchActorPort();
+        var queryPort = new RecordingScheduledDispatchQueryPort();
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            queryPort,
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
+
+        var act = () => service.UpdateAsync(
+            "schedule-update-raw",
+            CreateRawEnvelopeConfiguration("schedule-ignored"));
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*raw envelope*not supported*");
+        queryPort.GetScheduleIds.Should().BeEmpty();
+        actorPort.ResolvedScheduleIds.Should().BeEmpty();
+        actorPort.EnsuredScheduleIds.Should().BeEmpty();
+        actorPort.Updated.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task EnsureAsync_ShouldRejectRawEnvelopeBeforeQueryReadActorResolutionAndDispatch()
+    {
+        var actorPort = new RecordingScheduledDispatchActorPort();
+        var queryPort = new RecordingScheduledDispatchQueryPort();
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            queryPort,
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
+
+        var act = () => service.EnsureAsync(CreateRawEnvelopeConfiguration("schedule-ensure-raw"));
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*raw envelope*not supported*");
+        queryPort.GetScheduleIds.Should().BeEmpty();
+        actorPort.ResolvedScheduleIds.Should().BeEmpty();
+        actorPort.EnsuredScheduleIds.Should().BeEmpty();
+        actorPort.Ensured.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task CreateAsync_ShouldCheckActorExistenceWithoutQueryingReadModel()
     {
         var actorPort = new RecordingScheduledDispatchActorPort { ResolveUnknownAsMissing = true };
