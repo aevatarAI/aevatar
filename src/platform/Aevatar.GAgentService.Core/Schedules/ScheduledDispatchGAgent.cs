@@ -26,6 +26,10 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
     private static readonly TimeSpan OverdueFireGracePeriod = TimeSpan.FromMinutes(10);
     private const string LegacyDurableSenderBearerBlockedError =
         "Scheduled service invocation contains legacy durable bearer auth; reconfigure the schedule with senderNyxId or scopeOwnerNyxId.";
+    private const string LegacyUnmarkedEnvelopeRetiredError =
+        "Scheduled dispatch envelope target is retired because it lacks trusted internal authority.";
+    private const string LegacyUnmarkedEnvelopeRetiredReason =
+        "legacy_unmarked_envelope_target_retired";
     private static readonly TimeSpan MaxNextFireCallbackHop = TimeSpan.FromDays(7);
     internal static readonly TimeSpan TeamAutomationEffectAttemptLeaseDuration = TimeSpan.FromMinutes(5);
     private readonly IActorDispatchPort _dispatchPort;
@@ -55,6 +59,9 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             await PurgeDurableCallbacksAsync(ct);
             return;
         }
+
+        if (await RetireUnmarkedEnvelopeTargetAsync(ct))
+            return;
 
         await RecoverTeamCredentialExpiryAsync(ct);
         if (CanScheduleAutomaticFire())
@@ -956,6 +963,9 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         }
 
         EnsureConfiguredForWrite(command.Manual ? "manual fire" : "fire");
+        if (await RetireUnmarkedEnvelopeTargetAsync(ct, rejectManualFire: command.Manual))
+            return;
+
         if (command.Manual)
             EnsureTeamAutomationOwnerAccess(command.TeamAutomationOwner, "manual fire");
 
@@ -1611,8 +1621,44 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         !State.Completed &&
         !State.Deleted &&
         IsConfigured() &&
+        !HasEnvelopeTargetWithoutTrustedInternalAuthority() &&
         (!HasTeamCredentialLifecycle() ||
          HasUsableActiveTeamCredential(_timeProvider.GetUtcNow()));
+
+    private async Task<bool> RetireUnmarkedEnvelopeTargetAsync(
+        CancellationToken ct,
+        bool rejectManualFire = false)
+    {
+        if (!HasEnvelopeTargetWithoutTrustedInternalAuthority())
+            return false;
+        if (rejectManualFire)
+            throw new InvalidOperationException(LegacyUnmarkedEnvelopeRetiredError);
+
+        if (State.Enabled)
+        {
+            await PersistDomainEventAsync(new ScheduledDispatchDisabledEvent
+            {
+                Reason = LegacyUnmarkedEnvelopeRetiredReason,
+                DisabledAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            }, ct);
+        }
+
+        await PurgeDurableCallbacksAsync(ct);
+        Logger.LogWarning(
+            "Scheduled dispatch {ActorId} retired an envelope target without trusted internal authority. scheduleId={ScheduleId}",
+            Id,
+            ResolveScheduleId());
+        return true;
+    }
+
+    private bool HasEnvelopeTargetWithoutTrustedInternalAuthority() =>
+        IsConfigured() &&
+        ResolveTargetKind() == ScheduledDispatchTargetKindState.Envelope &&
+        !HasTrustedInternalEnvelopeAuthority(State.Target);
+
+    private static bool HasTrustedInternalEnvelopeAuthority(ScheduledDispatchTargetState? target) =>
+        target?.Kind == ScheduledDispatchTargetKindState.Envelope &&
+        target.EnvelopeAuthority == ScheduledDispatchEnvelopeAuthorityState.TrustedInternal;
 
     private async Task RecoverTeamCredentialExpiryAsync(CancellationToken ct)
     {
@@ -2879,7 +2925,14 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
     {
         if (triggerEnvelope == null || triggerEnvelope.Payload == null)
             throw new ArgumentException("Trigger envelope with payload is required.", nameof(triggerEnvelope));
-        _ = NormalizeTarget(target, scheduleKind);
+        var normalizedTarget = NormalizeTarget(target, scheduleKind);
+        if (normalizedTarget.Kind == ScheduledDispatchTargetKindState.Envelope &&
+            !HasTrustedInternalEnvelopeAuthority(normalizedTarget))
+        {
+            throw new ArgumentException(
+                "Scheduled dispatch envelope target requires trusted internal authority.",
+                nameof(target));
+        }
         _ = NormalizeRequired(targetActorId, nameof(targetActorId));
 
         var normalizedMode = NormalizeScheduleMode(scheduleMode);
@@ -2928,6 +2981,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                 Kind = ScheduledDispatchTargetKindState.Envelope,
                 ActorId = NormalizeOptional(target.ActorId),
                 Envelope = target.Envelope == null ? null : NormalizeTriggerEnvelope(target.Envelope),
+                EnvelopeAuthority = target.EnvelopeAuthority,
                 CredentialRequirementTargetKind = ResolveCredentialRequirementTargetKind(
                     target.CredentialRequirementTargetKind,
                     ScheduledDispatchTargetKindState.Envelope,
@@ -2938,6 +2992,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                 Kind = ScheduledDispatchTargetKindState.Envelope,
                 ActorId = NormalizeOptional(target.ActorId),
                 Envelope = target.Envelope == null ? null : NormalizeTriggerEnvelope(target.Envelope),
+                EnvelopeAuthority = target.EnvelopeAuthority,
                 CredentialRequirementTargetKind = ResolveCredentialRequirementTargetKind(
                     target.CredentialRequirementTargetKind,
                     ScheduledDispatchTargetKindState.Envelope,
