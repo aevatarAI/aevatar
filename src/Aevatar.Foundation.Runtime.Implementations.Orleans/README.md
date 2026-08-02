@@ -109,7 +109,9 @@ pause/resume、consume、commit、seek、close/dispose 都只在这个 owner loo
 重新获取同一个 QueueId 时，旧 consumer 完整 shutdown，新 consumer 重新 assign 同一个固定 partition。
 非 fatal `ConsumeException` 会记录 consume-error metric，并在同一个 owner loop 上退避重试；fatal
 `ConsumeException` 会终止 owner loop，且 `GetQueueMessagesAsync`、`MessagesDeliveredAsync` 和
-`Shutdown` 都传播同一个 lifecycle fault。只有显式 shutdown/reinitialize 创建新 consumer 后才恢复。
+`Shutdown` 都传播同一个 lifecycle fault。同一 lifecycle 的重复或并发 `Shutdown` 共享同一个 cleanup
+task，因此观察到同一成功或失败结果；shutdown cleanup 完成后，只有显式 reinitialize 创建新 consumer
+才清理旧 task/fault 并恢复。
 
 buffer 只是进程内 transport working state，不是事实源。它不改变 ACK 契约：offset 仍然只在
 `MessagesDeliveredAsync(...)` 标记 acknowledged 后，按连续 watermark commit；低水位恢复不能

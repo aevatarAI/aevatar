@@ -40,6 +40,7 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
     private int _shuttingDown;
 
     private Task? _initializeTask;
+    private Task? _shutdownTask;
     private CancellationTokenSource? _consumeLoopCts;
     private Task? _consumeLoopTask;
     private Exception? _ownerLoopFault;
@@ -160,39 +161,75 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
         return Task.CompletedTask;
     }
 
-    public async Task Shutdown(TimeSpan timeout)
+    public Task Shutdown(TimeSpan timeout)
     {
         _ = timeout;
 
-        if (Interlocked.Exchange(ref _shuttingDown, 1) == 1)
-            return;
+        TaskCompletionSource? shutdownCompletion = null;
+        Task shutdownTask;
+        lock (_lifecycleLock)
+        {
+            if (_shutdownTask != null)
+                return _shutdownTask;
 
-        var loopCts = Interlocked.Exchange(ref _consumeLoopCts, null);
-        loopCts?.Cancel();
+            shutdownCompletion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            shutdownTask = shutdownCompletion.Task;
+            _shutdownTask = shutdownTask;
+        }
+
+        _ = CompleteShutdownAsync(shutdownCompletion);
+        return shutdownTask;
+    }
+
+    private async Task CompleteShutdownAsync(TaskCompletionSource shutdownCompletion)
+    {
+        Exception? shutdownFailure = null;
+        CancellationTokenSource? loopCts = null;
+
+        Interlocked.Exchange(ref _shuttingDown, 1);
 
         try
         {
+            loopCts = Interlocked.Exchange(ref _consumeLoopCts, null);
+            loopCts?.Cancel();
             var loopTask = Interlocked.Exchange(ref _consumeLoopTask, null);
             if (loopTask != null)
-            {
-                try
-                {
-                    await loopTask;
-                }
-                catch (OperationCanceledException)
-                {
-                }
-            }
+                await loopTask.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (Volatile.Read(ref _ownerLoopFault) == null)
+        {
+        }
+        catch (Exception ex)
+        {
+            shutdownFailure = Volatile.Read(ref _ownerLoopFault) ?? ex;
         }
         finally
         {
-            loopCts?.Dispose();
-            _messageBuffer.Clear();
-            RecordInitialBufferState();
-            lock (_lifecycleLock)
+            try
             {
-                _initializeTask = null;
+                loopCts?.Dispose();
+                _messageBuffer.Clear();
+                RecordInitialBufferState();
             }
+            catch (Exception ex)
+            {
+                shutdownFailure ??= ex;
+                _logger.LogError(ex,
+                    "Kafka receiver shutdown cleanup failed on partition {Partition}.",
+                    _partitionId);
+            }
+            finally
+            {
+                lock (_lifecycleLock)
+                {
+                    _initializeTask = null;
+                }
+            }
+
+            if (shutdownFailure == null)
+                shutdownCompletion.TrySetResult();
+            else
+                shutdownCompletion.TrySetException(shutdownFailure);
         }
     }
 
@@ -569,6 +606,7 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
     private void PrepareForInitialization()
     {
         Interlocked.Exchange(ref _shuttingDown, 0);
+        _shutdownTask = null;
         _messageBuffer.Clear();
         _sequence = 0;
         _backpressureActive = false;

@@ -45,7 +45,10 @@ authority for this provider:
 7. A non-fatal librdkafka consume error is observable and retried on the same
    owner loop. A fatal consume error terminates that loop and is surfaced by
    receiver read, acknowledgement, and shutdown operations until Orleans
-   explicitly rebuilds the receiver lifecycle with a new consumer.
+   explicitly rebuilds the receiver lifecycle with a new consumer. Concurrent
+   and repeated shutdown callers for one lifecycle share the same cleanup task
+   and therefore observe the same completion or fault; only a new initialize
+   call starts another lifecycle generation and clears that task and fault.
 
 Receiver handoff can produce at-least-once redelivery around failures or
 overlap. Kafka committed offsets are the restart cursor, while delivery success

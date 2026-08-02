@@ -220,6 +220,34 @@ public sealed class KafkaReceiverBackpressureTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public async Task KafkaReceiver_WhenShutdownCalledConcurrently_ShouldShareOneSuccessfulCleanupTask()
+    {
+        var harness = CreateHarness(capacity: 3, highWatermark: 2, lowWatermark: 1);
+        await harness.Receiver.Initialize(TestTimeout);
+        var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var callers = Enumerable.Range(0, 8)
+            .Select(async _ =>
+            {
+                await start.Task;
+                return harness.Receiver.Shutdown(TestTimeout);
+            })
+            .ToArray();
+
+        start.SetResult();
+        var shutdownTasks = await Task.WhenAll(callers);
+
+        shutdownTasks.Should().OnlyContain(task => ReferenceEquals(task, shutdownTasks[0]));
+        await Task.WhenAll(shutdownTasks);
+        shutdownTasks[0].IsCompletedSuccessfully.Should().BeTrue();
+
+        var repeatedShutdown = harness.Receiver.Shutdown(TestTimeout);
+        repeatedShutdown.Should().BeSameAs(shutdownTasks[0]);
+        await repeatedShutdown;
+        harness.Consumer.CloseCallCount.Should().Be(1);
+        harness.Consumer.DisposeCallCount.Should().Be(1);
+    }
+
+    [Fact]
     public async Task KafkaReceiver_WhenPollReturnsAtHardCapacity_ShouldRewindWithoutGrowingBuffer()
     {
         var harness = CreateHarness(capacity: 2, highWatermark: 2, lowWatermark: 1);
@@ -421,24 +449,32 @@ public sealed class KafkaReceiverBackpressureTests(ITestOutputHelper output)
         var acknowledgementFailure = await acknowledge.Should().ThrowAsync<InvalidOperationException>();
         acknowledgementFailure.Which.Should().BeSameAs(readFailure.Which);
 
-        Func<Task> shutdown = () => receiver.Shutdown(TestTimeout);
-        var shutdownFailure = await shutdown.Should().ThrowAsync<InvalidOperationException>();
-        shutdownFailure.Which.Should().BeSameAs(readFailure.Which);
+        var firstShutdown = receiver.Shutdown(TestTimeout);
+        var repeatedShutdown = receiver.Shutdown(TestTimeout);
+        repeatedShutdown.Should().BeSameAs(firstShutdown);
+
+        Func<Task> awaitFirstShutdown = async () => await firstShutdown;
+        var firstShutdownFailure = await awaitFirstShutdown.Should().ThrowAsync<InvalidOperationException>();
+        firstShutdownFailure.Which.Should().BeSameAs(readFailure.Which);
+        Func<Task> awaitRepeatedShutdown = async () => await repeatedShutdown;
+        var repeatedShutdownFailure = await awaitRepeatedShutdown.Should().ThrowAsync<InvalidOperationException>();
+        repeatedShutdownFailure.Which.Should().BeSameAs(readFailure.Which);
+        Func<Task> readAfterShutdown = async () => _ = await receiver.GetQueueMessagesAsync(1);
+        var retainedLifecycleFailure = await readAfterShutdown.Should().ThrowAsync<InvalidOperationException>();
+        retainedLifecycleFailure.Which.Should().BeSameAs(readFailure.Which,
+            "shutdown cleanup must not clear a lifecycle fault before explicit reinitialization");
 
         await receiver.Initialize(TestTimeout);
-        try
-        {
-            secondConsumer.AssignedPartition.Should().Be(topicPartition);
-            secondConsumer.AddRecord(0);
-            secondConsumer.AddRecord(1);
-            _ = await secondConsumer.ReadPauseAsync();
-            (await receiver.GetQueueMessagesAsync(1)).Should().ContainSingle(
-                "explicit reinitialization must replace the failed owner loop and clear its lifecycle fault");
-        }
-        finally
-        {
-            await receiver.Shutdown(TestTimeout);
-        }
+        secondConsumer.AssignedPartition.Should().Be(topicPartition);
+        secondConsumer.AddRecord(0);
+        secondConsumer.AddRecord(1);
+        _ = await secondConsumer.ReadPauseAsync();
+        (await receiver.GetQueueMessagesAsync(1)).Should().ContainSingle(
+            "explicit reinitialization must replace the failed owner loop and clear its lifecycle fault");
+
+        var rebuiltLifecycleShutdown = receiver.Shutdown(TestTimeout);
+        rebuiltLifecycleShutdown.Should().NotBeSameAs(firstShutdown);
+        await rebuiltLifecycleShutdown;
     }
 
     [Fact]
