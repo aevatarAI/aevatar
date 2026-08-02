@@ -18,9 +18,10 @@ tests.
 
 Retire raw-envelope scheduling instead of adding a payload allowlist. Public
 scheduling accepts only a typed `serviceInvocation` target that is resolved
-through the service catalog and revision catalog. The HTTP boundary verifies
-that the resolved target tenant is accessible to the authenticated scope before
-calling the Application service.
+through the service catalog and revision catalog. The HTTP boundary requires
+the resolved target tenant to equal the authenticated request scope before
+calling the Application service. It does not expose `actorId`, raw
+`EventEnvelope`, or the internal authority marker.
 
 The retirement is enforced at three independent boundaries:
 
@@ -31,12 +32,14 @@ The retirement is enforced at three independent boundaries:
    internal caller constructs `ScheduledDispatchConfiguration` directly. Hide
    legacy envelope rows from get/list and reject their lifecycle mutations as
    not found.
-3. **Actor runtime:** require a typed `TrustedInternal` authority on every new
-   envelope configuration command. On activation, an existing envelope schedule
-   without that authority is durably disabled and its callbacks are purged.
-   Manual fire also fails before any target dispatch. This protects persisted
-   schedules created before the HTTP contract changes while preserving the
-   explicit low-level internal actor protocol used by runtime tests.
+3. **Actor runtime:** require a typed Protobuf `TrustedInternal` authority on
+   every new envelope configuration command. On activation, an existing
+   envelope schedule without that authority is durably disabled and its
+   callbacks are purged. Manual fire also fails before any target dispatch.
+   This protects persisted schedules created before the HTTP contract changes
+   while preserving the explicit low-level actor-only protocol used by runtime
+   tests. `TrustedInternal` is not surfaced by Hosting or Application and does
+   not authorize a public or administrator raw-envelope API.
 
 Legacy Protobuf/state fields and enum values remain readable only so existing
 actors and projections can recognize the retired target and fail closed. The
