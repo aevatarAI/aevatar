@@ -65,37 +65,64 @@ production percentile estimate.
 
 ## Core results
 
-Values are `p50/p95/p99`. Append counts and bytes are p50. Completion ends at
-the actor handler boundary and excludes deactivation and recovery-validation
-drain barriers.
+Values are `p50/p95/p99` for every displayed metric. Completion ends at the
+actor handler boundary and excludes deactivation and recovery-validation drain
+barriers.
 
 ### InMemory event store
 
 | Workload | Appends | Bytes | Snapshot saves / deleted | Store I/O ms | First output ms | Completion ms |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| short text | 7 | 2,878 | 0 / 0 | 0.0252/0.0952/0.0952 | 0.2359/1.1949/1.1949 | 1.0310/1.6321/1.6321 |
-| long text, 128 chunks | 131 | 53,317 | 2 / 95 | 0.5114/7.3959/7.3959 | 0.2295/0.6481/0.6481 | 14.7766/21.4282/21.4282 |
-| reasoning + text | 59 | 22,046 | 1 / 45 | 0.2154/0.4808/0.4808 | 0.3742/0.8637/0.8637 | 4.5463/9.2725/9.2725 |
-| single tool call | 9 | 6,948 | 0 / 0 | 0.0311/0.0755/0.0755 | 0.8153/1.3687/1.3687 | 1.4367/2.0432/2.0432 |
-| three tool calls | 17 | 22,470 | 0 / 0 | 0.0515/0.1722/0.1722 | 1.3748/4.4493/4.4493 | 2.1330/5.0625/5.0625 |
-| four media parts | 11 | 5,517 | 0 / 0 | 0.0285/0.0575/0.0575 | 0.1880/0.4745/0.4745 | 0.8710/1.4842/1.4842 |
-| terminal only | 3 | 1,637 | 0 / 0 | 0.0098/0.0259/0.0259 | n/a | 0.3754/0.6599/0.6599 |
-| cancellation | 5 | 2,209 | 0 / 0 | 0.0345/0.0635/0.0635 | 0.2499/0.5505/0.5505 | 16.5327/17.0362/17.0362 |
-| provider failure | 6 | 2,634 | 0 / 0 | 0.0191/0.0496/0.0496 | 0.2333/0.3041/0.3041 | 0.6964/0.9046/0.9046 |
+| short text | 7/7/7 | 2,878/2,898/2,898 | 0/0/0 / 0/0/0 | 0.0252/0.0952/0.0952 | 0.2359/1.1949/1.1949 | 1.0310/1.6321/1.6321 |
+| long text, 128 chunks | 131/131/131 | 53,317/53,585/53,585 | 2/2/2 / 95/95/95 | 0.5114/7.3959/7.3959 | 0.2295/0.6481/0.6481 | 14.7766/21.4282/21.4282 |
+| reasoning + text | 59/59/59 | 22,046/22,110/22,110 | 1/1/1 / 45/45/45 | 0.2154/0.4808/0.4808 | 0.3742/0.8637/0.8637 | 4.5463/9.2725/9.2725 |
+| single tool call | 9/9/9 | 6,948/6,983/6,983 | 0/0/0 / 0/0/0 | 0.0311/0.0755/0.0755 | 0.8153/1.3687/1.3687 | 1.4367/2.0432/2.0432 |
+| three tool calls | 17/17/17 | 22,470/22,560/22,560 | 0/0/0 / 0/0/0 | 0.0515/0.1722/0.1722 | 1.3748/4.4493/4.4493 | 2.1330/5.0625/5.0625 |
+| four media parts | 11/11/11 | 5,517/5,554/5,554 | 0/0/0 / 0/0/0 | 0.0285/0.0575/0.0575 | 0.1880/0.4745/0.4745 | 0.8710/1.4842/1.4842 |
+| terminal only | 3/3/3 | 1,637/1,649/1,649 | 0/0/0 / 0/0/0 | 0.0098/0.0259/0.0259 | n/a | 0.3754/0.6599/0.6599 |
+| cancellation | 5/5/5 | 2,209/2,224/2,224 | 0/0/0 / 0/0/0 | 0.0345/0.0635/0.0635 | 0.2499/0.5505/0.5505 | 16.5327/17.0362/17.0362 |
+| provider failure | 6/6/6 | 2,634/2,651/2,651 | 0/0/0 / 0/0/0 | 0.0191/0.0496/0.0496 | 0.2333/0.3041/0.3041 | 0.6964/0.9046/0.9046 |
 
 ### Garnet event store
 
 | Workload | Appends | Bytes | Snapshot saves / deleted | Store I/O ms | First output ms | Completion ms |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| short text | 7 | 2,878 | 0 / 0 | 4.2262/7.7453/7.7453 | 1.8269/3.1220/3.1220 | 5.1940/9.3947/9.3947 |
-| long text, 128 chunks | 131 | 53,317 | 2 / 95 | 67.7159/87.1258/87.1258 | 1.4397/3.2698/3.2698 | 78.6963/98.9983/98.9983 |
-| reasoning + text | 59 | 22,046 | 1 / 45 | 26.3611/33.8960/33.8960 | 1.3311/3.3872/3.3872 | 29.3472/36.7882/36.7882 |
-| single tool call | 9 | 6,959 | 0 / 0 | 4.7181/5.9032/5.9032 | 4.0618/4.9367/4.9367 | 5.6912/7.1300/7.1300 |
-| three tool calls | 17 | 22,446 | 0 / 0 | 7.3259/9.0548/9.0548 | 6.3859/9.0638/9.0638 | 8.7334/11.9876/11.9876 |
-| four media parts | 11 | 5,517 | 0 / 0 | 5.3941/11.2019/11.2019 | 1.4435/3.3634/3.3634 | 6.2685/12.3596/12.3596 |
-| terminal only | 3 | 1,637 | 0 / 0 | 1.5358/2.5629/2.5629 | n/a | 1.8606/2.9569/2.9569 |
-| cancellation | 5 | 2,203 | 0 / 0 | 7.0980/16.2082/16.2082 | 2.6230/14.1068/14.1068 | 17.8385/20.9787/20.9787 |
-| provider failure | 6 | 2,641 | 0 / 0 | 3.0256/7.2776/7.2776 | 1.2064/2.8144/2.8144 | 3.5721/7.8715/7.8715 |
+| short text | 7/7/7 | 2,878/2,906/2,906 | 0/0/0 / 0/0/0 | 4.2262/7.7453/7.7453 | 1.8269/3.1220/3.1220 | 5.1940/9.3947/9.3947 |
+| long text, 128 chunks | 131/131/131 | 53,317/53,585/53,585 | 2/2/2 / 95/95/95 | 67.7159/87.1258/87.1258 | 1.4397/3.2698/3.2698 | 78.6963/98.9983/98.9983 |
+| reasoning + text | 59/59/59 | 22,046/22,170/22,170 | 1/1/1 / 45/45/45 | 26.3611/33.8960/33.8960 | 1.3311/3.3872/3.3872 | 29.3472/36.7882/36.7882 |
+| single tool call | 9/9/9 | 6,959/6,983/6,983 | 0/0/0 / 0/0/0 | 4.7181/5.9032/5.9032 | 4.0618/4.9367/4.9367 | 5.6912/7.1300/7.1300 |
+| three tool calls | 17/17/17 | 22,446/22,560/22,560 | 0/0/0 / 0/0/0 | 7.3259/9.0548/9.0548 | 6.3859/9.0638/9.0638 | 8.7334/11.9876/11.9876 |
+| four media parts | 11/11/11 | 5,517/5,554/5,554 | 0/0/0 / 0/0/0 | 5.3941/11.2019/11.2019 | 1.4435/3.3634/3.3634 | 6.2685/12.3596/12.3596 |
+| terminal only | 3/3/3 | 1,637/1,649/1,649 | 0/0/0 / 0/0/0 | 1.5358/2.5629/2.5629 | n/a | 1.8606/2.9569/2.9569 |
+| cancellation | 5/5/5 | 2,203/2,224/2,224 | 0/0/0 / 0/0/0 | 7.0980/16.2082/16.2082 | 2.6230/14.1068/14.1068 | 17.8385/20.9787/20.9787 |
+| provider failure | 6/6/6 | 2,641/2,658/2,658 | 0/0/0 / 0/0/0 | 3.0256/7.2776/7.2776 | 1.2064/2.8144/2.8144 | 3.5721/7.8715/7.8715 |
+
+### Snapshot and compaction distributions
+
+The compact table below expands the persistence metrics that are easy to hide
+behind a median-only summary. Every cell is `p50/p95/p99`; zeros are measured
+results, not omitted values.
+
+| Adapter / workload | Snapshot saves | Snapshot bytes | Snapshot ms | Compaction calls | Deleted events | Compaction ms |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| InMemory / short text | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 |
+| InMemory / long text, 128 chunks | 2/2/2 | 568/570/570 | 0.0173/0.0407/0.0407 | 2/2/2 | 95/95/95 | 0.0098/0.0118/0.0118 |
+| InMemory / reasoning + text | 1/1/1 | 280/281/281 | 0.0069/0.0351/0.0351 | 1/1/1 | 45/45/45 | 0.0036/0.0084/0.0084 |
+| InMemory / single tool call | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 |
+| InMemory / three tool calls | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 |
+| InMemory / four media parts | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 |
+| InMemory / terminal only | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 |
+| InMemory / cancellation | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 |
+| InMemory / provider failure | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 |
+| Garnet / short text | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 |
+| Garnet / long text, 128 chunks | 2/2/2 | 568/570/570 | 0.0163/0.0275/0.0275 | 2/2/2 | 95/95/95 | 1.0606/1.8342/1.8342 |
+| Garnet / reasoning + text | 1/1/1 | 280/281/281 | 0.0088/0.0174/0.0174 | 1/1/1 | 45/45/45 | 0.4419/0.7919/0.7919 |
+| Garnet / single tool call | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 |
+| Garnet / three tool calls | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 |
+| Garnet / four media parts | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 |
+| Garnet / terminal only | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 |
+| Garnet / cancellation | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 |
+| Garnet / provider failure | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 |
 
 ## Recovery sweep
 
@@ -231,29 +258,32 @@ reconciliation. Every instrumented sample is paired with a separate matched
 control turn that removes append/snapshot decorators. Even iterations run the
 control first and odd iterations run it second.
 
-The following values are the matched-control estimate (`p50/p95`; p99 equals
-p95). Allocation uses process-wide `GC.GetTotalAllocatedBytes(true)`.
+The following values are the matched-control and process-resource distributions
+(`p50/p95/p99`). Allocation uses process-wide
+`GC.GetTotalAllocatedBytes(true)`. Heap and working-set values are gross
+process deltas because there is no meaningful per-turn subtraction contract;
+mailbox occupancy is the measured maximum in-flight plus queued turns.
 
-| Adapter / workload | Net CPU ms | Net allocated bytes |
-| --- | ---: | ---: |
-| InMemory / short text | 0.754/9.649 | 122,528/128,512 |
-| InMemory / long text | 13.975/21.856 | 1,850,896/1,856,152 |
-| InMemory / reasoning + text | 4.134/9.440 | 840,408/843,320 |
-| InMemory / single tool | 2.813/4.772 | 222,432/240,176 |
-| InMemory / three tools | 4.196/9.667 | 559,864/567,112 |
-| InMemory / media | 2.638/3.119 | 188,288/188,840 |
-| InMemory / terminal | 0.913/1.075 | 72,376/72,664 |
-| InMemory / cancellation | 2.081/19.439 | 117,624/117,816 |
-| InMemory / provider failure | 1.689/3.748 | 130,688/152,888 |
-| Garnet / short text | 4.567/6.276 | 146,480/148,440 |
-| Garnet / long text | 79.617/285.201 | 2,351,776/2,361,664 |
-| Garnet / reasoning + text | 51.590/75.482 | 1,060,376/1,162,904 |
-| Garnet / single tool | 7.836/14.238 | 256,160/258,664 |
-| Garnet / three tools | 8.906/25.180 | 633,736/639,536 |
-| Garnet / media | 11.753/16.461 | 227,336/228,216 |
-| Garnet / terminal | 4.601/7.679 | 84,624/85,136 |
-| Garnet / cancellation | 4.678/22.079 | 133,712/147,752 |
-| Garnet / provider failure | 3.603/4.619 | 149,712/169,688 |
+| Adapter / workload | Net CPU ms | Net allocated bytes | Heap delta bytes | Working-set delta bytes | Mailbox occupancy |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| InMemory / short text | 0.754/9.649/9.649 | 122,528/128,512/128,512 | 131,584/139,680/139,680 | 0/131,072/131,072 | 1/1/1 |
+| InMemory / long text | 13.975/21.856/21.856 | 1,850,896/1,856,152/1,856,152 | 1,946,560/1,965,960/1,965,960 | 16,384/311,296/311,296 | 1/1/1 |
+| InMemory / reasoning + text | 4.134/9.440/9.440 | 840,408/843,320/843,320 | 888,192/896,368/896,368 | 0/163,840/163,840 | 1/1/1 |
+| InMemory / single tool | 2.813/4.772/4.772 | 222,432/240,176/240,176 | 230,008/255,624/255,624 | 0/0/0 | 1/1/1 |
+| InMemory / three tools | 4.196/9.667/9.667 | 559,864/567,112/567,112 | 572,176/584,392/584,392 | 0/0/0 | 1/1/1 |
+| InMemory / media | 2.638/3.119/3.119 | 188,288/188,840/188,840 | 204,776/213,272/213,272 | 0/0/0 | 1/1/1 |
+| InMemory / terminal | 0.913/1.075/1.075 | 72,376/72,664/72,664 | 81,856/90,280/90,280 | 0/0/0 | 1/1/1 |
+| InMemory / cancellation | 2.081/19.439/19.439 | 117,624/117,816/117,816 | 122,864/139,472/139,472 | 0/1,343,488/1,343,488 | 1/1/1 |
+| InMemory / provider failure | 1.689/3.748/3.748 | 130,688/152,888/152,888 | 145,688/156,008/156,008 | 0/147,456/147,456 | 1/1/1 |
+| Garnet / short text | 4.567/6.276/6.276 | 146,480/148,440/148,440 | 155,392/172,296/172,296 | 0/114,688/114,688 | 1/1/1 |
+| Garnet / long text | 79.617/285.201/285.201 | 2,351,776/2,361,664/2,361,664 | 2,416,544/2,497,288/2,497,288 | 49,152/1,327,104/1,327,104 | 1/1/1 |
+| Garnet / reasoning + text | 51.590/75.482/75.482 | 1,060,376/1,162,904/1,162,904 | 1,093,296/1,120,360/1,120,360 | 81,920/212,992/212,992 | 1/1/1 |
+| Garnet / single tool | 7.836/14.238/14.238 | 256,160/258,664/258,664 | 270,448/323,664/323,664 | 0/16,384/16,384 | 1/1/1 |
+| Garnet / three tools | 8.906/25.180/25.180 | 633,736/639,536/639,536 | 649,600/665,800/665,800 | 0/147,456/147,456 | 1/1/1 |
+| Garnet / media | 11.753/16.461/16.461 | 227,336/228,216/228,216 | 237,352/246,424/246,424 | 16,384/49,152/49,152 | 1/1/1 |
+| Garnet / terminal | 4.601/7.679/7.679 | 84,624/85,136/85,136 | 95,264/106,728/106,728 | 0/0/0 | 1/1/1 |
+| Garnet / cancellation | 4.678/22.079/22.079 | 133,712/147,752/147,752 | 144,232/167,520/167,520 | 0/245,760/245,760 | 1/1/1 |
+| Garnet / provider failure | 3.603/4.619/4.619 | 149,712/169,688/169,688 | 163,688/172,448/172,448 | 0/32,768/32,768 | 1/1/1 |
 
 Gross-minus-control CPU and allocation still cross zero in some samples and
 show scheduler/GC noise. The raw file retains gross, net, and signed deltas for
