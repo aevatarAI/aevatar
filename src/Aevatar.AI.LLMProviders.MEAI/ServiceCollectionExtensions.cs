@@ -34,11 +34,18 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<ILLMProviderFactory>(serviceProvider =>
         {
-            var factory = new MEAILLMProviderFactory(
-                serviceProvider.GetRequiredService<IAgentToolExecutionPort>());
+            var factory = new MEAILLMProviderFactory(new ServiceProviderAgentToolExecutionPort(serviceProvider));
             configure(factory);
             return factory;
         });
         return services;
+    }
+
+    private sealed class ServiceProviderAgentToolExecutionPort(IServiceProvider serviceProvider) : IAgentToolExecutionPort
+    {
+        public Task<AgentToolExecutionOutcome> ExecuteAsync(
+            AgentToolExecutionRequest request,
+            CancellationToken ct = default) =>
+            serviceProvider.GetRequiredService<IAgentToolExecutionPort>().ExecuteAsync(request, ct);
     }
 }
