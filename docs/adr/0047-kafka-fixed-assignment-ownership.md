@@ -1,11 +1,11 @@
 ---
-title: 0046 - Kafka fixed-assignment ownership follows Orleans queue balancing
+title: 0047 - Kafka fixed-assignment ownership follows Orleans queue balancing
 status: accepted
 owner: eanzhao
 supersedes: "ADR-0003 shared-group, rebalance, and revoke ownership claims"
 ---
 
-# 0046 - Kafka fixed-assignment ownership follows Orleans queue balancing
+# 0047 - Kafka fixed-assignment ownership follows Orleans queue balancing
 
 ## Context
 

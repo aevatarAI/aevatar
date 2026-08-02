@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
@@ -30,6 +31,8 @@ public sealed class RoleGAgentIncompleteSessionFinalizationLocalRuntimeTests
         var services = new ServiceCollection();
         services.AddAevatarRuntime();
         services.Replace(ServiceDescriptor.Singleton<IEventStore>(eventStore));
+        services.AddSingleton<IAgentToolExecutionPort>(
+            WorkflowGAgentTestBase.UnexpectedAgentToolExecutionPort.Instance);
         services.AddAevatarAgentKindRegistry(builder => builder.Register<RoleGAgent>());
         await using var serviceProvider = services.BuildServiceProvider();
         var finalizationSignalPublished =
