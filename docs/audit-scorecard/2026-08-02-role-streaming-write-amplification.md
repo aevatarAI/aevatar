@@ -3,7 +3,7 @@ title: RoleGAgent streaming write-amplification measurement
 status: complete
 owner: codex
 issue: 3146
-source_commit: bd5716b838a6f4638d3ebc06f673fbe1f88760c6
+source_commit: 80887623f7e8b418e3fb90024ff9bce12ee46670
 ---
 
 # RoleGAgent streaming write-amplification measurement
@@ -17,9 +17,10 @@ typed committed facts would spend recovery and observation correctness without
 a production-backed benefit target.
 
 Keep the current `RoleGAgent` durability boundaries and the single committed
-state projection path. A future implementation issue requires production
-telemetry, an explicit benefit threshold, and recovery contracts from #3138
-plus publication/compaction fences from #3139.
+state projection path. The measured code includes #3138's typed recovery
+checkpoints and #3139's runtime-owned publication/compaction fence. A future
+implementation issue still requires production telemetry, an explicit benefit
+threshold, and preservation of both contracts.
 
 Raw samples, adapter identity, capabilities, and all distributions are in
 [`raw/2026-08-02-role-streaming-write-amplification.json`](raw/2026-08-02-role-streaming-write-amplification.json).
@@ -36,14 +37,16 @@ counts, protobuf sizes, and I/O duration; production code is unchanged.
 
 Configuration:
 
-- source commit `bd5716b838a6f4638d3ebc06f673fbe1f88760c6`;
+- source commit `80887623f7e8b418e3fb90024ff9bce12ee46670`;
+- Program SHA-256 `b20be0740f1b25d246693ac1014f8676101e68dc5596e6ed4a205230a07ebb78`;
+- config SHA-256 `e79890b6d747fb51898ff47235588d70eeeb6cbb8dc8e3fd4674f3fb41f86a3b`;
 - macOS 26.3 arm64, .NET 10.0.3, workstation GC, 12 logical processors;
 - 2 warmups and 12 measured samples per workload and adapter;
 - snapshot interval 50, compaction enabled, 5 retained events;
 - crash recovery append fences 4, 12, and 24;
-- recovery uses 22 text chunks, keeping final event-set reconciliation below
-  the version-50 compaction boundary; the 128-chunk workload measures
-  compaction separately;
+- recovery uses 23 text chunks so fence 24 reaches snapshot version 50,
+  compacts through the publication-fenced version 45, and verifies the retained
+  tail; the 128-chunk workload measures steady-state compaction separately;
 - InMemory and Garnet 2.1.0 over Docker loopback;
 - deterministic text, reasoning, tool, media, terminal, cancellation, failure,
   and recovery provider shapes.
@@ -70,38 +73,40 @@ drain barriers.
 
 | Workload | Appends | Bytes | Snapshot saves / deleted | Store I/O ms | First output ms | Completion ms |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| short text | 7 | 2,846 | 0 / 0 | 0.022/0.051/0.051 | 0.209/0.401/0.401 | 0.621/1.265/1.265 |
-| long text, 128 chunks | 131 | 53,277 | 2 / 95 | 0.376/5.925/5.925 | 0.143/0.281/0.281 | 6.174/19.374/19.374 |
-| reasoning + text | 59 | 22,006 | 1 / 45 | 0.123/0.244/0.244 | 0.135/0.202/0.202 | 2.156/3.025/3.025 |
-| single tool call | 7 | 3,472 | 0 / 0 | 0.019/0.064/0.064 | 0.336/2.055/2.055 | 0.637/2.512/2.512 |
-| three tool calls | 13 | 6,779 | 0 / 0 | 0.033/0.066/0.066 | 0.521/0.929/0.929 | 0.977/2.358/2.358 |
-| four media parts | 11 | 5,465 | 0 / 0 | 0.028/0.047/0.047 | 0.150/0.230/0.230 | 0.663/1.939/1.939 |
-| terminal only | 3 | 1,593 | 0 / 0 | 0.009/0.021/0.021 | n/a | 0.309/0.589/0.589 |
-| cancellation | 5 | 2,161 | 0 / 0 | 0.037/0.112/0.112 | 0.254/0.685/0.685 | 17.470/22.546/22.546 |
-| provider failure | 6 | 2,601 | 0 / 0 | 0.016/0.019/0.019 | 0.120/0.157/0.157 | 0.418/0.509/0.509 |
+| short text | 7 | 2,878 | 0 / 0 | 0.0252/0.0952/0.0952 | 0.2359/1.1949/1.1949 | 1.0310/1.6321/1.6321 |
+| long text, 128 chunks | 131 | 53,317 | 2 / 95 | 0.5114/7.3959/7.3959 | 0.2295/0.6481/0.6481 | 14.7766/21.4282/21.4282 |
+| reasoning + text | 59 | 22,046 | 1 / 45 | 0.2154/0.4808/0.4808 | 0.3742/0.8637/0.8637 | 4.5463/9.2725/9.2725 |
+| single tool call | 9 | 6,948 | 0 / 0 | 0.0311/0.0755/0.0755 | 0.8153/1.3687/1.3687 | 1.4367/2.0432/2.0432 |
+| three tool calls | 17 | 22,470 | 0 / 0 | 0.0515/0.1722/0.1722 | 1.3748/4.4493/4.4493 | 2.1330/5.0625/5.0625 |
+| four media parts | 11 | 5,517 | 0 / 0 | 0.0285/0.0575/0.0575 | 0.1880/0.4745/0.4745 | 0.8710/1.4842/1.4842 |
+| terminal only | 3 | 1,637 | 0 / 0 | 0.0098/0.0259/0.0259 | n/a | 0.3754/0.6599/0.6599 |
+| cancellation | 5 | 2,209 | 0 / 0 | 0.0345/0.0635/0.0635 | 0.2499/0.5505/0.5505 | 16.5327/17.0362/17.0362 |
+| provider failure | 6 | 2,634 | 0 / 0 | 0.0191/0.0496/0.0496 | 0.2333/0.3041/0.3041 | 0.6964/0.9046/0.9046 |
 
 ### Garnet event store
 
 | Workload | Appends | Bytes | Snapshot saves / deleted | Store I/O ms | First output ms | Completion ms |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| short text | 7 | 2,846 | 0 / 0 | 4.973/7.796/7.796 | 1.732/2.825/2.825 | 5.930/9.218/9.218 |
-| long text, 128 chunks | 131 | 53,277 | 2 / 95 | 64.375/188.731/188.731 | 1.359/16.046/16.046 | 73.182/200.508/200.508 |
-| reasoning + text | 59 | 22,006 | 1 / 45 | 34.642/135.597/135.597 | 1.434/2.963/2.963 | 38.386/137.625/137.625 |
-| single tool call | 7 | 3,472 | 0 / 0 | 2.936/6.571/6.571 | 2.085/4.260/4.260 | 3.352/7.084/7.084 |
-| three tool calls | 13 | 6,793 | 0 / 0 | 6.166/8.579/8.579 | 4.114/6.232/6.232 | 7.103/9.433/9.433 |
-| four media parts | 11 | 5,473 | 0 / 0 | 4.412/10.633/10.633 | 0.965/6.592/6.592 | 4.803/11.151/11.151 |
-| terminal only | 3 | 1,593 | 0 / 0 | 2.344/2.916/2.916 | n/a | 2.649/3.248/3.248 |
-| cancellation | 5 | 2,161 | 0 / 0 | 5.141/6.991/6.991 | 1.683/3.488/3.488 | 18.789/19.983/19.983 |
-| provider failure | 6 | 2,601 | 0 / 0 | 4.815/6.721/6.721 | 1.518/2.974/2.974 | 5.309/7.249/7.249 |
+| short text | 7 | 2,878 | 0 / 0 | 4.2262/7.7453/7.7453 | 1.8269/3.1220/3.1220 | 5.1940/9.3947/9.3947 |
+| long text, 128 chunks | 131 | 53,317 | 2 / 95 | 67.7159/87.1258/87.1258 | 1.4397/3.2698/3.2698 | 78.6963/98.9983/98.9983 |
+| reasoning + text | 59 | 22,046 | 1 / 45 | 26.3611/33.8960/33.8960 | 1.3311/3.3872/3.3872 | 29.3472/36.7882/36.7882 |
+| single tool call | 9 | 6,959 | 0 / 0 | 4.7181/5.9032/5.9032 | 4.0618/4.9367/4.9367 | 5.6912/7.1300/7.1300 |
+| three tool calls | 17 | 22,446 | 0 / 0 | 7.3259/9.0548/9.0548 | 6.3859/9.0638/9.0638 | 8.7334/11.9876/11.9876 |
+| four media parts | 11 | 5,517 | 0 / 0 | 5.3941/11.2019/11.2019 | 1.4435/3.3634/3.3634 | 6.2685/12.3596/12.3596 |
+| terminal only | 3 | 1,637 | 0 / 0 | 1.5358/2.5629/2.5629 | n/a | 1.8606/2.9569/2.9569 |
+| cancellation | 5 | 2,203 | 0 / 0 | 7.0980/16.2082/16.2082 | 2.6230/14.1068/14.1068 | 17.8385/20.9787/20.9787 |
+| provider failure | 6 | 2,641 | 0 / 0 | 3.0256/7.2776/7.2776 | 1.2064/2.8144/2.8144 | 3.5721/7.8715/7.8715 |
 
 ## Recovery sweep
 
-The comparison uses provider-generated semantic evidence, an
-append-acknowledged ledger, fresh `baseStore.GetEventsAsync(actorId)` readback,
-actual `CommittedStateEventPublished` observations, and an independently read
+The comparison uses provider-generated semantic evidence, the complete
+append-acknowledged ledger, actual `CommittedStateEventPublished` observations,
+the runtime-owned durable publication checkpoint, typed snapshots, fresh
+durable-tail readback, a fresh activation, and an independently read
 measurement-only current-state document. Actor initialization is included in
-the three final event sets, while turn resource metrics reset after
-initialization. The raw schema is version 4.
+the complete ledger/publication sets. After compaction, durable readback is the
+authoritative suffix rather than a second copy of deleted history. The raw
+schema is version 5.
 
 Generated boundaries are keyed by session, attempt, semantic ordinal, kind,
 and payload hash. Phase one deliberately reports the single chunk generated
@@ -116,23 +121,107 @@ hash, and usage hash; duplicate and stale writes must leave it unchanged.
 All counts below are deterministic p50 values. Missing/loss columns are zero
 for every sample on both adapters, not only at p50.
 
-| Adapter | Fence | Phase generated / committed | Recovery generated / committed | Payload redo / bytes | Final ledger / durable / publication | Attempt tail | Recovery G→C / C→G | Materialized |
+| Adapter | Fence | Phase generated / committed | Recovery generated / committed | Payload redo / bytes | Final ledger / durable tail / publication | Attempt tail | Recovery G→C / C→G | Materialized |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| InMemory | 4 | 3 / 2 | 23 / 23 | 3 / 1,009 | 29 / 29 / 29 | 1 | 0 / 0 | pass |
-| InMemory | 12 | 11 / 10 | 23 / 23 | 11 / 3,597 | 37 / 37 / 37 | 1 | 0 / 0 | pass |
-| InMemory | 24 | 23 / 22 | 23 / 23 | 23 / 7,473 | 49 / 49 / 49 | 1 | 0 / 0 | pass |
-| Garnet | 4 | 3 / 2 | 23 / 23 | 3 / 1,009 | 29 / 29 / 29 | 1 | 0 / 0 | pass |
-| Garnet | 12 | 11 / 10 | 23 / 23 | 11 / 3,608 | 37 / 37 / 37 | 1 | 0 / 0 | pass |
-| Garnet | 24 | 23 / 22 | 23 / 23 | 23 / 7,496 | 49 / 49 / 49 | 1 | 0 / 0 | pass |
+| InMemory | 4 | 3 / 2 | 24 / 24 | 3 / 1,006 | 30 / 30 / 30 | 1 | 0 / 0 | pass |
+| InMemory | 12 | 11 / 10 | 24 / 24 | 11 / 3,608 | 39 / 39 / 39 | 1 | 0 / 0 | pass |
+| InMemory | 24 | 23 / 22 | 24 / 24 | 23 / 7,496 | 50 / 5 / 50 | 1 | 0 / 0 | pass |
+| Garnet | 4 | 3 / 2 | 24 / 24 | 3 / 1,009 | 30 / 30 / 30 | 1 | 0 / 0 | pass |
+| Garnet | 12 | 11 / 10 | 24 / 24 | 11 / 3,608 | 38 / 38 / 38 | 1 | 0 / 0 | pass |
+| Garnet | 24 | 23 / 22 | 24 / 24 | 23 / 7,496 | 50 / 5 / 50 | 1 | 0 / 0 | pass |
 
-These are three observed windows, not a maximum. At each tested fence, the
-final append ledger, durable readback, and committed-publication event IDs
-matched exactly. Recovery did not reuse progress identity or sequence, but it
-repeated every previously emitted payload. The recovery attempt itself had no
-generated/committed gap, and its 22 text deltas plus usage matched the final
+These are three observed windows, not a maximum. At every fence, the complete
+append ledger and committed-publication identities matched. Before compaction,
+durable readback matched both. At fence 24, the snapshot-covered 45-event prefix
+was deleted and durable readback matched the continuous five- or six-event
+suffix, depending on whether a post-snapshot completion committed. Recovery did
+not reuse progress identity or sequence, but repeated every previously emitted
+payload. The successful attempt's 23 text deltas plus usage matched the final
 materialized session hashes for all 72 samples. The phase-one payload repeat is
 still user-visible redo risk; no tested committed or final user-visible fact
 was lost.
+
+### Durable authority fence
+
+Ranges below cover all 12 samples. In every row the publication checkpoint
+equalled the latest store version/event ID, ledger equalled publication,
+snapshot state matched the publication at that version, and fresh activation
+reconstructed the latest publication state.
+
+| Adapter | Fence | Store version | Snapshot | Compacted through | Published at compaction | Durable tail | Checkpoint version |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| InMemory | 4 | 30-31 | 0 | 0 | 0 | 30-31 | 30-31 |
+| InMemory | 12 | 38-39 | 0 | 0 | 0 | 38-39 | 38-39 |
+| InMemory | 24 | 50-51 | 50 | 45 | 50 | 5-6 | 50-51 |
+| Garnet | 4 | 30 | 0 | 0 | 0 | 30 | 30 |
+| Garnet | 12 | 38-39 | 0 | 0 | 0 | 38-39 | 38-39 |
+| Garnet | 24 | 50-51 | 50 | 45 | 50 | 5-6 | 50-51 |
+
+### Recovery resource distributions
+
+The following tables retain the full `p50/p95/p99` distribution for every
+crash-recovery fence. Append attempts include rejected and retried writes;
+committed event/byte counts describe the final successful durable turn.
+
+| Adapter | Fence | Append attempts | Committed events | Committed bytes | Event-store I/O ms |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| InMemory | 4 | 7/32/32 | 4/29/29 | 1,380/11,008/11,008 | 0.0767/0.1463/0.1463 |
+| InMemory | 12 | 41/41/41 | 38/38/38 | 14,788/14,873/14,873 | 0.1539/0.2754/0.2754 |
+| InMemory | 24 | 27/53/53 | 24/50/50 | 7,918/18,676/18,676 | 0.1418/0.2690/0.2690 |
+| Garnet | 4 | 8/8/8 | 4/4/4 | 1,380/1,389/1,389 | 3.5091/4.6105/4.6105 |
+| Garnet | 12 | 16/41/41 | 12/37/37 | 3,981/13,776/13,776 | 5.8385/14.1163/14.1163 |
+| Garnet | 24 | 28/53/53 | 24/49/49 | 7,869/17,533/17,533 | 10.5933/22.7178/22.7178 |
+
+Fence 24 always produced authoritative snapshot version 50 and compaction
+through version 45. The distributions below count work inside the timed handler
+window; snapshot/compaction completed after that window in some samples, so p50
+is zero while the durable-authority table above remains the correctness proof.
+
+| Adapter | Fence | Snapshot saves | Snapshot bytes | Snapshot ms | Compaction calls | Deleted events | Compaction ms |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| InMemory | 4 | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 |
+| InMemory | 12 | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 |
+| InMemory | 24 | 0/1/1 | 0/847/847 | 0/0.0064/0.0064 | 0/1/1 | 0/45/45 | 0/0.0043/0.0043 |
+| Garnet | 4 | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 |
+| Garnet | 12 | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 | 0/0/0 |
+| Garnet | 24 | 0/1/1 | 0/846/846 | 0/0.0041/0.0041 | 0/1/1 | 0/45/45 | 0/0.4366/0.4366 |
+
+Publication checkpoint calls are real runtime durable-delivery operations over
+the shared checkpoint store; failure-record counts were zero in every sample.
+
+| Adapter | Fence | Loads | Advances | Serialized write bytes | Checkpoint ms |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| InMemory | 4 | 6/31/31 | 4/29/29 | 484/3,509/3,509 | 0.0095/0.0540/0.0540 |
+| InMemory | 12 | 39/40/40 | 37/38/38 | 4,551/4,674/4,674 | 0.0577/0.0836/0.0836 |
+| InMemory | 24 | 26/53/53 | 24/50/50 | 2,952/6,150/6,150 | 0.0355/0.0895/0.0895 |
+| Garnet | 4 | 6/6/6 | 4/4/4 | 488/492/492 | 0.0087/0.0137/0.0137 |
+| Garnet | 12 | 14/39/39 | 12/37/37 | 1,476/4,588/4,588 | 0.0128/0.0510/0.0510 |
+| Garnet | 24 | 26/52/52 | 24/49/49 | 2,952/5,978/5,978 | 0.0241/0.0482/0.0482 |
+
+Gross metrics include the measurement decorators; net CPU and allocation come
+from the matched undecorated control turn with alternating execution order.
+
+| Adapter | Fence | Gross CPU ms | Gross allocated bytes | Net CPU ms | Net allocated bytes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| InMemory | 4 | 4.087/7.662/7.662 | 301,360/721,440/721,440 | 3.550/7.212/7.212 | 222,952/593,088/593,088 |
+| InMemory | 12 | 8.574/9.628/9.628 | 1,013,304/1,033,464/1,033,464 | 4.776/9.791/9.791 | 370,912/748,064/748,064 |
+| InMemory | 24 | 9.114/13.368/13.368 | 996,000/1,449,232/1,449,232 | 7.705/11.975/11.975 | 592,816/968,072/968,072 |
+| Garnet | 4 | 7.779/16.559/16.559 | 334,760/344,856/344,856 | 6.943/17.300/17.300 | 244,096/255,752/255,752 |
+| Garnet | 12 | 9.442/19.169/19.169 | 657,224/1,176,816/1,176,816 | 8.159/24.470/24.470 | 427,192/885,576/885,576 |
+| Garnet | 24 | 15.736/27.306/27.306 | 1,140,136/1,659,992/1,659,992 | 12.567/29.198/29.198 | 701,304/1,168,536/1,168,536 |
+
+Heap and working-set deltas are gross process diagnostics. Mailbox occupancy is
+in-flight plus queued turns and remains one because each recovery sample
+dispatches a single turn at a time.
+
+| Adapter | Fence | Managed heap bytes | Working set bytes | First output ms | Completion ms | Mailbox occupancy |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| InMemory | 4 | 301,792/737,256/737,256 | 0/196,608/196,608 | 0.2211/0.2886/0.2886 | 2.2755/3.8160/3.8160 | 1/1/1 |
+| InMemory | 12 | 1,013,936/1,030,536/1,030,536 | 0/16,384/16,384 | 0.2073/0.2605/0.2605 | 3.6661/4.3677/4.3677 | 1/1/1 |
+| InMemory | 24 | 998,520/1,440,696/1,440,696 | 0/360,448/360,448 | 0.2099/0.4978/0.4978 | 3.5470/5.8597/5.8597 | 1/1/1 |
+| Garnet | 4 | 327,352/384,552/384,552 | 0/16,384/16,384 | 1.2941/1.7940/1.7940 | 5.3742/6.5944/6.5944 | 1/1/1 |
+| Garnet | 12 | 651,648/671,040/671,040 | 0/32,768/32,768 | 1.0085/2.3351/2.3351 | 7.6605/16.5963/16.5963 | 1/1/1 |
+| Garnet | 24 | 1,142,952/1,733,128/1,733,128 | 0/16,384/16,384 | 1.0944/1.4482/1.4482 | 13.0226/26.3610/26.3610 | 1/1/1 |
 
 ## Resource calibration
 
@@ -147,58 +236,62 @@ p95). Allocation uses process-wide `GC.GetTotalAllocatedBytes(true)`.
 
 | Adapter / workload | Net CPU ms | Net allocated bytes |
 | --- | ---: | ---: |
-| InMemory / short text | 1.145/2.022 | 104,760/106,304 |
-| InMemory / long text | 12.305/18.976 | 1,563,952/1,569,296 |
-| InMemory / reasoning + text | 6.560/8.316 | 711,088/715,256 |
-| InMemory / single tool | 1.575/2.203 | 127,096/145,224 |
-| InMemory / three tools | 2.467/4.016 | 216,536/234,760 |
-| InMemory / media | 1.904/2.884 | 161,056/162,016 |
-| InMemory / terminal | 0.825/1.269 | 63,048/63,624 |
-| InMemory / cancellation | 1.901/19.414 | 100,432/100,680 |
-| InMemory / provider failure | 1.042/2.723 | 110,240/134,808 |
-| Garnet / short text | 6.039/8.379 | 128,400/130,504 |
-| Garnet / long text | 80.700/248.103 | 2,058,064/2,066,048 |
-| Garnet / reasoning + text | 61.115/174.428 | 920,544/931,640 |
-| Garnet / single tool | 3.480/10.300 | 150,864/152,856 |
-| Garnet / three tools | 15.240/35.145 | 260,712/263,872 |
-| Garnet / media | 5.716/16.042 | 200,320/205,880 |
-| Garnet / terminal | 2.817/3.415 | 75,040/75,440 |
-| Garnet / cancellation | 3.672/9.922 | 114,992/116,624 |
-| Garnet / provider failure | 3.352/4.859 | 129,000/130,528 |
+| InMemory / short text | 0.754/9.649 | 122,528/128,512 |
+| InMemory / long text | 13.975/21.856 | 1,850,896/1,856,152 |
+| InMemory / reasoning + text | 4.134/9.440 | 840,408/843,320 |
+| InMemory / single tool | 2.813/4.772 | 222,432/240,176 |
+| InMemory / three tools | 4.196/9.667 | 559,864/567,112 |
+| InMemory / media | 2.638/3.119 | 188,288/188,840 |
+| InMemory / terminal | 0.913/1.075 | 72,376/72,664 |
+| InMemory / cancellation | 2.081/19.439 | 117,624/117,816 |
+| InMemory / provider failure | 1.689/3.748 | 130,688/152,888 |
+| Garnet / short text | 4.567/6.276 | 146,480/148,440 |
+| Garnet / long text | 79.617/285.201 | 2,351,776/2,361,664 |
+| Garnet / reasoning + text | 51.590/75.482 | 1,060,376/1,162,904 |
+| Garnet / single tool | 7.836/14.238 | 256,160/258,664 |
+| Garnet / three tools | 8.906/25.180 | 633,736/639,536 |
+| Garnet / media | 11.753/16.461 | 227,336/228,216 |
+| Garnet / terminal | 4.601/7.679 | 84,624/85,136 |
+| Garnet / cancellation | 4.678/22.079 | 133,712/147,752 |
+| Garnet / provider failure | 3.603/4.619 | 149,712/169,688 |
 
-Gross-minus-control allocation delta spans about -18.7-25.0 KB for InMemory
-normal workloads and -24.1-93.1 KB for Garnet. CPU deltas likewise cross
-zero for several workloads and have noisy maxima. The raw file retains gross,
-net, and signed deltas for every sample. This calibration prevents decorator
-work from being attributed to `RoleGAgent`, but the control is still a
-synthetic process-level estimate, not production resource attribution.
+Gross-minus-control CPU and allocation still cross zero in some samples and
+show scheduler/GC noise. The raw file retains gross, net, and signed deltas for
+every sample. This calibration prevents decorator work from being attributed
+to `RoleGAgent`, but the control remains a synthetic process-level estimate,
+not production resource attribution.
 
 ## Findings
 
 1. **Transaction count is the synthetic cost center.** A 128-chunk response
    creates 131 append transactions but only about 53 KB of protobuf data.
-   Garnet store I/O is 64.4 ms p50 versus 0.38 ms InMemory. This points to
-   transaction/script round trips, not payload bytes. The 188.7 ms largest
+   Garnet store I/O is 67.7 ms p50 versus 0.51 ms InMemory. This points to
+   transaction/script round trips, not payload bytes. The 87.1 ms largest
    Garnet sample also shows this local setup is too variable for an SLO.
-2. **Snapshot save is not the dominant cost.** Long text makes two 486-byte
-   snapshots and deletes 95 events. Garnet compaction is 1.05 ms p50; typed
-   InMemory snapshot save is below 0.01 ms. Orleans snapshot persistence was
-   not measured.
-3. **Chunk count extends one mailbox turn.** The harness deliberately awaits
+2. **Publication checkpoints are measurable but not dominant.** Long text made
+   131 checkpoint advances and wrote 16,648 typed checkpoint bytes; checkpoint
+   work was 0.386 ms p50 on the Garnet event-store run. Event-store I/O remained
+   two orders of magnitude larger. The checkpoint store itself is InMemory in
+   this harness, so production durable-backend cost still needs telemetry.
+3. **Snapshot save is not the dominant cost.** Long text makes two snapshots
+   and deletes 95 events. Fence 24 also proves compaction only after publication
+   version 50 and reconstructs from snapshot plus retained tail. Orleans
+   snapshot persistence was not measured.
+4. **Chunk count extends one mailbox turn.** The harness deliberately awaits
    one chat dispatch, so occupancy is one and queued depth is zero. The long
-   Garnet turn occupies the actor for 73.2 ms p50 before provider network/model
+   Garnet turn occupies the actor for 78.7 ms p50 before provider network/model
    latency is added.
-4. **Recovery redo is semantic, not identity reuse.** Tested fences produced
-   zero progress event-ID and sequence overlap. Final full state-event sets were
-   identical across append ledger, durable readback, and committed publication
-   for all 72 adapter/fence samples. Each injected attempt had one generated
-   but intentionally uncommitted tail; every successful recovery generated
-   boundary and final user-visible text/usage fact was present. Payload redo
-   still equalled all phase-1 progress: 3, 11, and 23 events.
-5. **Tool boundaries remain recovery-sensitive.** One tool call is seven
-   append transactions and three calls are thirteen. #3138 must define
-   intent/completion/outcome-uncertain recovery before performance work can
-   combine or remove those facts.
+5. **Recovery redo is semantic, not identity reuse.** Tested fences produced
+   zero progress event-ID and sequence overlap. Complete ledger/publication and
+   compaction-aware durable-tail checks passed for all 72 adapter/fence samples.
+   Each injected attempt had one generated but intentionally uncommitted tail;
+   every successful recovery boundary and final text/usage fact was present.
+   Payload redo still equalled all phase-one progress: 3, 11, and 23 events.
+6. **Tool checkpoint cost is now visible.** One real tool execution is nine
+   appends and about 6.95 KB; three executions are seventeen appends and about
+   22.5 KB. The harness fail-closed asserts exactly one and three terminal tool
+   invocations. These current #3138 intent/completion checkpoints are recovery
+   authority, not candidates for an unqualified performance merge.
 
 ## Semantic constraints
 
