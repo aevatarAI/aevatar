@@ -158,6 +158,15 @@ internal static class StudioProvisioningEndpoints
     {
         result = exception switch
         {
+            StudioTeamNotFoundException missingTeam => Results.Json(
+                new
+                {
+                    code = "STUDIO_TEAM_NOT_FOUND",
+                    message = missingTeam.Message,
+                    scopeId = missingTeam.ScopeId,
+                    teamId = missingTeam.TeamId,
+                },
+                statusCode: StatusCodes.Status404NotFound),
             StudioMemberAutomationProjectionPendingException pending => Results.Json(
                 new
                 {
