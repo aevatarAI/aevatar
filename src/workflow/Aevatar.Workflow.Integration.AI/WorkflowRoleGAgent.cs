@@ -151,7 +151,9 @@ public class WorkflowRoleGAgent(
                 chatRequest);
             if (pendingApproval != null)
             {
-                pendingApproval.WorkflowLlmContinuation = BuildApprovalContinuation(intent);
+                pendingApproval.WorkflowLlmContinuation = BuildApprovalContinuation(
+                    intent,
+                    chatRequest.SessionId);
                 await SuspendForToolApprovalAsync(pendingApproval, streamCt);
                 streamCt.ThrowIfCancellationRequested();
                 return;
@@ -757,7 +759,9 @@ public class WorkflowRoleGAgent(
                 request);
             if (pendingApproval != null)
             {
-                pendingApproval.WorkflowLlmContinuation = continuation.Clone();
+                pendingApproval.WorkflowLlmContinuation = CloneApprovalContinuationForDirectParent(
+                    continuation,
+                    request.SessionId);
                 await SuspendForToolApprovalAsync(pendingApproval, timeoutCts.Token);
                 timeoutCts.Token.ThrowIfCancellationRequested();
                 return;
@@ -918,7 +922,8 @@ public class WorkflowRoleGAgent(
     }
 
     private static WorkflowLlmToolApprovalContinuation BuildApprovalContinuation(
-        WorkflowLlmExecutionIntent intent)
+        WorkflowLlmExecutionIntent intent,
+        string directParentRoleChatSessionId = "")
     {
         var continuation = new WorkflowLlmToolApprovalContinuation
         {
@@ -929,6 +934,7 @@ public class WorkflowRoleGAgent(
             UserMemoryPrompt = intent.UserMemoryPrompt ?? string.Empty,
             RoutePreference = intent.RoutePreference ?? string.Empty,
             TimeoutMs = intent.TimeoutMs,
+            DirectParentRoleChatSessionId = directParentRoleChatSessionId,
             RestrictToolSets = intent.AgentToolScope?.RestrictToolSets == true,
             RestrictAllowedToolNames = intent.AgentToolScope?.RestrictAllowedToolNames == true,
         };
@@ -940,6 +946,15 @@ public class WorkflowRoleGAgent(
             continuation.AllowedToolNames.Add(intent.AgentToolScope.AllowedToolNames);
         }
         return continuation;
+    }
+
+    private static WorkflowLlmToolApprovalContinuation CloneApprovalContinuationForDirectParent(
+        WorkflowLlmToolApprovalContinuation continuation,
+        string directParentRoleChatSessionId)
+    {
+        var next = continuation.Clone();
+        next.DirectParentRoleChatSessionId = directParentRoleChatSessionId;
+        return next;
     }
 
     private static WorkflowLlmCompletionDeliveryContext ToWorkflowLlmCompletionDeliveryContext(

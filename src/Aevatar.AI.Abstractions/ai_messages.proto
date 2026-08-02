@@ -298,6 +298,9 @@ message WorkflowLlmToolApprovalContinuation {
   string user_memory_prompt = 10;
   string route_preference = 11;
   int32 timeout_ms = 12;
+  // The role-chat session whose committed ContinuationPrepared checkpoint
+  // directly owns this continuation target. This is not the workflow session id.
+  string direct_parent_role_chat_session_id = 13;
 }
 
 message WorkflowLlmCompletionDeliveryContext {
@@ -522,6 +525,10 @@ message RoleChatRecoveryCheckpoint {
   bool requires_runtime_credential = 12;
   int64 payload_expires_at_unix_ms = 13;
   WorkflowLlmCompletionDeliveryContext workflow_llm_completion_delivery_context = 14;
+  // Durable parent relation of the current role-chat session. Outgoing nested
+  // continuations may replace workflow_llm_approval_continuation, so this fact
+  // is stored independently and remains stable for the session lifetime.
+  string direct_parent_role_chat_session_id = 15;
 }
 
 message RoleChatRecoveryCheckpointUpdatedEvent {
@@ -1024,6 +1031,9 @@ message RoleChatSessionState {
   string workflow_llm_completion_delivery_retry_callback_id = 33;
   google.protobuf.Timestamp workflow_llm_completion_delivery_retry_at = 34;
   RoleChatRecoveryCheckpoint recovery_checkpoint = 35;
+  // Stable direct parent relation retained after terminal completion clears the
+  // execution checkpoint, so completion can wake exactly one parent turn.
+  string direct_parent_role_chat_session_id = 36;
 }
 
 message RoleGAgentState {

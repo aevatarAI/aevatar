@@ -75,23 +75,77 @@ public sealed class RoleGAgentRecoveryCheckpointTests
     public async Task Recover_WhenNonReplayableCompletionIsMissing_ShouldCommitOutcomeUncertain()
     {
         var fixture = await CreateFixtureAsync("role-non-replayable");
-        await fixture.StartSessionAsync("session-a");
+        await fixture.StartSessionAsync("session-a", new RoleChatRunContext
+        {
+            CompletionNotificationActorId = "service-run:session-a",
+            CompletionNotificationDeliveryId = "delivery-session-a",
+            CompletionNotificationExpiresAtUnixMs = Now.AddMinutes(1).ToUnixTimeMilliseconds(),
+        });
+        await fixture.Agent.PrepareBatchAsync(Batch(
+            "session-a",
+            0,
+            Operation("call-a", fixture.Tool, AgentToolReplayPolicy.NonReplayable)));
+        var checkpoint = fixture.Agent.State.Sessions["session-a"].RecoveryCheckpoint.Clone();
+        var recovery = new RoleChatRecoveryContinuationRequested
+        {
+            SessionId = "session-a",
+            ExpectedCheckpointGeneration = checkpoint.Generation,
+        };
+
+        await fixture.Agent.HandleChatRecoveryContinuationRequestedAsync(recovery);
+
+        var session = fixture.Agent.State.Sessions["session-a"];
+        session.Completed.Should().BeTrue();
+        session.Outcome.Should().Be(RoleChatSessionOutcome.OutcomeUncertain);
+        session.FailureCode.Should().Be("SESSION_OUTCOME_UNCERTAIN");
+        session.CompletionNotificationDeliveryStatus.Should()
+            .Be(RoleChatCompletionNotificationDeliveryStatus.Dispatched);
+        fixture.Publisher.Published.OfType<RoleChatSessionCompletedEvent>()
+            .Should().ContainSingle(notification =>
+                notification.SessionId == "session-a" &&
+                notification.Outcome == RoleChatSessionOutcome.OutcomeUncertain);
+
+        await fixture.Agent.HandleChatRecoveryContinuationRequestedAsync(recovery);
+
+        fixture.Publisher.Published.OfType<RoleChatSessionCompletedEvent>()
+            .Should().ContainSingle(notification => notification.SessionId == "session-a");
+        fixture.ExecutionPort.Requests.Should().BeEmpty();
+        fixture.Tool.ExecutionCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Recover_WhenOutcomeUncertainNotificationSendFails_ShouldScheduleRetry()
+    {
+        var publisher = new RecordingPublisher { FailCompletionNotification = true };
+        var fixture = await CreateFixtureAsync(
+            "role-non-replayable-notification-retry",
+            publisher: publisher);
+        await fixture.StartSessionAsync("session-a", new RoleChatRunContext
+        {
+            CompletionNotificationActorId = "service-run:session-a",
+            CompletionNotificationDeliveryId = "delivery-session-a",
+            CompletionNotificationExpiresAtUnixMs = Now.AddMinutes(1).ToUnixTimeMilliseconds(),
+        });
         await fixture.Agent.PrepareBatchAsync(Batch(
             "session-a",
             0,
             Operation("call-a", fixture.Tool, AgentToolReplayPolicy.NonReplayable)));
         var checkpoint = fixture.Agent.State.Sessions["session-a"].RecoveryCheckpoint.Clone();
 
-        await fixture.Agent.HandleChatRecoveryContinuationRequestedAsync(new RoleChatRecoveryContinuationRequested
-        {
-            SessionId = "session-a",
-            ExpectedCheckpointGeneration = checkpoint.Generation,
-        });
+        await fixture.Agent.HandleChatRecoveryContinuationRequestedAsync(
+            new RoleChatRecoveryContinuationRequested
+            {
+                SessionId = "session-a",
+                ExpectedCheckpointGeneration = checkpoint.Generation,
+            });
 
         var session = fixture.Agent.State.Sessions["session-a"];
         session.Completed.Should().BeTrue();
         session.Outcome.Should().Be(RoleChatSessionOutcome.OutcomeUncertain);
-        session.FailureCode.Should().Be("SESSION_OUTCOME_UNCERTAIN");
+        session.CompletionNotificationDeliveryStatus.Should()
+            .Be(RoleChatCompletionNotificationDeliveryStatus.RetryScheduled);
+        session.CompletionNotificationAttempt.Should().Be(1);
+        session.CompletionNotificationRetryCallbackId.Should().NotBeNullOrWhiteSpace();
         fixture.ExecutionPort.Requests.Should().BeEmpty();
         fixture.Tool.ExecutionCount.Should().Be(0);
     }
@@ -987,20 +1041,22 @@ public sealed class RoleGAgentRecoveryCheckpointTests
         RecordingPublisher Publisher,
         ServiceProvider Services)
     {
-        public Task StartSessionAsync(string sessionId) => Agent.PersistForTestAsync(
-            new RoleChatSessionStartedEvent
-            {
-                SessionId = sessionId,
-                Prompt = "prompt",
-                ScopeId = "scope-a",
-                RecoveryCheckpoint = new RoleChatRecoveryCheckpoint
+        public Task StartSessionAsync(string sessionId, RoleChatRunContext? runContext = null) =>
+            Agent.PersistForTestAsync(
+                new RoleChatSessionStartedEvent
                 {
-                    Generation = 1,
-                    Stage = RoleChatRecoveryCheckpointStage.ModelReady,
-                    RecoveryContext = ToolContext(ActorId, sessionId).ToRecoveryPayload(),
-                    PayloadExpiresAtUnixMs = Now.AddHours(24).ToUnixTimeMilliseconds(),
-                },
-            });
+                    SessionId = sessionId,
+                    Prompt = "prompt",
+                    ScopeId = "scope-a",
+                    RunContext = runContext?.Clone(),
+                    RecoveryCheckpoint = new RoleChatRecoveryCheckpoint
+                    {
+                        Generation = 1,
+                        Stage = RoleChatRecoveryCheckpointStage.ModelReady,
+                        RecoveryContext = ToolContext(ActorId, sessionId).ToRecoveryPayload(),
+                        PayloadExpiresAtUnixMs = Now.AddHours(24).ToUnixTimeMilliseconds(),
+                    },
+                });
     }
 
     private sealed class TestRoleGAgent(
@@ -1165,6 +1221,7 @@ public sealed class RoleGAgentRecoveryCheckpointTests
     private sealed class RecordingPublisher : IEventPublisher
     {
         public bool FailRecoveryContinuation { get; init; }
+        public bool FailCompletionNotification { get; init; }
         public List<IMessage> Published { get; } = [];
 
         public Task PublishAsync<TEvent>(
@@ -1187,8 +1244,12 @@ public sealed class RoleGAgentRecoveryCheckpointTests
             CancellationToken ct = default,
             EventEnvelope? sourceEnvelope = null,
             EventEnvelopePublishOptions? options = null)
-            where TEvent : IMessage =>
-            PublishAsync(evt, TopologyAudience.Self, ct, sourceEnvelope, options);
+            where TEvent : IMessage
+        {
+            if (FailCompletionNotification && evt is RoleChatSessionCompletedEvent)
+                throw new InvalidOperationException("completion notification send failed");
+            return PublishAsync(evt, TopologyAudience.Self, ct, sourceEnvelope, options);
+        }
     }
 
     private sealed class RecordingScheduler : IActorRuntimeCallbackScheduler

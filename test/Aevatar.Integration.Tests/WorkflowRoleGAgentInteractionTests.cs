@@ -1404,6 +1404,14 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
             llmProvider.ReleaseAfterCancellation();
             await execution;
 
+            var sourceReconciliations = publisher.Published
+                .Select(static item => item.evt)
+                .OfType<RoleChatRecoveryContinuationRequested>()
+                .Where(item => item.SessionId == "session-approval")
+                .ToArray();
+            sourceReconciliations.Should().HaveCount(2);
+            await agent.HandleChatRecoveryContinuationRequestedAsync(sourceReconciliations[^1]);
+
             var completion = (await eventStore.GetEventsAsync(agent.Id))
                 .Where(stateEvent => stateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
                 .Select(stateEvent => stateEvent.EventData.Unpack<RoleChatSessionCompletedEvent>())
@@ -1727,6 +1735,14 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
                 .OfType<RoleChatRecoveryContinuationRequested>()
                 .Should().ContainSingle().Which;
             await agent.HandleChatRecoveryContinuationRequestedAsync(continuation);
+            var sourceReconciliations = publisher.Published
+                .Select(static item => item.evt)
+                .OfType<RoleChatRecoveryContinuationRequested>()
+                .Where(item => item.SessionId == "session-approval")
+                .ToArray();
+            sourceReconciliations.Should().HaveCount(2);
+            var sourceReconciliation = sourceReconciliations[^1];
+            await agent.HandleChatRecoveryContinuationRequestedAsync(sourceReconciliation);
 
             tool.ExecuteCount.Should().Be(1);
             tool.AccessTokens.Should().Equal("fresh-token-1");
@@ -1830,6 +1846,14 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
                     item.SessionId == continuationSessionId).Which;
 
             await agent.HandleChatRecoveryContinuationRequestedAsync(targetRecovery);
+            var sourceReconciliations = publisher.Published
+                .Select(static item => item.evt)
+                .OfType<RoleChatRecoveryContinuationRequested>()
+                .Where(item => item.SessionId == "session-approval")
+                .ToArray();
+            sourceReconciliations.Should().HaveCount(2);
+            var sourceReconciliation = sourceReconciliations[^1];
+            await agent.HandleChatRecoveryContinuationRequestedAsync(sourceReconciliation);
 
             approvalTool.ExecuteCount.Should().Be(1,
                 "source recovery must adopt the approved result");
@@ -1888,6 +1912,14 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
                         $"{pair.Key}:{pair.Value.Outcome}:{pair.Value.FailureCode}"))).Which;
 
             await agent.HandleChatRecoveryContinuationRequestedAsync(recovery);
+            var sourceReconciliations = publisher.Published
+                .Select(static item => item.evt)
+                .OfType<RoleChatRecoveryContinuationRequested>()
+                .Where(item => item.SessionId == "session-approval")
+                .ToArray();
+            sourceReconciliations.Should().HaveCount(2);
+            var sourceReconciliation = sourceReconciliations[^1];
+            await agent.HandleChatRecoveryContinuationRequestedAsync(sourceReconciliation);
 
             llm.CallCount.Should().Be(2);
             tool.ExecuteCount.Should().Be(1);
@@ -1963,8 +1995,10 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
         }
 
         [Fact]
-        public async Task WorkflowRoleGAgent_WhenContinuationNeedsAnotherApproval_ShouldSuspendAgain()
+        public async Task WorkflowRoleGAgent_WhenContinuationNeedsAnotherApproval_ShouldReconcileEveryDirectParent()
         {
+            const string firstContinuationSessionId = "approval-continuation-1";
+            const string secondContinuationSessionId = "approval-continuation-2";
             var eventStore = new InMemoryEventStore();
             var tool = new ApprovalRequiredWorkflowTool();
             var tokenProvider = new RotatingWorkflowCallerAccessTokenProvider();
@@ -1988,7 +2022,7 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
             {
                 RequestId = firstRequestId,
                 Approved = true,
-                ContinuationTurnId = "approval-continuation-1",
+                ContinuationTurnId = firstContinuationSessionId,
             });
             var continuation = publisher.Published
                 .Select(static item => item.evt)
@@ -2004,6 +2038,174 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
                 .OfType<ToolApprovalRequestEvent>().Should().HaveCount(2);
             publisher.Published.Select(static item => item.evt)
                 .OfType<WorkflowLlmInvocationCompletedEvent>().Should().BeEmpty();
+
+            var secondRequestId = agent.State.PendingApproval.RequestId;
+            await agent.HandleToolApprovalDecision(new ToolApprovalDecisionEvent
+            {
+                RequestId = secondRequestId,
+                Approved = true,
+                ContinuationTurnId = secondContinuationSessionId,
+            });
+            var secondContinuationRecovery = publisher.Published
+                .Select(static item => item.evt)
+                .OfType<RoleChatRecoveryContinuationRequested>()
+                .Last(item => item.SessionId == firstContinuationSessionId);
+
+            await agent.HandleChatRecoveryContinuationRequestedAsync(secondContinuationRecovery);
+
+            agent.State.Sessions[secondContinuationSessionId].Completed.Should().BeTrue();
+            agent.State.Sessions[firstContinuationSessionId].Completed.Should().BeFalse();
+            agent.State.Sessions["session-approval"].Completed.Should().BeFalse();
+            var firstParentReconciliations = publisher.Published
+                .Select(static item => item.evt)
+                .OfType<RoleChatRecoveryContinuationRequested>()
+                .Where(item => item.SessionId == firstContinuationSessionId)
+                .ToArray();
+            firstParentReconciliations.Should().HaveCount(2);
+            var firstParentReconciliation = firstParentReconciliations[^1];
+
+            await agent.HandleChatRecoveryContinuationRequestedAsync(firstParentReconciliation);
+
+            agent.State.Sessions[firstContinuationSessionId].Completed.Should().BeTrue();
+            agent.State.Sessions["session-approval"].Completed.Should().BeFalse();
+            var originalParentReconciliations = publisher.Published
+                .Select(static item => item.evt)
+                .OfType<RoleChatRecoveryContinuationRequested>()
+                .Where(item => item.SessionId == "session-approval")
+                .ToArray();
+            originalParentReconciliations.Should().HaveCount(2);
+            var originalParentReconciliation = originalParentReconciliations[^1];
+
+            await agent.HandleChatRecoveryContinuationRequestedAsync(originalParentReconciliation);
+
+            tool.ExecuteCount.Should().Be(2);
+            llm.CallCount.Should().Be(3);
+            agent.State.PendingApproval.Should().BeNull();
+            var firstContinuation = agent.State.Sessions[firstContinuationSessionId];
+            firstContinuation.DirectParentRoleChatSessionId.Should().Be("session-approval");
+            agent.State.Sessions[secondContinuationSessionId]
+                .DirectParentRoleChatSessionId.Should().Be(firstContinuationSessionId);
+            var original = agent.State.Sessions["session-approval"];
+            original.Completed.Should().BeTrue();
+            original.Outcome.Should().Be(RoleChatSessionOutcome.Completed);
+            original.ToolCalls.Should().HaveCount(2);
+            original.ToolResults.Should().HaveCount(2);
+            original.ToolResults.Should().OnlyContain(static result => result.Success);
+            original.ToolReceipts.Should().HaveCount(2);
+            publisher.Published.Select(static item => item.evt)
+                .OfType<WorkflowLlmInvocationCompletedEvent>()
+                .Should().ContainSingle(completed =>
+                    completed.Success && completed.SessionId == "session-approval");
+
+            await agent.HandleChatRecoveryContinuationRequestedAsync(firstParentReconciliation);
+            await agent.HandleChatRecoveryContinuationRequestedAsync(originalParentReconciliation);
+
+            tool.ExecuteCount.Should().Be(2, "terminal checkpoints must fence repeated recovery");
+            publisher.Published.Select(static item => item.evt)
+                .OfType<WorkflowLlmInvocationCompletedEvent>().Should().ContainSingle();
+        }
+
+        [Fact]
+        public async Task WorkflowRoleGAgent_WhenOnlySecondLevelTargetRecovers_ShouldReconcileParentsInOrder()
+        {
+            const string firstContinuationSessionId = "approval-target-level-1";
+            const string secondContinuationSessionId = "approval-target-level-2";
+            var eventStore = new FailCompletionCheckpointEventStore(failureOrdinal: 3);
+            var approvalTool = new ApprovalRequiredWorkflowTool();
+            var continuationTool = new SuccessfulWorkflowTool("lookup_after_two_approvals");
+            var llm = new TwoApprovalsThenToolWorkflowIntentLlmProvider(
+                approvalTool.Name,
+                continuationTool.Name);
+            var registry = new FixedToolSetRegistry(
+                "studio.write",
+                new FixedToolSource(approvalTool, continuationTool));
+            var (agent, publisher) = await CreateActivatedWorkflowRoleAgentAsync(
+                eventStore,
+                llm,
+                "workflow-role-agent-second-level-target-recovery",
+                toolSetRegistry: registry,
+                callerAccessTokenProvider: new RotatingWorkflowCallerAccessTokenProvider());
+            var intent = ApprovalIntent(approvalTool.Name);
+            intent.AgentToolScope.AllowedToolNames.Add(continuationTool.Name);
+
+            await agent.HandleWorkflowLlmExecutionIntent(intent);
+            await agent.HandleToolApprovalDecision(new ToolApprovalDecisionEvent
+            {
+                RequestId = agent.State.PendingApproval.RequestId,
+                Approved = true,
+                ContinuationTurnId = firstContinuationSessionId,
+            });
+            var originalRecovery = publisher.Published
+                .Select(static item => item.evt)
+                .OfType<RoleChatRecoveryContinuationRequested>()
+                .Single(item => item.SessionId == "session-approval");
+            await agent.HandleChatRecoveryContinuationRequestedAsync(originalRecovery);
+
+            await agent.HandleToolApprovalDecision(new ToolApprovalDecisionEvent
+            {
+                RequestId = agent.State.PendingApproval.RequestId,
+                Approved = true,
+                ContinuationTurnId = secondContinuationSessionId,
+            });
+            var firstTargetRecovery = publisher.Published
+                .Select(static item => item.evt)
+                .OfType<RoleChatRecoveryContinuationRequested>()
+                .Single(item => item.SessionId == firstContinuationSessionId);
+            await agent.HandleChatRecoveryContinuationRequestedAsync(firstTargetRecovery);
+
+            approvalTool.ExecuteCount.Should().Be(2);
+            continuationTool.ExecuteCount.Should().Be(1);
+            llm.CallCount.Should().Be(3);
+            agent.State.Sessions[secondContinuationSessionId].Completed.Should().BeFalse();
+            agent.State.Sessions[firstContinuationSessionId].Completed.Should().BeFalse();
+            agent.State.Sessions["session-approval"].Completed.Should().BeFalse();
+            var secondTargetRecovery = publisher.Published
+                .Select(static item => item.evt)
+                .OfType<RoleChatRecoveryContinuationRequested>()
+                .Should().ContainSingle(item => item.SessionId == secondContinuationSessionId).Which;
+
+            await agent.HandleChatRecoveryContinuationRequestedAsync(secondTargetRecovery);
+
+            approvalTool.ExecuteCount.Should().Be(2, "approved operations must adopt durable results");
+            continuationTool.ExecuteCount.Should().Be(1, "target recovery must adopt its sealed result");
+            llm.CallCount.Should().Be(4);
+            agent.State.Sessions[secondContinuationSessionId].Completed.Should().BeTrue();
+            agent.State.Sessions[firstContinuationSessionId].Completed.Should().BeFalse();
+            agent.State.Sessions["session-approval"].Completed.Should().BeFalse();
+
+            var firstParentReconciliations = publisher.Published
+                .Select(static item => item.evt)
+                .OfType<RoleChatRecoveryContinuationRequested>()
+                .Where(item => item.SessionId == firstContinuationSessionId)
+                .ToArray();
+            firstParentReconciliations.Should().HaveCount(2);
+            await agent.HandleChatRecoveryContinuationRequestedAsync(firstParentReconciliations[^1]);
+
+            agent.State.Sessions[firstContinuationSessionId].Completed.Should().BeTrue();
+            agent.State.Sessions["session-approval"].Completed.Should().BeFalse(
+                "the second-level target must reconcile its direct parent before the original source");
+            var originalParentReconciliations = publisher.Published
+                .Select(static item => item.evt)
+                .OfType<RoleChatRecoveryContinuationRequested>()
+                .Where(item => item.SessionId == "session-approval")
+                .ToArray();
+            originalParentReconciliations.Should().HaveCount(2);
+            await agent.HandleChatRecoveryContinuationRequestedAsync(originalParentReconciliations[^1]);
+
+            var original = agent.State.Sessions["session-approval"];
+            original.Completed.Should().BeTrue();
+            original.Outcome.Should().Be(RoleChatSessionOutcome.Completed);
+            original.ToolResults.Should().HaveCount(3);
+            original.ToolResults.Should().OnlyContain(static result => result.Success);
+            publisher.Published.Select(static item => item.evt)
+                .OfType<WorkflowLlmInvocationCompletedEvent>()
+                .Should().ContainSingle(completed =>
+                    completed.Success && completed.SessionId == "session-approval");
+
+            await agent.HandleChatRecoveryContinuationRequestedAsync(secondTargetRecovery);
+            await agent.HandleChatRecoveryContinuationRequestedAsync(firstParentReconciliations[^1]);
+            approvalTool.ExecuteCount.Should().Be(2);
+            continuationTool.ExecuteCount.Should().Be(1);
         }
 
         private static WorkflowLlmExecutionIntent ApprovalIntent(string toolName) => new()
@@ -3149,6 +3351,42 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
                 }
 
                 yield return new LLMStreamChunk { DeltaContent = "approval pending" };
+                yield return new LLMStreamChunk { IsLast = true, FinishReason = "stop" };
+                await Task.CompletedTask;
+            }
+        }
+
+        private sealed class TwoApprovalsThenToolWorkflowIntentLlmProvider(
+            string approvalToolName,
+            string continuationToolName) : WorkflowIntentLlmProviderBase
+        {
+            private int _calls;
+
+            public int CallCount => Volatile.Read(ref _calls);
+
+            public override async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+                LLMRequest request,
+                [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+            {
+                _ = request;
+                ct.ThrowIfCancellationRequested();
+                var call = Interlocked.Increment(ref _calls);
+                if (call <= 3)
+                {
+                    yield return new LLMStreamChunk
+                    {
+                        DeltaToolCall = new ToolCall
+                        {
+                            Id = $"call-two-approval-{call}",
+                            Name = call <= 2 ? approvalToolName : continuationToolName,
+                            ArgumentsJson = "{}",
+                        },
+                    };
+                    yield return new LLMStreamChunk { IsLast = true, FinishReason = "tool_calls" };
+                    yield break;
+                }
+
+                yield return new LLMStreamChunk { DeltaContent = "recovered two-approval completion" };
                 yield return new LLMStreamChunk { IsLast = true, FinishReason = "stop" };
                 await Task.CompletedTask;
             }

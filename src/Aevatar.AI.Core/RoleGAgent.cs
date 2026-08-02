@@ -1182,7 +1182,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         string.Equals(current.RequestId, candidate.RequestId, StringComparison.Ordinal) &&
         string.Equals(current.SessionId, candidate.SessionId, StringComparison.Ordinal) &&
         string.Equals(current.OperationId, candidate.OperationId, StringComparison.Ordinal) &&
-        string.Equals(current.ToolCallId, candidate.ToolCallId, StringComparison.Ordinal);
+        string.Equals(current.ToolCallId, candidate.ToolCallId, StringComparison.Ordinal) &&
+        Equals(current.WorkflowLlmContinuation, candidate.WorkflowLlmContinuation);
 
     protected virtual Task<(IAgentTool Tool, AgentToolExecutionContext ExecutionContext)>
         ResolveApprovedToolExecutionAsync(
@@ -1801,9 +1802,6 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             await TryFinalizeIncompleteSessionAsync(
                 targetSessionId,
                 incompleteContinuationSession.LastProgressSequence);
-            await ReconcileApprovalContinuationSourceSessionAsync(
-                request.SessionId,
-                targetSessionId);
             return;
         }
 
@@ -1903,24 +1901,6 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 recoveredResults),
             continuationContext,
             recoveredControl);
-
-        if (isApprovalContinuation)
-        {
-            await ReconcileApprovalContinuationSourceSessionAsync(
-                request.SessionId,
-                targetSessionId);
-        }
-        else if (checkpoint.WorkflowLlmApprovalContinuation is { } workflowContinuation &&
-                 !string.IsNullOrWhiteSpace(workflowContinuation.SessionId) &&
-                 !string.Equals(
-                     workflowContinuation.SessionId,
-                     request.SessionId,
-                     StringComparison.Ordinal))
-        {
-            await ReconcileApprovalContinuationSourceSessionAsync(
-                workflowContinuation.SessionId,
-                request.SessionId);
-        }
     }
 
     private async Task ReconcileApprovalContinuationSourceSessionAsync(
@@ -1930,11 +1910,56 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         if (!State.Sessions.TryGetValue(continuationSessionId, out var continuationSession) ||
             !continuationSession.Completed ||
             !State.Sessions.TryGetValue(sourceSessionId, out var sourceSession) ||
-            sourceSession.Completed)
+            sourceSession.Completed ||
+            sourceSession.RecoveryCheckpoint is not { } sourceCheckpoint ||
+            sourceCheckpoint.Stage != RoleChatRecoveryCheckpointStage.ContinuationPrepared ||
+            !string.Equals(
+                sourceCheckpoint.ContinuationSessionId,
+                continuationSessionId,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                continuationSession.DirectParentRoleChatSessionId,
+                sourceSessionId,
+                StringComparison.Ordinal))
         {
             return;
         }
 
+        var sourceToolResults = await ResolveCompletedApprovalSourceToolResultsAsync(
+            sourceSessionId,
+            sourceSession);
+        if (sourceToolResults is null)
+        {
+            await FinalizeRecoveryOutcomeUncertainAsync(
+                sourceSessionId,
+                "The committed approved-tool result could not be verified while reconciling the continuation.");
+            return;
+        }
+
+        var toolCalls = sourceToolResults
+            .Select(static result => result.ToolCall)
+            .Concat(continuationSession.ToolCalls.Select(static toolCall => new ToolCall
+            {
+                Id = toolCall.CallId,
+                Name = toolCall.ToolName,
+                ArgumentsJson = toolCall.ArgumentsJson,
+            }))
+            .GroupBy(static toolCall => toolCall.Id, StringComparer.Ordinal)
+            .Select(static group => group.Last())
+            .ToArray();
+        var toolReceipts = sourceToolResults
+            .Where(static result => result.Receipt is not null)
+            .Select(static result => result.Receipt!.Clone())
+            .Concat(continuationSession.ToolReceipts.Select(static receipt => receipt.Clone()))
+            .GroupBy(static receipt => receipt.CallId, StringComparer.Ordinal)
+            .Select(static group => group.Last())
+            .ToArray();
+        var toolResults = sourceToolResults
+            .Select(ToToolResultEvent)
+            .Concat(continuationSession.ToolResults.Select(static result => result.Clone()))
+            .GroupBy(static result => result.CallId, StringComparer.Ordinal)
+            .Select(static group => group.Last())
+            .ToArray();
         await PersistRoleChatSessionCompletionAsync(
             new ChatRequestEvent
             {
@@ -1949,22 +1974,62 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             },
             continuationSession.FinalContent,
             continuationSession.FinalReasoningContent,
-            continuationSession.ToolCalls.Select(static toolCall => new ToolCall
-            {
-                Id = toolCall.CallId,
-                Name = toolCall.ToolName,
-                ArgumentsJson = toolCall.ArgumentsJson,
-            }).ToArray(),
+            toolCalls,
             ContentPartProtoMapper.FromProtoList(continuationSession.OutputParts),
             continuationSession.ContentEmitted,
             ToTokenUsage(continuationSession.Usage),
             model: continuationSession.Model,
-            toolReceipts: continuationSession.ToolReceipts,
-            toolResults: continuationSession.ToolResults,
+            toolReceipts: toolReceipts,
+            toolResults: toolResults,
             outcome: continuationSession.Outcome,
             failureCode: continuationSession.FailureCode,
             safeMessage: continuationSession.SafeMessage,
             authorizationRequired: continuationSession.AuthorizationRequired);
+    }
+
+    private async Task<IReadOnlyList<RecoveredChatToolResult>?>
+        ResolveCompletedApprovalSourceToolResultsAsync(
+            string sourceSessionId,
+            RoleChatSessionState sourceSession)
+    {
+        var checkpoint = sourceSession.RecoveryCheckpoint;
+        if (checkpoint is null || checkpoint.ToolIntents.Count == 0)
+            return [];
+
+        var completedOperationIds = checkpoint.ToolCompletions
+            .Select(static completion => completion.OperationId)
+            .ToHashSet(StringComparer.Ordinal);
+        if (checkpoint.ToolIntents.Any(intent => !completedOperationIds.Contains(intent.OperationId)))
+            return null;
+
+        try
+        {
+            return await RecoverCheckpointToolResultsAsync(
+                sourceSessionId,
+                checkpoint,
+                AgentToolExecutionContext.Empty,
+                CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (ChatToolRecoveryPayloadMaterialException)
+        {
+            return null;
+        }
+    }
+
+    private static ToolResultEvent ToToolResultEvent(RecoveredChatToolResult recovered)
+    {
+        var result = new ToolResultEvent
+        {
+            CallId = recovered.ToolCall.Id,
+            ResultJson = recovered.Result,
+            Success = recovered.Success,
+            Error = recovered.Success
+                ? string.Empty
+                : recovered.Receipt?.ErrorMessage ?? recovered.SafeErrorCode,
+        };
+        if (recovered.Receipt is not null)
+            result.Receipt = recovered.Receipt.Clone();
+        return result;
     }
 
     protected virtual Task HandleRecoveredChatTurnAsync(
@@ -2379,6 +2444,10 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 ResolveWorkflowCompletionDeliveryContext(session),
             ActorId = Id,
         });
+        await DeliverCompletionNotificationAsync(
+            sessionId,
+            State.Sessions[sessionId],
+            CancellationToken.None);
     }
 
     protected sealed record RecoveredChatTurn(
@@ -2808,6 +2877,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                     LlmControl = ToRecoverySafeLlmControl(llmControl: request.LlmControl),
                     WorkflowLlmApprovalContinuation =
                         request.WorkflowLlmToolApprovalContinuation?.Clone(),
+                    DirectParentRoleChatSessionId =
+                        request.WorkflowLlmToolApprovalContinuation
+                            ?.DirectParentRoleChatSessionId ?? string.Empty,
                     RequiresRuntimeCredential = HasRuntimeCredential(
                         LLMControlContextMapper.FromPayload(request.LlmControl),
                         toolContext),
@@ -3417,7 +3489,34 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
 
     protected virtual Task OnRoleChatSessionTerminalCommittedAsync(
         string sessionId,
-        CancellationToken ct) => Task.CompletedTask;
+        CancellationToken ct) =>
+        RequestDirectParentApprovalReconciliationAsync(sessionId, ct);
+
+    private async Task RequestDirectParentApprovalReconciliationAsync(
+        string continuationSessionId,
+        CancellationToken ct)
+    {
+        if (!State.Sessions.TryGetValue(continuationSessionId, out var continuationSession) ||
+            string.IsNullOrWhiteSpace(continuationSession.DirectParentRoleChatSessionId) ||
+            !State.Sessions.TryGetValue(
+                continuationSession.DirectParentRoleChatSessionId,
+                out var directParentSession) ||
+            directParentSession.Completed ||
+            directParentSession.RecoveryCheckpoint is not { } directParentCheckpoint ||
+            directParentCheckpoint.Stage != RoleChatRecoveryCheckpointStage.ContinuationPrepared ||
+            !string.Equals(
+                directParentCheckpoint.ContinuationSessionId,
+                continuationSessionId,
+                StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        await TryRequestCheckpointRecoveryAsync(
+            continuationSession.DirectParentRoleChatSessionId,
+            directParentSession,
+            ct);
+    }
 
     private void PrepareTerminalProgress(RoleChatSessionCompletedEvent completion)
     {
@@ -4551,6 +4650,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         session.RunContext = evt.RunContext?.Clone();
         session.ScopeId = evt.ScopeId ?? string.Empty;
         session.RecoveryCheckpoint = evt.RecoveryCheckpoint?.Clone();
+        session.DirectParentRoleChatSessionId =
+            evt.RecoveryCheckpoint?.DirectParentRoleChatSessionId ?? string.Empty;
         session.WorkflowLlmCompletionDeliveryContext =
             evt.RecoveryCheckpoint?.WorkflowLlmCompletionDeliveryContext?.Clone();
         sessions[evt.SessionId] = session;
