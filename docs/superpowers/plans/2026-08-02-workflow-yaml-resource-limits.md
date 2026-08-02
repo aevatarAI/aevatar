@@ -34,7 +34,7 @@
 - Produces: `WorkflowYamlResourceLimitKind`, `WorkflowYamlResourceLimitException`, and `WorkflowYamlResourceGuard.Validate(string yaml)`.
 - Consumed by: runtime `WorkflowParser`, Infrastructure parse classification, Studio document parsing, and dynamic workflow validation.
 
-- [ ] **Step 1: Write failing core parser tests**
+- [x] **Step 1: Write failing core parser tests**
 
 Create tests that generate `steps[].children` rather than a generic YAML tree so the regression exactly matches issue #3041:
 
@@ -88,7 +88,7 @@ The helper writes one root step and then alternates a `children` sequence and ch
 
 Also pass the 31-link fixture to `DynamicWorkflowModule.ValidateWorkflowYaml` and assert a single error containing `YAML parse failed` and `nesting depth`. This test must be written before the guard because the dynamic module is a direct `WorkflowParser` ingress.
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 Run:
 
@@ -99,7 +99,7 @@ dotnet test test/Aevatar.Workflow.Core.Tests/Aevatar.Workflow.Core.Tests.csproj 
 
 Expected: compilation fails because `WorkflowYamlResourceGuard`, `WorkflowYamlResourceLimitException`, and `WorkflowYamlResourceLimitKind` do not exist.
 
-- [ ] **Step 3: Implement the iterative guard**
+- [x] **Step 3: Implement the iterative guard**
 
 Create the new guard with fixed public constants and no configuration surface:
 
@@ -189,11 +189,11 @@ public static class WorkflowYamlResourceGuard
 
 Call `WorkflowYamlResourceGuard.Validate(yaml);` as the first statement in `WorkflowParser.Parse`, before `ValidateRootSchema(yaml)`.
 
-- [ ] **Step 4: Run focused tests and verify GREEN**
+- [x] **Step 4: Run focused tests and verify GREEN**
 
 Run both filtered Core test commands. Expected: all resource-guard and dynamic-workflow tests pass without process termination.
 
-- [ ] **Step 5: Run the existing parser suite**
+- [x] **Step 5: Run the existing parser suite**
 
 Run:
 
@@ -203,7 +203,7 @@ dotnet test test/Aevatar.Workflow.Core.Tests/Aevatar.Workflow.Core.Tests.csproj 
 
 Expected: existing parser behavior remains green.
 
-- [ ] **Step 6: Commit the core guard**
+- [x] **Step 6: Commit the core guard**
 
 ```bash
 git add src/workflow/Aevatar.Workflow.Core/Primitives/WorkflowYamlResourceGuard.cs \
@@ -227,7 +227,7 @@ git commit -m "Guard workflow YAML resource usage"
 - Consumes: `WorkflowYamlResourceLimitException` from Task 1.
 - Produces: `WorkflowYamlParseErrorCode` and `ErrorCode` on single-document and inline-bundle parse results.
 
-- [ ] **Step 1: Write failing result and Infrastructure tests**
+- [x] **Step 1: Write failing result and Infrastructure tests**
 
 Add assertions that ordinary invalid results default to `InvalidYaml`, successful results use `None`, a deeply nested real parser result uses `ResourceLimit`, and an inline bundle propagates `ResourceLimit`:
 
@@ -237,7 +237,7 @@ result.ErrorCode.Should().Be(WorkflowYamlParseErrorCode.ResourceLimit);
 result.Error.Should().Contain("nesting depth");
 ```
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 Run:
 
@@ -248,7 +248,7 @@ dotnet test test/Aevatar.Workflow.Host.Api.Tests/Aevatar.Workflow.Host.Api.Tests
 
 Expected: compilation fails because `WorkflowYamlParseErrorCode` and `ErrorCode` do not exist.
 
-- [ ] **Step 3: Add the typed result contract**
+- [x] **Step 3: Add the typed result contract**
 
 Append an optional `ErrorCode` parameter to both parse records so existing callers remain source-compatible:
 
@@ -263,7 +263,7 @@ public enum WorkflowYamlParseErrorCode
 
 `Success` sets `None`; `Invalid` defaults to `InvalidYaml` and accepts an explicit final `errorCode` parameter. The inline parser passes `parseResult.ErrorCode` when a child document fails.
 
-- [ ] **Step 4: Classify the strong exception**
+- [x] **Step 4: Classify the strong exception**
 
 Add this catch before the existing external-capability and generic catches:
 
@@ -276,11 +276,11 @@ catch (WorkflowYamlResourceLimitException ex)
 }
 ```
 
-- [ ] **Step 5: Run focused tests and verify GREEN**
+- [x] **Step 5: Run focused tests and verify GREEN**
 
 Run both commands from Step 2. Expected: both projects pass their focused tests.
 
-- [ ] **Step 6: Commit typed classification**
+- [x] **Step 6: Commit typed classification**
 
 ```bash
 git add src/workflow/Aevatar.Workflow.Application.Abstractions/Runs/WorkflowRunPorts.cs \
@@ -303,7 +303,7 @@ git commit -m "Classify workflow YAML resource failures"
 - Consumes: `WorkflowYamlResourceGuard` and `WorkflowYamlResourceLimitException` from Task 1.
 - Produces: Studio validation finding code `yaml_resource_limit` before representation-model parsing.
 
-- [ ] **Step 1: Write failing Studio tests**
+- [x] **Step 1: Write failing Studio tests**
 
 Test a 31-link children chain and assert:
 
@@ -315,7 +315,7 @@ result.Findings.Should().ContainSingle(finding =>
 
 Also parse the 30-link fixture and assert a non-null document so the accepted boundary remains covered.
 
-- [ ] **Step 2: Run the Studio test group and verify RED**
+- [x] **Step 2: Run the Studio test group and verify RED**
 
 Run:
 
@@ -325,7 +325,7 @@ dotnet test test/Aevatar.Studio.Tests/Aevatar.Studio.Tests.csproj --nologo --fil
 
 Expected: Studio over-depth parsing reaches its own `YamlStream.Load` instead of producing `yaml_resource_limit`.
 
-- [ ] **Step 3: Guard Studio before representation-model parsing**
+- [x] **Step 3: Guard Studio before representation-model parsing**
 
 Add a direct `Aevatar.Workflow.Core` project reference to Studio Infrastructure. At the start of `Parse`, after the existing empty check and before creating/loading `YamlStream`, run the guard and translate only its strong exception:
 
@@ -342,11 +342,11 @@ catch (WorkflowYamlResourceLimitException exception)
 }
 ```
 
-- [ ] **Step 4: Run Studio tests and verify GREEN**
+- [x] **Step 4: Run Studio tests and verify GREEN**
 
 Run the command from Step 2. Expected: all selected tests pass.
 
-- [ ] **Step 5: Commit ingress coverage**
+- [x] **Step 5: Commit ingress coverage**
 
 ```bash
 git add src/Aevatar.Studio.Infrastructure/Aevatar.Studio.Infrastructure.csproj \
@@ -367,11 +367,11 @@ git commit -m "Enforce YAML limits across workflow ingresses"
 - Consumes: all completed behavior from Tasks 1-3.
 - Produces: reviewable #3041 branch and PR targeting `feature/integrate`.
 
-- [ ] **Step 1: Mark plan checkboxes and design status accurately**
+- [x] **Step 1: Mark plan checkboxes and design status accurately**
 
 Change the design frontmatter status to `Implemented and verified` only after all required commands succeed. Mark each completed plan checkbox `[x]`.
 
-- [ ] **Step 2: Run mandatory local verification**
+- [x] **Step 2: Run mandatory local verification**
 
 ```bash
 dotnet build aevatar.slnx --nologo
