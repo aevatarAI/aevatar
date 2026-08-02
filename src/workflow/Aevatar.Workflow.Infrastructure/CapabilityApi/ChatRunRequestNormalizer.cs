@@ -4,7 +4,7 @@ using WorkflowProtocol = Aevatar.Workflow.Abstractions;
 
 namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 
-internal readonly record struct ChatRunRequestNormalizationResult(
+public readonly record struct ChatRunRequestNormalizationResult(
     WorkflowChatRunRequest? Request,
     WorkflowChatRunStartError Error)
 {

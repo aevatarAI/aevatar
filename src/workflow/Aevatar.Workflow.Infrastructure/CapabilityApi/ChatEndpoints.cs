@@ -69,6 +69,23 @@ public static class WorkflowCapabilityEndpoints
             http.RequestServices.GetRequiredService<WorkflowMultipartChatRequestParser>(),
             ct);
 
+    public static ValueTask<ChatRunRequestNormalizationResult> NormalizeChatInputAsync(
+        ChatInput input,
+        IFileArtifactIngressPort? fileIngressPort,
+        IReadOnlyDictionary<string, string>? defaultMetadata = null,
+        Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential? trustedCallerCredential = null,
+        CancellationToken cancellationToken = default,
+        string? trustedScopeId = null,
+        bool allowEmptyInputForResolvedMemberWorkflow = false) =>
+        ChatRunRequestNormalizer.NormalizeAsync(
+            input,
+            fileIngressPort,
+            defaultMetadata,
+            trustedCallerCredential,
+            cancellationToken,
+            trustedScopeId,
+            allowEmptyInputForResolvedMemberWorkflow);
+
     internal static async Task HandleChatPost(
         HttpContext http,
         [FromServices] IWorkflowChatRunInteractionPort chatRunService,

@@ -29,7 +29,6 @@ using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
-using ExternalCapabilityExecutionMode = Aevatar.Workflow.Abstractions.ExternalCapabilityExecutionMode;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -204,23 +203,36 @@ public static class ScopeServiceEndpoints
 
             var normalizedPrompt = request.Prompt?.Trim() ?? string.Empty;
             var llmControl = await BuildScopedLlmControlAsync(http, ct);
-            var chatRequest = new WorkflowChatRunRequest(
-                Prompt: normalizedPrompt,
-                Source: WorkflowChatSource.InlineYamlBundle(request.WorkflowYamls),
-                ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
-                SessionId: request.SessionId,
-                InputParts: MapWorkflowChatInputParts(requestInput.InputParts),
-                Metadata: scopedHeaders,
-                ScopeId: scopeId,
-                CallerCredential: callerCredential.Credential,
-                LlmControl: ToWorkflowLlmControl(llmControl),
-                Headers: scopedHeaders);
+            var chatInput = new ChatInput
+            {
+                Prompt = normalizedPrompt,
+                InputParts = requestInput.InputParts,
+                WorkflowYamls = request.WorkflowYamls,
+                SessionId = request.SessionId,
+                ScopeId = scopeId,
+                Metadata = scopedHeaders,
+                Headers = scopedHeaders,
+                LlmControl = ToChatLlmControlInput(llmControl),
+            };
 
             if (eventFormat == ScopeWorkflowEndpoints.ScopeWorkflowStreamEventFormat.Agui)
             {
+                var normalizedRequest = await WorkflowCapabilityEndpoints.NormalizeChatInputAsync(
+                    chatInput,
+                    workflowFileIngressPort,
+                    trustedCallerCredential: callerCredential.Credential,
+                    cancellationToken: ct,
+                    trustedScopeId: scopeId);
+                if (!normalizedRequest.Succeeded)
+                {
+                    var (statusCode, code, message) = ScopeWorkflowEndpoints.MapRunStartError(normalizedRequest.Error);
+                    await WriteJsonErrorResponseAsync(http, statusCode, code, message, ct);
+                    return;
+                }
+
                 await ScopeWorkflowEndpoints.HandleAguiStreamAsync(
                     http,
-                    chatRequest,
+                    normalizedRequest.Request!,
                     chatRunService,
                     ct);
                 return;
@@ -228,18 +240,7 @@ public static class ScopeServiceEndpoints
 
             await WorkflowCapabilityEndpoints.HandleChat(
                 http,
-                new ChatInput
-                {
-                    Prompt = normalizedPrompt,
-                    InputParts = requestInput.InputParts,
-                    WorkflowYamls = chatRequest.Source.InlineBundle?.YamlDocuments
-                        .Select(static document => document.Yaml)
-                        .ToArray(),
-                    SessionId = chatRequest.SessionId,
-                    ScopeId = scopeId,
-                    Headers = scopedHeaders,
-                    LlmControl = ToChatLlmControlInput(llmControl),
-                },
+                chatInput,
                 chatRunService,
                 ct);
         }
@@ -3729,27 +3730,6 @@ const response = await fetch("{{invokePath}}", {
         };
     }
 
-    private static WorkflowLlmControl? ToWorkflowLlmControl(LLMControlContext? control)
-    {
-        if (control == null)
-            return null;
-
-        var model = NormalizeOptional(control.ModelOverride);
-        var userMemoryPrompt = NormalizeOptional(control.UserMemoryPrompt);
-        var routePreference = NormalizeOptional(control.NyxIdRoutePreference);
-        var maxToolRounds = control.MaxToolRoundsOverride is > 0
-            ? control.MaxToolRoundsOverride
-            : null;
-        if (model == null && userMemoryPrompt == null && routePreference == null && maxToolRounds == null)
-            return null;
-
-        return new WorkflowLlmControl(
-            ModelOverride: model,
-            MaxToolRoundsOverride: maxToolRounds,
-            UserMemoryPrompt: userMemoryPrompt,
-            RoutePreference: routePreference);
-    }
-
     private static async Task<LLMControlContext?> BuildScopedLlmControlAsync(
         HttpContext? http,
         CancellationToken cancellationToken = default)
@@ -3909,92 +3889,9 @@ const response = await fetch("{{invokePath}}", {
                 MediaType = p.MediaType,
                 Uri = p.Uri,
                 Name = p.Name,
+                InlineFile = p.InlineFile,
+                FileRef = p.FileRef,
             }).ToList();
-    }
-
-    private static IReadOnlyList<WorkflowChatInputPart>? MapWorkflowChatInputParts(
-        IReadOnlyList<ChatInputContentPart>? parts)
-    {
-        if (parts is not { Count: > 0 })
-            return null;
-
-        var inputParts = new List<WorkflowChatInputPart>(parts.Count);
-        foreach (var part in parts)
-        {
-            if (part == null || string.IsNullOrWhiteSpace(part.Type))
-                continue;
-
-            if (!TryParseWorkflowChatInputPartKind(part.Type, out var kind))
-                continue;
-
-            inputParts.Add(new WorkflowChatInputPart
-            {
-                Kind = kind,
-                Text = string.IsNullOrWhiteSpace(part.Text) ? null : part.Text,
-                DataBase64 = part.DataBase64,
-                MediaType = part.FileRef?.MediaType ?? part.MediaType,
-                Uri = part.FileRef?.ArtifactId ?? part.FileRef?.Uri ?? part.Uri,
-                Name = part.FileRef?.FileName ?? part.FileRef?.Name ?? part.Name,
-                FileRef = MapFileArtifactRef(part.FileRef),
-            });
-        }
-
-        return inputParts.Count == 0 ? null : inputParts;
-    }
-
-    private static bool TryParseWorkflowChatInputPartKind(
-        string raw,
-        out WorkflowChatInputPartKind kind)
-    {
-        kind = raw.Trim().ToLowerInvariant() switch
-        {
-            "text" => WorkflowChatInputPartKind.Text,
-            "image" => WorkflowChatInputPartKind.Image,
-            "audio" => WorkflowChatInputPartKind.Audio,
-            "video" => WorkflowChatInputPartKind.Video,
-            "file" => WorkflowChatInputPartKind.File,
-            _ => WorkflowChatInputPartKind.Unspecified,
-        };
-
-        return kind != WorkflowChatInputPartKind.Unspecified;
-    }
-
-    private static FileArtifactRef? MapFileArtifactRef(ChatInputFileRef? fileRef)
-    {
-        if (fileRef == null)
-            return null;
-
-        return new FileArtifactRef
-        {
-            FileId = fileRef.FileId,
-            ArtifactId = fileRef.ArtifactId ?? fileRef.Uri,
-            SourceKind = MapFileArtifactSourceKind(fileRef.SourceKind),
-            SourceMessageId = fileRef.SourceMessageId,
-            SourceResourceKey = fileRef.SourceResourceKey,
-            FileName = fileRef.FileName ?? fileRef.Name,
-            MediaType = fileRef.MediaType,
-            Sha256 = fileRef.Sha256,
-            CreatedAtUnixMs = fileRef.CreatedAtUnixMs ?? 0,
-            ExpiresAtUnixMs = fileRef.ExpiresAtUnixMs ?? 0,
-            OwnerRunId = fileRef.OwnerRunId,
-            OwnerScopeId = fileRef.OwnerScopeId,
-        };
-    }
-
-    private static FileArtifactSourceKind MapFileArtifactSourceKind(string? raw)
-    {
-        var key = string.IsNullOrWhiteSpace(raw)
-            ? string.Empty
-            : raw.Trim().ToLowerInvariant().Replace("-", string.Empty).Replace("_", string.Empty);
-        return key switch
-        {
-            "chatinput" or "chat" => FileArtifactSourceKind.ChatInput,
-            "formupload" or "form" => FileArtifactSourceKind.FormUpload,
-            "connectedserviceresource" or "connectedservice" => FileArtifactSourceKind.ConnectedServiceResource,
-            "externalresource" or "external" => FileArtifactSourceKind.ExternalResource,
-            "generated" => FileArtifactSourceKind.Generated,
-            _ => FileArtifactSourceKind.Unspecified,
-        };
     }
 
     private static IReadOnlyList<ChatInputContentPart>? AppendInputParts(
@@ -4380,7 +4277,9 @@ const response = await fetch("{{invokePath}}", {
         string? DataBase64 = null,
         string? MediaType = null,
         string? Uri = null,
-        string? Name = null);
+        string? Name = null,
+        ChatInputInlineFile? InlineFile = null,
+        ChatInputFileRef? FileRef = null);
 
     public sealed record ResumeScopeServiceRunHttpRequest(
         string? StepId,

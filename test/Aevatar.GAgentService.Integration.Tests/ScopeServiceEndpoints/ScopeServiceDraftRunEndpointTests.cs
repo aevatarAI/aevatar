@@ -152,6 +152,57 @@ public sealed class ScopeServiceDraftRunEndpointTests : ScopeServiceEndpointTest
     }
 
     [Fact]
+    public async Task ScopeDraftRunEndpoint_ShouldIngestAguiJsonInlineFileIntoTypedFileRef()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.InteractionService.ResultFactory = async (_, _, onAcceptedAsync, ct) =>
+        {
+            var receipt = new WorkflowChatRunAcceptedReceipt("run-actor-1", "main", "cmd-1", "corr-1");
+            if (onAcceptedAsync != null)
+                await onAcceptedAsync(receipt, ct);
+
+            return WorkflowChatRunInteractionResult
+                .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(
+                    WorkflowProjectionCompletionStatus.Completed,
+                    true));
+        };
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/workflow/draft-run", new
+        {
+            prompt = "inspect the sanitized attachment",
+            workflowYamls = new[]
+            {
+                "name: main\nsteps:\n  - run: echo file",
+            },
+            eventFormat = "agui",
+            inputParts = new[]
+            {
+                new
+                {
+                    type = "image",
+                    inlineFile = new
+                    {
+                        dataBase64 = "AQID",
+                        mediaType = "image/png",
+                        name = "probe.png",
+                        sizeBytes = 3,
+                        ownerScopeId = "scope-a",
+                    },
+                },
+            },
+        });
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, "body: {0}", body);
+        host.WorkflowFileIngressPort.Requests.Should().ContainSingle();
+        host.WorkflowFileIngressPort.Requests[0].Content.ToArray().Should().Equal(new byte[] { 1, 2, 3 });
+        var part = host.InteractionService.LastRequest!.InputParts.Should().ContainSingle().Which;
+        part.DataBase64.Should().BeNull();
+        part.FileRef.Should().NotBeNull();
+        part.FileRef!.ArtifactId.Should().Be("workflow-file://file-1");
+    }
+
+    [Fact]
     public async Task ScopeDraftRunEndpoint_ShouldPropagateScopedPreferredLlmRouteToAguiRequest()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync(

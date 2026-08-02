@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Reflection;
 using System.Security.Claims;
+using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
@@ -375,6 +376,41 @@ public sealed class ScopeServiceEndpointPrivateHelperTests : ScopeServiceEndpoin
             .Should().Contain("orders");
         InvokePrivateStatic<string>("BuildScopeServiceRunNotFoundMessage", "scope-a", "orders", "run-1")
             .Should().Contain("run-1");
+    }
+
+    [Fact]
+    public void ScopeServiceEndpointHelpers_ShouldPreserveTypedFileRefInput()
+    {
+        var request = JsonSerializer.Deserialize<ScopeServiceEndpoints.StreamScopeServiceHttpRequest>(
+            """
+            {
+              "prompt": "inspect the sanitized attachment",
+              "inputParts": [
+                {
+                  "type": "file",
+                  "fileRef": {
+                    "fileId": "file-alpha",
+                    "artifactId": "workflow-file://file-alpha",
+                    "sourceKind": "chat_input",
+                    "fileName": "probe.pdf",
+                    "mediaType": "application/pdf",
+                    "ownerScopeId": "scope-alpha"
+                  }
+                }
+              ]
+            }
+            """,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+
+        var mappedParts = InvokePrivateStatic<IReadOnlyList<ChatInputContentPart>?>(
+            "MapInputParts",
+            request!.InputParts);
+
+        var fileRef = mappedParts.Should().ContainSingle().Which.FileRef;
+        fileRef.Should().NotBeNull();
+        fileRef!.FileId.Should().Be("file-alpha");
+        fileRef.ArtifactId.Should().Be("workflow-file://file-alpha");
+        fileRef.OwnerScopeId.Should().Be("scope-alpha");
     }
 
     [Fact]
