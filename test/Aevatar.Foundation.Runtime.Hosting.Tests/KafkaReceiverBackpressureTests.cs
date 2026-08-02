@@ -23,7 +23,10 @@ public sealed class KafkaReceiverBackpressureTests(ITestOutputHelper output)
 {
     private const string PerformanceDiagnosticsEnvironmentVariable =
         "AEVATAR_KAFKA_RECEIVER_PERFORMANCE_DIAGNOSTICS";
+    private const string PerformanceDiagnosticWatchdogSecondsEnvironmentVariable =
+        "AEVATAR_KAFKA_RECEIVER_PERFORMANCE_WATCHDOG_SECONDS";
     private static readonly TimeSpan TestTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan DefaultPerformanceDiagnosticWatchdog = TimeSpan.FromMinutes(10);
 
     [Theory]
     [InlineData(0, 2, 4)]
@@ -385,6 +388,79 @@ public sealed class KafkaReceiverBackpressureTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public async Task KafkaReceiver_WhenShutdownWinsBeforeQueuedOwnerLoopRuns_ShouldNotCreateOrAssignConsumer()
+    {
+        var options = CreateOptions(capacity: 3, highWatermark: 2, lowWatermark: 1);
+        var mapper = new KafkaQueuePartitionMapper("backpressure-provider", 2);
+        var queueId = mapper.GetAllQueues().First();
+        var consumer = CreateDeterministicConsumer(options);
+        var consumerFactoryCallCount = 0;
+        var ownerLoopStarter = new GatedOwnerLoopStarter();
+        var receiver = new KafkaProviderQueueAdapterReceiver(
+            queueId,
+            "backpressure-provider",
+            options,
+            mapper,
+            "aevatar.events",
+            _ => Task.CompletedTask,
+            () =>
+            {
+                Interlocked.Increment(ref consumerFactoryCallCount);
+                return consumer;
+            },
+            ownerLoopStarter: ownerLoopStarter.Start);
+
+        var initialize = receiver.Initialize(TestTimeout);
+        await ownerLoopStarter.AwaitScheduledAsync();
+        consumerFactoryCallCount.Should().Be(0);
+
+        var shutdown = receiver.Shutdown(TestTimeout);
+        shutdown.IsCompleted.Should().BeFalse(
+            "shutdown waits for the already-published owner-loop task to observe lifecycle cancellation");
+        ownerLoopStarter.RunScheduled();
+
+        Func<Task> awaitInitialize = async () => await initialize;
+        await awaitInitialize.Should().ThrowAsync<OperationCanceledException>();
+        await shutdown.WaitAsync(TestTimeout);
+        consumerFactoryCallCount.Should().Be(0);
+        consumer.AssignedPartition.Should().BeNull(
+            "a queued delegate from a canceled generation must not assign its partition");
+        consumer.CloseCallCount.Should().Be(0);
+        consumer.DisposeCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task KafkaReceiver_WhenAssignFails_ShouldDisposeCreatedConsumerExactlyOnce()
+    {
+        var options = CreateOptions(capacity: 3, highWatermark: 2, lowWatermark: 1);
+        var mapper = new KafkaQueuePartitionMapper("backpressure-provider", 2);
+        var queueId = mapper.GetAllQueues().First();
+        var consumer = CreateDeterministicConsumer(options);
+        var assignFailure = new InvalidOperationException("assign failed on owner loop");
+        consumer.FailNextAssign(assignFailure);
+        var receiver = new KafkaProviderQueueAdapterReceiver(
+            queueId,
+            "backpressure-provider",
+            options,
+            mapper,
+            "aevatar.events",
+            _ => Task.CompletedTask,
+            () => consumer);
+
+        Func<Task> initialize = () => receiver.Initialize(TestTimeout);
+        var initializationFailure = await initialize.Should().ThrowAsync<InvalidOperationException>();
+        initializationFailure.Which.InnerException.Should().BeSameAs(assignFailure);
+        consumer.AssignedPartition.Should().BeNull();
+        consumer.CloseCallCount.Should().Be(1);
+        consumer.DisposeCallCount.Should().Be(1);
+
+        Func<Task> shutdown = () => receiver.Shutdown(TestTimeout);
+        await shutdown.Should().ThrowAsync<InvalidOperationException>();
+        consumer.CloseCallCount.Should().Be(1);
+        consumer.DisposeCallCount.Should().Be(1);
+    }
+
+    [Fact]
     public async Task KafkaReceiver_WhenPollReturnsAtHardCapacity_ShouldRewindWithoutGrowingBuffer()
     {
         var harness = CreateHarness(capacity: 2, highWatermark: 2, lowWatermark: 1);
@@ -634,11 +710,15 @@ public sealed class KafkaReceiverBackpressureTests(ITestOutputHelper output)
         const int warmupCount = 3;
         const int sampleCount = 9;
         var record = CreateBenchmarkRecord();
+        var diagnosticWatchdog = ResolvePerformanceDiagnosticWatchdog();
+        output.WriteLine("controlled measurement watchdog={0}", diagnosticWatchdog);
 
         for (var warmup = 0; warmup < warmupCount; warmup++)
         {
-            _ = await MeasureReceiverShapeAsync(record, 25_000, capacity, useBoundedBuffer: false);
-            _ = await MeasureReceiverShapeAsync(record, 25_000, capacity, useBoundedBuffer: true);
+            _ = await MeasureReceiverShapeAsync(
+                record, 25_000, capacity, useBoundedBuffer: false, diagnosticWatchdog);
+            _ = await MeasureReceiverShapeAsync(
+                record, 25_000, capacity, useBoundedBuffer: true, diagnosticWatchdog);
         }
 
         var baselineSamples = new List<ReceiverShapeMeasurement>(sampleCount);
@@ -649,16 +729,16 @@ public sealed class KafkaReceiverBackpressureTests(ITestOutputHelper output)
             if (sample % 2 == 0)
             {
                 baselineSamples.Add(await MeasureReceiverShapeAsync(
-                    record, operationCount, capacity, useBoundedBuffer: false));
+                    record, operationCount, capacity, useBoundedBuffer: false, diagnosticWatchdog));
                 boundedSamples.Add(await MeasureReceiverShapeAsync(
-                    record, operationCount, capacity, useBoundedBuffer: true));
+                    record, operationCount, capacity, useBoundedBuffer: true, diagnosticWatchdog));
             }
             else
             {
                 boundedSamples.Add(await MeasureReceiverShapeAsync(
-                    record, operationCount, capacity, useBoundedBuffer: true));
+                    record, operationCount, capacity, useBoundedBuffer: true, diagnosticWatchdog));
                 baselineSamples.Add(await MeasureReceiverShapeAsync(
-                    record, operationCount, capacity, useBoundedBuffer: false));
+                    record, operationCount, capacity, useBoundedBuffer: false, diagnosticWatchdog));
             }
 
             var baselineSample = baselineSamples[^1];
@@ -698,8 +778,10 @@ public sealed class KafkaReceiverBackpressureTests(ITestOutputHelper output)
 
         const int transferCount = 1_000_000;
         var message = Substitute.For<IBatchContainer>();
-        var unboundedTransfer = await MeasureConcurrentUnboundedQueueAsync(message, transferCount);
-        var boundedTransfer = await MeasureConcurrentBoundedBufferAsync(message, transferCount, transferCount);
+        var unboundedTransfer = await MeasureConcurrentUnboundedQueueAsync(
+            message, transferCount, diagnosticWatchdog);
+        var boundedTransfer = await MeasureConcurrentBoundedBufferAsync(
+            message, transferCount, transferCount, diagnosticWatchdog);
         output.WriteLine(
             "pure-buffer diagnostic: old-unbounded={0:N0} pairs/s; new-bounded={1:N0} pairs/s (no wall-clock gate)",
             transferCount / unboundedTransfer.TotalSeconds,
@@ -736,6 +818,22 @@ public sealed class KafkaReceiverBackpressureTests(ITestOutputHelper output)
         baseline.Checksum.Should().Be(expectedChecksum);
         bounded.Checksum.Should().Be(expectedChecksum,
             "both paths must pull the same sequence of Kafka offsets");
+    }
+
+    private static TimeSpan ResolvePerformanceDiagnosticWatchdog()
+    {
+        var configuredSeconds = Environment.GetEnvironmentVariable(
+            PerformanceDiagnosticWatchdogSecondsEnvironmentVariable);
+        if (string.IsNullOrWhiteSpace(configuredSeconds))
+            return DefaultPerformanceDiagnosticWatchdog;
+
+        if (!int.TryParse(configuredSeconds, out var seconds) || seconds <= 0)
+        {
+            throw new InvalidOperationException(
+                $"{PerformanceDiagnosticWatchdogSecondsEnvironmentVariable} must be a positive integer.");
+        }
+
+        return TimeSpan.FromSeconds(seconds);
     }
 
     private static ReceiverHarness CreateHarness(int capacity, int highWatermark, int lowWatermark)
@@ -786,7 +884,8 @@ public sealed class KafkaReceiverBackpressureTests(ITestOutputHelper output)
 
     private static async Task<TimeSpan> MeasureConcurrentUnboundedQueueAsync(
         IBatchContainer message,
-        int operationCount)
+        int operationCount,
+        TimeSpan diagnosticWatchdog)
     {
         var queue = new ConcurrentQueue<IBatchContainer>();
         return await MeasureConcurrentTransferAsync(
@@ -796,7 +895,8 @@ public sealed class KafkaReceiverBackpressureTests(ITestOutputHelper output)
                 queue.Enqueue(message);
                 return true;
             },
-            () => queue.TryDequeue(out _));
+            () => queue.TryDequeue(out _),
+            diagnosticWatchdog);
     }
 
     private static void UpdateMaximum(ref int maximum, int candidate)
@@ -812,19 +912,22 @@ public sealed class KafkaReceiverBackpressureTests(ITestOutputHelper output)
     private static async Task<TimeSpan> MeasureConcurrentBoundedBufferAsync(
         IBatchContainer message,
         int operationCount,
-        int capacity)
+        int capacity,
+        TimeSpan diagnosticWatchdog)
     {
         var buffer = new KafkaReceiverMessageBuffer(capacity);
         return await MeasureConcurrentTransferAsync(
             operationCount,
             () => buffer.TryWrite(message),
-            () => buffer.TryRead(out _));
+            () => buffer.TryRead(out _),
+            diagnosticWatchdog);
     }
 
     private static async Task<TimeSpan> MeasureConcurrentTransferAsync(
         int operationCount,
         Func<bool> tryProduce,
-        Func<bool> tryConsume)
+        Func<bool> tryConsume,
+        TimeSpan diagnosticWatchdog)
     {
         using var start = new ManualResetEventSlim();
         var producer = Task.Factory.StartNew(
@@ -860,7 +963,7 @@ public sealed class KafkaReceiverBackpressureTests(ITestOutputHelper output)
 
         var stopwatch = Stopwatch.StartNew();
         start.Set();
-        await Task.WhenAll(producer, consumer).WaitAsync(TestTimeout);
+        await Task.WhenAll(producer, consumer).WaitAsync(diagnosticWatchdog);
         stopwatch.Stop();
         return stopwatch.Elapsed;
     }
@@ -926,7 +1029,8 @@ public sealed class KafkaReceiverBackpressureTests(ITestOutputHelper output)
         ConsumeResult<Ignore, byte[]> record,
         int operationCount,
         int capacity,
-        bool useBoundedBuffer)
+        bool useBoundedBuffer,
+        TimeSpan diagnosticWatchdog)
     {
         var queue = useBoundedBuffer ? null : new ConcurrentQueue<IBatchContainer>();
         var buffer = useBoundedBuffer ? new KafkaReceiverMessageBuffer(capacity) : null;
@@ -997,7 +1101,7 @@ public sealed class KafkaReceiverBackpressureTests(ITestOutputHelper output)
         var allocatedBefore = GC.GetTotalAllocatedBytes(precise: true);
         var stopwatch = Stopwatch.StartNew();
         start.Set();
-        await Task.WhenAll(owner, puller).WaitAsync(TestTimeout);
+        await Task.WhenAll(owner, puller).WaitAsync(diagnosticWatchdog);
         stopwatch.Stop();
         var allocatedBytes = GC.GetTotalAllocatedBytes(precise: true) - allocatedBefore;
         var cpuElapsed = process.TotalProcessorTime - cpuBefore;
@@ -1058,6 +1162,39 @@ public sealed class KafkaReceiverBackpressureTests(ITestOutputHelper output)
         }
     }
 
+    private sealed class GatedOwnerLoopStarter
+    {
+        private readonly TaskCompletionSource<Action> _scheduled =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _completion =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private Action? _scheduledAction;
+
+        public Task Start(Action action)
+        {
+            Interlocked.CompareExchange(ref _scheduledAction, action, null).Should().BeNull();
+            _scheduled.TrySetResult(action).Should().BeTrue();
+            return _completion.Task;
+        }
+
+        public Task AwaitScheduledAsync() => _scheduled.Task.WaitAsync(TestTimeout);
+
+        public void RunScheduled()
+        {
+            try
+            {
+                (Volatile.Read(ref _scheduledAction) ??
+                 throw new InvalidOperationException("No owner-loop action was scheduled."))();
+                _completion.TrySetResult();
+            }
+            catch (Exception ex)
+            {
+                _completion.TrySetException(ex);
+                throw;
+            }
+        }
+    }
+
     private sealed class DeterministicKafkaReceiverConsumer(
         string topicName,
         string streamNamespace,
@@ -1083,6 +1220,7 @@ public sealed class KafkaReceiverBackpressureTests(ITestOutputHelper output)
         private int _commitAttemptCount;
         private int _closeCallCount;
         private int _disposeCallCount;
+        private Exception? _nextAssignFailure;
         private Exception? _nextResumeFailure;
         private KafkaException? _nextCommitFailure;
         private readonly TaskCompletionSource _disposed = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1129,6 +1267,9 @@ public sealed class KafkaReceiverBackpressureTests(ITestOutputHelper output)
         public void Assign(TopicPartitionOffset partition)
         {
             RecordOwnerThread();
+            if (Interlocked.Exchange(ref _nextAssignFailure, null) is { } failure)
+                throw failure;
+
             lock (_stateLock)
                 _assignedPartition = partition.TopicPartition;
         }
@@ -1217,6 +1358,12 @@ public sealed class KafkaReceiverBackpressureTests(ITestOutputHelper output)
         {
             ArgumentNullException.ThrowIfNull(failure);
             AddConsumeStep(() => throw failure);
+        }
+
+        public void FailNextAssign(Exception failure)
+        {
+            ArgumentNullException.ThrowIfNull(failure);
+            Interlocked.Exchange(ref _nextAssignFailure, failure).Should().BeNull();
         }
 
         public void FailNextResume(Exception failure)

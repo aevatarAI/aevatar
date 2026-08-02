@@ -24,6 +24,7 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
     private readonly ILogger _logger;
     private readonly Func<CancellationToken, Task> _ensureTransportReadyAsync;
     private readonly Func<IKafkaReceiverConsumer> _consumerFactory;
+    private readonly Func<Action, Task> _ownerLoopStarter;
 
     private readonly HashSet<long> _inflightOffsets = [];
     private readonly HashSet<long> _ackedOffsets = [];
@@ -71,7 +72,8 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
         string actorEventNamespace,
         Func<CancellationToken, Task> ensureTransportReadyAsync,
         Func<IKafkaReceiverConsumer> consumerFactory,
-        ILoggerFactory? loggerFactory = null)
+        ILoggerFactory? loggerFactory = null,
+        Func<Action, Task>? ownerLoopStarter = null)
     {
         ArgumentNullException.ThrowIfNull(transportOptions);
         ArgumentNullException.ThrowIfNull(mapper);
@@ -87,6 +89,7 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
         _messageBuffer = new KafkaReceiverMessageBuffer(_transportOptions.ReceiverBufferCapacity);
         _ensureTransportReadyAsync = ensureTransportReadyAsync;
         _consumerFactory = consumerFactory;
+        _ownerLoopStarter = ownerLoopStarter ?? (static action => Task.Run(action));
         _logger = (loggerFactory ?? NullLoggerFactory.Instance).CreateLogger<KafkaProviderQueueAdapterReceiver>();
     }
 
@@ -130,7 +133,7 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
                 EnsureGenerationCanStart(generation);
                 var loopCts = CancellationTokenSource.CreateLinkedTokenSource(generation.LifecycleCts.Token);
                 generation.ConsumeLoopCts = loopCts;
-                generation.ConsumeLoopTask = Task.Run(
+                generation.ConsumeLoopTask = _ownerLoopStarter(
                     () => ConsumeLoop(generation, loopCts.Token, loopReady));
             }
 
@@ -323,9 +326,13 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
 
         try
         {
-            consumer = _consumerFactory();
-            // Orleans queue balancing owns this lifecycle; each receiver is pinned to its mapped partition.
-            consumer.Assign(new TopicPartitionOffset(_topicPartition, Offset.Stored));
+            consumer = TryStartConsumer(generation, ct);
+            if (consumer == null)
+            {
+                loopReady.TrySetCanceled(ct);
+                return;
+            }
+
             ApplyBackpressure(consumer);
             loopReady.TrySetResult();
 
@@ -421,6 +428,55 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
             }
 
             loopReady.TrySetCanceled(ct);
+        }
+    }
+
+    private IKafkaReceiverConsumer? TryStartConsumer(
+        ReceiverLifecycleGeneration generation,
+        CancellationToken ct)
+    {
+        lock (_lifecycleLock)
+        {
+            if (ct.IsCancellationRequested ||
+                !ReferenceEquals(_currentGeneration, generation) ||
+                generation.ShutdownTask != null)
+            {
+                return null;
+            }
+
+            var consumer = _consumerFactory();
+            try
+            {
+                // Orleans queue balancing owns this lifecycle; each receiver is pinned to its mapped partition.
+                consumer.Assign(new TopicPartitionOffset(_topicPartition, Offset.Stored));
+                return consumer;
+            }
+            catch (Exception)
+            {
+                try
+                {
+                    consumer.Close();
+                }
+                catch (Exception closeException)
+                {
+                    _logger.LogWarning(closeException,
+                        "Failed to close Kafka consumer after assignment failure on partition {Partition}.",
+                        _partitionId);
+                }
+
+                try
+                {
+                    consumer.Dispose();
+                }
+                catch (Exception disposeException)
+                {
+                    _logger.LogWarning(disposeException,
+                        "Failed to dispose Kafka consumer after assignment failure on partition {Partition}.",
+                        _partitionId);
+                }
+
+                throw;
+            }
         }
     }
 

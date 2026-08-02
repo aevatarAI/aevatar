@@ -35,6 +35,11 @@ sample. Throughput, CPU, allocation, and their ratios are non-gating diagnostics
 CI success. CPU is process CPU time and allocation is process-wide allocation during the isolated sample, so
 neither is a production capacity promise.
 
+The controlled measurement does not use the unit suite's five-second timeout. Its default watchdog is 600
+seconds and exists only to detect a stuck harness. Set
+`AEVATAR_KAFKA_RECEIVER_PERFORMANCE_WATCHDOG_SECONDS` to a larger positive integer on slower or constrained
+machines; elapsed time below that watchdog is never an acceptance threshold.
+
 The retained-memory curve constructs a fresh buffer for each backlog depth. Allocation measurement begins
 after buffer construction so it reports overload-time allocation, while retained messages report the live
 references held after the offered backlog.
@@ -43,6 +48,7 @@ references held after the offered backlog.
 
 ```bash
 AEVATAR_KAFKA_RECEIVER_PERFORMANCE_DIAGNOSTICS=1 \
+  AEVATAR_KAFKA_RECEIVER_PERFORMANCE_WATCHDOG_SECONDS=600 \
   dotnet test test/Aevatar.Foundation.Runtime.Hosting.Tests/Aevatar.Foundation.Runtime.Hosting.Tests.csproj \
   --nologo --no-restore \
   --filter 'FullyQualifiedName~KafkaReceiverShape_ControlledMeasurement_ShouldReportNonGatingDiagnostics' \

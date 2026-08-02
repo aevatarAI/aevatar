@@ -113,7 +113,8 @@ pause/resume、consume、commit、seek、close/dispose 都只在这个 owner loo
 task、shutdown task 和 fault。同一代的重复或并发 `Initialize` / `Shutdown` 分别共享同一个 task；shutdown
 先发布 cleanup task，再取消并等待 in-flight initialize，最后停止 owner loop。shutdown 期间发起的
 initialize 只发布一代 successor，并等待 predecessor cleanup 完成后才进入 transport-ready。旧代 continuation
-在创建 consumer 前必须重新核对 cancellation 和 generation identity，因此不会在 shutdown 后越界启动 consumer。
+即使已经把 owner-loop delegate 排入 scheduler，也必须在 owner-loop thread 上、lifecycle lock 内重新核对
+cancellation 和 generation identity，之后才能 create/Assign consumer，因此不会在 shutdown 后越界启动旧代。
 
 buffer 只是进程内 transport working state，不是事实源。它不改变 ACK 契约：offset 仍然只在
 `MessagesDeliveredAsync(...)` 标记 acknowledged 后，按连续 watermark commit；低水位恢复不能
@@ -126,6 +127,8 @@ offset checksum 和 pause/resume 等确定性语义，不使用 wall-clock 阈�
 性能对照保留为显式 opt-in 的 controlled diagnostic：旧无界 queue 与新有界 buffer 执行相同的 fake
 `Consume`、routing header 解码、Protobuf parse、`StreamId` / batch 构造和 puller drain，只替换
 buffer 实现；独立进程做 3 次 warmup、9 轮交错原始采样并输出中位数，但不据此判定单次测试 pass/fail。
+诊断使用独立的 10 分钟默认 watchdog，而不是单元测试共享的 5 秒 timeout；慢速或受限机器可通过
+`AEVATAR_KAFKA_RECEIVER_PERFORMANCE_WATCHDOG_SECONDS` 显式放宽，watchdog 只用于发现挂死。
 2026-08-02 在 .NET 10 Debug、本地 arm64 的一次受控运行中，中位数为：
 
 | 实现 | receiver-shape msg/s | CPU us/msg | allocation B/msg |

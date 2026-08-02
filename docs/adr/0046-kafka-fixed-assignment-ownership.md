@@ -52,9 +52,11 @@ authority for this provider:
    owner loop. Initialization which overlaps shutdown publishes one shared
    successor generation but does not enter transport readiness until predecessor
    cleanup completes. The predecessor continuation rechecks generation identity
-   and cancellation before it may create a consumer, so it cannot start one
-   after shutdown. Only explicit initialization starts a successor generation
-   and leaves the predecessor task and fault behind.
+   and cancellation on the owner-loop thread, under the lifecycle lock, before
+   it may create or assign a consumer. A delegate which was queued before
+   shutdown but runs afterward therefore cannot start the old generation. Only
+   explicit initialization starts a successor generation and leaves the
+   predecessor task and fault behind.
 
 Receiver handoff can produce at-least-once redelivery around failures or
 overlap. Kafka committed offsets are the restart cursor, while delivery success
@@ -82,7 +84,8 @@ the canonical queue/partition mapping. Those decisions are unchanged.
 - Tests model shutdown and reinitialization of a fixed receiver instead of fake
   assignment changes. Gated transport-readiness tests cover shutdown during
   initialization, initialization during shutdown, and concurrent callers on
-  both lifecycle operations.
+  both lifecycle operations. A separate gated owner-loop starter covers the
+  exact queued-before-shutdown, executed-after-shutdown window.
 - Receiver owner-loop failure must surface through `IQueueAdapterReceiver`
   operations so Orleans can observe lifecycle failure; an unsupervised failed
   task must not masquerade as a healthy empty queue.
