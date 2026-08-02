@@ -1483,6 +1483,7 @@ public sealed class MainnetResponsesEndpointsTests
         // and JwtBearer scheme to be registered so an un-annotated endpoint would
         // be rejected. .AllowAnonymous() must short-circuit that.
         builder.Configuration["Aevatar:Authentication:Authority"] = "https://invalid.example";
+        builder.Configuration["Aevatar:Authentication:Audience"] = "aevatar-api";
         builder.AddAevatarAuthentication();
 
         builder.Services.AddSingleton(provider);
@@ -1573,6 +1574,7 @@ public sealed class MainnetResponsesEndpointsTests
         });
         builder.WebHost.UseTestServer();
         builder.Configuration["Aevatar:Authentication:Authority"] = "https://invalid.example";
+        builder.Configuration["Aevatar:Authentication:Audience"] = "aevatar-api";
         builder.AddAevatarAuthentication();
 
         builder.Services.AddSingleton(provider);
