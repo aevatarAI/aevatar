@@ -53,6 +53,7 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: Distributed
       ASPNETCORE_URLS: http://+:8080
+      AEVATAR_Aevatar__Authentication__Audience: urn:aevatar:api
       AEVATAR_ActorRuntime__Provider: Orleans
       AEVATAR_ActorRuntime__OrleansStreamBackend: KafkaProvider
       AEVATAR_ActorRuntime__OrleansPersistenceBackend: Garnet
@@ -100,6 +101,7 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: Distributed
       ASPNETCORE_URLS: http://+:8080
+      AEVATAR_Aevatar__Authentication__Audience: urn:aevatar:api
       AEVATAR_ActorRuntime__Provider: Orleans
       AEVATAR_ActorRuntime__OrleansStreamBackend: KafkaProvider
       AEVATAR_ActorRuntime__OrleansPersistenceBackend: Garnet
@@ -147,6 +149,7 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: Distributed
       ASPNETCORE_URLS: http://+:8080
+      AEVATAR_Aevatar__Authentication__Audience: urn:aevatar:api
       AEVATAR_ActorRuntime__Provider: Orleans
       AEVATAR_ActorRuntime__OrleansStreamBackend: KafkaProvider
       AEVATAR_ActorRuntime__OrleansPersistenceBackend: Garnet
