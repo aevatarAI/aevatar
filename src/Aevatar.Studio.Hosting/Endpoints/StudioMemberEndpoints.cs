@@ -100,6 +100,10 @@ internal static class StudioMemberEndpoints
         {
             return CreateImplementationRefNotAllowed(ex);
         }
+        catch (StudioTeamNotFoundException ex)
+        {
+            return TeamNotFound(ex);
+        }
         catch (InvalidOperationException ex)
         {
             return BadRequest("INVALID_STUDIO_MEMBER_REQUEST", ex.Message);
@@ -521,6 +525,17 @@ internal static class StudioMemberEndpoints
                 message = ex.Message,
                 scopeId = ex.ScopeId,
                 memberId = ex.MemberId,
+            },
+            statusCode: StatusCodes.Status404NotFound);
+
+    private static IResult TeamNotFound(StudioTeamNotFoundException ex) =>
+        Results.Json(
+            new
+            {
+                code = "STUDIO_TEAM_NOT_FOUND",
+                message = ex.Message,
+                scopeId = ex.ScopeId,
+                teamId = ex.TeamId,
             },
             statusCode: StatusCodes.Status404NotFound);
 
