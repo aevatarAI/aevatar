@@ -94,6 +94,29 @@ Generic schedules and Team automations are isolated in both directions:
 - Team automations use `ScheduledDispatchScheduleKind.Workflow` and a server-derived workflow service target;
 - `ScheduledDispatchScheduleKind.Generic` is not a fallback for Team automation, and the retired SkillRunner kind is not recreated.
 
+## Public Schedule Target Boundary
+
+The public `/api/schedules` contract accepts only a catalog-resolved typed
+`serviceInvocation` target. The server resolves that target from the service
+and revision catalogs; a browser or other external caller cannot supply an
+actor address, an `EventEnvelope`, or an equivalent raw dispatch payload.
+
+The authenticated request scope must equal the resolved target tenant. A
+target in another tenant is rejected before Application admission, even when
+the caller can name that service. `actorId` is an opaque runtime address and
+raw `EventEnvelope` is an internal transport shape; the public schedule target
+input does not accept either as a caller-supplied value.
+
+Legacy persisted envelope schedules remain readable only by the actor and
+projection paths needed to retire them. Application hides those rows from
+public get/list results and treats public lifecycle mutations as not found.
+When activation encounters an envelope schedule without the required marker,
+the actor durably disables it and purges its scheduled callbacks before it can
+fire. The Protobuf `TrustedInternal` marker is a strongly typed, actor-only
+contract for the narrow internal envelope protocol. Hosting and Application do
+not expose it, and it does not create an administrator or public
+raw-envelope-scheduling escape hatch.
+
 ## Admission Receipts And Projected State
 
 Mutation endpoints return `202 Accepted` with a typed receipt containing `accepted`, `status`, `scheduleId`, `operationId`, and `commandId`. Receipt status `accepted` or `pending` describes command/effect admission only. It does not prove that credential provisioning or revocation finished, that the schedule is active, or that the read model has observed the new authoritative version.

@@ -102,6 +102,9 @@ public static class ScheduledDispatchEndpoints
             {
                 TeamAutomationOwner = owner,
             };
+            var targetScopeId = configuration.Target.ServiceInvocation?.Identity.TenantId;
+            if (TryCreateOwnerScopeAccessDeniedResult(http, targetScopeId, out denied))
+                return denied;
         }
         catch (Exception ex) when (TryMapScheduleConfigurationError(ex, out var result))
         {
@@ -149,6 +152,9 @@ public static class ScheduledDispatchEndpoints
             {
                 TeamAutomationOwner = owner,
             };
+            var targetScopeId = configuration.Target.ServiceInvocation?.Identity.TenantId;
+            if (TryCreateOwnerScopeAccessDeniedResult(http, targetScopeId, out denied))
+                return denied;
         }
         catch (Exception ex) when (TryMapScheduleConfigurationError(ex, out var result))
         {
@@ -783,7 +789,6 @@ public sealed record ScheduledDispatchConfigurationHttpRequest
     public bool Enabled { get; init; } = true;
     public IReadOnlyDictionary<string, string>? Headers { get; init; }
     public ScheduledDispatchOwnerHttpRequest? Owner { get; init; }
-    public ScheduledDispatchEnvelopeTargetHttpRequest? Envelope { get; init; }
     public ScheduledDispatchServiceInvocationTargetHttpRequest? ServiceInvocation { get; init; }
 
     public async Task<ScheduledDispatchConfiguration> ToConfigurationAsync(
@@ -819,20 +824,14 @@ public sealed record ScheduledDispatchConfigurationHttpRequest
         ScheduledServiceInvocationNyxIdSubjectRef? authenticatedOwnerSubject,
         CancellationToken ct)
     {
-        var targetCount = (Envelope == null ? 0 : 1) +
-                          (ServiceInvocation == null ? 0 : 1);
-        if (targetCount != 1)
-            throw new ArgumentException("Exactly one scheduled dispatch target is required.");
+        if (ServiceInvocation == null)
+            throw new ArgumentException("A service invocation scheduled dispatch target is required.");
 
-        if (Envelope != null)
-        {
-            return new ResolvedScheduledDispatchTarget(
-                Envelope.ToTarget(),
-                IsWorkflowServiceTarget: false,
-                ScheduledDispatchCredentialRequirementTargetKind.Envelope);
-        }
-
-        return await ServiceInvocation!.ToResolvedTargetAsync(catalogReader, revisionCatalogReader, authenticatedOwnerSubject, ct);
+        return await ServiceInvocation.ToResolvedTargetAsync(
+            catalogReader,
+            revisionCatalogReader,
+            authenticatedOwnerSubject,
+            ct);
     }
 
     private ScheduledDispatchScheduleKind ResolveScheduleKind(ResolvedScheduledDispatchTarget resolvedTarget)
@@ -895,25 +894,6 @@ public sealed record ScheduledDispatchConfigurationHttpRequest
         ScheduledDispatchTargetDescriptor Target,
         bool IsWorkflowServiceTarget,
         ScheduledDispatchCredentialRequirementTargetKind CredentialRequirementTargetKind);
-}
-
-[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
-public sealed record ScheduledDispatchEnvelopeTargetHttpRequest
-{
-    public string? ActorId { get; init; }
-    public required EventEnvelope Envelope { get; init; }
-
-    public ScheduledDispatchTargetDescriptor ToTarget() =>
-        CreateTarget(Envelope);
-
-    private ScheduledDispatchTargetDescriptor CreateTarget(EventEnvelope envelope)
-    {
-        ScheduledDispatchEndpoints.RejectExternalCallerDurableCredential(envelope.Payload);
-        return new(
-            ScheduledDispatchTargetKind.Envelope,
-            ActorId: ActorId,
-            Envelope: envelope);
-    }
 }
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]

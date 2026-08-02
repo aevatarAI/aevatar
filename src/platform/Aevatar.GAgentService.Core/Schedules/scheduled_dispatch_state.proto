@@ -154,6 +154,12 @@ message ScheduledDispatchRuntimeCallbackLeaseState
   int32 slot_epoch = 5;
 }
 
+enum ScheduledDispatchEnvelopeAuthorityState
+{
+  SCHEDULED_DISPATCH_ENVELOPE_AUTHORITY_STATE_UNSPECIFIED = 0;
+  SCHEDULED_DISPATCH_ENVELOPE_AUTHORITY_STATE_TRUSTED_INTERNAL = 1;
+}
+
 message ScheduledDispatchTargetState
 {
   ScheduledDispatchTargetKindState kind = 1;
@@ -162,6 +168,7 @@ message ScheduledDispatchTargetState
   ScheduledServiceInvocationTargetState service_invocation = 4;
   reserved 5;
   ScheduledDispatchCredentialRequirementTargetKindState credential_requirement_target_kind = 6;
+  ScheduledDispatchEnvelopeAuthorityState envelope_authority = 7;
 }
 
 enum ScheduledDispatchTargetKindState

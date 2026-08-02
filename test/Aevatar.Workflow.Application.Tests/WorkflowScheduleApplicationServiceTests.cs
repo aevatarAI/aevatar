@@ -892,6 +892,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
             "cursor",
             true,
             ScheduleKind: ScheduledDispatchScheduleKind.Workflow,
+            TargetKind: ScheduledDispatchTargetKind.ServiceInvocation,
             ExcludeTeamOwned: true));
     }
 
