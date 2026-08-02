@@ -75,6 +75,7 @@ message ChatRequestEvent  {
   WorkflowLlmToolApprovalContinuation workflow_llm_tool_approval_continuation = 15;
   AgentToolNyxIdCredentialKindPayload caller_nyx_id_credential_kind = 16;
   string caller_source_readable_nyx_id_bearer_token = 17;
+  WorkflowLlmCompletionDeliveryContext workflow_llm_completion_delivery_context = 18;
 }
 message ChatResponseEvent { string content = 1; string session_id = 2; }
 
@@ -252,6 +253,12 @@ message WorkflowLlmToolApprovalContinuation {
   string user_memory_prompt = 10;
   string route_preference = 11;
   int32 timeout_ms = 12;
+}
+
+message WorkflowLlmCompletionDeliveryContext {
+  string run_id = 1;
+  string step_id = 2;
+  string session_id = 3;
 }
 
 message AgentToolChannelContextPayload {
@@ -480,6 +487,7 @@ message RoleChatSessionCompletedEvent {
   // final session authority. Projectors expand only this typed tail on live
   // completion; snapshot synthesis remains explicit replay-only behavior.
   repeated RoleChatSessionProgressedEvent terminal_progress = 20;
+  WorkflowLlmCompletionDeliveryContext workflow_llm_completion_delivery_context = 30;
 }
 
 message RoleChatTextStartedProgress {
@@ -593,6 +601,34 @@ message RoleChatCompletionNotificationExpiredEvent {
   string delivery_id = 2;
   int32 attempt = 3;
   int64 expired_at_unix_time_ms = 4;
+}
+
+enum WorkflowLlmCompletionDeliveryStatus {
+  WORKFLOW_LLM_COMPLETION_DELIVERY_STATUS_UNSPECIFIED = 0;
+  WORKFLOW_LLM_COMPLETION_DELIVERY_STATUS_PREPARED = 1;
+  WORKFLOW_LLM_COMPLETION_DELIVERY_STATUS_RETRY_SCHEDULED = 2;
+  WORKFLOW_LLM_COMPLETION_DELIVERY_STATUS_DISPATCHED = 3;
+}
+
+message WorkflowLlmCompletionDeliveryRetryScheduledEvent {
+  string session_id = 1;
+  string delivery_id = 2;
+  int32 attempt = 3;
+  string callback_id = 4;
+  google.protobuf.Timestamp retry_at = 5;
+}
+
+message WorkflowLlmCompletionDeliveryRetryFiredEvent {
+  string session_id = 1;
+  string delivery_id = 2;
+  int32 attempt = 3;
+}
+
+message WorkflowLlmCompletionDeliveryDispatchedEvent {
+  string session_id = 1;
+  string delivery_id = 2;
+  int32 attempt = 3;
+  int64 dispatched_at_unix_time_ms = 4;
 }
 
 message InitializeRoleAgentEvent {
@@ -842,6 +878,11 @@ message RoleChatSessionState {
   int32 completion_notification_attempt = 23;
   string completion_notification_retry_callback_id = 24;
   google.protobuf.Timestamp completion_notification_retry_at = 25;
+  WorkflowLlmCompletionDeliveryContext workflow_llm_completion_delivery_context = 30;
+  WorkflowLlmCompletionDeliveryStatus workflow_llm_completion_delivery_status = 31;
+  int32 workflow_llm_completion_delivery_attempt = 32;
+  string workflow_llm_completion_delivery_retry_callback_id = 33;
+  google.protobuf.Timestamp workflow_llm_completion_delivery_retry_at = 34;
 }
 
 message RoleGAgentState {

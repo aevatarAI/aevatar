@@ -8,6 +8,7 @@ using System.Diagnostics.Metrics;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core;
 using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Observability;
 using Aevatar.AI.Core.Tools;
@@ -1122,7 +1123,7 @@ public class NyxIdChatGAgentTests
     }
 
     [Fact]
-    public async Task HandleChatRequest_CancellationBeforeAuthorityBatch_ShouldPersistNeitherFact()
+    public async Task HandleChatRequest_DeadlineBeforeAuthorityBatch_ShouldPersistOnlyTimeoutTerminal()
     {
         const int timeoutMs = 1_000;
         const string actorId = "nyxid-chat-authority-pre-batch-cancel";
@@ -1156,20 +1157,21 @@ public class NyxIdChatGAgentTests
         });
         await blockingSource.Started;
 
-        try
-        {
-            timeProvider.Advance(TimeSpan.FromMilliseconds(timeoutMs));
-            await FluentActions.Awaiting(() => handling).Should().ThrowAsync<OperationCanceledException>();
-        }
-        finally
-        {
-            blockingSource.Release();
-        }
+        timeProvider.Advance(TimeSpan.FromMilliseconds(timeoutMs));
+        await handling;
 
         var events = await provider.GetRequiredService<IEventStore>().GetEventsAsync(actorId);
         events.Should().NotContain(stateEvent =>
             stateEvent.EventData.Is(RoleChatSessionStartedEvent.Descriptor) ||
             stateEvent.EventData.Is(AgentProfileTurnAuthorityCommittedEvent.Descriptor));
+        var timeout = events
+            .Where(stateEvent => stateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
+            .Select(stateEvent => stateEvent.EventData.Unpack<RoleChatSessionCompletedEvent>())
+            .Should().ContainSingle().Which;
+        timeout.SessionId.Should().Be(sessionId);
+        timeout.Outcome.Should().Be(RoleChatSessionOutcome.Failed);
+        timeout.FailureCode.Should().Be("LLM_TIMEOUT");
+        blockingSource.CancellationObserved.Should().BeTrue();
         publisher.Published.OfType<TextMessageStartEvent>().Should().BeEmpty();
     }
 
@@ -1638,6 +1640,65 @@ public class NyxIdChatGAgentTests
             null,
             null,
             "session-history"));
+    }
+
+    [Fact]
+    public async Task HandleChatRequest_WhenHistorySaveIgnoresCancellation_ShouldKeepTerminalAndReleaseNextTurn()
+    {
+        const string actorId = "nyxid-chat-history-post-turn-deadline";
+        const string firstSessionId = "history-post-turn-timeout";
+        var history = new IgnoringCancellationFirstChatHistoryCommandPort();
+        var eventStore = new InMemoryEventStoreForTests();
+        var timeProvider = new ManualDeadlineTimeProvider();
+        using var provider = BuildServiceProvider(
+            historyCommandPort: history,
+            eventStore: eventStore);
+        var llmProviderFactory = new StreamingToolLoopProviderFactory(
+        [
+            [new LLMStreamChunk { DeltaContent = "first committed answer" }],
+            [new LLMStreamChunk { DeltaContent = "second answer" }],
+        ]);
+        var agent = CreateAgent(
+            provider,
+            actorId,
+            llmProviderFactory,
+            timeProvider: timeProvider,
+            chatExecutionOptions: new RoleChatExecutionOptions(
+                maxTurnDeadlineMs: 5_000,
+                postCommitConfigRefreshTimeoutMs: 5_000,
+                postTurnProcessingTimeoutMs: 1_000));
+        await agent.ActivateAsync();
+
+        var firstTurn = agent.HandleChatRequest(new ChatRequestEvent
+        {
+            ScopeId = "scope-a",
+            Prompt = "first prompt",
+            SessionId = firstSessionId,
+        });
+        await history.FirstSaveStarted;
+
+        timeProvider.Advance(TimeSpan.FromMilliseconds(1_000));
+        await firstTurn;
+
+        var firstCompletions = (await eventStore.GetEventsAsync(actorId))
+            .Where(stateEvent => stateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
+            .Select(stateEvent => stateEvent.EventData.Unpack<RoleChatSessionCompletedEvent>())
+            .Where(completed => completed.SessionId == firstSessionId)
+            .ToArray();
+        firstCompletions.Should().ContainSingle();
+        firstCompletions[0].Outcome.Should().Be(RoleChatSessionOutcome.Completed);
+        firstCompletions[0].Content.Should().Be("first committed answer");
+
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            ScopeId = "scope-a",
+            Prompt = "second prompt",
+            SessionId = "history-next-turn",
+        });
+
+        agent.State.Sessions["history-next-turn"].Completed.Should().BeTrue();
+        agent.State.Sessions["history-next-turn"].FinalContent.Should().Be("second answer");
+        history.SuccessfulSaveCount.Should().Be(1);
     }
 
     [Fact]
@@ -2228,7 +2289,8 @@ public class NyxIdChatGAgentTests
         IEnumerable<IAgentToolSource>? toolSources = null,
         NyxIdRelayOptions? relayOptions = null,
         TimeProvider? timeProvider = null,
-        AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer = null)
+        AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer = null,
+        RoleChatExecutionOptions? chatExecutionOptions = null)
     {
         var agent = new NyxIdChatGAgent(
             new SystemSkillOverlayPromptInjectionTests.StubBuiltInPromptFloorProvider(),
@@ -2237,7 +2299,8 @@ public class NyxIdChatGAgentTests
             toolSources: toolSources,
             relayOptions: relayOptions,
             timeProvider: timeProvider,
-            turnCatalogMaterializer: turnCatalogMaterializer)
+            turnCatalogMaterializer: turnCatalogMaterializer,
+            chatExecutionOptions: chatExecutionOptions)
         {
             Services = provider,
             EventSourcingBehaviorFactory = provider.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),
@@ -2551,6 +2614,59 @@ public class NyxIdChatGAgentTests
             Deleted.Add((scopeId, conversationId));
             return Task.FromResult(ChatHistoryDeleteResult.Accepted());
         }
+    }
+
+    private sealed class IgnoringCancellationFirstChatHistoryCommandPort : IChatHistoryCommandPort
+    {
+        private readonly TaskCompletionSource _firstSaveStarted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _neverCompletes =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _saveCount;
+
+        public Task FirstSaveStarted => _firstSaveStarted.Task;
+        public int SuccessfulSaveCount { get; private set; }
+
+        public Task InitializeConversationAsync(
+            ChatHistoryConversationInitialization request,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task ReserveTurnDeliveryAsync(
+            ChatHistoryTurnDeliveryReservation request,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task NotifyTurnTerminalAsync(
+            ChatHistoryTurnTerminalNotification notification,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public async Task SaveMessagesAsync(
+            string scopeId,
+            string conversationId,
+            ConversationMeta meta,
+            IReadOnlyList<StoredChatMessage> messages,
+            CancellationToken ct = default)
+        {
+            _ = scopeId;
+            _ = conversationId;
+            _ = meta;
+            _ = messages;
+            if (Interlocked.Increment(ref _saveCount) == 1)
+            {
+                _firstSaveStarted.TrySetResult();
+                await _neverCompletes.Task;
+            }
+
+            SuccessfulSaveCount++;
+        }
+
+        public Task<ChatHistoryDeleteResult> DeleteConversationAsync(
+            string scopeId,
+            string conversationId,
+            CancellationToken ct = default) =>
+            Task.FromResult(ChatHistoryDeleteResult.Accepted());
     }
 
     private sealed record SavedChatHistory(

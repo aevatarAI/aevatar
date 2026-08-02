@@ -65,11 +65,13 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         IRemoteToolApprovalNotificationPort? remoteToolApprovalNotificationPort = null,
         NyxIdRelayOptions? relayOptions = null,
         TimeProvider? timeProvider = null,
-        AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer = null)
+        AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer = null,
+        RoleChatExecutionOptions? chatExecutionOptions = null)
         : base(toolExecutionPort, llmProviderFactory, additionalHooks, agentMiddlewares, llmMiddlewares, toolSources,
                remoteToolApprovalPort: remoteToolApprovalPort,
                remoteToolApprovalNotificationPort: remoteToolApprovalNotificationPort,
-               timeProvider: timeProvider)
+               timeProvider: timeProvider,
+               chatExecutionOptions: chatExecutionOptions)
     {
         _builtInPromptFloorProvider = builtInPromptFloorProvider ??
                                       throw new ArgumentNullException(nameof(builtInPromptFloorProvider));
@@ -395,7 +397,20 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         try
         {
             await base.HandleChatRequest(request);
-            await SaveDirectChatCompletionAsync(request, CancellationToken.None);
+            try
+            {
+                await RunPostTurnProcessingAsync(
+                    request.SessionId,
+                    "NyxID direct-chat history save",
+                    ct => SaveDirectChatCompletionAsync(request, ct));
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(
+                    ex,
+                    "NyxID direct-chat history save failed after terminal commit. session={SessionId}",
+                    request.SessionId);
+            }
         }
         finally
         {

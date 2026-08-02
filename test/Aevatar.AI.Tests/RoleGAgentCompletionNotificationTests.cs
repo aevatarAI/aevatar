@@ -15,6 +15,7 @@ using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Aevatar.AI.Tests;
 
@@ -255,7 +256,148 @@ public sealed class RoleGAgentCompletionNotificationTests
     }
 
     [Fact]
-    public async Task CompletionCancellation_ShouldRemainObservable()
+    public async Task ActivateAsync_WhenPendingCompletionSenderIgnoresCancellation_ShouldReturnAndPersistRetry()
+    {
+        const int timeoutMs = 1_000;
+        var store = new InMemoryEventStoreForTests();
+        var seed = await CreateInitializedActorAsync(
+            store,
+            new RecordingRuntimeCallbackScheduler(),
+            new RecordingEventPublisher(),
+            "role-reactivate-ignoring-sender");
+        await PersistPreparedCompletionAsync(seed, "session-1");
+
+        var timeProvider = new FakeTimeProvider(Now);
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var sendProbe = new IgnoringCancellationProbe();
+        var publisher = new RecordingEventPublisher
+        {
+            BeforeSendAsync = (_, _, _) => sendProbe.WaitForReleaseAsync(),
+        };
+        var recovered = CreateActor(
+            store,
+            scheduler,
+            publisher,
+            "role-reactivate-ignoring-sender",
+            timeProvider,
+            new RoleChatExecutionOptions(postTurnProcessingTimeoutMs: timeoutMs));
+
+        var activation = recovered.ActivateAsync();
+        await sendProbe.Started;
+        timeProvider.Advance(TimeSpan.FromMilliseconds(timeoutMs));
+        await activation;
+
+        var session = recovered.State.Sessions["session-1"];
+        session.CompletionNotificationDeliveryStatus.Should()
+            .Be(RoleChatCompletionNotificationDeliveryStatus.RetryScheduled);
+        session.CompletionNotificationAttempt.Should().Be(1);
+        scheduler.TimeoutRequests.Should().ContainSingle();
+        publisher.SuccessfulSends.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task LiveCompletion_WhenSenderIgnoresCancellation_ShouldFenceLateDispatchAndRetryFromSelfCallback()
+    {
+        const int timeoutMs = 1_000;
+        var store = new InMemoryEventStoreForTests();
+        var timeProvider = new FakeTimeProvider(Now);
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var sendProbe = new IgnoringCancellationProbe();
+        var publisher = new RecordingEventPublisher
+        {
+            BeforeSendAsync = (_, _, _) => sendProbe.WaitForReleaseAsync(),
+        };
+        var actor = CreateActor(
+            store,
+            scheduler,
+            publisher,
+            "role-live-ignoring-sender",
+            timeProvider,
+            new RoleChatExecutionOptions(postTurnProcessingTimeoutMs: timeoutMs));
+        await actor.ActivateAsync();
+        await actor.HandleInitializeRoleAgent(new InitializeRoleAgentEvent
+        {
+            RoleName = "assistant",
+            ProviderName = "completion-test",
+            SystemPrompt = "system",
+        });
+
+        var turn = CompleteSessionAsync(
+            actor,
+            "session-1",
+            Now.AddMinutes(1).ToUnixTimeMilliseconds());
+        await sendProbe.Started;
+        actor.State.Sessions["session-1"].CompletionNotificationDeliveryStatus.Should()
+            .Be(RoleChatCompletionNotificationDeliveryStatus.Prepared);
+        timeProvider.Advance(TimeSpan.FromMilliseconds(timeoutMs));
+        await turn;
+
+        actor.State.Sessions["session-1"].CompletionNotificationDeliveryStatus.Should()
+            .Be(RoleChatCompletionNotificationDeliveryStatus.RetryScheduled);
+        var retry = scheduler.TimeoutRequests.Should().ContainSingle().Subject.TriggerEnvelope;
+
+        sendProbe.Release();
+        await sendProbe.Completed;
+        actor.State.Sessions["session-1"].CompletionNotificationDeliveryStatus.Should()
+            .Be(RoleChatCompletionNotificationDeliveryStatus.RetryScheduled);
+        (await store.GetEventsAsync(actor.Id)).Should().NotContain(stateEvent =>
+            stateEvent.EventData.Is(RoleChatCompletionNotificationDispatchedEvent.Descriptor));
+
+        publisher.BeforeSendAsync = null;
+        await actor.HandleEventAsync(retry);
+        await actor.HandleEventAsync(retry);
+
+        actor.State.Sessions["session-1"].CompletionNotificationDeliveryStatus.Should()
+            .Be(RoleChatCompletionNotificationDeliveryStatus.Dispatched);
+        publisher.SuccessfulSends.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task RetryScheduler_WhenAdapterIgnoresCancellation_ShouldReturnWithoutLateStateMutation()
+    {
+        const int timeoutMs = 1_000;
+        var store = new InMemoryEventStoreForTests();
+        var timeProvider = new FakeTimeProvider(Now);
+        var scheduler = new IgnoringCancellationRuntimeCallbackScheduler();
+        var publisher = new RecordingEventPublisher
+        {
+            SendException = new InvalidOperationException("simulated completion send failure"),
+        };
+        var actor = CreateActor(
+            store,
+            scheduler,
+            publisher,
+            "role-ignoring-retry-scheduler",
+            timeProvider,
+            new RoleChatExecutionOptions(postTurnProcessingTimeoutMs: timeoutMs));
+        await actor.ActivateAsync();
+        await actor.HandleInitializeRoleAgent(new InitializeRoleAgentEvent
+        {
+            RoleName = "assistant",
+            ProviderName = "completion-test",
+            SystemPrompt = "system",
+        });
+
+        var turn = CompleteSessionAsync(
+            actor,
+            "session-1",
+            Now.AddMinutes(1).ToUnixTimeMilliseconds());
+        await scheduler.Started;
+        timeProvider.Advance(TimeSpan.FromMilliseconds(timeoutMs));
+        await turn;
+
+        actor.State.Sessions["session-1"].CompletionNotificationDeliveryStatus.Should()
+            .Be(RoleChatCompletionNotificationDeliveryStatus.Prepared);
+        scheduler.Release();
+        await scheduler.Completed;
+        actor.State.Sessions["session-1"].CompletionNotificationDeliveryStatus.Should()
+            .Be(RoleChatCompletionNotificationDeliveryStatus.Prepared);
+        (await store.GetEventsAsync(actor.Id)).Should().NotContain(stateEvent =>
+            stateEvent.EventData.Is(RoleChatCompletionNotificationRetryScheduledEvent.Descriptor));
+    }
+
+    [Fact]
+    public async Task CompletionPublisherCancellation_ShouldScheduleDurableRetry()
     {
         var store = new InMemoryEventStoreForTests();
         var scheduler = new RecordingRuntimeCallbackScheduler();
@@ -265,32 +407,30 @@ public sealed class RoleGAgentCompletionNotificationTests
         };
         var actor = await CreateInitializedActorAsync(store, scheduler, publisher, "role-cancelled");
 
-        var act = () => CompleteSessionAsync(
+        await CompleteSessionAsync(
             actor,
             "session-1",
             Now.AddMinutes(1).ToUnixTimeMilliseconds());
 
-        await act.Should().ThrowAsync<OperationCanceledException>();
         actor.State.Sessions["session-1"].CompletionNotificationDeliveryStatus.Should()
-            .Be(RoleChatCompletionNotificationDeliveryStatus.Prepared);
-        scheduler.TimeoutRequests.Should().BeEmpty();
+            .Be(RoleChatCompletionNotificationDeliveryStatus.RetryScheduled);
+        actor.State.Sessions["session-1"].CompletionNotificationAttempt.Should().Be(1);
+        scheduler.TimeoutRequests.Should().ContainSingle();
     }
 
     [Fact]
-    public async Task DispatchedCommitFailure_ShouldScheduleRetryAndRemainObservable()
+    public async Task DispatchedCommitFailure_ShouldScheduleRetryWithoutInvalidatingCommittedTerminal()
     {
         var store = new FailOnceDispatchedEventStore();
         var scheduler = new RecordingRuntimeCallbackScheduler();
         var publisher = new RecordingEventPublisher();
         var actor = await CreateInitializedActorAsync(store, scheduler, publisher, "role-dispatch-commit");
 
-        var act = () => CompleteSessionAsync(
+        await CompleteSessionAsync(
             actor,
             "session-1",
             Now.AddMinutes(1).ToUnixTimeMilliseconds());
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("simulated dispatched event commit failure");
         actor.State.Sessions["session-1"].CompletionNotificationDeliveryStatus.Should()
             .Be(RoleChatCompletionNotificationDeliveryStatus.RetryScheduled);
         actor.State.Sessions["session-1"].CompletionNotificationAttempt.Should().Be(1);
@@ -369,6 +509,65 @@ public sealed class RoleGAgentCompletionNotificationTests
         actor.State.Sessions["session-1"].CompletionNotificationDeliveryStatus.Should()
             .Be(RoleChatCompletionNotificationDeliveryStatus.Dispatched);
         actor.State.Sessions["session-1"].CompletionNotificationAttempt.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task DurableRetrySchedulerFailure_WhenSelfPublisherIgnoresCancellation_ShouldKeepOriginalFailureAndPreparedOutbox()
+    {
+        const int timeoutMs = 1_000;
+        var store = new InMemoryEventStoreForTests();
+        var timeProvider = new FakeTimeProvider(Now);
+        var scheduler = new RecordingRuntimeCallbackScheduler
+        {
+            ScheduleException = new InvalidOperationException("simulated durable scheduler failure"),
+        };
+        var publicationProbe = new IgnoringCancellationProbe();
+        var publisher = new RecordingEventPublisher
+        {
+            FailurePredicate = static targetActorId => targetActorId == "service-run:session-1",
+            BeforePublishAsync = (evt, _) => evt is RoleChatCompletionNotificationRetryFiredEvent
+                ? publicationProbe.WaitForReleaseAsync()
+                : Task.CompletedTask,
+        };
+        var actor = CreateActor(
+            store,
+            scheduler,
+            publisher,
+            "role-scheduler-failure-hanging-recovery",
+            timeProvider,
+            new RoleChatExecutionOptions(postTurnProcessingTimeoutMs: timeoutMs));
+        await actor.ActivateAsync();
+        await actor.HandleInitializeRoleAgent(new InitializeRoleAgentEvent
+        {
+            RoleName = "assistant",
+            ProviderName = "completion-test",
+            SystemPrompt = "system",
+        });
+
+        var turn = CompleteSessionAsync(
+            actor,
+            "session-1",
+            Now.AddMinutes(1).ToUnixTimeMilliseconds());
+        await publicationProbe.Started;
+        actor.State.Sessions["session-1"].CompletionNotificationDeliveryStatus.Should()
+            .Be(RoleChatCompletionNotificationDeliveryStatus.Prepared);
+
+        timeProvider.Advance(TimeSpan.FromMilliseconds(timeoutMs));
+        Func<Task> waitForTurn = async () => await turn;
+        await waitForTurn.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("simulated durable scheduler failure");
+
+        actor.State.Sessions["session-1"].CompletionNotificationDeliveryStatus.Should()
+            .Be(RoleChatCompletionNotificationDeliveryStatus.Prepared);
+        publisher.SuccessfulPublications.Should().NotContain(publication =>
+            publication.Audience == TopologyAudience.Self &&
+            publication.Event is RoleChatCompletionNotificationRetryFiredEvent);
+        publicationProbe.Release();
+        await publicationProbe.Completed;
+        actor.State.Sessions["session-1"].CompletionNotificationDeliveryStatus.Should()
+            .Be(RoleChatCompletionNotificationDeliveryStatus.Prepared);
+        (await store.GetEventsAsync(actor.Id)).Should().NotContain(stateEvent =>
+            stateEvent.EventData.Is(RoleChatCompletionNotificationRetryScheduledEvent.Descriptor));
     }
 
     [Theory]
@@ -631,9 +830,11 @@ public sealed class RoleGAgentCompletionNotificationTests
 
     private static TestRoleGAgent CreateActor(
         IEventStore store,
-        RecordingRuntimeCallbackScheduler scheduler,
+        IActorRuntimeCallbackScheduler scheduler,
         RecordingEventPublisher publisher,
-        string actorId)
+        string actorId,
+        TimeProvider? timeProvider = null,
+        RoleChatExecutionOptions? chatExecutionOptions = null)
     {
         var services = new ServiceCollection()
             .AddSingleton(store)
@@ -642,7 +843,10 @@ public sealed class RoleGAgentCompletionNotificationTests
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
             .BuildServiceProvider();
         var provider = new CompletionLlmProvider();
-        var actor = new TestRoleGAgent(provider, new FixedTimeProvider(Now))
+        var actor = new TestRoleGAgent(
+            provider,
+            timeProvider ?? new FixedTimeProvider(Now),
+            chatExecutionOptions)
         {
             Services = services,
             EventPublisher = publisher,
@@ -762,12 +966,16 @@ public sealed class RoleGAgentCompletionNotificationTests
 
         public Func<string, bool>? FailurePredicate { get; set; }
 
+        public Func<string, IMessage, CancellationToken, Task>? BeforeSendAsync { get; set; }
+
+        public Func<IMessage, CancellationToken, Task>? BeforePublishAsync { get; set; }
+
         public List<(IMessage Event, TopologyAudience Audience, EventEnvelopePublishOptions? Options)>
             SuccessfulPublications { get; } = [];
 
         public List<(string TargetActorId, IMessage Event, EventEnvelopePublishOptions? Options)> SuccessfulSends { get; } = [];
 
-        public Task PublishAsync<TEvent>(
+        public async Task PublishAsync<TEvent>(
             TEvent evt,
             TopologyAudience audience = TopologyAudience.Children,
             CancellationToken ct = default,
@@ -776,11 +984,13 @@ public sealed class RoleGAgentCompletionNotificationTests
             where TEvent : IMessage
         {
             ct.ThrowIfCancellationRequested();
+            if (BeforePublishAsync is not null)
+                await BeforePublishAsync(evt, ct);
+            ct.ThrowIfCancellationRequested();
             SuccessfulPublications.Add((evt, audience, options));
-            return Task.CompletedTask;
         }
 
-        public Task SendToAsync<TEvent>(
+        public async Task SendToAsync<TEvent>(
             string targetActorId,
             TEvent evt,
             CancellationToken ct = default,
@@ -793,10 +1003,68 @@ public sealed class RoleGAgentCompletionNotificationTests
                 throw SendException;
             if (FailurePredicate?.Invoke(targetActorId) == true)
                 throw new InvalidOperationException("simulated completion send failure");
+            if (BeforeSendAsync is not null)
+                await BeforeSendAsync(targetActorId, evt, ct);
+            ct.ThrowIfCancellationRequested();
 
             SuccessfulSends.Add((targetActorId, evt, options));
-            return Task.CompletedTask;
         }
+    }
+
+    private sealed class IgnoringCancellationProbe
+    {
+        private readonly TaskCompletionSource _started =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _release =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _completed =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task Started => _started.Task;
+        public Task Completed => _completed.Task;
+
+        public async Task WaitForReleaseAsync()
+        {
+            _started.TrySetResult();
+            await _release.Task;
+            _completed.TrySetResult();
+        }
+
+        public void Release() => _release.TrySetResult();
+    }
+
+    private sealed class IgnoringCancellationRuntimeCallbackScheduler : IActorRuntimeCallbackScheduler
+    {
+        private readonly IgnoringCancellationProbe _probe = new();
+
+        public Task Started => _probe.Started;
+        public Task Completed => _probe.Completed;
+
+        public async Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
+            RuntimeCallbackTimeoutRequest request,
+            CancellationToken ct = default)
+        {
+            _ = ct;
+            await _probe.WaitForReleaseAsync();
+            return new RuntimeCallbackLease(
+                request.ActorId,
+                request.CallbackId,
+                1,
+                RuntimeCallbackBackend.InMemory);
+        }
+
+        public Task<RuntimeCallbackLease> ScheduleTimerAsync(
+            RuntimeCallbackTimerRequest request,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task CancelAsync(RuntimeCallbackLease lease, CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task PurgeActorAsync(string actorId, CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public void Release() => _probe.Release();
     }
 
     private sealed class RecordingRuntimeCallbackScheduler : IActorRuntimeCallbackScheduler
@@ -879,10 +1147,13 @@ public sealed class RoleGAgentCompletionNotificationTests
 
     private sealed class TestRoleGAgent(
         ILLMProviderFactory provider,
-        TimeProvider timeProvider) : RoleGAgent(
+        TimeProvider timeProvider,
+        RoleChatExecutionOptions? chatExecutionOptions = null)
+        : RoleGAgent(
             TestAgentToolExecutionPort.Instance,
             provider,
-            timeProvider: timeProvider)
+            timeProvider: timeProvider,
+            chatExecutionOptions: chatExecutionOptions)
     {
         public Task PersistForTestAsync(IMessage evt) => PersistDomainEventAsync(evt);
     }

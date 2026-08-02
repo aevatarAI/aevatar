@@ -57,6 +57,11 @@ namespace Aevatar.Bootstrap.Extensions.AI;
 
 public sealed class AevatarAIFeatureOptions
 {
+    public int MaxTurnDeadlineMs { get; set; } = RoleChatExecutionOptions.DefaultMaxTurnDeadlineMs;
+    public int PostCommitConfigRefreshTimeoutMs { get; set; } =
+        RoleChatExecutionOptions.DefaultPostCommitConfigRefreshTimeoutMs;
+    public int PostTurnProcessingTimeoutMs { get; set; } =
+        RoleChatExecutionOptions.DefaultPostTurnProcessingTimeoutMs;
     public bool EnableMEAIProviders { get; set; } = true;
     public bool EnableMEAIToTornadoFailover { get; set; } = true;
     public bool EnableReloadableProviderFactory { get; set; }
@@ -127,7 +132,23 @@ public static class ServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(configuration);
 
         var options = new AevatarAIFeatureOptions();
+        options.MaxTurnDeadlineMs = ReadPositiveInteger(
+            configuration,
+            "Aevatar:AI:MaxTurnDeadlineMs",
+            options.MaxTurnDeadlineMs);
+        options.PostCommitConfigRefreshTimeoutMs = ReadPositiveInteger(
+            configuration,
+            "Aevatar:AI:PostCommitConfigRefreshTimeoutMs",
+            options.PostCommitConfigRefreshTimeoutMs);
+        options.PostTurnProcessingTimeoutMs = ReadPositiveInteger(
+            configuration,
+            "Aevatar:AI:PostTurnProcessingTimeoutMs",
+            options.PostTurnProcessingTimeoutMs);
         configure?.Invoke(options);
+        services.TryAddSingleton(new RoleChatExecutionOptions(
+            options.MaxTurnDeadlineMs,
+            options.PostCommitConfigRefreshTimeoutMs,
+            options.PostTurnProcessingTimeoutMs));
 
         services.AddAevatarAgentKindRegistry(builder => builder
             .ScanAssemblies(typeof(RoleGAgent).Assembly)
@@ -190,6 +211,21 @@ public static class ServiceCollectionExtensions
         RegisterVoicePresenceModules(services, configuration, options);
 
         return services;
+    }
+
+    private static int ReadPositiveInteger(
+        IConfiguration configuration,
+        string key,
+        int defaultValue)
+    {
+        var configuredValue = configuration[key];
+        if (string.IsNullOrWhiteSpace(configuredValue))
+            return defaultValue;
+
+        if (!int.TryParse(configuredValue, out var value))
+            throw new InvalidOperationException($"{key} must be a positive integer.");
+
+        return value;
     }
 
     private static void RegisterVoicePresenceModules(

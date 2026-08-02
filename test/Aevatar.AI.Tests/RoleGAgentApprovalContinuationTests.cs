@@ -357,7 +357,7 @@ public sealed partial class RoleGAgentStateCoverageTests
     [Theory]
     [InlineData(AuditTrailAppendStatus.Appended, "continuation-dispatch")]
     [InlineData(AuditTrailAppendStatus.StoreUnavailable, "audit-incomplete-follow-up")]
-    public async Task HandleToolApprovalDecision_WhenPostTerminalDispatchFails_ShouldPersistFailureThenClearOnce(
+    public async Task HandleToolApprovalDecision_WhenPostTerminalDispatchFails_ShouldPersistClearThenFailureOnce(
         AuditTrailAppendStatus terminalStatus,
         string scenario)
     {
@@ -395,12 +395,12 @@ public sealed partial class RoleGAgentStateCoverageTests
         terminalCalls.Should().Be(1);
         auditTrail.RunningAttempts.Should().Be(1);
         auditTrail.TerminalAttempts.Should().Be(1);
-        await AssertFailureThenSingleClearAsync(eventStore, actorId);
+        await AssertSingleClearThenFailureAsync(eventStore, actorId);
         timeline.Should().Equal(
             "audit:running:Appended",
             $"audit:terminal:{terminalStatus}",
-            "event:RoleChatSessionCompletedEvent",
-            "event:ClearPendingApprovalEvent");
+            "event:ClearPendingApprovalEvent",
+            "event:RoleChatSessionCompletedEvent");
         await AssertConsumedAfterReactivationAsync(provider, actorId, tool, Approved(pending));
         terminalCalls.Should().Be(1);
     }
@@ -502,6 +502,17 @@ public sealed partial class RoleGAgentStateCoverageTests
             Any.Pack(new PendingToolApprovalPersistedEvent()).TypeUrl,
             Any.Pack(new RoleChatSessionCompletedEvent()).TypeUrl,
             Any.Pack(new ClearPendingApprovalEvent()).TypeUrl);
+    }
+
+    private static async Task AssertSingleClearThenFailureAsync(IEventStore eventStore, string actorId)
+    {
+        var events = await eventStore.GetEventsAsync(actorId);
+        events.Count(x => x.EventData.Is(RoleChatSessionCompletedEvent.Descriptor)).Should().Be(1);
+        events.Count(x => x.EventData.Is(ClearPendingApprovalEvent.Descriptor)).Should().Be(1);
+        events.Select(x => x.EventData.TypeUrl).Should().Equal(
+            Any.Pack(new PendingToolApprovalPersistedEvent()).TypeUrl,
+            Any.Pack(new ClearPendingApprovalEvent()).TypeUrl,
+            Any.Pack(new RoleChatSessionCompletedEvent()).TypeUrl);
     }
 
     private static async Task AssertConsumedAfterReactivationAsync(
@@ -659,5 +670,66 @@ public sealed partial class RoleGAgentStateCoverageTests
             long toVersion,
             CancellationToken ct = default) =>
             inner.DeleteEventsUpToAsync(agentId, toVersion, ct);
+    }
+
+    [Fact]
+    public async Task HandleToolApprovalDecision_WhenPendingSessionIsTerminal_ShouldOnlyClearPending()
+    {
+        var toolExecutions = 0;
+        using var provider = BuildServiceProvider();
+        var agent = CreateRoleAgent(
+            provider,
+            "role-approval-terminal-pending-session",
+            toolSources:
+            [
+                new StaticToolSource(
+                [
+                    new DelegateTool("dangerous_tool", _ =>
+                    {
+                        toolExecutions++;
+                        return "unexpected";
+                    }),
+                ]),
+            ]);
+        var publisher = new RecordingEventPublisher();
+        agent.EventPublisher = publisher;
+        await agent.ActivateAsync();
+        await agent.HandleInitializeRoleAgent(new InitializeRoleAgentEvent
+        {
+            RoleId = "approval-role",
+            RoleName = "approval worker",
+        });
+        agent.State.PendingApproval = new PendingToolApprovalState
+        {
+            RequestId = "req-terminal",
+            SessionId = "turn-original-terminal",
+            ScopeId = "scope-a",
+            ToolName = "dangerous_tool",
+            ToolCallId = "call-1",
+            ArgumentsJson = "{}",
+        };
+        agent.State.Sessions["turn-original-terminal"] = new RoleChatSessionState
+        {
+            Completed = true,
+            Outcome = RoleChatSessionOutcome.Completed,
+        };
+
+        await agent.HandleToolApprovalDecision(new ToolApprovalDecisionEvent
+        {
+            RequestId = "req-terminal",
+            ContinuationTurnId = "turn-new-continuation",
+            Approved = true,
+        });
+
+        agent.State.PendingApproval.Should().BeNull();
+        agent.State.Sessions.Should().NotContainKey("turn-new-continuation");
+        toolExecutions.Should().Be(0);
+        publisher.Published.OfType<ChatRequestEvent>().Should().BeEmpty();
+        var events = await provider.GetRequiredService<IEventStore>()
+            .GetEventsAsync(agent.Id);
+        events.Should().ContainSingle(stateEvent =>
+            stateEvent.EventData.Is(ClearPendingApprovalEvent.Descriptor));
+        events.Should().NotContain(stateEvent =>
+            stateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor));
     }
 }

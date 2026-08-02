@@ -10,6 +10,7 @@ using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
+using System.Runtime.ExceptionServices;
 
 namespace Aevatar.Foundation.Core;
 
@@ -67,6 +68,7 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
     public override async Task DeactivateAsync(CancellationToken ct = default)
     {
         var eventSourcing = EnsureEventSourcingConfigured();
+        var snapshotCt = ct;
         try
         {
             await OnDeactivateAsync(ct);
@@ -75,12 +77,13 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
                 var commitResult = await eventSourcing.ConfirmEventsAsync(ct);
                 if (commitResult.CommittedEvents.Count > 0)
                 {
+                    snapshotCt = CancellationToken.None;
                     var publications = ApplyCommittedEvents(
                         eventSourcing,
                         commitResult,
                         commitResult.CommittedEvents.Select(static x => (IMessage)x.EventData));
-                    await OnStateChangedAsync(_state, ct);
-                    await PublishAndCheckpointAsync(publications, ct);
+                    await OnStateChangedAsync(_state, CancellationToken.None);
+                    await PublishAndCheckpointAsync(publications, CancellationToken.None);
                 }
             }
             catch (EventStoreOptimisticConcurrencyException)
@@ -94,7 +97,7 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
                 return;
             }
 
-            await eventSourcing.PersistSnapshotAsync(_state, ct);
+            await eventSourcing.PersistSnapshotAsync(_state, snapshotCt);
         }
         finally
         {
@@ -111,6 +114,14 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
     /// <summary>Hook invoked after state changes, useful for CQRS projection.</summary>
     protected virtual Task OnStateChangedAsync(TState state, CancellationToken ct) =>
         Task.CompletedTask;
+
+    /// <summary>
+    /// Runs non-authoritative state-change work after a commit has acquired authority.
+    /// Implementations may narrow the supplied cancellation contract, but must not use it
+    /// for committed publication, checkpoint, or snapshot recovery.
+    /// </summary>
+    protected virtual Task OnCommittedStateChangedAsync(TState state, CancellationToken ct) =>
+        OnStateChangedAsync(state, ct);
 
     /// <summary>Activation hook for subclass initialization.</summary>
     protected virtual Task OnActivateAsync(CancellationToken ct) => Task.CompletedTask;
@@ -256,13 +267,38 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
         foreach (var evt in domainEvents)
             eventSourcing.RaiseEvent(evt);
 
-        var commitResult = await eventSourcing.ConfirmEventsAsync(ct);
+        EventStoreCommitResult commitResult;
+        try
+        {
+            commitResult = await eventSourcing.ConfirmEventsAsync(ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // A canceled command must not leave its uncommitted events queued for the
+            // next terminal commit in the same actor turn.
+            eventSourcing.DiscardPendingEvents();
+            throw;
+        }
 
         var publications = ApplyCommittedEvents(eventSourcing, commitResult, domainEvents);
 
-        await OnStateChangedAsync(_state, ct);
-        await PublishAndCheckpointAsync(publications, ct);
-        await eventSourcing.PersistSnapshotAsync(_state, ct);
+        // Append cancellation is admission-only. A returned commit result is authoritative,
+        // even if the command deadline elapsed while an atomic adapter was committing.
+        // State-change hooks are non-authoritative and may still observe the caller deadline;
+        // committed publication/checkpoint/snapshot always finish under recovery authority.
+        ExceptionDispatchInfo? stateChangeFailure = null;
+        try
+        {
+            await OnCommittedStateChangedAsync(_state, ct);
+        }
+        catch (Exception ex)
+        {
+            stateChangeFailure = ExceptionDispatchInfo.Capture(ex);
+        }
+
+        await PublishAndCheckpointAsync(publications, CancellationToken.None);
+        await eventSourcing.PersistSnapshotAsync(_state, CancellationToken.None);
+        stateChangeFailure?.Throw();
     }
 
     private IEventSourcingBehavior<TState> EnsureEventSourcingConfigured()

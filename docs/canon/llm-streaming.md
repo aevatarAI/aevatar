@@ -58,6 +58,61 @@ NyxID direct Responses / Messages / Chat Completions 的 `LlmSessionGAgent` 使�
 2. `docs/canon/cqrs-projection.md:46`
 3. `docs/canon/overview.md:79`
 
+### 2.2 Role chat turn deadline 边界
+
+`RoleGAgent` 及其 Workflow/NyxID/Chatbot Classifier 交互入口使用 Host-owned 最大 turn deadline，默认为
+120000 ms，Host 可通过 `Aevatar:AI:MaxTurnDeadlineMs` 设置严格正数上限。请求中的
+`timeout_ms` 仅能收紧该上限：缺省、零、负数或超过 Host cap 都使用 Host cap，
+调用方无法关闭总 deadline。
+
+deadline token 沿 `ChatStreamAsync` 的异步枚举、tool discovery/materialization 与当前 turn
+发起的 tool call 传递。到期后 actor 提交 `RoleChatSessionCompletedEvent`，其
+`outcome = FAILED` 且 `failure_code = LLM_TIMEOUT`，再由统一 committed-event 投影/观察链
+对外发布终态。不使用 actor self timer 中断当前挂起 turn，也不在 query path
+补跑终态。Role stream consumer 在处理每个 chunk 以及正常结束枚举前都重新核对 deadline；
+provider 即使已经观察到 cancellation 后仍尝试产出晚到 chunk 或正常 completion，也不能覆盖或
+重复该 typed timeout 终态。子类不得通过覆写 handler 自建无 deadline 的 streaming 分支；
+classifier 的普通 provider failure JSON fallback 只作为主链上的非超时展示策略。
+
+`HouseholdEntity` 的 sensor、camera、chat 与 heartbeat reasoning handler 同样在 actor turn 内运行，
+因此复用同一个 `RoleChatExecutionOptions` Host cap，而不维护第二份 timeout 配置。reasoning stream
+必须携带该 token，并在每个 chunk 处理前和枚举正常结束后再次检查。deadline 到期提交 typed
+`ReasoningCompletedEvent`，其中 `outcome = FAILED`、`failure_code = LLM_TIMEOUT`，并将同一终态
+写入 actor-owned `HouseholdEntityState.last_reasoning_terminal`；失败不推进成功 reasoning debounce，
+所以释放后的下一条 inbox 消息可以正常执行。
+
+`WorkflowRoleGAgent` 的 workflow intent 与 approval continuation 使用独立的流消费循环，但仍遵循
+同一 fencing 契约：每个 chunk 在写入内容、发布进度或收集 tool receipt 前先检查 host token，
+异步枚举正常结束后再次检查，防止忽略 cancellation 的 provider 以晚到 chunk 或无 chunk 的正常
+结束伪造成功终态。
+
+审批通过后的 tool resume 是新的 actor turn，必须创建新的 Host-owned deadline；其 token 连续覆盖
+caller token refresh、request tool catalog materialization 和 approved tool execution，禁止使用
+`CancellationToken.None` 或沿用已结束 LLM turn 的 token。任一阶段超时后 actor 清理 pending
+approval，不发送 chat continuation，并提交失败的 `RoleChatSessionCompletedEvent`，其中
+`failure_code = APPROVAL_TOOL_TIMEOUT`；workflow completion 同步携带
+`approval_tool_timeout` reason code。该终态只表示已批准工具的恢复执行超时，不冒充原 LLM turn 的
+`LLM_TIMEOUT`。每个外部 await 返回后以及发送 continuation 前都必须再次检查 token；adapter 即使吞掉
+cancellation 后晚返回成功或晚抛其他异常，也仍归入 `APPROVAL_TOOL_TIMEOUT`，不得退化为普通失败或
+继续执行。
+
+Host deadline 不在 provider stream 正常结束时提前失效。stream 后的 catalog、progress 与 terminal
+commit admission 仍携带同一个 turn token；每个外部 await 返回后、以及发起下一次 success commit 前都必须
+复检。`IEventStore.AppendAsync` 的 cancellation authority 只覆盖 admission：它抛出的
+`OperationCanceledException` 必须保证该 batch 零提交，event-sourcing runtime 才能安全丢弃未提交 pending
+events；adapter 一旦进入不可取消的原子 commit，或已经取得 commit result，就必须停止观察 deadline 并返回
+权威 `EventStoreCommitResult`。因此 Lua/File 原子提交期间即使 deadline 到达，已提交 success 仍是唯一终态，
+不得再追加或发布 timeout/failure；state apply、committed publication/checkpoint 与 terminal presentation 从该
+commit result 继续，并由 runtime committed-publication recovery 处理投影失败。只有在 commit admission 被取消且
+零提交时，handler 才提交 typed timeout。approval resume 的 `ClearPendingApprovalEvent` 不是 success terminal：
+它提交返回后、self continuation 发送前后仍执行 fencing；即使 clear 已成功但返回晚于 deadline，仍提交一次
+`APPROVAL_TOOL_TIMEOUT`，且不得重复 clear 或发送 continuation。
+
+Provider adapter 仍独立负责 connect timeout、stream idle timeout 和 cancellation 传递；
+普通 `HttpClient.Timeout` 不充当 streaming 总时长上限。完全忽略
+`CancellationToken` 的第三方 provider 不符合 provider contract，Host deadline 不对这类
+adapter 承诺强制中断。
+
 ## 3. 组件与分层
 
 | 层 | 组件 | 职责 |

@@ -61,6 +61,19 @@ sequenceDiagram
     A->>S: "Save snapshot, then compact at/below checkpoint"
 ```
 
+Cancellation on the append call is admission-only. If the event-store adapter
+returns a committed result, that result is authoritative even when the caller's
+deadline expired while the atomic append was completing. The runtime applies
+the committed events locally, captures any non-authoritative post-commit
+state-change hook failure, and still completes publication, checkpoint, and
+snapshot under recovery authority before rethrowing the hook failure.
+
+Role chat configuration and tool refresh is one such post-commit hook. It uses
+a fresh host-bounded timeout rather than the expired turn token. Terminal-adjacent
+side effects such as workflow completion publication and direct-chat history
+storage use a separate fresh post-turn timeout; they cannot replace or weaken an
+already committed actor terminal fact.
+
 Publication adapter success means only that the configured runtime stream
 accepted the envelope. It does not mean an observer consumed it or that a read
 model is visible. Snapshot and compaction run only after the current committed

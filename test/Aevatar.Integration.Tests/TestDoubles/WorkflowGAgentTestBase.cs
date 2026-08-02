@@ -2,6 +2,7 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core;
 using Aevatar.AI.Core.Tools;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.Audit;
@@ -123,9 +124,12 @@ public abstract class WorkflowGAgentTestBase
             string agentId,
             IEnumerable<IAgentTool>? tools = null,
             IToolSetRegistry? toolSetRegistry = null,
-            IWorkflowCallerAccessTokenProvider? callerAccessTokenProvider = null)
+            IWorkflowCallerAccessTokenProvider? callerAccessTokenProvider = null,
+            TimeProvider? timeProvider = null,
+            RoleChatExecutionOptions? chatExecutionOptions = null,
+            IActorRuntimeCallbackScheduler? callbackScheduler = null)
         {
-            var services = new ServiceCollection()
+            var serviceCollection = new ServiceCollection()
                 .AddSingleton<IEventStore>(eventStore)
                 .AddSingleton(eventStore)
                 .AddSingleton<EventSourcingRuntimeOptions>()
@@ -133,14 +137,18 @@ public abstract class WorkflowGAgentTestBase
                 .AddSingleton<IAuditActorIdentityHasher, StableIdentityHasher>()
                 .AddSingleton<IAgentToolAdmissionLedger>(AlwaysStartingAgentToolAdmissionLedger.Instance)
                 .AddSingleton<IAgentToolExecutionPort, AdmittedAgentToolExecutor>()
-                .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
-                .BuildServiceProvider();
+                .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
+            if (callbackScheduler is not null)
+                serviceCollection.AddSingleton<IActorRuntimeCallbackScheduler>(callbackScheduler);
+            var services = serviceCollection.BuildServiceProvider();
             var publisher = new RecordingEventPublisher();
             var agent = new TestWorkflowRoleGAgent(
                 services.GetRequiredService<IAgentToolExecutionPort>(),
                 llmProviderFactory,
                 toolSetRegistry,
-                callerAccessTokenProvider)
+                callerAccessTokenProvider,
+                timeProvider,
+                chatExecutionOptions)
             {
                 Services = services,
                 EventPublisher = publisher,
@@ -189,12 +197,16 @@ public abstract class WorkflowGAgentTestBase
             IAgentToolExecutionPort toolExecutionPort,
             ILLMProviderFactory llmProviderFactory,
             IToolSetRegistry? toolSetRegistry,
-            IWorkflowCallerAccessTokenProvider? callerAccessTokenProvider)
+            IWorkflowCallerAccessTokenProvider? callerAccessTokenProvider,
+            TimeProvider? timeProvider,
+            RoleChatExecutionOptions? chatExecutionOptions)
             : WorkflowRoleGAgent(
                 toolExecutionPort,
                 llmProviderFactory,
                 toolSetRegistry: toolSetRegistry,
-                callerAccessTokenProvider: callerAccessTokenProvider)
+                callerAccessTokenProvider: callerAccessTokenProvider,
+                chatExecutionOptions: chatExecutionOptions,
+                timeProvider: timeProvider)
         {
             public void RegisterToolForTest(IAgentTool tool) => RegisterTool(tool);
         }
@@ -420,9 +432,13 @@ public abstract class WorkflowGAgentTestBase
         internal sealed class RecordingEventPublisher : IEventPublisher, ICommittedStateEventPublisher
         {
             public List<(IMessage evt, TopologyAudience direction)> Published { get; } = [];
+            public List<(IMessage Event, TopologyAudience Direction, EventEnvelopePublishOptions? Options)>
+                PublicationsWithOptions { get; } = [];
             public List<(string targetActorId, IMessage evt)> Sent { get; } = [];
+            public Func<IMessage, CancellationToken, Task>? BeforePublishAsync { get; set; }
+            public Func<IMessage, CancellationToken, Task>? BeforeSendAsync { get; set; }
 
-            public Task PublishAsync<TEvent>(
+            public async Task PublishAsync<TEvent>(
                 TEvent evt,
                 TopologyAudience direction = TopologyAudience.Children,
                 CancellationToken ct = default,
@@ -432,11 +448,14 @@ public abstract class WorkflowGAgentTestBase
             {
                 _ = sourceEnvelope;
                 _ = options;
+                if (BeforePublishAsync is not null)
+                    await BeforePublishAsync(evt, ct);
+                ct.ThrowIfCancellationRequested();
                 Published.Add((evt, direction));
-                return Task.CompletedTask;
+                PublicationsWithOptions.Add((evt, direction, options));
             }
 
-            public Task SendToAsync<TEvent>(
+            public async Task SendToAsync<TEvent>(
                 string targetActorId,
                 TEvent evt,
                 CancellationToken ct = default,
@@ -447,8 +466,10 @@ public abstract class WorkflowGAgentTestBase
                 Sent.Add((targetActorId, evt));
                 _ = sourceEnvelope;
                 _ = options;
+                if (BeforeSendAsync is not null)
+                    await BeforeSendAsync(evt, ct);
+                ct.ThrowIfCancellationRequested();
                 Published.Add((evt, TopologyAudience.Self));
-                return Task.CompletedTask;
             }
 
             public Task PublishCommittedStateEventAsync(

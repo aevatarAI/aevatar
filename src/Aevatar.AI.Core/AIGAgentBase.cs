@@ -445,15 +445,22 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
             try
             {
                 var tools = await source.DiscoverToolsAsync(ct);
+                ct.ThrowIfCancellationRequested();
                 foreach (var tool in tools)
                     discoveredTools[tool.Name] = tool;
             }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
+                ct.ThrowIfCancellationRequested();
                 Logger.LogWarning(ex, "Tool source discovery failed: {Source}", source.GetType().Name);
             }
         }
 
+        ct.ThrowIfCancellationRequested();
         RefreshSourceTools(discoveredTools.Values);
     }
 

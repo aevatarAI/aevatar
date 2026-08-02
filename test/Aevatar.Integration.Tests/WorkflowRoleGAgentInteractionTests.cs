@@ -2,6 +2,7 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.Tools;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
@@ -27,6 +28,7 @@ using Aevatar.Workflow.Integration.AI;
 using FluentAssertions;
 using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Time.Testing;
 using System.Reflection;
 using Any = Google.Protobuf.WellKnownTypes.Any;
 using StringValue = Google.Protobuf.WellKnownTypes.StringValue;
@@ -502,18 +504,21 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
                 TimeoutMs = 1,
             });
 
+            agent.State.Sessions["session-timeout"].WorkflowLlmCompletionDeliveryStatus.Should()
+                .Be(WorkflowLlmCompletionDeliveryStatus.Dispatched);
             publisher.Published.Select(x => x.evt).OfType<WorkflowLlmInvocationStartedEvent>()
                 .Should()
                 .ContainSingle(x => x.RunId == "run-timeout" && x.StepId == "step-timeout" && x.SessionId == "session-timeout");
-            publisher.Published.Select(x => x.evt).OfType<WorkflowLlmInvocationCompletedEvent>()
-                .Should()
-                .ContainSingle(x =>
-                    !x.Success &&
-                    x.RunId == "run-timeout" &&
-                    x.StepId == "step-timeout" &&
-                    x.SessionId == "session-timeout" &&
-                    x.RoleActorId == "workflow-role-agent-timeout" &&
-                    x.Error == "LLM request timed out after 1ms");
+            var completed = publisher.Published.Select(x => x.evt)
+                .OfType<WorkflowLlmInvocationCompletedEvent>()
+                .Should().ContainSingle().Which;
+            completed.Success.Should().BeFalse();
+            completed.RunId.Should().Be("run-timeout");
+            completed.StepId.Should().Be("step-timeout");
+            completed.SessionId.Should().Be("session-timeout");
+            completed.RoleActorId.Should().Be("workflow-role-agent-timeout");
+            completed.Error.Should().Be(
+                "llm_timeout: The LLM turn exceeded its deadline. Please try again.");
         }
 
         [Fact]
@@ -544,6 +549,767 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
             toolCall.CallId.Should().Be("call-1");
             toolCall.ToolName.Should().Be("lookup");
             Assert.Equal("""{"query":"aevatar"}""", toolCall.ArgumentsJson);
+        }
+
+        [Fact]
+        public async Task WorkflowRoleGAgent_WhenStartedPublicationBlocks_ShouldApplyHostDeadline()
+        {
+            const int timeoutMs = 1_000;
+            const string sessionId = "workflow-started-publication-deadline";
+            var eventStore = new InMemoryEventStore();
+            var timeProvider = new FakeTimeProvider();
+            var deadlineProbe = new ApprovalResumeDeadlineProbe();
+            var (agent, publisher) = await CreateActivatedWorkflowRoleAgentAsync(
+                eventStore,
+                new RecordingWorkflowIntentLlmProvider(),
+                "workflow-role-agent-started-publication-deadline",
+                timeProvider: timeProvider,
+                chatExecutionOptions: new RoleChatExecutionOptions(timeoutMs));
+            publisher.BeforePublishAsync = (evt, ct) => evt is WorkflowLlmInvocationStartedEvent
+                ? deadlineProbe.HangAsync(ct)
+                : Task.CompletedTask;
+
+            var execution = agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
+            {
+                RunId = "run-started-deadline",
+                StepId = "step-started-deadline",
+                SessionId = sessionId,
+                Prompt = "deadline includes started publication",
+            });
+            await deadlineProbe.Started;
+
+            timeProvider.Advance(TimeSpan.FromMilliseconds(timeoutMs));
+            await deadlineProbe.CancellationObserved;
+            await execution;
+
+            var completion = (await eventStore.GetEventsAsync(agent.Id))
+                .Where(stateEvent => stateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
+                .Select(stateEvent => stateEvent.EventData.Unpack<RoleChatSessionCompletedEvent>())
+                .Should().ContainSingle(completed => completed.SessionId == sessionId).Which;
+            completion.Outcome.Should().Be(RoleChatSessionOutcome.Failed);
+            completion.FailureCode.Should().Be("LLM_TIMEOUT");
+            publisher.Published.Select(static item => item.evt)
+                .OfType<WorkflowLlmInvocationCompletedEvent>()
+                .Should().ContainSingle(completed =>
+                    !completed.Success &&
+                    completed.SessionId == sessionId &&
+                    completed.Error.Contains("llm_timeout", StringComparison.Ordinal));
+        }
+
+        [Fact]
+        public async Task WorkflowRoleGAgent_WhenCompletionPublisherIgnoresCancellation_ShouldReleaseNextTurn()
+        {
+            const int timeoutMs = 1_000;
+            const string firstSessionId = "workflow-completion-publisher-deadline";
+            const string nextSessionId = "workflow-completion-publisher-next-turn";
+            var eventStore = new InMemoryEventStore();
+            var timeProvider = new FakeTimeProvider();
+            var provider = new RecordingWorkflowIntentLlmProvider();
+            var publicationProbe = new IgnoringCancellationPostTurnProbe();
+            var callbackScheduler = new RecordingWorkflowCompletionCallbackScheduler();
+            var (agent, publisher) = await CreateActivatedWorkflowRoleAgentAsync(
+                eventStore,
+                provider,
+                "workflow-role-agent-completion-publisher-deadline",
+                timeProvider: timeProvider,
+                chatExecutionOptions: new RoleChatExecutionOptions(
+                    maxTurnDeadlineMs: 5_000,
+                    postTurnProcessingTimeoutMs: timeoutMs),
+                callbackScheduler: callbackScheduler);
+            publisher.BeforePublishAsync = (evt, _) => evt is WorkflowLlmInvocationCompletedEvent
+                {
+                    SessionId: firstSessionId,
+                }
+                ? publicationProbe.HangIgnoringCancellationAsync()
+                : Task.CompletedTask;
+
+            var firstTurn = agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
+            {
+                RunId = "run-completion-publisher-deadline",
+                StepId = "step-completion-publisher-deadline",
+                SessionId = firstSessionId,
+                Prompt = "commit before the publisher hangs",
+            });
+            await publicationProbe.Started;
+            agent.State.Sessions[firstSessionId].Completed.Should().BeTrue();
+
+            timeProvider.Advance(TimeSpan.FromMilliseconds(timeoutMs));
+            await firstTurn;
+
+            var firstSession = agent.State.Sessions[firstSessionId];
+            firstSession.WorkflowLlmCompletionDeliveryStatus.Should()
+                .Be(WorkflowLlmCompletionDeliveryStatus.RetryScheduled);
+            firstSession.WorkflowLlmCompletionDeliveryAttempt.Should().Be(1);
+            var retryEnvelope = callbackScheduler.TimeoutRequests.Should()
+                .ContainSingle().Subject.TriggerEnvelope;
+            var retry = retryEnvelope.Payload
+                .Unpack<WorkflowLlmCompletionDeliveryRetryFiredEvent>();
+            retry.SessionId.Should().Be(firstSessionId);
+            retry.DeliveryId.Should().Be(
+                "run-completion-publisher-deadline:step-completion-publisher-deadline:" +
+                firstSessionId);
+            retry.Attempt.Should().Be(1);
+
+            publicationProbe.Release();
+            await publicationProbe.Completed;
+            agent.State.Sessions[firstSessionId].WorkflowLlmCompletionDeliveryStatus.Should()
+                .Be(WorkflowLlmCompletionDeliveryStatus.RetryScheduled);
+            (await eventStore.GetEventsAsync(agent.Id)).Should().NotContain(stateEvent =>
+                stateEvent.EventData.Is(WorkflowLlmCompletionDeliveryDispatchedEvent.Descriptor));
+
+            publisher.BeforePublishAsync = null;
+            await agent.HandleEventAsync(retryEnvelope);
+            await agent.HandleEventAsync(retryEnvelope);
+
+            agent.State.Sessions[firstSessionId].WorkflowLlmCompletionDeliveryStatus.Should()
+                .Be(WorkflowLlmCompletionDeliveryStatus.Dispatched);
+            publisher.PublicationsWithOptions
+                .Where(static publication =>
+                    publication.Event is WorkflowLlmInvocationCompletedEvent completed &&
+                    completed.SessionId == firstSessionId)
+                .Should().ContainSingle()
+                .Which.Options!.Delivery!.OperationId.Should().Be(
+                    "workflow-llm-terminal:run-completion-publisher-deadline:" +
+                    "step-completion-publisher-deadline:" + firstSessionId);
+
+            await agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
+            {
+                RunId = "run-completion-publisher-next-turn",
+                StepId = "step-completion-publisher-next-turn",
+                SessionId = nextSessionId,
+                Prompt = "process the next inbox turn",
+            });
+
+            provider.Requests.Should().HaveCount(2);
+            agent.State.Sessions[firstSessionId].FinalContent.Should().Be("workflow answer");
+            agent.State.Sessions[nextSessionId].Completed.Should().BeTrue();
+            publisher.Published.Select(static item => item.evt)
+                .OfType<WorkflowLlmInvocationCompletedEvent>()
+                .Should().ContainSingle(completed => completed.SessionId == nextSessionId);
+        }
+
+        [Fact]
+        public async Task WorkflowRoleGAgent_WhenCompletionPending_ShouldRedeliverOnActivationAndFenceStaleCallback()
+        {
+            const string actorId = "workflow-role-agent-completion-activation-retry";
+            const string sessionId = "workflow-completion-activation-retry";
+            var eventStore = new InMemoryEventStore();
+            var initialScheduler = new RecordingWorkflowCompletionCallbackScheduler();
+            var (initial, initialPublisher) = await CreateActivatedWorkflowRoleAgentAsync(
+                eventStore,
+                new RecordingWorkflowIntentLlmProvider(),
+                actorId,
+                callbackScheduler: initialScheduler);
+            initialPublisher.BeforePublishAsync = (evt, _) => evt is WorkflowLlmInvocationCompletedEvent
+                ? Task.FromException(new InvalidOperationException("simulated workflow completion failure"))
+                : Task.CompletedTask;
+
+            await initial.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
+            {
+                RunId = "run-activation-retry",
+                StepId = "step-activation-retry",
+                SessionId = sessionId,
+                Prompt = "commit then recover on activation",
+            });
+
+            initial.State.Sessions[sessionId].WorkflowLlmCompletionDeliveryStatus.Should()
+                .Be(WorkflowLlmCompletionDeliveryStatus.RetryScheduled);
+            var staleRetryEnvelope = initialScheduler.TimeoutRequests.Should()
+                .ContainSingle().Subject.TriggerEnvelope;
+
+            var recoveredScheduler = new RecordingWorkflowCompletionCallbackScheduler();
+            var (recovered, recoveredPublisher) = await CreateActivatedWorkflowRoleAgentAsync(
+                eventStore,
+                new RecordingWorkflowIntentLlmProvider(),
+                actorId,
+                callbackScheduler: recoveredScheduler);
+
+            recovered.State.Sessions[sessionId].WorkflowLlmCompletionDeliveryStatus.Should()
+                .Be(WorkflowLlmCompletionDeliveryStatus.Dispatched);
+            recovered.State.Sessions[sessionId].WorkflowLlmCompletionDeliveryAttempt.Should().Be(1);
+            recoveredPublisher.PublicationsWithOptions
+                .Where(static publication =>
+                    publication.Event is WorkflowLlmInvocationCompletedEvent completed &&
+                    completed.SessionId == sessionId)
+                .Should().ContainSingle()
+                .Which.Options!.Delivery!.OperationId.Should().Be(
+                    "workflow-llm-terminal:run-activation-retry:step-activation-retry:" + sessionId);
+
+            await recovered.HandleEventAsync(staleRetryEnvelope);
+
+            recoveredPublisher.Published.Select(static item => item.evt)
+                .OfType<WorkflowLlmInvocationCompletedEvent>()
+                .Should().ContainSingle(completed => completed.SessionId == sessionId);
+            recoveredScheduler.TimeoutRequests.Should().BeEmpty();
+        }
+
+        [Fact]
+        public async Task WorkflowRoleGAgent_WhenApprovalTimeoutCancellationBlocks_ShouldApplyHostDeadline()
+        {
+            const int timeoutMs = 1_000;
+            const string continuationTurnId = "approval-callback-cancel-deadline";
+            var eventStore = new InMemoryEventStore();
+            var timeProvider = new FakeTimeProvider();
+            var callbackScheduler = new BlockingCancelRuntimeCallbackScheduler();
+            var tool = new ApprovalRequiredWorkflowTool();
+            var registry = new FixedToolSetRegistry("studio.write", new FixedToolSource(tool));
+            var (agent, publisher) = await CreateActivatedWorkflowRoleAgentAsync(
+                eventStore,
+                new ApprovalWorkflowIntentLlmProvider(tool.Name),
+                "workflow-role-agent-approval-callback-cancel-deadline",
+                toolSetRegistry: registry,
+                callerAccessTokenProvider: new RotatingWorkflowCallerAccessTokenProvider(),
+                timeProvider: timeProvider,
+                chatExecutionOptions: new RoleChatExecutionOptions(timeoutMs),
+                callbackScheduler: callbackScheduler);
+            await agent.HandleWorkflowLlmExecutionIntent(ApprovalIntent(tool.Name));
+
+            var decision = agent.HandleToolApprovalDecision(new ToolApprovalDecisionEvent
+            {
+                RequestId = agent.State.PendingApproval.RequestId,
+                Approved = true,
+                ContinuationTurnId = continuationTurnId,
+            });
+            await callbackScheduler.CancelStarted;
+
+            timeProvider.Advance(TimeSpan.FromMilliseconds(timeoutMs));
+            await callbackScheduler.CancelCancellationObserved;
+            await decision;
+
+            agent.State.PendingApproval.Should().BeNull();
+            publisher.Sent.Select(static item => item.evt)
+                .OfType<ChatRequestEvent>().Should().BeEmpty();
+            var completion = (await eventStore.GetEventsAsync(agent.Id))
+                .Where(stateEvent => stateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
+                .Select(stateEvent => stateEvent.EventData.Unpack<RoleChatSessionCompletedEvent>())
+                .Should().ContainSingle(completed => completed.SessionId == continuationTurnId).Which;
+            completion.FailureCode.Should().Be("APPROVAL_TOOL_TIMEOUT");
+        }
+
+        [Fact]
+        public async Task WorkflowRoleGAgent_WhenApprovalFails_ShouldCommitActorTerminalBeforeWorkflowCompletion()
+        {
+            var operationLog = new List<string>();
+            var eventStore = new RecordingTerminalOrderEventStore(operationLog);
+            var tool = new ApprovalRequiredWorkflowTool();
+            var registry = new FixedToolSetRegistry("studio.write", new FixedToolSource(tool));
+            var (agent, publisher) = await CreateActivatedWorkflowRoleAgentAsync(
+                eventStore,
+                new ApprovalWorkflowIntentLlmProvider(tool.Name),
+                "workflow-role-agent-approval-terminal-order",
+                toolSetRegistry: registry);
+            publisher.BeforePublishAsync = (evt, ct) =>
+            {
+                ct.ThrowIfCancellationRequested();
+                if (evt is WorkflowLlmInvocationCompletedEvent)
+                    operationLog.Add("workflow-completion-published");
+                return Task.CompletedTask;
+            };
+            await agent.HandleWorkflowLlmExecutionIntent(ApprovalIntent(tool.Name));
+
+            await agent.HandleToolApprovalDecision(new ToolApprovalDecisionEvent
+            {
+                RequestId = agent.State.PendingApproval.RequestId,
+                Approved = false,
+                Reason = "not allowed",
+                ContinuationTurnId = "approval-terminal-order",
+            });
+
+            operationLog.Should().ContainInOrder(
+                "actor-terminal-committed",
+                "workflow-completion-published");
+            operationLog.IndexOf("actor-terminal-committed")
+                .Should().BeLessThan(operationLog.IndexOf("workflow-completion-published"));
+            var terminalBatch = eventStore.Batches.Should().ContainSingle(batch =>
+                    batch.Any(stateEvent =>
+                        stateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor) &&
+                        stateEvent.EventData.Unpack<RoleChatSessionCompletedEvent>().SessionId ==
+                        "approval-terminal-order"))
+                .Which;
+            terminalBatch.Select(stateEvent => stateEvent.EventData.TypeUrl).Should().Equal(
+                Any.Pack(new RoleChatSessionCompletedEvent()).TypeUrl,
+                Any.Pack(new ClearPendingApprovalEvent()).TypeUrl);
+        }
+
+        [Fact]
+        public async Task WorkflowRoleGAgent_WhenApprovalTerminalHookHangs_ShouldClearPendingBeforeBoundedHook()
+        {
+            const int timeoutMs = 1_000;
+            const string continuationTurnId = "approval-terminal-hook-deadline";
+            var eventStore = new InMemoryEventStore();
+            var timeProvider = new FakeTimeProvider();
+            var hookProbe = new ApprovalResumeDeadlineProbe();
+            var tool = new ApprovalRequiredWorkflowTool();
+            var registry = new FixedToolSetRegistry("studio.write", new FixedToolSource(tool));
+            var (agent, publisher) = await CreateActivatedWorkflowRoleAgentAsync(
+                eventStore,
+                new ApprovalWorkflowIntentLlmProvider(tool.Name),
+                "workflow-role-agent-terminal-hook-deadline",
+                toolSetRegistry: registry,
+                timeProvider: timeProvider,
+                chatExecutionOptions: new RoleChatExecutionOptions(
+                    maxTurnDeadlineMs: 5_000,
+                    postTurnProcessingTimeoutMs: timeoutMs));
+            await agent.HandleWorkflowLlmExecutionIntent(ApprovalIntent(tool.Name));
+            publisher.BeforePublishAsync = (evt, ct) => evt is WorkflowLlmInvocationCompletedEvent
+                ? hookProbe.HangAsync(ct)
+                : Task.CompletedTask;
+
+            var decision = agent.HandleToolApprovalDecision(new ToolApprovalDecisionEvent
+            {
+                RequestId = agent.State.PendingApproval.RequestId,
+                Approved = false,
+                Reason = "not allowed",
+                ContinuationTurnId = continuationTurnId,
+            });
+            await hookProbe.Started;
+
+            agent.State.PendingApproval.Should().BeNull();
+            agent.State.Sessions[continuationTurnId].FailureCode.Should().Be("APPROVAL_DENIED");
+            timeProvider.Advance(TimeSpan.FromMilliseconds(timeoutMs));
+            await hookProbe.CancellationObserved;
+            await decision;
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task WorkflowRoleGAgent_WhenInitialStreamEndsAfterHostDeadline_ShouldRejectLateProviderOutcome(
+            bool yieldLateChunk)
+        {
+            const int timeoutMs = 1_000;
+            const string sessionId = "session-initial-deadline";
+            var eventStore = new InMemoryEventStore();
+            var timeProvider = new FakeTimeProvider();
+            var llmProvider = new LateAfterCancellationWorkflowIntentLlmProvider(yieldLateChunk);
+            var (agent, publisher) = await CreateActivatedWorkflowRoleAgentAsync(
+                eventStore,
+                llmProvider,
+                $"workflow-role-agent-initial-deadline-{yieldLateChunk}",
+                timeProvider: timeProvider,
+                chatExecutionOptions: new RoleChatExecutionOptions(timeoutMs));
+
+            var execution = agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
+            {
+                RunId = "run-initial-deadline",
+                StepId = "step-initial-deadline",
+                SessionId = sessionId,
+                Prompt = "ignore the deadline",
+            });
+            await llmProvider.StreamStarted;
+
+            timeProvider.Advance(TimeSpan.FromMilliseconds(timeoutMs));
+            await llmProvider.CancellationObserved;
+            llmProvider.ReleaseAfterCancellation();
+            await execution;
+
+            var completion = (await eventStore.GetEventsAsync(agent.Id))
+                .Where(stateEvent => stateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
+                .Select(stateEvent => stateEvent.EventData.Unpack<RoleChatSessionCompletedEvent>())
+                .Should().ContainSingle(completed => completed.SessionId == sessionId).Which;
+            completion.Outcome.Should().Be(RoleChatSessionOutcome.Failed);
+            completion.FailureCode.Should().Be("LLM_TIMEOUT");
+            completion.Content.Should().NotContain(LateAfterCancellationWorkflowIntentLlmProvider.LateContent);
+            publisher.Published.Select(static item => item.evt)
+                .OfType<WorkflowLlmStreamChunkEvent>()
+                .Should().NotContain(chunk => chunk.DeltaContent.Contains(
+                    LateAfterCancellationWorkflowIntentLlmProvider.LateContent,
+                    StringComparison.Ordinal));
+            publisher.Published.Select(static item => item.evt)
+                .OfType<WorkflowLlmInvocationCompletedEvent>()
+                .Should().ContainSingle(completed =>
+                    !completed.Success &&
+                    completed.Error.Contains("llm_timeout", StringComparison.Ordinal));
+        }
+
+        [Fact]
+        public async Task WorkflowRoleGAgent_WhenSuccessCompletionCommitWaitsPastDeadline_ShouldPublishOnlyTimeout()
+        {
+            const int timeoutMs = 1_000;
+            const string sessionId = "workflow-post-stream-deadline";
+            var eventStore = new BlockingWorkflowSuccessCompletionEventStore();
+            var timeProvider = new FakeTimeProvider();
+            var (agent, publisher) = await CreateActivatedWorkflowRoleAgentAsync(
+                eventStore,
+                new RecordingWorkflowIntentLlmProvider(),
+                "workflow-role-agent-post-stream-deadline",
+                timeProvider: timeProvider,
+                chatExecutionOptions: new RoleChatExecutionOptions(timeoutMs));
+
+            var execution = agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
+            {
+                RunId = "run-post-stream",
+                StepId = "step-post-stream",
+                SessionId = sessionId,
+                Prompt = "finish then wait on persistence",
+            });
+            await eventStore.SuccessCompletionAppendStarted;
+            timeProvider.Advance(TimeSpan.FromMilliseconds(timeoutMs));
+            await eventStore.CancellationObserved;
+            await execution;
+
+            var completion = (await eventStore.Inner.GetEventsAsync(agent.Id))
+                .Where(stateEvent => stateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
+                .Select(stateEvent => stateEvent.EventData.Unpack<RoleChatSessionCompletedEvent>())
+                .Should().ContainSingle(completed => completed.SessionId == sessionId).Which;
+            completion.Outcome.Should().Be(RoleChatSessionOutcome.Failed);
+            completion.FailureCode.Should().Be("LLM_TIMEOUT");
+            completion.Content.Should().NotContain("workflow answer");
+            publisher.Published.Select(static item => item.evt)
+                .OfType<WorkflowLlmInvocationCompletedEvent>()
+                .Should().ContainSingle(completed =>
+                    !completed.Success &&
+                    completed.SessionId == sessionId &&
+                    completed.Error.Contains("llm_timeout", StringComparison.Ordinal));
+        }
+
+        [Fact]
+        public async Task WorkflowRoleGAgent_WhenSuccessCommitResultReturnsAfterDeadline_ShouldKeepCommittedSuccess()
+        {
+            const int timeoutMs = 1_000;
+            const string sessionId = "workflow-committed-before-deadline-result";
+            var eventStore = new LateReturningCommittedWorkflowSuccessEventStore();
+            var timeProvider = new FakeTimeProvider();
+            var (agent, publisher) = await CreateActivatedWorkflowRoleAgentAsync(
+                eventStore,
+                new RecordingWorkflowIntentLlmProvider(),
+                "workflow-role-agent-committed-before-deadline-result",
+                timeProvider: timeProvider,
+                chatExecutionOptions: new RoleChatExecutionOptions(timeoutMs));
+
+            var execution = agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
+            {
+                RunId = "run-committed",
+                StepId = "step-committed",
+                SessionId = sessionId,
+                Prompt = "commit before the deadline result returns",
+            });
+            await eventStore.SuccessCommitCompleted;
+            timeProvider.Advance(TimeSpan.FromMilliseconds(timeoutMs));
+            await eventStore.DeadlineObserved;
+            await execution;
+
+            var completion = (await eventStore.Inner.GetEventsAsync(agent.Id))
+                .Where(stateEvent => stateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
+                .Select(stateEvent => stateEvent.EventData.Unpack<RoleChatSessionCompletedEvent>())
+                .Should().ContainSingle(completed => completed.SessionId == sessionId).Which;
+            completion.Outcome.Should().Be(RoleChatSessionOutcome.Completed);
+            completion.FailureCode.Should().BeEmpty();
+            completion.Content.Should().Be("workflow answer");
+            publisher.Published.Select(static item => item.evt)
+                .OfType<WorkflowLlmInvocationCompletedEvent>()
+                .Should().ContainSingle(completed =>
+                    completed.Success &&
+                    completed.SessionId == sessionId &&
+                    completed.Content == "workflow answer");
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task WorkflowRoleGAgent_WhenApprovalContinuationStreamEndsAfterHostDeadline_ShouldRejectLateProviderOutcome(
+            bool yieldLateChunk)
+        {
+            const int timeoutMs = 1_000;
+            const string continuationTurnId = "approval-stream-deadline";
+            var eventStore = new InMemoryEventStore();
+            var timeProvider = new FakeTimeProvider();
+            var tool = new ApprovalRequiredWorkflowTool();
+            var llmProvider = new ApprovalThenLateWorkflowIntentLlmProvider(tool.Name, yieldLateChunk);
+            var registry = new FixedToolSetRegistry("studio.write", new FixedToolSource(tool));
+            var (agent, publisher) = await CreateActivatedWorkflowRoleAgentAsync(
+                eventStore,
+                llmProvider,
+                $"workflow-role-agent-continuation-deadline-{yieldLateChunk}",
+                toolSetRegistry: registry,
+                callerAccessTokenProvider: new RotatingWorkflowCallerAccessTokenProvider(),
+                timeProvider: timeProvider,
+                chatExecutionOptions: new RoleChatExecutionOptions(timeoutMs));
+
+            await agent.HandleWorkflowLlmExecutionIntent(ApprovalIntent(tool.Name));
+            await agent.HandleToolApprovalDecision(new ToolApprovalDecisionEvent
+            {
+                RequestId = agent.State.PendingApproval.RequestId,
+                Approved = true,
+                ContinuationTurnId = continuationTurnId,
+            });
+            var continuation = publisher.Sent
+                .Select(static item => item.evt)
+                .OfType<ChatRequestEvent>()
+                .Should().ContainSingle().Which;
+
+            var execution = agent.HandleChatRequest(continuation);
+            await llmProvider.ContinuationStreamStarted;
+            timeProvider.Advance(TimeSpan.FromMilliseconds(timeoutMs));
+            await llmProvider.CancellationObserved;
+            llmProvider.ReleaseAfterCancellation();
+            await execution;
+
+            var completion = (await eventStore.GetEventsAsync(agent.Id))
+                .Where(stateEvent => stateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
+                .Select(stateEvent => stateEvent.EventData.Unpack<RoleChatSessionCompletedEvent>())
+                .Should().ContainSingle(completed => completed.SessionId == continuationTurnId).Which;
+            completion.Outcome.Should().Be(RoleChatSessionOutcome.Failed);
+            completion.FailureCode.Should().Be("APPROVAL_TOOL_TIMEOUT");
+            completion.Content.Should().NotContain(LateAfterCancellationWorkflowIntentLlmProvider.LateContent);
+            publisher.Published.Select(static item => item.evt)
+                .OfType<WorkflowLlmStreamChunkEvent>()
+                .Should().NotContain(chunk => chunk.DeltaContent.Contains(
+                    LateAfterCancellationWorkflowIntentLlmProvider.LateContent,
+                    StringComparison.Ordinal));
+            publisher.Published.Select(static item => item.evt)
+                .OfType<WorkflowLlmInvocationCompletedEvent>()
+                .Should().ContainSingle(completed =>
+                    !completed.Success &&
+                    completed.RunId == "run-approval" &&
+                    completed.SessionId == "session-approval" &&
+                    completed.Error.Contains("approval_tool_timeout", StringComparison.Ordinal));
+        }
+
+        [Theory]
+        [InlineData("token_refresh")]
+        [InlineData("catalog_discovery")]
+        [InlineData("tool_execution")]
+        public async Task WorkflowRoleGAgent_WhenApprovalResumePhaseExceedsHostDeadline_ShouldCommitTypedTimeout(
+            string hangingPhase)
+        {
+            const int timeoutMs = 1_000;
+            const string continuationTurnId = "approval-tool-deadline";
+            var eventStore = new InMemoryEventStore();
+            var timeProvider = new FakeTimeProvider();
+            var deadlineProbe = new ApprovalResumeDeadlineProbe();
+            var tool = new ApprovalResumeDeadlineTool(
+                deadlineProbe,
+                hang: hangingPhase == "tool_execution");
+            var source = new ApprovalResumeDeadlineToolSource(
+                tool,
+                deadlineProbe,
+                hangOnApprovalResume: hangingPhase == "catalog_discovery");
+            var tokenProvider = new ApprovalResumeDeadlineTokenProvider(
+                deadlineProbe,
+                hang: hangingPhase == "token_refresh");
+            var registry = new FixedToolSetRegistry("studio.write", source);
+            var (agent, publisher) = await CreateActivatedWorkflowRoleAgentAsync(
+                eventStore,
+                new ApprovalWorkflowIntentLlmProvider(tool.Name),
+                $"workflow-role-agent-approval-phase-deadline-{hangingPhase}",
+                toolSetRegistry: registry,
+                callerAccessTokenProvider: tokenProvider,
+                timeProvider: timeProvider,
+                chatExecutionOptions: new RoleChatExecutionOptions(timeoutMs));
+
+            await agent.HandleWorkflowLlmExecutionIntent(ApprovalIntent(tool.Name));
+            var decision = agent.HandleToolApprovalDecision(new ToolApprovalDecisionEvent
+            {
+                RequestId = agent.State.PendingApproval.RequestId,
+                Approved = true,
+                ContinuationTurnId = continuationTurnId,
+            });
+            await deadlineProbe.Started;
+
+            timeProvider.Advance(TimeSpan.FromMilliseconds(timeoutMs));
+            await deadlineProbe.CancellationObserved;
+            await decision;
+
+            agent.State.PendingApproval.Should().BeNull();
+            publisher.Sent.Select(static item => item.evt)
+                .OfType<ChatRequestEvent>().Should().BeEmpty();
+            var completion = (await eventStore.GetEventsAsync(agent.Id))
+                .Where(stateEvent => stateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
+                .Select(stateEvent => stateEvent.EventData.Unpack<RoleChatSessionCompletedEvent>())
+                .Should().ContainSingle(completed => completed.SessionId == continuationTurnId).Which;
+            completion.Outcome.Should().Be(RoleChatSessionOutcome.Failed);
+            completion.FailureCode.Should().Be("APPROVAL_TOOL_TIMEOUT");
+            completion.SafeMessage.Should().Be(
+                "The approval continuation exceeded its deadline. Please try again.");
+            publisher.Published.Select(static item => item.evt)
+                .OfType<WorkflowLlmInvocationCompletedEvent>()
+                .Should().ContainSingle(completed =>
+                    !completed.Success &&
+                    completed.RunId == "run-approval" &&
+                    completed.SessionId == "session-approval" &&
+                    completed.Error.Contains("approval_tool_timeout", StringComparison.Ordinal));
+        }
+
+        [Theory]
+        [InlineData("token_refresh", false)]
+        [InlineData("token_refresh", true)]
+        [InlineData("catalog_discovery", false)]
+        [InlineData("catalog_discovery", true)]
+        [InlineData("tool_execution", false)]
+        [InlineData("tool_execution", true)]
+        public async Task WorkflowRoleGAgent_WhenApprovalResumeReturnsAfterDeadline_ShouldKeepTimeoutAuthority(
+            string latePhase,
+            bool throwLateFailure)
+        {
+            const int timeoutMs = 1_000;
+            const string continuationTurnId = "approval-late-return-deadline";
+            var eventStore = new InMemoryEventStore();
+            var timeProvider = new FakeTimeProvider();
+            var deadlineProbe = new LateApprovalResumeProbe(throwLateFailure);
+            var tool = new LateApprovalResumeTool(
+                deadlineProbe,
+                late: latePhase == "tool_execution");
+            var source = new LateApprovalResumeToolSource(
+                tool,
+                deadlineProbe,
+                lateOnApprovalResume: latePhase == "catalog_discovery");
+            var tokenProvider = new LateApprovalResumeTokenProvider(
+                deadlineProbe,
+                late: latePhase == "token_refresh");
+            var registry = new FixedToolSetRegistry("studio.write", source);
+            var (agent, publisher) = await CreateActivatedWorkflowRoleAgentAsync(
+                eventStore,
+                new ApprovalWorkflowIntentLlmProvider(tool.Name),
+                $"workflow-role-agent-approval-late-{latePhase}-{throwLateFailure}",
+                toolSetRegistry: registry,
+                callerAccessTokenProvider: tokenProvider,
+                timeProvider: timeProvider,
+                chatExecutionOptions: new RoleChatExecutionOptions(timeoutMs));
+
+            await agent.HandleWorkflowLlmExecutionIntent(ApprovalIntent(tool.Name));
+            var decision = agent.HandleToolApprovalDecision(new ToolApprovalDecisionEvent
+            {
+                RequestId = agent.State.PendingApproval.RequestId,
+                Approved = true,
+                ContinuationTurnId = continuationTurnId,
+            });
+            await deadlineProbe.Started;
+
+            timeProvider.Advance(TimeSpan.FromMilliseconds(timeoutMs));
+            await deadlineProbe.CancellationObserved;
+            deadlineProbe.ReleaseAfterDeadline();
+            await decision;
+
+            agent.State.PendingApproval.Should().BeNull();
+            publisher.Sent.Select(static item => item.evt)
+                .OfType<ChatRequestEvent>().Should().BeEmpty();
+            var completion = (await eventStore.GetEventsAsync(agent.Id))
+                .Where(stateEvent => stateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
+                .Select(stateEvent => stateEvent.EventData.Unpack<RoleChatSessionCompletedEvent>())
+                .Should().ContainSingle(completed => completed.SessionId == continuationTurnId).Which;
+            completion.Outcome.Should().Be(RoleChatSessionOutcome.Failed);
+            completion.FailureCode.Should().Be("APPROVAL_TOOL_TIMEOUT");
+            publisher.Published.Select(static item => item.evt)
+                .OfType<WorkflowLlmInvocationCompletedEvent>()
+                .Should().ContainSingle(completed =>
+                    !completed.Success &&
+                    completed.Error.Contains("approval_tool_timeout", StringComparison.Ordinal));
+        }
+
+        [Fact]
+        public async Task WorkflowRoleGAgent_WhenClearPendingReturnsAfterDeadline_ShouldCommitOneTimeoutWithoutContinuation()
+        {
+            const int timeoutMs = 1_000;
+            const string continuationTurnId = "approval-clear-pending-deadline";
+            var eventStore = new LateReturningClearPendingEventStore();
+            var timeProvider = new FakeTimeProvider();
+            var tool = new ApprovalRequiredWorkflowTool();
+            var registry = new FixedToolSetRegistry("studio.write", new FixedToolSource(tool));
+            var (agent, publisher) = await CreateActivatedWorkflowRoleAgentAsync(
+                eventStore,
+                new ApprovalWorkflowIntentLlmProvider(tool.Name),
+                "workflow-role-agent-clear-pending-deadline",
+                toolSetRegistry: registry,
+                callerAccessTokenProvider: new RotatingWorkflowCallerAccessTokenProvider(),
+                timeProvider: timeProvider,
+                chatExecutionOptions: new RoleChatExecutionOptions(timeoutMs));
+
+            await agent.HandleWorkflowLlmExecutionIntent(ApprovalIntent(tool.Name));
+            var decision = agent.HandleToolApprovalDecision(new ToolApprovalDecisionEvent
+            {
+                RequestId = agent.State.PendingApproval.RequestId,
+                Approved = true,
+                ContinuationTurnId = continuationTurnId,
+            });
+            await eventStore.ClearPendingCommitted;
+
+            timeProvider.Advance(TimeSpan.FromMilliseconds(timeoutMs));
+            eventStore.ReleaseLateReturn();
+            await decision;
+
+            agent.State.PendingApproval.Should().BeNull();
+            publisher.Sent.Select(static item => item.evt)
+                .OfType<ChatRequestEvent>().Should().BeEmpty();
+            var persisted = await eventStore.Inner.GetEventsAsync(agent.Id);
+            persisted.Count(stateEvent =>
+                    stateEvent.EventData.Is(ClearPendingApprovalEvent.Descriptor))
+                .Should().Be(1);
+            var completion = persisted
+                .Where(stateEvent => stateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
+                .Select(stateEvent => stateEvent.EventData.Unpack<RoleChatSessionCompletedEvent>())
+                .Should().ContainSingle(completed => completed.SessionId == continuationTurnId).Which;
+            completion.Outcome.Should().Be(RoleChatSessionOutcome.Failed);
+            completion.FailureCode.Should().Be("APPROVAL_TOOL_TIMEOUT");
+            publisher.Published.Select(static item => item.evt)
+                .OfType<WorkflowLlmInvocationCompletedEvent>()
+                .Should().ContainSingle(completed =>
+                    !completed.Success &&
+                    completed.Error.Contains("approval_tool_timeout", StringComparison.Ordinal));
+        }
+
+        [Fact]
+        public async Task WorkflowRoleGAgent_WhenAdmittedContinuationSendReturnsAfterDeadline_ShouldFenceQueuedContinuation()
+        {
+            const int timeoutMs = 1_000;
+            const string continuationTurnId = "approval-admitted-send-deadline";
+            var eventStore = new InMemoryEventStore();
+            var timeProvider = new FakeTimeProvider();
+            var sendProbe = new LateApprovalResumeProbe(throwLateFailure: false);
+            var tool = new ApprovalRequiredWorkflowTool();
+            var llmProvider = new ApprovalWorkflowIntentLlmProvider(tool.Name);
+            var tokenProvider = new RotatingWorkflowCallerAccessTokenProvider();
+            var registry = new FixedToolSetRegistry("studio.write", new FixedToolSource(tool));
+            var (agent, publisher) = await CreateActivatedWorkflowRoleAgentAsync(
+                eventStore,
+                llmProvider,
+                "workflow-role-agent-admitted-send-deadline",
+                toolSetRegistry: registry,
+                callerAccessTokenProvider: tokenProvider,
+                timeProvider: timeProvider,
+                chatExecutionOptions: new RoleChatExecutionOptions(timeoutMs));
+            await agent.HandleWorkflowLlmExecutionIntent(ApprovalIntent(tool.Name));
+            publisher.BeforeSendAsync = (evt, ct) => evt is ChatRequestEvent
+                ? sendProbe.CompleteAfterDeadlineAsync(true, ct)
+                : Task.CompletedTask;
+
+            var decision = agent.HandleToolApprovalDecision(new ToolApprovalDecisionEvent
+            {
+                RequestId = agent.State.PendingApproval.RequestId,
+                Approved = true,
+                ContinuationTurnId = continuationTurnId,
+            });
+            await sendProbe.Started;
+
+            timeProvider.Advance(TimeSpan.FromMilliseconds(timeoutMs));
+            await sendProbe.CancellationObserved;
+            sendProbe.ReleaseAfterDeadline();
+            await decision;
+
+            var queuedContinuation = publisher.Sent
+                .Select(static item => item.evt)
+                .OfType<ChatRequestEvent>()
+                .Should().ContainSingle().Which;
+            var providerCallsAfterTimeout = llmProvider.CallCount;
+            var tokenRefreshesAfterTimeout = tokenProvider.Authorities.Count;
+            var toolExecutionsAfterTimeout = tool.ExecuteCount;
+
+            await agent.HandleChatRequest(queuedContinuation);
+
+            llmProvider.CallCount.Should().Be(providerCallsAfterTimeout);
+            tokenProvider.Authorities.Should().HaveCount(tokenRefreshesAfterTimeout);
+            tool.ExecuteCount.Should().Be(toolExecutionsAfterTimeout);
+            agent.State.PendingApproval.Should().BeNull();
+            var completion = (await eventStore.GetEventsAsync(agent.Id))
+                .Where(stateEvent => stateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
+                .Select(stateEvent => stateEvent.EventData.Unpack<RoleChatSessionCompletedEvent>())
+                .Should().ContainSingle(completed => completed.SessionId == continuationTurnId).Which;
+            completion.FailureCode.Should().Be("APPROVAL_TOOL_TIMEOUT");
+            publisher.Published.Select(static item => item.evt)
+                .OfType<WorkflowLlmInvocationCompletedEvent>()
+                .Where(completed => !completed.Success)
+                .Should().OnlyContain(completed =>
+                    completed.Error.Contains("approval_tool_timeout", StringComparison.Ordinal));
         }
 
         [Fact]
@@ -955,6 +1721,487 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
             }
         }
 
+        private sealed class ApprovalResumeDeadlineProbe
+        {
+            private readonly TaskCompletionSource _started =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+            private readonly TaskCompletionSource _cancellationObserved =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+            private readonly TaskCompletionSource _neverCompletes =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            public Task Started => _started.Task;
+            public Task CancellationObserved => _cancellationObserved.Task;
+
+            public async Task HangAsync(CancellationToken ct)
+            {
+                _started.TrySetResult();
+                try
+                {
+                    await _neverCompletes.Task.WaitAsync(ct);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    _cancellationObserved.TrySetResult();
+                    throw;
+                }
+            }
+        }
+
+        private sealed class IgnoringCancellationPostTurnProbe
+        {
+            private readonly TaskCompletionSource _started =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+            private readonly TaskCompletionSource _neverCompletes =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+            private readonly TaskCompletionSource _completed =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            public Task Started => _started.Task;
+            public Task Completed => _completed.Task;
+
+            public async Task HangIgnoringCancellationAsync()
+            {
+                _started.TrySetResult();
+                await _neverCompletes.Task;
+                _completed.TrySetResult();
+            }
+
+            public void Release() => _neverCompletes.TrySetResult();
+        }
+
+        private sealed class RecordingWorkflowCompletionCallbackScheduler
+            : IActorRuntimeCallbackScheduler
+        {
+            public List<RuntimeCallbackTimeoutRequest> TimeoutRequests { get; } = [];
+
+            public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
+                RuntimeCallbackTimeoutRequest request,
+                CancellationToken ct = default)
+            {
+                ct.ThrowIfCancellationRequested();
+                TimeoutRequests.Add(new RuntimeCallbackTimeoutRequest
+                {
+                    ActorId = request.ActorId,
+                    CallbackId = request.CallbackId,
+                    TriggerEnvelope = request.TriggerEnvelope.Clone(),
+                    DueTime = request.DueTime,
+                    DeliveryMode = request.DeliveryMode,
+                });
+                return Task.FromResult(new RuntimeCallbackLease(
+                    request.ActorId,
+                    request.CallbackId,
+                    TimeoutRequests.Count,
+                    RuntimeCallbackBackend.InMemory));
+            }
+
+            public Task<RuntimeCallbackLease> ScheduleTimerAsync(
+                RuntimeCallbackTimerRequest request,
+                CancellationToken ct = default) =>
+                throw new NotSupportedException();
+
+            public Task CancelAsync(RuntimeCallbackLease lease, CancellationToken ct = default) =>
+                Task.CompletedTask;
+
+            public Task PurgeActorAsync(string actorId, CancellationToken ct = default) =>
+                Task.CompletedTask;
+        }
+
+        private sealed class ApprovalResumeDeadlineTool(
+            ApprovalResumeDeadlineProbe deadlineProbe,
+            bool hang) : IAgentTool
+        {
+            public string Name => "nyxid_service_update";
+            public string Description => "Updates a connected service.";
+            public string ParametersSchema => "{}";
+            public ToolApprovalMode ApprovalMode => ToolApprovalMode.AlwaysRequire;
+
+            public async Task<string> ExecuteAsync(
+                string argumentsJson,
+                CancellationToken ct = default)
+            {
+                _ = argumentsJson;
+                if (hang)
+                    await deadlineProbe.HangAsync(ct);
+                else
+                    ct.ThrowIfCancellationRequested();
+                return """{"updated":true}""";
+            }
+        }
+
+        private sealed class ApprovalResumeDeadlineToolSource(
+            IAgentTool tool,
+            ApprovalResumeDeadlineProbe deadlineProbe,
+            bool hangOnApprovalResume) : IAgentToolSource
+        {
+            private int _discoveryCount;
+
+            public async Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(
+                CancellationToken ct = default)
+            {
+                var discoveryCount = Interlocked.Increment(ref _discoveryCount);
+                if (hangOnApprovalResume && discoveryCount == 2)
+                    await deadlineProbe.HangAsync(ct);
+                else
+                    ct.ThrowIfCancellationRequested();
+                return [tool];
+            }
+        }
+
+        private sealed class ApprovalResumeDeadlineTokenProvider(
+            ApprovalResumeDeadlineProbe deadlineProbe,
+            bool hang) : IWorkflowCallerAccessTokenProvider
+        {
+            public async Task<string> IssueAsync(
+                WorkflowCallerNyxIdAuthority authority,
+                CancellationToken ct = default)
+            {
+                _ = authority;
+                if (hang)
+                    await deadlineProbe.HangAsync(ct);
+                else
+                    ct.ThrowIfCancellationRequested();
+                return "fresh-token";
+            }
+        }
+
+        private sealed class LateApprovalResumeProbe(bool throwLateFailure)
+        {
+            private readonly TaskCompletionSource _started =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+            private readonly TaskCompletionSource _cancellationObserved =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+            private readonly TaskCompletionSource _neverCompletes =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+            private readonly TaskCompletionSource _releaseAfterDeadline =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            public Task Started => _started.Task;
+            public Task CancellationObserved => _cancellationObserved.Task;
+
+            public void ReleaseAfterDeadline() => _releaseAfterDeadline.TrySetResult();
+
+            public async Task<T> CompleteAfterDeadlineAsync<T>(T result, CancellationToken ct)
+            {
+                _started.TrySetResult();
+                try
+                {
+                    await _neverCompletes.Task.WaitAsync(ct);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    _cancellationObserved.TrySetResult();
+                }
+
+                await _releaseAfterDeadline.Task;
+                if (throwLateFailure)
+                    throw new InvalidOperationException("late approval resume failure");
+                return result;
+            }
+        }
+
+        private sealed class LateApprovalResumeTool(
+            LateApprovalResumeProbe deadlineProbe,
+            bool late) : IAgentTool
+        {
+            public string Name => "nyxid_service_update";
+            public string Description => "Updates a connected service.";
+            public string ParametersSchema => "{}";
+            public ToolApprovalMode ApprovalMode => ToolApprovalMode.AlwaysRequire;
+
+            public Task<string> ExecuteAsync(
+                string argumentsJson,
+                CancellationToken ct = default)
+            {
+                _ = argumentsJson;
+                return late
+                    ? deadlineProbe.CompleteAfterDeadlineAsync("""{"updated":true}""", ct)
+                    : Task.FromResult("""{"updated":true}""");
+            }
+        }
+
+        private sealed class LateApprovalResumeToolSource(
+            IAgentTool tool,
+            LateApprovalResumeProbe deadlineProbe,
+            bool lateOnApprovalResume) : IAgentToolSource
+        {
+            private int _discoveryCount;
+
+            public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(
+                CancellationToken ct = default)
+            {
+                var discoveryCount = Interlocked.Increment(ref _discoveryCount);
+                return lateOnApprovalResume && discoveryCount == 2
+                    ? deadlineProbe.CompleteAfterDeadlineAsync<IReadOnlyList<IAgentTool>>([tool], ct)
+                    : Task.FromResult<IReadOnlyList<IAgentTool>>([tool]);
+            }
+        }
+
+        private sealed class LateApprovalResumeTokenProvider(
+            LateApprovalResumeProbe deadlineProbe,
+            bool late) : IWorkflowCallerAccessTokenProvider
+        {
+            public Task<string> IssueAsync(
+                WorkflowCallerNyxIdAuthority authority,
+                CancellationToken ct = default)
+            {
+                _ = authority;
+                return late
+                    ? deadlineProbe.CompleteAfterDeadlineAsync("fresh-token", ct)
+                    : Task.FromResult("fresh-token");
+            }
+        }
+
+        private sealed class BlockingCancelRuntimeCallbackScheduler : IActorRuntimeCallbackScheduler
+        {
+            private readonly TaskCompletionSource _cancelStarted =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+            private readonly TaskCompletionSource _cancelCancellationObserved =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+            private readonly TaskCompletionSource _neverCompletes =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            public Task CancelStarted => _cancelStarted.Task;
+            public Task CancelCancellationObserved => _cancelCancellationObserved.Task;
+
+            public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
+                RuntimeCallbackTimeoutRequest request,
+                CancellationToken ct = default)
+            {
+                ct.ThrowIfCancellationRequested();
+                return Task.FromResult(new RuntimeCallbackLease(
+                    request.ActorId,
+                    request.CallbackId,
+                    1,
+                    RuntimeCallbackBackend.InMemory));
+            }
+
+            public Task<RuntimeCallbackLease> ScheduleTimerAsync(
+                RuntimeCallbackTimerRequest request,
+                CancellationToken ct = default) =>
+                throw new NotSupportedException();
+
+            public async Task CancelAsync(
+                RuntimeCallbackLease lease,
+                CancellationToken ct = default)
+            {
+                _ = lease;
+                _cancelStarted.TrySetResult();
+                try
+                {
+                    await _neverCompletes.Task.WaitAsync(ct);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    _cancelCancellationObserved.TrySetResult();
+                    throw;
+                }
+            }
+
+            public Task PurgeActorAsync(string actorId, CancellationToken ct = default) =>
+                Task.CompletedTask;
+        }
+
+        private sealed class RecordingTerminalOrderEventStore(List<string> operationLog) : IEventStore
+        {
+            private readonly InMemoryEventStore _inner = new();
+            public List<StateEvent[]> Batches { get; } = [];
+
+            public async Task<EventStoreCommitResult> AppendAsync(
+                string agentId,
+                IEnumerable<StateEvent> events,
+                long expectedVersion,
+                CancellationToken ct = default)
+            {
+                var batch = events.Select(static stateEvent => stateEvent.Clone()).ToArray();
+                Batches.Add(batch);
+                var result = await _inner.AppendAsync(agentId, batch, expectedVersion, ct);
+                if (batch.Any(static stateEvent =>
+                        stateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor)))
+                {
+                    operationLog.Add("actor-terminal-committed");
+                }
+
+                return result;
+            }
+
+            public Task<IReadOnlyList<StateEvent>> GetEventsAsync(
+                string agentId,
+                long? fromVersion = null,
+                CancellationToken ct = default) =>
+                _inner.GetEventsAsync(agentId, fromVersion, ct);
+
+            public Task<long> GetVersionAsync(
+                string agentId,
+                CancellationToken ct = default) =>
+                _inner.GetVersionAsync(agentId, ct);
+
+            public Task<long> DeleteEventsUpToAsync(
+                string agentId,
+                long toVersion,
+                CancellationToken ct = default) =>
+                _inner.DeleteEventsUpToAsync(agentId, toVersion, ct);
+        }
+
+        private sealed class BlockingWorkflowSuccessCompletionEventStore : IEventStore
+        {
+            private readonly TaskCompletionSource _appendStarted =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+            private readonly TaskCompletionSource _cancellationObserved =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+            private readonly TaskCompletionSource _neverCompletes =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            public InMemoryEventStore Inner { get; } = new();
+            public Task SuccessCompletionAppendStarted => _appendStarted.Task;
+            public Task CancellationObserved => _cancellationObserved.Task;
+
+            public async Task<EventStoreCommitResult> AppendAsync(
+                string agentId,
+                IEnumerable<StateEvent> events,
+                long expectedVersion,
+                CancellationToken ct = default)
+            {
+                var batch = events.Select(static stateEvent => stateEvent.Clone()).ToArray();
+                if (batch.Any(IsSuccessfulRoleCompletion))
+                {
+                    _appendStarted.TrySetResult();
+                    try
+                    {
+                        await _neverCompletes.Task.WaitAsync(ct);
+                    }
+                    catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                    {
+                        _cancellationObserved.TrySetResult();
+                        throw;
+                    }
+                }
+
+                return await Inner.AppendAsync(agentId, batch, expectedVersion, ct);
+            }
+
+            public Task<IReadOnlyList<StateEvent>> GetEventsAsync(
+                string agentId,
+                long? fromVersion = null,
+                CancellationToken ct = default) =>
+                Inner.GetEventsAsync(agentId, fromVersion, ct);
+
+            public Task<long> GetVersionAsync(string agentId, CancellationToken ct = default) =>
+                Inner.GetVersionAsync(agentId, ct);
+
+            public Task<long> DeleteEventsUpToAsync(
+                string agentId,
+                long toVersion,
+                CancellationToken ct = default) =>
+                Inner.DeleteEventsUpToAsync(agentId, toVersion, ct);
+
+            private static bool IsSuccessfulRoleCompletion(StateEvent stateEvent) =>
+                stateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor) &&
+                stateEvent.EventData.Unpack<RoleChatSessionCompletedEvent>().Outcome ==
+                RoleChatSessionOutcome.Completed;
+        }
+
+        private sealed class LateReturningCommittedWorkflowSuccessEventStore : IEventStore
+        {
+            private readonly TaskCompletionSource _successCommitCompleted =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+            private readonly TaskCompletionSource _deadlineObserved =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            public InMemoryEventStore Inner { get; } = new();
+            public Task SuccessCommitCompleted => _successCommitCompleted.Task;
+            public Task DeadlineObserved => _deadlineObserved.Task;
+
+            public async Task<EventStoreCommitResult> AppendAsync(
+                string agentId,
+                IEnumerable<StateEvent> events,
+                long expectedVersion,
+                CancellationToken ct = default)
+            {
+                var batch = events.Select(static stateEvent => stateEvent.Clone()).ToArray();
+                if (!batch.Any(IsSuccessfulRoleCompletion))
+                    return await Inner.AppendAsync(agentId, batch, expectedVersion, ct);
+
+                var committed = await Inner.AppendAsync(
+                    agentId,
+                    batch,
+                    expectedVersion,
+                    CancellationToken.None);
+                _successCommitCompleted.TrySetResult();
+                using var registration = ct.Register(() => _deadlineObserved.TrySetResult());
+                await _deadlineObserved.Task;
+                return committed;
+            }
+
+            public Task<IReadOnlyList<StateEvent>> GetEventsAsync(
+                string agentId,
+                long? fromVersion = null,
+                CancellationToken ct = default) =>
+                Inner.GetEventsAsync(agentId, fromVersion, ct);
+
+            public Task<long> GetVersionAsync(string agentId, CancellationToken ct = default) =>
+                Inner.GetVersionAsync(agentId, ct);
+
+            public Task<long> DeleteEventsUpToAsync(
+                string agentId,
+                long toVersion,
+                CancellationToken ct = default) =>
+                Inner.DeleteEventsUpToAsync(agentId, toVersion, ct);
+
+            private static bool IsSuccessfulRoleCompletion(StateEvent stateEvent) =>
+                stateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor) &&
+                stateEvent.EventData.Unpack<RoleChatSessionCompletedEvent>().Outcome ==
+                RoleChatSessionOutcome.Completed;
+        }
+
+        private sealed class LateReturningClearPendingEventStore : IEventStore
+        {
+            private readonly TaskCompletionSource _clearPendingCommitted =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+            private readonly TaskCompletionSource _releaseLateReturn =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+            private int _blocked;
+
+            public InMemoryEventStore Inner { get; } = new();
+            public Task ClearPendingCommitted => _clearPendingCommitted.Task;
+
+            public void ReleaseLateReturn() => _releaseLateReturn.TrySetResult();
+
+            public async Task<EventStoreCommitResult> AppendAsync(
+                string agentId,
+                IEnumerable<StateEvent> events,
+                long expectedVersion,
+                CancellationToken ct = default)
+            {
+                var batch = events.Select(static stateEvent => stateEvent.Clone()).ToArray();
+                var result = await Inner.AppendAsync(agentId, batch, expectedVersion, ct);
+                if (batch.Any(static stateEvent =>
+                        stateEvent.EventData.Is(ClearPendingApprovalEvent.Descriptor)) &&
+                    Interlocked.CompareExchange(ref _blocked, 1, 0) == 0)
+                {
+                    _clearPendingCommitted.TrySetResult();
+                    await _releaseLateReturn.Task;
+                }
+
+                return result;
+            }
+
+            public Task<IReadOnlyList<StateEvent>> GetEventsAsync(
+                string agentId,
+                long? fromVersion = null,
+                CancellationToken ct = default) =>
+                Inner.GetEventsAsync(agentId, fromVersion, ct);
+
+            public Task<long> GetVersionAsync(string agentId, CancellationToken ct = default) =>
+                Inner.GetVersionAsync(agentId, ct);
+
+            public Task<long> DeleteEventsUpToAsync(
+                string agentId,
+                long toVersion,
+                CancellationToken ct = default) =>
+                Inner.DeleteEventsUpToAsync(agentId, toVersion, ct);
+        }
+
         private sealed class RotatingWorkflowCallerAccessTokenProvider
             : IWorkflowCallerAccessTokenProvider
         {
@@ -1014,6 +2261,7 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
             : WorkflowIntentLlmProviderBase
         {
             private int _calls;
+            public int CallCount => Volatile.Read(ref _calls);
 
             public override async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
                 LLMRequest request,
@@ -1039,6 +2287,115 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
                 yield return new LLMStreamChunk { DeltaContent = "approved completion" };
                 yield return new LLMStreamChunk { IsLast = true, FinishReason = "stop" };
                 await Task.CompletedTask;
+            }
+        }
+
+        private sealed class LateAfterCancellationWorkflowIntentLlmProvider(bool yieldLateChunk)
+            : WorkflowIntentLlmProviderBase
+        {
+            public const string LateContent = "late workflow content";
+
+            private readonly TaskCompletionSource _streamStarted =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+            private readonly TaskCompletionSource _cancellationObserved =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+            private readonly TaskCompletionSource _neverCompletes =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+            private readonly TaskCompletionSource _releaseAfterCancellation =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            public Task StreamStarted => _streamStarted.Task;
+            public Task CancellationObserved => _cancellationObserved.Task;
+
+            public void ReleaseAfterCancellation() => _releaseAfterCancellation.TrySetResult();
+
+            public override async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+                LLMRequest request,
+                [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+            {
+                _ = request;
+                _streamStarted.TrySetResult();
+                try
+                {
+                    await _neverCompletes.Task.WaitAsync(ct);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    _cancellationObserved.TrySetResult();
+                }
+
+                await _releaseAfterCancellation.Task;
+                if (yieldLateChunk)
+                    yield return new LLMStreamChunk { DeltaContent = LateContent };
+            }
+        }
+
+        private sealed class ApprovalThenLateWorkflowIntentLlmProvider(
+            string toolName,
+            bool yieldLateChunk) : WorkflowIntentLlmProviderBase
+        {
+            private readonly TaskCompletionSource _continuationStreamStarted =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+            private readonly TaskCompletionSource _cancellationObserved =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+            private readonly TaskCompletionSource _neverCompletes =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+            private readonly TaskCompletionSource _releaseAfterCancellation =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+            private int _streamCount;
+
+            public Task ContinuationStreamStarted => _continuationStreamStarted.Task;
+            public Task CancellationObserved => _cancellationObserved.Task;
+
+            public void ReleaseAfterCancellation() => _releaseAfterCancellation.TrySetResult();
+
+            public override async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+                LLMRequest request,
+                [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+            {
+                _ = request;
+                var streamCount = Interlocked.Increment(ref _streamCount);
+                if (streamCount == 1)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    yield return new LLMStreamChunk
+                    {
+                        DeltaToolCall = new ToolCall
+                        {
+                            Id = "call-approval-deadline",
+                            Name = toolName,
+                            ArgumentsJson = "{}",
+                        },
+                    };
+                    yield return new LLMStreamChunk { IsLast = true, FinishReason = "tool_calls" };
+                    yield break;
+                }
+
+                if (streamCount == 2)
+                {
+                    yield return new LLMStreamChunk { DeltaContent = "approval pending" };
+                    yield return new LLMStreamChunk { IsLast = true, FinishReason = "stop" };
+                    yield break;
+                }
+
+                _continuationStreamStarted.TrySetResult();
+                try
+                {
+                    await _neverCompletes.Task.WaitAsync(ct);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    _cancellationObserved.TrySetResult();
+                }
+
+                await _releaseAfterCancellation.Task;
+                if (yieldLateChunk)
+                {
+                    yield return new LLMStreamChunk
+                    {
+                        DeltaContent = LateAfterCancellationWorkflowIntentLlmProvider.LateContent,
+                    };
+                }
             }
         }
 
@@ -1074,4 +2431,5 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
                 await Task.CompletedTask;
             }
         }
+
 }
