@@ -4170,10 +4170,11 @@ const response = await fetch("{{invokePath}}", {
         string memberId,
         out IResult denied)
     {
-        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out denied))
-            return true;
-
-        return AevatarMemberAccessGuard.TryCreateMemberAccessDeniedResult(http, memberId, out denied);
+        return AevatarMemberAccessGuard.TryCreateMemberAccessDeniedResult(
+            http,
+            scopeId,
+            memberId,
+            out denied);
     }
 
     private static async Task<bool> TryWriteMemberRouteAccessDeniedAsync(
@@ -4182,10 +4183,11 @@ const response = await fetch("{{invokePath}}", {
         string memberId,
         CancellationToken ct)
     {
-        if (await AevatarScopeAccessGuard.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
-            return true;
-
-        return await AevatarMemberAccessGuard.TryWriteMemberAccessDeniedAsync(http, memberId, ct);
+        return await AevatarMemberAccessGuard.TryWriteMemberAccessDeniedAsync(
+            http,
+            scopeId,
+            memberId,
+            ct);
     }
 
     private static async Task WriteJsonErrorResponseAsync(
