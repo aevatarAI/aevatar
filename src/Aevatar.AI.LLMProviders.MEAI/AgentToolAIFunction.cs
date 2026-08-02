@@ -49,8 +49,8 @@ internal sealed class AgentToolAIFunction : AIFunction
         var ambientContext = AgentToolRequestContext.Current
             ?? throw new InvalidOperationException(
                 "MEAI function invocation requires a stable tool execution context.");
-        var invocationCallId = Normalize(FunctionInvokingChatClient.CurrentContext?.CallContent?.CallId);
-        var effectiveCallId = invocationCallId ?? ambientContext.Request.CallId;
+        var invocationContext = FunctionInvokingChatClient.CurrentContext;
+        var effectiveCallId = ResolveEffectiveCallId(ambientContext, invocationContext);
         var executionContext = string.Equals(effectiveCallId, ambientContext.Request.CallId, StringComparison.Ordinal)
             ? ambientContext
             : ambientContext.WithCallId(effectiveCallId);
@@ -76,6 +76,23 @@ internal sealed class AgentToolAIFunction : AIFunction
                 null),
             cancellationToken).ConfigureAwait(false);
         return outcome.ResultJson;
+    }
+
+    private static string? ResolveEffectiveCallId(
+        AgentToolExecutionContext ambientContext,
+        FunctionInvocationContext? invocationContext)
+    {
+        if (invocationContext is null)
+            return ambientContext.Request.CallId;
+
+        var invocationCallId = Normalize(invocationContext.CallContent?.CallId);
+        if (invocationCallId is not null)
+            return invocationCallId;
+
+        var requestId = Normalize(ambientContext.Request.RequestId)
+            ?? throw new InvalidOperationException(
+                "MEAI function invocation requires stable request and function-call identities.");
+        return $"meai-{requestId}-iteration-{invocationContext.Iteration}-function-{invocationContext.FunctionCallIndex}";
     }
 
     private static string? Normalize(string? value) =>

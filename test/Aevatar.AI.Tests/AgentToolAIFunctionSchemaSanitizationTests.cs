@@ -244,6 +244,55 @@ public sealed class AgentToolAIFunctionSchemaSanitizationTests
         }
     }
 
+    [Fact]
+    public async Task InvokeAsync_WithProviderInvocationContextWithoutCallId_ShouldSynthesizeDistinctCallIds()
+    {
+        const string safeResult = "{\"ok\":true}";
+        var tool = new SchemaStubTool("test_tool", "{}");
+        var executionPort = new RecordingExecutionPort(CreateOutcome(
+            AgentToolExecutionOutcomeKind.Executed,
+            AgentToolReceiptStatus.Success,
+            safeResult));
+        var function = CreateFunction(tool, executionPort);
+        using var _ = AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity("request-alpha", "ambient-round-call"),
+            ExecutionOwner = AgentToolExecutionOwners.Actor("actor-alpha"),
+        });
+        var previousContext = FunctionInvokingChatClient.CurrentContext;
+        try
+        {
+            SetFunctionInvocationContext(new FunctionInvocationContext
+            {
+                CallContent = new FunctionCallContent("", "test_tool", new Dictionary<string, object>()),
+                Iteration = 2,
+                FunctionCallIndex = 0,
+                FunctionCount = 2,
+            });
+            await function.InvokeAsync(new AIFunctionArguments());
+
+            SetFunctionInvocationContext(new FunctionInvocationContext
+            {
+                CallContent = new FunctionCallContent("", "test_tool", new Dictionary<string, object>()),
+                Iteration = 2,
+                FunctionCallIndex = 1,
+                FunctionCount = 2,
+            });
+            await function.InvokeAsync(new AIFunctionArguments());
+
+            executionPort.Requests.Select(request => request.ExecutionContext.Request.CallId)
+                .Should().Equal(
+                    "meai-request-alpha-iteration-2-function-0",
+                    "meai-request-alpha-iteration-2-function-1");
+            executionPort.Requests.Select(request => request.ExecutionContext.Request.CallId)
+                .Should().NotContain("ambient-round-call");
+        }
+        finally
+        {
+            SetFunctionInvocationContext(previousContext);
+        }
+    }
+
     [Theory]
     [InlineData(AgentToolExecutionOutcomeKind.Denied, AgentToolReceiptStatus.Denied)]
     [InlineData(AgentToolExecutionOutcomeKind.Failed, AgentToolReceiptStatus.Error)]
