@@ -94,6 +94,91 @@ public sealed class ScheduledDispatchGAgentTests
     }
 
     [Fact]
+    public async Task HandleConfigureAsync_WithUnknownEnvelopeAuthority_ShouldRejectBeforePersistingEvents()
+    {
+        var eventStore = new TestEventStore();
+        var agent = CreateAgent(eventStore, new RecordingActorDispatchPort());
+        await agent.ActivateAsync();
+        var command = CreateConfigureCommand(target: new ScheduledDispatchTargetState
+        {
+            Kind = ScheduledDispatchTargetKindState.Envelope,
+            ActorId = "actor-unknown-authority",
+            Envelope = CreateTriggerEnvelope("actor-unknown-authority", new Empty()),
+            EnvelopeAuthority = (ScheduledDispatchEnvelopeAuthorityState)99,
+        });
+
+        var act = () => agent.HandleConfigureAsync(command);
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*trusted internal authority*");
+        eventStore.GetEvents(ScheduleActorId).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleConfigureAsync_WithUnspecifiedTargetKind_ShouldRequireTypedTargetBeforePersistingEvents()
+    {
+        var eventStore = new TestEventStore();
+        var agent = CreateAgent(eventStore, new RecordingActorDispatchPort());
+        await agent.ActivateAsync();
+        var command = CreateConfigureCommand(target: new ScheduledDispatchTargetState
+        {
+            Kind = ScheduledDispatchTargetKindState.Unspecified,
+        });
+
+        var act = () => agent.HandleConfigureAsync(command);
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*typed target is required*");
+        eventStore.GetEvents(ScheduleActorId).Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("create")]
+    [InlineData("update")]
+    [InlineData("ensure-create")]
+    [InlineData("ensure-update")]
+    public async Task ConfigureEntryPoints_WithMissingTypedTarget_ShouldRejectBeforePersistingEvents(
+        string operation)
+    {
+        var eventStore = new TestEventStore();
+        var agent = CreateAgent(eventStore, new RecordingActorDispatchPort());
+        await agent.ActivateAsync();
+        if (operation is "update" or "ensure-update")
+            await agent.HandleConfigureAsync(CreateConfigureCommand(enabled: false));
+
+        var create = CreateConfigureCommand(enabled: false);
+        create.Target = null;
+        var update = CreateUpdateCommand(enabled: false);
+        update.Target = null;
+        var ensure = CreateEnsureCommand(enabled: false);
+        ensure.Target = null;
+        var eventCountBefore = eventStore.GetEvents(ScheduleActorId).Count;
+        var configuredEventCountBefore = eventStore.GetEvents(ScheduleActorId)
+            .Count(x => string.Equals(
+                x.EventType,
+                ScheduledDispatchConfiguredEvent.Descriptor.FullName,
+                StringComparison.Ordinal));
+        Func<Task> act = operation switch
+        {
+            "create" => () => agent.HandleConfigureAsync(create),
+            "update" => () => agent.HandleConfigureAsync(update),
+            "ensure-create" or "ensure-update" => () => agent.HandleEnsureAsync(ensure),
+            _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, null),
+        };
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*typed target is required*");
+        eventStore.GetEvents(ScheduleActorId).Should().HaveCount(eventCountBefore);
+        eventStore.GetEvents(ScheduleActorId)
+            .Count(x => string.Equals(
+                x.EventType,
+                ScheduledDispatchConfiguredEvent.Descriptor.FullName,
+                StringComparison.Ordinal))
+            .Should()
+            .Be(configuredEventCountBefore);
+    }
+
+    [Fact]
     public async Task OnActivateAsync_WithEnabledLegacyUnmarkedEnvelopeSnapshot_ShouldRetireAndPurgeWithoutDispatch()
     {
         var eventStore = new TestEventStore();
@@ -123,6 +208,32 @@ public sealed class ScheduledDispatchGAgentTests
             .Should()
             .ContainSingle();
         scheduler.TimeoutRequests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task OnActivateAsync_WithDisabledLegacyUnmarkedEnvelopeSnapshot_ShouldPurgeWithoutPersistingOrScheduling()
+    {
+        var eventStore = new TestEventStore();
+        var actorDispatch = new RecordingActorDispatchPort();
+        var serviceDispatch = new RecordingScheduledServiceInvocationDispatchPort();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = CreateAgent(
+            eventStore,
+            actorDispatch,
+            scheduler,
+            serviceDispatch,
+            snapshotStore: new TestSnapshotStore(
+                CreateLegacyUnmarkedEnvelopeSnapshot(enabled: false),
+                version: 0));
+
+        await agent.ActivateAsync();
+
+        agent.State.Enabled.Should().BeFalse();
+        eventStore.GetEvents(ScheduleActorId).Should().BeEmpty();
+        scheduler.PurgedActors.Should().ContainSingle().Which.Should().Be(ScheduleActorId);
+        scheduler.TimeoutRequests.Should().BeEmpty();
+        actorDispatch.Dispatches.Should().BeEmpty();
+        serviceDispatch.Requests.Should().BeEmpty();
     }
 
     [Fact]
@@ -179,15 +290,19 @@ public sealed class ScheduledDispatchGAgentTests
         await agent.ActivateAsync();
         scheduler.PurgedActors.Clear();
 
-        await agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        var command = new ScheduledDispatchFireCommand
         {
             ScheduledFireAt = Timestamp.FromDateTimeOffset(
                 new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero)),
             Manual = false,
-        });
+        };
+
+        await agent.HandleFireAsync(command);
+        await agent.HandleFireAsync(command);
 
         agent.State.Enabled.Should().BeFalse();
-        scheduler.PurgedActors.Should().ContainSingle().Which.Should().Be(ScheduleActorId);
+        scheduler.PurgedActors.Should().HaveCount(2)
+            .And.OnlyContain(actorId => actorId == ScheduleActorId);
         actorDispatch.Dispatches.Should().BeEmpty();
         serviceDispatch.Requests.Should().BeEmpty();
         eventStore.GetEvents(ScheduleActorId)
@@ -197,6 +312,13 @@ public sealed class ScheduledDispatchGAgentTests
                 StringComparison.Ordinal))
             .Should()
             .BeEmpty();
+        eventStore.GetEvents(ScheduleActorId)
+            .Count(x => string.Equals(
+                x.EventType,
+                ScheduledDispatchDisabledEvent.Descriptor.FullName,
+                StringComparison.Ordinal))
+            .Should()
+            .Be(1);
     }
 
     [Fact]

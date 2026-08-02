@@ -2925,6 +2925,8 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
     {
         if (triggerEnvelope == null || triggerEnvelope.Payload == null)
             throw new ArgumentException("Trigger envelope with payload is required.", nameof(triggerEnvelope));
+        if (target == null || target.Kind == ScheduledDispatchTargetKindState.Unspecified)
+            throw new ArgumentException("Scheduled dispatch typed target is required.", nameof(target));
         var normalizedTarget = NormalizeTarget(target, scheduleKind);
         if (normalizedTarget.Kind == ScheduledDispatchTargetKindState.Envelope &&
             !HasTrustedInternalEnvelopeAuthority(normalizedTarget))
