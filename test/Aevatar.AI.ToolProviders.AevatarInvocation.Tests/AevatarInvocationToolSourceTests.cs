@@ -3814,12 +3814,16 @@ public sealed class AevatarInvocationToolSourceTests
             tools,
             toolExecutionPort: CreateToolExecutionPort());
         using var executionState = executor.CreateExecutionState();
-        executor.AddTool(executionState, new ToolCall
-        {
-            Id = toolCallId,
-            Name = toolName,
-            ArgumentsJson = argumentsJson,
-        });
+        var prepared = await executor.PrepareBatchAsync(
+            $"tool-source-test:{toolCallId}",
+            round: 0,
+            [new ToolCall
+            {
+                Id = toolCallId,
+                Name = toolName,
+                ArgumentsJson = argumentsJson,
+            }]);
+        executor.AddTool(executionState, prepared.Single());
 
         var results = new List<ToolExecutionResult>();
         await foreach (var result in executor.GetRemainingResultsAsync(executionState, CancellationToken.None))

@@ -713,12 +713,16 @@ public sealed class ProvisionWorkflowScheduleToolTests
         using var executionState = executor.CreateExecutionState();
 
         using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
-        executor.AddTool(executionState, new ToolCall
-        {
-            Id = "tc-list-teams",
-            Name = ListTeamsToolName,
-            ArgumentsJson = "{}",
-        });
+        var prepared = await executor.PrepareBatchAsync(
+            "studio-provisioning-test:tc-list-teams",
+            round: 0,
+            [new ToolCall
+            {
+                Id = "tc-list-teams",
+                Name = ListTeamsToolName,
+                ArgumentsJson = "{}",
+            }]);
+        executor.AddTool(executionState, prepared.Single());
 
         var results = new List<ToolExecutionResult>();
         await foreach (var result in executor.GetRemainingResultsAsync(executionState, CancellationToken.None))
@@ -792,12 +796,16 @@ public sealed class ProvisionWorkflowScheduleToolTests
         using var executionState = executor.CreateExecutionState();
 
         using var _ = PushContext(scopeId: "scope-context", ownerSubject: "owner-1", accessToken: "access-token-1");
-        executor.AddTool(executionState, new ToolCall
-        {
-            Id = "tc-list-teams-error",
-            Name = ListTeamsToolName,
-            ArgumentsJson = """{"scope_id":"scope-model"}""",
-        });
+        var prepared = await executor.PrepareBatchAsync(
+            "studio-provisioning-test:tc-list-teams-error",
+            round: 0,
+            [new ToolCall
+            {
+                Id = "tc-list-teams-error",
+                Name = ListTeamsToolName,
+                ArgumentsJson = """{"scope_id":"scope-model"}""",
+            }]);
+        executor.AddTool(executionState, prepared.Single());
 
         var results = new List<ToolExecutionResult>();
         await foreach (var result in executor.GetRemainingResultsAsync(executionState, CancellationToken.None))
@@ -828,12 +836,16 @@ public sealed class ProvisionWorkflowScheduleToolTests
         using var executionState = executor.CreateExecutionState();
 
         using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
-        executor.AddTool(executionState, new ToolCall
-        {
-            Id = "tc-list-workflows",
-            Name = ListWorkflowsToolName,
-            ArgumentsJson = "{}",
-        });
+        var prepared = await executor.PrepareBatchAsync(
+            "studio-provisioning-test:tc-list-workflows",
+            round: 0,
+            [new ToolCall
+            {
+                Id = "tc-list-workflows",
+                Name = ListWorkflowsToolName,
+                ArgumentsJson = "{}",
+            }]);
+        executor.AddTool(executionState, prepared.Single());
 
         var results = new List<ToolExecutionResult>();
         await foreach (var result in executor.GetRemainingResultsAsync(executionState, CancellationToken.None))
@@ -2546,12 +2558,16 @@ public sealed class ProvisionWorkflowScheduleToolTests
             tools,
             toolExecutionPort: CreateToolExecutionPort());
         using var executionState = executor.CreateExecutionState();
-        executor.AddTool(executionState, new ToolCall
-        {
-            Id = toolCallId,
-            Name = toolName,
-            ArgumentsJson = argumentsJson,
-        });
+        var prepared = await executor.PrepareBatchAsync(
+            $"studio-provisioning-test:{toolCallId}",
+            round: 0,
+            [new ToolCall
+            {
+                Id = toolCallId,
+                Name = toolName,
+                ArgumentsJson = argumentsJson,
+            }]);
+        executor.AddTool(executionState, prepared.Single());
 
         var results = new List<ToolExecutionResult>();
         await foreach (var result in executor.GetRemainingResultsAsync(executionState, CancellationToken.None))
