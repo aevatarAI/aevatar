@@ -1,6 +1,6 @@
 ---
 title: "Workflow YAML Resource Limits"
-status: "Implemented; review fixes pending final verification"
+status: "Implemented and verified"
 owner: eanzhao
 issue: 3041
 ---

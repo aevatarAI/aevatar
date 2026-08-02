@@ -201,6 +201,46 @@ public sealed class WorkflowYamlResourceGuardTests
         act.Should().NotThrow();
     }
 
+    [Fact]
+    public void Validate_WhenAnchorNameIsRedefined_ShouldKeepBackwardAliasEncounterTarget()
+    {
+        var nestedAlias = new string('[', WorkflowYamlResourceGuard.MaxNestingDepth - 1) +
+                          "*shared" +
+                          new string(']', WorkflowYamlResourceGuard.MaxNestingDepth - 1);
+        var yaml = $"original: &shared value\nuse: {nestedAlias}\nreplacement: &shared [value]\n";
+
+        var act = () => WorkflowYamlResourceGuard.Validate(yaml);
+
+        act.Should().NotThrow();
+    }
+
+    [Fact]
+    public void Parse_WhenAliasTargetIsMissing_ShouldPreserveYamlSyntaxFailure()
+    {
+        const string yaml = """
+                            name: missing-alias
+                            roles: []
+                            steps: *missing
+                            """;
+
+        var act = () => new WorkflowParser().Parse(yaml);
+
+        act.Should().Throw<YamlDotNet.Core.YamlException>();
+    }
+
+    [Fact]
+    public void Validate_WhenAliasAndAnchorAreInDifferentDocuments_ShouldNotResolveAcrossDocuments()
+    {
+        var firstDocument = new string('[', WorkflowYamlResourceGuard.MaxNestingDepth) +
+                            "*shared" +
+                            new string(']', WorkflowYamlResourceGuard.MaxNestingDepth);
+        var yaml = $"---\n{firstDocument}\n---\ntarget: &shared [value]\n";
+
+        var act = () => WorkflowYamlResourceGuard.Validate(yaml);
+
+        act.Should().NotThrow();
+    }
+
     internal static string BuildNestedWorkflow(int childLinks)
     {
         var yaml = new StringBuilder()

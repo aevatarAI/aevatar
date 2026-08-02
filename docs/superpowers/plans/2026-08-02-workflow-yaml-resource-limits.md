@@ -372,7 +372,7 @@ git commit -m "Enforce YAML limits across workflow ingresses"
 
 Change the design frontmatter status to `Implemented and verified` only after all required commands succeed. Mark each completed plan checkbox `[x]`.
 
-- [ ] **Step 2: Run mandatory local verification**
+- [x] **Step 2: Run mandatory local verification**
 
 ```bash
 dotnet build aevatar.slnx --nologo
@@ -400,7 +400,12 @@ follow-up fix retains unresolved aliases per document, resolves them at `Documen
 and adds forward-cycle and forward-expansion regressions across the guard, Runtime parse
 classification, and Studio ingress.
 
-- [ ] **Step 4: Re-run verification after review fixes**
+The third review reported no Critical or Important findings and marked the change ready
+after verification. Its three Minor test suggestions were also accepted to pin backward
+binding under anchor redefinition, missing-anchor syntax handling, and cross-document
+anchor isolation.
+
+- [x] **Step 4: Re-run verification after review fixes**
 
 Repeat all commands from Step 2 and the focused tests from Tasks 1-3. Expected: every command exits 0 with a clean working tree after the final commit.
 
