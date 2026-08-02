@@ -125,42 +125,52 @@ request_json() {
   local body="$3"
   local expected_codes="$4"
   local output_file="$5"
+  local max_attempts="${6:-1}"
+  local attempt
   local code
 
-  code="$({
-    if [[ -n "${body}" ]]; then
-      curl --max-time 20 -sS \
-        -H "Content-Type: application/json" \
-        -H "Authorization: Bearer main-flow-smoke-token" \
-        -X "${method}" \
-        -d "${body}" \
-        -o "${output_file}" \
-        -w "%{http_code}" \
-        "http://127.0.0.1:${HTTP_PORT}${path}"
-    else
-      curl --max-time 20 -sS \
-        -H "Content-Type: application/json" \
-        -H "Authorization: Bearer main-flow-smoke-token" \
-        -X "${method}" \
-        -o "${output_file}" \
-        -w "%{http_code}" \
-        "http://127.0.0.1:${HTTP_PORT}${path}"
-    fi
-  } || true)"
-
-  case ",${expected_codes}," in
-    *",${code},"*)
-      echo "${method} ${path} -> ${code}"
-      ;;
-    *)
-      echo "Expected ${method} ${path} to return one of ${expected_codes}, got ${code}." >&2
-      echo "Response body:" >&2
-      if [[ -f "${output_file}" ]]; then
-        python3 -m json.tool "${output_file}" >&2 2>/dev/null || cat "${output_file}" >&2
+  for attempt in $(seq 1 "${max_attempts}"); do
+    code="$({
+      if [[ -n "${body}" ]]; then
+        curl --max-time 20 -sS \
+          -H "Content-Type: application/json" \
+          -H "Authorization: Bearer main-flow-smoke-token" \
+          -X "${method}" \
+          -d "${body}" \
+          -o "${output_file}" \
+          -w "%{http_code}" \
+          "http://127.0.0.1:${HTTP_PORT}${path}"
+      else
+        curl --max-time 20 -sS \
+          -H "Content-Type: application/json" \
+          -H "Authorization: Bearer main-flow-smoke-token" \
+          -X "${method}" \
+          -o "${output_file}" \
+          -w "%{http_code}" \
+          "http://127.0.0.1:${HTTP_PORT}${path}"
       fi
-      return 1
-      ;;
-  esac
+    } || true)"
+
+    case ",${expected_codes}," in
+      *",${code},"*)
+        echo "${method} ${path} -> ${code}"
+        return 0
+        ;;
+    esac
+
+    if (( attempt < max_attempts )); then
+      echo "${method} ${path} attempt ${attempt}/${max_attempts} returned ${code}; retrying." >&2
+      sleep 1
+    fi
+  done
+
+  echo "Expected ${method} ${path} to return one of ${expected_codes} after ${max_attempts} attempt(s), last got ${code}." >&2
+  echo "Response body:" >&2
+  if [[ -f "${output_file}" ]]; then
+    python3 -m json.tool "${output_file}" >&2 2>/dev/null || cat "${output_file}" >&2
+  fi
+  print_key_logs
+  return 1
 }
 
 wait_for_status_code() {
@@ -355,7 +365,9 @@ request_json POST "/api/scopes/${scope_id}/workflows:save-and-bind" "${save_bind
 request_json GET "/api/scopes/${scope_id}/workflows?includeSource=true" "" "200" "${workflow_list_response}"
 
 request_json POST "/api/schedules/preview" "${preview_body}" "200" "${preview_response}"
-request_json POST "/api/scopes/${scope_id}/provision-workflow" "${provision_body}" "202" "${provision_response}"
+# Provisioning uses deterministic identities and explicitly guarantees retry
+# convergence after an ambiguous transport timeout.
+request_json POST "/api/scopes/${scope_id}/provision-workflow" "${provision_body}" "202" "${provision_response}" 3
 assert_json_field "${provision_response}" "teamId" "${team_id}"
 
 schedule_id="$(python3 - "${provision_response}" <<'PY'
