@@ -54,6 +54,9 @@ public static class Program
     public static async Task<int> Main(string[] args)
     {
         var options = CommandLineOptions.Parse(args);
+        if (string.Equals(options.Measurement, CommandLineOptions.RoleContentionMeasurement, StringComparison.Ordinal))
+            return await RoleContentionMeasurement.RunAsync(options);
+
         var config = await LoadConfigAsync(options.ConfigPath);
         ValidateConfig(config);
         if (options.VerifyOnly)
@@ -1155,14 +1158,25 @@ public static class Program
     }
 }
 
-public sealed record CommandLineOptions(string ConfigPath, string OutputPath, string Adapter, bool VerifyOnly)
+public sealed record CommandLineOptions(
+    string ConfigPath,
+    string OutputPath,
+    string Adapter,
+    bool VerifyOnly,
+    string Measurement,
+    string RunPhase)
 {
+    public const string WriteAmplificationMeasurement = "write-amplification";
+    public const string RoleContentionMeasurement = "role-contention";
+
     public static CommandLineOptions Parse(IReadOnlyList<string> args)
     {
         string? config = null;
         string? output = null;
         var adapter = "all";
         var verify = false;
+        var measurement = WriteAmplificationMeasurement;
+        var runPhase = "baseline-pre-3135";
         for (var index = 0; index < args.Count; index++)
         {
             switch (args[index])
@@ -1179,14 +1193,33 @@ public sealed record CommandLineOptions(string ConfigPath, string OutputPath, st
                 case "--verify":
                     verify = true;
                     break;
+                case "--measurement":
+                    measurement = RequireValue(args, ref index, "--measurement").Trim().ToLowerInvariant();
+                    break;
+                case "--run-phase":
+                    runPhase = RequireValue(args, ref index, "--run-phase").Trim().ToLowerInvariant();
+                    break;
                 default:
                     throw new InvalidOperationException($"Unknown argument '{args[index]}'.");
             }
         }
 
-        config ??= Path.Combine(AppContext.BaseDirectory, "streaming-write-amplification.config.json");
-        output ??= Path.Combine(Environment.CurrentDirectory, "streaming-write-amplification.json");
-        return new CommandLineOptions(config, output, adapter, verify);
+        if (measurement is not WriteAmplificationMeasurement and not RoleContentionMeasurement)
+            throw new InvalidOperationException($"Unknown measurement '{measurement}'.");
+        if (runPhase is not "baseline-pre-3135" and not "post-3135")
+            throw new InvalidOperationException($"Unknown run phase '{runPhase}'.");
+
+        config ??= Path.Combine(
+            AppContext.BaseDirectory,
+            measurement == RoleContentionMeasurement
+                ? "role-contention.config.json"
+                : "streaming-write-amplification.config.json");
+        output ??= Path.Combine(
+            Environment.CurrentDirectory,
+            measurement == RoleContentionMeasurement
+                ? "role-contention.json"
+                : "streaming-write-amplification.json");
+        return new CommandLineOptions(config, output, adapter, verify, measurement, runPhase);
     }
 
     private static string RequireValue(IReadOnlyList<string> args, ref int index, string option)

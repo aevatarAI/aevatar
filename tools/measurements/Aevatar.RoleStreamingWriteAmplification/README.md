@@ -6,6 +6,50 @@ strategy, and event-store adapter. The measurement decorators exist only in
 this tool; they do not change production commit, publication, or projection
 code.
 
+The same project also contains the targeted `scoped_role` contention
+measurement required by issue #3143. That mode compares one explicitly reused
+`RoleGAgent` with one actor per turn; it does not add a production session actor
+or change runtime dispatch semantics.
+
+## Scoped-role contention mode
+
+The contention mode starts one controlled slow LLM turn and eight fast turns.
+The slow provider is held behind a deterministic completion gate while all fast
+turns are admitted, then released after a fixed async yield budget. It runs the
+same workload in two scenarios:
+
+- `same_actor`: all nine sessions share one `RoleGAgent` inbox;
+- `distinct_actor`: every session owns a separate `RoleGAgent` inbox.
+
+The JSON records per-turn queue, service, first-output, and completion latency;
+p50/p95/p99 summaries; the same-minus-distinct head-of-line delta; maximum
+per-actor and total queue depth; activation/deactivation counts; protobuf state
+bytes; cleanup failures; and remaining active actor orphans. Actor and session
+identities are represented only as run-local ordinals. The allowed metric label
+set is `entrypoint`, `scenario`, `turn_kind`, and `outcome`; identity labels are
+explicitly forbidden.
+
+Run the pre-#3135 baseline:
+
+```bash
+bash tools/measurements/Aevatar.RoleStreamingWriteAmplification/run-contention.sh \
+  baseline-pre-3135
+```
+
+After #3135 is integrated, rerun the exact checked-in config from a descendant
+of that integration commit:
+
+```bash
+bash tools/measurements/Aevatar.RoleStreamingWriteAmplification/run-contention.sh \
+  post-3135
+```
+
+Only compare outputs whose `configSha256` values match. The baseline config
+pins `dcb05b683b911db037eb51c071b4495f1195ee28` as the pre-#3135 production-code
+aggregate. `sourceCommit` records the harness checkout used for each run. These
+measurements are diagnostic evidence, not wall-clock CI gates or production
+SLOs.
+
 ## Fixed configuration
 
 `streaming-write-amplification.config.json` is the checked-in workload and
