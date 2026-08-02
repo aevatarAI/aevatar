@@ -11,6 +11,107 @@ measurement required by issue #3143. That mode compares one explicitly reused
 `RoleGAgent` with one actor per turn; it does not add a production session actor
 or change runtime dispatch semantics.
 
+The `provider-normalization` mode required by issue #3146 exercises the MEAI,
+NyxID, and Tornado streaming adapters through the same real `RoleGAgent`,
+`LocalActor`, `IActorDispatchPort`, event store, and committed publication path.
+Loopback fixtures provide deterministic provider protocol frames without using
+external credentials or network services.
+
+## Provider normalization mode
+
+The fixed provider workload uses two warmups and twelve measured samples per
+provider. Correctness is derived from committed typed progress and completion
+events, the append ledger, durable event-store readback, and observed
+`CommittedStateEventPublished` identities. SDK update or wire-frame counts are
+never used as correctness evidence.
+
+| Provider | Text | Reasoning | Media | Tool start/completion | Usage | Terminal |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| MEAI | yes | yes | yes | yes | yes | yes |
+| NyxID | yes | yes, raw patch | unsupported | yes | yes | yes |
+| Tornado | yes | unsupported | unsupported | unsupported | yes | yes |
+
+Tornado's production `MapRequest` does not map `LLMRequest.Tools` into the
+LlmTornado request. LlmTornado emits its streaming tool accumulator only when
+that request contains tools, so the adapter currently cannot surface tool
+deltas even though its declared capabilities say tool calls are supported.
+The harness therefore records `toolsAdvertised=false` and does not manufacture
+tool evidence. This is a provider contract gap, not evidence for changing
+`RoleGAgent` durability boundaries.
+
+Run the checked-in measurement and regenerate both the raw JSON and SHA-256
+sidecar:
+
+```bash
+bash tools/measurements/Aevatar.RoleStreamingWriteAmplification/run-provider-normalization.sh
+```
+
+Validate only the fixed config and harness wiring:
+
+```bash
+dotnet run \
+  --project tools/measurements/Aevatar.RoleStreamingWriteAmplification/Aevatar.RoleStreamingWriteAmplification.csproj \
+  --configuration Release -- \
+  --measurement provider-normalization \
+  --config tools/measurements/Aevatar.RoleStreamingWriteAmplification/provider-normalization.config.json \
+  --verify
+```
+
+Request facts are deliberately low-cardinality tuples. The checked-in result
+contains only these unique shapes:
+
+| Provider | Path | Stream | Usage opt-in | Auth | User-Agent | Tools advertised |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| MEAI | `in-process-ichatclient` | yes | yes | no | no | yes |
+| NyxID | `/api/v1/llm/gateway/v1/chat/completions` | yes | yes | yes | no | yes |
+| Tornado | `/v1/chat/completions` | yes | yes | yes | yes | no |
+
+Actor, session, command, and tool-call identities are excluded from metric
+labels. Assert the checked-in provider result with:
+
+```bash
+jq -e '
+  .providers as $providers |
+  .schemaVersion == 1 and
+  .config.warmupIterations == 2 and
+  .config.measuredIterations == 12 and
+  .provenance.configSha256 ==
+    "49d8081c54f0dc270c27dfa3e6de0932f327fa4beab41b175a53fcaaac4c4e1d" and
+  ([.providers[].provider] | sort) == ["meai", "nyxid", "tornado"] and
+  all(.providers[]; (.samples | length) == 12) and
+  all(
+    .providers[].samples[];
+    .progressSequenceMonotonic and
+    .uniqueCompletion and
+    .appendLedgerMatchesDurableReadback and
+    .durableReadbackMatchesPublication and
+    .textObserved and .usageObserved and .terminalObserved
+  ) and
+  all(.providers[]; all(.summary[]; .p95 == .p99)) and
+  ($providers[] | select(.provider == "meai") |
+    .coverage == {text:true, reasoning:true, media:true, tool:true, usage:true, terminal:true}) and
+  ($providers[] | select(.provider == "nyxid") |
+    .coverage.reasoning and .coverage.tool and (.coverage.media | not)) and
+  ($providers[] | select(.provider == "tornado") |
+    (.coverage.reasoning | not) and (.coverage.media | not) and
+    (.coverage.tool | not) and all(.requestFacts[]; .toolsAdvertised | not)) and
+  ([$providers[] | {provider, requestFacts:(.requestFacts | unique)}] | sort_by(.provider)) == [
+    {provider:"meai", requestFacts:[{path:"in-process-ichatclient", stream:true,
+      usageOptIn:true, authPresent:false, userAgentPresent:false, toolsAdvertised:true}]},
+    {provider:"nyxid", requestFacts:[{path:"/api/v1/llm/gateway/v1/chat/completions",
+      stream:true, usageOptIn:true, authPresent:true, userAgentPresent:false, toolsAdvertised:true}]},
+    {provider:"tornado", requestFacts:[{path:"/v1/chat/completions", stream:true,
+      usageOptIn:true, authPresent:true, userAgentPresent:true, toolsAdvertised:false}]}
+  ] and
+  (($providers | map(select(.provider == "meai"))[0]) as $meai |
+   ($providers | map(select(.provider == "nyxid"))[0]) as $nyxid |
+    ([$meai.samples[].toolArgumentsSha256] | unique | length) == 1 and
+    ([$nyxid.samples[].toolArgumentsSha256] | unique | length) == 1 and
+    $meai.samples[0].toolArgumentsSha256 != "" and
+    $meai.samples[0].toolArgumentsSha256 == $nyxid.samples[0].toolArgumentsSha256)
+' docs/audit-scorecard/raw/2026-08-02-role-provider-normalization.json
+```
+
 ## Scoped-role contention mode
 
 The contention mode starts one controlled slow LLM turn and eight fast turns.
@@ -62,10 +163,14 @@ The actor is initialized outside the measured turn. The fixed snapshot policy
 uses an interval of 50 committed versions, compaction enabled, and five
 retained events. Crash recovery sweeps failure fences after 4, 12, and 24
 successful turn appends. Each fence creates a new actor activation over the
-same stores and re-dispatches the same session. The recovery shape uses 22 text
-chunks, so even the fence-24 final reconciliation remains below version 50 and
-does not confuse expected compaction deletion with durability loss. The
-128-chunk long-text shape independently measures snapshot and compaction cost.
+same event, snapshot, publication-checkpoint, and secret-vault stores and
+re-dispatches the same session. The recovery shape uses 23 text chunks. Fence
+24 reaches committed version 50, snapshots that authoritative state, compacts
+through version 45 only after publication reaches version 50, and leaves the
+configured five events plus any post-snapshot commit as the durable tail.
+Fences 4 and 12 remain below the snapshot
+boundary. The 128-chunk long-text shape measures steady-state snapshot and
+compaction cost separately.
 
 Each instrumented resource sample has a matched control turn with the same
 workload, adapter, actor lifecycle, and committed-state publisher but without
@@ -126,6 +231,9 @@ dotnet run \
   run uses the InMemory snapshot store for both adapters; Garnet measurements
   cover event append/read/version/compaction I/O, not a production snapshot
   backend.
+- Publication-checkpoint metrics count runtime-owned load, initialization,
+  advance, and failure-record calls and mutations. Serialized checkpoint bytes
+  use the typed Protobuf state returned by each successful revision advance.
 - Mailbox occupancy means in-flight plus queued chat turns. The harness awaits
   one dispatch at a time, so occupancy is one and queued depth is zero; all
   provider chunks execute inside that single actor turn.
@@ -150,15 +258,20 @@ dotnet run \
   InMemory document projection store. The measurement-only protobuf read model
   is independently read after phase one and final recovery; it is not a
   production `RoleGAgent` read model and is never registered by a host.
-- Every sample reconciles full `StateEvent` ID sets in four fail-closed
-  directions: append ledger to durable missing, durable to ledger unexpected,
-  durable to committed-publication missing, and committed-publication to
-  durable unexpected. It also requires read-model version, last event ID,
-  state-root SHA-256, and session facts to match the committed publication,
-  and proves duplicate-write idempotency plus stale-write rejection. The raw
-  output also requires the successful recovery attempt's generated text and
-  usage hashes to equal the independently materialized final session facts.
-  The schema is version 4. Progress redo remains a separate diagnostic based on
+- Every sample requires the complete append ledger to equal the complete
+  committed-publication identity set. After compaction, durable readback must
+  equal only the ledger suffix above the compacted-through version; the deleted
+  prefix count must match the adapter's actual delete result. Snapshot state
+  must match the committed publication at its version, the runtime-owned
+  publication checkpoint must match the latest store version/event, retained
+  tail versions must be continuous, and a fresh activation must reconstruct
+  the latest committed state. The projection read model must independently
+  match version, event ID, state-root SHA-256, and session facts, including
+  duplicate-write idempotency and stale-write rejection. The raw output also
+  requires the successful recovery attempt's generated text and usage hashes
+  to equal the materialized final session facts. The schema is version 5 and
+  records source commit plus Program/config SHA-256 provenance. Progress redo
+  remains a separate diagnostic based on
   event ID, `session_id + sequence`, and a sequence-free payload SHA-256
   fingerprint; no fence is labelled a maximum.
 - Percentiles use nearest rank. With twelve samples, p95 and p99 are both the
@@ -171,7 +284,10 @@ Assert the checked-in final recovery evidence:
 
 ```bash
 jq -e '
-  .schemaVersion == 4 and
+  .schemaVersion == 5 and
+  (.sourceCommit | test("^[0-9a-f]{40}$")) and
+  (.provenance.programSha256 | test("^[0-9a-f]{64}$")) and
+  (.provenance.configSha256 | test("^[0-9a-f]{64}$")) and
   ([.adapters[].adapter] | sort) == ["garnet", "inmemory"] and
   all(.adapters[]; .status == "measured") and
   all(
@@ -183,8 +299,18 @@ jq -e '
       .crashRecovery.durableToLedgerUnexpectedEvents == 0 and
       .crashRecovery.durableToCommittedPublicationMissingEvents == 0 and
       .crashRecovery.committedPublicationToDurableUnexpectedEvents == 0 and
-      .crashRecovery.finalAppendLedgerEvents == .crashRecovery.finalDurableReadbackEvents and
-      .crashRecovery.finalDurableReadbackEvents == .crashRecovery.finalCommittedPublicationEvents and
+      .crashRecovery.finalAppendLedgerEvents == .crashRecovery.finalCommittedPublicationEvents and
+      .crashRecovery.durableAuthority.ledgerToPublicationMissingEvents == 0 and
+      .crashRecovery.durableAuthority.publicationToLedgerUnexpectedEvents == 0 and
+      .crashRecovery.durableAuthority.tailLedgerToDurableMissingEvents == 0 and
+      .crashRecovery.durableAuthority.durableToTailUnexpectedEvents == 0 and
+      .crashRecovery.durableAuthority.compactedBySnapshotEvents ==
+        .crashRecovery.durableAuthority.compactionDeletedEvents and
+      .crashRecovery.durableAuthority.snapshotCoversCompaction and
+      .crashRecovery.durableAuthority.snapshotStateMatchesCommittedPublication and
+      .crashRecovery.durableAuthority.checkpointMatchesAuthority and
+      .crashRecovery.durableAuthority.retainedTailVersionsContinuous and
+      .crashRecovery.durableAuthority.freshActivationStateMatchesLatestPublication and
       .crashRecovery.phaseOneAttemptLocalGeneratedTailEvents == 1 and
       .crashRecovery.phaseOneCommittedWithoutGeneratedEvidence == 0 and
       .crashRecovery.phaseOneGeneratedSemanticEvents ==
@@ -203,6 +329,22 @@ jq -e '
       .crashRecovery.materializedCurrentState.staleWriteDidNotOverwrite and
       .crashRecovery.recoveredUserVisibleSemantics.finalContentMatchesRecoveryGeneration and
       .crashRecovery.recoveredUserVisibleSemantics.finalUsageMatchesRecoveryGeneration
+    )
+  ) and
+  all(
+    .adapters[].workloads[] | select(.crashAfterSuccessfulAppends == 24);
+    all(
+      .samples[];
+      .crashRecovery.durableAuthority.storeVersion >= 50 and
+      .crashRecovery.durableAuthority.snapshotVersion == 50 and
+      .crashRecovery.durableAuthority.publicationCheckpointVersion ==
+        .crashRecovery.durableAuthority.storeVersion and
+      .crashRecovery.durableAuthority.compactedThroughVersion == 45 and
+      .crashRecovery.durableAuthority.publishedVersionAtCompaction == 50 and
+      .crashRecovery.durableAuthority.expectedDurableTailEvents ==
+        (.crashRecovery.durableAuthority.storeVersion - 45) and
+      .crashRecovery.durableAuthority.actualDurableTailEvents ==
+        .crashRecovery.durableAuthority.expectedDurableTailEvents
     )
   )
 ' docs/audit-scorecard/raw/2026-08-02-role-streaming-write-amplification.json

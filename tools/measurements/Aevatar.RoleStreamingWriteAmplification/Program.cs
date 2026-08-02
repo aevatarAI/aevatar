@@ -20,6 +20,9 @@ using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions.Credentials.Testing;
+using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.Streaming;
@@ -56,6 +59,8 @@ public static class Program
         var options = CommandLineOptions.Parse(args);
         if (string.Equals(options.Measurement, CommandLineOptions.RoleContentionMeasurement, StringComparison.Ordinal))
             return await RoleContentionMeasurement.RunAsync(options);
+        if (string.Equals(options.Measurement, CommandLineOptions.ProviderNormalizationMeasurement, StringComparison.Ordinal))
+            return await ProviderNormalizationMeasurement.RunAsync(options);
 
         var config = await LoadConfigAsync(options.ConfigPath);
         ValidateConfig(config);
@@ -166,9 +171,12 @@ public static class Program
 
         ValidateRecoveryEvidence(config, selectedAdapters, adapterResults);
         var output = new MeasurementOutput(
-            4,
+            5,
             DateTimeOffset.UtcNow,
             await ResolveGitCommitAsync(),
+            new MeasurementProvenance(
+                await HashFileAsync(GetProgramSourcePath()),
+                await HashFileAsync(Path.GetFullPath(options.ConfigPath))),
             new EnvironmentFacts(
                 RuntimeInformation.OSDescription,
                 RuntimeInformation.ProcessArchitecture.ToString(),
@@ -182,7 +190,7 @@ public static class Program
                 "Mailbox occupancy is in-flight plus queued chat turns. The harness awaits one dispatch at a time, so max occupancy is one; chunks remain inside that actor turn.",
                 "Nearest-rank percentiles: ceil(p * sample_count) - 1 after ascending sort.",
                 "Net CPU/allocation values come from an alternating-order matched control turn with append/snapshot measurement decorators removed. Gross values include those decorators; their signed difference estimates instrumentation cost. Both remain process-level and noisy.",
-                "Crash recovery reconciles provider-generated semantic evidence, the append-acknowledged ledger, final adapter durable readback, real CommittedStateEventPublished observations, and a measurement-only current-state read model written through the formal projection runtime. Generated boundaries use session + attempt + semantic ordinal + kind + payload hash identities: the injected phase-one generated-but-uncommitted tail is reported separately, while the successful recovery attempt must match committed semantics bidirectionally and its final text/usage hashes must match the materialized user-visible state. Each fence reports only its observed window."),
+                "Crash recovery reconciles provider-generated semantic evidence, the complete append ledger and committed publications, the compaction-aware durable tail, runtime-owned publication checkpoint, typed snapshot, fresh activation, and a measurement-only current-state read model. Generated boundaries use session + attempt + semantic ordinal + kind + payload hash identities: the injected phase-one generated-but-uncommitted tail is reported separately, while the successful recovery attempt must match committed semantics bidirectionally and its final text/usage hashes must match the materialized user-visible state. Each fence reports only its observed window."),
             adapterResults);
 
         var outputPath = Path.GetFullPath(options.OutputPath);
@@ -204,9 +212,16 @@ public static class Program
         var actorId = $"measure-role-{sampleId}";
         var sessionId = $"session-{sampleId}";
         var isRecovery = string.Equals(workload.Kind, "crash_recovery", StringComparison.Ordinal);
-        var eventStore = new MeasuringEventStore(baseStore, captureCommittedEvents: isRecovery);
+        var publicationStateStore = new MeasuringCommittedStatePublicationStateStore(
+            new InMemoryCommittedStatePublicationStateStore());
+        var eventStore = new MeasuringEventStore(
+            baseStore,
+            captureCommittedEvents: isRecovery,
+            () => publicationStateStore.LatestPublishedVersion);
         var snapshotStore = new MeasuringSnapshotStore<RoleGAgentState>(
             new InMemoryEventSourcingSnapshotStore<RoleGAgentState>());
+        var toolExecutionPort = new MeasurementToolExecutionPort();
+        var secretVault = new InMemorySecretVault();
         var phaseOneGeneratedRecorder = isRecovery
             ? new GeneratedSemanticEvidenceRecorder(sessionId, "phase-one")
             : null;
@@ -240,8 +255,11 @@ public static class Program
             actorId,
             eventStore,
             snapshotStore,
+            publicationStateStore,
             config,
             provider,
+            toolExecutionPort,
+            secretVault,
             streams,
             initialize: true);
 
@@ -250,6 +268,7 @@ public static class Program
             : [];
         eventStore.Reset();
         snapshotStore.Reset();
+        publicationStateStore.ResetMetrics();
 
         var process = Process.GetCurrentProcess();
         process.Refresh();
@@ -271,6 +290,7 @@ public static class Program
         GeneratedSemanticEvidenceSnapshot? generatedBeforeRecovery = null;
         MeasurementRoleCurrentStateReadModel? materializedBeforeRecovery = null;
         GeneratedSemanticEvidenceRecorder? recoveryGeneratedRecorder = null;
+        CompactionEvidence? compactionBeforeRecovery = null;
 
         if (isRecovery)
         {
@@ -281,14 +301,16 @@ public static class Program
             {
                 await DispatchAsync(actor, actorId, CreateRequest(workload, sampleId));
             }
-            catch (Exception ex)
+            catch (SimulatedProcessCrashException ex)
             {
                 failure = ex;
             }
 
             firstToken = actor.Agent.FirstTokenLatency;
 
+            snapshotStore.RejectCrashDeactivationSave();
             await actor.LocalActor.DeactivateAsync();
+            snapshotStore.ResumeSaves();
             await actor.Services.DisposeAsync();
             var validationStartedAt = Stopwatch.GetTimestamp();
             await publicationObserver!.DrainAsync(streams.GetStream(actorId));
@@ -298,6 +320,7 @@ public static class Program
             publicationEnvelopesBeforeRecovery = publicationObserver.PublishedEnvelopesSnapshot();
             generatedBeforeRecovery = phaseOneGeneratedRecorder!.Snapshot();
             materializedBeforeRecovery = await currentStateReader!.GetAsync(actorId);
+            compactionBeforeRecovery = eventStore.CompactionSnapshot();
             excludedRecoveryValidationDuration += Stopwatch.GetElapsedTime(validationStartedAt);
             eventStore.FailAfterSuccessfulAppends = null;
             recoveryGeneratedRecorder = new GeneratedSemanticEvidenceRecorder(sessionId, "recovery");
@@ -306,8 +329,11 @@ public static class Program
                 actorId,
                 eventStore,
                 snapshotStore,
+                publicationStateStore,
                 config,
                 recoveryProvider,
+                toolExecutionPort,
+                secretVault,
                 streams,
                 initialize: false);
             mailboxTurns++;
@@ -328,6 +354,7 @@ public static class Program
         var allocatedAfter = GC.GetTotalAllocatedBytes(precise: true);
         var storeMetrics = eventStore.Snapshot();
         var snapshotMetrics = snapshotStore.Snapshot();
+        var publicationStateMetrics = publicationStateStore.SnapshotMetrics();
 
         if (recoveredActor != null)
         {
@@ -343,8 +370,31 @@ public static class Program
         if (isRecovery)
         {
             await publicationObserver!.DrainAsync(streams.GetStream(actorId));
+            var freshActor = await CreateActorAsync(
+                actorId,
+                eventStore,
+                snapshotStore,
+                publicationStateStore,
+                config,
+                new WorkloadProviderFactory(workload),
+                toolExecutionPort,
+                secretVault,
+                streams,
+                initialize: false);
+            var freshActivationStateSha256 = Convert.ToHexString(
+                SHA256.HashData(freshActor.Agent.State.ToByteArray()));
+            await freshActor.LocalActor.DeactivateAsync();
+            await freshActor.Services.DisposeAsync();
+            await publicationObserver.DrainAsync(streams.GetStream(actorId));
             var finalDurableEvents = await baseStore.GetEventsAsync(actorId);
             var finalPublicationEnvelopes = publicationObserver.PublishedEnvelopesSnapshot();
+            var allCommittedEvents = eventStore.CommittedEventsSnapshot();
+            var allPublicationEvents = publicationObserver.PublishedEventsSnapshot();
+            var finalStoreVersion = await baseStore.GetVersionAsync(actorId);
+            var finalCheckpoint = publicationStateStore.LatestStateSnapshot()
+                ?? throw new InvalidOperationException("Recovery verification requires a publication checkpoint.");
+            var finalSnapshot = snapshotStore.LatestSnapshot();
+            var finalCompaction = eventStore.CompactionSnapshot();
             var finalMaterializedState = await VerifyMaterializedCurrentStateAsync(
                 actorId,
                 currentStateReader!,
@@ -360,12 +410,20 @@ public static class Program
                 preMeasurementAppendLedger,
                 committedBeforeRecovery,
                 durableBeforeRecovery,
-                eventStore.CommittedEventsSnapshot(),
+                allCommittedEvents,
                 finalDurableEvents,
                 publicationsBeforeRecovery,
-                publicationObserver.PublishedEventsSnapshot(),
+                allPublicationEvents,
+                finalPublicationEnvelopes,
                 generatedBeforeRecovery!,
                 recoveryGeneratedRecorder!.Snapshot(),
+                compactionBeforeRecovery!,
+                finalCompaction,
+                finalSnapshot,
+                finalCheckpoint,
+                finalStoreVersion,
+                config.RetainedEventsAfterSnapshot,
+                freshActivationStateSha256,
                 finalMaterializedState);
         }
         else
@@ -380,6 +438,13 @@ public static class Program
 
         if (isRecovery && failure == null)
             throw new InvalidOperationException("Crash-recovery workload did not hit its configured append failure fence.");
+        if (string.Equals(workload.Kind, "tool", StringComparison.Ordinal) &&
+            toolExecutionPort.ExecutionCount != workload.ToolCalls)
+        {
+            throw new InvalidOperationException(
+                $"Tool workload '{workload.Name}' executed {toolExecutionPort.ExecutionCount} calls; " +
+                $"expected {workload.ToolCalls}.");
+        }
 
         return new TurnSample(
             iteration,
@@ -400,6 +465,15 @@ public static class Program
             storeMetrics.VersionCalls,
             storeMetrics.VersionDuration.TotalMilliseconds,
             storeMetrics.TotalIoDuration.TotalMilliseconds,
+            publicationStateMetrics.LoadCalls,
+            publicationStateMetrics.InitializeCalls,
+            publicationStateMetrics.InitializeMutations,
+            publicationStateMetrics.AdvanceCalls,
+            publicationStateMetrics.AdvanceMutations,
+            publicationStateMetrics.FailureRecordCalls,
+            publicationStateMetrics.FailureRecordMutations,
+            publicationStateMetrics.SerializedWriteBytes,
+            publicationStateMetrics.TotalDuration.TotalMilliseconds,
             Math.Max(0, (cpuAfter - cpuBefore).TotalMilliseconds),
             allocatedAfter - allocatedBefore,
             0,
@@ -442,13 +516,19 @@ public static class Program
             : null;
         var eventStore = (IEventStore?)controlStore ?? baseStore;
         var snapshotStore = new InMemoryEventSourcingSnapshotStore<RoleGAgentState>();
+        var publicationStateStore = new InMemoryCommittedStatePublicationStateStore();
+        var toolExecutionPort = new MeasurementToolExecutionPort();
+        var secretVault = new InMemorySecretVault();
         var streams = CreateStreamProvider();
         var actor = await CreateActorAsync(
             actorId,
             eventStore,
             snapshotStore,
+            publicationStateStore,
             config,
             new WorkloadProviderFactory(workload),
+            toolExecutionPort,
+            secretVault,
             streams,
             initialize: true);
         controlStore?.Reset();
@@ -481,8 +561,11 @@ public static class Program
                     actorId,
                     eventStore,
                     snapshotStore,
+                    publicationStateStore,
                     config,
                     new WorkloadProviderFactory(workload),
+                    toolExecutionPort,
+                    secretVault,
                     streams,
                     initialize: false);
                 await DispatchAsync(recoveredActor, actorId, CreateRequest(workload, sampleId));
@@ -490,6 +573,14 @@ public static class Program
             else
             {
                 await DispatchAsync(actor, actorId, CreateRequest(workload, sampleId));
+            }
+
+            if (string.Equals(workload.Kind, "tool", StringComparison.Ordinal) &&
+                toolExecutionPort.ExecutionCount != workload.ToolCalls)
+            {
+                throw new InvalidOperationException(
+                    $"Tool control workload '{workload.Name}' executed {toolExecutionPort.ExecutionCount} calls; " +
+                    $"expected {workload.ToolCalls}.");
             }
 
             process.Refresh();
@@ -712,8 +803,16 @@ public static class Program
         IReadOnlyList<StateEvent> finalDurableEvents,
         IReadOnlyList<StateEvent> publicationsBeforeRecovery,
         IReadOnlyList<StateEvent> allPublications,
+        IReadOnlyList<EventEnvelope> finalPublicationEnvelopes,
         GeneratedSemanticEvidenceSnapshot generatedBeforeRecovery,
         GeneratedSemanticEvidenceSnapshot generatedDuringRecovery,
+        CompactionEvidence compactionBeforeRecovery,
+        CompactionEvidence finalCompaction,
+        EventSourcingSnapshot<RoleGAgentState>? finalSnapshot,
+        CommittedStatePublicationState finalCheckpoint,
+        long finalStoreVersion,
+        int retainedEventsAfterSnapshot,
+        string freshActivationStateSha256,
         MaterializedCurrentStateEvidence materializedCurrentState)
     {
         var preCommitted = BuildProgressFacts(committedBeforeRecovery);
@@ -732,16 +831,27 @@ public static class Program
         var preSequences = preCommitted.Select(static fact => fact.SequenceKey).ToHashSet(StringComparer.Ordinal);
         var prePayloads = preCommitted.Select(static fact => fact.PayloadFingerprint).ToHashSet(StringComparer.Ordinal);
 
-        var durableReadbackMissing = preCommittedIds.Except(preDurableIds).LongCount();
+        var phaseOneDurableTailIds = committedBeforeRecovery
+            .Where(stateEvent => stateEvent.Version > compactionBeforeRecovery.CompactedThroughVersion)
+            .Select(static stateEvent => stateEvent.EventId)
+            .ToHashSet(StringComparer.Ordinal);
+        var durableReadbackMissing = phaseOneDurableTailIds.Except(
+            durableBeforeRecovery.Select(static stateEvent => stateEvent.EventId)).LongCount();
         var phaseOnePublicationMissing = preCommittedIds.Except(prePublishedIds).LongCount();
         var finalAppendLedger = preMeasurementAppendLedger.Concat(allCommitted).ToArray();
-        var finalLedgerEventIds = BuildEventIds(finalAppendLedger, "append ledger");
-        var finalDurableEventIds = BuildEventIds(finalDurableEvents, "final durable readback");
-        var finalPublicationEventIds = BuildEventIds(allPublications, "committed publication");
-        var ledgerToDurableMissing = finalLedgerEventIds.Except(finalDurableEventIds).LongCount();
-        var durableToLedgerUnexpected = finalDurableEventIds.Except(finalLedgerEventIds).LongCount();
-        var durableToPublicationMissing = finalDurableEventIds.Except(finalPublicationEventIds).LongCount();
-        var publicationToDurableUnexpected = finalPublicationEventIds.Except(finalDurableEventIds).LongCount();
+        var finalLedgerIdentities = BuildEventIdentities(finalAppendLedger, "append ledger");
+        var finalDurableIdentities = BuildEventIdentities(finalDurableEvents, "final durable readback");
+        var finalPublicationIdentities = BuildEventIdentities(allPublications, "committed publication");
+        var expectedDurableTailIdentities = finalLedgerIdentities
+            .Where(identity => identity.StateVersion > finalCompaction.CompactedThroughVersion)
+            .ToHashSet();
+        var publishedTailIdentities = finalPublicationIdentities
+            .Where(identity => identity.StateVersion > finalCompaction.CompactedThroughVersion)
+            .ToHashSet();
+        var ledgerToDurableMissing = expectedDurableTailIdentities.Except(finalDurableIdentities).LongCount();
+        var durableToLedgerUnexpected = finalDurableIdentities.Except(expectedDurableTailIdentities).LongCount();
+        var durableToPublicationMissing = finalDurableIdentities.Except(publishedTailIdentities).LongCount();
+        var publicationToDurableUnexpected = publishedTailIdentities.Except(finalDurableIdentities).LongCount();
         var committedIdentityOverlap = recoveryCommitted.LongCount(fact => preCommittedIds.Contains(fact.EventId));
         var publicationIdentityOverlap = recoveryPublished.LongCount(fact => prePublishedIds.Contains(fact.EventId));
         var sequenceOverlap = recoveryCommitted.LongCount(fact => preSequences.Contains(fact.SequenceKey));
@@ -785,6 +895,18 @@ public static class Program
                 materializedFinal.UsageSha256,
                 StringComparison.Ordinal));
 
+        var durableAuthority = BuildDurableAuthorityEvidence(
+            finalAppendLedger,
+            finalDurableEvents,
+            allPublications,
+            finalPublicationEnvelopes,
+            finalCompaction,
+            finalSnapshot,
+            finalCheckpoint,
+            finalStoreVersion,
+            retainedEventsAfterSnapshot,
+            freshActivationStateSha256);
+
         if (durableReadbackMissing != 0 || phaseOnePublicationMissing != 0 ||
             ledgerToDurableMissing != 0 || durableToLedgerUnexpected != 0 ||
             durableToPublicationMissing != 0 || publicationToDurableUnexpected != 0)
@@ -795,7 +917,8 @@ public static class Program
                 $"ledgerToDurableMissing={ledgerToDurableMissing}, " +
                 $"durableToLedgerUnexpected={durableToLedgerUnexpected}, " +
                 $"durableToPublicationMissing={durableToPublicationMissing}, " +
-                $"publicationToDurableUnexpected={publicationToDurableUnexpected}.");
+                $"publicationToDurableUnexpected={publicationToDurableUnexpected}, " +
+                $"compactedThrough={finalCompaction.CompactedThroughVersion}.");
         }
 
         return new CrashRecoveryObservation(
@@ -808,9 +931,9 @@ public static class Program
             finalCommitted.LongCount(),
             finalDurable.LongCount(),
             finalPublished.LongCount(),
-            finalLedgerEventIds.Count,
-            finalDurableEventIds.Count,
-            finalPublicationEventIds.Count,
+            finalLedgerIdentities.Count,
+            finalDurableIdentities.Count,
+            finalPublicationIdentities.Count,
             committedIdentityOverlap,
             publicationIdentityOverlap,
             sequenceOverlap,
@@ -830,8 +953,115 @@ public static class Program
             phaseOneCommittedWithoutGenerated,
             recoveryGeneratedToCommittedMissing,
             recoveryCommittedWithoutGenerated,
+            durableAuthority,
             materializedCurrentState,
             recoveredUserVisibleSemantics);
+    }
+
+    private static DurableAuthorityEvidence BuildDurableAuthorityEvidence(
+        IReadOnlyList<StateEvent> appendLedger,
+        IReadOnlyList<StateEvent> durableEvents,
+        IReadOnlyList<StateEvent> publications,
+        IReadOnlyList<EventEnvelope> publicationEnvelopes,
+        CompactionEvidence compaction,
+        EventSourcingSnapshot<RoleGAgentState>? snapshot,
+        CommittedStatePublicationState checkpoint,
+        long storeVersion,
+        int retainedEventsAfterSnapshot,
+        string freshActivationStateSha256)
+    {
+        var ledger = BuildEventIdentities(appendLedger, "append ledger");
+        var durable = BuildEventIdentities(durableEvents, "durable tail");
+        var published = BuildEventIdentities(publications, "committed publication");
+        var compactedPrefix = ledger
+            .Where(identity => identity.StateVersion <= compaction.CompactedThroughVersion)
+            .ToHashSet();
+        var expectedTail = ledger
+            .Where(identity => identity.StateVersion > compaction.CompactedThroughVersion)
+            .ToHashSet();
+        var latestPublication = FindLatestCommittedPublication(publicationEnvelopes);
+        var latestPublicationStateSha256 = Convert.ToHexString(
+            SHA256.HashData(latestPublication.State.ToByteArray()));
+        var snapshotVersion = snapshot?.Version ?? 0;
+        var snapshotStateSha256 = snapshot == null
+            ? string.Empty
+            : Convert.ToHexString(SHA256.HashData(snapshot.State.ToByteArray()));
+        var snapshotPublication = snapshot == null
+            ? null
+            : publicationEnvelopes
+                .Select(TryCreateCommittedPublication)
+                .Where(static publication => publication != null)
+                .Cast<CommittedPublicationSnapshot>()
+                .LastOrDefault(publication => publication.StateVersion == snapshot.Version);
+        var snapshotPublicationSha256 = snapshotPublication == null
+            ? string.Empty
+            : Convert.ToHexString(SHA256.HashData(snapshotPublication.State.ToByteArray()));
+        var expectedVersions = Enumerable.Range(
+                checked((int)compaction.CompactedThroughVersion + 1),
+                checked((int)(storeVersion - compaction.CompactedThroughVersion)))
+            .Select(static version => (long)version)
+            .ToArray();
+        var durableVersions = durableEvents.Select(static stateEvent => stateEvent.Version).ToArray();
+        var snapshotCoversCompaction = compaction.CompactedThroughVersion == 0 ||
+            snapshot != null &&
+            snapshot.Version >= compaction.CompactedThroughVersion &&
+            compaction.CompactedThroughVersion == snapshot.Version - retainedEventsAfterSnapshot &&
+            compaction.PublishedVersionAtCompaction >= compaction.CompactedThroughVersion;
+        var checkpointMatchesAuthority = checkpoint.Initialized &&
+            checkpoint.PublishedVersion == storeVersion &&
+            latestPublication.StateVersion == storeVersion &&
+            string.Equals(checkpoint.PublishedEventId, latestPublication.EventId, StringComparison.Ordinal);
+
+        var evidence = new DurableAuthorityEvidence(
+            storeVersion,
+            snapshotVersion,
+            snapshotStateSha256,
+            checkpoint.PublishedVersion,
+            checkpoint.PublishedEventId,
+            checkpoint.Revision,
+            compaction.CompactedThroughVersion,
+            compaction.PublishedVersionAtCompaction,
+            retainedEventsAfterSnapshot,
+            ledger.Count,
+            published.Count,
+            compactedPrefix.Count,
+            expectedTail.Count,
+            durable.Count,
+            compaction.DeletedEvents,
+            ledger.Except(published).LongCount(),
+            published.Except(ledger).LongCount(),
+            expectedTail.Except(durable).LongCount(),
+            durable.Except(expectedTail).LongCount(),
+            snapshotCoversCompaction,
+            snapshot == null || string.Equals(
+                snapshotStateSha256,
+                snapshotPublicationSha256,
+                StringComparison.Ordinal),
+            checkpointMatchesAuthority,
+            durableVersions.SequenceEqual(expectedVersions),
+            string.Equals(
+                freshActivationStateSha256,
+                latestPublicationStateSha256,
+                StringComparison.Ordinal),
+            freshActivationStateSha256,
+            latestPublicationStateSha256);
+
+        if (evidence.LedgerToPublicationMissingEvents != 0 ||
+            evidence.PublicationToLedgerUnexpectedEvents != 0 ||
+            evidence.TailLedgerToDurableMissingEvents != 0 ||
+            evidence.DurableToTailUnexpectedEvents != 0 ||
+            evidence.CompactedBySnapshotEvents != evidence.CompactionDeletedEvents ||
+            !evidence.SnapshotCoversCompaction ||
+            !evidence.SnapshotStateMatchesCommittedPublication ||
+            !evidence.CheckpointMatchesAuthority ||
+            !evidence.RetainedTailVersionsContinuous ||
+            !evidence.FreshActivationStateMatchesLatestPublication)
+        {
+            throw new InvalidOperationException(
+                "Recovery durable authority evidence is inconsistent with snapshot/compaction semantics.");
+        }
+
+        return evidence;
     }
 
     private static IReadOnlyList<string> BuildProviderComparableSemanticOperations(
@@ -881,17 +1111,27 @@ public static class Program
         return source.LongCount(operation => !comparisonKeys.Contains(operation));
     }
 
-    private static HashSet<string> BuildEventIds(
+    private static HashSet<StateEventIdentity> BuildEventIdentities(
         IReadOnlyCollection<StateEvent> events,
         string source)
     {
         if (events.Any(static stateEvent => string.IsNullOrWhiteSpace(stateEvent.EventId)))
             throw new InvalidOperationException($"Recovery {source} contains an empty StateEvent event ID.");
-        var eventIds = events.Select(static stateEvent => stateEvent.EventId)
-            .ToHashSet(StringComparer.Ordinal);
-        if (eventIds.Count != events.Count)
-            throw new InvalidOperationException($"Recovery {source} contains duplicate StateEvent event IDs.");
-        return eventIds;
+        var identities = events
+            .Select(static stateEvent => new StateEventIdentity(
+                stateEvent.Version,
+                stateEvent.EventId))
+            .ToHashSet();
+        if (identities.Count != events.Count)
+            throw new InvalidOperationException($"Recovery {source} contains duplicate StateEvent identities.");
+        if (events.Select(static stateEvent => stateEvent.EventId).Distinct(StringComparer.Ordinal).Count()
+            != events.Count ||
+            events.Select(static stateEvent => stateEvent.Version).Distinct().Count() != events.Count)
+        {
+            throw new InvalidOperationException(
+                $"Recovery {source} contains duplicate event IDs or state versions.");
+        }
+        return identities;
     }
 
     private static void ValidateRecoveryEvidence(
@@ -906,8 +1146,7 @@ public static class Program
         foreach (var adapter in adapterResults)
         {
             var recoveryResults = adapter.Workloads
-                .Where(static workload => string.Equals(
-                    workload.StreamShape,
+                .Where(static workload => workload.StreamShape.StartsWith(
                     "crash_recovery",
                     StringComparison.Ordinal))
                 .ToArray();
@@ -936,19 +1175,28 @@ public static class Program
                     var observation = sample.CrashRecovery ?? throw new InvalidOperationException(
                         $"Adapter {adapter.Adapter} fence {recoveryResult.CrashAfterSuccessfulAppends} " +
                         $"sample {sample.Iteration} has no recovery reconciliation evidence.");
+                    var authority = observation.DurableAuthority;
                     if (observation.LedgerToDurableMissingEvents != 0 ||
                         observation.DurableToLedgerUnexpectedEvents != 0 ||
                         observation.DurableToCommittedPublicationMissingEvents != 0 ||
                         observation.CommittedPublicationToDurableUnexpectedEvents != 0 ||
-                        observation.FinalAppendLedgerEvents != observation.FinalDurableReadbackEvents ||
-                        observation.FinalDurableReadbackEvents != observation.FinalCommittedPublicationEvents ||
+                        observation.FinalAppendLedgerEvents != observation.FinalCommittedPublicationEvents ||
+                        authority.LedgerToPublicationMissingEvents != 0 ||
+                        authority.PublicationToLedgerUnexpectedEvents != 0 ||
+                        authority.TailLedgerToDurableMissingEvents != 0 ||
+                        authority.DurableToTailUnexpectedEvents != 0 ||
+                        authority.CompactedBySnapshotEvents != authority.CompactionDeletedEvents ||
+                        !authority.SnapshotCoversCompaction ||
+                        !authority.SnapshotStateMatchesCommittedPublication ||
+                        !authority.CheckpointMatchesAuthority ||
+                        !authority.RetainedTailVersionsContinuous ||
+                        !authority.FreshActivationStateMatchesLatestPublication ||
                         observation.PhaseOneGeneratedSemanticEvents <= 0 ||
-                        observation.PhaseOneAttemptLocalGeneratedTailEvents != 1 ||
+                        observation.PhaseOneAttemptLocalGeneratedTailEvents < 0 ||
                         observation.PhaseOneCommittedWithoutGeneratedEvidence != 0 ||
                         observation.PhaseOneGeneratedSemanticEvents !=
                             observation.PhaseOneCommittedSemanticEvents +
                             observation.PhaseOneAttemptLocalGeneratedTailEvents ||
-                        observation.RecoveryGeneratedSemanticEvents <= 0 ||
                         observation.RecoveryGeneratedSemanticEvents !=
                             observation.RecoveryCommittedSemanticEvents ||
                         observation.RecoveryGeneratedToCommittedMissingEvents != 0 ||
@@ -1006,14 +1254,18 @@ public static class Program
         string actorId,
         IEventStore eventStore,
         IEventSourcingSnapshotStore<RoleGAgentState> snapshotStore,
+        ICommittedStatePublicationStateStore publicationStateStore,
         MeasurementConfig config,
         WorkloadProviderFactory provider,
+        MeasurementToolExecutionPort toolExecutionPort,
+        ISecretVault secretVault,
         InMemoryStreamProvider streams,
         bool initialize)
     {
         var services = new ServiceCollection()
             .AddSingleton<IEventStore>(eventStore)
             .AddSingleton<IEventSourcingSnapshotStore<RoleGAgentState>>(snapshotStore)
+            .AddSingleton(publicationStateStore)
             .AddSingleton(new EventSourcingRuntimeOptions
             {
                 EnableSnapshots = true,
@@ -1030,9 +1282,10 @@ public static class Program
             .ToArray();
         var tools = toolNames.Select(static name => (IAgentTool)new MeasurementTool(name)).ToArray();
         var agent = new MeasuredRoleGAgent(
-            new MeasurementToolExecutionPort(),
+            toolExecutionPort,
             provider,
-            [new StaticToolSource(tools)])
+            [new StaticToolSource(tools)],
+            secretVault)
         {
             Services = services,
             EventSourcingBehaviorFactory = services.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),
@@ -1156,6 +1409,11 @@ public static class Program
         await process.WaitForExitAsync();
         return process.ExitCode == 0 ? output.Trim() : "unknown";
     }
+
+    private static async Task<string> HashFileAsync(string path) =>
+        Convert.ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(path))).ToLowerInvariant();
+
+    private static string GetProgramSourcePath([CallerFilePath] string sourcePath = "") => sourcePath;
 }
 
 public sealed record CommandLineOptions(
@@ -1168,6 +1426,7 @@ public sealed record CommandLineOptions(
 {
     public const string WriteAmplificationMeasurement = "write-amplification";
     public const string RoleContentionMeasurement = "role-contention";
+    public const string ProviderNormalizationMeasurement = "provider-normalization";
 
     public static CommandLineOptions Parse(IReadOnlyList<string> args)
     {
@@ -1204,21 +1463,29 @@ public sealed record CommandLineOptions(
             }
         }
 
-        if (measurement is not WriteAmplificationMeasurement and not RoleContentionMeasurement)
+        if (measurement is not WriteAmplificationMeasurement and
+            not RoleContentionMeasurement and
+            not ProviderNormalizationMeasurement)
             throw new InvalidOperationException($"Unknown measurement '{measurement}'.");
         if (runPhase is not "baseline-pre-3135" and not "post-3135")
             throw new InvalidOperationException($"Unknown run phase '{runPhase}'.");
 
         config ??= Path.Combine(
             AppContext.BaseDirectory,
-            measurement == RoleContentionMeasurement
-                ? "role-contention.config.json"
-                : "streaming-write-amplification.config.json");
+            measurement switch
+            {
+                RoleContentionMeasurement => "role-contention.config.json",
+                ProviderNormalizationMeasurement => "provider-normalization.config.json",
+                _ => "streaming-write-amplification.config.json",
+            });
         output ??= Path.Combine(
             Environment.CurrentDirectory,
-            measurement == RoleContentionMeasurement
-                ? "role-contention.json"
-                : "streaming-write-amplification.json");
+            measurement switch
+            {
+                RoleContentionMeasurement => "role-contention.json",
+                ProviderNormalizationMeasurement => "provider-normalization.json",
+                _ => "streaming-write-amplification.json",
+            });
         return new CommandLineOptions(config, output, adapter, verify, measurement, runPhase);
     }
 
@@ -1258,10 +1525,15 @@ public sealed record MeasurementOutput(
     int SchemaVersion,
     DateTimeOffset GeneratedAtUtc,
     string SourceCommit,
+    MeasurementProvenance Provenance,
     EnvironmentFacts Environment,
     MeasurementConfig Config,
     MetricSemantics MetricSemantics,
     IReadOnlyList<AdapterResult> Adapters);
+
+public sealed record MeasurementProvenance(
+    string ProgramSha256,
+    string ConfigSha256);
 
 public sealed record EnvironmentFacts(
     string OsDescription,
@@ -1320,6 +1592,15 @@ public sealed record TurnSample(
     long VersionReadCalls,
     double VersionReadDurationMs,
     double EventStoreIoDurationMs,
+    long PublicationCheckpointLoadCalls,
+    long PublicationCheckpointInitializeCalls,
+    long PublicationCheckpointInitializeMutations,
+    long PublicationCheckpointAdvanceCalls,
+    long PublicationCheckpointAdvanceMutations,
+    long PublicationCheckpointFailureRecordCalls,
+    long PublicationCheckpointFailureRecordMutations,
+    long PublicationCheckpointSerializedWriteBytes,
+    double PublicationCheckpointDurationMs,
     double GrossInstrumentedCpuMs,
     long GrossInstrumentedAllocatedBytes,
     double NetCpuMs,
@@ -1377,8 +1658,37 @@ public sealed record CrashRecoveryObservation(
     long PhaseOneCommittedWithoutGeneratedEvidence,
     long RecoveryGeneratedToCommittedMissingEvents,
     long RecoveryCommittedWithoutGeneratedEvidence,
+    DurableAuthorityEvidence DurableAuthority,
     MaterializedCurrentStateEvidence MaterializedCurrentState,
     RecoveredUserVisibleSemanticEvidence RecoveredUserVisibleSemantics);
+
+public sealed record DurableAuthorityEvidence(
+    long StoreVersion,
+    long SnapshotVersion,
+    string SnapshotStateSha256,
+    long PublicationCheckpointVersion,
+    string PublicationCheckpointEventId,
+    long PublicationCheckpointRevision,
+    long CompactedThroughVersion,
+    long PublishedVersionAtCompaction,
+    long RetainedEventsAfterSnapshot,
+    long AppendLedgerEvents,
+    long CommittedPublicationEvents,
+    long CompactedBySnapshotEvents,
+    long ExpectedDurableTailEvents,
+    long ActualDurableTailEvents,
+    long CompactionDeletedEvents,
+    long LedgerToPublicationMissingEvents,
+    long PublicationToLedgerUnexpectedEvents,
+    long TailLedgerToDurableMissingEvents,
+    long DurableToTailUnexpectedEvents,
+    bool SnapshotCoversCompaction,
+    bool SnapshotStateMatchesCommittedPublication,
+    bool CheckpointMatchesAuthority,
+    bool RetainedTailVersionsContinuous,
+    bool FreshActivationStateMatchesLatestPublication,
+    string FreshActivationStateSha256,
+    string LatestCommittedPublicationStateSha256);
 
 public sealed record RecoveredUserVisibleSemanticEvidence(
     string SessionId,
@@ -1476,6 +1786,12 @@ public sealed record WorkloadSummary(
     Distribution CompactionDeletedEvents,
     Distribution CompactionDurationMs,
     Distribution EventStoreIoDurationMs,
+    Distribution PublicationCheckpointLoads,
+    Distribution PublicationCheckpointInitializes,
+    Distribution PublicationCheckpointAdvances,
+    Distribution PublicationCheckpointFailureRecords,
+    Distribution PublicationCheckpointSerializedWriteBytes,
+    Distribution PublicationCheckpointDurationMs,
     Distribution GrossInstrumentedCpuMs,
     Distribution GrossInstrumentedAllocatedBytes,
     Distribution NetCpuMs,
@@ -1500,6 +1816,12 @@ public sealed record WorkloadSummary(
         Distribution.From(samples.Select(static sample => (double?)sample.CompactionDeletedEvents)),
         Distribution.From(samples.Select(static sample => (double?)sample.CompactionDurationMs)),
         Distribution.From(samples.Select(static sample => (double?)sample.EventStoreIoDurationMs)),
+        Distribution.From(samples.Select(static sample => (double?)sample.PublicationCheckpointLoadCalls)),
+        Distribution.From(samples.Select(static sample => (double?)sample.PublicationCheckpointInitializeCalls)),
+        Distribution.From(samples.Select(static sample => (double?)sample.PublicationCheckpointAdvanceCalls)),
+        Distribution.From(samples.Select(static sample => (double?)sample.PublicationCheckpointFailureRecordCalls)),
+        Distribution.From(samples.Select(static sample => (double?)sample.PublicationCheckpointSerializedWriteBytes)),
+        Distribution.From(samples.Select(static sample => (double?)sample.PublicationCheckpointDurationMs)),
         Distribution.From(samples.Select(static sample => (double?)sample.GrossInstrumentedCpuMs)),
         Distribution.From(samples.Select(static sample => (double?)sample.GrossInstrumentedAllocatedBytes)),
         Distribution.From(samples.Select(static sample => (double?)sample.NetCpuMs)),
@@ -1567,11 +1889,13 @@ internal sealed record ActorFixture(
 internal sealed class MeasuredRoleGAgent(
     IAgentToolExecutionPort toolExecutionPort,
     ILLMProviderFactory llmProviderFactory,
-    IEnumerable<IAgentToolSource> toolSources)
+    IEnumerable<IAgentToolSource> toolSources,
+    ISecretVault chatToolRecoverySecretVault)
     : RoleGAgent(
         toolExecutionPort: toolExecutionPort,
         llmProviderFactory: llmProviderFactory,
-        toolSources: toolSources)
+        toolSources: toolSources,
+        chatToolRecoverySecretVault: chatToolRecoverySecretVault)
 {
     private readonly object _completionLock = new();
     private TaskCompletionSource<Exception?>? _nextHandlerCompletion;
@@ -1614,11 +1938,13 @@ internal sealed class MeasuredRoleGAgent(
 
 internal sealed class SingleActorRuntime(LocalActor actor) : IActorRuntime
 {
+    private int _available = 1;
+
     public Task<IActor?> GetAsync(string id) =>
-        Task.FromResult<IActor?>(string.Equals(id, actor.Id, StringComparison.Ordinal) ? actor : null);
+        Task.FromResult<IActor?>(IsAvailable(id) ? actor : null);
 
     public Task<bool> ExistsAsync(string id) =>
-        Task.FromResult(string.Equals(id, actor.Id, StringComparison.Ordinal));
+        Task.FromResult(IsAvailable(id));
 
     public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
         where TAgent : IAgent =>
@@ -1627,14 +1953,27 @@ internal sealed class SingleActorRuntime(LocalActor actor) : IActorRuntime
     public Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default) =>
         throw new NotSupportedException("The measurement runtime owns one pre-created actor.");
 
-    public Task DestroyAsync(string id, CancellationToken ct = default) =>
-        throw new NotSupportedException("Actor lifecycle is owned by the measurement fixture.");
+    public async Task DestroyAsync(string id, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (!string.Equals(id, actor.Id, StringComparison.Ordinal) ||
+            Interlocked.Exchange(ref _available, 0) == 0)
+        {
+            return;
+        }
+
+        await actor.DeactivateAsync(ct);
+    }
 
     public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) =>
         throw new NotSupportedException("The measurement fixture has no topology links.");
 
     public Task UnlinkAsync(string childId, CancellationToken ct = default) =>
         throw new NotSupportedException("The measurement fixture has no topology links.");
+
+    private bool IsAvailable(string id) =>
+        Volatile.Read(ref _available) == 1 &&
+        string.Equals(id, actor.Id, StringComparison.Ordinal);
 }
 
 internal sealed class WorkloadProviderFactory(
@@ -1935,10 +2274,15 @@ internal sealed class MeasurementTool(string name) : IAgentTool
 
 internal sealed class MeasurementToolExecutionPort : IAgentToolExecutionPort
 {
+    private int _executionCount;
+
+    public int ExecutionCount => Volatile.Read(ref _executionCount);
+
     public async Task<AgentToolExecutionOutcome> ExecuteAsync(
         AgentToolExecutionRequest request,
         CancellationToken ct = default)
     {
+        Interlocked.Increment(ref _executionCount);
         var result = await request.Tool.ExecuteAsync(request.ArgumentsJson, ct);
         return new AgentToolExecutionOutcome(
             AgentToolExecutionOutcomeKind.Executed,
@@ -1984,10 +2328,14 @@ internal sealed class NoopRuntimeCallbackScheduler : IActorRuntimeCallbackSchedu
     public Task PurgeActorAsync(string actorId, CancellationToken ct = default) => Task.CompletedTask;
 }
 
-internal sealed class MeasuringEventStore(IEventStore inner, bool captureCommittedEvents) : IEventStore
+internal sealed class MeasuringEventStore(
+    IEventStore inner,
+    bool captureCommittedEvents,
+    Func<long?>? publishedVersionProvider = null) : IEventStore
 {
     private readonly object _lock = new();
     private readonly List<StateEvent> _committedEvents = new(256);
+    private readonly List<CompactionOperation> _compactions = [];
     private StoreMetrics _metrics = new();
 
     public int? FailAfterSuccessfulAppends { get; set; }
@@ -2089,6 +2437,10 @@ internal sealed class MeasuringEventStore(IEventStore inner, bool captureCommitt
             {
                 _metrics.DeleteCalls++;
                 _metrics.DeletedEventCount += deleted;
+                _compactions.Add(new CompactionOperation(
+                    toVersion,
+                    publishedVersionProvider?.Invoke(),
+                    deleted));
             }
             return deleted;
         }
@@ -2105,6 +2457,7 @@ internal sealed class MeasuringEventStore(IEventStore inner, bool captureCommitt
         {
             _metrics = new StoreMetrics();
             _committedEvents.Clear();
+            _compactions.Clear();
         }
     }
 
@@ -2119,6 +2472,210 @@ internal sealed class MeasuringEventStore(IEventStore inner, bool captureCommitt
         lock (_lock)
             return _committedEvents.ToArray();
     }
+
+    public CompactionEvidence CompactionSnapshot()
+    {
+        lock (_lock)
+        {
+            return new CompactionEvidence(
+                _compactions.Count,
+                _compactions.Count == 0
+                    ? 0
+                    : _compactions.Max(static operation => operation.CompactedThroughVersion),
+                _compactions.Count == 0
+                    ? 0
+                    : _compactions.Max(static operation => operation.PublishedVersionAtCompaction ?? 0),
+                _compactions.Sum(static operation => operation.DeletedEvents));
+        }
+    }
+}
+
+internal sealed record CompactionOperation(
+    long CompactedThroughVersion,
+    long? PublishedVersionAtCompaction,
+    long DeletedEvents);
+
+internal sealed record CompactionEvidence(
+    long Calls,
+    long CompactedThroughVersion,
+    long PublishedVersionAtCompaction,
+    long DeletedEvents);
+
+internal sealed class MeasuringCommittedStatePublicationStateStore(
+    ICommittedStatePublicationStateStore inner) : ICommittedStatePublicationStateStore
+{
+    private readonly object _lock = new();
+    private PublicationStateMetrics _metrics = new();
+    private CommittedStatePublicationState? _latestState;
+    private long _lastCountedRevision;
+
+    public long? LatestPublishedVersion
+    {
+        get
+        {
+            lock (_lock)
+                return _latestState?.PublishedVersion;
+        }
+    }
+
+    public async Task<CommittedStatePublicationState?> LoadAsync(
+        string actorId,
+        CancellationToken ct = default)
+    {
+        var startedAt = Stopwatch.GetTimestamp();
+        try
+        {
+            var state = await inner.LoadAsync(actorId, ct);
+            CaptureLatest(state);
+            return state;
+        }
+        finally
+        {
+            lock (_lock)
+            {
+                _metrics.LoadCalls++;
+                _metrics.LoadDuration += Stopwatch.GetElapsedTime(startedAt);
+            }
+        }
+    }
+
+    public async Task<CommittedStatePublicationState> InitializeAsync(
+        string actorId,
+        long baselinePublishedVersion,
+        CancellationToken ct = default)
+    {
+        var startedAt = Stopwatch.GetTimestamp();
+        try
+        {
+            var state = await inner.InitializeAsync(actorId, baselinePublishedVersion, ct);
+            CaptureMutation(state, static metrics => metrics.InitializeMutations++);
+            return state;
+        }
+        finally
+        {
+            lock (_lock)
+            {
+                _metrics.InitializeCalls++;
+                _metrics.InitializeDuration += Stopwatch.GetElapsedTime(startedAt);
+            }
+        }
+    }
+
+    public async Task<CommittedStatePublicationState> AdvanceAsync(
+        string actorId,
+        long expectedPublishedVersion,
+        StateEvent publishedEvent,
+        CancellationToken ct = default)
+    {
+        var startedAt = Stopwatch.GetTimestamp();
+        try
+        {
+            var state = await inner.AdvanceAsync(actorId, expectedPublishedVersion, publishedEvent, ct);
+            CaptureMutation(state, static metrics => metrics.AdvanceMutations++);
+            return state;
+        }
+        finally
+        {
+            lock (_lock)
+            {
+                _metrics.AdvanceCalls++;
+                _metrics.AdvanceDuration += Stopwatch.GetElapsedTime(startedAt);
+            }
+        }
+    }
+
+    public async Task<CommittedStatePublicationState> RecordFailureAsync(
+        string actorId,
+        long expectedPublishedVersion,
+        StateEvent failedEvent,
+        CommittedStatePublicationFailureStage stage,
+        Exception error,
+        CancellationToken ct = default)
+    {
+        var startedAt = Stopwatch.GetTimestamp();
+        try
+        {
+            var state = await inner.RecordFailureAsync(
+                actorId,
+                expectedPublishedVersion,
+                failedEvent,
+                stage,
+                error,
+                ct);
+            CaptureMutation(state, static metrics => metrics.FailureRecordMutations++);
+            return state;
+        }
+        finally
+        {
+            lock (_lock)
+            {
+                _metrics.FailureRecordCalls++;
+                _metrics.FailureRecordDuration += Stopwatch.GetElapsedTime(startedAt);
+            }
+        }
+    }
+
+    public void ResetMetrics()
+    {
+        lock (_lock)
+        {
+            _metrics = new PublicationStateMetrics();
+            _lastCountedRevision = _latestState?.Revision ?? 0;
+        }
+    }
+
+    public PublicationStateMetrics SnapshotMetrics()
+    {
+        lock (_lock)
+            return _metrics with { };
+    }
+
+    public CommittedStatePublicationState? LatestStateSnapshot()
+    {
+        lock (_lock)
+            return _latestState?.Clone();
+    }
+
+    private void CaptureLatest(CommittedStatePublicationState? state)
+    {
+        if (state == null)
+            return;
+        lock (_lock)
+            _latestState = state.Clone();
+    }
+
+    private void CaptureMutation(
+        CommittedStatePublicationState state,
+        Action<PublicationStateMetrics> countMutation)
+    {
+        lock (_lock)
+        {
+            _latestState = state.Clone();
+            if (state.Revision <= _lastCountedRevision)
+                return;
+            _lastCountedRevision = state.Revision;
+            countMutation(_metrics);
+            _metrics.SerializedWriteBytes += state.CalculateSize();
+        }
+    }
+}
+
+internal sealed record PublicationStateMetrics
+{
+    public long LoadCalls { get; set; }
+    public long InitializeCalls { get; set; }
+    public long InitializeMutations { get; set; }
+    public long AdvanceCalls { get; set; }
+    public long AdvanceMutations { get; set; }
+    public long FailureRecordCalls { get; set; }
+    public long FailureRecordMutations { get; set; }
+    public long SerializedWriteBytes { get; set; }
+    public TimeSpan LoadDuration { get; set; }
+    public TimeSpan InitializeDuration { get; set; }
+    public TimeSpan AdvanceDuration { get; set; }
+    public TimeSpan FailureRecordDuration { get; set; }
+    public TimeSpan TotalDuration =>
+        LoadDuration + InitializeDuration + AdvanceDuration + FailureRecordDuration;
 }
 
 internal sealed class FailureInjectingEventStore(IEventStore inner) : IEventStore
@@ -2126,6 +2683,7 @@ internal sealed class FailureInjectingEventStore(IEventStore inner) : IEventStor
     private int _successfulAppends;
 
     public int? FailAfterSuccessfulAppends { get; set; }
+    public int SuccessfulAppends => _successfulAppends;
 
     public async Task<EventStoreCommitResult> AppendAsync(
         string agentId,
@@ -2304,6 +2862,8 @@ internal sealed class MeasuringSnapshotStore<TState>(IEventSourcingSnapshotStore
 {
     private readonly object _lock = new();
     private SnapshotMetrics _metrics = new();
+    private EventSourcingSnapshot<TState>? _latestSnapshot;
+    private bool _rejectCrashDeactivationSave;
 
     public async Task<EventSourcingSnapshot<TState>?> LoadAsync(
         string agentId,
@@ -2312,7 +2872,13 @@ internal sealed class MeasuringSnapshotStore<TState>(IEventSourcingSnapshotStore
         var startedAt = Stopwatch.GetTimestamp();
         try
         {
-            return await inner.LoadAsync(agentId, ct);
+            var snapshot = await inner.LoadAsync(agentId, ct);
+            if (snapshot != null)
+            {
+                lock (_lock)
+                    _latestSnapshot = CloneSnapshot(snapshot);
+            }
+            return snapshot;
         }
         finally
         {
@@ -2329,6 +2895,14 @@ internal sealed class MeasuringSnapshotStore<TState>(IEventSourcingSnapshotStore
         EventSourcingSnapshot<TState> snapshot,
         CancellationToken ct = default)
     {
+        lock (_lock)
+        {
+            if (_rejectCrashDeactivationSave)
+            {
+                throw new SimulatedProcessCrashException(
+                    "snapshot persistence is unavailable after the injected process crash");
+            }
+        }
         var startedAt = Stopwatch.GetTimestamp();
         try
         {
@@ -2337,6 +2911,7 @@ internal sealed class MeasuringSnapshotStore<TState>(IEventSourcingSnapshotStore
             {
                 _metrics.SaveCalls++;
                 _metrics.SnapshotSerializedBytes += snapshot.State.CalculateSize();
+                _latestSnapshot = CloneSnapshot(snapshot);
             }
         }
         finally
@@ -2357,6 +2932,27 @@ internal sealed class MeasuringSnapshotStore<TState>(IEventSourcingSnapshotStore
         lock (_lock)
             return _metrics with { };
     }
+
+    public EventSourcingSnapshot<TState>? LatestSnapshot()
+    {
+        lock (_lock)
+            return _latestSnapshot == null ? null : CloneSnapshot(_latestSnapshot);
+    }
+
+    public void RejectCrashDeactivationSave()
+    {
+        lock (_lock)
+            _rejectCrashDeactivationSave = true;
+    }
+
+    public void ResumeSaves()
+    {
+        lock (_lock)
+            _rejectCrashDeactivationSave = false;
+    }
+
+    private static EventSourcingSnapshot<TState> CloneSnapshot(EventSourcingSnapshot<TState> snapshot) =>
+        new(snapshot.State.Clone(), snapshot.Version);
 }
 
 internal sealed record SnapshotMetrics
@@ -2368,8 +2964,17 @@ internal sealed record SnapshotMetrics
     public TimeSpan SaveDuration { get; set; }
 }
 
-internal sealed class SimulatedProcessCrashException(int successfulAppendFence)
-    : Exception($"Simulated process crash after {successfulAppendFence} successful turn append calls.");
+internal sealed class SimulatedProcessCrashException : Exception
+{
+    public SimulatedProcessCrashException(int successfulAppendFence)
+        : base($"Simulated process crash after {successfulAppendFence} successful turn append calls.")
+    {
+    }
+
+    public SimulatedProcessCrashException(string message) : base(message)
+    {
+    }
+}
 
 internal sealed class AdapterContext : IAsyncDisposable
 {

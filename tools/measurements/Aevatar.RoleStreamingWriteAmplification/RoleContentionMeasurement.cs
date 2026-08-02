@@ -377,7 +377,8 @@ internal static class RoleContentionMeasurement
             .GetProperty("CommittedStateEventPublisher", BindingFlags.Instance | BindingFlags.NonPublic)!
             .SetValue(agent, publisher);
         await localActor.ActivateAsync();
-        var dispatchPort = new LocalActorDispatchPort(new SingleActorRuntime(localActor));
+        var runtime = new SingleActorRuntime(localActor);
+        var dispatchPort = new LocalActorDispatchPort(runtime);
         var initializationCompleted = agent.ExpectInitializationCompletion();
         await dispatchPort.DispatchAsync(actorId, new EventEnvelope
         {
@@ -398,7 +399,7 @@ internal static class RoleContentionMeasurement
             actorId,
             actorOrdinal,
             agent,
-            localActor,
+            runtime,
             dispatchPort,
             services);
     }
@@ -880,14 +881,14 @@ internal sealed class RoleContentionActorFixture(
     string actorId,
     int actorOrdinal,
     RoleContentionGAgent agent,
-    LocalActor localActor,
+    IActorRuntime runtime,
     IActorDispatchPort dispatchPort,
     ServiceProvider services)
 {
     public string ActorId { get; } = actorId;
     public int ActorOrdinal { get; } = actorOrdinal;
     public RoleContentionGAgent Agent { get; } = agent;
-    public LocalActor LocalActor { get; } = localActor;
+    public IActorRuntime Runtime { get; } = runtime;
     public IActorDispatchPort DispatchPort { get; } = dispatchPort;
 
     public async Task<RoleContentionActorCleanupObservation> DeactivateAndVerifyAsync()
@@ -896,7 +897,7 @@ internal sealed class RoleContentionActorFixture(
         var cleanupFailureCount = 0;
         try
         {
-            await LocalActor.DeactivateAsync();
+            await Runtime.DestroyAsync(ActorId);
             deactivated = true;
         }
         catch
@@ -907,7 +908,7 @@ internal sealed class RoleContentionActorFixture(
         var acceptedEventAfterDeactivation = false;
         try
         {
-            acceptedEventAfterDeactivation = AcceptsEventAfterDeactivation();
+            acceptedEventAfterDeactivation = await AcceptsEventAfterDeactivationAsync();
         }
         catch
         {
@@ -929,11 +930,11 @@ internal sealed class RoleContentionActorFixture(
             acceptedEventAfterDeactivation);
     }
 
-    private bool AcceptsEventAfterDeactivation()
+    private async Task<bool> AcceptsEventAfterDeactivationAsync()
     {
         try
         {
-            _ = LocalActor.HandleEventAsync(new EventEnvelope
+            await DispatchPort.DispatchAsync(ActorId, new EventEnvelope
             {
                 Id = $"contention-active-probe-{Guid.NewGuid():N}",
                 Payload = Any.Pack(new StringValue { Value = "contention-active-probe" }),
@@ -942,7 +943,7 @@ internal sealed class RoleContentionActorFixture(
             return true;
         }
         catch (InvalidOperationException ex) when (
-            ex.Message.Contains("mailbox is closed", StringComparison.Ordinal))
+            ex.Message.Contains("not found", StringComparison.Ordinal))
         {
             return false;
         }

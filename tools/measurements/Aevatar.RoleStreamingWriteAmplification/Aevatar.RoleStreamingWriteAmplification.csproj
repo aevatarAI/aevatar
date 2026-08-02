@@ -9,6 +9,9 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../../src/Aevatar.AI.Core/Aevatar.AI.Core.csproj" />
+    <ProjectReference Include="../../../src/Aevatar.AI.LLMProviders.MEAI/Aevatar.AI.LLMProviders.MEAI.csproj" />
+    <ProjectReference Include="../../../src/Aevatar.AI.LLMProviders.NyxId/Aevatar.AI.LLMProviders.NyxId.csproj" />
+    <ProjectReference Include="../../../src/Aevatar.AI.LLMProviders.Tornado/Aevatar.AI.LLMProviders.Tornado.csproj" />
     <ProjectReference Include="../../../src/Aevatar.CQRS.Projection.Core/Aevatar.CQRS.Projection.Core.csproj" />
     <ProjectReference Include="../../../src/Aevatar.CQRS.Projection.Providers.InMemory/Aevatar.CQRS.Projection.Providers.InMemory.csproj" />
     <ProjectReference Include="../../../src/Aevatar.CQRS.Projection.Runtime/Aevatar.CQRS.Projection.Runtime.csproj" />
@@ -30,5 +33,6 @@
     <Protobuf Include="measurement_role_current_state_read_model.proto" GrpcServices="None" />
     <None Update="streaming-write-amplification.config.json" CopyToOutputDirectory="PreserveNewest" />
     <None Update="role-contention.config.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="provider-normalization.config.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
