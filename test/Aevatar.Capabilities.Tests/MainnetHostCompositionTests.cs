@@ -1227,16 +1227,20 @@ public sealed class MainnetHostCompositionTests
     }
 
     [Theory]
-    [InlineData(" ", MainnetHostBuilderExtensions.DefaultAuthenticationAudience)]
-    [InlineData("urn:custom:aevatar-api", "urn:custom:aevatar-api")]
-    public void AddAevatarMainnetHost_ShouldOwnAuthenticationAudienceWhenDeploymentOmitsIt(
+    [InlineData(" ", " https://nyx-api.example.test ", "https://nyx-api.example.test")]
+    [InlineData("urn:custom:aevatar-api", "https://nyx-api.example.test", "urn:custom:aevatar-api")]
+    public void AddAevatarMainnetHost_ShouldUseNyxIdApiAudienceWhenDeploymentOmitsIt(
         string configuredAudience,
+        string nyxIdApiBaseUrl,
         string expectedAudience)
     {
         using var home = new TemporaryAevatarHomeScope();
         using var audience = new EnvironmentVariableScope(
             "AEVATAR_Aevatar__Authentication__Audience",
             configuredAudience);
+        using var apiBaseUrl = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__NyxId__ApiBaseUrl",
+            nyxIdApiBaseUrl);
         var audienceKey = $"{AevatarAuthenticationOptions.SectionName}:Audience";
         var builder = CreateBuilder(environmentName: Environments.Production);
 
@@ -1247,6 +1251,29 @@ public sealed class MainnetHostCompositionTests
         });
 
         builder.Configuration[audienceKey].Should().Be(expectedAudience);
+    }
+
+    [Fact]
+    public void AddAevatarMainnetHost_WhenAudienceAndNyxIdApiBaseUrlAreMissingInProduction_ShouldFailClosed()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        using var audience = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__Authentication__Audience",
+            " ");
+        using var apiBaseUrl = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__NyxId__ApiBaseUrl",
+            " ");
+        var builder = CreateBuilder(environmentName: Environments.Production);
+
+        var act = () => builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage(
+                "Aevatar:Authentication:Audience is required when authentication is enabled outside Development.");
     }
 
     [Theory]
