@@ -112,6 +112,8 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
                 ct);
         }
 
+        // This observer is transient by design. It only publishes typed frames/completion
+        // back to the run actor; the actor-owned durable deadline guarantees termination.
         _ = Task.Run(
             () => ExecuteWorkflowInteractionAsync(runActorId, request.Clone(), CancellationToken.None),
             CancellationToken.None);
