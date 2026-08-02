@@ -51,9 +51,10 @@ internal static class RoleContentionMeasurement
         Validate(config);
         if (options.VerifyOnly)
         {
+            await VerifyCleanupLifecycleAsync(config);
             Console.WriteLine(
                 $"Role contention configuration valid: fast_sessions={config.FastSessionCount}, " +
-                $"iterations={config.MeasuredIterations}.");
+                $"iterations={config.MeasuredIterations}; cleanup lifecycle verified.");
             return 0;
         }
 
@@ -92,9 +93,12 @@ internal static class RoleContentionMeasurement
         var sameActor = scenarioResults.Single(static result => result.Scenario == SameActorScenario);
         var distinctActor = scenarioResults.Single(static result => result.Scenario == DistinctActorScenario);
         var output = new RoleContentionMeasurementOutput(
-            1,
+            2,
             DateTimeOffset.UtcNow,
             await ResolveGitCommitAsync(),
+            await ResolveGitDirtyPathsAsync(),
+            CalculateAssemblySha256(Assembly.GetExecutingAssembly()),
+            CalculateAssemblySha256(typeof(RoleGAgent).Assembly),
             options.RunPhase,
             config.BaselineCodeCommit,
             Convert.ToHexString(SHA256.HashData(configBytes)),
@@ -132,7 +136,9 @@ internal static class RoleContentionMeasurement
         var slowGate = new RoleContentionSlowGate();
         var slowSessionId = $"slow-{sampleKey}";
         var fixtures = new List<RoleContentionActorFixture>();
-        var cleanupFailures = 0;
+        IReadOnlyList<RoleContentionTurnSample>? turns = null;
+        IReadOnlyList<RoleContentionActorStateObservation>? stateObservations = null;
+        Exception? scenarioFailure = null;
 
         try
         {
@@ -178,52 +184,119 @@ internal static class RoleContentionMeasurement
             await ReleaseAfterYieldBudgetAsync(slowGate, config.SlowReleaseYieldCount);
             await Task.WhenAll(submitted).WaitAsync(TimeSpan.FromSeconds(config.WatchdogSeconds));
 
-            var stateObservations = fixtures.Select(static fixture => fixture.Agent.CaptureState()).ToArray();
-            return new RoleContentionRunSample(
-                iteration,
-                recorder.SnapshotTurns(),
-                recorder.MaxQueueDepthPerActor,
-                recorder.MaxTotalQueueDepth,
-                fixtures.Count,
-                stateObservations,
-                stateObservations.Sum(static state => state.SerializedBytes),
-                fixtures.Count,
-                0,
-                0);
+            turns = recorder.SnapshotTurns();
+            stateObservations = fixtures.Select(static fixture => fixture.Agent.CaptureState()).ToArray();
         }
-        finally
+        catch (Exception ex)
         {
-            slowGate.Release();
-            foreach (var fixture in fixtures)
-            {
-                try
-                {
-                    await fixture.DeactivateAsync();
-                }
-                catch
-                {
-                    cleanupFailures++;
-                }
-            }
+            scenarioFailure = ex;
+        }
 
-            foreach (var fixture in fixtures)
-            {
-                try
-                {
-                    await DrainStreamAsync(streams, fixture.ActorId, config.WatchdogSeconds);
-                }
-                catch
-                {
-                    cleanupFailures++;
-                }
-            }
+        slowGate.Release();
+        var cleanup = await CleanupScenarioAsync(fixtures, streams, config.WatchdogSeconds);
+        if (scenarioFailure is not null)
+        {
+            throw new InvalidOperationException(
+                $"Role contention scenario failed; cleanup observed " +
+                $"deactivations={cleanup.DeactivationCount}, " +
+                $"failures={cleanup.CleanupFailureCount}, " +
+                $"active_orphans={cleanup.OrphanedActiveActorCount}.",
+                scenarioFailure);
+        }
 
-            if (cleanupFailures > 0)
+        return new RoleContentionRunSample(
+            iteration,
+            turns ?? throw new InvalidOperationException("Role contention turns were not captured."),
+            recorder.MaxQueueDepthPerActor,
+            recorder.MaxTotalQueueDepth,
+            fixtures.Count,
+            stateObservations ?? throw new InvalidOperationException("Role contention state was not captured."),
+            stateObservations.Sum(static state => state.SerializedBytes),
+            cleanup.DeactivationCount,
+            cleanup.CleanupFailureCount,
+            cleanup.OrphanedActiveActorCount);
+    }
+
+    private static async Task VerifyCleanupLifecycleAsync(RoleContentionConfig config)
+    {
+        var streams = new InMemoryStreamProvider(
+            new InMemoryStreamOptions(),
+            NullLoggerFactory.Instance,
+            new InMemoryStreamForwardingRegistry());
+        var fixture = await CreateActorAsync(
+            $"verify-role-contention-cleanup-{Guid.NewGuid():N}",
+            0,
+            new InMemoryEventStore(),
+            streams,
+            config,
+            "verify-slow-session",
+            new RoleContentionSlowGate(),
+            new RoleContentionRecorder());
+        var cleanup = await CleanupScenarioAsync([fixture], streams, config.WatchdogSeconds);
+        if (cleanup != new RoleContentionCleanupResult(1, 0, 0))
+        {
+            throw new InvalidOperationException(
+                $"Role contention cleanup lifecycle verification failed: " +
+                $"deactivations={cleanup.DeactivationCount}, " +
+                $"failures={cleanup.CleanupFailureCount}, " +
+                $"active_orphans={cleanup.OrphanedActiveActorCount}.");
+        }
+
+        var failingFixture = await CreateActorAsync(
+            $"verify-role-contention-failed-cleanup-{Guid.NewGuid():N}",
+            0,
+            new InMemoryEventStore(),
+            streams,
+            config,
+            "verify-failed-slow-session",
+            new RoleContentionSlowGate(),
+            new RoleContentionRecorder(),
+            failDeactivation: true);
+        var failedCleanup = await CleanupScenarioAsync([failingFixture], streams, config.WatchdogSeconds);
+        if (failedCleanup != new RoleContentionCleanupResult(0, 1, 0))
+        {
+            throw new InvalidOperationException(
+                $"Role contention failed-cleanup verification was not measured honestly: " +
+                $"deactivations={failedCleanup.DeactivationCount}, " +
+                $"failures={failedCleanup.CleanupFailureCount}, " +
+                $"active_orphans={failedCleanup.OrphanedActiveActorCount}.");
+        }
+    }
+
+    private static async Task<RoleContentionCleanupResult> CleanupScenarioAsync(
+        IReadOnlyList<RoleContentionActorFixture> fixtures,
+        InMemoryStreamProvider streams,
+        int watchdogSeconds)
+    {
+        var deactivationCount = 0;
+        var cleanupFailureCount = 0;
+        var orphanedActiveActorCount = 0;
+        foreach (var fixture in fixtures)
+        {
+            var observation = await fixture.DeactivateAndVerifyAsync();
+            if (observation.Deactivated)
+                deactivationCount++;
+            cleanupFailureCount += observation.CleanupFailureCount;
+            if (observation.AcceptedEventAfterDeactivation)
+                orphanedActiveActorCount++;
+        }
+
+        foreach (var fixture in fixtures)
+        {
+            try
             {
-                throw new InvalidOperationException(
-                    $"Role contention fixture cleanup failed {cleanupFailures} time(s).");
+                await DrainStreamAsync(streams, fixture.ActorId, watchdogSeconds);
+            }
+            catch
+            {
+                cleanupFailureCount++;
             }
         }
+
+        return new RoleContentionCleanupResult(
+            deactivationCount,
+            cleanupFailureCount,
+            orphanedActiveActorCount);
     }
 
     private static async Task SubmitTurn(
@@ -266,7 +339,8 @@ internal static class RoleContentionMeasurement
         RoleContentionConfig config,
         string slowSessionId,
         RoleContentionSlowGate slowGate,
-        RoleContentionRecorder recorder)
+        RoleContentionRecorder recorder,
+        bool failDeactivation = false)
     {
         var services = new ServiceCollection()
             .AddSingleton(eventStore)
@@ -288,7 +362,7 @@ internal static class RoleContentionMeasurement
             config.FastTextChunks,
             config.SlowTextChunks,
             config.ChunkCharacters);
-        var agent = new RoleContentionGAgent(provider, recorder, actorOrdinal)
+        var agent = new RoleContentionGAgent(provider, recorder, actorOrdinal, failDeactivation)
         {
             Services = services,
             EventSourcingBehaviorFactory = services.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),
@@ -383,6 +457,35 @@ internal static class RoleContentionMeasurement
         await process.WaitForExitAsync();
         return process.ExitCode == 0 ? output.Trim() : "unknown";
     }
+
+    private static async Task<IReadOnlyList<string>> ResolveGitDirtyPathsAsync()
+    {
+        using var process = Process.Start(new ProcessStartInfo(
+            "git",
+            "status --porcelain=v1 --untracked-files=no")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        });
+        if (process == null)
+            return ["unknown"];
+
+        var output = await process.StandardOutput.ReadToEndAsync();
+        await process.WaitForExitAsync();
+        if (process.ExitCode != 0)
+            return ["unknown"];
+
+        return output
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(static line => line.TrimEnd('\r'))
+            .Select(static line => line.Length > 3 ? line[3..] : line)
+            .OrderBy(static path => path, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static string CalculateAssemblySha256(Assembly assembly) =>
+        Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(assembly.Location)));
 }
 
 public sealed record RoleContentionConfig
@@ -405,6 +508,9 @@ public sealed record RoleContentionMeasurementOutput(
     int SchemaVersion,
     DateTimeOffset GeneratedAtUtc,
     string SourceCommit,
+    IReadOnlyList<string> SourceDirtyPaths,
+    string MeasurementAssemblySha256,
+    string RoleAgentAssemblySha256,
     string RunPhase,
     string BaselineCodeCommit,
     string ConfigSha256,
@@ -451,6 +557,16 @@ public sealed record RoleContentionActorStateObservation(
     int SerializedBytes,
     int TrackedSessionCount,
     int CompletedSessionCount);
+
+internal sealed record RoleContentionCleanupResult(
+    int DeactivationCount,
+    int CleanupFailureCount,
+    int OrphanedActiveActorCount);
+
+internal sealed record RoleContentionActorCleanupObservation(
+    bool Deactivated,
+    int CleanupFailureCount,
+    bool AcceptedEventAfterDeactivation);
 
 public sealed record RoleContentionScenarioSummary(
     Distribution FastQueueTimeMs,
@@ -518,7 +634,8 @@ public sealed record PercentileDelta(double? P50, double? P95, double? P99)
 internal sealed class RoleContentionGAgent(
     RoleContentionProvider provider,
     RoleContentionRecorder recorder,
-    int actorOrdinal)
+    int actorOrdinal,
+    bool failDeactivation)
     : RoleGAgent(
         toolExecutionPort: new MeasurementToolExecutionPort(),
         llmProviderFactory: provider,
@@ -539,6 +656,14 @@ internal sealed class RoleContentionGAgent(
             State.CalculateSize(),
             State.Sessions.Count,
             State.Sessions.Values.Count(static session => session.Completed));
+
+    protected override Task OnDeactivateAsync(CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        return failDeactivation
+            ? Task.FromException(new InvalidOperationException("Injected cleanup verification failure."))
+            : Task.CompletedTask;
+    }
 
     protected override Task OnEventHandlerStartAsync(
         EventEnvelope envelope,
@@ -764,14 +889,62 @@ internal sealed class RoleContentionActorFixture(
     public RoleContentionGAgent Agent { get; } = agent;
     public LocalActor LocalActor { get; } = localActor;
     public IActorDispatchPort DispatchPort { get; } = dispatchPort;
-    public bool IsActive { get; private set; } = true;
 
-    public async Task DeactivateAsync()
+    public async Task<RoleContentionActorCleanupObservation> DeactivateAndVerifyAsync()
     {
-        if (!IsActive)
-            return;
-        await LocalActor.DeactivateAsync();
-        await services.DisposeAsync();
-        IsActive = false;
+        var deactivated = false;
+        var cleanupFailureCount = 0;
+        try
+        {
+            await LocalActor.DeactivateAsync();
+            deactivated = true;
+        }
+        catch
+        {
+            cleanupFailureCount++;
+        }
+
+        var acceptedEventAfterDeactivation = false;
+        try
+        {
+            acceptedEventAfterDeactivation = AcceptsEventAfterDeactivation();
+        }
+        catch
+        {
+            cleanupFailureCount++;
+        }
+
+        try
+        {
+            await services.DisposeAsync();
+        }
+        catch
+        {
+            cleanupFailureCount++;
+        }
+
+        return new RoleContentionActorCleanupObservation(
+            deactivated,
+            cleanupFailureCount,
+            acceptedEventAfterDeactivation);
+    }
+
+    private bool AcceptsEventAfterDeactivation()
+    {
+        try
+        {
+            _ = LocalActor.HandleEventAsync(new EventEnvelope
+            {
+                Id = $"contention-active-probe-{Guid.NewGuid():N}",
+                Payload = Any.Pack(new StringValue { Value = "contention-active-probe" }),
+                Route = EnvelopeRouteSemantics.CreateDirect("measurement-harness", ActorId),
+            });
+            return true;
+        }
+        catch (InvalidOperationException ex) when (
+            ex.Message.Contains("mailbox is closed", StringComparison.Ordinal))
+        {
+            return false;
+        }
     }
 }

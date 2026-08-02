@@ -21,10 +21,17 @@ It was produced by harness commit
 `618ba214166df2dd794bbe6d5a5eb2a75ae0dc98`. The raw post-#3135 result is
 [`raw/2026-08-02-role-actor-contention-post-3135.json`](raw/2026-08-02-role-actor-contention-post-3135.json).
 It was produced from aggregate commit
-`8d3d51c40b813455db4a41c5a4f0b1a8b8d91e98`, which contains #3135 and
+`54bbc8d9f72d5b528c4bde55aad45bef2a91a79c`, which contains #3135 and
 #3137. Both results use config digest
 `AA835BE81AF3B7FBD4184E083380C8B47CDD33DD500A51739D822263A16BB739`,
 so they satisfy the comparison contract.
+
+Both runs use schema 2 of the cleanup-corrected measurement. They were run in
+isolated detached worktrees whose only tracked dirty path was
+`tools/measurements/Aevatar.RoleStreamingWriteAmplification/RoleContentionMeasurement.cs`.
+The baseline and post raw files record the exact measurement and
+`Aevatar.AI.Core` assembly SHA-256 values, rather than representing the patched
+measurement as part of either production source commit.
 
 ## Entrypoint inventory
 
@@ -62,6 +69,17 @@ Actor/session identities are not metric labels. The only allowed label axes are
 `command_id`, and `correlation_id` are forbidden. Raw samples use only local
 ordinals.
 
+Each sample is constructed only after cleanup completes. `deactivationCount`
+increments only when the real `LocalActor.DeactivateAsync` call returns
+successfully. Deactivation, service-provider disposal, and stream-drain errors
+increment `cleanupFailureCount`. A post-deactivation mailbox acceptance probe
+independently verifies whether an actor remains active and supplies
+`orphanedActiveActorCount`. If the workload fails, cleanup still runs and its
+three observed counts are included in the thrown failure. The `--verify` mode
+executes both a successful lifecycle and an injected deactivation-hook failure;
+the latter must report `deactivations=0`, `failures=1`, and
+`active_orphans=0`.
+
 ## Pre-3135 baseline
 
 Milliseconds use nearest-rank percentiles over 96 fast-turn observations per
@@ -69,14 +87,15 @@ scenario.
 
 | Metric | `same_actor` p50/p95/p99 | `distinct_actor` p50/p95/p99 | same - distinct p50/p95/p99 |
 | --- | ---: | ---: | ---: |
-| Fast mailbox queue | 55.388 / 82.474 / 85.096 | 0.051 / 0.215 / 2.225 | 55.337 / 82.258 / 82.871 |
-| Fast completion latency | 55.700 / 83.110 / 85.456 | 0.571 / 2.707 / 2.779 | 55.129 / 80.404 / 82.677 |
-| Slow service time | 52.933 / 81.103 / 81.103 | 57.448 / 81.497 / 81.497 | not used for a gate |
+| Fast mailbox queue | 39.134 / 83.959 / 112.030 | 0.057 / 0.438 / 0.703 | 39.077 / 83.521 / 111.327 |
+| Fast completion latency | 39.688 / 106.857 / 113.071 | 0.599 / 1.118 / 3.261 | 39.089 / 105.739 / 109.810 |
+| Slow service time | 37.204 / 75.207 / 75.207 | 26.757 / 58.065 / 58.065 | not used for a gate |
 
 | Lifecycle/state observation | `same_actor` | `distinct_actor` |
 | --- | ---: | ---: |
 | Maximum queue depth per actor | 8 | 1 |
 | Activations per iteration | 1 | 9 |
+| Successful deactivations per iteration | 1 | 9 |
 | Actor protobuf state bytes p50 | 2,207 | 324 |
 | Aggregate protobuf state bytes p50 | 2,207 | 3,251 |
 | Cleanup failures | 0 | 0 |
@@ -95,14 +114,15 @@ The same workload and config produced the following result after #3135.
 
 | Metric | `same_actor` p50/p95/p99 | `distinct_actor` p50/p95/p99 | same - distinct p50/p95/p99 |
 | --- | ---: | ---: | ---: |
-| Fast mailbox queue | 49.119 / 86.868 / 90.055 | 0.046 / 0.131 / 0.222 | 49.073 / 86.737 / 89.833 |
-| Fast completion latency | 49.491 / 87.250 / 90.540 | 0.593 / 2.486 / 2.633 | 48.898 / 84.765 / 87.907 |
-| Slow service time | 45.430 / 85.827 / 85.827 | 44.414 / 76.927 / 76.927 | not used for a gate |
+| Fast mailbox queue | 66.252 / 107.509 / 109.702 | 0.042 / 0.284 / 0.503 | 66.210 / 107.225 / 109.198 |
+| Fast completion latency | 66.987 / 108.099 / 113.284 | 0.604 / 0.961 / 1.085 | 66.382 / 107.138 / 112.199 |
+| Slow service time | 63.919 / 104.704 / 104.704 | 56.669 / 84.788 / 84.788 | not used for a gate |
 
 | Lifecycle/state observation | `same_actor` | `distinct_actor` |
 | --- | ---: | ---: |
 | Maximum queue depth per actor | 8 | 1 |
 | Activations per iteration | 1 | 9 |
+| Successful deactivations per iteration | 1 | 9 |
 | Actor protobuf state bytes p50 | 2,207 | 324 |
 | Aggregate protobuf state bytes p50 | 2,207 | 3,251 |
 | Cleanup failures | 0 | 0 |
@@ -114,22 +134,24 @@ threshold.
 
 | Head-of-line delta | Baseline p50/p95/p99 | Post-#3135 p50/p95/p99 | Post - baseline p50/p95/p99 |
 | --- | ---: | ---: | ---: |
-| Fast mailbox queue | 55.337 / 82.258 / 82.871 | 49.073 / 86.737 / 89.833 | -6.265 / +4.478 / +6.961 |
-| Fast completion latency | 55.129 / 80.404 / 82.677 | 48.898 / 84.765 / 87.907 | -6.232 / +4.361 / +5.230 |
+| Fast mailbox queue | 39.077 / 83.521 / 111.327 | 66.210 / 107.225 / 109.198 | +27.133 / +23.704 / -2.129 |
+| Fast completion latency | 39.089 / 105.739 / 109.810 | 66.382 / 107.138 / 112.199 | +27.294 / +1.399 / +2.390 |
 
 #3135 bounds the maximum turn duration and makes deadline cancellation
 terminally observable; it does not make a single-reader actor execute two turns
 concurrently. This workload releases the controlled slow provider before the
 host cap, so the deadline is not expected to reduce its queue time. The mixed
-p50 and tail movement is consistent with scheduler variation from the fixed
-async-yield budget and is not evidence of either a capacity improvement or a
-regression.
+p50 and tail movement is not evidence of a capacity change: the controlled
+slow-turn durations also moved under the fixed async-yield budget. The
+diagnostic has no latency pass/fail threshold.
 
-The bottleneck attribution remains unchanged: fast service time stays small,
-distinct-actor queue time stays near zero, lifecycle/state sizes are unchanged,
-and every measured turn completed with zero cleanup failures or active actor
-orphans. The synthetic delay is therefore the reused actor's single inbox, not
-event-store payload, transport backlog, retained-session state, or cleanup.
+The bottleneck attribution remains unchanged: median fast service and
+distinct-actor queue times remain small, the per-actor maximum queue depth is
+still one versus eight, lifecycle/state sizes are unchanged, and every
+measured turn completed with zero cleanup failures or active actor orphans.
+The synthetic median delay remains attributable to the reused actor's single
+inbox, not event-store payload, transport backlog, retained-session state, or
+cleanup.
 The measurement still does not establish production severity because no
 production concurrency distribution, provider-throttling trace, or mailbox SLO
 was supplied.
@@ -160,6 +182,19 @@ Until then, the architecture remains unchanged.
 
 ## Reproduction
 
+Validate configuration plus both successful and injected-failure cleanup
+accounting:
+
+```bash
+dotnet run \
+  --project tools/measurements/Aevatar.RoleStreamingWriteAmplification/Aevatar.RoleStreamingWriteAmplification.csproj \
+  --configuration Release -- \
+  --measurement role-contention \
+  --adapter inmemory \
+  --config tools/measurements/Aevatar.RoleStreamingWriteAmplification/role-contention.config.json \
+  --verify
+```
+
 ```bash
 bash tools/measurements/Aevatar.RoleStreamingWriteAmplification/run-contention.sh \
   baseline-pre-3135
@@ -170,4 +205,24 @@ From the aggregate containing #3135 and #3137:
 ```bash
 bash tools/measurements/Aevatar.RoleStreamingWriteAmplification/run-contention.sh \
   post-3135
+```
+
+Validate the checked-in cleanup observations:
+
+```bash
+jq -e '
+  .schemaVersion == 2 and
+  .sourceDirtyPaths == ["tools/measurements/Aevatar.RoleStreamingWriteAmplification/RoleContentionMeasurement.cs"] and
+  all(
+    .scenarios[].samples[];
+    .deactivationCount == .activationCount and
+    .cleanupFailureCount == 0 and
+    .orphanedActiveActorCount == 0
+  ) and
+  all(
+    .scenarios[];
+    .summary.cleanupFailureCount == 0 and
+    .summary.orphanedActiveActorCount == 0
+  )
+' docs/audit-scorecard/raw/2026-08-02-role-actor-contention-*.json
 ```
