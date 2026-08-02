@@ -1240,6 +1240,25 @@ public sealed class WorkflowRuntimeModuleBranchTests
             .Which.Should().ContainAll("YAML parse failed", "nesting depth");
     }
 
+    [Fact]
+    public void DynamicWorkflowModule_ValidateWorkflowYaml_ShouldRejectCollectionAliasCycle()
+    {
+        var ctx = new RecordingWorkflowContext();
+        const string yaml = """
+                            name: cyclic
+                            roles: []
+                            steps: &steps
+                              - id: loop
+                                type: assign
+                                children: *steps
+                            """;
+
+        var errors = DynamicWorkflowModule.ValidateWorkflowYaml(yaml, ctx);
+
+        errors.Should().ContainSingle()
+            .Which.Should().ContainAll("YAML parse failed", "nesting depth");
+    }
+
     private static EventEnvelope Wrap(IMessage evt, EnvelopeCallbackContext? callback = null)
     {
         return new EventEnvelope

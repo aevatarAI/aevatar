@@ -33,6 +33,40 @@ public sealed class WorkflowDefinitionParserResourceLimitTests
         result.Error.Should().Contain("nesting depth");
     }
 
+    [Fact]
+    public async Task ParseWorkflowYamlAsync_ShouldClassifyCollectionAliasCycle()
+    {
+        var parser = new WorkflowDefinitionParser([new WorkflowCoreModulePack()]);
+
+        var result = await parser.ParseWorkflowYamlAsync(CyclicWorkflowYaml);
+
+        result.Succeeded.Should().BeFalse();
+        result.ErrorCode.Should().Be(WorkflowYamlParseErrorCode.ResourceLimit);
+        result.Error.Should().Contain("nesting depth");
+    }
+
+    [Fact]
+    public async Task ParseInlineWorkflowBundleAsync_ShouldPropagateCollectionAliasCycle()
+    {
+        var parser = new WorkflowDefinitionParser([new WorkflowCoreModulePack()]);
+
+        var result = await parser.ParseInlineWorkflowBundleAsync(
+            [new WorkflowChatInlineYamlDocument(string.Empty, CyclicWorkflowYaml)]);
+
+        result.Succeeded.Should().BeFalse();
+        result.ErrorCode.Should().Be(WorkflowYamlParseErrorCode.ResourceLimit);
+        result.Error.Should().Contain("nesting depth");
+    }
+
+    private const string CyclicWorkflowYaml = """
+                                                name: cyclic
+                                                roles: []
+                                                steps: &steps
+                                                  - id: loop
+                                                    type: assign
+                                                    children: *steps
+                                                """;
+
     private static string BuildNestedWorkflowYaml(int childLinks)
     {
         var yaml = new StringBuilder()
