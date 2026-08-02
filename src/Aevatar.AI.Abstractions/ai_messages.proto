@@ -521,6 +521,7 @@ message RoleChatRecoveryCheckpoint {
   string continuation_session_id = 11;
   bool requires_runtime_credential = 12;
   int64 payload_expires_at_unix_ms = 13;
+  WorkflowLlmCompletionDeliveryContext workflow_llm_completion_delivery_context = 14;
 }
 
 message RoleChatRecoveryCheckpointUpdatedEvent {

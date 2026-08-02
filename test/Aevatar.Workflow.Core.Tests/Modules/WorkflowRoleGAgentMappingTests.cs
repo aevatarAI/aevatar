@@ -1,13 +1,21 @@
 using System.Runtime.CompilerServices;
+using System.Reflection;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions.Credentials.Testing;
+using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Integration.AI;
 using FluentAssertions;
 using Google.Protobuf;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Workflow.Core.Tests.Modules;
 
@@ -52,10 +60,7 @@ public sealed class WorkflowRoleGAgentMappingTests
     {
         var provider = new RecordingLlmProvider();
         var publisher = new RecordingEventPublisher();
-        var agent = new WorkflowRoleGAgent(UnexpectedAgentToolExecutionPort.Instance, provider)
-        {
-            EventPublisher = publisher,
-        };
+        var (agent, eventStore) = CreateAgent(provider, publisher);
 
         await agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
         {
@@ -118,6 +123,12 @@ public sealed class WorkflowRoleGAgentMappingTests
         publisher.Published.OfType<WorkflowLlmInvocationCompletedEvent>()
             .Should()
             .ContainSingle(x => x.Success);
+        (await eventStore.GetEventsAsync(agent.Id))
+            .Select(stateEvent => stateEvent.EventData)
+            .Should().ContainSingle(eventData =>
+                eventData.Is(RoleChatSessionCompletedEvent.Descriptor) &&
+                eventData.Unpack<RoleChatSessionCompletedEvent>().Outcome ==
+                RoleChatSessionOutcome.Completed);
     }
 
     [Fact]
@@ -141,10 +152,7 @@ public sealed class WorkflowRoleGAgentMappingTests
             },
         };
         var publisher = new RecordingEventPublisher();
-        var agent = new WorkflowRoleGAgent(UnexpectedAgentToolExecutionPort.Instance, provider)
-        {
-            EventPublisher = publisher,
-        };
+        var (agent, eventStore) = CreateAgent(provider, publisher);
 
         await agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
         {
@@ -161,6 +169,15 @@ public sealed class WorkflowRoleGAgentMappingTests
         completed.ManagedHandoff.Should().NotBeNull();
         completed.ManagedHandoff.InvocationId.Should().Be("parent-run:workflow_tool:reply:tool-call-1");
         completed.ManagedHandoff.ParentStepId.Should().Be("reply");
+        var committed = (await eventStore.GetEventsAsync(agent.Id))
+            .Select(stateEvent => stateEvent.EventData)
+            .Where(eventData => eventData.Is(RoleChatSessionCompletedEvent.Descriptor))
+            .Select(eventData => eventData.Unpack<RoleChatSessionCompletedEvent>())
+            .Should().ContainSingle().Which;
+        committed.ToolReceipts.Should().ContainSingle(receipt =>
+            receipt.ManagedWorkflowHandoff != null &&
+            receipt.ManagedWorkflowHandoff.InvocationId ==
+            "parent-run:workflow_tool:reply:tool-call-1");
     }
 
     [Fact]
@@ -168,10 +185,7 @@ public sealed class WorkflowRoleGAgentMappingTests
     {
         var provider = new RecordingLlmProvider();
         var publisher = new RecordingEventPublisher();
-        var agent = new WorkflowRoleGAgent(UnexpectedAgentToolExecutionPort.Instance, provider)
-        {
-            EventPublisher = publisher,
-        };
+        var (agent, _) = CreateAgent(provider, publisher);
         var intent = new WorkflowLlmExecutionIntent
         {
             RunId = "run-files",
@@ -214,10 +228,7 @@ public sealed class WorkflowRoleGAgentMappingTests
     {
         var provider = new RecordingLlmProvider();
         var publisher = new RecordingEventPublisher();
-        var agent = new WorkflowRoleGAgent(UnexpectedAgentToolExecutionPort.Instance, provider)
-        {
-            EventPublisher = publisher,
-        };
+        var (agent, _) = CreateAgent(provider, publisher);
 
         await agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
         {
@@ -245,10 +256,7 @@ public sealed class WorkflowRoleGAgentMappingTests
         var publisher = new RecordingEventPublisher();
         var source = new RecordingToolSource(new StaticAgentTool("nyxid_calendar_create_event"));
         var registry = new RecordingToolSetRegistry(source);
-        var agent = new TestWorkflowRoleGAgent(provider, registry)
-        {
-            EventPublisher = publisher,
-        };
+        var (agent, _) = CreateAgent(provider, publisher, registry);
         agent.AddTool(new StaticAgentTool("nyxid_proxy"));
 
         await agent.HandleWorkflowLlmExecutionIntent(BuildConnectedServiceIntent("token-a", "session-a"));
@@ -270,7 +278,10 @@ public sealed class WorkflowRoleGAgentMappingTests
     {
         var provider = new RecordingLlmProvider();
         var source = new RecordingToolSource(new StaticAgentTool("nyxid_calendar_create_event"));
-        var agent = new TestWorkflowRoleGAgent(provider, new RecordingToolSetRegistry(source));
+        var (agent, _) = CreateAgent(
+            provider,
+            new RecordingEventPublisher(),
+            new RecordingToolSetRegistry(source));
         agent.AddTool(new StaticAgentTool("search"));
 
         await agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
@@ -295,7 +306,10 @@ public sealed class WorkflowRoleGAgentMappingTests
     {
         var provider = new RecordingLlmProvider();
         var source = new RecordingToolSource(new StaticAgentTool("nyxid_calendar_create_event"));
-        var agent = new TestWorkflowRoleGAgent(provider, new RecordingToolSetRegistry(source));
+        var (agent, _) = CreateAgent(
+            provider,
+            new RecordingEventPublisher(),
+            new RecordingToolSetRegistry(source));
         agent.AddTool(new StaticAgentTool("search"));
 
         await agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
@@ -430,13 +444,44 @@ public sealed class WorkflowRoleGAgentMappingTests
         }
     }
 
+    private static (TestWorkflowRoleGAgent Agent, InMemoryEventStore EventStore) CreateAgent(
+        ILLMProviderFactory provider,
+        RecordingEventPublisher publisher,
+        IToolSetRegistry? registry = null)
+    {
+        var eventStore = new InMemoryEventStore();
+        var vault = new InMemorySecretVault();
+        var services = new ServiceCollection()
+            .AddSingleton<IEventStore>(eventStore)
+            .AddSingleton<ISecretVault>(vault)
+            .AddSingleton<EventSourcingRuntimeOptions>()
+            .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
+            .BuildServiceProvider();
+        var agent = new TestWorkflowRoleGAgent(provider, registry, vault)
+        {
+            Services = services,
+            EventPublisher = publisher,
+            EventSourcingBehaviorFactory =
+                services.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),
+        };
+        SetAgentId(agent, $"workflow-role-mapping-{Guid.NewGuid():N}");
+        return (agent, eventStore);
+    }
+
+    private static void SetAgentId(Aevatar.Foundation.Core.GAgentBase agent, string agentId) =>
+        typeof(Aevatar.Foundation.Core.GAgentBase)
+            .GetMethod("SetId", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(agent, [agentId]);
+
     private sealed class TestWorkflowRoleGAgent(
         ILLMProviderFactory provider,
-        IToolSetRegistry registry)
+        IToolSetRegistry? registry,
+        ISecretVault chatToolRecoverySecretVault)
         : WorkflowRoleGAgent(
             UnexpectedAgentToolExecutionPort.Instance,
             provider,
-            toolSetRegistry: registry)
+            toolSetRegistry: registry,
+            chatToolRecoverySecretVault: chatToolRecoverySecretVault)
     {
         public void AddTool(IAgentTool tool) => RegisterTool(tool);
     }

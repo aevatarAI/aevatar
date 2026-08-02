@@ -3,6 +3,7 @@ using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core;
+using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Tools;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.Audit;
@@ -33,6 +34,7 @@ using Aevatar.Workflow.Integration.AI;
 using FluentAssertions;
 using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Time.Testing;
 using System.Reflection;
 using Any = Google.Protobuf.WellKnownTypes.Any;
 using StringValue = Google.Protobuf.WellKnownTypes.StringValue;
@@ -118,7 +120,7 @@ public abstract class WorkflowGAgentTestBase
             return agent;
         }
 
-        internal static async Task<(WorkflowRoleGAgent Agent, RecordingEventPublisher Publisher)> CreateActivatedWorkflowRoleAgentAsync(
+        internal static async Task<(TestWorkflowRoleGAgent Agent, RecordingEventPublisher Publisher)> CreateActivatedWorkflowRoleAgentAsync(
             IEventStore eventStore,
             ILLMProviderFactory llmProviderFactory,
             string agentId,
@@ -127,11 +129,16 @@ public abstract class WorkflowGAgentTestBase
             IWorkflowCallerAccessTokenProvider? callerAccessTokenProvider = null,
             TimeProvider? timeProvider = null,
             RoleChatExecutionOptions? chatExecutionOptions = null,
-            IActorRuntimeCallbackScheduler? callbackScheduler = null)
+            IActorRuntimeCallbackScheduler? callbackScheduler = null,
+            ISecretVault? chatToolRecoverySecretVault = null)
         {
+            if (timeProvider is FakeTimeProvider fakeTimeProvider)
+                fakeTimeProvider.SetUtcNow(DateTimeOffset.UtcNow);
+            chatToolRecoverySecretVault ??= new InMemorySecretVault();
             var serviceCollection = new ServiceCollection()
                 .AddSingleton<IEventStore>(eventStore)
                 .AddSingleton(eventStore)
+                .AddSingleton<ISecretVault>(chatToolRecoverySecretVault)
                 .AddSingleton<EventSourcingRuntimeOptions>()
                 .AddSingleton<IAuditTrailAppender, AppendedAuditTrail>()
                 .AddSingleton<IAuditActorIdentityHasher, StableIdentityHasher>()
@@ -148,7 +155,8 @@ public abstract class WorkflowGAgentTestBase
                 toolSetRegistry,
                 callerAccessTokenProvider,
                 timeProvider,
-                chatExecutionOptions)
+                chatExecutionOptions,
+                chatToolRecoverySecretVault)
             {
                 Services = services,
                 EventPublisher = publisher,
@@ -185,30 +193,57 @@ public abstract class WorkflowGAgentTestBase
 
         internal sealed class SuccessfulWorkflowTool(string name) : IAgentTool
         {
+            private int _executeCount;
+
             public string Name => name;
             public string Description => "Workflow integration test tool";
             public string ParametersSchema => "{}";
+            public int ExecuteCount => Volatile.Read(ref _executeCount);
 
-            public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
-                Task.FromResult("{}");
+            public AgentToolReceipt CreateSuccessReceipt(
+                string callId,
+                string toolName,
+                string resultJson) => new()
+            {
+                CallId = callId,
+                ToolName = toolName,
+                Status = AgentToolReceiptStatus.Success,
+                ResultJson = resultJson,
+            };
+
+            public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+            {
+                Interlocked.Increment(ref _executeCount);
+                return Task.FromResult("{}");
+            }
         }
 
-        private sealed class TestWorkflowRoleGAgent(
+        internal sealed class TestWorkflowRoleGAgent(
             IAgentToolExecutionPort toolExecutionPort,
             ILLMProviderFactory llmProviderFactory,
             IToolSetRegistry? toolSetRegistry,
             IWorkflowCallerAccessTokenProvider? callerAccessTokenProvider,
             TimeProvider? timeProvider,
-            RoleChatExecutionOptions? chatExecutionOptions)
+            RoleChatExecutionOptions? chatExecutionOptions,
+            ISecretVault chatToolRecoverySecretVault)
             : WorkflowRoleGAgent(
                 toolExecutionPort,
                 llmProviderFactory,
                 toolSetRegistry: toolSetRegistry,
                 callerAccessTokenProvider: callerAccessTokenProvider,
                 chatExecutionOptions: chatExecutionOptions,
-                timeProvider: timeProvider)
+                timeProvider: timeProvider,
+                chatToolRecoverySecretVault: chatToolRecoverySecretVault)
         {
             public void RegisterToolForTest(IAgentTool tool) => RegisterTool(tool);
+
+            public async Task StartRecoverySessionForTestAsync(
+                ChatRequestEvent request,
+                AgentToolExecutionContext toolContext,
+                CancellationToken ct = default)
+            {
+                await EstablishTurnAuthorityAsync(request, trackedSession: null, toolContext, ct);
+            }
         }
 
         internal sealed class AlwaysStartingAgentToolAdmissionLedger : IAgentToolAdmissionLedger
@@ -539,12 +574,17 @@ public abstract class WorkflowGAgentTestBase
 
         internal sealed class ThrowingWorkflowIntentLlmProvider(Exception exception) : WorkflowIntentLlmProviderBase
         {
+            private int _callCount;
+
+            public int CallCount => Volatile.Read(ref _callCount);
+
             public override async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
                 LLMRequest request,
                 [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
             {
                 _ = request;
                 ct.ThrowIfCancellationRequested();
+                Interlocked.Increment(ref _callCount);
                 await Task.CompletedTask;
                 if (exception is not null)
                     throw exception;
@@ -590,12 +630,15 @@ public abstract class WorkflowGAgentTestBase
         {
             private int _calls;
 
+            public List<LLMRequest> Requests { get; } = [];
+            public int CallCount => Volatile.Read(ref _calls);
+
             public override async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
                 LLMRequest request,
                 [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
             {
-                _ = request;
                 ct.ThrowIfCancellationRequested();
+                Requests.Add(request);
                 if (Interlocked.Increment(ref _calls) > 1)
                 {
                     yield return new LLMStreamChunk { DeltaContent = "done" };

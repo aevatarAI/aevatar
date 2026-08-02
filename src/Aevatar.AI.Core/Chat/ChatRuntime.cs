@@ -436,7 +436,7 @@ public sealed class ChatRuntime
         var authorizedTools = ToolCallLoop.CreateRequestToolManager(baseRequest.Tools);
         var skillRecovery = CreateSkillRecoveryOrchestrator(baseRequest, () => authorizedTools);
         var executedToolOutcomes = new List<ToolOutcomeReplyFact>();
-        var authorizationBlocked = false;
+        var toolLoopSuspended = false;
 
         if (skillRecovery.RequiresInitialSearch)
         {
@@ -675,11 +675,11 @@ public sealed class ChatRuntime
                                 result.Receipt);
                             messages.Add(toolMsg);
                             pendingHistoryMessages.Add(toolMsg);
-                            if (IsAuthorizationRequired(result))
-                                authorizationBlocked = true;
+                            if (RequiresToolLoopSuspension(result))
+                                toolLoopSuspended = true;
                         }
 
-                        if (authorizationBlocked)
+                        if (toolLoopSuspended)
                             break;
 
                         continue;
@@ -785,15 +785,15 @@ public sealed class ChatRuntime
                     result.Receipt);
                 messages.Add(toolMsg);
                 pendingHistoryMessages.Add(toolMsg);
-                if (IsAuthorizationRequired(result))
-                    authorizationBlocked = true;
+                if (RequiresToolLoopSuspension(result))
+                    toolLoopSuspended = true;
             }
 
-            if (authorizationBlocked)
+            if (toolLoopSuspended)
                 break;
         }
 
-        if (finalContent == null && !authorizationBlocked)
+        if (finalContent == null && !toolLoopSuspended)
         {
             if (hasStreamedTextContent)
             {
@@ -884,11 +884,11 @@ public sealed class ChatRuntime
                         result.Receipt);
                     messages.Add(toolMsg);
                     pendingHistoryMessages.Add(toolMsg);
-                    if (IsAuthorizationRequired(result))
-                        authorizationBlocked = true;
+                    if (RequiresToolLoopSuspension(result))
+                        toolLoopSuspended = true;
                 }
 
-                if (!authorizationBlocked)
+                if (!toolLoopSuspended)
                 {
                     var summaryRequest = new LLMRequest
                     {
@@ -1056,8 +1056,9 @@ public sealed class ChatRuntime
             },
         };
 
-    private static bool IsAuthorizationRequired(ToolExecutionResult result) =>
-        result.Receipt?.Status == AgentToolReceiptStatus.AuthorizationRequired;
+    private static bool RequiresToolLoopSuspension(ToolExecutionResult result) =>
+        result.Receipt?.Status is AgentToolReceiptStatus.ApprovalRequired or
+            AgentToolReceiptStatus.AuthorizationRequired;
 
     private async Task RunStopHookAsync(
         string? finalContent,
