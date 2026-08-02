@@ -26,12 +26,22 @@ It was produced from aggregate commit
 `AA835BE81AF3B7FBD4184E083380C8B47CDD33DD500A51739D822263A16BB739`,
 so they satisfy the comparison contract.
 
-Both runs use schema 2 of the cleanup-corrected measurement. They were run in
-isolated detached worktrees whose only tracked dirty path was
+Both runs use schema 2 of the final runtime-neutral, cleanup-corrected
+measurement. They were run in isolated detached worktrees whose only tracked
+dirty paths were
+`tools/measurements/Aevatar.RoleStreamingWriteAmplification/Program.cs` and
 `tools/measurements/Aevatar.RoleStreamingWriteAmplification/RoleContentionMeasurement.cs`.
-The baseline and post raw files record the exact measurement and
-`Aevatar.AI.Core` assembly SHA-256 values, rather than representing the patched
-measurement as part of either production source commit.
+The latter is byte-identical to commit `80887623f`; the former contains only
+that commit's `SingleActorRuntime` availability and `DestroyAsync` lifecycle
+patch. Production `RoleGAgent` code therefore remains pinned to each declared
+source commit.
+
+The raw files record the exact binaries used:
+
+| Run | Measurement assembly SHA-256 | `Aevatar.AI.Core` assembly SHA-256 |
+| --- | --- | --- |
+| Baseline | `6774D81C8DCCD7D1E5705A62A099DCA7ED3FD1A74AF428FC06B4840AF99B7CA1` | `904996AAFE9601838928FB84885BFC33A227E92E7C749FB49B3939C1954D1A80` |
+| Post-#3135 | `6DE872879419D6F832BB0893515EDFA9F1123CC87542B0312AD3DCBBEE67E520` | `9646C138D3FA09DE2F36BD8F22B5876A22E6170E90BAD561D30094D9891A3C6A` |
 
 ## Entrypoint inventory
 
@@ -70,15 +80,15 @@ Actor/session identities are not metric labels. The only allowed label axes are
 ordinals.
 
 Each sample is constructed only after cleanup completes. `deactivationCount`
-increments only when the real `LocalActor.DeactivateAsync` call returns
-successfully. Deactivation, service-provider disposal, and stream-drain errors
-increment `cleanupFailureCount`. A post-deactivation mailbox acceptance probe
-independently verifies whether an actor remains active and supplies
-`orphanedActiveActorCount`. If the workload fails, cleanup still runs and its
-three observed counts are included in the thrown failure. The `--verify` mode
-executes both a successful lifecycle and an injected deactivation-hook failure;
-the latter must report `deactivations=0`, `failures=1`, and
-`active_orphans=0`.
+increments only when `IActorRuntime.DestroyAsync` returns after deactivating the
+real `LocalActor`. Deactivation, service-provider disposal, and stream-drain
+errors increment `cleanupFailureCount`. A post-deactivation probe goes through
+`IActorDispatchPort` and independently verifies whether the runtime still
+accepts the actor address, supplying `orphanedActiveActorCount`. If the workload
+fails, cleanup still runs and its three observed counts are included in the
+thrown failure. The `--verify` mode executes both a successful lifecycle and an
+injected deactivation-hook failure; the latter must report `deactivations=0`,
+`failures=1`, and `active_orphans=0`.
 
 ## Pre-3135 baseline
 
@@ -87,17 +97,17 @@ scenario.
 
 | Metric | `same_actor` p50/p95/p99 | `distinct_actor` p50/p95/p99 | same - distinct p50/p95/p99 |
 | --- | ---: | ---: | ---: |
-| Fast mailbox queue | 39.134 / 83.959 / 112.030 | 0.057 / 0.438 / 0.703 | 39.077 / 83.521 / 111.327 |
-| Fast completion latency | 39.688 / 106.857 / 113.071 | 0.599 / 1.118 / 3.261 | 39.089 / 105.739 / 109.810 |
-| Slow service time | 37.204 / 75.207 / 75.207 | 26.757 / 58.065 / 58.065 | not used for a gate |
+| Fast mailbox queue | 26.973 / 38.804 / 39.754 | 0.299 / 2.775 / 3.167 | 26.674 / 36.029 / 36.587 |
+| Fast completion latency | 27.701 / 39.022 / 40.026 | 1.229 / 6.319 / 6.614 | 26.472 / 32.703 / 33.412 |
+| Slow service time | 25.207 / 39.805 / 39.805 | 26.272 / 53.575 / 53.575 | not used for a gate |
 
 | Lifecycle/state observation | `same_actor` | `distinct_actor` |
 | --- | ---: | ---: |
-| Maximum queue depth per actor | 8 | 1 |
+| Maximum queue depth per actor p50/p95/p99 | 8 / 8 / 8 | 1 / 1 / 1 |
 | Activations per iteration | 1 | 9 |
 | Successful deactivations per iteration | 1 | 9 |
-| Actor protobuf state bytes p50 | 2,207 | 324 |
-| Aggregate protobuf state bytes p50 | 2,207 | 3,251 |
+| Actor protobuf state bytes p50/p95/p99 | 2,207 / 2,216 / 2,216 | 324 / 659 / 660 |
+| Aggregate protobuf state bytes p50/p95/p99 | 2,207 / 2,216 / 2,216 | 3,251 / 3,260 / 3,260 |
 | Cleanup failures | 0 | 0 |
 | Active actor orphans after cleanup | 0 | 0 |
 
@@ -114,17 +124,17 @@ The same workload and config produced the following result after #3135.
 
 | Metric | `same_actor` p50/p95/p99 | `distinct_actor` p50/p95/p99 | same - distinct p50/p95/p99 |
 | --- | ---: | ---: | ---: |
-| Fast mailbox queue | 66.252 / 107.509 / 109.702 | 0.042 / 0.284 / 0.503 | 66.210 / 107.225 / 109.198 |
-| Fast completion latency | 66.987 / 108.099 / 113.284 | 0.604 / 0.961 / 1.085 | 66.382 / 107.138 / 112.199 |
-| Slow service time | 63.919 / 104.704 / 104.704 | 56.669 / 84.788 / 84.788 | not used for a gate |
+| Fast mailbox queue | 36.151 / 66.405 / 68.153 | 0.423 / 2.039 / 2.566 | 35.727 / 64.366 / 65.588 |
+| Fast completion latency | 37.400 / 66.834 / 68.785 | 2.004 / 5.619 / 6.288 | 35.396 / 61.215 / 62.497 |
+| Slow service time | 33.671 / 65.369 / 65.369 | 43.340 / 62.288 / 62.288 | not used for a gate |
 
 | Lifecycle/state observation | `same_actor` | `distinct_actor` |
 | --- | ---: | ---: |
-| Maximum queue depth per actor | 8 | 1 |
+| Maximum queue depth per actor p50/p95/p99 | 8 / 8 / 8 | 1 / 1 / 1 |
 | Activations per iteration | 1 | 9 |
 | Successful deactivations per iteration | 1 | 9 |
-| Actor protobuf state bytes p50 | 2,207 | 324 |
-| Aggregate protobuf state bytes p50 | 2,207 | 3,251 |
+| Actor protobuf state bytes p50/p95/p99 | 2,207 / 2,216 / 2,216 | 324 / 659 / 660 |
+| Aggregate protobuf state bytes p50/p95/p99 | 2,207 / 2,216 / 2,216 | 3,251 / 3,260 / 3,260 |
 | Cleanup failures | 0 | 0 |
 | Active actor orphans after cleanup | 0 | 0 |
 
@@ -134,16 +144,16 @@ threshold.
 
 | Head-of-line delta | Baseline p50/p95/p99 | Post-#3135 p50/p95/p99 | Post - baseline p50/p95/p99 |
 | --- | ---: | ---: | ---: |
-| Fast mailbox queue | 39.077 / 83.521 / 111.327 | 66.210 / 107.225 / 109.198 | +27.133 / +23.704 / -2.129 |
-| Fast completion latency | 39.089 / 105.739 / 109.810 | 66.382 / 107.138 / 112.199 | +27.294 / +1.399 / +2.390 |
+| Fast mailbox queue | 26.674 / 36.029 / 36.587 | 35.727 / 64.366 / 65.588 | +9.054 / +28.337 / +29.001 |
+| Fast completion latency | 26.472 / 32.703 / 33.412 | 35.396 / 61.215 / 62.497 | +8.924 / +28.511 / +29.085 |
 
 #3135 bounds the maximum turn duration and makes deadline cancellation
 terminally observable; it does not make a single-reader actor execute two turns
 concurrently. This workload releases the controlled slow provider before the
-host cap, so the deadline is not expected to reduce its queue time. The mixed
-p50 and tail movement is not evidence of a capacity change: the controlled
-slow-turn durations also moved under the fixed async-yield budget. The
-diagnostic has no latency pass/fail threshold.
+host cap, so the deadline is not expected to reduce its queue time. The post
+run's higher p50 and tail deltas are not evidence of a capacity regression: the
+controlled slow-turn durations also moved under the fixed async-yield budget.
+The diagnostic has no latency pass/fail threshold.
 
 The bottleneck attribution remains unchanged: median fast service and
 distinct-actor queue times remain small, the per-actor maximum queue depth is
@@ -212,7 +222,10 @@ Validate the checked-in cleanup observations:
 ```bash
 jq -e '
   .schemaVersion == 2 and
-  .sourceDirtyPaths == ["tools/measurements/Aevatar.RoleStreamingWriteAmplification/RoleContentionMeasurement.cs"] and
+  .sourceDirtyPaths == [
+    "tools/measurements/Aevatar.RoleStreamingWriteAmplification/Program.cs",
+    "tools/measurements/Aevatar.RoleStreamingWriteAmplification/RoleContentionMeasurement.cs"
+  ] and
   all(
     .scenarios[].samples[];
     .deactivationCount == .activationCount and

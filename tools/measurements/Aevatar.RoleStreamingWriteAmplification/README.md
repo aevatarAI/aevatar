@@ -151,6 +151,30 @@ aggregate. `sourceCommit` records the harness checkout used for each run. These
 measurements are diagnostic evidence, not wall-clock CI gates or production
 SLOs.
 
+Validate the checked-in schema, final runtime-neutral lifecycle patch, and
+cleanup observations:
+
+```bash
+jq -e '
+  .schemaVersion == 2 and
+  .sourceDirtyPaths == [
+    "tools/measurements/Aevatar.RoleStreamingWriteAmplification/Program.cs",
+    "tools/measurements/Aevatar.RoleStreamingWriteAmplification/RoleContentionMeasurement.cs"
+  ] and
+  all(
+    .scenarios[].samples[];
+    .deactivationCount == .activationCount and
+    .cleanupFailureCount == 0 and
+    .orphanedActiveActorCount == 0
+  ) and
+  all(
+    .scenarios[];
+    .summary.cleanupFailureCount == 0 and
+    .summary.orphanedActiveActorCount == 0
+  )
+' docs/audit-scorecard/raw/2026-08-02-role-actor-contention-*.json
+```
+
 ## Fixed configuration
 
 `streaming-write-amplification.config.json` is the checked-in workload and
