@@ -8,6 +8,7 @@ using Aevatar.Workflow.Core.Composition;
 using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Core.Primitives;
+using Aevatar.Workflow.Core.Tests.Primitives;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -1225,6 +1226,18 @@ public sealed class WorkflowRuntimeModuleBranchTests
             ctx);
 
         errors.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void DynamicWorkflowModule_ValidateWorkflowYaml_ShouldRejectExcessiveNesting()
+    {
+        var ctx = new RecordingWorkflowContext();
+        var yaml = WorkflowYamlResourceGuardTests.BuildNestedWorkflow(childLinks: 31);
+
+        var errors = DynamicWorkflowModule.ValidateWorkflowYaml(yaml, ctx);
+
+        errors.Should().ContainSingle()
+            .Which.Should().ContainAll("YAML parse failed", "nesting depth");
     }
 
     private static EventEnvelope Wrap(IMessage evt, EnvelopeCallbackContext? callback = null)
