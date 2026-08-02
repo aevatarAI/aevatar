@@ -433,7 +433,7 @@ public sealed class NyxIdChatPublicEndpointsTests
               "conversationId": "conversation-alpha",
               "requestId": "input-alpha",
               "clientRequestId": "body-input",
-              "answer": "Option A",
+              "answer": {"selectedOptionIds": ["option-a", "option-b"]},
               "expectedStateVersion": 19
             }
             """));
@@ -445,7 +445,9 @@ public sealed class NyxIdChatPublicEndpointsTests
         command.ConversationActorId.Should().Be("conversation-alpha");
         command.RequestId.Should().Be("input-alpha");
         command.ClientRequestId.Should().Be("body-input");
-        command.Answer.Should().Be("Option A");
+        command.Answer.AnswerCase.Should().Be(NyxIdChatInputAnswer.AnswerOneofCase.Selection);
+        command.Answer.Selection.OptionIds.Should().Equal("option-a", "option-b");
+        command.ToolContext.Credentials.NyxIdAccessToken.Should().Be("delegated-token");
         command.ExpectedStateVersion.Should().Be(19);
     }
 

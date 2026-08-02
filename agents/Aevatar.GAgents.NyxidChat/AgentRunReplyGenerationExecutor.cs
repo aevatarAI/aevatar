@@ -291,14 +291,15 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 continuation.StepIndex,
                 result.ToolCalls.ToArray(),
                 capturedToolContext,
-                async (executionContext, token) =>
+                async (executionContext, approvalGrant, token) =>
                 {
                     using var toolScope = TryBeginInteractiveScope(request);
                     var toolResults = await plan.StepExecutor.ExecuteAuthorizedToolStepAsync(
                             capturedToolCalls,
                             capturedTools,
                             executionContext,
-                            token)
+                            token,
+                            approvalGrant)
                         .ConfigureAwait(false);
                     var toolStepResult = BuildToolStepResult(toolResults);
                     if (TryTakeOutboundIntent(generator) is { } toolOutboundIntent)

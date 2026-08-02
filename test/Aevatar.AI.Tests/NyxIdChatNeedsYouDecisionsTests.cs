@@ -35,15 +35,18 @@ public sealed class NyxIdChatNeedsYouDecisionsTests
             AskedAt = AskedAt.Clone(),
             AllowFreeText = false,
             MultiSelect = false,
+            ToolCallId = "call-input-alpha",
             Options =
             {
                 new NyxIdChatInputOption
                 {
+                    OptionId = "option-singapore",
                     Label = "Singapore",
                     Description = "Use the Singapore region.",
                 },
                 new NyxIdChatInputOption
                 {
+                    OptionId = "option-frankfurt",
                     Label = "Frankfurt",
                     Description = "Use the Frankfurt region.",
                 },
@@ -89,7 +92,7 @@ public sealed class NyxIdChatNeedsYouDecisionsTests
             ConversationActorId = "conversation-alpha",
             RequestId = "input-alpha",
             ClientRequestId = "client-input-alpha",
-            Answer = "Singapore",
+            Answer = SelectionAnswer("option-singapore"),
             ExpectedStateVersion = 40,
         };
 
@@ -115,6 +118,15 @@ public sealed class NyxIdChatNeedsYouDecisionsTests
         accepted.State.LatestInputResolution.ClientRequestId.Should().Be("client-input-alpha");
         accepted.State.LatestInputResolution.AnswerSha256.Should().NotBeEmpty();
         accepted.State.ToString().Should().NotContain("Singapore");
+        accepted.State.ActiveTask.Steps.Single(step => step.StepId == "step-alpha")
+            .Status.Should().Be(NyxIdChatStepStatus.Done);
+        accepted.NextCommand.Should().NotBeNull();
+        accepted.NextCommand!.InputCase.Should().Be(
+            NyxIdChatOperationDispatchCommand.InputOneofCase.InputContinuation);
+        accepted.NextCommand.InputContinuation.Answer.Selection.OptionIds.Should()
+            .Equal("option-singapore");
+        accepted.NextCommand.InputContinuation.SelectedOptions.Should().ContainSingle()
+            .Which.OptionId.Should().Be("option-singapore");
 
         var reloaded = NyxIdChatConversationGAgentState.Parser.ParseFrom(
             accepted.State.ToByteArray());
@@ -139,7 +151,7 @@ public sealed class NyxIdChatNeedsYouDecisionsTests
 
         var conflicting = command.Clone();
         conflicting.ClientRequestId = "client-input-conflict";
-        conflicting.Answer = "Frankfurt";
+        conflicting.Answer = SelectionAnswer("option-frankfurt");
         var conflict = NyxIdChatNeedsYouDecisions.ResolveInput(
             reloaded,
             conflicting,
@@ -158,15 +170,86 @@ public sealed class NyxIdChatNeedsYouDecisionsTests
     }
 
     [Fact]
+    public void ResolveInput_ShouldCarryTwoSelectedOptionsOnlyInTransientContinuation()
+    {
+        var request = InputRequest();
+        request.MultiSelect = true;
+        var pending = NyxIdChatNeedsYouDecisions.RequestInput(
+            ActiveState(),
+            request,
+            AskedAt).State;
+        var command = new NyxIdChatInputResolveCommand
+        {
+            ScopeId = "scope-alpha",
+            ConversationActorId = "conversation-alpha",
+            RequestId = "input-alpha",
+            ClientRequestId = "client-input-multi",
+            Answer = SelectionAnswer("option-singapore", "option-frankfurt"),
+            ExpectedStateVersion = 41,
+        };
+
+        var decision = NyxIdChatNeedsYouDecisions.ResolveInput(
+            pending,
+            command,
+            currentStateVersion: 41,
+            ResolvedAt);
+
+        decision.ShouldCommit.Should().BeTrue();
+        decision.NextCommand!.InputContinuation.Answer.Selection.OptionIds.Should()
+            .Equal("option-singapore", "option-frankfurt");
+        decision.NextCommand.InputContinuation.SelectedOptions.Select(static option => option.OptionId)
+            .Should().Equal("option-singapore", "option-frankfurt");
+        decision.State.ToString().Should()
+            .NotContain("option-singapore")
+            .And.NotContain("option-frankfurt")
+            .And.NotContain("Singapore")
+            .And.NotContain("Frankfurt");
+    }
+
+    [Fact]
+    public void ResolveInput_ShouldKeepRawFreeTextOnlyInTransientContinuation()
+    {
+        const string rawAnswer = "private-answer-sentinel";
+        var request = InputRequest();
+        request.AllowFreeText = true;
+        var pending = NyxIdChatNeedsYouDecisions.RequestInput(
+            ActiveState(),
+            request,
+            AskedAt).State;
+        var command = new NyxIdChatInputResolveCommand
+        {
+            ScopeId = "scope-alpha",
+            ConversationActorId = "conversation-alpha",
+            RequestId = "input-alpha",
+            ClientRequestId = "client-input-free-text",
+            Answer = new NyxIdChatInputAnswer { FreeText = rawAnswer },
+            ExpectedStateVersion = 41,
+        };
+
+        var decision = NyxIdChatNeedsYouDecisions.ResolveInput(
+            pending,
+            command,
+            currentStateVersion: 41,
+            ResolvedAt);
+
+        decision.ShouldCommit.Should().BeTrue();
+        decision.State.ToString().Should().NotContain(rawAnswer);
+        System.Text.Encoding.UTF8.GetString(decision.State.ToByteArray()).Should()
+            .NotContain(rawAnswer);
+        decision.NextCommand!.InputContinuation.Answer.FreeText.Should().Be(rawAnswer);
+    }
+
+    [Fact]
     public void ResolveApproval_ShouldFenceStaleVersionsAndKeepFirstDecisionAcrossReload()
     {
-        var state = ActiveState();
+        var state = ApprovalState();
         state.PendingApproval = new NyxIdChatPendingApprovalState
         {
             ApprovalRequestId = "approval-alpha",
             TurnId = "turn-alpha",
             TaskId = "task-alpha",
             StepId = "step-alpha",
+            ToolCallId = "call-approval-alpha",
             ToolName = "repository_delete",
             AskedAt = AskedAt.Clone(),
             Presentation = new NyxIdChatApprovalPresentation
@@ -208,6 +291,13 @@ public sealed class NyxIdChatNeedsYouDecisionsTests
         accepted.State.LatestApprovalResolution.Approved.Should().BeFalse();
         accepted.State.LatestApprovalResolution.DecisionSha256.Should().NotBeEmpty();
         accepted.State.ToString().Should().NotContain("non-destructive");
+        accepted.State.ActiveTask.Steps.Single().Status.Should().Be(NyxIdChatStepStatus.Running);
+        accepted.State.ActiveTask.Steps.Single().Operation.Key.OperationGeneration.Should().Be(2);
+        accepted.NextCommand.Should().NotBeNull();
+        accepted.NextCommand!.InputCase.Should().Be(
+            NyxIdChatOperationDispatchCommand.InputOneofCase.ToolApprovalContinuation);
+        accepted.NextCommand.ToolApprovalContinuation.Approved.Should().BeFalse();
+        accepted.NextCommand.ToolApprovalContinuation.ApprovalRequestId.Should().Be("approval-alpha");
 
         var reloaded = NyxIdChatConversationGAgentState.Parser.ParseFrom(
             accepted.State.ToByteArray());
@@ -250,16 +340,19 @@ public sealed class NyxIdChatNeedsYouDecisionsTests
         TaskId = "task-alpha",
         StepId = "step-alpha",
         RequestId = "input-alpha",
+        ToolCallId = "call-input-alpha",
         Prompt = " Choose a deployment region. ",
         Options =
         {
             new NyxIdChatInputOption
             {
+                OptionId = " option-singapore ",
                 Label = " Singapore ",
                 Description = " Use the Singapore region. ",
             },
             new NyxIdChatInputOption
             {
+                OptionId = " option-frankfurt ",
                 Label = " Frankfurt ",
                 Description = " Use the Frankfurt region. ",
             },
@@ -293,7 +386,50 @@ public sealed class NyxIdChatNeedsYouDecisionsTests
             Kind = NyxIdChatStepKind.Input,
             Status = NyxIdChatStepStatus.Waiting,
             Description = "Choose a deployment region.",
+            Source = new NyxIdChatStepSource
+            {
+                Input = new NyxIdChatInputStepSource { RequestId = "input-alpha" },
+            },
         });
         return state;
+    }
+
+    private static NyxIdChatConversationGAgentState ApprovalState()
+    {
+        var state = ActiveState();
+        var step = state.ActiveTask.Steps.Single();
+        step.Kind = NyxIdChatStepKind.Tool;
+        step.Source = new NyxIdChatStepSource
+        {
+            Tool = new NyxIdChatToolStepSource { ToolName = "repository_delete" },
+        };
+        step.ApprovalRequestId = "approval-alpha";
+        step.MayChangeExternalState = true;
+        step.Operation = new NyxIdChatOperationState
+        {
+            Key = new NyxIdChatOperationKey
+            {
+                ConversationActorId = "conversation-alpha",
+                TurnId = "turn-alpha",
+                TaskId = "task-alpha",
+                StepId = "step-alpha",
+                OperationId = "operation-approval-alpha",
+                OperationGeneration = 1,
+            },
+            Kind = NyxIdChatStepKind.Tool,
+            Phase = NyxIdChatOperationPhase.Succeeded,
+            MayChangeExternalState = true,
+        };
+        return state;
+    }
+
+    private static NyxIdChatInputAnswer SelectionAnswer(params string[] optionIds)
+    {
+        var answer = new NyxIdChatInputAnswer
+        {
+            Selection = new NyxIdChatInputSelectionAnswer(),
+        };
+        answer.Selection.OptionIds.AddRange(optionIds);
+        return answer;
     }
 }

@@ -1932,7 +1932,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 tools,
                 hooks: null,
                 llmMiddlewares: _llmMiddlewares,
-                toolExecutionPort: _toolExecutionPort),
+                toolExecutionPort: _toolExecutionPort,
+                approvalContinuationMode: AgentToolApprovalContinuationMode.ActorOwned),
             hooks: null,
             requestBuilder: _ => new LLMRequest
             {

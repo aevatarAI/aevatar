@@ -90,6 +90,9 @@ public sealed class NyxIdChatConversationGAgent
     {
         await base.OnActivateAsync(ct);
 
+        if (State.PendingInputRequest is not null && State.PendingInput is null)
+            await DispatchInputRequestContinuationAsync(State.PendingInputRequest, ct);
+
         if (State.PendingHistoryInitialization is { } pendingInitialization)
         {
             await DispatchHistoryInitializationContinuationAsync(
@@ -681,7 +684,7 @@ public sealed class NyxIdChatConversationGAgent
         }
         catch (Exception exception)
         {
-            await PersistFirstDispatchFailureAsync(
+            await PersistOperationDispatchFailureAsync(
                     operationKey,
                     "NYXID_CHAT_HISTORY_RESERVATION_FAILED",
                     "The chat turn could not reserve its transcript delivery.",
@@ -876,6 +879,14 @@ public sealed class NyxIdChatConversationGAgent
             Resolution = decision.Resolution.Clone(),
             State = NyxIdChatNeedsYouDecisions.RefreshAttention(decision.State),
         }, CancellationToken.None);
+
+        if (decision.NextCommand is not null)
+        {
+            await DispatchAuthorizedOperationAsync(
+                decision.NextCommand,
+                command.CorrelationId,
+                Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()));
+        }
     }
 
     [EventHandler]
@@ -895,6 +906,14 @@ public sealed class NyxIdChatConversationGAgent
             Resolution = decision.Resolution.Clone(),
             State = NyxIdChatNeedsYouDecisions.RefreshAttention(decision.State),
         }, CancellationToken.None);
+
+        if (decision.NextCommand is not null)
+        {
+            await DispatchAuthorizedOperationAsync(
+                decision.NextCommand,
+                command.CorrelationId,
+                Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()));
+        }
     }
 
     [EventHandler]
@@ -970,7 +989,7 @@ public sealed class NyxIdChatConversationGAgent
                     exception.GetType().Name);
                 if (decision.NextCommand?.Key is not null)
                 {
-                    await PersistFirstDispatchFailureAsync(
+                    await PersistOperationDispatchFailureAsync(
                             decision.NextCommand.Key,
                             "NYXID_CHAT_HISTORY_RESERVATION_FAILED",
                             "The chat turn could not reserve its transcript delivery.",
@@ -1214,33 +1233,20 @@ public sealed class NyxIdChatConversationGAgent
         if (terminalPrepared)
             await DispatchPendingHistoryTerminalAsync();
 
+        if (decision.InputRequest is not null)
+        {
+            await DispatchInputRequestContinuationAsync(
+                decision.InputRequest,
+                CancellationToken.None);
+        }
+
         if (decision.NextCommand is null)
             return;
 
-        var turnActorId = NyxIdChatTurnActorIds.ForTurn(Id, signal.Key.TurnId);
-        var envelope = new EventEnvelope
-        {
-            Id = decision.NextCommand.Key.OperationId,
-            Timestamp = now.Clone(),
-            Payload = Any.Pack(decision.NextCommand),
-            Route = new EnvelopeRoute
-            {
-                Direct = new DirectRoute { TargetActorId = turnActorId },
-            },
-            Propagation = new EnvelopePropagation
-            {
-                CorrelationId = ActiveInboundEnvelope?.Propagation?.CorrelationId
-                    ?? signal.Key.OperationId,
-            },
-        };
-        await _actorDispatchPort
-            .DispatchAsync(turnActorId, envelope, CancellationToken.None);
-
-        await PersistDomainEventAsync(new NyxIdChatOperationDispatchedEvent
-        {
-            Key = decision.NextCommand.Key.Clone(),
-            DispatchedAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
-        }, CancellationToken.None);
+        await DispatchAuthorizedOperationAsync(
+            decision.NextCommand,
+            ActiveInboundEnvelope?.Propagation?.CorrelationId ?? signal.Key.OperationId,
+            now);
     }
 
     private static NyxIdChatOperationResultSignal BuildDurableResultEvidence(
@@ -2216,7 +2222,7 @@ public sealed class NyxIdChatConversationGAgent
             _ => throw new ArgumentOutOfRangeException(nameof(status), status, null),
         };
 
-    private async Task PersistFirstDispatchFailureAsync(
+    private async Task PersistOperationDispatchFailureAsync(
         NyxIdChatOperationKey operationKey,
         string failureCode,
         string safeMessage,
@@ -2225,7 +2231,7 @@ public sealed class NyxIdChatConversationGAgent
         if (exception is not null)
         {
             Logger.LogWarning(
-                "NyxIdChat first operation dispatch stage failed: actor={ActorId} operation={OperationId} code={FailureCode} exceptionType={ExceptionType}",
+                "NyxIdChat operation dispatch stage failed: actor={ActorId} operation={OperationId} code={FailureCode} exceptionType={ExceptionType}",
                 Id,
                 operationKey.OperationId,
                 failureCode,
@@ -2238,10 +2244,9 @@ public sealed class NyxIdChatConversationGAgent
         if (step is null)
             return;
 
-        // A transient start command carries the only runtime execution
-        // capability. Once its first dispatch path fails, this exact turn
-        // cannot be reconstructed as an automatic retry, so close it rather
-        // than advertising a recovery action that cannot be honored.
+        // The transient command carries the only runtime execution capability.
+        // Once dispatch fails, committed state cannot reconstruct it, so close
+        // the operation instead of leaving a running step with no continuation.
         step.RetryInputRebuildable = false;
         var failure = new NyxIdChatOperationResultSignal
         {
@@ -2298,6 +2303,27 @@ public sealed class NyxIdChatConversationGAgent
             Propagation = new EnvelopePropagation
             {
                 CorrelationId = pending.OperationId,
+            },
+        };
+        return _actorDispatchPort.DispatchAsync(Id, envelope, ct);
+    }
+
+    private Task DispatchInputRequestContinuationAsync(
+        NyxIdChatInputRequestCommand command,
+        CancellationToken ct)
+    {
+        var envelope = new EventEnvelope
+        {
+            Id = $"{command.RequestId}:materialize",
+            Timestamp = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
+            Payload = Any.Pack(command),
+            Route = new EnvelopeRoute
+            {
+                Direct = new DirectRoute { TargetActorId = Id },
+            },
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = command.RequestId,
             },
         };
         return _actorDispatchPort.DispatchAsync(Id, envelope, ct);
@@ -2394,8 +2420,33 @@ public sealed class NyxIdChatConversationGAgent
                 CorrelationId = NormalizeOptional(correlationId) ?? command.Key.OperationId,
             },
         };
-        await _actorDispatchPort
-            .DispatchAsync(turnActorId, envelope, CancellationToken.None);
+        try
+        {
+            var admission = await _actorDispatchPort
+                .DispatchAsync(turnActorId, envelope, CancellationToken.None);
+            if (!admission.Accepted)
+            {
+                await PersistOperationDispatchFailureAsync(
+                    command.Key,
+                    "NYXID_CHAT_OPERATION_DISPATCH_REJECTED",
+                    "The chat operation was not accepted for dispatch.");
+                return;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            await PersistOperationDispatchFailureAsync(
+                command.Key,
+                "NYXID_CHAT_OPERATION_DISPATCH_FAILED",
+                "The chat operation could not be dispatched.",
+                exception);
+            return;
+        }
+
         await PersistDomainEventAsync(new NyxIdChatOperationDispatchedEvent
         {
             Key = command.Key.Clone(),
@@ -2422,7 +2473,7 @@ public sealed class NyxIdChatConversationGAgent
         }
         catch (Exception exception)
         {
-            await PersistFirstDispatchFailureAsync(
+            await PersistOperationDispatchFailureAsync(
                     operationKey,
                     "NYXID_CHAT_TURN_ACTOR_CREATE_FAILED",
                     "The chat turn could not start its execution actor.",
@@ -2440,7 +2491,7 @@ public sealed class NyxIdChatConversationGAgent
         }
         catch (Exception exception)
         {
-            await PersistFirstDispatchFailureAsync(
+            await PersistOperationDispatchFailureAsync(
                     operationKey,
                     "NYXID_CHAT_TURN_ACTOR_LINK_FAILED",
                     "The chat turn could not attach its execution actor.",
@@ -2468,7 +2519,7 @@ public sealed class NyxIdChatConversationGAgent
                 .DispatchAsync(turnActor.Id, envelope, CancellationToken.None);
             if (!admission.Accepted)
             {
-                await PersistFirstDispatchFailureAsync(
+                await PersistOperationDispatchFailureAsync(
                         operationKey,
                         "NYXID_CHAT_OPERATION_DISPATCH_REJECTED",
                         "The chat operation was not accepted for dispatch.");
@@ -2481,7 +2532,7 @@ public sealed class NyxIdChatConversationGAgent
         }
         catch (Exception exception)
         {
-            await PersistFirstDispatchFailureAsync(
+            await PersistOperationDispatchFailureAsync(
                     operationKey,
                     "NYXID_CHAT_OPERATION_DISPATCH_FAILED",
                     "The chat operation could not be dispatched.",

@@ -1,0 +1,88 @@
+[
+  {
+    "scenario": "input-request",
+    "type": "CUSTOM",
+    "sequence": 23,
+    "custom": {
+      "name": "nyxid.input.request",
+      "payload": {
+        "requestId": "input-alpha",
+        "turnId": "turn-alpha",
+        "taskId": "task-alpha",
+        "stepId": "step-input-alpha",
+        "prompt": "Select the deployment regions.",
+        "options": [
+          {
+            "optionId": "option-singapore",
+            "label": "Singapore",
+            "description": "Deploy to the Singapore region."
+          },
+          {
+            "optionId": "option-frankfurt",
+            "label": "Frankfurt",
+            "description": "Deploy to the Frankfurt region."
+          }
+        ],
+        "askedAt": "2026-08-01T12:00:00Z",
+        "allowFreeText": false,
+        "multiSelect": true,
+        "toolCallId": "call-input-alpha"
+      }
+    }
+  },
+  {
+    "scenario": "input-changed",
+    "type": "CUSTOM",
+    "sequence": 24,
+    "custom": {
+      "name": "nyxid.input.changed",
+      "payload": {
+        "requestId": "input-alpha",
+        "clientRequestId": "client-input-alpha",
+        "outcome": "accepted",
+        "answerSha256": "AQIDBA==",
+        "committedAt": "2026-08-01T12:01:00Z"
+      }
+    }
+  },
+  {
+    "scenario": "approval-request",
+    "type": "CUSTOM",
+    "sequence": 31,
+    "custom": {
+      "name": "nyxid.approval.request",
+      "payload": {
+        "approvalRequestId": "approval-alpha",
+        "turnId": "turn-alpha",
+        "taskId": "task-alpha",
+        "stepId": "step-tool-alpha",
+        "toolCallId": "call-tool-alpha",
+        "toolName": "repository_delete",
+        "askedAt": "2026-08-01T12:05:00Z",
+        "presentation": {
+          "action": "repository.delete",
+          "target": "repository:repo-alpha",
+          "actorLabel": "Aevatar Assistant",
+          "reversibility": "irreversible",
+          "grantBoundary": "within_grant"
+        }
+      }
+    }
+  },
+  {
+    "scenario": "approval-changed",
+    "type": "CUSTOM",
+    "sequence": 32,
+    "custom": {
+      "name": "nyxid.approval.changed",
+      "payload": {
+        "requestId": "approval-alpha",
+        "clientRequestId": "client-approval-alpha",
+        "outcome": "accepted",
+        "approved": true,
+        "decisionSha256": "BQYHCA==",
+        "committedAt": "2026-08-01T12:06:00Z"
+      }
+    }
+  }
+]

@@ -132,7 +132,8 @@ public sealed class ChatRuntimeStepExecutor
         IReadOnlyList<ToolCall> toolCalls,
         IReadOnlyList<IAgentTool> authorizedTools,
         AgentToolExecutionContext authorizedToolContext,
-        CancellationToken ct)
+        CancellationToken ct,
+        AgentToolApprovalGrant? approvalGrant = null)
     {
         var runtime = new ChatRuntime(
             _providerFactory,
@@ -145,7 +146,8 @@ public sealed class ChatRuntimeStepExecutor
                 toolCalls,
                 authorizedTools,
                 authorizedToolContext,
-                ct)
+                ct,
+                approvalGrant)
             .ConfigureAwait(false);
     }
 

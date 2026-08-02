@@ -1815,8 +1815,8 @@ public sealed class NyxIdChatProjectionSessionTests
             AskedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-01T12:00:00Z")),
             Options =
             {
-                new NyxIdChatInputOption { Label = "Singapore" },
-                new NyxIdChatInputOption { Label = "Frankfurt" },
+                new NyxIdChatInputOption { OptionId = "option-singapore", Label = "Singapore" },
+                new NyxIdChatInputOption { OptionId = "option-frankfurt", Label = "Frankfurt" },
             },
         };
 

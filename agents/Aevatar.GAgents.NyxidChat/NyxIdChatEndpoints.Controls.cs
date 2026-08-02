@@ -278,12 +278,14 @@ public static partial class NyxIdChatEndpoints
                 request.ClientRequestId,
                 request.ExpectedStateVersion,
                 out var identity) ||
-            string.IsNullOrWhiteSpace(request.Answer) ||
-            request.Answer.Length > MaxSteeringInstructionLength)
+            !TryBuildInputAnswer(request.Answer, out var answer))
         {
             return InvalidControlRequest();
         }
 
+        var credentials = ExtractNyxIdCredentials(http);
+        if (string.IsNullOrWhiteSpace(credentials?.NyxIdAccessToken))
+            return Results.Unauthorized();
         var admissionError = await AuthorizeConversationAsync(
             admissionPort,
             identity.ScopeId,
@@ -300,10 +302,11 @@ public static partial class NyxIdChatEndpoints
             ConversationActorId = identity.ActorId,
             RequestId = identity.RequestId,
             ClientRequestId = identity.ClientRequestId,
-            Answer = request.Answer.Trim(),
+            Answer = answer,
             ExpectedStateVersion = request.ExpectedStateVersion,
             CommandId = commandId,
             CorrelationId = correlationId,
+            ToolContext = ToToolContextPayload(credentials!),
         }, ct).ConfigureAwait(false);
         return AcceptedControl(http, identity.ScopeId, identity.ActorId, receipt);
     }
@@ -329,6 +332,9 @@ public static partial class NyxIdChatEndpoints
             return InvalidControlRequest();
         }
 
+        var credentials = ExtractNyxIdCredentials(http);
+        if (string.IsNullOrWhiteSpace(credentials?.NyxIdAccessToken))
+            return Results.Unauthorized();
         var admissionError = await AuthorizeConversationAsync(
             admissionPort,
             identity.ScopeId,
@@ -350,6 +356,7 @@ public static partial class NyxIdChatEndpoints
             ExpectedStateVersion = request.ExpectedStateVersion,
             CommandId = commandId,
             CorrelationId = correlationId,
+            ToolContext = ToToolContextPayload(credentials!),
         }, ct).ConfigureAwait(false);
         return AcceptedControl(http, identity.ScopeId, identity.ActorId, receipt);
     }
@@ -369,6 +376,45 @@ public static partial class NyxIdChatEndpoints
             Channel = new AgentToolChannelContext("nyxid-chat", null, scopeId, null, null),
         };
         return control.ToToolContext(context).ToPayload();
+    }
+
+    private static AgentToolExecutionContextPayload ToToolContextPayload(AgentToolCredentials credentials) =>
+        (AgentToolExecutionContext.Empty with { Credentials = credentials }).ToPayload();
+
+    private static bool TryBuildInputAnswer(
+        NyxIdChatInputAnswerRequest? request,
+        out NyxIdChatInputAnswer answer)
+    {
+        answer = null!;
+        if (request is null)
+            return false;
+
+        var hasFreeText = !string.IsNullOrWhiteSpace(request.FreeText);
+        var selected = request.SelectedOptionIds?
+            .Select(static value => value?.Trim() ?? string.Empty)
+            .ToArray() ?? [];
+        if (hasFreeText == (selected.Length > 0) ||
+            (hasFreeText && request.FreeText!.Length > MaxSteeringInstructionLength) ||
+            selected.Length > 6 ||
+            selected.Any(static value =>
+                string.IsNullOrWhiteSpace(value) || value.Length > MaxControlIdentityLength) ||
+            selected.Distinct(StringComparer.Ordinal).Count() != selected.Length)
+        {
+            return false;
+        }
+
+        if (hasFreeText)
+        {
+            answer = new NyxIdChatInputAnswer { FreeText = request.FreeText!.Trim() };
+            return true;
+        }
+
+        answer = new NyxIdChatInputAnswer
+        {
+            Selection = new NyxIdChatInputSelectionAnswer(),
+        };
+        answer.Selection.OptionIds.AddRange(selected);
+        return selected.Length > 0;
     }
 
     private static IResult AcceptedControl(
@@ -535,8 +581,12 @@ public static partial class NyxIdChatEndpoints
     public sealed record NyxIdChatInputResolveRequest(
         string? RequestId,
         string? ClientRequestId,
-        string? Answer,
+        NyxIdChatInputAnswerRequest? Answer,
         long ExpectedStateVersion);
+
+    public sealed record NyxIdChatInputAnswerRequest(
+        string? FreeText = null,
+        IReadOnlyList<string>? SelectedOptionIds = null);
 
     public sealed record NyxIdChatApprovalResolveRequest(
         string? RequestId,

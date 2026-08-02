@@ -198,6 +198,7 @@ public sealed record NyxIdChatPendingApprovalSnapshot(
     [property: JsonPropertyName("nyxidRequestId")] string? NyxIdRequestId = null);
 
 public sealed record NyxIdChatInputOptionSnapshot(
+    string OptionId,
     string Label,
     string? Description);
 

@@ -297,6 +297,7 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
                 input.Prompt,
                 input.Options.Select(static option =>
                     new NyxIdChatInputOptionSnapshot(
+                        option.OptionId,
                         option.Label,
                         NullIfEmpty(option.Description))).ToArray(),
                 ToDateTimeOffset(input.AskedAt),

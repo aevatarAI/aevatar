@@ -1190,7 +1190,8 @@ public sealed class ChatRuntime
         IReadOnlyList<ToolCall> toolCalls,
         IReadOnlyList<IAgentTool>? tools,
         AgentToolExecutionContext? toolContext,
-        CancellationToken ct)
+        CancellationToken ct,
+        AgentToolApprovalGrant? approvalGrant = null)
     {
         var executor = new StreamingToolExecutor(
             ToolCallLoop.CreateRequestToolManager(tools),
@@ -1198,6 +1199,7 @@ public sealed class ChatRuntime
             toolContext: toolContext,
             toolExecutionPort: _toolLoop.ToolExecutionPort,
             approvalContinuationMode: _toolLoop.ApprovalContinuationMode,
+            approvalGrant: approvalGrant,
             logger: _logger);
         using var toolState = executor.CreateExecutionState();
         foreach (var toolCall in toolCalls)
