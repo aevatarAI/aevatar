@@ -56,6 +56,14 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
+    public void ConfigurationRequest_ShouldNotExposeRawEnvelopeTarget()
+    {
+        typeof(ScheduledDispatchConfigurationHttpRequest)
+            .GetProperty("Envelope")
+            .Should().BeNull();
+    }
+
+    [Fact]
     public void ServiceInvocationRequest_ShouldRejectForgedAuthorizationFact()
     {
         const string json = """
