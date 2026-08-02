@@ -643,7 +643,7 @@ public static class ServiceCollectionExtensions
                 var secretsStoreAccessor = CreateSecretsStoreAccessor(options, sp);
                 var logger = sp.GetService<ILogger<ReloadableLLMProviderFactory>>();
                 var loggerFactory = sp.GetService<ILoggerFactory>();
-                var toolExecutionPort = sp.GetRequiredService<IAgentToolExecutionPort>();
+                var toolExecutionPort = new ServiceProviderAgentToolExecutionPort(sp);
                 return new ReloadableLLMProviderFactory(
                     () => BuildLlmProviderFactory(configuration, options, secretsStoreAccessor, toolExecutionPort, loggerFactory),
                     versionProvider,
@@ -659,7 +659,7 @@ public static class ServiceCollectionExtensions
                 configuration,
                 options,
                 secretsStoreAccessor,
-                sp.GetRequiredService<IAgentToolExecutionPort>(),
+                new ServiceProviderAgentToolExecutionPort(sp),
                 sp.GetService<ILoggerFactory>());
         });
     }
@@ -1255,5 +1255,13 @@ public static class ServiceCollectionExtensions
     private static void RegisterBindingTools(IServiceCollection services)
     {
         services.AddBindingTools();
+    }
+
+    private sealed class ServiceProviderAgentToolExecutionPort(IServiceProvider serviceProvider) : IAgentToolExecutionPort
+    {
+        public Task<AgentToolExecutionOutcome> ExecuteAsync(
+            AgentToolExecutionRequest request,
+            CancellationToken ct = default) =>
+            serviceProvider.GetRequiredService<IAgentToolExecutionPort>().ExecuteAsync(request, ct);
     }
 }
